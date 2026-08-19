@@ -15,6 +15,7 @@ pub mod http;
 pub mod memcli;
 pub mod model;
 pub mod origin;
+pub mod presence;
 pub mod proc;
 
 /// How long `tailscale status` may take. It runs once, before the listener is

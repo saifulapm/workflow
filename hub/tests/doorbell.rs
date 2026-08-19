@@ -546,6 +546,108 @@ fn an_explicit_hub_url_still_wins_over_the_tailnet_name() {
     assert!(body.contains("http://chosen.example:8787/"), "{body}");
 }
 
+/// Presence routing: a watched machine gets the desktop bell and the phone
+/// stays silent. Watching = qshell state dir + live shell process + no flags.
+#[test]
+fn a_watched_machine_gets_the_desktop_bell_and_the_phone_stays_silent() {
+    let world = World::new("bell-watched", "http://127.0.0.1:9");
+    std::fs::create_dir_all(world.home.join("state/qshell")).unwrap();
+    fixture_bin(&world.bin, "pgrep", "exit 0");
+    let notify_log = world.dir.join("notify.log");
+    fixture_bin(
+        &world.bin,
+        "notify-send",
+        &format!(
+            "printf '\\1' >> '{log}'\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> '{log}'; done\nexit 0",
+            log = notify_log.display()
+        ),
+    );
+    let _hub = world.hub();
+    settle();
+
+    world.ask("Should we use Redis?");
+    wait_for("the desktop bell", Duration::from_secs(5), || {
+        !invocations(&notify_log).is_empty()
+    });
+    settle();
+
+    assert_eq!(invocations(&notify_log).len(), 1);
+    assert!(
+        world.rings().is_empty(),
+        "the phone rang for a watched machine: {:?}",
+        world.rings()
+    );
+    assert_eq!(world.seen().len(), 1, "the id is still recorded");
+}
+
+/// An unwatched machine with a watching sibling hands the bell to the sibling
+/// hub instead of the phone.
+#[test]
+fn an_unwatched_machine_delivers_to_a_watching_sibling_not_the_phone() {
+    let world = World::new("bell-sibling", "http://127.0.0.1:9");
+    let mut config = std::fs::read_to_string(&world.config).unwrap();
+    config.push_str("siblings = [\"http://127.0.0.1:9\"]\n");
+    std::fs::write(&world.config, config).unwrap();
+
+    // This curl answers presence probes affirmatively without recording them,
+    // and records everything else — the notify POST or an ntfy publish.
+    let curl_log = world.curl_log.clone();
+    fixture_bin(
+        &world.bin,
+        "curl",
+        &format!(
+            "for a in \"$@\"; do case \"$a\" in */api/presence) printf '{{\"watching\":true}}'; exit 0;; esac; done\n\
+             printf '\\1' >> '{log}'\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> '{log}'; done\nexit 0",
+            log = curl_log.display()
+        ),
+    );
+    let _hub = world.hub();
+    settle();
+
+    world.ask("Should we use Redis?");
+    wait_for("a delivery", Duration::from_secs(5), || {
+        !world.rings().is_empty()
+    });
+    settle();
+
+    let calls = world.rings();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(
+        calls[0].iter().any(|a| a.ends_with("/api/notify")),
+        "the sibling got the bell: {calls:?}"
+    );
+    assert!(
+        !calls[0]
+            .iter()
+            .any(|a| a.contains("workflow-TESTTESTTESTTESTTESTTESTTE")),
+        "and ntfy was never published to: {calls:?}"
+    );
+}
+
+/// A desktop bell that fails must fall back to the phone: a bell that can be
+/// lost silently is worse than a duplicate.
+#[test]
+fn a_failed_desktop_bell_falls_back_to_the_phone() {
+    let world = World::new("bell-fallback", "http://127.0.0.1:9");
+    std::fs::create_dir_all(world.home.join("state/qshell")).unwrap();
+    fixture_bin(&world.bin, "pgrep", "exit 0");
+    fixture_bin(&world.bin, "notify-send", "exit 1");
+    let _hub = world.hub();
+    settle();
+
+    world.ask("Should we use Redis?");
+    wait_for("the phone fallback", Duration::from_secs(5), || {
+        !world.rings().is_empty()
+    });
+    let calls = world.rings();
+    assert!(
+        calls[0]
+            .iter()
+            .any(|a| a.contains("workflow-TESTTESTTESTTESTTESTTESTTE")),
+        "ntfy took over from the failed desktop bell: {calls:?}"
+    );
+}
+
 #[test]
 fn the_seen_file_is_one_id_per_line_and_survives_being_read_back() {
     let dir = TempDir::new("bell-seenfile");

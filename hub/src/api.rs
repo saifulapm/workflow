@@ -48,6 +48,20 @@ pub fn projects(section: &Section<Project>) -> String {
     })
 }
 
+/// `/api/presence` — the doorbell-routing answer for this machine, for a
+/// sibling hub deciding where the bell should ring.
+pub fn presence(p: &crate::presence::Presence, machine: &str) -> String {
+    serde_json::json!({
+        "machine": machine,
+        "watching": p.watching(),
+        "shell": p.shell,
+        "locked": p.locked,
+        "stay_awake": p.stay_awake,
+        "idle": p.idle,
+    })
+    .to_string()
+}
+
 /// Serialising these cannot fail — every field is a String, an Option<String>
 /// or a Vec of those — but a `/api/*` route that panicked would take a
 /// connection thread with it, so the failure is a document too.
