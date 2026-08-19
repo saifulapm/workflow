@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "hub question",
+  "description": "One pending question. `title` is mem's own title, which for a batched ask is only its first line; `text` is the whole question. `asked_at` is derived from the ULID id, because mem's `created` on a list row is date-only.",
+  "type": "object",
+  "required": [
+    "id",
+    "short_id",
+    "title",
+    "text",
+    "project",
+    "machine",
+    "asked_at",
+    "age"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "short_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "machine": {
+      "type": "string"
+    },
+    "asked_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "age": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

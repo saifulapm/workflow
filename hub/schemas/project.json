@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "hub project",
+  "description": "One registered project. `last_activity` comes from the newest log item, since `mem projects` has no such field. `status` is the first line of status.md, and is null for a project that has none — the exit-1-with-empty-stdout row of spec §4a.",
+  "type": "object",
+  "required": [
+    "name",
+    "last_activity",
+    "last_activity_age",
+    "status"
+  ],
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "last_activity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "last_activity_age": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

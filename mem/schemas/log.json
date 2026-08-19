@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem log --json (read mode)",
+  "description": "Recent entries, newest first. A filtered read that matches nothing prints this document with an empty array and exits 1 (spec §7): callers that treat empty as fine test the array, not the code.",
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "item.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

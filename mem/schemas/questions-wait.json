@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem questions --wait <id> --json",
+  "description": "The answer item, body included (exit 0). A timeout is exit 4 with nothing on stdout.",
+  "$ref": "item.json",
+  "required": [
+    "body",
+    "answers"
+  ]
+}

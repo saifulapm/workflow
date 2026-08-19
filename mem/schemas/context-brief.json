@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem context --brief --json",
+  "description": "The ≤480-byte brief, counted on the content string. Empty when there is nothing to say.",
+  "type": "object",
+  "required": [
+    "brief"
+  ],
+  "properties": {
+    "brief": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

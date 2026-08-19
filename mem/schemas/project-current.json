@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem project current --json",
+  "description": "The working directory's project (spec §5 chain, read-only). Exit 1 with nothing on stdout when this directory belongs to no project mem knows; `root` is null when the project was named with --project from outside a checkout. `verify` is present only when the project declared one with `mem project set verify` — its absence means the caller does its own detection.",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "root"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "root": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verify": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

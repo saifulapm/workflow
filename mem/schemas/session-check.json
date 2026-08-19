@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem session-check --json",
+  "description": "What this machine-local session has done. `nudge` is the Stop text, or null when the session wrote something; `nudged` says whether that one nudge has already been emitted, which is what stops the Stop hook talking to itself.",
+  "type": "object",
+  "required": [
+    "writes",
+    "batches",
+    "nudge",
+    "nudged"
+  ],
+  "properties": {
+    "writes": {
+      "type": "integer"
+    },
+    "batches": {
+      "type": "integer"
+    },
+    "nudge": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nudged": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

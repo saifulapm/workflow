@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem snapshot --json",
+  "description": "The tarball that was written.",
+  "type": "object",
+  "required": [
+    "snapshot"
+  ],
+  "properties": {
+    "snapshot": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

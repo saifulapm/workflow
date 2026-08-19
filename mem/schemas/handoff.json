@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem handoff --json (read mode)",
+  "description": "The latest handoff for the project, body included. Exit 1 when there is none.",
+  "$ref": "item.json",
+  "required": [
+    "body"
+  ]
+}

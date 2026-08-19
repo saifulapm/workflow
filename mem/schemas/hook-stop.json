@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem session-check --session-id <id> --hook-json",
+  "description": "Emitted only when the session recorded nothing. PreCompact has no envelope of its own — `mem precompact` prints plain text, which the runtime passes to the summarizer as newCustomInstructions.",
+  "type": "object",
+  "required": [
+    "hookSpecificOutput"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "hookSpecificOutput": {
+      "type": "object",
+      "required": [
+        "hookEventName",
+        "additionalContext"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "hookEventName": {
+          "enum": [
+            "Stop"
+          ]
+        },
+        "additionalContext": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

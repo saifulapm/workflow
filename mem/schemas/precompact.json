@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem precompact --json",
+  "description": "The instruction the compaction summarizer must follow. This is the inspectable form: the hook itself is wired without --json, because PreCompact reads the hook's plain stdout as newCustomInstructions and has no envelope in the runtime's schema union.",
+  "type": "object",
+  "required": [
+    "newCustomInstructions"
+  ],
+  "properties": {
+    "newCustomInstructions": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,20 @@
+#!/bin/sh
+# The workflow gate, pre-push half. See hooks/pre-commit for why these two lines
+# stay in the stub and everything else lives in `workflow hook`.
+#
+# Pushing is one of the five stop conditions: it leaves the worktree. This is a
+# speed bump, not a wall -- `git push --no-verify` and `env -u WORKFLOW_AGENT`
+# both walk around it, and that is stated in spec §1. With a human present,
+# `WORKFLOW_ALLOW_PUSH=1 git push` is the deliberate, visible override.
+
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || exit 0
+
+if command -v workflow >/dev/null 2>&1; then
+	exec workflow hook --stub "$0" pre-push -- "$@"
+fi
+
+# Fail-open: no binary, no refusal, and the repo's own hook still runs.
+hd=$(git rev-parse --path-format=absolute --git-common-dir)
+h="$hd/hooks/pre-push"
+[ -x "$h" ] && [ "$(realpath "$h")" != "$(realpath "$0")" ] && exec "$h" "$@"
+exit 0

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem item",
+  "description": "One indexed item, as every read verb reports it. `score` is present only on search hits; `body` only where the verb reads the file (show, handoff, questions --wait).",
+  "type": "object",
+  "required": [
+    "id",
+    "short_id",
+    "kind",
+    "type",
+    "title",
+    "tags",
+    "project",
+    "machine",
+    "created",
+    "modified",
+    "active",
+    "archived",
+    "supersedes",
+    "superseded_by",
+    "answers",
+    "path"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "short_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "fact",
+        "ruling",
+        "log",
+        "handoff",
+        "question",
+        "answer"
+      ]
+    },
+    "type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "machine": {
+      "type": "string"
+    },
+    "created": {
+      "type": "string"
+    },
+    "modified": {
+      "type": "string"
+    },
+    "active": {
+      "type": "boolean"
+    },
+    "archived": {
+      "type": "boolean"
+    },
+    "supersedes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "superseded_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "answers": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "path": {
+      "type": "string"
+    },
+    "score": {
+      "type": "number"
+    },
+    "body": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

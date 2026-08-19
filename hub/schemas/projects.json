@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/projects",
+  "description": "Every project the store knows about, in mem's own order. `degraded` is null unless mem itself is broken.",
+  "type": "object",
+  "required": [
+    "degraded",
+    "projects"
+  ],
+  "properties": {
+    "degraded": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "$ref": "project.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

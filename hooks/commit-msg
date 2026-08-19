@@ -1,0 +1,15 @@
+#!/bin/sh
+# The workflow gate, commit-msg half. See hooks/pre-commit for why these two
+# lines stay in the stub and everything else lives in `workflow hook`.
+
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || exit 0
+
+if command -v workflow >/dev/null 2>&1; then
+	exec workflow hook --stub "$0" commit-msg -- "$@"
+fi
+
+# Fail-open: no binary, no checks, and the repo's own hook still runs.
+hd=$(git rev-parse --path-format=absolute --git-common-dir)
+h="$hd/hooks/commit-msg"
+[ -x "$h" ] && [ "$(realpath "$h")" != "$(realpath "$0")" ] && exec "$h" "$@"
+exit 0

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem plan --tick <task-id> --json",
+  "description": "`ticked` is false when the task was already checked, which is a success: a tick is idempotent. An unknown task id is exit 1.",
+  "type": "object",
+  "required": [
+    "id",
+    "ticked",
+    "path"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "ticked": {
+      "type": "boolean"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

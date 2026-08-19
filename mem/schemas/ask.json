@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem ask --json",
+  "description": "The question that is now waiting. `mem ask` never blocks.",
+  "type": "object",
+  "required": [
+    "id",
+    "short_id",
+    "options"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "short_id": {
+      "type": "string"
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

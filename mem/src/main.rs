@@ -1,0 +1,10 @@
+use std::process::ExitCode;
+
+use clap::Parser;
+
+use mem::cli::Cli;
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    ExitCode::from(mem::run(cli) as u8)
+}

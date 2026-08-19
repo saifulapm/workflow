@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem prune --apply <ids…> --json",
+  "description": "The short ids archived in place. Nothing is ever deleted. Printed whatever the exit code: 0 when every id resolved, 1 when one did not (the unresolved ids are named on stderr). `--apply all` takes every candidate.",
+  "type": "object",
+  "required": [
+    "archived"
+  ],
+  "properties": {
+    "archived": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

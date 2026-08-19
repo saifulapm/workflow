@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem save / mem log <text> / mem handoff --set / mem answer, --json",
+  "description": "What one write put on disk.",
+  "type": "object",
+  "required": [
+    "id",
+    "short_id",
+    "kind",
+    "path"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "short_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "fact",
+        "ruling",
+        "log",
+        "handoff",
+        "question",
+        "answer"
+      ]
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

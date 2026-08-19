@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem reindex --json",
+  "description": "What one reindex pass did. `skipped` means another invocation held the write lock and the existing index still stands.",
+  "type": "object",
+  "required": [
+    "indexed",
+    "deleted",
+    "unreadable",
+    "skipped"
+  ],
+  "properties": {
+    "indexed": {
+      "type": "integer"
+    },
+    "deleted": {
+      "type": "integer"
+    },
+    "unreadable": {
+      "type": "integer"
+    },
+    "skipped": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

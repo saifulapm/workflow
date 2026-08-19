@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/questions",
+  "description": "Every pending question in the store, newest first. `degraded` is null unless mem itself is broken — an empty queue is an empty array and a null degraded, never an error.",
+  "type": "object",
+  "required": [
+    "degraded",
+    "questions"
+  ],
+  "properties": {
+    "degraded": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "$ref": "question.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

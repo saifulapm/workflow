@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem context --json",
+  "description": "The assembled digest (spec §8). Always exit 0, the empty state included.",
+  "type": "object",
+  "required": [
+    "context",
+    "truncated",
+    "project"
+  ],
+  "properties": {
+    "context": {
+      "type": "string"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

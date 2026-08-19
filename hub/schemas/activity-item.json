@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "hub activity item",
+  "description": "One recent item, assembled by the per-project fan-out of spec §4b. `at` is derived from the ULID id and is what the list is sorted by.",
+  "type": "object",
+  "required": [
+    "id",
+    "short_id",
+    "kind",
+    "title",
+    "project",
+    "machine",
+    "at",
+    "age"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "short_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "fact",
+        "ruling",
+        "log",
+        "handoff",
+        "question",
+        "answer"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "machine": {
+      "type": "string"
+    },
+    "at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "age": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

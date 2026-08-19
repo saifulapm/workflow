@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem plan --json (read mode)",
+  "description": "plan.md, verbatim — the orchestrator parses it. Exit 1 when there is no plan.",
+  "type": "object",
+  "required": [
+    "text",
+    "path"
+  ],
+  "properties": {
+    "text": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

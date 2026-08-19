@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/activity",
+  "description": "The last ~20 log items across every project, newest first, sorted by ULID id. `degraded` is null unless mem itself is broken.",
+  "type": "object",
+  "required": [
+    "degraded",
+    "items"
+  ],
+  "properties": {
+    "degraded": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "activity-item.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

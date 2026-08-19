@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem status --json (read mode)",
+  "description": "status.md, verbatim. Exit 1 when nothing is recorded.",
+  "type": "object",
+  "required": [
+    "text",
+    "path"
+  ],
+  "properties": {
+    "text": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem sync --json",
+  "description": "The verdict of one verified round, read from qshell-sync's status file rather than its exit code. Exit 0 with a report; exit 3 only when qshell-sync cannot be invoked.",
+  "type": "object",
+  "required": [
+    "sync",
+    "detail"
+  ],
+  "properties": {
+    "sync": {
+      "enum": [
+        "performed",
+        "not performed",
+        "deferred"
+      ]
+    },
+    "detail": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

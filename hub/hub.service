@@ -1,0 +1,13 @@
+[Unit]
+Description=hub — mem's phone-facing view
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/hub
+Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

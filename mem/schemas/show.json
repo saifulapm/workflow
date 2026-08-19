@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mem show --json",
+  "description": "The named items, bodies included. An unknown id is exit 1 and an ambiguous short id exit 7, both with nothing on stdout.",
+  "type": "object",
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "item.json"
+      }
+    }
+  },
+  "additionalProperties": false
+}

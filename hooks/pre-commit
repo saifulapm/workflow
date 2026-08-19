@@ -1,0 +1,32 @@
+#!/bin/sh
+# The workflow gate, pre-commit half. Symlinked into ~/.config/git/hooks/ at
+# install; a global core.hooksPath points every repo on this machine here.
+#
+# The five steps of spec §7 live in `workflow hook` (spec §12b). Two lines are
+# left here, and both have to be here:
+#
+#   * the work-tree guard. `git rev-parse --show-toplevel` fatals in a bare
+#     repo, so nothing may ask git anything else before this.
+#   * the fail-open rule. No binary on PATH means a broken install, and a broken
+#     install must never stand between a human and their commit: skip the
+#     checks, still chain to the repo's own hook.
+#
+# The stub never touches its own environment. git sets GIT_DIR and
+# GIT_INDEX_FILE for hooks, and a partial commit's staged view lives in that
+# temporary index; unsetting them blinds the staged-diff checks and breaks
+# whatever we chain into. Only the child test suite is scrubbed, inside verify.
+
+[ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || exit 0
+
+if command -v workflow >/dev/null 2>&1; then
+	exec workflow hook --stub "$0" pre-commit -- "$@"
+fi
+
+# Fail-open. $hd is the repo's real hook directory: unlike `git rev-parse
+# --git-path hooks/x`, it does not follow core.hooksPath back to this very file.
+# ($0 may be relative; cwd is the toplevel in hooks, so realpath is safe -- do
+# not "fix".)
+hd=$(git rev-parse --path-format=absolute --git-common-dir)
+h="$hd/hooks/pre-commit"
+[ -x "$h" ] && [ "$(realpath "$h")" != "$(realpath "$0")" ] && exec "$h" "$@"
+exit 0

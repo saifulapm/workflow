@@ -1,0 +1,10 @@
+target/
+*.tmp
+.tmp-*
+references/
+build/
+specs/
+research/
+workflow-TESTING.md
+hub/TESTING.md
+mem/TESTING.md
