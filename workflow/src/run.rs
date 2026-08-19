@@ -165,18 +165,17 @@ impl Run {
         self.dispatched().len()
     }
 
-    /// The last state the worker reported in its own status file.
-    fn last_status_state(&self, task: &str) -> String {
-        let Ok(text) = std::fs::read_to_string(self.dir.join(format!("{task}.status"))) else {
-            return String::new();
-        };
-        let mut last = String::new();
+    /// The last line the worker reported in its own status file, as
+    /// (state, note). Lines read `<utc> <state> <note...>`.
+    fn last_status_line(&self, task: &str) -> Option<(String, String)> {
+        let text = std::fs::read_to_string(self.dir.join(format!("{task}.status"))).ok()?;
+        let mut last = None;
         for line in text.lines() {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.is_empty() {
+            let mut fields = line.split_whitespace();
+            let (Some(_utc), Some(state)) = (fields.next(), fields.next()) else {
                 continue;
-            }
-            last = fields.get(1).unwrap_or(&"").to_string();
+            };
+            last = Some((state.to_string(), fields.collect::<Vec<_>>().join(" ")));
         }
         last
     }
@@ -234,6 +233,9 @@ impl Run {
             let _ = std::fs::remove_file(self.dir.join(format!("{task}.{ext}")));
         }
         brief::write(&t, &wt, &status, &brief_file);
+        // The gate reads this from inside the worktree: the task is held to its
+        // own Verify command there, not to the repo-wide suite (verify.rs).
+        write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
 
         let n: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
         write_field(&self.dir, task, "dispatches", &(n + 1).to_string());
@@ -419,9 +421,22 @@ impl Run {
             }
             return;
         }
-        if self.last_status_state(task) != "ready" {
-            self.park_task(task, "the worker stopped without reporting ready");
-            return;
+        match self.last_status_line(task) {
+            // The worker said where it stood; the park must not claim otherwise.
+            Some((state, note)) if state != "ready" => {
+                let why = if note.is_empty() {
+                    format!("the worker's last report was '{state}'")
+                } else {
+                    format!("the worker's last report was '{state}: {note}'")
+                };
+                self.park_task(task, &why);
+                return;
+            }
+            None => {
+                self.park_task(task, "the worker stopped without reporting ready");
+                return;
+            }
+            Some(_) => {}
         }
         match self.merge(task) {
             Ok(()) => {

@@ -103,6 +103,11 @@ touch)
 	say ready 'merge-ready'
 	done_json
 	;;
+stuck)
+	# Reports why it cannot go on, then exits cleanly: the park must say it.
+	say blocked 'waiting on the sibling task'
+	done_json
+	;;
 costly)
 	say ready 'merge-ready'
 	done_json 99
@@ -163,6 +168,9 @@ base=$(git rev-parse HEAD)
 - [ ] red Commit what the suite hates [after: t1]
       Files: RED
       Verify: true
+- [ ] stuck Report blocked and stop
+      Files: app/Services/Stuck.php
+      Verify: true
 EOF
 
 ## ------------------------------------------------------------------ the run
@@ -211,6 +219,11 @@ like "$run_out" 'notes/scratch.txt' 'and the stray untracked file is named'
 is "$(cat "$rundir/red.state")" parked 'the clean exit with red tests is parked'
 is "$(cat "$rundir/red.dispatches")" 1 'and it is not redispatched'
 like "$(cat "$rundir/red.parked")" 'red' 'and the reason is the suite, not the worker'
+
+is "$(cat "$rundir/stuck.state")" parked 'the worker that reported blocked is parked'
+like "$(cat "$rundir/stuck.parked")" 'blocked: waiting on the sibling task' \
+	"and the park quotes the worker's own report"
+like "$(cat "$rundir/t1.verify")" 'true' 'dispatch recorded the task Verify command in the run dir'
 
 is "$(cat "$rundir/hang.state")" parked 'the hung worker ends up parked'
 is "$(cat "$rundir/hang.dispatches")" 2 'after exactly one redispatch'

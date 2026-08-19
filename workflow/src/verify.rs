@@ -278,6 +278,29 @@ fn check_test_removal(git: &Git) -> bool {
     false
 }
 
+/// The `Verify:` command of the task this worktree belongs to, from the run
+/// dir (`runs/<project>/<plan>/<task>.verify`, written at dispatch). Inside a
+/// run worktree the repo-wide suite may need sibling tasks that do not exist
+/// here yet -- holding the task to its own contract is what breaks that
+/// deadlock. The merge gate never comes here: integration faces the full
+/// ladder.
+fn task_verify_cmd(top: &Path) -> Option<String> {
+    let root = paths::realpath_m(paths::worktrees_root());
+    let real = paths::realpath(top)?;
+    let rel = real.strip_prefix(&root).ok()?;
+    let mut parts = rel.components();
+    let (project, plan, task) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let file = paths::runs_root()
+        .join(project.as_os_str())
+        .join(plan.as_os_str())
+        .join(format!("{}.verify", task.as_os_str().to_string_lossy()));
+    let cmd = std::fs::read_to_string(file).ok()?.trim().to_string();
+    (!cmd.is_empty()).then_some(cmd)
+}
+
 /// The exit-2 path. Location picks the lane (spec §7).
 fn no_verifier() -> i32 {
     if paths::under_worktrees_root(paths::cwd()) {
@@ -314,6 +337,21 @@ pub fn cmd_verify(mode: Mode) -> i32 {
 
     if mode == Mode::Hook && memcli::has_ruling("verify-optout", None) {
         warn("verify-optout ruling on file: the hook is lint-only here (the merge gate is not).");
+        return exit::OK;
+    }
+
+    // The task's own contract, inside a run worktree. Outside the green cache
+    // on purpose: a task-scoped green is not the ladder's green, so it must
+    // neither read nor write the cache the full suite earns.
+    if mode != Mode::Gate
+        && let Some(cmd) = task_verify_cmd(&top)
+    {
+        warn(format!("verify task: {cmd}"));
+        if !run_scrubbed(&cmd) {
+            warn("verify task: FAILED");
+            return exit::FAILED;
+        }
+        warn("verify: green (the task's own command; integration still runs the full suite)");
         return exit::OK;
     }
 

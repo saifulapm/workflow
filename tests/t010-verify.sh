@@ -212,6 +212,48 @@ run workflow verify
 is "$RC" 2 'plan lane (worktrees root): no verifier is a hard failure'
 like "$OUT" '[Pp]lan lane' 'plan lane: the message names the lane'
 
+## --------------------------------------- the task's own command, in a worktree
+
+# Inside a run worktree the repo-wide suite may need sibling tasks that are not
+# here yet (the whole-suite deadlock): the gate holds the task to ITS Verify
+# command, which dispatch records in the run dir. The merge gate stays on the
+# full suite.
+wt="$XDG_STATE_HOME/workflow/worktrees/proj/plan-y/t7"
+mkdir -p "$wt"
+cd "$wt" || exit 1
+git init -q .
+printf '{"name":"p/wt"}\n' >composer.json
+printf '#!/bin/sh\nexit 0\n' >artisan
+chmod +x artisan
+write_exec bin/php <<-'EOF'
+	#!/bin/sh
+	exit 1
+EOF
+git add -A
+git -c core.hooksPath=/dev/null commit -qm seed
+mkdir -p "$XDG_STATE_HOME/workflow/runs/proj/plan-y"
+printf 'touch task-verify-ran\n' >"$XDG_STATE_HOME/workflow/runs/proj/plan-y/t7.verify"
+
+run workflow verify
+is "$RC" 0 'task worktree: the task Verify decides, and the red repo suite does not run'
+if [ -f task-verify-ran ]; then
+	ok 'task worktree: the task command actually ran'
+else
+	notok 'task worktree: the task command actually ran'
+fi
+like "$OUT" 'task' 'task worktree: the output names the task command'
+
+run workflow verify --gate
+is "$RC" 1 'the merge gate is exempt: the red repo suite decides there, not the green task command'
+
+printf 'exit 1\n' >"$XDG_STATE_HOME/workflow/runs/proj/plan-y/t7.verify"
+run workflow verify
+is "$RC" 1 'task worktree: a red task command fails the gate'
+
+rm "$XDG_STATE_HOME/workflow/runs/proj/plan-y/t7.verify"
+run workflow verify
+is "$RC" 1 'no recorded task command: the repo suite decides again'
+
 ## ------------------------------------------------------------- green cache
 
 php_project cache
