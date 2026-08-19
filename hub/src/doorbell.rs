@@ -117,6 +117,13 @@ impl Doorbell {
             if state.seeding {
                 continue;
             }
+            // A question born on another machine arrives here by sync, already
+            // rung for where it was asked; this hub lists and answers it but
+            // does not buzz again. A row with no machine field still rings —
+            // a mem too old to say is a doorbell, not a silence.
+            if row["machine"].as_str().is_some_and(|m| m != self.machine) {
+                continue;
+            }
             self.ring(row["project"].as_str().unwrap_or(""));
         }
         state.seeding = false;

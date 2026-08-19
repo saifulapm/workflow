@@ -258,6 +258,43 @@ fn the_first_start_records_the_backlog_and_rings_for_none_of_it() {
     assert_eq!(status_of(&hub.get("/")), 200);
 }
 
+/// A question that arrives by sync — born on another machine — is recorded but
+/// not rung: the machine that asked already rang the phone, up to a sync round
+/// earlier. Ringing again here is the same buzz twice, minutes apart, with a
+/// link to the wrong hub.
+#[test]
+fn a_question_from_another_machine_is_recorded_and_not_rung() {
+    let world = World::new("bell-foreign", "http://127.0.0.1:9");
+    let machine_file = world.home.join("config/qshell/machine");
+    std::fs::create_dir_all(machine_file.parent().unwrap()).unwrap();
+    std::fs::write(&machine_file, "here-hub").unwrap();
+
+    let _hub = world.hub();
+    settle(); // the seeding round, on an empty queue
+
+    // The sibling's question lands in the store, the way bisync would land it:
+    // mem reads the machine file per invocation, hub read it once at start.
+    std::fs::write(&machine_file, "far-nuc").unwrap();
+    world.ask("Should we use Redis?");
+    wait_for("the id to be recorded", Duration::from_secs(5), || {
+        world.seen().len() == 1
+    });
+    settle();
+    assert!(
+        world.rings().is_empty(),
+        "a synced-in question is the sibling's doorbell, not ours: {:?}",
+        world.rings()
+    );
+
+    // A question asked on this machine still rings.
+    std::fs::write(&machine_file, "here-hub").unwrap();
+    world.ask("And Postgres over MySQL?");
+    wait_for("the local question to ring", Duration::from_secs(5), || {
+        world.rings().len() == 1
+    });
+    assert_eq!(world.seen().len(), 2, "both recorded, one rung");
+}
+
 #[test]
 fn an_unreachable_ntfy_keeps_the_service_serving() {
     // Real curl, and a port with nothing on it: curl fails, hub carries on.
