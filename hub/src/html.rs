@@ -116,14 +116,25 @@ li{padding:.35rem 0;border-bottom:1px solid #8882}
 .empty{opacity:.6}
 ";
 
-/// The whole page. `<meta http-equiv=refresh>` keeps it live without a line of
-/// JavaScript, which is also what makes answering work with JS disabled (AC4).
+/// The whole page. A guarded reload keeps it live: `<meta http-equiv=refresh>`
+/// reloaded unconditionally, and twice on the first real day it ate an answer
+/// being typed on iOS Safari. The script reloads only when it cannot cost
+/// anything — nothing focused, nothing typed. With JS disabled the page is
+/// simply still (answering already worked without JS, AC4); a stale page is
+/// the cheaper loss than a swallowed answer.
 pub fn page(view: &View, config: &Config, banner: &Banner) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
     out.push_str("<meta charset=\"utf-8\">\n");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-    out.push_str("<meta http-equiv=\"refresh\" content=\"15\">\n");
+    out.push_str(
+        "<script>setInterval(function(){\
+         var a=document.activeElement;\
+         if(a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'))return;\
+         var f=document.querySelectorAll('textarea,input');\
+         for(var i=0;i<f.length;i++){if(f[i].value)return;}\
+         location.reload();},15000);</script>\n",
+    );
     out.push_str(&format!("<title>hub — {}</title>\n", esc(&view.machine)));
     out.push_str(&format!("<style>{STYLE}</style>\n"));
     out.push_str("</head>\n<body>\n");

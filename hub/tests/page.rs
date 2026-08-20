@@ -104,9 +104,15 @@ fn the_page_has_the_three_sections_a_header_and_a_form() {
         "{body}"
     );
     assert!(body.contains("<textarea name=\"text\""), "{body}");
-    assert!(!body.contains("<script"), "{body}");
-    // §3: the page keeps itself live without JavaScript.
-    assert!(body.contains("http-equiv=\"refresh\" content=\"15\""));
+    // The reload is guarded: it must never fire while something is focused or
+    // typed (a hard meta refresh ate an answer being written, twice). The form
+    // above stays a plain POST, so answering still works with JS disabled.
+    assert!(!body.contains("http-equiv=\"refresh\""), "{body}");
+    assert!(body.contains("location.reload()"), "{body}");
+    assert!(
+        body.contains("activeElement"),
+        "the reload checks focus: {body}"
+    );
     // AC7: a project with no status.md is an em dash.
     assert!(body.contains('—'));
 }
@@ -212,8 +218,9 @@ fn a_question_that_is_script_renders_as_text() {
         !body.contains("<script>alert(1)"),
         "the question became script on hub's own origin: {body}"
     );
-    // The whole page, not just this value: nothing here opens a script tag.
-    assert!(!body.contains("<script"), "{body}");
+    // The whole page opens exactly one script tag — the guarded reload the
+    // head always carries. A second one anywhere is an injection.
+    assert_eq!(body.matches("<script").count(), 1, "{body}");
 }
 
 #[test]
@@ -510,9 +517,10 @@ fn an_unknown_id_is_a_banner_and_not_a_five_hundred() {
     let body = body_of(&hub.get("/?unknown=1")).to_string();
     assert!(body.contains("may already be answered"), "{body}");
     // The banner is chosen here, never reflected: a crafted query cannot put
-    // text on the page.
+    // text on the page. The head's own guarded-reload script is the one
+    // script tag a page ever carries; a reflected query would make two.
     let body = body_of(&hub.get("/?unknown=%3Cscript%3E")).to_string();
-    assert!(!body.contains("<script"), "{body}");
+    assert_eq!(body.matches("<script").count(), 1, "{body}");
 }
 
 #[test]
