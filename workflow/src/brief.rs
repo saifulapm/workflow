@@ -22,7 +22,8 @@ You are working alone in {wt}. Never leave it.
 Write the failing test first, then the code that passes it. The Verify: line
 above is your evidence command. Commit each atomic change in ordinary
 engineering voice -- no trailers, no session links, no words like agent, AI or
-orchestration. Stage only the files this task touched; never `git add -A`.
+orchestration, no puffery, plain words over fancy ones, straight quotes, no
+em dashes. Stage only the files this task touched; never `git add -A`.
 Everything you write must match the Files: patterns; anything outside them is
 refused at the merge gate and the task is parked.
 
@@ -98,6 +99,7 @@ mod tests {
             "Files: app/Services/Cart*.php tests/Unit/Cart*",
             "Verify: bin/php artisan test --filter=Cart",
             "Done: cart totals identical",
+            "no puffery",
             "Never leave it",
             "never `git add -A`",
             "mem ask",
