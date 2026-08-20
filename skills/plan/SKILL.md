@@ -52,12 +52,14 @@ Write it plain; the unslop skill's rules apply to specs too.
   patterns is refused at the merge gate and the task parks.
 - `Files:` and `Verify:` are mandatory here. `Verify:` is the worker's evidence
   command; `workflow verify` is what the gate runs.
-- An unknown dependency id or a cycle stops the run before anything is
-  dispatched.
+- An unknown dependency id or a cycle is a hard error.
 
 Check it parses before you ask for approval:
 
-    workflow run --plan-file plan.md    # exit 2 means the plan, not the code
+    workflow plan-check plan.md    # exit 1 means the plan, not the code
+
+That reads the file and nothing else. `workflow run` is the other thing: it
+makes a branch and a worktree per task and dispatches the first wave for real.
 
 ## 4. Shape
 

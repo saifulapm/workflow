@@ -27,7 +27,11 @@ like "$OUT" 'skill implement .*within budget' 'and doctor saw all four'
 # Skills point at the subcommands rather than restating what they do.
 like "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'workflow review-needed' 'route defers to review-needed'
 like "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'workflow verify' 'route defers to verify'
-like "$(cat "$WF_ROOT/skills/plan/SKILL.md")" 'workflow run --plan-file' 'plan defers to the parser'
+plan_skill=$(cat "$WF_ROOT/skills/plan/SKILL.md")
+like "$plan_skill" 'workflow plan-check' 'plan defers to the parser'
+# The check and the run are different acts, and sending a planner to the run
+# is how an unapproved plan once dispatched live workers.
+unlike "$plan_skill" 'workflow run --plan-file plan' 'and not to the orchestrator'
 like "$(cat "$WF_ROOT/skills/implement/SKILL.md")" 'workflow verify' 'implement defers to verify'
 like "$(cat "$WF_ROOT/skills/review/SKILL.md")" 'workflow review-needed' 'review defers to review-needed'
 

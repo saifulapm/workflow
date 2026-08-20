@@ -3,6 +3,7 @@
 //!   workflow verify          run this repo's suite over what is staged
 //!   workflow lint-msg        check a commit message, branch name or PR body
 //!   workflow review-needed   does this change set want a cold review?
+//!   workflow plan-check      read a plan and report its tasks and waves
 //!   workflow run             run a plan's tasks in worktrees
 //!   workflow reap            collect finished or stalled workers
 //!   workflow doctor          check this machine's wiring
@@ -167,8 +168,10 @@ pub fn run(cli: Cli) -> i32 {
     }
 }
 
-/// The plan grammar, run over a file and reported: the harness's way of
-/// checking the parser against written-down expectations (AC12).
+/// The plan grammar, run over a file and reported. This is what a planner runs
+/// before asking for approval, and it is also the harness's way of checking the
+/// parser against written-down expectations (AC12). It touches nothing: no
+/// worktree, no branch, no worker.
 fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
     let Ok(text) = std::fs::read_to_string(file) else {
         warn(format!("plan-check: cannot read {}", file.display()));

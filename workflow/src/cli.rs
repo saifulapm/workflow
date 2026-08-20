@@ -47,7 +47,23 @@ pub enum Command {
         #[arg(long, value_name = "RANGE")]
         diff: Option<String>,
     },
-    /// Run a plan's tasks in worktrees.
+    /// Read a plan and report what the grammar made of it. Nothing is run.
+    #[command(
+        name = "plan-check",
+        long_about = "Read a plan and report what the grammar made of it. Nothing is run.
+
+This is how a plan is checked before anyone approves it: it parses the file,
+prints the plan id, the tasks and the waves they fall into, and touches
+nothing else. `workflow run` is the other thing -- it creates a worktree and a
+branch per task and dispatches the first wave for real."
+    )]
+    PlanCheck {
+        file: PathBuf,
+        /// Print the parse as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a plan's tasks in worktrees. This dispatches real workers.
     Run {
         /// A plan file, instead of this project's plan in mem.
         #[arg(long = "plan-file", value_name = "FILE")]
@@ -134,17 +150,10 @@ in the index. Content is restored exactly; the staged/unstaged split is not.")]
     // ------------------------------------------------------------- test seams
     //
     // Hidden, and the port's replacement for sourcing the bash with
-    // WORKFLOW_LIB=1: the parser, the ownership evaluator and the liveness
-    // rule are checked against written-down expectations rather than against
-    // themselves (AC12).
-    /// Parse a plan file and report what the grammar made of it.
-    #[command(name = "plan-check", hide = true)]
-    PlanCheck {
-        file: PathBuf,
-        /// Print the parse as JSON.
-        #[arg(long)]
-        json: bool,
-    },
+    // WORKFLOW_LIB=1: the ownership evaluator and the liveness rule are
+    // checked against written-down expectations rather than against
+    // themselves (AC12). The parser's seam is `plan-check`, which turned out
+    // to be the verb a planner wanted too, and is no longer hidden.
     /// Print every record a task touched that its patterns do not claim.
     #[command(name = "ownership", hide = true)]
     Ownership {
@@ -181,7 +190,11 @@ usage: workflow <command> [options]
       0 clean (warnings included) · 1 hard fail
   review-needed [--diff <range>]
       0 a cold review is wanted · 1 it is not
+  plan-check <file> [--json]
+      read a plan and report its tasks and waves; nothing is run
+      0 it parses · 1 the grammar refused it · 2 no such file
   run [--plan-file <f>]
+      run a plan's tasks in worktrees; this dispatches real workers
       0 every task complete · 1 parked or failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
