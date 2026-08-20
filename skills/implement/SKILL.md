@@ -25,6 +25,12 @@ First action of the session:
 Stay inside the task's `Files:` patterns. In an orchestrated run, anything
 outside them is refused at the merge gate and the task parks.
 
+**A background session works exactly one task, then ends.** A task is sized to
+one fresh context window; a session that rolls into the next task is working
+from a degraded context and paying for the whole history again. Finish, hand
+off, exit — the orchestrator relaunches. This bounds interactive sessions too:
+that is what the `/clear` above is.
+
 ## Rulings
 
 When you decide something a later session would otherwise re-litigate, record
