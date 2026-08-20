@@ -8,9 +8,14 @@ description: Use when route sent a change to the plan lane, to turn it into a ta
 ## 1. Questions, once
 
 One numbered round, batched at the frontier of what you cannot work out for
-yourself. Each question carries a recommended answer, so silence is an answer.
+yourself. Each question carries a recommended answer, so silence is an answer
+— for small trade-offs only. Scope questions — what the product is, what
+stays, what goes — are never resolved by silence: park and keep waiting.
 Facts are researched, never asked: versions, file layouts, existing names,
-current behaviour. Ask about intent, priorities and trade-offs.
+current behaviour. Ask about intent, priorities and trade-offs, and ask
+enough: a plan that guessed is dearer than a plan that asked. A rewrite
+inventories the predecessor's whole surface (docs, backlog, screenshots)
+into mem first; cuts are marked by Saiful, never defaulted.
 
 ## 2. The spec
 
