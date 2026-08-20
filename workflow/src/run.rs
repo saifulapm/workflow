@@ -34,6 +34,20 @@ fn env_f64(key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+/// One live orchestrator per run directory (friction #V6KDQM3S). The lock
+/// rides the returned file: dropping it releases the run, and a holder that
+/// dies releases it with its fds, so there is nothing stale to clean up.
+/// `None` means another orchestrator is live in this run right now.
+pub fn lock_run(dir: &Path) -> Option<std::fs::File> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join("lock"))
+        .ok()?;
+    f.try_lock().ok().map(|()| f)
+}
+
 /// One task's files in the run directory.
 fn field(dir: &Path, task: &str, ext: &str) -> String {
     std::fs::read_to_string(dir.join(format!("{task}.{ext}")))
@@ -854,6 +868,18 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     };
     let mut run = new_run(parsed, top, &project.dir_name(), base);
 
+    // Held for the whole run, taken before setup writes a single worktree:
+    // two orchestrators sharing this run dir would dispatch the same tasks
+    // into the same worktrees (friction #V6KDQM3S).
+    let _ = std::fs::create_dir_all(&run.dir);
+    let Some(_lock) = lock_run(&run.dir) else {
+        warn(format!(
+            "run {}: another orchestrator is live in this run -- not starting a second",
+            run.plan.plan_id
+        ));
+        return exit::USAGE;
+    };
+
     if !run.setup() {
         run.rollback();
         return exit::USAGE;
@@ -1029,6 +1055,11 @@ pub fn cmd_reap() -> i32 {
         }
         let mut run = new_run(parsed, top.clone(), &project.dir_name(), base);
         run.dir = dir;
+        // A held lock means a live orchestrator is watching these workers;
+        // reap is for runs nobody owns.
+        let Some(_lock) = lock_run(&run.dir) else {
+            continue;
+        };
         if run.running() == 0 {
             continue;
         }
