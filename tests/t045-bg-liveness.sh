@@ -79,6 +79,7 @@ is "$(cat "$rundir/t1.dispatches")" 2 'after exactly one redispatch'
 
 dispatches=$(grep -c -- '--bg' "$T_TMP/claude-args")
 is "$dispatches" 4 'both tasks dispatched --bg, once plus one redispatch each'
+like "$(cat "$WF_TMP/claude-args")" 'model opus' 'workers get the strong model by default'
 sessions=$(ls "$T_TMP/agents" | wc -l)
 is "$sessions" 4 'and every dispatch got a session of its own'
 

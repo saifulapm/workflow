@@ -265,7 +265,7 @@ impl Run {
             status,
             rundir: self.dir.clone(),
             session: session.clone(),
-            model: env_str("WORKFLOW_MODEL", "sonnet"),
+            model: env_str("WORKFLOW_MODEL", "opus"),
             budget: env_str("WORKFLOW_WORKER_BUDGET", "10"),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env: self.env.clone(),
