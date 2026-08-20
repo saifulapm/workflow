@@ -345,3 +345,28 @@ fn calls(counter: &Path) -> usize {
         .map(|s| s.len())
         .unwrap_or(0)
 }
+
+/// ETXTBSY: `cargo install` replaces the mem binary while hub is live, and a
+/// test binary's own parallel threads hold fork-inherited write fds on freshly
+/// written fixtures (found live: one full-suite run in eight). The spawn must
+/// retry until the writer is gone, not report mem broken.
+#[test]
+fn a_mem_binary_held_open_for_write_is_retried_not_broken() {
+    let dir = TempDir::new("mem-etxtbsy");
+    let bin = dir.join("bin");
+    let path = fixture_mem(&bin, "echo '{\"projects\":[]}'");
+
+    let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(60));
+        drop(held);
+    });
+
+    let mem = MemCli::with_path(&bin);
+    let outcome = mem.projects();
+    releaser.join().unwrap();
+    assert!(
+        matches!(*outcome, Outcome::Json(_)),
+        "a held-open binary must be retried: {outcome:?}"
+    );
+}

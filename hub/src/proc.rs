@@ -43,13 +43,33 @@ pub enum Ended {
     Failed(String),
 }
 
+/// ETXTBSY is transient by nature: `cargo install` replacing the mem binary
+/// while this service is live, or — in the test suites — a sibling thread's
+/// fork holding a write fd on a freshly written fixture across the exec
+/// window. Both writers are gone within moments, so a bounded retry turns a
+/// spurious "mem is broken" into one short stutter. Anything else fails as it
+/// always did, on the first attempt.
+fn spawn_retrying_busy(command: &mut Command) -> std::io::Result<std::process::Child> {
+    const ETXTBSY: i32 = 26;
+    let mut tries = 0;
+    loop {
+        match command.spawn() {
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Runs `command` to completion, or kills it once `timeout` has passed.
 pub fn output_within(command: &mut Command, timeout: Duration) -> Ended {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = match command.spawn() {
+    let mut child = match spawn_retrying_busy(command) {
         Ok(child) => child,
         Err(e) => return Ended::Failed(e.to_string()),
     };
