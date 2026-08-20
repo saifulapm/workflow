@@ -12,10 +12,9 @@ yourself. Each question carries a recommended answer, so silence is an answer
 — for small trade-offs only. Scope questions — what the product is, what
 stays, what goes — are never resolved by silence: park and keep waiting.
 Facts are researched, never asked: versions, file layouts, existing names,
-current behaviour. Ask about intent, priorities and trade-offs, and ask
-enough: a plan that guessed is dearer than a plan that asked. A rewrite
-inventories the predecessor's whole surface (docs, backlog, screenshots)
-into mem first; cuts are marked by Saiful, never defaulted.
+current behaviour. Ask about intent, priorities and trade-offs — and ask
+enough. A rewrite inventories the predecessor's whole surface (docs,
+backlog, screenshots) into mem first; cuts are Saiful's, never defaulted.
 
 ## 2. The spec
 
