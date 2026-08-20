@@ -1,5 +1,5 @@
-//! `workflow lint-msg` -- the two tiers of spec §3, over a commit message, a
-//! branch name or a PR body.
+//! `workflow lint-msg` -- the three tiers of spec §3, over a commit message,
+//! a branch name or a PR body.
 
 use std::io::{IsTerminal, Read};
 use std::path::Path;
@@ -121,12 +121,55 @@ const WARN: &[(&str, Warn)] = &[
     ("ship review", Warn::Loose("ship review")),
 ];
 
+/// Tier three, style: machine tells in the writing itself. Warn, cleared per
+/// term by a lint-exception ruling, exactly as tier two is.
+///
+/// Only tells a substring can catch belong here: dash and quote characters,
+/// the vocabulary, the filler phrases. Shape-level tells (formulaic structure,
+/// vague attribution, sterile voice) are judgment and live in the unslop
+/// skill, read where the text is written. Verbs are matched on their stem so
+/// every inflection hits; `landscape` and `underscore` are left out because
+/// screens have orientations and identifiers have underscores.
+const STYLE: &[(&str, Warn)] = &[
+    ("em dash", Warn::Chars(&['\u{2014}'])),
+    ("en dash", Warn::Chars(&['\u{2013}'])),
+    (
+        "curly quote",
+        Warn::Chars(&['\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}']),
+    ),
+    ("delve", Warn::Loose("delv")),
+    ("enhance", Warn::Loose("enhanc")),
+    ("leverage", Warn::Loose("leverag")),
+    ("utilize", Warn::Loose("utiliz")),
+    ("facilitate", Warn::Loose("facilitat")),
+    ("showcase", Warn::Loose("showcas")),
+    ("foster", Warn::Loose("foster")),
+    ("garner", Warn::Loose("garner")),
+    ("tapestry", Warn::Word("tapestry", true)),
+    ("testament", Warn::Word("testament", true)),
+    ("pivotal", Warn::Word("pivotal", true)),
+    ("crucial", Warn::Word("crucial", true)),
+    ("vibrant", Warn::Word("vibrant", true)),
+    ("intricate", Warn::Word("intricate", true)),
+    ("interplay", Warn::Word("interplay", true)),
+    ("additionally", Warn::Word("additionally", true)),
+    ("boast", Warn::Word("boast", true)),
+    ("serves as", Warn::Loose("serves as")),
+    ("stands as", Warn::Loose("stands as")),
+    ("in order to", Warn::Loose("in order to")),
+    ("due to the fact", Warn::Loose("due to the fact")),
+    ("it is important to note", Warn::Loose("it is important to note")),
+    ("not just", Warn::Loose("not just")),
+];
+
 #[derive(Clone, Copy)]
 enum Warn {
     /// `(^|[^A-Za-z])<word>s?([^A-Za-z]|$)`; the flag is case-insensitivity.
     Word(&'static str, bool),
     /// A substring, case-insensitively.
     Loose(&'static str),
+    /// Any one of these characters.
+    Chars(&'static [char]),
 }
 
 fn alpha(c: u8) -> bool {
@@ -165,6 +208,7 @@ impl Warn {
         match self {
             Warn::Word(w, icase) => word_hit(text, w, *icase),
             Warn::Loose(w) => text.to_ascii_lowercase().contains(*w),
+            Warn::Chars(set) => text.chars().any(|c| set.contains(&c)),
         }
     }
 }
@@ -215,29 +259,39 @@ pub fn lint_text(text: &str) -> bool {
         return false;
     }
 
-    let mut warned: Vec<&str> = Vec::new();
     let mut exceptions: Option<String> = None;
-    for (term, rule) in WARN {
-        if !text.lines().any(|l| rule.hits(l)) {
-            continue;
+    let mut uncleared = |table: &[(&'static str, Warn)]| -> Vec<&'static str> {
+        let mut out = Vec::new();
+        for (term, rule) in table {
+            if !text.lines().any(|l| rule.hits(l)) {
+                continue;
+            }
+            let body = exceptions.get_or_insert_with(|| memcli::ruling_bodies("lint-exception"));
+            if !body
+                .to_ascii_lowercase()
+                .contains(&term.to_ascii_lowercase())
+            {
+                out.push(*term);
+            }
         }
-        let body = exceptions.get_or_insert_with(|| memcli::ruling_bodies("lint-exception"));
-        if !body
-            .to_ascii_lowercase()
-            .contains(&term.to_ascii_lowercase())
-        {
-            warned.push(term);
-        }
+        out
+    };
+    let warned = uncleared(WARN);
+    let styled = uncleared(STYLE);
+    for term in &warned {
+        warn(format!(
+            "lint warning: \"{term}\" reads as process vocabulary here."
+        ));
     }
-    if !warned.is_empty() {
-        for term in &warned {
-            warn(format!(
-                "lint warning: \"{term}\" reads as process vocabulary here."
-            ));
-        }
-        warn("if the word belongs to the product, clear it once --");
+    for term in &styled {
+        warn(format!(
+            "lint warning: \"{term}\" reads as machine writing here."
+        ));
+    }
+    if !warned.is_empty() || !styled.is_empty() {
+        warn("if the wording is deliberate, clear the term once --");
         warn(
-            "  mem save --kind ruling --type lint-exception \"<term> is the product's own word - why - cost if wrong\"",
+            "  mem save --kind ruling --type lint-exception \"<term> is deliberate here - why - cost if wrong\"",
         );
     }
     true
@@ -281,6 +335,14 @@ mod tests {
 
     fn warn_terms(text: &str) -> Vec<&'static str> {
         WARN.iter()
+            .filter(|(_, rule)| text.lines().any(|l| rule.hits(l)))
+            .map(|(t, _)| *t)
+            .collect()
+    }
+
+    fn style_terms(text: &str) -> Vec<&'static str> {
+        STYLE
+            .iter()
             .filter(|(_, rule)| text.lines().any(|l| rule.hits(l)))
             .map(|(t, _)| *t)
             .collect()
@@ -340,5 +402,48 @@ mod tests {
     fn the_plural_and_the_boundary_both_count() {
         assert_eq!(warn_terms("Retire the agents"), vec!["agent"]);
         assert!(warn_terms("The agency approved it").is_empty());
+    }
+
+    #[test]
+    fn the_style_tier_names_each_machine_tell() {
+        for (text, term) in [
+            ("Tidy the loop \u{2014} again", "em dash"),
+            ("Cover pages 3\u{2013}7 of the report", "en dash"),
+            ("Quote the \u{201c}path\u{201d} literally", "curly quote"),
+            ("Delving into the retry loop", "delve"),
+            ("Enhance the error output", "enhance"),
+            ("Leveraged the cache for lookups", "leverage"),
+            ("Utilize the new index", "utilize"),
+            ("Facilitates the handover", "facilitate"),
+            ("Showcasing the panel states", "showcase"),
+            ("Garnered from the run logs", "garner"),
+            ("A testament to the parser", "testament"),
+            ("A pivotal change to the gate", "pivotal"),
+            ("A crucial fix, apparently", "crucial"),
+            ("Additionally, retry on timeout", "additionally"),
+            ("Boasts a smaller manifest", "boast"),
+            ("Serves as the fallback path", "serves as"),
+            ("It stands as the only caller", "stands as"),
+            ("In order to cut startup time", "in order to"),
+            ("Due to the fact that mysql sleeps", "due to the fact"),
+            ("It is important to note the cap", "it is important to note"),
+            ("Not just faster, but safer", "not just"),
+        ] {
+            assert_eq!(style_terms(text), vec![term], "for {text:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_engineering_voice_passes_the_style_tier() {
+        for text in [
+            "Extract cart pricing into a service",
+            "Fix the checkout total when a coupon is applied",
+            "Use the new index for lookups",
+            "Cut startup time by caching the manifest",
+            "Order the retries by age -- oldest first",
+            "Reject a \"quoted\" path with straight quotes",
+        ] {
+            assert!(style_terms(text).is_empty(), "should have passed: {text:?}");
+        }
     }
 }

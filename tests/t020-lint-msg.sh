@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# workflow lint-msg: the two tiers of spec §3, --string for branch names and PR
-# bodies, and clearing a warn term with a lint-exception ruling (AC4).
+# workflow lint-msg: the three tiers of spec §3, --string for branch names and
+# PR bodies, and clearing a warn term with a lint-exception ruling (AC4).
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -65,6 +65,21 @@ clean 'Rename the column to ai_summary' 'a lowercase ai is not the initialism'
 clean 'Credit the photograph to Ai Nakamura' 'nor is a name that happens to be Ai'
 warns 'Refresh the User Agent string' 'while Agent still warns, agent being an ordinary word'
 warns 'Note the ORCHESTRATION step in the README' 'and so does a shouted orchestration'
+
+## --------------------------------------------------------------- style tier
+
+warns 'Tidy the loop — again' 'an em dash'
+warns 'Delving into the retry loop' 'the word delve, inflected'
+warns 'In order to cut startup time' 'the phrase in order to'
+clean 'Order the retries by age -- oldest first' 'a double hyphen is not an em dash'
+
+"$MEM_BIN" save --kind ruling --type lint-exception \
+	'"em dash" is deliberate here - the body quotes upstream text verbatim - cost if wrong: a leaked tell' >/dev/null
+run workflow lint-msg --string 'Tidy the loop — again'
+is "$RC" 0 'lint-exception: a cleared style term exits 0'
+unlike "$OUT" 'warn' 'lint-exception: and is no longer warned about'
+run workflow lint-msg --string 'Delving into the retry loop'
+like "$OUT" 'warn' 'lint-exception: clears only the style term it names'
 
 ## ----------------------------------------------------- per-term exceptions
 
