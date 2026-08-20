@@ -6,10 +6,33 @@ source "$(dirname -- "$0")/lib.sh"
 t_init
 
 export WF_TMP="$T_TMP"
+# The stub speaks the whole surface the backend drives: a --bg dispatch, the
+# agents listing (every recorded session, already idle — the stub's work is
+# done the moment it returns), and stop. Env and args are recorded only for
+# the dispatch: the agents calls come from the orchestrator's own unscrubbed
+# environment and must not overwrite the worker's.
 write_exec "$T_TMP/bin/claude" <<'CLAUDE'
 #!/bin/sh
+case "$1" in
+agents)
+	out='['; sep=''
+	if [ -f "$WF_TMP/sessions" ]; then
+		while IFS= read -r sid; do
+			out="$out$sep{\"pid\":1,\"id\":\"id-$sid\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"status\":\"idle\"}"
+			sep=','
+		done <"$WF_TMP/sessions"
+	fi
+	printf '%s]\n' "$out"
+	exit 0 ;;
+stop) exit 0 ;;
+esac
 env >"$WF_TMP/claude-env"
 printf '%s\n' "$*" >>"$WF_TMP/claude-args"
+prev=''
+for a in "$@"; do
+	[ "$prev" = "--session-id" ] && printf '%s\n' "$a" >>"$WF_TMP/sessions"
+	prev=$a
+done
 printf '{"is_error":false,"total_cost_usd":0.01,"result":"ok"}\n'
 CLAUDE
 
@@ -80,10 +103,10 @@ unlike "$envdump" '^WORKFLOW_HOOK_SEEN=' \
 ## ------------------------------------------------------------- the flags
 
 args=$(cat "$T_TMP/claude-args")
-like "$args" '-p --output-format json' 'print mode with json output'
+like "$args" '\-\-bg' 'workers are background sessions, visible in the agents view'
+unlike "$args" '\-p \-\-output-format' 'and never print mode'
 like "$args" '--dangerously-skip-permissions' 'permissions are skipped in the worktree'
 like "$args" '--max-budget-usd 3' 'the worker budget knob reaches the command line'
-like "$args" '--max-turns 7' 'and so does the turn ceiling'
 like "$args" '--model haiku' 'and the model'
 like "$args" '--session-id [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}' \
 	'the session id is a uuid, which is what --session-id insists on'
@@ -119,7 +142,27 @@ like "$body" "$rundir/t1.status" 'the brief names the status file by path'
 write_exec "$T_TMP/bin/claude" <<'CLAUDE'
 #!/bin/sh
 # A worker that does the job: it reads the brief it was pointed at, writes the
-# one file the task owns, commits it and reports ready.
+# one file the task owns, commits it and reports ready. Same agents/stop
+# surface as the first stub — the work happens during the dispatch call, so
+# every listed session is already idle.
+case "$1" in
+agents)
+	out='['; sep=''
+	if [ -f "$WF_TMP/sessions" ]; then
+		while IFS= read -r sid; do
+			out="$out$sep{\"pid\":1,\"id\":\"id-$sid\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"status\":\"idle\"}"
+			sep=','
+		done <"$WF_TMP/sessions"
+	fi
+	printf '%s]\n' "$out"
+	exit 0 ;;
+stop) exit 0 ;;
+esac
+prev=''
+for a in "$@"; do
+	[ "$prev" = "--session-id" ] && printf '%s\n' "$a" >>"$WF_TMP/sessions"
+	prev=$a
+done
 for a in "$@"; do prompt=$a; done
 brief=$(printf '%s' "$prompt" | sed -n 's/^Read \(.*\) and execute it exactly\.$/\1/p')
 [ -r "$brief" ] || { printf '{"is_error":true,"result":"no brief"}\n'; exit 0; }

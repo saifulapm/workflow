@@ -264,7 +264,9 @@ impl Run {
     }
 
     fn record_cost(&self, task: &str) {
-        let outcome = self.backend.result(&self.dir.join(format!("{task}.json")));
+        let outcome = self
+            .backend
+            .result(&self.handle(task), &self.dir.join(format!("{task}.json")));
         let line = format!("{task}\t{}\n", outcome.cost);
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -404,7 +406,9 @@ impl Run {
 
     fn finish(&self, task: &str) {
         self.record_cost(task);
-        let outcome = self.backend.result(&self.dir.join(format!("{task}.json")));
+        let outcome = self
+            .backend
+            .result(&self.handle(task), &self.dir.join(format!("{task}.json")));
         if !outcome.ok {
             // No pidfile and no result: the template never got as far as either,
             // so this is a dispatch that did not happen rather than a worker that

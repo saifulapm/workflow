@@ -2,12 +2,14 @@
 //!
 //! amx is the execution and visibility substrate, not an orchestrator: `run`
 //! dispatches *onto* a backend and keeps every policy decision -- waves,
-//! ownership, the merge gate, park -- to itself. The `claude` backend below is
-//! today's detached print-mode worker: a shell template, a pidfile, a session
-//! id that `--session-id` insists is a UUID, and a transcript to watch. An
-//! `amx` backend maps the same four questions onto `amx new` / `amx ls` /
-//! `amx result` / `amx stop` and deletes the pidfile and group-kill machinery
-//! with nothing above it changing.
+//! ownership, the merge gate, park -- to itself. The `claude` backend below
+//! launches every worker as a `claude --bg` session: visible in the agents
+//! view, attachable, ended with `claude stop`, answered for by
+//! `claude agents --json`. A custom `WORKFLOW_WORKER_CMD` template keeps the
+//! legacy process semantics (pidfile, signals, result document) -- that is
+//! the test seam. An `amx` backend maps the same four questions onto
+//! `amx new` / `amx ls` / `amx result` / `amx stop` with nothing above it
+//! changing.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -62,29 +64,36 @@ pub trait WorkerBackend {
     fn last_activity(&self, h: &Handle) -> i64;
     /// Stop the worker and everything it started.
     fn stop(&self, h: &Handle, grace_s: i64);
-    /// What the worker left behind.
-    fn result(&self, out: &Path) -> Outcome;
+    /// What the worker left behind: a print-mode result document at `out`, or
+    /// the agents list's word on the session named by the handle.
+    fn result(&self, h: &Handle, out: &Path) -> Outcome;
 }
 
-/// The dispatch template (spec §8.3). Every placeholder sits where a single
-/// shell-quoted word is legal -- at the outer level, or as a positional argument
-/// to the inner `sh -c` -- so a project whose path has a space in it dispatches
-/// like any other. A placeholder nested inside the inner script's own quoting
-/// could not be quoted correctly for both shells at once.
+/// The dispatch template (spec §8.3, amended: workers are `claude --bg`
+/// sessions, never print mode -- they appear in `claude agents`, can be
+/// attached, and end as resident idle sessions). Every placeholder sits where
+/// a single shell-quoted word is legal -- at the outer level, or as a
+/// positional argument to the inner `sh -c` -- so a project whose path has a
+/// space in it dispatches like any other.
 ///
 /// The `env -u` sweep is the credential scrub of spec §1. The two workflow
 /// variables go with it: an orchestrator run under WORKFLOW_ALLOW_PUSH would
 /// otherwise release the pre-push refusal for every worker it dispatches, and an
 /// inherited WORKFLOW_HOOK_SEEN would tell a worker's first commit that the gate
 /// had already run.
-pub const WORKER_CMD_DEFAULT: &str = r#"cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c 'echo $$ > "$1"; \
+///
+/// No setsid and no pidfile: `claude --bg` hands the session to its own
+/// service and returns. The session id we mint is the whole handle -- the
+/// agents list answers for it from then on. `--max-budget-usd` rides along
+/// but its enforcement outside print mode is unverified; the deadline, the
+/// worker cap and one-task briefs are the bounds that are known to hold.
+pub const WORKER_CMD_DEFAULT: &str = r#"cd {worktree} && WORKFLOW_AGENT=1 sh -c '\
   exec env -u GITHUB_API_KEY -u WORKFLOW_ALLOW_PUSH -u WORKFLOW_HOOK_SEEN \
   $(env | grep -oE "^[A-Za-z0-9_]*(_TOKEN|_KEY|_SECRET)=|^(GH_|GITHUB_|AWS_|STRIPE_)[A-Za-z0-9_]*=" | sed "s/=$//; s/^/-u /" | tr "\n" " ") \
-  claude -p --output-format json \
-  --dangerously-skip-permissions --max-budget-usd "$3" --max-turns "$4" \
-  --model "$5" --session-id "$6" \
-  "Read $2 and execute it exactly."' \
-  workflow-worker {pidfile} {brief} {budget} {turns} {model} {session} > {out} 2> {err} &"#;
+  claude --bg --dangerously-skip-permissions --max-budget-usd "$2" \
+  --model "$3" --session-id "$4" \
+  "Read $1 and execute it exactly."' \
+  workflow-worker {brief} {budget} {model} {session} > {out} 2> {err}"#;
 
 /// The value as one shell word, whatever is in it.
 fn shq(value: &str) -> String {
@@ -103,6 +112,14 @@ impl ClaudeBackend {
             Ok(v) if !v.is_empty() => v,
             _ => WORKER_CMD_DEFAULT.to_string(),
         }
+    }
+
+    /// A custom template owns its own process shape (the test fakes write
+    /// pidfiles and result documents), so it gets the legacy process
+    /// semantics and never a `claude agents` call — which also keeps every
+    /// fixture run hermetic on a machine with real sessions running.
+    fn custom_template() -> bool {
+        std::env::var("WORKFLOW_WORKER_CMD").is_ok_and(|v| !v.is_empty())
     }
 
     pub fn command_for(d: &Dispatch) -> String {
@@ -136,6 +153,37 @@ impl ClaudeBackend {
     }
 }
 
+/// The agents-list row for one session: (short id, status). Shells out to
+/// `claude agents --json --all` -- `--all` because a finished session leaves
+/// the live list but must still answer for its ending.
+fn agents_row(session: &str) -> Option<(String, String)> {
+    let out = Command::new("claude")
+        .args(["agents", "--json", "--all"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    row_in(&String::from_utf8_lossy(&out.stdout), session)
+}
+
+/// The pure half of `agents_row`, so the parse is testable without a claude.
+fn row_in(json: &str, session: &str) -> Option<(String, String)> {
+    let rows: serde_json::Value = serde_json::from_str(json).ok()?;
+    for row in rows.as_array()? {
+        if row.get("sessionId").and_then(|s| s.as_str()) == Some(session) {
+            let field = |k: &str| {
+                row.get(k)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            return Some((field("id"), field("status")));
+        }
+    }
+    None
+}
+
 impl WorkerBackend for ClaudeBackend {
     fn mint_session(&self) -> String {
         uuid::Uuid::new_v4().to_string()
@@ -155,12 +203,22 @@ impl WorkerBackend for ClaudeBackend {
         if !pid.is_empty() {
             return sys::pid_alive(&pid);
         }
-        // No pidfile yet: the session id is the only handle we have, and if the
-        // transcript is missing too there is nothing alive to wait for.
-        if !h.session.is_empty() && sys::pgrep(&h.session) {
-            return true;
+        if Self::custom_template() {
+            // Legacy process semantics: no pidfile means the dispatch never
+            // got that far unless something with the session id still runs.
+            if !h.session.is_empty() && sys::pgrep(&h.session) {
+                return true;
+            }
+            return paths::transcript_path(&h.worktree, &h.session).exists();
         }
-        paths::transcript_path(&h.worktree, &h.session).exists()
+        match agents_row(&h.session) {
+            // A resident session is alive while it works; idle or waiting is
+            // an ending -- the status file says which kind.
+            Some((_, status)) => status == "busy",
+            // Not listed: either still launching (claim alive; the stall
+            // deadline decides) or long gone with a transcript behind it.
+            None => !paths::transcript_path(&h.worktree, &h.session).exists(),
+        }
     }
 
     fn last_activity(&self, h: &Handle) -> i64 {
@@ -170,39 +228,62 @@ impl WorkerBackend for ClaudeBackend {
 
     fn stop(&self, h: &Handle, grace_s: i64) {
         let pid = Self::pid(h);
-        if pid.is_empty() {
-            if !h.session.is_empty() {
-                sys::pkill(&h.session);
+        if !pid.is_empty() {
+            sys::kill_group(&pid, "TERM");
+            let mut waited = 0;
+            while waited < grace_s * 5 && sys::pid_alive(&pid) {
+                sys::sleep(0.2);
+                waited += 1;
             }
+            sys::kill_group(&pid, "KILL");
             return;
         }
-        sys::kill_group(&pid, "TERM");
-        let mut waited = 0;
-        while waited < grace_s * 5 && sys::pid_alive(&pid) {
-            sys::sleep(0.2);
-            waited += 1;
+        // `claude stop` ends the session and keeps its conversation.
+        if !Self::custom_template()
+            && let Some((id, _)) = agents_row(&h.session)
+            && !id.is_empty()
+        {
+            let _ = Command::new("claude")
+                .args(["stop", &id])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            return;
         }
-        sys::kill_group(&pid, "KILL");
+        if !h.session.is_empty() {
+            sys::pkill(&h.session);
+        }
     }
 
-    fn result(&self, out: &Path) -> Outcome {
-        let Ok(text) = std::fs::read_to_string(out) else {
-            return Outcome::default();
-        };
-        if text.is_empty() {
+    fn result(&self, h: &Handle, out: &Path) -> Outcome {
+        // Print-mode JSON first: the fakes and any custom template speak it.
+        if let Ok(text) = std::fs::read_to_string(out)
+            && !text.trim().is_empty()
+            && let Ok(serde_json::Value::Object(v)) =
+                serde_json::from_str::<serde_json::Value>(&text)
+        {
+            return Outcome {
+                ok: !v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false),
+                cost: v
+                    .get("total_cost_usd")
+                    .and_then(|c| c.as_f64())
+                    .unwrap_or(0.0),
+            };
+        }
+        // A --bg session leaves no result document; ending non-busy in the
+        // agents list is the clean end, and the status file plus the merge
+        // gate judge the work. Cost is not knowable here, so the run budget
+        // breaker is inert on this backend -- the deadline, the worker cap
+        // and one-task briefs are the bounds.
+        if Self::custom_template() {
             return Outcome::default();
         }
-        let Ok(serde_json::Value::Object(v)) = serde_json::from_str::<serde_json::Value>(&text)
-        else {
-            // Malformed, or not an object: the worker did not report cleanly.
-            return Outcome::default();
-        };
-        Outcome {
-            ok: !v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false),
-            cost: v
-                .get("total_cost_usd")
-                .and_then(|c| c.as_f64())
-                .unwrap_or(0.0),
+        match agents_row(&h.session) {
+            Some((_, status)) => Outcome {
+                ok: status != "busy",
+                cost: 0.0,
+            },
+            None => Outcome::default(),
         }
     }
 }
@@ -233,9 +314,22 @@ mod tests {
     fn every_placeholder_is_substituted_as_one_shell_word() {
         let cmd = ClaudeBackend::command_for(&fixture());
         assert!(cmd.contains("cd '/state/my project/t1'"));
-        assert!(cmd.contains("'/runs/t1.pid'"));
+        assert!(cmd.contains("'/cache/briefs/t1.md'"));
         assert!(cmd.contains("> '/runs/t1.json' 2> '/runs/t1.err'"));
         assert!(!cmd.contains('{'), "a placeholder was left behind: {cmd}");
+    }
+
+    #[test]
+    fn the_agents_row_parse_finds_a_session_and_only_that_session() {
+        let json = r#"[
+            {"pid":1,"id":"aa11","kind":"background","sessionId":"s-one","status":"busy"},
+            {"pid":2,"id":"bb22","kind":"background","sessionId":"s-two","status":"idle"}
+        ]"#;
+        assert_eq!(row_in(json, "s-one"), Some(("aa11".into(), "busy".into())));
+        assert_eq!(row_in(json, "s-two"), Some(("bb22".into(), "idle".into())));
+        assert_eq!(row_in(json, "s-three"), None);
+        assert_eq!(row_in("not json", "s-one"), None);
+        assert_eq!(row_in("{}", "s-one"), None);
     }
 
     #[test]
@@ -249,10 +343,9 @@ mod tests {
     #[test]
     fn the_scrub_and_the_flags_are_in_the_shipped_template() {
         for needle in [
-            "-p --output-format json",
+            "claude --bg",
             "--dangerously-skip-permissions",
             "--max-budget-usd",
-            "--max-turns",
             "--session-id",
             "-u GITHUB_API_KEY",
             "-u WORKFLOW_ALLOW_PUSH",
@@ -265,6 +358,9 @@ mod tests {
                 "the template lost {needle}"
             );
         }
+        // Print mode is banned for workers: sessions must be visible in the
+        // agents view and attachable, and -p is neither.
+        assert!(!WORKER_CMD_DEFAULT.contains(" -p "), "{WORKER_CMD_DEFAULT}");
     }
 
     #[test]
