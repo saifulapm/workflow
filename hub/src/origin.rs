@@ -131,25 +131,6 @@ impl Guard {
         }
         false
     }
-
-    /// The write rule for machine peers (`POST /api/notify`): a request that
-    /// carries browser evidence is held to the same rules as `may_write`; one
-    /// that carries none — a sibling hub's curl, which sends no Origin — is
-    /// admitted. The default flips because the stakes differ: `/answer`
-    /// changes state a waiting agent acts on, `/api/notify` shows a line of
-    /// text on a screen, and the tailnet-only exposure plus `host_allowed`
-    /// remain the outer boundary. Residual risk, stated: a legacy browser
-    /// with no Sec-Fetch-Site could cross-site POST a spoofed popup; modern
-    /// ones announce themselves and are refused.
-    pub fn may_machine_write(&self, headers: &impl HeaderSource) -> bool {
-        if let Some(site) = headers.header("sec-fetch-site") {
-            return site == "same-origin";
-        }
-        if let Some(origin) = headers.header("origin") {
-            return origin != "null" && self.origin_allowed(origin);
-        }
-        true
-    }
 }
 
 /// So the check can be tested without building a whole `Request`.

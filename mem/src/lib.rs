@@ -14,7 +14,6 @@ pub mod ids;
 pub mod index;
 pub mod item;
 pub mod maint;
-pub mod notify;
 pub mod paths;
 pub mod project;
 pub mod questions;

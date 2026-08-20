@@ -72,18 +72,6 @@ fn shell_alive() -> bool {
         .unwrap_or(false)
 }
 
-/// One desktop notification, by argv, never a shell. The body is the
-/// doorbell's own minimal message — machine, project, link, no question text.
-pub fn notify_send(body: &str) -> bool {
-    Command::new("notify-send")
-        .args(["-a", "hub", body])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

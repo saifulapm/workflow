@@ -38,6 +38,8 @@ fn ask_env(
 }
 
 /// A stand-in for notify-send that records the arguments it was given.
+/// A stand-in that records any notification mem tries to send. Since hub's
+/// doorbell became the one bell, the record must stay empty.
 fn notify_stub(w: &World) -> std::path::PathBuf {
     let script = w.dir.join("notify-stub.sh");
     std::fs::write(
@@ -57,7 +59,7 @@ fn notify_stub(w: &World) -> std::path::PathBuf {
 }
 
 #[test]
-fn ask_returns_immediately_with_an_id_and_notifies() {
+fn ask_returns_immediately_and_rings_no_bell_of_its_own() {
     let w = World::new("q-ask");
     let repo = w.repo("thing", None);
     let log = notify_stub(&w);
@@ -80,11 +82,14 @@ fn ask_returns_immediately_with_an_id_and_notifies() {
     let short = v["short_id"].as_str().unwrap().to_string();
     assert_eq!(v["options"], serde_json::json!(["yes", "no"]));
 
+    // hub's doorbell is the one bell; mem ringing too was the double
+    // notification, and mem's carried the question text besides.
     let notified = std::fs::read_to_string(w.dir.join("notified.txt")).unwrap_or_default();
     assert!(
-        notified.contains(&short),
-        "the notification names the question: {notified:?}"
+        notified.is_empty(),
+        "ask must not send its own notification: {notified:?}"
     );
+    let _ = &short;
 
     // The question is listed and still pending.
     let out = ask_env(&w, &repo, &["questions", "--pending"], None);

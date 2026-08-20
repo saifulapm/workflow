@@ -43,9 +43,6 @@ pub struct Doorbell {
     pub machine: String,
     /// Where the buzz sends the phone.
     pub hub_url: String,
-    /// The other machines' hubs, asked "is anyone watching you?" before the
-    /// phone rings (config `siblings`).
-    pub siblings: Vec<String>,
     pub poll: Duration,
 }
 
@@ -56,7 +53,6 @@ impl Doorbell {
             ntfy_url: app.config.ntfy_url(),
             machine: app.machine.clone(),
             hub_url: hub_url(app),
-            siblings: app.config.siblings.clone(),
             poll: poll_interval(),
         })
     }
@@ -133,26 +129,16 @@ impl Doorbell {
         state.seeding = false;
     }
 
-    /// Where the bell rings. A watched machine gets a desktop notification —
-    /// a phone that buzzes for someone sitting at the desk is the defect this
-    /// exists to prevent — and the phone rings only for an empty house. Every
-    /// quiet path that fails falls through to ntfy, because a bell that can be
-    /// lost silently is worse than a duplicate.
+    /// Where the bell rings: the phone, and only for an empty house. A watched
+    /// machine gets nothing — whoever is at it sees questions in the session
+    /// itself (a background agent asks through its own question tool when the
+    /// machine is watched; `mem ask` is the locked-screen channel), so any
+    /// bell here would be a duplicate on a screen already showing the thing.
     fn deliver(&self, project: &str) {
-        let body = self.body(project);
         if crate::presence::sample().watching() {
-            if crate::presence::notify_send(&body) {
-                return;
-            }
-            eprintln!("hub: doorbell: local notify-send failed; ringing the phone");
-        } else {
-            for sibling in &self.siblings {
-                if sibling_watching(sibling) && notify_sibling(sibling, &body) {
-                    return;
-                }
-            }
+            return;
         }
-        self.ring(&body);
+        self.ring(&self.body(project));
     }
 
     /// One POST, by argv. Never retried: §5 says a failure is logged and
@@ -191,33 +177,6 @@ impl Doorbell {
             )
         }
     }
-}
-
-/// Is anyone watching that machine? Unreachable, slow, or unparseable all
-/// read as "no" — the phone then rings, which is the noisy side to fail on.
-fn sibling_watching(base: &str) -> bool {
-    let url = format!("{}/api/presence", base.trim_end_matches('/'));
-    let out = Command::new("curl")
-        .args(["-fsS", "-m", CURL_TIMEOUT_SECONDS, &url])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => serde_json::from_slice::<serde_json::Value>(&o.stdout)
-            .ok()
-            .and_then(|v| v["watching"].as_bool())
-            .unwrap_or(false),
-        _ => false,
-    }
-}
-
-/// Hands the sibling the bell. False means the caller rings the phone.
-fn notify_sibling(base: &str, body: &str) -> bool {
-    let url = format!("{}/api/notify", base.trim_end_matches('/'));
-    let data = format!("body={}", crate::form::encode_component(body));
-    Command::new("curl")
-        .args(["-fsS", "-m", CURL_TIMEOUT_SECONDS, "-d", &data, &url])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 /// What one run of the doorbell carries between rounds.
@@ -306,7 +265,6 @@ mod tests {
             ntfy_url: "http://127.0.0.1:9/workflow-TOPIC".to_string(),
             machine: "macbook".to_string(),
             hub_url: "http://macbook:8787/".to_string(),
-            siblings: Vec::new(),
             poll: DEFAULT_POLL,
         };
         assert_eq!(

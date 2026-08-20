@@ -20,7 +20,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/activity", "GET"),
     ("/api/projects", "GET"),
     ("/api/presence", "GET"),
-    ("/api/notify", "POST"),
     ("/subscribe", "GET"),
 ];
 
@@ -100,7 +99,6 @@ impl App {
             "/api/presence" => {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
-            "/api/notify" => self.notify(request),
             "/subscribe" => self.subscribe(),
             _ => Response::not_found(),
         }
@@ -210,26 +208,6 @@ impl App {
 
     fn back(&self, banner: Banner) -> Response {
         Response::see_other(&format!("/{}", banner.query()))
-    }
-
-    /// A sibling hub handing this machine the bell (spec: presence routing).
-    /// The body is the doorbell's own minimal message; it is capped and passed
-    /// as one argv, never through a shell.
-    fn notify(&self, request: &Request) -> Response {
-        if !self.guard.may_machine_write(request) {
-            return Response::text(403, "browser writes are refused here");
-        }
-        let form = request.form();
-        let body = form.get("body").unwrap_or("").trim().to_string();
-        if body.is_empty() {
-            return Response::text(400, "empty body");
-        }
-        let body: String = body.chars().take(300).collect();
-        if crate::presence::notify_send(&body) {
-            Response::text(200, "notified")
-        } else {
-            Response::text(503, "notify-send failed")
-        }
     }
 
     /// §3: the topic as plain text and as both links. No QR, no image crate.

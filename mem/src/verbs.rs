@@ -656,11 +656,11 @@ pub fn ask(app: &App, question: &str, options: &[String]) -> Result<i32> {
         meta.options = Some(options.to_vec());
     }
     let written = crate::write::write_item(app, &identity, meta, question.to_string())?;
+    // No bell here: hub's doorbell owns delivery, and it knows whether anyone
+    // is watching. When mem rang its own notify-send too, every question
+    // arrived twice — and this one carried the question text, which the
+    // doorbell deliberately never does.
     crate::sync::trigger(&app.dirs.qshell_status_json());
-    crate::notify::notify(
-        "mem: a question is waiting",
-        &format!("#{}  {}", written.short_id, question),
-    );
     if app.json {
         println!(
             "{}",

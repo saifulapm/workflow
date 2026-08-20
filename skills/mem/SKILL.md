@@ -38,10 +38,12 @@ reads to overturn you cheaply.
 **Session end with work unfinished** → `mem handoff --set "<state and the exact
 next action>"`. Write the next action as a command someone could run.
 
-**A stop condition** → `mem ask "<question>" [--options a,b]`. Irreversible
-work, a secret, someone else's system, a changed contract. `ask` returns an id
-immediately and rings the machine; it does not wait. Never resolve your own
-stop condition.
+**A stop condition** → a question, on the right channel. Interactive sessions
+ask in the conversation. A background session asks with its own question tool
+while the machine is watched — `curl -fsS http://127.0.0.1:8787/api/presence`
+says `"watching":true` — and with `mem ask "<question>"` when it is not; the
+phone is the locked-screen path, and `ask` returns an id without waiting.
+Never resolve your own stop condition.
 
 **The workflow itself got in the way** → `mem save --project workflow
 "friction: <what bit you - where - what you expected>"`. File it and move on;
