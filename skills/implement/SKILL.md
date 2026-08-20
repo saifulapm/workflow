@@ -18,7 +18,8 @@ First action of the session:
    command said. Exit codes: 0 green · 1 failed · 2 no verifier · 3 test
    removal.
 5. Commit. Ordinary engineering voice, present tense, says what changed and
-   why. Stage only the files this task touched; never `git add -A`.
+   why. Plain words, no puffery; the unslop skill is the standard for any
+   longer prose. Stage only the files this task touched; never `git add -A`.
 6. `mem log "<what landed>"`.
 7. `/clear`, then the next task. (Interactive sessions only.)
 

@@ -21,6 +21,7 @@ Write it to mem:
 Aim for 900–1,600 tokens (bytes ÷ 4). Under that and the tasks are wishes; over
 and nobody reads it. Reference generously — file paths, existing classes, the
 commit that introduced the thing. UI work produces a mockup before tasks.
+Write it plain; the unslop skill's rules apply to specs too.
 
 ## 3. The grammar
 
