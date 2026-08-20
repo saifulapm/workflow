@@ -351,3 +351,43 @@ fn a_question_and_its_answer_live_in_the_same_project_tree() {
         "{kinds:?}"
     );
 }
+
+/// The listing JSON must say which questions are answered: the text mode has
+/// its ✓/? column, and a robot reading `--json` deserves the same fact.
+#[test]
+fn the_listing_json_carries_the_answered_flag() {
+    let w = World::new("q-answered-json");
+    let repo = w.repo("thing", None);
+
+    let asked: serde_json::Value = serde_json::from_slice(
+        &ask_env(&w, &repo, &["ask", "is this answered?", "--json"], None).stdout,
+    )
+    .unwrap();
+    let id = asked["short_id"].as_str().unwrap().to_string();
+    ask_env(&w, &repo, &["ask", "and this one?", "--json"], None);
+
+    let out = ask_env(&w, &repo, &["answer", &id, "yes it is"], None);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let out = ask_env(&w, &repo, &["questions", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = v["questions"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{v}");
+    for row in rows {
+        let want = row["short_id"] == serde_json::json!(id);
+        assert_eq!(
+            row["answered"],
+            serde_json::json!(want),
+            "answered must mirror the text mode's mark: {row}"
+        );
+    }
+
+    // The pending queue never contains an answered question, so there the
+    // field is always false — but it is still present, so one parser serves
+    // both listings.
+    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = v["questions"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows[0]["answered"], serde_json::json!(false), "{v}");
+}

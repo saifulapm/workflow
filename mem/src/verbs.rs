@@ -705,7 +705,15 @@ pub fn questions(
     };
 
     if app.json {
-        let items: Vec<serde_json::Value> = rows.iter().map(row_json).collect();
+        // The text mode has its ✓/? column; the JSON carries the same fact,
+        // or a robot reading the recent listing cannot tell answered from
+        // pending (found live, the first day a human answered one).
+        let mut items: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let mut v = row_json(row);
+            v["answered"] = json!(index.answer_to(&row.id)?.is_some());
+            items.push(v);
+        }
         println!("{}", serde_json::to_string(&json!({ "questions": items }))?);
     } else {
         for row in &rows {

@@ -100,6 +100,10 @@
     },
     "body": {
       "type": "string"
+    },
+    "answered": {
+      "description": "Question rows in `questions --json` only: whether an answer item exists. The JSON twin of the text listing's ✓/? column.",
+      "type": "boolean"
     }
   },
   "additionalProperties": false
