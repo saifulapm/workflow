@@ -514,6 +514,35 @@ impl Run {
         did
     }
 
+    /// Tasks an earlier orchestrator left dispatched when it died. Its lock
+    /// went with its file descriptors, so this run owns them now: the ones
+    /// still working are adopted as they stand, and the rest are collected
+    /// exactly as the reap loop would have collected them.
+    ///
+    /// Without this a stale `dispatched` either holds its wave open forever
+    /// against a worker that is gone, or gets dispatched a second time into a
+    /// worktree that still has the first one in it.
+    ///
+    /// Answers with the ids it took over. They are settled for this run --
+    /// merged, parked, or running -- and the waves below must not queue them
+    /// a second time.
+    fn adopt_stale(&self) -> Vec<String> {
+        let taken = self.dispatched();
+        for task in &taken {
+            if self.alive(task) {
+                warn(format!(
+                    "task {task}: still working, from a run that is gone -- adopted"
+                ));
+                continue;
+            }
+            warn(format!(
+                "task {task}: left dispatched by a run that is gone -- collecting it"
+            ));
+            self.finish(task);
+        }
+        taken
+    }
+
     fn kill_everything(&self) {
         for task in self.dispatched() {
             self.stop(&task);
@@ -741,7 +770,29 @@ impl Run {
         let _ = std::fs::remove_dir(&self.wt_root);
     }
 
+    /// Take down what the run set up -- but never out from under a worker.
+    ///
+    /// A task still in `dispatched` has a worker standing in that worktree.
+    /// The tree going out from under two live workers has happened, and the
+    /// first they knew of it was their own tooling disappearing mid-task; no
+    /// ending is worth that. A run that stops with anything dispatched leaves
+    /// every worktree where it is, for the next invocation to adopt or for
+    /// `workflow reap` to collect.
     fn cleanup(&self) {
+        let live = self.dispatched();
+        if !live.is_empty() {
+            warn(format!(
+                "run {}: {} task(s) are still dispatched -- nothing here is cleaned up",
+                self.plan.plan_id,
+                live.len()
+            ));
+            for t in &live {
+                warn(format!("  {t}: {}", self.worktree(t).display()));
+            }
+            warn("run again in this checkout to adopt them, or 'workflow reap' to collect them");
+            return;
+        }
+
         let git = self.git();
         for t in self.plan.ids() {
             let wt = self.worktree(&t);
@@ -902,6 +953,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             run.set_state(&t, PENDING);
         }
     }
+    let adopted = run.adopt_stale();
     memcli::log(&format!(
         "run {}: started at {} with {} tasks",
         run.plan.plan_id,
@@ -945,6 +997,12 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                         ));
                     }
                 }
+                continue;
+            }
+            // Taken over from the run that died: already merged, already
+            // parked, or running right now. The loop below waits on the ones
+            // still going; none of them gets dispatched a second time.
+            if adopted.contains(id) {
                 continue;
             }
             if run.deps_satisfied(&task) {
