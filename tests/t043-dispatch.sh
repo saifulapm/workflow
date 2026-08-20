@@ -7,18 +7,22 @@ t_init
 
 export WF_TMP="$T_TMP"
 # The stub speaks the whole surface the backend drives: a --bg dispatch, the
-# agents listing (every recorded session, already idle — the stub's work is
+# agents listing (every recorded session, already done — the stub's work is
 # done the moment it returns), and stop. Env and args are recorded only for
 # the dispatch: the agents calls come from the orchestrator's own unscrubbed
 # environment and must not overwrite the worker's.
+#
+# It mints its own session id and announces it, because that is what --bg
+# does: it ignores --session-id and picks its own. A stub that honoured the
+# flag let a run pass here while no real worker could ever be found again.
 write_exec "$T_TMP/bin/claude" <<'CLAUDE'
 #!/bin/sh
 case "$1" in
 agents)
 	out='['; sep=''
 	if [ -f "$WF_TMP/sessions" ]; then
-		while IFS= read -r sid; do
-			out="$out$sep{\"pid\":1,\"id\":\"id-$sid\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"status\":\"idle\"}"
+		while read -r sid cwd; do
+			out="$out$sep{\"id\":\"${sid%%-*}\",\"cwd\":\"$cwd\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"state\":\"done\",\"startedAt\":1}"
 			sep=','
 		done <"$WF_TMP/sessions"
 	fi
@@ -28,12 +32,12 @@ stop) exit 0 ;;
 esac
 env >"$WF_TMP/claude-env"
 printf '%s\n' "$*" >>"$WF_TMP/claude-args"
-prev=''
-for a in "$@"; do
-	[ "$prev" = "--session-id" ] && printf '%s\n' "$a" >>"$WF_TMP/sessions"
-	prev=$a
-done
-printf '{"is_error":false,"total_cost_usd":0.01,"result":"ok"}\n'
+n=$(cat "$WF_TMP/seq" 2>/dev/null || echo 0)
+n=$((n + 1)); printf '%s' "$n" >"$WF_TMP/seq"
+short=$(printf 'a1b2c3%02x' "$n")
+sid="$short-0000-4000-8000-000000000000"
+printf '%s %s\n' "$sid" "$PWD" >>"$WF_TMP/sessions"
+printf 'backgrounded · %s\n' "$short"
 CLAUDE
 
 # Nothing here may reach the real binary: the stub has to be the claude that
@@ -108,15 +112,20 @@ unlike "$args" '\-p \-\-output-format' 'and never print mode'
 like "$args" '--dangerously-skip-permissions' 'permissions are skipped in the worktree'
 like "$args" '--max-budget-usd 3' 'the worker budget knob reaches the command line'
 like "$args" '--model haiku' 'and the model'
-like "$args" '--session-id [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}' \
-	'the session id is a uuid, which is what --session-id insists on'
+unlike "$args" '--session-id' \
+	'--session-id is not passed: --bg ignores it and warns, and would leave the run holding an id no session has'
 like "$args" 'Read .*/t[12]\.md and execute it exactly' 'and the prompt points at the brief'
 
 rundir="$XDG_STATE_HOME/workflow/runs/app/dispatch-check"
 s1=$(cat "$rundir/t1.session")
 s2=$(cat "$rundir/t2.session")
-isnt "$s1" "$s2" 'each dispatch mints its own session id'
-is "$(cut -f2 "$rundir/costs.tsv" | sort -u)" '0.01' "both workers' costs landed in the ledger"
+isnt "$s1" "$s2" 'each dispatch gets its own session id'
+# The recorded handle is the one --bg announced, resolved through the agents
+# listing to the full id -- not the uuid the orchestrator minted going in.
+is "$s1" 'a1b2c301-0000-4000-8000-000000000000' \
+	'the session recorded is the one the backgrounded session actually got'
+is "$(cut -f2 "$rundir/costs.tsv" | sort -u)" '0' \
+	'a ledger row per worker, at the zero cost a --bg session can report'
 
 ## ------------------------------------------------------------- the brief
 
@@ -144,13 +153,13 @@ write_exec "$T_TMP/bin/claude" <<'CLAUDE'
 # A worker that does the job: it reads the brief it was pointed at, writes the
 # one file the task owns, commits it and reports ready. Same agents/stop
 # surface as the first stub — the work happens during the dispatch call, so
-# every listed session is already idle.
+# every listed session is already done by the time anything asks after it.
 case "$1" in
 agents)
 	out='['; sep=''
 	if [ -f "$WF_TMP/sessions" ]; then
-		while IFS= read -r sid; do
-			out="$out$sep{\"pid\":1,\"id\":\"id-$sid\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"status\":\"idle\"}"
+		while read -r sid cwd; do
+			out="$out$sep{\"id\":\"${sid%%-*}\",\"cwd\":\"$cwd\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"state\":\"done\",\"startedAt\":1}"
 			sep=','
 		done <"$WF_TMP/sessions"
 	fi
@@ -158,14 +167,9 @@ agents)
 	exit 0 ;;
 stop) exit 0 ;;
 esac
-prev=''
-for a in "$@"; do
-	[ "$prev" = "--session-id" ] && printf '%s\n' "$a" >>"$WF_TMP/sessions"
-	prev=$a
-done
 for a in "$@"; do prompt=$a; done
 brief=$(printf '%s' "$prompt" | sed -n 's/^Read \(.*\) and execute it exactly\.$/\1/p')
-[ -r "$brief" ] || { printf '{"is_error":true,"result":"no brief"}\n'; exit 0; }
+[ -r "$brief" ] || { printf 'no brief\n' >&2; exit 1; }
 task=$(basename "$brief" .md)
 status=$(sed -n 's/^Append one line per state change to \(.*\):$/\1/p' "$brief")
 file=$(sed -n 's/^ *Files: *//p' "$brief" | head -1)
@@ -175,7 +179,12 @@ printf '%s\n' "$task" >"$file"
 git add "$file"
 git -c core.hooksPath=/dev/null commit -qm "Add the $task file"
 printf '%s ready merge-ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
-printf '{"is_error":false,"total_cost_usd":0.02,"result":"ok"}\n'
+n=$(cat "$WF_TMP/seq" 2>/dev/null || echo 0)
+n=$((n + 1)); printf '%s' "$n" >"$WF_TMP/seq"
+short=$(printf 'a1b2c3%02x' "$n")
+sid="$short-0000-4000-8000-000000000000"
+printf '%s %s\n' "$sid" "$PWD" >>"$WF_TMP/sessions"
+printf 'backgrounded · %s\n' "$short"
 CLAUDE
 
 new_repo 'my project'

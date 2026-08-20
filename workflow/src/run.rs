@@ -271,10 +271,22 @@ impl Run {
             env: self.env.clone(),
         };
 
+        // Recorded before the worker exists, so a run that dies between here
+        // and the next line leaves a task that is plainly mid-dispatch rather
+        // than one that looks untouched.
         self.set_state(task, DISPATCHED);
-        warn(format!("task {task}: dispatched (session {session})"));
+        let handle = self.backend.dispatch(&d);
+        // What the backend actually started, which on `claude --bg` is not
+        // what was minted. Everything that asks after this worker later --
+        // liveness, the stop, the transcript -- reads this file.
+        if !handle.is_empty() {
+            write_field(&self.dir, task, "session", &handle);
+        }
+        warn(format!(
+            "task {task}: dispatched (session {})",
+            if handle.is_empty() { &session } else { &handle }
+        ));
         memcli::log(&format!("run {}: dispatched {task}", self.plan.plan_id));
-        self.backend.dispatch(&d);
     }
 
     fn record_cost(&self, task: &str) {

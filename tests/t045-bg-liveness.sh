@@ -7,9 +7,11 @@ t_init
 
 export WF_TMP="$T_TMP"
 mkdir -p "$T_TMP/agents"
-# Dispatches record their session as busy and never do any work; the agents
-# listing serves whatever the state files say; stop is recorded and flips the
-# session idle, exactly as `claude stop` leaves a resident session behind.
+# Dispatches mint their own session id — --bg ignores --session-id — announce
+# it the way --bg does, and never do any work. The agents listing serves
+# whatever the state files say, in the shape a session with no process left
+# behind it has: an id, a session id and a state, and no status. Stop is
+# recorded and leaves the session behind stopped, as `claude stop` does.
 write_exec "$T_TMP/bin/claude" <<'CLAUDE'
 #!/bin/sh
 case "$1" in
@@ -18,7 +20,7 @@ agents)
 	for f in "$WF_TMP/agents"/*; do
 		[ -f "$f" ] || continue
 		sid=$(basename "$f")
-		out="$out$sep{\"pid\":1,\"id\":\"id-$sid\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"status\":\"$(cat "$f")\"}"
+		out="$out$sep{\"id\":\"${sid%%-*}\",\"cwd\":\"\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"state\":\"$(cat "$f")\",\"startedAt\":1}"
 		sep=','
 	done
 	printf '%s]\n' "$out"
@@ -27,18 +29,18 @@ stop)
 	printf 'stop %s\n' "$2" >>"$WF_TMP/claude-stops"
 	for f in "$WF_TMP/agents"/*; do
 		[ -f "$f" ] || continue
-		[ "id-$(basename "$f")" = "$2" ] && printf 'idle' >"$f"
+		sid=$(basename "$f")
+		[ "${sid%%-*}" = "$2" ] && printf 'stopped' >"$f"
 	done
 	exit 0 ;;
 esac
-prev=''
-for a in "$@"; do
-	[ "$prev" = "--session-id" ] && sid=$a
-	prev=$a
-done
-[ -n "$sid" ] && printf 'busy' >"$WF_TMP/agents/$sid"
+n=$(cat "$WF_TMP/seq" 2>/dev/null || echo 0)
+n=$((n + 1)); printf '%s' "$n" >"$WF_TMP/seq"
+short=$(printf 'a1b2c3%02x' "$n")
+sid="$short-0000-4000-8000-000000000000"
+printf 'working' >"$WF_TMP/agents/$sid"
 printf '%s\n' "$*" >>"$WF_TMP/claude-args"
-printf 'backgrounded · fake\n'
+printf 'backgrounded · %s\n' "$short"
 CLAUDE
 
 is "$(command -v claude)" "$T_TMP/bin/claude" 'the stub is the claude on PATH'
@@ -77,11 +79,15 @@ is "$(cat "$rundir/t1.dispatches")" 2 'after exactly one redispatch'
 
 dispatches=$(grep -c -- '--bg' "$T_TMP/claude-args")
 is "$dispatches" 4 'both tasks dispatched --bg, once plus one redispatch each'
-sessions=$(grep -oE -- '--session-id [0-9a-f-]{36}' "$T_TMP/claude-args" | sort -u | wc -l)
-is "$sessions" 4 'and every dispatch minted its own session id'
+sessions=$(ls "$T_TMP/agents" | wc -l)
+is "$sessions" 4 'and every dispatch got a session of its own'
 
-stops=$(sort -u "$T_TMP/claude-stops" | grep -c '^stop id-')
+stops=$(sort -u "$T_TMP/claude-stops" | grep -c '^stop a1b2c3')
 is "$(($stops >= 1))" 1 'a stalled session is ended with claude stop, by its short id'
-first_sid=$(grep -oE -- '--session-id [0-9a-f-]{36}' "$T_TMP/claude-args" | head -1 | awk '{print $2}')
-like "$(cat "$T_TMP/claude-stops")" "stop id-$first_sid" \
-	'and the stop named the session the agents list maps to that id'
+like "$(cat "$T_TMP/claude-stops")" 'stop a1b2c301' \
+	'and the stop named the first session, which is the one that stalled'
+# The handle the run kept is the one --bg announced, not the uuid it minted
+# going in: a run holding the minted id can neither see a worker finish nor
+# stop one.
+is "$(cat "$rundir/t1.session")" 'a1b2c302-0000-4000-8000-000000000000' \
+	'the redispatch recorded the session the new background agent actually got'
