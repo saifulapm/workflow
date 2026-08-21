@@ -293,3 +293,42 @@ fn seven_is_a_short_id_two_items_share() {
     assert_eq!(code(&out), 7);
     assert!(stderr(&out).contains("ambiguous"), "{}", stderr(&out));
 }
+
+/// A reader that closes early -- `mem show <id> | head -1` -- is the reader's
+/// business, not a failure of the program. Rust ignores SIGPIPE, so the write
+/// comes back EPIPE and `println!` turns that into a panic and exit 101
+/// (friction #ECTJYVXX). Neither belongs on a CLI.
+#[test]
+fn a_reader_that_closes_the_pipe_is_not_an_error() {
+    let w = World::new("exit-epipe");
+    w.project(P, "thing");
+    let store = w.store();
+    // Larger than any pipe buffer, so the write cannot quietly succeed.
+    let mut it = item(Kind::Fact, "a long one", &"x".repeat(400_000));
+    it.meta.id = "01K2YR1VC0AB3DE4FG5HJ6KM7N".to_string();
+    put(&store, Some(P), &it);
+
+    let dirs = w.dirs();
+    let dir = w.plain_dir("cwd");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_mem"))
+        .current_dir(&dir)
+        .args(["show", "5HJ6KM7N"])
+        .env("XDG_DATA_HOME", &dirs.data)
+        .env("XDG_CACHE_HOME", &dirs.cache)
+        .env("XDG_STATE_HOME", &dirs.state)
+        .env("XDG_CONFIG_HOME", &dirs.config)
+        .env_remove("MEM_SESSION_ID")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn mem");
+    drop(child.stdout.take());
+    let out = child.wait_with_output().expect("wait");
+
+    assert_ne!(code(&out), 101, "mem panicked: {}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("panicked"),
+        "a stack trace reached the terminal: {}",
+        stderr(&out)
+    );
+}

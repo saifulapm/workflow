@@ -76,3 +76,13 @@ for sub in verify lint-msg review-needed run reap doctor; do
 	unlike "$OUT" "unknown command: $sub" "a bad option does not make $sub an unknown command"
 	like "$OUT" '\-\-frob' "and $sub names the option instead"
 done
+
+# A reader that closes the pipe -- `workflow status | head` -- is the reader's
+# business. Rust ignores SIGPIPE, so an unfixed binary panics and exits 101
+# (friction #ECTJYVXX).
+# Enough patterns to overflow the pipe buffer, so the write cannot quietly
+# succeed after head has gone.
+big=$(awk 'BEGIN { for (i = 0; i < 9000; i++) printf "p%d ", i }')
+run bash -c 'workflow split-patterns "$1" 2>&1 | head -2; exit "${PIPESTATUS[0]}"' _ "$big"
+isnt "$RC" 101 'a closed pipe does not panic the binary'
+unlike "$OUT" 'panicked' 'and no stack trace reaches the terminal'
