@@ -19,6 +19,10 @@ answers only what only he can.
   run dir's word beats your memory of it.
 - Everything bound for Saiful is rewritten plainly: counts first, one line
   per group, a recommendation, no machine glue. The unslop rules apply.
+- The checkout is on a branch, and it is not always the one you assume.
+  `git branch --show-current` before any merge, including the recipes the
+  binary prints, and land on main. A merge onto a leftover scaffold branch
+  looks exactly like a clean landing and is not one.
 
 ## The run
 
@@ -52,5 +56,6 @@ A run that ends is written down: `mem log` the counts, the context each task
 carried and where the integration branch was left. Cost is not a metric here
 — the plan is flat-rate — so a task that ended near a full window is the
 number worth reporting: it says the plan was cut too big. Nothing is pushed,
-ever — landing the branch is Saiful's. On context pressure: `mem handoff
---set "<state>"` and stop; the next session adopts the run with nothing lost.
+ever — landing the branch is Saiful's. Leave the checkout on main, whatever
+it was on while you worked. On context pressure: `mem handoff --set
+"<state>"` and stop; the next session adopts the run with nothing lost.

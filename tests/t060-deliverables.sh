@@ -43,6 +43,12 @@ like "$orchestrate_skill" 'mem ask' 'orchestrate escalates through the question 
 # The binary decides mechanics; the session decides judgment. A skill that
 # edits project code has crossed the line the layer exists to draw.
 like "$orchestrate_skill" 'ever edit project code' 'orchestrate forbids touching the code'
+# A merge landed on a leftover scaffold branch once. Nothing in the binary can
+# catch that: the merge is a human hand on a checkout it did not choose.
+like "$orchestrate_skill" 'git branch --show-current' \
+	'orchestrate checks which branch the checkout is on before merging'
+like "$orchestrate_skill" 'Leave the checkout on main' \
+	'and puts it back on main when the run ends'
 
 ## ------------------------------------------------------------ the adapters
 
