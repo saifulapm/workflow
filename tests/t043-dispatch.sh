@@ -80,7 +80,7 @@ export ORDINARY_SETTING=keep-me
 
 run env WORKFLOW_MAX_WORKERS=1 WORKFLOW_DEADLINE_MIN=0.2 WORKFLOW_MODEL=haiku \
 	WORKFLOW_ALLOW_PUSH=1 WORKFLOW_HOOK_SEEN=/some/repo/.git \
-	WORKFLOW_WORKER_BUDGET=3 WORKFLOW_MAX_TURNS=7 workflow run --plan-file "$T_TMP/plan.md"
+	WORKFLOW_MAX_TURNS=7 workflow run --plan-file "$T_TMP/plan.md"
 is "$RC" 1 'the stub reports no ready state, so both tasks park'
 
 ## ------------------------------------------------------- the scrubbed env

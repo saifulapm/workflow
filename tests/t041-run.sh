@@ -191,7 +191,7 @@ rundir="$XDG_STATE_HOME/workflow/runs/app/fixture-run"
 ) &
 sampler=$!
 
-export WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.05 WORKFLOW_RUN_BUDGET=40
+export WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.05
 run workflow run
 run_rc=$RC
 run_out=$OUT
@@ -230,6 +230,13 @@ like "$(cat "$rundir/t1.verify")" 'true' 'dispatch recorded the task Verify comm
 
 is "$(cat "$rundir/hang.state")" parked 'the hung worker ends up parked'
 is "$(cat "$rundir/hang.dispatches")" 2 'after exactly one redispatch'
+
+# A redispatched worker used to wake up to the same fixed text as the first
+# attempt, with the status file truncated behind it (friction #YCW7ND6Z).
+hangbrief=$(cat "$XDG_CACHE_HOME/workflow/briefs/app/fixture-run/hang.md")
+like "$hangbrief" 'This is attempt 2' 'the redispatch brief says which attempt this is'
+like "$hangbrief" 'stalled with nothing committed' 'and what became of the one before it'
+like "$hangbrief" "last report was 'progress" "and what that attempt last reported"
 s1=$(grep '^hang ' "$T_TMP/sessions.log" | head -1 | cut -d' ' -f2)
 s2=$(grep '^hang ' "$T_TMP/sessions.log" | tail -1 | cut -d' ' -f2)
 isnt "$s1" "$s2" 'the redispatch minted a new session uuid'

@@ -293,7 +293,37 @@ impl Run {
         }
     }
 
-    fn dispatch(&self, task: &str) {
+    /// What the attempt before this one came to, for the brief to carry.
+    ///
+    /// `why` is what this caller knows and the run dir does not: a stall and a
+    /// ghost session are both redispatches nothing has parked, so the park note
+    /// is empty and only the caller can say what happened. Everything else is
+    /// read here, before the dispatch truncates it (friction #YCW7ND6Z).
+    fn prior_attempt(&self, task: &str, why: &str) -> brief::Prior {
+        let attempts: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
+        if attempts == 0 {
+            return brief::Prior::default();
+        }
+        let why = match why.is_empty() {
+            true => self.field(task, "parked"),
+            false => why.to_string(),
+        };
+        let last_report = self
+            .last_status_line(task)
+            .map(|(state, note)| match note.is_empty() {
+                true => state,
+                false => format!("{state}: {note}"),
+            })
+            .unwrap_or_default();
+        brief::Prior {
+            attempts,
+            why,
+            last_report,
+            bundle: self.field(task, "bundle"),
+        }
+    }
+
+    fn dispatch(&self, task: &str, after: &str) {
         let Some(t) = self.plan.get(task).cloned() else {
             return;
         };
@@ -302,18 +332,22 @@ impl Run {
         let brief_file = self.brief_dir.join(format!("{task}.md"));
         let status = self.dir.join(format!("{task}.status"));
         let session = self.backend.mint_session();
+        let prior = self.prior_attempt(task, after);
 
         write_field(&self.dir, task, "session", &session);
+        // Truncated, not appended: the gate reads this file to judge THIS
+        // attempt, and a stale `ready` from the last one would pass for it.
+        // What it said lives on in the brief instead.
         let _ = std::fs::write(&status, "");
         for ext in ["json", "err", "pid"] {
             let _ = std::fs::remove_file(self.dir.join(format!("{task}.{ext}")));
         }
-        brief::write(&t, &wt, &status, &brief_file);
+        brief::write(&t, &wt, &status, &prior, &brief_file);
         // The gate reads this from inside the worktree: the task is held to its
         // own Verify command there, not to the repo-wide suite (verify.rs).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
 
-        let n: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
+        let n = prior.attempts;
         write_field(&self.dir, task, "dispatches", &(n + 1).to_string());
         write_field(&self.dir, task, "dispatched_at", &sys::now().to_string());
 
@@ -647,7 +681,7 @@ impl Run {
                     warn(format!(
                         "task {task}: stalled with nothing committed -- one more try"
                     ));
-                    self.dispatch(&task);
+                    self.dispatch(&task, "it stalled with nothing committed and was stopped");
                 } else {
                     self.park_task(&task, "stalled with no sign of life");
                 }
@@ -684,7 +718,7 @@ impl Run {
                     warn(format!(
                         "task {task}: the recorded session never existed -- dispatching again now"
                     ));
-                    self.dispatch(task);
+                    self.dispatch(task, "the session it was given never existed, so it never ran");
                 } else {
                     warn(format!(
                         "task {task}: the recorded session never existed and the retry is spent"
@@ -1235,7 +1269,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         while !queue.is_empty() || run.running() > 0 {
             while !queue.is_empty() && run.running() < run.max_workers {
                 let next = queue.remove(0);
-                run.dispatch(&next);
+                run.dispatch(&next, "");
             }
             sys::sleep(run.poll);
             run.reap_pass();
