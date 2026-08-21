@@ -435,6 +435,7 @@ mod tests {
             name: "app".into(),
             root: None,
             verify: None,
+            review_paths: None,
         };
         assert_eq!(suite_lock_key(Some(&known), Path::new("/x")), "01ABC");
         let unregistered = Project {
@@ -442,6 +443,7 @@ mod tests {
             name: "app".into(),
             root: None,
             verify: None,
+            review_paths: None,
         };
         assert_eq!(
             suite_lock_key(Some(&unregistered), Path::new("/home/x/app")),

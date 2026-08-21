@@ -34,6 +34,13 @@ pub struct Project {
     /// without the repository carrying a file about them (spec §7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<String>,
+    /// Globs this project wants a cold review of, set by
+    /// `mem project set review-paths`. Whitespace separated, merged with the
+    /// global table rather than replacing it: the shipped rows are what is
+    /// sensitive everywhere, and these are what is sensitive here
+    /// (friction #HK2PNTR4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_paths: Option<String>,
 }
 
 impl Project {
@@ -304,6 +311,7 @@ pub fn register(
         },
         created: Timestamp::now(),
         verify: None,
+        review_paths: None,
     };
     write_project(store, &project)?;
     std::fs::create_dir_all(store.project_items(&id))
@@ -321,20 +329,20 @@ pub fn write_project(store: &Store, project: &Project) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// `mem project set verify "<cmd>"` — records the project's own verification
-/// command.
+/// One `mem project set <key> "<value>"` — the verification command, the review
+/// paths, and whatever else the project comes to own.
 ///
 /// The edit goes through the parsed document rather than through `Project`, so
 /// a key a later version of mem writes and this one has never heard of survives
 /// the write instead of being silently dropped.
-pub fn set_verify(store: &Store, project_id: &str, cmd: &str) -> Result<PathBuf> {
+pub fn set_key(store: &Store, project_id: &str, key: &str, value: &str) -> Result<PathBuf> {
     let path = store.project_toml(project_id);
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("reading {}", path.display()))
         .map_err(|e| exit::store_error(format!("{e:#}")))?;
     let mut doc: toml::Table = toml::from_str(&text)
         .map_err(|e| exit::store_error(format!("{} is not valid toml: {e}", path.display())))?;
-    doc.insert("verify".to_string(), toml::Value::String(cmd.to_string()));
+    doc.insert(key.to_string(), toml::Value::String(value.to_string()));
     let out = toml::to_string(&doc).context("serializing project.toml")?;
     write_atomic(&path, out.as_bytes())?;
     Ok(path)

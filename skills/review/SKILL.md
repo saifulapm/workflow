@@ -17,6 +17,13 @@ a case-sensitive table saw none of them.
 
 Do not argue with exit 0. It is the disqualifier for the one-shot lane too.
 
+The shipped rows are what is sensitive in any repository. What is load-bearing
+in *this* one goes in beside them:
+
+    mem project set review-paths "packages/core/** scripts/mutate.py"
+
+Merged with the table, never replacing it.
+
 ## Two cold reviewers
 
 Cold means they read the diff and the spec, and nothing else: not your

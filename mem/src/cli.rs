@@ -226,6 +226,11 @@ pub enum ProjectSetCommand {
     /// The command that verifies this project. It is tier one of the
     /// verification ladder: whatever it says beats every detected verifier.
     Verify { cmd: String },
+    /// Globs this project wants a cold review of, whitespace separated.
+    /// Merged with `workflow review-needed`'s global table, never replacing
+    /// it: these are the paths that are load-bearing in THIS repository.
+    #[command(name = "review-paths")]
+    ReviewPaths { globs: String },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]

@@ -61,6 +61,7 @@ fn project_with_verify(cmd: &str) -> Project {
         name: "app".into(),
         root: None,
         verify: Some(cmd.into()),
+        review_paths: None,
     }
 }
 

@@ -16,6 +16,11 @@ pub struct Project {
     pub root: Option<String>,
     #[serde(default)]
     pub verify: Option<String>,
+    /// Globs this project wants a cold review of, whitespace separated, set
+    /// with `mem project set review-paths`. Absent means the global table is
+    /// the whole answer (friction #HK2PNTR4).
+    #[serde(default)]
+    pub review_paths: Option<String>,
 }
 
 impl Project {

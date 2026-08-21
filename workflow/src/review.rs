@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::gitcmd::{self, Git};
-use crate::{exit, repo, warn};
+use crate::{exit, memcli, ownership, repo, warn};
 
 /// Every row is matched case-insensitively: on the primary stack the
 /// interesting files are StudlyCase, and a case-sensitive table was blind to
@@ -16,6 +16,10 @@ pub const ROWS: &[&str] = &[
     "**/permission*",
     "**/payment*",
     "**/billing/**",
+    // Billing is usually files, not a directory: billing.server.ts,
+    // usage-billing.server.ts, billing.ts (friction #HK2PNTR4). Both rows
+    // stand, the way checkout has both of its.
+    "**/*billing*",
     "**/stripe*",
     "**/checkout/**",
     "**/checkout*",
@@ -40,6 +44,16 @@ pub const ROWS: &[&str] = &[
     "**/routes/api*",
     "**/openapi*",
     "**/*.graphql",
+    // The Shopify app surface. The config carries scopes, webhook
+    // subscriptions and the app's urls, and `shopify app deploy` puts it
+    // live; a webhook handler is the HMAC boundary and the GDPR topics; a
+    // session file holds offline admin tokens. `**/` on the config because
+    // the apps sit under `apps/<name>/` in a monorepo, and the directory row
+    // beside the name row because a glob star does not cross a slash.
+    "**/shopify.app*.toml",
+    "**/webhooks*/**",
+    "**/*webhook*",
+    "**/*session*",
 ];
 
 /// `XY <path>` from porcelain output, with the two status letters removed.
@@ -82,6 +96,27 @@ fn matches(git: &Git, range: &str, specs: &[String]) -> BTreeSet<String> {
     found
 }
 
+/// The rows this checkout is judged by: the shipped table, plus whatever the
+/// project declared with `mem project set review-paths`.
+///
+/// Merged, never replaced. The shipped rows are what is sensitive in every
+/// repository; the project's rows are what is load-bearing in this one --
+/// `packages/shopify-core/**` is one repo's blast radius and nobody else's
+/// (friction #HK2PNTR4). Same grammar as a task's `Files:` line, so a glob
+/// with a space in it goes in double quotes.
+fn rows() -> Vec<String> {
+    let mut rows: Vec<String> = ROWS.iter().map(|r| r.to_string()).collect();
+    let declared = memcli::project_current()
+        .and_then(|p| p.review_paths)
+        .unwrap_or_default();
+    for pattern in ownership::split_patterns(&declared) {
+        if !rows.contains(&pattern) {
+            rows.push(pattern);
+        }
+    }
+    rows
+}
+
 pub fn cmd_review_needed(range: Option<&str>) -> i32 {
     let range = range.unwrap_or("").to_string();
 
@@ -101,7 +136,8 @@ pub fn cmd_review_needed(range: Option<&str>) -> i32 {
         return exit::OK;
     }
 
-    let specs: Vec<String> = ROWS.iter().map(|r| gitcmd::glob_icase_top(r)).collect();
+    let rows = rows();
+    let specs: Vec<String> = rows.iter().map(|r| gitcmd::glob_icase_top(r)).collect();
     let all = matches(&git, &range, &specs);
     if all.is_empty() {
         println!("review-needed: no");
@@ -109,7 +145,7 @@ pub fn cmd_review_needed(range: Option<&str>) -> i32 {
     }
 
     println!("review-needed: yes");
-    for row in ROWS {
+    for row in &rows {
         let hits = matches(&git, &range, &[gitcmd::glob_icase_top(row)]);
         if hits.is_empty() {
             continue;

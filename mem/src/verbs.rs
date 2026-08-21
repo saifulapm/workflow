@@ -265,11 +265,12 @@ pub fn project_current(app: &App) -> Result<i32> {
     };
     // The root is this checkout, not a path recorded on some other machine.
     let root = crate::git::toplevel(&app.cwd);
-    // Absent unless the project declared one: a caller that sees no `verify`
-    // field falls through to its own detection (workflow spec §7, tier 1).
-    let verify = Registry::load(&app.store)
-        .by_id(id)
-        .and_then(|p| p.verify.clone());
+    // Absent unless the project declared them: a caller that sees no `verify`
+    // field falls through to its own detection (workflow spec §7, tier 1), and
+    // one that sees no `review_paths` has only the global table.
+    let declared = Registry::load(&app.store).by_id(id).cloned();
+    let verify = declared.as_ref().and_then(|p| p.verify.clone());
+    let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
     if app.json {
         let mut doc = json!({
             "id": id,
@@ -278,6 +279,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         });
         if let Some(verify) = &verify {
             doc["verify"] = json!(verify);
+        }
+        if let Some(paths) = &review_paths {
+            doc["review_paths"] = json!(paths);
         }
         println!("{}", serde_json::to_string(&doc)?);
     } else {
@@ -289,19 +293,28 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(verify) = &verify {
             println!("verify  {verify}");
         }
+        if let Some(paths) = &review_paths {
+            println!("review-paths  {paths}");
+        }
     }
     Ok(exit::OK)
 }
 
-/// `mem project set verify "<cmd>"` — the per-project verification command.
-/// A write verb, so naming a command in a checkout mem has never seen registers
-/// that checkout, exactly as `mem log` there would.
-pub fn project_set_verify(app: &App, cmd: &str) -> Result<i32> {
-    let cmd = cmd.trim();
-    if cmd.is_empty() {
-        return Err(exit::usage(
-            "give a command to run, e.g. `mem project set verify \"just test\"`",
-        ));
+/// `mem project set <key> "<value>"` — the per-project verification command,
+/// the per-project review paths. A write verb, so declaring one in a checkout
+/// mem has never seen registers that checkout, exactly as `mem log` there
+/// would.
+pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(exit::usage(match key {
+            "verify" => "give a command to run, e.g. `mem project set verify \"just test\"`"
+                .to_string(),
+            _ => format!(
+                "give something to record, e.g. `mem project set {} \"app/**\"`",
+                key.replace('_', "-")
+            ),
+        }));
     }
     let identity = app.identity(Mode::Write)?;
     let Some(id) = identity.id() else {
@@ -310,19 +323,20 @@ pub fn project_set_verify(app: &App, cmd: &str) -> Result<i32> {
             unknown_project_note(&identity).unwrap_or_else(|| "no project here".to_string())
         )));
     };
-    let path = crate::project::set_verify(&app.store, id, cmd)?;
+    let path = crate::project::set_key(&app.store, id, key, value)?;
+    let shown = key.replace('_', "-");
     if app.json {
         println!(
             "{}",
             serde_json::to_string(&json!({
                 "id": id,
                 "name": identity.name(),
-                "verify": cmd,
+                key: value,
                 "path": path.to_string_lossy(),
             }))?
         );
     } else if !app.quiet {
-        println!("verify for {}: {cmd}", identity.name().unwrap_or(id));
+        println!("{shown} for {}: {value}", identity.name().unwrap_or(id));
     }
     Ok(exit::OK)
 }

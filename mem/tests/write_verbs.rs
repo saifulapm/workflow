@@ -470,3 +470,61 @@ fn project_set_verify_keeps_keys_this_version_does_not_know_about() {
     assert!(after.contains_key("created"), "{after:?}");
     assert_eq!(after["name"].as_str(), Some("thing"));
 }
+
+#[test]
+fn project_set_review_paths_records_the_globs_and_project_current_reports_them() {
+    let w = World::new("write-review-paths");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+
+    // Nothing declared yet: the field is simply absent, and the global table
+    // is the whole answer.
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("review_paths").is_none(), "{v}");
+
+    let out = mem(
+        &w,
+        &repo,
+        &[
+            "project",
+            "set",
+            "review-paths",
+            "packages/shopify-core/** scripts/mutate.py",
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(
+        v["review_paths"],
+        serde_json::json!("packages/shopify-core/** scripts/mutate.py")
+    );
+    assert!(
+        stdout(&mem(&w, &repo, &["project", "current"])).contains("scripts/mutate.py"),
+        "the plain rendering names the globs too"
+    );
+
+    // Setting them again replaces the list rather than appending to it.
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "review-paths", "app/**"])),
+        0
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["review_paths"], serde_json::json!("app/**"));
+
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert_eq!(
+        text.matches("review_paths = ").count(),
+        1,
+        "one review_paths key, not two: {text}"
+    );
+
+    // Nothing at all is a usage error, not a project that claims no paths.
+    let out = mem(&w, &repo, &["project", "set", "review-paths", "  "]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["review_paths"], serde_json::json!("app/**"));
+}

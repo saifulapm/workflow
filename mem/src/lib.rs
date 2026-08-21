@@ -97,7 +97,12 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         cli::Command::Project { command } => match command {
             cli::ProjectCommand::Current => verbs::project_current(&app),
             cli::ProjectCommand::Set { command } => match command {
-                cli::ProjectSetCommand::Verify { cmd } => verbs::project_set_verify(&app, cmd),
+                cli::ProjectSetCommand::Verify { cmd } => {
+                    verbs::project_set(&app, "verify", cmd)
+                }
+                cli::ProjectSetCommand::ReviewPaths { globs } => {
+                    verbs::project_set(&app, "review_paths", globs)
+                }
             },
         },
         cli::Command::Save {

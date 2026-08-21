@@ -90,3 +90,60 @@ mkdir -p app/Services/Cartx
 printf 'x\n' >app/Services/Cartx/Deep.php
 run workflow review-needed
 is "$RC" 1 'a nested file under a Cart* directory is still ordinary feature code'
+
+## ------------------------------------------------------ the Shopify surface
+
+# Measured against ~/Sites/github/shopify_apps, where the table used to see
+# almost none of the app surface (friction #HK2PNTR4).
+triggers shopify.app.toml 'the app config, which carries scopes and webhook urls'
+triggers apps/splitroute/shopify.app.toml 'the same file inside a monorepo'
+triggers apps/splitroute/shopify.app.staging.toml 'a per-environment app config'
+triggers app/routes/webhooks/orders.paid.tsx 'a file inside a webhooks directory'
+triggers app/routes/Webhooks/OrdersPaid.tsx 'and the StudlyCase spelling of it'
+triggers tests/webhooks.test.ts 'a webhook test beside the code'
+triggers app/lib/billing.server.ts 'billing as a file rather than a directory'
+triggers app/lib/usage-billing.server.ts 'a billing file with a prefix'
+triggers app/billing/Charge.php 'billing as a directory, which still counts'
+triggers app/lib/shopify/session-storage.server.ts 'offline session storage'
+triggers db/schema/sessions.ts 'the table those sessions live in'
+
+# A Shopify app has ordinary code too, and it must stay quiet.
+fresh
+mkdir -p app/components
+printf 'x\n' >app/components/OrderTable.tsx
+run workflow review-needed
+is "$RC" 1 'an ordinary component in a Shopify app does not trigger'
+
+## ------------------------------------------------ per-project review paths
+
+# packages/shopify-core/** is that repo's blast radius, not everyone's, so it
+# is declared per project and merged with the global table at check time.
+fresh
+mem_register
+mkdir -p packages/shopify-core/src
+printf 'x\n' >packages/shopify-core/src/client.ts
+run workflow review-needed
+is "$RC" 1 'a path no table claims is quiet to begin with'
+
+"$MEM_BIN" project set review-paths 'packages/shopify-core/** scripts/mutate.py' >/dev/null
+run workflow review-needed
+is "$RC" 0 'once the project declares it, the same change wants a review'
+like "$OUT" 'packages/shopify-core/\*\*' 'and the row that caught it is the project row'
+like "$OUT" 'client.ts' 'which names the file'
+
+# Declaring project rows adds to the global table, never replaces it.
+fresh
+mem_register
+"$MEM_BIN" project set review-paths 'packages/shopify-core/**' >/dev/null
+printf 'APP_KEY=x\n' >.env
+run workflow review-needed
+is "$RC" 0 'the global rows still fire alongside the project rows'
+
+# A glob with a space in it survives the split, same grammar as Files:.
+fresh
+mem_register
+"$MEM_BIN" project set review-paths '"config/deploy notes/**"' >/dev/null
+mkdir -p 'config/deploy notes'
+printf 'x\n' >'config/deploy notes/plan.md'
+run workflow review-needed
+is "$RC" 0 'a quoted glob keeps its space'
