@@ -837,6 +837,60 @@ impl Run {
     }
 }
 
+/// The stopped-short question, written for the person who answers it on a
+/// phone (friction #VTB9VB1S): counts first, then one line per outcome group,
+/// and never an empty note. Held to the same lint commits are held to.
+/// `tasks` is (id, state, park reason) in plan order.
+fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
+    let count = |s: &str| tasks.iter().filter(|(_, state, _)| state == s).count();
+    let (merged, parked, previous) = (count(MERGED), count(PARKED), count(DONE_PREVIOUSLY));
+    let waiting = tasks.len() - merged - parked - previous;
+
+    let mut counts = vec![format!("{merged} of {} merged", tasks.len())];
+    if parked > 0 {
+        counts.push(format!("{parked} parked"));
+    }
+    if waiting > 0 {
+        counts.push(format!("{waiting} never started"));
+    }
+    if previous > 0 {
+        counts.push(format!("{previous} already ticked off"));
+    }
+    let mut q = format!("Plan {plan_id} stopped short: {}.\n", counts.join(", "));
+
+    // Parked tasks grouped by reason, in the order the reasons first appear.
+    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (id, state, note) in tasks {
+        if state != PARKED {
+            continue;
+        }
+        let why = if note.is_empty() {
+            "no reason recorded"
+        } else {
+            note.as_str()
+        };
+        match groups.iter_mut().find(|(w, _)| *w == why) {
+            Some((_, list)) => list.push(id),
+            None => groups.push((why, vec![id])),
+        }
+    }
+    for (why, list) in &groups {
+        q.push_str(&format!("Parked - {why}: {}.\n", list.join(", ")));
+    }
+
+    let never: Vec<&str> = tasks
+        .iter()
+        .filter(|(_, s, _)| s != MERGED && s != PARKED && s != DONE_PREVIOUSLY)
+        .map(|(id, _, _)| id.as_str())
+        .collect();
+    if !never.is_empty() {
+        q.push_str(&format!("Never started: {}.\n", never.join(", ")));
+    }
+
+    q.push_str("What should happen to these?");
+    q
+}
+
 /// The knobs of spec §8, all injectable (AC7).
 fn timings() -> (usize, i64, i64, f64) {
     let mut max_workers = std::env::var("WORKFLOW_MAX_WORKERS")
@@ -1064,18 +1118,17 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         run.int_branch
     ));
     if parked + blocked > 0 {
-        let mut list = String::new();
-        for t in run.plan.ids() {
-            let state = run.state(&t);
-            if state == MERGED || state == DONE_PREVIOUSLY {
-                continue;
-            }
-            list.push_str(&format!(" {t}({state}): {};", run.field(&t, "parked")));
-        }
-        memcli::ask(&format!(
-            "Plan {} stopped short.{list} What should happen to these?",
-            run.plan.plan_id
-        ));
+        let tasks: Vec<(String, String, String)> = run
+            .plan
+            .ids()
+            .into_iter()
+            .map(|t| {
+                let state = run.state(&t);
+                let note = run.field(&t, "parked");
+                (t, state, note)
+            })
+            .collect();
+        memcli::ask(&stopped_short(&run.plan.plan_id, &tasks));
         return exit::FAILED;
     }
     exit::OK
@@ -1158,6 +1211,63 @@ pub fn cmd_stalled(rundir: &Path, wtroot: &Path, task: &str, deadline: i64) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn t(id: &str, state: &str, note: &str) -> (String, String, String) {
+        (id.into(), state.into(), note.into())
+    }
+
+    #[test]
+    fn the_stopped_short_question_leads_with_counts_and_groups_outcomes() {
+        let tasks = [
+            t("t1", MERGED, ""),
+            t("t2", MERGED, ""),
+            t("t3", PARKED, "the suite is red once the change sits on integration"),
+            t("t4", PARKED, "the suite is red once the change sits on integration"),
+            t("t5", PARKED, "wrote outside its Files: patterns"),
+            t("t6", BLOCKED, ""),
+            t("t7", PENDING, ""),
+        ];
+        let q = stopped_short("amx-v2", &tasks);
+        assert!(
+            q.starts_with(
+                "Plan amx-v2 stopped short: 2 of 7 merged, 3 parked, 2 never started."
+            ),
+            "counts do not lead: {q}"
+        );
+        assert!(
+            q.contains(
+                "Parked - the suite is red once the change sits on integration: t3, t4."
+            ),
+            "parked tasks are not grouped by reason: {q}"
+        );
+        assert!(q.contains("Parked - wrote outside its Files: patterns: t5."));
+        assert!(q.contains("Never started: t6, t7."));
+        assert!(q.trim_end().ends_with("What should happen to these?"));
+    }
+
+    #[test]
+    fn the_question_never_glues_empty_notes_and_passes_lint() {
+        let tasks = [
+            t("ansi", PARKED, "stalled with no sign of life"),
+            t("rules", BLOCKED, ""),
+        ];
+        let q = stopped_short("amx-v2", &tasks);
+        assert!(!q.contains("():"), "empty-note residue: {q}");
+        assert!(!q.contains(": ;"), "empty-note residue: {q}");
+        assert!(!q.contains("(blocked)"), "machine-glued state names: {q}");
+        assert!(
+            crate::lint::lint_text(&q),
+            "the question must hold to the standard commits are held to: {q}"
+        );
+    }
+
+    #[test]
+    fn zero_counts_stay_out_of_the_summary_line() {
+        let tasks = [t("t1", MERGED, ""), t("t2", PARKED, "the worker exited with an error")];
+        let q = stopped_short("p", &tasks);
+        assert!(q.starts_with("Plan p stopped short: 1 of 2 merged, 1 parked."));
+        assert!(!q.contains("0 never started"), "{q}");
+    }
 
     #[test]
     fn the_deadline_knob_is_fractional_minutes_and_the_rest_derive_from_it() {
