@@ -23,7 +23,7 @@ printf '%s %s\n' "$task" "$session" >>"$WF_TMP/sessions.log"
 
 say() { printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${2:-}" >>"$status"; }
 commit() { git -c core.hooksPath=/dev/null commit -qm "$1"; }
-done_json() { printf '{"is_error":false,"total_cost_usd":%s,"result":"ok"}\n' "${1:-0.01}"; }
+done_json() { printf '{"is_error":false,"result":"ok"}\n'; }
 
 say started
 case "$task" in
@@ -107,13 +107,6 @@ stuck)
 	# Reports why it cannot go on, then exits cleanly: the park must say it.
 	say blocked 'waiting on the sibling task'
 	done_json
-	;;
-costly)
-	say ready 'merge-ready'
-	done_json 99
-	;;
-sleeper)
-	sleep 300
 	;;
 esac
 rm -f "$live"
@@ -261,41 +254,6 @@ like "$("$MEM_BIN" plan)" '\[x\] t1' 'mem plan --tick checked the merged task of
 
 bundles=$(find "$XDG_DATA_HOME/workflow/parked" -name '*.bundle' 2>/dev/null | grep -c .)
 is "$bundles" 3 'every parked task with work in it left a bundle'
-
-## --------------------------------------------------------- the budget breach
-
-new_repo budget
-mem_register
-printf '{"name":"acme/b"}\n' >composer.json
-printf '#!/bin/sh\nexit 0\n' >artisan
-chmod +x artisan
-write_exec bin/php <<-'EOF'
-	#!/bin/sh
-	exit 0
-EOF
-git add -A
-git -c core.hooksPath=/dev/null commit -qm 'project files'
-cat >"$T_TMP/budget-plan.md" <<'EOF'
-# plan: budget-run
-
-- [ ] costly Spend the whole budget at once
-      Files: nothing-at-all
-      Verify: true
-- [ ] sleeper Take a long time about it
-      Files: nothing-at-all
-      Verify: true
-- [ ] costly2 Never get a turn
-      Files: nothing-at-all
-      Verify: true
-EOF
-run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_RUN_BUDGET=1 \
-	workflow run --plan-file "$T_TMP/budget-plan.md"
-is "$RC" 1 'the budget breach ends the run with parked work'
-like "$OUT" 'ceiling' 'and says why it stopped'
-brundir="$XDG_STATE_HOME/workflow/runs/budget/budget-run"
-is "$(cat "$brundir/sleeper.state")" parked 'the worker that was still running was stopped'
-is "$(cat "$brundir/costly2.state" 2>/dev/null)" pending 'and the one still queued was never dispatched'
-is "$(git worktree list | grep -c .)" 1 'the budget run left no worktrees behind'
 
 ## ------------------------------------------------- plans run refuses to run
 

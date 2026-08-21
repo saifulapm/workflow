@@ -110,8 +110,9 @@ args=$(cat "$T_TMP/claude-args")
 like "$args" '\-\-bg' 'workers are background sessions, visible in the agents view'
 unlike "$args" '\-p \-\-output-format' 'and never print mode'
 like "$args" '--dangerously-skip-permissions' 'permissions are skipped in the worktree'
-like "$args" '--max-budget-usd 3' 'the worker budget knob reaches the command line'
-like "$args" '--model haiku' 'and the model'
+unlike "$args" '--max-budget-usd' \
+	'no dollar ceiling: the plan is flat-rate and the knob guarded nothing'
+like "$args" '--model haiku' 'the model reaches the command line'
 unlike "$args" '--session-id' \
 	'--session-id is not passed: --bg ignores it and warns, and would leave the run holding an id no session has'
 like "$args" 'Read .*/t[12]\.md and execute it exactly' 'and the prompt points at the brief'
@@ -124,8 +125,8 @@ isnt "$s1" "$s2" 'each dispatch gets its own session id'
 # listing to the full id -- not the uuid the orchestrator minted going in.
 is "$s1" 'a1b2c301-0000-4000-8000-000000000000' \
 	'the session recorded is the one the backgrounded session actually got'
-is "$(cut -f2 "$rundir/costs.tsv" | sort -u)" '0' \
-	'a ledger row per worker, at the zero cost a --bg session can report'
+truthy "$([ ! -e "$rundir/costs.tsv" ] && echo 0 || echo 1)" \
+	'no cost ledger: the run keeps no dollar figures'
 
 ## ------------------------------------------------------------- the brief
 

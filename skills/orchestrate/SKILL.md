@@ -48,7 +48,9 @@ friction, filed as you go and never fixed mid-run:
 
 ## Ending
 
-A run that ends is written down: `mem log` the counts, the spend and where
-the integration branch was left. Nothing is pushed, ever — landing the
-branch is Saiful's. On context pressure: `mem handoff --set "<state>"` and
-stop; the next session adopts the run with nothing lost.
+A run that ends is written down: `mem log` the counts, the context each task
+carried and where the integration branch was left. Cost is not a metric here
+— the plan is flat-rate — so a task that ended near a full window is the
+number worth reporting: it says the plan was cut too big. Nothing is pushed,
+ever — landing the branch is Saiful's. On context pressure: `mem handoff
+--set "<state>"` and stop; the next session adopts the run with nothing lost.

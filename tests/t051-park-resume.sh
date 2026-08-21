@@ -109,7 +109,7 @@ printf 'outside\n' >NOTOWNED.txt
 git add NOTOWNED.txt
 git -c core.hooksPath=/dev/null commit -qm "Reach outside the task"
 printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
-printf '{"is_error":false,"total_cost_usd":0.01,"result":"ok"}\n'
+printf '{"is_error":false,"result":"ok"}\n'
 FAKE
 export FAKE="$T_TMP/lonely-worker.sh"
 export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status}'"'"' > {out} 2> {err} &'

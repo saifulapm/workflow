@@ -38,7 +38,6 @@ cat >"$rundir/plan.md" <<'EOF'
       Verify: true
 EOF
 printf '%s\n' "$base" >"$rundir/base_sha"
-: >"$rundir/costs.tsv"
 
 git branch integration/manual "$base"
 git worktree add -q "$wtroot/_integration" integration/manual
@@ -51,8 +50,16 @@ git worktree add -q -b manual/t1 "$wtroot/t1" "$base"
 	git -c core.hooksPath=/dev/null commit -qm 'Add the thing'
 )
 
-printf '{"is_error":false,"total_cost_usd":0.02,"result":"ok"}\n' >"$rundir/t1.json"
+printf '{"is_error":false,"result":"ok"}\n' >"$rundir/t1.json"
 printf '2026-08-19T00:00:00Z ready merge-ready\n' >"$rundir/t1.status"
+
+# The session's own transcript, where the context it was carrying is legible.
+slug=$(printf '%s' "$wtroot/t1" | tr -c '[:alnum:]' '-')
+mkdir -p "$HOME/.claude/projects/$slug"
+cat >"$HOME/.claude/projects/$slug/00000000-0000-4000-8000-000000000000.jsonl" <<'EOF'
+{"type":"assistant","message":{"usage":{"input_tokens":4,"cache_creation_input_tokens":900,"cache_read_input_tokens":12000}}}
+{"type":"assistant","message":{"usage":{"input_tokens":2,"cache_creation_input_tokens":1500,"cache_read_input_tokens":157000}}}
+EOF
 printf '%s\n' "$(sh -c 'echo $$')" >"$rundir/t1.pid" # a pid that has already gone
 printf '1\n' >"$rundir/t1.dispatches"
 printf '00000000-0000-4000-8000-000000000000\n' >"$rundir/t1.session"
@@ -64,7 +71,8 @@ run workflow reap
 is "$RC" 1 'reap collects the finished worker and says it did something'
 is "$(cat "$rundir/t1.state")" merged 'the finished task went through the merge gate'
 is "$(git rev-list --count "$base..integration/manual")" 1 'and landed on the integration branch'
-is "$(cut -f2 "$rundir/costs.tsv")" '0.02' "and its cost went into the run's ledger"
+is "$(cat "$rundir/t1.context" 2>/dev/null)" '158502' \
+	'and the context it was carrying at its last turn was recorded'
 
 run workflow reap
 is "$RC" 0 'a second reap has nothing left to do'

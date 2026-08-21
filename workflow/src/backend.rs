@@ -30,7 +30,6 @@ pub struct Dispatch {
     pub rundir: PathBuf,
     pub session: String,
     pub model: String,
-    pub budget: String,
     pub turns: String,
     pub env: Vec<(String, String)>,
 }
@@ -48,7 +47,6 @@ pub struct Handle {
 pub struct Outcome {
     /// The worker finished and said so without an error.
     pub ok: bool,
-    pub cost: f64,
 }
 
 pub trait WorkerBackend {
@@ -74,6 +72,11 @@ pub trait WorkerBackend {
     /// The worker's own status file is the orchestrator's signal, not the
     /// backend's, and is counted on top of this.
     fn last_activity(&self, h: &Handle) -> i64;
+    /// The context the worker was carrying at its last turn, in tokens, when
+    /// the backend can see it. Reported and never enforced (ruling #D7A4T2CH):
+    /// the plan is flat-rate, so the managed resource is the window, and a task
+    /// that ends near a full one was cut too big.
+    fn context_tokens(&self, h: &Handle) -> Option<u64>;
     /// Stop the worker and everything it started.
     fn stop(&self, h: &Handle, grace_s: i64);
     /// What the worker left behind: a print-mode result document at `out`, or
@@ -99,16 +102,19 @@ pub trait WorkerBackend {
 /// honoured only alongside `--resume`, and passing it to `--bg` earns a
 /// warning on stderr and nothing else. So the flag is not here, and the handle
 /// comes back the other way -- `--bg` prints the id it chose, and
-/// [`ClaudeBackend::adopt`] reads it off `{out}`. `--max-budget-usd` rides
-/// along but its enforcement outside print mode is unverified; the deadline,
-/// the worker cap and one-task briefs are the bounds that are known to hold.
+/// [`ClaudeBackend::adopt`] reads it off `{out}`.
+///
+/// No `--max-budget-usd` either: the plan is flat-rate, so a dollar ceiling
+/// guards a constraint that does not exist, and its enforcement outside print
+/// mode was never verified anyway (ruling #D7A4T2CH). The deadline, the worker
+/// cap and one-task briefs are the bounds that hold.
 pub const WORKER_CMD_DEFAULT: &str = r#"cd {worktree} && WORKFLOW_AGENT=1 sh -c '\
   exec env -u GITHUB_API_KEY -u WORKFLOW_ALLOW_PUSH -u WORKFLOW_HOOK_SEEN \
   $(env | grep -oE "^[A-Za-z0-9_]*(_TOKEN|_KEY|_SECRET)=|^(GH_|GITHUB_|AWS_|STRIPE_)[A-Za-z0-9_]*=" | sed "s/=$//; s/^/-u /" | tr "\n" " ") \
-  claude --bg --dangerously-skip-permissions --max-budget-usd "$2" \
-  --model "$3" \
+  claude --bg --dangerously-skip-permissions \
+  --model "$2" \
   "Read $1 and execute it exactly."' \
-  workflow-worker {brief} {budget} {model} > {out} 2> {err}"#;
+  workflow-worker {brief} {model} > {out} 2> {err}"#;
 
 /// The value as one shell word, whatever is in it.
 fn shq(value: &str) -> String {
@@ -151,7 +157,6 @@ impl ClaudeBackend {
             ("rundir", path(&d.rundir)),
             ("session", d.session.clone()),
             ("model", d.model.clone()),
-            ("budget", d.budget.clone()),
             ("turns", d.turns.clone()),
         ] {
             cmd = subst(&cmd, key, &value);
@@ -304,6 +309,35 @@ fn strip_ansi(line: &str) -> String {
     out
 }
 
+/// What one session was carrying at its last turn, in tokens.
+///
+/// Every assistant line of a transcript records a `usage` object, and its input
+/// side -- the fresh tokens, the ones written to cache and the ones read back
+/// from it -- is the context that went into that turn. The last such line is
+/// where the task ended up.
+///
+/// A worker that compacted mid-task reports what it carried afterwards, so the
+/// number is a floor and not a high-water mark. That is enough for the one
+/// question it answers: was this task cut too big?
+fn last_context_tokens(transcript: &str) -> Option<u64> {
+    let mut last = None;
+    for line in transcript.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(usage) = v.get("message").and_then(|m| m.get("usage")) else {
+            continue;
+        };
+        let field = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        last = Some(
+            field("input_tokens")
+                + field("cache_creation_input_tokens")
+                + field("cache_read_input_tokens"),
+        );
+    }
+    last
+}
+
 /// The id `claude --bg` printed on its way out. The line reads
 /// `backgrounded · <id>`, coloured, and the id is the short form every other
 /// `claude` verb takes.
@@ -376,6 +410,11 @@ impl WorkerBackend for ClaudeBackend {
         transcript.max(sys::newest_mtime(&h.worktree))
     }
 
+    fn context_tokens(&self, h: &Handle) -> Option<u64> {
+        let path = paths::transcript_path(&h.worktree, &h.session);
+        last_context_tokens(&std::fs::read_to_string(path).ok()?)
+    }
+
     fn stop(&self, h: &Handle, grace_s: i64) {
         let pid = Self::pid(h);
         if !pid.is_empty() {
@@ -414,32 +453,22 @@ impl WorkerBackend for ClaudeBackend {
         {
             return Outcome {
                 ok: !v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false),
-                cost: v
-                    .get("total_cost_usd")
-                    .and_then(|c| c.as_f64())
-                    .unwrap_or(0.0),
             };
         }
         // A --bg session leaves no result document; ending non-busy in the
         // agents list is the clean end, and the status file plus the merge
-        // gate judge the work. Cost is not knowable here, so the run budget
-        // breaker is inert on this backend -- the deadline, the worker cap
-        // and one-task briefs are the bounds.
+        // gate judge the work.
         if Self::custom_template() {
             return Outcome::default();
         }
         match agents_row(&h.session) {
-            Some(row) => Outcome {
-                ok: !row.working(),
-                cost: 0.0,
-            },
+            Some(row) => Outcome { ok: !row.working() },
             // Not listed at all. A transcript means it ran and the listing has
             // simply forgotten it -- that is an ending like any other, and the
             // status file and the merge gate judge the work. Neither means the
             // dispatch never happened, which is the one real error here.
             None => Outcome {
                 ok: paths::transcript_path(&h.worktree, &h.session).exists(),
-                cost: 0.0,
             },
         }
     }
@@ -461,7 +490,6 @@ mod tests {
             rundir: PathBuf::from("/runs"),
             session: "018f2c7e-0000-4000-8000-000000000000".into(),
             model: "sonnet".into(),
-            budget: "10".into(),
             turns: "120".into(),
             env: Vec::new(),
         }
@@ -544,7 +572,6 @@ mod tests {
         for needle in [
             "claude --bg",
             "--dangerously-skip-permissions",
-            "--max-budget-usd",
             "-u GITHUB_API_KEY",
             "-u WORKFLOW_ALLOW_PUSH",
             "-u WORKFLOW_HOOK_SEEN",
@@ -565,6 +592,30 @@ mod tests {
             !WORKER_CMD_DEFAULT.contains("--session-id"),
             "{WORKER_CMD_DEFAULT}"
         );
+    }
+
+    /// Two assistant turns and a user line between them. The answer is the
+    /// last turn's whole input side, not a running total: what the worker was
+    /// carrying when it stopped.
+    const TRANSCRIPT: &str = r#"{"type":"user","message":{"role":"user"}}
+{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":4,"cache_creation_input_tokens":900,"cache_read_input_tokens":12000,"output_tokens":50}}}
+not json at all
+{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":2,"cache_creation_input_tokens":1500,"cache_read_input_tokens":157000,"output_tokens":80}}}
+{"type":"user","message":{"role":"user"}}
+"#;
+
+    #[test]
+    fn the_context_a_worker_carried_is_the_last_turns_input_side() {
+        assert_eq!(last_context_tokens(TRANSCRIPT), Some(2 + 1500 + 157000));
+        // A usage object missing a field counts the ones it has.
+        assert_eq!(
+            last_context_tokens(r#"{"message":{"usage":{"input_tokens":7}}}"#),
+            Some(7)
+        );
+        // Nothing to read is not zero: zero would say the worker used no
+        // context, and the honest answer is that the backend cannot see.
+        assert_eq!(last_context_tokens(""), None);
+        assert_eq!(last_context_tokens("{\"type\":\"user\"}\n"), None);
     }
 
     #[test]

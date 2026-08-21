@@ -26,7 +26,7 @@ else
 	commit "Add the $task service"
 fi
 say ready
-printf '{"is_error":false,"total_cost_usd":0.01,"result":"ok"}\n'
+printf '{"is_error":false,"result":"ok"}\n'
 FAKE
 
 export FAKE="$T_TMP/fake-worker.sh"

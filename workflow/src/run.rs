@@ -279,7 +279,6 @@ impl Run {
             rundir: self.dir.clone(),
             session: session.clone(),
             model: env_str("WORKFLOW_MODEL", "opus"),
-            budget: env_str("WORKFLOW_WORKER_BUDGET", "10"),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env: self.env.clone(),
         };
@@ -302,32 +301,14 @@ impl Run {
         memcli::log(&format!("run {}: dispatched {task}", self.plan.plan_id));
     }
 
-    fn record_cost(&self, task: &str) {
-        let outcome = self
-            .backend
-            .result(&self.handle(task), &self.dir.join(format!("{task}.json")));
-        let line = format!("{task}\t{}\n", outcome.cost);
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.dir.join("costs.tsv"))
-        {
-            let _ = f.write_all(line.as_bytes());
+    /// What this attempt was carrying when it stopped, kept for the run's
+    /// closing report. Feedback on how the plan was cut, never a ceiling
+    /// (ruling #D7A4T2CH): the plan is flat-rate and context is the resource
+    /// one-task-per-session already manages.
+    fn record_context(&self, task: &str) {
+        if let Some(tokens) = self.backend.context_tokens(&self.handle(task)) {
+            write_field(&self.dir, task, "context", &tokens.to_string());
         }
-    }
-
-    fn spend(&self) -> f64 {
-        std::fs::read_to_string(self.dir.join("costs.tsv"))
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|l| l.split('\t').nth(1))
-            .filter_map(|c| c.parse::<f64>().ok())
-            .sum()
-    }
-
-    fn over_budget(&self) -> bool {
-        self.spend() >= env_f64("WORKFLOW_RUN_BUDGET", 40.0)
     }
 
     // ------------------------------------------------------------ merge gate
@@ -444,7 +425,7 @@ impl Run {
     }
 
     fn finish(&self, task: &str) {
-        self.record_cost(task);
+        self.record_context(task);
         let outcome = self
             .backend
             .result(&self.handle(task), &self.dir.join(format!("{task}.json")));
@@ -508,7 +489,7 @@ impl Run {
                     self.deadline_s
                 ));
                 self.stop(&task);
-                self.record_cost(&task); // whatever it spent before it went quiet
+                self.record_context(&task); // how full it was when it went quiet
                 did = true;
                 let tries: u64 = self.field(&task, "dispatches").parse().unwrap_or(0);
                 if self.commits(&task) == 0 && tries < 2 {
@@ -573,13 +554,6 @@ impl Run {
             self.finish(task);
         }
         taken
-    }
-
-    fn kill_everything(&self) {
-        for task in self.dispatched() {
-            self.stop(&task);
-            self.park_task(&task, "the run hit its budget and every worker was stopped");
-        }
     }
 
     // ----------------------------------------------------------------- setup
@@ -661,9 +635,6 @@ impl Run {
             }
         }
         let _ = std::fs::write(self.dir.join("base_sha"), format!("{}\n", self.base));
-        if !self.dir.join("costs.tsv").exists() {
-            let _ = std::fs::write(self.dir.join("costs.tsv"), "");
-        }
 
         // One cargo target for the whole project, so five worktrees do not each
         // rebuild the world. It flattens the worktree mtime signal, which is why
@@ -923,6 +894,19 @@ fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
     q
 }
 
+/// A token count the way a person reads one: 157k, 1.2M. Rounded down, because
+/// this is a size to judge a plan by and rounding a task up towards a full
+/// window would be the wrong way to be wrong.
+pub fn tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", (n / 100_000) as f64 / 10.0)
+    } else if n >= 1_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        n.to_string()
+    }
+}
+
 /// The knobs of spec §8, all injectable (AC7).
 fn timings() -> (usize, i64, i64, f64) {
     let mut max_workers = std::env::var("WORKFLOW_MAX_WORKERS")
@@ -1054,11 +1038,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         run.max_workers
     ));
 
-    let mut stopped = false;
     for wave in run.plan.waves.clone() {
-        if stopped {
-            break;
-        }
         let mut queue: Vec<String> = Vec::new();
         for id in &wave {
             let Some(task) = run.plan.get(id).cloned() else {
@@ -1102,17 +1082,6 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         }
 
         while !queue.is_empty() || run.running() > 0 {
-            if run.over_budget() {
-                warn(format!(
-                    "run {}: spent ${:.4} against a ${} ceiling -- stopping",
-                    run.plan.plan_id,
-                    run.spend(),
-                    env_str("WORKFLOW_RUN_BUDGET", "40")
-                ));
-                run.kill_everything();
-                stopped = true;
-                break;
-            }
             while !queue.is_empty() && run.running() < run.max_workers {
                 let next = queue.remove(0);
                 run.dispatch(&next);
@@ -1135,10 +1104,26 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     run.cleanup();
 
     warn(format!(
-        "run {}: {merged} merged, {parked} parked, {blocked} never started; spent ${:.4}",
-        run.plan.plan_id,
-        run.spend()
+        "run {}: {merged} merged, {parked} parked, {blocked} never started",
+        run.plan.plan_id
     ));
+    let sizing: Vec<String> = run
+        .plan
+        .ids()
+        .into_iter()
+        .filter_map(|t| {
+            let n: u64 = run.field(&t, "context").parse().ok()?;
+            Some(format!("{t} {}", tokens(n)))
+        })
+        .collect();
+    if !sizing.is_empty() {
+        warn(format!(
+            "run {}: context carried at the last turn -- {}",
+            run.plan.plan_id,
+            sizing.join(", ")
+        ));
+        warn("a task that ended near a full window was cut too big; size the next plan by that");
+    }
     if previous > 0 {
         warn(format!(
             "run {}: {previous} task(s) were already ticked off and this run left them alone",
@@ -1299,6 +1284,18 @@ mod tests {
         let q = stopped_short("p", &tasks);
         assert!(q.starts_with("Plan p stopped short: 1 of 2 merged, 1 parked."));
         assert!(!q.contains("0 never started"), "{q}");
+    }
+
+    #[test]
+    fn a_token_count_reads_the_way_a_person_says_it() {
+        assert_eq!(tokens(158_502), "158k");
+        assert_eq!(tokens(1_240_000), "1.2M");
+        assert_eq!(tokens(999), "999");
+        assert_eq!(tokens(0), "0");
+        // Rounded down: a task is never made to look closer to a full window
+        // than it was.
+        assert_eq!(tokens(1_999), "1k");
+        assert_eq!(tokens(1_999_999), "1.9M");
     }
 
     #[test]

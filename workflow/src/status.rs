@@ -15,6 +15,9 @@ struct TaskRow {
     parked: String,
     last_status: String,
     merged: String,
+    /// What the worker was carrying at its last turn, when the run could see
+    /// it. Plan-sizing feedback, not a ceiling (ruling #D7A4T2CH).
+    context: u64,
 }
 
 struct RunRow {
@@ -22,7 +25,6 @@ struct RunRow {
     live: bool,
     base: String,
     integration: String,
-    spend: f64,
     tasks: Vec<TaskRow>,
 }
 
@@ -82,15 +84,6 @@ fn live(dir: &Path) -> bool {
     run::lock_run(dir).is_none()
 }
 
-fn spend(dir: &Path) -> f64 {
-    std::fs::read_to_string(dir.join("costs.tsv"))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| l.split('\t').nth(1))
-        .filter_map(|c| c.parse::<f64>().ok())
-        .sum()
-}
-
 fn read_run(dir: &Path) -> Option<RunRow> {
     let plan_id = dir.file_name()?.to_string_lossy().to_string();
     if !dir.join("plan.md").is_file() {
@@ -105,6 +98,7 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             parked: field(dir, &id, "parked"),
             last_status: last_status(dir, &id),
             merged: field(dir, &id, "merged"),
+            context: field(dir, &id, "context").parse().unwrap_or(0),
             id,
         })
         .collect();
@@ -115,7 +109,6 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             .trim()
             .to_string(),
         integration: format!("integration/{plan_id}"),
-        spend: spend(dir),
         tasks,
         plan: plan_id,
     })
@@ -142,7 +135,6 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
             "live": r.live,
             "base": r.base,
             "integration": r.integration,
-            "spend": r.spend,
             "tasks": r.tasks.iter().map(|t| serde_json::json!({
                 "id": t.id,
                 "state": t.state,
@@ -151,6 +143,7 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
                 "parked": t.parked,
                 "last_status": t.last_status,
                 "merged": t.merged,
+                "context": t.context,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
@@ -159,10 +152,9 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
 fn print_human(rows: &[RunRow]) {
     for r in rows {
         println!(
-            "run {} ({}, ${:.2} spent, {})",
+            "run {} ({}, {})",
             r.plan,
             if r.live { "live" } else { "nobody at the wheel" },
-            r.spend,
             r.integration
         );
         for t in &r.tasks {
@@ -173,6 +165,14 @@ fn print_human(rows: &[RunRow]) {
                 detail = format!("last report: {}", t.last_status);
             } else if !t.merged.is_empty() {
                 detail = format!("merged {}", &t.merged[..t.merged.len().min(12)]);
+            }
+            if t.context > 0 {
+                let carried = format!("carried {}", run::tokens(t.context));
+                detail = if detail.is_empty() {
+                    carried
+                } else {
+                    format!("{detail} ({carried})")
+                };
             }
             println!("  {:<8} {:<10} {}", t.id, t.state, detail);
         }
