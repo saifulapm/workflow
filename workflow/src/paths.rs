@@ -39,6 +39,10 @@ pub fn green_root() -> PathBuf {
     state_home().join("workflow/green")
 }
 
+pub fn suite_lock_root() -> PathBuf {
+    state_home().join("workflow/suite-lock")
+}
+
 pub fn briefs_root() -> PathBuf {
     cache_home().join("workflow/briefs")
 }

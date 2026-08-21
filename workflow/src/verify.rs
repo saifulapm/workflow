@@ -22,7 +22,9 @@ pub struct Verifier {
 /// The child suite is scrubbed of the git variables (so it sees the real repo,
 /// not the commit in progress) and of the workflow variables (so its own
 /// scratch commits do not re-enter the gate). Our own environment is never
-/// touched -- review-3 F-3.
+/// touched -- review-3 F-3. The lock-held marker rides along so a suite that
+/// reaches cmd_verify again (a scratch commit firing the hook) skips the lock
+/// its parent already holds instead of deadlocking against it.
 pub fn run_scrubbed(cmd: &str) -> bool {
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd);
@@ -35,7 +37,41 @@ pub fn run_scrubbed(cmd: &str) -> bool {
     ] {
         c.env_remove(key);
     }
+    c.env(SUITE_LOCK_HELD, "1");
     c.status().map(|s| s.success()).unwrap_or(false)
+}
+
+const SUITE_LOCK_HELD: &str = "WORKFLOW_SUITE_LOCK_HELD";
+
+/// The project's id when mem knows the checkout; the toplevel's slug when it
+/// does not, so two checkouts strangers to mem never share a lock.
+fn suite_lock_key(project: Option<&Project>, top: &Path) -> String {
+    project
+        .map(|p| p.id.clone())
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| paths::path_slug(top))
+}
+
+/// One suite per project at a time (friction #VTB9VB1S). Both halves of the
+/// false red -- the gate's suite on the integration branch and a worker's
+/// evidence run in its worktree -- execute through cmd_verify, so an exclusive
+/// flock keyed by project serializes them. Blocking on purpose: a suite
+/// already running is worth waiting for, and a holder that dies releases the
+/// lock with its file descriptors.
+fn suite_lock(project: Option<&Project>, top: &Path) -> Option<std::fs::File> {
+    if std::env::var_os(SUITE_LOCK_HELD).is_some() {
+        return None;
+    }
+    let dir = paths::suite_lock_root();
+    std::fs::create_dir_all(&dir).ok()?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join(suite_lock_key(project, top)))
+        .ok()?;
+    f.lock().ok()?;
+    Some(f)
 }
 
 fn json_file(path: &Path) -> Option<serde_json::Value> {
@@ -347,6 +383,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
         && let Some(cmd) = task_verify_cmd(&top)
     {
         warn(format!("verify task: {cmd}"));
+        let _lock = suite_lock(project.as_ref(), &top);
         if !run_scrubbed(&cmd) {
             warn("verify task: FAILED");
             return exit::FAILED;
@@ -370,6 +407,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
     }
 
     let mut rc = exit::OK;
+    let _lock = suite_lock(project.as_ref(), &top);
     for v in &verifiers {
         warn(format!("verify {}: {}", v.label, v.cmd));
         if !run_scrubbed(&v.cmd) {
@@ -389,6 +427,28 @@ pub fn cmd_verify(mode: Mode) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_suite_lock_is_keyed_by_project_id_or_the_toplevel_slug() {
+        let known = Project {
+            id: "01ABC".into(),
+            name: "app".into(),
+            root: None,
+            verify: None,
+        };
+        assert_eq!(suite_lock_key(Some(&known), Path::new("/x")), "01ABC");
+        let unregistered = Project {
+            id: String::new(),
+            name: "app".into(),
+            root: None,
+            verify: None,
+        };
+        assert_eq!(
+            suite_lock_key(Some(&unregistered), Path::new("/home/x/app")),
+            "-home-x-app"
+        );
+        assert_eq!(suite_lock_key(None, Path::new("/home/x/app")), "-home-x-app");
+    }
 
     #[test]
     fn a_test_target_is_the_one_called_exactly_test() {

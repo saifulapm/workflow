@@ -19,8 +19,10 @@ You are working alone in {wt}. Never leave it.
 {block}
 ## How to work
 
-Write the failing test first, then the code that passes it. The Verify: line
-above is your evidence command. Commit each atomic change in ordinary
+Write the failing test first, then the code that passes it. Your evidence
+command is `workflow verify`: it runs the Verify: line above and holds the
+project's suite lock, so your run never overlaps the merge gate's. Commit
+each atomic change in ordinary
 engineering voice -- no trailers, no session links, no words like agent, AI or
 orchestration, no puffery, plain words over fancy ones, straight quotes, no
 em dashes. Stage only the files this task touched; never `git add -A`.
@@ -99,6 +101,7 @@ mod tests {
             "Files: app/Services/Cart*.php tests/Unit/Cart*",
             "Verify: bin/php artisan test --filter=Cart",
             "Done: cart totals identical",
+            "Your evidence\ncommand is `workflow verify`",
             "no puffery",
             "Never leave it",
             "never `git add -A`",
