@@ -120,7 +120,11 @@ t_init() {
 	export WORKFLOW_MEM="$MEM_BIN"
 	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true WORKFLOW_SYNC_CMD=true
 
-	unset WORKFLOW_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH
+	# WORKFLOW_SUITE_LOCK_HELD comes with it: running the suite through
+	# `workflow verify` exports the marker to say the parent holds this
+	# project's lock, and a sandbox that inherited it would skip a lock it
+	# does not hold -- which is what t012 exists to catch.
+	unset WORKFLOW_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH WORKFLOW_SUITE_LOCK_HELD
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
 
 	HOOKS="$WF_ROOT/hooks"
