@@ -142,4 +142,25 @@ truthy "$(kill -0 "$live" 2>/dev/null && echo 1 || echo 0)" \
 # Already gone, if the check above held; this is only in case it did not.
 kill "$live" 2>/dev/null || true
 
+## ----------------------------------- the session that never existed at all
+
+# The --session-id bug minted ids for sessions that never started. Adopting
+# one used to sit out the whole stall deadline before redispatching (friction
+# #9F7WT13K). At adoption, no record anywhere -- no process, no transcript,
+# no status line, no result, no commit -- is known-dead: dispatch again now.
+rm -rf "$rundir" "$wtroot"
+git -C "$repo" worktree prune
+for b in orphan-check/t1 orphan-check/t2 integration/orphan-check; do
+	git -C "$repo" branch -D "$b" >/dev/null 2>&1
+done
+
+orphan
+: >"$rundir/t1.status"
+# A deadline the test cannot wait out: only an immediate redispatch finishes.
+run env WORKFLOW_DEADLINE_MIN=60 timeout 60 workflow run --plan-file "$T_TMP/plan.md"
+is "$RC" 0 'the run finishes without waiting out the deadline'
+like "$OUT" 'never existed' 'it says the recorded session never existed'
+is "$(cat "$rundir/t1.dispatches")" 2 'the ghost was dispatched again immediately'
+is "$(cat "$rundir/t1.state")" merged 'and the second dispatch finished the task'
+
 t_done

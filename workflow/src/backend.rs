@@ -64,6 +64,12 @@ pub trait WorkerBackend {
     fn dispatch(&self, d: &Dispatch) -> String;
     /// Is anything of this worker still running?
     fn alive(&self, h: &Handle) -> bool;
+    /// Does the backend hold any record of this session at all -- a listing
+    /// row, a process carrying its id, a transcript, a pidfile? Distinct from
+    /// `alive`: a session can be seen and ended. At dispatch time no record
+    /// means still launching; at adoption, with the run that recorded the
+    /// session dead, it means the session never existed (friction #9F7WT13K).
+    fn seen(&self, h: &Handle) -> bool;
     /// The most recent sign of life the backend can see, in epoch seconds.
     /// The worker's own status file is the orchestrator's signal, not the
     /// backend's, and is counted on top of this.
@@ -350,6 +356,19 @@ impl WorkerBackend for ClaudeBackend {
             // deadline decides) or long gone with a transcript behind it.
             None => !paths::transcript_path(&h.worktree, &h.session).exists(),
         }
+    }
+
+    fn seen(&self, h: &Handle) -> bool {
+        if !Self::pid(h).is_empty() {
+            return true;
+        }
+        if paths::transcript_path(&h.worktree, &h.session).exists() {
+            return true;
+        }
+        if Self::custom_template() {
+            return !h.session.is_empty() && sys::pgrep(&h.session);
+        }
+        agents_row(&h.session).is_some()
     }
 
     fn last_activity(&self, h: &Handle) -> i64 {
