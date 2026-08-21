@@ -32,6 +32,7 @@ printf 'parked\n' >"$rundir/t2.state"
 printf 'the suite is red once the change sits on integration\n' >"$rundir/t2.parked"
 printf '2\n' >"$rundir/t2.dispatches"
 printf '2026-08-21T10:00:00Z blocked waiting on an answer\n' >"$rundir/t2.status"
+printf '%s/parked/app/demo-t2-20260821T100000Z.bundle\n' "$XDG_DATA_HOME/workflow" >"$rundir/t2.bundle"
 printf 'pending\n' >"$rundir/t3.state"
 
 run workflow status
@@ -41,6 +42,7 @@ like "$OUT" 't1 +merged' 'a merged task shows its state'
 like "$OUT" 't2 +parked +the suite is red' 'a parked task shows its reason'
 like "$OUT" 't3 +pending' 'a task that never started says so'
 like "$OUT" 'carried 158k' 'the context a task carried is plan-sizing feedback'
+like "$OUT" 'workflow resume .*demo-t2.*\.bundle' 'a parked task shows the way to put its work back'
 unlike "$OUT" '\$' 'and no dollar figure is reported at all'
 
 run workflow status --json
@@ -50,6 +52,7 @@ like "$OUT" '"state": *"parked"' 'json carries task states'
 like "$OUT" '"parked": *"the suite is red once the change sits on integration"' 'json carries the park reason'
 like "$OUT" '"last_status": *"blocked waiting on an answer"' "json carries the worker's own last report"
 like "$OUT" '"context": *158502' 'json carries the context a task carried'
+like "$OUT" '"bundle": *".*demo-t2.*\.bundle"' 'json carries the bundle a park wrote'
 unlike "$OUT" '"spend"' 'and no spend field'
 like "$OUT" '"live": *false' 'nobody holds the run lock'
 

@@ -130,6 +130,14 @@ impl Run {
 
     fn set_state(&self, task: &str, state: &str) {
         write_field(&self.dir, task, "state", state);
+        if state == MERGED {
+            // A park note used to outlive its park: status went on reporting
+            // why a task failed on one run long after another had merged it,
+            // and the bundle it named was work that is on the branch now
+            // (friction #BHPS3G7D).
+            write_field(&self.dir, task, "parked", "");
+            write_field(&self.dir, task, "bundle", "");
+        }
     }
 
     fn branch(&self, task: &str) -> String {
@@ -543,10 +551,22 @@ impl Run {
                 label: Some(&label),
                 quiet: true,
             };
-            if park::park_quietly(&args).is_err() {
-                warn(format!(
-                    "task {task}: could not bundle the parked work (the branch is still here)"
-                ));
+            // Quiet so the park does not narrate itself in the middle of the
+            // run's own report -- but the one thing worth saying gets said
+            // here, where the reason was. A park whose bundle path only
+            // appears if the next run happens to refuse preflight is a park
+            // nobody can act on (friction #BHPS3G7D).
+            match park::park_quietly(&args) {
+                Ok(Some(bundle)) => {
+                    let path = bundle.display().to_string();
+                    write_field(&self.dir, task, "bundle", &path);
+                    warn(format!("  its work is bundled at {path}"));
+                    warn(format!("  put it back with: workflow resume {path}"));
+                }
+                Ok(None) => warn("  it wrote nothing, so there is no bundle to put back"),
+                Err(e) => warn(format!(
+                    "  could not bundle the parked work ({e}); the branch {branch} is still here"
+                )),
             }
         }
         memcli::log(&format!(

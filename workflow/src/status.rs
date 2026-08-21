@@ -13,6 +13,9 @@ struct TaskRow {
     dispatches: u64,
     session: String,
     parked: String,
+    /// Where the park put the work. Read by the session that owns the run, so
+    /// resuming a parked task is a path it already has (friction #BHPS3G7D).
+    bundle: String,
     last_status: String,
     merged: String,
     /// What the worker was carrying at its last turn, when the run could see
@@ -96,6 +99,7 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             dispatches: field(dir, &id, "dispatches").parse().unwrap_or(0),
             session: field(dir, &id, "session"),
             parked: field(dir, &id, "parked"),
+            bundle: field(dir, &id, "bundle"),
             last_status: last_status(dir, &id),
             merged: field(dir, &id, "merged"),
             context: field(dir, &id, "context").parse().unwrap_or(0),
@@ -141,6 +145,7 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
                 "dispatches": t.dispatches,
                 "session": t.session,
                 "parked": t.parked,
+                "bundle": t.bundle,
                 "last_status": t.last_status,
                 "merged": t.merged,
                 "context": t.context,
@@ -175,6 +180,9 @@ fn print_human(rows: &[RunRow]) {
                 };
             }
             println!("  {:<8} {:<10} {}", t.id, t.state, detail);
+            if !t.bundle.is_empty() {
+                println!("                     workflow resume {}", t.bundle);
+            }
         }
     }
 }

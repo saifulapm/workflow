@@ -72,6 +72,12 @@ is "$RC" 1 'run 1: one task parked, so exit 1'
 is "$(cat "$rundir/t1.state")" merged 'run 1: t1 merged'
 is "$(cat "$rundir/t2.state")" parked 'run 1: t2 parked, having written outside its patterns'
 
+# A park that says nothing about its own escape hatch sends whoever reads it
+# hunting for the bundle (friction #BHPS3G7D).
+like "$OUT" 'bundled at .*rerun-check-t2' 'run 1: the park names the bundle it wrote'
+like "$OUT" 'workflow resume ' 'run 1: and the command that puts it back'
+like "$(cat "$rundir/t2.bundle")" '\.bundle$' 'run 1: the bundle path is in the run dir too'
+
 int1=$(git rev-parse integration/rerun-check)
 is "$(git rev-list --count "$base..integration/rerun-check")" 1 \
 	'run 1: integration carries exactly the merged task'
@@ -117,6 +123,9 @@ is "$RC" 0 'run 3: the recovery path runs to completion'
 is "$(cat "$rundir/t1.state")" merged \
 	'run 3: the task ticked off in run 1 counts as merged, its commit being on integration'
 is "$(cat "$rundir/t2.state")" merged 'run 3: the parked task ran again and merged'
+is "$(cat "$rundir/t2.parked")" '' \
+	'run 3: and the park reason from run 1 is cleared, not left to be reported forever'
+is "$(cat "$rundir/t2.bundle")" '' 'run 3: as is the bundle path it no longer needs'
 
 run git cat-file -e "integration/rerun-check:app/t1.php"
 is "$RC" 0 "run 3: t1's work is present on integration"
