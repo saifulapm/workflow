@@ -362,6 +362,20 @@ impl Run {
         let branch = self.branch(task);
         let wt = self.worktree(task);
 
+        // Before anything else: did this task's merge already land? The
+        // fast-forward and the verify are two steps, and a coordinator killed
+        // between them leaves integration advanced with the task still reading
+        // dispatched. Coming back in from there, the branch has nothing
+        // integration lacks, so this pass would rebase commits that are already
+        // applied and call the answer a conflict (friction #DM877DNV). The
+        // intent line written below says which commit was going on, which is
+        // what tells an applied merge from a real one.
+        if let Some((prev, new)) = self.pending_merge(task)
+            && self.git().is_ancestor(&new, &self.int_branch)
+        {
+            return self.settle_interrupted_merge(task, &prev, &new);
+        }
+
         if self.commits(task) == 0 {
             return Err("the worker reported ready but committed nothing".into());
         }
@@ -418,25 +432,73 @@ impl Run {
         if !int.quiet(&["checkout", "-q", &self.int_branch]) {
             return Err(format!("cannot return to {}", self.int_branch));
         }
+        // Written before the branch moves, not after: the bookkeeping that
+        // says a merge is done still waits on the verify, but a crash from
+        // here on leaves a record of what was in flight.
+        write_field(&self.dir, task, "merging", &format!("{prev} {new}"));
         if !int.quiet(&["merge", "-q", "--ff-only", &new]) {
+            write_field(&self.dir, task, "merging", "");
             return Err("the rebased branch does not fast-forward onto integration".into());
         }
 
         if !self.gate_verify() {
             int.quiet(&["reset", "-q", "--hard", &prev]);
+            write_field(&self.dir, task, "merging", "");
             return Err("the suite is red once the change sits on integration".into());
         }
 
-        if !self
-            .git()
-            .quiet(&["update-ref", &self.task_ref(task), &new])
-        {
+        self.record_merged(task, &new);
+        Ok(())
+    }
+
+    /// The merge this task was in the middle of when its coordinator died, as
+    /// (integration before, the commit that was going on).
+    fn pending_merge(&self, task: &str) -> Option<(String, String)> {
+        let line = self.field(task, "merging");
+        let (prev, new) = line.split_once(' ')?;
+        (!new.is_empty()).then(|| (prev.to_string(), new.to_string()))
+    }
+
+    fn record_merged(&self, task: &str, new: &str) {
+        if !self.git().quiet(&["update-ref", &self.task_ref(task), new]) {
             warn(format!(
                 "task {task}: could not record {new} as the commit that landed"
             ));
         }
-        write_field(&self.dir, task, "merged", &new);
-        Ok(())
+        write_field(&self.dir, task, "merged", new);
+        write_field(&self.dir, task, "merging", "");
+    }
+
+    /// A merge whose fast-forward landed and whose verify never ran. The work
+    /// is on the branch already, so there is nothing to replay -- but nothing
+    /// has vouched for it either, and the gate is the whole point.
+    fn settle_interrupted_merge(
+        &self,
+        task: &str,
+        prev: &str,
+        new: &str,
+    ) -> Result<(), String> {
+        warn(format!(
+            "task {task}: its merge reached {} before the run died -- verifying it now",
+            self.int_branch
+        ));
+        if self.gate_verify() {
+            self.record_merged(task, new);
+            return Ok(());
+        }
+        // Unwind only what nothing was built on. A later run may have merged
+        // other tasks on top, and taking those down with this one would be a
+        // worse answer than a red branch and a person told why.
+        let int = Git::at(&self.int_wt);
+        if int.head().as_deref() == Some(new) {
+            int.quiet(&["reset", "-q", "--hard", prev]);
+            write_field(&self.dir, task, "merging", "");
+            return Err("the suite is red once the change sits on integration".into());
+        }
+        Err(format!(
+            "its merge landed before the run died, {} is red now, and other work sits on top of it",
+            self.int_branch
+        ))
     }
 
     /// verify, on the integration branch, as its own process: the same

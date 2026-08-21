@@ -80,6 +80,63 @@ is "$RC" 0 'a second reap has nothing left to do'
 git worktree remove --force "$wtroot/t1" 2>/dev/null
 git worktree remove --force "$wtroot/_integration" 2>/dev/null
 
+## ------------------------------------------- a merge interrupted mid-flight
+
+# The fast-forward and the verify are two steps. A coordinator killed between
+# them leaves integration advanced with the task still reading dispatched, and
+# the pass that picks it up used to rebase commits integration already had and
+# call the result a conflict (friction #DM877DNV).
+rundir="$XDG_STATE_HOME/workflow/runs/reapme/halfway"
+wtroot="$XDG_STATE_HOME/workflow/worktrees/reapme/halfway"
+mkdir -p "$rundir"
+cat >"$rundir/plan.md" <<'EOF'
+# plan: halfway
+
+- [ ] t1 Add the halfway thing
+      Files: app/**
+      Verify: true
+EOF
+printf '%s\n' "$base" >"$rundir/base_sha"
+
+git branch integration/halfway "$base"
+git worktree add -q "$wtroot/_integration" integration/halfway
+git worktree add -q -b halfway/t1 "$wtroot/t1" "$base"
+(
+	cd "$wtroot/t1" || exit 1
+	mkdir -p app
+	printf '<?php\n' >app/Halfway.php
+	git add app/Halfway.php
+	git -c core.hooksPath=/dev/null commit -qm 'Add the halfway thing'
+)
+# The fast-forward that landed, and the intent line that says it was going to.
+landed=$(git rev-parse halfway/t1)
+(
+	cd "$wtroot/_integration" || exit 1
+	git merge -q --ff-only "$landed"
+)
+printf '%s %s\n' "$base" "$landed" >"$rundir/t1.merging"
+
+printf '{"is_error":false,"result":"ok"}\n' >"$rundir/t1.json"
+printf '2026-08-19T00:00:00Z ready merge-ready\n' >"$rundir/t1.status"
+printf '%s\n' "$(sh -c 'echo $$')" >"$rundir/t1.pid"
+printf '1\n' >"$rundir/t1.dispatches"
+printf '00000000-0000-4000-8000-000000000002\n' >"$rundir/t1.session"
+printf 'dispatched\n' >"$rundir/t1.state"
+
+cd "$main" || exit 1
+run workflow reap
+is "$(cat "$rundir/t1.state")" merged 'an already-applied merge is finished, not re-rebased'
+unlike "$(cat "$rundir/t1.parked" 2>/dev/null)" 'conflicts' \
+	'and it is never mis-parked as a conflict with integration'
+is "$(git rev-parse integration/halfway)" "$landed" \
+	'integration keeps the commit that was already on it'
+is "$(git rev-parse "refs/workflow/halfway/t1")" "$landed" \
+	'and the commit that landed is recorded for a later run'
+is "$(cat "$rundir/t1.merging")" '' 'the intent line is cleared once the merge is settled'
+
+git worktree remove --force "$wtroot/t1" 2>/dev/null
+git worktree remove --force "$wtroot/_integration" 2>/dev/null
+
 ## ------------------------------------------------- the three liveness signals
 
 # Each of the three can go quiet on a worker that is perfectly fine, so the
