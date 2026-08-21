@@ -71,6 +71,16 @@ branch per task and dispatches the first wave for real."
     },
     /// Collect finished or stalled workers.
     Reap,
+    /// Report this project's runs: task states, spend, lock liveness.
+    #[command(long_about = "Report this project's runs: task states, spend, lock liveness.
+
+The run dir read out loud, and nothing touched: no dispatch, no cleanup, no
+state change. --json is the shape a session that owns a run polls.")]
+    Status {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Check this machine's wiring.
     Doctor,
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
@@ -198,6 +208,9 @@ usage: workflow <command> [options]
       0 every task complete · 1 parked or failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
+  status [--json]
+      report this project's runs: task states, spend, lock liveness
+      0 reported · 2 outside a project
   doctor
       0 healthy · 1 findings
   hook <name> [--stub <path>] [-- <args>]

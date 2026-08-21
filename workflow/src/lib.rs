@@ -6,6 +6,7 @@
 //!   workflow plan-check      read a plan and report its tasks and waves
 //!   workflow run             run a plan's tasks in worktrees
 //!   workflow reap            collect finished or stalled workers
+//!   workflow status          report this project's runs, --json for machines
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
 //!   workflow park/resume     put work somewhere safe, and bring it back
@@ -34,6 +35,7 @@ pub mod resume;
 pub mod review;
 pub mod run;
 pub mod settings;
+pub mod status;
 pub mod sys;
 pub mod testdecl;
 pub mod verify;
@@ -117,6 +119,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Run { plan_file } => run::cmd_run(plan_file.as_deref()),
         Command::Reap => run::cmd_reap(),
+        Command::Status { json } => status::cmd_status(json),
         Command::Park {
             repo,
             branch,
