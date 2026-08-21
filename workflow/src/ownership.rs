@@ -119,7 +119,15 @@ pub fn split_patterns(line: &str) -> Vec<String> {
 }
 
 /// Every record the task touched that its `Files:` patterns do not claim.
-pub fn violations(wt: &Path, base: &str, branch: &str, patterns: &[String]) -> Vec<Vec<u8>> {
+///
+/// `anchor` is what the branch is measured against, and the measurement is
+/// from where the two last agreed -- `anchor...branch`, not `anchor..branch`.
+/// Two-dot compares tips, and both arrangements of a live run get that wrong
+/// (friction #A2JXGNB8): a branch that took the integration branch in to reach
+/// a dependency is charged with every file its siblings merged, and a branch
+/// that never needed to is charged with deleting them. Measured from the merge
+/// base, both see only what this task wrote.
+pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) -> Vec<Vec<u8>> {
     let git = Git::at(wt);
     let specs: Vec<String> = if patterns.is_empty() {
         vec![gitcmd::glob_top("__nothing_is_owned__")]
@@ -138,7 +146,7 @@ pub fn violations(wt: &Path, base: &str, branch: &str, patterns: &[String]) -> V
     let owned = status_records(&git.bytes(&owned_args));
     out.extend(all.difference(&owned).cloned());
 
-    let range = format!("{base}..{branch}");
+    let range = format!("{anchor}...{branch}");
     let diff = ["diff", "--name-status", "-z", "-M", range.as_str()];
     let mut owned_args: Vec<&str> = diff.to_vec();
     owned_args.push("--");

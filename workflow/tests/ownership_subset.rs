@@ -169,3 +169,74 @@ fn a_task_that_claims_nothing_owns_nothing() {
     let out = r.unowned(&base, "HEAD", &[]);
     assert!(any(&out, "app/One.php"), "{out:?}");
 }
+
+/// The friction the anchor exists for (#A2JXGNB8). A task whose dependency
+/// landed on the integration branch has to bring that branch into its own
+/// before it can build on it. Measured from the run's base, the diff then
+/// charges the task with every file its siblings merged; measured from the
+/// merge base with integration, it sees only what this task wrote.
+#[test]
+fn work_the_branch_only_inherited_from_integration_is_not_this_tasks() {
+    let r = Repo::new("inherited");
+    r.write("app/Services/Owned.php", "x\n");
+    r.git(&["add", "-A"]);
+    r.commit("fixtures");
+    let base = r.head();
+
+    // A sibling task's work, merged onto integration while this one waited.
+    r.git(&["checkout", "-qb", "integration", &base]);
+    r.write("app/Other/Sibling.php", "sibling\n");
+    r.git(&["add", "-A"]);
+    r.commit("Add the sibling service");
+
+    // This task's branch, cut from the base, pulling integration in to get it.
+    r.git(&["checkout", "-qb", "work", &base]);
+    r.write("app/Services/Owned.php", "changed\n");
+    r.git(&["add", "-A"]);
+    r.commit("Change the owned service");
+    r.git(&["merge", "-q", "--no-edit", "integration"]);
+
+    let out = r.unowned("integration", "work", &["app/Services/Owned.php"]);
+    assert!(
+        out.is_empty(),
+        "charged with a sibling's merged files: {out:?}"
+    );
+
+    // And the anchor does not hide what this task really did reach outside.
+    r.write("NOTOWNED.txt", "outside\n");
+    r.git(&["add", "-A"]);
+    r.commit("Reach outside the task");
+    let out = r.unowned("integration", "work", &["app/Services/Owned.php"]);
+    assert!(any(&out, "NOTOWNED.txt"), "{out:?}");
+    assert!(!any(&out, "Sibling"), "{out:?}");
+}
+
+/// The other arrangement, and the one that makes the anchor a merge base
+/// rather than the branch tip: a task that never needed its siblings' work
+/// sits where it was cut, and the integration branch has moved on without it.
+/// Compared tip to tip, every file the siblings added reads as a deletion this
+/// task made.
+#[test]
+fn a_branch_that_never_took_integration_in_is_not_charged_with_its_files() {
+    let r = Repo::new("behind");
+    r.write("app/Services/Owned.php", "x\n");
+    r.git(&["add", "-A"]);
+    r.commit("fixtures");
+    let base = r.head();
+
+    r.git(&["checkout", "-qb", "integration", &base]);
+    r.write("app/Other/Sibling.php", "sibling\n");
+    r.git(&["add", "-A"]);
+    r.commit("Add the sibling service");
+
+    r.git(&["checkout", "-qb", "work", &base]);
+    r.write("app/Services/Owned.php", "changed\n");
+    r.git(&["add", "-A"]);
+    r.commit("Change the owned service");
+
+    let out = r.unowned("integration", "work", &["app/Services/Owned.php"]);
+    assert!(
+        out.is_empty(),
+        "a sibling's file read as this task's deletion: {out:?}"
+    );
+}

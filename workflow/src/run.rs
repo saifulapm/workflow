@@ -199,6 +199,16 @@ impl Run {
             .count(&format!("{}..{}", self.base, self.branch(task)))
     }
 
+    /// The commits this task added, as against the ones it inherited by taking
+    /// the integration branch in. `commits` above answers a different question
+    /// -- did this dispatch produce anything at all -- and is measured from the
+    /// base because it is asked before the merge gate, of branches that may
+    /// never have touched integration.
+    fn own_commits(&self, task: &str) -> u64 {
+        self.git()
+            .count(&format!("{}..{}", self.int_branch, self.branch(task)))
+    }
+
     /// The commit some run merged for this task, or empty.
     fn prior_sha(&self, task: &str) -> String {
         self.git()
@@ -321,7 +331,7 @@ impl Run {
         let branch = self.branch(task);
         let wt = self.worktree(task);
 
-        if self.commits(task) == 0 {
+        if self.own_commits(task) == 0 {
             return Err("the worker reported ready but committed nothing".into());
         }
 
@@ -331,7 +341,10 @@ impl Run {
                 .and_then(|t| t.files.as_deref())
                 .unwrap_or(""),
         );
-        let bad = ownership::violations(&wt, &self.base, &branch, &patterns);
+        // Anchored on the integration branch, not the run's base: what this
+        // task owns is what it wrote, never what a sibling merged while it
+        // worked (friction #A2JXGNB8).
+        let bad = ownership::violations(&wt, &self.int_branch, &branch, &patterns);
         if !bad.is_empty() {
             warn(format!("task {task}: touched files it does not own --"));
             for line in ownership::show(&bad) {
@@ -340,9 +353,16 @@ impl Run {
             return Err("wrote outside its Files: patterns".into());
         }
 
+        // The same anchor again: a branch that took integration in to reach a
+        // dependency would otherwise be held to its siblings' commit messages
+        // as well as its own.
         let msgs = self
             .git()
-            .out(&["log", "--format=%B", &format!("{}..{branch}", self.base)])
+            .out(&[
+                "log",
+                "--format=%B",
+                &format!("{}..{branch}", self.int_branch),
+            ])
             .unwrap_or_default();
         if !lint::lint_text(&msgs) {
             return Err("a commit message did not pass lint-msg".into());
@@ -354,7 +374,11 @@ impl Run {
             int.quiet(&["checkout", "-q", &self.int_branch]);
             return Err(format!("cannot check out {branch} for the rebase"));
         }
-        if !int.quiet(&["rebase", "--onto", &self.int_branch, &self.base]) {
+        // Replay what the branch has that integration does not, which is the
+        // task's own work whether or not it took integration in along the way.
+        // Against the run's base it would replay the siblings' commits too and
+        // lean on patch-id dedup to drop them again.
+        if !int.quiet(&["rebase", &self.int_branch]) {
             int.quiet(&["rebase", "--abort"]);
             int.quiet(&["checkout", "-q", &self.int_branch]);
             return Err("conflicts with the integration branch".into());

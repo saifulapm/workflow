@@ -44,6 +44,11 @@ t2)
 	else
 		printf 'no\n' >"$WF_TMP/t2-saw-parent-merged"
 	fi
+	# It builds on its parent, whose work is only on the integration branch,
+	# so it brings that branch into its own first -- the shape friction
+	# #A2JXGNB8 was filed for. Measured from the run's base the diff would
+	# then charge this task with its parent's file and park it.
+	git merge -q --ff-only integration/fixture-run
 	mkdir -p app/Services
 	printf '<?php // totals\n' >app/Services/CartTotals.php
 	git add app/Services/CartTotals.php
@@ -196,7 +201,8 @@ is "$run_rc" 1 'the run reports parked work with exit 1'
 ## ------------------------------------------------------------- assertions
 
 is "$(cat "$rundir/t1.state")" merged 't1: the succeeding fake merged'
-is "$(cat "$rundir/t2.state")" merged 't2: the dependent succeeding fake merged'
+is "$(cat "$rundir/t2.state")" merged \
+	't2: a dependent that took the integration branch in still merged'
 is "$(cat "$T_TMP/t2-saw-parent-merged" 2>/dev/null)" yes \
 	't2 was dispatched only after t1 was on the integration branch'
 
