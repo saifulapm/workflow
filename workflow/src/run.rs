@@ -194,19 +194,20 @@ impl Run {
         last
     }
 
+    /// The commits this task wrote, which is not the same as the commits on its
+    /// branch: a branch caught up to the integration branch, or one whose
+    /// worker took that branch in, carries its siblings' commits too. Measured
+    /// against integration, so the answer is this task's own work.
+    ///
+    /// The base is the fallback for the one moment integration does not exist
+    /// yet -- a run refused in preflight before it made the branch.
     fn commits(&self, task: &str) -> u64 {
-        self.git()
-            .count(&format!("{}..{}", self.base, self.branch(task)))
-    }
-
-    /// The commits this task added, as against the ones it inherited by taking
-    /// the integration branch in. `commits` above answers a different question
-    /// -- did this dispatch produce anything at all -- and is measured from the
-    /// base because it is asked before the merge gate, of branches that may
-    /// never have touched integration.
-    fn own_commits(&self, task: &str) -> u64 {
-        self.git()
-            .count(&format!("{}..{}", self.int_branch, self.branch(task)))
+        let git = self.git();
+        let anchor = match git.rev_parse_commit(&self.int_branch) {
+            Some(_) => self.int_branch.clone(),
+            None => self.base.clone(),
+        };
+        git.count(&format!("{anchor}..{}", self.branch(task)))
     }
 
     /// The commit some run merged for this task, or empty.
@@ -255,10 +256,40 @@ impl Run {
 
     // ---------------------------------------------------------------- workers
 
+    /// Bring the task's worktree up to the integration branch before the worker
+    /// sees it.
+    ///
+    /// Every worktree is cut from the run's base at setup, so a task whose
+    /// dependency merged in an earlier wave opens onto a tree without it
+    /// (friction #VC7PAESB). The worker's only way out was to go and find the
+    /// integration branch itself, which nothing in its brief mentions. This
+    /// fast-forward puts the work it builds on simply there.
+    ///
+    /// Fast-forward only. A redispatch after a park has commits of its own on
+    /// the branch, and rebasing them mid-run to catch up is a decision for the
+    /// worker who can read the conflict, not for a silent step before it wakes.
+    fn catch_up(&self, task: &str) {
+        let wt = self.worktree(task);
+        if !wt.is_dir() {
+            return;
+        }
+        let git = Git::at(&wt);
+        if git.head() == self.git().rev_parse_commit(&self.int_branch) {
+            return; // already there, and on wave one it always is
+        }
+        if !git.quiet(&["merge", "-q", "--ff-only", &self.int_branch]) {
+            warn(format!(
+                "task {task}: its worktree keeps the commits it already has, so {} was not brought in",
+                self.int_branch
+            ));
+        }
+    }
+
     fn dispatch(&self, task: &str) {
         let Some(t) = self.plan.get(task).cloned() else {
             return;
         };
+        self.catch_up(task);
         let wt = self.worktree(task);
         let brief_file = self.brief_dir.join(format!("{task}.md"));
         let status = self.dir.join(format!("{task}.status"));
@@ -331,7 +362,7 @@ impl Run {
         let branch = self.branch(task);
         let wt = self.worktree(task);
 
-        if self.own_commits(task) == 0 {
+        if self.commits(task) == 0 {
             return Err("the worker reported ready but committed nothing".into());
         }
 
@@ -420,6 +451,15 @@ impl Run {
         c.status().map(|s| s.success()).unwrap_or(false)
     }
 
+    /// Where a parked branch's own work starts, as a sha: the task branch is
+    /// deleted at run end and the integration branch is deleted once it lands,
+    /// so a bundle that named either by name would not survive its own shelf.
+    fn park_base(&self) -> String {
+        self.git()
+            .rev_parse_commit(&self.int_branch)
+            .unwrap_or_else(|| self.base.clone())
+    }
+
     fn park_task(&self, task: &str, why: &str) {
         let wt = self.worktree(task);
         warn(format!("task {task}: parked -- {why}"));
@@ -428,10 +468,15 @@ impl Run {
         if wt.is_dir() {
             let label = format!("{}-{task}", self.plan.plan_id);
             let branch = self.branch(task);
+            // The same anchor the gate uses. Measured from the run's base, a
+            // branch caught up to integration bundles its siblings' commits
+            // as well, so a task that wrote nothing still left a bundle full
+            // of other people's work.
+            let anchor = self.park_base();
             let args = park::Args {
                 repo: Some(&wt),
                 branch: Some(&branch),
-                base: Some(&self.base),
+                base: Some(&anchor),
                 note: why,
                 label: Some(&label),
                 quiet: true,

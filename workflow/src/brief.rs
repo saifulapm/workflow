@@ -12,7 +12,8 @@ pub fn text(task: &Task, worktree: &Path, status_file: &Path) -> String {
         "\
 # {id} -- {title}
 
-You are working alone in {wt}. Never leave it.
+You are working alone in {wt}. Never leave it. Whatever this task
+depends on is already in that tree; you never go looking for another branch.
 
 ## The task, as the plan states it
 

@@ -44,10 +44,12 @@ t2)
 	else
 		printf 'no\n' >"$WF_TMP/t2-saw-parent-merged"
 	fi
-	# It builds on its parent, whose work is only on the integration branch,
-	# so it brings that branch into its own first -- the shape friction
-	# #A2JXGNB8 was filed for. Measured from the run's base the diff would
-	# then charge this task with its parent's file and park it.
+	# Its parent's work should be in this worktree already: the run caught the
+	# worktree up to the integration branch before waking it (#VC7PAESB).
+	[ -f app/Services/CartPricing.php ] &&
+		printf 'yes\n' >"$WF_TMP/t2-had-parents-work"
+	# A worker that brings the branch in for itself is the other shape, and the
+	# gate must not charge it with its parent's file for doing so (#A2JXGNB8).
 	git merge -q --ff-only integration/fixture-run
 	mkdir -p app/Services
 	printf '<?php // totals\n' >app/Services/CartTotals.php
@@ -205,6 +207,8 @@ is "$(cat "$rundir/t2.state")" merged \
 	't2: a dependent that took the integration branch in still merged'
 is "$(cat "$T_TMP/t2-saw-parent-merged" 2>/dev/null)" yes \
 	't2 was dispatched only after t1 was on the integration branch'
+is "$(cat "$T_TMP/t2-had-parents-work" 2>/dev/null)" yes \
+	"and t2's worktree already held its parent's work when it woke"
 
 max=$(sort -n "$T_TMP/conc.samples" | tail -1)
 is "$max" 2 'concurrency: two workers at once, never three'
