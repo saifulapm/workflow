@@ -6,7 +6,7 @@ t_init
 
 ## ------------------------------------------------------------- the skills
 
-for s in route plan implement review; do
+for s in route plan implement review orchestrate; do
 	f="$WF_ROOT/skills/$s/SKILL.md"
 	truthy "$([ -f "$f" ] && echo 0 || echo 1)" "skills/$s/SKILL.md exists"
 	like "$(head -1 "$f")" '^---$' "skills/$s starts with frontmatter"
@@ -14,10 +14,11 @@ for s in route plan implement review; do
 	like "$(sed -n '2,4p' "$f")" 'description: Use ' "skills/$s describes when to use it"
 done
 
-# Line ceilings from the spec: route 50, plan 100, review 80.
+# Line ceilings from the spec: route 50, plan 100, review 80, orchestrate 100.
 is "$(($(wc -l <"$WF_ROOT/skills/route/SKILL.md") <= 50))" 1 'route is within 50 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/plan/SKILL.md") <= 100))" 1 'plan is within 100 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/review/SKILL.md") <= 80))" 1 'review is within 80 lines'
+is "$(($(wc -l <"$WF_ROOT/skills/orchestrate/SKILL.md") <= 100))" 1 'orchestrate is within 100 lines'
 
 # The byte budgets, checked the way the machine checks them.
 run workflow doctor
@@ -34,6 +35,14 @@ like "$plan_skill" 'workflow plan-check' 'plan defers to the parser'
 unlike "$plan_skill" 'workflow run --plan-file plan' 'and not to the orchestrator'
 like "$(cat "$WF_ROOT/skills/implement/SKILL.md")" 'workflow verify' 'implement defers to verify'
 like "$(cat "$WF_ROOT/skills/review/SKILL.md")" 'workflow review-needed' 'review defers to review-needed'
+orchestrate_skill=$(cat "$WF_ROOT/skills/orchestrate/SKILL.md")
+like "$orchestrate_skill" 'workflow status --json' 'orchestrate polls status'
+like "$orchestrate_skill" 'workflow plan-check' 'orchestrate checks the plan before running it'
+like "$orchestrate_skill" 'mem save --kind ruling' 'orchestrate records its decisions as rulings'
+like "$orchestrate_skill" 'mem ask' 'orchestrate escalates through the question channel'
+# The binary decides mechanics; the session decides judgment. A skill that
+# edits project code has crossed the line the layer exists to draw.
+like "$orchestrate_skill" 'ever edit project code' 'orchestrate forbids touching the code'
 
 ## ------------------------------------------------------------ the adapters
 
