@@ -172,6 +172,9 @@ pub fn park(args: &Args) -> Result<Option<PathBuf>, String> {
     );
 
     prune(&dir, args.quiet);
+    // The other machine should see this bundle now, not on the 15-minute
+    // timer (friction #KAPRWGBB). Fired detached and never waited on.
+    crate::sync::trigger();
     let used = megabytes(&paths::parked_root());
     let warn_mb = env_num("WORKFLOW_PARK_WARN_MB", 50);
     if used > warn_mb {

@@ -36,6 +36,7 @@ pub mod review;
 pub mod run;
 pub mod settings;
 pub mod status;
+pub mod sync;
 pub mod sys;
 pub mod testdecl;
 pub mod verify;

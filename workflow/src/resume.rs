@@ -42,7 +42,16 @@ fn resume(
 ) -> Result<(), String> {
     let bundle = paths::realpath_m(bundle);
     if std::fs::File::open(&bundle).is_err() {
-        return Err(format!("cannot read {}", bundle.display()));
+        // Parked on the other machine and not here yet: ask the parked unit
+        // for a round, wait it out, look again (friction #KAPRWGBB).
+        warn("the bundle is not here; asking for a sync round");
+        crate::sync::await_round();
+        if std::fs::File::open(&bundle).is_err() {
+            return Err(format!(
+                "cannot read {} -- it did not arrive with the sync round either",
+                bundle.display()
+            ));
+        }
     }
     let meta = bundle.with_extension("meta");
 

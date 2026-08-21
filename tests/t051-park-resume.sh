@@ -141,3 +141,56 @@ is "$RC" 1 'the lonely-install run parks both tasks'
 unlike "$OUT" 'could not bundle' 'and park was found, so nothing failed to bundle'
 is "$(find "$XDG_DATA_HOME/workflow/parked/lonely" -name 'lonely-t*.bundle' 2>/dev/null | grep -c .)" 2 \
 	'both parked tasks left a bundle behind'
+
+## ------------------------------------------------ park asks for a sync round
+
+# park ends by firing the parked unit, detached, so the bundle reaches the
+# other machine now rather than on the 15-minute timer (friction #KAPRWGBB).
+write_exec "$T_TMP/fake-sync" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SYNC_LOG"
+EOF
+export SYNC_LOG="$T_TMP/sync.log"
+export WORKFLOW_SYNC_CMD="$T_TMP/fake-sync"
+
+cd "$T_TMP/work" || exit 1
+git checkout -q main
+git checkout -qb sync-me
+printf 'sync\n' >sync.txt
+git add sync.txt
+git -c core.hooksPath=/dev/null commit -qm 'Add the synced part'
+run park --repo "$PWD" --branch sync-me --base "$base" --name sync-me
+is "$RC" 0 'park with a sync command exits clean'
+bundle=$(printf '%s\n' "$OUT" | grep '^/.*\.bundle$' | head -1)
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	grep -q 'only parked' "$SYNC_LOG" 2>/dev/null && break
+	sleep 0.2
+done
+like "$(cat "$SYNC_LOG" 2>/dev/null)" 'only parked' 'park fired the parked unit'
+
+## --------------------------------------------- resume pulls before giving up
+
+# A bundle parked on the other machine is not here yet: resume asks for a
+# round, waits it out, and looks again.
+hidden="$T_TMP/hidden"
+mkdir -p "$hidden"
+mv "$bundle" "$hidden/"
+mv "${bundle%.bundle}.meta" "$hidden/"
+write_exec "$T_TMP/delivering-sync" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"\$SYNC_LOG"
+cp "$hidden"/* "$(dirname -- "$bundle")/"
+EOF
+export WORKFLOW_SYNC_CMD="$T_TMP/delivering-sync"
+git checkout -q main
+git branch -D sync-me >/dev/null
+rm -f sync.txt
+run resume "$bundle"
+is "$RC" 0 'resume finds the bundle a sync round delivered'
+is "$(git rev-parse --abbrev-ref HEAD)" 'sync-me' 'and the branch is back'
+
+# When the round delivers nothing, resume says what it tried.
+export WORKFLOW_SYNC_CMD="$T_TMP/fake-sync"
+run resume "$XDG_DATA_HOME/workflow/parked/work/never-there.bundle"
+is "$RC" 1 'a bundle no round delivers is an error'
+like "$OUT" 'sync' 'and resume says it asked for a round'

@@ -118,7 +118,7 @@ t_init() {
 	[ -x "$MEM_BIN" ] && ln -sf "$MEM_BIN" "$T_TMP/bin/mem"
 	export PATH="$T_TMP/bin:$PATH"
 	export WORKFLOW_MEM="$MEM_BIN"
-	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true
+	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true WORKFLOW_SYNC_CMD=true
 
 	unset WORKFLOW_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
