@@ -60,7 +60,7 @@ Questions find you: on screen while a machine is watched, on the phone
     mem plan                     # the active plan, [x] ticks are progress
     mem log                      # what happened, newest first
     mem log --kind ruling        # decisions taken instead of asking you
-    mem search "friction"        # what is queued for the next version
+    mem search friction --type friction   # exactly what is queued next
     mem show <id>                # the full item behind any #id
     mem questions                # what is waiting on you
     mem handoff                  # where the last session stopped
@@ -68,7 +68,7 @@ Questions find you: on screen while a machine is watched, on the phone
     workflow status              # a live run: per-task states and reports
 
 The concrete case: to see what amx v3 should fix, run
-`mem search "friction" --project amx` — every dogfooding finding is there
+`mem search friction --type friction --project amx` — every finding is there
 with what happened and what was expected. `mem context` opens every session
 with the same digest, so a fresh session already knows.
 
@@ -105,7 +105,7 @@ the store syncs. `mem projects` is the portfolio view.
 When anything here gets in the way — a gate misfires, a question is
 unreadable, a tool is missing — any agent (or you) files one line:
 
-    mem save --project workflow "friction: what - where - expected"
+    mem save --project workflow --type friction "friction: what - where - expected"
 
 Product findings go against their own project the same way (that is where
 the amx v3 queue came from). Nothing is fixed mid-task. When a few pile up,

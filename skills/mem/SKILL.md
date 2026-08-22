@@ -46,7 +46,8 @@ phone is the locked-screen path, and `ask` returns an id without waiting.
 Never resolve your own stop condition.
 
 **The workflow itself got in the way** → `mem save --project workflow
-"friction: <what bit you - where - what you expected>"`. File it and move on;
+--type friction "friction: <what bit you - where - what you expected>"`.
+File it and move on;
 the workflow is improved in reviewed batches from these, never mid-task.
 
 ## Superseding

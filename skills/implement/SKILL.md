@@ -49,7 +49,7 @@ Types that other tools read: `no-verifier`, `test-removal`, `verify-optout`,
 When this workflow itself gets in the way — a gate misfires, an instruction
 reads two ways, a verb is missing — record it and carry on:
 
-    mem save --project workflow "friction: <what bit you - where - expected>"
+    mem save --project workflow --type friction "friction: <what bit you - where - expected>"
 
 Never fix the workflow mid-task; it is improved in reviewed batches.
 
