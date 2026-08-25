@@ -20,12 +20,14 @@ use rusqlite::{
 use crate::ids::{IdRef, short_id};
 use crate::item::Item;
 use crate::project::Registry;
-use crate::store::Store;
+use crate::store::{Store, is_valid_slug, page_title, read_dir_sorted};
 
 /// Bumped when the schema below changes; a mismatch rebuilds from scratch.
 /// 2 added `idx_items_supersedes`, without which every read paid for an O(n²)
 /// correlated subquery over `items.supersedes`.
-const SCHEMA_VERSION: &str = "2";
+/// 3 added the wiki pages, which get their own tables: a page is a document,
+/// not an item, and nothing that counts or lists items should start seeing it.
+const SCHEMA_VERSION: &str = "3";
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS items(
@@ -41,6 +43,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
       title, body, tags,
       content='', contentless_delete=1,
       tokenize='porter unicode61');
+CREATE TABLE IF NOT EXISTS pages(
+      rowid INTEGER PRIMARY KEY,
+      project_id TEXT, project TEXT, slug TEXT, title TEXT,
+      path TEXT UNIQUE, size INT, mtime INT, ctime INT, modified_epoch INT);
+CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+      title, body,
+      content='', contentless_delete=1,
+      tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT, remote TEXT, aliases TEXT);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS idx_items_proj ON items(project_id, active, modified_epoch DESC);
@@ -49,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_items_short ON items(short_id);
 -- index that is a full scan per row, which at 1,000 items is 60 ms on every
 -- read verb.
 CREATE INDEX IF NOT EXISTS idx_items_supersedes ON items(supersedes);
+CREATE INDEX IF NOT EXISTS idx_pages_proj ON pages(project_id, slug);
 "#;
 
 /// Why this connection was opened. Reads never wait on a lock; explicit writes
@@ -68,7 +79,9 @@ impl Purpose {
     }
 }
 
-/// What one reindex pass did.
+/// What one reindex pass did. Items and pages are counted together: what these
+/// numbers mean is "rows brought up to date", and a user who just wrote a page
+/// would read a count that left it out as "the page was not indexed".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reindex {
     pub indexed: usize,
@@ -109,7 +122,30 @@ pub const ROW_COLUMNS: &str = "items.id, items.short_id, items.project_id, items
      items.modified_epoch, items.path, items.supersedes, items.answers, items.active, \
      items.superseded_by, items.archived";
 
+/// The `kind` a page wears. Pages come back from a search through the same
+/// `Row` as items, so that one query can rank both, and this is what tells
+/// them apart — no item has this kind.
+pub const WIKI_KIND: &str = "wiki";
+
+/// The page columns under the `Row` names, so `Row::from_sql` reads a page as
+/// happily as an item. A page has no ULID, no machine and no supersede edge:
+/// its id says what it is, and its short id is its slug.
+pub fn page_row_columns() -> String {
+    format!(
+        "('wiki:' || pages.project_id || '/' || pages.slug) AS id, pages.slug AS short_id, \
+         pages.project_id, pages.project, '{WIKI_KIND}' AS kind, NULL AS type, pages.title, \
+         '[]' AS tags, '' AS machine, pages.modified_epoch AS created_epoch, \
+         pages.modified_epoch, pages.path, NULL AS supersedes, NULL AS answers, 1 AS active, \
+         NULL AS superseded_by, 0 AS archived"
+    )
+}
+
 impl Row {
+    /// The slug, when this row is a page rather than an item.
+    pub fn wiki_slug(&self) -> Option<&str> {
+        (self.kind == WIKI_KIND).then_some(self.short_id.as_str())
+    }
+
     pub fn from_sql(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         let tags: String = row.get("tags")?;
         Ok(Row {
@@ -212,11 +248,26 @@ impl Index {
             })? as usize)
     }
 
+    pub fn count_pages(&self) -> Result<usize> {
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM pages", [], |r| r.get::<_, i64>(0))?
+            as usize)
+    }
+
     /// How many items match a token. Counting FTS rows rather than item rows is
     /// what makes a corrupt index visible: duplicate FTS rows and orphaned FTS
     /// rows both show up here and in neither `count_items` nor a rowcount.
     pub fn fts_match_count(&self, token: &str) -> Result<usize> {
         let sql = "SELECT count(*) FROM items_fts WHERE items_fts MATCH ?1";
+        Ok(self
+            .conn
+            .query_row(sql, params![token], |r| r.get::<_, i64>(0))? as usize)
+    }
+
+    /// The same count on the page side.
+    pub fn pages_fts_match_count(&self, token: &str) -> Result<usize> {
+        let sql = "SELECT count(*) FROM pages_fts WHERE pages_fts MATCH ?1";
         Ok(self
             .conn
             .query_row(sql, params![token], |r| r.get::<_, i64>(0))? as usize)
@@ -396,6 +447,7 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             // Derived data: throwing it away is always safe.
             conn.execute_batch(
                 "DROP TABLE IF EXISTS items; DROP TABLE IF EXISTS items_fts;
+                 DROP TABLE IF EXISTS pages; DROP TABLE IF EXISTS pages_fts;
                  DROP TABLE IF EXISTS projects; DROP TABLE IF EXISTS meta;",
             )?;
             create_schema(conn)
@@ -420,6 +472,13 @@ struct Stamp {
     size: i64,
     mtime: i64,
     ctime: i64,
+}
+
+impl Stamp {
+    /// The mtime in whole seconds, which is the resolution dates are shown at.
+    fn mtime_seconds(self) -> i64 {
+        self.mtime / 1_000_000_000
+    }
 }
 
 fn stamp(meta: &std::fs::Metadata) -> Stamp {
@@ -535,10 +594,12 @@ fn reindex_in(tx: &Transaction<'_>, store: &Store, full: bool) -> Result<Reindex
     // `active` and `superseded_by` derive from the supersedes edges and the
     // archived flags, both of which arrive with a row. A pass that inserted and
     // deleted nothing cannot have changed either, and this runs before every
-    // single read.
+    // single read. Pages come after it: they have no derived columns, and
+    // folding their counts in first would run it for nothing.
     if outcome.indexed > 0 || outcome.deleted > 0 {
         recompute_derived(tx)?;
     }
+    reindex_pages(tx, store, &registry, full, store_present, &mut outcome)?;
     sync_projects(tx, &registry)?;
     Ok(outcome)
 }
@@ -615,6 +676,170 @@ fn project_id_of(store: &Store, path: &Path) -> Option<String> {
         return None;
     }
     parent.file_name().map(|n| n.to_string_lossy().to_string())
+}
+
+/// One page file, as the scan finds it.
+struct PageFile {
+    project_id: String,
+    slug: String,
+    path: PathBuf,
+}
+
+/// `<root>/projects/<id>/wiki/<slug>.md`. Anything else in a wiki directory — a
+/// dot-temp, a bisync conflict loser, a name that is not a slug, a directory —
+/// is skipped the way a stray beside an item is.
+fn page_files(store: &Store) -> Vec<PageFile> {
+    let mut out = Vec::new();
+    for project in read_dir_sorted(&store.projects_dir()) {
+        let Some(project_id) = project.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        for path in read_dir_sorted(&store.wiki_dir(project_id)) {
+            let slug = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".md"));
+            let Some(slug) = slug.filter(|s| is_valid_slug(s)) else {
+                continue;
+            };
+            if !path.is_file() {
+                continue;
+            }
+            out.push(PageFile {
+                project_id: project_id.to_string(),
+                slug: slug.to_string(),
+                path: path.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// The item pass over again for pages: same change predicate, same delete
+/// phase, its own tables. The text is read only for a page that changed, so a
+/// wiki costs nothing on the reads that run a reindex first.
+fn reindex_pages(
+    tx: &Transaction<'_>,
+    store: &Store,
+    registry: &Registry,
+    full: bool,
+    store_present: bool,
+    outcome: &mut Reindex,
+) -> Result<()> {
+    let mut known: HashMap<String, (i64, Stamp)> = HashMap::new();
+    {
+        let mut stmt = tx.prepare("SELECT rowid, path, size, mtime, ctime FROM pages")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(1)?,
+                (
+                    r.get::<_, i64>(0)?,
+                    Stamp {
+                        size: r.get(2)?,
+                        mtime: r.get(3)?,
+                        ctime: r.get(4)?,
+                    },
+                ),
+            ))
+        })?;
+        for row in rows {
+            let (path, entry) = row?;
+            known.insert(path, entry);
+        }
+    }
+
+    tx.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS seen_pages(path TEXT PRIMARY KEY)",
+        [],
+    )?;
+    tx.execute("DELETE FROM seen_pages", [])?;
+
+    for page in page_files(store) {
+        let path_text = page.path.to_string_lossy().to_string();
+        let Ok(meta) = std::fs::metadata(&page.path) else {
+            continue;
+        };
+        let current = stamp(&meta);
+        tx.execute(
+            "INSERT OR IGNORE INTO seen_pages(path) VALUES(?1)",
+            params![path_text],
+        )?;
+
+        let previous = known.get(&path_text).copied();
+        if !full && previous.is_some_and(|(_, s)| s == current) {
+            continue;
+        }
+
+        // A page is markdown a person wrote; anything that is not text is as
+        // unreadable as a mangled item, and doctor reports it.
+        let Ok(text) = std::fs::read_to_string(&page.path) else {
+            outcome.unreadable += 1;
+            continue;
+        };
+
+        if let Some((rowid, _)) = previous {
+            delete_page_row(tx, rowid)?;
+        }
+        insert_page_row(tx, registry, &page, &path_text, current, &text)?;
+        outcome.indexed += 1;
+    }
+
+    if store_present {
+        let stale: Vec<i64> = {
+            let mut stmt = tx.prepare(
+                "SELECT rowid FROM pages WHERE path NOT IN (SELECT path FROM seen_pages)",
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for rowid in stale {
+            delete_page_row(tx, rowid)?;
+            outcome.deleted += 1;
+        }
+    }
+    Ok(())
+}
+
+/// The FTS row first and by rowid, for the reason `delete_row` gives.
+fn delete_page_row(tx: &Transaction<'_>, rowid: i64) -> Result<()> {
+    tx.execute("DELETE FROM pages_fts WHERE rowid = ?1", params![rowid])?;
+    tx.execute("DELETE FROM pages WHERE rowid = ?1", params![rowid])?;
+    Ok(())
+}
+
+fn insert_page_row(
+    tx: &Transaction<'_>,
+    registry: &Registry,
+    page: &PageFile,
+    path_text: &str,
+    stamp: Stamp,
+    text: &str,
+) -> Result<()> {
+    // A page carries no frontmatter, so its title is its first heading and its
+    // date is the file's.
+    let title = page_title(text);
+    tx.execute(
+        "INSERT INTO pages(project_id, project, slug, title, path, size, mtime, ctime,
+                           modified_epoch)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            page.project_id,
+            registry.by_id(&page.project_id).map(|p| p.name.clone()),
+            page.slug,
+            title,
+            path_text,
+            stamp.size,
+            stamp.mtime,
+            stamp.ctime,
+            stamp.mtime_seconds(),
+        ],
+    )?;
+    let rowid = tx.last_insert_rowid();
+    tx.execute(
+        "INSERT INTO pages_fts(rowid, title, body) VALUES(?1, ?2, ?3)",
+        params![rowid, title, text],
+    )?;
+    Ok(())
 }
 
 /// `active` and `superseded_by` are derived, never stored in a file: an item is

@@ -23,6 +23,13 @@ fn q<'a>(text: &'a str) -> Query<'a> {
     }
 }
 
+/// Writes a page where `mem wiki --stdin` would put it.
+fn page(store: &mem::store::Store, slug: &str, text: &str) {
+    let dir = store.wiki_dir(P);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{slug}.md")), text).unwrap();
+}
+
 #[test]
 fn the_top_hit_scores_one_and_the_rest_are_relative_to_it() {
     let w = World::new("search-scores");
@@ -310,6 +317,153 @@ fn a_search_line_never_exceeds_eighty_bytes() {
         assert!(line.len() <= 80, "{} bytes: {line}", line.len());
         assert!(line.starts_with('#'));
     }
+}
+
+#[test]
+fn a_page_is_findable_and_labelled_a_wiki_page() {
+    let w = World::new("search-wiki");
+    w.project(P, "thing");
+    let store = w.store();
+    page(
+        &store,
+        "sessions",
+        "# How sessions work\n\nwikitoken in the body\n",
+    );
+
+    let hits = search(&ready(&w), &q("wikitoken")).unwrap();
+    assert_eq!(hits.len(), 1);
+    let hit = &hits[0];
+    assert_eq!(hit.row.wiki_slug(), Some("sessions"));
+    assert_eq!(hit.row.kind, "wiki");
+    assert_eq!(hit.row.title, "How sessions work");
+    assert_eq!(hit.row.path, store.wiki_page(P, "sessions"));
+    assert_eq!(hit.row.project_id.as_deref(), Some(P));
+    assert_eq!(
+        hit.row.id, "wiki:01K2AAAAAAAAAAAAAAAAAAAAAA/sessions",
+        "a page has no ULID, so its id says what it is"
+    );
+    assert!(
+        hit.line().starts_with("wiki:sessions  "),
+        "the label is what keeps a page from reading as an item: {}",
+        hit.line()
+    );
+
+    // The heading is the title, so it ranks like one.
+    assert_eq!(search(&ready(&w), &q("title:sessions")).unwrap().len(), 1);
+}
+
+#[test]
+fn pages_and_items_are_ranked_in_one_list() {
+    let w = World::new("search-wiki-mixed");
+    w.project(P, "thing");
+    let store = w.store();
+    let mut it = item(Kind::Fact, "mixedtoken fact", "mixedtoken body");
+    it.meta.modified = jiff::Timestamp::now();
+    put(&store, Some(P), &it);
+    page(&store, "sessions", "# mixedtoken page\n\nmixedtoken body\n");
+
+    let hits = search(&ready(&w), &q("mixedtoken")).unwrap();
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert!(
+        (hits[0].score - 1.0).abs() < 1e-9,
+        "the top hit scores 1.00"
+    );
+    assert!(hits[1].score > 0.0);
+    let slugs: Vec<Option<&str>> = hits.iter().map(|h| h.row.wiki_slug()).collect();
+    assert!(
+        slugs.contains(&Some("sessions")) && slugs.contains(&None),
+        "{slugs:?}"
+    );
+}
+
+#[test]
+fn filters_and_scope_tell_pages_and_items_apart() {
+    let w = World::new("search-wiki-filters");
+    w.project(P, "thing");
+    let store = w.store();
+    let mut typed = item(Kind::Fact, "filtertoken fact", "filtertoken body");
+    typed.meta.r#type = Some("decision".to_string());
+    put(&store, Some(P), &typed);
+    page(
+        &store,
+        "sessions",
+        "# filtertoken page\n\nfiltertoken body\n",
+    );
+    let index = ready(&w);
+
+    let only_pages = search(
+        &index,
+        &Query {
+            kind: Some("wiki"),
+            ..q("filtertoken")
+        },
+    )
+    .unwrap();
+    assert_eq!(only_pages.len(), 1);
+    assert_eq!(only_pages[0].row.wiki_slug(), Some("sessions"));
+
+    let only_items = search(
+        &index,
+        &Query {
+            kind: Some("fact"),
+            ..q("filtertoken")
+        },
+    )
+    .unwrap();
+    assert_eq!(only_items.len(), 1);
+    assert_eq!(only_items[0].row.id, typed.meta.id);
+
+    // A page has no type, so asking for one asks for items alone.
+    let typed_only = search(
+        &index,
+        &Query {
+            r#type: Some("decision"),
+            ..q("filtertoken")
+        },
+    )
+    .unwrap();
+    assert_eq!(typed_only.len(), 1);
+    assert_eq!(typed_only[0].row.id, typed.meta.id);
+
+    // Pages belong to a project, so a global search has none of them.
+    let global = search(
+        &index,
+        &Query {
+            scope: Scope::Global,
+            ..q("filtertoken")
+        },
+    )
+    .unwrap();
+    assert!(global.is_empty(), "{global:?}");
+
+    let all = search(
+        &index,
+        &Query {
+            scope: Scope::All,
+            ..q("filtertoken")
+        },
+    )
+    .unwrap();
+    assert_eq!(all.len(), 2);
+}
+
+#[test]
+fn a_page_line_never_exceeds_eighty_bytes() {
+    let w = World::new("search-wiki-line");
+    w.project(P, "thing");
+    let store = w.store();
+    let slug = "a".repeat(64);
+    page(
+        &store,
+        &slug,
+        &format!("# {}\n\nlongpagetoken\n", "a very long heading ".repeat(10)),
+    );
+
+    let hits = search(&ready(&w), &q("longpagetoken")).unwrap();
+    assert_eq!(hits.len(), 1);
+    let line = hits[0].line();
+    assert!(line.len() <= 80, "{} bytes: {line}", line.len());
+    assert!(line.starts_with("wiki:"), "{line}");
 }
 
 #[test]

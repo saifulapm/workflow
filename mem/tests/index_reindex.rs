@@ -2,11 +2,13 @@
 
 mod common;
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{World, item, put};
 use mem::index::{Index, Purpose, Reindex};
 use mem::item::Kind;
+use mem::store::Store;
 
 fn open_read(w: &World) -> Index {
     Index::open(&w.index_path(), Purpose::Read).expect("open index")
@@ -21,6 +23,20 @@ fn reindex(w: &World) -> Reindex {
 /// a healthy index from one carrying duplicate FTS rows.
 fn fts_hits(index: &Index, token: &str) -> usize {
     index.fts_match_count(token).expect("fts count")
+}
+
+/// The same count on the page side.
+fn page_hits(index: &Index, token: &str) -> usize {
+    index.pages_fts_match_count(token).expect("page fts count")
+}
+
+/// Writes a page where `mem wiki --stdin` would put it.
+fn page(store: &Store, project_id: &str, slug: &str, text: &str) -> PathBuf {
+    let dir = store.wiki_dir(project_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{slug}.md"));
+    std::fs::write(&path, text).unwrap();
+    path
 }
 
 #[test]
@@ -143,6 +159,7 @@ fn an_absent_store_root_never_empties_the_index() {
     let store = w.store();
     put(&store, Some(&p), &item(Kind::Fact, "a", "survivortoken"));
     put(&store, Some(&p), &item(Kind::Fact, "b", "another one"));
+    page(&store, &p, "sessions", "# sessions\n\npagesurvivortoken\n");
     reindex(&w);
 
     // A fresh machine whose hub has not materialised yet: the store simply is
@@ -154,6 +171,8 @@ fn an_absent_store_root_never_empties_the_index() {
     assert_eq!(outcome.deleted, 0);
     assert_eq!(index.count_items().unwrap(), 2);
     assert_eq!(fts_hits(&index, "survivortoken"), 1);
+    assert_eq!(index.count_pages().unwrap(), 1);
+    assert_eq!(page_hits(&index, "pagesurvivortoken"), 1);
 }
 
 #[test]
@@ -385,6 +404,137 @@ fn the_index_asserts_fts5_and_a_new_enough_sqlite() {
         (major, minor) >= (3, 43),
         "contentless_delete needs SQLite 3.43+, got {major}.{minor}"
     );
+}
+
+#[test]
+fn a_wiki_page_is_indexed_beside_the_items_and_leaves_with_its_file() {
+    let w = World::new("idx-wiki");
+    let p = w.project("01K2AAAAAAAAAAAAAAAAAAAAAA", "thing");
+    let store = w.store();
+    put(&store, Some(&p), &item(Kind::Fact, "an item", "itemtoken"));
+    let path = page(&store, &p, "sessions", "# How sessions work\n\npagetoken\n");
+
+    let outcome = reindex(&w);
+    assert_eq!(outcome.indexed, 2, "a page is indexed with the items");
+    let index = open_read(&w);
+    assert_eq!(index.count_items().unwrap(), 1, "a page is not an item");
+    assert_eq!(index.count_pages().unwrap(), 1);
+    assert_eq!(page_hits(&index, "pagetoken"), 1);
+    assert_eq!(
+        fts_hits(&index, "pagetoken"),
+        0,
+        "pages match on their own table, never as items"
+    );
+
+    // Nothing changed: no work, and the page side does not double up.
+    let again = index.reindex(&store, false).unwrap();
+    assert_eq!(again.indexed, 0);
+    assert_eq!(page_hits(&index, "pagetoken"), 1);
+
+    std::fs::remove_file(&path).unwrap();
+    let outcome = index.reindex(&store, false).unwrap();
+    assert_eq!(outcome.deleted, 1);
+    assert_eq!(index.count_pages().unwrap(), 0);
+    assert_eq!(
+        page_hits(&index, "pagetoken"),
+        0,
+        "the FTS row must go with the page"
+    );
+    assert_eq!(index.count_items().unwrap(), 1, "the item is untouched");
+}
+
+#[test]
+fn an_edited_page_is_reindexed_and_the_old_text_stops_matching() {
+    let w = World::new("idx-wiki-edit");
+    let p = w.project("01K2AAAAAAAAAAAAAAAAAAAAAA", "thing");
+    let store = w.store();
+    page(&store, &p, "sessions", "# Old heading\n\nalphapagetoken\n");
+    reindex(&w);
+    let index = open_read(&w);
+    assert_eq!(page_hits(&index, "alphapagetoken"), 1);
+
+    page(&store, &p, "sessions", "# New heading\n\nbetapagetoken\n");
+    let outcome = index.reindex(&store, false).unwrap();
+    assert_eq!(outcome.indexed, 1);
+    assert_eq!(
+        index.count_pages().unwrap(),
+        1,
+        "a rewrite is not a new page"
+    );
+    assert_eq!(page_hits(&index, "alphapagetoken"), 0);
+    assert_eq!(page_hits(&index, "betapagetoken"), 1);
+    assert_eq!(
+        page_hits(&index, "\"New heading\""),
+        1,
+        "the heading is the title, and it is searchable"
+    );
+}
+
+#[test]
+fn a_full_rebuild_covers_pages_without_duplicating_them() {
+    let w = World::new("idx-wiki-full");
+    let p = w.project("01K2AAAAAAAAAAAAAAAAAAAAAA", "thing");
+    let store = w.store();
+    for n in 0..3 {
+        page(
+            &store,
+            &p,
+            &format!("page-{n}"),
+            "# heading\n\nsharedpagetoken\n",
+        );
+    }
+    reindex(&w);
+    let index = open_read(&w);
+    let outcome = index.reindex(&store, true).unwrap();
+    assert_eq!(outcome.indexed, 3);
+    assert_eq!(index.count_pages().unwrap(), 3);
+    assert_eq!(
+        page_hits(&index, "sharedpagetoken"),
+        3,
+        "a full rebuild must not double up the page side"
+    );
+}
+
+#[test]
+fn temps_conflict_losers_and_strays_never_enter_the_wiki_index() {
+    let w = World::new("idx-wiki-strays");
+    let p = w.project("01K2AAAAAAAAAAAAAAAAAAAAAA", "thing");
+    let store = w.store();
+    page(&store, &p, "sessions", "# real\n\nrealpagetoken\n");
+    let dir = store.wiki_dir(&p);
+    for name in [
+        ".tmp-99-sessions.md",
+        "sessions.md.path1",
+        "Sessions.md",
+        "-leading-dash.md",
+        "notes.txt",
+        "sessions",
+    ] {
+        std::fs::write(dir.join(name), b"# stray\n\nstraypagetoken\n").unwrap();
+    }
+    std::fs::create_dir_all(dir.join("nested.md")).unwrap();
+
+    reindex(&w);
+    let index = open_read(&w);
+    assert_eq!(index.count_pages().unwrap(), 1);
+    assert_eq!(page_hits(&index, "straypagetoken"), 0);
+    assert_eq!(page_hits(&index, "realpagetoken"), 1);
+}
+
+#[test]
+fn a_page_that_is_not_text_is_skipped_rather_than_failing_the_reindex() {
+    let w = World::new("idx-wiki-binary");
+    let p = w.project("01K2AAAAAAAAAAAAAAAAAAAAAA", "thing");
+    let store = w.store();
+    page(&store, &p, "good", "# good\n\ngoodpagetoken\n");
+    std::fs::write(store.wiki_page(&p, "binary"), [0xff, 0xfe, 0x00]).unwrap();
+
+    let outcome = reindex(&w);
+    assert_eq!(outcome.indexed, 1);
+    assert_eq!(outcome.unreadable, 1);
+    let index = open_read(&w);
+    assert_eq!(index.count_pages().unwrap(), 1);
+    assert_eq!(page_hits(&index, "goodpagetoken"), 1);
 }
 
 #[test]

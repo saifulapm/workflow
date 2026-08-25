@@ -9,7 +9,7 @@
 use anyhow::{Result, anyhow};
 use rusqlite::{ErrorCode, params_from_iter};
 
-use crate::index::{Index, ROW_COLUMNS, Row};
+use crate::index::{Index, ROW_COLUMNS, Row, WIKI_KIND, page_row_columns};
 
 /// BM25 column weights: title outranks tags, tags outrank body.
 const W_TITLE: f64 = 10.0;
@@ -82,16 +82,22 @@ pub struct Hit {
 }
 
 impl Hit {
-    /// `#<short8>  1.00  fact  2026-08-12  <title>`, capped at 80 bytes with the
-    /// title as the only part that gives way.
+    /// `#<short8>  1.00  fact  2026-08-12  <title>` for an item, and
+    /// `wiki:<slug>  1.00  wiki  2026-08-12  <title>` for a page: a page has no
+    /// id to show, and the label is what keeps it from reading as an item.
+    /// Capped at 80 bytes with the title as the part that gives way first.
     pub fn line(&self) -> String {
         let date = crate::timefmt::date(self.row.modified_epoch);
-        let prefix = format!(
-            "#{}  {:.2}  {}  {}  ",
-            self.row.short_id, self.score, self.row.kind, date
-        );
+        let head = match self.row.wiki_slug() {
+            Some(slug) => format!("wiki:{slug}"),
+            None => format!("#{}", self.row.short_id),
+        };
+        let prefix = format!("{head}  {:.2}  {}  {}  ", self.score, self.row.kind, date);
         let room = LINE_BUDGET.saturating_sub(prefix.len());
-        format!("{prefix}{}", truncate_bytes(&self.row.title, room))
+        let line = format!("{prefix}{}", truncate_bytes(&self.row.title, room));
+        // A slug may run to 64 characters, which is a prefix with no room left
+        // in it. The budget is the promise, so it is kept last as well as first.
+        truncate_bytes(&line, LINE_BUDGET)
     }
 }
 
@@ -117,15 +123,15 @@ pub fn search(index: &Index, query: &Query<'_>) -> Result<Vec<Hit>> {
     // Decay and the kind boost can reorder hits, so rank a wider pool than the
     // caller asked for and cut to the limit afterwards.
     let pool = query.limit.saturating_mul(5).max(50);
-    let rows = match match_rows(index, query.text, query, pool) {
-        Ok(rows) => rows,
-        Err(e) if is_query_syntax_error(&e) => {
-            match_rows(index, &quote_terms(query.text), query, pool)
-                .map_err(|_| anyhow!("could not run that search"))?
-        }
-        // A raw SQLite failure is never the user's business.
-        Err(_) => return Err(anyhow!("could not run that search")),
-    };
+    let mut rows = with_ladder(query.text, |text| match_rows(index, text, query, pool))?;
+    // Items and pages are two corpora, so they are two matches and one ranking:
+    // BM25 is relative to its own table, and a score here only ever means
+    // "relative to the other hits for this query" anyway.
+    if wants_pages(query) {
+        rows.extend(with_ladder(query.text, |text| {
+            match_pages(index, text, query, pool)
+        })?);
+    }
 
     let best = rows
         .iter()
@@ -181,6 +187,29 @@ fn scope_factor(row: &Row) -> f64 {
     }
 }
 
+/// The query ladder: the text as written, and if FTS5 calls that a syntax
+/// error, every term quoted. A raw SQLite failure is never the user's business.
+fn with_ladder(
+    text: &str,
+    run: impl Fn(&str) -> rusqlite::Result<Vec<(Row, f64)>>,
+) -> Result<Vec<(Row, f64)>> {
+    match run(text) {
+        Ok(rows) => Ok(rows),
+        Err(e) if is_query_syntax_error(&e) => {
+            run(&quote_terms(text)).map_err(|_| anyhow!("could not run that search"))
+        }
+        Err(_) => Err(anyhow!("could not run that search")),
+    }
+}
+
+/// A page has no type, no kind but `wiki`, and no existence outside a project,
+/// so a query that asks for anything else is asking for no pages at all.
+fn wants_pages(query: &Query<'_>) -> bool {
+    query.r#type.is_none()
+        && query.kind.is_none_or(|kind| kind == WIKI_KIND)
+        && !matches!(query.scope, Scope::Global | Scope::Project(None))
+}
+
 fn match_rows(
     index: &Index,
     text: &str,
@@ -214,6 +243,34 @@ fn match_rows(
         }
         Scope::Project(None) | Scope::Global => sql.push_str(" AND items.project_id IS NULL"),
         Scope::All => {}
+    }
+    sql.push_str(&format!(" ORDER BY bm25 ASC LIMIT {pool}"));
+
+    let mut stmt = index.conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), |r| {
+        Ok((Row::from_sql(r)?, r.get::<_, f64>("bm25")?))
+    })?;
+    rows.collect()
+}
+
+/// The page side of the same query. Pages carry no tags and are never archived
+/// or superseded, so the only filter they take is the scope.
+fn match_pages(
+    index: &Index,
+    text: &str,
+    query: &Query<'_>,
+    pool: usize,
+) -> rusqlite::Result<Vec<(Row, f64)>> {
+    let mut sql = format!(
+        "SELECT {}, bm25(pages_fts, {W_TITLE}, {W_BODY}) AS bm25
+         FROM pages_fts JOIN pages ON pages.rowid = pages_fts.rowid
+         WHERE pages_fts MATCH ?1",
+        page_row_columns()
+    );
+    let mut args: Vec<String> = vec![text.to_string()];
+    if let Scope::Project(Some(id)) = &query.scope {
+        args.push(id.clone());
+        sql.push_str(&format!(" AND pages.project_id = ?{}", args.len()));
     }
     sql.push_str(&format!(" ORDER BY bm25 ASC LIMIT {pool}"));
 
