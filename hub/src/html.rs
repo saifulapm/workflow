@@ -7,8 +7,11 @@
 //! is exactly one way text gets into the page, `esc`, and no format string in
 //! this file interpolates a value without it.
 
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark};
+
 use crate::config::Config;
-use crate::model::{Activity, Project, Question, View};
+use crate::form::encode_component;
+use crate::model::{Activity, Project, Question, Section, View, WikiProject, is_slug};
 
 /// The one escaping function. `'` and `"` are in here because values also land
 /// in attributes (`value="…"`, `href="…"`).
@@ -114,6 +117,16 @@ li{padding:.35rem 0;border-bottom:1px solid #8882}
 .banner.warn{background:#a52}
 .banner.degraded{background:#a33}
 .empty{opacity:.6}
+article.md{border:0;padding:0}
+article.md h1{font-size:1.3rem}
+article.md h2{font-size:1.1rem;text-transform:none;letter-spacing:normal;opacity:1}
+article.md ul,article.md ol{list-style:revert;padding-left:1.4rem}
+article.md li{border:0;padding:0}
+article.md pre{overflow-x:auto;background:#8881;padding:.6rem;border-radius:.4rem}
+article.md code{font-family:ui-monospace,monospace;font-size:.9em}
+article.md table{border-collapse:collapse}
+article.md th,article.md td{border:1px solid #8884;padding:.3rem .5rem}
+article.md blockquote{margin:0;padding-left:.8rem;border-left:3px solid #8884}
 ";
 
 /// The whole page. A guarded reload keeps it live: `<meta http-equiv=refresh>`
@@ -151,6 +164,7 @@ pub fn page(view: &View, config: &Config, banner: &Banner) -> String {
             ));
         }
     }
+    out.push_str("<a href=\"/wiki\">wiki</a>");
     out.push_str("<a href=\"/subscribe\">subscribe</a>");
     out.push_str("</nav>\n</header>\n");
 
@@ -226,6 +240,168 @@ pub fn subscribe_page(config: &Config, machine: &str) -> String {
          only from {machine} and the tailnet.</p>\n\
          </body>\n</html>\n",
         machine = esc(machine),
+    )
+}
+
+/// `GET /wiki`: every project that has pages, and its pages.
+pub fn wiki_index(section: &Section<WikiProject>) -> String {
+    let mut out = head("wiki");
+    out.push_str("<header><h1>wiki</h1><nav><a href=\"/\">home</a></nav></header>\n");
+    if let Some(why) = &section.degraded {
+        out.push_str(&format!(
+            "<p class=\"banner degraded\">mem is not answering, so this list is \
+             out of date: {}</p>\n",
+            esc(why)
+        ));
+    } else if section.rows.is_empty() {
+        out.push_str(
+            "<p class=\"empty\">No pages yet. A session writes one with \
+             <code>mem wiki &lt;slug&gt; --stdin --note \"&lt;why&gt;\"</code>.</p>\n",
+        );
+    }
+    for project in &section.rows {
+        out.push_str(&format!("<h2>{}</h2>\n<ul>\n", esc(&project.name)));
+        for page in &project.pages {
+            out.push_str(&format!(
+                "<li><a href=\"{href}\">{slug}</a>\
+                 <div class=\"meta\">{title} · {size} · {modified}</div></li>\n",
+                href = esc(&page_url(&project.name, &page.slug)),
+                slug = esc(&page.slug),
+                title = esc(&page.title),
+                size = esc(&size(page.bytes)),
+                modified = esc(page.modified.as_deref().unwrap_or("—")),
+            ));
+        }
+        out.push_str("</ul>\n");
+    }
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// `GET /wiki/<project>/<slug>`: one page, rendered.
+pub fn wiki_page(project: &str, slug: &str, text: &str) -> String {
+    let mut out = head(&format!("{project}/{slug}"));
+    out.push_str(&format!(
+        "<header><h1>{} / {}</h1>\
+         <nav><a href=\"/wiki\">wiki</a><a href=\"/\">home</a></nav></header>\n",
+        esc(project),
+        esc(slug),
+    ));
+    out.push_str("<article class=\"md\">\n");
+    out.push_str(&markdown(text, project));
+    out.push_str("</article>\n</body>\n</html>\n");
+    out
+}
+
+/// Markdown to HTML, with everything that could execute left out.
+///
+/// A page is written by a session that has been reading repositories and web
+/// pages, so it is exactly as trusted as a question is — and this origin owns
+/// `POST /answer`. `push_html` on its own copies raw HTML through verbatim,
+/// which would make a page the easiest way there is to put script on it. So:
+///
+/// * raw HTML, block and inline, becomes text and is escaped like any other;
+/// * a link points at another page, at http(s), or at nothing — its text stays
+///   either way, so a refused link is visible rather than silently gone;
+/// * an image is dropped whole and its alt text kept. `<img>` is the one tag
+///   that fetches from a third party without being asked, and a page is read on
+///   a phone over the tailnet.
+pub fn markdown(text: &str, project: &str) -> String {
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+
+    let mut events = Vec::new();
+    // Links do not nest in CommonMark, so one flag is exact: it says whether
+    // the link now open is one whose `Start` was kept.
+    let mut link_open = false;
+    for event in Parser::new_ext(text, options) {
+        match event {
+            // A block of raw HTML keeps its place in the flow, as a paragraph
+            // of text saying what was written.
+            Event::Start(Tag::HtmlBlock) => events.push(Event::Start(Tag::Paragraph)),
+            Event::End(TagEnd::HtmlBlock) => events.push(Event::End(TagEnd::Paragraph)),
+            Event::Html(raw) | Event::InlineHtml(raw) => events.push(Event::Text(raw)),
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                link_open = destination(&dest_url, project).is_some_and(|dest| {
+                    events.push(Event::Start(Tag::Link {
+                        link_type,
+                        dest_url: dest.into(),
+                        title,
+                        id,
+                    }));
+                    true
+                });
+            }
+            // Dropped with its `Start`, so `push_html` never closes a tag it
+            // did not open.
+            Event::End(TagEnd::Link) => {
+                if link_open {
+                    events.push(Event::End(TagEnd::Link));
+                }
+                link_open = false;
+            }
+            Event::Start(Tag::Image { .. }) | Event::End(TagEnd::Image) => {}
+            other => events.push(other),
+        }
+    }
+
+    let mut out = String::with_capacity(text.len() + text.len() / 2);
+    cmark::push_html(&mut out, events.into_iter());
+    out
+}
+
+/// Where a link in a page may point: another page of the same wiki, or the web.
+/// `None` means the link is dropped and only its text is kept.
+fn destination(dest: &str, project: &str) -> Option<String> {
+    let dest = dest.trim();
+    // The plan's rule: pages link to each other as `[name](name.md)`, standard
+    // markdown, so every renderer works. Here that becomes the route.
+    if let Some(slug) = dest.strip_suffix(".md")
+        && is_slug(slug)
+    {
+        return Some(page_url(project, slug));
+    }
+    let scheme = dest.to_ascii_lowercase();
+    let allowed = ["http://", "https://", "mailto:"];
+    allowed
+        .iter()
+        .any(|prefix| scheme.starts_with(prefix))
+        .then(|| dest.to_string())
+}
+
+fn page_url(project: &str, slug: &str) -> String {
+    format!(
+        "/wiki/{}/{}",
+        encode_component(project),
+        encode_component(slug)
+    )
+}
+
+fn size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    }
+}
+
+/// The head every page but the dashboard shares. No reload script: there is
+/// nothing on these pages that goes stale while it is being read.
+fn head(title: &str) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n\
+         <meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>hub — {}</title>\n\
+         <style>{STYLE}</style>\n</head>\n<body>\n",
+        esc(title),
     )
 }
 
@@ -327,6 +503,72 @@ mod tests {
         // carries anything but base32.
         let form = crate::form::Form::parse("answered=%3Cscript%3E");
         assert_eq!(Banner::from_query(&form), Banner::Answered("script".into()));
+    }
+
+    #[test]
+    fn a_pages_own_html_is_text_and_never_markup() {
+        let out = markdown(
+            "<script>alert(1)</script>\n\nand <b onmouseover=\"x\">inline</b>\n",
+            "p",
+        );
+        assert!(!out.contains("<script"), "{out}");
+        assert!(!out.contains("<b "), "{out}");
+        assert!(out.contains("&lt;script&gt;"), "{out}");
+        assert!(out.contains("inline"), "the text survives: {out}");
+    }
+
+    #[test]
+    fn a_refused_link_keeps_its_text_and_closes_nothing() {
+        let out = markdown("[tap](javascript:alert(1)) and [go](https://x.test/)", "p");
+        assert!(!out.contains("javascript:"), "{out}");
+        assert!(!out.contains("</a> and"), "no tag was closed twice: {out}");
+        assert!(out.contains("tap and"), "{out}");
+        assert!(out.contains("<a href=\"https://x.test/\">go</a>"), "{out}");
+        // An empty link is the case a flag gets wrong: nothing between the
+        // start and the end to notice the start was dropped.
+        assert_eq!(markdown("[](javascript:alert(1))", "p").trim(), "<p></p>");
+    }
+
+    #[test]
+    fn an_image_is_dropped_and_its_alt_text_kept() {
+        let out = markdown("![beacon](https://tracker.test/p.png)", "p");
+        assert!(!out.contains("<img"), "{out}");
+        assert!(out.contains("beacon"), "{out}");
+    }
+
+    #[test]
+    fn a_link_to_another_page_becomes_a_route_and_anything_odd_becomes_nothing() {
+        assert_eq!(
+            destination("storage.md", "proj-alpha").as_deref(),
+            Some("/wiki/proj-alpha/storage")
+        );
+        assert_eq!(
+            destination("https://example.com/x", "p").as_deref(),
+            Some("https://example.com/x")
+        );
+        assert_eq!(
+            destination("mailto:x@y.test", "p").as_deref(),
+            Some("mailto:x@y.test")
+        );
+        for dest in [
+            "javascript:alert(1)",
+            "JavaScript:alert(1)",
+            "data:text/html;base64,PHNjcmlwdD4=",
+            "../../etc/passwd.md",
+            "Storage.md",
+            "file:///etc/passwd",
+            "",
+        ] {
+            assert_eq!(destination(dest, "p"), None, "{dest}");
+        }
+    }
+
+    #[test]
+    fn a_project_name_is_encoded_into_the_route_it_becomes() {
+        assert_eq!(page_url("a b", "s"), "/wiki/a%20b/s");
+        assert_eq!(size(0), "0 B");
+        assert_eq!(size(1023), "1023 B");
+        assert_eq!(size(2048), "2.0 KB");
     }
 
     #[test]

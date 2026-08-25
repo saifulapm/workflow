@@ -6,9 +6,15 @@ edition = "2024"
 # Spec §8: no new crates. `std::net::TcpListener` and a hand-rolled HTTP/1.1
 # reader do the serving; these five are the family mem and workflow already
 # vendor. `tiny_http` stays pending per-item approval.
+#
+# pulldown-cmark is the sixth, approved per-item for the wiki: a markdown parser
+# is not something to hand-roll on the origin that owns `POST /answer`.
+# `default-features = false` drops `getopts`, which only the crate's own binary
+# needs.
 [dependencies]
 anyhow = "1.0.104"
 jiff = "0.2.35"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 toml = "1.1.4"

@@ -337,6 +337,24 @@ impl MemCli {
         self.read(&["status", &format!("--project={project}"), "--json"])
     }
 
+    /// One project's pages: slug, title, bytes and date. A project with none
+    /// still prints `{"pages":[]}`, so this reads like the other list verbs.
+    pub fn wiki(&self, project: &str) -> Arc<Outcome> {
+        self.read(&["wiki", &format!("--project={project}"), "--json"])
+    }
+
+    /// One page's text. `--` last, so a slug is a value and never a flag —
+    /// belt and braces, since `app` refuses anything that is not a slug first.
+    pub fn wiki_page(&self, project: &str, slug: &str) -> Arc<Outcome> {
+        self.read(&[
+            "wiki",
+            &format!("--project={project}"),
+            "--json",
+            "--",
+            slug,
+        ])
+    }
+
     /// The full text of one item. `mem questions` reports only the first line
     /// of a question as `title`, and workflow's asks are batched and
     /// multi-line, so the answer field would otherwise sit under a heading with

@@ -21,7 +21,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/projects", "GET"),
     ("/api/presence", "GET"),
     ("/subscribe", "GET"),
+    ("/wiki", "GET"),
 ];
+
+/// The one route with a path under it: `/wiki/<project>/<slug>`. It is a
+/// prefix so that a wrong method on a page is still a 405 that says GET, the
+/// same answer every other route gives.
+const ROUTE_PREFIXES: &[(&str, &str)] = &[("/wiki/", "GET")];
 
 pub struct App {
     pub config: Config,
@@ -78,11 +84,23 @@ impl App {
         if !self.guard.host_allowed(request.header("host")) {
             return Response::text(403, "not a host this hub answers to");
         }
-        let Some((_, allowed)) = ROUTES.iter().find(|(path, _)| *path == request.path) else {
+        let allowed = ROUTES
+            .iter()
+            .find(|(path, _)| *path == request.path)
+            .or_else(|| {
+                ROUTE_PREFIXES
+                    .iter()
+                    .find(|(prefix, _)| request.path.starts_with(prefix))
+            })
+            .map(|(_, allowed)| *allowed);
+        let Some(allowed) = allowed else {
             return Response::not_found();
         };
-        if request.method != *allowed {
+        if request.method != allowed {
             return Response::method_not_allowed(allowed);
+        }
+        if let Some(rest) = request.path.strip_prefix("/wiki/") {
+            return self.wiki_page(rest);
         }
         match request.path.as_str() {
             "/" => self.dashboard(request),
@@ -100,7 +118,31 @@ impl App {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
             "/subscribe" => self.subscribe(),
+            "/wiki" => Response::html(html::wiki_index(&model::wiki(&self.mem))),
             _ => Response::not_found(),
+        }
+    }
+
+    /// `GET /wiki/<project>/<slug>`.
+    ///
+    /// Both halves are checked before `mem` is run at all: the slug against
+    /// mem's own rule, the project against the list mem gave us. The path is
+    /// percent-decoded by then, so `%2e%2e%2f` is `../` here — which is neither
+    /// a slug nor a project name, and gets the same 404 as a page that is
+    /// simply not there.
+    fn wiki_page(&self, rest: &str) -> Response {
+        let Some((project, slug)) = rest.split_once('/') else {
+            return Response::not_found();
+        };
+        if !model::is_slug(slug) || project.is_empty() {
+            return Response::not_found();
+        }
+        if !model::is_known_project(&self.mem, project) {
+            return Response::not_found();
+        }
+        match model::wiki_text(&self.mem, project, slug) {
+            Some(text) => Response::html(html::wiki_page(project, slug, &text)),
+            None => Response::not_found(),
         }
     }
 

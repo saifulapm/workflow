@@ -24,6 +24,9 @@ const BASE32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// §3: "last ~20 log items across projects".
 pub const ACTIVITY_LIMIT: usize = 20;
 
+/// mem's own ceiling on a page slug (`mem/src/store.rs`).
+pub const SLUG_MAX: usize = 64;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Question {
     pub id: String,
@@ -61,6 +64,25 @@ pub struct Project {
     /// The first line of `status.md`, or `None` where there is no status.md —
     /// which the page renders as `—` (§4a, AC7).
     pub status: Option<String>,
+}
+
+/// One page of a project's wiki, as `mem wiki --json` lists it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WikiPage {
+    pub slug: String,
+    /// The page's first heading — or the slug, for a page that has none.
+    pub title: String,
+    pub bytes: u64,
+    /// mem's date, `2026-08-25`. `None` where mem could not stat the file.
+    pub modified: Option<String>,
+}
+
+/// One project that has at least one page. A project with none is not a
+/// heading with nothing under it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WikiProject {
+    pub name: String,
+    pub pages: Vec<WikiPage>,
 }
 
 /// One section of the page, and one `/api/*` document: its rows, and the
@@ -196,6 +218,79 @@ pub fn projects(mem: &MemCli, now_ms: i64) -> Section<Project> {
         degraded: list_fault(&outcome, "projects"),
         rows,
     }
+}
+
+/// Every project that has pages, with its pages — the same fan-out as
+/// `activity`, because `mem wiki` is a per-project verb too.
+pub fn wiki(mem: &MemCli) -> Section<WikiProject> {
+    let outcome = mem.projects();
+    let mut fault = list_fault(&outcome, "projects");
+    let mut rows = Vec::new();
+    for name in project_names(&outcome) {
+        let listing = mem.wiki(&name);
+        if let Some(why) = list_fault(&listing, "wiki") {
+            // As in `activity`: one project's failure costs that project's
+            // rows and says so, rather than quietly shortening the list.
+            fault.get_or_insert(format!("{name}: {why}"));
+            continue;
+        }
+        let mut pages: Vec<WikiPage> = listing.rows("pages").iter().map(wiki_row).collect();
+        pages.sort_by(|a, b| page_order(a).cmp(&page_order(b)));
+        if !pages.is_empty() {
+            rows.push(WikiProject { name, pages });
+        }
+    }
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    Section {
+        degraded: fault,
+        rows,
+    }
+}
+
+/// One page's text, byte for byte as mem printed it, or `None` for a page that
+/// is not there — which is `mem wiki <slug>`'s exit 1 with empty stdout, the
+/// same shape as a missing status.md.
+pub fn wiki_text(mem: &MemCli, project: &str, slug: &str) -> Option<String> {
+    let Outcome::Json(value) = &*mem.wiki_page(project, slug) else {
+        return None;
+    };
+    value.get("text")?.as_str().map(str::to_string)
+}
+
+/// Whether mem knows this project at all. The name comes out of a URL, so it is
+/// checked against the list rather than against a guess about what a project
+/// name may contain.
+pub fn is_known_project(mem: &MemCli, name: &str) -> bool {
+    project_names(&mem.projects()).iter().any(|p| p == name)
+}
+
+/// `index` first, then alphabetical: the index page is the one a reader wants
+/// first, and it is the page the plan makes every wiki keep.
+fn page_order(page: &WikiPage) -> (u8, &str) {
+    (u8::from(page.slug != "index"), &page.slug)
+}
+
+fn wiki_row(row: &Value) -> WikiPage {
+    let slug = string(row, "slug");
+    WikiPage {
+        title: optional(row, "title").unwrap_or_else(|| slug.clone()),
+        bytes: row.get("bytes").and_then(Value::as_u64).unwrap_or_default(),
+        modified: optional(row, "modified"),
+        slug,
+    }
+}
+
+/// mem's page-slug rule, `[a-z0-9][a-z0-9-]{0,63}`, applied before a slug off a
+/// URL becomes an argument to a child process. It is what keeps `..`, a leading
+/// dash and a dot-temp out of both the store and the argv.
+pub fn is_slug(slug: &str) -> bool {
+    let mut bytes = slug.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    slug.len() <= SLUG_MAX
+        && (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 fn project_names(outcome: &Outcome) -> Vec<String> {
@@ -405,6 +500,51 @@ mod tests {
         );
         // `status` is a singleton, and its empty stdout genuinely means absent.
         assert_eq!(first_line(&Outcome::Absent), None);
+    }
+
+    #[test]
+    fn the_slug_rule_is_mems_own_so_nothing_else_reaches_an_argv() {
+        for slug in ["index", "storage", "a", "0", "a-b-c", "x9"] {
+            assert!(is_slug(slug), "{slug}");
+        }
+        for slug in [
+            "",
+            "..",
+            "../status",
+            "-flag",
+            ".hidden",
+            "Storage",
+            "with space",
+            "under_score",
+            "trailing/",
+        ] {
+            assert!(!is_slug(slug), "{slug}");
+        }
+        assert!(is_slug(&"a".repeat(SLUG_MAX)));
+        assert!(!is_slug(&"a".repeat(SLUG_MAX + 1)));
+    }
+
+    #[test]
+    fn the_index_page_sorts_first_and_the_rest_alphabetically() {
+        let page = |slug: &str| WikiPage {
+            slug: slug.to_string(),
+            title: slug.to_string(),
+            bytes: 0,
+            modified: None,
+        };
+        let mut pages = [page("storage"), page("api"), page("index")];
+        pages.sort_by(|a, b| page_order(a).cmp(&page_order(b)));
+        let slugs: Vec<&str> = pages.iter().map(|p| p.slug.as_str()).collect();
+        assert_eq!(slugs, ["index", "api", "storage"]);
+    }
+
+    #[test]
+    fn a_page_with_no_heading_is_listed_under_its_slug() {
+        let row = serde_json::json!({"slug": "storage", "title": "", "bytes": 12});
+        let page = wiki_row(&row);
+        assert_eq!(page.title, "storage");
+        assert_eq!(page.bytes, 12);
+        assert_eq!(page.modified, None);
     }
 
     #[test]
