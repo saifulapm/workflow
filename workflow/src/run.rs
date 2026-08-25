@@ -1259,6 +1259,21 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         // this run about.
         let _ = std::fs::remove_file(run.dir.join(format!("{t}.redispatch")));
     }
+    // The way down (friction #RF50DJXQ): a killed coordinator used to leave
+    // its workers running for nobody. The signal only raises a flag; the poll
+    // loop sees it, stops every dispatched worker, and leaves the tasks
+    // `dispatched` for the next run in this checkout to adopt and collect.
+    // SIGKILL still can't be caught -- reap covers that aftermath.
+    let asked_to_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for sig in [
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGHUP,
+    ] {
+        let _ = signal_hook::flag::register(sig, asked_to_stop.clone());
+    }
+    let stopping = || asked_to_stop.load(std::sync::atomic::Ordering::Relaxed);
+
     let adopted = run.adopt_stale();
     memcli::log(&format!(
         "run {}: started at {} with {} tasks",
@@ -1333,11 +1348,17 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         }
 
         while !queue.is_empty() || run.running() > 0 {
+            if stopping() {
+                return shutdown(&run);
+            }
             while !queue.is_empty() && run.running() < run.max_workers {
                 let next = queue.remove(0);
                 run.dispatch(&next, "");
             }
             sys::sleep(run.poll);
+            if stopping() {
+                return shutdown(&run);
+            }
             run.reap_pass();
             // A parked task someone asked to try again, mid-run. The marker
             // file is how the request reaches a run that holds the project
@@ -1425,6 +1446,30 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         return exit::FAILED;
     }
     exit::OK
+}
+
+/// Told to stop: end every dispatched worker, say so, and leave the tasks
+/// `dispatched` -- the next run adopts them and judges whatever they wrote.
+/// No merging on the way out: a signal means now, and the merge gate is not
+/// a thing to run while shutting down.
+fn shutdown(run: &Run) -> i32 {
+    let live = run.dispatched();
+    warn(format!(
+        "run {}: told to stop -- stopping {} worker(s) before going",
+        run.plan.plan_id,
+        live.len()
+    ));
+    for task in &live {
+        run.stop(task);
+        warn(format!("task {task}: its worker was stopped"));
+    }
+    warn("run again in this checkout to adopt and collect what they left");
+    memcli::log(&format!(
+        "run {}: stopped by signal with {} worker(s) ended",
+        run.plan.plan_id,
+        live.len()
+    ));
+    exit::FAILED
 }
 
 /// `workflow redispatch <task>` -- the marker the live run's poll loop reads.
