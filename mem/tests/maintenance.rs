@@ -69,6 +69,24 @@ fn days_ago(days: i64) -> jiff::Timestamp {
     jiff::Timestamp::from_second(jiff::Timestamp::now().as_second() - days * 86_400).unwrap()
 }
 
+/// A wiki page written straight into the store, the way sync would deliver one.
+fn page(w: &World, slug: &str, text: &str) {
+    let dir = w.store().wiki_dir(P);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{slug}.md")), text).unwrap();
+}
+
+fn details(out: &std::process::Output, check: &str) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json output");
+    v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["check"] == check)
+        .map(|f| f["detail"].as_str().unwrap().to_string())
+        .collect()
+}
+
 #[test]
 fn prune_lists_only_the_stale_and_archives_in_place() {
     let w = World::new("maint-prune");
@@ -232,6 +250,119 @@ fn doctor_names_the_item_files_nothing_can_read() {
         !unreadable.iter().any(|d| d.contains("a readable one")),
         "{unreadable:?}"
     );
+}
+
+#[test]
+fn doctor_reads_the_wiki() {
+    let w = World::new("maint-wiki");
+    w.project(P, "thing");
+    page(
+        &w,
+        "index",
+        "# Index\n\n- [pricing](pricing.md)\n- [billing](billing.md)\n\
+         - [history](history.md)\n- [deploy](deploy.md)\n",
+    );
+    // A page that points at a page nobody has written.
+    page(
+        &w,
+        "pricing",
+        "# Pricing\n\nRounding is in [rounding](rounding.md).\n",
+    );
+    // On disk and not in the index: drift one way. billing.md is the other way.
+    page(&w, "shipping", "# Shipping\n\nZones, and nothing else.\n");
+    page(
+        &w,
+        "history",
+        &"How the cart came to total in cents, at length.\n".repeat(220),
+    );
+    page(
+        &w,
+        "deploy",
+        "# Deploy\n\nThe key is AKIAIOSFODNN7EXAMPLE, apparently.\n",
+    );
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
+    assert_eq!(code(&out), 0, "findings are exit 0");
+
+    let links = details(&out, "wiki link");
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert!(
+        links[0].contains("pricing.md") && links[0].contains("rounding.md"),
+        "{links:?}"
+    );
+    assert!(
+        !links.iter().any(|d| d.contains("billing")),
+        "the index's own dangling link is drift, not a second link finding: {links:?}"
+    );
+
+    let drift = details(&out, "wiki index");
+    assert_eq!(drift.len(), 2, "{drift:?}");
+    assert!(
+        drift.iter().any(|d| d.contains("shipping")),
+        "a page missing from the index: {drift:?}"
+    );
+    assert!(
+        drift.iter().any(|d| d.contains("billing")),
+        "an index entry with no page: {drift:?}"
+    );
+
+    let size = details(&out, "wiki size");
+    assert_eq!(size.len(), 1, "only the page over 8 KB: {size:?}");
+    assert!(size[0].contains("history"), "{size:?}");
+
+    let secrets = details(&out, "secret");
+    assert_eq!(secrets.len(), 1, "{secrets:?}");
+    assert!(
+        secrets[0].contains("deploy") && secrets[0].contains("line 3"),
+        "{secrets:?}"
+    );
+}
+
+#[test]
+fn a_tidy_wiki_gives_doctor_nothing_to_say() {
+    let w = World::new("maint-wiki-tidy");
+    w.project(P, "thing");
+    page(
+        &w,
+        "index",
+        "# Index\n\n- [pricing](pricing.md) — where money is rounded\n",
+    );
+    // An anchor, a link home, a URL that happens to end in .md, a path in some
+    // other tree, and a file name no slug could ever be: none of them is a page
+    // this wiki is missing.
+    page(
+        &w,
+        "pricing",
+        "# Pricing\n\nSee the [rules](pricing.md#rules) and the [index](index.md),\n\
+         then [the spec](https://example.com/pricing.md), [the repo](../docs/pricing.md)\n\
+         and its [README](README.md).\n",
+    );
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
+    assert_eq!(code(&out), 0);
+    for check in ["wiki link", "wiki index", "wiki size", "secret"] {
+        assert!(
+            details(&out, check).is_empty(),
+            "{check} fired on a tidy wiki"
+        );
+    }
+}
+
+#[test]
+fn a_wiki_with_no_index_page_is_one_finding_rather_than_one_per_page() {
+    let w = World::new("maint-wiki-unindexed");
+    w.project(P, "thing");
+    page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
+    page(&w, "shipping", "# Shipping\n\nZones, and nothing else.\n");
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
+    let drift = details(&out, "wiki index");
+    assert_eq!(
+        drift.len(),
+        1,
+        "one finding names the missing index: {drift:?}"
+    );
+    assert!(drift[0].contains("no index page"), "{drift:?}");
 }
 
 #[test]

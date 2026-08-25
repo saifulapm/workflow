@@ -1191,6 +1191,136 @@ pub fn sync(app: &App) -> Result<i32> {
     Ok(exit::OK)
 }
 
+/// The page every wiki has: one line per page, written by whoever writes the
+/// pages. Doctor is what keeps it honest.
+const WIKI_INDEX: &str = "index";
+
+/// Past this a page is a page to compact. There is no hard cap — a wiki grows
+/// by being written to, and compaction is a verb, not a refusal.
+const WIKI_PAGE_WARN_BYTES: u64 = 8 * 1024;
+
+/// The slug a markdown link points at, when it points at a page in the same
+/// wiki. `[name](name.md)` is the whole convention: an anchor is trimmed, and a
+/// target with a scheme or a slash in it lives in some other tree.
+fn page_link_target(target: &str) -> Option<&str> {
+    let target = target.split('#').next().unwrap_or_default();
+    if target.contains('/') || target.contains(':') {
+        return None;
+    }
+    let slug = target.strip_suffix(".md")?;
+    crate::store::is_valid_slug(slug).then_some(slug)
+}
+
+/// The target of every `[text](target)` in a page. Enough markdown to find the
+/// links the wiki convention writes, and no more: a title after the target is
+/// dropped, and a link mem cannot recognise is left for the renderer.
+fn markdown_links(text: &str) -> Vec<&str> {
+    let mut targets = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find("](") {
+        rest = &rest[open + 2..];
+        let Some(close) = rest.find(')') else { break };
+        let target = &rest[..close];
+        rest = &rest[close + 1..];
+        targets.push(target.split_whitespace().next().unwrap_or_default());
+    }
+    targets
+}
+
+/// The wiki checks: links that point at no page, drift between the index page
+/// and the directory in both directions, pages worth compacting, and the
+/// secrets grep the item files already get.
+fn wiki_findings(app: &App, project: &crate::project::Project) -> Vec<crate::maint::Finding> {
+    use crate::maint::{finding, looks_like_a_secret};
+    let mut findings = Vec::new();
+    let pages = app.store.wiki_pages(&project.id);
+    if pages.is_empty() {
+        return findings;
+    }
+    let slugs: std::collections::HashSet<&str> = pages.iter().map(|p| p.slug.as_str()).collect();
+    let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut has_index = false;
+
+    for page in &pages {
+        let name = format!("{}/{}.md", project.name, page.slug);
+        if page.bytes > WIKI_PAGE_WARN_BYTES {
+            findings.push(finding(
+                "wiki size",
+                format!(
+                    "{name} is {} KB — compact it, or split it and link the parts",
+                    page.bytes / 1024
+                ),
+            ));
+        }
+        let Ok(text) = std::fs::read_to_string(&page.path) else {
+            findings.push(finding(
+                "unreadable",
+                format!("{} is in no read", page.path.display()),
+            ));
+            continue;
+        };
+        // Per line, so the report names where to look: a page is a document,
+        // and "somewhere in here" is not a place.
+        for (n, line) in text.lines().enumerate() {
+            if let Some(shape) = looks_like_a_secret(line) {
+                findings.push(finding(
+                    "secret",
+                    format!("{name} line {} looks like it contains {shape}", n + 1),
+                ));
+            }
+        }
+        let is_index = page.slug == WIKI_INDEX;
+        has_index |= is_index;
+        for target in markdown_links(&text) {
+            let Some(slug) = page_link_target(target) else {
+                continue;
+            };
+            if is_index {
+                // A dangling link from the index is drift, not a broken link:
+                // one problem, one finding.
+                listed.insert(slug.to_string());
+                if !slugs.contains(slug) {
+                    findings.push(finding(
+                        "wiki index",
+                        format!(
+                            "{}'s index lists {slug}.md, which is not a page",
+                            project.name
+                        ),
+                    ));
+                }
+            } else if !slugs.contains(slug) {
+                findings.push(finding(
+                    "wiki link",
+                    format!("{name} links to {slug}.md, which is not a page"),
+                ));
+            }
+        }
+    }
+
+    if !has_index {
+        // Every page is missing from an index that does not exist, and saying
+        // so once is the finding. Listing them one by one buries it.
+        findings.push(finding(
+            "wiki index",
+            format!(
+                "{} has {} page(s) and no index page — write one, a line per page",
+                project.name,
+                pages.len()
+            ),
+        ));
+        return findings;
+    }
+    for page in &pages {
+        if page.slug != WIKI_INDEX && !listed.contains(page.slug.as_str()) {
+            findings.push(finding(
+                "wiki index",
+                format!("{}/{}.md is not in the index", project.name, page.slug),
+            ));
+        }
+    }
+    findings
+}
+
 /// `mem doctor [--fix]` — every check in spec §7. Findings are exit 0: they are
 /// for a human to read, not a failure of the command.
 pub fn doctor(app: &App, fix: bool) -> Result<i32> {
@@ -1315,6 +1445,7 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
                 format!("{}'s status.md is over cap — consolidate it", p.name),
             ));
         }
+        findings.extend(wiki_findings(app, p));
     }
 
     for path in app.store.item_paths() {
