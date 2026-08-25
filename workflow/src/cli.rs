@@ -54,8 +54,11 @@ pub enum Command {
 
 This is how a plan is checked before anyone approves it: it parses the file,
 prints the plan id, the tasks and the waves they fall into, and touches
-nothing else. `workflow run` is the other thing -- it creates a worktree and a
-branch per task and dispatches the first wave for real."
+nothing else. Run it from the project checkout and the plan is judged against
+the tree too: a Verify that cannot pass here is refused, and a Files line
+that does not look like it can hold its task is warned about. `workflow run`
+is the other thing -- it creates a worktree and a branch per task and
+dispatches the first wave for real."
     )]
     PlanCheck {
         file: PathBuf,

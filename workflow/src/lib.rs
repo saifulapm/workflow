@@ -30,6 +30,7 @@ pub mod ownership;
 pub mod park;
 pub mod paths;
 pub mod plan;
+pub mod plancheck;
 pub mod repo;
 pub mod resume;
 pub mod review;
@@ -185,6 +186,21 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
     let Some(parsed) = plan::parse(&text, true) else {
         return exit::FAILED;
     };
+    // The grammar is half the check: the plan must also hold in the checkout
+    // it will run in (frictions #DBHZBFY1, #6485CNC0). Warnings inform the
+    // planner; a Verify that cannot pass here is refused, after the report so
+    // the author still sees what parsed.
+    let mut refusals = Vec::new();
+    if let Some(top) = gitcmd::Git::here().toplevel() {
+        let found = plancheck::findings(&parsed, &top);
+        for w in &found.warnings {
+            warn(w);
+        }
+        for r in &found.refusals {
+            warn(r);
+        }
+        refusals = found.refusals;
+    }
     if json {
         println!(
             "{}",
@@ -198,6 +214,9 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
         for (i, w) in parsed.waves.iter().enumerate() {
             println!("  wave {}: {}", i + 1, w.join(" "));
         }
+    }
+    if !refusals.is_empty() {
+        return exit::FAILED;
     }
     exit::OK
 }

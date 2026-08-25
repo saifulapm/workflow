@@ -321,3 +321,63 @@ EOF2
 parse
 is "$RC" 1 'a slug git would refuse as a ref is refused here'
 like "$OUT" 'branch name' 'and says why'
+
+## --------------------------- the checkout half of the check (tree findings)
+
+# A plan is judged against the checkout it will run in, not only against its
+# own grammar: a Verify that cannot pass here is refused before a worker pays
+# a whole attempt discovering it (friction #DBHZBFY1), and a Files line that
+# does not look like it can hold its task is warned about (friction #6485CNC0).
+new_repo binonly
+mkdir -p src tests
+printf 'fn main() {}\n' >src/main.rs
+printf '[package]\nname = "binonly"\nversion = "0.1.0"\n' >Cargo.toml
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'a binary-only crate'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: cargo test --lib
+EOF2
+parse
+is "$RC" 1 'cargo test --lib on a crate with no library target is refused'
+like "$OUT" 'no library target' 'and the refusal says why'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs tests/main_change.rs
+      Verify: cargo test --test main_change
+EOF2
+parse
+is "$RC" 0 'a Verify this checkout can run passes'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Off in the weeds
+      Files: src/verbz/answer.rs
+      Verify: true
+- [ ] t2 Fine
+      Files: src/main.rs
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a suspect Files line is a warning, never a refusal'
+like "$OUT" 'src/verbz/answer.rs' 'the pattern is named'
+like "$OUT" 'typo' 'as a possible typo'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour with nothing to prove it
+      Files: src/main.rs
+      Verify: cargo test --test e2e
+EOF2
+parse
+is "$RC" 0 'a missing test file is a warning too'
+like "$OUT" 'no test file' 'and says what is missing'
