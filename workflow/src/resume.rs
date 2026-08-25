@@ -55,7 +55,7 @@ fn resume(
     }
     let meta = bundle.with_extension("meta");
 
-    let start = match repo_arg {
+    let mut start = match repo_arg {
         Some(r) => r.to_path_buf(),
         None => {
             let from_meta = meta_field(&meta, "repo");
@@ -66,7 +66,23 @@ fn resume(
             }
         }
     };
-    let probe = Git::at(&start);
+    let mut probe = Git::at(&start);
+    // The checkout the meta file names can be gone: a run's park records the
+    // task worktree, and run-end cleanup removes it (friction #DWNP07BC). The
+    // bundle applies to any checkout that holds its base commit, so the one
+    // this command is run from is the fallback -- never over an explicit
+    // --repo, whose failure should stay a failure.
+    if !probe.inside_worktree() && repo_arg.is_none() {
+        let cwd = paths::cwd();
+        if cwd != start {
+            warn(format!(
+                "{} is gone; restoring into this checkout instead",
+                start.display()
+            ));
+            start = cwd;
+            probe = Git::at(&start);
+        }
+    }
     if !probe.inside_worktree() {
         return Err(format!("{} is not a work tree", start.display()));
     }

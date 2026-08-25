@@ -194,3 +194,21 @@ export WORKFLOW_SYNC_CMD="$T_TMP/fake-sync"
 run resume "$XDG_DATA_HOME/workflow/parked/work/never-there.bundle"
 is "$RC" 1 'a bundle no round delivers is an error'
 like "$OUT" 'sync' 'and resume says it asked for a round'
+
+## --------------------- a bundle parked from a worktree that is gone
+
+# The run's park names the task worktree in the meta file, and run-end cleanup
+# removes that worktree: the printed resume recipe then died with 'not a work
+# tree' in exactly the window it was printed for (friction #DWNP07BC). When
+# the recorded checkout is gone, resume falls back to the one it is run from.
+cd "$T_TMP/lonely" || exit 1
+bundle=$(find "$XDG_DATA_HOME/workflow/parked/lonely" -name 'lonely-t1-*.bundle' | head -1)
+meta_repo=$(sed -n 's/^repo = //p' "${bundle%.bundle}.meta")
+is "$([ -d "$meta_repo" ] && echo here || echo gone)" gone \
+	'the checkout the meta file names really is gone'
+git branch -D lonely/t1 >/dev/null 2>&1
+run resume "$bundle"
+is "$RC" 0 'resume falls back to the checkout it is run from'
+like "$OUT" 'this checkout instead' 'and says the recorded one is gone'
+is "$(git rev-parse --abbrev-ref HEAD)" 'lonely/t1' 'the parked branch is back and checked out'
+git checkout -q main
