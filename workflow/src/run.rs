@@ -1254,6 +1254,10 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         if !run.dir.join(format!("{t}.state")).exists() {
             run.set_state(&t, PENDING);
         }
+        // A redispatch marker nobody consumed was a request to a run that is
+        // gone; carrying it into this run would dispatch a task nobody asked
+        // this run about.
+        let _ = std::fs::remove_file(run.dir.join(format!("{t}.redispatch")));
     }
     let adopted = run.adopt_stale();
     memcli::log(&format!(
@@ -1335,6 +1339,31 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             }
             sys::sleep(run.poll);
             run.reap_pass();
+            // A parked task someone asked to try again, mid-run. The marker
+            // file is how the request reaches a run that holds the project
+            // lock for its whole life (friction #W0S44DE6); it is honoured
+            // while the task's wave is still open, which is exactly when a
+            // redispatch can still feed the tasks waiting on it.
+            for id in &wave {
+                let marker = run.dir.join(format!("{id}.redispatch"));
+                if !marker.exists() {
+                    continue;
+                }
+                if run.state(id) != PARKED {
+                    let _ = std::fs::remove_file(&marker);
+                    warn(format!(
+                        "task {id}: asked to go again, but it is {} -- ignored",
+                        run.state(id)
+                    ));
+                    continue;
+                }
+                if run.running() >= run.max_workers {
+                    continue; // the marker keeps until a slot frees up
+                }
+                let _ = std::fs::remove_file(&marker);
+                warn(format!("task {id}: dispatched again by request"));
+                run.dispatch(id, "");
+            }
         }
     }
 
@@ -1396,6 +1425,56 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         return exit::FAILED;
     }
     exit::OK
+}
+
+/// `workflow redispatch <task>` -- the marker the live run's poll loop reads.
+/// Only a run whose lock is held right now can honour it; anything else is a
+/// stopped run, and a stopped run's parked work comes back by running the
+/// plan again.
+pub fn cmd_redispatch(task: &str) -> i32 {
+    if !Git::here().inside_worktree() {
+        warn("redispatch: stand in the project checkout");
+        return exit::USAGE;
+    }
+    let Some(project) = memcli::project_current() else {
+        warn("redispatch: mem does not know this checkout");
+        return exit::USAGE;
+    };
+
+    let root = paths::runs_root().join(project.dir_name());
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.join("plan.md").is_file())
+        .collect();
+    dirs.sort();
+
+    for dir in dirs {
+        // Taking the lock and succeeding means no orchestrator is live here;
+        // the guard drops it again on the way past.
+        if lock_run(&dir).is_some() {
+            continue;
+        }
+        if field(&dir, task, "state") != PARKED {
+            continue;
+        }
+        let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
+        let plan_id = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        warn(format!(
+            "run {plan_id}: asked to dispatch {task} again -- it goes on the next poll while its wave is open"
+        ));
+        return exit::OK;
+    }
+
+    warn(format!(
+        "no live run holds {task} parked -- run the plan again to retry parked tasks, or 'workflow resume' the bundle a park printed"
+    ));
+    exit::FAILED
 }
 
 pub fn cmd_reap() -> i32 {

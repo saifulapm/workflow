@@ -120,6 +120,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Run { plan_file } => run::cmd_run(plan_file.as_deref()),
         Command::Reap => run::cmd_reap(),
+        Command::Redispatch { task } => run::cmd_redispatch(&task),
         Command::Status { json } => status::cmd_status(json),
         Command::Park {
             repo,

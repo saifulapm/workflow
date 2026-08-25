@@ -71,6 +71,16 @@ branch per task and dispatches the first wave for real."
     },
     /// Collect finished or stalled workers.
     Reap,
+    /// Ask the live run to dispatch a parked task again.
+    #[command(long_about = "Ask the live run to dispatch a parked task again.
+
+A run holds its project's lock for its whole life, so a parked task used to
+wait for the run to end before anyone could act on it -- with the worker slot
+it freed sitting idle (friction #W0S44DE6). This writes a marker in the live
+run's directory; the run picks it up on its next poll and dispatches the task
+again, as long as its wave is still open. With no live run, just run the plan
+again -- a fresh run retries parked tasks by itself.")]
+    Redispatch { task: String },
     /// Report this project's runs: task states, spend, lock liveness.
     #[command(long_about = "Report this project's runs: task states, spend, lock liveness.
 
@@ -202,12 +212,15 @@ usage: workflow <command> [options]
       0 a cold review is wanted · 1 it is not
   plan-check <file> [--json]
       read a plan and report its tasks and waves; nothing is run
-      0 it parses · 1 the grammar refused it · 2 no such file
+      0 it holds · 1 the grammar or this checkout refused it · 2 no such file
   run [--plan-file <f>]
       run a plan's tasks in worktrees; this dispatches real workers
       0 every task complete · 1 parked or failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
+  redispatch <task>
+      ask the live run to dispatch a parked task again
+      0 the run was asked · 1 no live run holds that task parked
   status [--json]
       report this project's runs: task states, spend, lock liveness
       0 reported · 2 outside a project
