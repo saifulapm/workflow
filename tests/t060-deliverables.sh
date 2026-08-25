@@ -50,6 +50,29 @@ like "$orchestrate_skill" 'git branch --show-current' \
 like "$orchestrate_skill" 'Leave the checkout on main' \
 	'and puts it back on main when the run ends'
 
+## ---------------------------------------------------------------- the wiki
+
+# A page is read before a subsystem is touched and rewritten after it changes,
+# so every skill on that path has to name the verb. A wiki nobody is told about
+# is a wiki nobody writes.
+mem_skill=$(cat "$WF_ROOT/skills/mem/SKILL.md")
+like "$mem_skill" 'mem wiki' 'mem names the wiki'
+like "$mem_skill" 'mem wiki <slug> --stdin --note' 'mem shows how a page is written'
+# The index is a page like any other, and no verb writes it: whoever adds a
+# page adds its line, or doctor is left to report the drift.
+like "$mem_skill" 'index' 'mem says the index is maintained by hand'
+# Deleting a page does not stick: bisync brings it back (gotcha #PK0TGG25).
+# The store's answer is to archive in place, and only the skill can say so.
+like "$mem_skill" 'stub' 'mem teaches the stub instead of a delete that will not hold'
+like "$plan_skill" 'mem wiki' 'plan reads the pages before it cuts tasks'
+implement_skill=$(cat "$WF_ROOT/skills/implement/SKILL.md")
+like "$implement_skill" 'mem wiki .*--stdin --note' 'implement rewrites the page it touched'
+# Nothing refuses an oversized or unlinked page: doctor reports it and a batch
+# review is where someone acts on the report.
+like "$orchestrate_skill" 'mem doctor' 'orchestrate lints the wiki in a batch review'
+like "$orchestrate_skill" 'compact' 'and compacts the pages that have outgrown themselves'
+like "$(cat "$WF_ROOT/README.md")" 'mem wiki' 'the README puts the wiki among the reads'
+
 ## ------------------------------------------------------------ the adapters
 
 for a in codex pi; do

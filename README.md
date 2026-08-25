@@ -4,8 +4,8 @@ Three binaries that run a solo development workflow, plus the thin surfaces
 that carry it into an editor session.
 
 - `mem/` is the system of record for project state: durable facts, rulings,
-  logs, handoffs and blocking questions, kept as markdown outside every
-  project repo and synced between machines.
+  logs, handoffs, blocking questions and a wiki of design pages, kept as
+  markdown outside every project repo and synced between machines.
 - `workflow/` is the gate and the orchestrator: `verify`, `lint-msg`,
   `review-needed`, plan-driven `run`, `status`, `reap`, `park`/`resume`,
   `doctor`, and the body of the git hook stubs.
@@ -57,6 +57,7 @@ Questions find you: on screen while a machine is watched, on the phone
 
 ## Reading a project's state
 
+    mem wiki                     # the project's pages, one line each
     mem plan                     # the active plan, [x] ticks are progress
     mem log                      # what happened, newest first
     mem log --kind ruling        # decisions taken instead of asking you
@@ -74,6 +75,23 @@ with the same digest, so a fresh session already knows.
 
 All of it works from anywhere with `--project <name>`, and from any machine:
 the store syncs. `mem projects` is the portfolio view.
+
+## The wiki
+
+An item records what happened; a page records how something works now. Every
+project can keep both. Pages are markdown in the store, one per subsystem,
+linked to each other as `[name](name.md)` and listed in a page called `index`.
+
+    mem wiki cart-pricing          # read this before touching cart pricing
+    mem wiki cart-pricing --stdin --note "rounding moved into the service" <page.md
+
+A session reads the page for what it is about to change, then rewrites it when
+the change lands. The note is mandatory and becomes a log line, and that log
+is the page's history: there are no revisions to dig through. Nothing is
+deleted, because a deletion comes back on the next sync, so a page that is
+done becomes a one-line stub pointing at what replaced it. `mem doctor`
+reports dead links, pages missing from the index and pages big enough to want
+compacting.
 
 ## Pausing, moving, finishing
 

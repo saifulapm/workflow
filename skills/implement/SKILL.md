@@ -23,6 +23,16 @@ First action of the session:
 6. `mem log "<what landed>"`.
 7. `/clear`, then the next task. (Interactive sessions only.)
 
+If the task changed how a subsystem works, the page that describes it is now
+wrong. Read it before you start and rewrite it before you log:
+
+    mem wiki <slug> > page.md
+    mem wiki <slug> --stdin --note "<what changed and why>" <page.md
+
+The note is the page's history, so it says what changed, not that something
+did. A page nobody corrected is worse than no page: the next session believes
+it. New page, new line in `index`.
+
 Stay inside the task's `Files:` patterns. In an orchestrated run, anything
 outside them is refused at the merge gate and the task parks.
 
