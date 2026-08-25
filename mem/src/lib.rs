@@ -180,6 +180,17 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             text.as_deref(),
             option.as_deref(),
         ),
+        cli::Command::Wiki {
+            slug,
+            stdin,
+            note,
+            session_id,
+        } => verbs::wiki(
+            &with_session(app, session_id),
+            slug.as_deref(),
+            *stdin,
+            note.as_deref(),
+        ),
         cli::Command::Plan {
             set_file,
             stdin,

@@ -58,6 +58,25 @@ impl Store {
         self.project_dir(project_id).join("status.md")
     }
 
+    pub fn wiki_dir(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("wiki")
+    }
+
+    /// The file a slug names. The slug is joined verbatim, so every caller
+    /// checks it with `is_valid_slug` first.
+    pub fn wiki_page(&self, project_id: &str, slug: &str) -> PathBuf {
+        self.wiki_dir(project_id).join(format!("{slug}.md"))
+    }
+
+    /// One project's pages, by slug. Anything in the directory that is not a
+    /// `<slug>.md` file is skipped, the way strays beside items are.
+    pub fn wiki_pages(&self, project_id: &str) -> Vec<Page> {
+        read_dir_sorted(&self.wiki_dir(project_id))
+            .iter()
+            .filter_map(|path| read_page(path))
+            .collect()
+    }
+
     /// Every well-formed item file in the store.
     pub fn item_paths(&self) -> Vec<PathBuf> {
         item_files(&self.root)
@@ -92,6 +111,76 @@ impl Store {
         write_atomic(&path, &item.to_bytes()?)?;
         Ok(path)
     }
+}
+
+/// The longest a page slug may be.
+pub const SLUG_MAX: usize = 64;
+
+/// `[a-z0-9][a-z0-9-]{0,63}` — the plan's task-id rule grown up. A slug is also
+/// a file name, so this is what keeps `..`, dot-temps and bisync conflict
+/// losers out of the wiki.
+pub fn is_valid_slug(slug: &str) -> bool {
+    let mut chars = slug.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    slug.len() <= SLUG_MAX
+        && (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// A wiki page as the read verbs report it. The text is not carried: a listing
+/// of twenty pages has no business holding twenty documents.
+#[derive(Debug, Clone)]
+pub struct Page {
+    pub slug: String,
+    /// The first heading, for the listing. Empty when the page has none.
+    pub title: String,
+    pub bytes: u64,
+    pub modified_epoch: i64,
+    pub path: PathBuf,
+}
+
+/// Reads one page's listing line, or None when the file is not a page.
+pub fn read_page(path: &Path) -> Option<Page> {
+    let stem = path.file_name()?.to_str()?.strip_suffix(".md")?;
+    if !is_valid_slug(stem) {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    Some(Page {
+        slug: stem.to_string(),
+        title: page_title(&std::fs::read_to_string(path).unwrap_or_default()),
+        bytes: meta.len(),
+        modified_epoch: meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs() as i64),
+        path: path.to_path_buf(),
+    })
+}
+
+/// What a listing calls a page: its first heading, or its first non-empty line
+/// when it has none.
+pub fn page_title(text: &str) -> String {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let stripped = line.trim_start_matches('#');
+        let title = if stripped.len() < line.len() {
+            stripped.trim_start()
+        } else {
+            line
+        };
+        return crate::search::truncate_bytes(title, 100);
+    }
+    String::new()
 }
 
 pub fn read_item(path: &Path) -> Result<Item> {

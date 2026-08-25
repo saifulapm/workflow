@@ -193,6 +193,20 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
+    /// The project's wiki: list pages, print one, or replace one.
+    Wiki {
+        /// The page slug. Without one, list every page this project has.
+        slug: Option<String>,
+        /// Replace the page with what is on stdin.
+        #[arg(long)]
+        stdin: bool,
+        /// What changed and why. Mandatory on a write: the note becomes the
+        /// log line that is the page's history.
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        session_id: Option<String>,
+    },
     /// Print plan.md verbatim, or replace or clear it.
     Plan {
         #[arg(long)]

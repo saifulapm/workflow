@@ -617,6 +617,183 @@ fn plan_tick(app: &App, task: &str) -> Result<i32> {
     Ok(exit::OK)
 }
 
+/// `mem wiki` — the project's pages, under `projects/<id>/wiki/`. Items are
+/// episodic facts; a page is a document a session reads before it touches a
+/// subsystem and updates when it changes one. There is no delete verb: bisync
+/// resurrects deletions, so an obsolete page becomes a one-line stub pointing
+/// at its replacement.
+pub fn wiki(app: &App, slug: Option<&str>, stdin: bool, note: Option<&str>) -> Result<i32> {
+    if let Some(slug) = slug
+        && !crate::store::is_valid_slug(slug)
+    {
+        return Err(exit::usage(format!(
+            "'{slug}' is not a page slug — lower case letters, digits and dashes, \
+             starting with a letter or a digit, at most {} characters",
+            crate::store::SLUG_MAX
+        )));
+    }
+    if stdin || note.is_some() {
+        let Some(slug) = slug else {
+            return Err(exit::usage(
+                "name the page to write, e.g. `mem wiki index --stdin --note \"why\"`",
+            ));
+        };
+        return wiki_write(app, slug, stdin, note);
+    }
+    match slug {
+        Some(slug) => wiki_print(app, slug),
+        None => wiki_list(app),
+    }
+}
+
+fn wiki_list(app: &App) -> Result<i32> {
+    let identity = app.identity(Mode::Read)?;
+    let pages = match identity.id() {
+        Some(id) => app.store.wiki_pages(id),
+        None => Vec::new(),
+    };
+    if app.json {
+        let rows: Vec<serde_json::Value> = pages
+            .iter()
+            .map(|p| {
+                json!({
+                    "slug": p.slug,
+                    "title": p.title,
+                    "bytes": p.bytes,
+                    "modified": date(p.modified_epoch),
+                    "path": p.path.to_string_lossy(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&json!({ "pages": rows }))?);
+    } else {
+        for p in &pages {
+            println!(
+                "{:<24} {:>6}  {}  {}",
+                p.slug,
+                p.bytes,
+                date(p.modified_epoch),
+                p.title
+            );
+        }
+    }
+    if pages.is_empty() {
+        if !app.quiet && !app.json {
+            eprintln!(
+                "mem: {}",
+                unknown_project_note(&identity).unwrap_or_else(|| {
+                    "no pages yet — write one with `mem wiki <slug> --stdin --note \"why\"`"
+                        .to_string()
+                })
+            );
+        }
+        return Ok(exit::NOT_FOUND);
+    }
+    Ok(exit::OK)
+}
+
+/// A page prints byte for byte, like plan.md and status.md: hub renders it and
+/// a session reads it, and neither wants mem's opinion about markdown.
+fn wiki_print(app: &App, slug: &str) -> Result<i32> {
+    let identity = app.identity(Mode::Read)?;
+    let bytes = identity
+        .id()
+        .map(|id| app.store.wiki_page(id, slug))
+        .and_then(|path| std::fs::read(&path).ok().map(|bytes| (path, bytes)));
+    let Some((path, bytes)) = bytes else {
+        if !app.quiet && !app.json {
+            eprintln!(
+                "mem: {}",
+                unknown_project_note(&identity)
+                    .unwrap_or_else(|| format!("no page '{slug}' — `mem wiki` lists them"))
+            );
+        }
+        return Ok(exit::NOT_FOUND);
+    };
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "slug": slug,
+                "text": String::from_utf8_lossy(&bytes),
+                "bytes": bytes.len(),
+                "path": path.to_string_lossy(),
+            }))?
+        );
+    } else {
+        print!("{}", String::from_utf8_lossy(&bytes));
+    }
+    Ok(exit::OK)
+}
+
+fn wiki_write(app: &App, slug: &str, stdin: bool, note: Option<&str>) -> Result<i32> {
+    if !stdin {
+        return Err(exit::usage(
+            "a note describes a write — add --stdin to replace the page",
+        ));
+    }
+    // Both checks come before the project is resolved, so a refused write
+    // registers nothing.
+    let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) else {
+        return Err(exit::usage(
+            "a page write needs --note \"<what changed and why>\" — the note is the \
+             page's history",
+        ));
+    };
+    crate::maint::check_write_version(&app.store)?;
+    let identity = app.identity(Mode::Write)?;
+    let Some(id) = identity.id() else {
+        return Err(exit::usage(
+            "a page belongs to a project — run this in a checkout or pass --project",
+        ));
+    };
+    let path = app.store.wiki_page(id, slug);
+    // As in `status`: the CAS baseline is what the page looked like before the
+    // writer's text arrived, and `--stdin` holds that window open for as long
+    // as the writer takes.
+    let seen = crate::atomic::read_mtime(&path);
+    let text = crate::write::read_stdin()?;
+    if text.trim().is_empty() {
+        return Err(exit::usage(
+            "a page needs text — there is no delete verb, so a page that is done \
+             becomes a one-line stub pointing at what replaced it",
+        ));
+    }
+    if let crate::write::SingletonWrite::Conflict =
+        crate::write::write_singleton_since(&path, &text, false, seen)?
+    {
+        return Err(exit::coded(
+            exit::CAS_CONFLICT,
+            format!("{slug}.md changed since it was read — re-read it and try again"),
+        ));
+    }
+    // History is the log line, not a revision of the file: one item per write,
+    // typed so `mem log --type wiki` reads a wiki's whole story.
+    let written = crate::write::save(
+        app,
+        crate::item::Kind::Log,
+        &format!("wiki {slug}: {note}"),
+        None,
+        Some("wiki"),
+        &[],
+        None,
+    )?;
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "slug": slug,
+                "path": path.to_string_lossy(),
+                "bytes": std::fs::metadata(&path).map(|m| m.len()).unwrap_or_default(),
+                "log": written.short_id,
+            }))?
+        );
+    } else if !app.quiet {
+        println!("wiki {slug}  #{}", written.short_id);
+    }
+    Ok(exit::OK)
+}
+
 /// plan.md and status.md are printed byte for byte: the workflow orchestrator
 /// parses them, so this is a contract, not a display.
 fn print_singleton(
