@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use crate::index::{Index, Row};
 use crate::item::Item;
 use crate::search::truncate_bytes;
-use crate::store::Store;
+use crate::store::{Page, Store};
 use crate::timefmt::date;
 
 /// Assembly stops adding optional content here.
@@ -22,6 +22,11 @@ pub const WARN: usize = 10_000;
 pub const CEILING: usize = 24_000;
 /// `--brief` is a hook payload, not a digest.
 pub const BRIEF: usize = 480;
+
+/// The page that lists the others. It is a page like any other, kept by hand.
+pub const INDEX_SLUG: &str = "index";
+/// How much of the index page the digest carries when there is room for it.
+pub const INDEX_HEAD_LINES: usize = 5;
 
 pub const TRUNCATED: &str = "[digest truncated]";
 pub const HINT: &str = "detail: mem show <id> · search: mem search \"<q>\"";
@@ -44,6 +49,11 @@ pub struct Sources {
     pub handoff: Option<Row>,
     pub plan: Option<String>,
     pub questions: Vec<Row>,
+    /// The project's wiki pages. Only the count reaches the digest: a listing
+    /// belongs to `mem wiki`.
+    pub pages: Vec<Page>,
+    /// The text of the index page, when the project keeps one.
+    pub wiki_index: Option<String>,
     pub status: Option<String>,
     pub rulings: Vec<Row>,
     pub facts: Vec<Row>,
@@ -63,12 +73,21 @@ impl Sources {
         let status = project_id
             .map(|id| store.status_path(id))
             .and_then(|p| std::fs::read_to_string(p).ok());
+        let pages = project_id
+            .map(|id| store.wiki_pages(id))
+            .unwrap_or_default();
+        let wiki_index = pages
+            .iter()
+            .find(|p| p.slug == INDEX_SLUG)
+            .and_then(|p| std::fs::read_to_string(&p.path).ok());
         Ok(Sources {
             version: crate::maint::read_version_warning(store),
             staleness,
             handoff: index.recent("handoff", project_id, 1)?.into_iter().next(),
             plan,
             questions: index.pending_questions(project_id)?,
+            pages,
+            wiki_index,
             status,
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
@@ -80,6 +99,7 @@ impl Sources {
         self.handoff.is_none()
             && self.plan.is_none()
             && self.questions.is_empty()
+            && self.pages.is_empty()
             && self.status.is_none()
             && self.rulings.is_empty()
             && self.facts.is_empty()
@@ -100,6 +120,18 @@ pub fn plan_head(plan: &str) -> Vec<String> {
         out.push(task.trim().to_string());
     }
     out
+}
+
+/// The opening lines of the index page, which by convention are a heading and
+/// one line per page. The rest is a page, and pages are read with `mem wiki`.
+pub fn index_head(index: &str) -> Vec<String> {
+    index
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(INDEX_HEAD_LINES)
+        .map(|line| truncate_bytes(line, 100))
+        .collect()
 }
 
 fn item_line(row: &Row, store: &Store) -> String {
@@ -161,6 +193,15 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
             truncate_bytes(&q.title, 70)
         ));
     }
+    // A session that does not know the wiki is there will not go looking for
+    // it, so the count is mandatory: one line, whatever else the digest holds.
+    if !sources.pages.is_empty() {
+        let n = sources.pages.len();
+        mandatory.push(format!(
+            "wiki: {n} page{} — mem wiki",
+            if n == 1 { "" } else { "s" }
+        ));
+    }
     if sources.is_empty() {
         // Nothing recorded yet still means the warning lines: they are the only
         // mandatory content an empty project can have, and a machine reading a
@@ -185,8 +226,17 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
     let mandatory_bytes: usize = lines.iter().map(|l| l.len() + 1).sum();
 
     // Optional sections, in fill order, each dropped whole when there is no
-    // room: status body bottom-up first, then rulings, facts, logs.
+    // room: the index head under the wiki line it belongs to, then the status
+    // body bottom-up, then rulings, facts, logs.
     let mut optional: Vec<Vec<String>> = Vec::new();
+    if let Some(index) = &sources.wiki_index {
+        optional.push(
+            index_head(index)
+                .into_iter()
+                .map(|line| format!("  {line}"))
+                .collect(),
+        );
+    }
     if let Some(status) = &sources.status {
         optional.push(
             status

@@ -3,7 +3,7 @@
 mod common;
 
 use common::{World, code, item, mem, put, stdout};
-use mem::digest::{CEILING, EMPTY, HINT, Sources, TRUNCATED, build, plan_head};
+use mem::digest::{CEILING, EMPTY, HINT, Sources, TRUNCATED, build, index_head, plan_head};
 use mem::index::{Index, Purpose};
 use mem::item::Kind;
 
@@ -14,6 +14,13 @@ fn sources(w: &World, staleness: Option<String>) -> (Index, Sources) {
     index.reindex(&w.store(), false).unwrap();
     let s = Sources::gather(&index, &w.store(), Some(P), staleness).unwrap();
     (index, s)
+}
+
+/// Writes a page straight into the store, the way the wiki verb would.
+fn page(w: &World, slug: &str, text: &str) {
+    let store = w.store();
+    std::fs::create_dir_all(store.wiki_dir(P)).unwrap();
+    std::fs::write(store.wiki_page(P, slug), text).unwrap();
 }
 
 #[test]
@@ -142,6 +149,110 @@ fn plan_head_takes_the_heading_and_the_first_unchecked_task() {
     assert_eq!(
         plan_head("## Sub\n* [ ] star task\n"),
         vec!["## Sub", "* [ ] star task"]
+    );
+}
+
+#[test]
+fn a_project_with_pages_opens_with_the_wiki_line_and_the_index_head() {
+    let w = World::new("digest-wiki");
+    w.project(P, "thing");
+    let store = w.store();
+    put(
+        &store,
+        Some(P),
+        &item(Kind::Question, "deploy on friday?", "body"),
+    );
+    std::fs::write(store.status_path(P), "blocked on review\n").unwrap();
+    page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
+    page(
+        &w,
+        "sessions",
+        "# Sessions\n\nRedis, one key per session.\n",
+    );
+    page(
+        &w,
+        "index",
+        "# Index\n\n- [pricing](pricing.md) — where money is rounded\n\
+         - [sessions](sessions.md) — where a login lives\n",
+    );
+
+    let (_i, s) = sources(&w, None);
+    let text = build(&s, &store, 6000).text;
+    let lines: Vec<&str> = text.lines().collect();
+    let wiki_at = lines
+        .iter()
+        .position(|l| *l == "wiki: 3 pages — mem wiki")
+        .unwrap_or_else(|| panic!("{text}"));
+    let head_at = lines
+        .iter()
+        .position(|l| l.contains("[pricing](pricing.md)"))
+        .unwrap_or_else(|| panic!("{text}"));
+    let question_at = lines.iter().position(|l| l.starts_with("? #")).unwrap();
+    let status_at = lines.iter().position(|l| l.starts_with("status:")).unwrap();
+    assert!(
+        question_at < wiki_at && wiki_at < head_at && head_at < status_at,
+        "the wiki line closes the mandatory sections and the index head follows it: {text}"
+    );
+    assert!(lines[head_at].starts_with("  "), "{text}");
+    assert!(
+        text.contains("[sessions](sessions.md)"),
+        "the whole index head, not just its first entry: {text}"
+    );
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["context", "thing"]);
+    assert_eq!(code(&out), 0);
+    assert!(
+        stdout(&out).contains("wiki: 3 pages — mem wiki"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn a_project_whose_only_memory_is_a_page_is_not_empty() {
+    let w = World::new("digest-wiki-only");
+    w.project(P, "thing");
+    page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
+
+    let (_i, s) = sources(&w, None);
+    let text = build(&s, &w.store(), 6000).text;
+    assert!(!text.contains(EMPTY), "{text}");
+    assert_eq!(text, format!("wiki: 1 page — mem wiki\n{HINT}\n"));
+}
+
+#[test]
+fn a_tight_budget_keeps_the_wiki_line_and_drops_the_index_head() {
+    let w = World::new("digest-wiki-budget");
+    w.project(P, "thing");
+    page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
+    page(
+        &w,
+        "index",
+        "# Index\n\n- [pricing](pricing.md) — where money is rounded\n",
+    );
+
+    let (_i, s) = sources(&w, None);
+    let text = build(&s, &w.store(), 8).text;
+    assert!(text.contains("wiki: 2 pages — mem wiki"), "{text}");
+    assert!(!text.contains("[pricing](pricing.md)"), "{text}");
+}
+
+#[test]
+fn index_head_takes_the_first_lines_and_leaves_the_rest_to_mem_wiki() {
+    let mut page = String::from("# Index\n\n");
+    for n in 0..20 {
+        page.push_str(&format!("- [p{n}](p{n}.md) — page {n}\n"));
+    }
+    let head = index_head(&page);
+    assert_eq!(head.len(), mem::digest::INDEX_HEAD_LINES);
+    assert_eq!(head[0], "# Index");
+    assert_eq!(head[1], "- [p0](p0.md) — page 0");
+    assert_eq!(index_head(""), Vec::<String>::new());
+
+    let long = format!("# {}\n", "x".repeat(400));
+    assert!(
+        index_head(&long)[0].len() <= 100,
+        "a line is not a document"
     );
 }
 
