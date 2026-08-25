@@ -614,6 +614,23 @@ impl Run {
         let outcome = self
             .backend
             .result(&self.handle(task), &self.dir.join(format!("{task}.json")));
+        // A worker that died leaving nothing -- no status line, no commit --
+        // has said nothing about the task, only about the dispatch: a
+        // transient API error on the first turn looks exactly like this.
+        // Parking it stalls every dependent behind a task nobody has actually
+        // attempted, so it gets the one retry a silent stall already had
+        // (friction #195SW7VX).
+        let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
+        if self.last_status_line(task).is_none() && self.commits(task) == 0 && tries < 2 {
+            warn(format!(
+                "task {task}: its worker died leaving nothing -- one more try"
+            ));
+            self.dispatch(
+                task,
+                "its worker died before writing anything, and was dispatched again",
+            );
+            return;
+        }
         if !outcome.ok {
             // No pidfile and no result: the template never got as far as either,
             // so this is a dispatch that did not happen rather than a worker that

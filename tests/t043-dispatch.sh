@@ -123,7 +123,10 @@ s2=$(cat "$rundir/t2.session")
 isnt "$s1" "$s2" 'each dispatch gets its own session id'
 # The recorded handle is the one --bg announced, resolved through the agents
 # listing to the full id -- not the uuid the orchestrator minted going in.
-is "$s1" 'a1b2c301-0000-4000-8000-000000000000' \
+# It is the second id this stub minted: a worker that leaves nothing behind
+# is retried once before it parks (friction #195SW7VX), and the retry's
+# session is the one that stands.
+is "$s1" 'a1b2c302-0000-4000-8000-000000000000' \
 	'the session recorded is the one the backgrounded session actually got'
 truthy "$([ ! -e "$rundir/costs.tsv" ] && echo 0 || echo 1)" \
 	'no cost ledger: the run keeps no dollar figures'
