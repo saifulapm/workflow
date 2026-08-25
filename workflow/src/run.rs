@@ -1273,6 +1273,21 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             if adopted.contains(id) {
                 continue;
             }
+            // Unticked, but the commit some pass merged for it is on the
+            // integration branch as it stands: an earlier pass merged it and
+            // the tick never took, or the work was landed by hand between
+            // passes -- the binary's own printed recipe (friction #94EMPK30).
+            // The ref recorded at merge time outlives every branch, so this
+            // is checkable, and a worker was rebuilding landed work when only
+            // the tick was consulted.
+            if run.landed(id) {
+                run.set_state(id, MERGED);
+                warn(format!(
+                    "task {id}: its work is already on {} -- not dispatched again",
+                    run.int_branch
+                ));
+                continue;
+            }
             if run.deps_satisfied(&task) {
                 queue.push(id.clone());
             } else {

@@ -162,3 +162,39 @@ like "$OUT" 'already ticked off' 'pre-ticked: and the run says so out loud'
 is "$(cat "$prerun/t1.state")" merged 'pre-ticked: the ordinary task merged'
 is "$(cat "$prerun/t2.state")" merged \
 	'pre-ticked: a task waiting on a hand-done tick is not blocked by it'
+
+## ------------------- work landed by hand between passes is not built again
+
+# Task state was keyed to the integration branch: landing a pass by hand and
+# clearing the leftovers -- the binary's own printed recipe -- made an unticked
+# task whose commit was already on the trunk look untouched, and the next pass
+# dispatched a worker to build it again (friction #94EMPK30). The ref recorded
+# at merge time outlives every branch, so the run can see the work landed.
+new_repo hand
+mem_register
+php_fixture
+cat >"$T_TMP/hand.md" <<'PLAN'
+# plan: hand
+
+- [ ] t1 First service
+      Files: app/t1.php
+      Verify: true
+- [ ] t2 Second service
+      Files: app/t2.php
+      Verify: true
+PLAN
+: >"$T_TMP/misbehave-t2"
+run workflow run --plan-file "$T_TMP/hand.md"
+is "$RC" 1 'hand pass 1: t1 merges and t2 parks'
+handrun="$XDG_STATE_HOME/workflow/runs/hand/hand"
+is "$(cat "$handrun/t1.state")" merged 'hand pass 1: t1 merged'
+
+# The recipe: land the branch on the trunk, clear the leftover, run again.
+git merge -q --ff-only integration/hand
+git branch -D hand/t2 >/dev/null 2>&1
+rm -f "$T_TMP/misbehave-t2"
+run workflow run --plan-file "$T_TMP/hand.md"
+is "$RC" 0 'hand pass 2: the recovery pass completes'
+like "$OUT" 'already on integration/hand' 'and says t1 needs no second worker'
+is "$(cat "$handrun/t1.dispatches")" 1 'hand pass 2: t1 was never dispatched again'
+is "$(cat "$handrun/t2.state")" merged 'hand pass 2: the parked task ran and merged'
