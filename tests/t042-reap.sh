@@ -229,3 +229,54 @@ is "$RC" 1 'a dispatch that produced nothing parks the task'
 racy="$XDG_STATE_HOME/workflow/runs/racy/racy"
 is "$(cat "$racy/t1.parked")" 'dispatch race: worker never wrote its pidfile' \
 	'and names the dispatch, not a worker that never ran'
+
+## ------------------------- workers still running for a run that is gone
+
+# Killing a coordinator does not take its workers down with it, and some of
+# them can be working tasks a later pass already settled: rebuilding merged
+# work with nothing left to gate them (friction #RF50DJXQ). reap stops those,
+# and for a live worker on a still-dispatched task it says a run can adopt it
+# rather than claiming there is nothing to collect.
+new_repo orphaned
+mem_register
+obase=$(git rev-parse HEAD)
+orundir="$XDG_STATE_HOME/workflow/runs/orphaned/ghosts"
+mkdir -p "$orundir"
+cat >"$orundir/plan.md" <<'PLAN'
+# plan: ghosts
+
+- [ ] t1 Already settled
+      Files: a/**
+      Verify: true
+- [ ] t2 Still going
+      Files: b/**
+      Verify: true
+PLAN
+printf '%s\n' "$obase" >"$orundir/base_sha"
+# The stand-in workers close every inherited fd: a child holding the runner's
+# pipe open would stall the whole suite on this file.
+setsid sleep 300 >/dev/null 2>&1 &
+opid=$!
+printf '%s\n' "$opid" >"$orundir/t1.pid"
+printf '00000000-0000-4000-8000-00000000000a\n' >"$orundir/t1.session"
+printf 'merged\n' >"$orundir/t1.state"
+printf '2\n' >"$orundir/t1.dispatches"
+setsid sleep 300 >/dev/null 2>&1 &
+opid2=$!
+printf '%s\n' "$opid2" >"$orundir/t2.pid"
+printf '00000000-0000-4000-8000-00000000000b\n' >"$orundir/t2.session"
+printf 'dispatched\n' >"$orundir/t2.state"
+printf '%s\n' "$(date +%s)" >"$orundir/t2.dispatched_at"
+printf '1\n' >"$orundir/t2.dispatches"
+
+run workflow reap
+is "$RC" 1 'reap collected something'
+like "$OUT" 't1: merged already' 'the settled task with a live worker is named'
+for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$opid" 2>/dev/null || break; sleep 0.2; done
+is "$(kill -0 "$opid" 2>/dev/null && echo alive || echo gone)" gone \
+	'and its worker was stopped'
+is "$(kill -0 "$opid2" 2>/dev/null && echo alive || echo gone)" alive \
+	'the worker on a still-dispatched task is left for adoption'
+like "$OUT" 'adopt' 'and reap says a run can adopt it, not that there is nothing to collect'
+unlike "$OUT" 'nothing to collect' 'the nothing-to-collect line stays honest'
+kill "$opid" "$opid2" 2>/dev/null

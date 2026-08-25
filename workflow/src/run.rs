@@ -679,6 +679,36 @@ impl Run {
         }
     }
 
+    /// Workers still running tasks this run has already settled. A killed
+    /// coordinator does not take its workers down with it, and a later pass
+    /// can merge or park a task while an earlier attempt's worker is still
+    /// going: that worker is building for nobody, and what it commits becomes
+    /// a leftover branch for the next run to refuse on (friction #RF50DJXQ).
+    /// Answers with how many were stopped.
+    fn stop_settled_orphans(&self) -> usize {
+        let mut stopped = 0;
+        for task in self.plan.ids() {
+            let state = self.state(&task);
+            if state == DISPATCHED || state == PENDING || state.is_empty() {
+                continue; // the reap pass and the waves own these
+            }
+            if self.field(&task, "session").is_empty() && self.worker_pid(&task).is_empty() {
+                continue; // never dispatched, so nothing can be alive
+            }
+            // `alive` claims a session nothing has seen is still launching;
+            // for a settled task that silence means gone, not launching.
+            if !self.backend.seen(&self.handle(&task)) || !self.alive(&task) {
+                continue;
+            }
+            warn(format!(
+                "task {task}: {state} already, and its worker is still going -- stopping it"
+            ));
+            self.stop(&task);
+            stopped += 1;
+        }
+        stopped
+    }
+
     fn reap_pass(&self) -> bool {
         let mut did = false;
         for task in self.dispatched() {
@@ -1382,6 +1412,7 @@ pub fn cmd_reap() -> i32 {
     };
 
     let mut did = false;
+    let mut adoptable = false;
     let root = paths::runs_root().join(project.dir_name());
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
         .into_iter()
@@ -1417,18 +1448,41 @@ pub fn cmd_reap() -> i32 {
         let Some(_lock) = lock_run(&run.dir) else {
             continue;
         };
+        if run.stop_settled_orphans() > 0 {
+            did = true;
+        }
         if run.running() == 0 {
             continue;
         }
         if run.reap_pass() {
             did = true;
         }
+        // Alive and legitimately mid-task, with no orchestrator left to gate
+        // them. Not reap's to stop -- the next run adopts them as they stand
+        // -- but saying "nothing to collect" about them sent their reader
+        // away believing no worker existed (friction #RF50DJXQ).
+        let waiting: Vec<String> = run
+            .dispatched()
+            .into_iter()
+            .filter(|t| run.alive(t))
+            .collect();
+        if !waiting.is_empty() {
+            adoptable = true;
+            warn(format!(
+                "run {}: {} worker(s) are still going with no run watching them ({}) -- run again in the checkout to adopt them",
+                run.plan.plan_id,
+                waiting.len(),
+                waiting.join(", ")
+            ));
+        }
     }
 
     if did {
         return exit::FAILED;
     }
-    warn("reap: nothing to collect");
+    if !adoptable {
+        warn("reap: nothing to collect");
+    }
     exit::OK
 }
 
