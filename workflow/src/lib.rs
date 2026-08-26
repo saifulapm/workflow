@@ -10,6 +10,7 @@
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
 //!   workflow park/resume     put work somewhere safe, and bring it back
+//!   workflow enable/disable  this repo's skills, on in a project or off
 //!   workflow settings-merge  the install's settings edit
 //!
 //! Exit codes are a contract; `workflow help` prints them.
@@ -171,6 +172,8 @@ pub fn run(cli: Cli) -> i32 {
         Command::SettingsMerge { file, dry_run } => {
             settings::cmd_settings_merge(file.as_deref(), dry_run)
         }
+        Command::Enable { global, dry_run } => settings::cmd_skills("on", global, dry_run),
+        Command::Disable { global, dry_run } => settings::cmd_skills("off", global, dry_run),
     }
 }
 

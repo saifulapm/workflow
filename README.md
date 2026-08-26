@@ -8,7 +8,7 @@ that carry it into an editor session.
   markdown outside every project repo and synced between machines.
 - `workflow/` is the gate and the orchestrator: `verify`, `lint-msg`,
   `review-needed`, plan-driven `run`, `status`, `reap`, `park`/`resume`,
-  `doctor`, and the body of the git hook stubs.
+  `enable`/`disable`, `doctor`, and the body of the git hook stubs.
 - `hub/` is a small web view over mem's question queue, served tailnet-only,
   so an open question can be answered from a phone.
 - `skills/` holds the session-facing instructions (route, plan, implement,
@@ -30,12 +30,21 @@ of them committed:
     # the four route lines, kept out of git for good:
     printf 'CLAUDE.md\n.claude/\n' >> .git/info/exclude
     $EDITOR CLAUDE.md                # copy the block from any other project
+    workflow enable                  # and this project sees the skills
 
     mem project set verify "pnpm test"          # what green means here
     mem project set review-paths "scripts/**"   # extra risky globs, optional
 
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
+
+`workflow enable` writes `.claude/settings.json`, which is how a session is
+told this project wants route, plan, implement, orchestrate, review, mem and
+unslop. They are hidden everywhere else by `workflow disable --global`, run
+once per machine: a project's settings outrank the user's, so the skills are
+off by default and on where they were asked for. That file is the only lever —
+Claude Code reads the skill list from its settings, the frontmatter switch is
+global to the skill, and no environment variable is consulted for it.
 
 ## Daily use
 
@@ -114,8 +123,8 @@ compacting.
 2. Move the knowledge worth keeping into mem: each decision or gotcha as one
    `mem save`, the current state as `mem status --set`, the next action as
    `mem handoff --set`. Skip anything the code or git log already says.
-3. Do the three-step start above (register, CLAUDE.md via info/exclude,
-   verifier).
+3. Do the three-step start above (register, CLAUDE.md via info/exclude and
+   `workflow enable`, verifier).
 4. Commit the deletions in ordinary voice; the gate is already watching.
 
 ## How the workflow improves itself

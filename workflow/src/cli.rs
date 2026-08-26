@@ -160,6 +160,46 @@ in the index. Content is restored exactly; the staged/unstaged split is not.")]
         #[arg(long)]
         force: bool,
     },
+    /// Turn this workflow's skills on in this project's Claude Code settings.
+    #[command(
+        long_about = "Turn this workflow's skills on in this project's Claude Code settings.
+
+Claude Code decides which skills a session sees from its settings files, and a
+project's file outranks the user's. So the skills this repo ships -- route,
+plan, implement, orchestrate, review, mem, unslop -- are turned off once in the
+user's file with `workflow disable --global`, and each project that wants them
+says so with this. Nothing else scopes a skill to a project: the frontmatter is
+global to the skill, and no environment variable is read for it.
+
+Writes `.claude/settings.json` at the repo's toplevel, merging into whatever is
+already there."
+    )]
+    Enable {
+        /// Write the user's settings file instead of this project's.
+        #[arg(long)]
+        global: bool,
+        /// Print what the write would say, and write nothing.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
+    /// Turn this workflow's skills off. `--global` is the gate itself.
+    #[command(
+        long_about = "Turn this workflow's skills off in a Claude Code settings file.
+
+`workflow disable --global` is the gate: it hides route, plan, implement,
+orchestrate, review, mem and unslop from every session on this machine, and
+`workflow enable` in a project takes them back for that project alone. Without
+`--global` it writes this project's file, which is how a project inside a
+machine that has no gate is kept clear of them."
+    )]
+    Disable {
+        /// Write the user's settings file instead of this project's.
+        #[arg(long)]
+        global: bool,
+        /// Print what the write would say, and write nothing.
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+    },
     /// Turn attribution off and set WORKFLOW_AGENT in a Claude Code settings file.
     #[command(name = "settings-merge")]
     SettingsMerge {
@@ -233,5 +273,10 @@ usage: workflow <command> [options]
       the body of a git hook stub; the stub's exit code is the hook's
   park [--repo <d>] [--branch <b>] [--base <sha>] [--name <l>] [--note <t>]
   resume <bundle> [--repo <d>] [--branch <b>] [--force]
+  enable [--global] [--dry-run]
+      turn this workflow's skills on in this project's Claude Code settings
+  disable [--global] [--dry-run]
+      turn them off; --global is the gate that keeps them out of every project
+      that has not said `workflow enable`
   settings-merge [<file>] [--dry-run]
 ";
