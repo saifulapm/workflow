@@ -37,6 +37,16 @@ of them committed:
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
 
+A monorepo holds one project per app beside the root project:
+
+    mem project add apps/thing               # a child project at that subdir
+    cd apps/thing && mem project set verify "pnpm test --filter=thing"
+
+Sessions inside `apps/thing` resolve to the child — its own plan, status,
+handoff, wiki and questions — and everything else in the checkout stays with
+the root. The pre-commit gate runs at the toplevel, so it always answers to
+the root project's verify.
+
 ## Which projects see the skills
 
 `workflow enable` and `workflow disable` write one key, `skillOverrides`,
