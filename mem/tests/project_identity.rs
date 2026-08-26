@@ -304,6 +304,72 @@ fn a_corrupt_path_map_is_a_cache_miss_not_an_error() {
 }
 
 #[test]
+fn a_child_project_round_trips_parent_and_subdir() {
+    let toml_text = r#"
+id = "01K2CCCCCCCCCCCCCCCCCCCCCC"
+name = "splitroute"
+remote = "github.com/me/apps"
+created = "2026-08-26T00:00:00Z"
+parent = "01K2AAAAAAAAAAAAAAAAAAAAAA"
+subdir = "apps/splitroute"
+"#;
+    let p: mem::project::Project = toml::from_str(toml_text).unwrap();
+    assert_eq!(p.parent.as_deref(), Some("01K2AAAAAAAAAAAAAAAAAAAAAA"));
+    assert_eq!(p.subdir.as_deref(), Some("apps/splitroute"));
+    let out = toml::to_string(&p).unwrap();
+    assert!(out.contains("parent = "), "{out}");
+    assert!(out.contains("subdir = "), "{out}");
+
+    // A project that never heard of children serializes neither key.
+    let root: mem::project::Project = toml::from_str(
+        r#"
+id = "01K2AAAAAAAAAAAAAAAAAAAAAA"
+name = "apps"
+created = "2026-08-26T00:00:00Z"
+"#,
+    )
+    .unwrap();
+    assert_eq!(root.parent, None);
+    assert_eq!(root.subdir, None);
+    let out = toml::to_string(&root).unwrap();
+    assert!(!out.contains("parent"), "{out}");
+    assert!(!out.contains("subdir"), "{out}");
+}
+
+#[test]
+fn children_of_returns_only_that_roots_children() {
+    let w = World::new("ident-children");
+    let store = w.store();
+    let dirs = w.dirs();
+    let a = w.repo("appsrepo", Some("git@github.com:me/appsrepo.git"));
+    let b = w.repo("otherrepo", Some("git@github.com:me/otherrepo.git"));
+    let root_a = resolve(&a, &store, &dirs, None, Mode::Write)
+        .unwrap()
+        .id()
+        .unwrap()
+        .to_string();
+    let root_b = resolve(&b, &store, &dirs, None, Mode::Write)
+        .unwrap()
+        .id()
+        .unwrap()
+        .to_string();
+
+    let registry = Registry::load(&store);
+    let mut child = registry.by_id(&root_a).unwrap().clone();
+    child.id = "01K2DDDDDDDDDDDDDDDDDDDDDD".to_string();
+    child.name = "splitroute".to_string();
+    child.parent = Some(root_a.clone());
+    child.subdir = Some("apps/splitroute".to_string());
+    mem::project::write_project(&store, &child).unwrap();
+
+    let registry = Registry::load(&store);
+    let children = registry.children_of(&root_a);
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].name, "splitroute");
+    assert!(registry.children_of(&root_b).is_empty());
+}
+
+#[test]
 fn a_checkout_reports_its_default_name_and_normalized_remote() {
     let w = World::new("ident-checkout");
     let repo = w.repo("My-Repo", Some("git@github.com:Me/My-Repo.git"));

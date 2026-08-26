@@ -41,6 +41,16 @@ pub struct Project {
     /// (friction #HK2PNTR4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_paths: Option<String>,
+    /// The root project this one lives inside, by id. Present only on a child
+    /// project (`mem project add`): a monorepo's root project carries neither
+    /// this nor `subdir`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Where the child lives, relative to the checkout toplevel,
+    /// `/`-separated. Synced inside project.toml so a fresh machine resolves
+    /// the child through the parent's remote; paths.toml stays root-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdir: Option<String>,
 }
 
 impl Project {
@@ -116,6 +126,15 @@ impl Registry {
 
     pub fn name_taken(&self, name: &str) -> bool {
         self.projects.iter().any(|p| p.matches_name(name))
+    }
+
+    /// The children of a root project, i.e. the subdir projects registered
+    /// inside its checkout.
+    pub fn children_of(&self, root_id: &str) -> Vec<&Project> {
+        self.projects
+            .iter()
+            .filter(|p| p.parent.as_deref() == Some(root_id))
+            .collect()
     }
 
     /// `workflow`, then `workflow-2`, `workflow-3`… A suffixed project keeps
@@ -312,6 +331,8 @@ pub fn register(
         created: Timestamp::now(),
         verify: None,
         review_paths: None,
+        parent: None,
+        subdir: None,
     };
     write_project(store, &project)?;
     std::fs::create_dir_all(store.project_items(&id))

@@ -82,6 +82,8 @@ impl World {
                 created: "2026-08-01T00:00:00Z".parse().unwrap(),
                 verify: None,
                 review_paths: None,
+                parent: None,
+                subdir: None,
             },
         )
         .unwrap();
