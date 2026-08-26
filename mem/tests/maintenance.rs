@@ -707,3 +707,89 @@ fn reindex_reports_what_it_did() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["indexed"], serde_json::json!(1));
 }
+
+#[test]
+fn doctor_flags_broken_child_projects_and_context_stays_separated() {
+    let w = World::new("maint-children");
+    let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
+    std::fs::create_dir_all(repo.join("apps/x")).unwrap();
+    assert_eq!(code(&mem(&w, &repo, &["project", "add", "apps/x"])), 0);
+
+    // The healthy pair draws no child finding, and each side's write lands in
+    // its own context.
+    assert_eq!(code(&mem(&w, &repo, &["log", "root work"])), 0);
+    assert_eq!(
+        code(&mem(&w, &repo.join("apps/x"), &["log", "child work"])),
+        0
+    );
+    let ctx = stdout(&mem(&w, &repo.join("apps/x"), &["context"]));
+    assert!(ctx.contains("child work"), "{ctx}");
+    assert!(!ctx.contains("root work"), "{ctx}");
+    let ctx = stdout(&mem(&w, &repo, &["context"]));
+    assert!(ctx.contains("root work"), "{ctx}");
+    assert!(!ctx.contains("child work"), "{ctx}");
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let checks: Vec<&str> = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["check"].as_str().unwrap())
+        .collect();
+    assert!(!checks.contains(&"child"), "{v}");
+
+    // Break all three ways: an orphan parent, a nested child, and a subdir
+    // that is gone from a checkout this machine has.
+    let store = w.store();
+    let registry = mem::project::Registry::load(&store);
+    let root_id = registry
+        .projects
+        .iter()
+        .find(|p| p.name == "mono")
+        .unwrap()
+        .id
+        .clone();
+    let child = registry.projects.iter().find(|p| p.name == "x").unwrap();
+
+    let mut orphan = child.clone();
+    orphan.id = "01K2BBBBBBBBBBBBBBBBBBBBBB".to_string();
+    orphan.name = "orphan".to_string();
+    orphan.parent = Some("01K2ZZZZZZZZZZZZZZZZZZZZZZ".to_string());
+    mem::project::write_project(&store, &orphan).unwrap();
+
+    let mut nested = child.clone();
+    nested.id = "01K2CCCCCCCCCCCCCCCCCCCCCC".to_string();
+    nested.name = "nested".to_string();
+    nested.parent = Some(child.id.clone());
+    mem::project::write_project(&store, &nested).unwrap();
+
+    let mut gone = child.clone();
+    gone.id = "01K2DDDDDDDDDDDDDDDDDDDDDD".to_string();
+    gone.name = "gone".to_string();
+    gone.parent = Some(root_id);
+    gone.subdir = Some("apps/vanished".to_string());
+    mem::project::write_project(&store, &gone).unwrap();
+
+    let out = mem(&w, &w.plain_dir("cwd2"), &["doctor", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let details: Vec<String> = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["check"] == "child")
+        .map(|f| f["detail"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        details.iter().any(|d| d.contains("orphan")),
+        "orphan parent: {v}"
+    );
+    assert!(
+        details.iter().any(|d| d.contains("nested")),
+        "child of a child: {v}"
+    );
+    assert!(
+        details.iter().any(|d| d.contains("gone")),
+        "missing subdir: {v}"
+    );
+}

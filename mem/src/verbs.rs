@@ -1502,6 +1502,50 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
         findings.extend(wiki_findings(app, p));
     }
 
+    // Child projects: a parent that is gone, a chain deeper than the one
+    // level the contract allows, and a subdir vanished from a checkout this
+    // machine has. A checkout absent here is no finding — the path map only
+    // speaks for this machine.
+    let path_map = crate::project::PathMap::load(&app.dirs.paths_toml());
+    for p in &registry.projects {
+        let Some(parent_id) = p.parent.as_deref() else {
+            continue;
+        };
+        let Some(parent) = registry.by_id(parent_id) else {
+            findings.push(finding(
+                "child",
+                format!("{}'s parent {parent_id} is no project the store knows", p.name),
+            ));
+            continue;
+        };
+        if parent.parent.is_some() {
+            findings.push(finding(
+                "child",
+                format!("{} is a child of the child {}", p.name, parent.name),
+            ));
+        }
+        let Some(subdir) = p.subdir.as_deref() else {
+            findings.push(finding(
+                "child",
+                format!("{} names a parent but no subdir", p.name),
+            ));
+            continue;
+        };
+        for common in path_map.projects.get(parent_id).into_iter().flatten() {
+            let common = std::path::Path::new(common);
+            if common.file_name() == Some(std::ffi::OsStr::new(".git"))
+                && let Some(top) = common.parent()
+                && top.is_dir()
+                && !top.join(subdir).is_dir()
+            {
+                findings.push(finding(
+                    "child",
+                    format!("{}'s subdir {subdir} is missing from {}", p.name, top.display()),
+                ));
+            }
+        }
+    }
+
     for path in app.store.item_paths() {
         match crate::store::read_item(&path) {
             Ok(item) => {
