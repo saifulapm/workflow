@@ -228,6 +228,17 @@ pub enum ProjectCommand {
     /// Print the working directory's project — id, name and checkout root.
     /// Exit 1 when this directory belongs to no project mem knows.
     Current,
+    /// Register a subdirectory of this checkout as its own project, so a
+    /// monorepo holds one project per app beside the root project. Sessions
+    /// in that subdirectory then resolve to the child; everything else in
+    /// the checkout stays with the root.
+    Add {
+        /// The directory, relative to the checkout toplevel.
+        subdir: String,
+        /// The project name; the subdirectory's basename when absent.
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Record something about this project in the store.
     Set {
         #[command(subcommand)]

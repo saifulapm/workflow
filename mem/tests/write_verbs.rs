@@ -528,3 +528,82 @@ fn project_set_review_paths_records_the_globs_and_project_current_reports_them()
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     assert_eq!(v["review_paths"], serde_json::json!("app/**"));
 }
+
+#[test]
+fn project_add_registers_a_child_the_subdir_then_owns() {
+    let w = World::new("write-child");
+    let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
+    std::fs::create_dir_all(repo.join("apps/x")).unwrap();
+
+    let out = mem(&w, &repo, &["project", "add", "apps/x", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v = json(&out);
+    assert_eq!(v["name"], serde_json::json!("x"));
+    assert_eq!(v["subdir"], serde_json::json!("apps/x"));
+
+    let registry = mem::project::Registry::load(&w.store());
+    assert_eq!(registry.projects.len(), 2, "root and child");
+    let root = registry.projects.iter().find(|p| p.name == "mono").unwrap();
+    let child = registry.projects.iter().find(|p| p.name == "x").unwrap();
+    assert_eq!(child.parent.as_deref(), Some(root.id.as_str()));
+    assert_eq!(child.subdir.as_deref(), Some("apps/x"));
+    assert_eq!(child.remote, root.remote);
+    assert!(w.store().project_items(&child.id).is_dir());
+
+    // current in the subdir answers as the child, keeps the checkout root,
+    // and says where the child lives.
+    let v = json(&mem(&w, &repo.join("apps/x"), &["project", "current", "--json"]));
+    assert_eq!(v["id"], serde_json::json!(child.id));
+    assert_eq!(v["name"], serde_json::json!("x"));
+    assert_eq!(v["subdir"], serde_json::json!("apps/x"));
+    assert_eq!(
+        v["root"],
+        serde_json::json!(mem::git::canonical(&repo).to_string_lossy())
+    );
+
+    // A write from the subdir lands on the child, one from the root on the root.
+    let v = json(&mem(&w, &repo.join("apps/x"), &["log", "child work", "--json"]));
+    let item = mem::store::read_item(std::path::Path::new(v["path"].as_str().unwrap())).unwrap();
+    assert_eq!(item.meta.project.as_deref(), Some("x"));
+    let v = json(&mem(&w, &repo, &["log", "root work", "--json"]));
+    let item = mem::store::read_item(std::path::Path::new(v["path"].as_str().unwrap())).unwrap();
+    assert_eq!(item.meta.project.as_deref(), Some("mono"));
+}
+
+#[test]
+fn project_add_takes_a_name_and_refuses_nonsense() {
+    let w = World::new("write-child-refuse");
+    let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
+    std::fs::create_dir_all(repo.join("apps/x")).unwrap();
+
+    // A trailing slash is spelling, not a different subdir; --name overrides.
+    let out = mem(
+        &w,
+        &repo,
+        &["project", "add", "apps/x/", "--name", "renamed", "--json"],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(json(&out)["name"], serde_json::json!("renamed"));
+    assert_eq!(json(&out)["subdir"], serde_json::json!("apps/x"));
+
+    for (args, why) in [
+        (vec!["project", "add", "apps/x"], "already registered"),
+        (vec!["project", "add", "apps/missing"], "no such directory"),
+        (vec!["project", "add", "/etc"], "absolute path"),
+        (vec!["project", "add", "apps/../apps/x"], "dot-dot"),
+        (vec!["project", "add", "."], "the root is not a child"),
+    ] {
+        let out = mem(&w, &repo, &args);
+        assert_ne!(code(&out), 0, "{why}: {}", stdout(&out));
+    }
+    assert_eq!(
+        mem::project::Registry::load(&w.store()).projects.len(),
+        2,
+        "refusals register nothing"
+    );
+
+    // Outside a checkout there is nothing to add to.
+    let plain = w.plain_dir("loose");
+    let out = mem(&w, &plain, &["project", "add", "x"]);
+    assert_ne!(code(&out), 0);
+}

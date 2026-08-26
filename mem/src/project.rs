@@ -388,6 +388,88 @@ pub fn register(
     Ok(project)
 }
 
+/// `apps/x/`, `./apps/x` and `apps/x` are one subdir. Absolute paths and
+/// `..` are refused outright, and so is the empty result: the root is not a
+/// child of itself.
+pub fn normalize_subdir(raw: &str) -> Result<String> {
+    if Path::new(raw).is_absolute() {
+        return Err(exit::usage(format!(
+            "'{raw}' is absolute — name the directory relative to the checkout toplevel"
+        )));
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in raw.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                return Err(exit::usage(format!(
+                    "'{raw}' leaves the checkout — no '..' in a subdir"
+                )));
+            }
+            p => parts.push(p),
+        }
+    }
+    if parts.is_empty() {
+        return Err(exit::usage(
+            "the toplevel already is the root project — name a subdirectory".to_string(),
+        ));
+    }
+    Ok(parts.join("/"))
+}
+
+/// Registers `subdir` of the checkout as a child of `root`: same remote,
+/// parent set, no paths.toml entry — a child is found from the working
+/// directory through its parent, never pinned to a path.
+pub fn register_child(
+    store: &Store,
+    registry: &Registry,
+    root: &Project,
+    checkout: &Checkout,
+    subdir: &str,
+    wanted_name: Option<&str>,
+) -> Result<Project> {
+    let subdir = normalize_subdir(subdir)?;
+    if !checkout.toplevel.join(&subdir).is_dir() {
+        return Err(exit::not_found(format!(
+            "no directory '{subdir}' under {}",
+            checkout.toplevel.display()
+        )));
+    }
+    if let Some(taken) = registry
+        .children_of(&root.id)
+        .into_iter()
+        .find(|c| c.subdir.as_deref() == Some(subdir.as_str()))
+    {
+        return Err(exit::usage(format!(
+            "'{subdir}' is already the project '{}'",
+            taken.name
+        )));
+    }
+    let wanted = wanted_name
+        .map(str::to_string)
+        .unwrap_or_else(|| subdir.rsplit('/').next().unwrap_or(&subdir).to_string());
+    let name = registry.free_name(&wanted);
+    let project = Project {
+        id: ShortIds::scan(&store.root).mint().to_string(),
+        name: name.clone(),
+        remote: root.remote.clone(),
+        aliases: if name == wanted {
+            Vec::new()
+        } else {
+            vec![wanted]
+        },
+        created: Timestamp::now(),
+        verify: None,
+        review_paths: None,
+        parent: Some(root.id.clone()),
+        subdir: Some(subdir),
+    };
+    write_project(store, &project)?;
+    std::fs::create_dir_all(store.project_items(&project.id))
+        .with_context(|| format!("creating items dir for {name}"))?;
+    Ok(project)
+}
+
 pub fn write_project(store: &Store, project: &Project) -> Result<PathBuf> {
     let path = store.project_toml(&project.id);
     let text = toml::to_string(project).context("serializing project.toml")?;

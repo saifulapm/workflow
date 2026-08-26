@@ -96,6 +96,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         cli::Command::Projects => verbs::projects(&app),
         cli::Command::Project { command } => match command {
             cli::ProjectCommand::Current => verbs::project_current(&app),
+            cli::ProjectCommand::Add { subdir, name } => {
+                verbs::project_add(&app, subdir, name.as_deref())
+            }
             cli::ProjectCommand::Set { command } => match command {
                 cli::ProjectSetCommand::Verify { cmd } => {
                     verbs::project_set(&app, "verify", cmd)

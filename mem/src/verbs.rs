@@ -271,12 +271,18 @@ pub fn project_current(app: &App) -> Result<i32> {
     let declared = Registry::load(&app.store).by_id(id).cloned();
     let verify = declared.as_ref().and_then(|p| p.verify.clone());
     let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
+    // A child project keeps the checkout as its root — run dirs and worktrees
+    // key on the checkout — and says where inside it the child lives.
+    let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
     if app.json {
         let mut doc = json!({
             "id": id,
             "name": name,
             "root": root.as_ref().map(|p| p.to_string_lossy()),
         });
+        if let Some(subdir) = &subdir {
+            doc["subdir"] = json!(subdir);
+        }
         if let Some(verify) = &verify {
             doc["verify"] = json!(verify);
         }
@@ -290,12 +296,60 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(root) = &root {
             println!("root  {}", root.display());
         }
+        if let Some(subdir) = &subdir {
+            println!("subdir  {subdir}");
+        }
         if let Some(verify) = &verify {
             println!("verify  {verify}");
         }
         if let Some(paths) = &review_paths {
             println!("review-paths  {paths}");
         }
+    }
+    Ok(exit::OK)
+}
+
+/// `mem project add <subdir>` — a child project inside this checkout. The
+/// root is resolved from the toplevel and registered first when the checkout
+/// is new, so `add` works as the very first mem verb in a monorepo — and run
+/// from inside one child it still hangs the new child off the root.
+pub fn project_add(app: &App, subdir: &str, name: Option<&str>) -> Result<i32> {
+    let Some(checkout) = crate::git::Checkout::detect(&app.cwd) else {
+        return Err(exit::usage(
+            "not a git checkout — a child project lives inside one".to_string(),
+        ));
+    };
+    let identity = crate::project::resolve(
+        &checkout.toplevel,
+        &app.store,
+        &app.dirs,
+        None,
+        Mode::Write,
+    )?;
+    let registry = Registry::load(&app.store);
+    let root = identity
+        .id()
+        .and_then(|id| registry.by_id(id))
+        .expect("a write in a checkout resolves to a project");
+    let child =
+        crate::project::register_child(&app.store, &registry, root, &checkout, subdir, name)?;
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "id": child.id,
+                "name": child.name,
+                "subdir": child.subdir,
+                "parent": root.id,
+            }))?
+        );
+    } else if !app.quiet {
+        println!(
+            "{} ({}) registered under {}",
+            child.name,
+            child.subdir.as_deref().unwrap_or("?"),
+            root.name
+        );
     }
     Ok(exit::OK)
 }
