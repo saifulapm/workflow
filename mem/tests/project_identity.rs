@@ -369,6 +369,106 @@ fn children_of_returns_only_that_roots_children() {
     assert!(registry.children_of(&root_b).is_empty());
 }
 
+/// Registers `root_id`'s child named `name` at `subdir`, the way
+/// `mem project add` will: same remote, parent set, subdir recorded.
+fn add_child(store: &Store, root_id: &str, child_id: &str, name: &str, subdir: &str) {
+    let registry = Registry::load(store);
+    let mut child = registry.by_id(root_id).unwrap().clone();
+    child.id = child_id.to_string();
+    child.name = name.to_string();
+    child.parent = Some(root_id.to_string());
+    child.subdir = Some(subdir.to_string());
+    mem::project::write_project(store, &child).unwrap();
+    std::fs::create_dir_all(store.project_items(child_id)).unwrap();
+}
+
+#[test]
+fn the_deepest_subdir_child_wins_and_the_root_takes_the_rest() {
+    let w = World::new("ident-subdir");
+    let store = w.store();
+    let dirs = w.dirs();
+    let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
+    let root = resolve(&repo, &store, &dirs, None, Mode::Write)
+        .unwrap()
+        .id()
+        .unwrap()
+        .to_string();
+    add_child(&store, &root, "01K2DDDDDDDDDDDDDDDDDDDDDD", "x", "apps/x");
+    add_child(&store, &root, "01K2EEEEEEEEEEEEEEEEEEEEEE", "x2", "apps/x2");
+
+    for dir in ["apps/x", "apps/x/deep/er"] {
+        let cwd = repo.join(dir);
+        std::fs::create_dir_all(&cwd).unwrap();
+        let got = resolve(&cwd, &store, &dirs, None, Mode::Read).unwrap();
+        assert_eq!(got.name(), Some("x"), "{dir}");
+    }
+
+    // A component boundary, not a string prefix: apps/x2 is not inside apps/x.
+    let x2 = repo.join("apps/x2/nested");
+    std::fs::create_dir_all(&x2).unwrap();
+    assert_eq!(
+        resolve(&x2, &store, &dirs, None, Mode::Read).unwrap().name(),
+        Some("x2")
+    );
+    let xy = repo.join("apps/xy");
+    std::fs::create_dir_all(&xy).unwrap();
+    assert_eq!(
+        resolve(&xy, &store, &dirs, None, Mode::Read).unwrap().name(),
+        Some("mono"),
+        "apps/xy shares a string prefix with apps/x but no component"
+    );
+
+    // The root everywhere else, writes included: no accidental registration.
+    assert_eq!(
+        resolve(&repo, &store, &dirs, None, Mode::Write)
+            .unwrap()
+            .name(),
+        Some("mono")
+    );
+    assert_eq!(Registry::load(&store).projects.len(), 3);
+
+    // A write from inside the child's subdir belongs to the child.
+    let deep = repo.join("apps/x/src");
+    std::fs::create_dir_all(&deep).unwrap();
+    assert_eq!(
+        resolve(&deep, &store, &dirs, None, Mode::Write)
+            .unwrap()
+            .name(),
+        Some("x")
+    );
+}
+
+#[test]
+fn a_fresh_machine_resolves_a_child_through_the_parents_remote() {
+    let w = World::new("ident-subdir-remote");
+    let store = w.store();
+    let dirs = w.dirs();
+    let first = w.repo("mono", Some("git@github.com:me/mono.git"));
+    let root = resolve(&first, &store, &dirs, None, Mode::Write)
+        .unwrap()
+        .id()
+        .unwrap()
+        .to_string();
+    add_child(&store, &root, "01K2DDDDDDDDDDDDDDDDDDDDDD", "x", "apps/x");
+
+    // Another checkout of the same remote, no paths.toml entry: the ladder
+    // goes by remote, and it must land on the ROOT before picking the child.
+    let clone = w.repo("mono-clone", Some("https://github.com/me/mono"));
+    let sub = clone.join("apps/x");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::remove_file(dirs.paths_toml()).unwrap();
+    let got = resolve(&sub, &store, &dirs, None, Mode::Read).unwrap();
+    assert_eq!(got.name(), Some("x"));
+
+    // The remote hit recorded the ROOT project's path, not the child's.
+    let map = PathMap::load(&dirs.paths_toml());
+    assert!(map.projects.contains_key(&root), "{map:?}");
+    assert!(
+        !map.projects.contains_key("01K2DDDDDDDDDDDDDDDDDDDDDD"),
+        "paths.toml stays root-only: {map:?}"
+    );
+}
+
 #[test]
 fn a_checkout_reports_its_default_name_and_normalized_remote() {
     let w = World::new("ident-checkout");

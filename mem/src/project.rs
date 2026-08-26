@@ -90,10 +90,19 @@ impl Registry {
         self.projects.iter().find(|p| p.id == id)
     }
 
+    /// A child shares its parent's remote, so a remote lookup answers with the
+    /// root: the caller picks a child from the working directory, not from
+    /// here. Only when no parent-less project has the remote does a child
+    /// match count at all.
     pub fn by_remote(&self, remote: &str) -> Option<&Project> {
         self.projects
             .iter()
-            .find(|p| p.remote.as_deref() == Some(remote))
+            .find(|p| p.remote.as_deref() == Some(remote) && p.parent.is_none())
+            .or_else(|| {
+                self.projects
+                    .iter()
+                    .find(|p| p.remote.as_deref() == Some(remote))
+            })
     }
 
     /// A name matches a project's name first; aliases only get a say when no
@@ -278,6 +287,7 @@ pub fn resolve(
     if let Some(id) = map.lookup(&checkout.common_dir)
         && let Some(p) = registry.by_id(id)
     {
+        let p = child_for(&registry, p, &checkout, cwd).unwrap_or(p);
         return Ok(Identity::Known {
             id: p.id.clone(),
             name: p.name.clone(),
@@ -285,13 +295,19 @@ pub fn resolve(
     }
 
     if let Some(remote) = &checkout.remote
-        && let Some(p) = registry.by_remote(remote)
+        && let Some(root) = registry.by_remote(remote)
     {
-        let (id, name) = (p.id.clone(), p.name.clone());
+        // paths.toml stays root-only: a child is picked per working
+        // directory, never pinned to the checkout.
+        let root_id = root.id.clone();
         let _ = update_path_map(&map_path, |m| {
-            m.record(&id, &checkout.common_dir);
+            m.record(&root_id, &checkout.common_dir);
         });
-        return Ok(Identity::Known { id, name });
+        let p = child_for(&registry, root, &checkout, cwd).unwrap_or(root);
+        return Ok(Identity::Known {
+            id: p.id.clone(),
+            name: p.name.clone(),
+        });
     }
 
     match mode {
@@ -306,6 +322,35 @@ pub fn resolve(
             })
         }
     }
+}
+
+/// The child of `root` that owns `cwd`, by the deepest `subdir` that is a
+/// whole-component prefix of cwd relative to the toplevel. None means the
+/// root keeps it. `apps/x` does not own `apps/xy`: components, not bytes.
+fn child_for<'a>(
+    registry: &'a Registry,
+    root: &Project,
+    checkout: &Checkout,
+    cwd: &Path,
+) -> Option<&'a Project> {
+    let cwd = crate::git::canonical(cwd);
+    let rel: Vec<&std::ffi::OsStr> = cwd.strip_prefix(&checkout.toplevel).ok()?.iter().collect();
+    let mut best: Option<(usize, &Project)> = None;
+    for child in registry.children_of(&root.id) {
+        let Some(subdir) = child.subdir.as_deref() else {
+            continue;
+        };
+        let comps: Vec<&str> = subdir.split('/').filter(|c| !c.is_empty()).collect();
+        let owns = comps.len() <= rel.len()
+            && comps
+                .iter()
+                .zip(&rel)
+                .all(|(c, r)| std::ffi::OsStr::new(c) == *r);
+        if owns && best.is_none_or(|(depth, _)| comps.len() > depth) {
+            best = Some((comps.len(), child));
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// Creates `projects/<id>/project.toml` and records the checkout locally.
