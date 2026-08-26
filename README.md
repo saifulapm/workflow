@@ -30,7 +30,6 @@ of them committed:
     # the four route lines, kept out of git for good:
     printf 'CLAUDE.md\n.claude/\n' >> .git/info/exclude
     $EDITOR CLAUDE.md                # copy the block from any other project
-    workflow enable                  # and this project sees the skills
 
     mem project set verify "pnpm test"          # what green means here
     mem project set review-paths "scripts/**"   # extra risky globs, optional
@@ -38,13 +37,23 @@ of them committed:
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
 
-`workflow enable` writes `.claude/settings.json`, which is how a session is
-told this project wants route, plan, implement, orchestrate, review, mem and
-unslop. They are hidden everywhere else by `workflow disable --global`, run
-once per machine: a project's settings outrank the user's, so the skills are
-off by default and on where they were asked for. That file is the only lever —
-Claude Code reads the skill list from its settings, the frontmatter switch is
-global to the skill, and no environment variable is consulted for it.
+## Which projects see the skills
+
+`workflow enable` and `workflow disable` write one key, `skillOverrides`,
+naming route, plan, implement, orchestrate, review, mem and unslop one by one.
+`--global` writes the user's settings file; without it, `.claude/settings.json`
+at the repo's toplevel, which outranks the user's. So the switch runs either
+way round:
+
+    workflow enable --global     # the skills are there by default
+    workflow disable             # except in this project
+
+    workflow disable --global    # or: nowhere by default
+    workflow enable              # except in this project
+
+Settings are the only lever. Claude Code builds the skill list from its
+settings files, the frontmatter switch is global to the skill, and no
+environment variable is consulted for it.
 
 ## Daily use
 
@@ -123,8 +132,8 @@ compacting.
 2. Move the knowledge worth keeping into mem: each decision or gotcha as one
    `mem save`, the current state as `mem status --set`, the next action as
    `mem handoff --set`. Skip anything the code or git log already says.
-3. Do the three-step start above (register, CLAUDE.md via info/exclude and
-   `workflow enable`, verifier).
+3. Do the three-step start above (register, CLAUDE.md via info/exclude,
+   verifier).
 4. Commit the deletions in ordinary voice; the gate is already watching.
 
 ## How the workflow improves itself
