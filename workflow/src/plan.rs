@@ -15,6 +15,14 @@ pub struct Task {
     pub files: Option<String>,
     pub verify: Option<String>,
     pub done: Option<String>,
+    /// Paths the worker reads before editing anything.
+    pub read: Option<String>,
+    /// Interfaces consumed from other tasks or the tree, exact signatures.
+    pub uses: Option<String>,
+    /// Interfaces this task produces that other tasks rely on.
+    pub gives: Option<String>,
+    /// One analog to copy the shape of: `path` or `path:12-25`.
+    pub pattern: Option<String>,
     pub checked: bool,
     /// The task's own lines, verbatim: the brief quotes them back.
     #[serde(skip)]
@@ -226,6 +234,10 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                 "Files" => &mut plan.tasks[idx].files,
                 "Verify" => &mut plan.tasks[idx].verify,
                 "Done" => &mut plan.tasks[idx].done,
+                "Read" => &mut plan.tasks[idx].read,
+                "Uses" => &mut plan.tasks[idx].uses,
+                "Gives" => &mut plan.tasks[idx].gives,
+                "Pattern" => &mut plan.tasks[idx].pattern,
                 other => {
                     warn(format!("plan: line {n}: unknown key '{other}' ignored"));
                     continue;
@@ -445,6 +457,38 @@ mod tests {
             ),
         ] {
             assert!(parse(text, true).is_none(), "{name} should be refused");
+        }
+    }
+
+    #[test]
+    fn the_middle_tier_keys_parse_into_their_fields() {
+        let p = parse(
+            "# plan: p\n\n- [ ] t1 Wire the service\n      Files: src/**\n      Verify: true\n      \
+             Read: src/lib.rs docs/api.md\n      \
+             Uses: fn price(basket: &Basket) -> Cents\n      \
+             Gives: fn total(basket: &Basket) -> Cents\n      \
+             Pattern: src/old.rs:12-25\n",
+            true,
+        )
+        .expect("the middle-tier keys parse");
+        let t = p.get("t1").unwrap();
+        assert_eq!(t.read.as_deref(), Some("src/lib.rs docs/api.md"));
+        assert_eq!(t.uses.as_deref(), Some("fn price(basket: &Basket) -> Cents"));
+        assert_eq!(t.gives.as_deref(), Some("fn total(basket: &Basket) -> Cents"));
+        assert_eq!(t.pattern.as_deref(), Some("src/old.rs:12-25"));
+        // The brief quotes the block verbatim, so the keys reach the worker.
+        assert!(t.block.contains("Uses: fn price"));
+        assert!(t.block.contains("Pattern: src/old.rs:12-25"));
+    }
+
+    #[test]
+    fn a_duplicate_middle_tier_key_is_refused() {
+        for key in ["Read", "Uses", "Gives", "Pattern"] {
+            let text = format!(
+                "# plan: p\n\n- [ ] t1 Twice over\n      Files: x\n      Verify: true\n      \
+                 {key}: a\n      {key}: b\n"
+            );
+            assert!(parse(&text, true).is_none(), "two {key}: lines should be refused");
         }
     }
 

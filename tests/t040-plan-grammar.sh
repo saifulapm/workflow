@@ -144,6 +144,25 @@ is "$RC" 1 'a duplicate key is a hard error'
 plan_file <<'EOF'
 # plan: p
 
+- [ ] t1 Wire the service
+      Files: src/**
+      Verify: true
+      Read: src/lib.rs docs/api.md
+      Uses: fn price(basket: &Basket) -> Cents
+      Gives: fn total(basket: &Basket) -> Cents
+      Pattern: src/old.rs:12-25
+EOF
+parse
+is "$RC" 0 'the middle-tier keys parse'
+is "$(task_field t1 read)" 'src/lib.rs docs/api.md' 'Read: round-trips'
+is "$(task_field t1 uses)" 'fn price(basket: &Basket) -> Cents' 'Uses: round-trips'
+is "$(task_field t1 gives)" 'fn total(basket: &Basket) -> Cents' 'Gives: round-trips'
+is "$(task_field t1 pattern)" 'src/old.rs:12-25' 'Pattern: round-trips'
+unlike "$OUT" 'unknown key' 'none of the four warns as unknown'
+
+plan_file <<'EOF'
+# plan: p
+
 - [ ] t1 An unknown key
       Files: x
       Verify: true
