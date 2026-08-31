@@ -32,6 +32,17 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
         if let Some(msg) = lib_test_without_lib(&t.id, verify, root) {
             f.refusals.push(msg);
         }
+        match deferral(&t.block) {
+            Some(Deferral::Refuse(p)) => f.refusals.push(format!(
+                "plan: task {}: '{p}' defers work this plan should finish -- cut the scope honestly or plan the work",
+                t.id
+            )),
+            Some(Deferral::Warn(p)) => f.warnings.push(format!(
+                "plan: task {}: '{p}' -- fine if the task removes one, a deferral if it ships one",
+                t.id
+            )),
+            None => {}
+        }
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
         for p in &patterns {
             if matches_nothing(&git, root, p) {
@@ -117,9 +128,95 @@ fn runs_tests(verify: &str) -> bool {
     verify.contains("test")
 }
 
+/// What a deferral idiom in a task block means for the plan.
+#[derive(Debug)]
+pub enum Deferral {
+    /// The plan defers work it should finish; not ready to dispatch.
+    Refuse(&'static str),
+    /// The word can name deferred work or work that removes it; a human reads.
+    Warn(&'static str),
+}
+
+/// Scope-reduction language is how a plan quietly ships less than was asked
+/// (research/reports/11): the idioms below are refused outright, while a bare
+/// "placeholder" or "stub" only warns because a removal task legitimately
+/// names the thing it deletes. Matches are case-insensitive and stop at word
+/// boundaries, so "for nowhere" and "stubborn" pass.
+pub fn deferral(block: &str) -> Option<Deferral> {
+    const REFUSE: [&str; 5] = [
+        "tbd",
+        "for now",
+        "will be wired later",
+        "implement later",
+        "simplified version",
+    ];
+    const WARN: [&str; 2] = ["placeholder", "stub"];
+    let lower = block.to_lowercase();
+    for p in REFUSE {
+        if found_whole(&lower, p) {
+            return Some(Deferral::Refuse(p));
+        }
+    }
+    for p in WARN {
+        if found_whole(&lower, p) {
+            return Some(Deferral::Warn(p));
+        }
+    }
+    None
+}
+
+/// The phrase appears with nothing word-like touching either end.
+fn found_whole(haystack: &str, phrase: &str) -> bool {
+    let mut from = 0;
+    while let Some(at) = haystack[from..].find(phrase) {
+        let start = from + at;
+        let end = start + phrase.len();
+        let before = haystack[..start].chars().next_back();
+        let after = haystack[end..].chars().next();
+        let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        if boundary(before) && boundary(after) {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferral_idioms_are_refused_and_a_bare_placeholder_only_warns() {
+        for block in [
+            "- [ ] t1 Ship the simplified version of pricing\n",
+            "- [ ] t1 Wire the route\n      Done: static for now\n",
+            "- [ ] t1 Auth\n      Done: TBD\n",
+            "- [ ] t1 The page\n      Done: the button will be wired later\n",
+            "- [ ] t1 The page\n      Done: render it, implement later the rest\n",
+        ] {
+            assert!(
+                matches!(deferral(block), Some(Deferral::Refuse(_))),
+                "{block:?} should be refused"
+            );
+        }
+        for block in [
+            "- [ ] t1 Remove the placeholder hub page\n",
+            "- [ ] t1 Drop the stub route\n",
+        ] {
+            assert!(
+                matches!(deferral(block), Some(Deferral::Warn(_))),
+                "{block:?} should only warn"
+            );
+        }
+        for block in [
+            "- [ ] t1 Extract cart pricing into a service\n      Done: totals identical\n",
+            "- [ ] t1 A stubborn cache is invalidated\n", // 'stub' inside a word is not a stub
+            "- [ ] t1 Reach for nowhere-else state\n",    // nor is 'for now' inside one
+        ] {
+            assert!(deferral(block).is_none(), "{block:?} is honest work");
+        }
+    }
 
     #[test]
     fn a_test_run_is_recognised_by_the_word_and_true_is_not() {
