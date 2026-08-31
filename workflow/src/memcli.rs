@@ -81,6 +81,22 @@ pub fn project_current() -> Option<Project> {
     if p.id.is_empty() { None } else { Some(p) }
 }
 
+/// The worker backend this project declared with `mem project set backend`.
+///
+/// Read straight out of the document rather than modelled on [`Project`],
+/// which is how mem holds it: mem stores the choice and hands it to whoever
+/// dispatches the work, and nothing else in the workflow asks. `None` covers
+/// both an unregistered checkout and one that never chose.
+pub fn project_backend() -> Option<String> {
+    let (ok, out) = capture(&["project", "current", "--json"])?;
+    if !ok {
+        return None;
+    }
+    let doc: serde_json::Value = serde_json::from_str(&out).ok()?;
+    let name = doc.get("backend")?.as_str()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// Does this directory belong to a project mem knows? The hook's half of the
 /// fire condition, and no JSON is needed to answer it.
 pub fn knows_this_checkout() -> bool {

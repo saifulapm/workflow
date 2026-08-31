@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::backend::{ClaudeBackend, Dispatch, Handle, WorkerBackend};
+use crate::backend_amx::AmxBackend;
 use crate::gitcmd::Git;
 use crate::plan::{Plan, Task};
 use crate::{brief, exit, lint, memcli, ownership, paths, plan, repo, sys, warn};
@@ -1163,6 +1164,37 @@ fn timings() -> (usize, i64, i64, f64) {
     (max_workers as usize, deadline, grace, poll)
 }
 
+/// Which worker a run dispatches onto, by name: `WORKFLOW_BACKEND` first, so
+/// one run can be moved without touching what the project stands for; then the
+/// project's own key, which is where the standing choice lives; then claude,
+/// which is what every project ran on before there was a choice.
+fn backend_name<'a>(asked: Option<&'a str>, declared: Option<&'a str>) -> &'a str {
+    [asked, declared]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|name| !name.is_empty())
+        .unwrap_or("claude")
+}
+
+/// mem's `project set backend` takes a closed list, so a declared name is
+/// always one of these. `WORKFLOW_BACKEND` is free text and a typo in it must
+/// not silently dispatch onto the other worker.
+fn backend_for() -> Box<dyn WorkerBackend> {
+    let asked = std::env::var("WORKFLOW_BACKEND").ok();
+    let declared = memcli::project_backend();
+    match backend_name(asked.as_deref(), declared.as_deref()) {
+        "amx" => Box::new(AmxBackend),
+        "claude" => Box::new(ClaudeBackend),
+        other => {
+            warn(format!(
+                "backend '{other}' is not one this workflow has -- dispatching onto claude"
+            ));
+            Box::new(ClaudeBackend)
+        }
+    }
+}
+
 fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let (max_workers, deadline_s, kill_grace_s, poll) = timings();
     let wt_root = paths::worktrees_root().join(project).join(&plan.plan_id);
@@ -1180,7 +1212,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         kill_grace_s,
         poll,
         max_workers,
-        backend: Box::new(ClaudeBackend),
+        backend: backend_for(),
         env: Vec::new(),
         made: Vec::new(),
     }
@@ -1633,6 +1665,20 @@ mod tests {
 
     fn t(id: &str, state: &str, note: &str) -> (String, String, String) {
         (id.into(), state.into(), note.into())
+    }
+
+    #[test]
+    fn the_environment_beats_the_project_key_and_the_key_beats_the_default() {
+        assert_eq!(backend_name(Some("claude"), Some("amx")), "claude");
+        assert_eq!(backend_name(Some("amx"), None), "amx");
+        assert_eq!(backend_name(None, Some("amx")), "amx");
+        assert_eq!(backend_name(None, None), "claude");
+        // An exported-but-empty WORKFLOW_BACKEND is not a choice.
+        assert_eq!(backend_name(Some(""), Some("amx")), "amx");
+        assert_eq!(backend_name(Some(" \n"), None), "claude");
+        // Whatever is asked for comes back as asked, so an unknown name can be
+        // reported rather than quietly turning into the other worker.
+        assert_eq!(backend_name(Some("amxx"), Some("amx")), "amxx");
     }
 
     #[test]
