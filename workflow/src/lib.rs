@@ -18,6 +18,7 @@
 //! git and mem, so it works the same under any agent runtime.
 
 pub mod backend;
+pub mod backend_amx;
 pub mod brief;
 pub mod cli;
 pub mod doctor;
