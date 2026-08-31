@@ -495,3 +495,15 @@ pub fn set_key(store: &Store, project_id: &str, key: &str, value: &str) -> Resul
     write_atomic(&path, out.as_bytes())?;
     Ok(path)
 }
+
+/// The worker backend this project chose, from `mem project set backend`.
+///
+/// Read straight out of the document, which is also how `set_key` writes it:
+/// mem stores the choice and hands it to whoever dispatches the work, so there
+/// is nothing here for `Project` to model. Anything unreadable reads as no
+/// choice, and the caller falls back to its default.
+pub fn declared_backend(store: &Store, project_id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(store.project_toml(project_id)).ok()?;
+    let doc: toml::Table = toml::from_str(&text).ok()?;
+    doc.get("backend")?.as_str().map(str::to_string)
+}

@@ -256,6 +256,27 @@ pub enum ProjectSetCommand {
     /// it: these are the paths that are load-bearing in THIS repository.
     #[command(name = "review-paths")]
     ReviewPaths { globs: String },
+    /// The worker this project's tasks are dispatched onto. Absent means
+    /// claude, which is what every project ran on before there was a choice.
+    Backend { backend: Backend },
+}
+
+/// The workers a task can be dispatched onto. A closed list: an unknown name
+/// is a typo, and a typo must not leave a project pointing at nothing.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum Backend {
+    Claude,
+    Amx,
+}
+
+impl Backend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Backend::Claude => "claude",
+            Backend::Amx => "amx",
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]

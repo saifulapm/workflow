@@ -271,6 +271,7 @@ pub fn project_current(app: &App) -> Result<i32> {
     let declared = Registry::load(&app.store).by_id(id).cloned();
     let verify = declared.as_ref().and_then(|p| p.verify.clone());
     let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
+    let backend = crate::project::declared_backend(&app.store, id);
     // A child project keeps the checkout as its root — run dirs and worktrees
     // key on the checkout — and says where inside it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
@@ -289,6 +290,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(paths) = &review_paths {
             doc["review_paths"] = json!(paths);
         }
+        if let Some(backend) = &backend {
+            doc["backend"] = json!(backend);
+        }
         println!("{}", serde_json::to_string(&doc)?);
     } else {
         println!("id    {id}");
@@ -304,6 +308,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(paths) = &review_paths {
             println!("review-paths  {paths}");
+        }
+        if let Some(backend) = &backend {
+            println!("backend  {backend}");
         }
     }
     Ok(exit::OK)
@@ -355,7 +362,8 @@ pub fn project_add(app: &App, subdir: &str, name: Option<&str>) -> Result<i32> {
 }
 
 /// `mem project set <key> "<value>"` — the per-project verification command,
-/// the per-project review paths. A write verb, so declaring one in a checkout
+/// the per-project review paths, the worker backend. A write verb, so
+/// declaring one in a checkout
 /// mem has never seen registers that checkout, exactly as `mem log` there
 /// would.
 pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {

@@ -530,6 +530,53 @@ fn project_set_review_paths_records_the_globs_and_project_current_reports_them()
 }
 
 #[test]
+fn project_set_backend_records_the_choice_and_refuses_anything_else() {
+    let w = World::new("write-backend");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+
+    // Nothing declared yet: the field is absent, and the caller runs whatever
+    // it defaults to.
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("backend").is_none(), "{v}");
+
+    let out = mem(&w, &repo, &["project", "set", "backend", "amx"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["backend"], serde_json::json!("amx"));
+    assert!(
+        stdout(&mem(&w, &repo, &["project", "current"])).contains("backend  amx"),
+        "the plain rendering names it too"
+    );
+
+    // Choosing again replaces the choice rather than leaving two keys behind.
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "backend", "claude"])),
+        0
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["backend"], serde_json::json!("claude"));
+
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert_eq!(
+        text.matches("backend = ").count(),
+        1,
+        "one backend key, not two: {text}"
+    );
+
+    // A backend nothing implements is a usage error, and the stored choice
+    // survives it: a typo must not leave the project pointing at nothing.
+    let out = mem(&w, &repo, &["project", "set", "backend", "gemini"]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["backend"], serde_json::json!("claude"));
+}
+
+#[test]
 fn project_add_registers_a_child_the_subdir_then_owns() {
     let w = World::new("write-child");
     let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
