@@ -32,16 +32,26 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
         if let Some(msg) = lib_test_without_lib(&t.id, verify, root) {
             f.refusals.push(msg);
         }
-        match deferral(&t.block) {
+        // Done: states what the task delivers, so deferral there refuses. A
+        // title only warns: "Sweep every TBD out of the docs" names the
+        // marker it removes, and blocking that plan would be the check
+        // defeating its own point.
+        match deferral(t.done.as_deref().unwrap_or("")) {
             Some(Deferral::Refuse(p)) => f.refusals.push(format!(
-                "plan: task {}: '{p}' defers work this plan should finish -- cut the scope honestly or plan the work",
+                "plan: task {}: Done says '{p}' -- that defers work this plan should finish; cut the scope honestly or plan the work",
                 t.id
             )),
             Some(Deferral::Warn(p)) => f.warnings.push(format!(
-                "plan: task {}: '{p}' -- fine if the task removes one, a deferral if it ships one",
+                "plan: task {}: Done says '{p}' -- fine if the task removes one, a deferral if it ships one",
                 t.id
             )),
             None => {}
+        }
+        if let Some(Deferral::Refuse(p) | Deferral::Warn(p)) = deferral(&t.title) {
+            f.warnings.push(format!(
+                "plan: task {}: '{p}' in the title -- fine if the task removes it, a deferral if it ships it",
+                t.id
+            ));
         }
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
         for p in &patterns {
@@ -187,6 +197,11 @@ fn uses_idents(uses: &str) -> Vec<String> {
     uses.split(" · ")
         .filter_map(|item| {
             let head = item.split('(').next().unwrap_or(item);
+            // `CartPricing::price: Cents` names price, not its return type.
+            let head = match head.rsplit_once(": ") {
+                Some((h, _)) if !h.is_empty() => h,
+                _ => head,
+            };
             head.split(|c: char| !c.is_alphanumeric() && c != '_')
                 .filter(|t| !t.is_empty() && !KEYWORDS.contains(t))
                 .next_back()
@@ -208,17 +223,19 @@ pub enum Deferral {
 /// (research/reports/11): the idioms below are refused outright, while a bare
 /// "placeholder" or "stub" only warns because a removal task legitimately
 /// names the thing it deletes. Matches are case-insensitive and stop at word
-/// boundaries, so "for nowhere" and "stubborn" pass.
-pub fn deferral(block: &str) -> Option<Deferral> {
+/// boundaries, so "for nowhere" and "stubborn" pass. Only the title and the
+/// Done: line are read -- a Verify that greps for TBD or a Files path named
+/// tbd/ is a task removing deferrals, not making one.
+pub fn deferral(intent: &str) -> Option<Deferral> {
     const REFUSE: [&str; 5] = [
         "tbd",
         "for now",
-        "will be wired later",
+        "wired later",
         "implement later",
         "simplified version",
     ];
     const WARN: [&str; 2] = ["placeholder", "stub"];
-    let lower = block.to_lowercase();
+    let lower = intent.to_lowercase();
     for p in REFUSE {
         if found_whole(&lower, p) {
             return Some(Deferral::Refuse(p));
@@ -268,39 +285,42 @@ mod tests {
             vec!["price", "fixture"]
         );
         assert_eq!(uses_idents("CartPricing::price(Basket $b): Cents"), vec!["price"]);
+        // A colon-typed item without parens names the symbol, not its type.
+        assert_eq!(uses_idents("CartPricing::price: Cents"), vec!["price"]);
         assert_eq!(uses_idents("DEFAULT_MODEL"), vec!["DEFAULT_MODEL"]);
         assert!(uses_idents("").is_empty());
     }
 
+    /// deferral reads only what findings() hands it -- the Done: line
+    /// (refusals) and the title (downgraded to warnings there), never Verify
+    /// commands or Files/Read paths -- so a task that greps TBD out of the
+    /// docs is removing deferrals, not making one.
     #[test]
     fn deferral_idioms_are_refused_and_a_bare_placeholder_only_warns() {
-        for block in [
-            "- [ ] t1 Ship the simplified version of pricing\n",
-            "- [ ] t1 Wire the route\n      Done: static for now\n",
-            "- [ ] t1 Auth\n      Done: TBD\n",
-            "- [ ] t1 The page\n      Done: the button will be wired later\n",
-            "- [ ] t1 The page\n      Done: render it, implement later the rest\n",
+        for text in [
+            "the simplified version of pricing",
+            "static for now",
+            "TBD",
+            "the button gets wired later by t2",
+            "render it, implement later the rest",
         ] {
             assert!(
-                matches!(deferral(block), Some(Deferral::Refuse(_))),
-                "{block:?} should be refused"
+                matches!(deferral(text), Some(Deferral::Refuse(_))),
+                "{text:?} should be refused"
             );
         }
-        for block in [
-            "- [ ] t1 Remove the placeholder hub page\n",
-            "- [ ] t1 Drop the stub route\n",
-        ] {
+        for text in ["Remove the placeholder hub page", "Drop the stub route"] {
             assert!(
-                matches!(deferral(block), Some(Deferral::Warn(_))),
-                "{block:?} should only warn"
+                matches!(deferral(text), Some(Deferral::Warn(_))),
+                "{text:?} should only warn"
             );
         }
-        for block in [
-            "- [ ] t1 Extract cart pricing into a service\n      Done: totals identical\n",
-            "- [ ] t1 A stubborn cache is invalidated\n", // 'stub' inside a word is not a stub
-            "- [ ] t1 Reach for nowhere-else state\n",    // nor is 'for now' inside one
+        for text in [
+            "totals identical for the fixture basket",
+            "A stubborn cache is invalidated", // 'stub' inside a word is not a stub
+            "Reach for nowhere-else state",    // nor is 'for now' inside one
         ] {
-            assert!(deferral(block).is_none(), "{block:?} is honest work");
+            assert!(deferral(text).is_none(), "{text:?} is honest work");
         }
     }
 

@@ -365,6 +365,32 @@ parse
 is "$RC" 1 'cargo test --lib on a crate with no library target is refused'
 like "$OUT" 'no library target' 'and the refusal says why'
 
+# Deferral language: a Done that defers refuses; a cleanup task whose title
+# and Verify name the marker it removes is warned about, never blocked.
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 The page
+      Files: src/main.rs
+      Verify: true
+      Done: the button gets wired later by t2
+EOF2
+parse
+is "$RC" 1 'a Done that defers is refused'
+like "$OUT" 'wired later' 'and the refusal names the phrase'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Sweep every TBD out of the docs
+      Files: src/main.rs
+      Verify: bash -c "! grep -ri TBD src/"
+      Done: no deferral markers remain
+EOF2
+parse
+is "$RC" 0 'a cleanup task naming TBD in title and Verify is not blocked'
+like "$OUT" 'in the title' 'but the title mention is warned about'
+
 plan_file <<'EOF2'
 # plan: p
 
