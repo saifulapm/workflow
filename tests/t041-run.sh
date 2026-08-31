@@ -111,7 +111,7 @@ touch)
 	done_json
 	;;
 stuck)
-	# Reports why it cannot go on, then exits cleanly: the park must say it.
+	# Reports why it cannot go on, then exits cleanly: the failure must say it.
 	say blocked 'waiting on the sibling task'
 	done_json
 	;;
@@ -198,7 +198,7 @@ run_out=$OUT
 touch "$T_TMP/run-done"
 wait "$sampler" 2>/dev/null
 
-is "$run_rc" 1 'the run reports parked work with exit 1'
+is "$run_rc" 1 'the run reports failed work with exit 1'
 
 ## ------------------------------------------------------------- assertions
 
@@ -213,22 +213,22 @@ is "$(cat "$T_TMP/t2-had-parents-work" 2>/dev/null)" yes \
 max=$(sort -n "$T_TMP/conc.samples" | tail -1)
 is "$max" 2 'concurrency: two workers at once, never three'
 
-is "$(cat "$rundir/own1.state")" parked 'the tracked-file ownership violator is refused'
+is "$(cat "$rundir/own1.state")" failed 'the tracked-file ownership violator is refused'
 like "$run_out" 'with space' 'and the whole record for the unowned path with a space is reported'
 like "$run_out" 'Renamed Legacy' 'and the rename that left its patterns is reported'
-is "$(cat "$rundir/own2.state")" parked 'the untracked-file ownership violator is refused'
+is "$(cat "$rundir/own2.state")" failed 'the untracked-file ownership violator is refused'
 like "$run_out" 'notes/scratch.txt' 'and the stray untracked file is named'
 
-is "$(cat "$rundir/red.state")" parked 'the clean exit with red tests is parked'
+is "$(cat "$rundir/red.state")" failed 'the clean exit with red tests is failed'
 is "$(cat "$rundir/red.dispatches")" 1 'and it is not redispatched'
-like "$(cat "$rundir/red.parked")" 'red' 'and the reason is the suite, not the worker'
+like "$(cat "$rundir/red.failed")" 'red' 'and the reason is the suite, not the worker'
 
-is "$(cat "$rundir/stuck.state")" parked 'the worker that reported blocked is parked'
-like "$(cat "$rundir/stuck.parked")" 'blocked: waiting on the sibling task' \
-	"and the park quotes the worker's own report"
+is "$(cat "$rundir/stuck.state")" failed 'the worker that reported blocked is failed'
+like "$(cat "$rundir/stuck.failed")" 'blocked: waiting on the sibling task' \
+	"and the failure quotes the worker's own report"
 like "$(cat "$rundir/t1.verify")" 'true' 'dispatch recorded the task Verify command in the run dir'
 
-is "$(cat "$rundir/hang.state")" parked 'the hung worker ends up parked'
+is "$(cat "$rundir/hang.state")" failed 'the hung worker ends up failed'
 is "$(cat "$rundir/hang.dispatches")" 2 'after exactly one redispatch'
 
 # A redispatched worker used to wake up to the same fixed text as the first
@@ -266,11 +266,8 @@ git worktree remove --force "$T_TMP/check"
 
 is "$(git worktree list | grep -c .)" 1 'git worktree list is clean again'
 is "$(git branch --list 'fixture-run/t1' | grep -c .)" 0 'merged task branches are deleted'
-is "$(git branch --list 'fixture-run/own1' | grep -c .)" 1 'parked task branches are kept'
+is "$(git branch --list 'fixture-run/own1' | grep -c .)" 1 'failed task branches are kept'
 like "$("$MEM_BIN" plan)" '\[x\] t1' 'mem plan --tick checked the merged task off'
-
-bundles=$(find "$XDG_DATA_HOME/workflow/parked" -name '*.bundle' 2>/dev/null | grep -c .)
-is "$bundles" 3 'every parked task with work in it left a bundle'
 
 ## ------------------------------------------------- plans run refuses to run
 

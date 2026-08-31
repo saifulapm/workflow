@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The bg backend's liveness half: a session the agents list calls busy is
 # alive; one that stalls past the deadline is ended with `claude stop`, not a
-# signal; the redispatch mints a new session; and a second stall parks.
+# signal; the redispatch mints a new session; and a second stall fails.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -71,10 +71,10 @@ EOF
 
 run env WORKFLOW_MAX_WORKERS=1 WORKFLOW_DEADLINE_MIN=0.05 \
 	workflow run --plan-file "$T_TMP/plan.md"
-is "$RC" 1 'a worker that never reports parks the run'
+is "$RC" 1 'a worker that never reports fails the run'
 
 rundir="$XDG_STATE_HOME/workflow/runs/app/bg-liveness"
-is "$(cat "$rundir/t1.state")" parked 'the stalled task is parked'
+is "$(cat "$rundir/t1.state")" failed 'the stalled task is failed'
 is "$(cat "$rundir/t1.dispatches")" 2 'after exactly one redispatch'
 
 dispatches=$(grep -c -- '--bg' "$T_TMP/claude-args")

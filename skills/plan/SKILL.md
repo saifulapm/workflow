@@ -52,7 +52,7 @@ Write it plain; the unslop rules apply to specs too.
 - `Files:` is whitespace-separated globs; double-quote one that contains a
   space. `*` stops at a slash, `**` crosses, patterns are anchored at the repo
   root. This is the ownership boundary: what a worker writes outside its
-  patterns is refused at the merge gate and the task parks.
+  patterns is refused at the merge gate and the task fails.
 - `Files:` and `Verify:` are mandatory. `Verify:` is the worker's evidence
   command; `workflow verify` is what the gate runs.
 - An unknown dependency id or a cycle is a hard error.

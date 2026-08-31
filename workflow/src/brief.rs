@@ -19,8 +19,6 @@ pub struct Prior {
     pub why: String,
     /// The last line the last attempt wrote to its status file.
     pub last_report: String,
-    /// Where its work was bundled, when there was work to bundle.
-    pub bundle: String,
 }
 
 impl Prior {
@@ -38,12 +36,6 @@ impl Prior {
         }
         if !self.last_report.is_empty() {
             s.push_str(&format!(" Its last report was '{}'.", self.last_report));
-        }
-        if !self.bundle.is_empty() {
-            s.push_str(&format!(
-                "\nIts work is bundled at {}; `workflow resume` restores it here.",
-                self.bundle
-            ));
         }
         s.push_str("\nRead what it did before repeating it.\n\n");
         s
@@ -70,7 +62,7 @@ engineering voice -- no trailers, no session links, no words like agent, AI or
 orchestration, no puffery, plain words over fancy ones, straight quotes, no
 em dashes. Stage only the files this task touched; never `git add -A`.
 Everything you write must match the Files: patterns; anything outside them is
-refused at the merge gate and the task is parked.
+refused at the merge gate and the task is failed.
 
 ## Stop and ask -- never decide these yourself
 
@@ -166,7 +158,6 @@ mod tests {
             attempts: 1,
             why: "wrote outside its Files: patterns".into(),
             last_report: "ready merge-ready".into(),
-            bundle: "/state/parked/app/plan-t1-20260822T090000Z.bundle".into(),
         };
         let again = text(
             &task,
@@ -179,8 +170,6 @@ mod tests {
             "This is attempt 2.",
             "wrote outside its Files: patterns",
             "ready merge-ready",
-            "plan-t1-20260822T090000Z.bundle",
-            "workflow resume",
         ] {
             assert!(again.contains(needle), "the redispatch brief lost {needle}");
         }

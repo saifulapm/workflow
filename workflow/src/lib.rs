@@ -9,7 +9,6 @@
 //!   workflow status          report this project's runs, --json for machines
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
-//!   workflow park/resume     put work somewhere safe, and bring it back
 //!   workflow enable/disable  this repo's skills, on in a project or off
 //!   workflow settings-merge  the install's settings edit
 //!
@@ -28,17 +27,14 @@ pub mod hook;
 pub mod lint;
 pub mod memcli;
 pub mod ownership;
-pub mod park;
 pub mod paths;
 pub mod plan;
 pub mod plancheck;
 pub mod repo;
-pub mod resume;
 pub mod review;
 pub mod run;
 pub mod settings;
 pub mod status;
-pub mod sync;
 pub mod sys;
 pub mod testdecl;
 pub mod verify;
@@ -124,20 +120,6 @@ pub fn run(cli: Cli) -> i32 {
         Command::Reap => run::cmd_reap(),
         Command::Redispatch { task } => run::cmd_redispatch(&task),
         Command::Status { json } => status::cmd_status(json),
-        Command::Park {
-            repo,
-            branch,
-            base,
-            note,
-            name,
-        } => park::cmd_park(&park::Args {
-            repo: repo.as_deref(),
-            branch: branch.as_deref(),
-            base: base.as_deref(),
-            note: note.as_deref().unwrap_or(""),
-            label: name.as_deref(),
-            quiet: false,
-        }),
         Command::PlanCheck { file, json } => cmd_plan_check(&file, json),
         Command::Ownership {
             repo,
@@ -163,12 +145,6 @@ pub fn run(cli: Cli) -> i32 {
             task,
         } => run::cmd_stalled(&rundir, &wtroot, &task, deadline),
         Command::Doctor => doctor::cmd_doctor(),
-        Command::Resume {
-            bundle,
-            repo,
-            branch,
-            force,
-        } => resume::cmd_resume(&bundle, repo.as_deref(), branch.as_deref(), force),
         Command::SettingsMerge { file, dry_run } => {
             settings::cmd_settings_merge(file.as_deref(), dry_run)
         }

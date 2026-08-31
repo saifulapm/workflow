@@ -7,7 +7,7 @@ t_init
 new_repo app
 mem_register
 
-# A run dir as a stopped run leaves it: one merged, one parked with a reason,
+# A run dir as a stopped run leaves it: one merged, one failed with a reason,
 # one never started.
 rundir="$XDG_STATE_HOME/workflow/runs/app/demo"
 mkdir -p "$rundir"
@@ -28,31 +28,28 @@ printf 'abc123\n' >"$rundir/base_sha"
 printf 'merged\n' >"$rundir/t1.state"
 printf 'deadbeef\n' >"$rundir/t1.merged"
 printf '158502\n' >"$rundir/t1.context"
-printf 'parked\n' >"$rundir/t2.state"
-printf 'the suite is red once the change sits on integration\n' >"$rundir/t2.parked"
+printf 'failed\n' >"$rundir/t2.state"
+printf 'the suite is red once the change sits on integration\n' >"$rundir/t2.failed"
 printf '2\n' >"$rundir/t2.dispatches"
 printf '2026-08-21T10:00:00Z blocked waiting on an answer\n' >"$rundir/t2.status"
-printf '%s/parked/app/demo-t2-20260821T100000Z.bundle\n' "$XDG_DATA_HOME/workflow" >"$rundir/t2.bundle"
 printf 'pending\n' >"$rundir/t3.state"
 
 run workflow status
 is "$RC" 0 'status exits 0 with runs to report'
 like "$OUT" 'demo' 'the plan is named'
 like "$OUT" 't1 +merged' 'a merged task shows its state'
-like "$OUT" 't2 +parked +the suite is red' 'a parked task shows its reason'
+like "$OUT" 't2 +failed +the suite is red' 'a failed task shows its reason'
 like "$OUT" 't3 +pending' 'a task that never started says so'
 like "$OUT" 'carried 158k' 'the context a task carried is plan-sizing feedback'
-like "$OUT" 'workflow resume .*demo-t2.*\.bundle' 'a parked task shows the way to put its work back'
 unlike "$OUT" '\$' 'and no dollar figure is reported at all'
 
 run workflow status --json
 is "$RC" 0 'status --json exits 0'
 like "$OUT" '"plan": *"demo"' 'json names the plan'
-like "$OUT" '"state": *"parked"' 'json carries task states'
-like "$OUT" '"parked": *"the suite is red once the change sits on integration"' 'json carries the park reason'
+like "$OUT" '"state": *"failed"' 'json carries task states'
+like "$OUT" '"failed": *"the suite is red once the change sits on integration"' 'json carries the failure reason'
 like "$OUT" '"last_status": *"blocked waiting on an answer"' "json carries the worker's own last report"
 like "$OUT" '"context": *158502' 'json carries the context a task carried'
-like "$OUT" '"bundle": *".*demo-t2.*\.bundle"' 'json carries the bundle a park wrote'
 unlike "$OUT" '"spend"' 'and no spend field'
 like "$OUT" '"live": *false' 'nobody holds the run lock'
 

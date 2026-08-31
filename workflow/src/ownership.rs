@@ -7,7 +7,7 @@
 //! Records, not fields: a rename is `R <new>\0<old>`, two NUL fields for one
 //! record, and comparing fields would let half a rename look owned.
 //!
-//! Deliberately case-sensitive: a case-mismatched write should park, not merge
+//! Deliberately case-sensitive: a case-mismatched write should fail, not merge
 //! (spec §9).
 
 use std::collections::BTreeSet;

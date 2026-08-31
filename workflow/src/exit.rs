@@ -4,7 +4,7 @@
 //!   verify         0 green · 1 failed · 2 no verifier · 3 test removal
 //!   lint-msg       0 clean (warnings included) · 1 hard fail
 //!   review-needed  0 a cold review is wanted · 1 it is not
-//!   run            0 complete · 1 parked or failed tasks · 2 config/plan error
+//!   run            0 complete · 1 failed tasks · 2 config/plan error
 //!   reap           0 nothing to do · 1 reaped something
 //!   doctor         0 healthy · 1 findings
 

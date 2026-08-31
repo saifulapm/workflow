@@ -98,12 +98,3 @@ pub fn sleep(seconds: f64) {
         std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
     }
 }
-
-/// The machine's name, for a park's meta file.
-pub fn hostname() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|s| s.trim().to_string())
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
-}

@@ -23,10 +23,6 @@ pub fn cache_home() -> PathBuf {
     env_dir("XDG_CACHE_HOME").unwrap_or_else(|| home().join(".cache"))
 }
 
-pub fn data_home() -> PathBuf {
-    env_dir("XDG_DATA_HOME").unwrap_or_else(|| home().join(".local/share"))
-}
-
 pub fn worktrees_root() -> PathBuf {
     state_home().join("workflow/worktrees")
 }
@@ -45,10 +41,6 @@ pub fn suite_lock_root() -> PathBuf {
 
 pub fn briefs_root() -> PathBuf {
     cache_home().join("workflow/briefs")
-}
-
-pub fn parked_root() -> PathBuf {
-    data_home().join("workflow/parked")
 }
 
 pub fn cwd() -> PathBuf {

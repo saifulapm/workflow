@@ -12,10 +12,7 @@ struct TaskRow {
     state: String,
     dispatches: u64,
     session: String,
-    parked: String,
-    /// Where the park put the work. Read by the session that owns the run, so
-    /// resuming a parked task is a path it already has (friction #BHPS3G7D).
-    bundle: String,
+    failed: String,
     last_status: String,
     merged: String,
     /// What the worker was carrying at its last turn, when the run could see
@@ -98,8 +95,7 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             state: field(dir, &id, "state"),
             dispatches: field(dir, &id, "dispatches").parse().unwrap_or(0),
             session: field(dir, &id, "session"),
-            parked: field(dir, &id, "parked"),
-            bundle: field(dir, &id, "bundle"),
+            failed: field(dir, &id, "failed"),
             last_status: last_status(dir, &id),
             merged: field(dir, &id, "merged"),
             context: field(dir, &id, "context").parse().unwrap_or(0),
@@ -144,8 +140,7 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
                 "state": t.state,
                 "dispatches": t.dispatches,
                 "session": t.session,
-                "parked": t.parked,
-                "bundle": t.bundle,
+                "failed": t.failed,
                 "last_status": t.last_status,
                 "merged": t.merged,
                 "context": t.context,
@@ -164,8 +159,8 @@ fn print_human(rows: &[RunRow]) {
         );
         for t in &r.tasks {
             let mut detail = String::new();
-            if !t.parked.is_empty() {
-                detail = t.parked.clone();
+            if !t.failed.is_empty() {
+                detail = t.failed.clone();
             } else if !t.last_status.is_empty() {
                 detail = format!("last report: {}", t.last_status);
             } else if !t.merged.is_empty() {
@@ -180,9 +175,6 @@ fn print_human(rows: &[RunRow]) {
                 };
             }
             println!("  {:<8} {:<10} {}", t.id, t.state, detail);
-            if !t.bundle.is_empty() {
-                println!("                     workflow resume {}", t.bundle);
-            }
         }
     }
 }

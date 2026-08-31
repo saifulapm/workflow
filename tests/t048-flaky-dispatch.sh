@@ -2,7 +2,7 @@
 # A worker that dies leaving nothing -- no status line, no commit, no result --
 # has said nothing about the task, only about the dispatch: a transient API
 # error on the first turn looks exactly like this. It gets one retry in its
-# wave before anything is parked (friction #195SW7VX), the same allowance a
+# wave before anything is failed (friction #195SW7VX), the same allowance a
 # silent stall already had.
 source "$(dirname -- "$0")/lib.sh"
 t_init
@@ -71,7 +71,7 @@ like "$brief" 'died before writing anything' 'and what happened to the one befor
 
 ## ---------------------------------------- the retry is one, never a loop
 
-# A dispatch that never produces anything parks on its second silence, with
+# A dispatch that never produces anything fails on its second silence, with
 # the reason the first attempt would have given.
 rm -f "$T_TMP/tried-t1" "$T_TMP/tried-t2"
 new_repo hopeless
@@ -97,9 +97,9 @@ cat >"$T_TMP/hopeless.md" <<'EOF'
 EOF
 run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.2 \
 	WORKFLOW_WORKER_CMD='true' workflow run --plan-file "$T_TMP/hopeless.md"
-is "$RC" 1 'a dispatch that never produces anything still ends parked'
+is "$RC" 1 'a dispatch that never produces anything still ends failed'
 hdir="$XDG_STATE_HOME/workflow/runs/hopeless/hopeless"
-is "$(cat "$hdir/t1.state")" parked 'parked, not retried forever'
+is "$(cat "$hdir/t1.state")" failed 'failed, not retried forever'
 is "$(cat "$hdir/t1.dispatches")" 2 'after the one retry it is allowed'
-is "$(cat "$hdir/t1.parked")" 'dispatch race: worker never wrote its pidfile' \
+is "$(cat "$hdir/t1.failed")" 'dispatch race: worker never wrote its pidfile' \
 	'and the reason still names the dispatch, not a worker that never ran'

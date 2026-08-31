@@ -107,59 +107,6 @@ state change. --json is the shape a session that owns a run polls.")]
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Put a branch's work somewhere safe and get out of the way.
-    #[command(
-        long_about = "Put a branch's work somewhere safe and get out of the way.
-
-Uncommitted work becomes a `wip:` commit, and everything from <base> to the
-branch tip goes into a git bundle under the parked directory. `workflow resume`
-puts it back, including the uncommitted state -- the wip commit is an envelope,
-not a decision to commit that work.
-
-Bundles live in ~/.local/share/workflow/parked/<project>/, which syncs on its
-own unit. They never go near mem's store."
-    )]
-    Park {
-        /// The checkout to park. Default: the working directory.
-        #[arg(long, value_name = "DIR")]
-        repo: Option<PathBuf>,
-        /// The branch to park. Default: the one checked out.
-        #[arg(long, value_name = "NAME")]
-        branch: Option<String>,
-        /// Where the branch left the trunk. Default: worked out from the trunk.
-        #[arg(long, value_name = "SHA")]
-        base: Option<String>,
-        /// Why it was parked, recorded in the meta file.
-        #[arg(long, value_name = "TEXT")]
-        note: Option<String>,
-        /// The bundle's name. Default: the branch, slashes turned into dashes.
-        #[arg(long, value_name = "LABEL")]
-        name: Option<String>,
-    },
-    /// Bring a parked branch back, uncommitted state and all.
-    #[command(long_about = "Bring a parked branch back, uncommitted state and all.
-
-The branch is recreated from the bundle and checked out, then reset --soft to
-the wip commit's parent: whatever was uncommitted when park ran is uncommitted
-again.
-
-All of it comes back staged. `workflow park` takes the whole working tree with
-`git add -A`, untracked files included, so the wip commit does not record which
-of it was in the index and which was not, and `reset --soft` puts the lot back
-in the index. Content is restored exactly; the staged/unstaged split is not.")]
-    Resume {
-        /// The bundle to unpack.
-        bundle: PathBuf,
-        /// The checkout to restore into. Default: the one the meta file names.
-        #[arg(long, value_name = "DIR")]
-        repo: Option<PathBuf>,
-        /// The branch to restore. Default: the one the meta file names.
-        #[arg(long, value_name = "NAME")]
-        branch: Option<String>,
-        /// Overwrite an existing branch and a dirty working tree.
-        #[arg(long)]
-        force: bool,
-    },
     /// Turn this workflow's skills on in this project's Claude Code settings.
     #[command(
         long_about = "Turn this workflow's skills on in this project's Claude Code settings.
@@ -258,12 +205,12 @@ usage: workflow <command> [options]
       0 it holds · 1 the grammar or this checkout refused it · 2 no such file
   run [--plan-file <f>]
       run a plan's tasks in worktrees; this dispatches real workers
-      0 every task complete · 1 parked or failed tasks · 2 config or plan error
+      0 every task complete · 1 failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
   redispatch <task>
-      ask the live run to dispatch a parked task again
-      0 the run was asked · 1 no live run holds that task parked
+      ask the live run to dispatch a failed task again
+      0 the run was asked · 1 no live run holds that task failed
   status [--json]
       report this project's runs: task states, spend, lock liveness
       0 reported · 2 outside a project
@@ -271,8 +218,6 @@ usage: workflow <command> [options]
       0 healthy · 1 findings
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's
-  park [--repo <d>] [--branch <b>] [--base <sha>] [--name <l>] [--note <t>]
-  resume <bundle> [--repo <d>] [--branch <b>] [--force]
   enable [--global] [--dry-run]
       turn this workflow's skills on in this project's Claude Code settings
   disable [--global] [--dry-run]

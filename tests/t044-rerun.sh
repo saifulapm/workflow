@@ -8,7 +8,7 @@ t_init
 export WF_TMP="$T_TMP"
 
 # One fake worker for every task: it commits the file its Files: line claims,
-# unless a flag file tells it to reach outside and get itself parked.
+# unless a flag file tells it to reach outside and get itself failed.
 write_exec "$T_TMP/fake-worker.sh" <<'FAKE'
 #!/bin/sh
 task=$1; status=$3
@@ -68,15 +68,13 @@ EOF
 
 : >"$T_TMP/misbehave-t2"
 run workflow run
-is "$RC" 1 'run 1: one task parked, so exit 1'
+is "$RC" 1 'run 1: one task failed, so exit 1'
 is "$(cat "$rundir/t1.state")" merged 'run 1: t1 merged'
-is "$(cat "$rundir/t2.state")" parked 'run 1: t2 parked, having written outside its patterns'
+is "$(cat "$rundir/t2.state")" failed 'run 1: t2 failed, having written outside its patterns'
 
-# A park that says nothing about its own escape hatch sends whoever reads it
-# hunting for the bundle (friction #BHPS3G7D).
-like "$OUT" 'bundled at .*rerun-check-t2' 'run 1: the park names the bundle it wrote'
-like "$OUT" 'workflow resume ' 'run 1: and the command that puts it back'
-like "$(cat "$rundir/t2.bundle")" '\.bundle$' 'run 1: the bundle path is in the run dir too'
+# A failure that says nothing about where the work went sends whoever reads
+# it hunting for it (friction #BHPS3G7D).
+like "$OUT" 'its work is on the branch rerun-check/t2' 'run 1: the failure names the branch that holds the work'
 
 int1=$(git rev-parse integration/rerun-check)
 is "$(git rev-list --count "$base..integration/rerun-check")" 1 \
@@ -122,10 +120,9 @@ run workflow run
 is "$RC" 0 'run 3: the recovery path runs to completion'
 is "$(cat "$rundir/t1.state")" merged \
 	'run 3: the task ticked off in run 1 counts as merged, its commit being on integration'
-is "$(cat "$rundir/t2.state")" merged 'run 3: the parked task ran again and merged'
-is "$(cat "$rundir/t2.parked")" '' \
-	'run 3: and the park reason from run 1 is cleared, not left to be reported forever'
-is "$(cat "$rundir/t2.bundle")" '' 'run 3: as is the bundle path it no longer needs'
+is "$(cat "$rundir/t2.state")" merged 'run 3: the failed task ran again and merged'
+is "$(cat "$rundir/t2.failed")" '' \
+	'run 3: and the failure reason from run 1 is cleared, not left to be reported forever'
 
 run git cat-file -e "integration/rerun-check:app/t1.php"
 is "$RC" 0 "run 3: t1's work is present on integration"
@@ -185,7 +182,7 @@ cat >"$T_TMP/hand.md" <<'PLAN'
 PLAN
 : >"$T_TMP/misbehave-t2"
 run workflow run --plan-file "$T_TMP/hand.md"
-is "$RC" 1 'hand pass 1: t1 merges and t2 parks'
+is "$RC" 1 'hand pass 1: t1 merges and t2 fails'
 handrun="$XDG_STATE_HOME/workflow/runs/hand/hand"
 is "$(cat "$handrun/t1.state")" merged 'hand pass 1: t1 merged'
 
@@ -197,4 +194,4 @@ run workflow run --plan-file "$T_TMP/hand.md"
 is "$RC" 0 'hand pass 2: the recovery pass completes'
 like "$OUT" 'already on integration/hand' 'and says t1 needs no second worker'
 is "$(cat "$handrun/t1.dispatches")" 1 'hand pass 2: t1 was never dispatched again'
-is "$(cat "$handrun/t2.state")" merged 'hand pass 2: the parked task ran and merged'
+is "$(cat "$handrun/t2.state")" merged 'hand pass 2: the failed task ran and merged'

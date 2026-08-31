@@ -125,7 +125,7 @@ setsid sleep 30 &
 live=$!
 printf '%s\n' "$live" >"$rundir/t1.pid"
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$rundir/t1.status"
-# Committed, so the stall below parks it rather than trying it once more.
+# Committed, so the stall below fails it rather than trying it once more.
 committed_t1
 
 # The deadline is what ends it: nothing in that worktree moves, so the run
@@ -135,7 +135,7 @@ like "$OUT" 'task t1: still working, from a run that is gone -- adopted' \
 	'a worker still standing in its worktree is adopted, not replaced'
 is "$(cat "$rundir/t1.dispatches")" 1 \
 	'and it is not dispatched over the top of itself'
-is "$(cat "$rundir/t1.state")" parked 'it is the deadline that ends an adopted worker'
+is "$(cat "$rundir/t1.state")" failed 'it is the deadline that ends an adopted worker'
 truthy "$(kill -0 "$live" 2>/dev/null && echo 1 || echo 0)" \
 	'and the run stopped the process it adopted, not one of its own'
 # Already gone, if the check above held; this is only in case it did not.

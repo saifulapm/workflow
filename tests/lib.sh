@@ -109,16 +109,11 @@ t_init() {
 	git config --global commit.gpgsign false
 	git config --global advice.detachedHead false
 
-	# park and resume are subcommands now; the two names stay on PATH because
-	# that is how a human and an orchestrated park both reach them.
 	ln -sf "$WORKFLOW_BIN" "$T_TMP/bin/workflow"
-	printf '#!/bin/sh\nexec "%s" park "$@"\n' "$WORKFLOW_BIN" >"$T_TMP/bin/park"
-	printf '#!/bin/sh\nexec "%s" resume "$@"\n' "$WORKFLOW_BIN" >"$T_TMP/bin/resume"
-	chmod +x "$T_TMP/bin/park" "$T_TMP/bin/resume"
 	[ -x "$MEM_BIN" ] && ln -sf "$MEM_BIN" "$T_TMP/bin/mem"
 	export PATH="$T_TMP/bin:$PATH"
 	export WORKFLOW_MEM="$MEM_BIN"
-	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true WORKFLOW_SYNC_CMD=true
+	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true
 
 	# WORKFLOW_SUITE_LOCK_HELD comes with it: running the suite through
 	# `workflow verify` exports the marker to say the parent holds this

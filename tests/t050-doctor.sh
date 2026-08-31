@@ -5,7 +5,6 @@ source "$(dirname -- "$0")/lib.sh"
 t_init
 
 export WORKFLOW_SITES="$T_TMP/sites"
-export WORKFLOW_SYNC_SCRIPT="$T_TMP/qshell-sync"
 mkdir -p "$WORKFLOW_SITES"
 
 settings="$HOME/.claude/settings.json"
@@ -155,11 +154,3 @@ like "$OUT" 'skill route.*body is 34[0-9][0-9] bytes' 'and the finding gives the
 run workflow doctor
 like "$OUT" 'skill route.*frontmatter is' 'an oversized frontmatter is a finding too'
 
-## ------------------------------------------------------- the parked sync
-
-printf '#!/bin/sh\n# syncs mem only\n' >"$WORKFLOW_SYNC_SCRIPT"
-run workflow doctor
-like "$OUT" 'parked sync' 'a sync script that does not carry the bundles is reported'
-printf '#!/bin/sh\n# .local/share/workflow/parked\n' >"$WORKFLOW_SYNC_SCRIPT"
-run workflow doctor
-unlike "$OUT" 'parked sync' 'and it stops being reported once it does'

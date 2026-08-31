@@ -126,8 +126,8 @@ printf 'dispatched\n' >"$rundir/t1.state"
 cd "$main" || exit 1
 run workflow reap
 is "$(cat "$rundir/t1.state")" merged 'an already-applied merge is finished, not re-rebased'
-unlike "$(cat "$rundir/t1.parked" 2>/dev/null)" 'conflicts' \
-	'and it is never mis-parked as a conflict with integration'
+unlike "$(cat "$rundir/t1.failed" 2>/dev/null)" 'conflicts' \
+	'and it is never mis-failed as a conflict with integration'
 is "$(git rev-parse integration/halfway)" "$landed" \
 	'integration keeps the commit that was already on it'
 is "$(git rev-parse "refs/workflow/halfway/t1")" "$landed" \
@@ -200,7 +200,7 @@ is "$(git worktree list | grep -c .)" 1 'nothing was created in the meantime'
 ## -------------------------------------------------- a dispatch that never was
 
 # A template that writes no pidfile and no result: the worker is not slow, it
-# never started. The park reason has to say that rather than blame a worker
+# never started. The failure reason has to say that rather than blame a worker
 # that does not exist.
 new_repo racy
 mem_register
@@ -225,9 +225,9 @@ cat >"$T_TMP/racy.md" <<'PLAN'
 PLAN
 run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
 	WORKFLOW_WORKER_CMD='true' workflow run --plan-file "$T_TMP/racy.md"
-is "$RC" 1 'a dispatch that produced nothing parks the task'
+is "$RC" 1 'a dispatch that produced nothing fails the task'
 racy="$XDG_STATE_HOME/workflow/runs/racy/racy"
-is "$(cat "$racy/t1.parked")" 'dispatch race: worker never wrote its pidfile' \
+is "$(cat "$racy/t1.failed")" 'dispatch race: worker never wrote its pidfile' \
 	'and names the dispatch, not a worker that never ran'
 
 ## ------------------------- workers still running for a run that is gone

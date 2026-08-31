@@ -287,7 +287,7 @@ unlike "$out" '\?\? \.env$' '**/.env* owns the root .env'
 unlike "$out" 'config/\.env\.prod' '**/.env* owns a nested one too'
 like "$out" 'Cart' 'and owns nothing else'
 
-# Case matters here, deliberately: a case-mismatched write parks rather than
+# Case matters here, deliberately: a case-mismatched write fails rather than
 # merging, which is the safe direction (spec §9).
 out=$(unowned 'app/services/cart*.php')
 like "$out" 'app/Services/Cart.php' 'ownership stays case sensitive'

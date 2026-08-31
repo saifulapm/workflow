@@ -2,7 +2,7 @@
 //! (spec §8).
 //!
 //! Policy lives here and nowhere else: waves, concurrency, ownership, the
-//! serialized merge gate, park. How a worker is started, watched and stopped is
+//! serialized merge gate. How a worker is started, watched and stopped is
 //! the backend's business (see [`crate::backend`]).
 
 use std::path::{Path, PathBuf};
@@ -11,12 +11,12 @@ use std::process::Command;
 use crate::backend::{ClaudeBackend, Dispatch, Handle, WorkerBackend};
 use crate::gitcmd::Git;
 use crate::plan::{Plan, Task};
-use crate::{brief, exit, lint, memcli, ownership, park, paths, plan, repo, sys, warn};
+use crate::{brief, exit, lint, memcli, ownership, paths, plan, repo, sys, warn};
 
 pub const PENDING: &str = "pending";
 pub const DISPATCHED: &str = "dispatched";
 pub const MERGED: &str = "merged";
-pub const PARKED: &str = "parked";
+pub const FAILED: &str = "failed";
 pub const BLOCKED: &str = "blocked";
 pub const DONE_PREVIOUSLY: &str = "done-previously";
 
@@ -131,12 +131,10 @@ impl Run {
     fn set_state(&self, task: &str, state: &str) {
         write_field(&self.dir, task, "state", state);
         if state == MERGED {
-            // A park note used to outlive its park: status went on reporting
-            // why a task failed on one run long after another had merged it,
-            // and the bundle it named was work that is on the branch now
-            // (friction #BHPS3G7D).
-            write_field(&self.dir, task, "parked", "");
-            write_field(&self.dir, task, "bundle", "");
+            // A failure note used to outlive its failure: status went on
+            // reporting why a task failed on one run long after another had
+            // merged it (friction #BHPS3G7D).
+            write_field(&self.dir, task, "failed", "");
         }
     }
 
@@ -273,9 +271,10 @@ impl Run {
     /// integration branch itself, which nothing in its brief mentions. This
     /// fast-forward puts the work it builds on simply there.
     ///
-    /// Fast-forward only. A redispatch after a park has commits of its own on
-    /// the branch, and rebasing them mid-run to catch up is a decision for the
-    /// worker who can read the conflict, not for a silent step before it wakes.
+    /// Fast-forward only. A redispatch after a failure has commits of its own
+    /// on the branch, and rebasing them mid-run to catch up is a decision for
+    /// the worker who can read the conflict, not for a silent step before it
+    /// wakes.
     fn catch_up(&self, task: &str) {
         let wt = self.worktree(task);
         if !wt.is_dir() {
@@ -296,16 +295,17 @@ impl Run {
     /// What the attempt before this one came to, for the brief to carry.
     ///
     /// `why` is what this caller knows and the run dir does not: a stall and a
-    /// ghost session are both redispatches nothing has parked, so the park note
-    /// is empty and only the caller can say what happened. Everything else is
-    /// read here, before the dispatch truncates it (friction #YCW7ND6Z).
+    /// ghost session are both redispatches nothing has marked failed, so the
+    /// failure note is empty and only the caller can say what happened.
+    /// Everything else is read here, before the dispatch truncates it
+    /// (friction #YCW7ND6Z).
     fn prior_attempt(&self, task: &str, why: &str) -> brief::Prior {
         let attempts: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
         if attempts == 0 {
             return brief::Prior::default();
         }
         let why = match why.is_empty() {
-            true => self.field(task, "parked"),
+            true => self.field(task, "failed"),
             false => why.to_string(),
         };
         let last_report = self
@@ -319,7 +319,6 @@ impl Run {
             attempts,
             why,
             last_report,
-            bundle: self.field(task, "bundle"),
         }
     }
 
@@ -555,56 +554,17 @@ impl Run {
         c.status().map(|s| s.success()).unwrap_or(false)
     }
 
-    /// Where a parked branch's own work starts, as a sha: the task branch is
-    /// deleted at run end and the integration branch is deleted once it lands,
-    /// so a bundle that named either by name would not survive its own shelf.
-    fn park_base(&self) -> String {
-        self.git()
-            .rev_parse_commit(&self.int_branch)
-            .unwrap_or_else(|| self.base.clone())
-    }
-
-    fn park_task(&self, task: &str, why: &str) {
-        let wt = self.worktree(task);
-        warn(format!("task {task}: parked -- {why}"));
-        self.set_state(task, PARKED);
-        write_field(&self.dir, task, "parked", why);
-        if wt.is_dir() {
-            let label = format!("{}-{task}", self.plan.plan_id);
-            let branch = self.branch(task);
-            // The same anchor the gate uses. Measured from the run's base, a
-            // branch caught up to integration bundles its siblings' commits
-            // as well, so a task that wrote nothing still left a bundle full
-            // of other people's work.
-            let anchor = self.park_base();
-            let args = park::Args {
-                repo: Some(&wt),
-                branch: Some(&branch),
-                base: Some(&anchor),
-                note: why,
-                label: Some(&label),
-                quiet: true,
-            };
-            // Quiet so the park does not narrate itself in the middle of the
-            // run's own report -- but the one thing worth saying gets said
-            // here, where the reason was. A park whose bundle path only
-            // appears if the next run happens to refuse preflight is a park
-            // nobody can act on (friction #BHPS3G7D).
-            match park::park_quietly(&args) {
-                Ok(Some(bundle)) => {
-                    let path = bundle.display().to_string();
-                    write_field(&self.dir, task, "bundle", &path);
-                    warn(format!("  its work is bundled at {path}"));
-                    warn(format!("  put it back with: workflow resume {path}"));
-                }
-                Ok(None) => warn("  it wrote nothing, so there is no bundle to put back"),
-                Err(e) => warn(format!(
-                    "  could not bundle the parked work ({e}); the branch {branch} is still here"
-                )),
-            }
+    fn fail_task(&self, task: &str, why: &str) {
+        warn(format!("task {task}: failed -- {why}"));
+        self.set_state(task, FAILED);
+        write_field(&self.dir, task, "failed", why);
+        if self.commits(task) > 0 {
+            // The branch survives cleanup, so the work is still reachable --
+            // but only if the reader is told where (friction #BHPS3G7D).
+            warn(format!("  its work is on the branch {}", self.branch(task)));
         }
         memcli::log(&format!(
-            "run {}: parked {task} -- {why}",
+            "run {}: failed {task} -- {why}",
             self.plan.plan_id
         ));
     }
@@ -617,7 +577,7 @@ impl Run {
         // A worker that died leaving nothing -- no status line, no commit --
         // has said nothing about the task, only about the dispatch: a
         // transient API error on the first turn looks exactly like this.
-        // Parking it stalls every dependent behind a task nobody has actually
+        // Failing it stalls every dependent behind a task nobody has actually
         // attempted, so it gets the one retry a silent stall already had
         // (friction #195SW7VX).
         let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
@@ -641,25 +601,26 @@ impl Run {
                 .map(|m| m.len() == 0)
                 .unwrap_or(true);
             if no_pid && no_result {
-                self.park_task(task, "dispatch race: worker never wrote its pidfile");
+                self.fail_task(task, "dispatch race: worker never wrote its pidfile");
             } else {
-                self.park_task(task, "the worker exited with an error");
+                self.fail_task(task, "the worker exited with an error");
             }
             return;
         }
         match self.last_status_line(task) {
-            // The worker said where it stood; the park must not claim otherwise.
+            // The worker said where it stood; the failure must not claim
+            // otherwise.
             Some((state, note)) if state != "ready" => {
                 let why = if note.is_empty() {
                     format!("the worker's last report was '{state}'")
                 } else {
                     format!("the worker's last report was '{state}: {note}'")
                 };
-                self.park_task(task, &why);
+                self.fail_task(task, &why);
                 return;
             }
             None => {
-                self.park_task(task, "the worker stopped without reporting ready");
+                self.fail_task(task, "the worker stopped without reporting ready");
                 return;
             }
             Some(_) => {}
@@ -675,13 +636,13 @@ impl Run {
                 }
                 memcli::log(&format!("run {}: merged {task}", self.plan.plan_id));
             }
-            Err(why) => self.park_task(task, &why),
+            Err(why) => self.fail_task(task, &why),
         }
     }
 
     /// Workers still running tasks this run has already settled. A killed
     /// coordinator does not take its workers down with it, and a later pass
-    /// can merge or park a task while an earlier attempt's worker is still
+    /// can merge or fail a task while an earlier attempt's worker is still
     /// going: that worker is building for nobody, and what it commits becomes
     /// a leftover branch for the next run to refuse on (friction #RF50DJXQ).
     /// Answers with how many were stopped.
@@ -730,7 +691,7 @@ impl Run {
                     ));
                     self.dispatch(&task, "it stalled with nothing committed and was stopped");
                 } else {
-                    self.park_task(&task, "stalled with no sign of life");
+                    self.fail_task(&task, "stalled with no sign of life");
                 }
                 continue;
             }
@@ -750,7 +711,7 @@ impl Run {
     /// worktree that still has the first one in it.
     ///
     /// Answers with the ids it took over. They are settled for this run --
-    /// merged, parked, or running -- and the waves below must not queue them
+    /// merged, failed, or running -- and the waves below must not queue them
     /// a second time.
     fn adopt_stale(&self) -> Vec<String> {
         let taken = self.dispatched();
@@ -1075,15 +1036,15 @@ impl Run {
 /// The stopped-short question, written for the person who answers it on a
 /// phone (friction #VTB9VB1S): counts first, then one line per outcome group,
 /// and never an empty note. Held to the same lint commits are held to.
-/// `tasks` is (id, state, park reason) in plan order.
+/// `tasks` is (id, state, failure reason) in plan order.
 fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
     let count = |s: &str| tasks.iter().filter(|(_, state, _)| state == s).count();
-    let (merged, parked, previous) = (count(MERGED), count(PARKED), count(DONE_PREVIOUSLY));
-    let waiting = tasks.len() - merged - parked - previous;
+    let (merged, failed, previous) = (count(MERGED), count(FAILED), count(DONE_PREVIOUSLY));
+    let waiting = tasks.len() - merged - failed - previous;
 
     let mut counts = vec![format!("{merged} of {} merged", tasks.len())];
-    if parked > 0 {
-        counts.push(format!("{parked} parked"));
+    if failed > 0 {
+        counts.push(format!("{failed} failed"));
     }
     if waiting > 0 {
         counts.push(format!("{waiting} never started"));
@@ -1093,10 +1054,10 @@ fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
     }
     let mut q = format!("Plan {plan_id} stopped short: {}.\n", counts.join(", "));
 
-    // Parked tasks grouped by reason, in the order the reasons first appear.
+    // Failed tasks grouped by reason, in the order the reasons first appear.
     let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
     for (id, state, note) in tasks {
-        if state != PARKED {
+        if state != FAILED {
             continue;
         }
         let why = if note.is_empty() {
@@ -1110,12 +1071,12 @@ fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
         }
     }
     for (why, list) in &groups {
-        q.push_str(&format!("Parked - {why}: {}.\n", list.join(", ")));
+        q.push_str(&format!("Failed - {why}: {}.\n", list.join(", ")));
     }
 
     let never: Vec<&str> = tasks
         .iter()
-        .filter(|(_, s, _)| s != MERGED && s != PARKED && s != DONE_PREVIOUSLY)
+        .filter(|(_, s, _)| s != MERGED && s != FAILED && s != DONE_PREVIOUSLY)
         .map(|(id, _, _)| id.as_str())
         .collect();
     if !never.is_empty() {
@@ -1317,7 +1278,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                 continue;
             }
             // Taken over from the run that died: already merged, already
-            // parked, or running right now. The loop below waits on the ones
+            // failed, or running right now. The loop below waits on the ones
             // still going; none of them gets dispatched a second time.
             if adopted.contains(id) {
                 continue;
@@ -1360,7 +1321,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                 return shutdown(&run);
             }
             run.reap_pass();
-            // A parked task someone asked to try again, mid-run. The marker
+            // A failed task someone asked to try again, mid-run. The marker
             // file is how the request reaches a run that holds the project
             // lock for its whole life (friction #W0S44DE6); it is honoured
             // while the task's wave is still open, which is exactly when a
@@ -1370,7 +1331,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                 if !marker.exists() {
                     continue;
                 }
-                if run.state(id) != PARKED {
+                if run.state(id) != FAILED {
                     let _ = std::fs::remove_file(&marker);
                     warn(format!(
                         "task {id}: asked to go again, but it is {} -- ignored",
@@ -1388,11 +1349,11 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         }
     }
 
-    let (mut merged, mut parked, mut blocked, mut previous) = (0, 0, 0, 0);
+    let (mut merged, mut failed, mut blocked, mut previous) = (0, 0, 0, 0);
     for t in run.plan.ids() {
         match run.state(&t).as_str() {
             MERGED => merged += 1,
-            PARKED => parked += 1,
+            FAILED => failed += 1,
             DONE_PREVIOUSLY => previous += 1,
             _ => blocked += 1,
         }
@@ -1401,7 +1362,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     run.cleanup();
 
     warn(format!(
-        "run {}: {merged} merged, {parked} parked, {blocked} never started",
+        "run {}: {merged} merged, {failed} failed, {blocked} never started",
         run.plan.plan_id
     ));
     let sizing: Vec<String> = run
@@ -1431,14 +1392,14 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         "integration branch {} is yours to look at; nothing was pushed",
         run.int_branch
     ));
-    if parked + blocked > 0 {
+    if failed + blocked > 0 {
         let tasks: Vec<(String, String, String)> = run
             .plan
             .ids()
             .into_iter()
             .map(|t| {
                 let state = run.state(&t);
-                let note = run.field(&t, "parked");
+                let note = run.field(&t, "failed");
                 (t, state, note)
             })
             .collect();
@@ -1474,7 +1435,7 @@ fn shutdown(run: &Run) -> i32 {
 
 /// `workflow redispatch <task>` -- the marker the live run's poll loop reads.
 /// Only a run whose lock is held right now can honour it; anything else is a
-/// stopped run, and a stopped run's parked work comes back by running the
+/// stopped run, and a stopped run's failed work comes back by running the
 /// plan again.
 pub fn cmd_redispatch(task: &str) -> i32 {
     if !Git::here().inside_worktree() {
@@ -1502,7 +1463,7 @@ pub fn cmd_redispatch(task: &str) -> i32 {
         if lock_run(&dir).is_some() {
             continue;
         }
-        if field(&dir, task, "state") != PARKED {
+        if field(&dir, task, "state") != FAILED {
             continue;
         }
         let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
@@ -1517,7 +1478,7 @@ pub fn cmd_redispatch(task: &str) -> i32 {
     }
 
     warn(format!(
-        "no live run holds {task} parked -- run the plan again to retry parked tasks, or 'workflow resume' the bundle a park printed"
+        "no live run holds {task} failed -- run the plan again to retry failed tasks"
     ));
     exit::FAILED
 }
@@ -1633,26 +1594,26 @@ mod tests {
         let tasks = [
             t("t1", MERGED, ""),
             t("t2", MERGED, ""),
-            t("t3", PARKED, "the suite is red once the change sits on integration"),
-            t("t4", PARKED, "the suite is red once the change sits on integration"),
-            t("t5", PARKED, "wrote outside its Files: patterns"),
+            t("t3", FAILED, "the suite is red once the change sits on integration"),
+            t("t4", FAILED, "the suite is red once the change sits on integration"),
+            t("t5", FAILED, "wrote outside its Files: patterns"),
             t("t6", BLOCKED, ""),
             t("t7", PENDING, ""),
         ];
         let q = stopped_short("amx-v2", &tasks);
         assert!(
             q.starts_with(
-                "Plan amx-v2 stopped short: 2 of 7 merged, 3 parked, 2 never started."
+                "Plan amx-v2 stopped short: 2 of 7 merged, 3 failed, 2 never started."
             ),
             "counts do not lead: {q}"
         );
         assert!(
             q.contains(
-                "Parked - the suite is red once the change sits on integration: t3, t4."
+                "Failed - the suite is red once the change sits on integration: t3, t4."
             ),
-            "parked tasks are not grouped by reason: {q}"
+            "failed tasks are not grouped by reason: {q}"
         );
-        assert!(q.contains("Parked - wrote outside its Files: patterns: t5."));
+        assert!(q.contains("Failed - wrote outside its Files: patterns: t5."));
         assert!(q.contains("Never started: t6, t7."));
         assert!(q.trim_end().ends_with("What should happen to these?"));
     }
@@ -1660,7 +1621,7 @@ mod tests {
     #[test]
     fn the_question_never_glues_empty_notes_and_passes_lint() {
         let tasks = [
-            t("ansi", PARKED, "stalled with no sign of life"),
+            t("ansi", FAILED, "stalled with no sign of life"),
             t("rules", BLOCKED, ""),
         ];
         let q = stopped_short("amx-v2", &tasks);
@@ -1675,9 +1636,9 @@ mod tests {
 
     #[test]
     fn zero_counts_stay_out_of_the_summary_line() {
-        let tasks = [t("t1", MERGED, ""), t("t2", PARKED, "the worker exited with an error")];
+        let tasks = [t("t1", MERGED, ""), t("t2", FAILED, "the worker exited with an error")];
         let q = stopped_short("p", &tasks);
-        assert!(q.starts_with("Plan p stopped short: 1 of 2 merged, 1 parked."));
+        assert!(q.starts_with("Plan p stopped short: 1 of 2 merged, 1 failed."));
         assert!(!q.contains("0 never started"), "{q}");
     }
 

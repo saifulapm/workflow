@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# `workflow redispatch` -- ask a live run to dispatch a parked task again.
-# The run holds the project lock for its whole life, so a parked task used to
+# `workflow redispatch` -- ask a live run to dispatch a failed task again.
+# The run holds the project lock for its whole life, so a failed task used to
 # wait for the run to end before anyone could act on it, with the worker slot
 # it freed sitting idle (friction #W0S44DE6). A marker file in the run dir is
 # how the request reaches a run nothing else can talk to.
@@ -10,7 +10,7 @@ t_init
 export WF_TMP="$T_TMP"
 
 # t1 works until it is released, heartbeating so it never reads as stalled.
-# t2 reports blocked and parks -- until the go flag appears, when it does the
+# t2 reports blocked and fails -- until the go flag appears, when it does the
 # job properly.
 write_exec "$T_TMP/worker.sh" <<'FAKE'
 #!/bin/sh
@@ -56,7 +56,7 @@ cat >"$T_TMP/plan.md" <<'EOF'
 - [ ] t1 The long one
       Files: app/t1.php
       Verify: true
-- [ ] t2 The one that parks
+- [ ] t2 The one that fails
       Files: app/t2.php
       Verify: true
 EOF
@@ -76,10 +76,10 @@ env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
 runpid=$!
 
 for _ in $(seq 1 100); do
-	[ "$(cat "$rundir/t2.state" 2>/dev/null)" = parked ] && break
+	[ "$(cat "$rundir/t2.state" 2>/dev/null)" = failed ] && break
 	sleep 0.2
 done
-is "$(cat "$rundir/t2.state" 2>/dev/null)" parked 't2 parked while t1 still runs'
+is "$(cat "$rundir/t2.state" 2>/dev/null)" failed 't2 failed while t1 still runs'
 
 run workflow redispatch t2
 is "$RC" 0 'redispatch reaches the live run'

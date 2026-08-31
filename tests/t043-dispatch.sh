@@ -81,7 +81,7 @@ export ORDINARY_SETTING=keep-me
 run env WORKFLOW_MAX_WORKERS=1 WORKFLOW_DEADLINE_MIN=0.2 WORKFLOW_MODEL=haiku \
 	WORKFLOW_ALLOW_PUSH=1 WORKFLOW_HOOK_SEEN=/some/repo/.git \
 	WORKFLOW_MAX_TURNS=7 workflow run --plan-file "$T_TMP/plan.md"
-is "$RC" 1 'the stub reports no ready state, so both tasks park'
+is "$RC" 1 'the stub reports no ready state, so both tasks fail'
 
 ## ------------------------------------------------------- the scrubbed env
 
@@ -124,7 +124,7 @@ isnt "$s1" "$s2" 'each dispatch gets its own session id'
 # The recorded handle is the one --bg announced, resolved through the agents
 # listing to the full id -- not the uuid the orchestrator minted going in.
 # It is the second id this stub minted: a worker that leaves nothing behind
-# is retried once before it parks (friction #195SW7VX), and the retry's
+# is retried once before it fails (friction #195SW7VX), and the retry's
 # session is the one that stands.
 is "$s1" 'a1b2c302-0000-4000-8000-000000000000' \
 	'the session recorded is the one the backgrounded session actually got'

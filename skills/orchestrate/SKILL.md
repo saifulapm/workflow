@@ -33,11 +33,10 @@ yours; Saiful answers only what only he can.
 
        mem save --kind ruling --type <type> "<what - why - cost if wrong>"
 
-   - a parked task whose cause you can name: follow the binary's recipe
+   - a failed task whose cause you can name: follow the binary's recipe
      (leftover branches, integration ahead of base), then run again
    - suites that fought each other: WORKFLOW_MAX_WORKERS=1 and run again
    - a stall you can explain: run again and watch the redispatch
-   - work parked on another machine: `workflow resume` its bundle
 4. Escalate only scope, irreversible or taste (see Questions); decide the
    rest.
 

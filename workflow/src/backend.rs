@@ -2,7 +2,7 @@
 //!
 //! amx is the execution and visibility substrate, not an orchestrator: `run`
 //! dispatches *onto* a backend and keeps every policy decision -- waves,
-//! ownership, the merge gate, park -- to itself. The `claude` backend below
+//! ownership, the merge gate -- to itself. The `claude` backend below
 //! launches every worker as a `claude --bg` session: visible in the agents
 //! view, attachable, ended with `claude stop`, answered for by
 //! `claude agents --json`. A custom `WORKFLOW_WORKER_CMD` template keeps the

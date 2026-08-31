@@ -275,21 +275,6 @@ fn tools(r: &mut Report) {
             "workflow is not on PATH: the hook stubs skip their checks and only chain",
         );
     }
-    let sync = match std::env::var("WORKFLOW_SYNC_SCRIPT") {
-        Ok(v) if !v.is_empty() => PathBuf::from(v),
-        _ => paths::home().join(".dotfiles/bin/qshell-sync"),
-    };
-    if let Ok(text) = std::fs::read_to_string(&sync)
-        && !text.contains("workflow/parked")
-    {
-        r.finding(
-            "parked sync",
-            format!(
-                "{} does not carry the parked bundles; a park would stay on this machine",
-                sync.display()
-            ),
-        );
-    }
 }
 
 pub fn cmd_doctor() -> i32 {

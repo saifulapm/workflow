@@ -7,7 +7,7 @@ that carry it into an editor session.
   logs, handoffs, blocking questions and a wiki of design pages, kept as
   markdown outside every project repo and synced between machines.
 - `workflow/` is the gate and the orchestrator: `verify`, `lint-msg`,
-  `review-needed`, plan-driven `run`, `status`, `reap`, `park`/`resume`,
+  `review-needed`, plan-driven `run`, `status`, `reap`,
   `enable`/`disable`, `doctor`, and the body of the git hook stubs.
 - `hub/` is a small web view over mem's question queue, served tailnet-only,
   so an open question can be answered from a phone.
@@ -123,11 +123,10 @@ compacting.
 
 ## Pausing, moving, finishing
 
-- **Leaving a machine mid-work**: `workflow park` bundles the branch plus
-  uncommitted changes and pushes the bundle to the sync hub immediately;
-  `mem handoff --set "..."` says what is next. On the other machine,
-  `workflow resume <bundle>` restores all of it. Orchestrated tasks that
-  fail park themselves the same way.
+- **Leaving a machine mid-work**: commit or stash, and
+  `mem handoff --set "..."` says what is next; the handoff names the machine
+  the work is on. An orchestrated task that fails keeps its branch in the
+  project repo, and the run says which one.
 - **Finishing**: merge, push when you decide to (the pre-push stub makes a
   push deliberate: `WORKFLOW_ALLOW_PUSH=1 git push`), then
   `mem status --set "shipped; next decision is ..."` so the project's
