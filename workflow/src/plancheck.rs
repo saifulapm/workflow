@@ -57,6 +57,41 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
                 ));
             }
         }
+        // Read and Pattern point at what is already here; a path that is
+        // neither on disk nor tracked cannot be opened before editing.
+        let read = t.read.as_deref().unwrap_or("");
+        for p in ownership::split_patterns(read) {
+            if !root.join(&p).exists() && git.bytes(&["ls-files", "-z", "--", &p]).is_empty() {
+                f.warnings.push(format!(
+                    "plan: task {}: Read names '{p}' and it is not here to be read",
+                    t.id
+                ));
+            }
+        }
+        if let Some(pat) = t.pattern.as_deref() {
+            let path = pattern_path(pat);
+            if !root.join(path).exists() && git.bytes(&["ls-files", "-z", "--", path]).is_empty() {
+                f.warnings.push(format!(
+                    "plan: task {}: Pattern points at '{path}' and it is not here to copy from",
+                    t.id
+                ));
+            }
+        }
+        // A consumed interface comes from a dependency's Gives or the tree;
+        // one that comes from neither is a name the worker will hunt for.
+        for ident in uses_idents(t.uses.as_deref().unwrap_or("")) {
+            let given = t.deps.iter().any(|d| {
+                plan.get(d)
+                    .and_then(|dep| dep.gives.as_deref())
+                    .is_some_and(|g| g.contains(&ident))
+            });
+            if !given && !git.quiet(&["grep", "-q", "-F", &ident]) {
+                f.warnings.push(format!(
+                    "plan: task {}: Uses names '{ident}' and no dependency Gives it, nor does the tree",
+                    t.id
+                ));
+            }
+        }
         if runs_tests(verify) && !patterns.iter().any(|p| p.to_lowercase().contains("test")) {
             f.warnings.push(format!(
                 "plan: task {}: its Verify runs tests and its Files list no test file -- the worker cannot add the test that proves it",
@@ -128,6 +163,38 @@ fn runs_tests(verify: &str) -> bool {
     verify.contains("test")
 }
 
+/// `path:12-25` and `path:40` point into a file; anything else is the path
+/// itself, colons and all.
+fn pattern_path(p: &str) -> &str {
+    match p.rsplit_once(':') {
+        Some((path, lines))
+            if !lines.is_empty() && lines.chars().all(|c| c.is_ascii_digit() || c == '-') =>
+        {
+            path
+        }
+        _ => p,
+    }
+}
+
+/// One identifier per ` · `-separated item: the token nearest the call site
+/// (`CartPricing::price(...)` names `price`), or the item's only token when
+/// nothing is called. Declaration keywords never count as the name.
+fn uses_idents(uses: &str) -> Vec<String> {
+    const KEYWORDS: [&str; 12] = [
+        "fn", "pub", "struct", "enum", "class", "function", "def", "let", "const", "type",
+        "impl", "trait",
+    ];
+    uses.split(" · ")
+        .filter_map(|item| {
+            let head = item.split('(').next().unwrap_or(item);
+            head.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|t| !t.is_empty() && !KEYWORDS.contains(t))
+                .next_back()
+                .map(str::to_string)
+        })
+        .collect()
+}
+
 /// What a deferral idiom in a task block means for the plan.
 #[derive(Debug)]
 pub enum Deferral {
@@ -185,6 +252,25 @@ fn found_whole(haystack: &str, phrase: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pattern_pointer_gives_up_its_line_suffix_and_nothing_else() {
+        assert_eq!(pattern_path("src/old.rs:12-25"), "src/old.rs");
+        assert_eq!(pattern_path("src/old.rs:40"), "src/old.rs");
+        assert_eq!(pattern_path("src/old.rs"), "src/old.rs");
+        assert_eq!(pattern_path("scripts/build:release"), "scripts/build:release");
+    }
+
+    #[test]
+    fn a_uses_item_yields_the_identifier_nearest_its_call_site() {
+        assert_eq!(
+            uses_idents("fn price(basket: &Basket) -> Cents · Basket::fixture(): Basket"),
+            vec!["price", "fixture"]
+        );
+        assert_eq!(uses_idents("CartPricing::price(Basket $b): Cents"), vec!["price"]);
+        assert_eq!(uses_idents("DEFAULT_MODEL"), vec!["DEFAULT_MODEL"]);
+        assert!(uses_idents("").is_empty());
+    }
 
     #[test]
     fn deferral_idioms_are_refused_and_a_bare_placeholder_only_warns() {
