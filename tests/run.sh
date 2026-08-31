@@ -37,6 +37,7 @@ total=0
 failed=0
 files=0
 failed_files=()
+failed_checks=""
 
 for t in "$root"/tests/t*.sh; do
 	name=$(basename -- "$t")
@@ -53,11 +54,15 @@ for t in "$root"/tests/t*.sh; do
 	if [ "$status" -ne 0 ]; then
 		[ "$n_no" -eq 0 ] && failed=$((failed + 1))
 		failed_files+=("$name")
+		# Repeated in the tail summary: a red that scrolled away unnamed cannot
+		# be pinned afterwards (friction #BJVD1YCD).
+		failed_checks+=$(printf '%s\n' "$out" | grep '^not ok ' | sed "s/^/$name: /")$'\n'
 	fi
 done
 
 printf '\n----\n%d files, %d checks, %d failed\n' "$files" "$total" "$failed"
 if [ ${#failed_files[@]} -gt 0 ]; then
 	printf 'failing files: %s\n' "${failed_files[*]}"
+	printf '%s' "$failed_checks" | grep -v '^$'
 fi
 [ "$failed" -eq 0 ] || exit 1
