@@ -112,7 +112,7 @@ fn the_dashboard_links_to_the_wiki() {
 }
 
 #[test]
-fn the_index_lists_every_project_that_has_pages_and_their_pages() {
+fn the_index_lists_projects_by_name_and_a_name_opens_that_wiki_s_index() {
     let world = World::new("wiki-index");
     world.page(
         "proj-alpha",
@@ -130,15 +130,16 @@ fn the_index_lists_every_project_that_has_pages_and_their_pages() {
     assert_eq!(status_of(&response), 200);
     let body = body_of(&response);
 
-    assert!(body.contains("proj-alpha"), "{body}");
     assert!(
         body.contains("href=\"/wiki/proj-alpha/index\""),
-        "a page is a link: {body}"
+        "the project name is a link to its index page: {body}"
     );
-    assert!(body.contains("href=\"/wiki/proj-alpha/storage\""), "{body}");
-    // The first heading, which is what `mem wiki` reports as the title.
-    assert!(body.contains("How storage works"), "{body}");
-    // A project with no pages is not a section with nothing in it.
+    assert!(body.contains("2 pages"), "{body}");
+    // The pages themselves live behind the index, not on this listing: a
+    // hundred projects would otherwise make one unreadable page.
+    assert!(!body.contains("href=\"/wiki/proj-alpha/storage\""), "{body}");
+    assert!(!body.contains("How storage works"), "{body}");
+    // A project with no pages is not a row pointing at a 404.
     assert!(!body.contains("proj-beta"), "{body}");
 }
 

@@ -243,7 +243,10 @@ pub fn subscribe_page(config: &Config, machine: &str) -> String {
     )
 }
 
-/// `GET /wiki`: every project that has pages, and its pages.
+/// `GET /wiki`: every project that has pages, by name. The name opens the
+/// project's own `index` page, which every wiki keeps by hand; listing each
+/// project's pages here as well made the page grow with every project, and
+/// the index already answers what a project's wiki holds.
 pub fn wiki_index(section: &Section<WikiProject>) -> String {
     let mut out = head("wiki");
     out.push_str("<header><h1>wiki</h1><nav><a href=\"/\">home</a></nav></header>\n");
@@ -259,17 +262,16 @@ pub fn wiki_index(section: &Section<WikiProject>) -> String {
              <code>mem wiki &lt;slug&gt; --stdin --note \"&lt;why&gt;\"</code>.</p>\n",
         );
     }
-    for project in &section.rows {
-        out.push_str(&format!("<h2>{}</h2>\n<ul>\n", esc(&project.name)));
-        for page in &project.pages {
+    if !section.rows.is_empty() {
+        out.push_str("<ul>\n");
+        for project in &section.rows {
+            let pages = project.pages.len();
             out.push_str(&format!(
-                "<li><a href=\"{href}\">{slug}</a>\
-                 <div class=\"meta\">{title} · {size} · {modified}</div></li>\n",
-                href = esc(&page_url(&project.name, &page.slug)),
-                slug = esc(&page.slug),
-                title = esc(&page.title),
-                size = esc(&size(page.bytes)),
-                modified = esc(page.modified.as_deref().unwrap_or("—")),
+                "<li><a href=\"{href}\">{name}</a>\
+                 <div class=\"meta\">{pages} page{s}</div></li>\n",
+                href = esc(&page_url(&project.name, "index")),
+                name = esc(&project.name),
+                s = if pages == 1 { "" } else { "s" },
             ));
         }
         out.push_str("</ul>\n");
@@ -382,14 +384,6 @@ fn page_url(project: &str, slug: &str) -> String {
         encode_component(project),
         encode_component(slug)
     )
-}
-
-fn size(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    }
 }
 
 /// The head every page but the dashboard shares. No reload script: there is
@@ -566,9 +560,6 @@ mod tests {
     #[test]
     fn a_project_name_is_encoded_into_the_route_it_becomes() {
         assert_eq!(page_url("a b", "s"), "/wiki/a%20b/s");
-        assert_eq!(size(0), "0 B");
-        assert_eq!(size(1023), "1023 B");
-        assert_eq!(size(2048), "2.0 KB");
     }
 
     #[test]
