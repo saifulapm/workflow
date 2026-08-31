@@ -190,7 +190,9 @@ cat >"$T_TMP/again.md" <<'PLAN'
       Files: b/**
       Verify: true
 PLAN
-git branch again/t1
+# The leftover holds a commit: an empty one would be swept, not refused over
+# (friction #1916K336, covered in t044).
+git branch again/t1 "$(git commit-tree 'HEAD^{tree}' -p HEAD -m 'leftover work')"
 run workflow run --plan-file "$T_TMP/again.md"
 is "$RC" 2 'a leftover task branch stops the run before it dispatches anything'
 like "$OUT" 'still here from an earlier run' 'and says where it came from'

@@ -850,9 +850,19 @@ impl Run {
                 continue; // ticked off, or an interrupted run still set up
             }
             let branch = self.branch(&t.id);
-            if git.rev_parse_commit(&branch).is_some() {
-                leftovers.push(branch);
+            if git.rev_parse_commit(&branch).is_none() {
+                continue;
             }
+            // A task that was never dispatched -- blocked, or its run cut short
+            // -- leaves a branch holding nothing integration lacks. Refusing
+            // over it stops the rerun that would do the work, and there is
+            // nothing on it to look at (friction #1916K336).
+            if self.commits(&t.id) == 0 {
+                warn(format!("{branch}: empty, deleting"));
+                git.quiet(&["branch", "-D", &branch]);
+                continue;
+            }
+            leftovers.push(branch);
         }
         if !leftovers.is_empty() {
             warn("these branches are still here from an earlier run of this plan:");

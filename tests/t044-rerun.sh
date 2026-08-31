@@ -195,3 +195,38 @@ is "$RC" 0 'hand pass 2: the recovery pass completes'
 like "$OUT" 'already on integration/hand' 'and says t1 needs no second worker'
 is "$(cat "$handrun/t1.dispatches")" 1 'hand pass 2: t1 was never dispatched again'
 is "$(cat "$handrun/t2.state")" merged 'hand pass 2: the failed task ran and merged'
+
+## ------------- a blocked task's empty branch does not refuse the next run
+
+# A task skipped because its dependency failed was never dispatched, so its
+# branch holds nothing integration lacks -- and used to stop the rerun at
+# preflight all the same (friction #1916K336).
+new_repo blocked
+mem_register
+php_fixture
+cat >"$T_TMP/blocked.md" <<'PLAN'
+# plan: blocked
+
+- [ ] t1 First service
+      Files: app/t1.php
+      Verify: true
+- [ ] t2 Second service  [after: t1]
+      Files: app/t2.php
+      Verify: true
+PLAN
+: >"$T_TMP/misbehave-t1"
+run workflow run --plan-file "$T_TMP/blocked.md"
+is "$RC" 1 'blocked pass 1: t1 fails, so t2 never starts'
+blockedrun="$XDG_STATE_HOME/workflow/runs/blocked/blocked"
+is "$(cat "$blockedrun/t2.state")" blocked 'blocked pass 1: t2 is blocked'
+is "$(git rev-list --count 'main..blocked/t2')" 0 \
+	"blocked pass 1: t2's branch holds nothing"
+
+# The recipe clears only the branch that holds work; the empty one is swept.
+git branch -D blocked/t1 >/dev/null 2>&1
+rm -f "$T_TMP/misbehave-t1"
+run workflow run --plan-file "$T_TMP/blocked.md"
+is "$RC" 0 'blocked pass 2: the rerun is not refused over an empty branch'
+like "$OUT" 'blocked/t2: empty, deleting' 'blocked pass 2: and it says what it swept'
+is "$(cat "$blockedrun/t1.state")" merged 'blocked pass 2: t1 ran again and merged'
+is "$(cat "$blockedrun/t2.state")" merged 'blocked pass 2: the blocked task merged too'
