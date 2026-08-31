@@ -1,11 +1,16 @@
 //! The worker brief (spec §8.4): objective, the task block verbatim, the
-//! constraints, the mem cheat-line and the reporting protocol, inside 2,000
-//! bytes.
+//! constraints, the mem cheat-line and the reporting protocol, inside
+//! [`BUDGET`] bytes.
 
 use std::path::Path;
 
 use crate::plan::Task;
 use crate::warn;
+
+/// What a brief may weigh. 2,000 bytes held the core keys; the middle-tier
+/// keys (Read, Uses, Gives, Pattern) earn the room -- a deliberate deviation
+/// from spec §8.4's figure, recorded as a ruling.
+pub const BUDGET: usize = 3000;
 
 /// What the attempt before this one came to. A redispatched worker used to
 /// wake up to the same fixed text as the first attempt, with the status file
@@ -56,7 +61,8 @@ task depends on is already there; never go looking for another branch.
 ## How to work
 
 Write the failing test first, then the code that passes it. Your evidence
-command is `workflow verify`, which runs the Verify: line above. Commit each
+command is `workflow verify`, which runs the Verify: line above. A red
+Verify is answered in the code it tests, never by weakening the test. Commit each
 atomic change in ordinary
 engineering voice -- no trailers, no session links, no words like agent, AI or
 orchestration, no puffery, plain words over fancy ones, straight quotes, no
@@ -101,9 +107,9 @@ pub fn write(task: &Task, worktree: &Path, status_file: &Path, prior: &Prior, ou
     }
     let body = text(task, worktree, status_file, prior);
     let _ = std::fs::write(out, &body);
-    if body.len() > 2000 {
+    if body.len() > BUDGET {
         warn(format!(
-            "task {}: the brief is {} bytes, over the 2000 byte budget",
+            "task {}: the brief is {} bytes, over the {BUDGET} byte budget",
             task.id,
             body.len()
         ));
@@ -151,6 +157,38 @@ mod tests {
         assert!(
             !body.contains("The attempt before"),
             "a first attempt has no attempt before it: {body}"
+        );
+
+        // A middle-tier block -- Read, Uses, Gives, Pattern beside the core
+        // keys -- is what the budget has to hold now.
+        let rich = Task {
+            id: "t2".into(),
+            title: "Wire cart pricing into checkout".into(),
+            block: "- [ ] t2 Wire cart pricing into checkout [after: t1]\n      \
+                    Files: app/Checkout/*.php app/Services/Cart*.php tests/Unit/Checkout*\n      \
+                    Read: app/Checkout/Total.php app/Services/CartPricing.php docs/pricing.md\n      \
+                    Uses: CartPricing::price(Basket $b): Cents · Basket::fixture(): Basket\n      \
+                    Gives: CheckoutTotal::grand(Basket $b): Cents\n      \
+                    Pattern: app/Checkout/Shipping.php:40-88\n      \
+                    Verify: bin/php artisan test --filter=Checkout\n      \
+                    Done: every fixture basket totals identically through checkout and cart\n"
+                .into(),
+            ..Task::default()
+        };
+        let rich_body = text(
+            &rich,
+            Path::new("/state/worktrees/app/plan/t2"),
+            Path::new("/state/runs/app/plan/t2.status"),
+            &Prior::default(),
+        );
+        assert!(
+            rich_body.len() <= BUDGET,
+            "a middle-tier brief is {} bytes, over the {BUDGET} byte budget",
+            rich_body.len()
+        );
+        assert!(
+            rich_body.contains("never by weakening the test"),
+            "the brief lost the test invariant"
         );
 
         // The redispatch, which is where the section earns its bytes.

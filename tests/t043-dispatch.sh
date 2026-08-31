@@ -135,7 +135,7 @@ truthy "$([ ! -e "$rundir/costs.tsv" ] && echo 0 || echo 1)" \
 
 brief="$XDG_CACHE_HOME/workflow/briefs/app/dispatch-check/t1.md"
 truthy "$([ -f "$brief" ] && echo 0 || echo 1)" 'the brief was written where the template points'
-is "$(($(wc -c <"$brief") <= 2000))" 1 'the brief is inside its 2000 byte budget'
+is "$(($(wc -c <"$brief") <= 3000))" 1 'the brief is inside its 3000 byte budget'
 body=$(cat "$brief")
 like "$body" 'Extract cart pricing into a service' 'the brief carries the objective'
 like "$body" 'Files: app/Services/Cart\*\.php tests/Unit/Cart\*' 'and the task block verbatim'
