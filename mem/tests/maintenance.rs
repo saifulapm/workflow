@@ -349,6 +349,42 @@ fn a_tidy_wiki_gives_doctor_nothing_to_say() {
 }
 
 #[test]
+fn a_stub_that_left_the_index_is_not_drift() {
+    let w = World::new("maint-wiki-stub");
+    w.project(P, "thing");
+    page(
+        &w,
+        "index",
+        "# Index\n\n- [pricing](pricing.md) — where money is rounded\n",
+    );
+    page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
+    // A finished page: short, points at its replacement, out of the index —
+    // exactly what the skill says to leave behind, since a deletion would
+    // come back on the next sync.
+    page(
+        &w,
+        "rounding",
+        "# rounding\n\nFolded into [pricing](pricing.md).\n",
+    );
+    // Short and out of the index but pointing nowhere: still drift.
+    page(&w, "shipping", "# Shipping\n\nZones, and nothing else.\n");
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
+    assert_eq!(code(&out), 0);
+
+    let drift = details(&out, "wiki index");
+    assert_eq!(drift.len(), 1, "{drift:?}");
+    assert!(
+        drift[0].contains("shipping"),
+        "the linkless page is the one drifting: {drift:?}"
+    );
+    assert!(
+        !drift.iter().any(|d| d.contains("rounding")),
+        "a stub pointing at a live page is finished, not forgotten: {drift:?}"
+    );
+}
+
+#[test]
 fn a_wiki_with_no_index_page_is_one_finding_rather_than_one_per_page() {
     let w = World::new("maint-wiki-unindexed");
     w.project(P, "thing");

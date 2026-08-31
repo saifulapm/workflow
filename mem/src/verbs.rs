@@ -1253,6 +1253,10 @@ const WIKI_INDEX: &str = "index";
 /// by being written to, and compaction is a verb, not a refusal.
 const WIKI_PAGE_WARN_BYTES: u64 = 8 * 1024;
 
+/// Up to this size, a page that links to a live page and is out of the index
+/// reads as a finished page's stub rather than as index drift.
+const WIKI_STUB_MAX_BYTES: usize = 512;
+
 /// The slug a markdown link points at, when it points at a page in the same
 /// wiki. `[name](name.md)` is the whole convention: an anchor is trimmed, and a
 /// target with a scheme or a slash in it lives in some other tree.
@@ -1293,6 +1297,7 @@ fn wiki_findings(app: &App, project: &crate::project::Project) -> Vec<crate::mai
     }
     let slugs: std::collections::HashSet<&str> = pages.iter().map(|p| p.slug.as_str()).collect();
     let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stubs: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut has_index = false;
 
     for page in &pages {
@@ -1325,6 +1330,11 @@ fn wiki_findings(app: &App, project: &crate::project::Project) -> Vec<crate::mai
         }
         let is_index = page.slug == WIKI_INDEX;
         has_index |= is_index;
+        // A finished page becomes a one-line stub pointing at its replacement
+        // and leaves the index (deletion comes back on the next sync). Short
+        // plus a link to a live page reads as that stub; a stub whose link
+        // dangles is still caught by the link check below.
+        let mut points_at_a_page = false;
         for target in markdown_links(&text) {
             let Some(slug) = page_link_target(target) else {
                 continue;
@@ -1347,7 +1357,12 @@ fn wiki_findings(app: &App, project: &crate::project::Project) -> Vec<crate::mai
                     "wiki link",
                     format!("{name} links to {slug}.md, which is not a page"),
                 ));
+            } else {
+                points_at_a_page = true;
             }
+        }
+        if !is_index && text.len() <= WIKI_STUB_MAX_BYTES && points_at_a_page {
+            stubs.insert(page.slug.clone());
         }
     }
 
@@ -1365,7 +1380,10 @@ fn wiki_findings(app: &App, project: &crate::project::Project) -> Vec<crate::mai
         return findings;
     }
     for page in &pages {
-        if page.slug != WIKI_INDEX && !listed.contains(page.slug.as_str()) {
+        if page.slug != WIKI_INDEX
+            && !listed.contains(page.slug.as_str())
+            && !stubs.contains(page.slug.as_str())
+        {
             findings.push(finding(
                 "wiki index",
                 format!("{}/{}.md is not in the index", project.name, page.slug),
