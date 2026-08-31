@@ -74,15 +74,15 @@ dispatches the first wave for real."
     },
     /// Collect finished or stalled workers.
     Reap,
-    /// Ask the live run to dispatch a parked task again.
-    #[command(long_about = "Ask the live run to dispatch a parked task again.
+    /// Ask the live run to dispatch a failed task again.
+    #[command(long_about = "Ask the live run to dispatch a failed task again.
 
-A run holds its project's lock for its whole life, so a parked task used to
+A run holds its project's lock for its whole life, so a failed task used to
 wait for the run to end before anyone could act on it -- with the worker slot
 it freed sitting idle (friction #W0S44DE6). This writes a marker in the live
 run's directory; the run picks it up on its next poll and dispatches the task
 again, as long as its wave is still open. With no live run, just run the plan
-again -- a fresh run retries parked tasks by itself.")]
+again -- a fresh run retries failed tasks by itself.")]
     Redispatch { task: String },
     /// Report this project's runs: task states, spend, lock liveness.
     #[command(long_about = "Report this project's runs: task states, spend, lock liveness.
