@@ -13,15 +13,17 @@ First action of the session:
 
 1. Write the failing test. Watch it fail for the right reason.
 2. Write the smallest code that passes it.
-3. Run the task's `Verify:` command — that is your evidence.
-4. Run `workflow verify`. It is authoritative at the gate, whatever your own
-   command said. Exit codes: 0 green · 1 failed · 2 no verifier · 3 test
-   removal.
-5. Commit. Ordinary engineering voice, present tense, says what changed and
+3. Run `workflow verify` — that is your evidence, and it is authoritative at
+   the gate. In a task worktree it runs the task's own `Verify:` command,
+   under the machine's suite lock; a raw suite run beside the merge gate's is
+   how a timing-sensitive test goes red (friction #DKMYMTDH). A single
+   targeted test while iterating is fine — the full suite is not. Exit codes:
+   0 green · 1 failed · 2 no verifier · 3 test removal.
+4. Commit. Ordinary engineering voice, present tense, says what changed and
    why. Plain words, no puffery; the unslop skill is the standard for any
    longer prose. Stage only the files this task touched; never `git add -A`.
-6. `mem log "<what landed>"`.
-7. `/clear`, then the next task. (Interactive sessions only.)
+5. `mem log "<what landed>"`.
+6. `/clear`, then the next task. (Interactive sessions only.)
 
 If the task changed how a subsystem works, the page that describes it is now
 wrong. Read it before you start and rewrite it before you log:
