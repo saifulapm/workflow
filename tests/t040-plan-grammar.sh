@@ -381,3 +381,37 @@ EOF2
 parse
 is "$RC" 0 'a missing test file is a warning too'
 like "$OUT" 'no test file' 'and says what is missing'
+
+# A pattern git ignores is on disk, so it does not "match nothing" -- but no
+# commit can carry it, so the merge gate can never see the task's work
+# (friction #A3WHPGE3).
+printf 'notes.md\ndist/\n' >.gitignore
+printf 'x\n' >notes.md
+mkdir -p dist
+printf 'x\n' >dist/out.js
+git add .gitignore
+git -c core.hooksPath=/dev/null commit -qm 'ignore the notes and the dist'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Work the gate cannot see
+      Files: notes.md dist/out.js dist/new.js
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a gitignored Files line is a warning, never a refusal'
+like "$OUT" "'notes.md' matches only gitignored" 'the ignored file is named'
+like "$OUT" "'dist/out.js' matches only gitignored" 'and one inside an ignored directory'
+like "$OUT" "'dist/new.js' matches only gitignored" 'and one a task would create into it'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Ordinary tracked work
+      Files: src/*.rs
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a tracked pattern passes'
+unlike "$OUT" 'gitignored' 'with no gitignore warning'

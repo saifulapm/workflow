@@ -39,6 +39,11 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
                     "plan: task {}: '{p}' matches nothing here and its directory does not exist -- a task creating it, or a typo",
                     t.id
                 ));
+            } else if only_ignored(&git, p) {
+                f.warnings.push(format!(
+                    "plan: task {}: '{p}' matches only gitignored paths -- no worktree can carry them, so the merge gate will never see this work",
+                    t.id
+                ));
             }
         }
         if runs_tests(verify) && !patterns.iter().any(|p| p.to_lowercase().contains("test")) {
@@ -92,6 +97,20 @@ fn matches_nothing(git: &Git, root: &Path, pattern: &str) -> bool {
         None => root.to_path_buf(),
     };
     !dir.is_dir()
+}
+
+/// Nothing tracked answers the pattern and git sees only ignored matches --
+/// files that exist on disk, which is why `matches_nothing` waves them
+/// through, but that no commit can carry (friction #A3WHPGE3). The
+/// `check-ignore` probe catches the literal path a task would create straight
+/// into an ignored directory; on a glob it never matches and decides nothing.
+fn only_ignored(git: &Git, pattern: &str) -> bool {
+    let spec = gitcmd::glob_top(pattern);
+    if !git.bytes(&["ls-files", "-z", "--", &spec]).is_empty() {
+        return false;
+    }
+    let ignored = ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--", &spec];
+    !git.bytes(&ignored).is_empty() || git.quiet(&["check-ignore", "-q", "--", pattern])
 }
 
 fn runs_tests(verify: &str) -> bool {
