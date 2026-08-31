@@ -266,10 +266,15 @@ pub fn wiki_index(section: &Section<WikiProject>) -> String {
         out.push_str("<ul>\n");
         for project in &section.rows {
             let pages = project.pages.len();
+            // The first page: `index` whenever the wiki has one (the sort puts
+            // it first), and a real page rather than a 404 when it does not.
+            let Some(first) = project.pages.first() else {
+                continue; // model drops empty projects; belt and braces
+            };
             out.push_str(&format!(
                 "<li><a href=\"{href}\">{name}</a>\
                  <div class=\"meta\">{pages} page{s}</div></li>\n",
-                href = esc(&page_url(&project.name, "index")),
+                href = esc(&page_url(&project.name, &first.slug)),
                 name = esc(&project.name),
                 s = if pages == 1 { "" } else { "s" },
             ));

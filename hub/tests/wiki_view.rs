@@ -143,6 +143,23 @@ fn the_index_lists_projects_by_name_and_a_name_opens_that_wiki_s_index() {
     assert!(!body.contains("proj-beta"), "{body}");
 }
 
+/// A wiki whose author has not written `index` yet still deserves a working
+/// row: the link falls back to its first page instead of a 404.
+#[test]
+fn a_project_without_an_index_page_links_to_its_first_page() {
+    let world = World::new("wiki-no-index");
+    world.page("proj-alpha", "storage", "# How storage works\n\nIt writes.\n");
+    let hub = world.hub();
+
+    let body = body_of(&hub.get("/wiki")).to_string();
+
+    assert!(
+        body.contains("href=\"/wiki/proj-alpha/storage\""),
+        "{body}"
+    );
+    assert!(!body.contains("href=\"/wiki/proj-alpha/index\""), "{body}");
+}
+
 #[test]
 fn a_store_with_no_pages_anywhere_says_so() {
     let world = World::new("wiki-empty");
