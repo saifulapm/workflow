@@ -75,13 +75,17 @@ like "$(cat "$WF_ROOT/README.md")" 'mem wiki' 'the README puts the wiki among th
 
 ## ------------------------------------------------------------ the adapters
 
-for a in codex pi; do
+# codex only: pi reads the skills natively, so its adapter retired
+# (2026-08-31) in favour of pi's own settings and a workflow-gate extension.
+for a in codex; do
 	f="$WF_ROOT/adapters/$a.md"
 	truthy "$([ -f "$f" ] && echo 0 || echo 1)" "adapters/$a.md exists"
 	like "$(cat "$f")" 'export WORKFLOW_AGENT=1' "adapters/$a mandates exporting WORKFLOW_AGENT"
 	like "$(cat "$f")" 'workflow verify' "adapters/$a routes through the gate"
 	like "$(cat "$f")" 'mem ask' "adapters/$a keeps the stop conditions"
 done
+truthy "$([ ! -f "$WF_ROOT/adapters/pi.md" ] && echo 0 || echo 1)" \
+	'the retired pi adapter stays gone'
 
 ## ------------------------------------------------------------ the surface
 

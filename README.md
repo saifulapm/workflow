@@ -13,7 +13,9 @@ that carry it into an editor session.
   so an open question can be answered from a phone.
 - `skills/` holds the session-facing instructions (route, plan, implement,
   review, orchestrate, mem, unslop). `hooks/` holds the three git hook
-  stubs. `adapters/` carry the same contract to other runtimes.
+  stubs. `adapters/` carries the contract to a runtime that cannot read
+  skills — only Codex now; pi reads the skills natively (its settings name
+  `~/.claude/skills`, and a pi extension exports `WORKFLOW_AGENT=1`).
 
 Install each binary with `cargo install --path <crate>`. Tests are
 `cargo test` per crate plus `bash tests/run.sh`. `workflow doctor` and
