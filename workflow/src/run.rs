@@ -62,7 +62,7 @@ fn write_field(dir: &Path, task: &str, ext: &str, value: &str) {
 
 /// Liveness is the latest of three signals, because each one alone has a way of
 /// going quiet on a worker that is fine: a long test run writes no transcript
-/// line, a shared `CARGO_TARGET_DIR` flattens the worktree's mtime, and a worker
+/// line, an out-of-tree `CARGO_TARGET_DIR` flattens the worktree's mtime, and a worker
 /// that is only thinking touches neither. The status file is the worker's own
 /// heartbeat and it lives in the run directory, not the worktree, so it has to
 /// be counted separately (review-3 F-10).
@@ -154,6 +154,29 @@ impl Run {
 
     fn worktree(&self, task: &str) -> PathBuf {
         self.wt_root.join(task)
+    }
+
+    /// Where `who` (a task, or the gate as "integration") builds a Rust
+    /// project. One target dir per builder, never shared and always set: a
+    /// shared dir let one task's suite drive another task's binary, and left
+    /// binaries whose baked-in paths pointed at reaped worktrees (frictions
+    /// #MQRKM0AD, #TFVWXXDQ). An inherited CARGO_TARGET_DIR is overridden for
+    /// the same reason. Cleanup takes the whole plan's dirs down with the
+    /// worktrees.
+    fn cargo_root(&self) -> PathBuf {
+        paths::state_home()
+            .join("workflow/cargo")
+            .join(&self.project)
+            .join(&self.plan.plan_id)
+    }
+
+    fn cargo_env(&self, who: &str) -> Option<(String, String)> {
+        if !self.repo.join("Cargo.toml").is_file() {
+            return None;
+        }
+        let dir = self.cargo_root().join(who);
+        let _ = std::fs::create_dir_all(&dir);
+        Some(("CARGO_TARGET_DIR".into(), dir.to_string_lossy().to_string()))
     }
 
     /// The pid the template wrote, digits only: an empty answer means the
@@ -350,6 +373,8 @@ impl Run {
         write_field(&self.dir, task, "dispatches", &(n + 1).to_string());
         write_field(&self.dir, task, "dispatched_at", &sys::now().to_string());
 
+        let mut env = self.env.clone();
+        env.extend(self.cargo_env(task));
         let d = Dispatch {
             task: task.to_string(),
             worktree: wt,
@@ -362,7 +387,7 @@ impl Run {
             session: session.clone(),
             model: env_str("WORKFLOW_MODEL", "opus"),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
-            env: self.env.clone(),
+            env,
         };
 
         // Recorded before the worker exists, so a run that dies between here
@@ -549,6 +574,9 @@ impl Run {
         let mut c = Command::new(exe);
         c.arg("verify").arg("--gate").current_dir(&self.int_wt);
         for (k, v) in &self.env {
+            c.env(k, v);
+        }
+        if let Some((k, v)) = self.cargo_env("integration") {
             c.env(k, v);
         }
         c.status().map(|s| s.success()).unwrap_or(false)
@@ -829,20 +857,6 @@ impl Run {
         }
         let _ = std::fs::write(self.dir.join("base_sha"), format!("{}\n", self.base));
 
-        // One cargo target for the whole project, so five worktrees do not each
-        // rebuild the world. It flattens the worktree mtime signal, which is why
-        // liveness has three sources rather than one.
-        if self.repo.join("Cargo.toml").is_file() && std::env::var("CARGO_TARGET_DIR").is_err() {
-            let target = paths::state_home()
-                .join("workflow/cargo")
-                .join(&self.project);
-            let _ = std::fs::create_dir_all(&target);
-            self.env.push((
-                "CARGO_TARGET_DIR".into(),
-                target.to_string_lossy().to_string(),
-            ));
-        }
-
         let git = self.git();
         // Created once, never reset. If it is behind the base -- which is what
         // the sanctioned recovery leaves behind, the last run's work having been
@@ -964,6 +978,7 @@ impl Run {
         }
         self.git().quiet(&["worktree", "prune"]);
         let _ = std::fs::remove_dir(&self.wt_root);
+        let _ = std::fs::remove_dir_all(self.cargo_root());
     }
 
     /// Take down what the run set up -- but never out from under a worker.
@@ -1016,6 +1031,10 @@ impl Run {
         }
         git.quiet(&["worktree", "prune"]);
         let _ = std::fs::remove_dir(&self.wt_root);
+        // Artifacts built in the worktrees go with them: a cached test binary
+        // bakes its worktree path in at compile time, and outliving that path
+        // is how phantom failures happen (friction #TFVWXXDQ).
+        let _ = std::fs::remove_dir_all(self.cargo_root());
     }
 
     fn deps_satisfied(&self, task: &Task) -> bool {
