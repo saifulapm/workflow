@@ -38,12 +38,14 @@ fn run_with_stdin(args: &[&str], w: &World, cwd: &Path, input: &[u8]) -> std::pr
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn mem");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(input)
-        .expect("write stdin");
+    // A refused verb exits before it reads stdin, and under load the child can
+    // win that race, closing the pipe under this write. The early exit is the
+    // behavior under test, so EPIPE is a pass, not a panic (friction #D6TP86YJ).
+    if let Err(e) = child.stdin.take().expect("stdin").write_all(input)
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        panic!("write stdin: {e}");
+    }
     child.wait_with_output().expect("wait")
 }
 

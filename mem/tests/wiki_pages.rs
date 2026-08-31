@@ -33,12 +33,14 @@ fn spawn(w: &World, cwd: &Path, args: &[&str]) -> std::process::Child {
 
 fn mem_stdin(w: &World, cwd: &Path, args: &[&str], input: &[u8]) -> std::process::Output {
     let mut child = spawn(w, cwd, args);
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(input)
-        .expect("write stdin");
+    // A refused verb exits before it reads stdin, and under load the child can
+    // win that race, closing the pipe under this write. The early exit is the
+    // behavior under test, so EPIPE is a pass, not a panic (friction #D6TP86YJ).
+    if let Err(e) = child.stdin.take().expect("stdin").write_all(input)
+        && e.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        panic!("write stdin: {e}");
+    }
     child.wait_with_output().expect("wait")
 }
 
