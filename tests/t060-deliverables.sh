@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The shipped files themselves: skills inside their budgets, adapters that
+# The shipped files themselves: skills inside their budgets, hooks that
 # mandate the one line without which they are ungated, and the command surface.
 source "$(dirname -- "$0")/lib.sh"
 t_init
