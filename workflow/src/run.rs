@@ -424,7 +424,11 @@ impl Run {
     /// words, then rebase onto the integration branch, and only then verify --
     /// verifying before the rebase lets a semantic conflict land green
     /// (review-3 F-6).
-    fn merge(&self, task: &str) -> Result<(), String> {
+    ///
+    /// Ok(true) is a merge; Ok(false) is a ready worker with nothing to
+    /// merge, which is its way of saying the work is already in the tree it
+    /// opened onto (friction #B2D8SJKR).
+    fn merge(&self, task: &str) -> Result<bool, String> {
         let branch = self.branch(task);
         let wt = self.worktree(task);
 
@@ -439,11 +443,11 @@ impl Run {
         if let Some((prev, new)) = self.pending_merge(task)
             && self.git().is_ancestor(&new, &self.int_branch)
         {
-            return self.settle_interrupted_merge(task, &prev, &new);
+            return self.settle_interrupted_merge(task, &prev, &new).map(|()| true);
         }
 
         if self.commits(task) == 0 {
-            return Err("the worker reported ready but committed nothing".into());
+            return Ok(false);
         }
 
         let patterns = ownership::split_patterns(
@@ -514,7 +518,7 @@ impl Run {
         }
 
         self.record_merged(task, &new);
-        Ok(())
+        Ok(true)
     }
 
     /// The merge this task was in the middle of when its coordinator died, as
@@ -654,7 +658,7 @@ impl Run {
             Some(_) => {}
         }
         match self.merge(task) {
-            Ok(()) => {
+            Ok(true) => {
                 self.set_state(task, MERGED);
                 warn(format!("task {task}: merged onto {}", self.int_branch));
                 if !memcli::plan_tick(task) {
@@ -663,6 +667,25 @@ impl Run {
                     ));
                 }
                 memcli::log(&format!("run {}: merged {task}", self.plan.plan_id));
+            }
+            // Ready with nothing committed: the worker found its Done already
+            // satisfied -- rebuilt by hand between passes, or landed by an
+            // earlier plan. Failing it skipped every dependent behind work
+            // that exists (friction #B2D8SJKR).
+            Ok(false) => {
+                self.set_state(task, DONE_PREVIOUSLY);
+                warn(format!(
+                    "task {task}: reported ready with nothing to commit -- its work is already in the tree"
+                ));
+                if !memcli::plan_tick(task) {
+                    warn(format!(
+                        "task {task}: mem could not tick it off (is this plan in mem?)"
+                    ));
+                }
+                memcli::log(&format!(
+                    "run {}: {task} was already satisfied, nothing to merge",
+                    self.plan.plan_id
+                ));
             }
             Err(why) => self.fail_task(task, &why),
         }
@@ -1015,7 +1038,11 @@ impl Run {
             }
         }
         for t in self.plan.ids() {
-            if self.state(&t) == MERGED {
+            let state = self.state(&t);
+            // A done-previously branch is deleted only when it holds nothing
+            // integration lacks -- which for the ready-with-nothing case is
+            // definitionally true, and never true of failed work.
+            if state == MERGED || (state == DONE_PREVIOUSLY && self.commits(&t) == 0) {
                 git.quiet(&["branch", "-D", &self.branch(&t)]);
             }
         }
