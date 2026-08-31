@@ -243,8 +243,13 @@ fn settings_keys(r: &mut Report) {
 fn budgets(r: &mut Report) {
     const FM_MAX: usize = 240;
     for (name, fm, body) in skill_sizes() {
-        // implement carries the recorded exception to the 3,200 byte budget.
-        let body_max = if name == "implement" { 4800 } else { 3200 };
+        // implement and plan carry recorded exceptions to the 3,200 byte
+        // budget: implement holds the whole loop, plan the middle-tier keys.
+        let body_max = match name.as_str() {
+            "implement" => 4800,
+            "plan" => 4000,
+            _ => 3200,
+        };
         if fm > FM_MAX {
             r.finding(
                 &format!("skill {name}"),
