@@ -301,3 +301,69 @@ like "$OUT" 'nope' 'and names what is wrong with the plan'
 
 run workflow run --plan-file "$T_TMP/does-not-exist.md"
 is "$RC" 2 'an unreadable plan file is exit 2'
+
+## ------------------------------------------------- a monorepo child project
+
+# mem resolves a monorepo subdir to its child project, so a run typed there
+# must read the child's plan slot and record itself under the child's name --
+# not the root's, which is where the toplevel cwd would land every mem call
+# (frictions #GCYJFZT3, #FFSFMBDH).
+
+new_repo mono
+mem_register
+printf '{"name":"acme/mono"}\n' >composer.json
+printf '#!/bin/sh\nexit 0\n' >artisan
+chmod +x artisan
+write_exec bin/php <<-'EOF'
+	#!/bin/sh
+	exit 0
+EOF
+mkdir -p apps/child/src
+printf 'seed\n' >apps/child/src/seed.txt
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'mono files'
+"$MEM_BIN" project add apps/child >/dev/null
+
+cd apps/child
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: child-solo
+
+- [ ] t1 Just one thing
+      Files: apps/child/src/**
+      Verify: true
+EOF
+run workflow run
+is "$RC" 0 'a run typed in the child subdir finds the child plan'
+like "$OUT" 'one task' 'and refuses to orchestrate it, which proves it was read'
+
+write_exec "$T_TMP/child-worker.sh" <<'CFAKE'
+#!/bin/sh
+task=$1; status=$3
+printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+printf 'x\n' >"apps/child/src/$task.txt"
+git add "apps/child/src/$task.txt"
+git -c core.hooksPath=/dev/null commit -qm "Add $task"
+printf '%s ready merge-ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+printf '{"is_error":false,"result":"ok"}\n'
+CFAKE
+export CFAKE="$T_TMP/child-worker.sh"
+export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$CFAKE" {task} {worktree} {status} {session}'"'"' > {out} 2> {err} &'
+
+cat >"$T_TMP/child-run.md" <<'PLAN'
+# plan: child-run
+
+- [ ] a1 Add one file
+      Files: apps/child/src/a1.txt
+      Verify: true
+- [ ] a2 Add another file
+      Files: apps/child/src/a2.txt
+      Verify: true
+PLAN
+run workflow run --plan-file "$T_TMP/child-run.md"
+is "$RC" 0 'the child run ends green'
+[ -d "$XDG_STATE_HOME/workflow/runs/child/child-run" ] && recorded=yes || recorded=no
+is "$recorded" yes 'the run is recorded under the child project name'
+
+run workflow status --json
+like "$OUT" '"project": *"child"' 'status typed in the same subdir resolves the child'
+like "$OUT" '"plan": *"child-run"' 'and lists the run the dispatch recorded'

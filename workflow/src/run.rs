@@ -1233,6 +1233,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         warn("run: stand in the project checkout");
         return exit::USAGE;
     }
+    memcli::resolve_from_here();
     let Some((git, top)) = repo::goto_toplevel() else {
         return exit::USAGE;
     };
@@ -1576,6 +1577,7 @@ pub fn cmd_reap() -> i32 {
         warn("reap: stand in the project checkout");
         return exit::OK;
     }
+    memcli::resolve_from_here();
     let Some((_git, top)) = repo::goto_toplevel() else {
         return exit::OK;
     };

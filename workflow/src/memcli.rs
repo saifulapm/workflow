@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 use serde::Deserialize;
 
@@ -48,12 +49,29 @@ pub fn bin() -> String {
     }
 }
 
+static CALLER_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Pin every mem call to the directory the caller stood in. mem resolves a
+/// monorepo subdir to its child project by cwd, so a command that chdirs to
+/// the repo toplevel before asking mem would always get the root project:
+/// the wrong plan slot to read and tick, and the wrong name to record runs
+/// under (frictions #GCYJFZT3, #FFSFMBDH).
+pub fn resolve_from_here() {
+    if let Ok(cwd) = std::env::current_dir() {
+        let _ = CALLER_DIR.set(cwd);
+    }
+}
+
+fn command() -> Command {
+    let mut c = Command::new(bin());
+    if let Some(dir) = CALLER_DIR.get() {
+        c.current_dir(dir);
+    }
+    c
+}
+
 fn capture(args: &[&str]) -> Option<(bool, String)> {
-    let out = Command::new(bin())
-        .args(args)
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let out = command().args(args).stderr(Stdio::null()).output().ok()?;
     Some((
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).to_string(),
@@ -61,7 +79,7 @@ fn capture(args: &[&str]) -> Option<(bool, String)> {
 }
 
 fn silent(args: &[&str]) -> bool {
-    Command::new(bin())
+    command()
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
