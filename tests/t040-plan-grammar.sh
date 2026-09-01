@@ -460,3 +460,40 @@ EOF2
 parse
 is "$RC" 0 'a tracked pattern passes'
 unlike "$OUT" 'gitignored' 'with no gitignore warning'
+
+# A task that Gives an identifier the tree already carries must own every file
+# naming it: the constant changed in src/ breaks the test asserting it, and a
+# worker may not touch a file outside its patterns (friction #8M2YDDXH).
+mkdir -p src tests
+printf 'pub const BRIEF_BUDGET: usize = 2000;\n' >src/budget.rs
+printf 'assert BRIEF_BUDGET is 2000\n' >tests/budget-check.sh
+git add src/budget.rs tests/budget-check.sh
+git -c core.hooksPath=/dev/null commit -qm 'the budget and its test'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Raise the budget
+      Files: src/budget.rs
+      Gives: BRIEF_BUDGET
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'an unclaimed file naming a Gives identifier is a warning'
+like "$OUT" "Gives 'BRIEF_BUDGET'" 'the identifier is named'
+like "$OUT" 'tests/budget-check.sh' 'and so is the file no task owns'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Raise the budget
+      Files: src/budget.rs
+      Gives: BRIEF_BUDGET
+      Verify: true
+- [ ] t2 Keep the test asserting the new value [after: t1]
+      Files: tests/budget-check.sh
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a sibling task claiming the file settles it'
+unlike "$OUT" 'budget-check' 'and nothing warns once every naming file is owned'

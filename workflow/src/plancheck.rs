@@ -24,6 +24,17 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
         refusals: Vec::new(),
         warnings: Vec::new(),
     };
+    // Every path some task's Files could carry. A Gives identifier living in
+    // a file outside this union is a change the plan forgot to own: the value
+    // moves in the files one worker holds while the file asserting it belongs
+    // to nobody (friction #8M2YDDXH).
+    let mut claimed = std::collections::HashSet::new();
+    for t in &plan.tasks {
+        for p in ownership::split_patterns(t.files.as_deref().unwrap_or("")) {
+            let spec = gitcmd::glob_top(&p);
+            claimed.extend(zlines(&git.bytes(&["ls-files", "-z", "--", &spec])));
+        }
+    }
     for t in &plan.tasks {
         if t.checked {
             continue; // never dispatched, so its lines are history, not risk
@@ -102,6 +113,24 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
                 ));
             }
         }
+        for ident in uses_idents(t.gives.as_deref().unwrap_or("")) {
+            let named: Vec<String> = zlines(&git.bytes(&["grep", "-l", "-z", "-F", &ident]))
+                .into_iter()
+                .filter(|file| !claimed.contains(file))
+                .collect();
+            if named.is_empty() {
+                continue;
+            }
+            let shown = named.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+            let more = match named.len().saturating_sub(5) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            f.warnings.push(format!(
+                "plan: task {}: Gives '{ident}' -- {shown}{more} also name(s) it and no task's Files claims them, so that side of the change is nobody's to make",
+                t.id
+            ));
+        }
         if runs_tests(verify) && !patterns.iter().any(|p| p.to_lowercase().contains("test")) {
             f.warnings.push(format!(
                 "plan: task {}: its Verify runs tests and its Files list no test file -- the worker cannot add the test that proves it",
@@ -171,6 +200,15 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
 
 fn runs_tests(verify: &str) -> bool {
     verify.contains("test")
+}
+
+/// NUL-separated git output, one path per entry.
+fn zlines(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).to_string())
+        .collect()
 }
 
 /// `path:12-25` and `path:40` point into a file; anything else is the path
