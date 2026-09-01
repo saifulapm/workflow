@@ -131,16 +131,34 @@ fn hooks(r: &mut Report) {
             continue;
         }
         let target = paths::realpath(&h).unwrap_or_else(|| h.clone());
-        if let Some(home) = &home
-            && target != home.join("hooks").join(name)
-        {
-            r.finding(
-                &format!("hook {name}"),
-                format!(
-                    "does not resolve to this checkout's hooks/{name} (it is {})",
-                    target.display()
-                ),
-            );
+        match &home {
+            Some(home) => {
+                if target != home.join("hooks").join(name) {
+                    r.finding(
+                        &format!("hook {name}"),
+                        format!(
+                            "does not resolve to this checkout's hooks/{name} (it is {})",
+                            target.display()
+                        ),
+                    );
+                }
+            }
+            // No checkout to compare paths against, so judge the slot by what
+            // the file does: the stub's whole job is to exec `workflow hook`,
+            // and a hook that never does was written by something else --
+            // git-lfs installs its own pre-push here (friction #13D9MGCP).
+            None => {
+                let text = std::fs::read_to_string(&h).unwrap_or_default();
+                if !text.contains("workflow hook") {
+                    r.finding(
+                        &format!("hook {name}"),
+                        format!(
+                            "{} never invokes `workflow hook`, so the gate is not on this slot -- move its owner into the repos' own hooks (git-lfs: `git lfs update` per repo; the stub chains to a repo's own hook with stdin intact) and symlink the checkout's hooks/{name} here",
+                            h.display()
+                        ),
+                    );
+                }
+            }
         }
     }
 
@@ -286,6 +304,15 @@ pub fn cmd_doctor() -> i32 {
     println!("workflow doctor");
     let mut r = Report::default();
     tools(&mut r);
+    // Without a checkout the hook-identity and skill-budget checks have
+    // nothing to read; a silent pass here reported an ungated machine as
+    // healthy (friction #13D9MGCP).
+    if paths::wf_home().is_none() {
+        r.finding(
+            "checkout",
+            "no workflow checkout found above this binary -- set WORKFLOW_HOME so hook identity and skill budgets can be checked",
+        );
+    }
     hooks(&mut r);
     settings_keys(&mut r);
     budgets(&mut r);

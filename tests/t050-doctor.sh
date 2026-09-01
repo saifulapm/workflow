@@ -154,3 +154,40 @@ like "$OUT" 'skill route.*body is 34[0-9][0-9] bytes' 'and the finding gives the
 run workflow doctor
 like "$OUT" 'skill route.*frontmatter is' 'an oversized frontmatter is a finding too'
 
+## ------------------------------------- an installed binary, an occupied slot
+
+# An installed machine runs a copied binary: no checkout above the exe, so the
+# hook-identity comparison has nothing to compare against. Doctor must say so
+# instead of healthy, and must still catch a foreign hook squatting on a slot
+# -- git-lfs writes its own pre-push into a global hooksPath
+# (friction #13D9MGCP).
+{
+	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
+	printf 'short body\n'
+} >"$skills/route/SKILL.md"
+cp -L "$T_TMP/bin/workflow" "$T_TMP/installed-workflow"
+chmod +x "$T_TMP/installed-workflow"
+
+ghooks="$T_TMP/ghooks"
+mkdir -p "$ghooks"
+ln -sf "$HOOKS/pre-commit" "$ghooks/pre-commit"
+ln -sf "$HOOKS/commit-msg" "$ghooks/commit-msg"
+write_exec "$ghooks/pre-push" <<'EOF'
+#!/bin/sh
+command -v git-lfs >/dev/null 2>&1 || exit 0
+git lfs pre-push "$@"
+EOF
+git config --global core.hooksPath "$ghooks"
+
+run workflow doctor
+is "$RC" 1 'a checkout binary flags the foreign file by path'
+like "$OUT" 'hook pre-push.*does not resolve' 'and says where it points instead'
+
+run "$T_TMP/installed-workflow" doctor
+is "$RC" 1 'the installed binary has findings too'
+like "$OUT" 'hook pre-push.*never invokes' 'the foreign pre-push is caught by content'
+like "$OUT" 'git lfs update' 'and the remedy moves lfs into per-repo hooks'
+unlike "$OUT" 'hook pre-commit' 'the real stubs pass the content check'
+like "$OUT" 'WORKFLOW_HOME' 'unverifiable identity and budgets are said out loud'
+unlike "$OUT" 'healthy' 'an unverifiable machine is not called healthy'
+
