@@ -259,6 +259,9 @@ pub enum ProjectSetCommand {
     /// The worker this project's tasks are dispatched onto. Absent means
     /// claude, which is what every project ran on before there was a choice.
     Backend { backend: Backend },
+    /// This project's origin remote, for one registered before the remote
+    /// existed. Normalized exactly as registration normalizes `origin`.
+    Remote { url: String },
 }
 
 /// The workers a task can be dispatched onto. A closed list: an unknown name

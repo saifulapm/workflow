@@ -654,3 +654,34 @@ fn project_add_takes_a_name_and_refuses_nonsense() {
     let out = mem(&w, &plain, &["project", "add", "x"]);
     assert_ne!(code(&out), 0);
 }
+
+#[test]
+fn project_set_remote_records_the_normalized_url() {
+    let w = World::new("write-remote");
+    let repo = w.repo("thing", None);
+
+    // Registered before its remote existed, so the store holds none.
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+
+    let out = mem(
+        &w,
+        &repo,
+        &["project", "set", "remote", "https://GitHub.com/Acme/App.git"],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert!(
+        text.contains("remote = \"github.com/Acme/App\""),
+        "recorded exactly as registration would have normalized it: {text}"
+    );
+
+    // An empty url is a usage error, not an empty remote.
+    let out = mem(&w, &repo, &["project", "set", "remote", "   "]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert!(text.contains("remote = \"github.com/Acme/App\""), "{text}");
+}

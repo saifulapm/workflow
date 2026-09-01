@@ -372,12 +372,25 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
         return Err(exit::usage(match key {
             "verify" => "give a command to run, e.g. `mem project set verify \"just test\"`"
                 .to_string(),
+            "remote" => {
+                "give a url, e.g. `mem project set remote git@github.com:acme/app.git`"
+                    .to_string()
+            }
             _ => format!(
                 "give something to record, e.g. `mem project set {} \"app/**\"`",
                 key.replace('_', "-")
             ),
         }));
     }
+    // A remote is an identity, not free text: store the spelling registration
+    // would have, so `by_remote` finds this project from another machine.
+    let normalized;
+    let value = if key == "remote" {
+        normalized = crate::git::normalize_remote(value);
+        normalized.as_str()
+    } else {
+        value
+    };
     let identity = app.identity(Mode::Write)?;
     let Some(id) = identity.id() else {
         return Err(exit::usage(format!(
