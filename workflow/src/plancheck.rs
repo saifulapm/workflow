@@ -78,6 +78,20 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
                 ));
             }
         }
+        // A Done sentence that names a file is a claim about what the task's
+        // commit holds, and the gate refuses everything outside Files: -- so
+        // the two disagreeing is knowable here rather than after a worker has
+        // spent a whole context on the task (friction #RT818QJG).
+        let owned: std::collections::HashSet<String> = patterns
+            .iter()
+            .flat_map(|p| zlines(&git.bytes(&["ls-files", "-z", "--", &gitcmd::glob_top(p)])))
+            .collect();
+        for path in done_paths(&git, t.done.as_deref().unwrap_or(""), &owned) {
+            f.warnings.push(format!(
+                "plan: task {}: Done names '{path}' and no Files: pattern claims it -- the gate refuses whatever a task writes outside them",
+                t.id
+            ));
+        }
         // Read and Pattern point at what is already here; a path that is
         // neither on disk nor tracked cannot be opened before editing.
         let read = t.read.as_deref().unwrap_or("");
@@ -200,6 +214,34 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
 
 fn runs_tests(verify: &str) -> bool {
     verify.contains("test")
+}
+
+/// The paths a Done sentence names that `owned` does not hold, in the order
+/// the sentence names them and once each.
+///
+/// A token is a candidate when it carries a dot or a slash; the tree settles
+/// the rest, so prose that merely looks path-shaped -- "e.g.", "identical." --
+/// names nothing here and is dropped. A token naming a directory counts as
+/// claimed the moment any file under it is.
+fn done_paths(git: &Git, done: &str, owned: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in done.split_whitespace() {
+        let token = token
+            .trim_matches(|c| "`'\"()[]{},;:!?".contains(c))
+            .trim_end_matches('.');
+        if !token.contains('.') && !token.contains('/') {
+            continue;
+        }
+        if out.iter().any(|seen| seen == token) {
+            continue;
+        }
+        let hits = zlines(&git.bytes(&["ls-files", "-z", "--", token]));
+        if hits.is_empty() || hits.iter().any(|h| owned.contains(h)) {
+            continue;
+        }
+        out.push(token.to_string());
+    }
+    out
 }
 
 /// NUL-separated git output, one path per entry.

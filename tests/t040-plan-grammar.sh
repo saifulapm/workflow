@@ -497,3 +497,39 @@ EOF2
 parse
 is "$RC" 0 'a sibling task claiming the file settles it'
 unlike "$OUT" 'budget-check' 'and nothing warns once every naming file is owned'
+
+# A Done sentence that names a file the task's Files: do not claim is the
+# merge gate's refusal, spelled out at check time instead of after a worker has
+# spent a whole context reaching it (friction #RT818QJG).
+printf 'the readme\n' >README.md
+git add README.md
+git -c core.hooksPath=/dev/null commit -qm 'the readme'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Wire the budget through
+      Files: src/budget.rs
+      Verify: true
+      Done: src/budget.rs holds the new value and README.md says so in the same commit
+EOF2
+parse
+is "$RC" 0 'a Done naming an unclaimed file is a warning, never a refusal'
+like "$OUT" "Done names 'README.md'" 'the file the Done sentence carries is named'
+unlike "$OUT" "Done names 'src/budget.rs'" 'and a file the Files line does claim is not'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Wire the budget through
+      Files: src/budget.rs README.md
+      Verify: true
+      Done: src/budget.rs holds the new value and README.md says so in the same commit
+- [ ] t2 Prose that only looks like paths
+      Files: src/main.rs
+      Verify: true
+      Done: totals identical for the fixture basket, e.g. the frozen one
+EOF2
+parse
+is "$RC" 0 'claiming the file settles it'
+unlike "$OUT" 'Done names' 'nothing warns once Files claims every file the Done names'

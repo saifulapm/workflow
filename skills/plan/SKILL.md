@@ -71,7 +71,7 @@ Check it from the project checkout before asking approval:
 
 It reads the tree, runs nothing: a Verify that cannot pass here is refused,
 and so is deferral language ("for now", "TBD", "wired later"). Ungrounded
-Files, Read, Pattern and Uses lines are warned about. `workflow run` dispatches real workers, never from
+Files, Read, Pattern, Uses and Done lines are warned about. `workflow run` dispatches real workers, never from
 here.
 
 ## 4. Shape
