@@ -12,6 +12,11 @@ use crate::warn;
 /// from spec §8.4's figure, recorded as a ruling.
 pub const BUDGET: usize = 3000;
 
+/// The states a worker may report, in the order the brief teaches them. The
+/// gate names this list back when a report uses a word that is not on it, so
+/// the two must be the same list (friction #W2SY30WH).
+pub const STATES: [&str; 4] = ["started", "progress", "ready", "blocked"];
+
 /// What the attempt before this one came to. A redispatched worker used to
 /// wake up to the same fixed text as the first attempt, with the status file
 /// truncated behind it, so the only way to tell it anything was to leave a
@@ -89,8 +94,8 @@ Append one line per state change to {status}:
 
     <utc> <state> <note>
 
-States: started, progress, ready, blocked. `ready` means merge-ready and is
-your last act.
+States: {states}. `ready` means merge-ready and is
+your last act. The state is one bare word: no colon after it.
 ",
         id = task.id,
         title = task.title,
@@ -98,6 +103,7 @@ your last act.
         block = task.block,
         prior = prior.section(),
         status = status_file.display(),
+        states = STATES.join(", "),
     )
 }
 

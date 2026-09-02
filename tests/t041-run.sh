@@ -115,6 +115,22 @@ stuck)
 	say blocked 'waiting on the sibling task'
 	done_json
 	;;
+colons)
+	# Punctuates the state it was asked to write bare. The work is
+	# merge-ready and the run must read it as such (friction #W2SY30WH).
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/Colons.php
+	git add app/Services/Colons.php
+	commit 'Add the colons service'
+	say 'ready::' 'merge-ready'
+	done_json
+	;;
+noword)
+	# A state the protocol never taught it: failed, and the run has to name
+	# the vocabulary rather than quote a word nothing documents.
+	say finished 'all done here'
+	done_json
+	;;
 esac
 rm -f "$live"
 FAKE
@@ -171,6 +187,12 @@ base=$(git rev-parse HEAD)
 - [ ] stuck Report blocked and stop
       Files: app/Services/Stuck.php
       Verify: true
+- [ ] colons Punctuate the ready report
+      Files: app/Services/Colons.php
+      Verify: true
+- [ ] noword Report a state the protocol has no word for
+      Files: app/Services/Noword.php
+      Verify: true
 EOF
 
 ## ------------------------------------------------------------------ the run
@@ -226,6 +248,12 @@ like "$(cat "$rundir/red.failed")" 'red' 'and the reason is the suite, not the w
 is "$(cat "$rundir/stuck.state")" failed 'the worker that reported blocked is failed'
 like "$(cat "$rundir/stuck.failed")" 'blocked: waiting on the sibling task' \
 	"and the failure quotes the worker's own report"
+
+is "$(cat "$rundir/colons.state")" merged \
+	'a ready report the worker punctuated is still a ready report'
+is "$(cat "$rundir/noword.state")" failed 'a state the protocol has no word for fails'
+like "$(cat "$rundir/noword.failed")" 'not one of started, progress, ready, blocked' \
+	'and the failure names the vocabulary instead of quoting a word alone'
 like "$(cat "$rundir/t1.verify")" 'true' 'dispatch recorded the task Verify command in the run dir'
 
 is "$(cat "$rundir/hang.state")" failed 'the hung worker ends up failed'
@@ -253,7 +281,7 @@ is "$(cat "$rundir/touch.state")" merged 'the transcript-only worker was never k
 ## ---------------------------------------------------- the integration branch
 
 ahead=$(git rev-list --count "$base..integration/fixture-run")
-is "$ahead" 3 'integration is ahead of base_sha by the three merged tasks'
+is "$ahead" 4 'integration is ahead of base_sha by the four merged tasks'
 run git merge-base --is-ancestor "$(git rev-parse fixture-run/red 2>/dev/null || echo HEAD)" integration/fixture-run
 isnt "$RC" 0 'the red task never landed on integration'
 

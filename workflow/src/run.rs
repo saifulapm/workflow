@@ -219,7 +219,14 @@ impl Run {
             let (Some(_utc), Some(state)) = (fields.next(), fields.next()) else {
                 continue;
             };
-            last = Some((state.to_string(), fields.collect::<Vec<_>>().join(" ")));
+            let (state, head) = split_state(state);
+            let rest = fields.collect::<Vec<_>>().join(" ");
+            let note = match (head.is_empty(), rest.is_empty()) {
+                (true, _) => rest,
+                (false, true) => head,
+                (false, false) => format!("{head} {rest}"),
+            };
+            last = Some((state, note));
         }
         last
     }
@@ -644,11 +651,18 @@ impl Run {
             // The worker said where it stood; the failure must not claim
             // otherwise.
             Some((state, note)) if state != "ready" => {
-                let why = if note.is_empty() {
+                let mut why = if note.is_empty() {
                     format!("the worker's last report was '{state}'")
                 } else {
                     format!("the worker's last report was '{state}: {note}'")
                 };
+                // A word the protocol never taught it. Naming the vocabulary
+                // is the difference between a reader who can see what went
+                // wrong and one staring at a state nothing documents
+                // (friction #W2SY30WH).
+                if !brief::STATES.contains(&state.as_str()) {
+                    why.push_str(&format!(", which is not one of {}", brief::STATES.join(", ")));
+                }
                 self.fail_task(task, &why);
                 return;
             }
@@ -1142,6 +1156,20 @@ fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
 
     q.push_str("What should happen to these?");
     q
+}
+
+/// The state a report's second field names, and whatever it glued on after a
+/// colon.
+///
+/// `ready`, `ready:` and `ready::merge-ready` all name the same state: the
+/// colon is punctuation a worker adds to a word it was asked to write bare,
+/// and reading it as part of the state failed a task whose work was
+/// merge-ready (friction #W2SY30WH).
+fn split_state(token: &str) -> (String, String) {
+    match token.split_once(':') {
+        Some((state, rest)) => (state.to_string(), rest.trim_matches(':').to_string()),
+        None => (token.to_string(), String::new()),
+    }
 }
 
 /// A token count the way a person reads one: 157k, 1.2M. Rounded down, because
@@ -1744,6 +1772,24 @@ mod tests {
         let q = stopped_short("p", &tasks);
         assert!(q.starts_with("Plan p stopped short: 1 of 2 merged, 1 failed."));
         assert!(!q.contains("0 never started"), "{q}");
+    }
+
+    #[test]
+    fn a_state_gives_up_the_colons_a_worker_punctuates_it_with() {
+        assert_eq!(split_state("ready"), ("ready".into(), String::new()));
+        assert_eq!(split_state("ready:"), ("ready".into(), String::new()));
+        assert_eq!(split_state("ready::"), ("ready".into(), String::new()));
+        // Glued straight onto the state, the rest is note, not state.
+        assert_eq!(
+            split_state("ready::merge-ready"),
+            ("ready".into(), "merge-ready".into())
+        );
+        assert_eq!(
+            split_state("blocked:waiting"),
+            ("blocked".into(), "waiting".into())
+        );
+        // A word that is not a state stays whole, so the gate can name it.
+        assert_eq!(split_state("finished"), ("finished".into(), String::new()));
     }
 
     #[test]
