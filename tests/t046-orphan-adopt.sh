@@ -56,7 +56,6 @@ plan='# plan: orphan-check
       Files: app/t2.php
       Verify: true
 '
-printf '%s' "$plan" >"$T_TMP/plan.md"
 
 # What a dead orchestrator leaves: the run dir mid-flight, the worktrees and
 # branches it made still there, and t1 recorded as dispatched. Fabricated
@@ -65,6 +64,9 @@ orphan() {
 	mkdir -p "$rundir" "$wtroot"
 	printf '%s\n' "$base" >"$rundir/base_sha"
 	printf '%s' "$plan" >"$rundir/plan.md"
+	# The plan file too: a run ticks its merges off in the file it was handed,
+	# so each section here starts from the plan as its author wrote it.
+	printf '%s' "$plan" >"$T_TMP/plan.md"
 	printf 'dispatched\n' >"$rundir/t1.state"
 	printf 'pending\n' >"$rundir/t2.state"
 	printf '1\n' >"$rundir/t1.dispatches"

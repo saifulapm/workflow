@@ -170,8 +170,7 @@ is "$(cat "$prerun/t2.state")" merged \
 new_repo hand
 mem_register
 php_fixture
-cat >"$T_TMP/hand.md" <<'PLAN'
-# plan: hand
+hand_plan='# plan: hand
 
 - [ ] t1 First service
       Files: app/t1.php
@@ -179,7 +178,8 @@ cat >"$T_TMP/hand.md" <<'PLAN'
 - [ ] t2 Second service
       Files: app/t2.php
       Verify: true
-PLAN
+'
+printf '%s' "$hand_plan" >"$T_TMP/hand.md"
 : >"$T_TMP/misbehave-t2"
 run workflow run --plan-file "$T_TMP/hand.md"
 is "$RC" 1 'hand pass 1: t1 merges and t2 fails'
@@ -190,6 +190,11 @@ is "$(cat "$handrun/t1.state")" merged 'hand pass 1: t1 merged'
 git merge -q --ff-only integration/hand
 git branch -D hand/t2 >/dev/null 2>&1
 rm -f "$T_TMP/misbehave-t2"
+# Back to the plan as its author wrote it. Pass 1 ticked t1 off in this file,
+# and the state under test here is the other one: a task still unticked whose
+# commit is already on the trunk, which is what a regenerated plan, or one
+# read from a mem the sync had not reached, leaves behind.
+printf '%s' "$hand_plan" >"$T_TMP/hand.md"
 run workflow run --plan-file "$T_TMP/hand.md"
 is "$RC" 0 'hand pass 2: the recovery pass completes'
 like "$OUT" 'already on integration/hand' 'and says t1 needs no second worker'

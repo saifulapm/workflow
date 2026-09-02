@@ -97,6 +97,9 @@ pub fn stalled(
 
 pub struct Run {
     pub plan: Plan,
+    /// The file the plan was read from, when it came from one: where a merge
+    /// is ticked off for a plan mem may never have seen.
+    pub plan_file: Option<PathBuf>,
     pub repo: PathBuf,
     /// The project's name as one path component: it names the directories
     /// under the run, worktree, brief and cargo roots.
@@ -594,6 +597,32 @@ impl Run {
         c.status().map(|s| s.success()).unwrap_or(false)
     }
 
+    /// Tick the task off where the plan came from. mem holds the plan a plain
+    /// `workflow run` reads, but a `--plan-file` run's plan need not be in mem
+    /// at all -- and asking mem to tick a plan it does not have left the merge
+    /// recorded nowhere, with the ticking left to whoever was watching
+    /// (friction #2213VV3P).
+    fn tick_off(&self, task: &str) {
+        let Some(file) = self.plan_file.as_deref() else {
+            if !memcli::plan_tick(task) {
+                warn(format!(
+                    "task {task}: mem could not tick it off (is this plan in mem?)"
+                ));
+            }
+            return;
+        };
+        let ticked = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| plan::tick(&text, task))
+            .is_some_and(|text| std::fs::write(file, text).is_ok());
+        if !ticked {
+            warn(format!(
+                "task {task}: could not tick it off in {}",
+                file.display()
+            ));
+        }
+    }
+
     fn fail_task(&self, task: &str, why: &str) {
         warn(format!("task {task}: failed -- {why}"));
         self.set_state(task, FAILED);
@@ -676,11 +705,7 @@ impl Run {
             Ok(true) => {
                 self.set_state(task, MERGED);
                 warn(format!("task {task}: merged onto {}", self.int_branch));
-                if !memcli::plan_tick(task) {
-                    warn(format!(
-                        "task {task}: mem could not tick it off (is this plan in mem?)"
-                    ));
-                }
+                self.tick_off(task);
                 memcli::log(&format!("run {}: merged {task}", self.plan.plan_id));
             }
             // Ready with nothing committed: the worker found its Done already
@@ -692,11 +717,7 @@ impl Run {
                 warn(format!(
                     "task {task}: reported ready with nothing to commit -- its work is already in the tree"
                 ));
-                if !memcli::plan_tick(task) {
-                    warn(format!(
-                        "task {task}: mem could not tick it off (is this plan in mem?)"
-                    ));
-                }
+                self.tick_off(task);
                 memcli::log(&format!(
                     "run {}: {task} was already satisfied, nothing to merge",
                     self.plan.plan_id
@@ -1244,6 +1265,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         int_wt: wt_root.join("_integration"),
         wt_root,
         plan,
+        plan_file: None,
         repo,
         base,
         deadline_s,
@@ -1310,6 +1332,9 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         return exit::USAGE;
     };
     let mut run = new_run(parsed, top, &project.dir_name(), base);
+    // Resolved, not as typed: the ticks go back to this file for the rest of
+    // the run, and a relative path is read against whatever the cwd is then.
+    run.plan_file = plan_file.map(paths::realpath_m);
 
     // Held for the whole run, taken before setup writes a single worktree:
     // two orchestrators sharing this run dir would dispatch the same tasks

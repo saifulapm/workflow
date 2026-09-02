@@ -293,6 +293,26 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     Some(plan)
 }
 
+/// The plan text with one task's box ticked, or `None` when no task line
+/// carries that id. Every other byte is left as the author wrote it: the file
+/// is their document, not this program's scratch space.
+pub fn tick(text: &str, id: &str) -> Option<String> {
+    let mut found = false;
+    let out: String = text
+        .split_inclusive('\n')
+        .map(|line| match task_line(line.trim_end_matches(['\n', '\r'])) {
+            // `- [x]` is five ASCII bytes however the box is spelled, so the
+            // tail slices cleanly whatever the title holds.
+            Some((_, tid, _)) if tid == id => {
+                found = true;
+                format!("- [X]{}", &line[5..])
+            }
+            _ => line.to_string(),
+        })
+        .collect();
+    found.then_some(out)
+}
+
 /// Kahn levels. A cycle is a hard error.
 fn waves(plan: &Plan) -> Option<Vec<Vec<String>>> {
     let mut out: Vec<Vec<String>> = Vec::new();
@@ -548,6 +568,27 @@ mod tests {
         assert_eq!(p.get("t1").unwrap().verify, None);
         assert_eq!(p.get("t2").unwrap().files.as_deref(), Some("b"));
         assert_eq!(p.get("t2").unwrap().verify.as_deref(), Some("false"));
+    }
+
+    /// Ticking is how a `--plan-file` run records a merge: the file it was
+    /// handed is the only copy of that plan, so the run writes the tick back
+    /// there rather than leaving the merge recorded nowhere (friction
+    /// #2213VV3P).
+    #[test]
+    fn ticking_marks_one_task_and_leaves_the_rest_of_the_file_alone() {
+        let text = "# plan: p\n\nprose about the plan\n\n\
+                    - [ ] t1 First\n      Files: a\n      Verify: true\n\
+                    - [ ] t2 Second [after: t1]\n      Files: b\n      Verify: true\n";
+        let out = tick(text, "t2").expect("t2 is in this plan");
+        assert!(out.contains("- [X] t2 Second [after: t1]"));
+        assert!(out.contains("- [ ] t1 First"), "t1 must not move: {out}");
+        assert!(out.contains("prose about the plan"));
+        assert_eq!(out.len(), text.len());
+        // Ticking twice says the same thing, and a task the file does not
+        // carry says so instead of rewriting it.
+        let again = tick(&out, "t2").expect("an already ticked task is still found");
+        assert_eq!(again, out);
+        assert!(tick(text, "t9").is_none());
     }
 
     /// Every other way of opening a checkbox is refused outright, so no
