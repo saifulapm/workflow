@@ -258,9 +258,17 @@ impl Run {
     }
 
     /// Is that commit on the integration branch as it stands?
+    ///
+    /// The tip a refused preflight remembered counts too. Its recipe ends
+    /// "merge it or delete it", and once that merge lands on the trunk the
+    /// branch is gone -- a task that never reached the gate has no task ref
+    /// either, so without this note nothing records that the work is here and
+    /// a worker is sent to build it again (friction #GPC1PVZJ).
     fn landed(&self, task: &str) -> bool {
-        let sha = self.prior_sha(task);
-        !sha.is_empty() && self.git().is_ancestor(&sha, &self.int_branch)
+        let git = self.git();
+        [self.prior_sha(task), self.field(task, "leftover")]
+            .iter()
+            .any(|sha| !sha.is_empty() && git.is_ancestor(sha, &self.int_branch))
     }
 
     fn alive(&self, task: &str) -> bool {
@@ -897,6 +905,13 @@ impl Run {
                 git.quiet(&["branch", "-D", &branch]);
                 continue;
             }
+            // What the branch holds, remembered before the recipe below sends
+            // its reader off to merge it and delete it: after that the commit
+            // is on the trunk under no name this run knows (friction
+            // #GPC1PVZJ).
+            if let Some(tip) = git.rev_parse_commit(&branch) {
+                write_field(&self.dir, &t.id, "leftover", &tip);
+            }
             leftovers.push(branch);
         }
         if !leftovers.is_empty() {
@@ -1438,6 +1453,10 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                     "task {id}: its work is already on {} -- not dispatched again",
                     run.int_branch
                 ));
+                // Ticked here as at any other merge, or the plan goes on
+                // asking for work that is done and every later run pays the
+                // same discovery again.
+                run.tick_off(id);
                 continue;
             }
             if run.deps_satisfied(&task) {
