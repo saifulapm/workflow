@@ -30,6 +30,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "archived",
     "archived_at",
     "options",
+    "audience",
+    "task",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +105,15 @@ pub struct Meta {
     /// `kind = "question"` only: the offered answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<String>>,
+    /// `kind = "question"` only: who is meant to answer. `orchestrator` is a
+    /// worker's question, internals the session driving the run settles;
+    /// absent means a person, which is what the hub and the phone show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    /// `kind = "question"` only: the orchestrated task that asked, as
+    /// `<plan>/<task>`, so the answer can be carried into its next attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
 }
 
 impl Meta {
@@ -123,6 +134,8 @@ impl Meta {
             archived: None,
             archived_at: None,
             options: None,
+            audience: None,
+            task: None,
         }
     }
 

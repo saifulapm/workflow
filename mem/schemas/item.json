@@ -19,6 +19,8 @@
     "supersedes",
     "superseded_by",
     "answers",
+    "audience",
+    "task",
     "path"
   ],
   "properties": {
@@ -92,6 +94,20 @@
         "null"
       ]
     },
+    "audience": {
+      "description": "Question rows: who answers. `orchestrator` is a worker's question, settled by the session driving the run; null is a person's, which is what the hub shows.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "task": {
+      "description": "Question rows asked by an orchestrated worker: `<plan>/<task>`, so the answer can be carried into the task's next attempt.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "path": {
       "type": "string"
     },
@@ -104,6 +120,13 @@
     "answered": {
       "description": "Question rows in `questions --json` only: whether an answer item exists. The JSON twin of the text listing's ✓/? column.",
       "type": "boolean"
+    },
+    "answer": {
+      "description": "Question rows in `questions --json` only: the answer's body, or null while the question waits.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "additionalProperties": false

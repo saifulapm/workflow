@@ -133,6 +133,8 @@ pub fn row_json(row: &Row) -> serde_json::Value {
         "supersedes": row.supersedes,
         "superseded_by": row.superseded_by,
         "answers": row.answers,
+        "audience": row.audience,
+        "task": row.task,
         "path": row.path.to_string_lossy(),
     })
 }
@@ -271,7 +273,8 @@ pub fn project_current(app: &App) -> Result<i32> {
     let declared = Registry::load(&app.store).by_id(id).cloned();
     let verify = declared.as_ref().and_then(|p| p.verify.clone());
     let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
-    let backend = crate::project::declared_backend(&app.store, id);
+    let backend = crate::project::declared(&app.store, id, "backend");
+    let model = crate::project::declared(&app.store, id, "model");
     // A child project keeps the checkout as its root — run dirs and worktrees
     // key on the checkout — and says where inside it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
@@ -293,6 +296,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(backend) = &backend {
             doc["backend"] = json!(backend);
         }
+        if let Some(model) = &model {
+            doc["model"] = json!(model);
+        }
         println!("{}", serde_json::to_string(&doc)?);
     } else {
         println!("id    {id}");
@@ -311,6 +317,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(backend) = &backend {
             println!("backend  {backend}");
+        }
+        if let Some(model) = &model {
+            println!("model  {model}");
         }
     }
     Ok(exit::OK)
@@ -907,10 +916,46 @@ fn print_singleton(
     }
 }
 
+/// The orchestrated task this process speaks for, as `<plan>/<task>`, or
+/// nothing. `WORKFLOW_TASK` says so outright; failing that, a working
+/// directory under the workflow's worktree root
+/// (`.../workflow/worktrees/<project>/<plan>/<task>`) is a worker's, and a
+/// worker cannot forget to say who it is.
+fn asking_task(app: &App) -> Option<String> {
+    if let Ok(v) = std::env::var("WORKFLOW_TASK")
+        && !v.trim().is_empty()
+    {
+        return Some(v.trim().to_string());
+    }
+    let root = app.dirs.workflow_worktrees();
+    let cwd = crate::git::canonical(&app.cwd);
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    let rel = cwd.strip_prefix(&root).ok()?;
+    let parts: Vec<String> = rel
+        .iter()
+        .take(3)
+        .map(|c| c.to_string_lossy().to_string())
+        .collect();
+    match parts.as_slice() {
+        [_project, plan, task] => Some(format!("{plan}/{task}")),
+        _ => None,
+    }
+}
+
 /// `mem ask` — writes the question, asks for a sync, fires a notification and
 /// returns. It never waits: a tool call that blocks for hours dies at the
 /// runtime's ceiling, so waiting is `mem questions --wait`.
-pub fn ask(app: &App, question: &str, options: &[String]) -> Result<i32> {
+///
+/// Who answers is decided here, once: a worker's question is the
+/// orchestrator's and carries the task that asked it, so the run can hand the
+/// answer to the task's next attempt; anything else is a person's, and the
+/// hub shows exactly those.
+pub fn ask(
+    app: &App,
+    question: &str,
+    options: &[String],
+    audience: Option<crate::cli::Audience>,
+) -> Result<i32> {
     let identity = app.identity(Mode::Write)?;
     let mut meta = crate::item::Meta::new(
         String::new(),
@@ -920,6 +965,16 @@ pub fn ask(app: &App, question: &str, options: &[String]) -> Result<i32> {
     );
     if !options.is_empty() {
         meta.options = Some(options.to_vec());
+    }
+    let task = asking_task(app);
+    let audience = match audience {
+        Some(a) => a.stored(),
+        None if task.is_some() => Some("orchestrator"),
+        None => None,
+    };
+    if audience.is_some() {
+        meta.audience = audience.map(str::to_string);
+        meta.task = task;
     }
     let written = crate::write::write_item(app, &identity, meta, question.to_string())?;
     // No bell here: hub's doorbell owns delivery, and it knows whether anyone
@@ -934,6 +989,7 @@ pub fn ask(app: &App, question: &str, options: &[String]) -> Result<i32> {
                 "id": written.id,
                 "short_id": written.short_id,
                 "options": options,
+                "audience": audience,
             }))?
         );
     } else {
@@ -943,10 +999,16 @@ pub fn ask(app: &App, question: &str, options: &[String]) -> Result<i32> {
 }
 
 /// `mem questions` and `mem questions --wait <id>`.
+///
+/// `--for` narrows the listing to one audience's questions: the hub asks for
+/// a person's, the session driving a run asks for the orchestrator's. The
+/// JSON carries the body and the answer, so a run can hand a worker's
+/// answered question to its next attempt without a second verb.
 pub fn questions(
     app: &App,
     pending: bool,
     all_projects: bool,
+    audience: Option<crate::cli::Audience>,
     wait: Option<&str>,
     timeout: &str,
 ) -> Result<i32> {
@@ -958,7 +1020,7 @@ pub fn questions(
 
     let identity = app.identity(Mode::Read)?;
     let index = app.read_index()?;
-    let rows = if all_projects {
+    let mut rows = if all_projects {
         let mut all = index.pending_questions(None)?;
         for project in crate::project::Registry::load(&app.store).projects {
             all.extend(index.pending_questions(Some(&project.id))?);
@@ -969,6 +1031,9 @@ pub fn questions(
     } else {
         index.recent("question", identity.id(), 50)?
     };
+    if let Some(audience) = audience {
+        rows.retain(|row| row.audience.as_deref() == audience.stored());
+    }
 
     if app.json {
         // The text mode has its ✓/? column; the JSON carries the same fact,
@@ -977,15 +1042,25 @@ pub fn questions(
         let mut items: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
         for row in &rows {
             let mut v = row_json(row);
-            v["answered"] = json!(index.answer_to(&row.id)?.is_some());
+            let answer = index.answer_to(&row.id)?;
+            v["answered"] = json!(answer.is_some());
+            v["body"] = json!(read_body(row).trim());
+            v["answer"] = json!(answer.as_ref().map(|a| read_body(a).trim().to_string()));
             items.push(v);
         }
         println!("{}", serde_json::to_string(&json!({ "questions": items }))?);
     } else {
         for row in &rows {
             let answered = index.answer_to(&row.id)?.is_some();
+            // A worker's question names the task that asked it, so a reader
+            // can tell it from one a person owes an answer to.
+            let who = match (&row.audience, &row.task) {
+                (Some(_), Some(task)) => format!("[{task}] "),
+                (Some(a), None) => format!("[{a}] "),
+                _ => String::new(),
+            };
             println!(
-                "{} #{}  {}",
+                "{} #{}  {who}{}",
                 if answered { "✓" } else { "?" },
                 row.short_id,
                 row.title

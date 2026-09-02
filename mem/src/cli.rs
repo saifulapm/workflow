@@ -168,6 +168,11 @@ pub enum Command {
         question: String,
         #[arg(long, value_delimiter = ',')]
         options: Vec<String>,
+        /// Who answers. Asked from an orchestrated task's worktree (or with
+        /// WORKFLOW_TASK set) the default is the orchestrator; anywhere else
+        /// it is a person, which is what the hub and the phone show.
+        #[arg(long = "for", value_name = "AUDIENCE")]
+        audience: Option<Audience>,
         #[arg(long)]
         session_id: Option<String>,
     },
@@ -177,6 +182,9 @@ pub enum Command {
         pending: bool,
         #[arg(long)]
         all_projects: bool,
+        /// Only the questions this audience answers.
+        #[arg(long = "for", value_name = "AUDIENCE")]
+        audience: Option<Audience>,
         /// Wait for this question to be answered.
         #[arg(long, value_name = "ID")]
         wait: Option<String>,
@@ -259,6 +267,9 @@ pub enum ProjectSetCommand {
     /// The worker this project's tasks are dispatched onto. Absent means
     /// claude, which is what every project ran on before there was a choice.
     Backend { backend: Backend },
+    /// The model a run's workers are started on (`opus`, `sonnet`, ...).
+    /// Absent means the workflow's default; WORKFLOW_MODEL overrides per run.
+    Model { model: String },
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },
@@ -278,6 +289,25 @@ impl Backend {
         match self {
             Backend::Claude => "claude",
             Backend::Amx => "amx",
+        }
+    }
+}
+
+/// Who a question is for. A worker's question is the orchestrator's to
+/// settle and never reaches the hub; a person's is what the hub shows.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum Audience {
+    Orchestrator,
+    Human,
+}
+
+impl Audience {
+    /// The frontmatter value; a person is the absence of one.
+    pub fn stored(self) -> Option<&'static str> {
+        match self {
+            Audience::Orchestrator => Some("orchestrator"),
+            Audience::Human => None,
         }
     }
 }

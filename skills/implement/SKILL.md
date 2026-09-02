@@ -68,10 +68,12 @@ Never fix the workflow mid-task; it is improved in reviewed batches.
 ## The five stops
 
 Never resolve these yourself. On any of them: raise the question on your
-channel — in the conversation when interactive; a background session uses its
-own question tool while the machine is watched (the local hub's
-`/api/presence` says so) and `mem ask` when it is not — then
-`mem handoff --set "<where you are>"`, and stop.
+channel — in the conversation when interactive; in an orchestrated task,
+`mem ask "<question>"`, which from a task worktree is addressed to the
+orchestrator, who answers it, and your next attempt opens with the answer;
+a background session outside a run uses its own question tool while the
+machine is watched (the local hub's `/api/presence` says so) and `mem ask`
+when it is not — then `mem handoff --set "<where you are>"`, and stop.
 
 1. **Irreversible** — fails the git-revert test.
 2. **Security-sensitive** — auth, permissions, secrets handling, crypto.

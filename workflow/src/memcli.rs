@@ -99,20 +99,68 @@ pub fn project_current() -> Option<Project> {
     if p.id.is_empty() { None } else { Some(p) }
 }
 
-/// The worker backend this project declared with `mem project set backend`.
+/// A choice this project declared with `mem project set <key>`: the worker
+/// backend, the workers' model.
 ///
 /// Read straight out of the document rather than modelled on [`Project`],
 /// which is how mem holds it: mem stores the choice and hands it to whoever
 /// dispatches the work, and nothing else in the workflow asks. `None` covers
 /// both an unregistered checkout and one that never chose.
-pub fn project_backend() -> Option<String> {
+pub fn project_choice(key: &str) -> Option<String> {
     let (ok, out) = capture(&["project", "current", "--json"])?;
     if !ok {
         return None;
     }
     let doc: serde_json::Value = serde_json::from_str(&out).ok()?;
-    let name = doc.get("backend")?.as_str()?.trim();
+    let name = doc.get(key)?.as_str()?.trim();
     (!name.is_empty()).then(|| name.to_string())
+}
+
+pub fn project_backend() -> Option<String> {
+    project_choice("backend")
+}
+
+pub fn project_model() -> Option<String> {
+    project_choice("model")
+}
+
+/// A worker's question, as `mem questions --for orchestrator --json` reports
+/// it: the orchestrator's to answer, tagged with the task that asked.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Question {
+    pub id: String,
+    pub short_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub task: Option<String>,
+    #[serde(default)]
+    pub answer: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Questions {
+    questions: Vec<Question>,
+}
+
+/// Every question the task tagged `<plan>/<task>` has asked the orchestrator,
+/// answered or not, newest first. The run reads this twice: to name what a
+/// blocked worker is waiting on, and to carry the answer into its next brief.
+pub fn questions_for(tag: &str) -> Vec<Question> {
+    let Some((_, out)) = capture(&["questions", "--for", "orchestrator", "--json"]) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Questions>(&out)
+        .map(|q| q.questions)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|q| q.task.as_deref() == Some(tag))
+        .collect()
+}
+
+pub fn answer(id: &str, text: &str) -> bool {
+    silent(&["answer", id, text])
 }
 
 /// Does this directory belong to a project mem knows? The hook's half of the
@@ -164,10 +212,6 @@ pub fn ruling_bodies(rtype: &str) -> String {
 
 pub fn log(text: &str) {
     silent(&["log", text]);
-}
-
-pub fn ask(text: &str) {
-    silent(&["ask", text]);
 }
 
 pub fn plan_tick(task: &str) -> bool {

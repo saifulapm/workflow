@@ -6,7 +6,8 @@
   "required": [
     "id",
     "short_id",
-    "options"
+    "options",
+    "audience"
   ],
   "properties": {
     "id": {
@@ -20,6 +21,13 @@
       "items": {
         "type": "string"
       }
+    },
+    "audience": {
+      "description": "Who the question went to: `orchestrator` for a worker's, null for a person's.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "additionalProperties": false

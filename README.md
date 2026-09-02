@@ -82,11 +82,17 @@ Three sizes of work, three moves:
   background claude sessions by default: watch them in `claude agents`,
   attach to any. `mem project set backend amx` puts a project's workers in
   tmux panes instead, listed by `amx ls` and watched with `amx attach <id>`;
-  waves, ownership and the merge gate are the same either way.
+  waves, ownership and the merge gate are the same either way. Workers run
+  on opus unless the project says otherwise (`mem project set model sonnet`)
+  or one run does (`WORKFLOW_MODEL=sonnet workflow run`).
 
 Questions find you: on screen while a machine is watched, on the phone
 (ntfy via hub) when everything is locked. Answer in the session, with
-`mem answer <id> "..."`, or from the hub page.
+`mem answer <id> "..."`, or from the hub page. A worker's question never
+gets that far. Asked from a task worktree it is addressed to the
+orchestrator, which answers it from the plan and the code, and the run
+dispatches the task again with the answer in its brief. What reaches you is
+only what the orchestrator could not settle, asked fresh in its own words.
 
 ## Reading a project's state
 
@@ -96,7 +102,7 @@ Questions find you: on screen while a machine is watched, on the phone
     mem log --kind ruling        # decisions taken instead of asking you
     mem search friction --type friction   # exactly what is queued next
     mem show <id>                # the full item behind any #id
-    mem questions                # what is waiting on you
+    mem questions                # what is waiting on you; --for orchestrator, what a run's workers wait on
     mem handoff                  # where the last session stopped
     mem status                   # the standing one-paragraph status
     workflow status              # a live run: per-task states and reports

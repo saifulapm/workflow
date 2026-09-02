@@ -29,6 +29,11 @@ pub struct Prior {
     pub why: String,
     /// The last line the last attempt wrote to its status file.
     pub last_report: String,
+    /// What the last attempt asked the orchestrator, and what it answered.
+    /// A worker that stops on a question is dispatched again once the
+    /// answer lands, and this is how the answer reaches it: nothing else in
+    /// a fresh session knows the question was ever asked.
+    pub answers: Vec<(String, String)>,
 }
 
 impl Prior {
@@ -48,8 +53,30 @@ impl Prior {
             s.push_str(&format!(" Its last report was '{}'.", self.last_report));
         }
         s.push_str("\nRead what it did before repeating it.\n\n");
+        for (question, answer) in &self.answers {
+            s.push_str(&format!(
+                "It asked: {}\nThe orchestrator answered: {}\nAct on that answer.\n\n",
+                clip(question),
+                clip(answer)
+            ));
+        }
         s
     }
+}
+
+/// A question or an answer, cut to what the budget can carry. The whole
+/// text is one `mem show` away; what the brief needs is enough to act on.
+fn clip(text: &str) -> String {
+    const MAX: usize = 600;
+    let text = text.trim();
+    if text.len() <= MAX {
+        return text.to_string();
+    }
+    let mut end = MAX;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &text[..end])
 }
 
 pub fn text(task: &Task, worktree: &Path, status_file: &Path, prior: &Prior) -> String {
@@ -79,8 +106,11 @@ refused at the merge gate and the task is failed.
 
 Irreversible change · security-sensitive change · any effect outside this
 worktree (push, publish, deploy, external write) · the plan is broken beyond
-guessing · credentials or secrets. On any of them: `mem ask \"<question>\"`,
-`mem handoff --set \"<where you are>\"`, write a `blocked` line, stop.
+guessing, a file the change must touch that Files: omits included ·
+credentials or secrets. On any of them: `mem ask \"<question>\"` (it reaches
+the orchestrator), `mem handoff --set \"<where you are>\"`, a
+`blocked` line naming the question, stop. The answer comes back in your next
+brief; never work around it or ask twice.
 
 ## mem
 
@@ -202,6 +232,7 @@ mod tests {
             attempts: 1,
             why: "wrote outside its Files: patterns".into(),
             last_report: "ready merge-ready".into(),
+            answers: Vec::new(),
         };
         let again = text(
             &task,
@@ -209,7 +240,7 @@ mod tests {
             Path::new("/state/runs/app/plan/t1.status"),
             &prior,
         );
-        assert!(again.len() <= 2000, "the brief is {} bytes", again.len());
+        assert!(again.len() <= BUDGET, "the brief is {} bytes", again.len());
         for needle in [
             "This is attempt 2.",
             "wrote outside its Files: patterns",
@@ -217,5 +248,37 @@ mod tests {
         ] {
             assert!(again.contains(needle), "the redispatch brief lost {needle}");
         }
+        assert!(
+            !again.contains("It asked:"),
+            "an attempt that asked nothing has no answer to carry: {again}"
+        );
+
+        // A worker that stopped on a question wakes up to the answer.
+        let asked = Prior {
+            attempts: 1,
+            why: "asked #AB12CD34: may I widen Files by src/main.rs?".into(),
+            last_report: "blocked: asked #AB12CD34".into(),
+            answers: vec![(
+                "may I widen Files by src/main.rs? The dispatch arm lives there.".into(),
+                "Yes: the plan now lists src/main.rs on your Files line.".into(),
+            )],
+        };
+        let answered = text(
+            &task,
+            Path::new("/state/worktrees/app/plan/t1"),
+            Path::new("/state/runs/app/plan/t1.status"),
+            &asked,
+        );
+        for needle in [
+            "It asked: may I widen Files by src/main.rs?",
+            "The orchestrator answered: Yes: the plan now lists src/main.rs",
+            "Act on that answer.",
+        ] {
+            assert!(answered.contains(needle), "the answered brief lost {needle}");
+        }
+        assert!(answered.len() <= BUDGET, "{}", answered.len());
+        // A long answer is clipped, not dropped, and the clip ends cleanly.
+        assert_eq!(clip(&"x".repeat(1000)).len(), 603);
+        assert_eq!(clip("  short  "), "short");
     }
 }

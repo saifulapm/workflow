@@ -396,3 +396,113 @@ fn the_listing_json_carries_the_answered_flag() {
     assert_eq!(rows.len(), 1, "{v}");
     assert_eq!(rows[0]["answered"], serde_json::json!(false), "{v}");
 }
+
+/// A worker asks from its task worktree, and the question is the
+/// orchestrator's: tagged with the task, kept off the hub's listing, and
+/// carried with its answer in the JSON a run reads.
+#[test]
+fn a_workers_question_is_the_orchestrators_and_names_its_task() {
+    let w = World::new("q-worker");
+    let repo = w.repo("thing", None);
+    common::run_git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    );
+    // Where `workflow run` puts a task's worktree, under the mem state root.
+    let wt = w.dirs().workflow_worktrees().join("thing/cart-v2/t3");
+    std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+    common::run_git(
+        &repo,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "cart-v2/t3"],
+    );
+
+    let out = ask_env(&w, &wt, &["ask", "may I widen Files by src/main.rs?", "--json"], None);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["audience"], "orchestrator", "{v}");
+    let id = v["short_id"].as_str().unwrap().to_string();
+
+    // The hub's view: nothing for a person here.
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--pending", "--all-projects", "--for", "human", "--json"],
+        None,
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"], serde_json::json!([]), "{v}");
+
+    // The orchestrator's view: the question, the task that asked it, the body.
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--pending", "--for", "orchestrator", "--json"],
+        None,
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let q = &v["questions"][0];
+    assert_eq!(q["task"], "cart-v2/t3", "{q}");
+    assert_eq!(q["audience"], "orchestrator");
+    assert_eq!(q["body"], "may I widen Files by src/main.rs?");
+    assert_eq!(q["answered"], false);
+    assert!(q["answer"].is_null());
+    let text = stdout(&ask_env(&w, &repo, &["questions", "--pending"], None));
+    assert!(text.contains("[cart-v2/t3] may I widen"), "{text}");
+
+    // Answered, the same listing carries the answer for the next attempt.
+    let out = ask_env(&w, &repo, &["answer", &id, "yes, widen"], None);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = ask_env(&w, &repo, &["questions", "--for", "orchestrator", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"][0]["answer"], "yes, widen", "{v}");
+    assert_eq!(v["questions"][0]["answered"], true);
+
+    // `--for human` from a worktree is a worker escalating on purpose.
+    let out = ask_env(&w, &wt, &["ask", "delete the prod table?", "--for", "human", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["audience"].is_null(), "{v}");
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--pending", "--for", "human", "--json"],
+        None,
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["questions"][0]["title"], "delete the prod table?");
+}
+
+/// The environment says so too, for a backend whose worker does not stand in
+/// a worktree under the state root.
+#[test]
+fn workflow_task_in_the_environment_addresses_the_orchestrator() {
+    let w = World::new("q-env");
+    let repo = w.repo("thing", None);
+    let out = common::mem_env(
+        &w,
+        &repo,
+        &["ask", "which base?", "--json"],
+        &[("MEM_SYNC_CMD", "true"), ("WORKFLOW_TASK", "cart-v2/t1")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["audience"], "orchestrator", "{v}");
+    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"][0]["task"], "cart-v2/t1", "{v}");
+    // And a plain checkout with nothing set is a person's question.
+    let out = ask_env(&w, &repo, &["ask", "ship it?", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["audience"].is_null(), "{v}");
+}

@@ -62,6 +62,13 @@ impl Dirs {
         self.mem_state().join("snapshots")
     }
 
+    /// Where `workflow run` puts a task's worktree:
+    /// `<here>/<project>/<plan>/<task>`. A question asked from under it is a
+    /// worker's, and the orchestrator's to answer.
+    pub fn workflow_worktrees(&self) -> PathBuf {
+        self.state.join("workflow/worktrees")
+    }
+
     pub fn config_file(&self) -> PathBuf {
         self.config.join("mem/config.toml")
     }

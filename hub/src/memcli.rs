@@ -12,7 +12,7 @@
 //!
 //! | call | exit | stdout |
 //! |---|---|---|
-//! | `questions --pending --all-projects --json`, none pending | 1 | `{"questions":[]}` |
+//! | `questions --pending --all-projects --for human --json`, none pending | 1 | `{"questions":[]}` |
 //! | `log --limit N --project X --json`, none | 1 | `{"items":[]}` |
 //! | `projects --json`, none | 0 | `{"projects":[]}` |
 //! | `status --project <no status.md> --json` | 1 | **empty** |
@@ -33,6 +33,17 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::proc::{self, Ended};
+
+/// The one listing hub shows and rings for: pending, every project, and
+/// only what a person is meant to answer.
+pub const QUESTIONS_ARGV: [&str; 6] = [
+    "questions",
+    "--pending",
+    "--all-projects",
+    "--for",
+    "human",
+    "--json",
+];
 
 /// §4: "a small in-process cache (5 s TTL) so a phone refresh doesn't
 /// stampede". The key is the whole argv, so it is per-project by construction
@@ -304,13 +315,16 @@ impl MemCli {
         }
     }
 
+    /// `--for human`: a worker's question is the orchestrator's to answer
+    /// and never a phone's to see. Before the audience existed, every
+    /// "may I widen my Files line" reached the hub and rang the doorbell.
     pub fn questions(&self) -> Arc<Outcome> {
-        self.read(&["questions", "--pending", "--all-projects", "--json"])
+        self.read(&QUESTIONS_ARGV)
     }
 
     /// The same call, straight from the binary (see `refresh`).
     pub fn questions_fresh(&self) -> Arc<Outcome> {
-        self.refresh(&["questions", "--pending", "--all-projects", "--json"])
+        self.refresh(&QUESTIONS_ARGV)
     }
 
     pub fn projects(&self) -> Arc<Outcome> {

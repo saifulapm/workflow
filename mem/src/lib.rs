@@ -109,6 +109,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::Backend { backend } => {
                     verbs::project_set(&app, "backend", backend.as_str())
                 }
+                cli::ProjectSetCommand::Model { model } => verbs::project_set(&app, "model", model),
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
             },
         },
@@ -168,14 +169,23 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         cli::Command::Ask {
             question,
             options,
+            audience,
             session_id,
-        } => verbs::ask(&with_session(app, session_id), question, options),
+        } => verbs::ask(&with_session(app, session_id), question, options, *audience),
         cli::Command::Questions {
             pending,
             all_projects,
+            audience,
             wait,
             timeout,
-        } => verbs::questions(&app, *pending, *all_projects, wait.as_deref(), timeout),
+        } => verbs::questions(
+            &app,
+            *pending,
+            *all_projects,
+            *audience,
+            wait.as_deref(),
+            timeout,
+        ),
         cli::Command::Answer {
             id,
             text,

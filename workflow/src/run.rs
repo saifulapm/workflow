@@ -115,6 +115,9 @@ pub struct Run {
     pub poll: f64,
     pub max_workers: usize,
     pub backend: Box<dyn WorkerBackend>,
+    /// What every worker of this run is started on: `WORKFLOW_MODEL` for
+    /// one run, else the project's `mem project set model`, else opus.
+    pub model: String,
     pub env: Vec<(String, String)>,
     made: Vec<PathBuf>,
 }
@@ -144,6 +147,66 @@ impl Run {
 
     fn branch(&self, task: &str) -> String {
         format!("{}/{}", self.plan.plan_id, task)
+    }
+
+    /// How mem tags a question this task's worker asks: `<plan>/<task>`,
+    /// which mem reads off the worktree path and `WORKFLOW_TASK` alike.
+    fn task_tag(&self, task: &str) -> String {
+        format!("{}/{}", self.plan.plan_id, task)
+    }
+
+    /// The task as the plan of record has it now -- mem's plan, or the file
+    /// this run was handed -- falling back to what the run parsed at start.
+    ///
+    /// The plan used to be frozen at run start, so an orchestrator answering
+    /// "widen the Files line" by editing the plan changed nothing for the
+    /// live run: the redispatched worker was handed the old block and the
+    /// gate held it to the old patterns, and the same question came round
+    /// again (questions #QT76088P, #NS88MTQF). Read fresh at dispatch and at
+    /// the gate, an edit to the plan of record is the whole correction.
+    fn task_now(&self, id: &str) -> Option<Task> {
+        let source = match self.plan_file.as_deref() {
+            Some(file) => std::fs::read_to_string(file).ok(),
+            None => memcli::plan(),
+        };
+        source
+            .and_then(|text| plan::parse(&text, true))
+            .filter(|p| p.plan_id == self.plan.plan_id)
+            .and_then(|p| p.get(id).cloned())
+            .or_else(|| self.plan.get(id).cloned())
+    }
+
+    /// The question this task's worker is waiting on, if its failure note
+    /// names one: `asked #<short id>: ...`.
+    fn asked(&self, task: &str) -> Option<String> {
+        let note = self.field(task, "failed");
+        let rest = note.strip_prefix("asked #")?;
+        let id: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        (!id.is_empty()).then_some(id)
+    }
+
+    /// The failure note for a worker that stopped on a question, as
+    /// `asked #<id>: <what>`, or nothing when its `blocked` line names no
+    /// question and mem lists none pending for the task.
+    fn question_in(&self, task: &str, note: &str) -> Option<String> {
+        let named = note
+            .split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ')')
+            .filter_map(|w| w.strip_prefix('#'))
+            .map(|w| w.trim_end_matches(|c: char| !c.is_ascii_alphanumeric()))
+            .find(|w| w.len() == 8 && w.chars().all(|c| c.is_ascii_alphanumeric()));
+        let listed = memcli::questions_for(&self.task_tag(task));
+        if let Some(id) = named {
+            let what = listed
+                .iter()
+                .find(|q| q.short_id == id)
+                .map(|q| q.title.clone())
+                .unwrap_or_else(|| note.to_string());
+            return Some(format!("asked #{id}: {what}"));
+        }
+        listed
+            .into_iter()
+            .find(|q| q.answer.is_none())
+            .map(|q| format!("asked #{}: {}", q.short_id, q.title))
     }
 
     /// Where a merged task's commit is recorded. Outside refs/heads on purpose:
@@ -357,15 +420,24 @@ impl Run {
                 false => format!("{state}: {note}"),
             })
             .unwrap_or_default();
+        // What the worker asked and what the orchestrator said, newest first
+        // and at most two: the brief's budget is the limit, and the latest
+        // exchange is the one this attempt exists to act on.
+        let answers = memcli::questions_for(&self.task_tag(task))
+            .into_iter()
+            .filter_map(|q| q.answer.map(|a| (q.body, a)))
+            .take(2)
+            .collect();
         brief::Prior {
             attempts,
             why,
             last_report,
+            answers,
         }
     }
 
     fn dispatch(&self, task: &str, after: &str) {
-        let Some(t) = self.plan.get(task).cloned() else {
+        let Some(t) = self.task_now(task) else {
             return;
         };
         self.catch_up(task);
@@ -394,6 +466,9 @@ impl Run {
 
         let mut env = self.env.clone();
         env.extend(self.cargo_env(task));
+        // How a worker's `mem ask` knows it is a worker's: mem reads this, or
+        // the worktree path, and addresses the question to the orchestrator.
+        env.push(("WORKFLOW_TASK".into(), self.task_tag(task)));
         let d = Dispatch {
             task: task.to_string(),
             worktree: wt,
@@ -404,7 +479,7 @@ impl Run {
             status,
             rundir: self.dir.clone(),
             session: session.clone(),
-            model: env_str("WORKFLOW_MODEL", "opus"),
+            model: self.model.clone(),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env,
         };
@@ -470,9 +545,9 @@ impl Run {
         }
 
         let patterns = ownership::split_patterns(
-            self.plan
-                .get(task)
-                .and_then(|t| t.files.as_deref())
+            self.task_now(task)
+                .and_then(|t| t.files)
+                .as_deref()
                 .unwrap_or(""),
         );
         // Anchored on the integration branch, not the run's base: what this
@@ -685,6 +760,19 @@ impl Run {
             return;
         }
         match self.last_status_line(task) {
+            // A worker that stopped on a question is waiting on the
+            // orchestrator, and the failure note says which question: the
+            // poll loop watches it and dispatches the task again the moment
+            // an answer lands, with the answer in the brief. The id comes
+            // off the worker's own report first: mem's read verbs never wait
+            // on another invocation's reindex, so a question written a
+            // moment ago can be missing from the listing this once.
+            Some((state, note)) if state == "blocked"
+                && let Some(asked) = self.question_in(task, &note) =>
+            {
+                self.fail_task(task, &asked);
+                return;
+            }
             // The worker said where it stood; the failure must not claim
             // otherwise.
             Some((state, note)) if state != "ready" => {
@@ -1140,10 +1228,12 @@ impl Run {
     }
 }
 
-/// The stopped-short question, written for the person who answers it on a
-/// phone (friction #VTB9VB1S): counts first, then one line per outcome group,
-/// and never an empty note. Held to the same lint commits are held to.
-/// `tasks` is (id, state, failure reason) in plan order.
+/// The stopped-short report, written to be read at a glance (friction
+/// #VTB9VB1S): counts first, then one line per outcome group, and never an
+/// empty note. Held to the same lint commits are held to. `tasks` is (id,
+/// state, failure reason) in plan order. A log line and stderr, not a
+/// question: the orchestrator reads it and decides, and a person is asked
+/// only what the orchestrator cannot settle.
 fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
     let count = |s: &str| tasks.iter().filter(|(_, state, _)| state == s).count();
     let (merged, failed, previous) = (count(MERGED), count(FAILED), count(DONE_PREVIOUSLY));
@@ -1189,9 +1279,7 @@ fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
     if !never.is_empty() {
         q.push_str(&format!("Never started: {}.\n", never.join(", ")));
     }
-
-    q.push_str("What should happen to these?");
-    q
+    q.trim_end().to_string()
 }
 
 /// The state a report's second field names, and whatever it glued on after a
@@ -1288,6 +1376,10 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         poll,
         max_workers,
         backend: backend_for(),
+        model: env_str(
+            "WORKFLOW_MODEL",
+            &memcli::project_model().unwrap_or_else(|| "opus".into()),
+        ),
         env: Vec::new(),
         made: Vec::new(),
     }
@@ -1507,6 +1599,28 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                 warn(format!("task {id}: dispatched again by request"));
                 run.dispatch(id, "");
             }
+            // A task waiting on the orchestrator goes again by itself once
+            // the answer is in: the orchestrator's whole job here is to
+            // answer, and a run that had to be told twice stopped short
+            // over questions it could have carried (the queue was one
+            // stopped-short question per answer, all of them stale).
+            for id in &wave {
+                if run.state(id) != FAILED || run.running() >= run.max_workers {
+                    continue;
+                }
+                let Some(qid) = run.asked(id) else {
+                    continue;
+                };
+                let answered = memcli::questions_for(&run.task_tag(id))
+                    .into_iter()
+                    .any(|q| q.short_id == qid && q.answer.is_some());
+                if answered {
+                    warn(format!(
+                        "task {id}: #{qid} was answered -- dispatched again with the answer"
+                    ));
+                    run.dispatch(id, "");
+                }
+            }
         }
     }
 
@@ -1553,6 +1667,19 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         "integration branch {} is yours to look at; nothing was pushed",
         run.int_branch
     ));
+    // A worker's question on a task that merged anyway is moot, and left
+    // pending it sits in the orchestrator's queue for ever.
+    for t in run.plan.ids() {
+        let state = run.state(&t);
+        if state != MERGED && state != DONE_PREVIOUSLY {
+            continue;
+        }
+        for q in memcli::questions_for(&run.task_tag(&t)) {
+            if q.answer.is_none() {
+                memcli::answer(&q.id, &format!("moot: {t} merged without it"));
+            }
+        }
+    }
     if failed + blocked > 0 {
         let tasks: Vec<(String, String, String)> = run
             .plan
@@ -1564,7 +1691,15 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                 (t, state, note)
             })
             .collect();
-        memcli::ask(&stopped_short(&run.plan.plan_id, &tasks));
+        // Said on stderr and written to the log, never asked: a run that
+        // stops short is the orchestrator's to read and act on, and as a
+        // question it went to the phone once per stop, mostly stale by the
+        // time it was read.
+        let report = stopped_short(&run.plan.plan_id, &tasks);
+        for line in report.lines() {
+            warn(line);
+        }
+        memcli::log(&report);
         return exit::FAILED;
     }
     exit::OK
@@ -1790,8 +1925,11 @@ mod tests {
             "failed tasks are not grouped by reason: {q}"
         );
         assert!(q.contains("Failed - wrote outside its Files: patterns: t5."));
-        assert!(q.contains("Never started: t6, t7."));
-        assert!(q.trim_end().ends_with("What should happen to these?"));
+        assert!(q.trim_end().ends_with("Never started: t6, t7."));
+        assert!(
+            !q.contains('?'),
+            "a report is not a question; the orchestrator reads it: {q}"
+        );
     }
 
     #[test]

@@ -23,6 +23,19 @@
     },
     "verify": {
       "type": "string"
+    },
+    "review_paths": {
+      "type": "string"
+    },
+    "subdir": {
+      "type": "string"
+    },
+    "backend": {
+      "type": "string"
+    },
+    "model": {
+      "description": "Present only when the project chose its workers' model with `mem project set model`.",
+      "type": "string"
     }
   },
   "additionalProperties": false

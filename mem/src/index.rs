@@ -27,7 +27,9 @@ use crate::store::{Store, is_valid_slug, page_title, read_dir_sorted};
 /// correlated subquery over `items.supersedes`.
 /// 3 added the wiki pages, which get their own tables: a page is a document,
 /// not an item, and nothing that counts or lists items should start seeing it.
-const SCHEMA_VERSION: &str = "3";
+/// 4 added a question's audience and task, so the hub can list what is a
+/// person's to answer and a run can find what its worker asked.
+const SCHEMA_VERSION: &str = "4";
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS items(
@@ -38,7 +40,7 @@ CREATE TABLE IF NOT EXISTS items(
       path TEXT, size INT, mtime INT, ctime INT,
       supersedes TEXT, answers TEXT,
       active INT, superseded_by TEXT,
-      archived INT);
+      archived INT, audience TEXT, task TEXT);
 CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
       title, body, tags,
       content='', contentless_delete=1,
@@ -113,6 +115,8 @@ pub struct Row {
     pub active: bool,
     pub superseded_by: Option<String>,
     pub archived: bool,
+    pub audience: Option<String>,
+    pub task: Option<String>,
 }
 
 /// Qualified with the table name: `items_fts` also has `title` and `tags`, so
@@ -120,7 +124,7 @@ pub struct Row {
 pub const ROW_COLUMNS: &str = "items.id, items.short_id, items.project_id, items.project, \
      items.kind, items.type, items.title, items.tags, items.machine, items.created_epoch, \
      items.modified_epoch, items.path, items.supersedes, items.answers, items.active, \
-     items.superseded_by, items.archived";
+     items.superseded_by, items.archived, items.audience, items.task";
 
 /// The `kind` a page wears. Pages come back from a search through the same
 /// `Row` as items, so that one query can rank both, and this is what tells
@@ -136,7 +140,7 @@ pub fn page_row_columns() -> String {
          pages.project_id, pages.project, '{WIKI_KIND}' AS kind, NULL AS type, pages.title, \
          '[]' AS tags, '' AS machine, pages.modified_epoch AS created_epoch, \
          pages.modified_epoch, pages.path, NULL AS supersedes, NULL AS answers, 1 AS active, \
-         NULL AS superseded_by, 0 AS archived"
+         NULL AS superseded_by, 0 AS archived, NULL AS audience, NULL AS task"
     )
 }
 
@@ -166,6 +170,8 @@ impl Row {
             active: row.get::<_, i64>("active")? != 0,
             superseded_by: row.get("superseded_by")?,
             archived: row.get::<_, i64>("archived")? != 0,
+            audience: row.get("audience")?,
+            task: row.get("task")?,
         })
     }
 }
@@ -633,8 +639,10 @@ fn insert_row(
     tx.execute(
         "INSERT INTO items(id, short_id, project_id, project, kind, type, title, tags, machine,
                            created_epoch, modified_epoch, path, size, mtime, ctime,
-                           supersedes, answers, active, superseded_by, archived)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,1,NULL,?18)",
+                           supersedes, answers, active, superseded_by, archived,
+                           audience, task)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,1,NULL,?18,
+                ?19,?20)",
         params![
             item.meta.id,
             short_id(&item.meta.id),
@@ -654,6 +662,8 @@ fn insert_row(
             item.meta.supersedes,
             item.meta.answers,
             i64::from(item.meta.is_archived()),
+            item.meta.audience,
+            item.meta.task,
         ],
     )?;
     let rowid = tx.last_insert_rowid();
