@@ -12,6 +12,7 @@ use crate::backend::{ClaudeBackend, Dispatch, Handle, WorkerBackend};
 use crate::backend_amx::AmxBackend;
 use crate::gitcmd::Git;
 use crate::plan::{Plan, Task};
+use crate::reviewer::{self, Verdict};
 use crate::{brief, exit, lint, memcli, ownership, paths, plan, repo, sys, warn};
 
 pub const PENDING: &str = "pending";
@@ -118,6 +119,10 @@ pub struct Run {
     /// What every worker of this run is started on: `WORKFLOW_MODEL` for
     /// one run, else the project's `mem project set model`, else opus.
     pub model: String,
+    /// Who reads each task's diff at the gate once its verify is green:
+    /// `WORKFLOW_REVIEW_MODEL` for one run (empty turns the reading off),
+    /// else the project's `mem project set review-model`, else nobody.
+    pub review_model: Option<String>,
     pub env: Vec<(String, String)>,
     made: Vec<PathBuf>,
 }
@@ -165,15 +170,20 @@ impl Run {
     /// again (questions #QT76088P, #NS88MTQF). Read fresh at dispatch and at
     /// the gate, an edit to the plan of record is the whole correction.
     fn task_now(&self, id: &str) -> Option<Task> {
-        let source = match self.plan_file.as_deref() {
-            Some(file) => std::fs::read_to_string(file).ok(),
-            None => memcli::plan(),
-        };
-        source
+        self.plan_text()
             .and_then(|text| plan::parse(&text, true))
             .filter(|p| p.plan_id == self.plan.plan_id)
             .and_then(|p| p.get(id).cloned())
             .or_else(|| self.plan.get(id).cloned())
+    }
+
+    /// The plan of record as it reads right now: the `--plan-file`, else
+    /// mem's plan. What `task_now` parses and what the reviewer is handed.
+    fn plan_text(&self) -> Option<String> {
+        match self.plan_file.as_deref() {
+            Some(file) => std::fs::read_to_string(file).ok(),
+            None => memcli::plan(),
+        }
     }
 
     /// The question this task's worker is waiting on, if its failure note
@@ -605,10 +615,10 @@ impl Run {
             return Err("the rebased branch does not fast-forward onto integration".into());
         }
 
-        if !self.gate_verify() {
+        if let Err(why) = self.gate(task, &prev, &new) {
             int.quiet(&["reset", "-q", "--hard", &prev]);
             write_field(&self.dir, task, "merging", "");
-            return Err("the suite is red once the change sits on integration".into());
+            return Err(why);
         }
 
         self.record_merged(task, &new);
@@ -646,10 +656,13 @@ impl Run {
             "task {task}: its merge reached {} before the run died -- verifying it now",
             self.int_branch
         ));
-        if self.gate_verify() {
-            self.record_merged(task, new);
-            return Ok(());
-        }
+        let why = match self.gate(task, prev, new) {
+            Ok(()) => {
+                self.record_merged(task, new);
+                return Ok(());
+            }
+            Err(why) => why,
+        };
         // Unwind only what nothing was built on. A later run may have merged
         // other tasks on top, and taking those down with this one would be a
         // worse answer than a red branch and a person told why.
@@ -657,12 +670,72 @@ impl Run {
         if int.head().as_deref() == Some(new) {
             int.quiet(&["reset", "-q", "--hard", prev]);
             write_field(&self.dir, task, "merging", "");
-            return Err("the suite is red once the change sits on integration".into());
+            return Err(why);
         }
         Err(format!(
-            "its merge landed before the run died, {} is red now, and other work sits on top of it",
+            "its merge landed before the run died, {} refuses it now ({why}), and other work sits on top of it",
             self.int_branch
         ))
+    }
+
+    /// The two readings a fast-forwarded merge faces before it is recorded:
+    /// the suite, then the reviewer. `Err` is the reason the caller resets
+    /// integration to `prev` and fails the task with.
+    fn gate(&self, task: &str, prev: &str, new: &str) -> Result<(), String> {
+        if !self.gate_verify() {
+            return Err("the suite is red once the change sits on integration".into());
+        }
+        self.gate_review(task, prev, new)
+    }
+
+    /// The reader (plan gate-reviewer). Verify proves what a test can reach;
+    /// a model in a clean context reads the diff against the plan of record
+    /// and the task's Done line and says ship or fix. Nobody named means no
+    /// reading. `fix` leaves the findings in `<task>.review`, which the
+    /// failure note names and the redispatched worker's brief repeats.
+    fn gate_review(&self, task: &str, prev: &str, new: &str) -> Result<(), String> {
+        let Some(model) = self.review_model.as_deref() else {
+            return Ok(());
+        };
+        let Some(t) = self.task_now(task) else {
+            return Ok(());
+        };
+        let plan_text = self.plan_text().unwrap_or_default();
+        let int = Git::at(&self.int_wt);
+        let range = format!("{prev}..{new}");
+        let diff = int.out(&["diff", &range]).unwrap_or_default();
+        let stat = int.out(&["diff", "--stat", &range]).unwrap_or_default();
+        let prompt = self.dir.join(format!("{task}.review-prompt"));
+        let out = self.dir.join(format!("{task}.review"));
+        let err = self.dir.join(format!("{task}.review-err"));
+        let _ = std::fs::write(
+            &prompt,
+            reviewer::prompt(&plan_text, &t, &diff, &stat, &self.int_wt),
+        );
+
+        warn(format!("task {task}: {model} is reading the diff"));
+        let mut result = reviewer::review(model, &self.int_wt, &prompt, &out, &err);
+        // A reading that did not happen is not a verdict either way: one
+        // more try, and then the orchestrator is told.
+        if let Err(why) = &result {
+            warn(format!("task {task}: {why} -- one more reading"));
+            result = reviewer::review(model, &self.int_wt, &prompt, &out, &err);
+        }
+        match result {
+            Ok(Verdict::Ship) => {
+                warn(format!("task {task}: the reviewer says ship"));
+                Ok(())
+            }
+            Ok(Verdict::Fix) => {
+                let n = self.field(task, "reviews").parse::<u64>().unwrap_or(0) + 1;
+                write_field(&self.dir, task, "reviews", &n.to_string());
+                Err(format!(
+                    "the reviewer wants fixes first (review {n}) -- read {}",
+                    out.display()
+                ))
+            }
+            Err(why) => Err(format!("{why} -- read {}", out.display())),
+        }
     }
 
     /// verify, on the integration branch, as its own process: the same
@@ -1380,6 +1453,10 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
             "WORKFLOW_MODEL",
             &memcli::project_model().unwrap_or_else(|| "opus".into()),
         ),
+        review_model: match std::env::var("WORKFLOW_REVIEW_MODEL") {
+            Ok(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
+            Err(_) => memcli::project_review_model(),
+        },
         env: Vec::new(),
         made: Vec::new(),
     }
