@@ -275,6 +275,7 @@ pub fn project_current(app: &App) -> Result<i32> {
     let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
     let backend = crate::project::declared(&app.store, id, "backend");
     let model = crate::project::declared(&app.store, id, "model");
+    let review_model = crate::project::declared(&app.store, id, "review_model");
     // A child project keeps the checkout as its root — run dirs and worktrees
     // key on the checkout — and says where inside it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
@@ -299,6 +300,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(model) = &model {
             doc["model"] = json!(model);
         }
+        if let Some(model) = &review_model {
+            doc["review_model"] = json!(model);
+        }
         println!("{}", serde_json::to_string(&doc)?);
     } else {
         println!("id    {id}");
@@ -320,6 +324,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(model) = &model {
             println!("model  {model}");
+        }
+        if let Some(model) = &review_model {
+            println!("review-model  {model}");
         }
     }
     Ok(exit::OK)

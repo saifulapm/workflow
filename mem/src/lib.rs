@@ -110,6 +110,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     verbs::project_set(&app, "backend", backend.as_str())
                 }
                 cli::ProjectSetCommand::Model { model } => verbs::project_set(&app, "model", model),
+                cli::ProjectSetCommand::ReviewModel { model } => {
+                    verbs::project_set(&app, "review_model", model)
+                }
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
             },
         },

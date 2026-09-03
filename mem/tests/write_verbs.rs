@@ -577,6 +577,51 @@ fn project_set_backend_records_the_choice_and_refuses_anything_else() {
 }
 
 #[test]
+fn project_set_review_model_records_the_choice_and_project_current_reports_it() {
+    let w = World::new("write-review-model");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+
+    // Nothing declared: the field is absent, and a run reviews nothing.
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("review_model").is_none(), "{v}");
+
+    let out = mem(&w, &repo, &["project", "set", "review-model", "fable"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["review_model"], serde_json::json!("fable"));
+    assert!(
+        stdout(&mem(&w, &repo, &["project", "current"])).contains("review-model  fable"),
+        "the plain rendering names it too"
+    );
+    assert!(v.get("model").is_none(), "the workers' model is a separate key: {v}");
+
+    // Choosing again replaces the choice rather than leaving two keys behind.
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "review-model", "opus"])),
+        0
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["review_model"], serde_json::json!("opus"));
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert_eq!(
+        text.matches("review_model = ").count(),
+        1,
+        "one review_model key, not two: {text}"
+    );
+
+    // An empty value is a usage error, not a way to clear the key.
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "review-model", ""])),
+        2
+    );
+}
+
+#[test]
 fn project_add_registers_a_child_the_subdir_then_owns() {
     let w = World::new("write-child");
     let repo = w.repo("mono", Some("git@github.com:me/mono.git"));

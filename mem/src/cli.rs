@@ -270,6 +270,11 @@ pub enum ProjectSetCommand {
     /// The model a run's workers are started on (`opus`, `sonnet`, ...).
     /// Absent means the workflow's default; WORKFLOW_MODEL overrides per run.
     Model { model: String },
+    /// The model that reviews each task's diff at the merge gate, after its
+    /// Verify goes green (`fable`, `opus`, ...). Absent means no review;
+    /// WORKFLOW_REVIEW_MODEL overrides per run.
+    #[command(name = "review-model")]
+    ReviewModel { model: String },
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },
