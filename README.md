@@ -35,6 +35,7 @@ of them committed:
 
     mem project set verify "pnpm test"          # what green means here
     mem project set review-paths "scripts/**"   # extra risky globs, optional
+    mem project set review-model fable          # a reader at the merge gate, optional
 
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
@@ -84,7 +85,11 @@ Three sizes of work, three moves:
   tmux panes instead, listed by `amx ls` and watched with `amx attach <id>`;
   waves, ownership and the merge gate are the same either way. Workers run
   on opus unless the project says otherwise (`mem project set model sonnet`)
-  or one run does (`WORKFLOW_MODEL=sonnet workflow run`).
+  or one run does (`WORKFLOW_MODEL=sonnet workflow run`). With a
+  `review-model` set, every task's diff is read by that model against the
+  plan before it merges, after its Verify is green: a fix verdict sends the
+  task back to its worker with the findings, so a cheaper worker's work
+  still gets a frontier reading.
 
 Questions find you: on screen while a machine is watched, on the phone
 (ntfy via hub) when everything is locked. Answer in the session, with

@@ -36,7 +36,10 @@ did. A page nobody corrected is worse than no page: the next session believes
 it. New page, new line in `index`.
 
 Stay inside the task's `Files:` patterns. In an orchestrated run, anything
-outside them is refused at the merge gate and the task fails.
+outside them is refused at the merge gate and the task fails. A brief whose
+"attempt before this one" names a review file: read it first. Its findings
+are the task now, beside the Done line, and a reader will hold your next
+diff to both.
 
 **A background session works exactly one task, then ends.** A task is sized to
 one fresh context window; a session that rolls into the next task is working
