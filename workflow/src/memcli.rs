@@ -124,6 +124,12 @@ pub fn project_model() -> Option<String> {
     project_choice("model")
 }
 
+/// The model that reads each task's diff at the merge gate, or nothing:
+/// absent means the project asked for no review.
+pub fn project_review_model() -> Option<String> {
+    project_choice("review_model")
+}
+
 /// A worker's question, as `mem questions --for orchestrator --json` reports
 /// it: the orchestrator's to answer, tagged with the task that asked.
 #[derive(Debug, Clone, Deserialize)]

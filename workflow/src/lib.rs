@@ -33,6 +33,7 @@ pub mod plan;
 pub mod plancheck;
 pub mod repo;
 pub mod review;
+pub mod reviewer;
 pub mod run;
 pub mod settings;
 pub mod status;
