@@ -117,11 +117,11 @@ pub const WORKER_CMD_DEFAULT: &str = r#"cd {worktree} && WORKFLOW_AGENT=1 sh -c 
   workflow-worker {brief} {model} > {out} 2> {err}"#;
 
 /// The value as one shell word, whatever is in it.
-pub(crate) fn shq(value: &str) -> String {
+fn shq(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-pub(crate) fn subst(tpl: &str, key: &str, value: &str) -> String {
+fn subst(tpl: &str, key: &str, value: &str) -> String {
     tpl.replace(&format!("{{{key}}}"), &shq(value))
 }
 
