@@ -8,21 +8,15 @@
 //! record, the task block and the diff, and answers `VERDICT: ship` or
 //! `VERDICT: fix` with findings; `fix` takes the path a red Verify takes.
 //!
-//! The call goes through a template the way a worker's does, so a test can
-//! stand a fake reviewer in for `claude -p`.
+//! The reader is a worker like any other: dispatched through the project's
+//! backend (a `claude --bg` session or an amx pane, never print mode), so it
+//! shows up in `claude agents` or `amx ls` and can be attached to while it
+//! reads. It writes its answer to one file and ends; the gate reads the
+//! verdict off that file and checks the tree it read is untouched.
 
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
-use crate::backend::subst;
 use crate::plan::Task;
-use crate::sys;
-
-/// The reviewer, in the integration worktree so its file reads see the
-/// merged tree. Read-only tools and no session on disk: it is a reading, not
-/// a session anyone resumes.
-pub const CMD_DEFAULT: &str = "cd {worktree} && claude -p --model {model} --tools Read,Grep,Glob --no-session-persistence < {prompt} > {out} 2> {err}";
 
 /// Past this the diff goes in as its `--stat`, and the reviewer reads the
 /// files instead: a prompt that is mostly diff is a reading nobody does well.
@@ -38,10 +32,10 @@ pub enum Verdict {
     Fix,
 }
 
-/// The first `VERDICT: ship|fix` line in what the reviewer printed, case
+/// The first `VERDICT: ship|fix` line in what the reviewer wrote, case
 /// aside, with whatever markdown it wrapped the line in stripped off.
-pub fn verdict(stdout: &str) -> Option<Verdict> {
-    stdout.lines().find_map(|line| {
+pub fn verdict(text: &str) -> Option<Verdict> {
+    text.lines().find_map(|line| {
         let line = line.trim().trim_start_matches(['*', '#', '-', '>', ' ']);
         let rest = line
             .get(..8)
@@ -59,13 +53,21 @@ pub fn verdict(stdout: &str) -> Option<Verdict> {
     })
 }
 
-/// What the reviewer reads: the plan of record whole, so the rulings and the
-/// Done line it holds the diff to are the ones the run holds it to; the task
-/// block verbatim; the diff, or its stat past [`DIFF_CAP`]; and the contract.
-pub fn prompt(plan_text: &str, task: &Task, diff: &str, stat: &str, worktree: &Path) -> String {
+/// The reader's brief: the plan of record whole, so the rulings and the Done
+/// line it holds the diff to are the ones the run holds it to; the task block
+/// verbatim; the diff, or its stat past [`DIFF_CAP`]; and the contract --
+/// one answer file, first line the verdict, nothing else written.
+pub fn prompt(
+    plan_text: &str,
+    task: &Task,
+    diff: &str,
+    stat: &str,
+    worktree: &Path,
+    answer: &Path,
+) -> String {
     let change = if diff.len() > DIFF_CAP {
         format!(
-            "The diff is {} bytes, past what this prompt carries, so this is its stat; \
+            "The diff is {} bytes, past what this brief carries, so this is its stat; \
              read the files themselves in the worktree.\n\n```\n{}\n```",
             diff.len(),
             stat.trim_end()
@@ -79,7 +81,7 @@ pub fn prompt(plan_text: &str, task: &Task, diff: &str, stat: &str, worktree: &P
 
 You are a cold reviewer. You read the plan, the task block and the diff below,
 and nothing else: not the worker's reasoning, not its commit messages' claims.
-The worktree at {wt} holds the tree with this diff applied; read files there
+You are in {wt}, which holds the tree with this diff applied; read files there
 when a judgement depends on code the diff does not show. The task's Verify
 command has already passed on that tree, so a test is not what you are here
 for -- what a test can reach is proved, and what only a reader can see is not.
@@ -100,12 +102,21 @@ behaviour. \"Consider extracting this\" is a preference, and preferences do
 not block; correctness and requirement gaps do. Do not summarise the diff and
 do not review style.
 
-Answer in under 400 words. The first line of your answer is exactly one of:
+## How to answer
+
+Write your whole answer, under 400 words, to exactly this file and then stop:
+
+    Answer file: {answer}
+
+Its first line is exactly one of:
 
     VERDICT: ship
     VERDICT: fix
 
 then the findings, most severe first, or one line saying the diff is clean.
+That file is the only thing you write. Do not edit, create or commit anything
+in the tree, do not run its tests or builds, and do not ask questions: a
+reading that changes the tree is void.
 
 ## The plan of record
 
@@ -120,43 +131,11 @@ then the findings, most severe first, or one line saying the diff is clean.
 ",
         id = task.id,
         wt = worktree.display(),
+        answer = answer.display(),
         plan = plan_text.trim_end(),
         block = task.block,
         change = change,
     )
-}
-
-/// The reviewer's command from `WORKFLOW_REVIEW_CMD` or [`CMD_DEFAULT`].
-pub fn command(model: &str, worktree: &Path, prompt: &Path, out: &Path, err: &Path) -> String {
-    let template = match std::env::var("WORKFLOW_REVIEW_CMD") {
-        Ok(v) if !v.is_empty() => v,
-        _ => CMD_DEFAULT.to_string(),
-    };
-    command_from(&template, model, worktree, prompt, out, err)
-}
-
-/// The pure half: every placeholder becomes one shell word, so a project
-/// whose path has a space in it is reviewed like any other.
-pub fn command_from(
-    template: &str,
-    model: &str,
-    worktree: &Path,
-    prompt: &Path,
-    out: &Path,
-    err: &Path,
-) -> String {
-    let path = |p: &Path| p.to_string_lossy().to_string();
-    let mut cmd = template.to_string();
-    for (key, value) in [
-        ("worktree", path(worktree)),
-        ("prompt", path(prompt)),
-        ("out", path(out)),
-        ("err", path(err)),
-        ("model", model.to_string()),
-    ] {
-        cmd = subst(&cmd, key, &value);
-    }
-    cmd
 }
 
 /// Seconds one reading may take: `WORKFLOW_REVIEW_DEADLINE_MIN`, fractional,
@@ -173,53 +152,9 @@ fn deadline_from(value: Option<&str>) -> i64 {
     ((minutes * 60.0) + 0.5).max(1.0) as i64
 }
 
-/// One reading: run the command, wait for it within the deadline, and read
-/// the verdict off what it printed to `out`. `Err` is a reviewer that could
-/// not be started, ran past the deadline, or printed no verdict -- never a
-/// judgement on the code; the caller decides what a reading that did not
-/// happen means.
-pub fn review(model: &str, worktree: &Path, prompt: &Path, out: &Path, err: &Path) -> Result<Verdict, String> {
-    run(&command(model, worktree, prompt, out, err), out, deadline_s())
-}
-
-pub fn run(cmd: &str, out: &Path, deadline_s: i64) -> Result<Verdict, String> {
-    let _ = std::fs::write(out, "");
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("the reviewer could not be started: {e}"))?;
-    let until = sys::now() + deadline_s;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if sys::now() >= until => {
-                sys::kill_group(&child.id().to_string(), "TERM");
-                let _ = child.wait();
-                return Err(format!(
-                    "the review ran past its {deadline_s} second deadline and was stopped"
-                ));
-            }
-            Ok(None) => sys::sleep(1.0),
-            Err(e) => return Err(format!("lost track of the reviewer: {e}")),
-        }
-    };
-    let printed = std::fs::read_to_string(out).unwrap_or_default();
-    verdict(&printed).ok_or_else(|| match status.success() {
-        true => "the review returned no verdict".to_string(),
-        false => format!("the reviewer exited with {status} and no verdict"),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::shq;
-    use std::path::PathBuf;
 
     fn task() -> Task {
         Task {
@@ -259,17 +194,20 @@ mod tests {
             "diff --git a/x b/x\n+fixed\n",
             " x | 1 +\n",
             Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
         );
         for needle in [
             "# Review of task t3 before it merges",
             "Ruling 1. Config.",
             "Done: a fix verdict resets integration",
             "```diff\ndiff --git a/x b/x\n+fixed\n```",
-            "/state/wt/_integration",
+            "You are in /state/wt/_integration",
+            "Answer file: /runs/t3.review",
             "VERDICT: ship",
             "VERDICT: fix",
             "under 400 words",
             "preferences do\nnot block",
+            "the only thing you write",
         ] {
             assert!(text.contains(needle), "the prompt lost {needle:?}:\n{text}");
         }
@@ -279,55 +217,10 @@ mod tests {
     #[test]
     fn a_diff_past_the_cap_goes_in_as_its_stat() {
         let big = "+".repeat(DIFF_CAP + 1);
-        let text = prompt("# plan: p\n", &task(), &big, " x | 1 +\n", Path::new("/wt"));
+        let text = prompt("# plan: p\n", &task(), &big, " x | 1 +\n", Path::new("/wt"), Path::new("/r"));
         assert!(text.contains(" x | 1 +"), "the stat stands in");
         assert!(text.contains("read the files themselves"), "and the reviewer is told to read");
         assert!(!text.contains(&big[..1000]), "the diff body is out");
-    }
-
-    #[test]
-    fn every_placeholder_is_one_shell_word() {
-        let cmd = command_from(
-            CMD_DEFAULT,
-            "fable",
-            Path::new("/state/my project/_integration"),
-            Path::new("/runs/t3.review-prompt"),
-            Path::new("/runs/t3.review"),
-            Path::new("/runs/t3.review-err"),
-        );
-        assert!(cmd.starts_with("cd '/state/my project/_integration' && claude -p --model 'fable'"));
-        assert!(cmd.contains("< '/runs/t3.review-prompt' > '/runs/t3.review' 2> '/runs/t3.review-err'"));
-        assert!(cmd.contains("--tools Read,Grep,Glob"), "read-only tools: {cmd}");
-        assert!(!cmd.contains('{'), "a placeholder was left behind: {cmd}");
-    }
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("wf-reviewer-{}-{name}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join("out")
-    }
-
-    #[test]
-    fn a_reading_returns_what_the_reviewer_printed_or_says_why_not() {
-        let out = scratch("fix");
-        let cmd = format!("printf 'Some preamble\\nVERDICT: fix\\n1. x.rs:3\\n' > {}", shq(&out.to_string_lossy()));
-        assert_eq!(run(&cmd, &out, 30), Ok(Verdict::Fix));
-
-        let out = scratch("none");
-        let cmd = format!("printf 'I could not decide.\\n' > {}", shq(&out.to_string_lossy()));
-        assert_eq!(run(&cmd, &out, 30), Err("the review returned no verdict".into()));
-
-        let out = scratch("crash");
-        assert_eq!(
-            run("exit 3", &out, 30),
-            Err("the reviewer exited with exit status: 3 and no verdict".into())
-        );
-
-        let out = scratch("slow");
-        let started = sys::now();
-        let err = run("sleep 30; printf 'VERDICT: ship'", &out, 1).unwrap_err();
-        assert!(err.contains("ran past its 1 second deadline"), "{err}");
-        assert!(sys::now() - started < 10, "the deadline was enforced, not waited out");
     }
 
     #[test]

@@ -123,6 +123,10 @@ pub struct Run {
     /// `WORKFLOW_REVIEW_MODEL` for one run (empty turns the reading off),
     /// else the project's `mem project set review-model`, else nobody.
     pub review_model: Option<String>,
+    /// Raised by SIGTERM, SIGINT or SIGHUP. The poll loop reads it between
+    /// passes; the gate reads it while a reading is in flight, so a stop
+    /// takes the reviewer down with the workers.
+    pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub env: Vec<(String, String)>,
     made: Vec<PathBuf>,
 }
@@ -693,6 +697,11 @@ impl Run {
     /// and the task's Done line and says ship or fix. Nobody named means no
     /// reading. `fix` leaves the findings in `<task>.review`, which the
     /// failure note names and the redispatched worker's brief repeats.
+    ///
+    /// The reader is dispatched like a worker, through the project's backend,
+    /// so it is a session Saiful can watch and attach to -- never print mode.
+    /// It works in the integration worktree, writes one answer file and ends;
+    /// a reading that changed the tree is void.
     fn gate_review(&self, task: &str, prev: &str, new: &str) -> Result<(), String> {
         let Some(model) = self.review_model.as_deref() else {
             return Ok(());
@@ -706,20 +715,21 @@ impl Run {
         let diff = int.out(&["diff", &range]).unwrap_or_default();
         let stat = int.out(&["diff", "--stat", &range]).unwrap_or_default();
         let prompt = self.dir.join(format!("{task}.review-prompt"));
-        let out = self.dir.join(format!("{task}.review"));
-        let err = self.dir.join(format!("{task}.review-err"));
+        let answer = self.dir.join(format!("{task}.review"));
         let _ = std::fs::write(
             &prompt,
-            reviewer::prompt(&plan_text, &t, &diff, &stat, &self.int_wt),
+            reviewer::prompt(&plan_text, &t, &diff, &stat, &self.int_wt, &answer),
         );
 
         warn(format!("task {task}: {model} is reading the diff"));
-        let mut result = reviewer::review(model, &self.int_wt, &prompt, &out, &err);
+        let mut result = self.read_once(task, model, &prompt, &answer, new);
         // A reading that did not happen is not a verdict either way: one
         // more try, and then the orchestrator is told.
-        if let Err(why) = &result {
+        if let Err(why) = &result
+            && !why.contains("asked to stop")
+        {
             warn(format!("task {task}: {why} -- one more reading"));
-            result = reviewer::review(model, &self.int_wt, &prompt, &out, &err);
+            result = self.read_once(task, model, &prompt, &answer, new);
         }
         match result {
             Ok(Verdict::Ship) => {
@@ -731,11 +741,89 @@ impl Run {
                 write_field(&self.dir, task, "reviews", &n.to_string());
                 Err(format!(
                     "the reviewer wants fixes first (review {n}) -- read {}",
-                    out.display()
+                    answer.display()
                 ))
             }
-            Err(why) => Err(format!("{why} -- read {}", out.display())),
+            Err(why) => Err(format!("{why} -- read {}", answer.display())),
         }
+    }
+
+    /// One reading: a worker dispatch in the integration worktree, waited
+    /// for within the review deadline, its answer file read for the verdict
+    /// once it ends. `Err` is a reading that did not happen -- a session that
+    /// never answered, ran past the deadline, was stopped with the run, or
+    /// touched the tree -- never a judgement on the code.
+    fn read_once(
+        &self,
+        task: &str,
+        model: &str,
+        prompt: &Path,
+        answer: &Path,
+        new: &str,
+    ) -> Result<Verdict, String> {
+        let _ = std::fs::remove_file(answer);
+        let name = format!("{task}-review");
+        let pidfile = self.dir.join(format!("{task}.review-pid"));
+        let out = self.dir.join(format!("{task}.review-out"));
+        let _ = std::fs::remove_file(&pidfile);
+        let _ = std::fs::write(&out, "");
+        let mut env = self.env.clone();
+        env.push(("WORKFLOW_TASK".into(), format!("{}/{name}", self.plan.plan_id)));
+        let d = Dispatch {
+            task: name,
+            worktree: self.int_wt.clone(),
+            brief: prompt.to_path_buf(),
+            out,
+            err: self.dir.join(format!("{task}.review-err")),
+            pidfile: pidfile.clone(),
+            status: self.dir.join(format!("{task}.review-status")),
+            rundir: self.dir.clone(),
+            session: self.backend.mint_session(),
+            model: model.to_string(),
+            turns: env_str("WORKFLOW_MAX_TURNS", "120"),
+            env,
+        };
+        let session = self.backend.dispatch(&d);
+        write_field(&self.dir, task, "review-session", &session);
+        let h = Handle {
+            session,
+            pidfile,
+            worktree: self.int_wt.clone(),
+        };
+
+        let started = sys::now();
+        let deadline_s = reviewer::deadline_s();
+        loop {
+            if self.stop.load(std::sync::atomic::Ordering::Relaxed) {
+                self.backend.stop(&h, self.kill_grace_s);
+                return Err("the run was asked to stop during the reading".into());
+            }
+            // Gone with an answer is the clean end. Gone without one within
+            // the first moments is a dispatch still coming up, not an ending.
+            if !self.backend.alive(&h) && (answer.exists() || sys::now() - started >= 5) {
+                break;
+            }
+            if sys::now() - started >= deadline_s {
+                self.backend.stop(&h, self.kill_grace_s);
+                return Err(format!(
+                    "the review ran past its {deadline_s} second deadline and was stopped"
+                ));
+            }
+            sys::sleep(1.0);
+        }
+
+        // The tree it read must be the tree it was handed.
+        let int = Git::at(&self.int_wt);
+        let dirty = int
+            .out(&["status", "--porcelain"])
+            .is_some_and(|s| !s.trim().is_empty());
+        if dirty || int.head().as_deref() != Some(new) {
+            int.quiet(&["reset", "-q", "--hard", new]);
+            int.quiet(&["clean", "-fdq"]);
+            return Err("the reviewer changed the tree, which voids the reading".into());
+        }
+        let text = std::fs::read_to_string(answer).unwrap_or_default();
+        reviewer::verdict(&text).ok_or_else(|| "the review returned no verdict".to_string())
     }
 
     /// verify, on the integration branch, as its own process: the same
@@ -1457,6 +1545,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
             Ok(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
             Err(_) => memcli::project_review_model(),
         },
+        stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         env: Vec::new(),
         made: Vec::new(),
     }
@@ -1551,15 +1640,14 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     // loop sees it, stops every dispatched worker, and leaves the tasks
     // `dispatched` for the next run in this checkout to adopt and collect.
     // SIGKILL still can't be caught -- reap covers that aftermath.
-    let asked_to_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     for sig in [
         signal_hook::consts::SIGTERM,
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGHUP,
     ] {
-        let _ = signal_hook::flag::register(sig, asked_to_stop.clone());
+        let _ = signal_hook::flag::register(sig, run.stop.clone());
     }
-    let stopping = || asked_to_stop.load(std::sync::atomic::Ordering::Relaxed);
+    let stopping = || run.stop.load(std::sync::atomic::Ordering::Relaxed);
 
     let adopted = run.adopt_stale();
     memcli::log(&format!(

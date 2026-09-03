@@ -2,7 +2,9 @@
 # The reader at the merge gate (plan gate-reviewer). A task whose Verify is
 # green on integration is read once more by a model in a clean context; a
 # `fix` verdict takes the path a red Verify takes, and the findings wait in
-# the run dir for the redispatched worker, whose brief names the file.
+# the run dir for the redispatched worker, whose brief names the file. The
+# reader is dispatched like a worker, through the same template, so one fake
+# plays both parts: a task id ending in -review is a reading.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -12,11 +14,37 @@ export WF_TMP="$T_TMP"
 # again with the file already on its branch, commits the fix the reviewer
 # asked for. hold stays alive until released so the run stays live and
 # redispatch has something to reach. Everything else commits once.
+#
+# As the reader (task <id>-review) it logs what it was handed, wants fixes
+# for a t1 diff that lacks the fix, writes no verdict at all for t2, edits the
+# tree for t3, and ships everything else.
 write_exec "$T_TMP/worker.sh" <<'FAKE'
 #!/bin/sh
-task=$1; status=$3; brief=$5
+task=$1; wt=$2; status=$3; brief=$5; model=$6
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$status"; }
 commit() { git -c core.hooksPath=/dev/null commit -qm "$1"; }
+case $task in
+*-review)
+	answer=$(sed -n 's/^    Answer file: //p' "$brief")
+	printf '%s %s %s\n' "$model" "${task%-review}" "$wt" >>"$WF_TMP/reviews.log"
+	case $task in
+	t2-review) printf 'I read it twice and could not decide.\n' >"$answer" ;;
+	t3-review)
+		printf 'meddling\n' >"$wt/app/t3.php"
+		printf 'VERDICT: ship\n' >"$answer"
+		;;
+	t1-review)
+		if grep -q '^+fixed$' "$brief"; then
+			printf 'VERDICT: ship\nThe diff is clean.\n' >"$answer"
+		else
+			printf 'Reading...\n\n**VERDICT: fix**\n1. app/t1.php:1 -- says draft; the Done line wants the fix.\n' >"$answer"
+		fi
+		;;
+	*) printf 'VERDICT: ship\n' >"$answer" ;;
+	esac
+	exit 0
+	;;
+esac
 say started
 cp "$brief" "$WF_TMP/brief-$task-$(date +%s%N)"
 case $task in
@@ -53,35 +81,8 @@ say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE
 
-# The fake reviewer, standing in for `claude -p`. It logs what it was handed,
-# wants fixes for a t1 diff that lacks the fix, prints no verdict at all for
-# t2, and ships everything else.
-write_exec "$T_TMP/reviewer.sh" <<'FAKE'
-#!/bin/sh
-model=$1; wt=$2; prompt=$3; out=$4
-task=$(sed -n '1s/^# Review of task \([a-z0-9]*\) .*/\1/p' "$prompt")
-printf '%s %s %s\n' "$model" "$task" "$wt" >>"$WF_TMP/reviews.log"
-case $task in
-t2)
-	printf 'I read it twice and could not decide.\n' >"$out"
-	;;
-t1)
-	if grep -q '^+fixed$' "$prompt"; then
-		printf 'VERDICT: ship\nThe diff is clean.\n' >"$out"
-	else
-		printf 'Reading...\n\n**VERDICT: fix**\n1. app/t1.php:1 -- says draft; the Done line wants the fix.\n' >"$out"
-	fi
-	;;
-*)
-	printf 'VERDICT: ship\n' >"$out"
-	;;
-esac
-FAKE
-
 export FAKE="$T_TMP/worker.sh"
-export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {session} {brief}'"'"' > {out} 2> {err} &'
-export REVIEWER="$T_TMP/reviewer.sh"
-export WORKFLOW_REVIEW_CMD='sh "$REVIEWER" {model} {worktree} {prompt} {out} {err}'
+export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {session} {brief} {model}'"'"' > {out} 2> {err} &'
 
 new_repo app
 mem_register
@@ -132,6 +133,9 @@ plan live '- [ ] hold Stay alive until released
       Verify: true
 - [ ] t2 Add the t2 service  [after: t1]
       Files: app/t2.php
+      Verify: true
+- [ ] t3 Add the t3 service  [after: t1]
+      Files: app/t3.php
       Verify: true'
 rundir="$XDG_STATE_HOME/workflow/runs/app/live"
 
@@ -155,7 +159,9 @@ like "$(cat "$rundir/t1.review-prompt")" '# Review of task t1 before it merges' 
 like "$(cat "$rundir/t1.review-prompt")" 'Ruling 1\. The t1 service' 'carries the plan of record'
 like "$(cat "$rundir/t1.review-prompt")" 'Done: app/t1.php carries the fix' 'the task block'
 like "$(cat "$rundir/t1.review-prompt")" '^\+draft$' 'and the diff'
-like "$(cat "$WF_TMP/reviews.log")" "^fable t1 $XDG_STATE_HOME/workflow/worktrees/app/live/_integration\$" 'the reviewer ran as the named model in the integration worktree'
+like "$(cat "$WF_TMP/reviews.log")" "^fable t1 $XDG_STATE_HOME/workflow/worktrees/app/live/_integration\$" 'the reader ran as the named model in the integration worktree'
+like "$(cat "$rundir/t1.review-session")" '.' 'and its session is recorded, so it can be watched'
+like "$(cat "$T_TMP/run.log")" 'task t1: fable is reading the diff' 'the log says who is reading'
 
 run workflow redispatch t1
 is "$RC" 0 'redispatch reaches the live run'
@@ -181,8 +187,11 @@ is "$(cat "$rundir/t2.state" 2>/dev/null)" failed 'a reviewer that prints no ver
 like "$(cat "$rundir/t2.failed")" '^the review returned no verdict -- read ' 'and says so, naming the file'
 is "$(grep -c '^fable t2 ' "$WF_TMP/reviews.log")" 2 'after one more reading'
 [ -f "$rundir/t2.reviews" ] && notok 'a missing verdict is not a fix' "$(cat "$rundir/t2.reviews")" || ok 'a missing verdict is not a fix'
-like "$(cat "$T_TMP/run.log")" 'task t1: fable is reading the diff' 'the log says who read'
-like "$(cat "$T_TMP/run.log")" 'task t1: the reviewer says ship' 'and what it said'
+is "$(cat "$rundir/t3.state" 2>/dev/null)" failed 'a reader that touched the tree fails the task'
+like "$(cat "$rundir/t3.failed")" '^the reviewer changed the tree, which voids the reading -- read ' 'and says so'
+is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/app/live/_integration" status --porcelain 2>/dev/null | wc -l)" 0 'and the integration worktree was put back'
+unlike "$(git log --format=%s integration/live)" 'Add the t3 service' 'with t3 not on integration'
+like "$(cat "$T_TMP/run.log")" 'task t1: the reviewer says ship' 'the log says what the reader said'
 like "$(cat "$T_TMP/run.log")" 'Failed - the review returned no verdict -- read .*: t2' 'the report groups t2 under the missing verdict'
 is "$(grep -c '^fable hold ' "$WF_TMP/reviews.log")" 1 'every merge is read once'
 
