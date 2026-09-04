@@ -224,6 +224,7 @@ like "$OUT" 'task t1: sonnet wrote it, so sonnet does not read it' 'the run says
 # setting review-model alone. Kept before the `model` key is ever written,
 # because an empty value is a usage error and not a way to clear it back.
 plan default ''
+: >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=opus workflow run --plan-file "$T_TMP/default.md"
 is "$RC" 0 'the reader that names the default the workers fell back to reads nothing'
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
@@ -233,6 +234,7 @@ like "$OUT" 'task t1: opus wrote it, so opus does not read it' 'and the run says
 "$MEM_BIN" project set model fable >/dev/null
 "$MEM_BIN" project set review-model fable >/dev/null
 plan keys ''
+: >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/keys.md"
 is "$RC" 0 'the two project keys naming one model turn the reading off'
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'with nobody called'
@@ -240,6 +242,7 @@ is "$(wc -c <"$WF_TMP/reviews.log")" 0 'with nobody called'
 # And a cheaper worker under a frontier reader still gets read.
 "$MEM_BIN" project set model sonnet >/dev/null
 plan cheap ''
+: >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/cheap.md"
 is "$RC" 1 'a worker model the reader does not share is read as before'
 like "$(cat "$WF_TMP/reviews.log")" '^fable t1 ' 'by the named reader'

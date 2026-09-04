@@ -716,7 +716,9 @@ impl Run {
         };
         let wrote = self.model.trim();
         if model.trim().eq_ignore_ascii_case(wrote) {
-            warn(format!("task {task}: {model} wrote it, so {model} does not read it"));
+            warn(format!(
+                "task {task}: {model} wrote it, so {model} does not read it"
+            ));
             return Ok(());
         }
         let Some(t) = self.task_now(task) else {
