@@ -11,19 +11,23 @@ use std::path::Path;
 
 use crate::gitcmd::{self, Git};
 use crate::ownership;
-use crate::plan::Plan;
+use crate::plan::{Plan, Task};
 
 pub struct Findings {
     pub refusals: Vec<String>,
     pub warnings: Vec<String>,
 }
 
-pub fn findings(plan: &Plan, root: &Path) -> Findings {
+pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings {
     let git = Git::at(root);
     let mut f = Findings {
         refusals: Vec::new(),
         warnings: Vec::new(),
     };
+    // A plan names every interface it plans, so it answers `git grep` for all
+    // of them. Counting itself made every new symbol look like a change the
+    // plan forgot to own (friction #33WY4FAR).
+    let itself = repo_relative(plan_file, root);
     // Every path some task's Files could carry. A Gives identifier living in
     // a file outside this union is a change the plan forgot to own: the value
     // moves in the files one worker holds while the file asserting it belongs
@@ -92,20 +96,28 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
                 t.id
             ));
         }
-        // Read and Pattern point at what is already here; a path that is
-        // neither on disk nor tracked cannot be opened before editing.
+        // Read and Pattern point at what the worker opens before editing. By
+        // the time it runs its dependencies have landed, so a file one of them
+        // writes is there to be read even though this checkout has no such
+        // path yet (friction #33WY4FAR).
+        let waited_for = ancestors(plan, t);
+        let missing = |p: &str| {
+            !root.join(p).exists()
+                && git.bytes(&["ls-files", "-z", "--", p]).is_empty()
+                && !written_by(plan, &waited_for, p)
+        };
         let read = t.read.as_deref().unwrap_or("");
         for p in ownership::split_patterns(read) {
-            if !root.join(&p).exists() && git.bytes(&["ls-files", "-z", "--", &p]).is_empty() {
+            if missing(&p) {
                 f.warnings.push(format!(
-                    "plan: task {}: Read names '{p}' and it is not here to be read",
+                    "plan: task {}: Read names '{p}' and it is not here to be read, nor does a task it waits for write it",
                     t.id
                 ));
             }
         }
         if let Some(pat) = t.pattern.as_deref() {
             let path = pattern_path(pat);
-            if !root.join(path).exists() && git.bytes(&["ls-files", "-z", "--", path]).is_empty() {
+            if missing(path) {
                 f.warnings.push(format!(
                     "plan: task {}: Pattern points at '{path}' and it is not here to copy from",
                     t.id
@@ -113,22 +125,30 @@ pub fn findings(plan: &Plan, root: &Path) -> Findings {
             }
         }
         // A consumed interface comes from a dependency's Gives or the tree;
-        // one that comes from neither is a name the worker will hunt for.
+        // one that comes from neither is a name the worker will hunt for. The
+        // dependency need not be a direct one: a plan chains `[after:]`, and
+        // what t1 gives reaches t3 through t2 (friction #EYC8DHKV).
         for ident in uses_idents(t.uses.as_deref().unwrap_or("")) {
-            let given = t.deps.iter().any(|d| {
+            if !greppable(&ident) {
+                continue;
+            }
+            let given = waited_for.iter().any(|d| {
                 plan.get(d)
                     .and_then(|dep| dep.gives.as_deref())
                     .is_some_and(|g| g.contains(&ident))
             });
-            if !given && !git.quiet(&["grep", "-q", "-F", &ident]) {
+            if !given && named_by(&git, &ident, itself.as_deref()).is_empty() {
                 f.warnings.push(format!(
-                    "plan: task {}: Uses names '{ident}' and no dependency Gives it, nor does the tree",
+                    "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
                     t.id
                 ));
             }
         }
         for ident in uses_idents(t.gives.as_deref().unwrap_or("")) {
-            let named: Vec<String> = zlines(&git.bytes(&["grep", "-l", "-z", "-F", &ident]))
+            if !greppable(&ident) {
+                continue;
+            }
+            let named: Vec<String> = named_by(&git, &ident, itself.as_deref())
                 .into_iter()
                 .filter(|file| !claimed.contains(file))
                 .collect();
@@ -244,6 +264,96 @@ fn done_paths(git: &Git, done: &str, owned: &std::collections::HashSet<String>) 
     out
 }
 
+/// The plan file as git names it, when it is inside this checkout.
+fn repo_relative(file: Option<&Path>, root: &Path) -> Option<String> {
+    let file = file?.canonicalize().ok()?;
+    let root = root.canonicalize().ok()?;
+    Some(file.strip_prefix(root).ok()?.to_string_lossy().to_string())
+}
+
+/// The tracked files naming the identifier, the plan's own file aside.
+fn named_by(git: &Git, ident: &str, itself: Option<&str>) -> Vec<String> {
+    zlines(&git.bytes(&["grep", "-l", "-z", "-F", ident]))
+        .into_iter()
+        .filter(|file| Some(file.as_str()) != itself)
+        .collect()
+}
+
+/// Every task this one waits for, directly or through another. A cycle would
+/// already have been refused by the wave sort; `seen` guards anyway.
+fn ancestors(plan: &Plan, task: &Task) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut queue: Vec<String> = task.deps.clone();
+    while let Some(id) = queue.pop() {
+        if seen.contains(&id) {
+            continue;
+        }
+        if let Some(t) = plan.get(&id) {
+            queue.extend(t.deps.iter().cloned());
+        }
+        seen.push(id);
+    }
+    seen
+}
+
+/// Some task in `deps` claims the path in its Files, so it will exist by the
+/// time this task runs.
+fn written_by(plan: &Plan, deps: &[String], path: &str) -> bool {
+    deps.iter().filter_map(|d| plan.get(d)).any(|dep| {
+        ownership::split_patterns(dep.files.as_deref().unwrap_or(""))
+            .iter()
+            .any(|p| covers(p, path))
+    })
+}
+
+/// Does the pattern claim the path? A pattern with no glob in it is the path
+/// itself or a directory holding it; otherwise `*` stops at a slash and `**`
+/// crosses one, as in the pathspec the pattern becomes.
+fn covers(pattern: &str, path: &str) -> bool {
+    let pattern = pattern.trim_end_matches('/');
+    if pattern == path {
+        return true;
+    }
+    if !pattern.contains(['*', '?']) {
+        return path.starts_with(&format!("{pattern}/"));
+    }
+    glob(pattern.as_bytes(), path.as_bytes())
+}
+
+fn glob(pat: &[u8], s: &[u8]) -> bool {
+    match pat.first() {
+        None => s.is_empty(),
+        Some(b'*') if pat.get(1) == Some(&b'*') => {
+            // `a/**/b` covers `a/b` too, so the crossing wildcard may eat the
+            // separator that follows it or nothing at all.
+            let rest = &pat[2..];
+            let rest = if rest.first() == Some(&b'/') {
+                &rest[1..]
+            } else {
+                rest
+            };
+            (0..=s.len()).any(|i| glob(rest, &s[i..]))
+        }
+        Some(b'*') => {
+            let rest = &pat[1..];
+            let stop = s.iter().position(|c| *c == b'/').unwrap_or(s.len());
+            (0..=stop).any(|i| glob(rest, &s[i..]))
+        }
+        Some(b'?') => !s.is_empty() && s[0] != b'/' && glob(&pat[1..], &s[1..]),
+        Some(c) => s.first() == Some(c) && glob(&pat[1..], &s[1..]),
+    }
+}
+
+/// An identifier worth asking the tree about. Uses and Gives name exact
+/// signatures, so a real symbol carries an underscore or a capital --
+/// `set_data`, `StackEntry`, `setData`. A bare lowercase word is usually what
+/// this reader made of prose it could not parse: 'untouched' out of
+/// "engine.rs untouched", 'rs' out of "pub mod data in lib.rs". Grepping one
+/// names half the repo and says nothing (friction #33WY4FAR).
+fn greppable(ident: &str) -> bool {
+    ident.contains('_') || ident.chars().any(|c| c.is_ascii_uppercase())
+}
+
 /// NUL-separated git output, one path per entry.
 fn zlines(bytes: &[u8]) -> Vec<String> {
     bytes
@@ -268,7 +378,8 @@ fn pattern_path(p: &str) -> &str {
 
 /// One identifier per ` · `-separated item: the token nearest the call site
 /// (`CartPricing::price(...)` names `price`), or the item's only token when
-/// nothing is called. Declaration keywords never count as the name.
+/// nothing is called. Declaration keywords never count as the name. Two items
+/// reducing to one identifier are reported once, not twice.
 fn uses_idents(uses: &str) -> Vec<String> {
     const KEYWORDS: [&str; 12] = [
         "fn", "pub", "struct", "enum", "class", "function", "def", "let", "const", "type",
@@ -283,11 +394,15 @@ fn uses_idents(uses: &str) -> Vec<String> {
                 _ => head,
             };
             head.split(|c: char| !c.is_alphanumeric() && c != '_')
-                .filter(|t| !t.is_empty() && !KEYWORDS.contains(t))
-                .next_back()
+                .rfind(|t| !t.is_empty() && !KEYWORDS.contains(t))
                 .map(str::to_string)
         })
-        .collect()
+        .fold(Vec::new(), |mut out, ident| {
+            if !out.contains(&ident) {
+                out.push(ident);
+            }
+            out
+        })
 }
 
 /// What a deferral idiom in a task block means for the plan.
@@ -402,6 +517,79 @@ mod tests {
         ] {
             assert!(deferral(text).is_none(), "{text:?} is honest work");
         }
+    }
+
+    /// The identifiers that made the dactyl m8 plan print 45 warnings for two
+    /// real ones: every junk token this reader pulled out of a prose Gives
+    /// item is a bare lowercase word (friction #33WY4FAR).
+    #[test]
+    fn only_a_symbol_shaped_identifier_is_worth_grepping_for() {
+        for real in [
+            "set_data", "setData", "StackEntry", "text_of", "screen_tree_bound", "DEFAULT_MODEL",
+            "Value",
+        ] {
+            assert!(greppable(real), "{real:?} is a symbol");
+        }
+        for junk in [
+            "rs",
+            "a",
+            "l",
+            "10",
+            "item",
+            "untouched",
+            "update",
+            "once",
+            "after",
+        ] {
+            assert!(!greppable(junk), "{junk:?} is prose, not a symbol");
+        }
+    }
+
+    #[test]
+    fn a_files_pattern_covers_the_paths_its_pathspec_would() {
+        assert!(covers("engine/src/data.rs", "engine/src/data.rs"));
+        assert!(covers("engine", "engine/src/data.rs"));
+        assert!(covers("engine/", "engine/src/data.rs"));
+        assert!(covers("engine/tests/*.rs", "engine/tests/repeat.rs"));
+        assert!(covers("engine/**/*.rs", "engine/src/a/b.rs"));
+        assert!(covers("docs/**", "docs/plan/11.md"));
+        // `*` stops at a separator; `**` is how a pattern crosses one.
+        assert!(!covers("engine/*.rs", "engine/src/data.rs"));
+        assert!(!covers("engine/src/data.rs", "engine/src/data.rs.bak"));
+        assert!(!covers("engine", "engineer/x.rs"));
+        assert!(!covers("host-web/src/*.ts", "engine/src/data.rs"));
+    }
+
+    /// A plan chains `[after:]`, so what t1 gives reaches t3 through t2 --
+    /// which is why the Uses check reads the whole chain (friction #EYC8DHKV).
+    #[test]
+    fn a_task_waits_for_its_dependencies_dependencies_too() {
+        let text = "\
+# plan: chain
+
+- [ ] t1 first
+      Files: a.rs
+      Verify: true
+- [ ] t2 second  [after: t1]
+      Files: b.rs
+      Verify: true
+- [ ] t3 third  [after: t2]
+      Files: c.rs
+      Verify: true
+- [ ] t4 apart
+      Files: d.rs
+      Verify: true
+";
+        let plan = crate::plan::parse(text, true).expect("the plan parses");
+        let mut chain = ancestors(&plan, plan.get("t3").unwrap());
+        chain.sort();
+        assert_eq!(chain, vec!["t1", "t2"]);
+        assert!(ancestors(&plan, plan.get("t1").unwrap()).is_empty());
+        assert!(ancestors(&plan, plan.get("t4").unwrap()).is_empty());
+        // Read: is answered by any of them, not only the direct one.
+        assert!(written_by(&plan, &chain, "a.rs"));
+        assert!(written_by(&plan, &chain, "b.rs"));
+        assert!(!written_by(&plan, &chain, "d.rs"));
     }
 
     #[test]

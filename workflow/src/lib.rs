@@ -173,7 +173,7 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
     // the author still sees what parsed.
     let mut refusals = Vec::new();
     if let Some(top) = gitcmd::Git::here().toplevel() {
-        let found = plancheck::findings(&parsed, &top);
+        let found = plancheck::findings(&parsed, &top, Some(file));
         for w in &found.warnings {
             warn(w);
         }
