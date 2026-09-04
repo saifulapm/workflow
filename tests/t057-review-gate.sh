@@ -218,6 +218,17 @@ is "$(cat "$XDG_STATE_HOME/workflow/runs/app/mirror/t1.state")" merged 'and the 
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
 like "$OUT" 'task t1: sonnet wrote it, so sonnet does not read it' 'the run says why it skipped'
 
+# The workers' default is a model like any other. A project that never set
+# `model` still runs its workers on opus, so naming opus as the reader there
+# is naming the workers' own model -- the shape a project falls into by
+# setting review-model alone. Kept before the `model` key is ever written,
+# because an empty value is a usage error and not a way to clear it back.
+plan default ''
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=opus workflow run --plan-file "$T_TMP/default.md"
+is "$RC" 0 'the reader that names the default the workers fell back to reads nothing'
+is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
+like "$OUT" 'task t1: opus wrote it, so opus does not read it' 'and the run says so by name'
+
 # The project key and the run's model meet the same way.
 "$MEM_BIN" project set model fable >/dev/null
 "$MEM_BIN" project set review-model fable >/dev/null
