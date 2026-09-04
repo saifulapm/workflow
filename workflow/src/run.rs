@@ -122,6 +122,7 @@ pub struct Run {
     /// Who reads each task's diff at the gate once its verify is green:
     /// `WORKFLOW_REVIEW_MODEL` for one run (empty turns the reading off),
     /// else the project's `mem project set review-model`, else nobody.
+    /// Naming the model the workers run on is the same as naming nobody.
     pub review_model: Option<String>,
     /// Raised by SIGTERM, SIGINT or SIGHUP. The poll loop reads it between
     /// passes; the gate reads it while a reading is in flight, so a stop
@@ -698,6 +699,13 @@ impl Run {
     /// reading. `fix` leaves the findings in `<task>.review`, which the
     /// failure note names and the redispatched worker's brief repeats.
     ///
+    /// The reading is worth a session only when the reader is not who wrote
+    /// the code: a model reads its own work with its own blind spots and
+    /// agrees with itself. So a reader that names the task's own model reads
+    /// nothing. The comparison is made here, per task, which is where a task
+    /// that carries its own model will be compared to that one rather than to
+    /// the run's default.
+    ///
     /// The reader is dispatched like a worker, through the project's backend,
     /// so it is a session Saiful can watch and attach to -- never print mode.
     /// It works in the integration worktree, writes one answer file and ends;
@@ -706,6 +714,11 @@ impl Run {
         let Some(model) = self.review_model.as_deref() else {
             return Ok(());
         };
+        let wrote = self.model.trim();
+        if model.trim().eq_ignore_ascii_case(wrote) {
+            warn(format!("task {task}: {model} wrote it, so {model} does not read it"));
+            return Ok(());
+        }
         let Some(t) = self.task_now(task) else {
             return Ok(());
         };

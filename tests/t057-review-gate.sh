@@ -199,10 +199,39 @@ is "$(grep -c '^fable hold ' "$WF_TMP/reviews.log")" 1 'every merge is read once
 
 plan override ''
 : >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=opus workflow run --plan-file "$T_TMP/override.md"
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=sonnet WORKFLOW_REVIEW_MODEL=opus \
+	workflow run --plan-file "$T_TMP/override.md"
 is "$RC" 1 'the draft fails review under the run-level model too'
 like "$(cat "$WF_TMP/reviews.log")" '^opus t1 ' 'and it was that model that read'
 like "$(cat "$WF_TMP/reviews.log")" '^opus side ' 'every task of the run'
+
+## ------------------------------------- the reader is the one who wrote it
+
+# A model reading its own work agrees with itself, so naming the workers'
+# own model is the same as naming nobody -- said out loud, never silently.
+plan mirror ''
+: >"$WF_TMP/reviews.log"
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=sonnet WORKFLOW_REVIEW_MODEL=sonnet \
+	workflow run --plan-file "$T_TMP/mirror.md"
+is "$RC" 0 'a reader that names the workers own model reads nothing'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/app/mirror/t1.state")" merged 'and the draft merges'
+is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
+like "$OUT" 'task t1: sonnet wrote it, so sonnet does not read it' 'the run says why it skipped'
+
+# The project key and the run's model meet the same way.
+"$MEM_BIN" project set model fable >/dev/null
+"$MEM_BIN" project set review-model fable >/dev/null
+plan keys ''
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/keys.md"
+is "$RC" 0 'the two project keys naming one model turn the reading off'
+is "$(wc -c <"$WF_TMP/reviews.log")" 0 'with nobody called'
+
+# And a cheaper worker under a frontier reader still gets read.
+"$MEM_BIN" project set model sonnet >/dev/null
+plan cheap ''
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/cheap.md"
+is "$RC" 1 'a worker model the reader does not share is read as before'
+like "$(cat "$WF_TMP/reviews.log")" '^fable t1 ' 'by the named reader'
 
 plan off ''
 : >"$WF_TMP/reviews.log"
