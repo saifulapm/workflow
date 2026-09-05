@@ -61,8 +61,20 @@ fn field(dir: &Path, task: &str, ext: &str) -> String {
         .to_string()
 }
 
+/// One task's field, and a word if it could not be written. The run dir is
+/// the run's whole memory of a task: a state write that fails leaves the
+/// coordinator reading `pending` for a task it has just dispatched, and it
+/// then reports the task as never started and skips everything behind it.
+/// That has happened once, silently (t053 under a loaded machine), which is
+/// the argument for saying so rather than for `let _ =`.
 fn write_field(dir: &Path, task: &str, ext: &str, value: &str) {
-    let _ = std::fs::write(dir.join(format!("{task}.{ext}")), format!("{value}\n"));
+    let path = dir.join(format!("{task}.{ext}"));
+    if let Err(e) = std::fs::write(&path, format!("{value}\n")) {
+        warn(format!(
+            "task {task}: cannot write {} ({e}) -- this run's account of it is now unreliable",
+            path.display()
+        ));
+    }
 }
 
 /// Liveness is the latest of three signals, because each one alone has a way of
