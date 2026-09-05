@@ -36,6 +36,7 @@ of them committed:
     mem project set verify "pnpm test"          # what green means here
     mem project set review-paths "scripts/**"   # extra risky globs, optional
     mem project set review-model fable          # a reader at the merge gate, if it beats the workers'
+    mem project unset review-model              # and the way back to none
 
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
@@ -89,7 +90,9 @@ Three sizes of work, three moves:
   `review-model` set, every task's diff is read by that model against the
   plan before it merges, after its Verify is green: a fix verdict sends the
   task back to its worker with the findings, so a cheaper worker's work
-  still gets a frontier reading. Name the model the workers already run on,
+  still gets a frontier reading. The run does not wait on the reading: the
+  task sits `reviewing` while the next one is dispatched, and its merge is
+  recorded when the verdict says ship. Name the model the workers already run on,
   under any spelling (`opus` and `claude-opus-5` are one model), and nothing
   is read — a model goes over its own work with its own blind spots — so the
   reading costs a session only where it can find something.

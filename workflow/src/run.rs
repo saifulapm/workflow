@@ -17,6 +17,9 @@ use crate::{brief, exit, lint, memcli, ownership, paths, plan, repo, sys, warn};
 
 pub const PENDING: &str = "pending";
 pub const DISPATCHED: &str = "dispatched";
+/// Fast-forwarded onto integration and green, with a reader over the diff:
+/// the merge is recorded when the reading says ship.
+pub const REVIEWING: &str = "reviewing";
 pub const MERGED: &str = "merged";
 pub const FAILED: &str = "failed";
 pub const BLOCKED: &str = "blocked";
@@ -96,6 +99,19 @@ pub fn stalled(
     now - last >= deadline_s
 }
 
+/// What the gate made of a ready worker's branch.
+enum Merge {
+    /// Rebased, fast-forwarded, verified, read if a reader was named, and
+    /// recorded.
+    Landed,
+    /// A ready worker with nothing to merge: its Done was already satisfied
+    /// in the tree it opened onto (friction #B2D8SJKR).
+    Nothing,
+    /// Fast-forwarded and verified, and a reader has the diff. The merge is
+    /// recorded when the reading says ship, or unwound when it says fix.
+    Reading,
+}
+
 pub struct Run {
     pub plan: Plan,
     /// The file the plan was read from, when it came from one: where a merge
@@ -125,8 +141,7 @@ pub struct Run {
     /// Naming the model the workers run on is the same as naming nobody.
     pub review_model: Option<String>,
     /// Raised by SIGTERM, SIGINT or SIGHUP. The poll loop reads it between
-    /// passes; the gate reads it while a reading is in flight, so a stop
-    /// takes the reviewer down with the workers.
+    /// passes, and the stop takes a reader down with the workers.
     pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub env: Vec<(String, String)>,
     made: Vec<PathBuf>,
@@ -290,6 +305,17 @@ impl Run {
         self.dispatched().len()
     }
 
+    /// Tasks whose diff a reader is going over right now. At most one: the
+    /// gate is serialized, and integration holds that task's fast-forward
+    /// unrecorded until the reading ends.
+    fn reviewing(&self) -> Vec<String> {
+        self.plan
+            .ids()
+            .into_iter()
+            .filter(|t| self.state(t) == REVIEWING)
+            .collect()
+    }
+
     /// The last line the worker reported in its own status file, as
     /// (state, note). Lines read `<utc> <state> <note...>`.
     fn last_status_line(&self, task: &str) -> Option<(String, String)> {
@@ -326,6 +352,19 @@ impl Run {
             None => self.base.clone(),
         };
         git.count(&format!("{anchor}..{}", self.branch(task)))
+    }
+
+    /// The integration commit a task's worktree is brought up to: the branch
+    /// tip, except while a reading holds a fast-forward on it that nothing
+    /// has recorded -- then the commit before it, so no worker builds on
+    /// work the reader may yet send back.
+    fn integration_tip(&self) -> Option<String> {
+        for task in self.reviewing() {
+            if let Some((prev, _)) = self.pending_merge(&task) {
+                return Some(prev);
+            }
+        }
+        self.git().rev_parse_commit(&self.int_branch)
     }
 
     /// The commit some run merged for this task, or empty.
@@ -401,10 +440,13 @@ impl Run {
             return;
         }
         let git = Git::at(&wt);
-        if git.head() == self.git().rev_parse_commit(&self.int_branch) {
+        let Some(tip) = self.integration_tip() else {
+            return;
+        };
+        if git.head().as_deref() == Some(tip.as_str()) {
             return; // already there, and on wave one it always is
         }
-        if !git.quiet(&["merge", "-q", "--ff-only", &self.int_branch]) {
+        if !git.quiet(&["merge", "-q", "--ff-only", &tip]) {
             warn(format!(
                 "task {task}: its worktree keeps the commits it already has, so {} was not brought in",
                 self.int_branch
@@ -534,10 +576,8 @@ impl Run {
     /// verifying before the rebase lets a semantic conflict land green
     /// (review-3 F-6).
     ///
-    /// Ok(true) is a merge; Ok(false) is a ready worker with nothing to
-    /// merge, which is its way of saying the work is already in the tree it
-    /// opened onto (friction #B2D8SJKR).
-    fn merge(&self, task: &str) -> Result<bool, String> {
+    /// The answer says what became of the branch; see [`Merge`].
+    fn merge(&self, task: &str) -> Result<Merge, String> {
         let branch = self.branch(task);
         let wt = self.worktree(task);
 
@@ -552,11 +592,11 @@ impl Run {
         if let Some((prev, new)) = self.pending_merge(task)
             && self.git().is_ancestor(&new, &self.int_branch)
         {
-            return self.settle_interrupted_merge(task, &prev, &new).map(|()| true);
+            return self.settle_interrupted_merge(task, &prev, &new);
         }
 
         if self.commits(task) == 0 {
-            return Ok(false);
+            return Ok(Merge::Nothing);
         }
 
         let patterns = ownership::split_patterns(
@@ -620,14 +660,17 @@ impl Run {
             return Err("the rebased branch does not fast-forward onto integration".into());
         }
 
-        if let Err(why) = self.gate(task, &prev, &new) {
-            int.quiet(&["reset", "-q", "--hard", &prev]);
-            write_field(&self.dir, task, "merging", "");
-            return Err(why);
+        match self.gate(task, &prev, &new) {
+            Err(why) => {
+                self.unwind(task, &prev);
+                return Err(why);
+            }
+            Ok(true) => return Ok(Merge::Reading),
+            Ok(false) => {}
         }
 
         self.record_merged(task, &new);
-        Ok(true)
+        Ok(Merge::Landed)
     }
 
     /// The merge this task was in the middle of when its coordinator died, as
@@ -656,25 +699,24 @@ impl Run {
         task: &str,
         prev: &str,
         new: &str,
-    ) -> Result<(), String> {
+    ) -> Result<Merge, String> {
         warn(format!(
             "task {task}: its merge reached {} before the run died -- verifying it now",
             self.int_branch
         ));
         let why = match self.gate(task, prev, new) {
-            Ok(()) => {
+            Ok(true) => return Ok(Merge::Reading),
+            Ok(false) => {
                 self.record_merged(task, new);
-                return Ok(());
+                return Ok(Merge::Landed);
             }
             Err(why) => why,
         };
         // Unwind only what nothing was built on. A later run may have merged
         // other tasks on top, and taking those down with this one would be a
         // worse answer than a red branch and a person told why.
-        let int = Git::at(&self.int_wt);
-        if int.head().as_deref() == Some(new) {
-            int.quiet(&["reset", "-q", "--hard", prev]);
-            write_field(&self.dir, task, "merging", "");
+        if Git::at(&self.int_wt).head().as_deref() == Some(new) {
+            self.unwind(task, prev);
             return Err(why);
         }
         Err(format!(
@@ -685,12 +727,21 @@ impl Run {
 
     /// The two readings a fast-forwarded merge faces before it is recorded:
     /// the suite, then the reviewer. `Err` is the reason the caller resets
-    /// integration to `prev` and fails the task with.
-    fn gate(&self, task: &str, prev: &str, new: &str) -> Result<(), String> {
+    /// integration to `prev` and fails the task with. `Ok(true)` means a
+    /// reader now has the diff and the merge waits on its verdict;
+    /// `Ok(false)` means nobody reads here and the merge is final.
+    fn gate(&self, task: &str, prev: &str, new: &str) -> Result<bool, String> {
         if !self.gate_verify() {
             return Err("the suite is red once the change sits on integration".into());
         }
-        self.gate_review(task, prev, new)
+        Ok(self.start_review(task, prev, new))
+    }
+
+    /// Integration back to where it stood before this task's fast-forward,
+    /// and the intent line cleared: the merge did not happen.
+    fn unwind(&self, task: &str, prev: &str) {
+        Git::at(&self.int_wt).quiet(&["reset", "-q", "--hard", prev]);
+        write_field(&self.dir, task, "merging", "");
     }
 
     /// The reader (plan gate-reviewer). Verify proves what a test can reach;
@@ -710,19 +761,26 @@ impl Run {
     /// so it is a session Saiful can watch and attach to -- never print mode.
     /// It works in the integration worktree, writes one answer file and ends;
     /// a reading that changed the tree is void.
-    fn gate_review(&self, task: &str, prev: &str, new: &str) -> Result<(), String> {
+    ///
+    /// Started here and judged by [`Run::review_pass`] from the poll loop,
+    /// never waited for: a reading may run for its whole deadline, and a
+    /// loop blocked on it dispatched nothing, stopped no stalled worker and
+    /// heard no signal meanwhile. The task sits `reviewing` in between, its
+    /// `merging` intent line still naming the fast-forward that waits.
+    /// Answers whether a reading began.
+    fn start_review(&self, task: &str, prev: &str, new: &str) -> bool {
         let Some(model) = self.review_model.as_deref() else {
-            return Ok(());
+            return false;
         };
         if same_model(model, &self.model) {
             warn(format!(
                 "task {task}: {} wrote it, so {model} does not read it",
                 self.model.trim()
             ));
-            return Ok(());
+            return false;
         }
         let Some(t) = self.task_now(task) else {
-            return Ok(());
+            return false;
         };
         let plan_text = self.plan_text().unwrap_or_default();
         let int = Git::at(&self.int_wt);
@@ -735,62 +793,38 @@ impl Run {
             &prompt,
             reviewer::prompt(&plan_text, &t, &diff, &stat, &self.int_wt, &answer),
         );
-
+        write_field(&self.dir, task, "review-tries", "0");
         warn(format!("task {task}: {model} is reading the diff"));
-        let mut result = self.read_once(task, model, &prompt, &answer, new);
-        // A reading that did not happen is not a verdict either way: one
-        // more try, and then the orchestrator is told.
-        if let Err(why) = &result
-            && !why.contains("asked to stop")
-        {
-            warn(format!("task {task}: {why} -- one more reading"));
-            result = self.read_once(task, model, &prompt, &answer, new);
-        }
-        match result {
-            Ok(Verdict::Ship) => {
-                warn(format!("task {task}: the reviewer says ship"));
-                Ok(())
-            }
-            Ok(Verdict::Fix) => {
-                let n = self.field(task, "reviews").parse::<u64>().unwrap_or(0) + 1;
-                write_field(&self.dir, task, "reviews", &n.to_string());
-                Err(format!(
-                    "the reviewer wants fixes first (review {n}) -- read {}",
-                    answer.display()
-                ))
-            }
-            Err(why) => Err(format!("{why} -- read {}", answer.display())),
-        }
+        self.read_start(task);
+        true
     }
 
-    /// One reading: a worker dispatch in the integration worktree, waited
-    /// for within the review deadline, its answer file read for the verdict
-    /// once it ends. `Err` is a reading that did not happen -- a session that
-    /// never answered, ran past the deadline, was stopped with the run, or
-    /// touched the tree -- never a judgement on the code.
-    fn read_once(
-        &self,
-        task: &str,
-        model: &str,
-        prompt: &Path,
-        answer: &Path,
-        new: &str,
-    ) -> Result<Verdict, String> {
-        let _ = std::fs::remove_file(answer);
+    /// One reading: a worker dispatch in the integration worktree, off the
+    /// prompt `start_review` wrote. Counted in `review-tries`, stamped in
+    /// `review-started`, its handle in `review-session`; `review_pass` reads
+    /// all three.
+    fn read_start(&self, task: &str) {
+        let Some(model) = self.review_model.as_deref() else {
+            return;
+        };
         let name = format!("{task}-review");
         let pidfile = self.dir.join(format!("{task}.review-pid"));
         let out = self.dir.join(format!("{task}.review-out"));
+        let _ = std::fs::remove_file(self.dir.join(format!("{task}.review")));
         let _ = std::fs::remove_file(&pidfile);
         let _ = std::fs::write(&out, "");
         let mut env = self.env.clone();
-        env.push(("WORKFLOW_TASK".into(), format!("{}/{name}", self.plan.plan_id)));
+        env.push((
+            "WORKFLOW_TASK".into(),
+            format!("{}/{name}", self.plan.plan_id),
+        ));
         let d = Dispatch {
             task: name,
             worktree: self.int_wt.clone(),
-            brief: prompt.to_path_buf(),
+            brief: self.dir.join(format!("{task}.review-prompt")),
             out,
             err: self.dir.join(format!("{task}.review-err")),
-            pidfile: pidfile.clone(),
+            pidfile,
             status: self.dir.join(format!("{task}.review-status")),
             rundir: self.dir.clone(),
             session: self.backend.mint_session(),
@@ -798,35 +832,93 @@ impl Run {
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env,
         };
+        let tries: u64 = self.field(task, "review-tries").parse().unwrap_or(0);
+        write_field(&self.dir, task, "review-tries", &(tries + 1).to_string());
+        write_field(&self.dir, task, "review-started", &sys::now().to_string());
         let session = self.backend.dispatch(&d);
         write_field(&self.dir, task, "review-session", &session);
-        let h = Handle {
-            session,
-            pidfile,
+    }
+
+    fn review_handle(&self, task: &str) -> Handle {
+        Handle {
+            session: self.field(task, "review-session"),
+            pidfile: self.dir.join(format!("{task}.review-pid")),
             worktree: self.int_wt.clone(),
-        };
-
-        let started = sys::now();
-        let deadline_s = reviewer::deadline_s();
-        loop {
-            if self.stop.load(std::sync::atomic::Ordering::Relaxed) {
-                self.backend.stop(&h, self.kill_grace_s);
-                return Err("the run was asked to stop during the reading".into());
-            }
-            // Gone with an answer is the clean end. Gone without one within
-            // the first moments is a dispatch still coming up, not an ending.
-            if !self.backend.alive(&h) && (answer.exists() || sys::now() - started >= 5) {
-                break;
-            }
-            if sys::now() - started >= deadline_s {
-                self.backend.stop(&h, self.kill_grace_s);
-                return Err(format!(
-                    "the review ran past its {deadline_s} second deadline and was stopped"
-                ));
-            }
-            sys::sleep(1.0);
         }
+    }
 
+    /// Every reading in flight, judged if it has ended.
+    fn review_passes(&self) {
+        for task in self.reviewing() {
+            self.review_pass(&task);
+        }
+    }
+
+    /// The reading in flight, judged once it ends. `true` when the task is
+    /// settled either way -- merged on ship, failed on fix or on a reading
+    /// that could not be had twice -- and `false` while the reader is still
+    /// going or has just been sent again.
+    fn review_pass(&self, task: &str) -> bool {
+        let Some((prev, new)) = self.pending_merge(task) else {
+            self.fail_task(task, "the reading lost the record of what it was reading");
+            return true;
+        };
+        let answer = self.dir.join(format!("{task}.review"));
+        let h = self.review_handle(task);
+        let started: i64 = self.field(task, "review-started").parse().unwrap_or(0);
+        let waited = sys::now() - started;
+        let deadline_s = reviewer::deadline_s();
+        // Gone with an answer is the clean end. Gone without one within the
+        // first moments is a dispatch still coming up, not an ending.
+        let outcome = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
+            self.judge_reading(&new, &answer)
+        } else if waited >= deadline_s {
+            self.backend.stop(&h, self.kill_grace_s);
+            Err(format!(
+                "the review ran past its {deadline_s} second deadline and was stopped"
+            ))
+        } else {
+            return false;
+        };
+        self.moot_reader_questions(task);
+        match outcome {
+            Ok(Verdict::Ship) => {
+                warn(format!("task {task}: the reviewer says ship"));
+                self.record_merged(task, &new);
+                self.land(task);
+            }
+            Ok(Verdict::Fix) => {
+                let n = self.field(task, "reviews").parse::<u64>().unwrap_or(0) + 1;
+                write_field(&self.dir, task, "reviews", &n.to_string());
+                self.unwind(task, &prev);
+                self.fail_task(
+                    task,
+                    &format!(
+                        "the reviewer wants fixes first (review {n}) -- read {}",
+                        answer.display()
+                    ),
+                );
+            }
+            // A reading that did not happen is not a verdict either way: one
+            // more try, and then the orchestrator is told.
+            Err(why) => {
+                let tries: u64 = self.field(task, "review-tries").parse().unwrap_or(0);
+                if tries < 2 {
+                    warn(format!("task {task}: {why} -- one more reading"));
+                    self.read_start(task);
+                    return false;
+                }
+                self.unwind(task, &prev);
+                self.fail_task(task, &format!("{why} -- read {}", answer.display()));
+            }
+        }
+        true
+    }
+
+    /// What a reading that has ended came to. `Err` is a reading that did
+    /// not happen -- no verdict written, or a tree that is not the one it was
+    /// handed -- never a judgement on the code.
+    fn judge_reading(&self, new: &str, answer: &Path) -> Result<Verdict, String> {
         // The tree it read must be the tree it was handed.
         let int = Git::at(&self.int_wt);
         let dirty = int
@@ -839,6 +931,30 @@ impl Run {
         }
         let text = std::fs::read_to_string(answer).unwrap_or_default();
         reviewer::verdict(&text).ok_or_else(|| "the review returned no verdict".to_string())
+    }
+
+    /// A reader is told never to ask, and one that asks anyway waits on
+    /// nobody: the gate reads its answer file, not its questions. Whatever it
+    /// asked is closed the moment its reading ends, or it sits in the
+    /// orchestrator's queue for ever under a task id no plan holds.
+    fn moot_reader_questions(&self, task: &str) {
+        let tag = format!("{}/{task}-review", self.plan.plan_id);
+        for q in memcli::questions_for(&tag) {
+            if q.answer.is_none() {
+                memcli::answer(
+                    &q.id,
+                    &format!("moot: the reading of {task} ended without waiting on it"),
+                );
+            }
+        }
+    }
+
+    /// The bookkeeping of a merge that is final: state, tick, log.
+    fn land(&self, task: &str) {
+        self.set_state(task, MERGED);
+        warn(format!("task {task}: merged onto {}", self.int_branch));
+        self.tick_off(task);
+        memcli::log(&format!("run {}: merged {task}", self.plan.plan_id));
     }
 
     /// verify, on the integration branch, as its own process: the same
@@ -974,17 +1090,16 @@ impl Run {
             Some(_) => {}
         }
         match self.merge(task) {
-            Ok(true) => {
-                self.set_state(task, MERGED);
-                warn(format!("task {task}: merged onto {}", self.int_branch));
-                self.tick_off(task);
-                memcli::log(&format!("run {}: merged {task}", self.plan.plan_id));
-            }
+            Ok(Merge::Landed) => self.land(task),
+            // A reader has the diff. The task waits on its verdict, and so
+            // does every merge behind it; the run goes on dispatching and
+            // watching its workers meanwhile.
+            Ok(Merge::Reading) => self.set_state(task, REVIEWING),
             // Ready with nothing committed: the worker found its Done already
             // satisfied -- rebuilt by hand between passes, or landed by an
             // earlier plan. Failing it skipped every dependent behind work
             // that exists (friction #B2D8SJKR).
-            Ok(false) => {
+            Ok(Merge::Nothing) => {
                 self.set_state(task, DONE_PREVIOUSLY);
                 warn(format!(
                     "task {task}: reported ready with nothing to commit -- its work is already in the tree"
@@ -1009,7 +1124,8 @@ impl Run {
         let mut stopped = 0;
         for task in self.plan.ids() {
             let state = self.state(&task);
-            if state == DISPATCHED || state == PENDING || state.is_empty() {
+            if state == DISPATCHED || state == PENDING || state == REVIEWING || state.is_empty()
+            {
                 continue; // the reap pass and the waves own these
             }
             if self.field(&task, "session").is_empty() && self.worker_pid(&task).is_empty() {
@@ -1054,6 +1170,14 @@ impl Run {
                 }
                 continue;
             }
+            // While a reader holds integration, a finished worker keeps: its
+            // merge would land on a fast-forward nothing has recorded yet.
+            // Asked per task, not per pass -- the task before it in this very
+            // pass may be the one that started the reading. It is collected
+            // on the pass after the reading ends.
+            if !self.reviewing().is_empty() {
+                continue;
+            }
             did = true;
             self.finish(&task);
         }
@@ -1073,7 +1197,7 @@ impl Run {
     /// merged, failed, or running -- and the waves below must not queue them
     /// a second time.
     fn adopt_stale(&self) -> Vec<String> {
-        let taken = self.dispatched();
+        let mut taken = self.dispatched();
         for task in &taken {
             // Known-dead, not still-launching: the run that recorded this
             // session is gone and nothing anywhere says it ever ran. Waiting
@@ -1100,10 +1224,27 @@ impl Run {
                 ));
                 continue;
             }
+            if !self.reviewing().is_empty() {
+                continue; // a reader holds integration; the poll loop collects it after
+            }
             warn(format!(
                 "task {task}: left dispatched by a run that is gone -- collecting it"
             ));
             self.finish(task);
+        }
+        // A reading the dead run started. Its reader may still be going, and
+        // its answer would be read by nobody; the merge is verified and read
+        // again off the intent line, the way an interrupted merge is.
+        for task in self.reviewing() {
+            let h = self.review_handle(&task);
+            if self.backend.seen(&h) && self.backend.alive(&h) {
+                self.backend.stop(&h, self.kill_grace_s);
+            }
+            warn(format!(
+                "task {task}: left mid-reading by a run that is gone -- reading it again"
+            ));
+            self.finish(&task);
+            taken.push(task);
         }
         taken
     }
@@ -1756,7 +1897,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             }
         }
 
-        while !queue.is_empty() || run.running() > 0 {
+        while !queue.is_empty() || run.running() > 0 || !run.reviewing().is_empty() {
             if stopping() {
                 return shutdown(&run);
             }
@@ -1768,6 +1909,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             if stopping() {
                 return shutdown(&run);
             }
+            run.review_passes();
             run.reap_pass();
             // A failed task someone asked to try again, mid-run. The marker
             // file is how the request reaches a run that holds the project
@@ -1915,6 +2057,12 @@ fn shutdown(run: &Run) -> i32 {
         run.stop(task);
         warn(format!("task {task}: its worker was stopped"));
     }
+    for task in run.reviewing() {
+        run.backend.stop(&run.review_handle(&task), run.kill_grace_s);
+        warn(format!(
+            "task {task}: its reader was stopped -- the next run reads the merge again"
+        ));
+    }
     warn("run again in this checkout to adopt and collect what they left");
     memcli::log(&format!(
         "run {}: stopped by signal with {} worker(s) ended",
@@ -2027,6 +2175,15 @@ pub fn cmd_reap() -> i32 {
         };
         if run.stop_settled_orphans() > 0 {
             did = true;
+        }
+        // A reading is the run's to judge, not reap's: reap collects, and a
+        // verdict may call for another reader.
+        for task in run.reviewing() {
+            adoptable = true;
+            warn(format!(
+                "run {}: {task} was mid-reading when its run went -- run again in the checkout to read it again",
+                run.plan.plan_id
+            ));
         }
         if run.running() == 0 {
             continue;

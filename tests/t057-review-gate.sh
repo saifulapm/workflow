@@ -16,8 +16,10 @@ export WF_TMP="$T_TMP"
 # redispatch has something to reach. Everything else commits once.
 #
 # As the reader (task <id>-review) it logs what it was handed, wants fixes
-# for a t1 diff that lacks the fix, writes no verdict at all for t2, edits the
-# tree for t3, and ships everything else.
+# for a t1 diff that lacks the fix (holding that verdict back while
+# hold-review exists, so the run can be watched going on around a reading),
+# writes no verdict at all for t2, asks a question and edits the tree for t3,
+# and ships everything else.
 write_exec "$T_TMP/worker.sh" <<'FAKE'
 #!/bin/sh
 task=$1; wt=$2; status=$3; brief=$5; model=$6
@@ -30,6 +32,7 @@ case $task in
 	case $task in
 	t2-review) printf 'I read it twice and could not decide.\n' >"$answer" ;;
 	t3-review)
+		mem ask 'may I run the suite myself?' >/dev/null 2>&1
 		printf 'meddling\n' >"$wt/app/t3.php"
 		printf 'VERDICT: ship\n' >"$answer"
 		;;
@@ -37,6 +40,7 @@ case $task in
 		if grep -q '^+fixed$' "$brief"; then
 			printf 'VERDICT: ship\nThe diff is clean.\n' >"$answer"
 		else
+			while [ -f "$WF_TMP/hold-review" ]; do sleep 0.2; done
 			printf 'Reading...\n\n**VERDICT: fix**\n1. app/t1.php:1 -- says draft; the Done line wants the fix.\n' >"$answer"
 		fi
 		;;
@@ -138,10 +142,29 @@ plan live '- [ ] hold Stay alive until released
       Files: app/t3.php
       Verify: true'
 rundir="$XDG_STATE_HOME/workflow/runs/app/live"
+wtroot="$XDG_STATE_HOME/workflow/worktrees/app/live"
 
+: >"$WF_TMP/hold-review"
 env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
 	workflow run --plan-file "$T_TMP/live.md" >"$T_TMP/run.log" 2>&1 &
 runpid=$!
+
+# The reading does not hold the run: while the reader has t1's diff, the
+# slot t1's worker gave up is filled and the next task starts -- on the
+# integration commit before t1's fast-forward, which nothing has recorded.
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = reviewing ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.state" 2>/dev/null)" reviewing 'a task whose diff is being read is reviewing'
+like "$(cat "$rundir/t1.merging" 2>/dev/null)" '^[0-9a-f]+ [0-9a-f]+$' 'with its fast-forward on record as in flight'
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/hold.state" 2>/dev/null)" = dispatched ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/hold.state" 2>/dev/null)" dispatched 'and the run dispatches the next task while the reader reads'
+unlike "$(git -C "$wtroot/hold" log --format=%s)" 'Add the t1 service' 'onto integration as it stood before the unrecorded fast-forward'
+rm -f "$WF_TMP/hold-review"
 
 for _ in $(seq 1 100); do
 	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = failed ] && break
@@ -194,6 +217,9 @@ unlike "$(git log --format=%s integration/live)" 'Add the t3 service' 'with t3 n
 like "$(cat "$T_TMP/run.log")" 'task t1: the reviewer says ship' 'the log says what the reader said'
 like "$(cat "$T_TMP/run.log")" 'Failed - the review returned no verdict -- read .*: t2' 'the report groups t2 under the missing verdict'
 is "$(grep -c '^fable hold ' "$WF_TMP/reviews.log")" 1 'every merge is read once'
+run_out "$MEM_BIN" questions --for orchestrator --json
+like "$OUT" '"task": ?"live/t3-review"' 'a question the reader asked anyway is tagged with the reading'
+like "$OUT" 'moot: the reading of t3 ended without waiting on it' 'and was closed as moot when the reading ended'
 
 ## --------------------------------------------- the variable beats the key
 
