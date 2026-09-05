@@ -44,14 +44,19 @@ isnt() {
 }
 
 # like <got> <extended-regex> <desc>
+#
+# A here-string, not a pipe from printf: grep -q quits on the first match, and
+# under load a printf still writing behind it took SIGPIPE, which pipefail then
+# read as the check failing. That was one in two hundred checks going red on a
+# text that matched, only when the whole verify chain was running.
 like() {
-	if printf '%s' "$1" | grep -Eq -- "$2"; then ok "$3"; else notok "$3" "no match for /$2/ in:
+	if grep -Eq -- "$2" <<<"$1"; then ok "$3"; else notok "$3" "no match for /$2/ in:
 $1"; fi
 }
 
 # unlike <got> <extended-regex> <desc>
 unlike() {
-	if printf '%s' "$1" | grep -Eq -- "$2"; then notok "$3" "unwanted match for /$2/ in:
+	if grep -Eq -- "$2" <<<"$1"; then notok "$3" "unwanted match for /$2/ in:
 $1"; else ok "$3"; fi
 }
 
