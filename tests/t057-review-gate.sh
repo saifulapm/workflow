@@ -218,6 +218,17 @@ is "$(cat "$XDG_STATE_HOME/workflow/runs/app/mirror/t1.state")" merged 'and the 
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
 like "$OUT" 'task t1: sonnet wrote it, so sonnet does not read it' 'the run says why it skipped'
 
+# One model under two spellings. The alias the CLI takes and the full id
+# start the same model, so a reader named by one for workers running under
+# the other is still a model reading its own work.
+plan alias ''
+: >"$WF_TMP/reviews.log"
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=claude-opus-5 WORKFLOW_REVIEW_MODEL=opus \
+	workflow run --plan-file "$T_TMP/alias.md"
+is "$RC" 0 'a reader named by alias for the model the workers run on by full id reads nothing'
+is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
+like "$OUT" 'task t1: claude-opus-5 wrote it, so opus does not read it' 'and the run names both spellings'
+
 # The workers' default is a model like any other. A project that never set
 # `model` still runs its workers on opus, so naming opus as the reader there
 # is naming the workers' own model -- the shape a project falls into by

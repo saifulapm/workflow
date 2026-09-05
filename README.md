@@ -89,9 +89,10 @@ Three sizes of work, three moves:
   `review-model` set, every task's diff is read by that model against the
   plan before it merges, after its Verify is green: a fix verdict sends the
   task back to its worker with the findings, so a cheaper worker's work
-  still gets a frontier reading. Name the model the workers already run on
-  and nothing is read — a model goes over its own work with its own blind
-  spots — so the reading costs a session only where it can find something.
+  still gets a frontier reading. Name the model the workers already run on,
+  under any spelling (`opus` and `claude-opus-5` are one model), and nothing
+  is read — a model goes over its own work with its own blind spots — so the
+  reading costs a session only where it can find something.
 
 Questions find you: on screen while a machine is watched, on the phone
 (ntfy via hub) when everything is locked. Answer in the session, with

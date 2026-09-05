@@ -39,9 +39,11 @@ Each answers in 400 words or less. Do not merge their reports, do not
 pre-judge, do not tell reviewer two what reviewer one said. Two independent
 readings are the point; one averaged reading is worth less than either.
 
-Dispatch depends on the runtime: an Agent tool call with the model named
-explicitly, or `claude -p --agent`, or — where neither exists — say so and
-record a ruling rather than quietly skipping the review.
+Each reviewer is a session Saiful can watch — a `claude --bg` session or an
+amx agent, never print mode — on a model other than the one that wrote the
+diff: a model reads its own work with its own blind spots, which is the rule
+the merge gate's reader holds to as well. Where no such session can be
+started, say so and record a ruling rather than quietly skipping the review.
 
 ## The fix loop, bounded
 

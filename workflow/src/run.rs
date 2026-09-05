@@ -714,10 +714,10 @@ impl Run {
         let Some(model) = self.review_model.as_deref() else {
             return Ok(());
         };
-        let wrote = self.model.trim();
-        if model.trim().eq_ignore_ascii_case(wrote) {
+        if same_model(model, &self.model) {
             warn(format!(
-                "task {task}: {model} wrote it, so {model} does not read it"
+                "task {task}: {} wrote it, so {model} does not read it",
+                self.model.trim()
             ));
             return Ok(());
         }
@@ -1402,6 +1402,21 @@ impl Run {
             _ => false,
         })
     }
+}
+
+/// Are these two names one model? `opus`, `claude-opus-5` and `opus[1m]`
+/// all start the same model, so when both names carry a family word that
+/// word settles it; names outside the families are compared as spelled.
+/// The gate asks this to keep a model from reading its own work under a
+/// second spelling.
+fn same_model(a: &str, b: &str) -> bool {
+    const FAMILIES: [&str; 4] = ["fable", "opus", "sonnet", "haiku"];
+    let (a, b) = (a.trim().to_ascii_lowercase(), b.trim().to_ascii_lowercase());
+    if a == b {
+        return true;
+    }
+    let family = |name: &str| FAMILIES.iter().copied().find(|f| name.contains(f));
+    matches!((family(&a), family(&b)), (Some(x), Some(y)) if x == y)
 }
 
 /// The stopped-short report, written to be read at a glance (friction
@@ -2152,6 +2167,20 @@ mod tests {
         );
         // A word that is not a state stays whole, so the gate can name it.
         assert_eq!(split_state("finished"), ("finished".into(), String::new()));
+    }
+
+    #[test]
+    fn a_reader_is_the_writer_under_any_spelling_of_the_same_model() {
+        assert!(same_model("opus", "opus"));
+        assert!(same_model("Opus", " opus "));
+        // The alias the CLI takes and the full id start one model.
+        assert!(same_model("opus", "claude-opus-5"));
+        assert!(same_model("opus[1m]", "claude-opus-5"));
+        assert!(!same_model("fable", "opus"));
+        assert!(!same_model("claude-fable-5-1", "claude-opus-5"));
+        // A name outside the families is compared as spelled.
+        assert!(same_model("my-model", "my-model"));
+        assert!(!same_model("my-model", "opus"));
     }
 
     #[test]
