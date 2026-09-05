@@ -14,8 +14,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use common::{
-    Hub, TempDir, fixture_bin, fixture_mem, invocations, mem_in, real_mem, seed_project, status_of,
-    wait_for,
+    Hub, TempDir, fixture_bin, fixture_mem, invocations, mem_in, real_mem, recording_mem,
+    seed_project, status_of, wait_for,
 };
 
 struct World {
@@ -26,6 +26,9 @@ struct World {
     /// One line per ring: `yes` if the id was already in the seen file when
     /// curl ran, `no` if it was not.
     order_log: PathBuf,
+    /// Every mem invocation hub made, so a test can count the doorbell's
+    /// polls instead of guessing how long one takes.
+    mem_log: PathBuf,
     config: PathBuf,
     mem: PathBuf,
 }
@@ -37,22 +40,10 @@ impl World {
         let dir = TempDir::new(tag);
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let bin = dir.join("bin");
         let mem = real_mem().expect("build mem first");
-
-        // The real mem, against a throwaway store.
-        fixture_bin(
-            &bin,
-            "mem",
-            &format!(
-                "export XDG_DATA_HOME='{home}/data' XDG_CACHE_HOME='{home}/cache'\n\
-                 export XDG_STATE_HOME='{home}/state' XDG_CONFIG_HOME='{home}/config'\n\
-                 export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true\n\
-                 exec '{mem}' \"$@\"",
-                home = home.display(),
-                mem = mem.display(),
-            ),
-        );
+        // The real mem, against a throwaway store, with hub's every call to
+        // it on record.
+        let (bin, mem_log) = recording_mem(dir.path(), &home);
 
         let curl_log = dir.join("curl.log");
         let order_log = dir.join("order.log");
@@ -87,6 +78,7 @@ impl World {
             bin,
             curl_log,
             order_log,
+            mem_log,
             config,
             mem,
         }
@@ -123,11 +115,26 @@ impl World {
             .map(str::to_string)
             .collect()
     }
-}
 
-/// Waits for the doorbell to have gone round at least twice with nothing new.
-fn settle() {
-    std::thread::sleep(Duration::from_millis(400));
+    /// How many times the doorbell has asked mem for the queue.
+    fn polls(&self) -> usize {
+        invocations(&self.mem_log)
+            .iter()
+            .filter(|argv| argv.first().is_some_and(|a| a == "questions"))
+            .count()
+    }
+
+    /// Waits for the doorbell to go round twice more: the round in flight, if
+    /// any, and one whole round after it, so whatever the queue held at the
+    /// call has been seen and judged. This used to be a fixed sleep, and under
+    /// suite load the seeding round outlasted it: a question asked after the
+    /// sleep was swallowed as backlog and never rang (friction #VDVH24X0).
+    fn settle(&self) {
+        let before = self.polls();
+        wait_for("the doorbell to go round", Duration::from_secs(15), || {
+            self.polls() >= before + 2
+        });
+    }
 }
 
 #[test]
@@ -135,7 +142,7 @@ fn ac2_a_new_question_rings_exactly_once_however_many_times_it_is_polled() {
     let world = World::new("bell-once", "http://127.0.0.1:9");
     let hub = world.hub();
     // First start with an empty queue: seeding has nothing to record.
-    settle();
+    world.settle();
     assert!(world.rings().is_empty());
 
     world.ask("Should we use Redis?");
@@ -144,8 +151,8 @@ fn ac2_a_new_question_rings_exactly_once_however_many_times_it_is_polled() {
     });
 
     // Several more polls go by; the id is in the seen file, so nothing rings.
-    settle();
-    settle();
+    world.settle();
+    world.settle();
     assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
     assert_eq!(world.seen().len(), 1);
 
@@ -157,7 +164,7 @@ fn ac2_a_new_question_rings_exactly_once_however_many_times_it_is_polled() {
 fn the_ring_carries_no_question_text_and_never_touches_a_shell() {
     let world = World::new("bell-body", "http://127.0.0.1:9");
     let _hub = world.hub();
-    settle();
+    world.settle();
     world.ask("Should we deploy the thing that must not be named?");
     wait_for("the doorbell to ring", Duration::from_secs(5), || {
         !world.rings().is_empty()
@@ -190,7 +197,7 @@ fn the_ring_carries_no_question_text_and_never_touches_a_shell() {
 fn the_seen_file_is_written_before_the_ring() {
     let world = World::new("bell-order", "http://127.0.0.1:9");
     let _hub = world.hub();
-    settle();
+    world.settle();
     world.ask("Should we use Redis?");
     wait_for("the doorbell to ring", Duration::from_secs(5), || {
         !world.rings().is_empty()
@@ -209,7 +216,7 @@ fn the_seen_file_is_written_before_the_ring() {
 fn ac5_a_restart_does_not_re_ring() {
     let world = World::new("bell-restart", "http://127.0.0.1:9");
     let hub = world.hub();
-    settle();
+    world.settle();
     world.ask("Should we use Redis?");
     wait_for("the first ring", Duration::from_secs(5), || {
         world.rings().len() == 1
@@ -219,8 +226,8 @@ fn ac5_a_restart_does_not_re_ring() {
     // Exactly what `systemctl --user restart` does.
     drop(hub);
     let hub = world.hub();
-    settle();
-    settle();
+    world.settle();
+    world.settle();
 
     assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
     assert_eq!(world.seen(), seen_before);
@@ -238,8 +245,8 @@ fn the_first_start_records_the_backlog_and_rings_for_none_of_it() {
     assert!(!world.home.join("state/hub/seen").exists());
 
     let hub = world.hub();
-    settle();
-    settle();
+    world.settle();
+    world.settle();
 
     assert!(
         world.rings().is_empty(),
@@ -270,7 +277,7 @@ fn a_question_from_another_machine_is_recorded_and_not_rung() {
     std::fs::write(&machine_file, "here-hub").unwrap();
 
     let _hub = world.hub();
-    settle(); // the seeding round, on an empty queue
+    world.settle(); // the seeding round, on an empty queue
 
     // The sibling's question lands in the store, the way bisync would land it:
     // mem reads the machine file per invocation, hub read it once at start.
@@ -279,7 +286,7 @@ fn a_question_from_another_machine_is_recorded_and_not_rung() {
     wait_for("the id to be recorded", Duration::from_secs(15), || {
         world.seen().len() == 1
     });
-    settle();
+    world.settle();
     assert!(
         world.rings().is_empty(),
         "a synced-in question is the sibling's doorbell, not ours: {:?}",
@@ -301,10 +308,10 @@ fn an_unreachable_ntfy_keeps_the_service_serving() {
     let world = World::new("bell-unreachable", "http://127.0.0.1:9");
     std::fs::remove_file(world.bin.join("curl")).unwrap();
     let hub = world.hub();
-    settle();
+    world.settle();
     world.ask("Should we use Redis?");
-    settle();
-    settle();
+    world.settle();
+    world.settle();
 
     assert_eq!(status_of(&hub.get("/")), 200);
     assert_eq!(status_of(&hub.get("/api/questions")), 200);
@@ -332,7 +339,7 @@ fn the_publish_reaches_a_real_sink_over_real_curl() {
     // No fixture curl: the real one, off /usr/bin.
     std::fs::remove_file(world.bin.join("curl")).unwrap();
     let _hub = world.hub();
-    settle();
+    world.settle();
     world.ask("Should we use Redis?");
 
     let request = rx
@@ -355,10 +362,10 @@ fn a_state_directory_that_cannot_be_written_does_not_become_a_ring_every_poll() 
     std::fs::write(world.home.join("state/hub"), "in the way").unwrap();
 
     let hub = world.hub();
-    settle();
+    world.settle();
     world.ask("Should we use Redis?");
-    settle();
-    settle();
+    world.settle();
+    world.settle();
 
     assert!(
         world.rings().is_empty(),
@@ -439,6 +446,18 @@ fn a_first_poll_that_prints_nothing_does_not_spend_the_seeding_round() {
             .lines()
             .count()
     };
+    let polled = || {
+        std::fs::read_to_string(&polls)
+            .ok()
+            .and_then(|n| n.trim().parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    let settle = || {
+        let before = polled();
+        wait_for("the doorbell to go round", Duration::from_secs(15), || {
+            polled() >= before + 2
+        });
+    };
     wait_for(
         "the backlog to be recorded",
         Duration::from_secs(10),
@@ -453,12 +472,7 @@ fn a_first_poll_that_prints_nothing_does_not_spend_the_seeding_round() {
         invocations(&curl_log)
     );
     assert!(
-        std::fs::read_to_string(&polls)
-            .unwrap()
-            .trim()
-            .parse::<u32>()
-            .unwrap()
-            > 1,
+        polled() > 1,
         "the doorbell stopped polling instead of seeding"
     );
 
@@ -505,7 +519,7 @@ fn the_doorbell_link_is_the_tailnet_name_rather_than_the_machine_name() {
             ("HUB_TAILNET_NAME", "macbook.taila27604.ts.net"),
         ],
     );
-    settle();
+    world.settle();
     world.ask("Should we use Redis?");
     wait_for("the doorbell to ring", Duration::from_secs(5), || {
         !world.rings().is_empty()
@@ -536,7 +550,7 @@ fn an_explicit_hub_url_still_wins_over_the_tailnet_name() {
             ("HUB_TAILNET_NAME", "macbook.taila27604.ts.net"),
         ],
     );
-    settle();
+    world.settle();
     world.ask("Should we use Redis?");
     wait_for("the doorbell to ring", Duration::from_secs(5), || {
         !world.rings().is_empty()
@@ -562,13 +576,13 @@ fn a_watched_machine_rings_nothing_at_all() {
         &format!("printf '\\1' >> '{}'\nexit 0", notify_log.display()),
     );
     let _hub = world.hub();
-    settle();
+    world.settle();
 
     world.ask("Should we use Redis?");
     wait_for("the id to be recorded", Duration::from_secs(15), || {
         world.seen().len() == 1
     });
-    settle();
+    world.settle();
 
     assert!(
         world.rings().is_empty(),
@@ -590,13 +604,13 @@ fn an_unwatched_machine_rings_the_phone_and_never_probes_a_sibling() {
     config.push_str("siblings = [\"http://127.0.0.1:9\"]\n");
     std::fs::write(&world.config, config).unwrap();
     let _hub = world.hub();
-    settle();
+    world.settle();
 
     world.ask("Should we use Redis?");
     wait_for("the phone", Duration::from_secs(15), || {
         !world.rings().is_empty()
     });
-    settle();
+    world.settle();
 
     let calls = world.rings();
     assert_eq!(calls.len(), 1, "{calls:?}");
