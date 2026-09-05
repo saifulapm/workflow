@@ -128,27 +128,27 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
         // one that comes from neither is a name the worker will hunt for. The
         // dependency need not be a direct one: a plan chains `[after:]`, and
         // what t1 gives reaches t3 through t2 (friction #EYC8DHKV).
-        for ident in uses_idents(t.uses.as_deref().unwrap_or("")) {
-            if !greppable(&ident) {
+        for (ident, needle) in uses_items(t.uses.as_deref().unwrap_or("")) {
+            let Some(needle) = needle else {
                 continue;
-            }
+            };
             let given = waited_for.iter().any(|d| {
                 plan.get(d)
                     .and_then(|dep| dep.gives.as_deref())
                     .is_some_and(|g| g.contains(&ident))
             });
-            if !given && named_by(&git, &ident, itself.as_deref()).is_empty() {
+            if !given && named_by(&git, &needle, itself.as_deref()).is_empty() {
                 f.warnings.push(format!(
                     "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
                     t.id
                 ));
             }
         }
-        for ident in uses_idents(t.gives.as_deref().unwrap_or("")) {
-            if !greppable(&ident) {
+        for (ident, needle) in uses_items(t.gives.as_deref().unwrap_or("")) {
+            let Some(needle) = needle else {
                 continue;
-            }
-            let named: Vec<String> = named_by(&git, &ident, itself.as_deref())
+            };
+            let named: Vec<String> = named_by(&git, &needle, itself.as_deref())
                 .into_iter()
                 .filter(|file| !claimed.contains(file))
                 .collect();
@@ -344,14 +344,35 @@ fn glob(pat: &[u8], s: &[u8]) -> bool {
     }
 }
 
-/// An identifier worth asking the tree about. Uses and Gives name exact
-/// signatures, so a real symbol carries an underscore or a capital --
+/// An identifier worth asking the tree about by itself. Uses and Gives name
+/// exact signatures, so a real symbol carries an underscore or a capital --
 /// `set_data`, `StackEntry`, `setData`. A bare lowercase word is usually what
 /// this reader made of prose it could not parse: 'untouched' out of
 /// "engine.rs untouched", 'rs' out of "pub mod data in lib.rs". Grepping one
 /// names half the repo and says nothing (friction #33WY4FAR).
 fn greppable(ident: &str) -> bool {
     ident.contains('_') || ident.chars().any(|c| c.is_ascii_uppercase())
+}
+
+/// What the tree is asked for on an item's behalf. A symbol-shaped identifier
+/// is asked for as it is. A bare word is asked for with the shape the item
+/// gave it -- `price(` when the item calls it, `::fixture` when the item
+/// qualifies it -- which names a definition or a call and not every sentence
+/// with the word in it. A bare word with neither is prose and asks nothing,
+/// so `Uses: Basket::fixture(): Basket` is grounded rather than skipped.
+fn needle_for(item: &str, ident: &str) -> Option<String> {
+    if greppable(ident) {
+        return Some(ident.to_string());
+    }
+    let call = format!("{ident}(");
+    if item.contains(&call) {
+        return Some(call);
+    }
+    let scoped = format!("::{ident}");
+    if item.contains(&scoped) {
+        return Some(scoped);
+    }
+    None
 }
 
 /// NUL-separated git output, one path per entry.
@@ -376,33 +397,40 @@ fn pattern_path(p: &str) -> &str {
     }
 }
 
-/// One identifier per ` · `-separated item: the token nearest the call site
-/// (`CartPricing::price(...)` names `price`), or the item's only token when
-/// nothing is called. Declaration keywords never count as the name. Two items
-/// reducing to one identifier are reported once, not twice.
-fn uses_idents(uses: &str) -> Vec<String> {
+/// One identifier per ` · `-separated item, with what to grep for it: the
+/// identifier is the token nearest the call site (`CartPricing::price(...)`
+/// names `price`), or the item's only token when nothing is called, and
+/// declaration keywords never count as the name. Two items reducing to one
+/// identifier are reported once, not twice.
+fn uses_items(uses: &str) -> Vec<(String, Option<String>)> {
+    uses.split(" · ")
+        .filter_map(|item| {
+            let ident = ident_of(item)?;
+            let needle = needle_for(item, &ident);
+            Some((ident, needle))
+        })
+        .fold(Vec::new(), |mut out: Vec<(String, Option<String>)>, pair| {
+            if !out.iter().any(|(ident, _)| *ident == pair.0) {
+                out.push(pair);
+            }
+            out
+        })
+}
+
+fn ident_of(item: &str) -> Option<String> {
     const KEYWORDS: [&str; 12] = [
         "fn", "pub", "struct", "enum", "class", "function", "def", "let", "const", "type",
         "impl", "trait",
     ];
-    uses.split(" · ")
-        .filter_map(|item| {
-            let head = item.split('(').next().unwrap_or(item);
-            // `CartPricing::price: Cents` names price, not its return type.
-            let head = match head.rsplit_once(": ") {
-                Some((h, _)) if !h.is_empty() => h,
-                _ => head,
-            };
-            head.split(|c: char| !c.is_alphanumeric() && c != '_')
-                .rfind(|t| !t.is_empty() && !KEYWORDS.contains(t))
-                .map(str::to_string)
-        })
-        .fold(Vec::new(), |mut out, ident| {
-            if !out.contains(&ident) {
-                out.push(ident);
-            }
-            out
-        })
+    let head = item.split('(').next().unwrap_or(item);
+    // `CartPricing::price: Cents` names price, not its return type.
+    let head = match head.rsplit_once(": ") {
+        Some((h, _)) if !h.is_empty() => h,
+        _ => head,
+    };
+    head.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .rfind(|t| !t.is_empty() && !KEYWORDS.contains(t))
+        .map(str::to_string)
 }
 
 /// What a deferral idiom in a task block means for the plan.
@@ -473,17 +501,39 @@ mod tests {
         assert_eq!(pattern_path("scripts/build:release"), "scripts/build:release");
     }
 
+    fn idents(uses: &str) -> Vec<String> {
+        uses_items(uses).into_iter().map(|(ident, _)| ident).collect()
+    }
+
     #[test]
     fn a_uses_item_yields_the_identifier_nearest_its_call_site() {
         assert_eq!(
-            uses_idents("fn price(basket: &Basket) -> Cents · Basket::fixture(): Basket"),
+            idents("fn price(basket: &Basket) -> Cents · Basket::fixture(): Basket"),
             vec!["price", "fixture"]
         );
-        assert_eq!(uses_idents("CartPricing::price(Basket $b): Cents"), vec!["price"]);
+        assert_eq!(idents("CartPricing::price(Basket $b): Cents"), vec!["price"]);
         // A colon-typed item without parens names the symbol, not its type.
-        assert_eq!(uses_idents("CartPricing::price: Cents"), vec!["price"]);
-        assert_eq!(uses_idents("DEFAULT_MODEL"), vec!["DEFAULT_MODEL"]);
-        assert!(uses_idents("").is_empty());
+        assert_eq!(idents("CartPricing::price: Cents"), vec!["price"]);
+        assert_eq!(idents("DEFAULT_MODEL"), vec!["DEFAULT_MODEL"]);
+        assert!(idents("").is_empty());
+    }
+
+    /// A bare lowercase word is not grepped for by itself, but the item
+    /// around it usually gives it a shape the tree can be asked for -- so the
+    /// plan skill's own example, `Basket::fixture(): Basket`, is grounded
+    /// rather than passed over.
+    #[test]
+    fn a_bare_word_is_asked_for_with_the_shape_its_item_gives_it() {
+        assert_eq!(needle_for("set_data(v)", "set_data"), Some("set_data".into()));
+        assert_eq!(needle_for("Basket::fixture(): Basket", "fixture"), Some("fixture(".into()));
+        assert_eq!(needle_for("fn price(basket: &Basket) -> Cents", "price"), Some("price(".into()));
+        assert_eq!(needle_for("CartPricing::price: Cents", "price"), Some("::price".into()));
+        assert_eq!(needle_for("engine.rs untouched", "untouched"), None);
+        assert_eq!(needle_for("per ruling 10", "10"), None);
+        assert_eq!(
+            uses_items("Basket::fixture(): Basket · engine.rs untouched"),
+            vec![("fixture".to_string(), Some("fixture(".to_string())), ("untouched".to_string(), None)]
+        );
     }
 
     /// deferral reads only what findings() hands it -- the Done: line
