@@ -100,9 +100,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 verbs::project_add(&app, subdir, name.as_deref())
             }
             cli::ProjectCommand::Set { command } => match command {
-                cli::ProjectSetCommand::Verify { cmd } => {
-                    verbs::project_set(&app, "verify", cmd)
-                }
+                cli::ProjectSetCommand::Verify { cmd } => verbs::project_set(&app, "verify", cmd),
                 cli::ProjectSetCommand::ReviewPaths { globs } => {
                     verbs::project_set(&app, "review_paths", globs)
                 }

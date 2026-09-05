@@ -423,10 +423,22 @@ fn a_workers_question_is_the_orchestrators_and_names_its_task() {
     std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
     common::run_git(
         &repo,
-        &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "cart-v2/t3"],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            wt.to_str().unwrap(),
+            "-b",
+            "cart-v2/t3",
+        ],
     );
 
-    let out = ask_env(&w, &wt, &["ask", "may I widen Files by src/main.rs?", "--json"], None);
+    let out = ask_env(
+        &w,
+        &wt,
+        &["ask", "may I widen Files by src/main.rs?", "--json"],
+        None,
+    );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["audience"], "orchestrator", "{v}");
@@ -436,7 +448,14 @@ fn a_workers_question_is_the_orchestrators_and_names_its_task() {
     let out = ask_env(
         &w,
         &repo,
-        &["questions", "--pending", "--all-projects", "--for", "human", "--json"],
+        &[
+            "questions",
+            "--pending",
+            "--all-projects",
+            "--for",
+            "human",
+            "--json",
+        ],
         None,
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -463,13 +482,23 @@ fn a_workers_question_is_the_orchestrators_and_names_its_task() {
     // Answered, the same listing carries the answer for the next attempt.
     let out = ask_env(&w, &repo, &["answer", &id, "yes, widen"], None);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let out = ask_env(&w, &repo, &["questions", "--for", "orchestrator", "--json"], None);
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--for", "orchestrator", "--json"],
+        None,
+    );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["questions"][0]["answer"], "yes, widen", "{v}");
     assert_eq!(v["questions"][0]["answered"], true);
 
     // `--for human` from a worktree is a worker escalating on purpose.
-    let out = ask_env(&w, &wt, &["ask", "delete the prod table?", "--for", "human", "--json"], None);
+    let out = ask_env(
+        &w,
+        &wt,
+        &["ask", "delete the prod table?", "--for", "human", "--json"],
+        None,
+    );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(v["audience"].is_null(), "{v}");
     let out = ask_env(

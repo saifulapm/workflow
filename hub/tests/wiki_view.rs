@@ -137,7 +137,10 @@ fn the_index_lists_projects_by_name_and_a_name_opens_that_wiki_s_index() {
     assert!(body.contains("2 pages"), "{body}");
     // The pages themselves live behind the index, not on this listing: a
     // hundred projects would otherwise make one unreadable page.
-    assert!(!body.contains("href=\"/wiki/proj-alpha/storage\""), "{body}");
+    assert!(
+        !body.contains("href=\"/wiki/proj-alpha/storage\""),
+        "{body}"
+    );
     assert!(!body.contains("How storage works"), "{body}");
     // A project with no pages is not a row pointing at a 404.
     assert!(!body.contains("proj-beta"), "{body}");
@@ -148,15 +151,16 @@ fn the_index_lists_projects_by_name_and_a_name_opens_that_wiki_s_index() {
 #[test]
 fn a_project_without_an_index_page_links_to_its_first_page() {
     let world = World::new("wiki-no-index");
-    world.page("proj-alpha", "storage", "# How storage works\n\nIt writes.\n");
+    world.page(
+        "proj-alpha",
+        "storage",
+        "# How storage works\n\nIt writes.\n",
+    );
     let hub = world.hub();
 
     let body = body_of(&hub.get("/wiki")).to_string();
 
-    assert!(
-        body.contains("href=\"/wiki/proj-alpha/storage\""),
-        "{body}"
-    );
+    assert!(body.contains("href=\"/wiki/proj-alpha/storage\""), "{body}");
     assert!(!body.contains("href=\"/wiki/proj-alpha/index\""), "{body}");
 }
 

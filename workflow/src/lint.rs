@@ -158,7 +158,10 @@ const STYLE: &[(&str, Warn)] = &[
     ("stands as", Warn::Loose("stands as")),
     ("in order to", Warn::Loose("in order to")),
     ("due to the fact", Warn::Loose("due to the fact")),
-    ("it is important to note", Warn::Loose("it is important to note")),
+    (
+        "it is important to note",
+        Warn::Loose("it is important to note"),
+    ),
     ("not just", Warn::Loose("not just")),
 ];
 

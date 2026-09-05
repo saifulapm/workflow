@@ -506,7 +506,11 @@ fn project_set_review_paths_records_the_globs_and_project_current_reports_them()
 
     // Setting them again replaces the list rather than appending to it.
     assert_eq!(
-        code(&mem(&w, &repo, &["project", "set", "review-paths", "app/**"])),
+        code(&mem(
+            &w,
+            &repo,
+            &["project", "set", "review-paths", "app/**"]
+        )),
         0
     );
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
@@ -595,7 +599,10 @@ fn project_set_review_model_records_the_choice_and_project_current_reports_it() 
         stdout(&mem(&w, &repo, &["project", "current"])).contains("review-model  fable"),
         "the plain rendering names it too"
     );
-    assert!(v.get("model").is_none(), "the workers' model is a separate key: {v}");
+    assert!(
+        v.get("model").is_none(),
+        "the workers' model is a separate key: {v}"
+    );
 
     // Choosing again replaces the choice rather than leaving two keys behind.
     assert_eq!(
@@ -625,9 +632,16 @@ fn project_set_review_model_records_the_choice_and_project_current_reports_it() 
 fn project_unset_takes_a_choice_off_and_leaves_the_others() {
     let w = World::new("write-unset");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-    assert_eq!(code(&mem(&w, &repo, &["project", "set", "model", "sonnet"])), 0);
     assert_eq!(
-        code(&mem(&w, &repo, &["project", "set", "review-model", "fable"])),
+        code(&mem(&w, &repo, &["project", "set", "model", "sonnet"])),
+        0
+    );
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["project", "set", "review-model", "fable"]
+        )),
         0
     );
 
@@ -640,7 +654,11 @@ fn project_unset_takes_a_choice_off_and_leaves_the_others() {
     );
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     assert!(v.get("review_model").is_none(), "the reader is gone: {v}");
-    assert_eq!(v["model"], serde_json::json!("sonnet"), "the other key stays");
+    assert_eq!(
+        v["model"],
+        serde_json::json!("sonnet"),
+        "the other key stays"
+    );
     let id = mem::project::Registry::load(&w.store()).projects[0]
         .id
         .clone();
@@ -680,7 +698,11 @@ fn project_add_registers_a_child_the_subdir_then_owns() {
 
     // current in the subdir answers as the child, keeps the checkout root,
     // and says where the child lives.
-    let v = json(&mem(&w, &repo.join("apps/x"), &["project", "current", "--json"]));
+    let v = json(&mem(
+        &w,
+        &repo.join("apps/x"),
+        &["project", "current", "--json"],
+    ));
     assert_eq!(v["id"], serde_json::json!(child.id));
     assert_eq!(v["name"], serde_json::json!("x"));
     assert_eq!(v["subdir"], serde_json::json!("apps/x"));
@@ -690,7 +712,11 @@ fn project_add_registers_a_child_the_subdir_then_owns() {
     );
 
     // A write from the subdir lands on the child, one from the root on the root.
-    let v = json(&mem(&w, &repo.join("apps/x"), &["log", "child work", "--json"]));
+    let v = json(&mem(
+        &w,
+        &repo.join("apps/x"),
+        &["log", "child work", "--json"],
+    ));
     let item = mem::store::read_item(std::path::Path::new(v["path"].as_str().unwrap())).unwrap();
     assert_eq!(item.meta.project.as_deref(), Some("x"));
     let v = json(&mem(&w, &repo, &["log", "root work", "--json"]));
@@ -747,7 +773,12 @@ fn project_set_remote_records_the_normalized_url() {
     let out = mem(
         &w,
         &repo,
-        &["project", "set", "remote", "https://GitHub.com/Acme/App.git"],
+        &[
+            "project",
+            "set",
+            "remote",
+            "https://GitHub.com/Acme/App.git",
+        ],
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 

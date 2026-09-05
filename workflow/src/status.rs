@@ -154,7 +154,11 @@ fn print_human(rows: &[RunRow]) {
         println!(
             "run {} ({}, {})",
             r.plan,
-            if r.live { "live" } else { "nobody at the wheel" },
+            if r.live {
+                "live"
+            } else {
+                "nobody at the wheel"
+            },
             r.integration
         );
         for t in &r.tasks {

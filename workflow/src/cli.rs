@@ -85,10 +85,12 @@ again, as long as its wave is still open. With no live run, just run the plan
 again -- a fresh run retries failed tasks by itself.")]
     Redispatch { task: String },
     /// Report this project's runs: task states, spend, lock liveness.
-    #[command(long_about = "Report this project's runs: task states, spend, lock liveness.
+    #[command(
+        long_about = "Report this project's runs: task states, spend, lock liveness.
 
 The run dir read out loud, and nothing touched: no dispatch, no cleanup, no
-state change. --json is the shape a session that owns a run polls.")]
+state change. --json is the shape a session that owns a run polls."
+    )]
     Status {
         /// Print the report as JSON.
         #[arg(long)]

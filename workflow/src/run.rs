@@ -223,7 +223,10 @@ impl Run {
     fn asked(&self, task: &str) -> Option<String> {
         let note = self.field(task, "failed");
         let rest = note.strip_prefix("asked #")?;
-        let id: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        let id: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
         (!id.is_empty()).then_some(id)
     }
 
@@ -706,12 +709,7 @@ impl Run {
     /// A merge whose fast-forward landed and whose verify never ran. The work
     /// is on the branch already, so there is nothing to replay -- but nothing
     /// has vouched for it either, and the gate is the whole point.
-    fn settle_interrupted_merge(
-        &self,
-        task: &str,
-        prev: &str,
-        new: &str,
-    ) -> Result<Merge, String> {
+    fn settle_interrupted_merge(&self, task: &str, prev: &str, new: &str) -> Result<Merge, String> {
         warn(format!(
             "task {task}: its merge reached {} before the run died -- verifying it now",
             self.int_branch
@@ -1071,8 +1069,9 @@ impl Run {
             // off the worker's own report first: mem's read verbs never wait
             // on another invocation's reindex, so a question written a
             // moment ago can be missing from the listing this once.
-            Some((state, note)) if state == "blocked"
-                && let Some(asked) = self.question_in(task, &note) =>
+            Some((state, note))
+                if state == "blocked"
+                    && let Some(asked) = self.question_in(task, &note) =>
             {
                 self.fail_task(task, &asked);
                 return;
@@ -1090,7 +1089,10 @@ impl Run {
                 // wrong and one staring at a state nothing documents
                 // (friction #W2SY30WH).
                 if !brief::STATES.contains(&state.as_str()) {
-                    why.push_str(&format!(", which is not one of {}", brief::STATES.join(", ")));
+                    why.push_str(&format!(
+                        ", which is not one of {}",
+                        brief::STATES.join(", ")
+                    ));
                 }
                 self.fail_task(task, &why);
                 return;
@@ -1136,8 +1138,7 @@ impl Run {
         let mut stopped = 0;
         for task in self.plan.ids() {
             let state = self.state(&task);
-            if state == DISPATCHED || state == PENDING || state == REVIEWING || state.is_empty()
-            {
+            if state == DISPATCHED || state == PENDING || state == REVIEWING || state.is_empty() {
                 continue; // the reap pass and the waves own these
             }
             if self.field(&task, "session").is_empty() && self.worker_pid(&task).is_empty() {
@@ -1221,7 +1222,10 @@ impl Run {
                     warn(format!(
                         "task {task}: the recorded session never existed -- dispatching again now"
                     ));
-                    self.dispatch(task, "the session it was given never existed, so it never ran");
+                    self.dispatch(
+                        task,
+                        "the session it was given never existed, so it never ran",
+                    );
                 } else {
                     warn(format!(
                         "task {task}: the recorded session never existed and the retry is spent"
@@ -2070,7 +2074,8 @@ fn shutdown(run: &Run) -> i32 {
         warn(format!("task {task}: its worker was stopped"));
     }
     for task in run.reviewing() {
-        run.backend.stop(&run.review_handle(&task), run.kill_grace_s);
+        run.backend
+            .stop(&run.review_handle(&task), run.kill_grace_s);
         warn(format!(
             "task {task}: its reader was stopped -- the next run reads the merge again"
         ));
@@ -2269,23 +2274,27 @@ mod tests {
         let tasks = [
             t("t1", MERGED, ""),
             t("t2", MERGED, ""),
-            t("t3", FAILED, "the suite is red once the change sits on integration"),
-            t("t4", FAILED, "the suite is red once the change sits on integration"),
+            t(
+                "t3",
+                FAILED,
+                "the suite is red once the change sits on integration",
+            ),
+            t(
+                "t4",
+                FAILED,
+                "the suite is red once the change sits on integration",
+            ),
             t("t5", FAILED, "wrote outside its Files: patterns"),
             t("t6", BLOCKED, ""),
             t("t7", PENDING, ""),
         ];
         let q = stopped_short("amx-v2", &tasks);
         assert!(
-            q.starts_with(
-                "Plan amx-v2 stopped short: 2 of 7 merged, 3 failed, 2 never started."
-            ),
+            q.starts_with("Plan amx-v2 stopped short: 2 of 7 merged, 3 failed, 2 never started."),
             "counts do not lead: {q}"
         );
         assert!(
-            q.contains(
-                "Failed - the suite is red once the change sits on integration: t3, t4."
-            ),
+            q.contains("Failed - the suite is red once the change sits on integration: t3, t4."),
             "failed tasks are not grouped by reason: {q}"
         );
         assert!(q.contains("Failed - wrote outside its Files: patterns: t5."));
@@ -2314,7 +2323,10 @@ mod tests {
 
     #[test]
     fn zero_counts_stay_out_of_the_summary_line() {
-        let tasks = [t("t1", MERGED, ""), t("t2", FAILED, "the worker exited with an error")];
+        let tasks = [
+            t("t1", MERGED, ""),
+            t("t2", FAILED, "the worker exited with an error"),
+        ];
         let q = stopped_short("p", &tasks);
         assert!(q.starts_with("Plan p stopped short: 1 of 2 merged, 1 failed."));
         assert!(!q.contains("0 never started"), "{q}");

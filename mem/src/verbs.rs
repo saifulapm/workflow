@@ -342,13 +342,8 @@ pub fn project_add(app: &App, subdir: &str, name: Option<&str>) -> Result<i32> {
             "not a git checkout — a child project lives inside one".to_string(),
         ));
     };
-    let identity = crate::project::resolve(
-        &checkout.toplevel,
-        &app.store,
-        &app.dirs,
-        None,
-        Mode::Write,
-    )?;
+    let identity =
+        crate::project::resolve(&checkout.toplevel, &app.store, &app.dirs, None, Mode::Write)?;
     let registry = Registry::load(&app.store);
     let root = identity
         .id()
@@ -386,11 +381,11 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     let value = value.trim();
     if value.is_empty() {
         return Err(exit::usage(match key {
-            "verify" => "give a command to run, e.g. `mem project set verify \"just test\"`"
-                .to_string(),
+            "verify" => {
+                "give a command to run, e.g. `mem project set verify \"just test\"`".to_string()
+            }
             "remote" => {
-                "give a url, e.g. `mem project set remote git@github.com:acme/app.git`"
-                    .to_string()
+                "give a url, e.g. `mem project set remote git@github.com:acme/app.git`".to_string()
             }
             _ => format!(
                 "give something to record, e.g. `mem project set {} \"app/**\"`",
@@ -1669,7 +1664,10 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
         let Some(parent) = registry.by_id(parent_id) else {
             findings.push(finding(
                 "child",
-                format!("{}'s parent {parent_id} is no project the store knows", p.name),
+                format!(
+                    "{}'s parent {parent_id} is no project the store knows",
+                    p.name
+                ),
             ));
             continue;
         };
@@ -1695,7 +1693,11 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
             {
                 findings.push(finding(
                     "child",
-                    format!("{}'s subdir {subdir} is missing from {}", p.name, top.display()),
+                    format!(
+                        "{}'s subdir {subdir} is missing from {}",
+                        p.name,
+                        top.display()
+                    ),
                 ));
             }
         }

@@ -407,13 +407,17 @@ fn the_deepest_subdir_child_wins_and_the_root_takes_the_rest() {
     let x2 = repo.join("apps/x2/nested");
     std::fs::create_dir_all(&x2).unwrap();
     assert_eq!(
-        resolve(&x2, &store, &dirs, None, Mode::Read).unwrap().name(),
+        resolve(&x2, &store, &dirs, None, Mode::Read)
+            .unwrap()
+            .name(),
         Some("x2")
     );
     let xy = repo.join("apps/xy");
     std::fs::create_dir_all(&xy).unwrap();
     assert_eq!(
-        resolve(&xy, &store, &dirs, None, Mode::Read).unwrap().name(),
+        resolve(&xy, &store, &dirs, None, Mode::Read)
+            .unwrap()
+            .name(),
         Some("mono"),
         "apps/xy shares a string prefix with apps/x but no component"
     );

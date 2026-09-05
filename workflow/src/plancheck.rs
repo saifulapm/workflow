@@ -228,7 +228,15 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
     if !git.bytes(&["ls-files", "-z", "--", &spec]).is_empty() {
         return false;
     }
-    let ignored = ["ls-files", "-z", "-o", "-i", "--exclude-standard", "--", &spec];
+    let ignored = [
+        "ls-files",
+        "-z",
+        "-o",
+        "-i",
+        "--exclude-standard",
+        "--",
+        &spec,
+    ];
     !git.bytes(&ignored).is_empty() || git.quiet(&["check-ignore", "-q", "--", pattern])
 }
 
@@ -409,18 +417,21 @@ fn uses_items(uses: &str) -> Vec<(String, Option<String>)> {
             let needle = needle_for(item, &ident);
             Some((ident, needle))
         })
-        .fold(Vec::new(), |mut out: Vec<(String, Option<String>)>, pair| {
-            if !out.iter().any(|(ident, _)| *ident == pair.0) {
-                out.push(pair);
-            }
-            out
-        })
+        .fold(
+            Vec::new(),
+            |mut out: Vec<(String, Option<String>)>, pair| {
+                if !out.iter().any(|(ident, _)| *ident == pair.0) {
+                    out.push(pair);
+                }
+                out
+            },
+        )
 }
 
 fn ident_of(item: &str) -> Option<String> {
     const KEYWORDS: [&str; 12] = [
-        "fn", "pub", "struct", "enum", "class", "function", "def", "let", "const", "type",
-        "impl", "trait",
+        "fn", "pub", "struct", "enum", "class", "function", "def", "let", "const", "type", "impl",
+        "trait",
     ];
     let head = item.split('(').next().unwrap_or(item);
     // `CartPricing::price: Cents` names price, not its return type.
@@ -498,11 +509,17 @@ mod tests {
         assert_eq!(pattern_path("src/old.rs:12-25"), "src/old.rs");
         assert_eq!(pattern_path("src/old.rs:40"), "src/old.rs");
         assert_eq!(pattern_path("src/old.rs"), "src/old.rs");
-        assert_eq!(pattern_path("scripts/build:release"), "scripts/build:release");
+        assert_eq!(
+            pattern_path("scripts/build:release"),
+            "scripts/build:release"
+        );
     }
 
     fn idents(uses: &str) -> Vec<String> {
-        uses_items(uses).into_iter().map(|(ident, _)| ident).collect()
+        uses_items(uses)
+            .into_iter()
+            .map(|(ident, _)| ident)
+            .collect()
     }
 
     #[test]
@@ -511,7 +528,10 @@ mod tests {
             idents("fn price(basket: &Basket) -> Cents · Basket::fixture(): Basket"),
             vec!["price", "fixture"]
         );
-        assert_eq!(idents("CartPricing::price(Basket $b): Cents"), vec!["price"]);
+        assert_eq!(
+            idents("CartPricing::price(Basket $b): Cents"),
+            vec!["price"]
+        );
         // A colon-typed item without parens names the symbol, not its type.
         assert_eq!(idents("CartPricing::price: Cents"), vec!["price"]);
         assert_eq!(idents("DEFAULT_MODEL"), vec!["DEFAULT_MODEL"]);
@@ -524,15 +544,30 @@ mod tests {
     /// rather than passed over.
     #[test]
     fn a_bare_word_is_asked_for_with_the_shape_its_item_gives_it() {
-        assert_eq!(needle_for("set_data(v)", "set_data"), Some("set_data".into()));
-        assert_eq!(needle_for("Basket::fixture(): Basket", "fixture"), Some("fixture(".into()));
-        assert_eq!(needle_for("fn price(basket: &Basket) -> Cents", "price"), Some("price(".into()));
-        assert_eq!(needle_for("CartPricing::price: Cents", "price"), Some("::price".into()));
+        assert_eq!(
+            needle_for("set_data(v)", "set_data"),
+            Some("set_data".into())
+        );
+        assert_eq!(
+            needle_for("Basket::fixture(): Basket", "fixture"),
+            Some("fixture(".into())
+        );
+        assert_eq!(
+            needle_for("fn price(basket: &Basket) -> Cents", "price"),
+            Some("price(".into())
+        );
+        assert_eq!(
+            needle_for("CartPricing::price: Cents", "price"),
+            Some("::price".into())
+        );
         assert_eq!(needle_for("engine.rs untouched", "untouched"), None);
         assert_eq!(needle_for("per ruling 10", "10"), None);
         assert_eq!(
             uses_items("Basket::fixture(): Basket · engine.rs untouched"),
-            vec![("fixture".to_string(), Some("fixture(".to_string())), ("untouched".to_string(), None)]
+            vec![
+                ("fixture".to_string(), Some("fixture(".to_string())),
+                ("untouched".to_string(), None)
+            ]
         );
     }
 
@@ -575,7 +610,12 @@ mod tests {
     #[test]
     fn only_a_symbol_shaped_identifier_is_worth_grepping_for() {
         for real in [
-            "set_data", "setData", "StackEntry", "text_of", "screen_tree_bound", "DEFAULT_MODEL",
+            "set_data",
+            "setData",
+            "StackEntry",
+            "text_of",
+            "screen_tree_bound",
+            "DEFAULT_MODEL",
             "Value",
         ] {
             assert!(greppable(real), "{real:?} is a symbol");

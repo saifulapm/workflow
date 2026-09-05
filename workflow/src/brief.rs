@@ -274,7 +274,10 @@ mod tests {
             "The orchestrator answered: Yes: the plan now lists src/main.rs",
             "Act on that answer.",
         ] {
-            assert!(answered.contains(needle), "the answered brief lost {needle}");
+            assert!(
+                answered.contains(needle),
+                "the answered brief lost {needle}"
+            );
         }
         assert!(answered.len() <= BUDGET, "{}", answered.len());
         // A long answer is clipped, not dropped, and the clip ends cleanly.

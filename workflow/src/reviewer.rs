@@ -141,7 +141,11 @@ reading that changes the tree is void.
 /// Seconds one reading may take: `WORKFLOW_REVIEW_DEADLINE_MIN`, fractional,
 /// else [`DEADLINE_MIN_DEFAULT`].
 pub fn deadline_s() -> i64 {
-    deadline_from(std::env::var("WORKFLOW_REVIEW_DEADLINE_MIN").ok().as_deref())
+    deadline_from(
+        std::env::var("WORKFLOW_REVIEW_DEADLINE_MIN")
+            .ok()
+            .as_deref(),
+    )
 }
 
 fn deadline_from(value: Option<&str>) -> i64 {
@@ -175,12 +179,26 @@ mod tests {
 
     #[test]
     fn the_verdict_is_the_first_verdict_line_however_it_is_dressed() {
-        assert_eq!(verdict("VERDICT: ship\n\nThe diff is clean."), Some(Verdict::Ship));
-        assert_eq!(verdict("Reading the diff...\nverdict: FIX\n1. run.rs:10"), Some(Verdict::Fix));
+        assert_eq!(
+            verdict("VERDICT: ship\n\nThe diff is clean."),
+            Some(Verdict::Ship)
+        );
+        assert_eq!(
+            verdict("Reading the diff...\nverdict: FIX\n1. run.rs:10"),
+            Some(Verdict::Fix)
+        );
         assert_eq!(verdict("**VERDICT: fix**\n- run.rs:10"), Some(Verdict::Fix));
         assert_eq!(verdict("## Verdict: Ship"), Some(Verdict::Ship));
-        assert_eq!(verdict("VERDICT: fix\nVERDICT: ship"), Some(Verdict::Fix), "the first one counts");
-        assert_eq!(verdict("VERDICT: maybe\nVERDICT: ship"), Some(Verdict::Ship), "an unknown word is skipped");
+        assert_eq!(
+            verdict("VERDICT: fix\nVERDICT: ship"),
+            Some(Verdict::Fix),
+            "the first one counts"
+        );
+        assert_eq!(
+            verdict("VERDICT: maybe\nVERDICT: ship"),
+            Some(Verdict::Ship),
+            "an unknown word is skipped"
+        );
         assert_eq!(verdict("The verdict is that it ships."), None);
         assert_eq!(verdict("VERDICTS: ship"), None);
         assert_eq!(verdict(""), None);
@@ -211,22 +229,39 @@ mod tests {
         ] {
             assert!(text.contains(needle), "the prompt lost {needle:?}:\n{text}");
         }
-        assert!(!text.contains(" x | 1 +"), "a diff under the cap goes in whole, not as its stat");
+        assert!(
+            !text.contains(" x | 1 +"),
+            "a diff under the cap goes in whole, not as its stat"
+        );
     }
 
     #[test]
     fn a_diff_past_the_cap_goes_in_as_its_stat() {
         let big = "+".repeat(DIFF_CAP + 1);
-        let text = prompt("# plan: p\n", &task(), &big, " x | 1 +\n", Path::new("/wt"), Path::new("/r"));
+        let text = prompt(
+            "# plan: p\n",
+            &task(),
+            &big,
+            " x | 1 +\n",
+            Path::new("/wt"),
+            Path::new("/r"),
+        );
         assert!(text.contains(" x | 1 +"), "the stat stands in");
-        assert!(text.contains("read the files themselves"), "and the reviewer is told to read");
+        assert!(
+            text.contains("read the files themselves"),
+            "and the reviewer is told to read"
+        );
         assert!(!text.contains(&big[..1000]), "the diff body is out");
     }
 
     #[test]
     fn the_deadline_is_fractional_minutes_with_a_floor_of_one_second() {
         assert_eq!(deadline_from(None), 900);
-        assert_eq!(deadline_from(Some("0.05")), 3, "three seconds, the way a test injects one");
+        assert_eq!(
+            deadline_from(Some("0.05")),
+            3,
+            "three seconds, the way a test injects one"
+        );
         assert_eq!(deadline_from(Some("0.001")), 1, "never zero");
         assert_eq!(deadline_from(Some("nonsense")), 900);
         assert_eq!(deadline_from(Some("-2")), 900);

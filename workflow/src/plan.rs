@@ -300,15 +300,17 @@ pub fn tick(text: &str, id: &str) -> Option<String> {
     let mut found = false;
     let out: String = text
         .split_inclusive('\n')
-        .map(|line| match task_line(line.trim_end_matches(['\n', '\r'])) {
-            // `- [x]` is five ASCII bytes however the box is spelled, so the
-            // tail slices cleanly whatever the title holds.
-            Some((_, tid, _)) if tid == id => {
-                found = true;
-                format!("- [X]{}", &line[5..])
-            }
-            _ => line.to_string(),
-        })
+        .map(
+            |line| match task_line(line.trim_end_matches(['\n', '\r'])) {
+                // `- [x]` is five ASCII bytes however the box is spelled, so the
+                // tail slices cleanly whatever the title holds.
+                Some((_, tid, _)) if tid == id => {
+                    found = true;
+                    format!("- [X]{}", &line[5..])
+                }
+                _ => line.to_string(),
+            },
+        )
         .collect();
     found.then_some(out)
 }
@@ -493,8 +495,14 @@ mod tests {
         .expect("the middle-tier keys parse");
         let t = p.get("t1").unwrap();
         assert_eq!(t.read.as_deref(), Some("src/lib.rs docs/api.md"));
-        assert_eq!(t.uses.as_deref(), Some("fn price(basket: &Basket) -> Cents"));
-        assert_eq!(t.gives.as_deref(), Some("fn total(basket: &Basket) -> Cents"));
+        assert_eq!(
+            t.uses.as_deref(),
+            Some("fn price(basket: &Basket) -> Cents")
+        );
+        assert_eq!(
+            t.gives.as_deref(),
+            Some("fn total(basket: &Basket) -> Cents")
+        );
         assert_eq!(t.pattern.as_deref(), Some("src/old.rs:12-25"));
         // The brief quotes the block verbatim, so the keys reach the worker.
         assert!(t.block.contains("Uses: fn price"));
@@ -508,7 +516,10 @@ mod tests {
                 "# plan: p\n\n- [ ] t1 Twice over\n      Files: x\n      Verify: true\n      \
                  {key}: a\n      {key}: b\n"
             );
-            assert!(parse(&text, true).is_none(), "two {key}: lines should be refused");
+            assert!(
+                parse(&text, true).is_none(),
+                "two {key}: lines should be refused"
+            );
         }
     }
 

@@ -449,7 +449,10 @@ mod tests {
             suite_lock_key(Some(&unregistered), Path::new("/home/x/app")),
             "-home-x-app"
         );
-        assert_eq!(suite_lock_key(None, Path::new("/home/x/app")), "-home-x-app");
+        assert_eq!(
+            suite_lock_key(None, Path::new("/home/x/app")),
+            "-home-x-app"
+        );
     }
 
     #[test]
