@@ -252,6 +252,36 @@ pub enum ProjectCommand {
         #[command(subcommand)]
         command: ProjectSetCommand,
     },
+    /// Forget something `set` recorded, so the project is back on the
+    /// default: no reader, the workflow's model, the claude backend, the
+    /// detected verifier. `set` refuses an empty value, so this is the way
+    /// back to absent.
+    Unset { key: ProjectKey },
+}
+
+/// The keys `set` records and `unset` clears. `remote` is not one: it is the
+/// project's identity across machines, not a choice to fall back from.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "kebab-case")]
+pub enum ProjectKey {
+    Verify,
+    ReviewPaths,
+    Backend,
+    Model,
+    ReviewModel,
+}
+
+impl ProjectKey {
+    /// The key as project.toml spells it.
+    pub fn stored(self) -> &'static str {
+        match self {
+            ProjectKey::Verify => "verify",
+            ProjectKey::ReviewPaths => "review_paths",
+            ProjectKey::Backend => "backend",
+            ProjectKey::Model => "model",
+            ProjectKey::ReviewModel => "review_model",
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

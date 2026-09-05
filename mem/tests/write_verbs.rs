@@ -622,6 +622,42 @@ fn project_set_review_model_records_the_choice_and_project_current_reports_it() 
 }
 
 #[test]
+fn project_unset_takes_a_choice_off_and_leaves_the_others() {
+    let w = World::new("write-unset");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["project", "set", "model", "sonnet"])), 0);
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "review-model", "fable"])),
+        0
+    );
+
+    let out = mem(&w, &repo, &["project", "unset", "review-model"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("review-model for thing: cleared"),
+        "{}",
+        stdout(&out)
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("review_model").is_none(), "the reader is gone: {v}");
+    assert_eq!(v["model"], serde_json::json!("sonnet"), "the other key stays");
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert!(!text.contains("review_model"), "no key left behind: {text}");
+
+    // Clearing what is not set is not an error, and says so.
+    let out = mem(&w, &repo, &["project", "unset", "review-model", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(json(&out)["was_set"], serde_json::json!(false));
+
+    // The keys set records are the keys unset clears; remote is an identity.
+    assert_eq!(code(&mem(&w, &repo, &["project", "unset", "verify"])), 0);
+    assert_ne!(code(&mem(&w, &repo, &["project", "unset", "remote"])), 0);
+}
+
+#[test]
 fn project_add_registers_a_child_the_subdir_then_owns() {
     let w = World::new("write-child");
     let repo = w.repo("mono", Some("git@github.com:me/mono.git"));

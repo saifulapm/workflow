@@ -432,6 +432,40 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     Ok(exit::OK)
 }
 
+/// `mem project unset <key>` -- the way back to absent. `set` refuses an
+/// empty value, and until this the only way to take a reader, a model or a
+/// backend off a project was to edit project.toml by hand.
+pub fn project_unset(app: &App, key: &str) -> Result<i32> {
+    let identity = app.identity(Mode::Write)?;
+    let Some(id) = identity.id() else {
+        return Err(exit::usage(format!(
+            "{} — name one with --project",
+            unknown_project_note(&identity).unwrap_or_else(|| "no project here".to_string())
+        )));
+    };
+    let (path, had) = crate::project::unset_key(&app.store, id, key)?;
+    let shown = key.replace('_', "-");
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "id": id,
+                "name": identity.name(),
+                "unset": key,
+                "was_set": had,
+                "path": path.to_string_lossy(),
+            }))?
+        );
+    } else if !app.quiet {
+        println!(
+            "{shown} for {}: {}",
+            identity.name().unwrap_or(id),
+            if had { "cleared" } else { "was not set" }
+        );
+    }
+    Ok(exit::OK)
+}
+
 /// The one-line empty state a read verb prints when the working directory is
 /// not a project mem knows (spec §5: reads never register).
 pub fn unknown_project_note(identity: &Identity) -> Option<String> {

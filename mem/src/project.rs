@@ -496,6 +496,24 @@ pub fn set_key(store: &Store, project_id: &str, key: &str, value: &str) -> Resul
     Ok(path)
 }
 
+/// Drop a key `set_key` wrote. Answers with the path and whether the key was
+/// there to drop: clearing what was never set is not an error, and the caller
+/// says which it was.
+pub fn unset_key(store: &Store, project_id: &str, key: &str) -> Result<(PathBuf, bool)> {
+    let path = store.project_toml(project_id);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))
+        .map_err(|e| exit::store_error(format!("{e:#}")))?;
+    let mut doc: toml::Table = toml::from_str(&text)
+        .map_err(|e| exit::store_error(format!("{} is not valid toml: {e}", path.display())))?;
+    let had = doc.remove(key).is_some();
+    if had {
+        let out = toml::to_string(&doc).context("serializing project.toml")?;
+        write_atomic(&path, out.as_bytes())?;
+    }
+    Ok((path, had))
+}
+
 /// A choice this project declared with `mem project set <key>` -- the worker
 /// backend, the worker model.
 ///
