@@ -82,6 +82,19 @@ is "$RC" 0 'a dry run exits 0'
 is "$(printf '%s' "$OUT" | jq -r '.skillOverrides.route')" 'on' 'it prints what it would write'
 is "$(cat "$proj")" "$before" 'and writes nothing'
 
+## ------------------------------------------------- the help names them
+
+# Both long descriptions spell the list out by hand, so a skill added to
+# settings::SKILLS and nowhere else is one the help quietly stops naming.
+run workflow enable --help
+for s in $skills; do
+	like "$OUT" "$s" "enable --help names $s"
+done
+run workflow disable --help
+for s in $skills; do
+	like "$OUT" "$s" "disable --help names $s"
+done
+
 ## ------------------------------------- a machine with no gate says so
 
 rm -f "$user"

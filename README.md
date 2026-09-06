@@ -11,9 +11,9 @@ that carry it into an editor session.
   `enable`/`disable`, `doctor`, and the body of the git hook stubs.
 - `hub/` is a small web view over mem's question queue, served tailnet-only,
   so an open question can be answered from a phone.
-- `skills/` holds the session-facing instructions (route, plan, implement,
-  review, orchestrate, mem, unslop). `hooks/` holds the three git hook
-  stubs. Another runtime joins by reading the same skills and exporting
+- `skills/` holds the session-facing instructions (route, plan, roadmap,
+  implement, review, orchestrate, mem, unslop). `hooks/` holds the three git
+  hook stubs. Another runtime joins by reading the same skills and exporting
   `WORKFLOW_AGENT=1` in its sessions; that wiring is per-runtime and kept
   outside this repo.
 
@@ -54,7 +54,8 @@ the root project's verify.
 ## Which projects see the skills
 
 `workflow enable` and `workflow disable` write one key, `skillOverrides`,
-naming route, plan, implement, orchestrate, review, mem and unslop one by one.
+naming route, plan, roadmap, implement, orchestrate, review, mem and unslop one
+by one.
 `--global` writes the user's settings file; without it, `.claude/settings.json`
 at the repo's toplevel, which outranks the user's. So the switch runs either
 way round:

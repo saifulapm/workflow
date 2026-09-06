@@ -115,10 +115,10 @@ state change. --json is the shape a session that owns a run polls."
 
 Claude Code decides which skills a session sees from its settings files, and a
 project's file outranks the user's. So the skills this repo ships -- route,
-plan, implement, orchestrate, review, mem, unslop -- are turned off once in the
-user's file with `workflow disable --global`, and each project that wants them
-says so with this. Nothing else scopes a skill to a project: the frontmatter is
-global to the skill, and no environment variable is read for it.
+plan, roadmap, implement, orchestrate, review, mem, unslop -- are turned off
+once in the user's file with `workflow disable --global`, and each project that
+wants them says so with this. Nothing else scopes a skill to a project: the
+frontmatter is global to the skill, and no environment variable is read for it.
 
 Writes `.claude/settings.json` at the repo's toplevel, merging into whatever is
 already there."
@@ -135,11 +135,11 @@ already there."
     #[command(
         long_about = "Turn this workflow's skills off in a Claude Code settings file.
 
-`workflow disable --global` is the gate: it hides route, plan, implement,
-orchestrate, review, mem and unslop from every session on this machine, and
-`workflow enable` in a project takes them back for that project alone. Without
-`--global` it writes this project's file, which is how a project inside a
-machine that has no gate is kept clear of them."
+`workflow disable --global` is the gate: it hides route, plan, roadmap,
+implement, orchestrate, review, mem and unslop from every session on this
+machine, and `workflow enable` in a project takes them back for that project
+alone. Without `--global` it writes this project's file, which is how a project
+inside a machine that has no gate is kept clear of them."
     )]
     Disable {
         /// Write the user's settings file instead of this project's.

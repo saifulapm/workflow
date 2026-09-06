@@ -99,6 +99,16 @@ like "$orchestrate_skill" 'mem doctor' 'orchestrate lints the wiki in a batch re
 like "$orchestrate_skill" 'compact' 'and compacts the pages that have outgrown themselves'
 like "$(cat "$WF_ROOT/README.md")" 'mem wiki' 'the README puts the wiki among the reads'
 
+# The README spells the skill list out twice by hand -- what skills/ holds,
+# and what enable and disable write. A skill missing from either list is one a
+# reader has no way to learn is there.
+holds=$(grep -A1 'session-facing instructions' "$WF_ROOT/README.md")
+writes=$(grep -A1 'write one key' "$WF_ROOT/README.md")
+for s in route plan roadmap implement orchestrate review mem unslop; do
+	like "$holds" "$s" "the README counts $s among the skills it ships"
+	like "$writes" "$s" "and among the ones enable and disable write"
+done
+
 ## ------------------------------------------------------------ the adapters
 
 # Removed 2026-08-31: other runtimes wire themselves (read the skills, export
