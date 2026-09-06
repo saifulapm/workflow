@@ -650,49 +650,221 @@ fn self_record(app: &App) {
     }
 }
 
-/// `mem plan` — prints plan.md verbatim, or replaces, clears or ticks it.
-pub fn plan(
+/// The plan singletons: the plan of record, and the roadmap of milestones
+/// above it. One grammar and one set of verbs over two files, so the handling
+/// is written once and told which file it is acting on.
+#[derive(Clone, Copy)]
+struct Singleton {
+    /// What it is, in the sentence "a plan belongs to a project".
+    noun: &'static str,
+    /// What the file is called, for the messages that name it.
+    file: &'static str,
+    path: fn(&crate::store::Store, &str) -> std::path::PathBuf,
+}
+
+const PLAN: Singleton = Singleton {
+    noun: "plan",
+    file: "plan.md",
+    path: |store, id| store.plan_path(id),
+};
+
+const ROADMAP: Singleton = Singleton {
+    noun: "roadmap",
+    file: "roadmap.md",
+    path: |store, id| store.roadmap_path(id),
+};
+
+/// What `mem plan` was asked for. The verb reaches from the plan of record to
+/// the stored milestone plans and back, which is more than a row of positional
+/// flags reads well as.
+pub struct PlanArgs<'a> {
+    pub slug: Option<&'a str>,
+    pub set_file: Option<&'a std::path::Path>,
+    pub stdin: bool,
+    pub clear: bool,
+    pub tick: Option<&'a str>,
+    pub list: bool,
+    pub from: Option<&'a str>,
+}
+
+/// `mem plan` — the plan of record, the milestone plans stored beside it, and
+/// the copy that makes one of them the record.
+pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
+    if args.list {
+        return list_slug_files(
+            app,
+            |store, id| store.stored_plans(id),
+            "plans",
+            "no stored plans — write one with `mem plan <slug> --set-file <file>`",
+        );
+    }
+    if let Some(slug) = args.from {
+        return plan_from(app, slug);
+    }
+    let Some(slug) = args.slug else {
+        return match args.tick {
+            Some(task) => tick_singleton(app, PLAN, task),
+            None => singleton(app, PLAN, args.set_file, args.stdin, args.clear),
+        };
+    };
+    check_slug(slug, "plan")?;
+    if args.tick.is_some() {
+        return Err(exit::usage(
+            "a tick belongs to the plan of record — make this milestone's plan the \
+             record first with `mem plan --from <slug>`",
+        ));
+    }
+    stored_plan(app, slug, args.set_file, args.stdin, args.clear)
+}
+
+/// `mem roadmap` — the same four moves over roadmap.md.
+pub fn roadmap(
     app: &App,
     set_file: Option<&std::path::Path>,
     stdin: bool,
     clear: bool,
     tick: Option<&str>,
 ) -> Result<i32> {
-    if let Some(task) = tick {
-        return plan_tick(app, task);
+    match tick {
+        Some(slug) => tick_singleton(app, ROADMAP, slug),
+        None => singleton(app, ROADMAP, set_file, stdin, clear),
     }
+}
+
+/// Print, replace or clear one of the plan singletons.
+fn singleton(
+    app: &App,
+    which: Singleton,
+    set_file: Option<&std::path::Path>,
+    stdin: bool,
+    clear: bool,
+) -> Result<i32> {
     if !clear && set_file.is_none() && !stdin {
-        return print_singleton(app, |store, id| store.plan_path(id));
+        return print_singleton(app, which.path);
     }
-    let identity = app.identity(Mode::Write)?;
-    let Some(id) = identity.id() else {
-        return Err(exit::usage(
-            "a plan belongs to a project — run this in a checkout or pass --project",
-        ));
-    };
-    let path = app.store.plan_path(id);
+    let id = writable_project(app, which.noun)?;
+    let path = (which.path)(&app.store, &id);
     if clear {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {
-                self_record(app);
-                return Ok(exit::OK);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(exit::OK),
-            Err(e) => return Err(exit::store_error(format!("clearing the plan: {e}"))),
-        }
+        return clear_file(app, &path, which.noun);
     }
-    // As in `status`: the baseline is what the plan looked like before the
+    // As in `status`: the baseline is what the file looked like before the
     // caller's text arrived, however long that took.
     let seen = crate::atomic::read_mtime(&path);
-    let text = match set_file {
+    let text = set_text(set_file)?;
+    land(app, &path, &text, seen, which.file)
+}
+
+/// `mem plan <slug>` — one milestone's plan, filed under `plans/<slug>.md`.
+fn stored_plan(
+    app: &App,
+    slug: &str,
+    set_file: Option<&std::path::Path>,
+    stdin: bool,
+    clear: bool,
+) -> Result<i32> {
+    if !clear && set_file.is_none() && !stdin {
+        return print_slug_file(
+            app,
+            slug,
+            |store, id, slug| store.plan_slot(id, slug),
+            format!("no stored plan '{slug}' — `mem plan --list` lists them"),
+        );
+    }
+    let id = writable_project(app, "plan")?;
+    let path = app.store.plan_slot(&id, slug);
+    if clear {
+        return clear_file(app, &path, "stored plan");
+    }
+    let seen = crate::atomic::read_mtime(&path);
+    let text = set_text(set_file)?;
+    // The header is the file name. A plan filed under a slug that is not its
+    // own is what would later send a run at the wrong milestone.
+    let first = text.lines().next().unwrap_or_default();
+    if plan_header_slug(first) != Some(slug) {
+        return Err(exit::usage(format!(
+            "a stored plan's first line must be `# plan: {slug}`, and this one is `{}`",
+            crate::search::truncate_bytes(first.trim(), 60)
+        )));
+    }
+    land(app, &path, &text, seen, &format!("{slug}.md"))
+}
+
+/// The slug of a `# plan: <slug>` header line, read as the plan parser reads
+/// it: one hash, the word, and the slug alone to the end of the line.
+fn plan_header_slug(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix('#')?.trim_start();
+    let slug = rest.strip_prefix("plan:")?.trim();
+    (!slug.is_empty()).then_some(slug)
+}
+
+/// `mem plan --from <slug>` — a stored plan becomes the plan of record. The
+/// refusal is the point: an unchecked task means a run still in flight, and
+/// overwriting plan.md under it loses what the run is ticking.
+fn plan_from(app: &App, slug: &str) -> Result<i32> {
+    check_slug(slug, "plan")?;
+    let id = writable_project(app, "plan")?;
+    let text = std::fs::read_to_string(app.store.plan_slot(&id, slug)).map_err(|_| {
+        exit::not_found(format!(
+            "no stored plan '{slug}' — `mem plan --list` lists them"
+        ))
+    })?;
+    let path = app.store.plan_path(&id);
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    if let Some(task) = crate::digest::first_open_task(&current) {
+        return Err(exit::usage(format!(
+            "the plan of record still has an unchecked task ({}) — finish it, or \
+             `mem plan --clear`",
+            crate::search::truncate_bytes(task, 60)
+        )));
+    }
+    let seen = crate::atomic::read_mtime(&path);
+    land(app, &path, &text, seen, PLAN.file)
+}
+
+/// The project a plan write belongs to, or the usage error that says so.
+fn writable_project(app: &App, noun: &str) -> Result<String> {
+    let identity = app.identity(Mode::Write)?;
+    identity.id().map(str::to_string).ok_or_else(|| {
+        exit::usage(format!(
+            "a {noun} belongs to a project — run this in a checkout or pass --project"
+        ))
+    })
+}
+
+/// Clearing what is not there is not an error: `--clear` states the end it
+/// wants, not a transition it expects to make.
+fn clear_file(app: &App, path: &std::path::Path, noun: &str) -> Result<i32> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            self_record(app);
+            Ok(exit::OK)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(exit::OK),
+        Err(e) => Err(exit::store_error(format!("clearing the {noun}: {e}"))),
+    }
+}
+
+fn set_text(set_file: Option<&std::path::Path>) -> Result<String> {
+    match set_file {
         Some(file) => std::fs::read_to_string(file)
-            .map_err(|e| exit::not_found(format!("{}: {e}", file.display())))?,
-        None => crate::write::read_stdin()?,
-    };
-    match crate::write::write_singleton_since(&path, &text, false, seen)? {
+            .map_err(|e| exit::not_found(format!("{}: {e}", file.display()))),
+        None => crate::write::read_stdin(),
+    }
+}
+
+/// The CAS write every plan file lands through, named so the conflict says
+/// which file changed under the caller.
+fn land(
+    app: &App,
+    path: &std::path::Path,
+    text: &str,
+    seen: Option<std::time::SystemTime>,
+    file: &str,
+) -> Result<i32> {
+    match crate::write::write_singleton_since(path, text, false, seen)? {
         crate::write::SingletonWrite::Conflict => Err(exit::coded(
             exit::CAS_CONFLICT,
-            "plan.md changed since it was read — re-read it and try again",
+            format!("{file} changed since it was read — re-read it and try again"),
         )),
         _ => {
             self_record(app);
@@ -701,15 +873,19 @@ pub fn plan(
     }
 }
 
-/// `mem plan --tick <task-id>` — the CAS-safe checkbox tick (spec §7). The
-/// project is resolved in read mode: a tick can only apply to a plan that
-/// already exists, so there is never a project to invent here.
-fn plan_tick(app: &App, task: &str) -> Result<i32> {
+/// `mem plan --tick <task-id>` and `mem roadmap --tick <slug>` — the CAS-safe
+/// checkbox tick (spec §7). The project is resolved in read mode: a tick can
+/// only apply to a file that already exists, so there is never a project to
+/// invent here.
+fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
     let Some(id) = identity.id() else {
-        return Err(exit::not_found("no plan here — this is not a mem project"));
+        return Err(exit::not_found(format!(
+            "no {} here — this is not a mem project",
+            which.noun
+        )));
     };
-    let path = app.store.plan_path(id);
+    let path = (which.path)(&app.store, id);
     let outcome = crate::write::tick_task(&path, task)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
     if flipped {
@@ -743,14 +919,8 @@ fn plan_tick(app: &App, task: &str) -> Result<i32> {
 /// resurrects deletions, so an obsolete page becomes a one-line stub pointing
 /// at its replacement.
 pub fn wiki(app: &App, slug: Option<&str>, stdin: bool, note: Option<&str>) -> Result<i32> {
-    if let Some(slug) = slug
-        && !crate::store::is_valid_slug(slug)
-    {
-        return Err(exit::usage(format!(
-            "'{slug}' is not a page slug — lower case letters, digits and dashes, \
-             starting with a letter or a digit, at most {} characters",
-            crate::store::SLUG_MAX
-        )));
+    if let Some(slug) = slug {
+        check_slug(slug, "page")?;
     }
     if stdin || note.is_some() {
         let Some(slug) = slug else {
@@ -767,13 +937,53 @@ pub fn wiki(app: &App, slug: Option<&str>, stdin: bool, note: Option<&str>) -> R
 }
 
 fn wiki_list(app: &App) -> Result<i32> {
+    list_slug_files(
+        app,
+        |store, id| store.wiki_pages(id),
+        "pages",
+        "no pages yet — write one with `mem wiki <slug> --stdin --note \"why\"`",
+    )
+}
+
+/// A page prints byte for byte, like plan.md and status.md: hub renders it and
+/// a session reads it, and neither wants mem's opinion about markdown.
+fn wiki_print(app: &App, slug: &str) -> Result<i32> {
+    print_slug_file(
+        app,
+        slug,
+        |store, id, slug| store.wiki_page(id, slug),
+        format!("no page '{slug}' — `mem wiki` lists them"),
+    )
+}
+
+/// A slug is a file name, so this is what keeps `..`, dot-temps and bisync
+/// conflict losers out of the directories a slug addresses.
+fn check_slug(slug: &str, what: &str) -> Result<()> {
+    if crate::store::is_valid_slug(slug) {
+        return Ok(());
+    }
+    Err(exit::usage(format!(
+        "'{slug}' is not a {what} slug — lower case letters, digits and dashes, \
+         starting with a letter or a digit, at most {} characters",
+        crate::store::SLUG_MAX
+    )))
+}
+
+/// The listing both slug-addressed readers print: one line per file, and the
+/// same row in JSON under the caller's key.
+fn list_slug_files(
+    app: &App,
+    which: fn(&crate::store::Store, &str) -> Vec<crate::store::Page>,
+    key: &str,
+    empty: &str,
+) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
-    let pages = match identity.id() {
-        Some(id) => app.store.wiki_pages(id),
+    let files = match identity.id() {
+        Some(id) => which(&app.store, id),
         None => Vec::new(),
     };
     if app.json {
-        let rows: Vec<serde_json::Value> = pages
+        let rows: Vec<serde_json::Value> = files
             .iter()
             .map(|p| {
                 json!({
@@ -785,9 +995,9 @@ fn wiki_list(app: &App) -> Result<i32> {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string(&json!({ "pages": rows }))?);
+        println!("{}", serde_json::to_string(&json!({ key: rows }))?);
     } else {
-        for p in &pages {
+        for p in &files {
             println!(
                 "{:<24} {:>6}  {}  {}",
                 p.slug,
@@ -797,14 +1007,11 @@ fn wiki_list(app: &App) -> Result<i32> {
             );
         }
     }
-    if pages.is_empty() {
+    if files.is_empty() {
         if !app.quiet && !app.json {
             eprintln!(
                 "mem: {}",
-                unknown_project_note(&identity).unwrap_or_else(|| {
-                    "no pages yet — write one with `mem wiki <slug> --stdin --note \"why\"`"
-                        .to_string()
-                })
+                unknown_project_note(&identity).unwrap_or_else(|| empty.to_string())
             );
         }
         return Ok(exit::NOT_FOUND);
@@ -812,20 +1019,23 @@ fn wiki_list(app: &App) -> Result<i32> {
     Ok(exit::OK)
 }
 
-/// A page prints byte for byte, like plan.md and status.md: hub renders it and
-/// a session reads it, and neither wants mem's opinion about markdown.
-fn wiki_print(app: &App, slug: &str) -> Result<i32> {
+/// One slug-addressed file, byte for byte, with the same JSON around it.
+fn print_slug_file(
+    app: &App,
+    slug: &str,
+    which: fn(&crate::store::Store, &str, &str) -> std::path::PathBuf,
+    missing: String,
+) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
-    let bytes = identity
+    let found = identity
         .id()
-        .map(|id| app.store.wiki_page(id, slug))
+        .map(|id| which(&app.store, id, slug))
         .and_then(|path| std::fs::read(&path).ok().map(|bytes| (path, bytes)));
-    let Some((path, bytes)) = bytes else {
+    let Some((path, bytes)) = found else {
         if !app.quiet && !app.json {
             eprintln!(
                 "mem: {}",
-                unknown_project_note(&identity)
-                    .unwrap_or_else(|| format!("no page '{slug}' — `mem wiki` lists them"))
+                unknown_project_note(&identity).unwrap_or(missing)
             );
         }
         return Ok(exit::NOT_FOUND);

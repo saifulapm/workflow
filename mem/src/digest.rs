@@ -48,6 +48,9 @@ pub struct Sources {
     pub staleness: Option<String>,
     pub handoff: Option<Row>,
     pub plan: Option<String>,
+    /// The milestones above the plan of record, when the project is planned
+    /// whole rather than one plan at a time.
+    pub roadmap: Option<String>,
     pub questions: Vec<Row>,
     /// The project's wiki pages. Only the count reaches the digest: a listing
     /// belongs to `mem wiki`.
@@ -70,6 +73,9 @@ impl Sources {
         let plan = project_id
             .map(|id| store.plan_path(id))
             .and_then(|p| std::fs::read_to_string(p).ok());
+        let roadmap = project_id
+            .map(|id| store.roadmap_path(id))
+            .and_then(|p| std::fs::read_to_string(p).ok());
         let status = project_id
             .map(|id| store.status_path(id))
             .and_then(|p| std::fs::read_to_string(p).ok());
@@ -85,6 +91,7 @@ impl Sources {
             staleness,
             handoff: index.recent("handoff", project_id, 1)?.into_iter().next(),
             plan,
+            roadmap,
             questions: index.pending_questions(project_id)?,
             pages,
             wiki_index,
@@ -98,6 +105,7 @@ impl Sources {
     pub fn is_empty(&self) -> bool {
         self.handoff.is_none()
             && self.plan.is_none()
+            && self.roadmap.is_none()
             && self.questions.is_empty()
             && self.pages.is_empty()
             && self.status.is_none()
@@ -113,13 +121,19 @@ pub fn plan_head(plan: &str) -> Vec<String> {
     if let Some(heading) = plan.lines().find(|l| l.trim_start().starts_with('#')) {
         out.push(heading.trim().to_string());
     }
-    if let Some(task) = plan.lines().find(|l| {
-        let t = l.trim_start();
-        t.starts_with("- [ ]") || t.starts_with("* [ ]")
-    }) {
-        out.push(task.trim().to_string());
+    if let Some(task) = first_open_task(plan) {
+        out.push(task.to_string());
     }
     out
+}
+
+/// The first unchecked task line of a plan, trimmed. An open box is what says
+/// the plan still has work in it, whether the reader is the digest or the
+/// `--from` that would otherwise overwrite it.
+pub fn first_open_task(plan: &str) -> Option<&str> {
+    plan.lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("- [ ]") || line.starts_with("* [ ]"))
 }
 
 /// The opening lines of the index page, which by convention are a heading and
@@ -179,6 +193,13 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
         let body = first_sentence(handoff, store);
         if !body.is_empty() {
             mandatory.push(format!("  {body}"));
+        }
+    }
+    // The roadmap sits above the plan of record, and reads that way: which
+    // milestone is next, then what the plan in hand is doing about it.
+    if let Some(roadmap) = &sources.roadmap {
+        for line in plan_head(roadmap) {
+            mandatory.push(format!("roadmap: {line}"));
         }
     }
     if let Some(plan) = &sources.plan {

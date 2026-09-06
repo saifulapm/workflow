@@ -54,6 +54,31 @@ impl Store {
         self.project_dir(project_id).join("plan.md")
     }
 
+    /// The plan of plans: one line per milestone, each milestone a plan filed
+    /// under `plans/`. A singleton beside plan.md, in the same grammar.
+    pub fn roadmap_path(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("roadmap.md")
+    }
+
+    pub fn plans_dir(&self, project_id: &str) -> PathBuf {
+        self.project_dir(project_id).join("plans")
+    }
+
+    /// Where a milestone's plan is filed. The slug is joined verbatim, so every
+    /// caller checks it with `is_valid_slug` first.
+    pub fn plan_slot(&self, project_id: &str, slug: &str) -> PathBuf {
+        self.plans_dir(project_id).join(format!("{slug}.md"))
+    }
+
+    /// One project's stored plans, by slug. As with the wiki, anything in the
+    /// directory that is not a `<slug>.md` file is skipped.
+    pub fn stored_plans(&self, project_id: &str) -> Vec<Page> {
+        read_dir_sorted(&self.plans_dir(project_id))
+            .iter()
+            .filter_map(|path| read_page(path))
+            .collect()
+    }
+
     pub fn status_path(&self, project_id: &str) -> PathBuf {
         self.project_dir(project_id).join("status.md")
     }

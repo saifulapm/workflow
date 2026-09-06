@@ -211,12 +211,33 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             note.as_deref(),
         ),
         cli::Command::Plan {
+            slug,
+            set_file,
+            stdin,
+            clear,
+            tick,
+            list,
+            from,
+            session_id,
+        } => verbs::plan(
+            &with_session(app, session_id),
+            verbs::PlanArgs {
+                slug: slug.as_deref(),
+                set_file: set_file.as_deref(),
+                stdin: *stdin,
+                clear: *clear,
+                tick: tick.as_deref(),
+                list: *list,
+                from: from.as_deref(),
+            },
+        ),
+        cli::Command::Roadmap {
             set_file,
             stdin,
             clear,
             tick,
             session_id,
-        } => verbs::plan(
+        } => verbs::roadmap(
             &with_session(app, session_id),
             set_file.as_deref(),
             *stdin,

@@ -105,10 +105,32 @@ orchestrator, which answers it from the plan and the code, and the run
 dispatches the task again with the answer in its brief. What reaches you is
 only what the orchestrator could not settle, asked fresh in its own words.
 
+## A project planned whole
+
+Bigger than one plan: cut a roadmap of milestones once, with a full plan for
+each, and pick them up one at a time.
+
+    mem roadmap --set-file roadmap.md       # the milestones, in the plan grammar
+    mem plan m1-auth --set-file m1-auth.md  # one milestone's plan, filed by slug
+    mem plan --list                         # what is stored and waiting
+
+    mem roadmap                             # which milestone is next
+    mem plan --from m1-auth                 # make it the plan of record
+
+A stored plan's first line has to be `# plan: <slug>`, so a plan is always
+filed under the name the roadmap calls it. `--from` is refused while the plan
+of record still holds an unchecked task, because that plan is a run in
+flight; `mem plan --clear` is the way to abandon it. Ticks are progress on
+both files — `mem plan --tick <task>` and `mem roadmap --tick <slug>` — and
+`mem context` opens every session with the roadmap heading and the milestone
+that is next.
+
 ## Reading a project's state
 
     mem wiki                     # the project's pages, one line each
+    mem roadmap                  # the milestones, [x] ticks are progress
     mem plan                     # the active plan, [x] ticks are progress
+    mem plan --list              # the milestone plans waiting their turn
     mem log                      # what happened, newest first
     mem log --kind ruling        # decisions taken instead of asking you
     mem search friction --type friction   # exactly what is queued next

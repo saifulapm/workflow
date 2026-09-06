@@ -215,8 +215,11 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
-    /// Print plan.md verbatim, or replace or clear it.
+    /// Print plan.md verbatim, or replace or clear it. With a slug, the stored
+    /// plan of that milestone instead.
     Plan {
+        /// A milestone's stored plan. Without one, the plan of record.
+        slug: Option<String>,
         #[arg(long)]
         set_file: Option<std::path::PathBuf>,
         #[arg(long)]
@@ -225,6 +228,27 @@ pub enum Command {
         clear: bool,
         /// Check off one task by its plan id, in place.
         #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["set_file", "stdin", "clear"])]
+        tick: Option<String>,
+        /// List the stored plans: slug, bytes, date and title.
+        #[arg(long, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick"])]
+        list: bool,
+        /// Make a stored plan the plan of record. Refused while the current one
+        /// still holds an unchecked task.
+        #[arg(long, value_name = "SLUG", conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick", "list"])]
+        from: Option<String>,
+        #[arg(long)]
+        session_id: Option<String>,
+    },
+    /// Print roadmap.md verbatim, or replace, clear or tick it.
+    Roadmap {
+        #[arg(long)]
+        set_file: Option<std::path::PathBuf>,
+        #[arg(long)]
+        stdin: bool,
+        #[arg(long)]
+        clear: bool,
+        /// Check off one milestone by its slug, in place.
+        #[arg(long, value_name = "SLUG", conflicts_with_all = ["set_file", "stdin", "clear"])]
         tick: Option<String>,
         #[arg(long)]
         session_id: Option<String>,
