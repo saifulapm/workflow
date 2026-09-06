@@ -11,7 +11,7 @@ use std::process::Command;
 use crate::backend::{ClaudeBackend, Dispatch, Handle, WorkerBackend};
 use crate::backend_amx::AmxBackend;
 use crate::gitcmd::Git;
-use crate::plan::{Plan, Task};
+use crate::plan::{Plan, PlanKind, Task};
 use crate::reviewer::{self, Verdict};
 use crate::{brief, exit, lint, memcli, ownership, paths, plan, repo, sys, warn};
 
@@ -780,15 +780,10 @@ impl Run {
     /// The reader (plan gate-reviewer). Verify proves what a test can reach;
     /// a model in a clean context reads the diff against the plan of record
     /// and the task's Done line and says ship or fix. Nobody named means no
-    /// reading. `fix` leaves the findings in `<task>.review`, which the
-    /// failure note names and the redispatched worker's brief repeats.
-    ///
-    /// The reading is worth a session only when the reader is not who wrote
-    /// the code: a model reads its own work with its own blind spots and
-    /// agrees with itself. So a reader that names the task's own model reads
-    /// nothing. The comparison is made here, per task, which is where a task
-    /// that carries its own model will be compared to that one rather than to
-    /// the run's default.
+    /// reading, which by the time a task gets here means a run that was told
+    /// so on the way in (see [`refused`]). `fix` leaves the findings in
+    /// `<task>.review`, which the failure note names and the redispatched
+    /// worker's brief repeats.
     ///
     /// The reader is dispatched like a worker, through the project's backend,
     /// so it is a session Saiful can watch and attach to -- never print mode.
@@ -805,13 +800,6 @@ impl Run {
         let Some(model) = self.review_model.as_deref() else {
             return false;
         };
-        if same_model(model, &self.model) {
-            warn(format!(
-                "task {task}: {} wrote it, so {model} does not read it",
-                self.model.trim()
-            ));
-            return false;
-        }
         let Some(t) = self.task_now(task) else {
             return false;
         };
@@ -1583,11 +1571,46 @@ impl Run {
     }
 }
 
+/// Every reason to refuse a run before it has written anything, as the lines
+/// to say; `None` means go. Said here rather than at the gate because all
+/// three are settled before the first worker starts, and a run that dispatches
+/// and only then discovers nobody reads it has spent the sessions already.
+///
+/// `asked` is whether `WORKFLOW_REVIEW_MODEL` is set at all, empty or not.
+/// Empty is how a run says it wants no reading and means it; absent is a
+/// project that has not decided, and merges nobody reads are not what the
+/// gate is for.
+fn refused(plan: &Plan, model: &str, reader: Option<&str>, asked: bool) -> Option<String> {
+    if plan.kind == PlanKind::Roadmap {
+        return Some(format!(
+            "run: '{}' is a roadmap, and its items are milestones rather than work a worker can take.\n\
+             make one of them the plan of record with `mem plan --from <slug>`, then run again.",
+            plan.plan_id
+        ));
+    }
+    let unread = "or run this one unread with WORKFLOW_REVIEW_MODEL= in the environment.";
+    match reader {
+        // A model reads its own work with its own blind spots and agrees with
+        // itself, so naming the workers' own model is naming nobody -- under
+        // any spelling of it.
+        Some(reader) if same_model(reader, model) => Some(format!(
+            "run: the workers write with {}, and {reader} is the same model, so it would be reading its own work.\n\
+             name another reader with `mem project set review-model <model>`, {unread}",
+            model.trim()
+        )),
+        None if !asked => Some(format!(
+            "run: nobody is named to read what this run merges.\n\
+             name a reader with `mem project set review-model <model>`, {unread}"
+        )),
+        _ => None,
+    }
+}
+
 /// Are these two names one model? `opus`, `claude-opus-5` and `opus[1m]`
 /// all start the same model, so when both names carry a family word that
 /// word settles it; names outside the families are compared as spelled.
-/// The gate asks this to keep a model from reading its own work under a
-/// second spelling.
+/// The refusal above asks this to keep a model from reading its own work
+/// under a second spelling.
 fn same_model(a: &str, b: &str) -> bool {
     const FAMILIES: [&str; 4] = ["fable", "opus", "sonnet", "haiku"];
     let (a, b) = (a.trim().to_ascii_lowercase(), b.trim().to_ascii_lowercase());
@@ -1803,14 +1826,6 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         return exit::USAGE;
     };
 
-    if parsed.tasks.len() <= 1 {
-        warn(format!(
-            "plan '{}' has one task: do it here, in this session -- orchestrating one worker costs more than it saves.",
-            parsed.plan_id
-        ));
-        return exit::OK;
-    }
-
     let Some(base) = git.head() else {
         return exit::USAGE;
     };
@@ -1818,6 +1833,28 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     // Resolved, not as typed: the ticks go back to this file for the rest of
     // the run, and a relative path is read against whatever the cwd is then.
     run.plan_file = plan_file.map(paths::realpath_m);
+
+    // Before the lock, the worktrees and the first dispatch: nothing here has
+    // written anything yet, so a refusal costs a message and no cleanup.
+    if let Some(why) = refused(
+        &run.plan,
+        &run.model,
+        run.review_model.as_deref(),
+        std::env::var("WORKFLOW_REVIEW_MODEL").is_ok(),
+    ) {
+        for line in why.lines() {
+            warn(line);
+        }
+        return exit::USAGE;
+    }
+
+    if run.plan.tasks.len() <= 1 {
+        warn(format!(
+            "plan '{}' has one task: do it here, in this session -- orchestrating one worker costs more than it saves.",
+            run.plan.plan_id
+        ));
+        return exit::OK;
+    }
 
     // Held for the whole run, taken before setup writes a single worktree:
     // two orchestrators sharing this run dir would dispatch the same tasks
@@ -2408,6 +2445,50 @@ mod tests {
         // A name outside the families is compared as spelled.
         assert!(same_model("my-model", "my-model"));
         assert!(!same_model("my-model", "opus"));
+    }
+
+    fn doc(kind: PlanKind) -> Plan {
+        Plan {
+            plan_id: "amx-v2".into(),
+            kind,
+            ..Plan::default()
+        }
+    }
+
+    #[test]
+    fn a_roadmap_is_refused_with_the_verb_that_turns_one_into_a_plan() {
+        let why = refused(&doc(PlanKind::Roadmap), "opus", Some("fable"), true)
+            .expect("a roadmap is not work a worker can take");
+        assert!(why.contains("'amx-v2' is a roadmap"), "{why}");
+        assert!(why.contains("mem plan --from <slug>"), "{why}");
+    }
+
+    #[test]
+    fn a_run_nobody_reads_is_refused_unless_it_says_so_on_purpose() {
+        // Nobody named and nobody asked: the project has not decided.
+        let why =
+            refused(&doc(PlanKind::Plan), "opus", None, false).expect("an unread run is refused");
+        assert!(why.contains("nobody is named to read"), "{why}");
+        assert!(why.contains("mem project set review-model"), "{why}");
+        assert!(why.contains("WORKFLOW_REVIEW_MODEL="), "{why}");
+        // The empty variable is the way to mean it.
+        assert_eq!(refused(&doc(PlanKind::Plan), "opus", None, true), None);
+    }
+
+    #[test]
+    fn a_reader_that_is_the_writer_is_refused_under_either_spelling() {
+        let why = refused(&doc(PlanKind::Plan), "claude-opus-5", Some("opus"), true)
+            .expect("a model reading its own work is no reading");
+        assert!(
+            why.contains("the workers write with claude-opus-5"),
+            "{why}"
+        );
+        assert!(why.contains("opus is the same model"), "{why}");
+        // A reader the workers do not share is the whole point of the gate.
+        assert_eq!(
+            refused(&doc(PlanKind::Plan), "sonnet", Some("fable"), false),
+            None
+        );
     }
 
     #[test]

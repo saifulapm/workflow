@@ -8,6 +8,10 @@
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
+# lib.sh runs every other test unread; naming a reader is what this one is
+# about, so the run reads the project key again.
+unset WORKFLOW_REVIEW_MODEL
+
 export WF_TMP="$T_TMP"
 
 # The fake worker. t1 writes a draft on its first attempt and, dispatched
@@ -120,14 +124,20 @@ plan() {
 	EOF
 }
 
-## ------------------------------------------- nobody named: nobody reads
+## ---------------------------------------- nobody named: the run is refused
 
+# The gate is the reason the workflow merges anything unattended, so a project
+# that has named nobody is asked to decide before a worker is started, not
+# after the sessions are spent.
 plan quiet ''
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/quiet.md"
-is "$RC" 0 'with no review-model and no variable the run merges as before'
-is "$(cat "$XDG_STATE_HOME/workflow/runs/app/quiet/t1.state")" merged 'the draft merges unread'
+is "$RC" 2 'with no review-model and no variable the run is refused'
+like "$OUT" 'nobody is named to read what this run merges' 'saying what is missing'
+like "$OUT" 'mem project set review-model <model>' 'naming the remedy'
+like "$OUT" 'WORKFLOW_REVIEW_MODEL=' 'and the way to run one unread on purpose'
 [ -f "$WF_TMP/reviews.log" ] && notok 'and the reviewer was never called' "$(cat "$WF_TMP/reviews.log")" || ok 'and the reviewer was never called'
-unlike "$OUT" 'reading the diff' 'the run never said anyone was reading'
+[ -d "$XDG_STATE_HOME/workflow/worktrees/app/quiet" ] && notok 'and no worker was dispatched' 'the run set up worktrees' || ok 'and no worker was dispatched'
+is "$(git worktree list | grep -c .)" 1 'nor any worktree in the checkout'
 
 ## ------------------------------------------------ the project names one
 
@@ -233,16 +243,18 @@ like "$(cat "$WF_TMP/reviews.log")" '^opus side ' 'every task of the run'
 
 ## ------------------------------------- the reader is the one who wrote it
 
-# A model reading its own work agrees with itself, so naming the workers'
-# own model is the same as naming nobody -- said out loud, never silently.
+# A model reading its own work agrees with itself, so naming the workers' own
+# model is the same as naming nobody -- and a run nobody reads is refused
+# before a worker is started, never merged quietly unread.
 plan mirror ''
 : >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=sonnet WORKFLOW_REVIEW_MODEL=sonnet \
 	workflow run --plan-file "$T_TMP/mirror.md"
-is "$RC" 0 'a reader that names the workers own model reads nothing'
-is "$(cat "$XDG_STATE_HOME/workflow/runs/app/mirror/t1.state")" merged 'and the draft merges'
+is "$RC" 2 'a reader that names the workers own model is refused'
+like "$OUT" 'the workers write with sonnet, and sonnet is the same model' 'the run says why'
+like "$OUT" 'name another reader with `mem project set review-model <model>`' 'and what to do about it'
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
-like "$OUT" 'task t1: sonnet wrote it, so sonnet does not read it' 'the run says why it skipped'
+[ -e "$XDG_STATE_HOME/workflow/runs/app/mirror/t1.state" ] && notok 'and no worker was dispatched' 'a task has a state' || ok 'and no worker was dispatched'
 
 # One model under two spellings. The alias the CLI takes and the full id
 # start the same model, so a reader named by one for workers running under
@@ -251,9 +263,9 @@ plan alias ''
 : >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=claude-opus-5 WORKFLOW_REVIEW_MODEL=opus \
 	workflow run --plan-file "$T_TMP/alias.md"
-is "$RC" 0 'a reader named by alias for the model the workers run on by full id reads nothing'
+is "$RC" 2 'a reader named by alias for the model the workers run on by full id is refused too'
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
-like "$OUT" 'task t1: claude-opus-5 wrote it, so opus does not read it' 'and the run names both spellings'
+like "$OUT" 'the workers write with claude-opus-5, and opus is the same model' 'and the run names both spellings'
 
 # The workers' default is a model like any other. A project that never set
 # `model` still runs its workers on opus, so naming opus as the reader there
@@ -263,9 +275,9 @@ like "$OUT" 'task t1: claude-opus-5 wrote it, so opus does not read it' 'and the
 plan default ''
 : >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=opus workflow run --plan-file "$T_TMP/default.md"
-is "$RC" 0 'the reader that names the default the workers fell back to reads nothing'
+is "$RC" 2 'a reader that names the default the workers fell back to is refused'
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
-like "$OUT" 'task t1: opus wrote it, so opus does not read it' 'and the run says so by name'
+like "$OUT" 'the workers write with opus, and opus is the same model' 'and the run says so by name'
 
 # The project key and the run's model meet the same way.
 "$MEM_BIN" project set model fable >/dev/null
@@ -273,7 +285,7 @@ like "$OUT" 'task t1: opus wrote it, so opus does not read it' 'and the run says
 plan keys ''
 : >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/keys.md"
-is "$RC" 0 'the two project keys naming one model turn the reading off'
+is "$RC" 2 'the two project keys naming one model are refused as well'
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'with nobody called'
 
 # And a cheaper worker under a frontier reader still gets read.
