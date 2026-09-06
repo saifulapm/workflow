@@ -134,8 +134,12 @@ t_init() {
 	# WORKFLOW_MODEL goes too: a session running under the workflow has it set
 	# to whatever model it was dispatched on, and a test about who reads whose
 	# work would then be judging that model instead of the one it named.
+	# WORKFLOW_TASK and CARGO_TARGET_DIR go the same way: a session running
+	# under the workflow has both set for its own task, and a sandbox that
+	# inherited them would see a task nobody named and build into a directory
+	# nobody meant for it.
 	unset WORKFLOW_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH WORKFLOW_SUITE_LOCK_HELD
-	unset WORKFLOW_MODEL
+	unset WORKFLOW_MODEL WORKFLOW_TASK CARGO_TARGET_DIR
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
 
 	HOOKS="$WF_ROOT/hooks"

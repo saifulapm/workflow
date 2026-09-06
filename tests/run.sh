@@ -14,11 +14,18 @@ root=$PWD
 pattern=${1:-}
 
 # Built every time, not only when it is missing: a stale binary next to changed
-# sources passes tests that the code it stands for would fail.
+# sources passes tests that the code it stands for would fail. CARGO_TARGET_DIR
+# is pinned here rather than left to whatever the caller's shell has: a session
+# running under the workflow already has one set for its own task, and that
+# value would otherwise carry the binary off to a path this suite never checks.
 mem_bin=${MEM_BIN:-$root/mem/target/release/mem}
 if [ -z "${MEM_BIN:-}" ] || [ ! -x "$mem_bin" ]; then
 	printf 'building mem (tests need %s)\n' "$mem_bin"
-	(cd "$root/mem" && cargo build --release) || exit 1
+	(cd "$root/mem" && CARGO_TARGET_DIR="$root/mem/target" cargo build --release) || exit 1
+	if [ ! -x "$mem_bin" ]; then
+		printf 'mem build did not produce %s\n' "$mem_bin" >&2
+		exit 1
+	fi
 fi
 export MEM_BIN=$mem_bin
 
@@ -28,7 +35,11 @@ wf_bin=${WORKFLOW_BIN:-$root/workflow/target/release/workflow}
 case "$wf_bin" in
 */workflow/target/release/workflow)
 	printf 'building workflow (tests need %s)\n' "$wf_bin"
-	(cd "$root/workflow" && cargo build --release) || exit 1
+	(cd "$root/workflow" && CARGO_TARGET_DIR="$root/workflow/target" cargo build --release) || exit 1
+	if [ ! -x "$wf_bin" ]; then
+		printf 'workflow build did not produce %s\n' "$wf_bin" >&2
+		exit 1
+	fi
 	;;
 esac
 export WORKFLOW_BIN=$wf_bin
