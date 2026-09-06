@@ -6,7 +6,7 @@ t_init
 
 ## ------------------------------------------------------------- the skills
 
-for s in route plan implement review orchestrate; do
+for s in route plan implement review orchestrate roadmap; do
 	f="$WF_ROOT/skills/$s/SKILL.md"
 	truthy "$([ -f "$f" ] && echo 0 || echo 1)" "skills/$s/SKILL.md exists"
 	like "$(head -1 "$f")" '^---$' "skills/$s starts with frontmatter"
@@ -14,11 +14,13 @@ for s in route plan implement review orchestrate; do
 	like "$(sed -n '2,4p' "$f")" 'description: Use ' "skills/$s describes when to use it"
 done
 
-# Line ceilings from the spec: route 50, plan 100, review 80, orchestrate 100.
+# Line ceilings from the spec: route 50, plan 100, review 80, orchestrate 100,
+# roadmap 100.
 is "$(($(wc -l <"$WF_ROOT/skills/route/SKILL.md") <= 50))" 1 'route is within 50 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/plan/SKILL.md") <= 100))" 1 'plan is within 100 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/review/SKILL.md") <= 80))" 1 'review is within 80 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/orchestrate/SKILL.md") <= 100))" 1 'orchestrate is within 100 lines'
+is "$(($(wc -l <"$WF_ROOT/skills/roadmap/SKILL.md") <= 100))" 1 'roadmap is within 100 lines'
 
 # The byte budgets, checked the way the machine checks them.
 run workflow doctor
@@ -49,6 +51,23 @@ like "$orchestrate_skill" 'git branch --show-current' \
 	'orchestrate checks which branch the checkout is on before merging'
 like "$orchestrate_skill" 'Leave the checkout on main' \
 	'and puts it back on main when the run ends'
+
+# A roadmap is cut in one sitting and executed over many sessions, so the
+# skill has to carry both halves: the verbs that store and check it, and what
+# a session picking up the next milestone does.
+roadmap_skill=$(cat "$WF_ROOT/skills/roadmap/SKILL.md")
+like "$roadmap_skill" 'mem roadmap --stdin' 'roadmap stores the milestones'
+like "$roadmap_skill" 'mem plan <slug> --set-file' 'and one plan per milestone beside them'
+like "$roadmap_skill" 'workflow plan-check roadmap.md' 'roadmap checks the whole thing at once'
+like "$roadmap_skill" 'mem roadmap +#' 'a later session reads which milestone is next'
+like "$roadmap_skill" 'mem plan --from <slug>' 'and makes its plan the plan of record'
+like "$roadmap_skill" 'plan-check' 'then checks that plan against the tree it will run in'
+like "$roadmap_skill" 'One milestone' 'a session takes one milestone and no more'
+# A plan cut weeks ago meets a tree that has moved. The small difference is
+# the orchestrator's to absorb; the one that changes what is being built is
+# not, and a session that guesses builds the wrong milestone.
+like "$roadmap_skill" 'mem save --kind ruling' 'drift the orchestrator absorbs is a ruling'
+like "$roadmap_skill" 'mem ask' 'and drift that changes the scope goes back to planning'
 
 ## ---------------------------------------------------------------- the wiki
 
