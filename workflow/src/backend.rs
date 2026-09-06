@@ -112,9 +112,23 @@ pub const WORKER_CMD_DEFAULT: &str = r#"cd {worktree} && WORKFLOW_AGENT=1 sh -c 
   exec env -u GITHUB_API_KEY -u WORKFLOW_ALLOW_PUSH -u WORKFLOW_HOOK_SEEN \
   $(env | grep -oE "^[A-Za-z0-9_]*(_TOKEN|_KEY|_SECRET)=|^(GH_|GITHUB_|AWS_|STRIPE_)[A-Za-z0-9_]*=" | sed "s/=$//; s/^/-u /" | tr "\n" " ") \
   claude --bg --dangerously-skip-permissions \
-  --model "$2" \
+  --model "$2" --settings "$3" \
   "Read $1 and execute it exactly."' \
-  workflow-worker {brief} {model} > {out} 2> {err}"#;
+  workflow-worker {brief} {model} {settings} > {out} 2> {err}"#;
+
+/// `Dispatch.env` as the JSON object `--settings` takes. `env` is the key
+/// the flag reads for the session's own environment, so this is how a
+/// per-task value -- the task's own tag, its own cargo target dir -- reaches
+/// the worker's process rather than just the shell dispatch runs it under.
+pub fn settings_json(env: &[(String, String)]) -> String {
+    let mut vars = serde_json::Map::new();
+    for (k, v) in env {
+        vars.insert(k.clone(), serde_json::Value::String(v.clone()));
+    }
+    let mut settings = serde_json::Map::new();
+    settings.insert("env".to_string(), serde_json::Value::Object(vars));
+    serde_json::Value::Object(settings).to_string()
+}
 
 /// The value as one shell word, whatever is in it.
 fn shq(value: &str) -> String {
@@ -158,6 +172,7 @@ impl ClaudeBackend {
             ("session", d.session.clone()),
             ("model", d.model.clone()),
             ("turns", d.turns.clone()),
+            ("settings", settings_json(&d.env)),
         ] {
             cmd = subst(&cmd, key, &value);
         }
@@ -501,7 +516,51 @@ mod tests {
         assert!(cmd.contains("cd '/state/my project/t1'"));
         assert!(cmd.contains("'/cache/briefs/t1.md'"));
         assert!(cmd.contains("> '/runs/t1.json' 2> '/runs/t1.err'"));
-        assert!(!cmd.contains('{'), "a placeholder was left behind: {cmd}");
+        for key in [
+            "worktree", "brief", "out", "err", "pidfile", "status", "task", "rundir", "session",
+            "model", "turns", "settings",
+        ] {
+            let placeholder = format!("{{{key}}}");
+            assert!(
+                !cmd.contains(&placeholder),
+                "{placeholder} was left behind: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_settings_json_holds_every_env_pair() {
+        let json = settings_json(&[
+            ("CARGO_TARGET_DIR".into(), "/state/cargo/t1".into()),
+            ("WORKFLOW_TASK".into(), "env-carry/t1".into()),
+        ]);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert_eq!(v["env"]["CARGO_TARGET_DIR"], "/state/cargo/t1");
+        assert_eq!(v["env"]["WORKFLOW_TASK"], "env-carry/t1");
+    }
+
+    #[test]
+    fn the_settings_flag_carries_the_env_as_one_shell_word() {
+        let mut d = fixture();
+        d.env = vec![("WORKFLOW_TASK".into(), "env-carry/t1".into())];
+        let cmd = ClaudeBackend::command_for(&d);
+        let word = shq(&settings_json(&d.env));
+        assert!(
+            cmd.contains("--settings \"$3\""),
+            "the inner claude call is missing --settings \"$3\": {cmd}"
+        );
+        assert!(
+            cmd.contains(&word),
+            "the settings json is not one shell word in: {cmd}"
+        );
+    }
+
+    #[test]
+    fn a_template_without_the_settings_placeholder_is_unchanged() {
+        assert_eq!(
+            subst("no placeholder here", "settings", "{\"env\":{}}"),
+            "no placeholder here"
+        );
     }
 
     /// The two shapes the listing really serves: a session with a process
