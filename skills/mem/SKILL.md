@@ -13,6 +13,7 @@ in a project repo or CLAUDE.md.
     mem context            # this project's memory, sized for a session start
     mem search "<query>"   # older than the context carries
     mem show <id>          # the item behind a search line
+    mem roadmap            # the milestones; `roadmap` runs them
 
 A hook runs `mem context` at session start; a staleness line at the top
 means the sync unit is behind, so say so before trusting it.
@@ -20,7 +21,7 @@ means the sync unit is behind, so say so before trusting it.
 ## The wiki
 
 An item is an episodic fact; a page is the living document for a subsystem.
-Read it before touching a subsystem, rewrite it when you change one.
+Read it before touching one, rewrite it when you change one.
 
     mem wiki                  # the pages: slug, bytes, modified, title
     mem wiki <slug>           # one page, byte for byte
@@ -42,8 +43,7 @@ message's voice, not a diff summary.
 
 **A decision or a gotcha** → `mem save "<text>" --title "<short>"`. Worth
 saving: you would want it in three weeks and it is not in the code or the git
-log; a constraint imposed, a version that must not move, an approach that
-failed.
+log; a version that must not move, an approach that failed.
 
 **Deciding instead of asking** → `mem save "<text>" --kind ruling`. When an
 answer is not yours to invent but stopping costs more than being wrong:
@@ -54,12 +54,11 @@ was right: it is how Saiful overturns you cheaply.
 action>"`, the action as a runnable command.
 
 **A stop condition** → a question, on the right channel. Interactive sessions
-ask in the conversation. An orchestrated worker asks `mem ask "<question>"`:
-from its worktree that is the orchestrator's to answer, and the next attempt
-opens with the answer. A background session outside a run uses its own
-question tool while the machine is watched (hub `/api/presence` says so),
-else `mem ask`, which reaches the phone without waiting. Never resolve
-your own stop condition.
+ask in the conversation. An orchestrated worker asks `mem ask "<question>"`,
+which is the orchestrator's to answer, and the next attempt opens with the
+answer. A background session outside a run uses its own question tool while
+the machine is watched (hub `/api/presence`), else `mem ask`, which reaches
+the phone without waiting. Never resolve your own stop condition.
 
 **The workflow itself got in the way** → `mem save --project workflow
 --type friction "friction: <what bit you - where - expected>"`. File it and
@@ -77,5 +76,5 @@ a memory that records everything is one nobody reads.
 ## Waiting
 
 Only an orchestrator waits: `mem questions --wait <id> --timeout 5m`, where
-exit 4 is a timeout to park on. Any machine answers: `mem answer <id> "<text>"`.
+exit 4 is a timeout. Any machine answers: `mem answer <id> "<text>"`.
 `mem questions --pending --for orchestrator` is what a run's workers wait on.

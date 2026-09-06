@@ -5,18 +5,19 @@ description: Use when route sent a change to the plan lane, to turn it into a ta
 
 # plan
 
+Work bigger than one plan is a roadmap of milestones: `roadmap`.
+
 ## 1. Questions, once
 
 One numbered round, batched at the frontier of what you cannot work out. Each
 carries a recommended answer, so silence answers it, for small trade-offs
-only. Scope questions (what the product is, what stays, what goes)
-are never resolved by silence: keep waiting. Facts are researched,
-never asked: versions, layouts, names, current behaviour. Ask
-about intent, priorities and trade-offs. A question that leaves the session
-(`mem ask`, read on a phone) is one decision, the choices, a recommendation,
-under a hundred words; a batch is several asks. A rewrite inventories the
-predecessor's whole surface (docs, backlog, screenshots) into mem first;
-cuts are Saiful's.
+only; a scope question (what the product is, what stays, what goes) is never
+resolved by silence, so keep waiting. Facts are researched, never asked:
+versions, layouts, names, current behaviour. Ask about intent, priorities and
+trade-offs. A question that leaves the session (`mem ask`, read on a phone) is
+one decision, the choices, a recommendation, under a hundred words. A rewrite
+inventories the predecessor's whole surface (docs, backlog, screenshots) into
+mem first; cuts are Saiful's.
 
 Read the project's pages before cutting tasks: `mem wiki`, then each page the
 change touches; they hold decisions code cannot show.
@@ -58,8 +59,8 @@ Write it plain; the unslop rules apply.
   root. This is the ownership boundary: what a worker writes outside them is
   refused at the merge gate. Grep for every name the task changes: a file
   asserting it belongs here too, and so does one the change forces (the arm
-  an exhaustive match demands, the README sample a test pins, the test file
-  Verify runs). Each one missed stops the task to ask.
+  an exhaustive match demands, the test file Verify runs). Each one missed
+  stops the task to ask.
 - `Files:` and `Verify:` are mandatory. `Verify:` is the worker's evidence
   command; `workflow verify` is what the gate runs.
 - `Read:`, `Uses:`, `Gives:` and `Pattern:` carry the middle tier: files to
@@ -75,7 +76,7 @@ Check it from the checkout before approval:
 
 It reads the tree, runs nothing: a Verify that cannot pass here is refused,
 so is deferral language ("for now", "TBD"); ungrounded Files, Read, Pattern,
-Uses and Done lines are warned about.
+Uses and Done lines warn.
 
 ## 4. Shape
 

@@ -69,6 +69,13 @@ like "$roadmap_skill" 'One milestone' 'a session takes one milestone and no more
 like "$roadmap_skill" 'mem save --kind ruling' 'drift the orchestrator absorbs is a ruling'
 like "$roadmap_skill" 'mem ask' 'and drift that changes the scope goes back to planning'
 
+# A skill nothing points at is one nobody loads: each lane that can find
+# itself holding a roadmap says so where that lane is decided.
+like "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'roadmap' 'route sends work bigger than one plan to roadmap'
+like "$plan_skill" 'roadmap' 'plan says when a plan is a roadmap instead'
+like "$orchestrate_skill" 'roadmap' 'orchestrate knows a run can be one milestone of one'
+like "$(cat "$WF_ROOT/skills/mem/SKILL.md")" 'mem roadmap' 'mem names the verb that reads the milestones'
+
 ## ---------------------------------------------------------------- the wiki
 
 # A page is read before a subsystem is touched and rewritten after it changes,

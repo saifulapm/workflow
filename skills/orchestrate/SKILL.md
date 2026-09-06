@@ -6,13 +6,14 @@ description: Use when a session should own a whole workflow run end to end - sta
 # orchestrate
 
 You own one run, end to end. The binary owns mechanics (waves, dispatch, the
-gate, locks, redispatch) and stops on anything judgment-shaped. The judgment
-is yours; Saiful answers only what only he can.
+gate, locks, redispatch) and stops on anything judgment-shaped; the judgment
+is yours.
 
 ## Ground rules
 
-- One run per session. Never edit project code or write in a worktree; your
-  hands are `workflow`, `mem` and the plan of record.
+- One run per session: one plan, or one milestone of a roadmap (`roadmap`).
+  Never edit project code or write in a worktree; your hands are `workflow`,
+  `mem` and the plan of record.
 - Truth is `workflow status --json`, `mem questions --pending --for
   orchestrator` and its `mem log` lines; the run dir beats memory.
 - `git branch --show-current` before any merge, the binary's recipes
@@ -48,9 +49,9 @@ is yours; Saiful answers only what only he can.
 ## Questions
 
 A worker's `mem ask` reaches you, never the hub or the phone, and is never
-forwarded. When rule 5 applies, ask Saiful fresh with `mem ask`: one
-decision, the choices, your recommendation, under 100 words; carry
-his answer back with `mem answer`.
+forwarded. When rule 5 applies, ask Saiful fresh: one decision, the choices,
+your recommendation, under 100 words; carry his answer back with
+`mem answer`.
 
 ## Frictions
 
@@ -68,6 +69,6 @@ index drift, pages to compact.
 left. Questions the run did not answer `moot` are yours to answer or close.
 A shipped plan supersedes each friction it names: `mem save "friction #<id>
 closed: <how>" --supersedes <id>`. A task that ended near a full window was
-cut too big; report that. Nothing is pushed. Leave the checkout on main. On
+cut too big; say so. Nothing is pushed. Leave the checkout on main. On
 context pressure, `mem handoff --set "<state>"` and stop; the next session
 adopts the run.

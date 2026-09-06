@@ -11,8 +11,7 @@ Two lanes. Pick one, then stop thinking about lanes.
 
 Could this be undone with a `git revert` and nothing else? If not — it touches
 data, a public contract, a deployed thing, someone else's system — that is a
-stop condition, not a lane. Ask; do not choose. Reversibility comes before
-lanes, it does not pick one.
+stop condition, not a lane, and it comes first: ask, do not choose.
 
 ## Then, blast radius
 
@@ -41,8 +40,9 @@ subagents, no questions.
 
 ## Non-zero → the plan lane
 
-Hand over to `plan`. Do not write code first "to see how it goes": that is how
-a plan-lane change becomes an unreviewed one-shot.
+Hand over to `plan`, or to `roadmap` when the work is more than one plan
+holds. Do not write code first "to see how it goes": that is how a plan-lane
+change becomes an unreviewed one-shot.
 
 ## What the gate is
 
