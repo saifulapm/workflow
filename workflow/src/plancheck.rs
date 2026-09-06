@@ -213,7 +213,8 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
 /// A roadmap is a plan of plans: every milestone names `<id>.md` beside it,
 /// holding a plan the run lane will be handed as it stands -- so Files: and
 /// Verify: are required of its tasks, and a milestone pointing at no plan, or
-/// at a plan filed under another name, is refused.
+/// at a file headed as anything but a plan under that milestone's own id, is
+/// refused.
 ///
 /// The walk is by wave rather than by line, so a milestone is read after the
 /// ones it waits on: their plans are what it is judged against as well as the
@@ -242,9 +243,13 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
             ));
             continue;
         };
-        if plan.plan_id != *id {
+        // The header word carries as much as the slug: `parse` asks a roadmap
+        // for no Files: and no Verify:, so a milestone filed as one would reach
+        // run with neither.
+        if plan.kind != plan::PlanKind::Plan || plan.plan_id != *id {
             f.refusals.push(format!(
-                "roadmap: milestone {id}: the plan at {shown} is headed '# plan: {}' -- a plan is filed under the milestone that names it",
+                "roadmap: milestone {id}: the plan at {shown} is headed '# {}: {}' -- a milestone names a plan filed under its own id",
+                plan.kind.word(),
                 plan.plan_id
             ));
             continue;

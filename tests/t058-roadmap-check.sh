@@ -148,6 +148,19 @@ check
 is "$RC" 1 'a plan headed with a slug that is not the milestone id is refused'
 like "$ERR" "m2-billing.*'# plan: billing'" 'and the refusal names both'
 
+# The header word matters as much as the slug: a file headed as a roadmap is
+# asked for no Files: and no Verify: when it parses, so a milestone filed as
+# one would go to run with neither.
+milestone m2-billing <<'EOF'
+# roadmap: m2-billing
+
+- [ ] t1 Charge a customer
+- [ ] t2 Refund a charge  [after: t1]
+EOF
+check
+is "$RC" 1 'a milestone plan headed as a roadmap is refused'
+like "$ERR" "m2-billing.*'# roadmap: m2-billing'" 'and the refusal names the header it found'
+
 # Files: and Verify: are required of every task in a milestone's plan: it is
 # dispatched as it stands.
 milestone m2-billing <<'EOF'
