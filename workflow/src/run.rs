@@ -82,7 +82,9 @@ fn write_field(dir: &Path, task: &str, ext: &str, value: &str) {
 /// line, an out-of-tree `CARGO_TARGET_DIR` flattens the worktree's mtime, and a worker
 /// that is only thinking touches neither. The status file is the worker's own
 /// heartbeat and it lives in the run directory, not the worktree, so it has to
-/// be counted separately (review-3 F-10).
+/// be counted separately (review-3 F-10). A worker the usage limit has paused
+/// touches none of the three either -- this is the same clock [`Run::paused`]
+/// is held to, rather than being judged dead the moment `alive` goes false.
 pub fn last_activity(backend: &dyn WorkerBackend, dir: &Path, wt_root: &Path, task: &str) -> i64 {
     let h = Handle {
         session: field(dir, task, "session"),
@@ -433,6 +435,35 @@ impl Run {
             task,
             self.deadline_s,
         )
+    }
+
+    /// Seen by the backend and not alive, with nothing that says it is
+    /// done: no commit on its branch and no final word past `started` or
+    /// `progress` in its status file. The usage limit pauses a session
+    /// without ending it -- `claude agents` shows it idle, not gone -- and
+    /// this is what tells that apart from a worker that actually finished
+    /// or died, so it is held to the stall deadline like a live one instead
+    /// of being collected the instant `alive` goes false (friction
+    /// #17SPEY7R).
+    ///
+    /// A pidfile answers this on its own: the legacy template's process is
+    /// either running or it is not, and a dead one is dead, not idle. Only a
+    /// session with no pid to check -- the shipped `--bg` dispatch -- has a
+    /// listing that can lie this way.
+    fn paused(&self, task: &str) -> bool {
+        if !self.worker_pid(task).is_empty() {
+            return false;
+        }
+        if !self.backend.seen(&self.handle(task)) || self.alive(task) {
+            return false;
+        }
+        if self.commits(task) != 0 {
+            return false;
+        }
+        match self.last_status_line(task) {
+            None => true,
+            Some((state, _)) => state == "started" || state == "progress",
+        }
     }
 
     fn stop(&self, task: &str) {
@@ -1170,7 +1201,7 @@ impl Run {
     fn reap_pass(&self) -> bool {
         let mut did = false;
         for task in self.dispatched() {
-            if self.alive(&task) {
+            if self.alive(&task) || self.paused(&task) {
                 if !self.stalled(&task) {
                     continue;
                 }
@@ -1244,7 +1275,7 @@ impl Run {
                 }
                 continue;
             }
-            if self.alive(task) {
+            if self.alive(task) || self.paused(task) {
                 warn(format!(
                     "task {task}: still working, from a run that is gone -- adopted"
                 ));
