@@ -137,18 +137,42 @@ your last act. The state is one bare word: no colon after it.
     )
 }
 
+/// How far over the budget a brief is, and which line of the task block
+/// weighs most -- the one to trim. `None` when it fits. The run said a bare
+/// byte count at dispatch, the one place a planner could no longer act on
+/// it; this is what the run and plan-check both say (friction #QX8GXNQY).
+pub fn over_budget(task: &Task, body: &str) -> Option<String> {
+    if body.len() <= BUDGET {
+        return None;
+    }
+    let heaviest = task
+        .block
+        .lines()
+        .map(str::trim_start)
+        .max_by_key(|l| l.len())
+        .unwrap_or("");
+    let line = match heaviest.split_once(':') {
+        Some((key, _)) if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphabetic()) => {
+            format!("{key}:")
+        }
+        _ => "the title".to_string(),
+    };
+    Some(format!(
+        "{} bytes, {} over the {BUDGET} byte budget; the heaviest line of the block is {line} at {} bytes",
+        body.len(),
+        body.len() - BUDGET,
+        heaviest.len()
+    ))
+}
+
 pub fn write(task: &Task, worktree: &Path, status_file: &Path, prior: &Prior, out: &Path) {
     if let Some(dir) = out.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     let body = text(task, worktree, status_file, prior);
     let _ = std::fs::write(out, &body);
-    if body.len() > BUDGET {
-        warn(format!(
-            "task {}: the brief is {} bytes, over the {BUDGET} byte budget",
-            task.id,
-            body.len()
-        ));
+    if let Some(over) = over_budget(task, &body) {
+        warn(format!("task {}: the brief is {over}", task.id));
     }
 }
 
@@ -283,5 +307,49 @@ mod tests {
         // A long answer is clipped, not dropped, and the clip ends cleanly.
         assert_eq!(clip(&"x".repeat(1000)).len(), 603);
         assert_eq!(clip("  short  "), "short");
+    }
+
+    /// A brief over its budget says by how much and which line of the block
+    /// to trim, so a planner can act on it before dispatch rather than
+    /// after (friction #QX8GXNQY).
+    #[test]
+    fn a_brief_over_its_budget_names_the_bytes_over_and_the_line_to_trim() {
+        let done = format!("Done: {}", "every basket totals identically ".repeat(40));
+        let task = Task {
+            id: "t2".into(),
+            title: "Wire cart pricing into checkout".into(),
+            block: format!(
+                "- [ ] t2 Wire cart pricing into checkout\n      \
+                 Files: app/Checkout/*.php\n      \
+                 Verify: bin/php artisan test --filter=Checkout\n      \
+                 {done}\n"
+            ),
+            ..Task::default()
+        };
+        let wt = Path::new("/state/worktrees/app/plan/t2");
+        let status = Path::new("/state/runs/app/plan/t2.status");
+        let body = text(&task, wt, status, &Prior::default());
+        let over = over_budget(&task, &body).expect("the brief is over");
+        assert!(
+            over.contains(&format!(
+                "{} over the {BUDGET} byte budget",
+                body.len() - BUDGET
+            )),
+            "{over}"
+        );
+        assert!(
+            over.contains(&format!(
+                "heaviest line of the block is Done: at {} bytes",
+                done.len()
+            )),
+            "{over}"
+        );
+        // Inside the budget there is nothing to say.
+        let small = Task {
+            block: "- [ ] t2 Wire cart pricing into checkout\n      Files: a\n      Verify: true\n"
+                .into(),
+            ..task.clone()
+        };
+        assert!(over_budget(&small, &text(&small, wt, status, &Prior::default())).is_none());
     }
 }

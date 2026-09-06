@@ -533,3 +533,20 @@ EOF2
 parse
 is "$RC" 0 'claiming the file settles it'
 unlike "$OUT" 'Done names' 'nothing warns once Files claims every file the Done names'
+
+# The brief is the block inside fixed text, and its budget used to be checked
+# at dispatch alone, as a bare byte count (friction #QX8GXNQY). plan-check says
+# it first, by how much, and which line to trim.
+long=$(printf 'every fixture basket totals identically through checkout and cart, %.0s' $(seq 1 24))
+plan_file <<EOF2
+# plan: p
+
+- [ ] t1 Say too much
+      Files: src/budget.rs
+      Verify: true
+      Done: $long
+EOF2
+parse
+is "$RC" 0 'a brief over its budget is a warning, never a refusal'
+like "$OUT" 'over the 3000 byte budget' 'and the warning says by how much'
+like "$OUT" 'heaviest line of the block is Done:' 'and which line to trim'

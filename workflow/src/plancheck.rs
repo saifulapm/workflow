@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use crate::gitcmd::{self, Git};
-use crate::ownership;
 use crate::plan::{Plan, Task};
+use crate::{brief, memcli, ownership, paths};
 
 pub struct Findings {
     pub refusals: Vec<String>,
@@ -39,6 +39,14 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
             claimed.extend(zlines(&git.bytes(&["ls-files", "-z", "--", &spec])));
         }
     }
+    // The brief is the block inside fixed text, and its budget was checked
+    // at dispatch alone, where the remedy is stopping the run to trim the
+    // plan (friction #QX8GXNQY). Measured here with the paths the run would
+    // write into it, so the two counts agree to the byte.
+    let project = memcli::project_current()
+        .map(|p| p.dir_name())
+        .or_else(|| root.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_default();
     for t in &plan.tasks {
         if t.checked {
             continue; // never dispatched, so its lines are history, not risk
@@ -168,6 +176,21 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
         if runs_tests(verify) && !patterns.iter().any(|p| p.to_lowercase().contains("test")) {
             f.warnings.push(format!(
                 "plan: task {}: its Verify runs tests and its Files list no test file -- the worker cannot add the test that proves it",
+                t.id
+            ));
+        }
+        let wt = paths::worktrees_root()
+            .join(&project)
+            .join(&plan.plan_id)
+            .join(&t.id);
+        let status = paths::runs_root()
+            .join(&project)
+            .join(&plan.plan_id)
+            .join(format!("{}.status", t.id));
+        let body = brief::text(t, &wt, &status, &brief::Prior::default());
+        if let Some(over) = brief::over_budget(t, &body) {
+            f.warnings.push(format!(
+                "plan: task {}: its brief would be {over}; trim the block before it is dispatched",
                 t.id
             ));
         }
