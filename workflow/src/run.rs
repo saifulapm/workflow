@@ -156,6 +156,11 @@ pub struct Run {
     /// passes, and the stop takes a reader down with the workers.
     pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub env: Vec<(String, String)>,
+    /// Set by `workflow reap`, which collects for a run that is gone. A
+    /// worker it started would have no run watching it, so where a run
+    /// gives a task one more try, reap fails it and names who tries it next
+    /// (friction #F6MR6AMH).
+    pub collecting: bool,
     made: Vec<PathBuf>,
 }
 
@@ -506,6 +511,24 @@ impl Run {
             last_report,
             answers,
         }
+    }
+
+    /// One more try for a task nobody has really attempted -- under a run,
+    /// which watches what it starts. Under `workflow reap` there is no run:
+    /// reap starts nothing, and the task fails with a line saying the next
+    /// run in this checkout retries it, which a fresh run does by itself.
+    fn once_more(&self, task: &str, what: &str, after: &str) {
+        if self.collecting {
+            self.fail_task(
+                task,
+                &format!(
+                    "{what}; reap starts nothing, and the next run in this checkout tries it again"
+                ),
+            );
+            return;
+        }
+        warn(format!("task {task}: {what} -- one more try"));
+        self.dispatch(task, after);
     }
 
     fn dispatch(&self, task: &str, after: &str) {
@@ -1036,11 +1059,9 @@ impl Run {
         // (friction #195SW7VX).
         let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
         if self.last_status_line(task).is_none() && self.commits(task) == 0 && tries < 2 {
-            warn(format!(
-                "task {task}: its worker died leaving nothing -- one more try"
-            ));
-            self.dispatch(
+            self.once_more(
                 task,
+                "its worker died leaving nothing",
                 "its worker died before writing anything, and was dispatched again",
             );
             return;
@@ -1174,10 +1195,11 @@ impl Run {
                 did = true;
                 let tries: u64 = self.field(&task, "dispatches").parse().unwrap_or(0);
                 if self.commits(&task) == 0 && tries < 2 {
-                    warn(format!(
-                        "task {task}: stalled with nothing committed -- one more try"
-                    ));
-                    self.dispatch(&task, "it stalled with nothing committed and was stopped");
+                    self.once_more(
+                        &task,
+                        "stalled with nothing committed",
+                        "it stalled with nothing committed and was stopped",
+                    );
                 } else {
                     self.fail_task(&task, "stalled with no sign of life");
                 }
@@ -1734,6 +1756,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         },
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         env: Vec::new(),
+        collecting: false,
         made: Vec::new(),
     }
 }
@@ -2185,6 +2208,7 @@ pub fn cmd_reap() -> i32 {
         }
         let mut run = new_run(parsed, top.clone(), &project.dir_name(), base);
         run.dir = dir;
+        run.collecting = true;
         // A held lock means a live orchestrator is watching these workers;
         // reap is for runs nobody owns.
         let Some(_lock) = lock_run(&run.dir) else {

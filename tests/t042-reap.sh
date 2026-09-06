@@ -282,3 +282,40 @@ is "$(kill -0 "$opid2" 2>/dev/null && echo alive || echo gone)" alive \
 like "$OUT" 'adopt' 'and reap says a run can adopt it, not that there is nothing to collect'
 unlike "$OUT" 'nothing to collect' 'the nothing-to-collect line stays honest'
 kill "$opid" "$opid2" 2>/dev/null
+
+## ----------------------- a worker that died leaving nothing, and no run
+
+# The one retry a task nobody has really attempted gets is a run's to give:
+# a run watches what it starts. reap collects for a run that is gone, and it
+# used to start a worker that nothing would watch (friction #F6MR6AMH).
+new_repo silent
+mem_register
+sbase=$(git rev-parse HEAD)
+srundir="$XDG_STATE_HOME/workflow/runs/silent/quiet"
+mkdir -p "$srundir"
+cat >"$srundir/plan.md" <<'PLAN'
+# plan: quiet
+
+- [ ] t1 Died before a word
+      Files: a/**
+      Verify: true
+- [ ] t2 Never dispatched
+      Files: b/**
+      Verify: true
+PLAN
+printf '%s\n' "$sbase" >"$srundir/base_sha"
+printf '%s\n' "$(sh -c 'echo $$')" >"$srundir/t1.pid" # a pid that has already gone
+printf '00000000-0000-4000-8000-00000000000c\n' >"$srundir/t1.session"
+printf 'dispatched\n' >"$srundir/t1.state"
+printf '%s\n' "$(date +%s)" >"$srundir/t1.dispatched_at"
+printf '1\n' >"$srundir/t1.dispatches"
+printf 'pending\n' >"$srundir/t2.state"
+
+run env WORKFLOW_WORKER_CMD="touch $T_TMP/reap-dispatched" workflow reap
+is "$RC" 1 'reap collected the silent task'
+is "$(cat "$srundir/t1.state")" failed 'a worker that died leaving nothing is failed, not tried again'
+like "$(cat "$srundir/t1.failed")" 'next run' 'and the failure names who tries it next'
+is "$(cat "$srundir/t1.dispatches")" 1 'reap dispatched nothing'
+truthy "$([ ! -e "$T_TMP/reap-dispatched" ] && echo 0 || echo 1)" \
+	'and started no worker for a run nobody is watching'
+unlike "$OUT" 'one more try' 'nor did it promise one'
