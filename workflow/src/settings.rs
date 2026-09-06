@@ -34,9 +34,10 @@ pub fn default_file() -> PathBuf {
 /// The skills this repo ships, named one by one. `enable` and `disable` write
 /// exactly these, so a project's file says which skills it means rather than
 /// standing for "whatever was installed the day it was written".
-pub const SKILLS: [&str; 7] = [
+pub const SKILLS: [&str; 8] = [
     "route",
     "plan",
+    "roadmap",
     "implement",
     "orchestrate",
     "review",

@@ -9,7 +9,7 @@ source "$(dirname -- "$0")/lib.sh"
 t_init
 
 user="$HOME/.claude/settings.json"
-skills='route plan implement orchestrate review mem unslop'
+skills='route plan roadmap implement orchestrate review mem unslop'
 
 ## ------------------------------------------------------- the gate, once
 
