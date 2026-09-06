@@ -224,6 +224,25 @@ pub fn plan_tick(task: &str) -> bool {
     silent(&["plan", "--tick", task])
 }
 
+/// What `mem roadmap --tick <slug> --json` answers. `ticked` is false for a
+/// milestone that was already checked off, which is not a failure and not news.
+#[derive(Debug, Deserialize)]
+struct RoadmapTick {
+    ticked: bool,
+}
+
+/// Check a finished plan's slug off in the project's roadmap. `false` covers
+/// every way there is nothing to say: no roadmap, no milestone under this
+/// slug, or a box that was already ticked.
+pub fn roadmap_tick(slug: &str) -> bool {
+    let Some((ok, out)) = capture(&["roadmap", "--tick", slug, "--json"]) else {
+        return false;
+    };
+    ok && serde_json::from_str::<RoadmapTick>(&out)
+        .map(|t| t.ticked)
+        .unwrap_or(false)
+}
+
 /// This project's plan, as mem holds it.
 pub fn plan() -> Option<String> {
     let (_, out) = capture(&["plan"])?;

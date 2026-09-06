@@ -2104,6 +2104,15 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             }
         }
     }
+    // A milestone is finished when its plan is. The plan of record is the one
+    // the roadmap's milestone names, so only a run that read it from mem can
+    // say which box to tick: a --plan-file plan need not be in mem at all.
+    if failed + blocked == 0 && run.plan_file.is_none() && memcli::roadmap_tick(&run.plan.plan_id) {
+        warn(format!(
+            "milestone {} is ticked off in the roadmap",
+            run.plan.plan_id
+        ));
+    }
     if failed + blocked > 0 {
         let tasks: Vec<(String, String, String)> = run
             .plan

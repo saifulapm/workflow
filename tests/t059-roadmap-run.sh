@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The roadmap at run time. A roadmap is milestones, not work a worker can be
 # handed, so `workflow run` refuses one and says which verb turns a milestone
-# into the plan of record.
+# into the plan of record. The other half is the tick: a milestone whose plan
+# came out of mem and finished is checked off in the roadmap, and a plan that
+# stopped short or came from a file is not.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -86,3 +88,37 @@ is "$(git worktree list | grep -c .)" 1 'and no worktree was made'
 run workflow run
 is "$RC" 2 'a roadmap filed as the plan of record is refused the same way'
 like "$OUT" 'mem plan --from <slug>' 'with the same remedy'
+
+## ------------------------------------------ a finished milestone is ticked
+
+plan done-milestone t2
+"$MEM_BIN" plan --set-file "$T_TMP/done-milestone.md" >/dev/null
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 0 'the milestone plan runs to the end'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/app/done-milestone/t2.state")" merged 'with every task merged'
+like "$OUT" 'milestone done-milestone is ticked off in the roadmap' 'and the run says what it ticked'
+run_out "$MEM_BIN" roadmap
+like "$OUT" '^- \[x\] done-milestone ' 'and its slug is ticked off in the roadmap'
+like "$OUT" '^- \[ \] sulky-milestone ' 'leaving the milestones behind it alone'
+
+## ------------------------------------- a milestone that stopped short is not
+
+plan sulky-milestone sulk
+"$MEM_BIN" plan --set-file "$T_TMP/sulky-milestone.md" >/dev/null
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 1 'a task that never reported ready stops the run short'
+unlike "$OUT" 'ticked off in the roadmap' 'so the run claims no milestone'
+run_out "$MEM_BIN" roadmap
+like "$OUT" '^- \[ \] sulky-milestone ' 'and the milestone stays unticked'
+
+## ------------------------------------------- and a plan read off a file is not
+
+# A --plan-file plan need not be in mem at all, so nothing here can say which
+# milestone it is, even when the names line up.
+plan filed-milestone t2
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/filed-milestone.md"
+is "$RC" 0 'a run off a plan file finishes the same way'
+unlike "$OUT" 'ticked off in the roadmap' 'without a word about the roadmap'
+like "$(cat "$T_TMP/filed-milestone.md")" '^- \[X\] t1 ' 'ticking its tasks off in the file it was handed'
+run_out "$MEM_BIN" roadmap
+like "$OUT" '^- \[ \] filed-milestone ' 'and leaving the roadmap alone'
