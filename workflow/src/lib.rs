@@ -188,7 +188,7 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
             serde_json::to_string(&parsed).unwrap_or_else(|_| "{}".into())
         );
     } else {
-        println!("plan: {}", parsed.plan_id);
+        println!("{}: {}", parsed.kind.word(), parsed.plan_id);
         for t in &parsed.tasks {
             println!("  {} {}", t.id, t.title);
         }

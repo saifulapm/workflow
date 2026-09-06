@@ -29,9 +29,40 @@ pub struct Task {
     pub block: String,
 }
 
+/// What the first line says the document is. A plan is a wave of worker tasks;
+/// a roadmap is a wave of milestones, each naming a stored plan of its own, so
+/// its items carry no Files: or Verify: and their ids are plan slugs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlanKind {
+    #[default]
+    Plan,
+    Roadmap,
+}
+
+impl PlanKind {
+    pub fn word(self) -> &'static str {
+        match self {
+            PlanKind::Plan => "plan",
+            PlanKind::Roadmap => "roadmap",
+        }
+    }
+
+    /// A task id names a branch and a worktree directory and is typed by hand
+    /// into a status line; a milestone id is the slug of a stored plan, which
+    /// mem allows sixty-four characters of.
+    fn max_id(self) -> usize {
+        match self {
+            PlanKind::Plan => 16,
+            PlanKind::Roadmap => 64,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Plan {
     pub plan_id: String,
+    pub kind: PlanKind,
     pub tasks: Vec<Task>,
     pub waves: Vec<Vec<String>>,
 }
@@ -50,10 +81,14 @@ fn is_sp(c: char) -> bool {
     c.is_ascii_whitespace()
 }
 
-/// `^#[[:space:]]*plan:[[:space:]]*([A-Za-z0-9][A-Za-z0-9._-]*)[[:space:]]*$`
-fn header_slug(line: &str) -> Option<String> {
+/// `^#[[:space:]]*(plan|roadmap):[[:space:]]*([A-Za-z0-9][A-Za-z0-9._-]*)[[:space:]]*$`
+fn header(line: &str) -> Option<(PlanKind, String)> {
     let rest = line.strip_prefix('#')?.trim_start_matches(is_sp);
-    let rest = rest.strip_prefix("plan:")?.trim_start_matches(is_sp);
+    let (kind, rest) = match rest.strip_prefix("roadmap:") {
+        Some(rest) => (PlanKind::Roadmap, rest),
+        None => (PlanKind::Plan, rest.strip_prefix("plan:")?),
+    };
+    let rest = rest.trim_start_matches(is_sp);
     let slug: String = rest
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
@@ -64,20 +99,20 @@ fn header_slug(line: &str) -> Option<String> {
     if !rest[slug.len()..].trim_end_matches(is_sp).is_empty() {
         return None;
     }
-    Some(slug)
+    Some((kind, slug))
 }
 
-/// `^- \[([ xX])\] ([a-z0-9][a-z0-9-]{0,15}) (.+)$`
+/// `^- \[([ xX])\] ([a-z0-9][a-z0-9-]{0,max-1}) (.+)$`
 ///
 /// The id run cannot contain a space, so the only place the title can start is
-/// straight after it: a run longer than sixteen characters is not a task line,
-/// it is a mistake, and the caller says so out loud.
+/// straight after it: a run longer than the ids of this document are allowed to
+/// be is not a task line, it is a mistake, and the caller says so out loud.
 ///
 /// The tick is the one part of the line that reads the same in either case:
 /// `- [X]` is a ticked box everywhere markdown is rendered, and unlike an id --
 /// which names a branch and a directory -- its case means nothing to anything
 /// downstream. Ids stay case sensitive; the box does not.
-fn task_line(line: &str) -> Option<(bool, String, String)> {
+fn task_line(line: &str, max_id: usize) -> Option<(bool, String, String)> {
     let rest = line.strip_prefix("- [")?;
     let mut chars = rest.chars();
     let checked = match chars.next()? {
@@ -90,7 +125,7 @@ fn task_line(line: &str) -> Option<(bool, String, String)> {
         .chars()
         .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-')
         .collect();
-    if id.is_empty() || id.len() > 16 || id.starts_with('-') {
+    if id.is_empty() || id.len() > max_id || id.starts_with('-') {
         return None;
     }
     let after = &rest[id.len()..];
@@ -142,21 +177,23 @@ fn is_continuation(line: &str) -> bool {
 }
 
 /// `require_files`: the plan lane insists on `Files:` and `Verify:` (spec §5.3).
+/// A roadmap never does: a milestone is a plan to be cut later, not work a
+/// worker can be handed.
 pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     let mut plan = Plan::default();
-    let mut header = false;
+    let mut seen_header = false;
     let mut cur: Option<usize> = None;
     let mut rc = true;
 
     for (i, line) in text.lines().enumerate() {
         let n = i + 1;
 
-        if !header {
+        if !seen_header {
             if line.trim().is_empty() {
                 continue;
             }
-            match header_slug(line) {
-                Some(slug) => {
+            match header(line) {
+                Some((kind, slug)) => {
                     // The slug names branches and directories, so it has to be
                     // something git will accept as a ref component.
                     if slug.contains("..") || slug.ends_with(".lock") || slug.ends_with('.') {
@@ -164,19 +201,20 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                         return None;
                     }
                     plan.plan_id = slug;
-                    header = true;
+                    plan.kind = kind;
+                    seen_header = true;
                     continue;
                 }
                 None => {
                     warn(format!(
-                        "plan: line {n}: the first line must be '# plan: <slug>'"
+                        "plan: line {n}: the first line must be '# plan: <slug>' or '# roadmap: <slug>'"
                     ));
                     return None;
                 }
             }
         }
 
-        if let Some((checked, id, rest)) = task_line(line) {
+        if let Some((checked, id, rest)) = task_line(line, plan.kind.max_id()) {
             if plan.get(&id).is_some() {
                 warn(format!("plan: line {n}: task id '{id}' appears twice"));
                 rc = false;
@@ -207,9 +245,10 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
         // exactly that failure, one spelling further out.
         if opens_a_checkbox(line) {
             warn(format!("plan: line {n}: this is not a task line: {line}"));
-            warn(
-                "plan: the box is [ ] or [x], and the id is 1-16 characters of a-z, 0-9 and -, starting with a letter or digit",
-            );
+            warn(format!(
+                "plan: the box is [ ] or [x], and the id is 1-{} characters of a-z, 0-9 and -, starting with a letter or digit",
+                plan.kind.max_id()
+            ));
             rc = false;
             cur = None;
             continue;
@@ -254,8 +293,8 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
         cur = None;
     }
 
-    if !header {
-        warn("plan: no '# plan: <slug>' header");
+    if !seen_header {
+        warn("plan: no '# plan: <slug>' or '# roadmap: <slug>' header");
         return None;
     }
     if plan.tasks.is_empty() {
@@ -274,7 +313,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                 rc = false;
             }
         }
-        if require_files {
+        if require_files && plan.kind == PlanKind::Plan {
             if t.files.as_deref().unwrap_or("").is_empty() {
                 warn(format!("plan: task {} has no Files: line", t.id));
                 rc = false;
@@ -297,11 +336,17 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
 /// carries that id. Every other byte is left as the author wrote it: the file
 /// is their document, not this program's scratch space.
 pub fn tick(text: &str, id: &str) -> Option<String> {
+    let max_id = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .and_then(header)
+        .map_or(PlanKind::default(), |(kind, _)| kind)
+        .max_id();
     let mut found = false;
     let out: String = text
         .split_inclusive('\n')
         .map(
-            |line| match task_line(line.trim_end_matches(['\n', '\r'])) {
+            |line| match task_line(line.trim_end_matches(['\n', '\r']), max_id) {
                 // `- [x]` is five ASCII bytes however the box is spelled, so the
                 // tail slices cleanly whatever the title holds.
                 Some((_, tid, _)) if tid == id => {
@@ -379,6 +424,7 @@ mod tests {
     fn the_example_round_trips() {
         let p = parse(EXAMPLE, true).expect("the example parses");
         assert_eq!(p.plan_id, "cart-pricing-v2");
+        assert_eq!(p.kind, PlanKind::Plan);
         assert_eq!(p.ids(), vec!["t0", "t1"]);
         let t1 = p.get("t1").unwrap();
         assert_eq!(t1.title, "Extract cart pricing into a service");
@@ -600,6 +646,82 @@ mod tests {
         let again = tick(&out, "t2").expect("an already ticked task is still found");
         assert_eq!(again, out);
         assert!(tick(text, "t9").is_none());
+    }
+
+    /// A roadmap is the same grammar under a different first line. Its
+    /// milestones name stored plans rather than work, so `require_files` does
+    /// not reach them, and an id is a plan slug rather than a task id.
+    #[test]
+    fn a_roadmap_carries_milestones_without_files_or_verify() {
+        let text = "# roadmap: workflow-2026\n\n\
+                    - [x] mem-stores-the-plans Store the plans in mem\n\
+                    - [ ] the-roadmap-header Teach the parser the header [after: mem-stores-the-plans]\n";
+        let p = parse(text, true).expect("a roadmap parses");
+        assert_eq!(p.kind, PlanKind::Roadmap);
+        assert_eq!(p.plan_id, "workflow-2026");
+        assert_eq!(p.ids(), vec!["mem-stores-the-plans", "the-roadmap-header"]);
+        assert!(p.get("mem-stores-the-plans").unwrap().checked);
+        assert_eq!(
+            p.get("the-roadmap-header").unwrap().deps,
+            vec!["mem-stores-the-plans"]
+        );
+        assert_eq!(
+            p.waves,
+            vec![vec!["mem-stores-the-plans"], vec!["the-roadmap-header"]]
+        );
+        // Ticking reads the ids of the document it was handed, so a milestone
+        // id longer than a task's is still found.
+        let out = tick(text, "the-roadmap-header").expect("the milestone is in this roadmap");
+        assert!(out.contains("- [X] the-roadmap-header"), "{out}");
+    }
+
+    #[test]
+    fn a_roadmap_refuses_what_a_plan_refuses() {
+        for (name, text) in [
+            (
+                "unknown dependency",
+                "# roadmap: r\n\n- [ ] a Waits for nothing that is here [after: nope]\n",
+            ),
+            (
+                "cycle",
+                "# roadmap: r\n\n- [ ] a One [after: b]\n- [ ] b Two [after: a]\n",
+            ),
+            (
+                "duplicate id",
+                "# roadmap: r\n\n- [ ] a One\n- [ ] a Again\n",
+            ),
+            ("uppercase id", "# roadmap: r\n\n- [ ] Mem-Stores An id\n"),
+        ] {
+            assert!(parse(text, true).is_none(), "{name} should be refused");
+        }
+    }
+
+    /// The id run is the one rule the two kinds spell differently: a task id
+    /// names a branch and a worktree, a milestone id is the slug of a stored
+    /// plan.
+    #[test]
+    fn the_id_run_is_sixty_four_in_a_roadmap_and_sixteen_in_a_plan() {
+        let id64 = "a".repeat(64);
+        let p = parse(
+            &format!("# roadmap: r\n\n- [ ] {id64} At the limit\n"),
+            true,
+        )
+        .expect("a 64 character milestone id parses");
+        assert_eq!(p.ids(), vec![id64.clone()]);
+        assert!(
+            parse(&format!("# roadmap: r\n\n- [ ] {id64}a Past it\n"), true).is_none(),
+            "65 characters should be refused"
+        );
+
+        let id17 = "b".repeat(17);
+        assert!(
+            parse(
+                &format!("# plan: p\n\n- [ ] {id17} Past it\n      Files: x\n      Verify: true\n"),
+                true
+            )
+            .is_none(),
+            "a 17 character task id should still be refused in a plan"
+        );
     }
 
     /// Every other way of opening a checkbox is refused outright, so no

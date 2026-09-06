@@ -270,6 +270,118 @@ parse
 is "$RC" 0 'a checkbox that is not at the start of a line is left alone'
 is "$(field '[.tasks[].id] | join(" ")')" 'a b' 'and both real tasks are still there'
 
+## ------------------------------------------------------- the roadmap header
+
+# A roadmap is the same document one line up: `# roadmap:` where a plan says
+# `# plan:`. Its milestones name stored plans rather than worker tasks, so they
+# carry no Files: or Verify:, and an id is a plan slug of up to 64 characters.
+plan_file <<'EOF'
+# roadmap: workflow-2026
+
+- [x] mem-stores-the-plans Store the roadmap and milestone plans in mem
+- [ ] the-roadmap-header Teach the parser the roadmap header [after: mem-stores-the-plans]
+- [ ] the-hub-reads-it Show the roadmap on the hub [after: the-roadmap-header]
+EOF
+parse
+is "$RC" 0 'a roadmap parses with no Files: or Verify: on its milestones'
+is "$(field '.kind')" 'roadmap' 'and the JSON says which kind of plan it is'
+is "$(field '.plan_id')" 'workflow-2026' 'the slug on the first line is the roadmap id'
+is "$(field '[.tasks[].id] | join(" ")')" \
+	'mem-stores-the-plans the-roadmap-header the-hub-reads-it' 'every milestone, in order'
+is "$(task_field mem-stores-the-plans checked)" 'true' 'a ticked milestone is already done'
+is "$(task_field the-roadmap-header 'deps | join(" ")')" 'mem-stores-the-plans' \
+	'[after:] reads as it does between tasks'
+is "$(field '.waves | length')" '3' 'three waves'
+is "$(field '.waves[1] | join(" ")')" 'the-roadmap-header' 'the dependent milestone comes second'
+
+out=$(workflow plan-check "$T_TMP/plan.md" 2>/dev/null)
+like "$out" '^roadmap: workflow-2026$' 'the report calls a roadmap a roadmap'
+like "$out" 'the-roadmap-header Teach the parser the roadmap header' 'and lists the milestones'
+like "$out" 'wave 2: the-roadmap-header' 'and the waves'
+
+# A plan is untouched by any of it.
+plan_file <<'EOF'
+# plan: p
+
+- [ ] t1 A thing
+      Files: x
+      Verify: true
+EOF
+parse
+is "$RC" 0 'a plan parses as before'
+is "$(field '.kind')" 'plan' 'and carries the kind it is'
+out=$(workflow plan-check "$T_TMP/plan.md" 2>/dev/null)
+like "$out" '^plan: p$' 'the report still calls a plan a plan'
+
+# The id run: 64 characters in a roadmap, 16 in a plan.
+id64=$(printf 'a%.0s' $(seq 1 64))
+plan_file <<EOF
+# roadmap: r
+
+- [ ] $id64 A slug the length of the rule
+EOF
+parse
+is "$RC" 0 'a 64 character milestone id parses'
+is "$(field '[.tasks[].id] | join(" ")')" "$id64" 'and it is the milestone id'
+
+plan_file <<EOF
+# roadmap: r
+
+- [ ] ${id64}a One character past the rule
+EOF
+parse
+is "$RC" 1 'a 65 character milestone id is refused'
+like "$OUT" '1-64 characters' 'and the message gives the rule a roadmap holds to'
+
+id17=$(printf 'b%.0s' $(seq 1 17))
+plan_file <<EOF
+# plan: p
+
+- [ ] $id17 Seventeen characters
+      Files: x
+      Verify: true
+EOF
+parse
+is "$RC" 1 'a 17 character task id is still refused in a plan'
+like "$OUT" '1-16 characters' 'with the rule a plan holds to'
+
+plan_file <<'EOF'
+# roadmap: r
+
+- [ ] Mem-Stores-The-Plans An uppercase slug
+EOF
+parse
+is "$RC" 1 'a milestone id outside a-z, 0-9 and - is refused'
+
+# Everything the waves do for tasks they do for milestones.
+plan_file <<'EOF'
+# roadmap: r
+
+- [ ] a One [after: b]
+- [ ] b Two [after: a]
+EOF
+parse
+is "$RC" 1 'milestones that wait on each other in a circle are refused'
+like "$OUT" 'circle' 'and the refusal says so'
+
+plan_file <<'EOF'
+# roadmap: r
+
+- [ ] a One
+- [ ] a Again
+EOF
+parse
+is "$RC" 1 'a duplicate milestone id is refused'
+
+plan_file <<'EOF'
+# roadmap: r
+
+- [ ] a Waits for something that is not here [after: nope]
+EOF
+parse
+is "$RC" 1 'an unknown [after:] id is refused in a roadmap too'
+like "$OUT" 'nope' 'and is named'
+
 ## ------------------------------------------------- Files: pattern splitting
 
 is "$(workflow split-patterns 'app/Services/Cart*.php tests/Unit/Cart*' | tr '\n' '|')" \
