@@ -11,7 +11,8 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{
-    Hub, TempDir, body_of, fixture_mem, mem_in, real_mem, schema, seed_project, status_of,
+    Hub, TempDir, body_of, fixture_mem, mem_build, mem_in, real_mem, schema, seed_project,
+    status_of,
 };
 use serde_json::{Value, json};
 
@@ -58,6 +59,21 @@ fn json_at(hub: &Hub, path: &str) -> Value {
     let response = hub.get(path);
     assert_eq!(status_of(&response), 200, "{response}");
     serde_json::from_str(body_of(&response)).unwrap_or_else(|e| panic!("{path}: {e}\n{response}"))
+}
+
+#[test]
+fn mem_build_pins_cargo_target_dir_under_its_own_root() {
+    // Reads the `Command`'s own recorded overrides, never this process's
+    // environment: `std::env::set_var` in a test binary whose other tests
+    // spawn processes concurrently is undefined behaviour.
+    let root = Path::new("/checkout");
+    let command = mem_build(root);
+    let pin = command
+        .get_envs()
+        .find(|(key, _)| *key == std::ffi::OsStr::new("CARGO_TARGET_DIR"))
+        .and_then(|(_, value)| value)
+        .expect("CARGO_TARGET_DIR is set as an explicit override");
+    assert_eq!(pin, root.join("mem/target").as_os_str());
 }
 
 #[test]

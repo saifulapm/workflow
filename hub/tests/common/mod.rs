@@ -77,6 +77,21 @@ pub fn hub_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hub"))
 }
 
+/// A `cargo build --release` for the repo's own `mem`, with `CARGO_TARGET_DIR`
+/// pinned to `<root>/mem/target` rather than inherited from the caller: a
+/// session running under the workflow already has that variable set for its
+/// own task, and left alone it would carry this build off to a path
+/// `real_mem` never looks under.
+pub fn mem_build(root: &Path) -> Command {
+    let mem_dir = root.join("mem");
+    let mut command = Command::new(env!("CARGO"));
+    command
+        .args(["build", "--release", "--quiet"])
+        .current_dir(&mem_dir)
+        .env("CARGO_TARGET_DIR", mem_dir.join("target"));
+    command
+}
+
 /// The repo's own `mem`, built here when it is missing. Never the machine's
 /// installed binary: verify's answer went red or green with whatever happened
 /// to be on PATH (friction #6SQKR4HE), so these tests pin the mem they drive
@@ -89,9 +104,7 @@ pub fn real_mem() -> Option<PathBuf> {
     if built.is_file() {
         return Some(built);
     }
-    let ok = std::process::Command::new(env!("CARGO"))
-        .args(["build", "--release", "--quiet"])
-        .current_dir(root.join("mem"))
+    let ok = mem_build(&root)
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
