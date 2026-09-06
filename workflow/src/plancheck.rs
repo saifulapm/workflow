@@ -436,8 +436,9 @@ fn pattern_path(p: &str) -> &str {
 fn uses_items(uses: &str) -> Vec<(String, Option<String>)> {
     uses.split(" · ")
         .filter_map(|item| {
-            let ident = ident_of(item)?;
-            let needle = needle_for(item, &ident);
+            let item = without_locations(item);
+            let ident = ident_of(&item)?;
+            let needle = needle_for(&item, &ident);
             Some((ident, needle))
         })
         .fold(
@@ -449,6 +450,28 @@ fn uses_items(uses: &str) -> Vec<(String, Option<String>)> {
                 out
             },
         )
+}
+
+/// The item with its line locations taken out: `layout.rs:219`, a bare
+/// `:448`, a `:448-470` span. They point into a file and name nothing, and
+/// read as tokens the digits stood where the symbol was, so plan-check asked
+/// the tree for '448' (friction #QG0SDXQ4).
+fn without_locations(item: &str) -> String {
+    item.split(' ')
+        .filter_map(|tok| {
+            let Some((head, tail)) = tok.rsplit_once(':') else {
+                return Some(tok);
+            };
+            let location = tail.starts_with(|c: char| c.is_ascii_digit())
+                && tail.chars().all(|c| c.is_ascii_digit() || c == '-');
+            match (location, head.is_empty()) {
+                (false, _) => Some(tok),
+                (true, true) => None,
+                (true, false) => Some(head),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn ident_of(item: &str) -> Option<String> {
@@ -590,6 +613,41 @@ mod tests {
             vec![
                 ("fixture".to_string(), Some("fixture(".to_string())),
                 ("untouched".to_string(), None)
+            ]
+        );
+    }
+
+    /// A line location points into a file and names nothing: the digits
+    /// used to stand where the symbol was, and the symbol before a span
+    /// went unread (friction #QG0SDXQ4).
+    #[test]
+    fn a_line_location_after_a_path_is_a_place_not_a_name() {
+        assert_eq!(
+            without_locations("engine/src/layout.rs:219 and the empty place arm at :448"),
+            "engine/src/layout.rs and the empty place arm at"
+        );
+        assert_eq!(
+            without_locations("StackEntry engine/src/layout.rs:448-470"),
+            "StackEntry engine/src/layout.rs"
+        );
+        // A colon that is not a location is left exactly as it was.
+        assert_eq!(
+            without_locations("Basket::fixture(): Basket"),
+            "Basket::fixture(): Basket"
+        );
+        assert_eq!(
+            without_locations("scripts/build:release"),
+            "scripts/build:release"
+        );
+        assert_eq!(
+            uses_items("engine/src/layout.rs:219 and the empty place arm at :448"),
+            vec![("at".to_string(), None)]
+        );
+        assert_eq!(
+            uses_items("StackEntry :448 · Layout::place :448-470"),
+            vec![
+                ("StackEntry".to_string(), Some("StackEntry".to_string())),
+                ("place".to_string(), Some("::place".to_string()))
             ]
         );
     }

@@ -550,3 +550,19 @@ parse
 is "$RC" 0 'a brief over its budget is a warning, never a refusal'
 like "$OUT" 'over the 3000 byte budget' 'and the warning says by how much'
 like "$OUT" 'heaviest line of the block is Done:' 'and which line to trim'
+
+# A line location in a Uses item -- budget.rs:12, a bare :48, a :48-60 span --
+# points into a file and names nothing; read as a token it stood where the
+# symbol was (friction #QG0SDXQ4).
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Fill the arm
+      Files: src/budget.rs
+      Verify: true
+      Uses: src/budget.rs:12 and the empty place arm at :48 · PlaceArm :48-60
+EOF2
+parse
+is "$RC" 0 'a Uses item that points into a file parses'
+unlike "$OUT" "Uses names '48'" 'a line number is a place, not a name'
+like "$OUT" "Uses names 'PlaceArm'" 'and the symbol in front of a span is still read'
