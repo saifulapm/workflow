@@ -64,7 +64,11 @@ like "$roadmap_skill" 'mem plan <slug> --set-file' 'and one plan per milestone b
 like "$roadmap_skill" 'workflow plan-check roadmap.md' 'roadmap checks the whole thing at once'
 like "$roadmap_skill" 'mem roadmap +#' 'a later session reads which milestone is next'
 like "$roadmap_skill" 'mem plan --from <slug>' 'and makes its plan the plan of record'
-like "$roadmap_skill" 'plan-check' 'then checks that plan against the tree it will run in'
+# `--from` writes the plan of record into mem's store, and nothing puts a copy
+# in the checkout. Checking a bare plan.md there reads whatever an older
+# session left lying around, and the milestone runs unchecked.
+like "$roadmap_skill" 'plan-check <\(mem plan\)' 'then checks that plan against the tree it will run in'
+unlike "$roadmap_skill" 'plan-check plan\.md' 'and not a plan.md nothing wrote'
 like "$roadmap_skill" 'One milestone' 'a session takes one milestone and no more'
 # A plan cut weeks ago meets a tree that has moved. The small difference is
 # the orchestrator's to absorb; the one that changes what is being built is

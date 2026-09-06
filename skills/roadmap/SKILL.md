@@ -57,12 +57,14 @@ One milestone per session, and nothing else in that session.
 
     mem roadmap                # the milestones; the first unticked is next
     mem plan --from <slug>     # make its plan the plan of record
-    workflow plan-check plan.md
+    workflow plan-check <(mem plan)
 
 `--from` is refused while the plan of record still holds an unchecked task,
 because that plan is a run in flight; `mem plan --clear` abandons it. Check
 the plan again here even though it was checked when it was cut: the
-milestones before it have landed and the tree has moved under it.
+milestones before it have landed and the tree has moved under it. The check
+reads the plan of record itself, because `--from` writes it into mem's store
+and a `plan.md` in the checkout is some earlier session's leftover.
 
 Then `orchestrate` owns the run. A run that merges every task ticks its
 milestone off in the roadmap by itself.
