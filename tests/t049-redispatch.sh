@@ -22,7 +22,7 @@ if [ "$task" = t1 ]; then
 		say progress
 		sleep 0.5
 	done
-elif [ ! -f "$WF_TMP/go-t2" ]; then
+elif [ ! -f "$WF_TMP/go-$task" ]; then
 	say 'blocked waiting on a decision'
 	printf '{"is_error":false,"result":"blocked"}\n'
 	exit 0
@@ -106,3 +106,47 @@ like "$(cat "$T_TMP/plan.md")" '\[X\] t1' 'a merged task is ticked off in the pl
 like "$(cat "$T_TMP/plan.md")" '\[X\] t2' 'both of them'
 unlike "$(cat "$T_TMP/run.log")" 'is this plan in mem' \
 	'and the run does not send its reader to a plan slot it was never given'
+
+## ------------------------------------------ a wave that has closed behind it
+
+# The marker is read for the open wave only, and the answer used to be the
+# same cheerful line either way: exit 0 and a marker nothing would ever read
+# (friction #H80BMJJF).
+rm -f "$WF_TMP/release-t1"
+: >"$WF_TMP/go-t4"
+cat >"$T_TMP/closed.md" <<'EOF'
+# plan: closed
+
+- [ ] t3 Fails in the first wave
+      Files: app/t3.php
+      Verify: true
+- [ ] t4 Lands in the first wave
+      Files: app/t4.php
+      Verify: true
+- [ ] t1 Holds the second wave open [after: t4]
+      Files: app/t1.php
+      Verify: true
+EOF
+rundir="$XDG_STATE_HOME/workflow/runs/app/closed"
+
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
+	workflow run --plan-file "$T_TMP/closed.md" >"$T_TMP/closed.log" 2>&1 &
+runpid=$!
+
+for _ in $(seq 1 150); do
+	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = dispatched ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 'the second wave is open'
+is "$(cat "$rundir/t3.state" 2>/dev/null)" failed 'with t3 failed in the wave before it'
+is "$(cat "$rundir/wave" 2>/dev/null)" t1 'and the run has written down which wave is open'
+
+run workflow redispatch t3
+is "$RC" 1 'asking for a task whose wave has closed is refused'
+like "$OUT" 'wave that has closed' 'and the answer says why'
+truthy "$([ ! -e "$rundir/t3.redispatch" ] && echo 0 || echo 1)" 'no marker is left for nobody to read'
+
+: >"$WF_TMP/release-t1"
+wait "$runpid"
+is "$?" 1 'the run ends with t3 still failed'
+is "$(cat "$rundir/t3.dispatches")" 1 'and t3 was never dispatched again'

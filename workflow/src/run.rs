@@ -1875,6 +1875,17 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     ));
 
     for wave in run.plan.waves.clone() {
+        // Which tasks a redispatch can still reach. `workflow redispatch`
+        // reads this to refuse a task whose wave has closed, instead of
+        // leaving a marker nothing will read (friction #H80BMJJF).
+        let open = run.dir.join("wave");
+        if let Err(e) = std::fs::write(&open, format!("{}\n", wave.join(" "))) {
+            warn(format!(
+                "run {}: cannot write {} ({e})",
+                run.plan.plan_id,
+                open.display()
+            ));
+        }
         let mut queue: Vec<String> = Vec::new();
         for id in &wave {
             let Some(task) = run.plan.get(id).cloned() else {
@@ -2145,13 +2156,24 @@ pub fn cmd_redispatch(task: &str) -> i32 {
         if field(&dir, task, "state") != FAILED {
             continue;
         }
-        let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
         let plan_id = dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+        // The poll loop reads markers for the open wave only: a task that
+        // failed in a wave that has closed cannot feed what waited on it,
+        // and its marker would sit unread. Said, with exit 1, rather than
+        // the same cheerful line either way (friction #H80BMJJF).
+        let open = std::fs::read_to_string(dir.join("wave")).unwrap_or_default();
+        if !open.split_whitespace().any(|t| t == task) {
+            warn(format!(
+                "run {plan_id}: {task} failed in a wave that has closed -- this run will not dispatch it; run the plan again when it ends"
+            ));
+            return exit::FAILED;
+        }
+        let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
         warn(format!(
-            "run {plan_id}: asked to dispatch {task} again -- it goes on the next poll while its wave is open"
+            "run {plan_id}: asked to dispatch {task} again -- it goes on the next poll with a free worker slot"
         ));
         return exit::OK;
     }

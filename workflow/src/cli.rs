@@ -212,7 +212,7 @@ usage: workflow <command> [options]
       0 nothing to do · 1 reaped something
   redispatch <task>
       ask the live run to dispatch a failed task again
-      0 the run was asked · 1 no live run holds that task failed
+      0 the run was asked · 1 no live run holds that task failed, or its wave closed
   status [--json]
       report this project's runs: task states, spend, lock liveness
       0 reported · 2 outside a project
