@@ -287,10 +287,10 @@ impl Run {
             .join(&self.plan.plan_id)
     }
 
+    /// Unconditional: a Cargo.toml at the repo root is not where every Rust
+    /// project keeps one, and a builder that turns out not to need this is no
+    /// worse off for having it.
     fn cargo_env(&self, who: &str) -> Option<(String, String)> {
-        if !self.repo.join("Cargo.toml").is_file() {
-            return None;
-        }
         let dir = self.cargo_root().join(who);
         let _ = std::fs::create_dir_all(&dir);
         Some(("CARGO_TARGET_DIR".into(), dir.to_string_lossy().to_string()))
