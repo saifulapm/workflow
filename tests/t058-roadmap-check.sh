@@ -97,9 +97,11 @@ is "$RC" 0 'a roadmap whose milestones all hold is not refused'
 like "$OUT" '^roadmap: shop$' 'the report still names the roadmap'
 like "$ERR" "m1-auth: plan: task t1: 'engine/auth/session.rs' matches nothing" \
 	'a finding carries the milestone it came from'
-unlike "$ERR" 'm2-billing' \
+like "$ERR" 'milestone m1-auth: reading road/m1-auth.md' \
+	'and every milestone names the file it was read from'
+unlike "$ERR" 'm2-billing: plan:' \
 	'what a milestone it waits on writes and gives is not missing from it'
-unlike "$ERR" 'm3-reports' \
+unlike "$ERR" 'm3-reports: plan:' \
 	'and the chain reaches through the milestone between them'
 like "$ERR" 'm4-search: plan: task t1: Read names' \
 	'reading what a milestone it does not wait for writes still warns'
@@ -190,6 +192,51 @@ check
 is "$RC" 0 'a one-task milestone is not refused'
 like "$ERR" 'm2-billing.*one task' 'but it is named'
 like "$ERR" 'run refuses' 'with what run would do with it'
+
+## ------------------------------------------- whose grammar line is whose
+
+# The grammar prints its own diagnostics as it reads a milestone, long before
+# the findings are batched and printed together, so two broken milestones would
+# run their lines into one heap. What is read is announced first, and the lines
+# under an announcement are that milestone's.
+road_reset
+road <<'EOF'
+# roadmap: shop
+
+- [ ] m1-auth Sign-in and sessions
+- [ ] m2-billing Billing  [after: m1-auth]
+EOF
+milestone m1-auth <<'EOF'
+# plan: m1-auth
+
+- [ ] t1 Add the session store
+      Files: engine/src/session.rs
+- [ ] t2 Read sessions at boot  [after: t1]
+      Files: engine/src/lib.rs
+      Verify: cargo build
+EOF
+milestone m2-billing <<'EOF'
+# plan: m2-billing
+
+- [ ] t1 Charge a customer
+      Verify: cargo build
+- [ ] t2 Refund a charge  [after: t1]
+      Files: engine/src/refund.rs
+      Verify: cargo build
+EOF
+# What stderr said after one milestone was announced and before the next was.
+under() {
+	awk -v id="$1" '
+		$0 ~ ": milestone " id ": reading " { on = 1; next }
+		/: milestone [^ ]+: reading / { on = 0 }
+		on' "$T_TMP/check.err"
+}
+check
+is "$RC" 1 'two milestones that do not parse are both refused'
+like "$(under m1-auth)" 'task t1 has no Verify' \
+	"the first milestone's grammar lines sit under its own name"
+unlike "$(under m1-auth)" 'task t1 has no Files' 'and not the next one'
+like "$(under m2-billing)" 'task t1 has no Files' "the second milestone's sit under its"
 
 ## ------------------------------------------------------------ a plain plan
 

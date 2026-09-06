@@ -237,9 +237,14 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
             ));
             continue;
         };
+        // The grammar prints its diagnostics as it reads, while every finding
+        // below is batched and printed after the whole walk. Without this line
+        // two broken milestones spill their complaints into one heap that says
+        // nothing about which file either belongs to.
+        crate::warn(format!("roadmap: milestone {id}: reading {shown}"));
         let Some(plan) = plan::parse(&text, true) else {
             f.refusals.push(format!(
-                "roadmap: milestone {id}: the plan at {shown} does not parse; the lines above say what is wrong with it"
+                "roadmap: milestone {id}: the plan at {shown} does not parse; the lines under it say what is wrong with it"
             ));
             continue;
         };
