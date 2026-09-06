@@ -86,6 +86,17 @@ own2)
 	say ready 'merge-ready'
 	done_json
 	;;
+own3)
+	# The work is owned; the untracked leftover is the harness's own scratch,
+	# a sub-agent's memory, and not the task's write (friction #HE9YA819).
+	mkdir -p app/Services .claude/agent-memory/code-reviewer
+	printf '<?php\n' >app/Services/Owned3.php
+	git add app/Services/Owned3.php
+	commit 'Add the third owned file'
+	printf 'notes\n' >.claude/agent-memory/code-reviewer/MEMORY.md
+	say ready 'merge-ready'
+	done_json
+	;;
 hang)
 	sh -c 'sleep 300' &
 	printf '%s\n' "$!" >>"$WF_TMP/hang-children"
@@ -172,6 +183,9 @@ base=$(git rev-parse HEAD)
 - [ ] own2 Leave a stray file behind
       Files: app/Services/Owned2.php
       Verify: true
+- [ ] own3 Leave the harness's scratch behind
+      Files: app/Services/Owned3.php
+      Verify: true
 - [ ] hang Never finish
       Files: app/Services/Hang.php
       Verify: true
@@ -240,6 +254,8 @@ like "$run_out" 'with space' 'and the whole record for the unowned path with a s
 like "$run_out" 'Renamed Legacy' 'and the rename that left its patterns is reported'
 is "$(cat "$rundir/own2.state")" failed 'the untracked-file ownership violator is refused'
 like "$run_out" 'notes/scratch.txt' 'and the stray untracked file is named'
+is "$(cat "$rundir/own3.state")" merged \
+	"untracked scratch under .claude/ is the harness's, not a write outside Files"
 
 is "$(cat "$rundir/red.state")" failed 'the clean exit with red tests is failed'
 is "$(cat "$rundir/red.dispatches")" 1 'and it is not redispatched'
@@ -281,7 +297,7 @@ is "$(cat "$rundir/touch.state")" merged 'the transcript-only worker was never k
 ## ---------------------------------------------------- the integration branch
 
 ahead=$(git rev-list --count "$base..integration/fixture-run")
-is "$ahead" 4 'integration is ahead of base_sha by the four merged tasks'
+is "$ahead" 5 'integration is ahead of base_sha by the five merged tasks'
 run git merge-base --is-ancestor "$(git rev-parse fixture-run/red 2>/dev/null || echo HEAD)" integration/fixture-run
 isnt "$RC" 0 'the red task never landed on integration'
 

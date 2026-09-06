@@ -96,6 +96,20 @@ fn diff_records(bytes: &[u8]) -> BTreeSet<Vec<u8>> {
     out
 }
 
+/// Claude Code's own scratch inside a worktree: a sub-agent's memory under
+/// `.claude/agent-memory/`, the permissions a session allowed in
+/// `.claude/settings.local.json`. The harness writes it, not the task, and no
+/// commit carries it -- and counting it failed a task before review for a
+/// file it never wrote (friction #HE9YA819). Only the untracked record is
+/// waved through: a tracked file under `.claude/` that a task changes is
+/// still its write.
+fn harness_scratch(record: &[u8]) -> bool {
+    let Some(path) = record.strip_prefix(b"?? ") else {
+        return false;
+    };
+    path.starts_with(b".claude/") || path.windows(9).any(|w| w == b"/.claude/")
+}
+
 /// Whitespace-separated globs, double quotes around one that contains a space.
 pub fn split_patterns(line: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -144,7 +158,11 @@ pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) ->
     owned_args.extend(&spec_args);
     let all = status_records(&git.bytes(&status));
     let owned = status_records(&git.bytes(&owned_args));
-    out.extend(all.difference(&owned).cloned());
+    out.extend(
+        all.difference(&owned)
+            .filter(|r| !harness_scratch(r))
+            .cloned(),
+    );
 
     let range = format!("{anchor}...{branch}");
     let diff = ["diff", "--name-status", "-z", "-M", range.as_str()];
@@ -197,6 +215,18 @@ mod tests {
         assert!(recs.contains(&"R100|app/Old.php|app/New.php".to_string()));
         assert!(recs.contains(&"M|app/Kept.php".to_string()));
         assert_eq!(recs.len(), 2);
+    }
+
+    #[test]
+    fn the_harness_s_own_untracked_scratch_is_not_the_task_s_write() {
+        assert!(harness_scratch(
+            b"?? .claude/agent-memory/code-reviewer/MEMORY.md"
+        ));
+        assert!(harness_scratch(b"?? apps/web/.claude/settings.local.json"));
+        // Tracked and changed is the task's doing, wherever it sits.
+        assert!(!harness_scratch(b" M .claude/settings.json"));
+        assert!(!harness_scratch(b"?? notes/scratch.txt"));
+        assert!(!harness_scratch(b"?? .claude-flow/x"));
     }
 
     #[test]
