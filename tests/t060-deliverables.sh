@@ -41,7 +41,10 @@ orchestrate_skill=$(cat "$WF_ROOT/skills/orchestrate/SKILL.md")
 like "$orchestrate_skill" 'workflow status --json' 'orchestrate polls status'
 like "$orchestrate_skill" 'workflow plan-check' 'orchestrate checks the plan before running it'
 like "$orchestrate_skill" 'mem save --kind ruling' 'orchestrate records its decisions as rulings'
-like "$orchestrate_skill" 'mem ask' 'orchestrate escalates through the question channel'
+# An orchestrator runs in the background with nobody to ask in, so the
+# escalation has to name the channel it goes out on, not just say to ask.
+like "$orchestrate_skill" 'ask Saiful fresh with `mem ask`' \
+	'orchestrate escalates through the question channel'
 # The binary decides mechanics; the session decides judgment. A skill that
 # edits project code has crossed the line the layer exists to draw.
 like "$orchestrate_skill" 'ever edit project code' 'orchestrate forbids touching the code'

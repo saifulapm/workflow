@@ -48,10 +48,10 @@ is yours.
 
 ## Questions
 
-A worker's `mem ask` reaches you, never the hub or the phone, and is never
-forwarded. When rule 5 applies, ask Saiful fresh: one decision, the choices,
-your recommendation, under 100 words; carry his answer back with
-`mem answer`.
+A worker's `mem ask` reaches you, not the hub or the phone, and is never
+forwarded. When rule 5 applies, ask Saiful fresh with `mem ask`: one
+decision, the choices, your recommendation, under 100 words; carry the
+answer back with `mem answer`.
 
 ## Frictions
 
@@ -66,7 +66,7 @@ index drift, pages to compact.
 ## Ending
 
 `mem log` the counts, the context each task carried, where integration was
-left. Questions the run did not answer `moot` are yours to answer or close.
+left. Questions the run left open are yours to answer or `moot`.
 A shipped plan supersedes each friction it names: `mem save "friction #<id>
 closed: <how>" --supersedes <id>`. A task that ended near a full window was
 cut too big; say so. Nothing is pushed. Leave the checkout on main. On
