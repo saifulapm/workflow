@@ -23,7 +23,9 @@ fn ask_env(
         .env("XDG_STATE_HOME", dirs.state)
         .env("XDG_CONFIG_HOME", dirs.config)
         .env("MEM_SYNC_CMD", "true")
-        .env("MEM_POLL_MS", "50");
+        .env("MEM_POLL_MS", "50")
+        .env_remove("WORKFLOW_TASK")
+        .env_remove("CARGO_TARGET_DIR");
     match notify_log {
         // A stub standing in for notify-send: it appends the arguments it was
         // called with to a file the test can read.
@@ -534,4 +536,98 @@ fn workflow_task_in_the_environment_addresses_the_orchestrator() {
     let out = ask_env(&w, &repo, &["ask", "ship it?", "--json"], None);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(v["audience"].is_null(), "{v}");
+}
+
+/// A task worktree's own path outranks `WORKFLOW_TASK`: the environment
+/// cannot spoof another task's question just because it names one.
+#[test]
+fn the_worktree_path_outranks_workflow_task_in_the_environment() {
+    let w = World::new("q-worktree-wins");
+    let repo = w.repo("thing", None);
+    common::run_git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    );
+    let wt = w.dirs().workflow_worktrees().join("thing/cart-v2/t7");
+    std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+    common::run_git(
+        &repo,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "cart-v2/t7"],
+    );
+
+    let out = common::mem_env(
+        &w,
+        &wt,
+        &["ask", "which base?", "--json"],
+        &[("MEM_SYNC_CMD", "true"), ("WORKFLOW_TASK", "other/t1")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["audience"], "orchestrator", "{v}");
+
+    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"][0]["task"], "cart-v2/t7", "{v}");
+}
+
+/// The `_integration` worktree speaks for no single task, so it defers to
+/// `WORKFLOW_TASK` like a process outside the worktree root would.
+#[test]
+fn an_integration_worktree_defers_to_workflow_task_in_the_environment() {
+    let w = World::new("q-integration");
+    let repo = w.repo("thing", None);
+    common::run_git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    );
+    let wt = w
+        .dirs()
+        .workflow_worktrees()
+        .join("thing/cart-v2/_integration");
+    std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+    common::run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            wt.to_str().unwrap(),
+            "-b",
+            "cart-v2/_integration",
+        ],
+    );
+
+    let out = common::mem_env(
+        &w,
+        &wt,
+        &["ask", "which base?", "--json"],
+        &[("MEM_SYNC_CMD", "true"), ("WORKFLOW_TASK", "cart-v2/t9")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["audience"], "orchestrator", "{v}");
+
+    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"][0]["task"], "cart-v2/t9", "{v}");
 }

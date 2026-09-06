@@ -1163,29 +1163,33 @@ fn print_singleton(
 }
 
 /// The orchestrated task this process speaks for, as `<plan>/<task>`, or
-/// nothing. `WORKFLOW_TASK` says so outright; failing that, a working
-/// directory under the workflow's worktree root
-/// (`.../workflow/worktrees/<project>/<plan>/<task>`) is a worker's, and a
-/// worker cannot forget to say who it is.
+/// nothing. A working directory under the workflow's worktree root
+/// (`.../workflow/worktrees/<project>/<plan>/<task>`) names its own task, and
+/// a worker cannot forget to say who it is or spoof another task by exporting
+/// `WORKFLOW_TASK`. The `_integration` worktree speaks for no single task, and
+/// a process outside the root has no path to read, so both fall back to
+/// `WORKFLOW_TASK`.
 fn asking_task(app: &App) -> Option<String> {
-    if let Ok(v) = std::env::var("WORKFLOW_TASK")
-        && !v.trim().is_empty()
-    {
-        return Some(v.trim().to_string());
-    }
     let root = app.dirs.workflow_worktrees();
     let cwd = crate::git::canonical(&app.cwd);
     let root = std::fs::canonicalize(&root).unwrap_or(root);
-    let rel = cwd.strip_prefix(&root).ok()?;
-    let parts: Vec<String> = rel
-        .iter()
-        .take(3)
-        .map(|c| c.to_string_lossy().to_string())
-        .collect();
-    match parts.as_slice() {
-        [_project, plan, task] => Some(format!("{plan}/{task}")),
-        _ => None,
+    let from_cwd = cwd.strip_prefix(&root).ok().and_then(|rel| {
+        let parts: Vec<String> = rel
+            .iter()
+            .take(3)
+            .map(|c| c.to_string_lossy().to_string())
+            .collect();
+        match parts.as_slice() {
+            [_project, plan, task] if task != "_integration" => Some(format!("{plan}/{task}")),
+            _ => None,
+        }
+    });
+    if from_cwd.is_some() {
+        return from_cwd;
     }
+    let v = std::env::var("WORKFLOW_TASK").ok()?;
+    let v = v.trim();
+    if v.is_empty() { None } else { Some(v.to_string()) }
 }
 
 /// `mem ask` — writes the question, asks for a sync, fires a notification and
