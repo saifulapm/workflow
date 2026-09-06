@@ -170,10 +170,14 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
     // The grammar is half the check: the plan must also hold in the checkout
     // it will run in (frictions #DBHZBFY1, #6485CNC0). Warnings inform the
     // planner; a Verify that cannot pass here is refused, after the report so
-    // the author still sees what parsed.
+    // the author still sees what parsed. A roadmap is checked through the
+    // milestone plans it names, one per milestone, in wave order.
     let mut refusals = Vec::new();
     if let Some(top) = gitcmd::Git::here().toplevel() {
-        let found = plancheck::findings(&parsed, &top, Some(file));
+        let found = match parsed.kind {
+            plan::PlanKind::Roadmap => plancheck::roadmap_findings(&parsed, &top, file),
+            plan::PlanKind::Plan => plancheck::findings(&parsed, &[], &top, Some(file)),
+        };
         for w in &found.warnings {
             warn(w);
         }

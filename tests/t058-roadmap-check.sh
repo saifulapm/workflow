@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# `workflow plan-check` on a roadmap: every milestone's plan is read from
+# <dir>/<id>.md beside it and judged in wave order, each against the tree plus
+# what the milestones it waits on, transitively, write and give.
+source "$(dirname -- "$0")/lib.sh"
+t_init
+
+new_repo roadmap
+mkdir -p engine/src
+printf 'pub fn boot() {}\n' >engine/src/lib.rs
+git add engine/src/lib.rs
+git -c core.hooksPath=/dev/null commit -qm 'the engine'
+
+# The roadmap and its milestone plans live beside each other, the way a
+# planner writes them before storing them in mem.
+mkdir -p road
+road() { cat >"road/roadmap.md"; }
+milestone() { cat >"road/$1.md"; }
+road_reset() { rm -rf road && mkdir road; }
+# The report on stdout, the findings on stderr, and the exit code.
+check() {
+	OUT=$(workflow plan-check road/roadmap.md 2>"$T_TMP/check.err")
+	RC=$?
+	ERR=$(cat "$T_TMP/check.err")
+}
+
+## --------------------------------------------------- a chain that holds
+
+# Listed out of the order they run in: the walk is by wave, so a milestone is
+# read after everything it waits on, however the document lists them.
+road <<'EOF'
+# roadmap: shop
+
+- [ ] m4-search Search
+- [ ] m3-reports Reports  [after: m2-billing]
+- [ ] m2-billing Billing  [after: m1-auth]
+- [ ] m1-auth Sign-in and sessions
+EOF
+
+milestone m1-auth <<'EOF'
+# plan: m1-auth
+
+- [ ] t1 Add the session store
+      Files: engine/auth/session.rs
+      Gives: fn sign_in(user: &str) -> Session
+      Verify: cargo build
+- [ ] t2 Read sessions at boot  [after: t1]
+      Files: engine/src/lib.rs
+      Read: engine/auth/session.rs
+      Uses: fn sign_in(user: &str) -> Session
+      Verify: cargo build
+EOF
+
+milestone m2-billing <<'EOF'
+# plan: m2-billing
+
+- [ ] t1 Charge a signed-in customer
+      Files: engine/auth/charge.rs
+      Read: engine/auth/session.rs
+      Uses: fn sign_in(user: &str) -> Session
+      Verify: cargo build
+- [ ] t2 Refund a charge  [after: t1]
+      Files: engine/src/refund.rs
+      Verify: cargo build
+EOF
+
+milestone m3-reports <<'EOF'
+# plan: m3-reports
+
+- [ ] t1 Report on sessions
+      Files: engine/src/report.rs
+      Read: engine/auth/session.rs
+      Uses: fn sign_in(user: &str) -> Session
+      Verify: cargo build
+- [ ] t2 Summarise the reports  [after: t1]
+      Files: engine/src/summary.rs
+      Pattern: engine/auth/session.rs
+      Verify: cargo build
+EOF
+
+milestone m4-search <<'EOF'
+# plan: m4-search
+
+- [ ] t1 Search the orders
+      Files: engine/src/search.rs
+      Read: engine/auth/session.rs
+      Uses: fn sign_in(user: &str) -> Session
+      Verify: cargo build
+- [ ] t2 Index the orders  [after: t1]
+      Files: engine/src/index.rs
+      Pattern: engine/auth/session.rs
+      Verify: cargo build
+EOF
+
+check
+is "$RC" 0 'a roadmap whose milestones all hold is not refused'
+like "$OUT" '^roadmap: shop$' 'the report still names the roadmap'
+like "$ERR" "m1-auth: plan: task t1: 'engine/auth/session.rs' matches nothing" \
+	'a finding carries the milestone it came from'
+unlike "$ERR" 'm2-billing' \
+	'what a milestone it waits on writes and gives is not missing from it'
+unlike "$ERR" 'm3-reports' \
+	'and the chain reaches through the milestone between them'
+like "$ERR" 'm4-search: plan: task t1: Read names' \
+	'reading what a milestone it does not wait for writes still warns'
+like "$ERR" 'm4-search: plan: task t1: Uses names' \
+	'and so does using what that milestone gives'
+like "$ERR" 'm4-search: plan: task t2: Pattern points at' \
+	'a Pattern is read the same way'
+
+## ------------------------------------------- the milestone plans themselves
+
+# A milestone names a plan; no plan under that name is the roadmap pointing at
+# nothing.
+road_reset
+road <<'EOF'
+# roadmap: shop
+
+- [ ] m1-auth Sign-in and sessions
+- [ ] m2-billing Billing  [after: m1-auth]
+EOF
+milestone m1-auth <<'EOF'
+# plan: m1-auth
+
+- [ ] t1 Add the session store
+      Files: engine/src/session.rs
+      Verify: cargo build
+- [ ] t2 Read sessions at boot  [after: t1]
+      Files: engine/src/lib.rs
+      Verify: cargo build
+EOF
+check
+is "$RC" 1 'a milestone with no plan beside the roadmap is refused'
+like "$ERR" 'm2-billing.*road/m2-billing.md' 'and the refusal names the file it looked for'
+
+# A plan filed under another milestone's name would send a run at the wrong one.
+milestone m2-billing <<'EOF'
+# plan: billing
+
+- [ ] t1 Charge a customer
+      Files: engine/src/charge.rs
+      Verify: cargo build
+- [ ] t2 Refund a charge  [after: t1]
+      Files: engine/src/refund.rs
+      Verify: cargo build
+EOF
+check
+is "$RC" 1 'a plan headed with a slug that is not the milestone id is refused'
+like "$ERR" "m2-billing.*'# plan: billing'" 'and the refusal names both'
+
+# Files: and Verify: are required of every task in a milestone's plan: it is
+# dispatched as it stands.
+milestone m2-billing <<'EOF'
+# plan: m2-billing
+
+- [ ] t1 Charge a customer
+      Files: engine/src/charge.rs
+- [ ] t2 Refund a charge  [after: t1]
+      Files: engine/src/refund.rs
+      Verify: cargo build
+EOF
+check
+is "$RC" 1 'a milestone plan whose task has no Verify: is refused'
+like "$ERR" 'task t1 has no Verify' 'the grammar says what is wrong with it'
+like "$ERR" 'm2-billing.*does not parse' 'and the refusal names the milestone'
+
+# run refuses a one-task plan, so a milestone cut down to one is worth saying
+# out loud -- but the roadmap is not wrong, so it warns.
+milestone m2-billing <<'EOF'
+# plan: m2-billing
+
+- [ ] t1 Charge a customer
+      Files: engine/src/charge.rs
+      Verify: cargo build
+EOF
+check
+is "$RC" 0 'a one-task milestone is not refused'
+like "$ERR" 'm2-billing.*one task' 'but it is named'
+like "$ERR" 'run refuses' 'with what run would do with it'
+
+## ------------------------------------------------------------ a plain plan
+
+# Nothing of the roadmap walk reaches a plan: it is judged against the tree
+# alone, exactly as before.
+road_reset
+cat >road/plan.md <<'EOF'
+# plan: p
+
+- [ ] t1 Add the session store
+      Files: engine/src/session.rs
+      Read: engine/auth/session.rs
+      Verify: cargo build
+EOF
+OUT=$(workflow plan-check road/plan.md 2>&1)
+RC=$?
+is "$RC" 0 'a plan is checked as it always was'
+like "$OUT" '^plan: p$' 'and reported as a plan'
+like "$OUT" 'plan: task t1: Read names' 'with its findings unprefixed'

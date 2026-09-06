@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use crate::gitcmd::{self, Git};
-use crate::plan::{Plan, Task};
+use crate::plan::{self, Plan, Task};
 use crate::{brief, memcli, ownership, paths};
 
 pub struct Findings {
@@ -18,7 +18,10 @@ pub struct Findings {
     pub warnings: Vec<String>,
 }
 
-pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings {
+/// `prior` is the plans this one waits on: the milestones a roadmap puts ahead
+/// of it, so what their tasks write and Give is part of the tree this plan will
+/// run in. A plan of its own has none.
+pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Path>) -> Findings {
     let git = Git::at(root);
     let mut f = Findings {
         refusals: Vec::new(),
@@ -33,7 +36,11 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
     // moves in the files one worker holds while the file asserting it belongs
     // to nobody (friction #8M2YDDXH).
     let mut claimed = std::collections::HashSet::new();
-    for t in &plan.tasks {
+    for t in plan
+        .tasks
+        .iter()
+        .chain(prior.iter().flat_map(|p| p.tasks.iter()))
+    {
         for p in ownership::split_patterns(t.files.as_deref().unwrap_or("")) {
             let spec = gitcmd::glob_top(&p);
             claimed.extend(zlines(&git.bytes(&["ls-files", "-z", "--", &spec])));
@@ -78,7 +85,7 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
         }
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
         for p in &patterns {
-            if matches_nothing(&git, root, p) {
+            if matches_nothing(&git, root, p) && !dir_claimed(prior, p) {
                 f.warnings.push(format!(
                     "plan: task {}: '{p}' matches nothing here and its directory does not exist -- a task creating it, or a typo",
                     t.id
@@ -113,6 +120,7 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
             !root.join(p).exists()
                 && git.bytes(&["ls-files", "-z", "--", p]).is_empty()
                 && !written_by(plan, &waited_for, p)
+                && !prior.iter().any(|dep| written_by(dep, &dep.ids(), p))
         };
         let read = t.read.as_deref().unwrap_or("");
         for p in ownership::split_patterns(read) {
@@ -140,11 +148,15 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
             let Some(needle) = needle else {
                 continue;
             };
-            let given = waited_for.iter().any(|d| {
-                plan.get(d)
-                    .and_then(|dep| dep.gives.as_deref())
-                    .is_some_and(|g| g.contains(&ident))
-            });
+            let given = waited_for
+                .iter()
+                .filter_map(|d| plan.get(d))
+                .chain(prior.iter().flat_map(|p| p.tasks.iter()))
+                .any(|dep| {
+                    dep.gives
+                        .as_deref()
+                        .is_some_and(|g| g.contains(ident.as_str()))
+                });
             if !given && named_by(&git, &needle, itself.as_deref()).is_empty() {
                 f.warnings.push(format!(
                     "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
@@ -198,6 +210,100 @@ pub fn findings(plan: &Plan, root: &Path, plan_file: Option<&Path>) -> Findings 
     f
 }
 
+/// A roadmap is a plan of plans: every milestone names `<id>.md` beside it,
+/// holding a plan the run lane will be handed as it stands -- so Files: and
+/// Verify: are required of its tasks, and a milestone pointing at no plan, or
+/// at a plan filed under another name, is refused.
+///
+/// The walk is by wave rather than by line, so a milestone is read after the
+/// ones it waits on: their plans are what it is judged against as well as the
+/// tree, because by the time it runs their work has landed. A milestone line
+/// carries no Files, Verify, Read or Uses of its own -- everything `findings`
+/// judges lives in the plan it names.
+pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
+    let dir = file.parent().unwrap_or(Path::new("."));
+    let mut f = Findings {
+        refusals: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let mut plans: Vec<(String, Plan)> = Vec::new();
+    for id in roadmap.waves.iter().flatten() {
+        let path = dir.join(format!("{id}.md"));
+        let shown = path.display();
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            f.refusals.push(format!(
+                "roadmap: milestone {id}: no plan at {shown} -- a milestone id is the slug of the plan filed beside the roadmap"
+            ));
+            continue;
+        };
+        let Some(plan) = plan::parse(&text, true) else {
+            f.refusals.push(format!(
+                "roadmap: milestone {id}: the plan at {shown} does not parse; the lines above say what is wrong with it"
+            ));
+            continue;
+        };
+        if plan.plan_id != *id {
+            f.refusals.push(format!(
+                "roadmap: milestone {id}: the plan at {shown} is headed '# plan: {}' -- a plan is filed under the milestone that names it",
+                plan.plan_id
+            ));
+            continue;
+        }
+        if plan.tasks.len() <= 1 {
+            f.warnings.push(format!(
+                "roadmap: milestone {id}: its plan has one task, and run refuses a one-task plan -- do that task in the session, or plan the whole milestone"
+            ));
+        }
+        let waited_for = roadmap
+            .get(id)
+            .map(|m| ancestors(roadmap, m))
+            .unwrap_or_default();
+        let prior: Vec<Plan> = plans
+            .iter()
+            .filter(|(mid, _)| waited_for.contains(mid))
+            .map(|(_, p)| p.clone())
+            .collect();
+        let found = findings(&plan, &prior, root, Some(&path));
+        // Which milestone a finding came from is the first thing its reader
+        // needs: a roadmap prints four plans' worth of them at once.
+        f.refusals
+            .extend(found.refusals.into_iter().map(|m| format!("{id}: {m}")));
+        f.warnings
+            .extend(found.warnings.into_iter().map(|m| format!("{id}: {m}")));
+        plans.push((id.clone(), plan));
+    }
+    f
+}
+
+/// A prior plan's Files claims something in the directory this pattern points
+/// into, so the directory is there by the time this plan runs -- which is the
+/// one thing `matches_nothing` could not know about a milestone that creates a
+/// tree the next milestone builds in.
+fn dir_claimed(prior: &[Plan], pattern: &str) -> bool {
+    let dir = fixed_dir(pattern);
+    prior
+        .iter()
+        .flat_map(|p| p.tasks.iter())
+        .flat_map(|t| ownership::split_patterns(t.files.as_deref().unwrap_or("")))
+        .any(|claim| {
+            let claimed = fixed_dir(&claim);
+            dir == claimed || dir.starts_with(&format!("{claimed}/"))
+        })
+}
+
+/// The directory a pattern points into: everything before the last slash of
+/// its glob-free head, as `matches_nothing` reads it.
+fn fixed_dir(pattern: &str) -> String {
+    let fixed: String = pattern
+        .chars()
+        .take_while(|c| !matches!(c, '*' | '?' | '['))
+        .collect();
+    match fixed.rsplit_once('/') {
+        Some((d, _)) => d.to_string(),
+        None => String::new(),
+    }
+}
+
 /// `cargo test --lib` in a crate with no library target runs nothing and can
 /// never go green -- the trap four tasks each paid an attempt to find
 /// (friction #DBHZBFY1). A workspace manifest is left alone: the member that
@@ -230,15 +336,7 @@ fn matches_nothing(git: &Git, root: &Path, pattern: &str) -> bool {
     if !git.bytes(&["ls-files", "-z", "--", &spec]).is_empty() {
         return false;
     }
-    let fixed: String = pattern
-        .chars()
-        .take_while(|c| !matches!(c, '*' | '?' | '['))
-        .collect();
-    let dir = match fixed.rsplit_once('/') {
-        Some((d, _)) => root.join(d),
-        None => root.to_path_buf(),
-    };
-    !dir.is_dir()
+    !root.join(fixed_dir(pattern)).is_dir()
 }
 
 /// Nothing tracked answers the pattern and git sees only ignored matches --
@@ -761,6 +859,30 @@ mod tests {
         assert!(written_by(&plan, &chain, "a.rs"));
         assert!(written_by(&plan, &chain, "b.rs"));
         assert!(!written_by(&plan, &chain, "d.rs"));
+    }
+
+    /// A milestone builds in the tree the milestone before it created, so the
+    /// directory its Files point into is not missing -- it is the earlier
+    /// plan's work, and warning about it once per milestone would teach the
+    /// reader to skip the warning.
+    #[test]
+    fn a_directory_a_prior_plan_claims_answers_a_pattern_under_it() {
+        let text = "\
+# plan: m1
+
+- [ ] t1 The session store
+      Files: engine/auth/*.rs
+      Verify: true
+- [ ] t2 The engine
+      Files: engine/src/lib.rs
+      Verify: true
+";
+        let prior = vec![crate::plan::parse(text, true).expect("the plan parses")];
+        assert!(dir_claimed(&prior, "engine/auth/charge.rs"));
+        assert!(dir_claimed(&prior, "engine/auth/refund/*.rs"));
+        assert!(dir_claimed(&prior, "engine/src/billing.rs"));
+        assert!(!dir_claimed(&prior, "host-web/src/cart.ts"));
+        assert!(!dir_claimed(&[], "engine/auth/charge.rs"));
     }
 
     #[test]
