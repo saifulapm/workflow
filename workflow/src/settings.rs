@@ -86,8 +86,8 @@ pub fn merge(current: &Value) -> Result<Value, String> {
 /// `on` is what a project writes to take the user file's `off` back, because
 /// a project's settings outrank the user's.
 ///
-/// Other people's entries in the same map are left alone: this names its own
-/// seven and nothing else.
+/// Other people's entries in the same map are left alone: this names the skills
+/// in `SKILLS` and nothing else.
 pub fn merge_skills(current: &Value, state: &str) -> Result<Value, String> {
     let Value::Object(root) = current else {
         return Err("the merge failed; nothing was written".into());
