@@ -203,6 +203,14 @@ for _ in $(seq 1 100); do
 done
 is "$(cat "$rundir/t1.state" 2>/dev/null)" reviewing \
 	'adoption starts the reading rather than merging straight through'
+
+# The state file is written by the orchestrator the moment dispatch returns;
+# the fake reader logs from a separately forked shell, which can still be
+# behind it. Wait for the log rather than trusting the state file's timing.
+for _ in $(seq 1 100); do
+	[ "$(grep -c '^t1-review$' "$WF_TMP/reviews.log" 2>/dev/null)" -ge 1 ] && break
+	sleep 0.2
+done
 is "$(grep -c '^t1-review$' "$WF_TMP/reviews.log")" 1 \
 	'the reading it started is fresh, so it is not stopped and read again'
 is "$(cat "$rundir/t1.review-tries")" 1 'one try recorded, not two'
