@@ -82,3 +82,25 @@ like "$ERR" \
 	'the real hit still warns once the plan itself is tracked'
 unlike "$ERR" 'named by plan\.md' \
 	"the plan's own Files line mentioning a basename is not counted as a hit on itself"
+
+## ------------------------------- a non-ascii naming file is read, not quoted
+
+new_repo data2
+mkdir -p assets tests
+printf 'title = "demo"\n' >assets/rules.toml
+printf 'grep rules.toml assets/rules.toml\n' >'tests/café_test.sh'
+git add assets/rules.toml 'tests/café_test.sh'
+git -c core.hooksPath=/dev/null commit -qm 'rules and a non-ascii test naming it'
+
+plan <<'EOF'
+# plan: assets
+
+- [ ] t1 Load the screen rules and their test
+      Files: assets/rules.toml tests/café_test.sh
+      Verify: true
+EOF
+
+check
+is "$RC" 0 'warnings do not refuse the plan'
+unlike "$ERR" 'is named by' \
+	'a non-ascii naming file claimed in Files is matched, quoting and all'

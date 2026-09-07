@@ -412,11 +412,9 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git, itself: Option<&s
         let Some(basename) = Path::new(f).file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Some(hits) = git.out(&["grep", "-l", "-F", basename]) else {
-            continue;
-        };
-        for hit in hits.lines() {
-            if Some(hit) == itself || files.iter().any(|p| covers(p, hit)) {
+        let hits = zlines(&git.bytes(&["grep", "-l", "-z", "-F", basename]));
+        for hit in &hits {
+            if Some(hit.as_str()) == itself || files.iter().any(|p| covers(p, hit)) {
                 continue;
             }
             out.push(format!(
