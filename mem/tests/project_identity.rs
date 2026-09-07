@@ -645,6 +645,21 @@ fn alias_project(id: &str, name: &str, alias: &str) -> mem::project::Project {
 }
 
 #[test]
+fn claim_note_leaves_a_child_project_alone() {
+    let mut child = alias_project("01K2CCCCCCCCCCCCCCCCCCCCCC", "thing", "thing");
+    child.parent = Some("01K2AAAAAAAAAAAAAAAAAAAAAA".to_string());
+    let registry = Registry {
+        projects: vec![child],
+    };
+    assert_eq!(
+        mem::verbs::claim_note(&registry, "thing"),
+        None,
+        "a child shares its root's remote, so claiming it would fold an \
+         unrelated checkout into the root's child instead of a project of its own"
+    );
+}
+
+#[test]
 fn claim_note_reports_an_alias_collision_instead_of_swallowing_it() {
     let registry = Registry {
         projects: vec![

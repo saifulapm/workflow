@@ -373,11 +373,11 @@ pub fn project_add(app: &App, subdir: &str, name: Option<&str>) -> Result<i32> {
 }
 
 /// `mem project set <key> "<value>"` — the per-project verification command,
-/// the per-project review paths, the worker backend. A write verb, so
-/// declaring one in a checkout mem has never seen registers that checkout,
-/// exactly as `mem log` there would — unless the checkout's own name is
-/// already claimed by a registered project, in which case that would spawn a
-/// duplicate rather than find it, and the write is refused instead.
+/// the per-project review paths, the worker backend. Unlike other write
+/// verbs, `project set` and `project unset` configure a project rather than
+/// record against one, so they resolve in `Mode::Read` and refuse an
+/// unregistered checkout instead of registering it; `claim_note` only
+/// sharpens the refusal's message when a project already owns the name.
 pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     let value = value.trim();
     if value.is_empty() {
@@ -476,8 +476,12 @@ pub fn unknown_project_note(identity: &Identity) -> Option<String> {
 /// where that is why the checkout's own remote never matched it, or names an
 /// alias collision the registry refused to pick between; `None` when no
 /// project shares the name, so the caller falls back to its own generic note.
+/// A child project is left alone (ruling 3): it shares its root's remote, so
+/// pointing an unrelated checkout at it by remote would fold that checkout's
+/// notes into the root's child instead of a project of its own.
 pub fn claim_note(registry: &Registry, name_hint: &str) -> Option<String> {
     match registry.by_name(name_hint) {
+        Ok(Some(project)) if project.parent.is_some() => None,
         Ok(Some(project)) if project.remote.is_none() => Some(format!(
             "this checkout ({name_hint}) is not registered, and a project named '{}' exists \
              without a remote — `mem project set --project {} remote <url>` sets it there, and \
