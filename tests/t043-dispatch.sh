@@ -148,8 +148,8 @@ like "$body" 'started, progress, ready, blocked' 'and the reporting states'
 like "$body" "$rundir/t1.status" 'the brief names the status file by path'
 like "$body" '`workflow verify --gate` runs after merge' \
 	'the brief names the gate that runs after merge'
-like "$body" "the project's whole ladder" \
-	"naming it the project's whole ladder"
+like "$body" "the project's verify key, else" \
+	"naming it the project's verify key, else"
 like "$body" 'cargo test && cargo clippy -- -D warnings && cargo fmt --check' \
 	'naming the Rust ladder as the example'
 like "$body" 'A green Verify with a red gate fails the task' \

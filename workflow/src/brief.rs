@@ -113,8 +113,8 @@ em dashes. Stage only the files this task touched; never `git add -A`.
 Everything you write must match the Files: patterns; anything outside them is
 refused at the merge gate and the task is failed.
 
-`workflow verify --gate` runs after merge: the project's whole ladder
-(Rust: `cargo test && cargo clippy -- -D warnings && cargo fmt --check`).
+`workflow verify --gate` runs after merge: the project's verify key, else
+its ladder (Rust: `cargo test && cargo clippy -- -D warnings && cargo fmt --check`).
 A green Verify with a red gate fails the task; run it before `ready`.
 
 ## Stop and ask -- never decide these yourself
@@ -218,7 +218,11 @@ mod tests {
         // comment on BUDGET promises stays under 2,400 -- a ceiling tighter
         // than BUDGET that catches a new paragraph eating the middle tier's
         // room before a real plan's task ever does.
-        assert!(body.len() <= 2400, "the fixed prose is {} bytes", body.len());
+        assert!(
+            body.len() <= 2400,
+            "the fixed prose is {} bytes",
+            body.len()
+        );
         for needle in [
             "Extract cart pricing into a service",
             "Files: app/Services/Cart*.php tests/Unit/Cart*",
@@ -232,7 +236,7 @@ mod tests {
             "started, progress, ready, blocked",
             "/state/runs/app/plan/t1.status",
             "`workflow verify --gate` runs after merge",
-            "the project's whole ladder",
+            "the project's verify key, else\nits ladder",
             "cargo test && cargo clippy -- -D warnings && cargo fmt --check",
             "A green Verify with a red gate fails the task",
             "run it before `ready`",

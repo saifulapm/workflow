@@ -1331,7 +1331,9 @@ impl Run {
             // it here throws that work away for a report the worker may never
             // have gotten to write; the gate is what judges whether it holds
             // up, not this last line.
-            Some((state, _)) if state != "ready" && state != "blocked" && self.commits(task) > 0 => {
+            Some((state, _))
+                if state != "ready" && state != "blocked" && self.commits(task) > 0 =>
+            {
                 warn(format!(
                     "task {task}: its worker committed and left without reporting ready -- the gate judges the branch"
                 ));
