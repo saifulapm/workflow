@@ -1085,9 +1085,16 @@ impl Run {
             // the same wall, so that fails the task at once.
             Err(why) => {
                 if read {
+                    // The dispatch's own stderr is already in review-err; an
+                    // empty transcript must not blank it out, and when the
+                    // transcript has nothing, the stderr it left behind is
+                    // still worth reading for a provider's own refusal.
                     let last_words = self.backend.last_words(&h);
-                    write_field(&self.dir, task, "review-err", &last_words);
-                    if let Some(line) = reviewer::provider_limit(&last_words) {
+                    if !last_words.is_empty() {
+                        write_field(&self.dir, task, "review-err", &last_words);
+                    }
+                    let err_text = self.field(task, "review-err");
+                    if let Some(line) = reviewer::provider_limit(&err_text) {
                         self.unwind(task, &prev);
                         self.fail_task(
                             task,
@@ -1109,7 +1116,14 @@ impl Run {
                     return false;
                 }
                 self.unwind(task, &prev);
-                self.fail_task(task, &format!("{why} -- read {}", answer.display()));
+                self.fail_task(
+                    task,
+                    &format!(
+                        "{why} -- read {} (session {})",
+                        self.dir.join(format!("{task}.review-err")).display(),
+                        h.session
+                    ),
+                );
             }
         }
         true

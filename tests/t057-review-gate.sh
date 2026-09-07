@@ -42,6 +42,13 @@ case $task in
 		printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"You've reached your Fable limit for this session.\"}]}}" >"$dir/$session.jsonl"
 		printf 'stopped mid-turn\n' >"$answer"
 		;;
+	ceiling-review)
+		# No transcript at all -- a custom template's shape -- and no
+		# verdict either; the only record of why is what lands on
+		# stderr through the dispatch's own redirect.
+		echo 'Error: rate limit exceeded, please retry.' >&2
+		printf 'nothing useful\n' >"$answer"
+		;;
 	t3-review)
 		mem ask 'may I run the suite myself?' >/dev/null 2>&1
 		printf 'meddling\n' >"$wt/app/t3.php"
@@ -225,6 +232,8 @@ is "$(cat "$rundir/hold.state")" merged 'hold merged once released'
 is "$(cat "$rundir/side.state")" merged 'so did side'
 is "$(cat "$rundir/t2.state" 2>/dev/null)" failed 'a reviewer that prints no verdict fails the task'
 like "$(cat "$rundir/t2.failed")" '^the review returned no verdict -- read ' 'and says so, naming the file'
+like "$(cat "$rundir/t2.failed")" "$rundir/t2\\.review-err" 'pointing at review-err, not the review file the next reading would delete'
+like "$(cat "$rundir/t2.failed")" '\(session .+\)$' 'and naming the session the last reading ran as'
 is "$(grep -c '^fable t2 ' "$WF_TMP/reviews.log")" 2 'after one more reading'
 [ -f "$rundir/t2.reviews" ] && notok 'a missing verdict is not a fix' "$(cat "$rundir/t2.reviews")" || ok 'a missing verdict is not a fix'
 is "$(cat "$rundir/t3.state" 2>/dev/null)" failed 'a reader that touched the tree fails the task'
@@ -328,6 +337,9 @@ Ruling 1. Nothing to say.
 - [ ] floor Add the floor service
       Files: app/floor.php
       Verify: true
+- [ ] ceiling Add the ceiling service
+      Files: app/ceiling.php
+      Verify: true
 EOF
 rundir="$XDG_STATE_HOME/workflow/runs/app/limit"
 : >"$WF_TMP/reviews.log"
@@ -337,3 +349,11 @@ is "$(cat "$rundir/wall.state" 2>/dev/null)" failed 'the task is failed'
 like "$(cat "$rundir/wall.failed")" "^the reader hit a provider limit: You've reached your Fable limit for this session\\. \\(session " 'the note names the line and the session'
 like "$(cat "$rundir/wall.review-err")" "You've reached your Fable limit for this session\\." 'review-err carries the same line'
 is "$(grep -c '^fable wall ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
+
+# A reading with no transcript at all -- a custom template's shape -- still
+# has its own stderr to read: the dispatch put it in review-err directly, and
+# an empty transcript must not blank that out before the limit line is read.
+is "$(cat "$rundir/ceiling.state" 2>/dev/null)" failed 'a reader with no transcript still fails on its own stderr'
+like "$(cat "$rundir/ceiling.failed")" "^the reader hit a provider limit: Error: rate limit exceeded, please retry\\. \\(session " 'the note names the line and the session'
+like "$(cat "$rundir/ceiling.review-err")" 'rate limit exceeded' 'review-err keeps the stderr the dispatch captured'
+is "$(grep -c '^fable ceiling ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
