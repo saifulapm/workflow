@@ -1192,13 +1192,43 @@ impl Run {
     /// authoritative gate a human would run there. Both streams land in
     /// `<task>.gate` on every run, red or green, so a failure names what
     /// broke without asking anyone to reproduce it.
+    ///
+    /// A red run is run once more before it fails anybody. Suites flake, and
+    /// a flake here fails a task whose work was right and sends it back for a
+    /// redispatch that changes nothing; the second run decides. The red run's
+    /// output moves to `<task>.gate.1` so both are on disk to compare, and a
+    /// merge that took two goes says so.
     fn gate_verify(&self, task: &str) -> Result<(), String> {
         let gate_file = self.dir.join(format!("{task}.gate"));
-        let stdout = std::fs::File::create(&gate_file)
-            .map_err(|e| format!("cannot write {} ({e})", gate_file.display()))?;
+        let kept = self.dir.join(format!("{task}.gate.1"));
+        let Err(red) = self.gate_run(&gate_file) else {
+            // A `.gate.1` left by an earlier merge attempt of this task would
+            // read as this one having flaked, which it did not.
+            let _ = std::fs::remove_file(&kept);
+            return Ok(());
+        };
+        if std::fs::rename(&gate_file, &kept).is_err() {
+            return Err(red);
+        }
+        self.gate_run(&gate_file)?;
+        let line = format!(
+            "task {task}: the gate was red once and green on the second run -- see {}",
+            kept.display()
+        );
+        warn(&line);
+        memcli::log(&line);
+        Ok(())
+    }
+
+    /// One run of the gate, both streams into `file`. `Err` is the reason the
+    /// merge cannot stand, naming the checks that broke out of what the run
+    /// left there.
+    fn gate_run(&self, file: &Path) -> Result<(), String> {
+        let stdout = std::fs::File::create(file)
+            .map_err(|e| format!("cannot write {} ({e})", file.display()))?;
         let stderr = stdout
             .try_clone()
-            .map_err(|e| format!("cannot write {} ({e})", gate_file.display()))?;
+            .map_err(|e| format!("cannot write {} ({e})", file.display()))?;
 
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("workflow"));
         let mut c = Command::new(exe);
@@ -1220,7 +1250,7 @@ impl Run {
         if ok {
             return Ok(());
         }
-        let text = std::fs::read_to_string(&gate_file).unwrap_or_default();
+        let text = std::fs::read_to_string(file).unwrap_or_default();
         let checks = failing_checks(&text);
         let named = if checks.is_empty() {
             String::new()
@@ -1229,7 +1259,7 @@ impl Run {
         };
         Err(format!(
             "the suite is red once the change sits on integration{named} -- see {}",
-            gate_file.display()
+            file.display()
         ))
     }
 

@@ -70,3 +70,50 @@ is "$RC" 1 'the second run resumes it and finds the suite still red'
 is "$(cat "$rundir/t1.dispatches")" 2 'on a second dispatch of the same branch'
 like "$(cat "$brief")" 'not ok 12 - t3 merges' 'the redispatched brief names the first failing check'
 like "$(cat "$brief")" 'not ok 14 - side ships' 'and the second'
+
+# A suite that goes red once and green when it is run again is a flake, not a
+# broken merge. The gate runs a second time before it fails anyone: the task
+# merges on the green, the red run's output is kept beside the green one, and
+# the warning says both files are there to read.
+new_repo flake
+mem_register
+
+export GATE_RUNS="$T_TMP/gate-runs"
+write_exec "$T_TMP/flaky.sh" <<'FAKE'
+#!/bin/sh
+n=$(cat "$GATE_RUNS" 2>/dev/null || echo 0)
+n=$((n + 1))
+printf '%s\n' "$n" >"$GATE_RUNS"
+if [ "$n" = 1 ]; then
+	printf 'not ok 7 - the flake\n'
+	exit 1
+fi
+printf 'ok 7 - the flake settles\n'
+FAKE
+"$MEM_BIN" project set verify "$T_TMP/flaky.sh" >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: flake
+
+- [ ] t1 The one whose first gate run goes red on its own
+      Files: app/t1.php
+      Verify: true
+- [ ] side A second task, so the plan is worth a worker [after: t1]
+      Files: app/side.php
+      Verify: true
+EOF
+
+flakedir="$XDG_STATE_HOME/workflow/runs/flake/flake"
+
+run workflow run
+is "$RC" 0 'the second gate run carries the merge'
+is "$(cat "$flakedir/t1.state")" merged 'and t1 is merged, not failed'
+like "$OUT" 'task t1: the gate was red once and green on the second run -- see .*t1\.gate\.1' \
+	'the run warns that the gate needed two goes'
+# mem cuts a log title to 100 bytes, so the line is there as far as it keeps
+# it: the sentence and the start of the path.
+like "$("$MEM_BIN" log --limit 20 --json)" \
+	'task t1: the gate was red once and green on the second run -- see /' \
+	'and the same line is in the mem log'
+like "$(cat "$flakedir/t1.gate.1")" 'not ok 7 - the flake' "the red run's output is kept"
+like "$(cat "$flakedir/t1.gate")" 'ok 7 - the flake settles' "and the green run's sits beside it"
