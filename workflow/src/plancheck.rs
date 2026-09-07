@@ -60,6 +60,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         .map(|p| p.dir_name())
         .or_else(|| root.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_default();
+    f.refusals.extend(same_wave_claims(plan, &git));
     for t in &plan.tasks {
         if t.checked {
             continue; // never dispatched, so its lines are history, not risk
@@ -447,6 +448,47 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
             out.push(format!(
                 "plan: task {task}: {tracked} is named by {hit}, which Files does not claim -- a test there may assert its contents"
             ));
+        }
+    }
+    out
+}
+
+/// Two tasks in one wave run at once, and a file both claim is one the second
+/// merge conflicts on: the rule that tasks running together never touch the
+/// same files, made checkable rather than found at the gate and hand-sequenced
+/// by the orchestrator (friction #GWD8A4BD). A pattern is judged by the tracked
+/// files it expands to, plus the literal path it names when nothing matches yet
+/// -- a file the task creates -- and each shared path refuses once, naming
+/// both tasks. A ticked task is out of it: it is not dispatched again.
+fn same_wave_claims(plan: &Plan, git: &Git) -> Vec<String> {
+    let owned = |t: &Task| -> std::collections::BTreeSet<String> {
+        let mut set = std::collections::BTreeSet::new();
+        for p in ownership::split_patterns(t.files.as_deref().unwrap_or("")) {
+            let tracked = zlines(&git.bytes(&["ls-files", "-z", "--", &gitcmd::glob_top(&p)]));
+            if tracked.is_empty() && !p.contains(['*', '?', '[']) {
+                set.insert(p.trim_end_matches('/').to_string());
+            }
+            set.extend(tracked);
+        }
+        set
+    };
+    let mut out = Vec::new();
+    for wave in &plan.waves {
+        let tasks: Vec<(&Task, std::collections::BTreeSet<String>)> = wave
+            .iter()
+            .filter_map(|id| plan.get(id))
+            .filter(|t| !t.checked)
+            .map(|t| (t, owned(t)))
+            .collect();
+        for (i, (a, a_owned)) in tasks.iter().enumerate() {
+            for (b, b_owned) in &tasks[i + 1..] {
+                for path in a_owned.intersection(b_owned) {
+                    out.push(format!(
+                        "plan: tasks {} and {} run in one wave and both claim {path} -- give one an [after:] on the other",
+                        a.id, b.id
+                    ));
+                }
+            }
         }
     }
     out

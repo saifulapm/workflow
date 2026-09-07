@@ -491,6 +491,42 @@ is "$RC" 1 'a bare workflow verify is refused'
 like "$OUT" 't1' 'and the refusal names the task'
 like "$OUT" 'workflow verify --gate' 'and the refusal names the remedy'
 
+# Two tasks in one wave claiming one file would collide at the merge; the plan
+# says which goes first (friction #GWD8A4BD).
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: cargo test
+- [ ] t2 Change it again
+      Files: src/*.rs
+      Verify: cargo test
+EOF2
+parse
+is "$RC" 1 'two tasks in one wave claiming one file are refused'
+like "$OUT" 'src/main.rs' 'and the refusal names the file'
+like "$OUT" 't1 and t2' 'and both tasks'
+like "$OUT" 'after:' 'and the remedy'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs src/new.rs
+      Verify: cargo test
+- [ ] t2 Change it again  [after: t1]
+      Files: src/*.rs
+      Verify: cargo test
+- [ ] t3 Add the same new file
+      Files: src/new.rs
+      Verify: cargo test
+EOF2
+parse
+is "$RC" 1 'a file two same-wave tasks would both create is refused too'
+like "$OUT" 't1 and t3' 'naming the two that run together'
+unlike "$OUT" 't1 and t2' 'and never the pair that runs in sequence'
+
 plan_file <<'EOF2'
 # plan: p
 
