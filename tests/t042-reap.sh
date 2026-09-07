@@ -342,11 +342,7 @@ write_exec bin/php <<-'EOF'
 EOF
 git add -A
 git -c core.hooksPath=/dev/null commit -qm 'project files'
-mbase=$(git rev-parse HEAD)
-mrundir="$XDG_STATE_HOME/workflow/runs/modelcheck/models"
-mwtroot="$XDG_STATE_HOME/workflow/worktrees/modelcheck/models"
-mkdir -p "$mrundir"
-cat >"$mrundir/plan.md" <<'PLAN'
+cat >"$T_TMP/models.md" <<'PLAN'
 # plan: models
 
 - [ ] t1 Add the thing
@@ -356,13 +352,20 @@ cat >"$mrundir/plan.md" <<'PLAN'
       Files: other/**
       Verify: true
 PLAN
-printf '%s\n' "$mbase" >"$mrundir/base_sha"
-printf 'opus\n' >"$mrundir/model"
-printf 'fake-reader\n' >"$mrundir/review-model"
+# A real run, the way the racy run above makes one, so the review model reap
+# reads below is one setup actually wrote, not a printf standing in for it.
+run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_WORKER_CMD='true' \
+	WORKFLOW_REVIEW_MODEL=fake-reader workflow run --plan-file "$T_TMP/models.md"
+mrundir="$XDG_STATE_HOME/workflow/runs/modelcheck/models"
+mwtroot="$XDG_STATE_HOME/workflow/worktrees/modelcheck/models"
+is "$(cat "$mrundir/review-model" 2>/dev/null)" fake-reader \
+	'setup records the review model this run reads with'
 
-git branch integration/models "$mbase"
+# The race above failed both tasks and cleanup took their worktrees down;
+# rebuild them on the branches setup already made, then hand-build the
+# interruption: t1 finished and nobody has gated it, t2 was never dispatched.
 git worktree add -q "$mwtroot/_integration" integration/models
-git worktree add -q -b models/t1 "$mwtroot/t1" "$mbase"
+git worktree add -q "$mwtroot/t1" models/t1
 (
 	cd "$mwtroot/t1" || exit 1
 	mkdir -p app
@@ -376,6 +379,9 @@ printf '%s\n' "$(sh -c 'echo $$')" >"$mrundir/t1.pid" # a pid that has already g
 printf '1\n' >"$mrundir/t1.dispatches"
 printf '00000000-0000-4000-8000-00000000000d\n' >"$mrundir/t1.session"
 printf 'dispatched\n' >"$mrundir/t1.state"
+rm -f "$mrundir/t1.failed" "$mrundir/t1.dispatched_at" \
+	"$mrundir/t2.failed" "$mrundir/t2.dispatches" "$mrundir/t2.dispatched_at" \
+	"$mrundir/t2.session" "$mrundir/t2.status"
 printf 'pending\n' >"$mrundir/t2.state"
 
 export WF_TMP="$T_TMP"
