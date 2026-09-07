@@ -107,10 +107,16 @@ impl Checkout {
         })
     }
 
-    /// The project name a fresh registration would take: the basename of the
-    /// git toplevel directory.
+    /// The project name a fresh registration would take: a linked worktree
+    /// shares its main checkout's common dir, so it takes the main
+    /// checkout's directory name rather than its own; anything else takes
+    /// the basename of the git toplevel directory.
     pub fn default_name(&self) -> String {
-        self.toplevel
+        let main = match self.common_dir.file_name() {
+            Some(n) if n == ".git" => self.common_dir.parent(),
+            _ => None,
+        };
+        main.unwrap_or(&self.toplevel)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "project".to_string())

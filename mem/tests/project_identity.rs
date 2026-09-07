@@ -250,6 +250,30 @@ fn a_linked_worktree_is_the_same_project() {
 }
 
 #[test]
+fn registering_from_a_linked_worktree_takes_the_main_checkouts_name() {
+    let w = World::new("ident-worktree-register");
+    let store = w.store();
+    let dirs = w.dirs();
+    let repo = w.repo("mainrepo", Some("git@github.com:me/mainrepo.git"));
+    run_git(&repo, &["config", "user.email", "t@example.com"]);
+    run_git(&repo, &["config", "user.name", "T"]);
+    std::fs::write(repo.join("f.txt"), b"x").unwrap();
+    run_git(&repo, &["add", "f.txt"]);
+    run_git(&repo, &["commit", "-qm", "first"]);
+
+    let wt = w.dir.join("some-other-worktree-name");
+    run_git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+
+    // Register straight from the worktree, never touching the main checkout.
+    let resolved = resolve(&wt, &store, &dirs, None, Mode::Write).unwrap();
+    assert_eq!(
+        resolved.name(),
+        Some("mainrepo"),
+        "the project takes the main checkout's name, not the worktree's"
+    );
+}
+
+#[test]
 fn the_path_map_merges_a_concurrent_rewrite() {
     let w = World::new("ident-pathmap");
     let path = w.dir.join("paths.toml");
