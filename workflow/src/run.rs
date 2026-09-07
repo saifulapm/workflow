@@ -2164,8 +2164,10 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             // failing the run out from under it, so said once, not on every
             // poll while the answer is still pending.
             for id in run.waiting(&wave) {
-                if warned_waiting.insert(id.clone()) {
-                    let qid = run.asked(&id).unwrap_or_default();
+                let Some(qid) = run.asked(&id) else {
+                    continue;
+                };
+                if warned_waiting.insert(format!("{id} {qid}")) {
                     warn(format!(
                         "{id}: waiting on #{qid} -- the wave stays open until it is answered"
                     ));

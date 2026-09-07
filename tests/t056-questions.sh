@@ -103,6 +103,34 @@ pause)
 	say blocked "asked $(cat "$WF_TMP/pause-id")"
 	done_json
 	;;
+twice)
+	if [ "$attempt" = 1 ]; then
+		mem ask 'first question: does the wave wait on this one?' >"$WF_TMP/twice-id-1"
+		say blocked "asked $(cat "$WF_TMP/twice-id-1")"
+		done_json
+		exit 0
+	fi
+	if [ "$attempt" = 2 ]; then
+		mem ask 'second question: does the wave still wait, and say so?' >"$WF_TMP/twice-id-2"
+		say blocked "asked $(cat "$WF_TMP/twice-id-2")"
+		done_json
+		exit 0
+	fi
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/Twice.php
+	git add app/Services/Twice.php
+	commit 'Add the twice service'
+	say ready 'merge-ready'
+	done_json
+	;;
+aftertwice)
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/AfterTwice.php
+	git add app/Services/AfterTwice.php
+	commit 'Add the aftertwice service'
+	say ready 'merge-ready'
+	done_json
+	;;
 esac
 FAKE
 
@@ -318,3 +346,52 @@ run kill -0 "$runpid"
 isnt "$RC" 0 'the coordinator is gone'
 wait "$runpid" 2>/dev/null
 is "$?" 1 'a stop while only waiting on an answer ends the run cleanly, not hung'
+
+## -------------------------------- a second question is named too, not just the first
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: twice-check
+
+- [ ] twice Ask, get answered, then ask something else
+      Files: app/Services/Twice.php
+      Verify: true
+- [ ] aftertwice Comes after the wave that asks twice [after: twice]
+      Files: app/Services/AfterTwice.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/app/twice-check"
+workflow run >"$T_TMP/twice.log" 2>&1 &
+runpid=$!
+
+for _ in $(seq 1 100); do
+	[ -s "$WF_TMP/twice-id-1" ] && break
+	sleep 0.2
+done
+id1=$(sed 's/^#//' "$WF_TMP/twice-id-1")
+for _ in $(seq 1 100); do
+	grep -q "waiting on #$id1" "$T_TMP/twice.log" 2>/dev/null && break
+	sleep 0.2
+done
+is "$(grep -c "waiting on #$id1" "$T_TMP/twice.log")" 1 'the first question is named once'
+
+"$MEM_BIN" answer "$id1" 'yes: named, and dispatched again' >/dev/null 2>&1
+
+for _ in $(seq 1 100); do
+	[ -s "$WF_TMP/twice-id-2" ] && break
+	sleep 0.2
+done
+id2=$(sed 's/^#//' "$WF_TMP/twice-id-2")
+for _ in $(seq 1 100); do
+	grep -q "waiting on #$id2" "$T_TMP/twice.log" 2>/dev/null && break
+	sleep 0.2
+done
+is "$(grep -c "waiting on #$id2" "$T_TMP/twice.log")" 1 \
+	'the second question is named too, not swallowed by the first one'"'"'s guard'
+
+"$MEM_BIN" answer "$id2" 'yes: the second answer lands too' >/dev/null 2>&1
+
+wait "$runpid"
+is "$?" 0 'the run finishes once both answers land'
+is "$(cat "$rundir/twice.state")" merged 'twice merged on its third attempt'
+is "$(cat "$rundir/aftertwice.state")" merged 'and the wave after it went on to merge too'
