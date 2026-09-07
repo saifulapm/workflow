@@ -2338,7 +2338,7 @@ pub fn cmd_reap() -> i32 {
         let waiting: Vec<String> = run
             .dispatched()
             .into_iter()
-            .filter(|t| run.alive(t))
+            .filter(|t| run.alive(t) || run.paused(t))
             .collect();
         if !waiting.is_empty() {
             adoptable = true;

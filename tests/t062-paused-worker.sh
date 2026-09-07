@@ -44,6 +44,10 @@ printf 'idle' >"$WF_TMP/agents/$sid"
 task=$(basename "$PWD")
 rundir=$(dirname "$PWD" | sed 's#/worktrees/#/runs/#')
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$rundir/$task.status"
+# The transcript a real session leaves behind, standing after it goes idle.
+slug=$(printf '%s' "$PWD" | tr -c '[:alnum:]' '-')
+mkdir -p "$HOME/.claude/projects/$slug"
+printf '{"type":"assistant"}\n' >"$HOME/.claude/projects/$slug/$sid.jsonl"
 printf 'backgrounded · %s\n' "$short"
 CLAUDE
 
@@ -124,10 +128,14 @@ printf '1\n' >"$orundir/t1.dispatches"
 printf '%s\n' "$(date -u +%s)" >"$orundir/t1.dispatched_at"
 git -C "$repo" worktree add -q -b paused-orphan/t1 "$owtroot/t1" "$base"
 git -C "$repo" worktree add -q -b paused-orphan/t2 "$owtroot/t2" "$base"
-# A session the listing carries as idle, and only "started" said: paused,
-# not dead, from a run that no longer exists to watch it.
+# The listing has already forgotten this session -- no row for it anywhere
+# -- and only "started" said: paused, not dead, from a run that no longer
+# exists to watch it. The transcript it left behind is the only thing left
+# that says it was ever seen (backend.rs's `seen`, ahead of any row).
 osid='b2c3d400-0000-4000-8000-000000000000'
-printf 'idle' >"$T_TMP/agents/$osid"
+oslug=$(printf '%s' "$owtroot/t1" | tr -c '[:alnum:]' '-')
+mkdir -p "$HOME/.claude/projects/$oslug"
+printf '{"type":"assistant"}\n' >"$HOME/.claude/projects/$oslug/$osid.jsonl"
 printf '%s\n' "$osid" >"$orundir/t1.session"
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$orundir/t1.status"
 
