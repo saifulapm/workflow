@@ -287,6 +287,15 @@ pub fn resolve(
     if let Some(id) = map.lookup(&checkout.common_dir)
         && let Some(p) = registry.by_id(id)
     {
+        // A checkout registered before it had a remote learns one late: back
+        // it into the path-bound root, in both modes, as long as no other
+        // project already owns it.
+        if p.remote.is_none()
+            && let Some(remote) = &checkout.remote
+            && registry.by_remote(remote).is_none()
+        {
+            let _ = set_key(store, &p.id, "remote", remote);
+        }
         let p = child_for(&registry, p, &checkout, cwd).unwrap_or(p);
         return Ok(Identity::Known {
             id: p.id.clone(),

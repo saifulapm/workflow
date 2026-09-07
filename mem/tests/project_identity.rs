@@ -147,6 +147,43 @@ fn a_second_checkout_of_the_same_remote_resolves_by_remote() {
 }
 
 #[test]
+fn resolve_backfills_a_remote_the_checkout_learned_after_registration() {
+    let w = common::World::new("ident-late-remote");
+    let repo = w.repo("thing", None);
+
+    // Registered before it has a remote at all.
+    let out = common::mem(&w, &repo, &["log", "before remote"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    let store = w.store();
+    let id = Registry::load(&store).projects[0].id.clone();
+    assert_eq!(Registry::load(&store).by_id(&id).unwrap().remote, None);
+
+    // The remote shows up later, and a plain read notices it.
+    run_git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:me/thing.git"],
+    );
+    let out = common::mem(&w, &repo, &["context"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert_eq!(
+        Registry::load(&store).by_id(&id).unwrap().remote.as_deref(),
+        Some("github.com/me/thing")
+    );
+
+    // A second machine — same synced store, a fresh path map — finds the
+    // project by that remote from a clone of its own.
+    let dirs2 = Dirs {
+        data: w.dirs().data,
+        cache: w.dir.join("machine-2/cache"),
+        state: w.dir.join("machine-2/state"),
+        config: w.dir.join("machine-2/config"),
+    };
+    let clone = w.repo("thing-clone", Some("git@github.com:me/thing.git"));
+    let resolved = resolve(&clone, &store, &dirs2, None, Mode::Read).unwrap();
+    assert_eq!(resolved.id(), Some(id.as_str()));
+}
+
+#[test]
 fn a_name_collision_takes_a_numeric_suffix_and_keeps_the_wanted_name_as_an_alias() {
     let w = World::new("ident-collide");
     let store = w.store();
