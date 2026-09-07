@@ -31,6 +31,7 @@ is "$seq" 'enter leave enter leave ' 'two concurrent verifies serialize their su
 
 # A second project locks its own file, not this one's.
 new_repo other
+mem_register
 printf 'touch %s/other-ran\n' "$T_TMP" >"$T_TMP/other-suite.sh"
 chmod +x "$T_TMP/other-suite.sh"
 "$MEM_BIN" project set verify "$T_TMP/other-suite.sh" >/dev/null
