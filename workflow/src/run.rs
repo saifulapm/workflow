@@ -1530,10 +1530,14 @@ impl Run {
         // thing this run just dispatched, so it is left to `review_pass`.
         let run_started = recorded(&self.dir, "started")
             .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
+            .unwrap_or(i64::MAX);
         for task in mid_review {
             let review_started: i64 = self.field(&task, "review-started").parse().unwrap_or(0);
             if review_started >= run_started {
+                // This run's own reading, started while collecting a task
+                // above -- settled for this run either way, so it belongs
+                // in `taken` even though it is left running.
+                taken.push(task);
                 continue;
             }
             let h = self.review_handle(&task);
