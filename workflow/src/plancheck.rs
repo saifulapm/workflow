@@ -397,29 +397,35 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
 /// outside what this task's own Files claims, is worth a warning. `itself`
 /// is excluded the way `named_by` excludes it: a tracked plan's own Files
 /// line is a tracked file naming every basename it lists, and is not a test
-/// asserting on any of them (friction #33WY4FAR).
+/// asserting on any of them (friction #33WY4FAR). A glob entry is expanded
+/// through `ls-files` first, the way `matches_nothing` and `only_ignored`
+/// already resolve one, so `assets/*.toml` is judged by the data files it
+/// actually matches rather than by grepping its own literal asterisk.
 fn data_file_asserted(task: &str, files: &[String], git: &Git, itself: Option<&str>) -> Vec<String> {
     const DATA_EXTENSIONS: [&str; 6] = ["toml", "json", "yaml", "yml", "csv", "txt"];
     let mut out = Vec::new();
     for f in files {
-        let is_data = Path::new(f)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| DATA_EXTENSIONS.contains(&e));
-        if !is_data || git.out(&["ls-files", "--", f]).is_none() {
-            continue;
-        }
-        let Some(basename) = Path::new(f).file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let hits = zlines(&git.bytes(&["grep", "-l", "-z", "-F", basename]));
-        for hit in &hits {
-            if Some(hit.as_str()) == itself || files.iter().any(|p| covers(p, hit)) {
+        let spec = gitcmd::glob_top(f);
+        for tracked in zlines(&git.bytes(&["ls-files", "-z", "--", &spec])) {
+            let is_data = Path::new(&tracked)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| DATA_EXTENSIONS.contains(&e));
+            if !is_data {
                 continue;
             }
-            out.push(format!(
-                "plan: task {task}: {f} is named by {hit}, which Files does not claim -- a test there may assert its contents"
-            ));
+            let Some(basename) = Path::new(&tracked).file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let hits = zlines(&git.bytes(&["grep", "-l", "-z", "-F", basename]));
+            for hit in &hits {
+                if Some(hit.as_str()) == itself || files.iter().any(|p| covers(p, hit)) {
+                    continue;
+                }
+                out.push(format!(
+                    "plan: task {task}: {tracked} is named by {hit}, which Files does not claim -- a test there may assert its contents"
+                ));
+            }
         }
     }
     out

@@ -104,3 +104,29 @@ check
 is "$RC" 0 'warnings do not refuse the plan'
 unlike "$ERR" 'is named by' \
 	'a non-ascii naming file claimed in Files is matched, quoting and all'
+
+## ------------------------------------------- a glob Files entry is expanded
+
+new_repo data3
+mkdir -p assets tests
+printf 'title = "demo"\n' >assets/rules.toml
+printf '# self.toml is the source of truth\n' >assets/self.toml
+printf 'grep rules.toml assets/rules.toml\n' >tests/rules_test.sh
+git add assets/rules.toml assets/self.toml tests/rules_test.sh
+git -c core.hooksPath=/dev/null commit -qm 'rules, a self-naming file and their test'
+
+plan <<'EOF'
+# plan: assets
+
+- [ ] t1 Load every screen rule
+      Files: assets/*.toml
+      Verify: true
+EOF
+
+check
+is "$RC" 0 'warnings do not refuse the plan'
+like "$ERR" \
+	"plan: task t1: assets/rules\.toml is named by tests/rules_test\.sh, which Files does not claim" \
+	'a glob Files entry is expanded to the tracked files it matches'
+unlike "$ERR" 'assets/self\.toml is named by' \
+	'a basename only its own file mentions produces no warning under a glob either'
