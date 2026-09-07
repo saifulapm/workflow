@@ -231,7 +231,8 @@ pub struct Run {
     pub model: String,
     /// Who reads each task's diff at the gate once its verify is green:
     /// `WORKFLOW_REVIEW_MODEL` for one run (empty turns the reading off),
-    /// else the project's `mem project set review-model`, else nobody.
+    /// else the project's `mem project set review-model` (`none` turns it
+    /// off), else nobody.
     /// Naming the model the workers run on is the same as naming nobody.
     pub review_model: Option<String>,
     /// Raised by SIGTERM, SIGINT or SIGHUP. The poll loop reads it between
@@ -1954,10 +1955,10 @@ impl Run {
 /// three are settled before the first worker starts, and a run that dispatches
 /// and only then discovers nobody reads it has spent the sessions already.
 ///
-/// `asked` is whether `WORKFLOW_REVIEW_MODEL` is set at all, empty or not.
-/// Empty is how a run says it wants no reading and means it; absent is a
-/// project that has not decided, and merges nobody reads are not what the
-/// gate is for.
+/// `asked` is whether anyone said nobody should read: `WORKFLOW_REVIEW_MODEL`
+/// set at all, empty or not, or `review-model none` in the store. Either is a
+/// run saying it wants no reading and meaning it; neither is a project that
+/// has not decided, and merges nobody reads are not what the gate is for.
 fn refused(plan: &Plan, model: &str, reader: Option<&str>, asked: bool) -> Option<String> {
     if plan.kind == PlanKind::Roadmap {
         return Some(format!(
@@ -1966,7 +1967,8 @@ fn refused(plan: &Plan, model: &str, reader: Option<&str>, asked: bool) -> Optio
             plan.plan_id
         ));
     }
-    let unread = "or run this one unread with WORKFLOW_REVIEW_MODEL= in the environment.";
+    let unread = "record that nobody does with `mem project set review-model none`, \
+                  or run this one unread with WORKFLOW_REVIEW_MODEL= in the environment.";
     match reader {
         // A model reads its own work with its own blind spots and agrees with
         // itself, so naming the workers' own model is naming nobody -- under
@@ -2228,16 +2230,22 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
 
     // Before the lock, the worktrees and the first dispatch: nothing here has
     // written anything yet, so a refusal costs a message and no cleanup.
+    let recorded_none = memcli::reader_recorded_none();
     if let Some(why) = refused(
         &run.plan,
         &run.model,
         run.review_model.as_deref(),
-        std::env::var("WORKFLOW_REVIEW_MODEL").is_ok(),
+        recorded_none || std::env::var("WORKFLOW_REVIEW_MODEL").is_ok(),
     ) {
         for line in why.lines() {
             warn(line);
         }
         return exit::USAGE;
+    }
+    // Said out loud, because a run that merges unread is worth noticing even
+    // when it is exactly what the project asked for.
+    if recorded_none && run.review_model.is_none() {
+        warn("nobody reads this run: review-model is none");
     }
 
     if run.plan.tasks.len() <= 1 {
@@ -2959,9 +2967,15 @@ mod tests {
         let why =
             refused(&doc(PlanKind::Plan), "opus", None, false).expect("an unread run is refused");
         assert!(why.contains("nobody is named to read"), "{why}");
-        assert!(why.contains("mem project set review-model"), "{why}");
+        assert!(
+            why.contains("mem project set review-model <model>"),
+            "{why}"
+        );
+        // Both ways to mean it: the key the project records once, and the
+        // variable that says it for one run.
+        assert!(why.contains("mem project set review-model none"), "{why}");
         assert!(why.contains("WORKFLOW_REVIEW_MODEL="), "{why}");
-        // The empty variable is the way to mean it.
+        // Either one is the way to mean it.
         assert_eq!(refused(&doc(PlanKind::Plan), "opus", None, true), None);
     }
 

@@ -277,9 +277,11 @@ pub enum ProjectCommand {
         command: ProjectSetCommand,
     },
     /// Forget something `set` recorded, so the project is back on the
-    /// default: no reader, the workflow's model, the claude backend, the
-    /// detected verifier. `set` refuses an empty value, so this is the way
-    /// back to absent.
+    /// default: the workflow's model, the claude backend, the detected
+    /// verifier. `set` refuses an empty value, so this is the way back to
+    /// absent. An absent `review-model` is not the same as no reader: a run
+    /// stops and asks for one. `mem project set review-model none` is how a
+    /// project records that nobody reads.
     Unset { key: ProjectKey },
 }
 
@@ -325,8 +327,9 @@ pub enum ProjectSetCommand {
     /// Absent means the workflow's default; WORKFLOW_MODEL overrides per run.
     Model { model: String },
     /// The model that reviews each task's diff at the merge gate, after its
-    /// Verify goes green (`fable`, `opus`, ...). Absent means no review;
-    /// WORKFLOW_REVIEW_MODEL overrides per run.
+    /// Verify goes green (`fable`, `opus`, ...). `none` says nobody reads and
+    /// the run goes ahead unread; absent means the project has not decided,
+    /// and a run stops to ask. WORKFLOW_REVIEW_MODEL overrides per run.
     #[command(name = "review-model")]
     ReviewModel { model: String },
     /// This project's origin remote, for one registered before the remote
@@ -379,4 +382,41 @@ pub enum Scope {
     Project,
     Global,
     All,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+
+    fn long_help(path: &[&str]) -> String {
+        let mut cmd = Cli::command();
+        cmd.build();
+        let mut node = &mut cmd;
+        for name in path {
+            node = node
+                .find_subcommand_mut(name)
+                .unwrap_or_else(|| panic!("no such subcommand: {name}"));
+        }
+        node.render_long_help().to_string()
+    }
+
+    /// Clearing the reader is not the same as saying nobody reads: a run with
+    /// no `review-model` stops and asks for one, so the help has to send a
+    /// project that means it to `none` rather than to `unset`.
+    #[test]
+    fn unset_help_tells_an_absent_reader_apart_from_none() {
+        let help = long_help(&["project", "unset"]);
+        assert!(help.contains("ask"), "{help}");
+        assert!(help.contains("review-model none"), "{help}");
+    }
+
+    /// And the key's own help says the same, since that is where a project
+    /// setting a reader for the first time reads what the values mean.
+    #[test]
+    fn review_model_help_names_none_and_what_absent_costs() {
+        let help = long_help(&["project", "set", "review-model"]);
+        assert!(help.contains("none"), "{help}");
+        assert!(help.contains("WORKFLOW_REVIEW_MODEL"), "{help}");
+    }
 }

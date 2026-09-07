@@ -166,6 +166,7 @@ run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/quiet.md"
 is "$RC" 2 'with no review-model and no variable the run is refused'
 like "$OUT" 'nobody is named to read what this run merges' 'saying what is missing'
 like "$OUT" 'mem project set review-model <model>' 'naming the remedy'
+like "$OUT" 'mem project set review-model none' 'the recorded way to mean nobody'
 like "$OUT" 'WORKFLOW_REVIEW_MODEL=' 'and the way to run one unread on purpose'
 [ -f "$WF_TMP/reviews.log" ] && notok 'and the reviewer was never called' "$(cat "$WF_TMP/reviews.log")" || ok 'and the reviewer was never called'
 [ -d "$XDG_STATE_HOME/workflow/worktrees/app/quiet" ] && notok 'and no worker was dispatched' 'the run set up worktrees' || ok 'and no worker was dispatched'
@@ -401,3 +402,29 @@ is "$(cat "$rundir/curfew.state" 2>/dev/null)" failed 'a reader stopped at the d
 like "$(cat "$rundir/curfew.failed")" "^the reader hit a provider limit: Error: this session is not logged in\\. \\(session " 'the note names the line and the session'
 like "$(cat "$rundir/curfew.review-err")" 'not logged in' 'review-err keeps the stderr the dispatch captured'
 is "$(grep -c '^fable curfew ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
+
+## ------------------------------------ the recorded way to run one unread
+
+# An absent key is a project that never decided, and the run stops to ask;
+# `review-model none` is the decision, and it belongs in the store beside the
+# other project keys rather than in the environment of every run. The run goes
+# ahead unread and says whose choice that was.
+"$MEM_BIN" project set review-model none >/dev/null
+plan nobody ''
+: >"$WF_TMP/reviews.log"
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/nobody.md"
+is "$RC" 0 'review-model none runs unread with no variable set'
+like "$OUT" 'nobody reads this run: review-model is none' 'and the run says so'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/app/nobody/t1.state")" merged 'the draft merges unread'
+is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/app/nobody/review-model")" '' 'and the run records no reader'
+
+# The variable still beats the key, in both directions: a project that records
+# nobody can still have one run read.
+plan reader ''
+: >"$WF_TMP/reviews.log"
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=fable \
+	workflow run --plan-file "$T_TMP/reader.md"
+is "$RC" 1 'the variable names a reader over a recorded none'
+unlike "$OUT" 'nobody reads this run' 'so the run does not say nobody reads it'
+like "$(cat "$WF_TMP/reviews.log")" '^fable t1 ' 'and that model read the diff'

@@ -124,10 +124,22 @@ pub fn project_model() -> Option<String> {
     project_choice("model")
 }
 
+/// What `review-model` is set to by a project that has decided nobody reads
+/// its merges. Absent is a different answer -- a project that has not decided
+/// -- and a run is refused over that one rather than merged unread.
+const NO_READER: &str = "none";
+
 /// The model that reads each task's diff at the merge gate, or nothing:
-/// absent means the project asked for no review.
+/// nothing covers both a project that never named one and one that recorded
+/// [`NO_READER`], since neither leaves a model to dispatch.
 pub fn project_review_model() -> Option<String> {
-    project_choice("review_model")
+    project_choice("review_model").filter(|m| !m.eq_ignore_ascii_case(NO_READER))
+}
+
+/// Did this project record that nobody reads? The run asks so it can tell the
+/// decision apart from the silence, and go ahead unread on the first.
+pub fn reader_recorded_none() -> bool {
+    project_choice("review_model").is_some_and(|m| m.eq_ignore_ascii_case(NO_READER))
 }
 
 /// A worker's question, as `mem questions --for orchestrator --json` reports
