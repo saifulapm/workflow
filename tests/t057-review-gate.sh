@@ -49,6 +49,16 @@ case $task in
 		echo 'Error: rate limit exceeded, please retry.' >&2
 		printf 'nothing useful\n' >"$answer"
 		;;
+	floor-review)
+		# A session that ran a while before hitting the wall: ordinary
+		# text in the transcript, and the limit only on stderr.
+		slug=$(printf '%s' "$wt" | sed -E 's/[^A-Za-z0-9]/-/g')
+		dir="$HOME/.claude/projects/$slug"
+		mkdir -p "$dir"
+		printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Reading floor.php against ruling 1...\"}]}}" >"$dir/$session.jsonl"
+		echo 'Error: rate limit exceeded, please retry.' >&2
+		printf 'nothing useful\n' >"$answer"
+		;;
 	t3-review)
 		mem ask 'may I run the suite myself?' >/dev/null 2>&1
 		printf 'meddling\n' >"$wt/app/t3.php"
@@ -357,3 +367,14 @@ is "$(cat "$rundir/ceiling.state" 2>/dev/null)" failed 'a reader with no transcr
 like "$(cat "$rundir/ceiling.failed")" "^the reader hit a provider limit: Error: rate limit exceeded, please retry\\. \\(session " 'the note names the line and the session'
 like "$(cat "$rundir/ceiling.review-err")" 'rate limit exceeded' 'review-err keeps the stderr the dispatch captured'
 is "$(grep -c '^fable ceiling ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
+
+# A reading with ordinary transcript text but the limit only on stderr -- the
+# shape a real session takes when it ran a while before hitting the wall.
+# The stderr the dispatch captured must survive next to the last words, not
+# be overwritten by them, or the limit line is lost and a second reading
+# meets the same wall.
+is "$(cat "$rundir/floor.state" 2>/dev/null)" failed 'a reader with transcript text and a limit on stderr fails too'
+like "$(cat "$rundir/floor.failed")" "^the reader hit a provider limit: Error: rate limit exceeded, please retry\\. \\(session " 'the note names the line and the session'
+like "$(cat "$rundir/floor.review-err")" 'Reading floor\.php against ruling 1\.\.\.' 'review-err keeps the transcript text'
+like "$(cat "$rundir/floor.review-err")" 'rate limit exceeded' 'and the stderr line next to it'
+is "$(grep -c '^fable floor ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'

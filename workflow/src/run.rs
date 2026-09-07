@@ -1085,16 +1085,23 @@ impl Run {
             // the same wall, so that fails the task at once.
             Err(why) => {
                 if read {
-                    // The dispatch's own stderr is already in review-err; an
-                    // empty transcript must not blank it out, and when the
-                    // transcript has nothing, the stderr it left behind is
-                    // still worth reading for a provider's own refusal.
+                    // The dispatch's own stderr is already in review-err.
+                    // Last words are appended, never used to overwrite it: a
+                    // session that ran a while before the wall has ordinary
+                    // text in its transcript and the limit only on stderr, so
+                    // either one losing the other would hide the line a
+                    // second reading is going to meet again.
+                    let stderr_text = self.field(task, "review-err");
                     let last_words = self.backend.last_words(&h);
+                    let combined = match (stderr_text.is_empty(), last_words.is_empty()) {
+                        (true, _) => last_words.clone(),
+                        (false, true) => stderr_text.clone(),
+                        (false, false) => format!("{stderr_text}\n{last_words}"),
+                    };
                     if !last_words.is_empty() {
-                        write_field(&self.dir, task, "review-err", &last_words);
+                        write_field(&self.dir, task, "review-err", &combined);
                     }
-                    let err_text = self.field(task, "review-err");
-                    if let Some(line) = reviewer::provider_limit(&err_text) {
+                    if let Some(line) = reviewer::provider_limit(&combined) {
                         self.unwind(task, &prev);
                         self.fail_task(
                             task,
