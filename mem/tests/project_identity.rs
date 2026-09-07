@@ -537,6 +537,11 @@ fn project_set_and_unset_refuse_an_unregistered_checkout_but_take_explicit_proje
     let msg = common::stderr(&out);
     assert!(msg.contains("poshra"), "{msg}");
     assert!(msg.contains("--project"), "{msg}");
+    assert!(msg.contains("without a remote"), "{msg}");
+    assert!(
+        msg.contains("mem project set --project poshra remote"),
+        "{msg}"
+    );
     assert_eq!(
         Registry::load(&w.store()).projects.len(),
         1,
@@ -589,6 +594,68 @@ fn project_set_and_unset_refuse_an_unregistered_checkout_but_take_explicit_proje
     let text = common::stdout(&out);
     assert!(text.contains("first note"), "{text}");
     assert!(text.contains("second note"), "{text}");
+}
+
+#[test]
+fn project_set_and_unset_register_nothing_in_a_fresh_checkout() {
+    let w = common::World::new("ident-noreg");
+    let repo = w.repo("freshthing", Some("git@github.com:me/freshthing.git"));
+
+    let out = common::mem(&w, &repo, &["project", "set", "verify", "just test"]);
+    assert_eq!(
+        common::code(&out),
+        mem::exit::USAGE,
+        "{}",
+        common::stderr(&out)
+    );
+    assert!(
+        !w.store().projects_dir().exists(),
+        "a refused set must register nothing"
+    );
+
+    let out = common::mem(&w, &repo, &["project", "unset", "verify"]);
+    assert_eq!(
+        common::code(&out),
+        mem::exit::USAGE,
+        "{}",
+        common::stderr(&out)
+    );
+    assert!(
+        !w.store().projects_dir().exists(),
+        "a refused unset must register nothing"
+    );
+    let msg = common::stderr(&out);
+    assert!(msg.contains("freshthing"), "{msg}");
+    assert!(msg.contains("--project"), "{msg}");
+}
+
+/// A minimal registered project, for building a `Registry` by hand.
+fn alias_project(id: &str, name: &str, alias: &str) -> mem::project::Project {
+    mem::project::Project {
+        id: id.to_string(),
+        name: name.to_string(),
+        remote: None,
+        aliases: vec![alias.to_string()],
+        created: "2026-08-01T00:00:00Z".parse().unwrap(),
+        verify: None,
+        review_paths: None,
+        parent: None,
+        subdir: None,
+    }
+}
+
+#[test]
+fn claim_note_reports_an_alias_collision_instead_of_swallowing_it() {
+    let registry = Registry {
+        projects: vec![
+            alias_project("01K2AAAAAAAAAAAAAAAAAAAAAA", "thing-2", "thing"),
+            alias_project("01K2BBBBBBBBBBBBBBBBBBBBBB", "thing-3", "thing"),
+        ],
+    };
+    let note = mem::verbs::claim_note(&registry, "thing")
+        .expect("an alias ambiguity must be reported, not discarded");
+    assert!(note.contains("thing-2"), "{note}");
+    assert!(note.contains("thing-3"), "{note}");
 }
 
 #[test]

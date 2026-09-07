@@ -632,6 +632,7 @@ fn project_set_review_model_records_the_choice_and_project_current_reports_it() 
 fn project_unset_takes_a_choice_off_and_leaves_the_others() {
     let w = World::new("write-unset");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     assert_eq!(
         code(&mem(&w, &repo, &["project", "set", "model", "sonnet"])),
         0

@@ -472,48 +472,52 @@ pub fn unknown_project_note(identity: &Identity) -> Option<String> {
 /// project mem does: the poshra case, a project registered from one checkout
 /// with a second checkout of it that has never been recorded — by remote or
 /// by path — against it. `Some` names the project that already owns the name
-/// and the `--project` form that reaches it; `None` when no project shares
-/// it, so the caller falls back to its own generic note.
+/// and the `--project` form that reaches it, diagnosing a missing remote
+/// where that is why the checkout's own remote never matched it, or names an
+/// alias collision the registry refused to pick between; `None` when no
+/// project shares the name, so the caller falls back to its own generic note.
 pub fn claim_note(registry: &Registry, name_hint: &str) -> Option<String> {
-    let project = registry.by_name(name_hint).ok().flatten()?;
-    Some(format!(
-        "this checkout ({name_hint}) is not registered, and a project named '{}' already \
-         exists — set it explicitly with --project {}",
-        project.name, project.name
-    ))
+    match registry.by_name(name_hint) {
+        Ok(Some(project)) if project.remote.is_none() => Some(format!(
+            "this checkout ({name_hint}) is not registered, and a project named '{}' exists \
+             without a remote — `mem project set --project {} remote <url>` sets it there, and \
+             the next verb here finds it by that remote",
+            project.name, project.name
+        )),
+        Ok(Some(project)) => Some(format!(
+            "this checkout ({name_hint}) is not registered, and a project named '{}' already \
+             exists — set it explicitly with --project {}",
+            project.name, project.name
+        )),
+        Ok(None) => None,
+        Err(err) => Some(format!(
+            "this checkout ({name_hint}) is not registered, and {err}"
+        )),
+    }
 }
 
-/// The identity `project set` and `project unset` write against. A write
-/// verb, so an unregistered checkout normally registers exactly as `mem log`
-/// there would — except when the checkout's own name is already claimed by a
-/// registered project: auto-registering there would suffix a duplicate
-/// (`free_name`) rather than find the project the caller means, so that
-/// checkout is left `UnknownRepo` for the caller to refuse.
+/// The identity `project set` and `project unset` write against. Unlike
+/// every other write verb, these two never auto-register: they configure a
+/// project, so the project has to exist first, resolved in Read mode only.
+/// `--project <name>` still names an existing one to write.
 fn writable_project_identity(app: &App) -> Result<Identity> {
-    let identity = app.identity(Mode::Read)?;
-    if let Identity::UnknownRepo { name_hint } = &identity {
-        let registry = Registry::load(&app.store);
-        if registry.by_name(name_hint).ok().flatten().is_none() {
-            return app.identity(Mode::Write);
-        }
-    }
-    Ok(identity)
+    app.identity(Mode::Read)
 }
 
-/// The usage error `project set` and `project unset` give when
-/// `writable_project_identity` came back with nothing to write to: a name
-/// collision, named as precisely as the registry allows, or a directory
-/// that is not a git checkout at all.
+/// The usage error `project set` and `project unset` give when the checkout
+/// they ran in is not a registered project: the name hint and, when a
+/// project already owns that name, the claim naming it.
 fn unregistered_project_note(app: &App, identity: &Identity) -> String {
-    if let Identity::UnknownRepo { name_hint } = identity
-        && let Some(note) = claim_note(&Registry::load(&app.store), name_hint)
-    {
-        return note;
+    match identity {
+        Identity::UnknownRepo { name_hint } => claim_note(&Registry::load(&app.store), name_hint)
+            .unwrap_or_else(|| {
+                format!(
+                    "this checkout ({name_hint}) is not registered — name a project with --project"
+                )
+            }),
+        Identity::NonGit => "not a git checkout — name a project with --project".to_string(),
+        Identity::Known { .. } => "no project here — name one with --project".to_string(),
     }
-    format!(
-        "{} — name one with --project",
-        unknown_project_note(identity).unwrap_or_else(|| "no project here".to_string())
-    )
 }
 
 /// `mem save "<text>"`.
