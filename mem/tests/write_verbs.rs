@@ -285,14 +285,26 @@ fn ticking_a_task_flips_one_checkbox_and_leaves_the_rest_alone() {
     // An id that no task line carries is exit 1, and nothing is written.
     let out = mem(&w, &repo, &["plan", "--tick", "t99"]);
     assert_eq!(code(&out), 1);
+    assert!(
+        stderr(&out).contains("no task 't99' in the plan"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(stdout(&mem(&w, &repo, &["plan"])), after);
 
     // A prefix of a real id is not a match either.
     assert_eq!(code(&mem(&w, &repo, &["plan", "--tick", "t"])), 1);
 
-    // With no plan at all there is nothing to tick.
+    // With no plan at all there is nothing to tick, or to read.
     assert_eq!(code(&mem(&w, &repo, &["plan", "--clear"])), 0);
     assert_eq!(code(&mem(&w, &repo, &["plan", "--tick", "t1"])), 1);
+    let out = mem(&w, &repo, &["plan"]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        stderr(&out).contains("no plan recorded for this project"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]

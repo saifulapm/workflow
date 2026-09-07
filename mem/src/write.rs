@@ -241,14 +241,18 @@ pub enum Ticked {
     Already,
 }
 
-/// Ticks one task in `plan.md`. The read-modify-write is internal, so the CAS
-/// is retried rather than surfaced: exit 5 is not a thing a caller can act on
+/// Ticks one line — a task in `plan.md`, a milestone in `roadmap.md` — found
+/// by an exact id. `noun` names what was not found ("task", "milestone") in
+/// the "no `<noun>` '`<id>`' in the `<document>`" error; the document word is
+/// the file's own name. The read-modify-write is internal, so the CAS is
+/// retried rather than surfaced: exit 5 is not a thing a caller can act on
 /// here (spec §7).
-pub fn tick_task(path: &Path, id: &str) -> Result<Ticked> {
+pub fn tick_task(path: &Path, id: &str, noun: &str) -> Result<Ticked> {
+    let document = path.file_stem().and_then(|s| s.to_str()).unwrap_or("plan");
     for _ in 0..3 {
         let seen = read_mtime(path);
         let text = std::fs::read_to_string(path)
-            .map_err(|_| exit::not_found("no plan recorded for this project"))?;
+            .map_err(|_| exit::not_found(format!("no {document} recorded for this project")))?;
         let mut lines: Vec<String> = text.split('\n').map(|l| l.to_string()).collect();
         let mut flipped = false;
         let mut found = false;
@@ -268,7 +272,9 @@ pub fn tick_task(path: &Path, id: &str) -> Result<Ticked> {
             }
         }
         if !found {
-            return Err(exit::not_found(format!("no task '{id}' in the plan")));
+            return Err(exit::not_found(format!(
+                "no {noun} '{id}' in the {document}"
+            )));
         }
         if !flipped {
             return Ok(Ticked::Already);

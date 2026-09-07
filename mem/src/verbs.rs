@@ -656,7 +656,7 @@ pub fn handoff(app: &App, set: Option<&str>, stdin: bool, title: Option<&str>) -
 /// replaces it. An over-cap write still lands and reports exit 6.
 pub fn status(app: &App, set: Option<&str>, stdin: bool) -> Result<i32> {
     if set.is_none() && !stdin {
-        return print_singleton(app, |store, id| store.status_path(id));
+        return print_singleton(app, "status", |store, id| store.status_path(id));
     }
     let identity = app.identity(Mode::Write)?;
     let Some(id) = identity.id() else {
@@ -708,6 +708,9 @@ fn self_record(app: &App) {
 struct Singleton {
     /// What it is, in the sentence "a plan belongs to a project".
     noun: &'static str,
+    /// What one line of it ticks: "task" for the plan, "milestone" for the
+    /// roadmap.
+    item: &'static str,
     /// What the file is called, for the messages that name it.
     file: &'static str,
     path: fn(&crate::store::Store, &str) -> std::path::PathBuf,
@@ -715,12 +718,14 @@ struct Singleton {
 
 const PLAN: Singleton = Singleton {
     noun: "plan",
+    item: "task",
     file: "plan.md",
     path: |store, id| store.plan_path(id),
 };
 
 const ROADMAP: Singleton = Singleton {
     noun: "roadmap",
+    item: "milestone",
     file: "roadmap.md",
     path: |store, id| store.roadmap_path(id),
 };
@@ -791,7 +796,7 @@ fn singleton(
     clear: bool,
 ) -> Result<i32> {
     if !clear && set_file.is_none() && !stdin {
-        return print_singleton(app, which.path);
+        return print_singleton(app, which.noun, which.path);
     }
     let id = writable_project(app, which.noun)?;
     let path = (which.path)(&app.store, &id);
@@ -937,7 +942,7 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
         )));
     };
     let path = (which.path)(&app.store, id);
-    let outcome = crate::write::tick_task(&path, task)?;
+    let outcome = crate::write::tick_task(&path, task, which.item)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
     if flipped {
         self_record(app);
@@ -1179,6 +1184,7 @@ fn wiki_write(app: &App, slug: &str, stdin: bool, note: Option<&str>) -> Result<
 /// parses them, so this is a contract, not a display.
 fn print_singleton(
     app: &App,
+    noun: &str,
     which: fn(&crate::store::Store, &str) -> std::path::PathBuf,
 ) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
@@ -1206,7 +1212,7 @@ fn print_singleton(
         }
         Err(_) => {
             if !app.quiet && !app.json {
-                eprintln!("mem: nothing recorded");
+                eprintln!("mem: no {noun} recorded for this project");
             }
             Ok(exit::NOT_FOUND)
         }

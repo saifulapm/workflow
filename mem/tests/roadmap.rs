@@ -85,14 +85,26 @@ fn the_roadmap_sets_prints_clears_and_ticks() {
     let out = mem(&w, &repo, &["roadmap", "--tick", "m1-auth", "--json"]);
     assert_eq!(code(&out), 0);
     assert_eq!(json(&out)["ticked"], serde_json::json!(false));
-    assert_eq!(code(&mem(&w, &repo, &["roadmap", "--tick", "m9"])), 1);
+    let out = mem(&w, &repo, &["roadmap", "--tick", "m9"]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        stderr(&out).contains("no milestone 'm9' in the roadmap"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(stdout(&mem(&w, &repo, &["roadmap"])), after);
 
     // The plan of record is a different file and is untouched by all of it.
     assert_eq!(code(&mem(&w, &repo, &["plan"])), 1);
 
     assert_eq!(code(&mem(&w, &repo, &["roadmap", "--clear"])), 0);
-    assert_eq!(code(&mem(&w, &repo, &["roadmap"])), 1);
+    let out = mem(&w, &repo, &["roadmap"]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        stderr(&out).contains("no roadmap recorded for this project"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(code(&mem(&w, &repo, &["roadmap", "--tick", "m1-auth"])), 1);
     assert_eq!(
         code(&mem(
