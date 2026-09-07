@@ -287,7 +287,7 @@ pub fn tick_task(path: &Path, id: &str, noun: &str) -> Result<Ticked> {
     }
     Err(exit::coded(
         exit::CAS_CONFLICT,
-        "plan.md is being rewritten faster than a tick can land — try again",
+        format!("{document}.md is being rewritten faster than a tick can land — try again"),
     ))
 }
 
