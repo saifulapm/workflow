@@ -335,6 +335,10 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
 /// The plan text with one task's box ticked, or `None` when no task line
 /// carries that id. Every other byte is left as the author wrote it: the file
 /// is their document, not this program's scratch space.
+///
+/// The box written is `- [x]`, the spelling `mem plan --tick` writes, so a
+/// plan ticked by either of them reads the same. The parser still takes `[X]`
+/// from anyone who writes it.
 pub fn tick(text: &str, id: &str) -> Option<String> {
     let max_id = text
         .lines()
@@ -351,7 +355,7 @@ pub fn tick(text: &str, id: &str) -> Option<String> {
                 // tail slices cleanly whatever the title holds.
                 Some((_, tid, _)) if tid == id => {
                     found = true;
-                    format!("- [X]{}", &line[5..])
+                    format!("- [x]{}", &line[5..])
                 }
                 _ => line.to_string(),
             },
@@ -631,14 +635,18 @@ mod tests {
     /// handed is the only copy of that plan, so the run writes the tick back
     /// there rather than leaving the merge recorded nowhere (friction
     /// #2213VV3P).
+    ///
+    /// The box this writes is lowercase, and t1's `[X]` is left as its author
+    /// spelled it: ticking one task is not a licence to restyle the rest of
+    /// someone's document.
     #[test]
     fn ticking_marks_one_task_and_leaves_the_rest_of_the_file_alone() {
         let text = "# plan: p\n\nprose about the plan\n\n\
-                    - [ ] t1 First\n      Files: a\n      Verify: true\n\
+                    - [X] t1 First\n      Files: a\n      Verify: true\n\
                     - [ ] t2 Second [after: t1]\n      Files: b\n      Verify: true\n";
         let out = tick(text, "t2").expect("t2 is in this plan");
-        assert!(out.contains("- [X] t2 Second [after: t1]"));
-        assert!(out.contains("- [ ] t1 First"), "t1 must not move: {out}");
+        assert!(out.contains("- [x] t2 Second [after: t1]"), "{out}");
+        assert!(out.contains("- [X] t1 First"), "t1 must not move: {out}");
         assert!(out.contains("prose about the plan"));
         assert_eq!(out.len(), text.len());
         // Ticking twice says the same thing, and a task the file does not
@@ -672,7 +680,7 @@ mod tests {
         // Ticking reads the ids of the document it was handed, so a milestone
         // id longer than a task's is still found.
         let out = tick(text, "the-roadmap-header").expect("the milestone is in this roadmap");
-        assert!(out.contains("- [X] the-roadmap-header"), "{out}");
+        assert!(out.contains("- [x] the-roadmap-header"), "{out}");
     }
 
     #[test]
