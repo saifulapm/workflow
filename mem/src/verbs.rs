@@ -374,9 +374,10 @@ pub fn project_add(app: &App, subdir: &str, name: Option<&str>) -> Result<i32> {
 
 /// `mem project set <key> "<value>"` — the per-project verification command,
 /// the per-project review paths, the worker backend. A write verb, so
-/// declaring one in a checkout
-/// mem has never seen registers that checkout, exactly as `mem log` there
-/// would.
+/// declaring one in a checkout mem has never seen registers that checkout,
+/// exactly as `mem log` there would — unless the checkout's own name is
+/// already claimed by a registered project, in which case that would spawn a
+/// duplicate rather than find it, and the write is refused instead.
 pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     let value = value.trim();
     if value.is_empty() {
@@ -402,12 +403,9 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     } else {
         value
     };
-    let identity = app.identity(Mode::Write)?;
+    let identity = writable_project_identity(app)?;
     let Some(id) = identity.id() else {
-        return Err(exit::usage(format!(
-            "{} — name one with --project",
-            unknown_project_note(&identity).unwrap_or_else(|| "no project here".to_string())
-        )));
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let path = crate::project::set_key(&app.store, id, key, value)?;
     let shown = key.replace('_', "-");
@@ -431,12 +429,9 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
 /// empty value, and until this the only way to take a reader, a model or a
 /// backend off a project was to edit project.toml by hand.
 pub fn project_unset(app: &App, key: &str) -> Result<i32> {
-    let identity = app.identity(Mode::Write)?;
+    let identity = writable_project_identity(app)?;
     let Some(id) = identity.id() else {
-        return Err(exit::usage(format!(
-            "{} — name one with --project",
-            unknown_project_note(&identity).unwrap_or_else(|| "no project here".to_string())
-        )));
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let (path, had) = crate::project::unset_key(&app.store, id, key)?;
     let shown = key.replace('_', "-");
@@ -471,6 +466,54 @@ pub fn unknown_project_note(identity: &Identity) -> Option<String> {
         Identity::NonGit => Some("not a git checkout — showing global scope only".to_string()),
         Identity::Known { .. } => None,
     }
+}
+
+/// A checkout `project set`/`project unset` does not know might still be a
+/// project mem does: the poshra case, a project registered from one checkout
+/// with a second checkout of it that has never been recorded — by remote or
+/// by path — against it. `Some` names the project that already owns the name
+/// and the `--project` form that reaches it; `None` when no project shares
+/// it, so the caller falls back to its own generic note.
+pub fn claim_note(registry: &Registry, name_hint: &str) -> Option<String> {
+    let project = registry.by_name(name_hint).ok().flatten()?;
+    Some(format!(
+        "this checkout ({name_hint}) is not registered, and a project named '{}' already \
+         exists — set it explicitly with --project {}",
+        project.name, project.name
+    ))
+}
+
+/// The identity `project set` and `project unset` write against. A write
+/// verb, so an unregistered checkout normally registers exactly as `mem log`
+/// there would — except when the checkout's own name is already claimed by a
+/// registered project: auto-registering there would suffix a duplicate
+/// (`free_name`) rather than find the project the caller means, so that
+/// checkout is left `UnknownRepo` for the caller to refuse.
+fn writable_project_identity(app: &App) -> Result<Identity> {
+    let identity = app.identity(Mode::Read)?;
+    if let Identity::UnknownRepo { name_hint } = &identity {
+        let registry = Registry::load(&app.store);
+        if registry.by_name(name_hint).ok().flatten().is_none() {
+            return app.identity(Mode::Write);
+        }
+    }
+    Ok(identity)
+}
+
+/// The usage error `project set` and `project unset` give when
+/// `writable_project_identity` came back with nothing to write to: a name
+/// collision, named as precisely as the registry allows, or a directory
+/// that is not a git checkout at all.
+fn unregistered_project_note(app: &App, identity: &Identity) -> String {
+    if let Identity::UnknownRepo { name_hint } = identity
+        && let Some(note) = claim_note(&Registry::load(&app.store), name_hint)
+    {
+        return note;
+    }
+    format!(
+        "{} — name one with --project",
+        unknown_project_note(identity).unwrap_or_else(|| "no project here".to_string())
+    )
 }
 
 /// `mem save "<text>"`.
@@ -1189,7 +1232,11 @@ fn asking_task(app: &App) -> Option<String> {
     }
     let v = std::env::var("WORKFLOW_TASK").ok()?;
     let v = v.trim();
-    if v.is_empty() { None } else { Some(v.to_string()) }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.to_string())
+    }
 }
 
 /// `mem ask` — writes the question, asks for a sync, fires a notification and

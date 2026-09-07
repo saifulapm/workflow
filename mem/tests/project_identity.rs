@@ -498,6 +498,100 @@ fn a_fresh_machine_resolves_a_child_through_the_parents_remote() {
 }
 
 #[test]
+fn project_set_and_unset_refuse_an_unregistered_checkout_but_take_explicit_project() {
+    let w = common::World::new("ident-claim");
+
+    // "poshra" gets registered from checkout A, with no remote at all.
+    let a = w.repo("poshra", None);
+    let out = common::mem(&w, &a, &["log", "first note"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    let registry = Registry::load(&w.store());
+    assert_eq!(registry.projects.len(), 1);
+    assert_eq!(registry.projects[0].name, "poshra");
+
+    // A second checkout, same default name, never recorded against it —
+    // no paths.toml entry, and the remote it does have is not on record yet.
+    let nested = w.plain_dir("elsewhere");
+    let b = nested.join("poshra");
+    std::fs::create_dir_all(&b).unwrap();
+    run_git(&b, &["init", "-q"]);
+    run_git(
+        &b,
+        &["remote", "add", "origin", "git@github.com:me/poshra.git"],
+    );
+
+    // `set` without --project is refused: it names the project that already
+    // has this name and the --project form that reaches it, and registers
+    // nothing.
+    let out = common::mem(
+        &w,
+        &b,
+        &["project", "set", "remote", "git@github.com:me/poshra.git"],
+    );
+    assert_eq!(
+        common::code(&out),
+        mem::exit::USAGE,
+        "{}",
+        common::stderr(&out)
+    );
+    let msg = common::stderr(&out);
+    assert!(msg.contains("poshra"), "{msg}");
+    assert!(msg.contains("--project"), "{msg}");
+    assert_eq!(
+        Registry::load(&w.store()).projects.len(),
+        1,
+        "a refused set must not register a second project"
+    );
+
+    // `unset` gives the same refusal.
+    let out = common::mem(&w, &b, &["project", "unset", "verify"]);
+    assert_eq!(
+        common::code(&out),
+        mem::exit::USAGE,
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(Registry::load(&w.store()).projects.len(), 1);
+
+    // Named explicitly, `set` still works as it always has.
+    let out = common::mem(
+        &w,
+        &b,
+        &[
+            "project",
+            "set",
+            "remote",
+            "git@github.com:me/poshra.git",
+            "--project",
+            "poshra",
+        ],
+    );
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    let registry = Registry::load(&w.store());
+    assert_eq!(registry.projects.len(), 1);
+    assert_eq!(
+        registry.projects[0].remote.as_deref(),
+        Some("github.com/me/poshra")
+    );
+
+    // Now that the remote is on record, a plain write from the second
+    // checkout resolves by remote and lands on the one project — it does
+    // not spawn a "poshra-2".
+    let out = common::mem(&w, &b, &["log", "second note"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert_eq!(
+        Registry::load(&w.store()).projects.len(),
+        1,
+        "the second checkout must join the one project"
+    );
+    let out = common::mem(&w, &b, &["log"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    let text = common::stdout(&out);
+    assert!(text.contains("first note"), "{text}");
+    assert!(text.contains("second note"), "{text}");
+}
+
+#[test]
 fn a_checkout_reports_its_default_name_and_normalized_remote() {
     let w = World::new("ident-checkout");
     let repo = w.repo("My-Repo", Some("git@github.com:Me/My-Repo.git"));
