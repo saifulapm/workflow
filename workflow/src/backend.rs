@@ -82,6 +82,13 @@ pub trait WorkerBackend {
     /// What the worker left behind: a print-mode result document at `out`, or
     /// the agents list's word on the session named by the handle.
     fn result(&self, h: &Handle, out: &Path) -> Outcome;
+    /// The transcript's last text -- what the worker said on its last turn,
+    /// read off its own conversation file. Empty when there is nothing to
+    /// read there, which for a custom template is every time: it never
+    /// touches `~/.claude/projects`.
+    fn last_words(&self, _h: &Handle) -> String {
+        String::new()
+    }
 }
 
 /// The dispatch template (spec §8.3, amended: workers are `claude --bg`
@@ -353,6 +360,41 @@ fn last_context_tokens(transcript: &str) -> Option<u64> {
     last
 }
 
+/// The joined text of a transcript's last turn that said anything -- a tool
+/// call carries no text and leaves the turn before it standing, the way a
+/// worker that ended mid-thought does not overwrite what it last actually
+/// said.
+fn last_words_in(transcript: &str) -> String {
+    let mut last = String::new();
+    for line in transcript.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+            continue;
+        };
+        let text = match content {
+            serde_json::Value::String(s) => s.trim().to_string(),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .filter_map(|b| {
+                    (b.get("type").and_then(|t| t.as_str()) == Some("text"))
+                        .then(|| b.get("text").and_then(|t| t.as_str()))
+                        .flatten()
+                })
+                .collect::<Vec<_>>()
+                .join("")
+                .trim()
+                .to_string(),
+            _ => String::new(),
+        };
+        if !text.is_empty() {
+            last = text;
+        }
+    }
+    last
+}
+
 /// The id `claude --bg` printed on its way out. The line reads
 /// `backgrounded · <id>`, coloured, and the id is the short form every other
 /// `claude` verb takes.
@@ -486,6 +528,11 @@ impl WorkerBackend for ClaudeBackend {
                 ok: paths::transcript_path(&h.worktree, &h.session).exists(),
             },
         }
+    }
+
+    fn last_words(&self, h: &Handle) -> String {
+        let path = paths::transcript_path(&h.worktree, &h.session);
+        last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
 }
 
@@ -675,6 +722,31 @@ not json at all
         // context, and the honest answer is that the backend cannot see.
         assert_eq!(last_context_tokens(""), None);
         assert_eq!(last_context_tokens("{\"type\":\"user\"}\n"), None);
+    }
+
+    /// A user turn, an assistant turn with a tool call and no text, and a
+    /// final assistant turn with two text blocks. The answer is the joined
+    /// text of that last turn, not the tool call and not the user line.
+    const WORDS_TRANSCRIPT: &str = r#"{"type":"user","message":{"role":"user","content":"go"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"You've reached your "},{"type":"text","text":"Fable limit."}]}}
+"#;
+
+    #[test]
+    fn the_last_words_are_the_last_turns_text_joined() {
+        assert_eq!(
+            last_words_in(WORDS_TRANSCRIPT),
+            "You've reached your Fable limit."
+        );
+        // A turn with no text block leaves the last text before it standing.
+        assert_eq!(
+            last_words_in(&format!(
+                "{WORDS_TRANSCRIPT}{{\"type\":\"assistant\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"tool_use\",\"name\":\"Bash\"}}]}}}}\n"
+            )),
+            "You've reached your Fable limit."
+        );
+        assert_eq!(last_words_in(""), "");
+        assert_eq!(last_words_in("not json at all"), "");
     }
 
     #[test]

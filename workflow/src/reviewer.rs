@@ -138,6 +138,31 @@ reading that changes the tree is void.
     )
 }
 
+/// Phrases a provider itself writes when it, not the diff, is the reason a
+/// reading ended -- a usage limit, a rate limit, an outage, a session that
+/// was never logged in. Case aside, since nothing pins how a provider
+/// capitalises its own message.
+const PROVIDER_LIMIT_MARKERS: [&str; 5] = [
+    "reached your",
+    "usage limit",
+    "rate limit",
+    "overloaded",
+    "not logged in",
+];
+
+/// The line, if any, where a reader's last words read as a provider's own
+/// refusal rather than a judgement on the diff. A match here is not a second
+/// reading's kind of problem: the run says so and stops.
+pub fn provider_limit(text: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let lower = line.to_ascii_lowercase();
+        PROVIDER_LIMIT_MARKERS
+            .iter()
+            .any(|marker| lower.contains(marker))
+            .then(|| line.trim().to_string())
+    })
+}
+
 /// Seconds one reading may take: `WORKFLOW_REVIEW_DEADLINE_MIN`, fractional,
 /// else [`DEADLINE_MIN_DEFAULT`].
 pub fn deadline_s() -> i64 {
@@ -265,5 +290,22 @@ mod tests {
         assert_eq!(deadline_from(Some("0.001")), 1, "never zero");
         assert_eq!(deadline_from(Some("nonsense")), 900);
         assert_eq!(deadline_from(Some("-2")), 900);
+    }
+
+    #[test]
+    fn a_provider_limit_is_read_off_the_line_that_says_so() {
+        assert_eq!(
+            provider_limit("You've reached your Fable limit for this session."),
+            Some("You've reached your Fable limit for this session.".into())
+        );
+        assert_eq!(
+            provider_limit("Reading the diff...\n\nError: rate limit exceeded, retry later\n"),
+            Some("Error: rate limit exceeded, retry later".into())
+        );
+        assert_eq!(
+            provider_limit("VERDICT: fix\n1. run.rs:10 -- off by one"),
+            None,
+            "a clean answer names no provider"
+        );
     }
 }
