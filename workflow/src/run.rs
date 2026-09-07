@@ -1043,20 +1043,17 @@ impl Run {
         let waited = sys::now() - started;
         let deadline_s = reviewer::deadline_s();
         // Gone with an answer is the clean end. Gone without one within the
-        // first moments is a dispatch still coming up, not an ending. Only
-        // this path is a reading that actually ended: the deadline below
-        // stops a session still alive, which has no last words of its own to
-        // read yet.
-        let (outcome, read) = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
-            (self.judge_reading(&new, &answer), true)
+        // first moments is a dispatch still coming up, not an ending. The
+        // deadline below is an ending too: a session stopped there has been
+        // talking for the whole wait and has last words of its own, same as
+        // one that simply exited without a verdict.
+        let outcome = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
+            self.judge_reading(&new, &answer)
         } else if waited >= deadline_s {
             self.backend.stop(&h, self.kill_grace_s);
-            (
-                Err(format!(
-                    "the review ran past its {deadline_s} second deadline and was stopped"
-                )),
-                false,
-            )
+            Err(format!(
+                "the review ran past its {deadline_s} second deadline and was stopped"
+            ))
         } else {
             return false;
         };
@@ -1084,34 +1081,34 @@ impl Run {
             // words say the provider itself is why -- a second reading hits
             // the same wall, so that fails the task at once.
             Err(why) => {
-                if read {
-                    // The dispatch's own stderr is already in review-err.
-                    // Last words are appended, never used to overwrite it: a
-                    // session that ran a while before the wall has ordinary
-                    // text in its transcript and the limit only on stderr, so
-                    // either one losing the other would hide the line a
-                    // second reading is going to meet again.
-                    let stderr_text = self.field(task, "review-err");
-                    let last_words = self.backend.last_words(&h);
-                    let combined = match (stderr_text.is_empty(), last_words.is_empty()) {
-                        (true, _) => last_words.clone(),
-                        (false, true) => stderr_text.clone(),
-                        (false, false) => format!("{stderr_text}\n{last_words}"),
-                    };
-                    if !last_words.is_empty() {
-                        write_field(&self.dir, task, "review-err", &combined);
-                    }
-                    if let Some(line) = reviewer::provider_limit(&combined) {
-                        self.unwind(task, &prev);
-                        self.fail_task(
-                            task,
-                            &format!(
-                                "the reader hit a provider limit: {line} (session {})",
-                                h.session
-                            ),
-                        );
-                        return true;
-                    }
+                // The dispatch's own stderr is already in review-err. Last
+                // words are appended, never used to overwrite it: a session
+                // that ran a while before the wall has ordinary text in its
+                // transcript and the limit only on stderr, so either one
+                // losing the other would hide the line a second reading is
+                // going to meet again. A reader that never launched has no
+                // transcript at all, so last_words comes back empty and
+                // review-err is left as the dispatch captured it.
+                let stderr_text = self.field(task, "review-err");
+                let last_words = self.backend.last_words(&h);
+                let combined = match (stderr_text.is_empty(), last_words.is_empty()) {
+                    (true, _) => last_words.clone(),
+                    (false, true) => stderr_text.clone(),
+                    (false, false) => format!("{stderr_text}\n{last_words}"),
+                };
+                if !last_words.is_empty() {
+                    write_field(&self.dir, task, "review-err", &combined);
+                }
+                if let Some(line) = reviewer::provider_limit(&combined) {
+                    self.unwind(task, &prev);
+                    self.fail_task(
+                        task,
+                        &format!(
+                            "the reader hit a provider limit: {line} (session {})",
+                            h.session
+                        ),
+                    );
+                    return true;
                 }
                 let tries: u64 = self.field(task, "review-tries").parse().unwrap_or(0);
                 if tries < 2 {

@@ -59,6 +59,14 @@ case $task in
 		echo 'Error: rate limit exceeded, please retry.' >&2
 		printf 'nothing useful\n' >"$answer"
 		;;
+	curfew-review)
+		# Refused at launch: no transcript ever starts, no verdict
+		# comes, and the process itself outlives the review deadline,
+		# so the run's own stop() is what ends it. Its stderr is the
+		# only record of why.
+		echo 'Error: this session is not logged in.' >&2
+		sleep 30
+		;;
 	t3-review)
 		mem ask 'may I run the suite myself?' >/dev/null 2>&1
 		printf 'meddling\n' >"$wt/app/t3.php"
@@ -350,10 +358,14 @@ Ruling 1. Nothing to say.
 - [ ] ceiling Add the ceiling service
       Files: app/ceiling.php
       Verify: true
+- [ ] curfew Add the curfew service
+      Files: app/curfew.php
+      Verify: true
 EOF
 rundir="$XDG_STATE_HOME/workflow/runs/app/limit"
 : >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/limit.md"
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_DEADLINE_MIN=0.15 \
+	workflow run --plan-file "$T_TMP/limit.md"
 is "$RC" 1 'a reader that hit a provider limit fails the run'
 is "$(cat "$rundir/wall.state" 2>/dev/null)" failed 'the task is failed'
 like "$(cat "$rundir/wall.failed")" "^the reader hit a provider limit: You've reached your Fable limit for this session\\. \\(session " 'the note names the line and the session'
@@ -378,3 +390,13 @@ like "$(cat "$rundir/floor.failed")" "^the reader hit a provider limit: Error: r
 like "$(cat "$rundir/floor.review-err")" 'Reading floor\.php against ruling 1\.\.\.' 'review-err keeps the transcript text'
 like "$(cat "$rundir/floor.review-err")" 'rate limit exceeded' 'and the stderr line next to it'
 is "$(grep -c '^fable floor ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
+
+# A reader that never returns a verdict and is still going when the review's
+# own deadline stops it -- launch refused, no transcript, the wall on stderr
+# alone. The deadline branch has to read review-err the same way the ended
+# branch does, or the diagnosis sits unread while a second reading burns the
+# full deadline again.
+is "$(cat "$rundir/curfew.state" 2>/dev/null)" failed 'a reader stopped at the deadline fails on its own stderr too'
+like "$(cat "$rundir/curfew.failed")" "^the reader hit a provider limit: Error: this session is not logged in\\. \\(session " 'the note names the line and the session'
+like "$(cat "$rundir/curfew.review-err")" 'not logged in' 'review-err keeps the stderr the dispatch captured'
+is "$(grep -c '^fable curfew ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
