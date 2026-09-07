@@ -82,6 +82,44 @@ fn write_field(dir: &Path, task: &str, ext: &str, value: &str) {
     }
 }
 
+/// Up to three failing checks named out of a verify run's combined output,
+/// so a gate failure says what broke instead of just that something did.
+/// TAP's `not ok` lines are named first, when the suite speaks TAP; cargo
+/// test's per-test `FAILED` lines are next; a suite in neither format still
+/// gives up its last nonblank line, which is usually the one that says why.
+pub fn failing_checks(output: &str) -> Vec<String> {
+    let tap: Vec<String> = output
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("not ok"))
+        .map(str::to_string)
+        .collect();
+    if !tap.is_empty() {
+        return tap.into_iter().take(3).collect();
+    }
+
+    let cargo: Vec<String> = output
+        .lines()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix("test ")?;
+            let name = rest.strip_suffix("FAILED")?.trim();
+            let name = name.strip_suffix("...").unwrap_or(name).trim();
+            (!name.is_empty()).then(|| name.to_string())
+        })
+        .collect();
+    if !cargo.is_empty() {
+        return cargo.into_iter().take(3).collect();
+    }
+
+    output
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| vec![l.to_string()])
+        .unwrap_or_default()
+}
+
 /// Liveness is the latest of three signals, because each one alone has a way of
 /// going quiet on a worker that is fine: a long test run writes no transcript
 /// line, an out-of-tree `CARGO_TARGET_DIR` flattens the worktree's mtime, and a worker
@@ -854,9 +892,7 @@ impl Run {
     /// reader now has the diff and the merge waits on its verdict;
     /// `Ok(false)` means nobody reads here and the merge is final.
     fn gate(&self, task: &str, prev: &str, new: &str) -> Result<bool, String> {
-        if !self.gate_verify() {
-            return Err("the suite is red once the change sits on integration".into());
-        }
+        self.gate_verify(task)?;
         Ok(self.start_review(task, prev, new))
     }
 
@@ -1069,8 +1105,10 @@ impl Run {
     }
 
     /// verify, on the integration branch, as its own process: the same
-    /// authoritative gate a human would run there.
-    fn gate_verify(&self) -> bool {
+    /// authoritative gate a human would run there. Both streams land in
+    /// `<task>.gate` on every run, red or green, so a failure names what
+    /// broke without asking anyone to reproduce it.
+    fn gate_verify(&self, task: &str) -> Result<(), String> {
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("workflow"));
         let mut c = Command::new(exe);
         c.arg("verify").arg("--gate").current_dir(&self.int_wt);
@@ -1080,7 +1118,37 @@ impl Run {
         if let Some((k, v)) = self.cargo_env("integration") {
             c.env(k, v);
         }
-        c.status().map(|s| s.success()).unwrap_or(false)
+        let (ok, text) = match c.output() {
+            Ok(o) => (
+                o.status.success(),
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&o.stdout),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+            ),
+            Err(e) => (false, format!("could not run verify --gate: {e}")),
+        };
+        let gate_file = self.dir.join(format!("{task}.gate"));
+        if let Err(e) = std::fs::write(&gate_file, &text) {
+            warn(format!(
+                "task {task}: cannot write {} ({e})",
+                gate_file.display()
+            ));
+        }
+        if ok {
+            return Ok(());
+        }
+        let checks = failing_checks(&text);
+        let named = if checks.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", checks.join(", "))
+        };
+        Err(format!(
+            "the suite is red once the change sits on integration{named} -- see {}",
+            gate_file.display()
+        ))
     }
 
     /// Tick the task off where the plan came from. mem holds the plan a plain
@@ -2527,6 +2595,37 @@ mod tests {
 
     fn t(id: &str, state: &str, note: &str) -> (String, String, String) {
         (id.into(), state.into(), note.into())
+    }
+
+    #[test]
+    fn failing_checks_names_up_to_three_tap_lines() {
+        let out = "ok 1 - a\nnot ok 2 t3 merges\nok 3 - b\nnot ok 4 side ships\nnot ok 5 extra\nnot ok 6 overflow\n";
+        assert_eq!(
+            failing_checks(out),
+            vec![
+                "not ok 2 t3 merges",
+                "not ok 4 side ships",
+                "not ok 5 extra"
+            ]
+        );
+    }
+
+    #[test]
+    fn failing_checks_names_cargo_test_failures_when_there_is_no_tap() {
+        let out = "running 2 tests\ntest tests::foo ... FAILED\ntest tests::bar ... ok\n\nfailures:\n    tests::foo\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored\n";
+        assert_eq!(failing_checks(out), vec!["tests::foo"]);
+    }
+
+    #[test]
+    fn failing_checks_falls_back_to_the_last_line_in_neither_format() {
+        let out = "Building...\nSomething broke on line 12\n";
+        assert_eq!(failing_checks(out), vec!["Something broke on line 12"]);
+    }
+
+    #[test]
+    fn failing_checks_is_empty_on_blank_output() {
+        assert!(failing_checks("").is_empty());
+        assert!(failing_checks("   \n\n").is_empty());
     }
 
     #[test]
