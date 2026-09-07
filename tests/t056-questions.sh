@@ -76,6 +76,33 @@ t1)
 	say ready 'merge-ready'
 	done_json
 	;;
+hold)
+	if [ "$attempt" = 1 ]; then
+		mem ask 'does an unanswered question hold its wave open?' >"$WF_TMP/hold-id"
+		say blocked "asked $(cat "$WF_TMP/hold-id")"
+		done_json
+		exit 0
+	fi
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/Hold.php
+	git add app/Services/Hold.php
+	commit 'Add the hold service'
+	say ready 'merge-ready'
+	done_json
+	;;
+afterhold)
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/AfterHold.php
+	git add app/Services/AfterHold.php
+	commit 'Add the afterhold service'
+	say ready 'merge-ready'
+	done_json
+	;;
+pause)
+	mem ask 'does a signal reach a task with a question still open?' >"$WF_TMP/pause-id"
+	say blocked "asked $(cat "$WF_TMP/pause-id")"
+	done_json
+	;;
 esac
 FAKE
 
@@ -220,3 +247,74 @@ is "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(len(json.load(sys.
 	'no question was raised for the stop'
 run_out "$MEM_BIN" log --limit 5
 like "$OUT" 'Plan report-check stopped short' 'the report went to the log instead'
+
+## ------------------------------------------ a wave waits on a question
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: hold-check
+
+- [ ] hold Ask and hold its wave open, alone
+      Files: app/Services/Hold.php
+      Verify: true
+- [ ] afterhold Comes after the wave that holds [after: hold]
+      Files: app/Services/AfterHold.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/app/hold-check"
+workflow run >"$T_TMP/hold.log" 2>&1 &
+runpid=$!
+
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/hold.state" 2>/dev/null)" = failed ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/hold.state" 2>/dev/null)" failed 'hold stopped on its question, alone in its wave'
+
+# More than three polls' worth of waiting, unanswered.
+sleep 4
+is "$(cat "$rundir/afterhold.state" 2>/dev/null)" pending \
+	'the wave after it has not opened while the question sits unanswered'
+is "$(grep -c 'waiting on #' "$T_TMP/hold.log")" 1 \
+	'the run says the wave stays open once, not on every poll'
+
+id=$(sed 's/^#//' "$WF_TMP/hold-id")
+"$MEM_BIN" answer "$id" 'yes: an open question holds the wave open' >/dev/null 2>&1
+
+wait "$runpid"
+is "$?" 0 'the run finishes once the answer lands'
+is "$(cat "$rundir/hold.state")" merged 'hold merged on its second attempt'
+is "$(cat "$rundir/afterhold.state")" merged 'and the wave after it went on to merge too'
+
+## -------------------------------- stopping short while waiting ends cleanly
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: pause-check
+
+- [ ] pause Ask and wait for a signal, not an answer
+      Files: app/Services/Pause.php
+      Verify: true
+- [ ] afterpause Comes after the wave that pauses [after: pause]
+      Files: app/Services/AfterPause.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/app/pause-check"
+workflow run >"$T_TMP/pause.log" 2>&1 &
+runpid=$!
+
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/pause.state" 2>/dev/null)" = failed ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/pause.state" 2>/dev/null)" failed 'pause stopped on its question, alone in its wave'
+
+kill -TERM "$runpid"
+for _ in $(seq 1 100); do
+	kill -0 "$runpid" 2>/dev/null || break
+	sleep 0.2
+done
+run kill -0 "$runpid"
+isnt "$RC" 0 'the coordinator is gone'
+wait "$runpid" 2>/dev/null
+is "$?" 1 'a stop while only waiting on an answer ends the run cleanly, not hung'

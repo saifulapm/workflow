@@ -237,6 +237,24 @@ impl Run {
         (!id.is_empty()).then_some(id)
     }
 
+    /// The FAILED tasks of this wave still waiting on a question with no
+    /// answer: the wave loop keeps polling for them rather than closing the
+    /// wave and leaving the answer nowhere to land.
+    fn waiting(&self, wave: &[String]) -> Vec<String> {
+        wave.iter()
+            .filter(|id| self.state(id) == FAILED)
+            .filter(|id| {
+                let Some(qid) = self.asked(id) else {
+                    return false;
+                };
+                !memcli::questions_for(&self.task_tag(id))
+                    .into_iter()
+                    .any(|q| q.short_id == qid && q.answer.is_some())
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The failure note for a worker that stopped on a question, as
     /// `asked #<id>: <what>`, or nothing when its `blocked` line names no
     /// question and mem lists none pending for the task.
@@ -2097,7 +2115,13 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             }
         }
 
-        while !queue.is_empty() || run.running() > 0 || !run.reviewing().is_empty() {
+        let mut warned_waiting: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        while !queue.is_empty()
+            || run.running() > 0
+            || !run.reviewing().is_empty()
+            || !run.waiting(&wave).is_empty()
+        {
             if stopping() {
                 return shutdown(&run);
             }
@@ -2135,6 +2159,17 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                 let _ = std::fs::remove_file(&marker);
                 warn(format!("task {id}: dispatched again by request"));
                 run.dispatch(id, "");
+            }
+            // A task waiting on a question keeps its wave open rather than
+            // failing the run out from under it, so said once, not on every
+            // poll while the answer is still pending.
+            for id in run.waiting(&wave) {
+                if warned_waiting.insert(id.clone()) {
+                    let qid = run.asked(&id).unwrap_or_default();
+                    warn(format!(
+                        "{id}: waiting on #{qid} -- the wave stays open until it is answered"
+                    ));
+                }
             }
             // A task waiting on the orchestrator goes again by itself once
             // the answer is in: the orchestrator's whole job here is to
@@ -2326,7 +2361,7 @@ pub fn cmd_redispatch(task: &str) -> i32 {
         let open = std::fs::read_to_string(dir.join("wave")).unwrap_or_default();
         if !open.split_whitespace().any(|t| t == task) {
             warn(format!(
-                "run {plan_id}: {task} failed in a wave that has closed -- this run will not dispatch it; run the plan again when it ends"
+                "run {plan_id}: {task} failed in a wave that has closed -- this run will not dispatch it; run the plan again to resume it"
             ));
             return exit::FAILED;
         }
