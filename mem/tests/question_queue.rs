@@ -562,7 +562,14 @@ fn the_worktree_path_outranks_workflow_task_in_the_environment() {
     std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
     common::run_git(
         &repo,
-        &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "cart-v2/t7"],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            wt.to_str().unwrap(),
+            "-b",
+            "cart-v2/t7",
+        ],
     );
 
     let out = common::mem_env(
