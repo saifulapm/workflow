@@ -66,6 +66,16 @@ fn field(dir: &Path, task: &str, ext: &str) -> String {
         .to_string()
 }
 
+/// A run-level file `setup` wrote before the first worker went out -- `model`
+/// or `review-model` -- read back for a run `reap` is rebuilding. `None`
+/// means the file was never written: a run dir from before this, or a
+/// fixture that never went through `setup`.
+fn recorded(dir: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(dir.join(name))
+        .ok()
+        .map(|v| v.trim().to_string())
+}
+
 /// One task's field, and a word if it could not be written. The run dir is
 /// the run's whole memory of a task: a state write that fails leaves the
 /// coordinator reading `pending` for a task it has just dispatched, and it
@@ -1636,6 +1646,14 @@ impl Run {
             }
         }
         let _ = std::fs::write(self.dir.join("base_sha"), format!("{}\n", self.base));
+        // What this run dispatches on and reads with, so a later `reap` for
+        // a run that is gone reads with the same models rather than
+        // whatever the environment or the project key happen to say by then.
+        let _ = std::fs::write(self.dir.join("model"), format!("{}\n", self.model));
+        let _ = std::fs::write(
+            self.dir.join("review-model"),
+            format!("{}\n", self.review_model.as_deref().unwrap_or("")),
+        );
 
         let git = self.git();
         // Created once, never reset. If it is behind the base -- which is what
@@ -2053,9 +2071,17 @@ fn backend_for() -> Box<dyn WorkerBackend> {
     }
 }
 
-fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
+/// `recorded` is the run directory a `setup` of this same plan already wrote
+/// `model` and `review-model` into -- given by `reap`, rebuilding a run
+/// nobody is watching, and `None` for a fresh `run`, which has nothing
+/// recorded yet. Either way the environment has the last word and a project
+/// key the least: `WORKFLOW_MODEL`/`WORKFLOW_REVIEW_MODEL`, then what was
+/// recorded, then `mem project set model`/`review-model`, then `opus`/nobody.
+fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String, recorded: Option<&Path>) -> Run {
     let (max_workers, deadline_s, kill_grace_s, poll) = timings();
     let wt_root = paths::worktrees_root().join(project).join(&plan.plan_id);
+    let recorded_model = recorded.and_then(|d| self::recorded(d, "model"));
+    let recorded_review = recorded.and_then(|d| self::recorded(d, "review-model"));
     Run {
         dir: paths::runs_root().join(project).join(&plan.plan_id),
         brief_dir: paths::briefs_root().join(project).join(&plan.plan_id),
@@ -2072,13 +2098,19 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         poll,
         max_workers,
         backend: backend_for(),
-        model: env_str(
-            "WORKFLOW_MODEL",
-            &memcli::project_model().unwrap_or_else(|| "opus".into()),
-        ),
+        model: match std::env::var("WORKFLOW_MODEL") {
+            Ok(v) if !v.is_empty() => v,
+            _ => recorded_model
+                .filter(|v| !v.is_empty())
+                .or_else(memcli::project_model)
+                .unwrap_or_else(|| "opus".into()),
+        },
         review_model: match std::env::var("WORKFLOW_REVIEW_MODEL") {
             Ok(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
-            Err(_) => memcli::project_review_model(),
+            Err(_) => match recorded_review {
+                Some(v) => Some(v).filter(|v| !v.is_empty()),
+                None => memcli::project_review_model(),
+            },
         },
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         env: Vec::new(),
@@ -2132,7 +2164,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     let Some(base) = git.head() else {
         return exit::USAGE;
     };
-    let mut run = new_run(parsed, top, &project.dir_name(), base);
+    let mut run = new_run(parsed, top, &project.dir_name(), base, None);
     // Resolved, not as typed: the ticks go back to this file for the rest of
     // the run, and a relative path is read against whatever the cwd is then.
     run.plan_file = plan_file.map(paths::realpath_m);
@@ -2596,7 +2628,7 @@ pub fn cmd_reap() -> i32 {
         if base.is_empty() {
             continue;
         }
-        let mut run = new_run(parsed, top.clone(), &project.dir_name(), base);
+        let mut run = new_run(parsed, top.clone(), &project.dir_name(), base, Some(&dir));
         run.dir = dir;
         run.collecting = true;
         // A held lock means a live orchestrator is watching these workers;
@@ -2604,6 +2636,15 @@ pub fn cmd_reap() -> i32 {
         let Some(_lock) = lock_run(&run.dir) else {
             continue;
         };
+        // The environment reap runs under is whatever happens to be exported
+        // right now, not what this run was told to read with -- say so when
+        // the recorded model is what is about to be used.
+        if std::env::var("WORKFLOW_REVIEW_MODEL").is_err()
+            && let Some(model) = run.review_model.as_deref()
+            && recorded(&run.dir, "review-model").is_some_and(|v| !v.is_empty())
+        {
+            warn(format!("reap: reading with {model} as the run did"));
+        }
         if run.stop_settled_orphans() > 0 {
             did = true;
         }

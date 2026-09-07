@@ -231,6 +231,10 @@ is "$RC" 1 'a dispatch that produced nothing fails the task'
 racy="$XDG_STATE_HOME/workflow/runs/racy/racy"
 is "$(cat "$racy/t1.failed")" 'dispatch race: worker never wrote its pidfile' \
 	'and names the dispatch, not a worker that never ran'
+is "$(cat "$racy/model" 2>/dev/null)" opus \
+	'setup records the model this run dispatches on'
+is "$(cat "$racy/review-model" 2>/dev/null)" '' \
+	'and an empty review-model when nobody reads'
 
 ## ------------------------- workers still running for a run that is gone
 
@@ -319,3 +323,83 @@ is "$(cat "$srundir/t1.dispatches")" 1 'reap dispatched nothing'
 truthy "$([ ! -e "$T_TMP/reap-dispatched" ] && echo 0 || echo 1)" \
 	'and started no worker for a run nobody is watching'
 unlike "$OUT" 'one more try' 'nor did it promise one'
+
+## ------------------------------ reap reads with the run's own recorded model
+
+# `workflow run` records the model it dispatches on and the model it reads
+# with before a single worker goes out (t3). A run killed with a finished
+# worker nobody has gated yet leaves that recorded, and reap, picking the
+# task up, reads it with the model the run named -- not the empty environment
+# every other test in this file runs reap under.
+new_repo modelcheck
+mem_register
+printf '{"name":"acme/models"}\n' >composer.json
+printf '#!/bin/sh\nexit 0\n' >artisan
+chmod +x artisan
+write_exec bin/php <<-'EOF'
+	#!/bin/sh
+	exit 0
+EOF
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'project files'
+mbase=$(git rev-parse HEAD)
+mrundir="$XDG_STATE_HOME/workflow/runs/modelcheck/models"
+mwtroot="$XDG_STATE_HOME/workflow/worktrees/modelcheck/models"
+mkdir -p "$mrundir"
+cat >"$mrundir/plan.md" <<'PLAN'
+# plan: models
+
+- [ ] t1 Add the thing
+      Files: app/**
+      Verify: true
+- [ ] t2 Never dispatched
+      Files: other/**
+      Verify: true
+PLAN
+printf '%s\n' "$mbase" >"$mrundir/base_sha"
+printf 'opus\n' >"$mrundir/model"
+printf 'fake-reader\n' >"$mrundir/review-model"
+
+git branch integration/models "$mbase"
+git worktree add -q "$mwtroot/_integration" integration/models
+git worktree add -q -b models/t1 "$mwtroot/t1" "$mbase"
+(
+	cd "$mwtroot/t1" || exit 1
+	mkdir -p app
+	printf '<?php\n' >app/Thing.php
+	git add app/Thing.php
+	git -c core.hooksPath=/dev/null commit -qm 'Add the thing'
+)
+printf '{"is_error":false,"result":"ok"}\n' >"$mrundir/t1.json"
+printf '2026-08-19T00:00:00Z ready merge-ready\n' >"$mrundir/t1.status"
+printf '%s\n' "$(sh -c 'echo $$')" >"$mrundir/t1.pid" # a pid that has already gone
+printf '1\n' >"$mrundir/t1.dispatches"
+printf '00000000-0000-4000-8000-00000000000d\n' >"$mrundir/t1.session"
+printf 'dispatched\n' >"$mrundir/t1.state"
+printf 'pending\n' >"$mrundir/t2.state"
+
+export WF_TMP="$T_TMP"
+write_exec "$T_TMP/reviewer.sh" <<'FAKE'
+#!/bin/sh
+task=$1; brief=$5; model=$6
+printf '%s %s\n' "$model" "$task" >>"$WF_TMP/reviews.log"
+answer=$(sed -n 's/^    Answer file: //p' "$brief")
+printf 'VERDICT: ship\n' >"$answer"
+FAKE
+export FAKE="$T_TMP/reviewer.sh"
+
+unset WORKFLOW_REVIEW_MODEL
+run env WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {session} {brief} {model}'"'"' > {out} 2> {err} &' workflow reap
+export WORKFLOW_REVIEW_MODEL=
+
+for _ in $(seq 1 50); do
+	[ -s "$T_TMP/reviews.log" ] && break
+	sleep 0.2
+done
+is "$(cat "$T_TMP/reviews.log" 2>/dev/null)" 'fake-reader t1-review' \
+	'reap reads with the model the run recorded, not the empty environment reap runs under'
+like "$OUT" 'reap: reading with fake-reader as the run did' \
+	'and says so before it collects anything'
+
+git worktree remove --force "$mwtroot/t1" 2>/dev/null
+git worktree remove --force "$mwtroot/_integration" 2>/dev/null
