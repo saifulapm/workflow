@@ -19,6 +19,15 @@ if [ -f "$WF_TMP/misbehave-$task" ]; then
 	printf 'outside\n' >NOTOWNED.txt
 	git add NOTOWNED.txt
 	commit 'Reach outside the task'
+elif [ -f NOTOWNED.txt ]; then
+	# Resumed on the branch that holds its own past mistake: undo it and
+	# fold the fix into the same commit, the way a worker reading its own
+	# rejection would.
+	git rm -q NOTOWNED.txt
+	mkdir -p app
+	printf '%s\n' "$task" >"app/$task.php"
+	git add "app/$task.php"
+	git -c core.hooksPath=/dev/null commit --amend -qm "Add the $task service"
 else
 	mkdir -p app
 	printf '%s\n' "$task" >"app/$task.php"
@@ -92,7 +101,8 @@ like "$rerun_out" 'integration/rerun-check holds' \
 	'run 2: the message says the branch holds work an earlier run merged'
 like "$rerun_out" 'git merge integration/rerun-check' \
 	'run 2: and names the way to land it'
-like "$rerun_out" 'rerun-check/t2' 'run 2: the leftover task branch is named too'
+like "$rerun_out" 't2: failed last run -- resumed on its branch' \
+	'run 2: the failed task is named as resumed, not as a leftover to clear'
 
 is "$(git rev-parse integration/rerun-check)" "$int1" 'run 2: integration is untouched'
 run git merge-base --is-ancestor "$int1" integration/rerun-check
@@ -100,14 +110,8 @@ is "$RC" 0 "run 2: run 1's merged commit is still reachable"
 run git cat-file -e "integration/rerun-check:app/t1.php"
 is "$RC" 0 "run 2: t1's work is still on the branch"
 is "$(cat "$rundir/base_sha")" "$base" 'run 2: it did not even rewrite the recorded base'
-is "$(git worktree list | grep -c .)" 1 'run 2: it made no worktrees'
-
-# Clearing only the leftover branch is not enough: the two guards are separate.
-git branch -D rerun-check/t2 >/dev/null 2>&1
-run workflow run
-is "$RC" 2 'run 2b: still refused while integration is ahead of the base'
-is "$(git rev-parse integration/rerun-check)" "$int1" 'run 2b: and still untouched'
-unlike "$OUT" 'rerun-check/t2' 'run 2b: the branch it no longer objects to is not named'
+is "$(git worktree list | grep -c .)" 2 \
+	'run 2: it made no new worktrees beyond the one already kept for t2'
 
 ## --------------------------------------------- the recovery the message names
 
@@ -120,7 +124,8 @@ run workflow run
 is "$RC" 0 'run 3: the recovery path runs to completion'
 is "$(cat "$rundir/t1.state")" merged \
 	'run 3: the task ticked off in run 1 counts as merged, its commit being on integration'
-is "$(cat "$rundir/t2.state")" merged 'run 3: the failed task ran again and merged'
+is "$(cat "$rundir/t2.state")" merged 'run 3: the failed task resumed on its own branch and merged'
+is "$(cat "$rundir/t2.dispatches")" 2 'run 3: on the same branch, not a fresh one'
 is "$(cat "$rundir/t2.failed")" '' \
 	'run 3: and the failure reason from run 1 is cleared, not left to be reported forever'
 
@@ -186,9 +191,9 @@ is "$RC" 1 'hand pass 1: t1 merges and t2 fails'
 handrun="$XDG_STATE_HOME/workflow/runs/hand/hand"
 is "$(cat "$handrun/t1.state")" merged 'hand pass 1: t1 merged'
 
-# The recipe: land the branch on the trunk, clear the leftover, run again.
+# The recipe: land the branch on the trunk, run again. t2's branch is not
+# cleared -- it is resumable, and its worktree still holds it.
 git merge -q --ff-only integration/hand
-git branch -D hand/t2 >/dev/null 2>&1
 rm -f "$T_TMP/misbehave-t2"
 # Back to the plan as its author wrote it. Pass 1 ticked t1 off in this file,
 # and the state under test here is the other one: a task still unticked whose
@@ -227,8 +232,8 @@ is "$(cat "$blockedrun/t2.state")" blocked 'blocked pass 1: t2 is blocked'
 is "$(git rev-list --count 'main..blocked/t2')" 0 \
 	"blocked pass 1: t2's branch holds nothing"
 
-# The recipe clears only the branch that holds work; the empty one is swept.
-git branch -D blocked/t1 >/dev/null 2>&1
+# t1's branch is not cleared -- it is resumable and resumes on its own; only
+# t2's empty one needs sweeping.
 rm -f "$T_TMP/misbehave-t1"
 run workflow run --plan-file "$T_TMP/blocked.md"
 is "$RC" 0 'blocked pass 2: the rerun is not refused over an empty branch'

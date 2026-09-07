@@ -308,7 +308,12 @@ is "$RC" 0 'integration is green at the end of the run'
 cd "$WF_MAIN" || exit 1
 git worktree remove --force "$T_TMP/check"
 
-is "$(git worktree list | grep -c .)" 1 'git worktree list is clean again'
+wt_list=$(git worktree list)
+is "$(printf '%s\n' "$wt_list" | grep -c .)" 4 \
+	'merged and reviewed worktrees are gone; the three failed-with-commits ones stay for resume'
+like "$wt_list" 'fixture-run/own1' 'own1 kept, resumable'
+like "$wt_list" 'fixture-run/own2' 'own2 kept, resumable'
+like "$wt_list" 'fixture-run/red' 'red kept, resumable'
 is "$(git branch --list 'fixture-run/t1' | grep -c .)" 0 'merged task branches are deleted'
 is "$(git branch --list 'fixture-run/own1' | grep -c .)" 1 'failed task branches are kept'
 like "$("$MEM_BIN" plan)" '\[x\] t1' 'mem plan --tick checked the merged task off'
