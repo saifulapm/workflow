@@ -363,14 +363,22 @@ fn last_context_tokens(transcript: &str) -> Option<u64> {
 /// The joined text of a transcript's last turn that said anything -- a tool
 /// call carries no text and leaves the turn before it standing, the way a
 /// worker that ended mid-thought does not overwrite what it last actually
-/// said.
+/// said. A user turn is never it, even one carrying text: a reading that
+/// ends before the assistant speaks has said nothing, and marker text in a
+/// user turn -- CLAUDE.md, a system reminder -- is not the worker's own word.
 fn last_words_in(transcript: &str) -> String {
     let mut last = String::new();
     for line in transcript.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+        let Some(message) = v.get("message") else {
+            continue;
+        };
+        if message.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = message.get("content") else {
             continue;
         };
         let text = match content {
@@ -747,6 +755,19 @@ not json at all
         );
         assert_eq!(last_words_in(""), "");
         assert_eq!(last_words_in("not json at all"), "");
+    }
+
+    #[test]
+    fn a_users_turn_is_never_the_last_words() {
+        // A reading that ends before the assistant answers leaves only a
+        // user turn -- the dispatch's own prompt, or a rate-limit mention
+        // planted in it -- which must never stand in as the reader's own.
+        assert_eq!(
+            last_words_in(
+                r#"{"type":"user","message":{"role":"user","content":"reviewing t2, mind the rate limit"}}"#
+            ),
+            ""
+        );
     }
 
     #[test]
