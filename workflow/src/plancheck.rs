@@ -159,7 +159,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // one that comes from neither is a name the worker will hunt for. The
         // dependency need not be a direct one: a plan chains `[after:]`, and
         // what t1 gives reaches t3 through t2 (friction #EYC8DHKV).
-        for (ident, needle) in uses_items(t.uses.as_deref().unwrap_or("")) {
+        for (ident, needle, qualifier) in uses_items(t.uses.as_deref().unwrap_or("")) {
             let Some(needle) = needle else {
                 continue;
             };
@@ -172,21 +172,24 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                         .as_deref()
                         .is_some_and(|g| g.contains(ident.as_str()))
                 });
-            if !given && named_by(&git, &needle, itself.as_deref()).is_empty() {
+            if !given
+                && named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()).is_empty()
+            {
                 f.warnings.push(format!(
                     "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
                     t.id
                 ));
             }
         }
-        for (ident, needle) in uses_items(t.gives.as_deref().unwrap_or("")) {
+        for (ident, needle, qualifier) in uses_items(t.gives.as_deref().unwrap_or("")) {
             let Some(needle) = needle else {
                 continue;
             };
-            let named: Vec<String> = named_by(&git, &needle, itself.as_deref())
-                .into_iter()
-                .filter(|file| !claimed.contains(file))
-                .collect();
+            let named: Vec<String> =
+                named_under(&git, &needle, qualifier.as_deref(), itself.as_deref())
+                    .into_iter()
+                    .filter(|file| !claimed.contains(file))
+                    .collect();
             if named.is_empty() {
                 continue;
             }
@@ -533,6 +536,24 @@ fn repo_relative(file: Option<&Path>, root: &Path) -> Option<String> {
     Some(file.strip_prefix(root).ok()?.to_string_lossy().to_string())
 }
 
+/// The files naming the identifier, narrowed to those naming its qualifier
+/// too. A tree carries several `label`s and the item says which it means:
+/// `Composer::label()` is the one in the file that also says `Composer`, so
+/// the rest are neither work the task forgot to own nor the name it consumes.
+fn named_under(
+    git: &Git,
+    needle: &str,
+    qualifier: Option<&str>,
+    itself: Option<&str>,
+) -> Vec<String> {
+    let named = named_by(git, needle, itself);
+    let Some(qualifier) = qualifier else {
+        return named;
+    };
+    let under = named_by(git, qualifier, itself);
+    named.into_iter().filter(|f| under.contains(f)).collect()
+}
+
 /// The tracked files naming the identifier, the plan's own file aside.
 fn named_by(git: &Git, ident: &str, itself: Option<&str>) -> Vec<String> {
     zlines(&git.bytes(&["grep", "-l", "-z", "-F", ident]))
@@ -659,28 +680,28 @@ fn pattern_path(p: &str) -> &str {
     }
 }
 
-/// One identifier per ` · `-separated item, with what to grep for it: the
-/// identifier is the token nearest the call site (`CartPricing::price(...)`
-/// names `price`), or the item's only token when nothing is called, and
-/// declaration keywords never count as the name. Two items reducing to one
-/// identifier are reported once, not twice.
-fn uses_items(uses: &str) -> Vec<(String, Option<String>)> {
+/// An item of a Uses or Gives line: its identifier, what to grep the tree for
+/// on its behalf, and the qualifier it hangs off.
+type Item = (String, Option<String>, Option<String>);
+
+/// One identifier per ` · `-separated item: the token nearest the call site
+/// (`CartPricing::price(...)` names `price`), or the item's only token when
+/// nothing is called, and declaration keywords never count as the name. Two
+/// items reducing to one identifier are reported once, not twice.
+fn uses_items(uses: &str) -> Vec<Item> {
     uses.split(" · ")
         .filter_map(|item| {
             let item = without_locations(item);
             let ident = ident_of(&item)?;
             let needle = needle_for(&item, &ident);
-            Some((ident, needle))
+            Some((ident, needle, qualifier_of(&item)))
         })
-        .fold(
-            Vec::new(),
-            |mut out: Vec<(String, Option<String>)>, pair| {
-                if !out.iter().any(|(ident, _)| *ident == pair.0) {
-                    out.push(pair);
-                }
-                out
-            },
-        )
+        .fold(Vec::new(), |mut out: Vec<Item>, item| {
+            if !out.iter().any(|(ident, _, _)| *ident == item.0) {
+                out.push(item);
+            }
+            out
+        })
 }
 
 /// The item with its line locations taken out: `layout.rs:219`, a bare
@@ -710,14 +731,44 @@ fn ident_of(item: &str) -> Option<String> {
         "fn", "pub", "struct", "enum", "class", "function", "def", "let", "const", "type", "impl",
         "trait",
     ];
+    head_of(item)
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .rfind(|t| !t.is_empty() && !KEYWORDS.contains(t))
+        .map(str::to_string)
+}
+
+/// What an item declares, with its arguments and its return type dropped:
+/// `CartPricing::price: Cents` declares `CartPricing::price`, and `Cents` is
+/// what it hands back.
+fn head_of(item: &str) -> &str {
     let head = item.split('(').next().unwrap_or(item);
-    // `CartPricing::price: Cents` names price, not its return type.
-    let head = match head.rsplit_once(": ") {
+    match head.rsplit_once(": ") {
         Some((h, _)) if !h.is_empty() => h,
         _ => head,
+    }
+}
+
+/// The type or module an item hangs its identifier off: the token before the
+/// last `::` or `.` in its head, when that separator stands right in front of
+/// the identifier. `Composer::label()` means the `label` in `Composer` and no
+/// other; `price(Basket $b)` hangs off nothing, and `src/brief.rs BUDGET`
+/// names a file beside a constant rather than a constant inside one.
+pub fn qualifier_of(item: &str) -> Option<String> {
+    let head = head_of(item);
+    let ident = ident_of(item)?;
+    let at = match (head.rfind("::"), head.rfind('.')) {
+        (Some(colons), Some(dot)) => colons.max(dot),
+        (Some(at), None) | (None, Some(at)) => at,
+        (None, None) => return None,
     };
-    head.split(|c: char| !c.is_alphanumeric() && c != '_')
-        .rfind(|t| !t.is_empty() && !KEYWORDS.contains(t))
+    let sep = if head[at..].starts_with("::") { 2 } else { 1 };
+    if head[at + sep..] != ident {
+        return None;
+    }
+    head[..at]
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next_back()
+        .filter(|t| !t.is_empty())
         .map(str::to_string)
 }
 
@@ -795,8 +846,25 @@ mod tests {
     fn idents(uses: &str) -> Vec<String> {
         uses_items(uses)
             .into_iter()
-            .map(|(ident, _)| ident)
+            .map(|(ident, _, _)| ident)
             .collect()
+    }
+
+    /// A qualified item says which of the tree's several `label`s it means,
+    /// and the qualifier is what narrows the files naming it down to that one.
+    #[test]
+    fn a_qualified_item_yields_the_token_it_hangs_off() {
+        assert_eq!(qualifier_of("Composer::label()"), Some("Composer".into()));
+        assert_eq!(qualifier_of("Cart.total(): Cents"), Some("Cart".into()));
+        assert_eq!(qualifier_of("price(Basket $b)"), None);
+        // A return type the item names after a colon qualifies nothing.
+        assert_eq!(
+            qualifier_of("CartPricing::price: crate::Cents"),
+            Some("CartPricing".into())
+        );
+        assert_eq!(qualifier_of("DEFAULT_MODEL"), None);
+        // A path standing beside the symbol is not what the symbol hangs off.
+        assert_eq!(qualifier_of("src/brief.rs BRIEF_BUDGET"), None);
     }
 
     #[test]
@@ -842,8 +910,12 @@ mod tests {
         assert_eq!(
             uses_items("Basket::fixture(): Basket · engine.rs untouched"),
             vec![
-                ("fixture".to_string(), Some("fixture(".to_string())),
-                ("untouched".to_string(), None)
+                (
+                    "fixture".to_string(),
+                    Some("fixture(".to_string()),
+                    Some("Basket".to_string())
+                ),
+                ("untouched".to_string(), None, None)
             ]
         );
     }
@@ -872,13 +944,21 @@ mod tests {
         );
         assert_eq!(
             uses_items("engine/src/layout.rs:219 and the empty place arm at :448"),
-            vec![("at".to_string(), None)]
+            vec![("at".to_string(), None, None)]
         );
         assert_eq!(
             uses_items("StackEntry :448 · Layout::place :448-470"),
             vec![
-                ("StackEntry".to_string(), Some("StackEntry".to_string())),
-                ("place".to_string(), Some("::place".to_string()))
+                (
+                    "StackEntry".to_string(),
+                    Some("StackEntry".to_string()),
+                    None
+                ),
+                (
+                    "place".to_string(),
+                    Some("::place".to_string()),
+                    Some("Layout".to_string())
+                )
             ]
         );
     }

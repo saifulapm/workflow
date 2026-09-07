@@ -680,6 +680,62 @@ parse
 is "$RC" 0 'a sibling task claiming the file settles it'
 unlike "$OUT" 'budget-check' 'and nothing warns once every naming file is owned'
 
+# A qualified item says which of the tree's several `label`s it means, so the
+# files naming it are narrowed to those naming the qualifier too. Without
+# that, every file with the bare word in it was reported as work nobody owns.
+printf 'pub struct Composer { name: String }\n\nimpl Composer {\n    pub fn label(&self) -> String { self.name.clone() }\n}\n' >src/composer.rs
+printf 'assert label() reads the name\n' >tests/label-check.sh
+git add src/composer.rs tests/label-check.sh
+git -c core.hooksPath=/dev/null commit -qm 'the composer and a test naming a label'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Rename the label
+      Files: src/composer.rs
+      Gives: Composer::label()
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a qualified Gives parses'
+unlike "$OUT" 'label-check' 'a file naming label but not Composer is another symbol'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Rename the label
+      Files: src/composer.rs
+      Gives: label()
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'an unqualified Gives reads every file naming it'
+like "$OUT" 'tests/label-check.sh' 'and warns about the one no task claims'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Read the ledger label
+      Files: src/composer.rs
+      Uses: Ledger::label()
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a qualified Uses parses'
+like "$OUT" "Uses names 'label'" 'and no file carries label under Ledger'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Read the label
+      Files: src/composer.rs
+      Uses: label()
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'an unqualified Uses is answered by the tree'
+unlike "$OUT" "Uses names 'label'" 'so nothing warns'
+
 # A Done sentence that names a file the task's Files: do not claim is the
 # merge gate's refusal, spelled out at check time instead of after a worker has
 # spent a whole context reaching it (friction #RT818QJG).
