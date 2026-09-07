@@ -104,16 +104,18 @@ task depends on is already there; never go looking for another branch.
 
 Write the failing test first, then the code that passes it. Your evidence
 command is `workflow verify`, which runs the Verify: line above. A red
-Verify is answered in the code it tests, never by weakening the test. Once your
-branch merges, the gate runs `workflow verify --gate` over the merged change --
-for Rust that is `cargo test && cargo clippy -- -D warnings && cargo fmt --check`
-chained end to end. A green Verify with a red gate still fails the task. Commit each
+Verify is answered in the code it tests, never by weakening the test. Commit each
 atomic change in ordinary
 engineering voice -- no trailers, no session links, no words like agent, AI or
 orchestration, no puffery, plain words over fancy ones, straight quotes, no
 em dashes. Stage only the files this task touched; never `git add -A`.
 Everything you write must match the Files: patterns; anything outside them is
 refused at the merge gate and the task is failed.
+
+After your branch merges, the gate runs `workflow verify --gate` over the merged change --
+for Rust that is `cargo test && cargo clippy -- -D warnings && cargo fmt --check`
+chained end to end. A green Verify with a red gate still fails the task, so
+run `workflow verify --gate` in your worktree before you report `ready`.
 
 ## Stop and ask -- never decide these yourself
 
@@ -227,6 +229,7 @@ mod tests {
             "the gate runs `workflow verify --gate` over the merged change",
             "cargo test && cargo clippy -- -D warnings && cargo fmt --check",
             "A green Verify with a red gate still fails the task",
+            "run `workflow verify --gate` in your worktree before you report `ready`",
         ] {
             assert!(body.contains(needle), "the brief lost {needle}");
         }

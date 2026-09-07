@@ -152,6 +152,8 @@ like "$body" 'cargo test && cargo clippy -- -D warnings && cargo fmt --check' \
 	'naming the Rust ladder as the example'
 like "$body" 'A green Verify with a red gate still fails the task' \
 	'and that a green Verify does not excuse a red gate'
+like "$body" 'run `workflow verify --gate` in your worktree before you report `ready`' \
+	'and telling the worker to run the gate before it reports ready'
 
 ## ------------------------------------------- a project whose path has a space
 
