@@ -3,7 +3,9 @@
 mod common;
 
 use common::{World, code, item, mem, put, stdout};
-use mem::digest::{CEILING, EMPTY, HINT, Sources, TRUNCATED, build, index_head, plan_head};
+use mem::digest::{
+    CEILING, EMPTY, HINT, Sources, TRUNCATED, build, first_open_task, index_head, plan_head,
+};
 use mem::index::{Index, Purpose};
 use mem::item::Kind;
 
@@ -150,6 +152,60 @@ fn plan_head_takes_the_heading_and_the_first_unchecked_task() {
         plan_head("## Sub\n* [ ] star task\n"),
         vec!["## Sub", "* [ ] star task"]
     );
+}
+
+/// A plan that spells out its own grammar carries open boxes that illustrate a
+/// task rather than being one: fenced, or indented under the task they explain.
+const EXAMPLES: &str = "# Migrate sessions
+
+- [x] t1 write the plan
+      Spec: a task line reads
+
+          - [ ] t9 an example task
+
+```
+- [ ] t8 another example
+```
+
+- [ ] t2 run the migration
+";
+
+#[test]
+fn an_open_box_in_an_example_is_not_the_next_task() {
+    assert_eq!(
+        first_open_task(EXAMPLES),
+        Some("- [ ] t2 run the migration")
+    );
+    assert_eq!(
+        plan_head(EXAMPLES),
+        vec!["# Migrate sessions", "- [ ] t2 run the migration"]
+    );
+
+    // With the one real task ticked the plan is finished, examples and all.
+    let done = EXAMPLES.replace("- [ ] t2", "- [x] t2");
+    assert_eq!(first_open_task(&done), None);
+    assert_eq!(plan_head(&done), vec!["# Migrate sessions"]);
+}
+
+#[test]
+fn context_names_the_first_real_task_and_none_of_the_examples() {
+    let w = World::new("digest-plan-examples");
+    w.project(P, "thing");
+    std::fs::write(w.store().plan_path(P), EXAMPLES).unwrap();
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["context", "thing"]);
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("plan: - [ ] t2 run the migration"), "{text}");
+    assert!(!text.contains("t9"), "an indented example: {text}");
+    assert!(!text.contains("t8"), "a fenced example: {text}");
+
+    // Nothing open left means the digest names the plan and no task under it.
+    let done = EXAMPLES.replace("- [ ] t2", "- [x] t2");
+    std::fs::write(w.store().plan_path(P), &done).unwrap();
+    let text = stdout(&mem(&w, &w.plain_dir("cwd"), &["context", "thing"]));
+    assert!(text.contains("plan: # Migrate sessions"), "{text}");
+    assert!(!text.contains("- [ ]"), "{text}");
 }
 
 #[test]

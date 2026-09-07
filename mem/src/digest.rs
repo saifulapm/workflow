@@ -130,10 +130,27 @@ pub fn plan_head(plan: &str) -> Vec<String> {
 /// The first unchecked task line of a plan, trimmed. An open box is what says
 /// the plan still has work in it, whether the reader is the digest or the
 /// `--from` that would otherwise overwrite it.
+///
+/// A box inside a fenced block, or indented four spaces or more, is an example
+/// of a task rather than one: plans that quote their own grammar are full of
+/// them, and counting them holds a finished plan open forever.
 pub fn first_open_task(plan: &str) -> Option<&str> {
-    plan.lines()
-        .map(str::trim)
-        .find(|line| line.starts_with("- [ ]") || line.starts_with("* [ ]"))
+    let mut fenced = false;
+    for line in plan.lines() {
+        let body = line.trim_start();
+        if body.starts_with("```") || body.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced || line.starts_with("    ") {
+            continue;
+        }
+        let line = line.trim();
+        if line.starts_with("- [ ]") || line.starts_with("* [ ]") {
+            return Some(line);
+        }
+    }
+    None
 }
 
 /// The opening lines of the index page, which by convention are a heading and

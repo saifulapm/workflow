@@ -283,6 +283,39 @@ fn from_copies_a_stored_plan_over_the_plan_of_record() {
 }
 
 #[test]
+fn from_reads_past_the_example_boxes_of_a_finished_plan() {
+    let w = World::new("roadmap-from-examples");
+    let repo = w.repo("shop", None);
+
+    let second = "# plan: m2-billing\n\n- [ ] t1 Charge the card\n";
+    let path = file(&w, "m2-billing.md", second);
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["plan", "m2-billing", "--set-file", &path]
+        )),
+        0
+    );
+
+    // Every task is ticked; the open boxes left are a fenced example and one
+    // indented under the task that explains it, so the plan is finished.
+    let finished = "# plan: m1-auth\n\n\
+        - [x] t1 Sign-in\n\
+        \x20     Spec: a task line reads\n\n\
+        \x20         - [ ] t9 an example task\n\n\
+        ```\n\
+        - [ ] t8 another example\n\
+        ```\n";
+    let path = file(&w, "record.md", finished);
+    assert_eq!(code(&mem(&w, &repo, &["plan", "--set-file", &path])), 0);
+
+    let out = mem(&w, &repo, &["plan", "--from", "m2-billing"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&mem(&w, &repo, &["plan"])), second);
+}
+
+#[test]
 fn context_names_the_roadmap_and_its_next_milestone() {
     let w = World::new("roadmap-context");
     let repo = w.repo("shop", None);
