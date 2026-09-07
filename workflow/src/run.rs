@@ -1120,14 +1120,17 @@ impl Run {
                     return false;
                 }
                 self.unwind(task, &prev);
-                self.fail_task(
-                    task,
-                    &format!(
-                        "{why} -- read {} (session {})",
+                let note = if combined.is_empty() {
+                    format!("{why} -- read {} (session {})", answer.display(), h.session)
+                } else {
+                    format!(
+                        "{why} -- read {} and {} (session {})",
+                        answer.display(),
                         self.dir.join(format!("{task}.review-err")).display(),
                         h.session
-                    ),
-                );
+                    )
+                };
+                self.fail_task(task, &note);
             }
         }
         true
