@@ -2636,15 +2636,6 @@ pub fn cmd_reap() -> i32 {
         let Some(_lock) = lock_run(&run.dir) else {
             continue;
         };
-        // The environment reap runs under is whatever happens to be exported
-        // right now, not what this run was told to read with -- say so when
-        // the recorded model is what is about to be used.
-        if std::env::var("WORKFLOW_REVIEW_MODEL").is_err()
-            && let Some(model) = run.review_model.as_deref()
-            && recorded(&run.dir, "review-model").is_some_and(|v| !v.is_empty())
-        {
-            warn(format!("reap: reading with {model} as the run did"));
-        }
         if run.stop_settled_orphans() > 0 {
             did = true;
         }
@@ -2659,6 +2650,16 @@ pub fn cmd_reap() -> i32 {
         }
         if run.running() == 0 {
             continue;
+        }
+        // The environment reap runs under is whatever happens to be exported
+        // right now, not what this run was told to read with -- say so when
+        // the recorded model is what is about to be used, and only once this
+        // run has something to collect.
+        if std::env::var("WORKFLOW_REVIEW_MODEL").is_err()
+            && let Some(model) = run.review_model.as_deref()
+            && recorded(&run.dir, "review-model").is_some_and(|v| !v.is_empty())
+        {
+            warn(format!("reap: reading with {model} as the run did"));
         }
         if run.reap_pass() {
             did = true;

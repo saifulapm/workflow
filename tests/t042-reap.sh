@@ -396,7 +396,7 @@ export FAKE="$T_TMP/reviewer.sh"
 
 unset WORKFLOW_REVIEW_MODEL
 run env WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {session} {brief} {model}'"'"' > {out} 2> {err} &' workflow reap
-export WORKFLOW_REVIEW_MODEL=
+unset WORKFLOW_REVIEW_MODEL
 
 for _ in $(seq 1 50); do
 	[ -s "$T_TMP/reviews.log" ] && break
@@ -409,3 +409,33 @@ like "$OUT" 'reap: reading with fake-reader as the run did' \
 
 git worktree remove --force "$mwtroot/t1" 2>/dev/null
 git worktree remove --force "$mwtroot/_integration" 2>/dev/null
+
+## ------------------- reap stays quiet about a run with nothing left to read
+
+# A finished run's directory is never removed, so every later reap keeps
+# seeing it. Naming the model it would read with is only honest for a run
+# that still has something dispatched; one with everything already settled
+# has no reading ahead of it, and saying so anyway (review 2) claims a
+# reading that never happens.
+qrundir="$XDG_STATE_HOME/workflow/runs/modelcheck/settled"
+mkdir -p "$qrundir"
+cat >"$qrundir/plan.md" <<'PLAN'
+# plan: settled
+
+- [ ] t1 Already merged
+      Files: a/**
+      Verify: true
+- [ ] t2 Already failed
+      Files: b/**
+      Verify: true
+PLAN
+git rev-parse HEAD >"$qrundir/base_sha"
+printf 'fake-reader\n' >"$qrundir/review-model"
+printf 'merged\n' >"$qrundir/t1.state"
+printf 'failed\n' >"$qrundir/t2.state"
+
+unset WORKFLOW_REVIEW_MODEL
+run workflow reap
+unset WORKFLOW_REVIEW_MODEL
+unlike "$OUT" 'reading with' \
+	'a settled run with nothing dispatched says nothing about reading'
