@@ -366,7 +366,11 @@ fn last_context_tokens(transcript: &str) -> Option<u64> {
 /// said. A user turn is never it, even one carrying text: a reading that
 /// ends before the assistant speaks has said nothing, and marker text in a
 /// user turn -- CLAUDE.md, a system reminder -- is not the worker's own word.
-fn last_words_in(transcript: &str) -> String {
+///
+/// Both backends read through this: a worker under amx is a claude session in
+/// a pane and writes the same transcript, so the file differs only in which
+/// session id names it.
+pub(crate) fn last_words_in(transcript: &str) -> String {
     let mut last = String::new();
     for line in transcript.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {

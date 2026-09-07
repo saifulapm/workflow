@@ -6,6 +6,10 @@
 //! `amx status <id> --json` -- so liveness, the record and the ending are one
 //! parse of one document rather than a listing, a transcript and a pidfile.
 //!
+//! The one thing that document does not carry is what the worker last said.
+//! That is in its own transcript, the same one the claude backend reads, and
+//! the conversation `status` names is what finds the file.
+//!
 //! `WORKFLOW_AMX` names the binary, defaulting to `amx` on PATH. It is this
 //! backend's test seam, the way `WORKFLOW_WORKER_CMD` is the claude backend's;
 //! the two mean nothing to each other.
@@ -13,8 +17,8 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::backend::{Dispatch, Handle, Outcome, WorkerBackend};
-use crate::sys;
+use crate::backend::{Dispatch, Handle, Outcome, WorkerBackend, last_words_in};
+use crate::{paths, sys};
 
 /// The phases that mean nothing more is coming from this agent.
 ///
@@ -66,11 +70,15 @@ fn amx(args: &[&str]) -> (String, bool) {
     )
 }
 
-/// The two fields of `amx status --json` this backend reads.
+/// The three fields of `amx status --json` this backend reads.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Status {
     state: String,
     last_event: i64,
+    /// The claude conversation the pane is running, which is what names the
+    /// transcript under the worker's directory. Empty for an agent that never
+    /// got as far as one.
+    session: String,
 }
 
 /// The pure half of [`status`], so the parse is testable without an amx.
@@ -85,6 +93,11 @@ fn status_in(json: &str) -> Option<Status> {
             .unwrap_or_default()
             .to_string(),
         last_event: v.get("last_event").and_then(|n| n.as_i64()).unwrap_or(0),
+        session: v
+            .get("session")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
     })
 }
 
@@ -224,9 +237,16 @@ impl WorkerBackend for AmxBackend {
         for name in scrubbed(std::env::vars().map(|(k, _)| k)) {
             c.env_remove(name);
         }
+        // A launch amx refuses says why on stderr and nowhere else, and for a
+        // reader that line is the whole diagnosis -- so it goes where the
+        // dispatch was told to put it rather than to /dev/null.
+        let err = match std::fs::File::create(&d.err) {
+            Ok(f) => Stdio::from(f),
+            Err(_) => Stdio::null(),
+        };
         // `amx new` prints the id and returns as soon as the pane is up, so
         // there is nothing to detach from and nothing to wait for.
-        let _ = c.stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ = c.stdout(Stdio::null()).stderr(err).status();
         name
     }
 
@@ -278,6 +298,23 @@ impl WorkerBackend for AmxBackend {
             ok: status(&h.session).is_some_and(|s| CLEAN.contains(&s.state.as_str())),
         }
     }
+
+    /// A worker under amx is a claude session in a pane, so it leaves the same
+    /// transcript the claude backend reads -- only the id naming it is amx's
+    /// to give, and `amx status --json` is what gives it. An agent whose
+    /// status names no conversation has no last words: the reading ended
+    /// before one existed, and the transcripts standing under the directory
+    /// belong to other panes.
+    fn last_words(&self, h: &Handle) -> String {
+        let Some(session) = status(&h.session)
+            .map(|s| s.session)
+            .filter(|s| !s.is_empty())
+        else {
+            return String::new();
+        };
+        let path = paths::transcript_path(&h.worktree, &session);
+        last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
+    }
 }
 
 #[cfg(test)]
@@ -285,6 +322,9 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::Mutex;
+
+    /// The conversation [`STATUS`] says its agent is running.
+    const SESSION: &str = "685bae4d-35cd-4a63-b50e-686ebcae1aa9";
 
     /// One agent as `amx status --json` prints it: amx's `View::json`, with
     /// the fields this backend never reads left in so the parse is exercised
@@ -323,6 +363,9 @@ mod tests {
         let s = status_in(STATUS).unwrap();
         assert_eq!(s.state, "working");
         assert_eq!(s.last_event, 1787939754);
+        // The conversation the pane is running, which is the transcript this
+        // backend reads a reader's last words out of.
+        assert_eq!(s.session, SESSION);
         // A document missing what it should carry is still a record.
         assert_eq!(status_in("{}"), Some(Status::default()));
         // Anything that is not one agent's object is not a record at all.
@@ -442,6 +485,7 @@ mod tests {
 
     struct Fake {
         dir: PathBuf,
+        home: Option<std::ffi::OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
@@ -449,8 +493,13 @@ mod tests {
         /// A stand-in for amx that records every call's argv and the
         /// environment it was handed, and answers `status` for one known id
         /// out of [`STATUS`] with `state` replaced.
+        ///
+        /// `HOME` moves into the same directory, so the transcripts
+        /// [`paths::transcript_path`] resolves are the fixture's and never
+        /// the machine's.
         fn new(test: &str, state: &str) -> Fake {
             let lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let home = std::env::var_os("HOME");
             let dir = std::env::temp_dir().join(format!("wf-amx-{}-{test}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
@@ -467,6 +516,7 @@ mod tests {
                     r#"#!/bin/sh
 printf '%s\n' "$@" >> '{d}/argv'
 env > '{d}/env'
+echo "amx: $1: no capacity" >&2
 if [ "$1" = status ]; then
   [ "$2" = wf-t1-a3k9 ] || exit 1
   cat '{d}/status.json'
@@ -484,8 +534,13 @@ exit 0
             unsafe {
                 std::env::set_var("WORKFLOW_AMX", &bin);
                 std::env::set_var("GITHUB_API_KEY", "leak-me");
+                std::env::set_var("HOME", &dir);
             }
-            Fake { dir, _lock: lock }
+            Fake {
+                dir,
+                home,
+                _lock: lock,
+            }
         }
 
         fn handle(&self, session: &str) -> Handle {
@@ -499,6 +554,23 @@ exit 0
         fn read(&self, name: &str) -> String {
             std::fs::read_to_string(self.dir.join(name)).unwrap_or_default()
         }
+
+        /// One conversation file where [`paths::transcript_path`] will look
+        /// for it: under the fixture's HOME, in the slug of the worktree the
+        /// handles are cut from.
+        fn transcript(&self, session: &str, body: &str) {
+            let path = paths::transcript_path(&self.dir, session);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+
+        /// The same status with no conversation named -- an agent amx has a
+        /// record of whose pane never got as far as one.
+        fn nameless(&self) {
+            let path = self.dir.join("status.json");
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(&path, text.replace(SESSION, "")).unwrap();
+        }
     }
 
     impl Drop for Fake {
@@ -507,6 +579,10 @@ exit 0
             unsafe {
                 std::env::remove_var("WORKFLOW_AMX");
                 std::env::remove_var("GITHUB_API_KEY");
+                match &self.home {
+                    Some(home) => std::env::set_var("HOME", home),
+                    None => std::env::remove_var("HOME"),
+                }
             }
             let _ = std::fs::remove_dir_all(&self.dir);
         }
@@ -517,6 +593,7 @@ exit 0
         let fake = Fake::new("dispatch", "working");
         let mut d = fixture();
         d.worktree = fake.dir.clone();
+        d.err = fake.dir.join("t1.err");
         d.env = vec![("CARGO_TARGET_DIR".into(), "/tmp/target".into())];
 
         assert_eq!(AmxBackend.dispatch(&d), "wf-t1-a3k9");
@@ -533,6 +610,35 @@ exit 0
             !env.lines().any(|l| l.starts_with("GITHUB_API_KEY=")),
             "a credential reached the pane: {env}"
         );
+        // What amx said on its way out is the only account of a launch that
+        // was refused, so it goes where the dispatch was told to put it.
+        assert_eq!(fake.read("t1.err").trim(), "amx: new: no capacity");
+    }
+
+    #[test]
+    fn a_readers_last_words_come_off_the_conversation_amx_names() {
+        let fake = Fake::new("words", "failed");
+        let h = fake.handle("wf-t1-a3k9");
+        // The conversation is named but has not been written yet.
+        assert_eq!(AmxBackend.last_words(&h), "");
+
+        fake.transcript(
+            SESSION,
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\
+             \"content\":[{\"type\":\"text\",\"text\":\"You've reached your Fable limit.\"}]}}\n",
+        );
+        assert_eq!(
+            AmxBackend.last_words(&h),
+            "You've reached your Fable limit."
+        );
+
+        // An agent amx has no record of names no conversation to read.
+        assert_eq!(AmxBackend.last_words(&fake.handle("nope")), "");
+        // Nor does a record that carries no session: the transcript on disk
+        // belongs to some other pane, and guessing at it would put another
+        // reader's words in this task's account of itself.
+        fake.nameless();
+        assert_eq!(AmxBackend.last_words(&h), "");
     }
 
     #[test]

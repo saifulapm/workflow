@@ -41,10 +41,31 @@ new)
 		esac
 	done
 	printf 'working\n' >"$AMX_DIR/$name.state"
-	# The status file to report into is in the brief, which is where a real
-	# worker reads it too. Its name is the task's.
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
+	# A reading, not a task: the brief names an answer file rather than a
+	# status file, and neither reader here writes a verdict. wall leaves its
+	# last words in the conversation amx names for it; ceiling never gets a
+	# conversation, so the only account of why is what this launch prints.
+	answer=$(sed -n 's/^    Answer file: //p' "$brief")
+	if [ -n "$answer" ]; then
+		printf 'nothing useful\n' >"$answer"
+		case $name in
+		wf-wall-review-*)
+			sess=11111111-2222-4333-8444-555555555555
+			printf '%s\n' "$sess" >"$AMX_DIR/$name.session"
+			slug=$(printf '%s' "$dir" | sed -E 's/[^A-Za-z0-9]/-/g')
+			mkdir -p "$HOME/.claude/projects/$slug"
+			printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"You've reached your Fable limit for this session.\"}]}}" \
+				>"$HOME/.claude/projects/$slug/$sess.jsonl"
+			;;
+		*) echo 'amx: rate limit exceeded, please retry.' >&2 ;;
+		esac
+		printf 'done\n' >"$AMX_DIR/$name.state"
+		exit 0
+	fi
+	# The status file to report into is in the brief, which is where a real
+	# worker reads it too. Its name is the task's.
 	status=$(grep -oE '[^ ]+\.status' "$brief" | head -1)
 	task=$(basename "$status" .status)
 	printf '%s progress\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
@@ -60,7 +81,8 @@ new)
 	;;
 status)
 	[ -f "$AMX_DIR/$1.state" ] || exit 1
-	printf '{"id":"%s","state":"%s","last_event":0}\n' "$1" "$(cat "$AMX_DIR/$1.state")"
+	printf '{"id":"%s","state":"%s","last_event":0,"session":"%s"}\n' \
+		"$1" "$(cat "$AMX_DIR/$1.state")" "$(cat "$AMX_DIR/$1.session" 2>/dev/null)"
 	;;
 stop)
 	printf 'stopped\n' >"$AMX_DIR/$1.state"
@@ -168,3 +190,41 @@ envdir="$XDG_STATE_HOME/workflow/runs/app/env-wins"
 is "$(cat "$envdir/e1.state")" merged 'the named backend is what the tasks ran on'
 is "$(grep -c . "$argv")" "$before" 'and the amx the project asked for was left alone'
 like "$(cat "$T_TMP/claude.log")" 'e1' 'the claude backend took the work instead'
+
+## ------------------------------------- a reader that hit a provider limit
+
+# The reader at the merge gate is a worker like any other, so under amx it is
+# an agent too. `amx status --json` names the conversation its pane is
+# running, which is where a reading that ended on the provider's own line left
+# its last words; a reading that never got a conversation has only what
+# `amx new` printed on its way out. Either line fails the task on the first
+# reading, since a second one meets the same wall.
+unset WORKFLOW_REVIEW_MODEL
+"$MEM_BIN" project set review-model fable >/dev/null
+
+cat >"$T_TMP/limit.md" <<-'PLAN'
+	# plan: limit
+
+	- [ ] wall Add the wall service
+	      Files: app/wall.php
+	      Verify: true
+	- [ ] ceiling Add the ceiling service
+	      Files: app/ceiling.php
+	      Verify: true
+PLAN
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/limit.md"
+is "$RC" 1 'a reader that hit a provider limit fails the run'
+limitdir="$XDG_STATE_HOME/workflow/runs/app/limit"
+
+is "$(cat "$limitdir/wall.state" 2>/dev/null)" failed 'the task whose reader hit the wall is failed'
+like "$(cat "$limitdir/wall.failed")" "^the reader hit a provider limit: You've reached your Fable limit for this session\\. \\(session wf-wall-review-" \
+	'the note names the line and the amx agent that read'
+like "$(cat "$limitdir/wall.review-err")" "You've reached your Fable limit for this session\\." \
+	'review-err carries the line off the conversation amx named'
+is "$(cat "$limitdir/wall.review-tries")" 1 'and only one reading was tried'
+
+is "$(cat "$limitdir/ceiling.state" 2>/dev/null)" failed 'a reading with no conversation of its own is failed too'
+like "$(cat "$limitdir/ceiling.failed")" '^the reader hit a provider limit: amx: rate limit exceeded, please retry\.' \
+	'on the line the launch printed'
+like "$(cat "$limitdir/ceiling.review-err")" 'rate limit exceeded' 'which the dispatch put in review-err'
+is "$(cat "$limitdir/ceiling.review-tries")" 1 'after one reading as well'
