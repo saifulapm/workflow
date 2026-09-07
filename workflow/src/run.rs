@@ -1477,6 +1477,11 @@ impl Run {
     /// a second time.
     fn adopt_stale(&self) -> Vec<String> {
         let mut taken = self.dispatched();
+        // Taken before a single task below is collected: collecting one can
+        // itself start a reading, and that reading is this run's own, not
+        // something left behind by one that died -- the loop after must
+        // never mistake it for the latter.
+        let mid_review = self.reviewing();
         for task in &taken {
             // Known-dead, not still-launching: the run that recorded this
             // session is gone and nothing anywhere says it ever ran. Waiting
@@ -1517,7 +1522,20 @@ impl Run {
         // A reading the dead run started. Its reader may still be going, and
         // its answer would be read by nobody; the merge is verified and read
         // again off the intent line, the way an interrupted merge is.
-        for task in self.reviewing() {
+        //
+        // Over the snapshot taken above, not a fresh `reviewing()`: this run
+        // may itself have started a reading while collecting a task above,
+        // and that reading is stamped after `started` was written, never
+        // before it. Stopping and rereading it here would judge the very
+        // thing this run just dispatched, so it is left to `review_pass`.
+        let run_started = recorded(&self.dir, "started")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        for task in mid_review {
+            let review_started: i64 = self.field(&task, "review-started").parse().unwrap_or(0);
+            if review_started >= run_started {
+                continue;
+            }
             let h = self.review_handle(&task);
             if self.backend.seen(&h) && self.backend.alive(&h) {
                 self.backend.stop(&h, self.kill_grace_s);
@@ -1646,6 +1664,9 @@ impl Run {
             }
         }
         let _ = std::fs::write(self.dir.join("base_sha"), format!("{}\n", self.base));
+        // The moment this run began, so adoption can tell its own fresh work
+        // from what a run that died before it left behind.
+        let _ = std::fs::write(self.dir.join("started"), format!("{}\n", sys::now()));
         // What this run dispatches on and reads with, so a later `reap` for
         // a run that is gone reads with the same models rather than
         // whatever the environment or the project key happen to say by then.

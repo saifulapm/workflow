@@ -16,7 +16,16 @@ export WF_TMP="$T_TMP"
 # its task owns and reports ready.
 write_exec "$T_TMP/fake-worker.sh" <<'FAKE'
 #!/bin/sh
-task=$1; status=$3
+task=$1; status=$3; brief=$4
+case $task in
+*-review)
+	printf '%s\n' "$task" >>"$WF_TMP/reviews.log"
+	while [ -f "$WF_TMP/hold-review" ]; do sleep 0.2; done
+	answer=$(sed -n 's/^    Answer file: //p' "$brief")
+	printf 'VERDICT: ship\n' >"$answer"
+	exit 0
+	;;
+esac
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 mkdir -p app
 printf '%s\n' "$task" >"app/$task.php"
@@ -27,7 +36,7 @@ printf '{"is_error":false,"result":"ok"}\n'
 FAKE
 
 export FAKE="$T_TMP/fake-worker.sh"
-export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status}'"'"' > {out} 2> {err} &'
+export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {brief}'"'"' > {out} 2> {err} &'
 export WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.2
 
 new_repo app
@@ -163,5 +172,45 @@ is "$RC" 0 'the run finishes without waiting out the deadline'
 like "$OUT" 'never existed' 'it says the recorded session never existed'
 is "$(cat "$rundir/t1.dispatches")" 2 'the ghost was dispatched again immediately'
 is "$(cat "$rundir/t1.state")" merged 'and the second dispatch finished the task'
+
+## ------------------------------------- adoption starts a reading once, not twice
+
+# t1 finished before its orchestrator died, same as the first case above, but
+# this project also names a reader. Collecting it is what starts the reading
+# -- and from that moment the reading is this run's own, not something a run
+# that is gone left behind. The pass that rereads what a dead run left
+# mid-flight must leave this one alone for the poll loop to judge.
+rm -rf "$rundir" "$wtroot"
+git -C "$repo" worktree prune
+for b in orphan-check/t1 orphan-check/t2 integration/orphan-check; do
+	git -C "$repo" branch -D "$b" >/dev/null 2>&1
+done
+
+orphan
+committed_t1
+printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$rundir/t1.status"
+printf '{"is_error":false,"result":"ok"}\n' >"$rundir/t1.json"
+
+: >"$WF_TMP/reviews.log"
+: >"$WF_TMP/hold-review"
+env WORKFLOW_REVIEW_MODEL=fable WORKFLOW_DEADLINE_MIN=5 \
+	workflow run --plan-file "$T_TMP/plan.md" >"$T_TMP/reading.log" 2>&1 &
+runpid=$!
+
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = reviewing ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.state" 2>/dev/null)" reviewing \
+	'adoption starts the reading rather than merging straight through'
+is "$(grep -c '^t1-review$' "$WF_TMP/reviews.log")" 1 \
+	'the reading it started is fresh, so it is not stopped and read again'
+is "$(cat "$rundir/t1.review-tries")" 1 'one try recorded, not two'
+rm -f "$WF_TMP/hold-review"
+
+wait "$runpid"
+is "$?" 0 'the run goes on to ship it'
+is "$(cat "$rundir/t1.state")" merged 'the poll loop, not adoption, is what collects the ship verdict'
+is "$(grep -c '^t1-review$' "$WF_TMP/reviews.log")" 1 'still one reading, start to finish'
 
 t_done
