@@ -1123,36 +1123,34 @@ impl Run {
     /// `<task>.gate` on every run, red or green, so a failure names what
     /// broke without asking anyone to reproduce it.
     fn gate_verify(&self, task: &str) -> Result<(), String> {
+        let gate_file = self.dir.join(format!("{task}.gate"));
+        let stdout = std::fs::File::create(&gate_file)
+            .map_err(|e| format!("cannot write {} ({e})", gate_file.display()))?;
+        let stderr = stdout
+            .try_clone()
+            .map_err(|e| format!("cannot write {} ({e})", gate_file.display()))?;
+
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("workflow"));
         let mut c = Command::new(exe);
-        c.arg("verify").arg("--gate").current_dir(&self.int_wt);
+        c.arg("verify")
+            .arg("--gate")
+            .current_dir(&self.int_wt)
+            .stdout(stdout)
+            .stderr(stderr);
         for (k, v) in &self.env {
             c.env(k, v);
         }
         if let Some((k, v)) = self.cargo_env("integration") {
             c.env(k, v);
         }
-        let (ok, text) = match c.output() {
-            Ok(o) => (
-                o.status.success(),
-                format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&o.stdout),
-                    String::from_utf8_lossy(&o.stderr)
-                ),
-            ),
-            Err(e) => (false, format!("could not run verify --gate: {e}")),
-        };
-        let gate_file = self.dir.join(format!("{task}.gate"));
-        if let Err(e) = std::fs::write(&gate_file, &text) {
-            warn(format!(
-                "task {task}: cannot write {} ({e})",
-                gate_file.display()
-            ));
-        }
+        let ok = c
+            .status()
+            .map_err(|e| format!("could not run verify --gate: {e}"))?
+            .success();
         if ok {
             return Ok(());
         }
+        let text = std::fs::read_to_string(&gate_file).unwrap_or_default();
         let checks = failing_checks(&text);
         let named = if checks.is_empty() {
             String::new()
