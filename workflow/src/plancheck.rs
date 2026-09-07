@@ -100,6 +100,8 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 ));
             }
         }
+        f.warnings
+            .extend(data_file_asserted(&t.id, &patterns, &git));
         // A Done sentence that names a file is a claim about what the task's
         // commit holds, and the gate refuses everything outside Files: -- so
         // the two disagreeing is knowable here rather than after a worker has
@@ -386,6 +388,40 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
         &spec,
     ];
     !git.bytes(&ignored).is_empty() || git.quiet(&["check-ignore", "-q", "--", pattern])
+}
+
+/// A data file's own Files entry says nothing about what reads it: a test
+/// elsewhere can assert on its contents while owning none of the change, and
+/// the worker who edits the file never sees that test until the assertion
+/// fails on it (friction #JRS7GAA5). Each tracked file naming the basename,
+/// outside what this task's own Files claims, is worth a warning.
+fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
+    const DATA_EXTENSIONS: [&str; 6] = ["toml", "json", "yaml", "yml", "csv", "txt"];
+    let mut out = Vec::new();
+    for f in files {
+        let is_data = Path::new(f)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| DATA_EXTENSIONS.contains(&e));
+        if !is_data || git.out(&["ls-files", "--", f]).is_none() {
+            continue;
+        }
+        let Some(basename) = Path::new(f).file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(hits) = git.out(&["grep", "-l", "-F", basename]) else {
+            continue;
+        };
+        for hit in hits.lines() {
+            if files.iter().any(|p| covers(p, hit)) {
+                continue;
+            }
+            out.push(format!(
+                "plan: task {task}: {f} is named by {hit}, which Files does not claim -- a test there may assert its contents"
+            ));
+        }
+    }
+    out
 }
 
 fn runs_tests(verify: &str) -> bool {
