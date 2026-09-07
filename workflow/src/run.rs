@@ -1043,14 +1043,20 @@ impl Run {
         let waited = sys::now() - started;
         let deadline_s = reviewer::deadline_s();
         // Gone with an answer is the clean end. Gone without one within the
-        // first moments is a dispatch still coming up, not an ending.
-        let outcome = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
-            self.judge_reading(&new, &answer)
+        // first moments is a dispatch still coming up, not an ending. Only
+        // this path is a reading that actually ended: the deadline below
+        // stops a session still alive, which has no last words of its own to
+        // read yet.
+        let (outcome, read) = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
+            (self.judge_reading(&new, &answer), true)
         } else if waited >= deadline_s {
             self.backend.stop(&h, self.kill_grace_s);
-            Err(format!(
-                "the review ran past its {deadline_s} second deadline and was stopped"
-            ))
+            (
+                Err(format!(
+                    "the review ran past its {deadline_s} second deadline and was stopped"
+                )),
+                false,
+            )
         } else {
             return false;
         };
@@ -1074,11 +1080,31 @@ impl Run {
                 );
             }
             // A reading that did not happen is not a verdict either way: one
-            // more try, and then the orchestrator is told.
+            // more try, and then the orchestrator is told. Unless its last
+            // words say the provider itself is why -- a second reading hits
+            // the same wall, so that fails the task at once.
             Err(why) => {
+                if read {
+                    let last_words = self.backend.last_words(&h);
+                    write_field(&self.dir, task, "review-err", &last_words);
+                    if let Some(line) = reviewer::provider_limit(&last_words) {
+                        self.unwind(task, &prev);
+                        self.fail_task(
+                            task,
+                            &format!(
+                                "the reader hit a provider limit: {line} (session {})",
+                                h.session
+                            ),
+                        );
+                        return true;
+                    }
+                }
                 let tries: u64 = self.field(task, "review-tries").parse().unwrap_or(0);
                 if tries < 2 {
-                    warn(format!("task {task}: {why} -- one more reading"));
+                    warn(format!(
+                        "task {task}: {why} -- one more reading (session {})",
+                        h.session
+                    ));
                     self.read_start(task);
                     return false;
                 }

@@ -23,10 +23,10 @@ export WF_TMP="$T_TMP"
 # for a t1 diff that lacks the fix (holding that verdict back while
 # hold-review exists, so the run can be watched going on around a reading),
 # writes no verdict at all for t2, asks a question and edits the tree for t3,
-# and ships everything else.
+# dies on a provider's own line for wall, and ships everything else.
 write_exec "$T_TMP/worker.sh" <<'FAKE'
 #!/bin/sh
-task=$1; wt=$2; status=$3; brief=$5; model=$6
+task=$1; wt=$2; status=$3; session=$4; brief=$5; model=$6
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$status"; }
 commit() { git -c core.hooksPath=/dev/null commit -qm "$1"; }
 case $task in
@@ -35,6 +35,13 @@ case $task in
 	printf '%s %s %s\n' "$model" "${task%-review}" "$wt" >>"$WF_TMP/reviews.log"
 	case $task in
 	t2-review) printf 'I read it twice and could not decide.\n' >"$answer" ;;
+	wall-review)
+		slug=$(printf '%s' "$wt" | sed -E 's/[^A-Za-z0-9]/-/g')
+		dir="$HOME/.claude/projects/$slug"
+		mkdir -p "$dir"
+		printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"You've reached your Fable limit for this session.\"}]}}" >"$dir/$session.jsonl"
+		printf 'stopped mid-turn\n' >"$answer"
+		;;
 	t3-review)
 		mem ask 'may I run the suite myself?' >/dev/null 2>&1
 		printf 'meddling\n' >"$wt/app/t3.php"
@@ -302,3 +309,31 @@ run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL= workflow run --plan-fil
 is "$RC" 0 'an empty variable turns the reading off for the run'
 is "$(cat "$XDG_STATE_HOME/workflow/runs/app/off/t1.state")" merged 'and the draft merges unread'
 is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
+
+## ------------------------------------------------- a reader that hit a limit
+
+# A reading that ends on a provider's own refusal is not a defect a second
+# reading is going to resolve: the task fails on the first one and says which
+# line stopped it.
+cat >"$T_TMP/limit.md" <<-'EOF'
+# plan: limit
+
+## Spec
+
+Ruling 1. Nothing to say.
+
+- [ ] wall Add the wall service
+      Files: app/wall.php
+      Verify: true
+- [ ] floor Add the floor service
+      Files: app/floor.php
+      Verify: true
+EOF
+rundir="$XDG_STATE_HOME/workflow/runs/app/limit"
+: >"$WF_TMP/reviews.log"
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/limit.md"
+is "$RC" 1 'a reader that hit a provider limit fails the run'
+is "$(cat "$rundir/wall.state" 2>/dev/null)" failed 'the task is failed'
+like "$(cat "$rundir/wall.failed")" "^the reader hit a provider limit: You've reached your Fable limit for this session\\. \\(session " 'the note names the line and the session'
+like "$(cat "$rundir/wall.review-err")" "You've reached your Fable limit for this session\\." 'review-err carries the same line'
+is "$(grep -c '^fable wall ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
