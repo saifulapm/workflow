@@ -1290,6 +1290,39 @@ impl Run {
         }
     }
 
+    /// Every task this run settled, ticked once more against the plan of
+    /// record as it reads at the end. The plan is a live document -- read
+    /// fresh at every dispatch, and edited mid-run by whoever answers the
+    /// questions -- so an edit that reopens a box this run already ticked left
+    /// the merge recorded nowhere, and the next run read the task as work
+    /// still to do and built it again.
+    fn tick_settled_again(&self) {
+        let Some(record) = self
+            .plan_text()
+            .and_then(|text| plan::parse(&text, false))
+            .filter(|p| p.plan_id == self.plan.plan_id)
+        else {
+            return;
+        };
+        for id in self.plan.ids() {
+            let state = self.state(&id);
+            if state != MERGED && state != DONE_PREVIOUSLY {
+                continue;
+            }
+            let Some(task) = record.get(&id) else {
+                continue;
+            };
+            if task.checked {
+                continue;
+            }
+            self.tick_off(&id);
+            let line =
+                format!("task {id}: had come unticked in the plan of record -- ticked again");
+            warn(&line);
+            memcli::log(&line);
+        }
+    }
+
     fn fail_task(&self, task: &str, why: &str) {
         warn(format!("task {task}: failed -- {why}"));
         self.set_state(task, FAILED);
@@ -2523,6 +2556,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             }
         }
     }
+    run.tick_settled_again();
     // A milestone is finished when its plan is. The plan of record is the one
     // the roadmap's milestone names, so only a run that read it from mem can
     // say which box to tick: a --plan-file plan need not be in mem at all.

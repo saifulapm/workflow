@@ -9,7 +9,9 @@ t_init
 
 export WF_TMP="$T_TMP"
 
-# The fake worker: one commit per task, except sulk, which reports blocked.
+# The fake worker: one commit per task, except sulk, which reports blocked,
+# and reopen, which first files the plan of record again with every box open --
+# standing in for an orchestrator editing the plan while the run is going.
 write_exec "$T_TMP/fake-worker.sh" <<'FAKE'
 #!/bin/sh
 task=$1; status=$3
@@ -19,6 +21,9 @@ if [ "$task" = sulk ]; then
 	say 'blocked I would rather not'
 	printf '{"is_error":false,"result":"ok"}\n'
 	exit 0
+fi
+if [ "$task" = reopen ]; then
+	"$WORKFLOW_MEM" plan --set-file "$WF_TMP/reopened-milestone.md" >/dev/null
 fi
 mkdir -p app
 printf '%s\n' "$task" >"app/$task.php"
@@ -49,6 +54,7 @@ git -c core.hooksPath=/dev/null commit -qm 'project files'
 - [ ] filed-milestone The one whose plan is read off a file
 - [ ] sulky-milestone The one whose worker will not
 - [ ] done-milestone The one that finishes
+- [ ] reopened-milestone The one whose plan is rewritten under it
 EOF
 
 # plan <slug> <task-two> -- a two-task plan in $T_TMP/<slug>.md.
@@ -122,3 +128,36 @@ unlike "$OUT" 'ticked off in the roadmap' 'without a word about the roadmap'
 like "$(cat "$T_TMP/filed-milestone.md")" '^- \[x\] t1 ' 'ticking its tasks off in the file it was handed'
 run_out "$MEM_BIN" roadmap
 like "$OUT" '^- \[ \] filed-milestone ' 'and leaving the roadmap alone'
+
+## ------------------------- a plan rewritten under the run is ticked again
+
+# The plan of record is a live document -- read fresh at every dispatch, and
+# edited mid-run by whoever is answering questions. An edit that reopens a box
+# this run already ticked used to stand, so a merged task read as work still to
+# do and the next run built it again. Every merge is ticked once more at the
+# end, against the plan as it reads then.
+cat >"$T_TMP/reopened-milestone.md" <<'EOF'
+# plan: reopened-milestone
+
+- [ ] t1 Add the t1 service
+      Files: app/t1.php
+      Verify: true
+- [ ] reopen Add the reopen service [after: t1]
+      Files: app/reopen.php
+      Verify: true
+EOF
+"$MEM_BIN" plan --set-file "$T_TMP/reopened-milestone.md" >/dev/null
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 0 'the run finishes though the plan was rewritten under it'
+like "$OUT" 'task t1: had come unticked in the plan of record -- ticked again' \
+	'and names the box it had to tick again'
+like "$OUT" 'milestone reopened-milestone is ticked off in the roadmap' \
+	'so the milestone is finished after all'
+like "$("$MEM_BIN" log --limit 20 --json)" \
+	'task t1: had come unticked in the plan of record -- ticked again' \
+	'with the same line in the mem log'
+run_out "$MEM_BIN" plan
+like "$OUT" '^- \[x\] t1 ' 'the reopened box is ticked in the plan of record'
+like "$OUT" '^- \[x\] reopen ' 'beside the task that rewrote it'
+run_out "$MEM_BIN" roadmap
+like "$OUT" '^- \[x\] reopened-milestone ' 'and the milestone is ticked in the roadmap'
