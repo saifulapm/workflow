@@ -55,7 +55,7 @@ is "$RC" 1 'the gate rejects the merge'
 is "$(cat "$rundir/t1.state")" failed 't1 is failed'
 like "$(cat "$rundir/t1.failed")" 'not ok 12 - t3 merges' 'the failure note names the first failing check'
 like "$(cat "$rundir/t1.failed")" 'not ok 14 - side ships' 'and the second'
-like "$(cat "$rundir/t1.failed")" -- '-- see .*t1\.gate$' 'and points at the gate output file'
+like "$(cat "$rundir/t1.failed")" '-- see .*t1\.gate$' 'and points at the gate output file'
 
 like "$OUT" 'not ok 12 - t3 merges' 'the run log names the first failing check too'
 like "$OUT" 'not ok 14 - side ships' 'and the second'

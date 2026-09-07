@@ -84,9 +84,10 @@ fn write_field(dir: &Path, task: &str, ext: &str, value: &str) {
 
 /// Up to three failing checks named out of a verify run's combined output,
 /// so a gate failure says what broke instead of just that something did.
-/// TAP's `not ok` lines are named first, when the suite speaks TAP; cargo
-/// test's per-test `FAILED` lines are next; a suite in neither format still
-/// gives up its last nonblank line, which is usually the one that says why.
+/// TAP's `not ok` lines are named first, when the suite speaks TAP; lines
+/// holding `FAILED` are next, cargo test's per-test ones trimmed to the bare
+/// name; a suite in neither format still gives up its last three nonblank
+/// lines, oldest first, which are usually the ones that say why.
 pub fn failing_checks(output: &str) -> Vec<String> {
     let tap: Vec<String> = output
         .lines()
@@ -111,13 +112,26 @@ pub fn failing_checks(output: &str) -> Vec<String> {
         return cargo.into_iter().take(3).collect();
     }
 
-    output
+    let failed: Vec<String> = output
         .lines()
-        .rev()
         .map(str::trim)
-        .find(|l| !l.is_empty())
-        .map(|l| vec![l.to_string()])
-        .unwrap_or_default()
+        .filter(|l| l.contains("FAILED"))
+        .map(str::to_string)
+        .collect();
+    if !failed.is_empty() {
+        return failed.into_iter().take(3).collect();
+    }
+
+    let mut last: Vec<String> = output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .rev()
+        .take(3)
+        .map(str::to_string)
+        .collect();
+    last.reverse();
+    last
 }
 
 /// Liveness is the latest of three signals, because each one alone has a way of
@@ -2617,9 +2631,25 @@ mod tests {
     }
 
     #[test]
-    fn failing_checks_falls_back_to_the_last_line_in_neither_format() {
-        let out = "Building...\nSomething broke on line 12\n";
-        assert_eq!(failing_checks(out), vec!["Something broke on line 12"]);
+    fn failing_checks_names_failed_lines_when_not_cargo_shaped() {
+        let out = "Running suite...\nFAILED tests/BillTest.php::testRender - Assertion failed\n=== 3 failed, 12 passed in 1.2s ===\n";
+        assert_eq!(
+            failing_checks(out),
+            vec!["FAILED tests/BillTest.php::testRender - Assertion failed"]
+        );
+    }
+
+    #[test]
+    fn failing_checks_falls_back_to_the_last_three_lines_in_neither_format() {
+        let out = "Building...\nerror[E0599]: no method named `render`\n  --> app/Http/Bill.php:12\nerror: aborting due to 1 previous error\n";
+        assert_eq!(
+            failing_checks(out),
+            vec![
+                "error[E0599]: no method named `render`",
+                "--> app/Http/Bill.php:12",
+                "error: aborting due to 1 previous error"
+            ]
+        );
     }
 
     #[test]
