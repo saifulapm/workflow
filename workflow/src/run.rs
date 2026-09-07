@@ -414,6 +414,14 @@ impl Run {
         self.backend.alive(&self.handle(task))
     }
 
+    /// A failed task whose branch holds commits is not gone: the gate itself
+    /// can be why it failed, and the work is still there to build on (ruling
+    /// 4). Nothing else counts -- a task a run left `dispatched` when it died
+    /// has no verdict on it at all, and is adopted, not resumed.
+    pub fn resumable(&self, task: &str) -> bool {
+        self.state(task) == FAILED && self.commits(task) > 0
+    }
+
     /// Nothing anywhere says this session ever ran: the backend has no record
     /// of it, the worker wrote no status line and no result, and the branch
     /// has no commits. Only adoption asks -- at dispatch time the same silence
@@ -1367,8 +1375,17 @@ impl Run {
 
         let mut leftovers: Vec<String> = Vec::new();
         for t in &self.plan.tasks {
-            if t.checked || self.worktree(&t.id).is_dir() {
-                continue; // ticked off, or an interrupted run still set up
+            if t.checked {
+                continue; // already done, nothing to run
+            }
+            if self.worktree(&t.id).is_dir() {
+                if self.resumable(&t.id) {
+                    warn(format!(
+                        "{}: failed last run -- resumed on its branch",
+                        t.id
+                    ));
+                }
+                continue; // an interrupted run still set up, or a resumable one
             }
             let branch = self.branch(&t.id);
             if git.rev_parse_commit(&branch).is_none() {
@@ -1381,6 +1398,16 @@ impl Run {
             if self.commits(&t.id) == 0 {
                 warn(format!("{branch}: empty, deleting"));
                 git.quiet(&["branch", "-D", &branch]);
+                continue;
+            }
+            // A failed task with commits resumes rather than refuses, even
+            // with its worktree gone (setup below prunes and rebuilds it on
+            // the same branch).
+            if self.resumable(&t.id) {
+                warn(format!(
+                    "{}: failed last run -- resumed on its branch",
+                    t.id
+                ));
                 continue;
             }
             // What the branch holds, remembered before the recipe below sends
@@ -1468,12 +1495,27 @@ impl Run {
             if wt.is_dir() {
                 continue;
             }
+            // A worktree hand-removed since the last run leaves its
+            // registration behind; without pruning first, git refuses to
+            // reuse the branch or the path a resumed task needs back.
+            git.quiet(&["worktree", "prune"]);
+            let branch = self.branch(&t.id);
+            if self.resumable(&t.id) {
+                // The branch already exists with the failed attempt's
+                // commits on it -- checked out again, never recreated.
+                if !git.quiet(&["worktree", "add", "-q", &wt.to_string_lossy(), &branch]) {
+                    warn(format!("cannot resume the worktree for task {}", t.id));
+                    return false;
+                }
+                self.link_deps(&wt);
+                continue; // not self.made: rollback and cleanup leave it be
+            }
             if !git.quiet(&[
                 "worktree",
                 "add",
                 "-q",
                 "-b",
-                &self.branch(&t.id),
+                &branch,
                 &wt.to_string_lossy(),
                 &self.base,
             ]) {
@@ -1527,6 +1569,25 @@ impl Run {
         }
     }
 
+    /// Every builder's dir under `cargo_root`, torn down -- except a resumable
+    /// task's, which the next run's worker needs to find undisturbed. Walks
+    /// the directory's actual entries rather than the plan's task ids: the
+    /// gate's own "integration" builder is not a task and was left behind by
+    /// a version of this that iterated ids instead (t052).
+    fn clear_cargo(&self) {
+        let root = self.cargo_root();
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if self.resumable(&name.to_string_lossy()) {
+                    continue;
+                }
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        let _ = std::fs::remove_dir(&root);
+    }
+
     /// Undo exactly what this setup created, and nothing an earlier run may have
     /// left behind.
     fn rollback(&self) {
@@ -1540,7 +1601,7 @@ impl Run {
         }
         self.git().quiet(&["worktree", "prune"]);
         let _ = std::fs::remove_dir(&self.wt_root);
-        let _ = std::fs::remove_dir_all(self.cargo_root());
+        self.clear_cargo();
     }
 
     /// Take down what the run set up -- but never out from under a worker.
@@ -1572,6 +1633,9 @@ impl Run {
             if !wt.is_dir() {
                 continue;
             }
+            if self.resumable(&t) {
+                continue; // its worktree stays for the next run to resume
+            }
             if !git.quiet(&["worktree", "remove", "--force", &wt.to_string_lossy()]) {
                 let _ = std::fs::remove_dir_all(&wt);
             }
@@ -1599,8 +1663,9 @@ impl Run {
         let _ = std::fs::remove_dir(&self.wt_root);
         // Artifacts built in the worktrees go with them: a cached test binary
         // bakes its worktree path in at compile time, and outliving that path
-        // is how phantom failures happen (friction #TFVWXXDQ).
-        let _ = std::fs::remove_dir_all(self.cargo_root());
+        // is how phantom failures happen (friction #TFVWXXDQ). A resumable
+        // task's is the exception, same as its worktree above.
+        self.clear_cargo();
     }
 
     fn deps_satisfied(&self, task: &Task) -> bool {
