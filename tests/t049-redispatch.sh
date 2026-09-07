@@ -102,8 +102,8 @@ like "$(cat "$T_TMP/run.log")" 'dispatched again by request' \
 
 # This plan lives in a file and nowhere else, so mem has nothing to tick and
 # the merge used to be recorded nowhere at all (friction #2213VV3P).
-like "$(cat "$T_TMP/plan.md")" '\[X\] t1' 'a merged task is ticked off in the plan file it came from'
-like "$(cat "$T_TMP/plan.md")" '\[X\] t2' 'both of them'
+like "$(cat "$T_TMP/plan.md")" '\[x\] t1' 'a merged task is ticked off in the plan file it came from'
+like "$(cat "$T_TMP/plan.md")" '\[x\] t2' 'both of them'
 unlike "$(cat "$T_TMP/run.log")" 'is this plan in mem' \
 	'and the run does not send its reader to a plan slot it was never given'
 

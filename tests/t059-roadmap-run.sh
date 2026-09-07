@@ -119,6 +119,6 @@ plan filed-milestone t2
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/filed-milestone.md"
 is "$RC" 0 'a run off a plan file finishes the same way'
 unlike "$OUT" 'ticked off in the roadmap' 'without a word about the roadmap'
-like "$(cat "$T_TMP/filed-milestone.md")" '^- \[X\] t1 ' 'ticking its tasks off in the file it was handed'
+like "$(cat "$T_TMP/filed-milestone.md")" '^- \[x\] t1 ' 'ticking its tasks off in the file it was handed'
 run_out "$MEM_BIN" roadmap
 like "$OUT" '^- \[ \] filed-milestone ' 'and leaving the roadmap alone'
