@@ -62,6 +62,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         if let Some(msg) = lib_test_without_lib(&t.id, verify, root) {
             f.refusals.push(msg);
         }
+        if let Some(msg) = gate_verify_as_verify(&t.id, verify) {
+            f.refusals.push(msg);
+        }
         // Done: states what the task delivers, so deferral there refuses. A
         // title only warns: "Sweep every TBD out of the docs" names the
         // marker it removes, and blocking that plan would be the check
@@ -331,6 +334,20 @@ fn lib_test_without_lib(task: &str, verify: &str, root: &Path) -> Option<String>
     }
     Some(format!(
         "plan: task {task}: Verify runs 'cargo test --lib' and this crate has no library target -- it can never pass here"
+    ))
+}
+
+/// The gate's own command proves nothing about a task: `workflow verify` runs
+/// this whole repo's suite over what is staged, not the change this task
+/// makes, so a task copying it as its Verify never learns whether its own
+/// work is done. `--gate`, `--hook` or any further word makes it a different,
+/// legitimate command; only the bare invocation is refused.
+fn gate_verify_as_verify(task: &str, verify: &str) -> Option<String> {
+    if verify.trim() != "workflow verify" {
+        return None;
+    }
+    Some(format!(
+        "plan: task {task}: Verify is 'workflow verify' -- that runs the whole gate, not this task's change; give it the command that builds or tests this task's own work"
     ))
 }
 
@@ -902,5 +919,25 @@ mod tests {
         assert!(runs_tests("bin/php artisan test --filter=Cart"));
         assert!(!runs_tests("true"));
         assert!(!runs_tests("cargo build"));
+    }
+
+    /// A bare `workflow verify` proves nothing about the task that copied it:
+    /// it runs the whole gate, not the task's own change. A flag or a further
+    /// word makes it a real command again.
+    #[test]
+    fn a_bare_workflow_verify_is_refused_but_a_flagged_one_is_not() {
+        let msg = gate_verify_as_verify("t1", "workflow verify").expect("bare is refused");
+        assert!(msg.contains("t1"), "{msg:?} names the task");
+        assert!(
+            msg.contains("workflow verify"),
+            "{msg:?} names the command"
+        );
+        assert!(
+            gate_verify_as_verify("t1", "  workflow verify  ").is_some(),
+            "surrounding whitespace does not save it"
+        );
+        assert!(gate_verify_as_verify("t1", "workflow verify --gate").is_none());
+        assert!(gate_verify_as_verify("t1", "workflow verify project").is_none());
+        assert!(gate_verify_as_verify("t1", "cargo test").is_none());
     }
 }

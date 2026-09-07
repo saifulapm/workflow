@@ -477,6 +477,39 @@ parse
 is "$RC" 1 'cargo test --lib on a crate with no library target is refused'
 like "$OUT" 'no library target' 'and the refusal says why'
 
+# A Verify that is the gate's own command proves nothing about the task: it
+# runs the whole suite over what is staged, not the task's own change.
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: workflow verify
+EOF2
+parse
+is "$RC" 1 'a bare workflow verify is refused'
+like "$OUT" 't1' 'and the refusal names the task'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: workflow verify --gate
+EOF2
+parse
+is "$RC" 0 'workflow verify --gate is a real command, not the bare one'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: workflow verify project
+EOF2
+parse
+is "$RC" 0 'workflow verify project is a real command, not the bare one'
+
 # Deferral language: a Done that defers refuses; a cleanup task whose title
 # and Verify name the marker it removes is warned about, never blocked.
 plan_file <<'EOF2'
