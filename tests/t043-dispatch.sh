@@ -146,6 +146,12 @@ like "$body" 'never .git add -A.' 'the staging rule'
 like "$body" 'mem ask' 'the stop protocol'
 like "$body" 'started, progress, ready, blocked' 'and the reporting states'
 like "$body" "$rundir/t1.status" 'the brief names the status file by path'
+like "$body" 'the gate runs `workflow verify --gate` over the merged change' \
+	'the brief names the gate that runs after merge'
+like "$body" 'cargo test && cargo clippy -- -D warnings && cargo fmt --check' \
+	'naming the Rust ladder as the example'
+like "$body" 'A green Verify with a red gate still fails the task' \
+	'and that a green Verify does not excuse a red gate'
 
 ## ------------------------------------------- a project whose path has a space
 
