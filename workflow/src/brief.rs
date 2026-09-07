@@ -113,11 +113,9 @@ em dashes. Stage only the files this task touched; never `git add -A`.
 Everything you write must match the Files: patterns; anything outside them is
 refused at the merge gate and the task is failed.
 
-After your branch merges, the gate runs `workflow verify --gate` over the merged change --
-your project's whole ladder, chained end to end (for a Rust crate that is
-`cargo test && cargo clippy -- -D warnings && cargo fmt --check`).
-A green Verify with a red gate still fails the task, so
-run `workflow verify --gate` in your worktree before you report `ready`.
+`workflow verify --gate` runs after merge: the project's whole ladder
+(Rust: `cargo test && cargo clippy -- -D warnings && cargo fmt --check`).
+A green Verify with a red gate fails the task; run it before `ready`.
 
 ## Stop and ask -- never decide these yourself
 
@@ -216,6 +214,11 @@ mod tests {
             &Prior::default(),
         );
         assert!(body.len() <= BUDGET, "the brief is {} bytes", body.len());
+        // The fixed prose alone, with no middle-tier keys, is what the doc
+        // comment on BUDGET promises stays under 2,400 -- a ceiling tighter
+        // than BUDGET that catches a new paragraph eating the middle tier's
+        // room before a real plan's task ever does.
+        assert!(body.len() <= 2400, "the fixed prose is {} bytes", body.len());
         for needle in [
             "Extract cart pricing into a service",
             "Files: app/Services/Cart*.php tests/Unit/Cart*",
@@ -228,11 +231,11 @@ mod tests {
             "mem ask",
             "started, progress, ready, blocked",
             "/state/runs/app/plan/t1.status",
-            "the gate runs `workflow verify --gate` over the merged change",
-            "your project's whole ladder",
+            "`workflow verify --gate` runs after merge",
+            "the project's whole ladder",
             "cargo test && cargo clippy -- -D warnings && cargo fmt --check",
-            "A green Verify with a red gate still fails the task",
-            "run `workflow verify --gate` in your worktree before you report `ready`",
+            "A green Verify with a red gate fails the task",
+            "run it before `ready`",
         ] {
             assert!(body.contains(needle), "the brief lost {needle}");
         }

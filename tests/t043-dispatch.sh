@@ -146,15 +146,15 @@ like "$body" 'never .git add -A.' 'the staging rule'
 like "$body" 'mem ask' 'the stop protocol'
 like "$body" 'started, progress, ready, blocked' 'and the reporting states'
 like "$body" "$rundir/t1.status" 'the brief names the status file by path'
-like "$body" 'the gate runs `workflow verify --gate` over the merged change' \
+like "$body" '`workflow verify --gate` runs after merge' \
 	'the brief names the gate that runs after merge'
-like "$body" "your project's whole ladder" \
+like "$body" "the project's whole ladder" \
 	"naming it the project's whole ladder"
 like "$body" 'cargo test && cargo clippy -- -D warnings && cargo fmt --check' \
 	'naming the Rust ladder as the example'
-like "$body" 'A green Verify with a red gate still fails the task' \
+like "$body" 'A green Verify with a red gate fails the task' \
 	'and that a green Verify does not excuse a red gate'
-like "$body" 'run `workflow verify --gate` in your worktree before you report `ready`' \
+like "$body" 'run it before `ready`' \
 	'and telling the worker to run the gate before it reports ready'
 
 ## ------------------------------------------- a project whose path has a space
