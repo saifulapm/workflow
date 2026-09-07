@@ -7,9 +7,10 @@ use std::path::Path;
 use crate::plan::Task;
 use crate::warn;
 
-/// What a brief may weigh. 2,000 bytes held the core keys; the middle-tier
-/// keys (Read, Uses, Gives, Pattern) earn the room -- a deliberate deviation
-/// from spec §8.4's figure, recorded as a ruling.
+/// What a brief may weigh. The core keys' fixed prose holds under 2,400
+/// bytes; the middle-tier keys (Read, Uses, Gives, Pattern) earn the rest of
+/// the room to 3,000 -- a deliberate deviation from spec §8.4's figure,
+/// recorded as a ruling.
 pub const BUDGET: usize = 3000;
 
 /// The states a worker may report, in the order the brief teaches them. The
@@ -113,8 +114,9 @@ Everything you write must match the Files: patterns; anything outside them is
 refused at the merge gate and the task is failed.
 
 After your branch merges, the gate runs `workflow verify --gate` over the merged change --
-for Rust that is `cargo test && cargo clippy -- -D warnings && cargo fmt --check`
-chained end to end. A green Verify with a red gate still fails the task, so
+your project's whole ladder, chained end to end (for a Rust crate that is
+`cargo test && cargo clippy -- -D warnings && cargo fmt --check`).
+A green Verify with a red gate still fails the task, so
 run `workflow verify --gate` in your worktree before you report `ready`.
 
 ## Stop and ask -- never decide these yourself
@@ -227,6 +229,7 @@ mod tests {
             "started, progress, ready, blocked",
             "/state/runs/app/plan/t1.status",
             "the gate runs `workflow verify --gate` over the merged change",
+            "your project's whole ladder",
             "cargo test && cargo clippy -- -D warnings && cargo fmt --check",
             "A green Verify with a red gate still fails the task",
             "run `workflow verify --gate` in your worktree before you report `ready`",
