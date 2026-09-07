@@ -130,3 +130,35 @@ like "$ERR" \
 	'a glob Files entry is expanded to the tracked files it matches'
 unlike "$ERR" 'assets/self\.toml is named by' \
 	'a basename only its own file mentions produces no warning under a glob either'
+
+## ------------------------- a non-data Files entry is not expanded for data
+
+plan <<'EOF'
+# plan: assets
+
+- [ ] t1 Load the whole assets tree
+      Files: assets/
+      Verify: true
+EOF
+
+check
+is "$RC" 0 'warnings do not refuse the plan'
+unlike "$ERR" 'is named by' \
+	"a directory Files entry is not gated as data even though ls-files expands it to a .toml path"
+
+## ---------------------------- overlapping Files entries warn once each
+
+plan <<'EOF'
+# plan: assets
+
+- [ ] t1 Load every screen rule, named twice
+      Files: assets/*.toml assets/rules.toml
+      Verify: true
+EOF
+
+check
+is "$RC" 0 'warnings do not refuse the plan'
+COUNT=$(grep -Ec \
+	"plan: task t1: assets/rules\.toml is named by tests/rules_test\.sh, which Files does not claim" \
+	<<<"$ERR")
+is "$COUNT" 1 'a file two Files entries both cover is named once, not once per entry'
