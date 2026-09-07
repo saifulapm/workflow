@@ -87,8 +87,21 @@ fn write_field(dir: &Path, task: &str, ext: &str, value: &str) {
 /// TAP's `not ok` lines are named first, when the suite speaks TAP; lines
 /// holding `FAILED` are next, cargo test's per-test ones trimmed to the bare
 /// name; a suite in neither format still gives up its last three nonblank
-/// lines, oldest first, which are usually the ones that say why.
+/// lines, oldest first, which are usually the ones that say why. The gate's
+/// own `workflow: `-prefixed lines are dropped before any of that: the child
+/// is `workflow verify --gate` itself, and its `verify project: FAILED`
+/// diagnostic would otherwise satisfy the `FAILED` branch for every suite
+/// that names nothing in that shape of its own -- PHPUnit, jest, `go test`
+/// -- shadowing the last-three-lines fallback that would have shown the
+/// real failure (review 3).
 pub fn failing_checks(output: &str) -> Vec<String> {
+    let output: String = output
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("workflow: "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = output.as_str();
+
     let tap: Vec<String> = output
         .lines()
         .map(str::trim)
@@ -2646,6 +2659,19 @@ mod tests {
                 "error[E0599]: no method named `render`",
                 "--> app/Http/Bill.php:12",
                 "error: aborting due to 1 previous error"
+            ]
+        );
+    }
+
+    #[test]
+    fn failing_checks_drops_the_gates_own_lines_before_classifying() {
+        let out = "Running suite...\nFAILURES!\n1) Tests\\Unit\\BillTest::testRender\nFailed asserting that false is true\nTests: 12, Assertions: 30, Failures: 1\nworkflow: verify project: FAILED\n";
+        assert_eq!(
+            failing_checks(out),
+            vec![
+                "1) Tests\\Unit\\BillTest::testRender",
+                "Failed asserting that false is true",
+                "Tests: 12, Assertions: 30, Failures: 1"
             ]
         );
     }
