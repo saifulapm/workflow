@@ -36,7 +36,7 @@ of them committed:
     mem project set verify "pnpm test"          # what green means here
     mem project set review-paths "scripts/**"   # extra risky globs, optional
     mem project set review-model fable          # a reader at the merge gate, if it beats the workers'
-    mem project unset review-model              # and the way back to none
+    mem project set review-model none           # nobody reads; the run starts unread
 
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
