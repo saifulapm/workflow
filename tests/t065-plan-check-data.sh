@@ -59,3 +59,26 @@ check
 is "$RC" 0 'still not refused'
 unlike "$ERR" 'is named by' \
 	'claiming the naming file in Files clears the warning'
+
+## --------------------------------------------- a tracked plan is not a hit
+
+plan <<'EOF'
+# plan: assets
+
+- [ ] t1 Load the screen rules
+      Files: assets/rules.toml
+      Verify: true
+- [ ] t2 Load the self-describing file
+      Files: assets/self.toml
+      Verify: true
+EOF
+git add plan.md
+git -c core.hooksPath=/dev/null commit -qm 'track the plan too'
+
+check
+is "$RC" 0 'warnings do not refuse the plan'
+like "$ERR" \
+	"plan: task t1: assets/rules\.toml is named by tests/rules_test\.sh, which Files does not claim" \
+	'the real hit still warns once the plan itself is tracked'
+unlike "$ERR" 'named by plan\.md' \
+	"the plan's own Files line mentioning a basename is not counted as a hit on itself"

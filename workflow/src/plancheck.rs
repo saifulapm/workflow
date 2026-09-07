@@ -101,7 +101,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             }
         }
         f.warnings
-            .extend(data_file_asserted(&t.id, &patterns, &git));
+            .extend(data_file_asserted(&t.id, &patterns, &git, itself.as_deref()));
         // A Done sentence that names a file is a claim about what the task's
         // commit holds, and the gate refuses everything outside Files: -- so
         // the two disagreeing is knowable here rather than after a worker has
@@ -394,8 +394,11 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
 /// elsewhere can assert on its contents while owning none of the change, and
 /// the worker who edits the file never sees that test until the assertion
 /// fails on it (friction #JRS7GAA5). Each tracked file naming the basename,
-/// outside what this task's own Files claims, is worth a warning.
-fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
+/// outside what this task's own Files claims, is worth a warning. `itself`
+/// is excluded the way `named_by` excludes it: a tracked plan's own Files
+/// line is a tracked file naming every basename it lists, and is not a test
+/// asserting on any of them (friction #33WY4FAR).
+fn data_file_asserted(task: &str, files: &[String], git: &Git, itself: Option<&str>) -> Vec<String> {
     const DATA_EXTENSIONS: [&str; 6] = ["toml", "json", "yaml", "yml", "csv", "txt"];
     let mut out = Vec::new();
     for f in files {
@@ -413,7 +416,7 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
             continue;
         };
         for hit in hits.lines() {
-            if files.iter().any(|p| covers(p, hit)) {
+            if Some(hit) == itself || files.iter().any(|p| covers(p, hit)) {
                 continue;
             }
             out.push(format!(
