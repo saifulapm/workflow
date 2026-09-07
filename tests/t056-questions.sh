@@ -131,6 +131,20 @@ aftertwice)
 	say ready 'merge-ready'
 	done_json
 	;;
+ghost)
+	# Never asks; the id in the note is a friction id, not a question mem
+	# will ever list for this task.
+	say blocked 'cannot proceed, see friction #GH0STGH0'
+	done_json
+	;;
+afterghost)
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/AfterGhost.php
+	git add app/Services/AfterGhost.php
+	commit 'Add the afterghost service'
+	say ready 'merge-ready'
+	done_json
+	;;
 esac
 FAKE
 
@@ -395,3 +409,24 @@ wait "$runpid"
 is "$?" 0 'the run finishes once both answers land'
 is "$(cat "$rundir/twice.state")" merged 'twice merged on its third attempt'
 is "$(cat "$rundir/aftertwice.state")" merged 'and the wave after it went on to merge too'
+
+## ------------------------------ an id mem never lists does not wait forever
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: ghost-check
+
+- [ ] ghost Blocks on a friction id, never a question
+      Files: app/Services/Ghost.php
+      Verify: true
+- [ ] afterghost Comes after the wave that never resolves [after: ghost]
+      Files: app/Services/AfterGhost.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/app/ghost-check"
+run workflow run
+is "$RC" 1 'a question mem never lists does not hold the wave open forever'
+like "$OUT" 'Plan ghost-check stopped short: 0 of 2 merged, 1 failed, 1 never started' \
+	'the run reports the stop instead of hanging'
+is "$(cat "$rundir/ghost.state")" failed 'ghost stays failed, its id never answerable'
+is "$(cat "$rundir/afterghost.state" 2>/dev/null)" blocked 'the wave after it never opens'

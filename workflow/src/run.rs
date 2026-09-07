@@ -25,6 +25,11 @@ pub const FAILED: &str = "failed";
 pub const BLOCKED: &str = "blocked";
 pub const DONE_PREVIOUSLY: &str = "done-previously";
 
+/// How many consecutive polls [`Run::question_open`] tolerates a question's
+/// id being absent from mem's listing, for the reindex lag, before treating
+/// the id as one mem will never list.
+const QUESTION_MISS_LIMIT: u32 = 3;
+
 fn env_str(key: &str, default: &str) -> String {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => v,
@@ -243,16 +248,43 @@ impl Run {
     fn waiting(&self, wave: &[String]) -> Vec<String> {
         wave.iter()
             .filter(|id| self.state(id) == FAILED)
-            .filter(|id| {
-                let Some(qid) = self.asked(id) else {
-                    return false;
-                };
-                !memcli::questions_for(&self.task_tag(id))
-                    .into_iter()
-                    .any(|q| q.short_id == qid && q.answer.is_some())
-            })
+            .filter(|id| self.question_open(id))
             .cloned()
             .collect()
+    }
+
+    /// Whether `task`'s failure note names a question that still holds its
+    /// wave open: mem lists it for the task and it carries no answer yet.
+    /// An id mem never lists for this task -- a friction id quoted in the
+    /// same blocked line, another task's or project's question, the same
+    /// eight-character shape -- is not an unanswered question: no answer
+    /// can ever land on it. It gets the reindex lag [`Self::question_in`]
+    /// describes -- a few polls where a real question is briefly missing
+    /// -- but past that bound it stops holding the wave.
+    fn question_open(&self, task: &str) -> bool {
+        let Some(qid) = self.asked(task) else {
+            return false;
+        };
+        match memcli::questions_for(&self.task_tag(task))
+            .into_iter()
+            .find(|q| q.short_id == qid)
+        {
+            Some(q) => {
+                write_field(&self.dir, task, "qmiss", "");
+                q.answer.is_none()
+            }
+            None => {
+                let key = format!("{qid} ");
+                let misses: u32 = self
+                    .field(task, "qmiss")
+                    .strip_prefix(&key)
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0)
+                    + 1;
+                write_field(&self.dir, task, "qmiss", &format!("{key}{misses}"));
+                misses <= QUESTION_MISS_LIMIT
+            }
+        }
     }
 
     /// The failure note for a worker that stopped on a question, as
