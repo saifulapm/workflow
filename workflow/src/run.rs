@@ -1116,6 +1116,17 @@ impl Run {
                 self.fail_task(task, &asked);
                 return;
             }
+            // A worker that committed and then reported something other than
+            // ready, or nothing at all, has still left work on the branch --
+            // the same work a `ready` report would hand to the gate. Failing
+            // it here throws that work away for a report the worker may never
+            // have gotten to write; the gate is what judges whether it holds
+            // up, not this last line.
+            Some((state, _)) if state != "ready" && state != "blocked" && self.commits(task) > 0 => {
+                warn(format!(
+                    "task {task}: its worker committed and left without reporting ready -- the gate judges the branch"
+                ));
+            }
             // The worker said where it stood; the failure must not claim
             // otherwise.
             Some((state, note)) if state != "ready" => {
@@ -1136,6 +1147,11 @@ impl Run {
                 }
                 self.fail_task(task, &why);
                 return;
+            }
+            None if self.commits(task) > 0 => {
+                warn(format!(
+                    "task {task}: its worker committed and left without reporting ready -- the gate judges the branch"
+                ));
             }
             None => {
                 self.fail_task(task, "the worker stopped without reporting ready");

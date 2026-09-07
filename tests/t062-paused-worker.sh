@@ -146,4 +146,79 @@ is "$(cat "$orundir/t1.state")" failed 'the deadline still ends it eventually'
 like "$(cat "$orundir/t1.failed")" 'stalled with no sign of life' \
 	'failed as a stall, not mis-read as a worker that ran and erred'
 
+## ------------------------- a worker that committed and left goes to the gate
+
+# It writes `started`, commits its file and exits without ever saying `ready`
+# -- the way a worker that ran out of turns mid-task leaves things. What it
+# left on the branch is still worth judging.
+write_exec "$T_TMP/bin/claude" <<'CLAUDE'
+#!/bin/sh
+case "$1" in
+agents)
+	out='['; sep=''
+	if [ -f "$WF_TMP/sessions" ]; then
+		while read -r sid cwd; do
+			out="$out$sep{\"id\":\"${sid%%-*}\",\"cwd\":\"$cwd\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"state\":\"done\",\"startedAt\":1}"
+			sep=','
+		done <"$WF_TMP/sessions"
+	fi
+	printf '%s]\n' "$out"
+	exit 0 ;;
+stop) exit 0 ;;
+esac
+for a in "$@"; do prompt=$a; done
+brief=$(printf '%s' "$prompt" | sed -n 's/^Read \(.*\) and execute it exactly\.$/\1/p')
+[ -r "$brief" ] || { printf 'no brief\n' >&2; exit 1; }
+task=$(basename "$brief" .md)
+status=$(sed -n 's/^Append one line per state change to \(.*\):$/\1/p' "$brief")
+file=$(sed -n 's/^ *Files: *//p' "$brief" | head -1)
+printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+mkdir -p "$(dirname "$file")"
+printf '%s\n' "$task" >"$file"
+git add "$file"
+git -c core.hooksPath=/dev/null commit -qm "Add the $task file"
+n=$(cat "$WF_TMP/seq" 2>/dev/null || echo 0)
+n=$((n + 1)); printf '%s' "$n" >"$WF_TMP/seq"
+short=$(printf 'a1b2c3%02x' "$n")
+sid="$short-0000-4000-8000-000000000000"
+printf '%s %s\n' "$sid" "$PWD" >>"$WF_TMP/sessions"
+printf 'backgrounded · %s\n' "$short"
+CLAUDE
+
+new_repo committed
+mem_register
+printf '{"name":"acme/committed"}\n' >composer.json
+printf '#!/bin/sh\nexit 0\n' >artisan
+chmod +x artisan
+write_exec bin/php <<-'EOF'
+	#!/bin/sh
+	exit 0
+EOF
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'project files'
+cbase=$(git rev-parse HEAD)
+
+cat >"$T_TMP/committed-plan.md" <<'EOF'
+# plan: committed-left
+
+- [ ] t1 A worker that commits and leaves
+      Files: app/One.php
+      Verify: true
+- [ ] t2 A second task so the run is worth having
+      Files: app/Two.php
+      Verify: true
+EOF
+
+run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
+	workflow run --plan-file "$T_TMP/committed-plan.md"
+is "$RC" 0 'a worker that committed and left still lands the run clean'
+crundir="$XDG_STATE_HOME/workflow/runs/committed/committed-left"
+is "$(cat "$crundir/t1.state")" merged \
+	'the task merged, judged by the gate rather than failed on its last word'
+like "$OUT" "task t1: its worker committed and left without reporting ready -- the gate judges the branch" \
+	'and the run log carries the warning'
+is "$(cat "$crundir/t1.dispatches")" 1 'counted once, not retried'
+is "$(git rev-list --count "$cbase..integration/committed-left")" 2 \
+	'and both commits reached the integration branch'
+
 t_done
