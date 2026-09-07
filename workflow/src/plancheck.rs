@@ -343,11 +343,11 @@ fn lib_test_without_lib(task: &str, verify: &str, root: &Path) -> Option<String>
 /// work is done. `--gate`, `--hook` or any further word makes it a different,
 /// legitimate command; only the bare invocation is refused.
 fn gate_verify_as_verify(task: &str, verify: &str) -> Option<String> {
-    if verify.trim() != "workflow verify" {
+    if !verify.split_whitespace().eq(["workflow", "verify"]) {
         return None;
     }
     Some(format!(
-        "plan: task {task}: Verify is 'workflow verify' -- that runs the whole gate, not this task's change; give it the command that builds or tests this task's own work"
+        "plan: task {task}: Verify is 'workflow verify' -- the gate's own command recurses in a worktree; name the check itself, or 'workflow verify --gate' for a task with nothing of its own to run"
     ))
 }
 
@@ -929,12 +929,16 @@ mod tests {
         let msg = gate_verify_as_verify("t1", "workflow verify").expect("bare is refused");
         assert!(msg.contains("t1"), "{msg:?} names the task");
         assert!(
-            msg.contains("workflow verify"),
-            "{msg:?} names the command"
+            msg.contains("workflow verify --gate"),
+            "{msg:?} names the remedy"
         );
         assert!(
             gate_verify_as_verify("t1", "  workflow verify  ").is_some(),
             "surrounding whitespace does not save it"
+        );
+        assert!(
+            gate_verify_as_verify("t1", "workflow  verify").is_some(),
+            "extra whitespace between the words does not save it"
         );
         assert!(gate_verify_as_verify("t1", "workflow verify --gate").is_none());
         assert!(gate_verify_as_verify("t1", "workflow verify project").is_none());

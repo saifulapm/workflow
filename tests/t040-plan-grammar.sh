@@ -489,6 +489,7 @@ EOF2
 parse
 is "$RC" 1 'a bare workflow verify is refused'
 like "$OUT" 't1' 'and the refusal names the task'
+like "$OUT" 'workflow verify --gate' 'and the refusal names the remedy'
 
 plan_file <<'EOF2'
 # plan: p
