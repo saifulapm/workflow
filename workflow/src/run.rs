@@ -548,6 +548,7 @@ impl Run {
             attempts,
             why,
             last_report,
+            commits: self.commits(task),
             answers,
         }
     }

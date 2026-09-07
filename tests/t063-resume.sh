@@ -90,6 +90,10 @@ is "$(cat "$rundir/t1.dispatches")" 2 'dispatched twice in all'
 isnt "$(cat "$rundir/t1.session")" "$session1" 'the resumed dispatch minted a new session'
 is "$(cat "$rundir/t2.state")" merged 'the dependent behind it runs and merges too'
 
+t1brief=$(cat "$XDG_CACHE_HOME/workflow/briefs/app/resume/t1.md")
+like "$t1brief" 'Your branch already holds 1 commit\(s\) from the last attempt; continue from them' \
+	'the resumed brief says what the branch already holds'
+
 run git merge-base --is-ancestor "$s1" integration/resume
 is "$RC" 0 "the first attempt's own commit is still in the history -- the same branch, not a fresh one"
 run git cat-file -e 'integration/resume:app/t1.php'

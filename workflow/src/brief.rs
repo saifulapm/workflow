@@ -29,6 +29,10 @@ pub struct Prior {
     pub why: String,
     /// The last line the last attempt wrote to its status file.
     pub last_report: String,
+    /// Commits already on the task's branch from earlier attempts. A worker
+    /// resumed on a branch that already holds work used to learn that only by
+    /// reading its own history -- this says so up front.
+    pub commits: u64,
     /// What the last attempt asked the orchestrator, and what it answered.
     /// A worker that stops on a question is dispatched again once the
     /// answer lands, and this is how the answer reaches it: nothing else in
@@ -48,6 +52,12 @@ impl Prior {
         );
         if !self.why.is_empty() {
             s.push_str(&format!(" The last one ended: {}.", self.why));
+        }
+        if self.commits > 0 {
+            s.push_str(&format!(
+                " Your branch already holds {} commit(s) from the last attempt; continue from them.",
+                self.commits
+            ));
         }
         if !self.last_report.is_empty() {
             s.push_str(&format!(" Its last report was '{}'.", self.last_report));
@@ -256,6 +266,7 @@ mod tests {
             attempts: 1,
             why: "wrote outside its Files: patterns".into(),
             last_report: "ready merge-ready".into(),
+            commits: 0,
             answers: Vec::new(),
         };
         let again = text(
@@ -276,12 +287,17 @@ mod tests {
             !again.contains("It asked:"),
             "an attempt that asked nothing has no answer to carry: {again}"
         );
+        assert!(
+            !again.contains("already holds"),
+            "a branch with no commits has nothing to say it already holds: {again}"
+        );
 
         // A worker that stopped on a question wakes up to the answer.
         let asked = Prior {
             attempts: 1,
             why: "asked #AB12CD34: may I widen Files by src/main.rs?".into(),
             last_report: "blocked: asked #AB12CD34".into(),
+            commits: 2,
             answers: vec![(
                 "may I widen Files by src/main.rs? The dispatch arm lives there.".into(),
                 "Yes: the plan now lists src/main.rs on your Files line.".into(),
@@ -297,6 +313,7 @@ mod tests {
             "It asked: may I widen Files by src/main.rs?",
             "The orchestrator answered: Yes: the plan now lists src/main.rs",
             "Act on that answer.",
+            "Your branch already holds 2 commit(s) from the last attempt; continue from them.",
         ] {
             assert!(
                 answered.contains(needle),
