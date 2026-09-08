@@ -221,6 +221,13 @@ pub struct Run {
     pub base: String,
     pub int_branch: String,
     pub int_wt: PathBuf,
+    /// This binary, as a path taken once when the run is built. The gate
+    /// spawns it for `verify --gate`, and reading `current_exe` at that
+    /// moment answered `<path> (deleted)` after a `cargo install` replaced
+    /// the file under a live run -- an ENOENT with no path in it, one per
+    /// live run, at the first gate after the reinstall (frictions #PXSZ47M3,
+    /// #TAXTZMSW). Taken early, the path names whatever stands there now.
+    pub exe: PathBuf,
     pub deadline_s: i64,
     pub kill_grace_s: i64,
     pub poll: f64,
@@ -1231,8 +1238,7 @@ impl Run {
             .try_clone()
             .map_err(|e| format!("cannot write {} ({e})", file.display()))?;
 
-        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("workflow"));
-        let mut c = Command::new(exe);
+        let mut c = Command::new(&self.exe);
         c.arg("verify")
             .arg("--gate")
             .current_dir(&self.int_wt)
@@ -1246,7 +1252,13 @@ impl Run {
         }
         let ok = c
             .status()
-            .map_err(|e| format!("could not run verify --gate: {e}"))?
+            .map_err(|e| {
+                format!(
+                    "could not run {} verify --gate in {}: {e}",
+                    self.exe.display(),
+                    self.int_wt.display()
+                )
+            })?
             .success();
         if ok {
             return Ok(());
@@ -2180,6 +2192,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String, recorded: Opt
         project: project.to_string(),
         int_branch: format!("integration/{}", plan.plan_id),
         int_wt: wt_root.join("_integration"),
+        exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("workflow")),
         wt_root,
         plan,
         plan_file: None,
