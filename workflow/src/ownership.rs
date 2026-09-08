@@ -132,6 +132,21 @@ pub fn split_patterns(line: &str) -> Vec<String> {
     out
 }
 
+/// What a task touched outside its `Files:` patterns, in the two halves the
+/// gate treats differently.
+pub struct Violations {
+    /// Records of the committed diff: what the merge would carry onto the
+    /// integration branch. Any of these refuses the task.
+    pub committed: Vec<Vec<u8>>,
+    /// Records of the working tree -- a tracked file modified, an untracked
+    /// one left -- that no commit carries. Nothing here reaches integration
+    /// and the worktree goes with the merge, so these are named and waved
+    /// on: refusing over them failed finished work over a lockfile a `pnpm
+    /// install` had rewritten, with no path in the reason (frictions
+    /// #SJYD304E, #PAY9TDN6).
+    pub uncommitted: Vec<Vec<u8>>,
+}
+
 /// Every record the task touched that its `Files:` patterns do not claim.
 ///
 /// `anchor` is what the branch is measured against, and the measurement is
@@ -141,7 +156,7 @@ pub fn split_patterns(line: &str) -> Vec<String> {
 /// a dependency is charged with every file its siblings merged, and a branch
 /// that never needed to is charged with deleting them. Measured from the merge
 /// base, both see only what this task wrote.
-pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) -> Vec<Vec<u8>> {
+pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) -> Violations {
     let git = Git::at(wt);
     let specs: Vec<String> = if patterns.is_empty() {
         vec![gitcmd::glob_top("__nothing_is_owned__")]
@@ -150,19 +165,17 @@ pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) ->
     };
     let spec_args: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
 
-    let mut out: Vec<Vec<u8>> = Vec::new();
-
     let status = ["status", "--porcelain", "-uall", "-z"];
     let mut owned_args: Vec<&str> = status.to_vec();
     owned_args.push("--");
     owned_args.extend(&spec_args);
     let all = status_records(&git.bytes(&status));
     let owned = status_records(&git.bytes(&owned_args));
-    out.extend(
-        all.difference(&owned)
-            .filter(|r| !harness_scratch(r))
-            .cloned(),
-    );
+    let uncommitted = all
+        .difference(&owned)
+        .filter(|r| !harness_scratch(r))
+        .cloned()
+        .collect();
 
     let range = format!("{anchor}...{branch}");
     let diff = ["diff", "--name-status", "-z", "-M", range.as_str()];
@@ -171,9 +184,12 @@ pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) ->
     owned_args.extend(&spec_args);
     let all = diff_records(&git.bytes(&diff));
     let owned = diff_records(&git.bytes(&owned_args));
-    out.extend(all.difference(&owned).cloned());
+    let committed = all.difference(&owned).cloned().collect();
 
-    out
+    Violations {
+        committed,
+        uncommitted,
+    }
 }
 
 /// The records as one line each, with the record separator shown.

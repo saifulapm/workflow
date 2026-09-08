@@ -819,13 +819,32 @@ impl Run {
         // Anchored on the integration branch, not the run's base: what this
         // task owns is what it wrote, never what a sibling merged while it
         // worked (friction #A2JXGNB8).
-        let bad = ownership::violations(&wt, &self.int_branch, &branch, &patterns);
-        if !bad.is_empty() {
-            warn(format!("task {task}: touched files it does not own --"));
-            for line in ownership::show(&bad) {
+        let found = ownership::violations(&wt, &self.int_branch, &branch, &patterns);
+        if !found.uncommitted.is_empty() {
+            warn(format!(
+                "task {task}: left writes outside its Files in the worktree; no commit carries them, so they go with it --"
+            ));
+            for line in ownership::show(&found.uncommitted) {
                 warn(format!("  {line}"));
             }
-            return Err("wrote outside its Files: patterns".into());
+        }
+        if !found.committed.is_empty() {
+            let shown = ownership::show(&found.committed);
+            warn(format!("task {task}: touched files it does not own --"));
+            for line in &shown {
+                warn(format!("  {line}"));
+            }
+            // The reason is what the failure note, the mem log line and the
+            // next attempt's brief carry; a bare sentence left the reader
+            // with nothing to act on (frictions #SJYD304E, #PAY9TDN6).
+            let more = match shown.len().saturating_sub(5) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            return Err(format!(
+                "wrote outside its Files: patterns -- {}{more}",
+                shown.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+            ));
         }
 
         // The same anchor again: a branch that took integration in to reach a

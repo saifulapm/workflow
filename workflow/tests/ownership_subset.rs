@@ -52,7 +52,11 @@ impl Repo {
 
     fn unowned(&self, base: &str, branch: &str, patterns: &[&str]) -> Vec<String> {
         let owned: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
-        show(&violations(&self.0, base, branch, &owned))
+        let found = violations(&self.0, base, branch, &owned);
+        show(&found.uncommitted)
+            .into_iter()
+            .chain(show(&found.committed))
+            .collect()
     }
 }
 

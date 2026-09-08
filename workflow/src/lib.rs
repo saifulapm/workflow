@@ -129,7 +129,11 @@ pub fn run(cli: Cli) -> i32 {
             branch,
             patterns,
         } => {
-            for line in ownership::show(&ownership::violations(&repo, &base, &branch, &patterns)) {
+            let found = ownership::violations(&repo, &base, &branch, &patterns);
+            for line in ownership::show(&found.uncommitted)
+                .into_iter()
+                .chain(ownership::show(&found.committed))
+            {
                 println!("{line}");
             }
             exit::OK

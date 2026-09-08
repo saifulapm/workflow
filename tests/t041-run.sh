@@ -78,6 +78,9 @@ own1)
 	done_json
 	;;
 own2)
+	# The work is owned; the untracked leftover is outside Files but no
+	# commit carries it, so it is named and the merge goes on (frictions
+	# #SJYD304E, #PAY9TDN6).
 	mkdir -p app/Services notes
 	printf '<?php\n' >app/Services/Owned2.php
 	git add app/Services/Owned2.php
@@ -252,8 +255,12 @@ is "$max" 2 'concurrency: two workers at once, never three'
 is "$(cat "$rundir/own1.state")" failed 'the tracked-file ownership violator is refused'
 like "$run_out" 'with space' 'and the whole record for the unowned path with a space is reported'
 like "$run_out" 'Renamed Legacy' 'and the rename that left its patterns is reported'
-is "$(cat "$rundir/own2.state")" failed 'the untracked-file ownership violator is refused'
-like "$run_out" 'notes/scratch.txt' 'and the stray untracked file is named'
+like "$(cat "$rundir/own1.failed")" 'wrote outside its Files: patterns -- .*with space' \
+	'and the reason the failure note carries names the record'
+like "$(cat "$rundir/own1.failed")" 'Renamed Legacy' 'both records'
+is "$(cat "$rundir/own2.state")" merged \
+	'a stray uncommitted file outside Files is not the merge, so the task merges'
+like "$run_out" 'notes/scratch.txt' 'and the stray untracked file is still named'
 is "$(cat "$rundir/own3.state")" merged \
 	"untracked scratch under .claude/ is the harness's, not a write outside Files"
 
@@ -297,7 +304,7 @@ is "$(cat "$rundir/touch.state")" merged 'the transcript-only worker was never k
 ## ---------------------------------------------------- the integration branch
 
 ahead=$(git rev-list --count "$base..integration/fixture-run")
-is "$ahead" 5 'integration is ahead of base_sha by the five merged tasks'
+is "$ahead" 6 'integration is ahead of base_sha by the six merged tasks'
 run git merge-base --is-ancestor "$(git rev-parse fixture-run/red 2>/dev/null || echo HEAD)" integration/fixture-run
 isnt "$RC" 0 'the red task never landed on integration'
 
@@ -309,10 +316,10 @@ cd "$WF_MAIN" || exit 1
 git worktree remove --force "$T_TMP/check"
 
 wt_list=$(git worktree list)
-is "$(printf '%s\n' "$wt_list" | grep -c .)" 4 \
-	'merged and reviewed worktrees are gone; the three failed-with-commits ones stay for resume'
+is "$(printf '%s\n' "$wt_list" | grep -c .)" 3 \
+	'merged and reviewed worktrees are gone; the two failed-with-commits ones stay for resume'
 like "$wt_list" 'fixture-run/own1' 'own1 kept, resumable'
-like "$wt_list" 'fixture-run/own2' 'own2 kept, resumable'
+unlike "$wt_list" 'fixture-run/own2' 'own2 went with its merge'
 like "$wt_list" 'fixture-run/red' 'red kept, resumable'
 is "$(git branch --list 'fixture-run/t1' | grep -c .)" 0 'merged task branches are deleted'
 is "$(git branch --list 'fixture-run/own1' | grep -c .)" 1 'failed task branches are kept'
