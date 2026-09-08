@@ -428,3 +428,22 @@ run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=fable \
 is "$RC" 1 'the variable names a reader over a recorded none'
 unlike "$OUT" 'nobody reads this run' 'so the run does not say nobody reads it'
 like "$(cat "$WF_TMP/reviews.log")" '^fable t1 ' 'and that model read the diff'
+
+## --------------------------------- a refusal says what the last run recorded
+
+# An orchestrator launched against a project whose key was never set cannot
+# answer "who reads?" from the plan (friction #7GVER0M5); the refusal says what
+# the project's latest run recorded, and the decision can be made from that.
+"$MEM_BIN" project unset review-model >/dev/null
+plan fresh ''
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/fresh.md"
+is "$RC" 2 'with the key unset a new plan is refused again'
+like "$OUT" 'the last run here, reader, read with fable\.' 'and the refusal names what the latest run recorded'
+
+# A run picked up again after a stop reads with what it recorded when it
+# began, key or no key: `nobody` recorded no reader, and goes on unread. Its
+# work is landed first, or preflight stops it over the integration branch.
+git merge -q integration/nobody
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/nobody.md"
+is "$RC" 0 'a run that recorded no reader when it began is not refused for the key'
+like "$OUT" 'nobody reads this run: it recorded no reader when it began' 'and says whose choice that was'

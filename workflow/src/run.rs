@@ -2061,10 +2061,20 @@ impl Run {
 /// and only then discovers nobody reads it has spent the sessions already.
 ///
 /// `asked` is whether anyone said nobody should read: `WORKFLOW_REVIEW_MODEL`
-/// set at all, empty or not, or `review-model none` in the store. Either is a
-/// run saying it wants no reading and meaning it; neither is a project that
-/// has not decided, and merges nobody reads are not what the gate is for.
-fn refused(plan: &Plan, model: &str, reader: Option<&str>, asked: bool) -> Option<String> {
+/// set at all, empty or not, `review-model none` in the store, or this same
+/// run's own record from when it began. Any is a run saying it wants no
+/// reading and meaning it; none is a project that has not decided, and merges
+/// nobody reads are not what the gate is for. `last` is what the project's
+/// latest run recorded, said back so the decision can be made from the
+/// refusal alone: an orchestrator launched against a project that ran unread
+/// eight times cannot answer "who reads?" from the plan (friction #7GVER0M5).
+fn refused(
+    plan: &Plan,
+    model: &str,
+    reader: Option<&str>,
+    asked: bool,
+    last: Option<&str>,
+) -> Option<String> {
     if plan.kind == PlanKind::Roadmap {
         return Some(format!(
             "run: '{}' is a roadmap, and its items are milestones rather than work a worker can take.\n\
@@ -2083,12 +2093,42 @@ fn refused(plan: &Plan, model: &str, reader: Option<&str>, asked: bool) -> Optio
              name another reader with `mem project set review-model <model>`, {unread}",
             model.trim()
         )),
-        None if !asked => Some(format!(
-            "run: nobody is named to read what this run merges.\n\
-             name a reader with `mem project set review-model <model>`, {unread}"
-        )),
+        None if !asked => {
+            let last = last.map(|l| format!("\n{l}")).unwrap_or_default();
+            Some(format!(
+                "run: nobody is named to read what this run merges.\n\
+                 name a reader with `mem project set review-model <model>`, {unread}{last}"
+            ))
+        }
         _ => None,
     }
+}
+
+/// What the project's latest run other than this one recorded about its
+/// reader, as a sentence for the refusal above -- `None` when no other run
+/// has left a record. Latest by when it began, which every run writes as it
+/// sets up.
+fn last_reader(dir: &Path) -> Option<String> {
+    let siblings = std::fs::read_dir(dir.parent()?).ok()?;
+    let (plan_id, reader) = siblings
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p != dir)
+        .filter_map(|p| {
+            let started: u64 = recorded(&p, "started")?.parse().ok()?;
+            let reader = recorded(&p, "review-model")?;
+            Some((
+                started,
+                p.file_name()?.to_string_lossy().to_string(),
+                reader,
+            ))
+        })
+        .max_by_key(|(started, ..)| *started)
+        .map(|(_, plan_id, reader)| (plan_id, reader))?;
+    Some(match reader.is_empty() {
+        true => format!("the last run here, {plan_id}, recorded no reader."),
+        false => format!("the last run here, {plan_id}, read with {reader}."),
+    })
 }
 
 /// Are these two names one model? `opus`, `claude-opus-5` and `opus[1m]`
@@ -2235,19 +2275,22 @@ fn backend_for() -> Box<dyn WorkerBackend> {
     }
 }
 
-/// `recorded` is the run directory a `setup` of this same plan already wrote
-/// `model` and `review-model` into -- given by `reap`, rebuilding a run
-/// nobody is watching, and `None` for a fresh `run`, which has nothing
-/// recorded yet. Either way the environment has the last word and a project
-/// key the least: `WORKFLOW_MODEL`/`WORKFLOW_REVIEW_MODEL`, then what was
-/// recorded, then `mem project set model`/`review-model`, then `opus`/nobody.
-fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String, recorded: Option<&Path>) -> Run {
+/// A `setup` of this same plan may already have written `model` and
+/// `review-model` into the run directory: `reap` rebuilding a run nobody is
+/// watching, or `run` picking one up after a stop. Either reads with what
+/// the run was told to read with when it began, rather than whatever the
+/// project key says by then (friction #7GVER0M5). The environment has the
+/// last word and a project key the least: `WORKFLOW_MODEL`/
+/// `WORKFLOW_REVIEW_MODEL`, then what was recorded, then `mem project set
+/// model`/`review-model`, then `opus`/nobody.
+fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let (max_workers, deadline_s, kill_grace_s, poll) = timings();
     let wt_root = paths::worktrees_root().join(project).join(&plan.plan_id);
-    let recorded_model = recorded.and_then(|d| self::recorded(d, "model"));
-    let recorded_review = recorded.and_then(|d| self::recorded(d, "review-model"));
+    let dir = paths::runs_root().join(project).join(&plan.plan_id);
+    let recorded_model = recorded(&dir, "model");
+    let recorded_review = recorded(&dir, "review-model");
     Run {
-        dir: paths::runs_root().join(project).join(&plan.plan_id),
+        dir,
         brief_dir: paths::briefs_root().join(project).join(&plan.plan_id),
         project: project.to_string(),
         int_branch: format!("integration/{}", plan.plan_id),
@@ -2329,7 +2372,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     let Some(base) = git.head() else {
         return exit::USAGE;
     };
-    let mut run = new_run(parsed, top, &project.dir_name(), base, None);
+    let mut run = new_run(parsed, top, &project.dir_name(), base);
     // Resolved, not as typed: the ticks go back to this file for the rest of
     // the run, and a relative path is read against whatever the cwd is then.
     run.plan_file = plan_file.map(paths::realpath_m);
@@ -2337,11 +2380,13 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     // Before the lock, the worktrees and the first dispatch: nothing here has
     // written anything yet, so a refusal costs a message and no cleanup.
     let recorded_none = memcli::reader_recorded_none();
+    let carried = recorded(&run.dir, "review-model").is_some();
     if let Some(why) = refused(
         &run.plan,
         &run.model,
         run.review_model.as_deref(),
-        recorded_none || std::env::var("WORKFLOW_REVIEW_MODEL").is_ok(),
+        recorded_none || carried || std::env::var("WORKFLOW_REVIEW_MODEL").is_ok(),
+        last_reader(&run.dir).as_deref(),
     ) {
         for line in why.lines() {
             warn(line);
@@ -2350,8 +2395,11 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     }
     // Said out loud, because a run that merges unread is worth noticing even
     // when it is exactly what the project asked for.
-    if recorded_none && run.review_model.is_none() {
-        warn("nobody reads this run: review-model is none");
+    if run.review_model.is_none() && std::env::var("WORKFLOW_REVIEW_MODEL").is_err() {
+        warn(match recorded_none {
+            true => "nobody reads this run: review-model is none",
+            false => "nobody reads this run: it recorded no reader when it began",
+        });
     }
 
     if run.plan.tasks.len() <= 1 {
@@ -2800,7 +2848,7 @@ pub fn cmd_reap() -> i32 {
         if base.is_empty() {
             continue;
         }
-        let mut run = new_run(parsed, top.clone(), &project.dir_name(), base, Some(&dir));
+        let mut run = new_run(parsed, top.clone(), &project.dir_name(), base);
         run.dir = dir;
         run.collecting = true;
         // A held lock means a live orchestrator is watching these workers;
@@ -3062,7 +3110,7 @@ mod tests {
 
     #[test]
     fn a_roadmap_is_refused_with_the_verb_that_turns_one_into_a_plan() {
-        let why = refused(&doc(PlanKind::Roadmap), "opus", Some("fable"), true)
+        let why = refused(&doc(PlanKind::Roadmap), "opus", Some("fable"), true, None)
             .expect("a roadmap is not work a worker can take");
         assert!(why.contains("'amx-v2' is a roadmap"), "{why}");
         assert!(why.contains("mem plan --from <slug>"), "{why}");
@@ -3071,8 +3119,8 @@ mod tests {
     #[test]
     fn a_run_nobody_reads_is_refused_unless_it_says_so_on_purpose() {
         // Nobody named and nobody asked: the project has not decided.
-        let why =
-            refused(&doc(PlanKind::Plan), "opus", None, false).expect("an unread run is refused");
+        let why = refused(&doc(PlanKind::Plan), "opus", None, false, None)
+            .expect("an unread run is refused");
         assert!(why.contains("nobody is named to read"), "{why}");
         assert!(
             why.contains("mem project set review-model <model>"),
@@ -3083,13 +3131,27 @@ mod tests {
         assert!(why.contains("mem project set review-model none"), "{why}");
         assert!(why.contains("WORKFLOW_REVIEW_MODEL="), "{why}");
         // Either one is the way to mean it.
-        assert_eq!(refused(&doc(PlanKind::Plan), "opus", None, true), None);
+        assert_eq!(
+            refused(&doc(PlanKind::Plan), "opus", None, true, None),
+            None
+        );
+        // What the project's last run recorded goes at the end, as given.
+        let last = "the last run here, m16, recorded no reader.";
+        let why =
+            refused(&doc(PlanKind::Plan), "opus", None, false, Some(last)).expect("still refused");
+        assert!(why.ends_with(last), "{why}");
     }
 
     #[test]
     fn a_reader_that_is_the_writer_is_refused_under_either_spelling() {
-        let why = refused(&doc(PlanKind::Plan), "claude-opus-5", Some("opus"), true)
-            .expect("a model reading its own work is no reading");
+        let why = refused(
+            &doc(PlanKind::Plan),
+            "claude-opus-5",
+            Some("opus"),
+            true,
+            None,
+        )
+        .expect("a model reading its own work is no reading");
         assert!(
             why.contains("the workers write with claude-opus-5"),
             "{why}"
@@ -3097,7 +3159,7 @@ mod tests {
         assert!(why.contains("opus is the same model"), "{why}");
         // A reader the workers do not share is the whole point of the gate.
         assert_eq!(
-            refused(&doc(PlanKind::Plan), "sonnet", Some("fable"), false),
+            refused(&doc(PlanKind::Plan), "sonnet", Some("fable"), false, None),
             None
         );
     }
