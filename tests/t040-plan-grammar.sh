@@ -772,6 +772,40 @@ parse
 is "$RC" 0 'claiming the file settles it'
 unlike "$OUT" 'Done names' 'nothing warns once Files claims every file the Done names'
 
+# A Done that quotes a literal is changing a spelling, and a test elsewhere
+# that hardcodes it goes red at the gate -- frictions-2 t3 passed plan-check
+# with Files: src/plan.rs alone and failed on three assertions in two shell
+# suites (friction #CS0Q2NA4). Quoted names and paths are the Uses and Files
+# checks' business and stay quiet here.
+mkdir -p t
+printf 'expect "- [X] t1"\n' >t/tick.sh
+git add t/tick.sh
+git -c core.hooksPath=/dev/null commit -qm 'a suite that spells the box'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 A tick is lowercase
+      Files: src/plan.rs
+      Verify: true
+      Done: `plan::tick` writes `- [x]` and parsing `[X]` as checked is unchanged
+EOF2
+parse
+is "$RC" 0 'a quoted literal another file carries is a warning, never a refusal'
+like "$OUT" "Done quotes '\[X\]' and t/tick.sh" 'the file that hardcodes the spelling is named'
+unlike "$OUT" "Done quotes 'plan::tick'" 'a quoted name is not a literal'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 A tick is lowercase
+      Files: src/plan.rs t/tick.sh
+      Verify: true
+      Done: `plan::tick` writes `- [x]` and parsing `[X]` as checked is unchanged
+EOF2
+parse
+unlike "$OUT" 'Done quotes' 'claiming the file settles it'
+
 # The brief is the block inside fixed text, and its budget used to be checked
 # at dispatch alone, as a bare byte count (friction #QX8GXNQY). plan-check says
 # it first, by how much, and which line to trim.

@@ -126,6 +126,26 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 t.id
             ));
         }
+        // A Done that quotes a literal is changing or asserting a spelling,
+        // and a test elsewhere that hardcodes it goes red at the gate -- one
+        // round trip through the orchestrator for a Files line the planner
+        // could have widened at the cut (friction #CS0Q2NA4).
+        for (literal, files) in done_literals(
+            &git,
+            t.done.as_deref().unwrap_or(""),
+            &owned,
+            itself.as_deref(),
+        ) {
+            let shown = files.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+            let more = match files.len().saturating_sub(5) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            f.warnings.push(format!(
+                "plan: task {}: Done quotes '{literal}' and {shown}{more} carry it outside Files: -- whatever asserts the spelling this task changes goes red at the gate",
+                t.id
+            ));
+        }
         // Read and Pattern point at what the worker opens before editing. By
         // the time it runs its dependencies have landed, so a file one of them
         // writes is there to be read even though this checkout has no such
@@ -525,6 +545,65 @@ fn done_paths(git: &Git, done: &str, owned: &std::collections::HashSet<String>) 
             continue;
         }
         out.push(token.to_string());
+    }
+    out
+}
+
+/// The quoted spans of a Done sentence -- backticks or double quotes -- that
+/// read as strings rather than words (see [`string_like`]), each with the
+/// tracked files outside `owned` that carry it, the plan's own file aside.
+fn done_literals(
+    git: &Git,
+    done: &str,
+    owned: &std::collections::HashSet<String>,
+    itself: Option<&str>,
+) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for literal in quoted(done) {
+        if !string_like(&literal) || out.iter().any(|(seen, _)| *seen == literal) {
+            continue;
+        }
+        let files: Vec<String> =
+            zlines(&git.bytes(&["grep", "-l", "-z", "-F", "-e", &literal, "--"]))
+                .into_iter()
+                .filter(|file| !owned.contains(file) && Some(file.as_str()) != itself)
+                .collect();
+        if !files.is_empty() {
+            out.push((literal, files));
+        }
+    }
+    out
+}
+
+/// A quoted span worth asking the tree about: one with a token that is
+/// not a word. Words are what names, paths, commands, flags and
+/// placeholders are made of -- `plan::tick`, `src/plan.rs`, `mem log`,
+/// `cargo install --path <crate>` -- and Uses, Files and the prose own
+/// those; grepping them named README and half the tree on every plan.
+/// `- [x]`, `[X]` and `price(Basket $b)` carry a bracket, a dollar, a
+/// paren: a spelling something else may assert.
+fn string_like(literal: &str) -> bool {
+    literal.len() >= 2
+        && literal.split_whitespace().any(|token| {
+            !token
+                .chars()
+                .all(|c| c.is_alphanumeric() || "_:./<>-".contains(c))
+        })
+}
+
+/// The spans between matching backticks or double quotes, in order.
+fn quoted(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut open: Option<(char, usize)> = None;
+    for (i, c) in text.char_indices() {
+        match open {
+            None if c == '`' || c == '"' => open = Some((c, i + c.len_utf8())),
+            Some((q, start)) if c == q => {
+                out.push(text[start..i].to_string());
+                open = None;
+            }
+            _ => {}
+        }
     }
     out
 }
@@ -1129,5 +1208,35 @@ mod tests {
         assert!(gate_verify_as_verify("t1", "workflow verify --gate").is_none());
         assert!(gate_verify_as_verify("t1", "workflow verify project").is_none());
         assert!(gate_verify_as_verify("t1", "cargo test").is_none());
+    }
+
+    #[test]
+    fn quoted_spans_come_out_in_order_and_an_odd_quote_is_dropped() {
+        assert_eq!(
+            quoted("`plan::tick` writes `- [x]` and \"[X]\" stays"),
+            vec!["plan::tick", "- [x]", "[X]"]
+        );
+        // A backtick span may hold a double quote and the other way round.
+        assert_eq!(quoted("say `it's \"done\"` now"), vec!["it's \"done\""]);
+        // An apostrophe is not a quote, and a span never closed is nothing.
+        assert!(quoted("the task's `box").is_empty());
+    }
+
+    #[test]
+    fn a_literal_is_a_span_with_a_token_that_is_not_a_word() {
+        for lit in ["- [x]", "[X]", "price(Basket $b)", "a = b"] {
+            assert!(string_like(lit), "{lit}");
+        }
+        // Names, paths, commands, flags and placeholders are words.
+        for word in [
+            "plan::tick",
+            "src/plan.rs",
+            "mem log",
+            "cargo install --path <crate>",
+            "mem project set review-model none",
+            "x",
+        ] {
+            assert!(!string_like(word), "{word}");
+        }
     }
 }
