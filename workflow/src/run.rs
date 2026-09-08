@@ -13,7 +13,7 @@ use crate::backend_amx::AmxBackend;
 use crate::gitcmd::Git;
 use crate::plan::{Plan, PlanKind, Task};
 use crate::reviewer::{self, Verdict};
-use crate::{brief, exit, lint, memcli, ownership, paths, plan, repo, sys, warn};
+use crate::{brief, exit, lint, memcli, ownership, paths, plan, plancheck, repo, sys, warn};
 
 pub const PENDING: &str = "pending";
 pub const DISPATCHED: &str = "dispatched";
@@ -709,6 +709,7 @@ impl Run {
             return;
         };
         self.catch_up(task);
+        self.own_deps(task);
         let wt = self.worktree(task);
         let brief_file = self.brief_dir.join(format!("{task}.md"));
         let status = self.dir.join(format!("{task}.status"));
@@ -1869,6 +1870,46 @@ impl Run {
                 let _ = std::os::unix::fs::symlink(&from, &to);
             }
         }
+        self.install_deps(wt);
+    }
+
+    /// The shared dependencies are the checkout's, and a task that changes the
+    /// lockfile cannot install into them: pnpm refuses a `node_modules` that
+    /// resolves outside the worktree, and a worker that forces it is rewriting
+    /// what its siblings are reading (friction #A0WC5ABM). So the task whose
+    /// Files claim the manifest or the lockfile gets a directory of its own,
+    /// and so does one whose lockfile no longer matches the checkout's: a
+    /// dependency a sibling merged is not in the shared directory until
+    /// someone installs there. Judged at dispatch, after the catch-up.
+    fn own_deps(&self, task: &str) {
+        let wt = self.worktree(task);
+        let claims = self
+            .task_now(task)
+            .and_then(|t| t.files)
+            .map(|f| ownership::split_patterns(&f))
+            .unwrap_or_default();
+        for (dir, lock, manifest) in [
+            ("node_modules", "pnpm-lock.yaml", "package.json"),
+            ("vendor", "composer.lock", "composer.json"),
+        ] {
+            let link = wt.join(dir);
+            if !link.is_symlink() {
+                continue;
+            }
+            let claimed = claims
+                .iter()
+                .any(|p| plancheck::covers(p, lock) || plancheck::covers(p, manifest));
+            let changed =
+                std::fs::read(wt.join(lock)).ok() != std::fs::read(self.repo.join(lock)).ok();
+            if claimed || changed {
+                let _ = std::fs::remove_file(&link);
+                self.install_deps(&wt);
+            }
+        }
+    }
+
+    /// Install into a worktree that has no dependencies of its own yet.
+    fn install_deps(&self, wt: &Path) {
         if !wt.join("node_modules").exists() && wt.join("pnpm-lock.yaml").is_file() {
             let ok = Command::new("pnpm")
                 .args(["install", "--frozen-lockfile"])

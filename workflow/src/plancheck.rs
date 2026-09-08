@@ -671,7 +671,7 @@ fn written_by(plan: &Plan, deps: &[String], path: &str) -> bool {
 /// Does the pattern claim the path? A pattern with no glob in it is the path
 /// itself or a directory holding it; otherwise `*` stops at a slash and `**`
 /// crosses one, as in the pathspec the pattern becomes.
-fn covers(pattern: &str, path: &str) -> bool {
+pub(crate) fn covers(pattern: &str, path: &str) -> bool {
     let pattern = pattern.trim_end_matches('/');
     if pattern == path {
         return true;
