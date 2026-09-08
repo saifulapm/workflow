@@ -340,3 +340,52 @@ fn context_names_the_roadmap_and_its_next_milestone() {
     let text = stdout(&mem(&w, &repo, &["context"]));
     assert!(text.contains("roadmap: - [ ] m2-billing Billing"), "{text}");
 }
+
+#[test]
+fn replacing_the_plan_of_record_keeps_the_ticks_a_run_has_made() {
+    // The orchestrator answers a worker mid-run by editing the file the run
+    // started from -- unticked -- and storing it over mem's copy, which by
+    // then carries the merges the run has recorded. The ticks stay.
+    let w = World::new("plan-keeps-ticks");
+    let repo = w.repo("shop", None);
+    let plan = "# plan: m18\n\n\
+        - [ ] t1 The store\n\
+        \x20     Files: src/store.rs\n\
+        - [ ] t2 The reader\n\
+        \x20     Files: src/read.rs\n\
+        - [ ] t3 The writer [after: t2]\n\
+        \x20     Files: src/write.rs\n";
+    let out = mem_stdin(&w, &repo, &["plan", "--stdin"], plan.as_bytes());
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(code(&mem(&w, &repo, &["plan", "--tick", "t1"])), 0);
+    assert_eq!(code(&mem(&w, &repo, &["plan", "--tick", "t2"])), 0);
+
+    // The edit widens t3's Files; t1 and t2 come back unticked.
+    let edited = plan.replace("Files: src/write.rs", "Files: src/write.rs src/read.rs");
+    let out = mem_stdin(&w, &repo, &["plan", "--stdin"], edited.as_bytes());
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("kept the tick on t1, t2"),
+        "the write says which boxes it kept: {}",
+        stderr(&out)
+    );
+    let now = stdout(&mem(&w, &repo, &["plan"]));
+    assert!(now.contains("- [x] t1 The store"), "{now}");
+    assert!(now.contains("- [x] t2 The reader"), "{now}");
+    assert!(now.contains("- [ ] t3 The writer [after: t2]"), "{now}");
+    assert!(
+        now.contains("Files: src/write.rs src/read.rs"),
+        "the edit landed: {now}"
+    );
+
+    // A new plan under the same task ids is a new document: nothing carries.
+    let next = "# plan: m19\n\n\
+        - [ ] t1 The index\n\
+        \x20     Files: src/index.rs\n\
+        - [ ] t2 The search\n\
+        \x20     Files: src/search.rs\n";
+    let out = mem_stdin(&w, &repo, &["plan", "--stdin"], next.as_bytes());
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(!stderr(&out).contains("kept the tick"), "{}", stderr(&out));
+    assert_eq!(stdout(&mem(&w, &repo, &["plan"])), next);
+}

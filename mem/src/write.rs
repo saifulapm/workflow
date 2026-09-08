@@ -233,6 +233,49 @@ pub fn tick_line(line: &str, id: &str) -> Tick {
     Tick::Flipped(format!("{indent}{bullet}[x] {tail}"))
 }
 
+/// The id of a checked task line, `- [x] <id> …`, and nothing for any other
+/// line.
+fn ticked_id(line: &str) -> Option<&str> {
+    let rest = line.trim_start();
+    let rest = rest
+        .strip_prefix("- ")
+        .or_else(|| rest.strip_prefix("* "))?;
+    let tail = rest
+        .strip_prefix("[x] ")
+        .or_else(|| rest.strip_prefix("[X] "))?;
+    tail.split_whitespace().next()
+}
+
+/// A replacement of the same document keeps the ticks the copy on disk has
+/// and the incoming copy lacks: the incoming text with those boxes checked
+/// again, and the ids it happened to. An orchestrator answering a question
+/// mid-run edits the file the run started from, unticked, and stores it over
+/// mem's copy, which by then carries every merge the run has made (friction
+/// #6K4RFP7Q). A different first line is a different document -- a new plan
+/// under the old one's task ids -- and nothing carries over.
+pub fn carry_ticks(current: &str, incoming: &str) -> (String, Vec<String>) {
+    let same = current.lines().next().map(str::trim) == incoming.lines().next().map(str::trim);
+    let ticked: Vec<&str> = if same {
+        current.lines().filter_map(ticked_id).collect()
+    } else {
+        Vec::new()
+    };
+    let mut kept = Vec::new();
+    let lines: Vec<String> = incoming
+        .split('\n')
+        .map(|line| {
+            for id in &ticked {
+                if let Tick::Flipped(new) = tick_line(line, id) {
+                    kept.push(id.to_string());
+                    return new;
+                }
+            }
+            line.to_string()
+        })
+        .collect();
+    (lines.join("\n"), kept)
+}
+
 /// The result of `mem plan --tick`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ticked {

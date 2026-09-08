@@ -807,6 +807,15 @@ fn singleton(
     // caller's text arrived, however long that took.
     let seen = crate::atomic::read_mtime(&path);
     let text = set_text(set_file)?;
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    let (text, kept) = crate::write::carry_ticks(&current, &text);
+    if !kept.is_empty() {
+        eprintln!(
+            "mem: kept the tick on {}: the {} has them ticked and the incoming copy did not",
+            kept.join(", "),
+            which.noun
+        );
+    }
     land(app, &path, &text, seen, which.file)
 }
 

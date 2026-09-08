@@ -11,7 +11,9 @@ export WF_TMP="$T_TMP"
 
 # The fake worker: one commit per task, except sulk, which reports blocked,
 # and reopen, which first files the plan of record again with every box open --
-# standing in for an orchestrator editing the plan while the run is going.
+# standing in for an orchestrator editing the plan while the run is going --
+# through mem, which keeps the ticks (friction #6K4RFP7Q), and then behind
+# mem's back, which only the run's end can put right.
 write_exec "$T_TMP/fake-worker.sh" <<'FAKE'
 #!/bin/sh
 task=$1; status=$3
@@ -23,7 +25,8 @@ if [ "$task" = sulk ]; then
 	exit 0
 fi
 if [ "$task" = reopen ]; then
-	"$WORKFLOW_MEM" plan --set-file "$WF_TMP/reopened-milestone.md" >/dev/null
+	"$WORKFLOW_MEM" plan --set-file "$WF_TMP/reopened-milestone.md" >/dev/null 2>"$WF_TMP/reopen.mem"
+	sed -i 's/^- \[x\] t1 /- [ ] t1 /' "$(find "$XDG_DATA_HOME/mem/store/projects" -name plan.md)"
 fi
 mkdir -p app
 printf '%s\n' "$task" >"app/$task.php"
@@ -134,8 +137,10 @@ like "$OUT" '^- \[ \] filed-milestone ' 'and leaving the roadmap alone'
 # The plan of record is a live document -- read fresh at every dispatch, and
 # edited mid-run by whoever is answering questions. An edit that reopens a box
 # this run already ticked used to stand, so a merged task read as work still to
-# do and the next run built it again. Every merge is ticked once more at the
-# end, against the plan as it reads then.
+# do and the next run built it again. `mem plan` keeps the ticks its copy has
+# when the same document is filed again; a write that bypasses mem is caught
+# at the end, where every merge is ticked once more against the plan as it
+# reads then.
 cat >"$T_TMP/reopened-milestone.md" <<'EOF'
 # plan: reopened-milestone
 
@@ -149,8 +154,10 @@ EOF
 "$MEM_BIN" plan --set-file "$T_TMP/reopened-milestone.md" >/dev/null
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
 is "$RC" 0 'the run finishes though the plan was rewritten under it'
+like "$(cat "$WF_TMP/reopen.mem")" 'kept the tick on t1: the plan has them ticked' \
+	'filing the plan through mem kept the tick the run had made'
 like "$OUT" 'task t1: had come unticked in the plan of record -- ticked again' \
-	'and names the box it had to tick again'
+	'and the box unticked behind mem is named as ticked again'
 like "$OUT" 'milestone reopened-milestone is ticked off in the roadmap' \
 	'so the milestone is finished after all'
 like "$("$MEM_BIN" log --limit 20 --json)" \
