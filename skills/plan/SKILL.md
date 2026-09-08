@@ -12,10 +12,10 @@ Work bigger than one plan is a roadmap of milestones: `roadmap`.
 One numbered round, batched at the frontier of what you cannot work out. Each
 carries a recommended answer, so silence answers it, for small trade-offs
 only; a scope question (what the product is, what stays, what goes) is never
-resolved by silence, so keep waiting. Facts are researched, never asked:
+resolved by silence, so keep waiting. Facts are researched, not asked:
 versions, layouts, names, current behaviour. Ask about intent, priorities and
 trade-offs. A question that leaves the session (`mem ask`, read on a phone) is
-one decision, the choices, a recommendation, under a hundred words. A rewrite
+one decision, the choices, a recommendation, under 100 words. A rewrite
 inventories the predecessor's whole surface (docs, backlog, screenshots) into
 mem first; cuts are Saiful's.
 
@@ -29,9 +29,9 @@ Write it to mem:
     mem plan --stdin < plan.md
 
 Aim for 900–1,600 tokens (bytes ÷ 4): under that the tasks are wishes, over it
-nobody reads them. Reference file paths, classes, the commit that introduced the
-thing. A plan cut from the friction queue names the
-ids it answers, so shipping closes them. UI work produces a mockup first.
+nobody reads them. Reference file paths, classes, the introducing commit. A
+plan cut from the friction queue names the ids it answers, so shipping closes
+them. UI work produces a mockup first.
 Write it plain; the unslop rules apply.
 
 ## 3. The grammar
@@ -54,13 +54,14 @@ Write it plain; the unslop rules apply.
   `[after: a, b]`. Ids: lowercase, up to 16 characters.
 - Continuation lines are indented two or more spaces and read `Key: value`,
   split at the first colon-space.
-- `Files:` is whitespace-separated globs; double-quote one that contains a
-  space. `*` stops at a slash, `**` crosses, patterns are anchored at the repo
-  root. This is the ownership boundary: what a worker writes outside them is
-  refused at the merge gate. Grep for every name the task changes: a file
-  asserting it belongs here too, and so does one the change forces (the arm
-  an exhaustive match demands, the test file Verify runs). Each one missed
-  stops the task to ask.
+- `Files:` is whitespace-separated globs; double-quote one with a space. `*`
+  stops at a slash, `**` crosses, patterns are anchored at the repo root.
+  This is the ownership boundary: a write outside them is refused at the
+  merge gate. Grep for every name the task changes: a file asserting it
+  belongs here, and so does one the change forces: the arm an exhaustive
+  match demands, the test file Verify runs, the dead-code guard on a
+  sibling's symbol this task first calls. Each one missed stops the task to
+  ask.
 - `Files:` and `Verify:` are mandatory. `Verify:` is the worker's evidence
   command; `workflow verify` is what the gate runs.
 - `Read:`, `Uses:`, `Gives:` and `Pattern:` carry the middle tier: files to
@@ -80,13 +81,13 @@ Uses and Done lines warn.
 
 ## 4. Shape
 
-Tasks that run at once must not touch the same files; the patterns make that
+Tasks that run at once must not share files; the patterns make it
 checkable. For a wide refactor, expand and contract: add
 the new beside the old, move callers, remove the old last, each its own task.
 
 Write `Done:` checkable and demanding, a sentence a human can check without
 the diff: "every caller migrated" forces the sweep that "callers updated"
-lets slide. Then self-review: every requirement points at a task, and a name
+lets slide. Self-review: every requirement points at a task, and a name
 two tasks share is spelled identically in both.
 
 ## 5. One approval checkpoint
