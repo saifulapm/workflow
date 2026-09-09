@@ -87,7 +87,11 @@ Three sizes of work, three moves:
   tmux panes instead, listed by `amx ls` and watched with `amx attach <id>`;
   waves, ownership and the merge gate are the same either way. Workers run
   on opus unless the project says otherwise (`mem project set model sonnet`)
-  or one run does (`WORKFLOW_MODEL=sonnet workflow run`). With a
+  or one run does (`WORKFLOW_MODEL=sonnet workflow run`). A cheaper model
+  can be given more reasoning: `mem project set effort max` starts every
+  worker with `--effort max`, `review-effort` does the same for the reader,
+  `unset` takes either back, and `WORKFLOW_EFFORT` and
+  `WORKFLOW_REVIEW_EFFORT` do it for one run (empty means no flag). With a
   `review-model` set, every task's diff is read by that model against the
   plan before it merges, after its Verify is green: a fix verdict sends the
   task back to its worker with the findings, so a cheaper worker's work
