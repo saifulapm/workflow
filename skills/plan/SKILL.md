@@ -12,12 +12,11 @@ Work bigger than one plan is a roadmap of milestones: `roadmap`.
 One numbered round, batched at the frontier of what you cannot work out. Each
 carries a recommended answer, so silence answers it, for small trade-offs
 only; a scope question (what the product is, what stays, what goes) is never
-resolved by silence, so keep waiting. Facts are researched, not asked:
-versions, layouts, names, current behaviour. Ask about intent, priorities and
-trade-offs. A question that leaves the session (`mem ask`, read on a phone) is
-one decision, the choices, a recommendation, under 100 words. A rewrite
-inventories the predecessor's whole surface (docs, backlog, screenshots) into
-mem first; cuts are Saiful's.
+resolved by silence, so keep waiting. Facts are researched, not asked. Ask
+about intent, priorities and trade-offs. A question that leaves the session
+(`mem ask`, read on a phone) is one decision, the choices, a recommendation,
+under 100 words. A rewrite inventories the predecessor's whole surface (docs,
+backlog, screenshots) into mem first; cuts are Saiful's.
 
 Read the project's pages before cutting tasks: `mem wiki`, then each page the
 change touches; they hold decisions code cannot show.
@@ -28,11 +27,11 @@ Write it to mem:
 
     mem plan --stdin < plan.md
 
-Aim for 900–1,600 tokens (bytes ÷ 4): under that the tasks are wishes, over it
-nobody reads them. Reference file paths, classes, the introducing commit. A
+Aim for 1,500–3,500 tokens (bytes ÷ 4): under that the tasks are wishes, over
+it nobody reads them. Reference file paths, classes, the introducing commit. A
 plan cut from the friction queue names the ids it answers, so shipping closes
 them. UI work produces a mockup first.
-Write it plain; the unslop rules apply.
+Write it plain.
 
 ## 3. The grammar
 
@@ -77,7 +76,8 @@ Check it from the checkout before approval:
 
 It reads the tree, runs nothing: a Verify that cannot pass here is refused,
 so is deferral language ("for now", "TBD"); ungrounded Files, Read, Pattern,
-Uses and Done lines warn.
+Uses and Done lines warn. A block over budget is a task to split, never a
+line to trim.
 
 ## 4. Shape
 

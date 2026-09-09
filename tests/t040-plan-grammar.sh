@@ -806,10 +806,10 @@ EOF2
 parse
 unlike "$OUT" 'Done quotes' 'claiming the file settles it'
 
-# The brief is the block inside fixed text, and its budget used to be checked
-# at dispatch alone, as a bare byte count (friction #QX8GXNQY). plan-check says
-# it first, by how much, and which line to trim.
-long=$(printf 'every fixture basket totals identically through checkout and cart, %.0s' $(seq 1 24))
+# The budget is the block's alone, not the brief's around it, and it used to
+# be checked at dispatch alone, as a bare byte count (friction #QX8GXNQY).
+# plan-check says it first, by how much, and which line weighs most.
+long=$(printf 'every fixture basket totals identically through checkout and cart, %.0s' $(seq 1 32))
 plan_file <<EOF2
 # plan: p
 
@@ -820,8 +820,9 @@ plan_file <<EOF2
 EOF2
 parse
 is "$RC" 0 'a brief over its budget is a warning, never a refusal'
-like "$OUT" 'over the 3000 byte budget' 'and the warning says by how much'
-like "$OUT" 'heaviest line of the block is Done:' 'and which line to trim'
+like "$OUT" 'over the 2000 byte budget' 'and the warning says by how much'
+like "$OUT" 'heaviest line of the block is Done:' 'and which line weighs most'
+like "$OUT" 'a task to split, not a line to trim' 'and what to do about it'
 
 # A line location in a Uses item -- budget.rs:12, a bare :48, a :48-60 span --
 # points into a file and names nothing; read as a token it stood where the

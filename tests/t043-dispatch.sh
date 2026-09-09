@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The default dispatch template, with a stub standing in for `claude`. This is
 # the one place the shipped template itself runs: the credential scrub of spec
-# §1, the flags, the fresh session uuid, and the brief inside its byte budget.
+# §1, the flags, the fresh session uuid, and the block inside its byte budget.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -135,7 +135,7 @@ truthy "$([ ! -e "$rundir/costs.tsv" ] && echo 0 || echo 1)" \
 
 brief="$XDG_CACHE_HOME/workflow/briefs/app/dispatch-check/t1.md"
 truthy "$([ -f "$brief" ] && echo 0 || echo 1)" 'the brief was written where the template points'
-is "$(($(wc -c <"$brief") <= 3000))" 1 'the brief is inside its 3000 byte budget'
+unlike "$OUT" 'over the [0-9]+ byte budget' 'the block is inside its byte budget'
 body=$(cat "$brief")
 like "$body" 'Extract cart pricing into a service' 'the brief carries the objective'
 like "$body" 'Files: app/Services/Cart\*\.php tests/Unit/Cart\*' 'and the task block verbatim'

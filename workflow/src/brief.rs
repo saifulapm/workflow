@@ -1,17 +1,21 @@
 //! The worker brief (spec §8.4): objective, the task block verbatim, the
-//! constraints, the mem cheat-line and the reporting protocol, inside
-//! [`BUDGET`] bytes.
+//! constraints, the mem cheat-line and the reporting protocol. The block is
+//! held to [`BUDGET`] bytes; the fixed prose around it is not counted.
 
 use std::path::Path;
 
 use crate::plan::Task;
 use crate::warn;
 
-/// What a brief may weigh. The core keys' fixed prose holds under 2,400
-/// bytes; the middle-tier keys (Read, Uses, Gives, Pattern) earn the rest of
-/// the room to 3,000 -- a deliberate deviation from spec §8.4's figure,
-/// recorded as a ruling.
-pub const BUDGET: usize = 3000;
+/// What a task block may weigh. The block alone: the fixed prose around it
+/// took 2,100 of the 3,000 bytes the whole brief used to be held to, which
+/// left a planner about 900 for the one part of the brief that is the task,
+/// and trimming a Done or Uses line to fit took out exactly the grounding a
+/// worker otherwise stops to ask for. Boilerplate growth must never cost the
+/// planner room, so it is not counted (the test below holds it under 2,400
+/// on its own). A block past this is a task to split, not a line to trim.
+/// A deviation from spec §8.4's figure, recorded as a ruling.
+pub const BUDGET: usize = 2000;
 
 /// The states a worker may report, in the order the brief teaches them. The
 /// gate names this list back when a report uses a word that is not on it, so
@@ -152,12 +156,13 @@ your last act. The state is one bare word: no colon after it.
     )
 }
 
-/// How far over the budget a brief is, and which line of the task block
-/// weighs most -- the one to trim. `None` when it fits. The run said a bare
-/// byte count at dispatch, the one place a planner could no longer act on
-/// it; this is what the run and plan-check both say (friction #QX8GXNQY).
-pub fn over_budget(task: &Task, body: &str) -> Option<String> {
-    if body.len() <= BUDGET {
+/// How far over the budget a task block is, and which of its lines weighs
+/// most. `None` when it fits. The run said a bare byte count at dispatch, the
+/// one place a planner could no longer act on it; this is what the run and
+/// plan-check both say (friction #QX8GXNQY).
+pub fn over_budget(task: &Task) -> Option<String> {
+    let size = task.block.len();
+    if size <= BUDGET {
         return None;
     }
     let heaviest = task
@@ -173,9 +178,8 @@ pub fn over_budget(task: &Task, body: &str) -> Option<String> {
         _ => "the title".to_string(),
     };
     Some(format!(
-        "{} bytes, {} over the {BUDGET} byte budget; the heaviest line of the block is {line} at {} bytes",
-        body.len(),
-        body.len() - BUDGET,
+        "{size} bytes, {} over the {BUDGET} byte budget; the heaviest line of the block is {line} at {} bytes",
+        size - BUDGET,
         heaviest.len()
     ))
 }
@@ -186,8 +190,8 @@ pub fn write(task: &Task, worktree: &Path, status_file: &Path, prior: &Prior, ou
     }
     let body = text(task, worktree, status_file, prior);
     let _ = std::fs::write(out, &body);
-    if let Some(over) = over_budget(task, &body) {
-        warn(format!("task {}: the brief is {over}", task.id));
+    if let Some(over) = over_budget(task) {
+        warn(format!("task {}: its block is {over}", task.id));
     }
 }
 
@@ -213,11 +217,10 @@ mod tests {
             Path::new("/state/runs/app/plan/t1.status"),
             &Prior::default(),
         );
-        assert!(body.len() <= BUDGET, "the brief is {} bytes", body.len());
-        // The fixed prose alone, with no middle-tier keys, is what the doc
-        // comment on BUDGET promises stays under 2,400 -- a ceiling tighter
-        // than BUDGET that catches a new paragraph eating the middle tier's
-        // room before a real plan's task ever does.
+        assert!(over_budget(&task).is_none());
+        // The fixed prose is not what BUDGET counts, and it is still held:
+        // a brief nobody reads is worse than none, and this is the ceiling
+        // that catches a new paragraph before a real plan's worker does.
         assert!(
             body.len() <= 2400,
             "the fixed prose is {} bytes",
@@ -271,9 +274,9 @@ mod tests {
             &Prior::default(),
         );
         assert!(
-            rich_body.len() <= BUDGET,
-            "a middle-tier brief is {} bytes, over the {BUDGET} byte budget",
-            rich_body.len()
+            over_budget(&rich).is_none(),
+            "a middle-tier block is {} bytes, over the {BUDGET} byte budget",
+            rich.block.len()
         );
         assert!(
             rich_body.contains("never by weakening the test"),
@@ -294,7 +297,8 @@ mod tests {
             Path::new("/state/runs/app/plan/t1.status"),
             &prior,
         );
-        assert!(again.len() <= BUDGET, "the brief is {} bytes", again.len());
+        // The section is not the block's to pay for.
+        assert!(over_budget(&task).is_none());
         for needle in [
             "This is attempt 2.",
             "wrote outside its Files: patterns",
@@ -339,18 +343,18 @@ mod tests {
                 "the answered brief lost {needle}"
             );
         }
-        assert!(answered.len() <= BUDGET, "{}", answered.len());
         // A long answer is clipped, not dropped, and the clip ends cleanly.
         assert_eq!(clip(&"x".repeat(1000)).len(), 603);
         assert_eq!(clip("  short  "), "short");
     }
 
-    /// A brief over its budget says by how much and which line of the block
-    /// to trim, so a planner can act on it before dispatch rather than
-    /// after (friction #QX8GXNQY).
+    /// A block over its budget says by how much and which line weighs most,
+    /// so a planner can act on it before dispatch rather than after
+    /// (friction #QX8GXNQY). The fixed prose around the block is not counted:
+    /// only the planner's own bytes can put a task over.
     #[test]
-    fn a_brief_over_its_budget_names_the_bytes_over_and_the_line_to_trim() {
-        let done = format!("Done: {}", "every basket totals identically ".repeat(40));
+    fn a_block_over_its_budget_names_the_bytes_over_and_the_heaviest_line() {
+        let done = format!("Done: {}", "every basket totals identically ".repeat(70));
         let task = Task {
             id: "t2".into(),
             title: "Wire cart pricing into checkout".into(),
@@ -362,14 +366,12 @@ mod tests {
             ),
             ..Task::default()
         };
-        let wt = Path::new("/state/worktrees/app/plan/t2");
-        let status = Path::new("/state/runs/app/plan/t2.status");
-        let body = text(&task, wt, status, &Prior::default());
-        let over = over_budget(&task, &body).expect("the brief is over");
+        let over = over_budget(&task).expect("the block is over");
         assert!(
             over.contains(&format!(
-                "{} over the {BUDGET} byte budget",
-                body.len() - BUDGET
+                "{} bytes, {} over the {BUDGET} byte budget",
+                task.block.len(),
+                task.block.len() - BUDGET
             )),
             "{over}"
         );
@@ -380,12 +382,25 @@ mod tests {
             )),
             "{over}"
         );
-        // Inside the budget there is nothing to say.
+        // Inside the budget there is nothing to say, however long the brief
+        // around the block runs: a redispatch with a question and an answer
+        // carried is the fixed prose at its longest.
         let small = Task {
             block: "- [ ] t2 Wire cart pricing into checkout\n      Files: a\n      Verify: true\n"
                 .into(),
             ..task.clone()
         };
-        assert!(over_budget(&small, &text(&small, wt, status, &Prior::default())).is_none());
+        assert!(over_budget(&small).is_none());
+        let wt = Path::new("/state/worktrees/app/plan/t2");
+        let status = Path::new("/state/runs/app/plan/t2.status");
+        let prior = Prior {
+            attempts: 2,
+            why: "asked #AB12CD34: which file?".into(),
+            last_report: "blocked".into(),
+            commits: 1,
+            answers: vec![("x".repeat(600), "y".repeat(600))],
+        };
+        assert!(text(&small, wt, status, &prior).len() > BUDGET);
+        assert!(over_budget(&small).is_none());
     }
 }
