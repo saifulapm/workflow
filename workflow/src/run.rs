@@ -66,8 +66,9 @@ fn field(dir: &Path, task: &str, ext: &str) -> String {
         .to_string()
 }
 
-/// A run-level file `setup` wrote before the first worker went out -- `model`
-/// or `review-model` -- read back for a run `reap` is rebuilding. `None`
+/// A run-level file `setup` wrote before the first worker went out -- `model`,
+/// `review-model`, `effort`, `review-effort` -- read back for a run `reap` is
+/// rebuilding. `None`
 /// means the file was never written: a run dir from before this, or a
 /// fixture that never went through `setup`.
 fn recorded(dir: &Path, name: &str) -> Option<String> {
@@ -242,6 +243,15 @@ pub struct Run {
     /// off), else nobody.
     /// Naming the model the workers run on is the same as naming nobody.
     pub review_model: Option<String>,
+    /// How much reasoning the workers spend, `--effort` on either backend:
+    /// `WORKFLOW_EFFORT` for one run (empty means no flag), else the
+    /// project's `mem project set effort`, else nothing and the CLI's own
+    /// default stands.
+    pub effort: Option<String>,
+    /// The same dial for the reader, from `WORKFLOW_REVIEW_EFFORT` and
+    /// `mem project set review-effort`. Independent of `effort`: a cheap
+    /// worker turned up does not turn the frontier reader up with it.
+    pub review_effort: Option<String>,
     /// Raised by SIGTERM, SIGINT or SIGHUP. The poll loop reads it between
     /// passes, and the stop takes a reader down with the workers.
     pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -749,6 +759,7 @@ impl Run {
             rundir: self.dir.clone(),
             session: session.clone(),
             model: self.model.clone(),
+            effort: self.effort.clone(),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env,
         };
@@ -1041,6 +1052,7 @@ impl Run {
             rundir: self.dir.clone(),
             session: self.backend.mint_session(),
             model: model.to_string(),
+            effort: self.review_effort.clone(),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env,
         };
@@ -1777,6 +1789,14 @@ impl Run {
             self.dir.join("review-model"),
             format!("{}\n", self.review_model.as_deref().unwrap_or("")),
         );
+        let _ = std::fs::write(
+            self.dir.join("effort"),
+            format!("{}\n", self.effort.as_deref().unwrap_or("")),
+        );
+        let _ = std::fs::write(
+            self.dir.join("review-effort"),
+            format!("{}\n", self.review_effort.as_deref().unwrap_or("")),
+        );
 
         let git = self.git();
         // Created once, never reset. If it is behind the base -- which is what
@@ -2275,20 +2295,42 @@ fn backend_for() -> Box<dyn WorkerBackend> {
     }
 }
 
-/// A `setup` of this same plan may already have written `model` and
-/// `review-model` into the run directory: `reap` rebuilding a run nobody is
-/// watching, or `run` picking one up after a stop. Either reads with what
-/// the run was told to read with when it began, rather than whatever the
-/// project key says by then (friction #7GVER0M5). The environment has the
-/// last word and a project key the least: `WORKFLOW_MODEL`/
-/// `WORKFLOW_REVIEW_MODEL`, then what was recorded, then `mem project set
-/// model`/`review-model`, then `opus`/nobody.
+/// A dial a run may or may not carry -- the reader, the two effort levels --
+/// resolved the way `new_run` describes: the variable set, even empty, is
+/// the answer for this run; else what a `setup` of this plan recorded, an
+/// empty record meaning none; else the project key.
+fn optional_dial(
+    var: &str,
+    recorded: Option<String>,
+    project: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    match std::env::var(var) {
+        Ok(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
+        Err(_) => match recorded {
+            Some(v) => Some(v).filter(|v| !v.is_empty()),
+            None => project(),
+        },
+    }
+}
+
+/// A `setup` of this same plan may already have written `model`,
+/// `review-model`, `effort` and `review-effort` into the run directory:
+/// `reap` rebuilding a run nobody is watching, or `run` picking one up after
+/// a stop. Either reads with what the run was told to read with when it
+/// began, rather than whatever the project key says by then (friction
+/// #7GVER0M5). The environment has the last word and a project key the
+/// least: `WORKFLOW_MODEL`/`WORKFLOW_REVIEW_MODEL`/`WORKFLOW_EFFORT`/
+/// `WORKFLOW_REVIEW_EFFORT`, then what was recorded, then `mem project set
+/// model`/`review-model`/`effort`/`review-effort`, then `opus`/nobody/the
+/// CLI's own default.
 fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let (max_workers, deadline_s, kill_grace_s, poll) = timings();
     let wt_root = paths::worktrees_root().join(project).join(&plan.plan_id);
     let dir = paths::runs_root().join(project).join(&plan.plan_id);
     let recorded_model = recorded(&dir, "model");
     let recorded_review = recorded(&dir, "review-model");
+    let recorded_effort = recorded(&dir, "effort");
+    let recorded_review_effort = recorded(&dir, "review-effort");
     Run {
         dir,
         brief_dir: paths::briefs_root().join(project).join(&plan.plan_id),
@@ -2313,13 +2355,17 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
                 .or_else(memcli::project_model)
                 .unwrap_or_else(|| "opus".into()),
         },
-        review_model: match std::env::var("WORKFLOW_REVIEW_MODEL") {
-            Ok(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
-            Err(_) => match recorded_review {
-                Some(v) => Some(v).filter(|v| !v.is_empty()),
-                None => memcli::project_review_model(),
-            },
-        },
+        review_model: optional_dial(
+            "WORKFLOW_REVIEW_MODEL",
+            recorded_review,
+            memcli::project_review_model,
+        ),
+        effort: optional_dial("WORKFLOW_EFFORT", recorded_effort, memcli::project_effort),
+        review_effort: optional_dial(
+            "WORKFLOW_REVIEW_EFFORT",
+            recorded_review_effort,
+            memcli::project_review_effort,
+        ),
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         env: Vec::new(),
         collecting: false,

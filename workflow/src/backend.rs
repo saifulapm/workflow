@@ -30,6 +30,9 @@ pub struct Dispatch {
     pub rundir: PathBuf,
     pub session: String,
     pub model: String,
+    /// The reasoning dial, when the run has one to pass: `--effort` on both
+    /// backends. `None` adds no flag, and the CLI's own default stands.
+    pub effort: Option<String>,
     pub turns: String,
     pub env: Vec<(String, String)>,
 }
@@ -115,13 +118,17 @@ pub trait WorkerBackend {
 /// guards a constraint that does not exist, and its enforcement outside print
 /// mode was never verified anyway (ruling #D7A4T2CH). The deadline, the worker
 /// cap and one-task briefs are the bounds that hold.
+///
+/// `{effort}` is the fourth positional, and `${4:+--effort "$4"}` puts the
+/// flag on the line only when there is a level to pass: empty, the expansion
+/// is no words at all, and the session starts on the CLI's own default.
 pub const WORKER_CMD_DEFAULT: &str = r#"cd {worktree} && WORKFLOW_AGENT=1 sh -c '\
   exec env -u GITHUB_API_KEY -u WORKFLOW_ALLOW_PUSH -u WORKFLOW_HOOK_SEEN \
   $(env | grep -oE "^[A-Za-z0-9_]*(_TOKEN|_KEY|_SECRET)=|^(GH_|GITHUB_|AWS_|STRIPE_)[A-Za-z0-9_]*=" | sed "s/=$//; s/^/-u /" | tr "\n" " ") \
   claude --bg --dangerously-skip-permissions \
-  --model "$2" --settings "$3" \
+  --model "$2" --settings "$3" ${4:+--effort "$4"} \
   "Read $1 and execute it exactly."' \
-  workflow-worker {brief} {model} {settings} > {out} 2> {err}"#;
+  workflow-worker {brief} {model} {settings} {effort} > {out} 2> {err}"#;
 
 /// `Dispatch.env` as the JSON object `--settings` takes. `env` is the key
 /// the flag reads for the session's own environment, so this is how a
@@ -178,6 +185,7 @@ impl ClaudeBackend {
             ("rundir", path(&d.rundir)),
             ("session", d.session.clone()),
             ("model", d.model.clone()),
+            ("effort", d.effort.clone().unwrap_or_default()),
             ("turns", d.turns.clone()),
             ("settings", settings_json(&d.env)),
         ] {
@@ -564,6 +572,7 @@ mod tests {
             rundir: PathBuf::from("/runs"),
             session: "018f2c7e-0000-4000-8000-000000000000".into(),
             model: "sonnet".into(),
+            effort: None,
             turns: "120".into(),
             env: Vec::new(),
         }
@@ -577,7 +586,7 @@ mod tests {
         assert!(cmd.contains("> '/runs/t1.json' 2> '/runs/t1.err'"));
         for key in [
             "worktree", "brief", "out", "err", "pidfile", "status", "task", "rundir", "session",
-            "model", "turns", "settings",
+            "model", "effort", "turns", "settings",
         ] {
             let placeholder = format!("{{{key}}}");
             assert!(
@@ -612,6 +621,55 @@ mod tests {
             cmd.contains(&word),
             "the settings json is not one shell word in: {cmd}"
         );
+    }
+
+    /// The level rides as the fourth positional, and the template's own
+    /// `${4:+...}` decides whether the flag goes on the line: an unset dial is
+    /// an empty word there, never a `--effort ''` the CLI would refuse.
+    #[test]
+    fn the_effort_level_is_the_fourth_positional_and_empty_when_unset() {
+        let mut d = fixture();
+        let settings = shq(&settings_json(&d.env));
+        let cmd = ClaudeBackend::command_for(&d);
+        assert!(
+            cmd.contains(&format!(
+                "workflow-worker '/cache/briefs/t1.md' 'sonnet' {settings} ''"
+            )),
+            "{cmd}"
+        );
+        d.effort = Some("max".into());
+        let cmd = ClaudeBackend::command_for(&d);
+        assert!(
+            cmd.contains(&format!(
+                "workflow-worker '/cache/briefs/t1.md' 'sonnet' {settings} 'max'"
+            )),
+            "{cmd}"
+        );
+        assert!(cmd.contains(r#"${4:+--effort "$4"}"#), "{cmd}");
+    }
+
+    /// The idiom itself, run through the shell the template runs under: two
+    /// words with a level, none without.
+    #[test]
+    fn the_effort_words_vanish_when_the_level_is_empty() {
+        let words = |level: &str| {
+            let out = Command::new("sh")
+                .args([
+                    "-c",
+                    r#"printf '%s
+' "$2" ${4:+--effort "$4"}"#,
+                    "workflow-worker",
+                    "brief",
+                    "sonnet",
+                    "settings",
+                    level,
+                ])
+                .output()
+                .expect("sh runs");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(words("max"), "sonnet\n--effort\nmax");
+        assert_eq!(words(""), "sonnet");
     }
 
     #[test]
@@ -695,6 +753,7 @@ mod tests {
             "-u WORKFLOW_HOOK_SEEN",
             "WORKFLOW_AGENT=1",
             "[A-Za-z0-9_]*(_TOKEN|_KEY|_SECRET)=",
+            r#"${4:+--effort "$4"}"#,
         ] {
             assert!(
                 WORKER_CMD_DEFAULT.contains(needle),

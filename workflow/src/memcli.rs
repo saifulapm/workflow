@@ -124,6 +124,18 @@ pub fn project_model() -> Option<String> {
     project_choice("model")
 }
 
+/// The reasoning dial the project set for its workers, `mem project set
+/// effort`; absent is the CLI's own default.
+pub fn project_effort() -> Option<String> {
+    project_choice("effort")
+}
+
+/// The same dial for the reader at the merge gate, `mem project set
+/// review-effort`.
+pub fn project_review_effort() -> Option<String> {
+    project_choice("review_effort")
+}
+
 /// What `review-model` is set to by a project that has decided nobody reads
 /// its merges. Absent is a different answer -- a project that has not decided
 /// -- and a run is refused over that one rather than merged unread.

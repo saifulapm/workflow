@@ -164,10 +164,11 @@ fn name_for(d: &Dispatch) -> String {
 ///
 /// `--no-worktree` because workflow has already cut this task's worktree and
 /// the merge gate anchors on its branch; a second one wrapped around it would
-/// leave the commits somewhere nothing looks.
+/// leave the commits somewhere nothing looks. `--effort` only when the run
+/// has a level: absent, amx starts the agent on its own default.
 fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
     let path = |p: &Path| p.to_string_lossy().to_string();
-    vec![
+    let mut argv = vec![
         "new".to_string(),
         "--name".to_string(),
         name.to_string(),
@@ -176,8 +177,13 @@ fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
         "--no-worktree".to_string(),
         "--model".to_string(),
         d.model.clone(),
-        format!("Read {} and execute it exactly.", path(&d.brief)),
-    ]
+    ];
+    if let Some(level) = &d.effort {
+        argv.push("--effort".to_string());
+        argv.push(level.clone());
+    }
+    argv.push(format!("Read {} and execute it exactly.", path(&d.brief)));
+    argv
 }
 
 /// The variables a worker must not inherit (spec §1), out of the names the
@@ -353,6 +359,7 @@ mod tests {
             rundir: PathBuf::from("/runs"),
             session: "wf-a3k9".into(),
             model: "opus".into(),
+            effort: None,
             turns: "120".into(),
             env: Vec::new(),
         }
@@ -438,6 +445,22 @@ mod tests {
                 "Read /cache/briefs/t1.md and execute it exactly.",
             ]
         );
+    }
+
+    #[test]
+    fn the_effort_dial_goes_on_the_argv_only_when_the_run_has_one() {
+        let mut d = fixture();
+        d.effort = Some("max".into());
+        let argv = new_argv(&d, "wf-t1-a3k9");
+        assert_eq!(
+            &argv[argv.len() - 3..],
+            [
+                "--effort",
+                "max",
+                "Read /cache/briefs/t1.md and execute it exactly."
+            ]
+        );
+        assert!(!new_argv(&fixture(), "wf-t1-a3k9").contains(&"--effort".to_string()));
     }
 
     #[test]
