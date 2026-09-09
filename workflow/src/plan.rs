@@ -179,6 +179,28 @@ fn is_continuation(line: &str) -> bool {
 /// `require_files`: the plan lane insists on `Files:` and `Verify:` (spec §5.3).
 /// A roadmap never does: a milestone is a plan to be cut later, not work a
 /// worker can be handed.
+/// What the planner wrote between the title and the first task: the why,
+/// the rulings, whatever the spec holds. Verbatim, trimmed, and empty for a
+/// plan that goes straight to its tasks. The reader at the merge gate holds
+/// a diff to the rulings in here, so the worker's brief carries them too;
+/// the tasks themselves are not part of it, since a worker sees its own
+/// block and restates in Uses what a sibling gives.
+pub fn prose(text: &str) -> String {
+    let mut seen_header = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if !seen_header {
+            seen_header = header(line).is_some();
+            continue;
+        }
+        if task_line(line, usize::MAX).is_some() {
+            break;
+        }
+        out.push(line);
+    }
+    out.join("\n").trim().to_string()
+}
+
 pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     let mut plan = Plan::default();
     let mut seen_header = false;
@@ -410,6 +432,39 @@ fn waves(plan: &Plan) -> Option<Vec<Vec<String>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_prose_is_what_sits_between_the_title_and_the_first_task() {
+        let text = "\
+# plan: p
+
+## Why
+
+Totals drift.
+
+## Rulings
+
+- Ruling 1. Cents, never floats.
+
+- [x] t0 Freeze the fixture
+      Files: a
+      Verify: true
+- [ ] t1 Do it
+      Files: b
+      Verify: true
+";
+        assert_eq!(
+            prose(text),
+            "## Why\n\nTotals drift.\n\n## Rulings\n\n- Ruling 1. Cents, never floats."
+        );
+        assert_eq!(prose("# plan: p\n\n- [ ] t1 Do it\n      Files: a\n"), "");
+        assert_eq!(prose(""), "");
+        // A roadmap's prose is read the same way.
+        assert_eq!(
+            prose("# roadmap: r\n\nThe shape.\n\n- [ ] m1 First\n"),
+            "The shape."
+        );
+    }
 
     const EXAMPLE: &str = "\
 # plan: cart-pricing-v2

@@ -734,7 +734,10 @@ impl Run {
         for ext in ["json", "err", "pid"] {
             let _ = std::fs::remove_file(self.dir.join(format!("{task}.{ext}")));
         }
-        brief::write(&t, &wt, &status, &prior, &brief_file);
+        // The plan of record, read now rather than at setup: an edit the
+        // orchestrator makes mid-run is in the next attempt's brief.
+        let prose = plan::prose(&self.plan_text().unwrap_or_default());
+        brief::write(&t, &wt, &status, &prior, &prose, &brief_file);
         // The gate reads this from inside the worktree: the task is held to its
         // own Verify command there, not to the repo-wide suite (verify.rs).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));

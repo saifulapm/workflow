@@ -66,8 +66,8 @@ Write it plain.
 - `Read:`, `Uses:`, `Gives:` and `Pattern:` carry the middle tier: files to
   open before editing, interfaces consumed and produced across task
   boundaries (exact signatures, items joined with ` · `), and one analog to
-  copy the shape of. A worker sees only its own block: restate every symbol
-  another task defines, or it hunts.
+  copy the shape of. A worker sees its block and the plan's prose, not a
+  sibling's block: restate every symbol another task defines, or it hunts.
 - An unknown dependency id or a cycle is a hard error.
 
 Check it from the checkout before approval:
@@ -81,8 +81,7 @@ line to trim.
 
 ## 4. Shape
 
-Tasks that run at once must not share files; the patterns make it
-checkable. For a wide refactor, expand and contract: add
+Tasks that run at once must not share files. For a wide refactor, expand and contract: add
 the new beside the old, move callers, remove the old last, each its own task.
 
 Write `Done:` checkable and demanding, a sentence a human can check without

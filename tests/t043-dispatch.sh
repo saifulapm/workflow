@@ -60,6 +60,10 @@ git -c core.hooksPath=/dev/null commit -qm 'project files'
 cat >"$T_TMP/plan.md" <<'EOF'
 # plan: dispatch-check
 
+## Rulings
+
+- Ruling 1. Prices are integers in cents, never a float.
+
 - [ ] t1 Extract cart pricing into a service
       Files: app/Services/Cart*.php tests/Unit/Cart*
       Verify: bin/php artisan test --filter=Cart
@@ -141,6 +145,8 @@ like "$body" 'Extract cart pricing into a service' 'the brief carries the object
 like "$body" 'Files: app/Services/Cart\*\.php tests/Unit/Cart\*' 'and the task block verbatim'
 like "$body" 'Verify: bin/php artisan test --filter=Cart' 'including the evidence command'
 like "$body" 'Done: cart totals identical' 'and the done condition'
+like "$body" 'The plan this task belongs to' 'the plan rides in front of the block'
+like "$body" 'Ruling 1\. Prices are integers in cents, never a float\.' 'with its rulings verbatim'
 like "$body" 'Never leave it' 'the worktree boundary'
 like "$body" 'never .git add -A.' 'the staging rule'
 like "$body" 'mem ask' 'the stop protocol'

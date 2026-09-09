@@ -1,6 +1,7 @@
-//! The worker brief (spec §8.4): objective, the task block verbatim, the
-//! constraints, the mem cheat-line and the reporting protocol. The block is
-//! held to [`BUDGET`] bytes; the fixed prose around it is not counted.
+//! The worker brief (spec §8.4): objective, the plan's prose above its
+//! tasks, the task block verbatim, the constraints, the mem cheat-line and
+//! the reporting protocol. The block is held to [`BUDGET`] bytes; nothing
+//! else in the brief is counted.
 
 use std::path::Path;
 
@@ -94,7 +95,30 @@ fn clip(text: &str) -> String {
     format!("{}...", &text[..end])
 }
 
-pub fn text(task: &Task, worktree: &Path, status_file: &Path, prior: &Prior) -> String {
+/// The section the plan's prose rides in, or nothing for a plan that has
+/// none. The reader at the merge gate holds the diff to these rulings, so a
+/// worker that never saw them was being judged against text it could not
+/// have followed; every attempt carries them, read live off the plan of
+/// record, so an edit the orchestrator makes mid-run reaches the next one.
+fn plan_section(prose: &str) -> String {
+    if prose.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        "## The plan this task belongs to\n\n\
+         Its rulings bind your work; the reader at the merge gate holds your diff to them.\n\n\
+         {}\n\n",
+        prose.trim()
+    )
+}
+
+pub fn text(
+    task: &Task,
+    worktree: &Path,
+    status_file: &Path,
+    prior: &Prior,
+    prose: &str,
+) -> String {
     format!(
         "\
 # {id} -- {title}
@@ -102,7 +126,7 @@ pub fn text(task: &Task, worktree: &Path, status_file: &Path, prior: &Prior) -> 
 You are working alone in {wt}. Never leave it. What this
 task depends on is already there; never go looking for another branch.
 
-{prior}## The task, as the plan states it
+{prior}{plan}## The task, as the plan states it
 
 {block}
 ## How to work
@@ -149,6 +173,7 @@ your last act. The state is one bare word: no colon after it.
         id = task.id,
         title = task.title,
         wt = worktree.display(),
+        plan = plan_section(prose),
         block = task.block,
         prior = prior.section(),
         status = status_file.display(),
@@ -184,11 +209,18 @@ pub fn over_budget(task: &Task) -> Option<String> {
     ))
 }
 
-pub fn write(task: &Task, worktree: &Path, status_file: &Path, prior: &Prior, out: &Path) {
+pub fn write(
+    task: &Task,
+    worktree: &Path,
+    status_file: &Path,
+    prior: &Prior,
+    prose: &str,
+    out: &Path,
+) {
     if let Some(dir) = out.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let body = text(task, worktree, status_file, prior);
+    let body = text(task, worktree, status_file, prior, prose);
     let _ = std::fs::write(out, &body);
     if let Some(over) = over_budget(task) {
         warn(format!("task {}: its block is {over}", task.id));
@@ -216,6 +248,7 @@ mod tests {
             Path::new("/state/worktrees/app/plan/t1"),
             Path::new("/state/runs/app/plan/t1.status"),
             &Prior::default(),
+            "",
         );
         assert!(over_budget(&task).is_none());
         // The fixed prose is not what BUDGET counts, and it is still held:
@@ -272,6 +305,7 @@ mod tests {
             Path::new("/state/worktrees/app/plan/t2"),
             Path::new("/state/runs/app/plan/t2.status"),
             &Prior::default(),
+            "",
         );
         assert!(
             over_budget(&rich).is_none(),
@@ -296,6 +330,7 @@ mod tests {
             Path::new("/state/worktrees/app/plan/t1"),
             Path::new("/state/runs/app/plan/t1.status"),
             &prior,
+            "",
         );
         // The section is not the block's to pay for.
         assert!(over_budget(&task).is_none());
@@ -331,6 +366,7 @@ mod tests {
             Path::new("/state/worktrees/app/plan/t1"),
             Path::new("/state/runs/app/plan/t1.status"),
             &asked,
+            "",
         );
         for needle in [
             "It asked: may I widen Files by src/main.rs?",
@@ -400,7 +436,36 @@ mod tests {
             commits: 1,
             answers: vec![("x".repeat(600), "y".repeat(600))],
         };
-        assert!(text(&small, wt, status, &prior).len() > BUDGET);
+        assert!(text(&small, wt, status, &prior, "").len() > BUDGET);
         assert!(over_budget(&small).is_none());
+    }
+
+    /// The plan's prose rides in front of the block, verbatim, and a plan
+    /// with none adds no section at all.
+    #[test]
+    fn the_plans_prose_rides_in_front_of_the_block() {
+        let task = Task {
+            id: "t1".into(),
+            title: "Do it".into(),
+            block: "- [ ] t1 Do it\n      Files: a\n      Verify: true\n".into(),
+            ..Task::default()
+        };
+        let wt = Path::new("/state/worktrees/app/plan/t1");
+        let status = Path::new("/state/runs/app/plan/t1.status");
+        let prose = "## Rulings\n\n- Ruling 1. Cents, never floats.";
+        let body = text(&task, wt, status, &Prior::default(), prose);
+        let section = body
+            .find("## The plan this task belongs to")
+            .expect("the section");
+        let rulings = body
+            .find("- Ruling 1. Cents, never floats.")
+            .expect("the prose");
+        let block = body
+            .find("## The task, as the plan states it")
+            .expect("the block");
+        assert!(section < rulings && rulings < block, "{body}");
+        assert!(body.contains("the reader at the merge gate holds your diff to them"));
+        let bare = text(&task, wt, status, &Prior::default(), "  \n");
+        assert!(!bare.contains("The plan this task belongs to"), "{bare}");
     }
 }
