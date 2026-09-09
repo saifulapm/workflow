@@ -641,6 +641,66 @@ fn project_set_review_model_records_the_choice_and_project_current_reports_it() 
 }
 
 #[test]
+fn project_set_effort_records_a_level_for_each_dial_and_refuses_a_sixth() {
+    let w = World::new("write-effort");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("effort").is_none(), "{v}");
+    assert!(v.get("review_effort").is_none(), "{v}");
+
+    let out = mem(&w, &repo, &["project", "set", "effort", "max"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = mem(&w, &repo, &["project", "set", "review-effort", "high"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["effort"], serde_json::json!("max"));
+    assert_eq!(v["review_effort"], serde_json::json!("high"));
+    let plain = stdout(&mem(&w, &repo, &["project", "current"]));
+    assert!(plain.contains("effort  max"), "{plain}");
+    assert!(plain.contains("review-effort  high"), "{plain}");
+
+    // The level is the list both backends take; anything else is a typo
+    // that must not reach a worker's launch.
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "effort", "maximum"])),
+        2
+    );
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "review-effort", ""])),
+        2
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(
+        v["effort"],
+        serde_json::json!("max"),
+        "a refusal changes nothing"
+    );
+
+    // Each dial clears on its own.
+    let out = mem(&w, &repo, &["project", "unset", "effort"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("effort for thing: cleared"),
+        "{}",
+        stdout(&out)
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("effort").is_none(), "{v}");
+    assert_eq!(v["review_effort"], serde_json::json!("high"));
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "unset", "review-effort"])),
+        0
+    );
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert!(!text.contains("effort"), "no key left behind: {text}");
+}
+
+#[test]
 fn project_unset_takes_a_choice_off_and_leaves_the_others() {
     let w = World::new("write-unset");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));

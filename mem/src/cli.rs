@@ -295,6 +295,8 @@ pub enum ProjectKey {
     Backend,
     Model,
     ReviewModel,
+    Effort,
+    ReviewEffort,
 }
 
 impl ProjectKey {
@@ -306,6 +308,8 @@ impl ProjectKey {
             ProjectKey::Backend => "backend",
             ProjectKey::Model => "model",
             ProjectKey::ReviewModel => "review_model",
+            ProjectKey::Effort => "effort",
+            ProjectKey::ReviewEffort => "review_effort",
         }
     }
 }
@@ -332,6 +336,16 @@ pub enum ProjectSetCommand {
     /// and a run stops to ask. WORKFLOW_REVIEW_MODEL overrides per run.
     #[command(name = "review-model")]
     ReviewModel { model: String },
+    /// How much reasoning a run's workers spend, on whatever model they run
+    /// (`max` buys a cheaper model more thinking). Absent means the CLI's
+    /// own default; WORKFLOW_EFFORT overrides per run, and set empty it
+    /// means no dial for that run.
+    Effort { level: Effort },
+    /// The same dial for the reader at the merge gate. Absent means the
+    /// CLI's own default; WORKFLOW_REVIEW_EFFORT overrides per run, and set
+    /// empty it means no dial for that run.
+    #[command(name = "review-effort")]
+    ReviewEffort { level: Effort },
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },
@@ -351,6 +365,31 @@ impl Backend {
         match self {
             Backend::Claude => "claude",
             Backend::Amx => "amx",
+        }
+    }
+}
+
+/// The reasoning dial both backends take (`claude --effort`, `amx new
+/// --effort`). A closed list for the same reason `Backend` is: a level the
+/// worker would refuse at launch must not be stored.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl Effort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::Xhigh => "xhigh",
+            Effort::Max => "max",
         }
     }
 }
@@ -413,6 +452,16 @@ mod tests {
 
     /// And the key's own help says the same, since that is where a project
     /// setting a reader for the first time reads what the values mean.
+    /// The effort dials name their run override the way the model keys do,
+    /// since that is where a project reads how to turn one up for one run.
+    #[test]
+    fn effort_help_names_the_run_override_for_each_dial() {
+        let help = long_help(&["project", "set", "effort"]);
+        assert!(help.contains("WORKFLOW_EFFORT"), "{help}");
+        let help = long_help(&["project", "set", "review-effort"]);
+        assert!(help.contains("WORKFLOW_REVIEW_EFFORT"), "{help}");
+    }
+
     #[test]
     fn review_model_help_names_none_and_what_absent_costs() {
         let help = long_help(&["project", "set", "review-model"]);

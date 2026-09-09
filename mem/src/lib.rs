@@ -111,6 +111,12 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::ReviewModel { model } => {
                     verbs::project_set(&app, "review_model", model)
                 }
+                cli::ProjectSetCommand::Effort { level } => {
+                    verbs::project_set(&app, "effort", level.as_str())
+                }
+                cli::ProjectSetCommand::ReviewEffort { level } => {
+                    verbs::project_set(&app, "review_effort", level.as_str())
+                }
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
             },
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
