@@ -11,7 +11,9 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark};
 
 use crate::config::Config;
 use crate::form::encode_component;
-use crate::model::{Activity, Project, ProjectView, Question, Section, View, WikiProject, is_slug};
+use crate::model::{
+    Activity, ItemDetail, Project, ProjectView, Question, Section, View, WikiProject, is_slug,
+};
 
 /// The one escaping function. `'` and `"` are in here because values also land
 /// in attributes (`value="…"`, `href="…"`).
@@ -354,11 +356,19 @@ pub fn plan_page(
 }
 
 /// `GET /p/<project>/item/<id>`: one item, whole — its body pre-wrap, like a
-/// question's text (ruling 4).
-pub fn item_page(project: &str, kind: &str, title: &str, body: &str) -> String {
-    let mut out = detail_head(project, title);
-    out.push_str(&format!("<div class=\"meta\">{}</div>\n", esc(kind)));
-    out.push_str(&body_block(Some(body), ""));
+/// question's text (ruling 4). `item` is `None` only when mem itself is
+/// broken (ruling 2); an id mem simply does not have never reaches this page,
+/// since the route answers 404 first.
+pub fn item_page(project: &str, item: Option<&ItemDetail>, degraded: Option<&str>) -> String {
+    let label = item.map(|item| item.title.as_str()).unwrap_or("item");
+    let mut out = detail_head(project, label);
+    if let Some(why) = degraded {
+        out.push_str(&degraded_banner(why));
+    }
+    if let Some(item) = item {
+        out.push_str(&format!("<div class=\"meta\">{}</div>\n", esc(&item.kind)));
+        out.push_str(&body_block(Some(&item.body), ""));
+    }
     out.push_str("</body>\n</html>\n");
     out
 }

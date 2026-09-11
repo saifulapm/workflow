@@ -230,3 +230,78 @@ fn project_detail_a_broken_mem_leaves_a_list_page_degraded_rather_than_empty() {
     let body = body_of(&response);
     assert!(body.contains("not JSON"), "{body}");
 }
+
+/// Ruling 2: the same holds for the two singleton detail reads, the stored
+/// plan and the item — a broken mem must not be mistaken for a slug or id
+/// mem simply does not have (review 1 of detail).
+#[test]
+fn project_detail_a_broken_mem_leaves_the_plan_slug_and_item_pages_degraded_rather_than_404() {
+    let dir = TempDir::new("detail-degraded-singleton");
+    let home = dir.join("home");
+    let bin = dir.join("bin");
+    fixture_mem(
+        &bin,
+        &format!(
+            "if [ \"$1\" = projects ]; then echo '{{\"projects\":[{{\"name\":\"{PROJECT}\"}}]}}'; \
+             else echo 'not json at all'; fi"
+        ),
+    );
+    let hub = Hub::spawn(&home, &[&bin], &["--port", "0"]);
+
+    for path in [
+        format!("/p/{PROJECT}/plan/somewhere"),
+        format!("/p/{PROJECT}/item/28J1TSD1"),
+    ] {
+        let response = hub.get(&path);
+        assert_eq!(status_of(&response), 200, "{path}");
+        let body = body_of(&response);
+        assert!(body.contains("not JSON"), "{path}: {body}");
+    }
+}
+
+/// Review 1 of detail: `mem show` resolves an id against the whole index, not
+/// one project, so the route itself must refuse an id that belongs to
+/// another project rather than trust mem to scope it.
+#[test]
+fn project_detail_an_item_page_404s_when_the_id_belongs_to_another_project() {
+    let dir = TempDir::new("detail-item-cross-project");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let (bin, _log) = recording_mem(dir.path(), &home);
+    let mem = real_mem().unwrap();
+    seed_project(&mem, &home, "proj-a", "a did a thing");
+    seed_project(&mem, &home, "proj-b", "b did a thing");
+
+    let out = common::mem_in(
+        &mem,
+        &home,
+        &home.join("proj-a"),
+        &[
+            "save",
+            "--kind",
+            "ruling",
+            "a ruling that belongs to proj-a",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let last = common::mem_in(
+        &mem,
+        &home,
+        &home.join("proj-a"),
+        &["log", "--kind", "ruling", "--limit", "1", "--json"],
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&last.stdout).unwrap();
+    let id = doc["items"][0]["id"].as_str().unwrap().to_string();
+
+    let hub = Hub::spawn(&home, &[&bin], &["--port", "0"]);
+    assert_eq!(
+        status_of(&hub.get(&format!("/p/proj-a/item/{id}"))),
+        200,
+        "sanity: the item is real, under its own project"
+    );
+    assert_eq!(
+        status_of(&hub.get(&format!("/p/proj-b/item/{id}"))),
+        404,
+        "an item under another project must not be reachable here"
+    );
+}

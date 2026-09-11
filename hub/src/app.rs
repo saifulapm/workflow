@@ -227,15 +227,22 @@ impl App {
         }
     }
 
-    /// `GET /p/<project>/plan/<slug>` — one stored plan, whole.
+    /// `GET /p/<project>/plan/<slug>` — one stored plan, whole. A broken mem
+    /// renders degraded (ruling 2); a slug mem simply does not have is a 404.
     fn project_plan_slug(&self, project: &str, slug: &str) -> Response {
         if !model::is_slug(slug) {
             return Response::not_found();
         }
-        match model::plan_slug_text(&self.mem, project, slug) {
-            Some(text) => Response::html(html::plan_page(project, Some(slug), Some(&text), None)),
-            None => Response::not_found(),
+        let plan = model::plan_slug_text(&self.mem, project, slug);
+        if plan.value.is_none() && plan.degraded.is_none() {
+            return Response::not_found();
         }
+        Response::html(html::plan_page(
+            project,
+            Some(slug),
+            plan.value.as_deref(),
+            plan.degraded.as_deref(),
+        ))
     }
 
     /// `GET /p/<project>/items/<kind>` — the last 100 items of one kind.
@@ -252,18 +259,22 @@ impl App {
         ))
     }
 
-    /// `GET /p/<project>/item/<id>` — one item, whole.
+    /// `GET /p/<project>/item/<id>` — one item, whole. `mem show` has no
+    /// `--project`, so an id that resolves under another project 404s here
+    /// rather than leaking that project's item (review 1 of detail).
     fn project_item(&self, project: &str, id: &str) -> Response {
         if !model::is_item_id(id) {
             return Response::not_found();
         }
-        match model::item_detail(&self.mem, id) {
-            Some(item) => Response::html(html::item_page(
-                project,
-                &item.kind,
-                &item.title,
-                &item.body,
-            )),
+        let item = model::item_detail(&self.mem, id);
+        match &item.value {
+            Some(detail) if detail.project.as_deref() == Some(project) => Response::html(
+                html::item_page(project, Some(detail), item.degraded.as_deref()),
+            ),
+            Some(_) => Response::not_found(),
+            None if item.degraded.is_some() => {
+                Response::html(html::item_page(project, None, item.degraded.as_deref()))
+            }
             None => Response::not_found(),
         }
     }

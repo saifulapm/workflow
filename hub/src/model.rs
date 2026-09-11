@@ -270,13 +270,23 @@ pub fn is_known_project(mem: &MemCli, name: &str) -> bool {
     project_names(&mem.projects()).iter().any(|p| p == name)
 }
 
-/// One stored plan's text, by slug — `/p/<project>/plan/<slug>`. `None` for a
-/// slug mem does not have, the same shape as `wiki_text`.
-pub fn plan_slug_text(mem: &MemCli, project: &str, slug: &str) -> Option<String> {
-    let Outcome::Json(value) = &*mem.plan_slug(project, slug) else {
-        return None;
-    };
-    value.get("text")?.as_str().map(str::to_string)
+/// A `/p/<project>` singleton read — a stored plan's text or one item —
+/// present, absent, or degraded when mem itself is broken (ruling 2). The two
+/// are never collapsed into one `None`: an absent slug or id is a 404, a
+/// broken mem is the degraded banner (review 1 of detail).
+#[derive(Debug)]
+pub struct Singleton<T> {
+    pub degraded: Option<String>,
+    pub value: Option<T>,
+}
+
+/// One stored plan's text, by slug — `/p/<project>/plan/<slug>`.
+pub fn plan_slug_text(mem: &MemCli, project: &str, slug: &str) -> Singleton<String> {
+    let outcome = mem.plan_slug(project, slug);
+    Singleton {
+        degraded: singleton_fault(&outcome),
+        value: singleton_text(&outcome),
+    }
 }
 
 /// `/p/<project>/log`: the last 200 log lines, whole.
@@ -313,23 +323,37 @@ pub struct ItemDetail {
     pub kind: String,
     pub title: String,
     pub body: String,
+    /// The item's own project, from `mem show`'s row. `mem show` has no
+    /// `--project` — it resolves an id against the whole index — so the route
+    /// compares this against the project in the URL and 404s on a mismatch
+    /// (review 1 of detail).
+    pub project: Option<String>,
 }
 
-/// `None` for an id mem does not have, the same shape as `wiki_text`.
-pub fn item_detail(mem: &MemCli, id: &str) -> Option<ItemDetail> {
-    let Outcome::Json(value) = &*mem.show(id) else {
-        return None;
+/// `None` for an id mem does not have.
+pub fn item_detail(mem: &MemCli, id: &str) -> Singleton<ItemDetail> {
+    let outcome = mem.show(id);
+    let value = match &*outcome {
+        Outcome::Json(json) => json
+            .get("items")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .map(|item| ItemDetail {
+                kind: string(item, "kind"),
+                title: string(item, "title"),
+                body: item
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                project: optional(item, "project"),
+            }),
+        _ => None,
     };
-    let item = value.get("items")?.as_array()?.first()?;
-    Some(ItemDetail {
-        kind: string(item, "kind"),
-        title: string(item, "title"),
-        body: item
-            .get("body")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-    })
+    Singleton {
+        degraded: singleton_fault(&outcome),
+        value,
+    }
 }
 
 /// `index` first, then alphabetical: the index page is the one a reader wants
