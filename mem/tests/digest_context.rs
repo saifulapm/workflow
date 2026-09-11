@@ -440,6 +440,41 @@ fn the_digests_recent_logs_skip_the_runs_own_bookkeeping() {
 }
 
 #[test]
+fn a_burst_of_run_logs_does_not_empty_the_digests_log_section() {
+    let w = World::new("digest-run-log-burst");
+    w.project(P, "thing");
+    let store = w.store();
+    for n in 0..5 {
+        let mut log = item(Kind::Log, &format!("worker did thing {n}"), "body");
+        log.meta.modified = jiff::Timestamp::from_second(1_800_000_000 + n).unwrap();
+        put(&store, Some(P), &log);
+    }
+    // A restarted run's bookkeeping outnumbers the fixed 20-row page the old
+    // over-fetch used, so every worker log above sits past it.
+    for n in 0..21 {
+        let mut run_log = item(Kind::Log, &format!("run thing: dispatched t{n}"), "body");
+        run_log.meta.r#type = Some("run".to_string());
+        run_log.meta.modified = jiff::Timestamp::from_second(1_800_000_100 + n).unwrap();
+        put(&store, Some(P), &run_log);
+    }
+
+    let (_i, s) = sources(&w, None);
+    assert_eq!(
+        s.logs.len(),
+        5,
+        "the worker logs still fill the five slots past the run burst"
+    );
+    assert!(
+        s.logs.iter().all(|l| l.r#type.as_deref() != Some("run")),
+        "no run-typed log reaches the digest"
+    );
+    let text = build(&s, &store, 6000).text;
+    for n in 0..5 {
+        assert!(text.contains(&format!("worker did thing {n}")), "{text}");
+    }
+}
+
+#[test]
 fn context_on_an_unregistered_checkout_serves_global_and_exits_zero() {
     let w = World::new("digest-unknown");
     let store = w.store();

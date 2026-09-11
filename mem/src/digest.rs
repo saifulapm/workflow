@@ -117,13 +117,26 @@ impl Sources {
 
 /// The most recent logs that are not the run's own bookkeeping (ruling 6 of
 /// m1-wiki-first): a run's dispatch and merge lines would otherwise crowd out
-/// the handful of worker and person logs the digest has room for. Over-fetches
-/// because filtering can only shrink the page `recent` already picked.
+/// the handful of worker and person logs the digest has room for. A run can
+/// write long unbroken bursts of run-typed lines, so a fixed-size page can
+/// come back empty after filtering; fetch growing pages until `limit` logs
+/// survive the filter or the project's log history is exhausted.
 fn recent_non_run_logs(index: &Index, project_id: Option<&str>, limit: usize) -> Result<Vec<Row>> {
-    let mut rows = index.recent("log", project_id, limit.max(1) * 4)?;
-    rows.retain(|r| r.r#type.as_deref() != Some("run"));
-    rows.truncate(limit);
-    Ok(rows)
+    let limit = limit.max(1);
+    let mut fetch = limit * 4;
+    loop {
+        let rows = index.recent("log", project_id, fetch)?;
+        let exhausted = rows.len() < fetch;
+        let mut kept: Vec<Row> = rows
+            .into_iter()
+            .filter(|r| r.r#type.as_deref() != Some("run"))
+            .collect();
+        if kept.len() >= limit || exhausted {
+            kept.truncate(limit);
+            return Ok(kept);
+        }
+        fetch *= 2;
+    }
 }
 
 /// The first heading line and the first unchecked task of a plan.
