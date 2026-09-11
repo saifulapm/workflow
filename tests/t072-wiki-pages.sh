@@ -80,19 +80,23 @@ unlike "$(cat "$brief2")" 'Pages the plan names' 't2 named no pages, so no headi
 
 ## -------------------------------------------- pages past the byte cap
 
-big=$(head -c 24001 /dev/zero | tr '\0' 'x')
-printf '%s' "$big" | "$MEM_BIN" wiki big --stdin --note seed >/dev/null
-printf 'a small page\n' | "$MEM_BIN" wiki small --stdin --note seed >/dev/null
+fits=$(head -c 12000 /dev/zero | tr '\0' 'x')
+after=$(head -c 12500 /dev/zero | tr '\0' 'x')
+solo=$(head -c 30000 /dev/zero | tr '\0' 'x')
+printf '%s' "$fits" | "$MEM_BIN" wiki fits --stdin --note seed >/dev/null
+printf '%s' "$after" | "$MEM_BIN" wiki after --stdin --note seed >/dev/null
+printf '%s' "$solo" | "$MEM_BIN" wiki solo --stdin --note seed >/dev/null
 
 cat >"$T_TMP/cap.md" <<-EOF
 # plan: cap
 
 - [ ] t1 Add the t1 service
       Files: app/t1.php
-      Read: wiki:big wiki:small
+      Read: wiki:fits wiki:after
       Verify: true
 - [ ] t2 Add the t2 service
       Files: app/t2.php
+      Read: wiki:solo
       Verify: true
 EOF
 
@@ -100,9 +104,14 @@ caprun="$XDG_STATE_HOME/workflow/runs/app/cap"
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/cap.md"
 is "$RC" 0 'a plan whose pages pass the cap still merges'
 is "$(cat "$caprun/t1.state")" merged 't1 merged'
+is "$(cat "$caprun/t2.state")" merged 't2 merged'
 
 capbrief=$(cat "$XDG_CACHE_HOME/workflow/briefs/app/cap/t1.md")
-like "$capbrief" "$big" 'the page under the cap is inlined whole'
-unlike "$capbrief" 'a small page' 'the page past the cap is not inlined'
-like "$capbrief" '`mem wiki -- small`' 'and is named as a command to fetch it instead'
+like "$capbrief" "$fits" 'a page that fits alone is inlined whole'
+unlike "$capbrief" "$after" 'a page that would fit alone but not after the first is not inlined'
+like "$capbrief" '`mem wiki -- after`' 'and is named as a command to fetch it instead'
 like "$OUT" 'its pages are past the 24000 byte cap' 'the run warns once about the cap'
+
+t2brief=$(cat "$XDG_CACHE_HOME/workflow/briefs/app/cap/t2.md")
+unlike "$t2brief" "$solo" 'a page bigger than the cap on its own is never inlined'
+like "$t2brief" '`mem wiki -- solo`' 'and is named as a command from the start'

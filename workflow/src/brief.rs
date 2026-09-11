@@ -135,7 +135,7 @@ pub(crate) fn pages_section(task_id: &str, pages: &[(String, Option<String>)]) -
         out.push_str(&format!("### wiki:{slug}\n\n"));
         match text {
             None => out.push_str("This project has no such page.\n\n"),
-            Some(body) if used < PAGES_CAP => {
+            Some(body) if used + body.len() <= PAGES_CAP => {
                 used += body.len();
                 out.push_str(body.trim_end());
                 out.push_str("\n\n");
