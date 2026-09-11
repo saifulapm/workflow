@@ -439,18 +439,6 @@ impl MemCli {
         self.read(&["questions", &format!("--project={project}"), "--json"])
     }
 
-    /// This project's checkout root, for the live-run read: `project
-    /// current` resolved against `--project` instead of the working
-    /// directory, since hub's own cwd is never a project's checkout.
-    pub fn project_root(&self, project: &str) -> Arc<Outcome> {
-        self.read(&[
-            "project",
-            "current",
-            &format!("--project={project}"),
-            "--json",
-        ])
-    }
-
     /// The one write hub makes. `--` first, so an answer beginning with a dash
     /// is text rather than a flag mem rejects with exit 2 (review m-9).
     pub fn answer(&self, id: &str, text: &str) -> Run {

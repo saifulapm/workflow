@@ -238,10 +238,9 @@ fn every_new_read_carries_project_and_json() {
     mem.log_n("proj-alpha", 200);
     mem.items("proj-alpha", "fact", 100);
     mem.questions_all("proj-alpha");
-    mem.project_root("proj-alpha");
 
     let calls = invocations(&log);
-    assert_eq!(calls.len(), 9, "{calls:?}");
+    assert_eq!(calls.len(), 8, "{calls:?}");
     for call in &calls {
         assert!(
             call.contains(&"--project=proj-alpha".to_string()),
@@ -287,10 +286,6 @@ fn every_new_read_carries_project_and_json() {
     assert_eq!(
         calls[7],
         strs(&["questions", "--project=proj-alpha", "--json"])
-    );
-    assert_eq!(
-        calls[8],
-        strs(&["project", "current", "--project=proj-alpha", "--json"])
     );
 }
 
@@ -618,20 +613,6 @@ fn new_reads_return_the_project_s_memory_against_the_real_binary() {
     assert!(answered.contains(&false), "{rows:?}");
 
     assert_eq!(mem.log_n("proj-alpha", 200).rows("items").len(), 1);
-
-    // `real_mem_on_path` runs from a directory that is not a git checkout —
-    // the same as hub's own service, since `WorkingDirectory` defaults to
-    // `%h`. `project current`'s root comes from the caller's own cwd
-    // (verbs.rs), never from `--project`, so it is null here even though the
-    // id and name resolve; the page renders the "no root" sentence for
-    // exactly this case (ruling 5).
-    match &*mem.project_root("proj-alpha") {
-        Outcome::Json(v) => {
-            assert_eq!(v["name"], "proj-alpha");
-            assert!(v["root"].is_null(), "{v:?}");
-        }
-        other => panic!("{other:?}"),
-    }
 }
 
 fn calls(counter: &Path) -> usize {
