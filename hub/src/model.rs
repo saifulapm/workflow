@@ -751,12 +751,17 @@ const WORKFLOW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 /// Ruling 5: `workflow status --json`, run with `root` as its working
 /// directory — this machine's checkout of the project, from
 /// [`checkout_of`]. `root` is `None` when this machine has none; that, a
-/// missing `workflow` on PATH and a non-zero exit each render their own
-/// one-sentence reason rather than a table.
+/// `root` that no longer exists on disk (a child project's registered
+/// checkout is only ever checked for its parent's `.git`, never for the
+/// subdir itself), a missing `workflow` on PATH and a non-zero exit each
+/// render their own one-sentence reason rather than a table.
 pub fn runs(root: Option<&str>) -> Section<RunTask> {
     let Some(root) = root else {
         return degraded_runs("no checkout of this project on this machine");
     };
+    if !std::path::Path::new(root).is_dir() {
+        return degraded_runs(&format!("the checkout at {root} does not exist"));
+    }
     let mut command = Command::new("workflow");
     command.args(["status", "--json"]).current_dir(root);
     match proc::output_within(&mut command, WORKFLOW_STATUS_TIMEOUT) {
@@ -960,6 +965,14 @@ mod tests {
         let section = runs(None);
         assert!(section.degraded.is_some());
         assert!(section.rows.is_empty());
+    }
+
+    #[test]
+    fn runs_with_a_root_that_does_not_exist_names_it_rather_than_the_binary() {
+        let section = runs(Some("/no/such/checkout/at/all"));
+        let why = section.degraded.expect("degraded");
+        assert!(why.contains("/no/such/checkout/at/all"), "{why}");
+        assert!(!why.contains("not installed"), "{why}");
     }
 
     #[test]

@@ -538,9 +538,10 @@ fn runs_section(runs: &Section<RunTask>, machine: &str) -> String {
     out.push_str("<ul>\n");
     for task in &runs.rows {
         out.push_str(&format!(
-            "<li>{plan}{live} · {id} <span class=\"meta\">{state} · \
-             {dispatches} dispatches{last}</span></li>\n",
+            "<li>{plan} <span class=\"meta\">{integration}</span>{live} · {id} \
+             <span class=\"meta\">{state} · {dispatches} dispatches{last}</span></li>\n",
             plan = esc(&task.plan),
+            integration = esc(&task.integration),
             live = if task.live { " (live)" } else { "" },
             id = esc(&task.id),
             state = esc(&task.state),

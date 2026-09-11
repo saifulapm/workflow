@@ -80,6 +80,10 @@ fn the_runs_section_lists_each_task_when_workflow_answers() {
 
     assert!(body.contains("Runs on"), "runs heading: {body}");
     assert!(body.contains("m1"), "plan: {body}");
+    assert!(
+        body.contains("integration/m1"),
+        "integration branch: {body}"
+    );
     assert!(body.contains("t1"), "first task id: {body}");
     assert!(body.contains("merged"), "first task state: {body}");
     assert!(body.contains("t2"), "second task id: {body}");
