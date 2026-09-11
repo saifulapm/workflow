@@ -84,6 +84,11 @@ pub struct Plan {
     pub kind: PlanKind,
     pub tasks: Vec<Task>,
     pub waves: Vec<Vec<String>>,
+    /// What sits between the header and the first task, verbatim: the Spec
+    /// and Rulings plan-check wants a plan to carry (ruling 3 of
+    /// m1-wiki-first). Set by [`parse`], the same text [`prose`] would
+    /// return for this plan's own text.
+    pub prose: String,
 }
 
 impl Plan {
@@ -370,6 +375,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     }
 
     plan.waves = waves(&plan)?;
+    plan.prose = prose(text);
     Some(plan)
 }
 
@@ -478,6 +484,14 @@ Totals drift.
         );
         assert_eq!(prose("# plan: p\n\n- [ ] t1 Do it\n      Files: a\n"), "");
         assert_eq!(prose(""), "");
+        // `parse` carries the same text on the plan it returns, so
+        // plan-check can hold a plan to having some (ruling 3 of
+        // m1-wiki-first).
+        assert_eq!(
+            parse(text, true).expect("the plan parses").prose,
+            prose(text)
+        );
+        assert_eq!(parse(EXAMPLE, true).expect("the example parses").prose, "");
         // A roadmap's prose is read the same way.
         assert_eq!(
             prose("# roadmap: r\n\nThe shape.\n\n- [ ] m1 First\n"),

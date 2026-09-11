@@ -11,12 +11,19 @@ use std::path::Path;
 
 use crate::gitcmd::{self, Git};
 use crate::plan::{self, Plan, Task};
-use crate::{brief, ownership};
+use crate::{brief, memcli, ownership};
 
 pub struct Findings {
     pub refusals: Vec<String>,
     pub warnings: Vec<String>,
 }
+
+/// A plan with nothing above its tasks hands the worker and the reader only
+/// the task blocks (ruling 3 of m1-wiki-first). `roadmap_findings` drops
+/// this one for a milestone plan: ruling 10 has the spec for a roadmap live
+/// in wiki pages, read by the milestone's own tasks with `wiki:`, not
+/// repeated as prose in every plan beside the roadmap.
+const NO_PROSE_WARNING: &str = "plan: no prose above the tasks -- the worker and the reader see only the task blocks; write the Spec and the Rulings first";
 
 /// `prior` is the plans this one waits on: the milestones a roadmap puts ahead
 /// of it, so what their tasks write and Give is part of the tree this plan will
@@ -52,6 +59,12 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             claimed.extend(zlines(&git.bytes(&["ls-files", "-z", "--", &spec])));
         }
     }
+    // A plan with nothing above its tasks hands the worker and the reader
+    // only the task blocks: no Spec to work from, no Rulings the reader can
+    // hold the diff to (ruling 3 of m1-wiki-first).
+    if plan.prose.trim().is_empty() {
+        f.warnings.push(NO_PROSE_WARNING.to_string());
+    }
     // The block's budget was checked at dispatch alone, where the remedy is
     // stopping the run to recut the plan (friction #QX8GXNQY). It is the
     // block alone that is measured, so nothing about where the run would
@@ -83,6 +96,16 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             )),
             None => {}
         }
+        // A Done sentence this long is standing in for the fix verdict the
+        // worker will get once it turns out to have shipped less than it
+        // said (ruling 3 of m1-wiki-first): split before that happens.
+        let done_words = t.done.as_deref().unwrap_or("").split_whitespace().count();
+        if done_words > 40 {
+            f.warnings.push(format!(
+                "plan: task {}: Done is {done_words} words -- a sentence over forty is a fix verdict waiting; split the task or the sentence",
+                t.id
+            ));
+        }
         if let Some(Deferral::Refuse(p) | Deferral::Warn(p)) = deferral(&t.title) {
             f.warnings.push(format!(
                 "plan: task {}: '{p}' in the title -- fine if the task removes it, a deferral if it ships it",
@@ -90,6 +113,13 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             ));
         }
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
+        if patterns.len() > 8 {
+            f.warnings.push(format!(
+                "plan: task {}: Files carries {} patterns -- a task owning more than eight is two tasks",
+                t.id,
+                patterns.len()
+            ));
+        }
         for p in &patterns {
             if matches_nothing(&git, root, p) && !dir_claimed(prior, p) {
                 f.warnings.push(format!(
@@ -155,9 +185,24 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         };
         let read = t.read.as_deref().unwrap_or("");
         for p in ownership::split_patterns(read) {
+            // A `wiki:<slug>` item addresses a page in mem, never a path in
+            // this checkout, so `missing` has nothing to ask the tree about
+            // it -- its own existence is checked below instead (ruling 3 of
+            // m1-wiki-first).
+            if p.starts_with("wiki:") {
+                continue;
+            }
             if missing(&p) {
                 f.warnings.push(format!(
                     "plan: task {}: Read names '{p}' and it is not here to be read, nor does a task it waits for write it",
+                    t.id
+                ));
+            }
+        }
+        for slug in t.wiki_slugs() {
+            if memcli::wiki_page(&slug).is_none() {
+                f.warnings.push(format!(
+                    "plan: task {}: Read names wiki:{slug} and the project has no such page",
                     t.id
                 ));
             }
@@ -303,8 +348,13 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
         // needs: a roadmap prints four plans' worth of them at once.
         f.refusals
             .extend(found.refusals.into_iter().map(|m| format!("{id}: {m}")));
-        f.warnings
-            .extend(found.warnings.into_iter().map(|m| format!("{id}: {m}")));
+        f.warnings.extend(
+            found
+                .warnings
+                .into_iter()
+                .filter(|w| w != NO_PROSE_WARNING)
+                .map(|m| format!("{id}: {m}")),
+        );
         plans.push((id.clone(), plan));
     }
     f
