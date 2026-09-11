@@ -9,8 +9,10 @@ that carry it into an editor session.
 - `workflow/` is the gate and the orchestrator: `verify`, `lint-msg`,
   `review-needed`, plan-driven `run`, `status`, `reap`,
   `enable`/`disable`, `doctor`, and the body of the git hook stubs.
-- `hub/` is a small web view over mem's question queue, served tailnet-only,
-  so an open question can be answered from a phone.
+- `hub/` is a small web view over mem, served tailnet-only, so a phone can
+  answer an open question and read any project's memory: `/p/<project>`
+  shows its status, handoff, roadmap, plan, stored plans, log, rulings,
+  questions with their answers, wiki pages and the runs on that machine.
 - `skills/` holds the session-facing instructions (route, plan, roadmap,
   implement, review, orchestrate, mem, unslop). `hooks/` holds the three git
   hook stubs. Another runtime joins by reading the same skills and exporting
