@@ -255,6 +255,56 @@ impl Run {
     }
 }
 
+/// The three hooks the mem skill's wiring depends on, and the command
+/// substring that makes each one count as wired (spec ruling 7, `TESTING.md` §4).
+const REQUIRED_HOOKS: [(&str, &str); 3] = [
+    ("SessionStart", "mem context"),
+    ("PostToolBatch", "mem context --brief --hook-json"),
+    ("PreCompact", "mem precompact --hook-json"),
+];
+
+/// One finding per missing adapter hook in a Claude Code settings file; an
+/// unreadable file (missing, or not valid JSON) is one finding naming the
+/// path rather than three findings about hooks it cannot see.
+pub fn hook_findings(settings: &Path) -> Vec<Finding> {
+    let Ok(text) = std::fs::read_to_string(settings) else {
+        return vec![finding(
+            "hooks",
+            format!("{} is not readable", settings.display()),
+        )];
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return vec![finding(
+            "hooks",
+            format!("{} is not readable", settings.display()),
+        )];
+    };
+    REQUIRED_HOOKS
+        .into_iter()
+        .filter(|(event, wants)| !hook_wired(&doc, event, wants))
+        .map(|(event, wants)| {
+            finding(
+                "hooks",
+                format!(
+                    "{event} has no command containing `{wants}` in {}",
+                    settings.display()
+                ),
+            )
+        })
+        .collect()
+}
+
+fn hook_wired(doc: &serde_json::Value, event: &str, wants: &str) -> bool {
+    doc["hooks"][event]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|group| group["hooks"].as_array())
+        .flatten()
+        .filter_map(|h| h["command"].as_str())
+        .any(|cmd| cmd.contains(wants))
+}
+
 /// The secret shapes worth refusing to keep: an AWS key, a PEM header, or a
 /// long unbroken run that looks like encoded bytes.
 pub fn looks_like_a_secret(text: &str) -> Option<&'static str> {

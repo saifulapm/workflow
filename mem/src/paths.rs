@@ -73,6 +73,17 @@ impl Dirs {
         self.config.join("mem/config.toml")
     }
 
+    /// Claude Code's own settings file -- `$CLAUDE_CONFIG_DIR/settings.json`,
+    /// else `$HOME/.claude/settings.json`. Not under `self.config`: Claude
+    /// Code does not honour XDG here.
+    pub fn claude_settings(&self) -> PathBuf {
+        match std::env::var_os("CLAUDE_CONFIG_DIR") {
+            Some(v) if !v.is_empty() => PathBuf::from(v),
+            _ => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".claude"),
+        }
+        .join("settings.json")
+    }
+
     /// qshell's machine name file, and the sync status the panel and mem share.
     pub fn qshell_machine(&self) -> PathBuf {
         self.config.join("qshell/machine")

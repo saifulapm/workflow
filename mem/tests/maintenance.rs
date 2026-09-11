@@ -744,6 +744,75 @@ fn reindex_reports_what_it_did() {
     assert_eq!(v["indexed"], serde_json::json!(1));
 }
 
+fn claude_settings(dir: &Path, body: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join("settings.json");
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn doctor_reports_the_missing_adapter_hooks() {
+    let w = World::new("maint-hooks");
+    w.project(P, "thing");
+    let cwd = w.plain_dir("cwd");
+
+    // All three commands present: no finding.
+    let wired = w.dir.join("claude-wired");
+    claude_settings(
+        &wired,
+        r#"{"hooks": {
+            "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context || true"}]}],
+            "PostToolBatch": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context --brief --hook-json || true"}]}],
+            "PreCompact": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem precompact --hook-json || true"}]}]
+        }}"#,
+    );
+    let out = mem_env(
+        &w,
+        &cwd,
+        &["doctor", "--json"],
+        &[("CLAUDE_CONFIG_DIR", wired.to_str().unwrap())],
+    );
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    assert!(details(&out, "hooks").is_empty(), "{}", stdout(&out));
+
+    // PreCompact missing: exactly one finding, naming it.
+    let half_wired = w.dir.join("claude-half-wired");
+    claude_settings(
+        &half_wired,
+        r#"{"hooks": {
+            "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context || true"}]}],
+            "PostToolBatch": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context --brief --hook-json || true"}]}]
+        }}"#,
+    );
+    let out = mem_env(
+        &w,
+        &cwd,
+        &["doctor", "--json"],
+        &[("CLAUDE_CONFIG_DIR", half_wired.to_str().unwrap())],
+    );
+    let hooks = details(&out, "hooks");
+    assert_eq!(hooks.len(), 1, "{hooks:?}");
+    assert!(hooks[0].contains("PreCompact"), "{hooks:?}");
+
+    // No settings file at all: one finding naming the path.
+    let missing = w.dir.join("claude-missing");
+    std::fs::create_dir_all(&missing).unwrap();
+    let out = mem_env(
+        &w,
+        &cwd,
+        &["doctor", "--json"],
+        &[("CLAUDE_CONFIG_DIR", missing.to_str().unwrap())],
+    );
+    let hooks = details(&out, "hooks");
+    assert_eq!(hooks.len(), 1, "{hooks:?}");
+    let settings_path = missing.join("settings.json");
+    assert!(
+        hooks[0].contains(settings_path.to_str().unwrap()),
+        "{hooks:?}"
+    );
+}
+
 #[test]
 fn doctor_flags_broken_child_projects_and_context_stays_separated() {
     let w = World::new("maint-children");

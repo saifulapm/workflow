@@ -1833,6 +1833,7 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
     if let Some(warning) = crate::maint::read_version_warning(&app.store) {
         findings.push(finding("version", warning));
     }
+    findings.extend(crate::maint::hook_findings(&app.dirs.claude_settings()));
     match crate::sync::Status::read(&app.dirs.qshell_status_json()) {
         Some(status) => match status.unit(crate::sync::UNIT) {
             Some(unit) if unit.ok == Some(false) => findings.push(finding(
