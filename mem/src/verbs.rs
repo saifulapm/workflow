@@ -11,7 +11,7 @@ use crate::exit;
 use crate::ids::IdRef;
 use crate::index::Row;
 use crate::item::Item;
-use crate::project::{Identity, Mode, Registry};
+use crate::project::{Identity, Mode, PathMap, Registry};
 use crate::search::{Hit, Query, search};
 use crate::timefmt::date;
 
@@ -210,10 +210,16 @@ pub fn projects(app: &App) -> Result<i32> {
     let current = identity.id();
 
     if app.json {
+        let path_map = PathMap::load(&app.dirs.paths_toml());
         let rows: Vec<serde_json::Value> = registry
             .projects
             .iter()
             .map(|p| {
+                let checkouts: Vec<String> = path_map
+                    .roots(&p.id)
+                    .into_iter()
+                    .map(|root| root.to_string_lossy().to_string())
+                    .collect();
                 json!({
                     "id": p.id,
                     "name": p.name,
@@ -222,6 +228,7 @@ pub fn projects(app: &App) -> Result<i32> {
                     "created": p.created.to_string(),
                     "items": index.count_for_project(&p.id).unwrap_or(0),
                     "current": current == Some(p.id.as_str()),
+                    "checkouts": checkouts,
                 })
             })
             .collect();

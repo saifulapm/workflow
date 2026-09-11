@@ -350,6 +350,41 @@ fn the_path_map_merges_a_concurrent_rewrite() {
 }
 
 #[test]
+fn project_identity_roots_are_oldest_first_and_drop_the_gone_ones() {
+    let w = World::new("ident-roots");
+    let a = w.repo("first", None);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let b = w.repo("second", None);
+    let path = w.dir.join("paths.toml");
+
+    update_path_map(&path, |m| {
+        m.record("01K2AAAAAAAAAAAAAAAAAAAAAA", &a.join(".git"));
+        m.record("01K2AAAAAAAAAAAAAAAAAAAAAA", &b.join(".git"));
+    })
+    .unwrap();
+
+    let map = PathMap::load(&path);
+    assert_eq!(
+        map.roots("01K2AAAAAAAAAAAAAAAAAAAAAA"),
+        vec![a.clone(), b.clone()],
+        "oldest checkout first"
+    );
+    assert_eq!(
+        map.roots("01K2BBBBBBBBBBBBBBBBBBBBBB"),
+        Vec::<PathBuf>::new(),
+        "a project with no recorded checkout carries an empty array"
+    );
+
+    std::fs::remove_dir_all(a.join(".git")).unwrap();
+    let map = PathMap::load(&path);
+    assert_eq!(
+        map.roots("01K2AAAAAAAAAAAAAAAAAAAAAA"),
+        vec![b],
+        "a recorded dir that no longer exists is left out"
+    );
+}
+
+#[test]
 fn a_corrupt_path_map_is_a_cache_miss_not_an_error() {
     let w = World::new("ident-corrupt");
     let path = w.dir.join("paths.toml");

@@ -21,7 +21,8 @@
           "aliases",
           "created",
           "items",
-          "current"
+          "current",
+          "checkouts"
         ],
         "properties": {
           "id": {
@@ -50,6 +51,12 @@
           },
           "current": {
             "type": "boolean"
+          },
+          "checkouts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
