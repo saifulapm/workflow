@@ -439,7 +439,10 @@ fn project_identity_json_names_a_childs_checkout_through_its_parents_root() {
         .iter()
         .find(|p| p["id"] == "01K2FFFFFFFFFFFFFFFFFFFFFF")
         .expect("child row present");
-    let want = repo.join("apps/splitroute").to_string_lossy().to_string();
+    let want = mem::git::canonical(&repo)
+        .join("apps/splitroute")
+        .to_string_lossy()
+        .to_string();
     assert_eq!(
         row["checkouts"],
         serde_json::json!([want]),
