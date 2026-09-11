@@ -335,16 +335,7 @@ impl MemCli {
     /// `--scope all` is project ∪ global — from `%h`, which is not a checkout,
     /// it resolves to nothing at all.
     pub fn log(&self, project: &str) -> Arc<Outcome> {
-        let limit = LOG_LIMIT.to_string();
-        self.read(&[
-            "log",
-            "--limit",
-            &limit,
-            // `--flag=value`, so a project named `-weird` is a value and not a
-            // flag. Verified against the real binary.
-            &format!("--project={project}"),
-            "--json",
-        ])
+        self.log_n(project, LOG_LIMIT)
     }
 
     pub fn status(&self, project: &str) -> Arc<Outcome> {
@@ -375,6 +366,89 @@ impl MemCli {
     /// the questions missing.
     pub fn show(&self, id: &str) -> Arc<Outcome> {
         self.read(&["show", "--json", "--", id])
+    }
+
+    /// The project's roadmap, byte for byte, milestone ticks and all.
+    pub fn roadmap(&self, project: &str) -> Arc<Outcome> {
+        self.read(&["roadmap", &format!("--project={project}"), "--json"])
+    }
+
+    /// The plan of record, byte for byte, task ticks and all. No slug: the
+    /// file at `plan.md`, not one filed under `plans/`.
+    pub fn plan(&self, project: &str) -> Arc<Outcome> {
+        self.read(&["plan", &format!("--project={project}"), "--json"])
+    }
+
+    /// The stored plans beside the plan of record: slug, bytes, date — the
+    /// same list shape `wiki` already has.
+    pub fn plan_list(&self, project: &str) -> Arc<Outcome> {
+        self.read(&["plan", "--list", &format!("--project={project}"), "--json"])
+    }
+
+    /// One stored plan's text, by slug. `--` last, exactly as `wiki_page`: a
+    /// slug is a value and never a flag, belt and braces over the route's
+    /// own check.
+    pub fn plan_slug(&self, project: &str, slug: &str) -> Arc<Outcome> {
+        self.read(&[
+            "plan",
+            &format!("--project={project}"),
+            "--json",
+            "--",
+            slug,
+        ])
+    }
+
+    /// The latest handoff, body and all.
+    pub fn handoff(&self, project: &str) -> Arc<Outcome> {
+        self.read(&["handoff", &format!("--project={project}"), "--json"])
+    }
+
+    /// Up to `limit` recent log lines — wider than `log`'s fixed
+    /// `LOG_LIMIT`, for the full log page's last 200 against the overview's
+    /// last 20.
+    pub fn log_n(&self, project: &str, limit: usize) -> Arc<Outcome> {
+        let limit = limit.to_string();
+        self.read(&[
+            "log",
+            "--limit",
+            &limit,
+            &format!("--project={project}"),
+            "--json",
+        ])
+    }
+
+    /// Up to `limit` items of one kind — fact, ruling, handoff, question or
+    /// log. `--kind=`, merged like `--project=`, so a kind is a value and
+    /// never a flag.
+    pub fn items(&self, project: &str, kind: &str, limit: usize) -> Arc<Outcome> {
+        let limit = limit.to_string();
+        self.read(&[
+            "log",
+            &format!("--kind={kind}"),
+            "--limit",
+            &limit,
+            &format!("--project={project}"),
+            "--json",
+        ])
+    }
+
+    /// Every question this project has, pending and answered, most recent
+    /// first — the page sorts pending to the top and trims to the last 10
+    /// answered.
+    pub fn questions_all(&self, project: &str) -> Arc<Outcome> {
+        self.read(&["questions", &format!("--project={project}"), "--json"])
+    }
+
+    /// This project's checkout root, for the live-run read: `project
+    /// current` resolved against `--project` instead of the working
+    /// directory, since hub's own cwd is never a project's checkout.
+    pub fn project_root(&self, project: &str) -> Arc<Outcome> {
+        self.read(&[
+            "project",
+            "current",
+            &format!("--project={project}"),
+            "--json",
+        ])
     }
 
     /// The one write hub makes. `--` first, so an answer beginning with a dash
