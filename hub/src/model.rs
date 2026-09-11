@@ -13,14 +13,10 @@
 //! unit starts in, resolves to nothing (review B-3). So: list the projects,
 //! then one `mem log --project <name>` each, merged and sorted by id.
 
-use std::process::Command;
-use std::time::Duration;
-
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::memcli::{MemCli, Outcome};
-use crate::proc::{self, Ended};
 
 /// Crockford base32, the ULID alphabet.
 const BASE32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -452,7 +448,6 @@ pub struct ProjectView {
     pub rulings: Vec<Activity>,
     pub log: Vec<Activity>,
     pub wiki: Vec<WikiPage>,
-    pub runs: Runs,
 }
 
 #[derive(Debug)]
@@ -471,38 +466,8 @@ pub struct ProjectQuestion {
     pub answer: Option<String>,
 }
 
-/// `workflow status --json`'s answer, or why there is none — ruling 5.
-#[derive(Debug)]
-pub enum Runs {
-    Found(Vec<Run>),
-    /// No checkout root, no `workflow` on PATH, or a non-zero exit: one
-    /// sentence the page shows instead of a list.
-    Unavailable(String),
-}
-
-#[derive(Debug)]
-pub struct Run {
-    pub plan: String,
-    pub integration: String,
-    pub live: bool,
-    pub tasks: Vec<RunTask>,
-}
-
-#[derive(Debug)]
-pub struct RunTask {
-    pub id: String,
-    pub state: String,
-    pub dispatches: u64,
-    pub last_status: String,
-}
-
-/// How long `workflow status` may take before the run section gives up on it
-/// (ruling 5).
-const WORKFLOW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Everything one project's page needs, assembled from `mem` and, for the
-/// live-run section, from `workflow` itself. `None` for a name `mem projects`
-/// does not know, which the route answers with a 404.
+/// Everything one project's page needs, assembled from `mem`. `None` for a
+/// name `mem projects` does not know, which the route answers with a 404.
 pub fn project_view(mem: &MemCli, name: &str, now_ms: i64) -> Option<ProjectView> {
     if !is_known_project(mem, name) {
         return None;
@@ -565,7 +530,6 @@ pub fn project_view(mem: &MemCli, name: &str, now_ms: i64) -> Option<ProjectView
         rulings,
         log,
         wiki,
-        runs: runs_for(mem, name),
     })
 }
 
@@ -645,76 +609,6 @@ fn project_questions(outcome: &Outcome) -> Vec<ProjectQuestion> {
     answered.truncate(10);
     pending.append(&mut answered);
     pending
-}
-
-/// The project's checkout root on this machine, or `None` when `mem` has
-/// none to give — ruling 5's first way the live-run section is unavailable.
-fn project_root(mem: &MemCli, project: &str) -> Option<String> {
-    let Outcome::Json(value) = &*mem.project_root(project) else {
-        return None;
-    };
-    value
-        .get("root")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
-/// `workflow status --json`, run with its cwd set to the project's own
-/// checkout — ruling 5.
-fn runs_for(mem: &MemCli, project: &str) -> Runs {
-    let Some(root) = project_root(mem, project) else {
-        return Runs::Unavailable(
-            "no checkout root is registered for this project on this machine".to_string(),
-        );
-    };
-    let mut command = Command::new("workflow");
-    command.args(["status", "--json"]).current_dir(&root);
-    match proc::output_within(&mut command, WORKFLOW_STATUS_TIMEOUT) {
-        Ended::Exited(done) if done.code == Some(0) => {
-            match serde_json::from_slice::<Value>(&done.stdout) {
-                Ok(doc) => Runs::Found(parse_runs(&doc)),
-                Err(_) => Runs::Unavailable(
-                    "workflow printed something that could not be read".to_string(),
-                ),
-            }
-        }
-        Ended::Exited(_) => Runs::Unavailable("workflow status exited with an error".to_string()),
-        Ended::TimedOut => {
-            Runs::Unavailable("workflow did not answer within five seconds".to_string())
-        }
-        Ended::Failed(_) => Runs::Unavailable("workflow is not on this machine's PATH".to_string()),
-    }
-}
-
-fn parse_runs(doc: &Value) -> Vec<Run> {
-    doc.get("runs")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .map(|row| Run {
-            plan: string(row, "plan"),
-            integration: string(row, "integration"),
-            live: row["live"].as_bool().unwrap_or(false),
-            tasks: row
-                .get("tasks")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .map(run_task)
-                .collect(),
-        })
-        .collect()
-}
-
-fn run_task(row: &Value) -> RunTask {
-    RunTask {
-        id: string(row, "id"),
-        state: string(row, "state"),
-        dispatches: row["dispatches"].as_u64().unwrap_or(0),
-        last_status: string(row, "last_status"),
-    }
 }
 
 #[cfg(test)]

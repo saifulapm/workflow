@@ -11,9 +11,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark};
 
 use crate::config::Config;
 use crate::form::encode_component;
-use crate::model::{
-    Activity, Project, ProjectView, Question, Runs, Section, View, WikiProject, is_slug,
-};
+use crate::model::{Activity, Project, ProjectView, Question, Section, View, WikiProject, is_slug};
 
 /// The one escaping function. `'` and `"` are in here because values also land
 /// in attributes (`value="…"`, `href="…"`).
@@ -404,7 +402,9 @@ pub fn project_page(view: &ProjectView, machine: &str) -> String {
         esc(&log_url(project))
     ));
     out.push_str(&wiki_section(view, project));
-    out.push_str(&runs_section(view, machine));
+    // Ruling 3: the heading belongs to this task; the live read is the runs
+    // task's (ruling 5, review 1 of overview).
+    out.push_str(&format!("<h2>Runs on {}</h2>\n", esc(machine)));
 
     out.push_str("</body>\n</html>\n");
     out
@@ -536,39 +536,6 @@ fn wiki_section(view: &ProjectView, project: &str) -> String {
             ));
         }
         out.push_str("</ul>\n");
-    }
-    out
-}
-
-/// Ruling 5: the heading names this machine, because only the machine
-/// running a run has its run dir.
-fn runs_section(view: &ProjectView, machine: &str) -> String {
-    let mut out = format!("<h2>Runs on {}</h2>\n", esc(machine));
-    match &view.runs {
-        Runs::Unavailable(why) => out.push_str(&format!("<p class=\"empty\">{}</p>\n", esc(why))),
-        Runs::Found(runs) if runs.is_empty() => {
-            out.push_str("<p class=\"empty\">No runs recorded.</p>\n");
-        }
-        Runs::Found(runs) => {
-            for run in runs {
-                out.push_str(&format!(
-                    "<article>\n<div class=\"meta\">{plan} · {integration} · {live}</div>\n<ul>\n",
-                    plan = esc(&run.plan),
-                    integration = esc(&run.integration),
-                    live = if run.live { "live" } else { "not live" },
-                ));
-                for task in &run.tasks {
-                    out.push_str(&format!(
-                        "<li>{id} {state} · {dispatches} dispatches · {last}</li>\n",
-                        id = esc(&task.id),
-                        state = esc(&task.state),
-                        dispatches = task.dispatches,
-                        last = esc(&task.last_status),
-                    ));
-                }
-                out.push_str("</ul>\n</article>\n");
-            }
-        }
     }
     out
 }
