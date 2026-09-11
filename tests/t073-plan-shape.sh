@@ -4,8 +4,8 @@
 # patterns, a Done sentence over forty words, and a Read: naming a wiki page
 # the project has no such page -- four warnings, never a refusal. A wiki:
 # item never trips the existing "not here to be read" warning, and a
-# roadmap's milestone plan is judged on its spec through wiki pages, not on
-# carrying its own prose (ruling 10).
+# roadmap's milestone plan earns every one of them exactly as a plan of its
+# own would.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -170,9 +170,9 @@ unlike "$ERR" "Read names 'wiki:missing' and it is not here to be read" \
 
 ## ------------------------------------------ a milestone plan in a roadmap
 
-# A roadmap's milestone plan is judged on its spec through wiki pages, so a
-# milestone with no prose of its own does not earn the "no prose" warning --
-# only a plan checked on its own does.
+# A milestone plan is judged exactly as a plan checked on its own would be:
+# ruling 3 names no exemption for it, and poshra's 36 prose-less plans were
+# a roadmap's milestones.
 mkdir -p road
 cat >road/roadmap.md <<'EOF'
 # roadmap: shop
@@ -190,5 +190,5 @@ OUT=$(workflow plan-check road/roadmap.md 2>"$T_TMP/road.err")
 RC=$?
 ROAD_ERR=$(cat "$T_TMP/road.err")
 is "$RC" 0 'the roadmap is not refused'
-unlike "$ROAD_ERR" 'no prose above the tasks' \
-	"a milestone plan's own lack of prose is not warned about"
+like "$ROAD_ERR" 'm1: plan: no prose above the tasks' \
+	"a milestone plan with no prose of its own earns the warning too"

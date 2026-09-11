@@ -40,6 +40,8 @@ EOF
 milestone m1-auth <<'EOF'
 # plan: m1-auth
 
+Sign-in issues a session and boot reads it back.
+
 - [ ] t1 Add the session store
       Files: engine/auth/session.rs
       Gives: fn sign_in(user: &str) -> Session
@@ -54,6 +56,8 @@ EOF
 milestone m2-billing <<'EOF'
 # plan: m2-billing
 
+A signed-in customer is charged and can be refunded.
+
 - [ ] t1 Charge a signed-in customer
       Files: engine/auth/charge.rs
       Read: engine/auth/session.rs
@@ -66,6 +70,8 @@ EOF
 
 milestone m3-reports <<'EOF'
 # plan: m3-reports
+
+Sessions are reported on and the reports are summarised.
 
 - [ ] t1 Report on sessions
       Files: engine/src/report.rs
@@ -80,6 +86,8 @@ EOF
 
 milestone m4-search <<'EOF'
 # plan: m4-search
+
+Orders are searched and indexed.
 
 - [ ] t1 Search the orders
       Files: engine/src/search.rs

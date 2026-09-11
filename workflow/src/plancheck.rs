@@ -18,11 +18,6 @@ pub struct Findings {
     pub warnings: Vec<String>,
 }
 
-/// A plan with nothing above its tasks hands the worker and the reader only
-/// the task blocks (ruling 3 of m1-wiki-first). `roadmap_findings` drops
-/// this one for a milestone plan: ruling 10 has the spec for a roadmap live
-/// in wiki pages, read by the milestone's own tasks with `wiki:`, not
-/// repeated as prose in every plan beside the roadmap.
 const NO_PROSE_WARNING: &str = "plan: no prose above the tasks -- the worker and the reader see only the task blocks; write the Spec and the Rulings first";
 
 /// `prior` is the plans this one waits on: the milestones a roadmap puts ahead
@@ -345,16 +340,14 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
             .collect();
         let found = findings(&plan, &prior, root, Some(&path));
         // Which milestone a finding came from is the first thing its reader
-        // needs: a roadmap prints four plans' worth of them at once.
+        // needs: a roadmap prints four plans' worth of them at once. A
+        // milestone plan is judged exactly as a plan of its own would be,
+        // no-prose finding included: ruling 3 names no exemption for it, and
+        // poshra's 36 prose-less plans were a roadmap's milestones.
         f.refusals
             .extend(found.refusals.into_iter().map(|m| format!("{id}: {m}")));
-        f.warnings.extend(
-            found
-                .warnings
-                .into_iter()
-                .filter(|w| w != NO_PROSE_WARNING)
-                .map(|m| format!("{id}: {m}")),
-        );
+        f.warnings
+            .extend(found.warnings.into_iter().map(|m| format!("{id}: {m}")));
         plans.push((id.clone(), plan));
     }
     f
