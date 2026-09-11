@@ -29,6 +29,25 @@ pub struct Task {
     pub block: String,
 }
 
+impl Task {
+    /// The `wiki:<slug>` names on this task's Read: line, in the order they
+    /// were written, each once. Neither a checkout path nor a refusal, since
+    /// a page lives in mem and never in the tree a plan-check or a worker
+    /// walks (ruling 1 of m1-wiki-first).
+    pub fn wiki_slugs(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for item in self.read.as_deref().unwrap_or("").split_whitespace() {
+            if let Some(slug) = item.strip_prefix("wiki:")
+                && !slug.is_empty()
+                && !out.iter().any(|s| s == slug)
+            {
+                out.push(slug.to_string());
+            }
+        }
+        out
+    }
+}
+
 /// What the first line says the document is. A plan is a wave of worker tasks;
 /// a roadmap is a wave of milestones, each naming a stored plan of its own, so
 /// its items carry no Files: or Verify: and their ids are plan slugs.
@@ -585,6 +604,21 @@ Totals drift.
         ] {
             assert!(parse(text, true).is_none(), "{name} should be refused");
         }
+    }
+
+    /// A `wiki:<slug>` name on Read: is neither a checkout path nor prose --
+    /// it addresses a page in mem, in the order it was written, once each.
+    #[test]
+    fn wiki_slugs_are_read_off_the_read_line_in_order_and_deduplicated() {
+        let mut t = Task {
+            read: Some("src/lib.rs wiki:run wiki:merge-gate wiki:run".into()),
+            ..Task::default()
+        };
+        assert_eq!(t.wiki_slugs(), vec!["run", "merge-gate"]);
+        t.read = Some("src/lib.rs docs/api.md".into());
+        assert!(t.wiki_slugs().is_empty());
+        t.read = None;
+        assert!(t.wiki_slugs().is_empty());
     }
 
     #[test]

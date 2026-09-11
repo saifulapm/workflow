@@ -18,6 +18,13 @@ use crate::warn;
 /// A deviation from spec §8.4's figure, recorded as a ruling.
 pub const BUDGET: usize = 2000;
 
+/// How many bytes of wiki page text one brief carries inlined (ruling 1 of
+/// m1-wiki-first). A plan naming pages past this would otherwise blow the
+/// context window it is trying to save the worker from reading the tree for;
+/// past the cap the rest are named as a `mem wiki` command instead, and the
+/// run warns once so an over-named plan is heard about at dispatch.
+pub const PAGES_CAP: usize = 24_000;
+
 /// The states a worker may report, in the order the brief teaches them. The
 /// gate names this list back when a report uses a word that is not on it, so
 /// the two must be the same list (friction #W2SY30WH).
@@ -112,12 +119,50 @@ fn plan_section(prose: &str) -> String {
     )
 }
 
+/// The wiki pages a task's Read: named, verbatim under one heading, for the
+/// worker's brief and the reader's prompt alike (ruling 1 of m1-wiki-first).
+/// `pages` is `(slug, text)`, absent text meaning no such page. Past
+/// [`PAGES_CAP`] bytes of page text, the rest are named as a `mem wiki`
+/// command instead of inlined, and the run is warned once for this call.
+pub(crate) fn pages_section(task_id: &str, pages: &[(String, Option<String>)]) -> String {
+    if pages.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## Pages the plan names\n\n");
+    let mut used = 0usize;
+    let mut over = false;
+    for (slug, text) in pages {
+        out.push_str(&format!("### wiki:{slug}\n\n"));
+        match text {
+            None => out.push_str("This project has no such page.\n\n"),
+            Some(body) if used < PAGES_CAP => {
+                used += body.len();
+                out.push_str(body.trim_end());
+                out.push_str("\n\n");
+            }
+            Some(_) => {
+                over = true;
+                out.push_str(&format!(
+                    "Past the page cap; read it with `mem wiki -- {slug}`.\n\n"
+                ));
+            }
+        }
+    }
+    if over {
+        warn(format!(
+            "task {task_id}: its pages are past the {PAGES_CAP} byte cap; the rest are named as `mem wiki` commands"
+        ));
+    }
+    out
+}
+
 pub fn text(
     task: &Task,
     worktree: &Path,
     status_file: &Path,
     prior: &Prior,
     prose: &str,
+    pages: &[(String, Option<String>)],
 ) -> String {
     format!(
         "\
@@ -126,7 +171,7 @@ pub fn text(
 You are working alone in {wt}. Never leave it. What this
 task depends on is already there; never go looking for another branch.
 
-{prior}{plan}## The task, as the plan states it
+{prior}{plan}{pages}## The task, as the plan states it
 
 {block}
 ## How to work
@@ -174,6 +219,7 @@ your last act. The state is one bare word: no colon after it.
         title = task.title,
         wt = worktree.display(),
         plan = plan_section(prose),
+        pages = pages_section(&task.id, pages),
         block = task.block,
         prior = prior.section(),
         status = status_file.display(),
@@ -215,12 +261,13 @@ pub fn write(
     status_file: &Path,
     prior: &Prior,
     prose: &str,
+    pages: &[(String, Option<String>)],
     out: &Path,
 ) {
     if let Some(dir) = out.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let body = text(task, worktree, status_file, prior, prose);
+    let body = text(task, worktree, status_file, prior, prose, pages);
     let _ = std::fs::write(out, &body);
     if let Some(over) = over_budget(task) {
         warn(format!("task {}: its block is {over}", task.id));
@@ -249,6 +296,7 @@ mod tests {
             Path::new("/state/runs/app/plan/t1.status"),
             &Prior::default(),
             "",
+            &[],
         );
         assert!(over_budget(&task).is_none());
         // The fixed prose is not what BUDGET counts, and it is still held:
@@ -306,6 +354,7 @@ mod tests {
             Path::new("/state/runs/app/plan/t2.status"),
             &Prior::default(),
             "",
+            &[],
         );
         assert!(
             over_budget(&rich).is_none(),
@@ -331,6 +380,7 @@ mod tests {
             Path::new("/state/runs/app/plan/t1.status"),
             &prior,
             "",
+            &[],
         );
         // The section is not the block's to pay for.
         assert!(over_budget(&task).is_none());
@@ -367,6 +417,7 @@ mod tests {
             Path::new("/state/runs/app/plan/t1.status"),
             &asked,
             "",
+            &[],
         );
         for needle in [
             "It asked: may I widen Files by src/main.rs?",
@@ -436,7 +487,7 @@ mod tests {
             commits: 1,
             answers: vec![("x".repeat(600), "y".repeat(600))],
         };
-        assert!(text(&small, wt, status, &prior, "").len() > BUDGET);
+        assert!(text(&small, wt, status, &prior, "", &[]).len() > BUDGET);
         assert!(over_budget(&small).is_none());
     }
 
@@ -453,7 +504,7 @@ mod tests {
         let wt = Path::new("/state/worktrees/app/plan/t1");
         let status = Path::new("/state/runs/app/plan/t1.status");
         let prose = "## Rulings\n\n- Ruling 1. Cents, never floats.";
-        let body = text(&task, wt, status, &Prior::default(), prose);
+        let body = text(&task, wt, status, &Prior::default(), prose, &[]);
         let section = body
             .find("## The plan this task belongs to")
             .expect("the section");
@@ -465,7 +516,71 @@ mod tests {
             .expect("the block");
         assert!(section < rulings && rulings < block, "{body}");
         assert!(body.contains("the reader at the merge gate holds your diff to them"));
-        let bare = text(&task, wt, status, &Prior::default(), "  \n");
+        let bare = text(&task, wt, status, &Prior::default(), "  \n", &[]);
         assert!(!bare.contains("The plan this task belongs to"), "{bare}");
+    }
+
+    /// A page named on Read: rides verbatim under its own heading, after the
+    /// plan's prose and before the block; an absent page says so rather than
+    /// refusing, and a task naming none adds no heading at all (rulings 1
+    /// and 2 of m1-wiki-first).
+    #[test]
+    fn wiki_pages_ride_after_the_prose_and_before_the_block() {
+        let task = Task {
+            id: "t1".into(),
+            title: "Do it".into(),
+            block: "- [ ] t1 Do it\n      Files: a\n      Verify: true\n".into(),
+            ..Task::default()
+        };
+        let wt = Path::new("/state/worktrees/app/plan/t1");
+        let status = Path::new("/state/runs/app/plan/t1.status");
+        let prose = "## Rulings\n\n- Ruling 1. Cents, never floats.";
+        let pages = vec![
+            ("run".to_string(), Some("The run drives waves.".to_string())),
+            ("missing-page".to_string(), None),
+        ];
+        let body = text(&task, wt, status, &Prior::default(), prose, &pages);
+        let rulings = body.find("- Ruling 1. Cents, never floats.").unwrap();
+        let heading = body.find("## Pages the plan names").unwrap();
+        let run_heading = body.find("### wiki:run").unwrap();
+        let run_text = body.find("The run drives waves.").unwrap();
+        let missing_heading = body.find("### wiki:missing-page").unwrap();
+        let missing_text = body.find("This project has no such page.").unwrap();
+        let block = body.find("## The task, as the plan states it").unwrap();
+        assert!(
+            rulings < heading
+                && heading < run_heading
+                && run_heading < run_text
+                && run_text < missing_heading
+                && missing_heading < missing_text
+                && missing_text < block,
+            "{body}"
+        );
+
+        let none = text(&task, wt, status, &Prior::default(), prose, &[]);
+        assert!(
+            !none.contains("Pages the plan names"),
+            "a task naming no pages adds no heading: {none}"
+        );
+    }
+
+    /// Past the cap, the rest of a brief's pages are named as a command
+    /// instead of inlined (ruling 1). The run's own warning is exercised at
+    /// the integration level, in t072.
+    #[test]
+    fn pages_past_the_cap_become_a_command() {
+        let big = "x".repeat(PAGES_CAP);
+        let pages = vec![
+            ("big".to_string(), Some(big.clone())),
+            ("small".to_string(), Some("tiny page".to_string())),
+        ];
+        let section = pages_section("t1", &pages);
+        assert!(section.contains(&big), "the first page fits under the cap");
+        assert!(
+            section
+                .contains("### wiki:small\n\nPast the page cap; read it with `mem wiki -- small`."),
+            "{section}"
+        );
+        assert!(!section.contains("tiny page"), "{section}");
     }
 }

@@ -30,6 +30,19 @@ pub const DONE_PREVIOUSLY: &str = "done-previously";
 /// the id as one mem will never list.
 const QUESTION_MISS_LIMIT: u32 = 3;
 
+/// The wiki pages a task's Read: named, read live off mem, in the shape the
+/// brief and the reviewer's prompt both take: `(slug, text)`, `None` for a
+/// page mem does not have (ruling 2 of m1-wiki-first).
+fn wiki_pages(task: &Task) -> Vec<(String, Option<String>)> {
+    task.wiki_slugs()
+        .into_iter()
+        .map(|slug| {
+            let text = memcli::wiki_page(&slug);
+            (slug, text)
+        })
+        .collect()
+}
+
 fn env_str(key: &str, default: &str) -> String {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => v,
@@ -737,7 +750,8 @@ impl Run {
         // The plan of record, read now rather than at setup: an edit the
         // orchestrator makes mid-run is in the next attempt's brief.
         let prose = plan::prose(&self.plan_text().unwrap_or_default());
-        brief::write(&t, &wt, &status, &prior, &prose, &brief_file);
+        let pages = wiki_pages(&t);
+        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
         // The gate reads this from inside the worktree: the task is held to its
         // own Verify command there, not to the repo-wide suite (verify.rs).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
@@ -1015,9 +1029,10 @@ impl Run {
         let stat = int.out(&["diff", "--stat", &range]).unwrap_or_default();
         let prompt = self.dir.join(format!("{task}.review-prompt"));
         let answer = self.dir.join(format!("{task}.review"));
+        let pages = wiki_pages(&t);
         let _ = std::fs::write(
             &prompt,
-            reviewer::prompt(&plan_text, &t, &diff, &stat, &self.int_wt, &answer),
+            reviewer::prompt(&plan_text, &t, &diff, &stat, &self.int_wt, &answer, &pages),
         );
         write_field(&self.dir, task, "review-tries", "0");
         warn(format!("task {task}: {model} is reading the diff"));

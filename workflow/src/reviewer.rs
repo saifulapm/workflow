@@ -16,6 +16,7 @@
 
 use std::path::Path;
 
+use crate::brief;
 use crate::plan::Task;
 
 /// Past this the diff goes in as its `--stat`, and the reviewer reads the
@@ -54,9 +55,11 @@ pub fn verdict(text: &str) -> Option<Verdict> {
 }
 
 /// The reader's brief: the plan of record whole, so the rulings and the Done
-/// line it holds the diff to are the ones the run holds it to; the task block
-/// verbatim; the diff, or its stat past [`DIFF_CAP`]; and the contract --
-/// one answer file, first line the verdict, nothing else written.
+/// line it holds the diff to are the ones the run holds it to; the wiki
+/// pages the task's Read: named, verbatim, under the same heading the
+/// worker's brief uses (ruling 1 of m1-wiki-first); the task block verbatim;
+/// the diff, or its stat past [`DIFF_CAP`]; and the contract -- one answer
+/// file, first line the verdict, nothing else written.
 pub fn prompt(
     plan_text: &str,
     task: &Task,
@@ -64,6 +67,7 @@ pub fn prompt(
     stat: &str,
     worktree: &Path,
     answer: &Path,
+    pages: &[(String, Option<String>)],
 ) -> String {
     let change = if diff.len() > DIFF_CAP {
         format!(
@@ -122,7 +126,7 @@ reading that changes the tree is void.
 
 {plan}
 
-## The task
+{pages}## The task
 
 {block}
 ## The diff
@@ -133,6 +137,7 @@ reading that changes the tree is void.
         wt = worktree.display(),
         answer = answer.display(),
         plan = plan_text.trim_end(),
+        pages = brief::pages_section(&task.id, pages),
         block = task.block,
         change = change,
     )
@@ -238,6 +243,7 @@ mod tests {
             " x | 1 +\n",
             Path::new("/state/wt/_integration"),
             Path::new("/runs/t3.review"),
+            &[],
         );
         for needle in [
             "# Review of task t3 before it merges",
@@ -260,6 +266,35 @@ mod tests {
         );
     }
 
+    /// The reader sees the same pages the worker did, verbatim, between the
+    /// plan of record and the task block; an absent one says so rather than
+    /// refusing the reading (rulings 1 and 2 of m1-wiki-first).
+    #[test]
+    fn the_reader_sees_the_pages_the_plan_named() {
+        let pages = vec![
+            ("run".to_string(), Some("The run drives waves.".to_string())),
+            ("gone".to_string(), None),
+        ];
+        let text = prompt(
+            "# plan: gate-reviewer\n",
+            &task(),
+            "diff --git a/x b/x\n+fixed\n",
+            " x | 1 +\n",
+            Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
+            &pages,
+        );
+        let plan = text.find("# plan: gate-reviewer").unwrap();
+        let heading = text.find("## Pages the plan names").unwrap();
+        let run = text.find("The run drives waves.").unwrap();
+        let gone = text.find("This project has no such page.").unwrap();
+        let block = text.find("## The task\n").unwrap();
+        assert!(
+            plan < heading && heading < run && run < gone && gone < block,
+            "{text}"
+        );
+    }
+
     #[test]
     fn a_diff_past_the_cap_goes_in_as_its_stat() {
         let big = "+".repeat(DIFF_CAP + 1);
@@ -270,6 +305,7 @@ mod tests {
             " x | 1 +\n",
             Path::new("/wt"),
             Path::new("/r"),
+            &[],
         );
         assert!(text.contains(" x | 1 +"), "the stat stands in");
         assert!(

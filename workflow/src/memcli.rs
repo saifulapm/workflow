@@ -276,3 +276,13 @@ pub fn plan() -> Option<String> {
         Some(out)
     }
 }
+
+/// One wiki page, verbatim, read fresh off `mem wiki -- <slug>` -- the plan
+/// of record is read live the same way, so an edit to a page reaches the
+/// next dispatch. `None` covers both a project mem does not know and a
+/// project with no such page: the caller lists it as absent rather than
+/// refusing the dispatch over it (ruling 2 of m1-wiki-first).
+pub fn wiki_page(slug: &str) -> Option<String> {
+    let (ok, out) = capture(&["wiki", "--", slug])?;
+    ok.then_some(out)
+}
