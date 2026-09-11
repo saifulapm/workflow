@@ -189,26 +189,26 @@ impl PathMap {
             .map(|(id, _)| id.as_str())
     }
 
-    /// The checkout roots recorded for a project on this machine: the parent
-    /// of each common dir that still exists, oldest checkout first. A common
-    /// dir gone from disk (the checkout was removed) is left out rather than
-    /// reported as a root nothing is there to serve.
+    /// The checkout roots recorded for a project on this machine, in
+    /// paths.toml's own order: the parent of each common dir that still
+    /// exists and is named `.git`. A common dir gone from disk (the checkout
+    /// was removed) or not named `.git` (a submodule's
+    /// `.git/modules/<name>`, a bare repo) is left out rather than reported
+    /// as a root nothing is there to serve.
     pub fn roots(&self, id: &str) -> Vec<PathBuf> {
-        let mut found: Vec<(std::time::SystemTime, PathBuf)> = self
-            .projects
+        self.projects
             .get(id)
             .into_iter()
             .flatten()
             .filter_map(|common| {
                 let common = Path::new(common);
-                let meta = std::fs::metadata(common).ok()?;
-                let root = common.parent()?.to_path_buf();
-                let when = meta.created().or_else(|_| meta.modified()).ok()?;
-                Some((when, root))
+                std::fs::metadata(common).ok()?;
+                match common.file_name() {
+                    Some(n) if n == ".git" => common.parent().map(PathBuf::from),
+                    _ => None,
+                }
             })
-            .collect();
-        found.sort_by_key(|(when, _)| *when);
-        found.into_iter().map(|(_, root)| root).collect()
+            .collect()
     }
 
     pub fn record(&mut self, id: &str, common_dir: &Path) -> bool {

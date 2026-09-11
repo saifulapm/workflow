@@ -350,13 +350,13 @@ fn the_path_map_merges_a_concurrent_rewrite() {
 }
 
 #[test]
-fn project_identity_roots_are_oldest_first_and_drop_the_gone_ones() {
+fn project_identity_roots_are_in_paths_toml_order_and_drop_the_gone_ones() {
     let w = World::new("ident-roots");
-    // Named so alphabetical order (the Vec's on-disk order) disagrees with
-    // creation-time order: the assertion below can only pass if `roots`
-    // sorts by common-dir metadata time, not by list position.
+    // Named so creation order disagrees with alphabetical order: the
+    // assertion below can only pass if `roots` reports paths.toml's own
+    // order (alphabetical, since `record` sorts on insert), not creation
+    // order.
     let a = w.repo("zeta", None);
-    std::thread::sleep(std::time::Duration::from_millis(20));
     let b = w.repo("alpha", None);
     let path = w.dir.join("paths.toml");
 
@@ -369,8 +369,8 @@ fn project_identity_roots_are_oldest_first_and_drop_the_gone_ones() {
     let map = PathMap::load(&path);
     assert_eq!(
         map.roots("01K2AAAAAAAAAAAAAAAAAAAAAA"),
-        vec![a.clone(), b.clone()],
-        "oldest checkout first"
+        vec![b.clone(), a.clone()],
+        "paths.toml order, not creation order"
     );
     assert_eq!(
         map.roots("01K2BBBBBBBBBBBBBBBBBBBBBB"),
@@ -384,6 +384,27 @@ fn project_identity_roots_are_oldest_first_and_drop_the_gone_ones() {
         map.roots("01K2AAAAAAAAAAAAAAAAAAAAAA"),
         vec![b],
         "a recorded dir that no longer exists is left out"
+    );
+}
+
+#[test]
+fn project_identity_roots_skips_a_common_dir_not_named_git() {
+    let w = World::new("ident-roots-submodule");
+    let repo = w.repo("mainrepo", None);
+    // A submodule's common dir: <super>/.git/modules/<name>. Its parent is
+    // not a checkout root -- only a common dir literally named `.git` is.
+    let modules = repo.join(".git").join("modules").join("sub");
+    std::fs::create_dir_all(&modules).unwrap();
+    let path = w.dir.join("paths.toml");
+    update_path_map(&path, |m| {
+        m.record("01K2DDDDDDDDDDDDDDDDDDDDDD", &modules);
+    })
+    .unwrap();
+    let map = PathMap::load(&path);
+    assert_eq!(
+        map.roots("01K2DDDDDDDDDDDDDDDDDDDDDD"),
+        Vec::<PathBuf>::new(),
+        "a common dir not named .git yields no root"
     );
 }
 
