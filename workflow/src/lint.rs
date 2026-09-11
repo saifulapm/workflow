@@ -19,6 +19,7 @@ const HARD: &[(&str, Hard)] = &[
     ("a session URL trailer", Hard::SessionTrailer),
     ("the shipflow name", Hard::Literal("shipflow")),
     ("a focus:, gate: or track/ prefix", Hard::ProcessPrefix),
+    ("a plan <slug>: or run <slug>: prefix", Hard::SlugPrefix),
     ("a robot or sparkle emoji", Hard::Emoji),
 ];
 
@@ -34,6 +35,8 @@ enum Hard {
     SessionTrailer,
     /// `^[[:space:]]*(focus:|gate:|track/)`
     ProcessPrefix,
+    /// `^[[:space:]]*(plan|run) [a-z0-9][a-z0-9.-]*:`
+    SlugPrefix,
     Emoji,
 }
 
@@ -43,6 +46,16 @@ fn is_sp(c: char) -> bool {
 
 fn skip_spaces(s: &str) -> &str {
     s.trim_start_matches(is_sp)
+}
+
+/// `[a-z0-9][a-z0-9.-]*`
+fn is_slug(id: &str) -> bool {
+    let mut chars = id.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
 }
 
 impl Hard {
@@ -94,6 +107,14 @@ impl Hard {
                 head.starts_with("focus:")
                     || head.starts_with("gate:")
                     || head.starts_with("track/")
+            }
+            Hard::SlugPrefix => {
+                let head = skip_spaces(&lower);
+                ["plan ", "run "].iter().any(|kw| {
+                    head.strip_prefix(kw)
+                        .and_then(|rest| rest.split_once(':'))
+                        .is_some_and(|(id, _)| is_slug(id))
+                })
             }
             Hard::Emoji => line.contains('🤖') || line.contains('✨'),
         }
@@ -365,6 +386,8 @@ mod tests {
             "Extract cart pricing 🤖",
             "Extract cart pricing ✨",
             "  Session-URL:   http://claude.com/s/x",
+            "plan m05-ui-kit: all nine tasks shipped",
+            "run cart: merged t3",
         ] {
             assert!(hard_hit(text), "should have failed: {text:?}");
         }
@@ -377,6 +400,8 @@ mod tests {
             "Fix the checkout total when a coupon is applied",
             "Note the session id in the run directory",
             "Move to https://example.com/code",
+            "plan: extract the cart service",
+            "worker: consumer runner",
         ] {
             assert!(!hard_hit(text), "should have passed: {text:?}");
         }

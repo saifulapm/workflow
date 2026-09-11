@@ -43,8 +43,12 @@ hard 'gate: tighten the pre-commit check' 'a gate: subject prefix'
 hard 'track/cart-pricing' 'a track/ branch name'
 hard 'Extract cart pricing 🤖' 'a robot emoji'
 hard 'Extract cart pricing ✨' 'a sparkle emoji'
+hard 'plan m05-ui-kit: all nine tasks shipped' 'a plan <slug>: prefix'
+hard 'run cart: merged t3' 'a run <slug>: prefix'
 
 clean 'Extract cart pricing into a service' 'an ordinary subject'
+clean 'plan: extract the cart service' 'a bare plan: prefix stays ordinary'
+clean 'worker: consumer runner' 'a worker: prefix stays ordinary'
 clean 'Fix the checkout total when a coupon is applied
 
 The rounding happened before the discount, so a 33% coupon on 100 gave 67
