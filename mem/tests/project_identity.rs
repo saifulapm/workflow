@@ -352,9 +352,12 @@ fn the_path_map_merges_a_concurrent_rewrite() {
 #[test]
 fn project_identity_roots_are_oldest_first_and_drop_the_gone_ones() {
     let w = World::new("ident-roots");
-    let a = w.repo("first", None);
+    // Named so alphabetical order (the Vec's on-disk order) disagrees with
+    // creation-time order: the assertion below can only pass if `roots`
+    // sorts by common-dir metadata time, not by list position.
+    let a = w.repo("zeta", None);
     std::thread::sleep(std::time::Duration::from_millis(20));
-    let b = w.repo("second", None);
+    let b = w.repo("alpha", None);
     let path = w.dir.join("paths.toml");
 
     update_path_map(&path, |m| {
@@ -381,6 +384,45 @@ fn project_identity_roots_are_oldest_first_and_drop_the_gone_ones() {
         map.roots("01K2AAAAAAAAAAAAAAAAAAAAAA"),
         vec![b],
         "a recorded dir that no longer exists is left out"
+    );
+}
+
+#[test]
+fn project_identity_json_names_a_childs_checkout_through_its_parents_root() {
+    // paths.toml stays root-only (ruling #Y57A9FE7's fix), so the child's row
+    // in `mem projects --json` must look its checkout up under the parent's
+    // id and join its own subdir onto the parent's root.
+    let w = common::World::new("ident-checkouts-json");
+    let store = w.store();
+    let dirs = w.dirs();
+    let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
+    let root_id = resolve(&repo, &store, &dirs, None, Mode::Write)
+        .unwrap()
+        .id()
+        .unwrap()
+        .to_string();
+    add_child(
+        &store,
+        &root_id,
+        "01K2FFFFFFFFFFFFFFFFFFFFFF",
+        "splitroute",
+        "apps/splitroute",
+    );
+
+    let out = common::mem(&w, &repo, &["projects", "--json"]);
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let row = json["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "01K2FFFFFFFFFFFFFFFFFFFFFF")
+        .expect("child row present");
+    let want = repo.join("apps/splitroute").to_string_lossy().to_string();
+    assert_eq!(
+        row["checkouts"],
+        serde_json::json!([want]),
+        "the child's checkouts join the parent's recorded root with its own subdir"
     );
 }
 

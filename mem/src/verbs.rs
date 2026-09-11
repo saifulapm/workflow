@@ -215,10 +215,14 @@ pub fn projects(app: &App) -> Result<i32> {
             .projects
             .iter()
             .map(|p| {
+                let root_id = p.parent.as_deref().unwrap_or(&p.id);
                 let checkouts: Vec<String> = path_map
-                    .roots(&p.id)
+                    .roots(root_id)
                     .into_iter()
-                    .map(|root| root.to_string_lossy().to_string())
+                    .map(|root| match &p.subdir {
+                        Some(subdir) => root.join(subdir).to_string_lossy().to_string(),
+                        None => root.to_string_lossy().to_string(),
+                    })
                     .collect();
                 json!({
                     "id": p.id,
