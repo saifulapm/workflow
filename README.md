@@ -41,6 +41,11 @@ of them committed:
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
 
+A project's spec lives in the wiki, never the repo: write it as pages with
+`mem wiki <slug> --stdin`, one per subsystem. A plan names a page with
+`Read: wiki:<slug>` instead of restating it, and the run inlines that page,
+verbatim, in the worker's brief and the reader's prompt.
+
 A monorepo holds one project per app beside the root project:
 
     mem project add apps/thing               # a child project at that subdir

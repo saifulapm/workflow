@@ -14,7 +14,10 @@ sessions. Anything one plan holds stays in the plan lane.
 Everything `plan` says about questions, research and detail holds for every
 milestone plan. The difference is that they are cut together, while the whole
 shape is still in front of you. Read the project's pages first (`mem wiki`),
-then write the roadmap:
+write the spec as wiki pages before cutting a single milestone -- a page per
+subsystem the project touches, so a plan reads one with `Read: wiki:<slug>`
+instead of restating it -- then write the roadmap in a scratch dir from
+`mktemp -d`, never the checkout:
 
     # roadmap: shop
 

@@ -20,16 +20,16 @@ means the sync unit is behind, so say so before trusting it.
 
 ## The wiki
 
-An item is an episodic fact; a page is the living document for a subsystem.
-Read it before touching one, rewrite it when you change one.
+A page is the spec's home, the living document for a subsystem; an item is
+an episodic fact. Read a page before touching it, rewrite it when it changes.
 
     mem wiki                  # the pages: slug, bytes, modified, title
     mem wiki <slug>           # one page, byte for byte
     mem wiki <slug> --stdin --note "<what changed and why>" <page.md
 
 The note is the page's whole history: write it like a commit message. Pages
-link as `[name](name.md)` and each has a line in the `index` page you keep by
-hand.
+link as `[name](name.md)` and list in `index`, kept by hand; one over 8 KB
+splits by section, each part linked from index too.
 
 Nothing is deleted; a deletion returns on the next sync. A finished page
 becomes a one-line stub pointing at its replacement and leaves the index.
@@ -42,8 +42,8 @@ Six, one command each, none blocking.
 message's voice, not a diff summary.
 
 **A decision or a gotcha** → `mem save "<text>" --title "<short>"`. Worth
-saving: you would want it in three weeks and it is not in the code or the git
-log; a version that must not move, an approach that failed.
+saving: you would want it in three weeks and it is not in the code or the
+git log.
 
 **Deciding instead of asking** → `mem save "<text>" --kind ruling`. When an
 answer is not yours to invent but stopping costs more than being wrong:
@@ -61,7 +61,7 @@ the machine is watched (hub `/api/presence`), else `mem ask`, which reaches
 the phone without waiting. Never resolve your own stop condition.
 
 **The workflow itself got in the way** → `mem save --project workflow
---type friction "friction: <what bit you - where - expected>"`. File it and
+--type friction "friction: <what bit you - where - expected>"`. File it,
 move on.
 
 Superseding is a write too: `mem save "<new text>" --supersedes <id>`. Two live
