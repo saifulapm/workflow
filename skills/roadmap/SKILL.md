@@ -37,19 +37,20 @@ files an earlier one creates and symbols an earlier one Gives.
 
 ## 2. Checking it, then storing it
 
-    workflow plan-check roadmap.md
+    d=$(mktemp -d)
+    workflow plan-check "$d/roadmap.md"
 
-reads the roadmap and every milestone plan from `<id>.md` beside it, in wave
-order, judging each against the tree plus what the milestones it waits on
-write and Give -- so a path a later milestone reads and an earlier one
+reads the roadmap and every milestone plan from `"$d/<id>.md"` beside it, in
+wave order, judging each against the tree plus what the milestones it waits
+on write and Give -- so a path a later milestone reads and an earlier one
 creates is not a finding. A milestone with no plan, a plan headed under
 another slug, and a plan that does not parse each refuse the check.
 
 After the check passes and Saiful approves, store them:
 
-    mem roadmap --stdin < roadmap.md
-    mem plan <slug> --set-file <slug>.md    # once per milestone
-    mem plan --list                         # what is stored and waiting
+    mem roadmap --stdin < "$d/roadmap.md"
+    mem plan <slug> --set-file "$d/<slug>.md"    # once per milestone
+    mem plan --list                              # what is stored and waiting
 
 A stored plan's first line has to be `# plan: <slug>` under the slug it is
 filed as, so a run can never be pointed at the wrong milestone.

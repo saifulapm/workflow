@@ -61,7 +61,7 @@ like "$orchestrate_skill" 'Leave the checkout on main' \
 roadmap_skill=$(cat "$WF_ROOT/skills/roadmap/SKILL.md")
 like "$roadmap_skill" 'mem roadmap --stdin' 'roadmap stores the milestones'
 like "$roadmap_skill" 'mem plan <slug> --set-file' 'and one plan per milestone beside them'
-like "$roadmap_skill" 'workflow plan-check roadmap.md' 'roadmap checks the whole thing at once'
+like "$roadmap_skill" 'workflow plan-check "\$d/roadmap\.md"' 'roadmap checks the whole thing at once'
 like "$roadmap_skill" 'mem roadmap +#' 'a later session reads which milestone is next'
 like "$roadmap_skill" 'mem plan --from <slug>' 'and makes its plan the plan of record'
 # `--from` writes the plan of record into mem's store, and nothing puts a copy

@@ -25,9 +25,9 @@ the predecessor's whole surface into pages first; cuts are Saiful's.
 Prose above the tasks is mandatory: a `## Spec` section and a numbered
 `## Rulings` section, since a worker sees only its task block and this prose.
 
-Write it in a scratch dir from `mktemp -d`, never the checkout, then store
-it in mem:
+Write it in a scratch dir, never the checkout, then store it in mem:
 
+    d=$(mktemp -d)
     mem plan --stdin < "$d/plan.md"
 
 Aim for 1,500–3,500 tokens (bytes ÷ 4): under that the tasks are wishes, over
@@ -71,7 +71,7 @@ produces a mockup first.
   restate every symbol another task defines, or it hunts.
 - An unknown dependency id or a cycle is a hard error.
 
-Check it from the checkout before approval:
+Check it from the checkout:
 
     workflow plan-check "$d/plan.md"
 
