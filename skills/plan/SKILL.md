@@ -10,12 +10,11 @@ Work bigger than one plan is a roadmap of milestones: `roadmap`.
 ## 1. Questions, once
 
 One numbered round, batched at the frontier of what you cannot work out. Each
-carries a recommended answer, so silence answers it, for small trade-offs;
-a scope question (what the product is, what stays, what goes) is never
-resolved by silence. Facts are researched, not asked; ask about intent,
-priorities and trade-offs. A question that leaves the session (`mem ask`,
-read on a phone) is one decision, the choices, a recommendation, under 100
-words.
+carries a recommended answer, so silence answers it, for small trade-offs; a
+scope question (what the product is, what stays, what goes) is never resolved
+by silence. Facts are researched, not asked. A question that leaves the
+session (`mem ask`, read on a phone) is one decision, the choices, a
+recommendation, under 100 words.
 
 Read the project's pages before cutting tasks: `mem wiki`, then each page the
 change touches; they hold decisions code cannot show. A rewrite inventories
@@ -31,9 +30,9 @@ Store it in mem, never the checkout:
     mem plan --stdin < plan.md
 
 Aim for 1,500–3,500 tokens (bytes ÷ 4): under that the tasks are wishes, over
-it nobody reads them. Reference file paths, classes, the introducing commit. A
-plan cut from the friction queue names the ids it answers, so shipping closes
-them. UI work produces a mockup first. Write it plain.
+it nobody reads them. Reference file paths, classes, commits. A plan cut from
+the friction queue names the ids it answers, so shipping closes them. UI work
+produces a mockup first.
 
 ## 3. The grammar
 
@@ -52,22 +51,23 @@ them. UI work produces a mockup first. Write it plain.
 
 - `# plan: <slug>` opens it, naming the run's branches and worktrees; a task
   line is `- [ ] <id> <title>` with an optional `[after: a, b]` (ids:
-  lowercase, up to 16 chars). Continuation lines indent two-plus spaces as
+  lowercase, up to 16 chars). Continuation lines indent 2+ spaces as
   `Key: value`, split at the first colon-space.
 - `Files:` is whitespace-separated globs; double-quote one with a space. `*`
   stops at a slash, `**` crosses, patterns are anchored at the repo root.
   Both it and `Verify:` are mandatory; `workflow verify` is what the gate
   runs. This is the ownership boundary: a write outside them is refused at
   the merge gate, and a task owning more than eight patterns is two tasks.
-  The sweep names four classes: the registry or mount file, the lockfile,
-  the barrel or index file, the test file Verify runs. Each one missed
-  stops the task to ask.
+  The sweep names six classes: the registry or mount file, the lockfile,
+  the barrel or index file, the test file Verify runs, the arm an
+  exhaustive match demands, the dead-code guard on a sibling's symbol
+  this task first calls. Each one missed stops the task to ask.
 - `Read:`, `Uses:`, `Gives:` and `Pattern:` carry the middle tier: files to
-  open before editing (`Read:` may name `wiki:<slug>`, a page of the
-  project's wiki), interfaces consumed and produced across task boundaries
-  (exact signatures, items joined with ` · `), and one analog to copy the
-  shape of. A worker sees its block and the plan's prose, not a sibling's
-  block: restate every symbol another task defines, or it hunts.
+  open before editing (`Read:` may name `wiki:<slug>`, a wiki page),
+  interfaces consumed and produced across task boundaries (exact
+  signatures, items joined with ` · `), and one analog to copy the shape
+  of. A worker sees its block and the plan's prose, not a sibling's block:
+  restate every symbol another task defines, or it hunts.
 - An unknown dependency id or a cycle is a hard error.
 
 Check it from the checkout before approval:
@@ -75,8 +75,8 @@ Check it from the checkout before approval:
     workflow plan-check plan.md    # exit 1 means the plan, not the code
 
 It reads the tree, runs nothing: an unpassable Verify or deferral language
-("for now", "TBD") is refused; ungrounded lines warn. A block over budget
-is a task to split, never a line to trim.
+("for now", "TBD") is refused; ungrounded lines warn. A block over budget is
+a task to split, never a line to trim.
 
 ## 4. Shape
 
@@ -91,5 +91,5 @@ task, and a name two tasks share is spelled identically in both.
 
 ## 5. One approval checkpoint
 
-Present the plan once, whole; after approval `implement` or `workflow run`
-takes it.
+Present it once, whole; `implement` or `workflow run` takes it after
+approval.

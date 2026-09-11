@@ -35,13 +35,13 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
        mem save --kind ruling --type <type> "<what - why - cost if wrong>"
 
 4. When the run stops short, its report is on stderr and in `mem log`;
-   status says why per task. Decide, record, then run again: a cause you can
+   status says why per task. Decide, record, rerun: a cause you can
    name, follow the binary's recipe; a question waiting, answer it; suites
    that fought, WORKFLOW_MAX_WORKERS=1; failed on a reading (`the reviewer
-   wants fixes`), read the file it names, `workflow redispatch <task>`. A
-   second fix verdict is a task cut too big or a model too small, not a
-   third dispatch; overruling it is a ruling and a plan edit. `no verdict`:
-   `<task>.review-err` says why.
+   wants fixes first`), read the file it names, `workflow redispatch
+   <task>`. A second fix verdict is a task cut too big or a model too
+   small, not a third dispatch; overruling it is a ruling and a plan edit.
+   `no verdict`: `<task>.review-err` says why.
 5. Escalate only scope, irreversible or taste; decide the rest.
 
 ## Questions
