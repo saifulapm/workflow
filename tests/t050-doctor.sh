@@ -191,3 +191,14 @@ unlike "$OUT" 'hook pre-commit' 'the real stubs pass the content check'
 like "$OUT" 'WORKFLOW_HOME' 'unverifiable identity and budgets are said out loud'
 unlike "$OUT" 'healthy' 'an unverifiable machine is not called healthy'
 
+## ------------------------------------------------------- the third door
+
+# Still no WORKFLOW_HOME, and the installed binary still has no checkout
+# above it, so ruling 8's third door is a mem project literally named
+# workflow: the doctor is run from inside a checkout mem already knows by
+# that name (AC ruling 8).
+new_repo workflow
+mem_register
+run "$T_TMP/installed-workflow" doctor
+unlike "$OUT" 'no workflow checkout found' 'a mem project named workflow answers the third door'
+cd "$T_TMP" || exit 1

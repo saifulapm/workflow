@@ -2,11 +2,32 @@
 //! It reports and never edits.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde_json::Value;
 
 use crate::gitcmd::{self, Git};
-use crate::{exit, have, paths, settings};
+use crate::{exit, have, memcli, paths, settings};
+
+/// The checkout this run of `doctor` is about, in the order ruling 8 sets:
+/// `WORKFLOW_HOME`, then the directory above the binary -- both answered by
+/// [`paths::wf_home`] -- then the project mem calls "workflow", asked for by
+/// that name so an unrelated project at this cwd never answers instead.
+pub fn checkout() -> Option<PathBuf> {
+    if let Some(h) = paths::wf_home() {
+        return Some(h);
+    }
+    let out = Command::new(memcli::bin())
+        .args(["--project", "workflow", "project", "current", "--json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let doc: Value = serde_json::from_slice(&out.stdout).ok()?;
+    let root = doc.get("root")?.as_str()?;
+    (!root.is_empty()).then(|| PathBuf::from(root))
+}
 
 #[derive(Default)]
 struct Report {
@@ -64,7 +85,7 @@ fn sites_checkouts() -> Vec<PathBuf> {
 fn skill_sizes() -> Vec<(String, usize, usize)> {
     let dir = match std::env::var("WORKFLOW_SKILLS_DIR") {
         Ok(v) if !v.is_empty() => PathBuf::from(v),
-        _ => match paths::wf_home() {
+        _ => match checkout() {
             Some(h) => h.join("skills"),
             None => return Vec::new(),
         },
@@ -117,7 +138,7 @@ fn hooks(r: &mut Report) {
         r.note("hooks path", &installed);
     }
 
-    let home = paths::wf_home();
+    let home = checkout();
     for name in ["pre-commit", "commit-msg", "pre-push"] {
         if installed.is_empty() {
             continue;
@@ -309,7 +330,7 @@ pub fn cmd_doctor() -> i32 {
     // Without a checkout the hook-identity and skill-budget checks have
     // nothing to read; a silent pass here reported an ungated machine as
     // healthy (friction #13D9MGCP).
-    if paths::wf_home().is_none() {
+    if checkout().is_none() {
         r.finding(
             "checkout",
             "no workflow checkout found above this binary -- set WORKFLOW_HOME so hook identity and skill budgets can be checked",
