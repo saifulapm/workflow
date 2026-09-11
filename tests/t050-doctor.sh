@@ -194,32 +194,57 @@ unlike "$OUT" 'healthy' 'an unverifiable machine is not called healthy'
 ## ------------------------------------------------------- the third door
 
 # Still no WORKFLOW_HOME, and the installed binary still has no checkout
-# above it, so ruling 8's third door is the root `mem project current --json`
-# names for the cwd -- accepted only when that root itself holds
-# hooks/pre-commit and skills/. WORKFLOW_SKILLS_DIR is unset first so
-# skill_sizes() has to fall back through checkout() to prove which root it got.
+# above it, so ruling 8's third door is the checkout that owns the cwd: the
+# parent of `git rev-parse --path-format=absolute --git-common-dir`,
+# accepted only when that root itself holds hooks/pre-commit and skills/.
+# WORKFLOW_SKILLS_DIR is unset first so skill_sizes() has to fall back
+# through checkout() to prove which root it got.
 unset WORKFLOW_SKILLS_DIR
 
 new_repo workflow
 mkdir -p hooks skills/route
-write_exec hooks/pre-commit <<'EOF'
+for name in pre-commit commit-msg pre-push; do
+	write_exec "hooks/$name" <<'EOF'
 #!/bin/sh
 exit 0
 EOF
+done
 printf -- '---\nname: route\ndescription: pick the lane\n---\n\nshort body\n' >skills/route/SKILL.md
 git add hooks skills
 git -c core.hooksPath=/dev/null commit -qm 'wiring'
-mem_register
+
+wfhooks="$T_TMP/wfhooks"
+mkdir -p "$wfhooks"
+for name in pre-commit commit-msg pre-push; do
+	ln -sf "$T_TMP/workflow/hooks/$name" "$wfhooks/$name"
+done
+git config --global core.hooksPath "$wfhooks"
+
 run "$T_TMP/installed-workflow" doctor
 unlike "$OUT" 'no workflow checkout found' \
-	'a registered checkout holding hooks/pre-commit and skills/ answers the third door'
+	'a checkout holding hooks/pre-commit and skills/ answers the third door'
+unlike "$OUT" 'does not resolve' 'and the stubs resolve to its own hooks'
 like "$OUT" 'skill route .*within budget' 'and the root it names is read for its own skills'
 
-# The poshra repro from review 1 of doctor: a project mem knows by some name,
-# standing at a cwd with neither marker, must still be refused.
-new_repo other-project
-mem_register
+# A linked worktree of that checkout must still resolve to the main checkout,
+# not to itself: every worktree the orchestrator makes is a full tree, so
+# hooks/pre-commit and skills/ sit on the worktree too, and a marker check
+# alone would not catch door three naming the worktree by mistake -- only the
+# hooks it actually resolves against does (review 2's regression).
+git worktree add -q ../workflow-wt -b wt-branch
+cd "$T_TMP/workflow-wt" || exit 1
 run "$T_TMP/installed-workflow" doctor
-is "$RC" 1 'a registered project with neither marker is still a finding'
-like "$OUT" 'no workflow checkout found' 'the third door refuses it, registered or not'
+unlike "$OUT" 'does not resolve' \
+	'from a linked worktree, the stubs still resolve to the main checkout'
+like "$OUT" 'skill route .*within budget' 'and the skills read are the main checkout'\''s'
+cd "$T_TMP" || exit 1
+
+git config --global core.hooksPath "$ghooks"
+
+# The poshra repro from review 1 of doctor: an unrelated repo standing at
+# this cwd, with neither marker, must still be refused.
+new_repo other-project
+run "$T_TMP/installed-workflow" doctor
+is "$RC" 1 'an unrelated repo with neither marker is still a finding'
+like "$OUT" 'no workflow checkout found' 'the third door refuses it'
 cd "$T_TMP" || exit 1

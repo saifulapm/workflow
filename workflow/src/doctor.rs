@@ -2,38 +2,27 @@
 //! It reports and never edits.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::Value;
 
 use crate::gitcmd::{self, Git};
-use crate::{exit, have, memcli, paths, settings};
+use crate::{exit, have, paths, settings};
 
 /// The checkout this run of `doctor` is about, in the order ruling 8 sets:
 /// `WORKFLOW_HOME`, then the directory above the binary -- both answered by
-/// [`paths::wf_home`] -- then the root `mem project current --json` reports
-/// for the cwd, whatever project that is. `--project` only picks an identity
-/// by name, never a path, and mem keeps no reverse lookup from a project id
-/// back to a checkout, so that root is accepted only when it itself holds
-/// `hooks/pre-commit` and `skills/`; a registered project standing at this
-/// cwd without those never answers, and the old finding stays for it.
+/// [`paths::wf_home`] -- then the checkout that owns the cwd: the parent of
+/// `git rev-parse --path-format=absolute --git-common-dir`, which from a
+/// linked worktree is the main checkout and from a plain checkout is itself.
+/// That root is accepted only when it itself holds `hooks/pre-commit` and
+/// `skills/`, so an unrelated repo at this cwd never answers. No mem call:
+/// mem's `project current` root is cwd-derived and names a worktree as
+/// itself, which is the wrong answer for hook identity and skill budgets.
 pub fn checkout() -> Option<PathBuf> {
     if let Some(h) = paths::wf_home() {
         return Some(h);
     }
-    let out = Command::new(memcli::bin())
-        .args(["project", "current", "--json"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let doc: Value = serde_json::from_slice(&out.stdout).ok()?;
-    let root = doc.get("root")?.as_str()?;
-    if root.is_empty() {
-        return None;
-    }
-    let root = PathBuf::from(root);
+    let common = Git::here().out(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+    let root = PathBuf::from(common).parent()?.to_path_buf();
     (root.join("hooks/pre-commit").exists() && root.join("skills").is_dir()).then_some(root)
 }
 
