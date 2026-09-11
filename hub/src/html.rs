@@ -12,7 +12,8 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark};
 use crate::config::Config;
 use crate::form::encode_component;
 use crate::model::{
-    Activity, ItemDetail, Project, ProjectView, Question, Section, View, WikiProject, is_slug,
+    Activity, ItemDetail, Project, ProjectView, Question, RunTask, Section, View, WikiProject,
+    is_slug,
 };
 
 /// The one escaping function. `'` and `"` are in here because values also land
@@ -483,7 +484,7 @@ pub fn markdown(text: &str, project: &str) -> String {
 const ROADMAP_LINES: usize = 40;
 
 /// `GET /p/<project>`: ruling 3's sections, in order.
-pub fn project_page(view: &ProjectView, machine: &str) -> String {
+pub fn project_page(view: &ProjectView, machine: &str, runs: &Section<RunTask>) -> String {
     let project = view.name.as_str();
     let mut out = head(project);
     out.push_str(&format!(
@@ -515,11 +516,43 @@ pub fn project_page(view: &ProjectView, machine: &str) -> String {
         esc(&log_url(project))
     ));
     out.push_str(&wiki_section(view, project));
-    // Ruling 3: the heading belongs to this task; the live read is the runs
-    // task's (ruling 5, review 1 of overview).
-    out.push_str(&format!("<h2>Runs on {}</h2>\n", esc(machine)));
+    out.push_str(&runs_section(runs, machine));
 
     out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// Ruling 5: each task, with the run it belongs to. `runs.degraded` carries
+/// the one sentence for no checkout, no `workflow` on PATH or a non-zero
+/// exit — never the mem banner, since this section's read is not a mem read.
+fn runs_section(runs: &Section<RunTask>, machine: &str) -> String {
+    let mut out = format!("<h2>Runs on {}</h2>\n", esc(machine));
+    if let Some(why) = &runs.degraded {
+        out.push_str(&format!("<p class=\"empty\">{}</p>\n", esc(why)));
+        return out;
+    }
+    if runs.rows.is_empty() {
+        out.push_str("<p class=\"empty\">No runs.</p>\n");
+        return out;
+    }
+    out.push_str("<ul>\n");
+    for task in &runs.rows {
+        out.push_str(&format!(
+            "<li>{plan}{live} · {id} <span class=\"meta\">{state} · \
+             {dispatches} dispatches{last}</span></li>\n",
+            plan = esc(&task.plan),
+            live = if task.live { " (live)" } else { "" },
+            id = esc(&task.id),
+            state = esc(&task.state),
+            dispatches = task.dispatches,
+            last = if task.last_status.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", esc(&task.last_status))
+            },
+        ));
+    }
+    out.push_str("</ul>\n");
     out
 }
 

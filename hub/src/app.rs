@@ -186,7 +186,11 @@ impl App {
 
     fn project_overview(&self, project: &str) -> Response {
         match model::project_view(&self.mem, project, self.now_ms()) {
-            Some(view) => Response::html(html::project_page(&view, &self.machine)),
+            Some(view) => {
+                let root = model::checkout_of(&self.mem, project);
+                let runs = model::runs(root.as_deref());
+                Response::html(html::project_page(&view, &self.machine, &runs))
+            }
             None => Response::not_found(),
         }
     }

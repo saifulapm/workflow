@@ -13,10 +13,14 @@
 //! unit starts in, resolves to nothing (review B-3). So: list the projects,
 //! then one `mem log --project <name>` each, merged and sorted by id.
 
+use std::process::Command;
+use std::time::Duration;
+
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::memcli::{MemCli, Outcome};
+use crate::proc::{self, Ended};
 
 /// Crockford base32, the ULID alphabet.
 const BASE32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -268,6 +272,20 @@ pub fn wiki_text(mem: &MemCli, project: &str, slug: &str) -> Option<String> {
 /// name may contain.
 pub fn is_known_project(mem: &MemCli, name: &str) -> bool {
     project_names(&mem.projects()).iter().any(|p| p == name)
+}
+
+/// This machine's checkout of `name`, for the live-run read (ruling 5): the
+/// first entry of its `checkouts` row from `mem projects --json`. `None`
+/// when mem does not know the project or this machine has no checkout of it.
+pub fn checkout_of(mem: &MemCli, name: &str) -> Option<String> {
+    let outcome = mem.projects();
+    let rows = outcome.rows("projects");
+    let row = rows.iter().find(|p| p["name"].as_str() == Some(name))?;
+    row["checkouts"]
+        .as_array()?
+        .first()?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// A `/p/<project>` singleton read — a stored plan's text or one item —
@@ -713,6 +731,94 @@ fn project_questions(outcome: &Outcome) -> Vec<ProjectQuestion> {
     pending
 }
 
+/// One task of one run, flattened with the run's own plan, integration
+/// branch and live flag (ruling 5) — the shape the overview's runs section
+/// lists, one row per task.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RunTask {
+    pub plan: String,
+    pub integration: String,
+    pub live: bool,
+    pub id: String,
+    pub state: String,
+    pub dispatches: u64,
+    pub last_status: String,
+}
+
+/// How long `workflow status` may take before ruling 5's deadline kills it.
+const WORKFLOW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Ruling 5: `workflow status --json`, run with `root` as its working
+/// directory — this machine's checkout of the project, from
+/// [`checkout_of`]. `root` is `None` when this machine has none; that, a
+/// missing `workflow` on PATH and a non-zero exit each render their own
+/// one-sentence reason rather than a table.
+pub fn runs(root: Option<&str>) -> Section<RunTask> {
+    let Some(root) = root else {
+        return degraded_runs("no checkout of this project on this machine");
+    };
+    let mut command = Command::new("workflow");
+    command.args(["status", "--json"]).current_dir(root);
+    match proc::output_within(&mut command, WORKFLOW_STATUS_TIMEOUT) {
+        Ended::Failed(_) => degraded_runs("workflow is not installed here"),
+        Ended::TimedOut => degraded_runs(&format!(
+            "workflow did not answer within {WORKFLOW_STATUS_TIMEOUT:?} and was killed"
+        )),
+        Ended::Exited(done) if done.code == Some(0) => match run_tasks(&done.stdout) {
+            Some(rows) => Section {
+                degraded: None,
+                rows,
+            },
+            None => degraded_runs("workflow status printed something that is not JSON"),
+        },
+        Ended::Exited(done) => {
+            let stderr = String::from_utf8_lossy(&done.stderr).trim().to_string();
+            let why = if stderr.is_empty() {
+                "workflow status exited without a runs document".to_string()
+            } else {
+                stderr
+            };
+            degraded_runs(&why)
+        }
+    }
+}
+
+fn degraded_runs(why: &str) -> Section<RunTask> {
+    Section {
+        degraded: Some(why.to_string()),
+        rows: Vec::new(),
+    }
+}
+
+/// `workflow status --json`'s document (`workflow/src/status.rs`), flattened
+/// into one `RunTask` per task. `None` for stdout that will not parse.
+fn run_tasks(stdout: &[u8]) -> Option<Vec<RunTask>> {
+    let value: Value = serde_json::from_slice(stdout).ok()?;
+    let mut rows = Vec::new();
+    for run in value.get("runs")?.as_array()? {
+        let plan = string(run, "plan");
+        let integration = string(run, "integration");
+        let live = run["live"].as_bool().unwrap_or(false);
+        for task in run
+            .get("tasks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            rows.push(RunTask {
+                plan: plan.clone(),
+                integration: integration.clone(),
+                live,
+                id: string(task, "id"),
+                state: string(task, "state"),
+                dispatches: task["dispatches"].as_u64().unwrap_or(0),
+                last_status: string(task, "last_status"),
+            });
+        }
+    }
+    Some(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,5 +953,60 @@ mod tests {
         assert_eq!(first_line(&outcome).as_deref(), Some("Green."));
         assert_eq!(first_line(&Outcome::Absent), None);
         assert_eq!(first_line(&Outcome::Json(serde_json::json!({}))), None);
+    }
+
+    #[test]
+    fn runs_with_no_checkout_root_says_so_without_running_anything() {
+        let section = runs(None);
+        assert!(section.degraded.is_some());
+        assert!(section.rows.is_empty());
+    }
+
+    #[test]
+    fn runs_flattens_each_run_s_plan_and_live_flag_onto_its_tasks() {
+        let doc = serde_json::json!({
+            "project": "proj-alpha",
+            "runs": [{
+                "plan": "m1",
+                "live": true,
+                "base": "deadbeef",
+                "integration": "integration/m1",
+                "tasks": [
+                    {"id": "t1", "state": "merged", "dispatches": 2, "session": "s1",
+                     "failed": "", "last_status": "ready: done", "merged": "abc123", "context": 0},
+                    {"id": "t2", "state": "dispatched", "dispatches": 1, "session": "s2",
+                     "failed": "", "last_status": "", "merged": "", "context": 0},
+                ],
+            }],
+        });
+        let rows = run_tasks(doc.to_string().as_bytes()).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                RunTask {
+                    plan: "m1".to_string(),
+                    integration: "integration/m1".to_string(),
+                    live: true,
+                    id: "t1".to_string(),
+                    state: "merged".to_string(),
+                    dispatches: 2,
+                    last_status: "ready: done".to_string(),
+                },
+                RunTask {
+                    plan: "m1".to_string(),
+                    integration: "integration/m1".to_string(),
+                    live: true,
+                    id: "t2".to_string(),
+                    state: "dispatched".to_string(),
+                    dispatches: 1,
+                    last_status: String::new(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn runs_rejects_a_status_document_that_will_not_parse() {
+        assert!(run_tasks(b"not json").is_none());
     }
 }
