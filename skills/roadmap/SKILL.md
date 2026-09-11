@@ -16,8 +16,8 @@ milestone plan. The difference is that they are cut together, while the whole
 shape is still in front of you. Read the project's pages first (`mem wiki`),
 write the spec as wiki pages before cutting a single milestone -- a page per
 subsystem the project touches, so a plan reads one with `Read: wiki:<slug>`
-instead of restating it -- then write the roadmap in a scratch dir from
-`mktemp -d`, never the checkout:
+instead of restating it -- then write the roadmap in a scratch dir, never
+the checkout: `d=$(mktemp -d)`
 
     # roadmap: shop
 
@@ -37,7 +37,6 @@ files an earlier one creates and symbols an earlier one Gives.
 
 ## 2. Checking it, then storing it
 
-    d=$(mktemp -d)
     workflow plan-check "$d/roadmap.md"
 
 reads the roadmap and every milestone plan from `"$d/<id>.md"` beside it, in
