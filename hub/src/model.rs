@@ -27,6 +27,12 @@ pub const ACTIVITY_LIMIT: usize = 20;
 /// mem's own ceiling on a page slug (`mem/src/store.rs`).
 pub const SLUG_MAX: usize = 64;
 
+/// Ruling 1: `/p/<project>/log`'s size.
+pub const PROJECT_LOG_LIMIT: usize = 200;
+
+/// Ruling 1: `/p/<project>/items/<kind>`'s size.
+pub const PROJECT_ITEMS_LIMIT: usize = 100;
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Question {
     pub id: String,
@@ -264,6 +270,68 @@ pub fn is_known_project(mem: &MemCli, name: &str) -> bool {
     project_names(&mem.projects()).iter().any(|p| p == name)
 }
 
+/// One stored plan's text, by slug — `/p/<project>/plan/<slug>`. `None` for a
+/// slug mem does not have, the same shape as `wiki_text`.
+pub fn plan_slug_text(mem: &MemCli, project: &str, slug: &str) -> Option<String> {
+    let Outcome::Json(value) = &*mem.plan_slug(project, slug) else {
+        return None;
+    };
+    value.get("text")?.as_str().map(str::to_string)
+}
+
+/// `/p/<project>/log`: the last 200 log lines, whole.
+pub fn log_lines(mem: &MemCli, project: &str, now_ms: i64) -> Section<Activity> {
+    let outcome = mem.log_n(project, PROJECT_LOG_LIMIT);
+    let rows = outcome
+        .rows("items")
+        .iter()
+        .map(|row| activity_item(row, now_ms))
+        .collect();
+    Section {
+        degraded: list_fault(&outcome, "log"),
+        rows,
+    }
+}
+
+/// `/p/<project>/items/<kind>`: the last 100 items of one kind.
+pub fn kind_items(mem: &MemCli, project: &str, kind: &str, now_ms: i64) -> Section<Activity> {
+    let outcome = mem.items(project, kind, PROJECT_ITEMS_LIMIT);
+    let rows = outcome
+        .rows("items")
+        .iter()
+        .map(|row| activity_item(row, now_ms))
+        .collect();
+    Section {
+        degraded: list_fault(&outcome, kind),
+        rows,
+    }
+}
+
+/// `/p/<project>/item/<id>`: one item, whole.
+#[derive(Debug)]
+pub struct ItemDetail {
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+}
+
+/// `None` for an id mem does not have, the same shape as `wiki_text`.
+pub fn item_detail(mem: &MemCli, id: &str) -> Option<ItemDetail> {
+    let Outcome::Json(value) = &*mem.show(id) else {
+        return None;
+    };
+    let item = value.get("items")?.as_array()?.first()?;
+    Some(ItemDetail {
+        kind: string(item, "kind"),
+        title: string(item, "title"),
+        body: item
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
 /// `index` first, then alphabetical: the index page is the one a reader wants
 /// first, and it is the page the plan makes every wiki keep.
 fn page_order(page: &WikiPage) -> (u8, &str) {
@@ -291,6 +359,13 @@ pub fn is_slug(slug: &str) -> bool {
     slug.len() <= SLUG_MAX
         && (first.is_ascii_lowercase() || first.is_ascii_digit())
         && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Ruling 1: an id is a short id (8 base32 characters) or a full ULID (26),
+/// checked before it becomes an argument to `mem show`.
+pub fn is_item_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    (bytes.len() == 8 || bytes.len() == 26) && bytes.iter().all(|b| BASE32.contains(b))
 }
 
 fn project_names(outcome: &Outcome) -> Vec<String> {
@@ -455,6 +530,8 @@ pub struct PlanSummary {
     pub title: String,
     pub ticked: usize,
     pub total: usize,
+    /// The plan's whole text, for the plan pages under the overview (detail).
+    pub text: String,
 }
 
 #[derive(Debug)]
@@ -584,6 +661,7 @@ fn plan_summary(text: &str) -> PlanSummary {
         title,
         ticked,
         total,
+        text: text.to_string(),
     }
 }
 
@@ -703,6 +781,17 @@ mod tests {
         }
         assert!(is_slug(&"a".repeat(SLUG_MAX)));
         assert!(!is_slug(&"a".repeat(SLUG_MAX + 1)));
+    }
+
+    #[test]
+    fn an_item_id_is_a_short_id_or_a_full_ulid_in_base32() {
+        assert!(is_item_id("28J1TSD1"));
+        assert!(is_item_id("01M0BF1F8BY8FXGZS428J1TSD1"));
+        for id in ["", "short7", "toolong123", "28J1TSD!", "28j1tsd1"] {
+            assert!(!is_item_id(id), "{id}");
+        }
+        // The `I`, `L`, `O` and `U` a ULID never uses.
+        assert!(!is_item_id("01M0BF1F8IY8FXGZS428J1TSD1"));
     }
 
     #[test]

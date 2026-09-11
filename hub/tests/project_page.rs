@@ -232,16 +232,6 @@ fn an_unknown_project_page_is_a_404() {
     assert_eq!(status_of(&hub.get("/p/no-such-project")), 404);
 }
 
-/// Ruling 1: a path with more after the project name belongs to a route this
-/// milestone has not built yet, and is refused the same way.
-#[test]
-fn a_project_page_sub_path_is_a_404_for_now() {
-    let world = World::new("project-page-subpath-404");
-    let hub = world.hub();
-
-    assert_eq!(status_of(&hub.get(&format!("/p/{PROJECT}/roadmap"))), 404);
-}
-
 /// Ruling 6: the home page's project rows link to `/p/<name>`.
 #[test]
 fn the_home_page_links_to_the_project_page() {

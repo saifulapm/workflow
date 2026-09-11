@@ -29,6 +29,9 @@ const ROUTES: &[(&str, &str)] = &[
 /// still a 405 that says GET, the same answer every other route gives.
 const ROUTE_PREFIXES: &[(&str, &str)] = &[("/wiki/", "GET"), ("/p/", "GET")];
 
+/// Ruling 1: the five kinds `/p/<project>/items/<kind>` answers.
+const ITEM_KINDS: [&str; 5] = ["fact", "ruling", "handoff", "question", "log"];
+
 pub struct App {
     pub config: Config,
     /// The port actually bound, which is not always `config.port`: `--port`
@@ -149,15 +152,118 @@ impl App {
         }
     }
 
-    /// `GET /p/<project>` — ruling 1: only a bare project name matches here.
-    /// A path with more segments after it belongs to a route this milestone
-    /// has not built yet, and gets the same 404 as an unknown project.
+    /// `GET /p/<project>` and its detail routes (ruling 1): a bare name is the
+    /// overview, and everything after it is checked against one of the known
+    /// shapes — `log`, `roadmap`, `plan`, `plan/<slug>`, `items/<kind>`,
+    /// `item/<id>` — before it reaches an argv. Anything else is a 404, as
+    /// `/wiki/` already does.
     fn project_page(&self, rest: &str) -> Response {
-        if rest.is_empty() || rest.contains('/') {
+        let (project, sub) = match rest.split_once('/') {
+            Some((project, sub)) => (project, Some(sub)),
+            None => (rest, None),
+        };
+        if project.is_empty() || !model::is_known_project(&self.mem, project) {
             return Response::not_found();
         }
-        match model::project_view(&self.mem, rest, self.now_ms()) {
+        match sub {
+            None => self.project_overview(project),
+            Some("log") => self.project_log(project),
+            Some("roadmap") => self.project_roadmap(project),
+            Some("plan") => self.project_plan(project),
+            Some(sub) => {
+                if let Some(slug) = sub.strip_prefix("plan/") {
+                    self.project_plan_slug(project, slug)
+                } else if let Some(kind) = sub.strip_prefix("items/") {
+                    self.project_items(project, kind)
+                } else if let Some(id) = sub.strip_prefix("item/") {
+                    self.project_item(project, id)
+                } else {
+                    Response::not_found()
+                }
+            }
+        }
+    }
+
+    fn project_overview(&self, project: &str) -> Response {
+        match model::project_view(&self.mem, project, self.now_ms()) {
             Some(view) => Response::html(html::project_page(&view, &self.machine)),
+            None => Response::not_found(),
+        }
+    }
+
+    /// `GET /p/<project>/log`.
+    fn project_log(&self, project: &str) -> Response {
+        let section = model::log_lines(&self.mem, project, self.now_ms());
+        Response::html(html::log_page(
+            project,
+            &section.rows,
+            section.degraded.as_deref(),
+        ))
+    }
+
+    /// `GET /p/<project>/roadmap` — the roadmap's whole text, uncut (contrast
+    /// the overview's 40-line excerpt).
+    fn project_roadmap(&self, project: &str) -> Response {
+        match model::project_view(&self.mem, project, self.now_ms()) {
+            Some(view) => Response::html(html::roadmap_page(
+                project,
+                view.roadmap.as_deref(),
+                view.degraded.as_deref(),
+            )),
+            None => Response::not_found(),
+        }
+    }
+
+    /// `GET /p/<project>/plan` — the plan of record's whole text.
+    fn project_plan(&self, project: &str) -> Response {
+        match model::project_view(&self.mem, project, self.now_ms()) {
+            Some(view) => Response::html(html::plan_page(
+                project,
+                None,
+                view.plan.as_ref().map(|plan| plan.text.as_str()),
+                view.degraded.as_deref(),
+            )),
+            None => Response::not_found(),
+        }
+    }
+
+    /// `GET /p/<project>/plan/<slug>` — one stored plan, whole.
+    fn project_plan_slug(&self, project: &str, slug: &str) -> Response {
+        if !model::is_slug(slug) {
+            return Response::not_found();
+        }
+        match model::plan_slug_text(&self.mem, project, slug) {
+            Some(text) => Response::html(html::plan_page(project, Some(slug), Some(&text), None)),
+            None => Response::not_found(),
+        }
+    }
+
+    /// `GET /p/<project>/items/<kind>` — the last 100 items of one kind.
+    fn project_items(&self, project: &str, kind: &str) -> Response {
+        if !ITEM_KINDS.contains(&kind) {
+            return Response::not_found();
+        }
+        let section = model::kind_items(&self.mem, project, kind, self.now_ms());
+        Response::html(html::items_page(
+            project,
+            kind,
+            &section.rows,
+            section.degraded.as_deref(),
+        ))
+    }
+
+    /// `GET /p/<project>/item/<id>` — one item, whole.
+    fn project_item(&self, project: &str, id: &str) -> Response {
+        if !model::is_item_id(id) {
+            return Response::not_found();
+        }
+        match model::item_detail(&self.mem, id) {
+            Some(item) => Response::html(html::item_page(
+                project,
+                &item.kind,
+                &item.title,
+                &item.body,
+            )),
             None => Response::not_found(),
         }
     }

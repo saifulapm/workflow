@@ -302,6 +302,109 @@ pub fn wiki_page(project: &str, slug: &str, text: &str) -> String {
     out
 }
 
+/// `GET /p/<project>/log`: the last 200 log lines, whole.
+pub fn log_page(project: &str, rows: &[Activity], degraded: Option<&str>) -> String {
+    let mut out = detail_head(project, "log");
+    if let Some(why) = degraded {
+        out.push_str(&degraded_banner(why));
+    }
+    out.push_str(&item_list_section("Log", rows, project));
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// `GET /p/<project>/items/<kind>`: the last 100 items of one kind.
+pub fn items_page(project: &str, kind: &str, rows: &[Activity], degraded: Option<&str>) -> String {
+    let mut out = detail_head(project, kind);
+    if let Some(why) = degraded {
+        out.push_str(&degraded_banner(why));
+    }
+    out.push_str(&item_list_section(&capitalize(kind), rows, project));
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// `GET /p/<project>/roadmap`: the roadmap's whole text, uncut.
+pub fn roadmap_page(project: &str, text: Option<&str>, degraded: Option<&str>) -> String {
+    let mut out = detail_head(project, "roadmap");
+    if let Some(why) = degraded {
+        out.push_str(&degraded_banner(why));
+    }
+    out.push_str(&markdown_article(text, project, "No roadmap recorded."));
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// `GET /p/<project>/plan` and `GET /p/<project>/plan/<slug>`: a plan's whole
+/// text, so its ticks show (ruling 4).
+pub fn plan_page(
+    project: &str,
+    slug: Option<&str>,
+    text: Option<&str>,
+    degraded: Option<&str>,
+) -> String {
+    let label = slug.unwrap_or("plan");
+    let mut out = detail_head(project, label);
+    if let Some(why) = degraded {
+        out.push_str(&degraded_banner(why));
+    }
+    out.push_str(&markdown_article(text, project, "No plan recorded."));
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// `GET /p/<project>/item/<id>`: one item, whole — its body pre-wrap, like a
+/// question's text (ruling 4).
+pub fn item_page(project: &str, kind: &str, title: &str, body: &str) -> String {
+    let mut out = detail_head(project, title);
+    out.push_str(&format!("<div class=\"meta\">{}</div>\n", esc(kind)));
+    out.push_str(&body_block(Some(body), ""));
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// The head and header every detail page under `/p/<project>` shares: a title
+/// naming the project and the page, and a nav back to the project and home.
+fn detail_head(project: &str, label: &str) -> String {
+    let mut out = head(&format!("{project} / {label}"));
+    out.push_str(&format!(
+        "<header><h1>{proj} / {label_esc}</h1>\
+         <nav><a href=\"{proj_href}\">{proj}</a><a href=\"/\">home</a></nav></header>\n",
+        proj = esc(project),
+        label_esc = esc(label),
+        proj_href = esc(&project_url(project)),
+    ));
+    out
+}
+
+fn degraded_banner(why: &str) -> String {
+    format!(
+        "<p class=\"banner degraded\">mem is not answering, so this page is \
+         out of date: {}</p>\n",
+        esc(why)
+    )
+}
+
+fn markdown_article(text: Option<&str>, project: &str, empty: &str) -> String {
+    match text {
+        None => format!("<p class=\"empty\">{empty}</p>\n"),
+        Some(text) => format!(
+            "<article class=\"md\">\n{}</article>\n",
+            markdown(text, project)
+        ),
+    }
+}
+
+/// `kind` is one of the five lowercase words `is_kind` accepts; the page
+/// heading reads better capitalized.
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 /// Markdown to HTML, with everything that could execute left out.
 ///
 /// A page is written by a session that has been reading repositories and web
