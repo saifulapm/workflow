@@ -2400,6 +2400,15 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     let Some((git, top)) = repo::goto_toplevel() else {
         return exit::USAGE;
     };
+    if let Some(f) = plan_file
+        && paths::realpath_m(f).starts_with(paths::realpath_m(&top))
+    {
+        warn(format!(
+            "run: {} is inside the checkout, so its ticks would land in the tree -- store it with `mem plan <slug> --set-file` and run from mem",
+            f.display()
+        ));
+        return exit::USAGE;
+    }
     let Some(project) = memcli::project_current() else {
         warn("run: mem does not know this checkout, so there is no project to run under");
         return exit::USAGE;
