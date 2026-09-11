@@ -10,11 +10,11 @@ Work bigger than one plan is a roadmap of milestones: `roadmap`.
 ## 1. Questions, once
 
 One numbered round, batched at the frontier of what you cannot work out. Each
-carries a recommended answer, so silence answers it, for small trade-offs; a
-scope question (what the product is, what stays, what goes) is never resolved
-by silence. Facts are researched, not asked. A question that leaves the
-session (`mem ask`, read on a phone) is one decision, the choices, a
-recommendation, under 100 words.
+carries a recommended answer, so silence answers small trade-offs; a scope
+question (what the product is, what stays, what goes) is never resolved by
+silence. Facts are researched, not asked. A question that leaves the session
+(`mem ask`, read on a phone) is one decision, the choices, a recommendation,
+under 100 words.
 
 Read the project's pages before cutting tasks: `mem wiki`, then each page the
 change touches; they hold decisions code cannot show. A rewrite inventories
@@ -25,12 +25,13 @@ the predecessor's whole surface into pages first; cuts are Saiful's.
 Prose above the tasks is mandatory: a `## Spec` section and a numbered
 `## Rulings` section, since a worker sees only its task block and this prose.
 
-Store it in mem, never the checkout:
+Write it in a scratch dir from `mktemp -d`, never the checkout, then store
+it in mem:
 
-    mem plan --stdin < plan.md
+    mem plan --stdin < "$d/plan.md"
 
 Aim for 1,500–3,500 tokens (bytes ÷ 4): under that the tasks are wishes, over
-it nobody reads them. Reference file paths, classes, commits. A plan cut from
+it nobody reads them. Reference paths, classes, commits. A plan cut from
 the friction queue names the ids it answers, so shipping closes them. UI work
 produces a mockup first.
 
@@ -72,7 +73,7 @@ produces a mockup first.
 
 Check it from the checkout before approval:
 
-    workflow plan-check plan.md    # exit 1 means the plan, not the code
+    workflow plan-check "$d/plan.md"
 
 It reads the tree, runs nothing: an unpassable Verify or deferral language
 ("for now", "TBD") is refused; ungrounded lines warn. A block over budget is

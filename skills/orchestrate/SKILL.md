@@ -26,11 +26,11 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
    brief says nobody reads, else ask Saiful.
 3. Answer each worker question now, from the plan, the code or a ruling:
    `mem answer <id> "<decision>"`; the run redispatches with it in the
-   brief. When it changes the plan (a Files line too narrow, a Verify that
-   cannot pass here) edit the plan of record first (`mem plan > tmp`, edit,
-   `mem plan --stdin < tmp`: mem's copy carries the ticks) or the file the
-   run was handed -- `--plan-file` is only for one outside the checkout;
-   the run rereads it at dispatch and the gate. Record it:
+   brief. The plan of record is mem's: when it changes (a Files line too
+   narrow, a Verify that cannot pass here), `mem plan > tmp`, edit, `mem
+   plan --stdin < tmp` carries the ticks -- unless the run was started
+   with `--plan-file`, only ever a file outside the checkout; edit that
+   file, since the run rereads it at dispatch and the gate. Record it:
 
        mem save --kind ruling --type <type> "<what - why - cost if wrong>"
 
