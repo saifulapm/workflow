@@ -11,14 +11,18 @@ use crate::{exit, have, memcli, paths, settings};
 
 /// The checkout this run of `doctor` is about, in the order ruling 8 sets:
 /// `WORKFLOW_HOME`, then the directory above the binary -- both answered by
-/// [`paths::wf_home`] -- then the project mem calls "workflow", asked for by
-/// that name so an unrelated project at this cwd never answers instead.
+/// [`paths::wf_home`] -- then the root `mem project current --json` reports
+/// for the cwd, whatever project that is. `--project` only picks an identity
+/// by name, never a path, and mem keeps no reverse lookup from a project id
+/// back to a checkout, so that root is accepted only when it itself holds
+/// `hooks/pre-commit` and `skills/`; a registered project standing at this
+/// cwd without those never answers, and the old finding stays for it.
 pub fn checkout() -> Option<PathBuf> {
     if let Some(h) = paths::wf_home() {
         return Some(h);
     }
     let out = Command::new(memcli::bin())
-        .args(["--project", "workflow", "project", "current", "--json"])
+        .args(["project", "current", "--json"])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -26,7 +30,11 @@ pub fn checkout() -> Option<PathBuf> {
     }
     let doc: Value = serde_json::from_slice(&out.stdout).ok()?;
     let root = doc.get("root")?.as_str()?;
-    (!root.is_empty()).then(|| PathBuf::from(root))
+    if root.is_empty() {
+        return None;
+    }
+    let root = PathBuf::from(root);
+    (root.join("hooks/pre-commit").exists() && root.join("skills").is_dir()).then_some(root)
 }
 
 #[derive(Default)]
