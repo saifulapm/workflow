@@ -24,10 +24,10 @@ const ROUTES: &[(&str, &str)] = &[
     ("/wiki", "GET"),
 ];
 
-/// The one route with a path under it: `/wiki/<project>/<slug>`. It is a
-/// prefix so that a wrong method on a page is still a 405 that says GET, the
-/// same answer every other route gives.
-const ROUTE_PREFIXES: &[(&str, &str)] = &[("/wiki/", "GET")];
+/// The routes with a path under them: `/wiki/<project>/<slug>` and
+/// `/p/<project>`. Both are prefixes so that a wrong method on a page is
+/// still a 405 that says GET, the same answer every other route gives.
+const ROUTE_PREFIXES: &[(&str, &str)] = &[("/wiki/", "GET"), ("/p/", "GET")];
 
 pub struct App {
     pub config: Config,
@@ -102,6 +102,9 @@ impl App {
         if let Some(rest) = request.path.strip_prefix("/wiki/") {
             return self.wiki_page(rest);
         }
+        if let Some(rest) = request.path.strip_prefix("/p/") {
+            return self.project_page(rest);
+        }
         match request.path.as_str() {
             "/" => self.dashboard(request),
             "/answer" => self.answer(request),
@@ -142,6 +145,19 @@ impl App {
         }
         match model::wiki_text(&self.mem, project, slug) {
             Some(text) => Response::html(html::wiki_page(project, slug, &text)),
+            None => Response::not_found(),
+        }
+    }
+
+    /// `GET /p/<project>` — ruling 1: only a bare project name matches here.
+    /// A path with more segments after it belongs to a route this milestone
+    /// has not built yet, and gets the same 404 as an unknown project.
+    fn project_page(&self, rest: &str) -> Response {
+        if rest.is_empty() || rest.contains('/') {
+            return Response::not_found();
+        }
+        match model::project_view(&self.mem, rest, self.now_ms()) {
+            Some(view) => Response::html(html::project_page(&view, &self.machine)),
             None => Response::not_found(),
         }
     }

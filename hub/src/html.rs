@@ -11,7 +11,9 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark};
 
 use crate::config::Config;
 use crate::form::encode_component;
-use crate::model::{Activity, Project, Question, Section, View, WikiProject, is_slug};
+use crate::model::{
+    Activity, Project, ProjectView, Question, Runs, Section, View, WikiProject, is_slug,
+};
 
 /// The one escaping function. `'` and `"` are in here because values also land
 /// in attributes (`value="…"`, `href="…"`).
@@ -289,10 +291,12 @@ pub fn wiki_index(section: &Section<WikiProject>) -> String {
 pub fn wiki_page(project: &str, slug: &str, text: &str) -> String {
     let mut out = head(&format!("{project}/{slug}"));
     out.push_str(&format!(
-        "<header><h1>{} / {}</h1>\
-         <nav><a href=\"/wiki\">wiki</a><a href=\"/\">home</a></nav></header>\n",
-        esc(project),
-        esc(slug),
+        "<header><h1>{proj_esc} / {slug_esc}</h1>\
+         <nav><a href=\"{proj_href}\">{proj_esc}</a><a href=\"/wiki\">wiki</a>\
+         <a href=\"/\">home</a></nav></header>\n",
+        proj_esc = esc(project),
+        slug_esc = esc(slug),
+        proj_href = esc(&project_url(project)),
     ));
     out.push_str("<article class=\"md\">\n");
     out.push_str(&markdown(text, project));
@@ -362,6 +366,235 @@ pub fn markdown(text: &str, project: &str) -> String {
     let mut out = String::with_capacity(text.len() + text.len() / 2);
     cmark::push_html(&mut out, events.into_iter());
     out
+}
+
+/// Ruling 3: cut a roadmap at 40 lines, with a link to the whole.
+const ROADMAP_LINES: usize = 40;
+
+/// `GET /p/<project>`: ruling 3's sections, in order.
+pub fn project_page(view: &ProjectView, machine: &str) -> String {
+    let project = view.name.as_str();
+    let mut out = head(project);
+    out.push_str(&format!(
+        "<header><h1>{}</h1><nav><a href=\"/wiki\">wiki</a><a href=\"/\">home</a></nav></header>\n",
+        esc(project),
+    ));
+    if let Some(why) = &view.degraded {
+        out.push_str(&format!(
+            "<p class=\"banner degraded\">mem is not answering, so this page is \
+             out of date: {}</p>\n",
+            esc(why)
+        ));
+    }
+
+    out.push_str("<h2>Status</h2>\n");
+    out.push_str(&body_block(view.status.as_deref(), "No status recorded."));
+
+    out.push_str("<h2>Handoff</h2>\n");
+    out.push_str(&body_block(view.handoff.as_deref(), "No handoff recorded."));
+
+    out.push_str(&roadmap_section(view, project));
+    out.push_str(&plan_section(view, project));
+    out.push_str(&stored_plans_section(view, project));
+    out.push_str(&questions_section(view));
+    out.push_str(&item_list_section("Rulings", &view.rulings, project));
+    out.push_str(&item_list_section("Log", &view.log, project));
+    out.push_str(&format!(
+        "<p><a href=\"{}\">full log</a></p>\n",
+        esc(&log_url(project))
+    ));
+    out.push_str(&wiki_section(view, project));
+    out.push_str(&runs_section(view, machine));
+
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+/// Ruling 4: an item body renders pre-wrap like a question's text — status
+/// and handoff both render this way.
+fn body_block(text: Option<&str>, empty: &str) -> String {
+    match text {
+        Some(text) => format!("<p class=\"q\">{}</p>\n", esc(text)),
+        None => format!("<p class=\"empty\">{empty}</p>\n"),
+    }
+}
+
+fn roadmap_section(view: &ProjectView, project: &str) -> String {
+    let mut out = String::from("<h2>Roadmap</h2>\n");
+    match &view.roadmap {
+        None => out.push_str("<p class=\"empty\">No roadmap recorded.</p>\n"),
+        Some(text) => {
+            out.push_str("<article class=\"md\">\n");
+            out.push_str(&markdown(&truncate_lines(text, ROADMAP_LINES), project));
+            out.push_str("</article>\n");
+            out.push_str(&format!(
+                "<p><a href=\"{}\">full roadmap</a></p>\n",
+                esc(&roadmap_url(project))
+            ));
+        }
+    }
+    out
+}
+
+fn truncate_lines(text: &str, limit: usize) -> String {
+    text.lines().take(limit).collect::<Vec<_>>().join("\n")
+}
+
+fn plan_section(view: &ProjectView, project: &str) -> String {
+    let mut out = String::from("<h2>Plan of record</h2>\n");
+    match &view.plan {
+        None => out.push_str("<p class=\"empty\">No plan of record.</p>\n"),
+        Some(plan) => out.push_str(&format!(
+            "<p><a href=\"{href}\">{title}</a> — {ticked}/{total}</p>\n",
+            href = esc(&plan_url(project)),
+            title = esc(&plan.title),
+            ticked = plan.ticked,
+            total = plan.total,
+        )),
+    }
+    out
+}
+
+fn stored_plans_section(view: &ProjectView, project: &str) -> String {
+    let mut out = String::from("<h2>Stored plans</h2>\n");
+    if view.stored_plans.is_empty() {
+        out.push_str("<p class=\"empty\">No stored plans.</p>\n");
+    } else {
+        out.push_str("<ul>\n");
+        for plan in &view.stored_plans {
+            out.push_str(&format!(
+                "<li><a href=\"{href}\">{slug}</a>\
+                 <div class=\"meta\">{bytes} bytes · {date}</div></li>\n",
+                href = esc(&stored_plan_url(project, &plan.slug)),
+                slug = esc(&plan.slug),
+                bytes = plan.bytes,
+                date = esc(plan.modified.as_deref().unwrap_or("—")),
+            ));
+        }
+        out.push_str("</ul>\n");
+    }
+    out
+}
+
+fn questions_section(view: &ProjectView) -> String {
+    let mut out = String::from("<h2>Questions</h2>\n");
+    if view.questions.is_empty() {
+        out.push_str("<p class=\"empty\">No questions.</p>\n");
+        return out;
+    }
+    for question in &view.questions {
+        out.push_str(&format!(
+            "<article>\n<div class=\"meta\">#{short} · {state}</div>\n\
+             <p class=\"q\">{text}</p>\n",
+            short = esc(&question.short_id),
+            state = if question.answered {
+                "answered"
+            } else {
+                "pending"
+            },
+            text = esc(&question.text),
+        ));
+        if let Some(answer) = &question.answer {
+            out.push_str(&format!("<p class=\"q\">{}</p>\n", esc(answer)));
+        }
+        out.push_str("</article>\n");
+    }
+    out
+}
+
+/// Rulings and log both list `Activity` rows, each linked to its own item.
+fn item_list_section(title: &str, rows: &[Activity], project: &str) -> String {
+    let mut out = format!("<h2>{}</h2>\n", esc(title));
+    if rows.is_empty() {
+        out.push_str("<p class=\"empty\">Nothing yet.</p>\n");
+    } else {
+        out.push_str("<ul>\n");
+        for row in rows {
+            out.push_str(&format!(
+                "<li><a href=\"{href}\">{title}</a><div class=\"meta\">{age}</div></li>\n",
+                href = esc(&item_url(project, &row.id)),
+                title = esc(&row.title),
+                age = esc(&row.age),
+            ));
+        }
+        out.push_str("</ul>\n");
+    }
+    out
+}
+
+fn wiki_section(view: &ProjectView, project: &str) -> String {
+    let mut out = String::from("<h2>Wiki</h2>\n");
+    if view.wiki.is_empty() {
+        out.push_str("<p class=\"empty\">No pages yet.</p>\n");
+    } else {
+        out.push_str("<ul>\n");
+        for page in &view.wiki {
+            out.push_str(&format!(
+                "<li><a href=\"{href}\">{title}</a></li>\n",
+                href = esc(&page_url(project, &page.slug)),
+                title = esc(&page.title),
+            ));
+        }
+        out.push_str("</ul>\n");
+    }
+    out
+}
+
+/// Ruling 5: the heading names this machine, because only the machine
+/// running a run has its run dir.
+fn runs_section(view: &ProjectView, machine: &str) -> String {
+    let mut out = format!("<h2>Runs on {}</h2>\n", esc(machine));
+    match &view.runs {
+        Runs::Unavailable(why) => out.push_str(&format!("<p class=\"empty\">{}</p>\n", esc(why))),
+        Runs::Found(runs) if runs.is_empty() => {
+            out.push_str("<p class=\"empty\">No runs recorded.</p>\n");
+        }
+        Runs::Found(runs) => {
+            for run in runs {
+                out.push_str(&format!(
+                    "<article>\n<div class=\"meta\">{plan} · {integration} · {live}</div>\n<ul>\n",
+                    plan = esc(&run.plan),
+                    integration = esc(&run.integration),
+                    live = if run.live { "live" } else { "not live" },
+                ));
+                for task in &run.tasks {
+                    out.push_str(&format!(
+                        "<li>{id} {state} · {dispatches} dispatches · {last}</li>\n",
+                        id = esc(&task.id),
+                        state = esc(&task.state),
+                        dispatches = task.dispatches,
+                        last = esc(&task.last_status),
+                    ));
+                }
+                out.push_str("</ul>\n</article>\n");
+            }
+        }
+    }
+    out
+}
+
+fn project_url(project: &str) -> String {
+    format!("/p/{}", encode_component(project))
+}
+
+fn roadmap_url(project: &str) -> String {
+    format!("{}/roadmap", project_url(project))
+}
+
+fn plan_url(project: &str) -> String {
+    format!("{}/plan", project_url(project))
+}
+
+fn stored_plan_url(project: &str, slug: &str) -> String {
+    format!("{}/plan/{}", project_url(project), encode_component(slug))
+}
+
+fn log_url(project: &str) -> String {
+    format!("{}/log", project_url(project))
+}
+
+fn item_url(project: &str, id: &str) -> String {
+    format!("{}/item/{}", project_url(project), encode_component(id))
 }
 
 /// Where a link in a page may point: another page of the same wiki, or the web.
@@ -438,8 +671,9 @@ fn activity_row(item: &Activity) -> String {
 
 fn project_row(project: &Project) -> String {
     format!(
-        "<li><strong>{name}</strong> <span class=\"meta\">{age}</span>\
+        "<li><strong><a href=\"{href}\">{name}</a></strong> <span class=\"meta\">{age}</span>\
          <div>{status}</div></li>\n",
+        href = esc(&project_url(&project.name)),
         name = esc(&project.name),
         age = esc(project.last_activity_age.as_deref().unwrap_or("—")),
         // AC7: a project with no status.md is an em dash, not an error.

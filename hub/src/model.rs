@@ -13,10 +13,14 @@
 //! unit starts in, resolves to nothing (review B-3). So: list the projects,
 //! then one `mem log --project <name>` each, merged and sorted by id.
 
+use std::process::Command;
+use std::time::Duration;
+
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::memcli::{MemCli, Outcome};
+use crate::proc::{self, Ended};
 
 /// Crockford base32, the ULID alphabet.
 const BASE32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -427,6 +431,289 @@ pub fn age(millis: Option<i64>, now_ms: i64) -> String {
         60..=3599 => format!("{}m", seconds / 60),
         3600..=86399 => format!("{}h", seconds / 3600),
         _ => format!("{}d", seconds / 86400),
+    }
+}
+
+/// `GET /p/<project>`: everything the wiki, the plan grammar and a run's own
+/// state hold for one project, on one page (m2-hub-pages).
+#[derive(Debug)]
+pub struct ProjectView {
+    pub name: String,
+    /// Set only when a `mem` read came back broken — never for a record that
+    /// is simply absent, which every section below renders as its own empty
+    /// line (§4a's singleton contract).
+    pub degraded: Option<String>,
+    pub status: Option<String>,
+    pub handoff: Option<String>,
+    pub roadmap: Option<String>,
+    pub plan: Option<PlanSummary>,
+    pub stored_plans: Vec<WikiPage>,
+    pub questions: Vec<ProjectQuestion>,
+    pub rulings: Vec<Activity>,
+    pub log: Vec<Activity>,
+    pub wiki: Vec<WikiPage>,
+    pub runs: Runs,
+}
+
+#[derive(Debug)]
+pub struct PlanSummary {
+    pub title: String,
+    pub ticked: usize,
+    pub total: usize,
+}
+
+#[derive(Debug)]
+pub struct ProjectQuestion {
+    pub id: String,
+    pub short_id: String,
+    pub text: String,
+    pub answered: bool,
+    pub answer: Option<String>,
+}
+
+/// `workflow status --json`'s answer, or why there is none — ruling 5.
+#[derive(Debug)]
+pub enum Runs {
+    Found(Vec<Run>),
+    /// No checkout root, no `workflow` on PATH, or a non-zero exit: one
+    /// sentence the page shows instead of a list.
+    Unavailable(String),
+}
+
+#[derive(Debug)]
+pub struct Run {
+    pub plan: String,
+    pub integration: String,
+    pub live: bool,
+    pub tasks: Vec<RunTask>,
+}
+
+#[derive(Debug)]
+pub struct RunTask {
+    pub id: String,
+    pub state: String,
+    pub dispatches: u64,
+    pub last_status: String,
+}
+
+/// How long `workflow status` may take before the run section gives up on it
+/// (ruling 5).
+const WORKFLOW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Everything one project's page needs, assembled from `mem` and, for the
+/// live-run section, from `workflow` itself. `None` for a name `mem projects`
+/// does not know, which the route answers with a 404.
+pub fn project_view(mem: &MemCli, name: &str, now_ms: i64) -> Option<ProjectView> {
+    if !is_known_project(mem, name) {
+        return None;
+    }
+
+    let status_outcome = mem.status(name);
+    let mut degraded = singleton_fault(&status_outcome);
+    let status = singleton_text(&status_outcome);
+
+    let handoff_outcome = mem.handoff(name);
+    degraded = degraded.or_else(|| singleton_fault(&handoff_outcome));
+    let handoff = handoff_body(&handoff_outcome);
+
+    let roadmap_outcome = mem.roadmap(name);
+    degraded = degraded.or_else(|| singleton_fault(&roadmap_outcome));
+    let roadmap = singleton_text(&roadmap_outcome);
+
+    let plan_outcome = mem.plan(name);
+    degraded = degraded.or_else(|| singleton_fault(&plan_outcome));
+    let plan = singleton_text(&plan_outcome).map(|text| plan_summary(&text));
+
+    let plan_list = mem.plan_list(name);
+    degraded = degraded.or_else(|| list_fault(&plan_list, "plan"));
+    let stored_plans: Vec<WikiPage> = plan_list.rows("plans").iter().map(wiki_row).collect();
+
+    let questions_outcome = mem.questions_all(name);
+    degraded = degraded.or_else(|| list_fault(&questions_outcome, "questions"));
+    let questions = project_questions(&questions_outcome);
+
+    let rulings_outcome = mem.items(name, "ruling", 10);
+    degraded = degraded.or_else(|| list_fault(&rulings_outcome, "ruling"));
+    let rulings: Vec<Activity> = rulings_outcome
+        .rows("items")
+        .iter()
+        .map(|row| activity_item(row, now_ms))
+        .collect();
+
+    let log_outcome = mem.log_n(name, 20);
+    degraded = degraded.or_else(|| list_fault(&log_outcome, "log"));
+    let log: Vec<Activity> = log_outcome
+        .rows("items")
+        .iter()
+        .map(|row| activity_item(row, now_ms))
+        .collect();
+
+    let wiki_outcome = mem.wiki(name);
+    degraded = degraded.or_else(|| list_fault(&wiki_outcome, "wiki"));
+    let mut wiki: Vec<WikiPage> = wiki_outcome.rows("pages").iter().map(wiki_row).collect();
+    wiki.sort_by(|a, b| page_order(a).cmp(&page_order(b)));
+
+    Some(ProjectView {
+        name: name.to_string(),
+        degraded,
+        status,
+        handoff,
+        roadmap,
+        plan,
+        stored_plans,
+        questions,
+        rulings,
+        log,
+        wiki,
+        runs: runs_for(mem, name),
+    })
+}
+
+/// Only a broken read is a fault for a singleton file: an absent one is a
+/// project that has simply not written it yet (memcli's own §4a table).
+fn singleton_fault(outcome: &Outcome) -> Option<String> {
+    match outcome {
+        Outcome::Broken(why) => Some(why.clone()),
+        _ => None,
+    }
+}
+
+fn singleton_text(outcome: &Outcome) -> Option<String> {
+    let Outcome::Json(value) = outcome else {
+        return None;
+    };
+    value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// The handoff's own body, as `mem handoff --json` carries it — under
+/// `body`, unlike the other three singletons' `text`.
+fn handoff_body(outcome: &Outcome) -> Option<String> {
+    let Outcome::Json(value) = outcome else {
+        return None;
+    };
+    let body = value.get("body")?.as_str()?.trim();
+    (!body.is_empty()).then(|| body.to_string())
+}
+
+/// The plan's first line, and how many of its task boxes are ticked.
+fn plan_summary(text: &str) -> PlanSummary {
+    let title = text.lines().next().unwrap_or_default().trim().to_string();
+    let mut ticked = 0;
+    let mut total = 0;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let rest = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "));
+        let Some(rest) = rest else { continue };
+        if rest.starts_with("[x] ") {
+            ticked += 1;
+            total += 1;
+        } else if rest.starts_with("[ ] ") {
+            total += 1;
+        }
+    }
+    PlanSummary {
+        title,
+        ticked,
+        total,
+    }
+}
+
+fn project_question(row: &Value) -> ProjectQuestion {
+    ProjectQuestion {
+        id: string(row, "id"),
+        short_id: string(row, "short_id"),
+        text: optional(row, "body").unwrap_or_else(|| string(row, "title")),
+        answered: row["answered"].as_bool().unwrap_or(false),
+        answer: optional(row, "answer"),
+    }
+}
+
+/// Pending first, then the last 10 answered — ruling 3.
+fn project_questions(outcome: &Outcome) -> Vec<ProjectQuestion> {
+    let mut rows: Vec<ProjectQuestion> = outcome
+        .rows("questions")
+        .iter()
+        .map(project_question)
+        .collect();
+    rows.sort_by(|a, b| b.id.cmp(&a.id));
+    let (mut pending, mut answered): (Vec<_>, Vec<_>) = rows.into_iter().partition(|q| !q.answered);
+    answered.truncate(10);
+    pending.append(&mut answered);
+    pending
+}
+
+/// The project's checkout root on this machine, or `None` when `mem` has
+/// none to give — ruling 5's first way the live-run section is unavailable.
+fn project_root(mem: &MemCli, project: &str) -> Option<String> {
+    let Outcome::Json(value) = &*mem.project_root(project) else {
+        return None;
+    };
+    value
+        .get("root")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// `workflow status --json`, run with its cwd set to the project's own
+/// checkout — ruling 5.
+fn runs_for(mem: &MemCli, project: &str) -> Runs {
+    let Some(root) = project_root(mem, project) else {
+        return Runs::Unavailable(
+            "no checkout root is registered for this project on this machine".to_string(),
+        );
+    };
+    let mut command = Command::new("workflow");
+    command.args(["status", "--json"]).current_dir(&root);
+    match proc::output_within(&mut command, WORKFLOW_STATUS_TIMEOUT) {
+        Ended::Exited(done) if done.code == Some(0) => {
+            match serde_json::from_slice::<Value>(&done.stdout) {
+                Ok(doc) => Runs::Found(parse_runs(&doc)),
+                Err(_) => Runs::Unavailable(
+                    "workflow printed something that could not be read".to_string(),
+                ),
+            }
+        }
+        Ended::Exited(_) => Runs::Unavailable("workflow status exited with an error".to_string()),
+        Ended::TimedOut => {
+            Runs::Unavailable("workflow did not answer within five seconds".to_string())
+        }
+        Ended::Failed(_) => Runs::Unavailable("workflow is not on this machine's PATH".to_string()),
+    }
+}
+
+fn parse_runs(doc: &Value) -> Vec<Run> {
+    doc.get("runs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|row| Run {
+            plan: string(row, "plan"),
+            integration: string(row, "integration"),
+            live: row["live"].as_bool().unwrap_or(false),
+            tasks: row
+                .get("tasks")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(run_task)
+                .collect(),
+        })
+        .collect()
+}
+
+fn run_task(row: &Value) -> RunTask {
+    RunTask {
+        id: string(row, "id"),
+        state: string(row, "state"),
+        dispatches: row["dispatches"].as_u64().unwrap_or(0),
+        last_status: string(row, "last_status"),
     }
 }
 
