@@ -325,6 +325,19 @@ is "$(git branch --list 'fixture-run/t1' | grep -c .)" 0 'merged task branches a
 is "$(git branch --list 'fixture-run/own1' | grep -c .)" 1 'failed task branches are kept'
 like "$("$MEM_BIN" plan)" '\[x\] t1' 'mem plan --tick checked the merged task off'
 
+## ---------------------------------------------------- run bookkeeping logs
+
+runlog=$("$MEM_BIN" log --type run --limit 100 --json)
+like "$runlog" 'run fixture-run: started at ' 'the run start line carries type run'
+like "$runlog" 'run fixture-run: dispatched t1' 'every dispatch line does too'
+like "$runlog" 'run fixture-run: merged t1' 'every merge line'
+like "$runlog" 'run fixture-run: failed own1' 'every failure line'
+like "$runlog" 'Plan fixture-run stopped short' 'and the stopped-short report the run wrote at the end'
+
+alllog=$("$MEM_BIN" log --limit 100 --json)
+like "$alllog" 'run fixture-run: started at ' 'the untyped log still lists the run lines'
+like "$alllog" 'registered by the test harness' 'beside a plain log with no type at all'
+
 ## ------------------------------------------------- plans run refuses to run
 
 new_repo tiny

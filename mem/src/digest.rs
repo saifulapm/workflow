@@ -98,7 +98,7 @@ impl Sources {
             status,
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
-            logs: index.recent("log", project_id, 5)?,
+            logs: recent_non_run_logs(index, project_id, 5)?,
         })
     }
 
@@ -113,6 +113,17 @@ impl Sources {
             && self.facts.is_empty()
             && self.logs.is_empty()
     }
+}
+
+/// The most recent logs that are not the run's own bookkeeping (ruling 6 of
+/// m1-wiki-first): a run's dispatch and merge lines would otherwise crowd out
+/// the handful of worker and person logs the digest has room for. Over-fetches
+/// because filtering can only shrink the page `recent` already picked.
+fn recent_non_run_logs(index: &Index, project_id: Option<&str>, limit: usize) -> Result<Vec<Row>> {
+    let mut rows = index.recent("log", project_id, limit.max(1) * 4)?;
+    rows.retain(|r| r.r#type.as_deref() != Some("run"));
+    rows.truncate(limit);
+    Ok(rows)
 }
 
 /// The first heading line and the first unchecked task of a plan.

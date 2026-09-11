@@ -240,8 +240,12 @@ pub fn ruling_bodies(rtype: &str) -> String {
     body
 }
 
-pub fn log(text: &str) {
-    silent(&["log", text]);
+/// Every line the run itself writes, tagged so the digest can leave them out
+/// of the handful of recent logs it shows and `mem log --type run` can find
+/// them apart from what a worker or a person logged (ruling 6 of
+/// m1-wiki-first).
+pub fn log_run(text: &str) {
+    silent(&["log", "--type", "run", "--", text]);
 }
 
 pub fn plan_tick(task: &str) -> bool {

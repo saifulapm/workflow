@@ -406,6 +406,40 @@ fn brief_fits_in_its_own_budget() {
 }
 
 #[test]
+fn the_digests_recent_logs_skip_the_runs_own_bookkeeping() {
+    let w = World::new("digest-run-logs");
+    w.project(P, "thing");
+    let store = w.store();
+    for n in 0..5 {
+        let mut log = item(Kind::Log, &format!("worker did thing {n}"), "body");
+        log.meta.modified = jiff::Timestamp::from_second(1_800_000_000 + n).unwrap();
+        put(&store, Some(P), &log);
+    }
+    let mut run_log = item(Kind::Log, "run thing: dispatched t1", "body");
+    run_log.meta.r#type = Some("run".to_string());
+    // Newer than every worker log, so a naive "most recent five" would pick
+    // it over one of them.
+    run_log.meta.modified = jiff::Timestamp::from_second(1_800_000_100).unwrap();
+    put(&store, Some(P), &run_log);
+
+    let (_i, s) = sources(&w, None);
+    assert_eq!(
+        s.logs.len(),
+        5,
+        "the run log does not take one of the five slots"
+    );
+    assert!(
+        s.logs.iter().all(|l| l.r#type.as_deref() != Some("run")),
+        "no run-typed log reaches the digest"
+    );
+    let text = build(&s, &store, 6000).text;
+    assert!(!text.contains("dispatched t1"), "{text}");
+    for n in 0..5 {
+        assert!(text.contains(&format!("worker did thing {n}")), "{text}");
+    }
+}
+
+#[test]
 fn context_on_an_unregistered_checkout_serves_global_and_exits_zero() {
     let w = World::new("digest-unknown");
     let store = w.store();

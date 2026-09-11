@@ -796,7 +796,7 @@ impl Run {
             "task {task}: dispatched (session {})",
             if handle.is_empty() { &session } else { &handle }
         ));
-        memcli::log(&format!("run {}: dispatched {task}", self.plan.plan_id));
+        memcli::log_run(&format!("run {}: dispatched {task}", self.plan.plan_id));
     }
 
     /// What this attempt was carrying when it stopped, kept for the run's
@@ -1243,7 +1243,7 @@ impl Run {
         self.set_state(task, MERGED);
         warn(format!("task {task}: merged onto {}", self.int_branch));
         self.tick_off(task);
-        memcli::log(&format!("run {}: merged {task}", self.plan.plan_id));
+        memcli::log_run(&format!("run {}: merged {task}", self.plan.plan_id));
     }
 
     /// verify, on the integration branch, as its own process: the same
@@ -1274,7 +1274,7 @@ impl Run {
             kept.display()
         );
         warn(&line);
-        memcli::log(&line);
+        memcli::log_run(&line);
         Ok(())
     }
 
@@ -1381,7 +1381,7 @@ impl Run {
             let line =
                 format!("task {id}: had come unticked in the plan of record -- ticked again");
             warn(&line);
-            memcli::log(&line);
+            memcli::log_run(&line);
         }
     }
 
@@ -1394,7 +1394,7 @@ impl Run {
             // but only if the reader is told where (friction #BHPS3G7D).
             warn(format!("  its work is on the branch {}", self.branch(task)));
         }
-        memcli::log(&format!(
+        memcli::log_run(&format!(
             "run {}: failed {task} -- {why}",
             self.plan.plan_id
         ));
@@ -1512,7 +1512,7 @@ impl Run {
                     "task {task}: reported ready with nothing to commit -- its work is already in the tree"
                 ));
                 self.tick_off(task);
-                memcli::log(&format!(
+                memcli::log_run(&format!(
                     "run {}: {task} was already satisfied, nothing to merge",
                     self.plan.plan_id
                 ));
@@ -2524,7 +2524,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     let stopping = || run.stop.load(std::sync::atomic::Ordering::Relaxed);
 
     let adopted = run.adopt_stale();
-    memcli::log(&format!(
+    memcli::log_run(&format!(
         "run {}: started at {} with {} tasks",
         run.plan.plan_id,
         run.base,
@@ -2779,7 +2779,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         for line in report.lines() {
             warn(line);
         }
-        memcli::log(&report);
+        memcli::log_run(&report);
         return exit::FAILED;
     }
     exit::OK
@@ -2808,7 +2808,7 @@ fn shutdown(run: &Run) -> i32 {
         ));
     }
     warn("run again in this checkout to adopt and collect what they left");
-    memcli::log(&format!(
+    memcli::log_run(&format!(
         "run {}: stopped by signal with {} worker(s) ended",
         run.plan.plan_id,
         live.len()
