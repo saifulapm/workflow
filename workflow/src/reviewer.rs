@@ -58,8 +58,10 @@ pub fn verdict(text: &str) -> Option<Verdict> {
 /// line it holds the diff to are the ones the run holds it to; the wiki
 /// pages the task's Read: named, verbatim, under the same heading the
 /// worker's brief uses (ruling 1 of m1-wiki-first); the task block verbatim;
-/// the diff, or its stat past [`DIFF_CAP`]; and the contract -- one answer
+/// the diff, or its stat past [`DIFF_CAP`]; the gate's own commands, so a red
+/// gate is never mistaken for a finding; and the contract -- one answer
 /// file, first line the verdict, nothing else written.
+#[allow(clippy::too_many_arguments)]
 pub fn prompt(
     plan_text: &str,
     task: &Task,
@@ -68,6 +70,7 @@ pub fn prompt(
     worktree: &Path,
     answer: &Path,
     pages: &[(String, Option<String>)],
+    gate: &str,
 ) -> String {
     let change = if diff.len() > DIFF_CAP {
         format!(
@@ -86,9 +89,15 @@ pub fn prompt(
 You are a cold reviewer. You read the plan, the task block and the diff below,
 and nothing else: not the worker's reasoning, not its commit messages' claims.
 You are in {wt}, which holds the tree with this diff applied; read files there
-when a judgement depends on code the diff does not show. The task's Verify
-command has already passed on that tree, so a test is not what you are here
-for -- what a test can reach is proved, and what only a reader can see is not.
+when a judgement depends on code the diff does not show.
+
+While you read, the gate runs the project's own checks on this same tree:
+
+{gate}
+
+A compile error, a type error, a lint or a failing test is the gate's to
+find, and a red gate voids this reading, so never report one and never run
+them. You are here for what those cannot reach.
 
 Two lenses, answer both:
 
@@ -135,6 +144,7 @@ reading that changes the tree is void.
 ",
         id = task.id,
         wt = worktree.display(),
+        gate = gate.trim_end(),
         answer = answer.display(),
         plan = plan_text.trim_end(),
         pages = brief::pages_section(&task.id, pages),
@@ -244,6 +254,7 @@ mod tests {
             Path::new("/state/wt/_integration"),
             Path::new("/runs/t3.review"),
             &[],
+            "rust: cargo test",
         );
         for needle in [
             "# Review of task t3 before it merges",
@@ -266,6 +277,44 @@ mod tests {
         );
     }
 
+    /// The gate's own commands are named and ruled out of the reading, so a
+    /// compile error or a failing test is never mistaken for a finding
+    /// (ruling 2).
+    #[test]
+    fn the_prompt_names_the_gates_commands_and_rules_out_their_failures() {
+        let text = prompt(
+            "# plan: gate-reviewer\n",
+            &task(),
+            "diff --git a/x b/x\n+fixed\n",
+            " x | 1 +\n",
+            Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
+            &[],
+            "php: ./bin/php artisan test",
+        );
+        assert!(
+            text.contains(
+                "While you read, the gate runs the project's own checks on this same tree:"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("php: ./bin/php artisan test"), "{text}");
+        assert!(
+            text.contains(
+                "A compile error, a type error, a lint or a failing test is the gate's to"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("never report one and never run\nthem"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("The task's Verify command has already passed"),
+            "the gate's suite replaces the worker's own Verify as what a reader defers to: {text}"
+        );
+    }
+
     /// The reader sees the same pages the worker did, verbatim, between the
     /// plan of record and the task block; an absent one says so rather than
     /// refusing the reading (rulings 1 and 2 of m1-wiki-first).
@@ -283,6 +332,7 @@ mod tests {
             Path::new("/state/wt/_integration"),
             Path::new("/runs/t3.review"),
             &pages,
+            "rust: cargo test",
         );
         let plan = text.find("# plan: gate-reviewer").unwrap();
         let heading = text.find("## Pages the plan names").unwrap();
@@ -306,6 +356,7 @@ mod tests {
             Path::new("/wt"),
             Path::new("/r"),
             &[],
+            "rust: cargo test",
         );
         assert!(text.contains(" x | 1 +"), "the stat stands in");
         assert!(

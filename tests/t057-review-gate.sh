@@ -83,6 +83,13 @@ case $task in
 	twice-review)
 		printf 'VERDICT: fix\n1. app/twice.php:1 -- never good enough.\n' >"$answer"
 		;;
+	redgate-review)
+		# The reader starts before the suite does, so it is still reading
+		# when the gate turns red; it never gets to write a verdict, since
+		# the run stops it first.
+		while [ -f "$WF_TMP/hold-redgate-review" ]; do sleep 0.2; done
+		printf 'VERDICT: ship\n' >"$answer"
+		;;
 	*) printf 'VERDICT: ship\n' >"$answer" ;;
 	esac
 	exit 0
@@ -246,6 +253,7 @@ like "$(cat "$rundir/t1.review-prompt")" '# Review of task t1 before it merges' 
 like "$(cat "$rundir/t1.review-prompt")" 'Ruling 1\. The t1 service' 'carries the plan of record'
 like "$(cat "$rundir/t1.review-prompt")" 'Done: app/t1.php carries the fix' 'the task block'
 like "$(cat "$rundir/t1.review-prompt")" '^\+draft$' 'and the diff'
+like "$(cat "$rundir/t1.review-prompt")" 'artisan test' 'and the gate commands the run detected'
 like "$(cat "$WF_TMP/reviews.log")" "^fable t1 $XDG_STATE_HOME/workflow/worktrees/app/live/_integration\$" 'the reader ran as the named model in the integration worktree'
 like "$(cat "$rundir/t1.review-session")" '.' 'and its session is recorded, so it can be watched'
 like "$(cat "$T_TMP/run.log")" 'task t1: fable is reading the diff' 'the log says who is reading'
@@ -481,3 +489,42 @@ git merge -q integration/nobody
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/nobody.md"
 is "$RC" 0 'a run that recorded no reader when it began is not refused for the key'
 like "$OUT" 'nobody reads this run: it recorded no reader when it began' 'and says whose choice that was'
+
+## ------------------------------------- a red gate stops a reader still reading
+
+# The reader starts before the gate's own suite runs, not after: it works
+# alongside the gate rather than waiting on it. A red gate voids the reading
+# outright -- the run stops it mid-turn and fails the merge on the suite's
+# own words, never on a verdict that never came.
+new_repo redgate
+mem_register
+"$MEM_BIN" project set review-model fable >/dev/null
+write_exec "$T_TMP/redgate-verify.sh" <<'FAKE'
+#!/bin/sh
+printf 'not ok 1 - the suite is red\n'
+exit 1
+FAKE
+"$MEM_BIN" project set verify "$T_TMP/redgate-verify.sh" >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: redgate
+
+- [ ] redgate The one whose gate goes red while its reader is still reading
+      Files: app/redgate.php
+      Verify: true
+- [ ] side A second task, so the plan is worth a worker
+      Files: app/side.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/redgate/redgate"
+: >"$WF_TMP/hold-redgate-review"
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 1 'the run stops short over the red gate'
+is "$(cat "$rundir/redgate.state")" failed 'the task is failed'
+like "$(cat "$rundir/redgate.failed")" '^the suite is red once the change sits on integration' "the gate's own note is the reason"
+like "$(cat "$rundir/redgate.failed")" 'not ok 1 - the suite is red' 'naming the failing check'
+[ -f "$rundir/redgate.review" ] && notok 'no verdict was judged' "$(cat "$rundir/redgate.review")" || ok 'no verdict was judged'
+readerpid=$(cat "$rundir/redgate.review-pid" 2>/dev/null)
+kill -0 "$readerpid" 2>/dev/null
+isnt "$?" 0 'and its reader process was stopped'

@@ -13,7 +13,9 @@ use crate::backend_amx::AmxBackend;
 use crate::gitcmd::Git;
 use crate::plan::{Plan, PlanKind, Task};
 use crate::reviewer::{self, Verdict};
-use crate::{brief, exit, lint, memcli, ownership, paths, plan, plancheck, repo, sys, warn};
+use crate::{
+    brief, exit, lint, memcli, ownership, paths, plan, plancheck, repo, sys, verify, warn,
+};
 
 pub const PENDING: &str = "pending";
 pub const DISPATCHED: &str = "dispatched";
@@ -981,13 +983,29 @@ impl Run {
     }
 
     /// The two readings a fast-forwarded merge faces before it is recorded:
-    /// the suite, then the reviewer. `Err` is the reason the caller resets
-    /// integration to `prev` and fails the task with. `Ok(true)` means a
-    /// reader now has the diff and the merge waits on its verdict;
-    /// `Ok(false)` means nobody reads here and the merge is final.
+    /// the reviewer, dispatched first so it works alongside the suite rather
+    /// than after it, then the suite itself. `Err` is the reason the caller
+    /// resets integration to `prev` and fails the task with; a reading
+    /// already in flight is stopped and its questions mooted first, since a
+    /// red gate voids it outright. `Ok(true)` means a reader now has the
+    /// diff and the merge waits on its verdict -- its `review-started`
+    /// stamped again so the deadline counts from the gate's end, not from
+    /// before the suite ran; `Ok(false)` means nobody reads here and the
+    /// merge is final.
     fn gate(&self, task: &str, prev: &str, new: &str) -> Result<bool, String> {
-        self.gate_verify(task)?;
-        Ok(self.start_review(task, prev, new))
+        let reading = self.start_review(task, prev, new);
+        if let Err(why) = self.gate_verify(task) {
+            if reading {
+                self.backend
+                    .stop(&self.review_handle(task), self.kill_grace_s);
+                self.moot_reader_questions(task);
+            }
+            return Err(why);
+        }
+        if reading {
+            write_field(&self.dir, task, "review-started", &sys::now().to_string());
+        }
+        Ok(reading)
     }
 
     /// Integration back to where it stood before this task's fast-forward,
@@ -997,14 +1015,16 @@ impl Run {
         write_field(&self.dir, task, "merging", "");
     }
 
-    /// The reader (plan gate-reviewer). Verify proves what a test can reach;
-    /// a model in a clean context reads the diff against the plan of record
-    /// and the task's Done line and says ship or fix. Nobody named means no
-    /// reading, which by the time a task gets here means a run that was told
-    /// so on the way in (see [`refused`]). `fix` leaves the findings in
-    /// `<task>.review.<n>`, which the failure note names and the
-    /// redispatched worker's brief repeats; `<task>.review` is the file the
-    /// next [`Run::read_start`] deletes.
+    /// The reader (plan gate-reviewer), started before the gate's own suite
+    /// so the two run side by side rather than one after the other. A model
+    /// in a clean context reads the diff against the plan of record and the
+    /// task's Done line and says ship or fix; the gate's commands ride along
+    /// in the prompt, named and ruled out, so a red gate is never mistaken
+    /// for a finding. Nobody named means no reading, which by the time a
+    /// task gets here means a run that was told so on the way in (see
+    /// [`refused`]). `fix` leaves the findings in `<task>.review.<n>`, which
+    /// the failure note names and the redispatched worker's brief repeats;
+    /// `<task>.review` is the file the next [`Run::read_start`] deletes.
     ///
     /// The reader is dispatched like a worker, through the project's backend,
     /// so it is a session Saiful can watch and attach to -- never print mode.
@@ -1015,8 +1035,9 @@ impl Run {
     /// never waited for: a reading may run for its whole deadline, and a
     /// loop blocked on it dispatched nothing, stopped no stalled worker and
     /// heard no signal meanwhile. The task sits `reviewing` in between, its
-    /// `merging` intent line still naming the fast-forward that waits.
-    /// Answers whether a reading began.
+    /// `merging` intent line still naming the fast-forward that waits. A
+    /// reading in flight when the gate goes red is stopped by [`Run::gate`],
+    /// never judged here. Answers whether a reading began.
     fn start_review(&self, task: &str, prev: &str, new: &str) -> bool {
         let Some(model) = self.review_model.as_deref() else {
             return false;
@@ -1032,9 +1053,23 @@ impl Run {
         let prompt = self.dir.join(format!("{task}.review-prompt"));
         let answer = self.dir.join(format!("{task}.review"));
         let pages = wiki_pages(&t);
+        let gate = verify::detect_verifiers(&self.int_wt, memcli::project_current().as_ref())
+            .into_iter()
+            .map(|v| format!("{}: {}", v.label, v.cmd))
+            .collect::<Vec<_>>()
+            .join("\n");
         let _ = std::fs::write(
             &prompt,
-            reviewer::prompt(&plan_text, &t, &diff, &stat, &self.int_wt, &answer, &pages),
+            reviewer::prompt(
+                &plan_text,
+                &t,
+                &diff,
+                &stat,
+                &self.int_wt,
+                &answer,
+                &pages,
+                &gate,
+            ),
         );
         write_field(&self.dir, task, "review-tries", "0");
         warn(format!("task {task}: {model} is reading the diff"));
