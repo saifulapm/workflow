@@ -512,11 +512,15 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
 /// binary at compile time, so a task whose Files claims the file that
 /// includes but not the file it names owns only half the change: whatever a
 /// test asserts about those bytes is left for nobody to fix (ruling 10, wiki
-/// review-2026-09 defect 10). The literal is resolved against the including
-/// file's own directory, `..` folded, the way the compiler resolves it -- so
-/// `include_str!("../README.md")` in `src/cli.rs` names `README.md`, not
-/// `src/README.md`. Only a tracked target counts: a file the task means to
-/// create is `matches_nothing`'s business, not this one's.
+/// review-2026-09 defect 10). Only a tracked `.rs` file has a compile time to
+/// scan -- a shell script or a page can carry the macro names in a comment or
+/// a fixture without calling either. The literal is resolved against the
+/// including file's own directory, `..` folded, the way the compiler
+/// resolves it -- so `include_str!("../README.md")` in `src/cli.rs` names
+/// `README.md`, not `src/README.md`; a literal whose `..` climbs above the
+/// repo root names nothing. Only a tracked target counts: a file the task
+/// means to create is `matches_nothing`'s business, not this one's. A (file,
+/// target) pair warns once, however many calls name it.
 fn included_unclaimed(task: &str, files: &[String], git: &Git) -> Vec<String> {
     let Some(root) = git.toplevel() else {
         return Vec::new();
@@ -532,18 +536,27 @@ fn included_unclaimed(task: &str, files: &[String], git: &Git) -> Vec<String> {
         }
     }
     let mut out = Vec::new();
+    let mut warned = std::collections::HashSet::new();
     for file in &tracked {
+        if !file.ends_with(".rs") {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(root.join(file)) else {
             continue;
         };
         let dir = Path::new(file).parent().unwrap_or(Path::new(""));
         for literal in include_literals(&text) {
-            let target = fold_dots(&dir.join(&literal));
+            let Some(target) = fold_dots(&dir.join(&literal)) else {
+                continue; // climbed above the repo root: names nothing
+            };
             if git.bytes(&["ls-files", "-z", "--", &target]).is_empty() {
                 continue; // not a tracked path: not this check's to raise
             }
             if files.iter().any(|p| covers(p, &target)) {
                 continue;
+            }
+            if !warned.insert((file.clone(), target.clone())) {
+                continue; // one (file, target) pair warns once
             }
             out.push(format!(
                 "plan: task {task}: {file} includes {target} at compile time and Files does not claim it -- a test in {file} asserts its contents, so that side of the change is nobody's to make"
@@ -575,23 +588,27 @@ fn include_literals(text: &str) -> Vec<String> {
 }
 
 /// A path with its `.` and `..` components folded away lexically, the way
-/// `include_str!`'s path resolves without touching the filesystem.
-fn fold_dots(path: &Path) -> String {
+/// `include_str!`'s path resolves without touching the filesystem. A `..`
+/// with nothing left to pop climbs above the root the path started under --
+/// that escapes the tree, so `None` says the path names nothing.
+fn fold_dots(path: &Path) -> Option<String> {
     let mut out: Vec<std::ffi::OsString> = Vec::new();
     for part in path.components() {
         match part {
             std::path::Component::ParentDir => {
-                out.pop();
+                out.pop()?;
             }
             std::path::Component::CurDir => {}
             std::path::Component::Normal(s) => out.push(s.to_os_string()),
             _ => {}
         }
     }
-    out.iter()
-        .map(|s| s.to_string_lossy().to_string())
-        .collect::<Vec<_>>()
-        .join("/")
+    Some(
+        out.iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
 }
 
 /// A run dispatches from the ready set, not one wave at a time, so two tasks

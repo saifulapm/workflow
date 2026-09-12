@@ -923,3 +923,56 @@ EOF2
 parse
 is "$RC" 0 'claiming the include target settles it'
 unlike "$OUT" 'includes README.md' 'and nothing warns once Files claims it'
+
+# A shell script or a page has no compile time, so mentioning the macro name
+# in one is not a call (ruling 10, amended after reading 1 of include).
+mkdir -p scripts
+printf '#!/usr/bin/env bash\n# include_str!("../README.md")\n' >scripts/mention.sh
+git add scripts/mention.sh
+git -c core.hooksPath=/dev/null commit -qm 'a script that mentions the macro name in a comment'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Mention the macro name
+      Files: scripts/mention.sh
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a non-rs file mentioning the macro name parses'
+unlike "$OUT" 'includes README.md' 'a shell script has no compile time, so it is not scanned'
+
+# Two calls naming the same target warn once, not once per call.
+printf 'fn a() {\n    let _ = include_str!("../README.md");\n}\nfn b() {\n    let _ = include_bytes!("../README.md");\n}\n' >src/dual.rs
+git add src/dual.rs
+git -c core.hooksPath=/dev/null commit -qm 'two macro calls naming the same target'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Include the readme twice
+      Files: src/dual.rs
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'two calls naming the same target parse'
+is "$(printf '%s\n' "$OUT" | grep -c 'includes README.md')" 1 'the pair warns once however many calls name it'
+
+# A literal whose `..` climbs above the repo root names nothing and warns
+# nothing, even when a tracked file with that basename exists at the root.
+printf 'the license\n' >LICENSE
+git add LICENSE
+printf 'fn main() {\n    let _ = include_str!("../../LICENSE");\n}\n' >src/climb.rs
+git add src/climb.rs
+git -c core.hooksPath=/dev/null commit -qm 'a literal that climbs above the repo root'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Climb above the root
+      Files: src/climb.rs
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'a literal that climbs above the repo root parses'
+unlike "$OUT" 'LICENSE' 'it names nothing and warns nothing'
