@@ -644,6 +644,24 @@ parse
 is "$RC" 0 'a missing test file is a warning too'
 like "$OUT" 'no test file' 'and says what is missing'
 
+# An inline `#[cfg(test)]` module is the other shape cargo finds without a
+# file of its own; the Files line already covers it (ruling 9, wiki
+# review-2026-09 defect 9).
+printf 'fn main() {}\n\n#[cfg(test)]\nmod tests {}\n' >src/main.rs
+git add src/main.rs
+git -c core.hooksPath=/dev/null commit -qm 'an inline test module in main.rs'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: cargo test
+EOF2
+parse
+is "$RC" 0 'an inline test module is not itself a problem'
+unlike "$OUT" 'no test file' 'and the module counts as the test file'
+
 # A pattern git ignores is on disk, so it does not "match nothing" -- but no
 # commit can carry it, so the merge gate can never see the task's work
 # (friction #A3WHPGE3).

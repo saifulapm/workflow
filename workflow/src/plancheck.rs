@@ -259,7 +259,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 t.id
             ));
         }
-        if runs_tests(verify) && !patterns.iter().any(|p| p.to_lowercase().contains("test")) {
+        if runs_tests(verify) && !has_test_file(&git, &patterns) {
             f.warnings.push(format!(
                 "plan: task {}: its Verify runs tests and its Files list no test file -- the worker cannot add the test that proves it",
                 t.id
@@ -554,6 +554,37 @@ fn concurrent_claims(plan: &Plan, git: &Git) -> Vec<String> {
 
 fn runs_tests(verify: &str) -> bool {
     verify.contains("test")
+}
+
+/// A Files pattern naming "test" is the common case; the other shape cargo
+/// finds without a file of its own is an inline `#[cfg(test)]` module in a
+/// tracked `.rs` file the patterns already expand to (ruling 9, wiki
+/// review-2026-09 defect 9).
+fn has_test_file(git: &Git, patterns: &[String]) -> bool {
+    if patterns.iter().any(|p| p.to_lowercase().contains("test")) {
+        return true;
+    }
+    let rs_files: Vec<String> = patterns
+        .iter()
+        .flat_map(|p| zlines(&git.bytes(&["ls-files", "-z", "--", &gitcmd::glob_top(p)])))
+        .filter(|f| f.ends_with(".rs"))
+        .collect();
+    if rs_files.is_empty() {
+        return false;
+    }
+    let mut args: Vec<&str> = vec![
+        "grep",
+        "-l",
+        "-z",
+        "-F",
+        "-e",
+        "#[cfg(test)]",
+        "-e",
+        "#[test]",
+        "--",
+    ];
+    args.extend(rs_files.iter().map(String::as_str));
+    !git.bytes(&args).is_empty()
 }
 
 /// The paths a Done sentence names that `owned` does not hold, in the order
@@ -1219,6 +1250,26 @@ mod tests {
         assert!(runs_tests("bin/php artisan test --filter=Cart"));
         assert!(!runs_tests("true"));
         assert!(!runs_tests("cargo build"));
+    }
+
+    /// A Files pattern naming "test" already covers most tasks; an inline
+    /// `#[cfg(test)]` module is the other shape cargo finds without a file
+    /// of its own (ruling 9, wiki review-2026-09 defect 9).
+    #[test]
+    fn an_inline_test_module_counts_as_a_test_file() {
+        let git = Git::at(env!("CARGO_MANIFEST_DIR"));
+        assert!(has_test_file(
+            &git,
+            &["workflow/src/plancheck.rs".to_string()]
+        ));
+        assert!(!has_test_file(
+            &git,
+            &["workflow/src/gitcmd.rs".to_string()]
+        ));
+        assert!(has_test_file(
+            &git,
+            &["src/never-created-eee-test.rs".to_string()]
+        ));
     }
 
     /// A bare `workflow verify` proves nothing about the task that copied it:
