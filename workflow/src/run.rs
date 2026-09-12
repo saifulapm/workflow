@@ -1,8 +1,8 @@
 //! `workflow run` and `workflow reap` -- deterministic interim orchestration
 //! (spec §8).
 //!
-//! Policy lives here and nowhere else: waves, concurrency, ownership, the
-//! serialized merge gate. How a worker is started, watched and stopped is
+//! Policy lives here and nowhere else: the ready set, concurrency, ownership,
+//! the serialized merge gate. How a worker is started, watched and stopped is
 //! the backend's business (see [`crate::backend`]).
 
 use std::path::{Path, PathBuf};
@@ -348,25 +348,25 @@ impl Run {
         (!id.is_empty()).then_some(id)
     }
 
-    /// The FAILED tasks of this wave still waiting on a question with no
-    /// answer: the wave loop keeps polling for them rather than closing the
-    /// wave and leaving the answer nowhere to land.
-    fn waiting(&self, wave: &[String]) -> Vec<String> {
-        wave.iter()
+    /// Of `ids`, the FAILED tasks still waiting on a question with no
+    /// answer: the poll loop keeps the run open for them rather than ending
+    /// it and leaving the answer nowhere to land.
+    fn waiting(&self, ids: &[String]) -> Vec<String> {
+        ids.iter()
             .filter(|id| self.state(id) == FAILED)
             .filter(|id| self.question_open(id))
             .cloned()
             .collect()
     }
 
-    /// Whether `task`'s failure note names a question that still holds its
-    /// wave open: mem lists it for the task and it carries no answer yet.
+    /// Whether `task`'s failure note names a question that still holds the
+    /// run open: mem lists it for the task and it carries no answer yet.
     /// An id mem never lists for this task -- a friction id quoted in the
     /// same blocked line, another task's or project's question, the same
     /// eight-character shape -- is not an unanswered question: no answer
     /// can ever land on it. It gets the reindex lag [`Self::question_in`]
     /// describes -- a few polls where a real question is briefly missing
-    /// -- but past that bound it stops holding the wave.
+    /// -- but past that bound it stops holding the run open.
     fn question_open(&self, task: &str) -> bool {
         let Some(qid) = self.asked(task) else {
             return false;
@@ -640,7 +640,7 @@ impl Run {
     /// sees it.
     ///
     /// Every worktree is cut from the run's base at setup, so a task whose
-    /// dependency merged in an earlier wave opens onto a tree without it
+    /// dependency merged before it dispatches opens onto a tree without it
     /// (friction #VC7PAESB). The worker's only way out was to go and find the
     /// integration branch itself, which nothing in its brief mentions. This
     /// fast-forward puts the work it builds on simply there.
@@ -659,7 +659,7 @@ impl Run {
             return;
         };
         if git.head().as_deref() == Some(tip.as_str()) {
-            return; // already there, and on wave one it always is
+            return; // already there, and on a task's first attempt it always is
         }
         if !git.quiet(&["merge", "-q", "--ff-only", &tip]) {
             warn(format!(
@@ -729,6 +729,7 @@ impl Run {
 
     fn dispatch(&self, task: &str, after: &str) {
         let Some(t) = self.task_now(task) else {
+            self.fail_task(task, "the plan of record no longer holds this task");
             return;
         };
         self.catch_up(task);
@@ -1532,7 +1533,7 @@ impl Run {
         for task in self.plan.ids() {
             let state = self.state(&task);
             if state == DISPATCHED || state == PENDING || state == REVIEWING || state.is_empty() {
-                continue; // the reap pass and the waves own these
+                continue; // the reap pass and the ready-set loop own these
             }
             if self.field(&task, "session").is_empty() && self.worker_pid(&task).is_empty() {
                 continue; // never dispatched, so nothing can be alive
@@ -1596,13 +1597,13 @@ impl Run {
     /// still working are adopted as they stand, and the rest are collected
     /// exactly as the reap loop would have collected them.
     ///
-    /// Without this a stale `dispatched` either holds its wave open forever
+    /// Without this a stale `dispatched` either holds the run open forever
     /// against a worker that is gone, or gets dispatched a second time into a
     /// worktree that still has the first one in it.
     ///
     /// Answers with the ids it took over. They are settled for this run --
-    /// merged, failed, or running -- and the waves below must not queue them
-    /// a second time.
+    /// merged, failed, or running -- and the classification below must not
+    /// queue them a second time.
     fn adopt_stale(&self) -> Vec<String> {
         let mut taken = self.dispatched();
         // Taken before a single task below is collected: collecting one can
@@ -2531,166 +2532,177 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         run.plan.tasks.len()
     ));
     warn(format!(
-        "run {}: {} tasks in {} wave(s), up to {} at a time",
+        "run {}: {} tasks, up to {} at a time",
         run.plan.plan_id,
         run.plan.tasks.len(),
-        run.plan.waves.len(),
         run.max_workers
     ));
 
-    for wave in run.plan.waves.clone() {
-        // Which tasks a redispatch can still reach. `workflow redispatch`
-        // reads this to refuse a task whose wave has closed, instead of
-        // leaving a marker nothing will read (friction #H80BMJJF).
-        let open = run.dir.join("wave");
-        if let Err(e) = std::fs::write(&open, format!("{}\n", wave.join(" "))) {
-            warn(format!(
-                "run {}: cannot write {} ({e})",
-                run.plan.plan_id,
-                open.display()
-            ));
+    // Classified once, in plan order, before the loop dispatches anything.
+    for id in run.plan.ids() {
+        let Some(task) = run.plan.get(&id).cloned() else {
+            continue;
+        };
+        // A tick in the plan is a claim about the past, not about this
+        // integration branch. It only counts as merged here when the commit
+        // some run recorded for it is actually on the branch.
+        if task.checked {
+            if run.landed(&id) {
+                run.set_state(&id, MERGED);
+            } else {
+                run.set_state(&id, DONE_PREVIOUSLY);
+                if run.prior_sha(&id).is_empty() {
+                    warn(format!(
+                        "task {id}: ticked off in the plan already; this run does not touch it"
+                    ));
+                } else {
+                    warn(format!(
+                        "task {id}: ticked off, but the commit an earlier run merged is not on {} -- left alone",
+                        run.int_branch
+                    ));
+                }
+            }
+            continue;
         }
-        let mut queue: Vec<String> = Vec::new();
-        for id in &wave {
-            let Some(task) = run.plan.get(id).cloned() else {
+        // Taken over from the run that died: already merged, already
+        // failed, or running right now. The loop below waits on the ones
+        // still going; none of them gets dispatched a second time.
+        if adopted.contains(&id) {
+            continue;
+        }
+        // Unticked, but the commit some pass merged for it is on the
+        // integration branch as it stands: an earlier pass merged it and
+        // the tick never took, or the work was landed by hand between
+        // passes -- the binary's own printed recipe (friction #94EMPK30).
+        // The ref recorded at merge time outlives every branch, so this
+        // is checkable, and a worker was rebuilding landed work when only
+        // the tick was consulted.
+        if run.landed(&id) {
+            run.set_state(&id, MERGED);
+            warn(format!(
+                "task {id}: its work is already on {} -- not dispatched again",
+                run.int_branch
+            ));
+            // Ticked here as at any other merge, or the plan goes on
+            // asking for work that is done and every later run pays the
+            // same discovery again.
+            run.tick_off(&id);
+            continue;
+        }
+        run.set_state(&id, PENDING);
+    }
+
+    // The ready set, in plan order: PENDING tasks whose dependencies have
+    // merged. Recomputed every pass, so a task made ready by a merge two
+    // passes ago is dispatched exactly as readily as one ready from the start
+    // (friction #G550QXHZ).
+    let ready = |run: &Run| -> Vec<String> {
+        run.plan
+            .ids()
+            .into_iter()
+            .filter(|id| run.state(id) == PENDING)
+            .filter(|id| run.plan.get(id).is_some_and(|t| run.deps_satisfied(t)))
+            .collect()
+    };
+    let marked_failed = |run: &Run| -> bool {
+        run.plan
+            .ids()
+            .into_iter()
+            .any(|id| run.state(&id) == FAILED && run.dir.join(format!("{id}.redispatch")).exists())
+    };
+
+    let mut warned_waiting: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let all_ids = run.plan.ids();
+    while run.running() > 0
+        || !run.reviewing().is_empty()
+        || !run.waiting(&all_ids).is_empty()
+        || !ready(&run).is_empty()
+        || marked_failed(&run)
+    {
+        if stopping() {
+            return shutdown(&run);
+        }
+        for id in ready(&run) {
+            if run.running() >= run.max_workers {
+                break;
+            }
+            run.dispatch(&id, "");
+        }
+        sys::sleep(run.poll);
+        if stopping() {
+            return shutdown(&run);
+        }
+        run.review_passes();
+        run.reap_pass();
+        // A failed task someone asked to try again, mid-run. The marker file
+        // is how the request reaches a run that holds the project lock for
+        // its whole life (friction #W0S44DE6); nothing here closes behind a
+        // failed task, so the marker is honoured for as long as the run lives
+        // (friction #G550QXHZ).
+        for id in &all_ids {
+            let marker = run.dir.join(format!("{id}.redispatch"));
+            if !marker.exists() {
+                continue;
+            }
+            if run.state(id) != FAILED {
+                let _ = std::fs::remove_file(&marker);
+                warn(format!(
+                    "task {id}: asked to go again, but it is {} -- ignored",
+                    run.state(id)
+                ));
+                continue;
+            }
+            if run.running() >= run.max_workers {
+                continue; // the marker keeps until a slot frees up
+            }
+            let _ = std::fs::remove_file(&marker);
+            warn(format!("task {id}: dispatched again by request"));
+            run.dispatch(id, "");
+        }
+        // A task waiting on a question keeps the run open rather than
+        // failing it out from under it, so said once, not on every poll
+        // while the answer is still pending.
+        for id in run.waiting(&all_ids) {
+            let Some(qid) = run.asked(&id) else {
                 continue;
             };
-            // A tick in the plan is a claim about the past, not about this
-            // integration branch. It only counts as merged here when the commit
-            // some run recorded for it is actually on the branch.
-            if task.checked {
-                if run.landed(id) {
-                    run.set_state(id, MERGED);
-                } else {
-                    run.set_state(id, DONE_PREVIOUSLY);
-                    if run.prior_sha(id).is_empty() {
-                        warn(format!(
-                            "task {id}: ticked off in the plan already; this run does not touch it"
-                        ));
-                    } else {
-                        warn(format!(
-                            "task {id}: ticked off, but the commit an earlier run merged is not on {} -- left alone",
-                            run.int_branch
-                        ));
-                    }
-                }
-                continue;
-            }
-            // Taken over from the run that died: already merged, already
-            // failed, or running right now. The loop below waits on the ones
-            // still going; none of them gets dispatched a second time.
-            if adopted.contains(id) {
-                continue;
-            }
-            // Unticked, but the commit some pass merged for it is on the
-            // integration branch as it stands: an earlier pass merged it and
-            // the tick never took, or the work was landed by hand between
-            // passes -- the binary's own printed recipe (friction #94EMPK30).
-            // The ref recorded at merge time outlives every branch, so this
-            // is checkable, and a worker was rebuilding landed work when only
-            // the tick was consulted.
-            if run.landed(id) {
-                run.set_state(id, MERGED);
+            if warned_waiting.insert(format!("{id} {qid}")) {
                 warn(format!(
-                    "task {id}: its work is already on {} -- not dispatched again",
-                    run.int_branch
+                    "{id}: waiting on #{qid} -- the run stays open until it is answered"
                 ));
-                // Ticked here as at any other merge, or the plan goes on
-                // asking for work that is done and every later run pays the
-                // same discovery again.
-                run.tick_off(id);
-                continue;
-            }
-            if run.deps_satisfied(&task) {
-                queue.push(id.clone());
-            } else {
-                warn(format!(
-                    "task {id}: skipped, what it waits for did not land"
-                ));
-                run.set_state(id, BLOCKED);
             }
         }
-
-        let mut warned_waiting: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        while !queue.is_empty()
-            || run.running() > 0
-            || !run.reviewing().is_empty()
-            || !run.waiting(&wave).is_empty()
-        {
-            if stopping() {
-                return shutdown(&run);
+        // A task waiting on the orchestrator goes again by itself once the
+        // answer is in: the orchestrator's whole job here is to answer, and a
+        // run that had to be told twice stopped short over questions it could
+        // have carried (the queue was one stopped-short question per answer,
+        // all of them stale).
+        for id in &all_ids {
+            if run.state(id) != FAILED || run.running() >= run.max_workers {
+                continue;
             }
-            while !queue.is_empty() && run.running() < run.max_workers {
-                let next = queue.remove(0);
-                run.dispatch(&next, "");
-            }
-            sys::sleep(run.poll);
-            if stopping() {
-                return shutdown(&run);
-            }
-            run.review_passes();
-            run.reap_pass();
-            // A failed task someone asked to try again, mid-run. The marker
-            // file is how the request reaches a run that holds the project
-            // lock for its whole life (friction #W0S44DE6); it is honoured
-            // while the task's wave is still open, which is exactly when a
-            // redispatch can still feed the tasks waiting on it.
-            for id in &wave {
-                let marker = run.dir.join(format!("{id}.redispatch"));
-                if !marker.exists() {
-                    continue;
-                }
-                if run.state(id) != FAILED {
-                    let _ = std::fs::remove_file(&marker);
-                    warn(format!(
-                        "task {id}: asked to go again, but it is {} -- ignored",
-                        run.state(id)
-                    ));
-                    continue;
-                }
-                if run.running() >= run.max_workers {
-                    continue; // the marker keeps until a slot frees up
-                }
-                let _ = std::fs::remove_file(&marker);
-                warn(format!("task {id}: dispatched again by request"));
+            let Some(qid) = run.asked(id) else {
+                continue;
+            };
+            let answered = memcli::questions_for(&run.task_tag(id))
+                .into_iter()
+                .any(|q| q.short_id == qid && q.answer.is_some());
+            if answered {
+                warn(format!(
+                    "task {id}: #{qid} was answered -- dispatched again with the answer"
+                ));
                 run.dispatch(id, "");
             }
-            // A task waiting on a question keeps its wave open rather than
-            // failing the run out from under it, so said once, not on every
-            // poll while the answer is still pending.
-            for id in run.waiting(&wave) {
-                let Some(qid) = run.asked(&id) else {
-                    continue;
-                };
-                if warned_waiting.insert(format!("{id} {qid}")) {
-                    warn(format!(
-                        "{id}: waiting on #{qid} -- the wave stays open until it is answered"
-                    ));
-                }
-            }
-            // A task waiting on the orchestrator goes again by itself once
-            // the answer is in: the orchestrator's whole job here is to
-            // answer, and a run that had to be told twice stopped short
-            // over questions it could have carried (the queue was one
-            // stopped-short question per answer, all of them stale).
-            for id in &wave {
-                if run.state(id) != FAILED || run.running() >= run.max_workers {
-                    continue;
-                }
-                let Some(qid) = run.asked(id) else {
-                    continue;
-                };
-                let answered = memcli::questions_for(&run.task_tag(id))
-                    .into_iter()
-                    .any(|q| q.short_id == qid && q.answer.is_some());
-                if answered {
-                    warn(format!(
-                        "task {id}: #{qid} was answered -- dispatched again with the answer"
-                    ));
-                    run.dispatch(id, "");
-                }
-            }
+        }
+    }
+
+    // Never made ready: what it waited for never landed.
+    for id in &all_ids {
+        if run.state(id) == PENDING {
+            warn(format!(
+                "task {id}: skipped, what it waits for did not land"
+            ));
+            run.set_state(id, BLOCKED);
         }
     }
 
@@ -2853,17 +2865,6 @@ pub fn cmd_redispatch(task: &str) -> i32 {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        // The poll loop reads markers for the open wave only: a task that
-        // failed in a wave that has closed cannot feed what waited on it,
-        // and its marker would sit unread. Said, with exit 1, rather than
-        // the same cheerful line either way (friction #H80BMJJF).
-        let open = std::fs::read_to_string(dir.join("wave")).unwrap_or_default();
-        if !open.split_whitespace().any(|t| t == task) {
-            warn(format!(
-                "run {plan_id}: {task} failed in a wave that has closed -- this run will not dispatch it; run the plan again to resume it"
-            ));
-            return exit::FAILED;
-        }
         let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
         warn(format!(
             "run {plan_id}: asked to dispatch {task} again -- it goes on the next poll with a free worker slot"

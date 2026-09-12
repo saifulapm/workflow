@@ -109,21 +109,22 @@ unlike "$(cat "$T_TMP/run.log")" 'is this plan in mem' \
 
 ## ------------------------------------------ a wave that has closed behind it
 
-# The marker is read for the open wave only, and the answer used to be the
-# same cheerful line either way: exit 0 and a marker nothing would ever read
-# (friction #H80BMJJF).
+# The level walk used to refuse a failed task once its wave had closed, with
+# the only way on a fresh `workflow run` (friction #G550QXHZ). The ready set
+# has no wave to close behind it: t3 fails before t1 even depends on t4, and
+# redispatch still reaches it with t1 already dispatched.
 rm -f "$WF_TMP/release-t1"
 : >"$WF_TMP/go-t4"
 cat >"$T_TMP/closed.md" <<'EOF'
 # plan: closed
 
-- [ ] t3 Fails in the first wave
+- [ ] t3 Fails, then is asked to go again
       Files: app/t3.php
       Verify: true
-- [ ] t4 Lands in the first wave
+- [ ] t4 Lands in the same pass
       Files: app/t4.php
       Verify: true
-- [ ] t1 Holds the second wave open [after: t4]
+- [ ] t1 Dispatches once t4 lands [after: t4]
       Files: app/t1.php
       Verify: true
 EOF
@@ -137,16 +138,21 @@ for _ in $(seq 1 150); do
 	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = dispatched ] && break
 	sleep 0.2
 done
-is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 'the second wave is open'
-is "$(cat "$rundir/t3.state" 2>/dev/null)" failed 'with t3 failed in the wave before it'
-is "$(cat "$rundir/wave" 2>/dev/null)" t1 'and the run has written down which wave is open'
+is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 't1 is dispatched once its dependency merges'
+is "$(cat "$rundir/t3.state" 2>/dev/null)" failed 'with t3 already failed'
 
+: >"$WF_TMP/go-t3"
 run workflow redispatch t3
-is "$RC" 1 'asking for a task whose wave has closed is refused'
-like "$OUT" 'wave that has closed' 'and the answer says why'
-truthy "$([ ! -e "$rundir/t3.redispatch" ] && echo 0 || echo 1)" 'no marker is left for nobody to read'
+is "$RC" 0 'redispatch reaches it even with a later task already dispatched'
+like "$OUT" 'asked' 'and says the run was asked'
+
+for _ in $(seq 1 150); do
+	[ "$(cat "$rundir/t3.state" 2>/dev/null)" = merged ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t3.state" 2>/dev/null)" merged 't3 merges on its second dispatch'
+is "$(cat "$rundir/t3.dispatches")" 2 'as a second attempt, not a fresh task'
 
 : >"$WF_TMP/release-t1"
 wait "$runpid"
-is "$?" 1 'the run ends with t3 still failed'
-is "$(cat "$rundir/t3.dispatches")" 1 'and t3 was never dispatched again'
+is "$?" 0 'the run ends with everything merged'
