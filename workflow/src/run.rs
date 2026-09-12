@@ -2329,7 +2329,7 @@ fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
 /// colon is punctuation a worker adds to a word it was asked to write bare,
 /// and reading it as part of the state failed a task whose work was
 /// merge-ready (friction #W2SY30WH).
-fn split_state(token: &str) -> (String, String) {
+pub fn split_state(token: &str) -> (String, String) {
     match token.split_once(':') {
         Some((state, rest)) => (state.to_string(), rest.trim_matches(':').to_string()),
         None => (token.to_string(), String::new()),

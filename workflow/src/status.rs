@@ -35,7 +35,8 @@ fn field(dir: &Path, task: &str, ext: &str) -> String {
         .to_string()
 }
 
-/// The worker's own last report, state and note as one line.
+/// The worker's own last report, state and note as one line, the state
+/// bare of the colon a worker punctuates it with (`run::split_state`).
 fn last_status(dir: &Path, task: &str) -> String {
     let text = std::fs::read_to_string(dir.join(format!("{task}.status"))).unwrap_or_default();
     let mut last = String::new();
@@ -44,9 +45,15 @@ fn last_status(dir: &Path, task: &str) -> String {
         let (Some(_utc), Some(state)) = (fields.next(), fields.next()) else {
             continue;
         };
-        let note = fields.collect::<Vec<_>>().join(" ");
+        let (state, head) = run::split_state(state);
+        let rest = fields.collect::<Vec<_>>().join(" ");
+        let note = match (head.is_empty(), rest.is_empty()) {
+            (true, _) => rest,
+            (false, true) => head,
+            (false, false) => format!("{head} {rest}"),
+        };
         last = if note.is_empty() {
-            state.to_string()
+            state
         } else {
             format!("{state} {note}")
         };

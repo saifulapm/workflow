@@ -23,6 +23,9 @@ cat >"$rundir/plan.md" <<'EOF'
 - [ ] t3 Third service
       Files: app/t3.php
       Verify: true
+- [ ] t4 Fourth service
+      Files: app/t4.php
+      Verify: true
 EOF
 printf 'abc123\n' >"$rundir/base_sha"
 printf 'merged\n' >"$rundir/t1.state"
@@ -33,6 +36,8 @@ printf 'the suite is red once the change sits on integration\n' >"$rundir/t2.fai
 printf '2\n' >"$rundir/t2.dispatches"
 printf '2026-08-21T10:00:00Z blocked waiting on an answer\n' >"$rundir/t2.status"
 printf 'pending\n' >"$rundir/t3.state"
+printf 'dispatched\n' >"$rundir/t4.state"
+printf '2026-08-21T10:05:00Z ready: done\n' >"$rundir/t4.status"
 
 run workflow status
 is "$RC" 0 'status exits 0 with runs to report'
@@ -42,6 +47,7 @@ like "$OUT" 't2 +failed +the suite is red' 'a failed task shows its reason'
 like "$OUT" 't3 +pending' 'a task that never started says so'
 like "$OUT" 'carried 158k' 'the context a task carried is plan-sizing feedback'
 unlike "$OUT" '\$' 'and no dollar figure is reported at all'
+like "$OUT" 'last report: ready done' 'a status line punctuated ready: reports the state bare'
 
 run workflow status --json
 is "$RC" 0 'status --json exits 0'
@@ -49,6 +55,7 @@ like "$OUT" '"plan": *"demo"' 'json names the plan'
 like "$OUT" '"state": *"failed"' 'json carries task states'
 like "$OUT" '"failed": *"the suite is red once the change sits on integration"' 'json carries the failure reason'
 like "$OUT" '"last_status": *"blocked waiting on an answer"' "json carries the worker's own last report"
+like "$OUT" '"last_status": *"ready done"' 'json reports ready for a status line punctuated ready:'
 like "$OUT" '"context": *158502' 'json carries the context a task carried'
 unlike "$OUT" '"spend"' 'and no spend field'
 like "$OUT" '"live": *false' 'nobody holds the run lock'
