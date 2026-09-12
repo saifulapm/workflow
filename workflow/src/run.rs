@@ -580,19 +580,6 @@ impl Run {
         self.state(task) == FAILED && self.commits(task) > 0
     }
 
-    /// Nothing anywhere says this session ever ran: the backend has no record
-    /// of it, the worker wrote no status line and no result, and the branch
-    /// has no commits. Only adoption asks -- at dispatch time the same silence
-    /// means still launching, and the stall deadline decides.
-    fn ghost(&self, task: &str) -> bool {
-        !self.backend.seen(&self.handle(task))
-            && self.field(task, "status").is_empty()
-            && std::fs::metadata(self.dir.join(format!("{task}.json")))
-                .map(|m| m.len() == 0)
-                .unwrap_or(true)
-            && self.commits(task) == 0
-    }
-
     fn stalled(&self, task: &str) -> bool {
         stalled(
             self.backend.as_ref(),
@@ -1678,29 +1665,34 @@ impl Run {
         // never mistake it for the latter.
         let mid_review = self.reviewing();
         for task in &taken {
-            // Known-dead, not still-launching: the run that recorded this
-            // session is gone and nothing anywhere says it ever ran. Waiting
-            // out the stall deadline on it bought nothing (friction
-            // #9F7WT13K); dispatch again now, while the retry lasts.
-            if self.ghost(task) {
+            // Not seen by the backend at all: whatever `alive` would say, it
+            // is gone, the way a stall deadline never has to prove -- waiting
+            // it out bought nothing (friction #9F7WT13K); dispatch again now,
+            // while the retry lasts. `alive` and `paused` are only asked of a
+            // session the backend can see, so a task that fails this check
+            // skips straight to the fall-through below.
+            if !self.backend.seen(&self.handle(task)) {
                 let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
-                if tries < 2 {
-                    warn(format!(
-                        "task {task}: the recorded session never existed -- dispatching again now"
-                    ));
+                if tries < 2 && self.commits(task) == 0 {
+                    let no_result = std::fs::metadata(self.dir.join(format!("{task}.json")))
+                        .map(|m| m.len() == 0)
+                        .unwrap_or(true);
+                    if self.field(task, "status").is_empty() && no_result {
+                        warn(format!(
+                            "task {task}: the recorded session never existed -- dispatching again now"
+                        ));
+                    } else {
+                        warn(format!(
+                            "task {task}: its session is gone and nothing was committed -- dispatching again now"
+                        ));
+                    }
                     self.dispatch(
                         task,
                         "the session it was given never existed, so it never ran",
                     );
-                } else {
-                    warn(format!(
-                        "task {task}: the recorded session never existed and the retry is spent"
-                    ));
-                    self.finish(task);
+                    continue;
                 }
-                continue;
-            }
-            if self.alive(task) || self.paused(task) {
+            } else if self.alive(task) || self.paused(task) {
                 warn(format!(
                     "task {task}: still working, from a run that is gone -- adopted"
                 ));

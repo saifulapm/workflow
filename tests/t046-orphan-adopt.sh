@@ -173,6 +173,26 @@ like "$OUT" 'never existed' 'it says the recorded session never existed'
 is "$(cat "$rundir/t1.dispatches")" 2 'the ghost was dispatched again immediately'
 is "$(cat "$rundir/t1.state")" merged 'and the second dispatch finished the task'
 
+## ------------------------------------------ the session that vanished
+
+# A worker that got far enough to report `started` before its session
+# disappeared -- no pid, no process, no transcript -- is still gone, not
+# still launching: the status line changes the note, not the outcome.
+rm -rf "$rundir" "$wtroot"
+git -C "$repo" worktree prune
+for b in orphan-check/t1 orphan-check/t2 integration/orphan-check; do
+	git -C "$repo" branch -D "$b" >/dev/null 2>&1
+done
+
+orphan
+printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$rundir/t1.status"
+run env WORKFLOW_DEADLINE_MIN=60 timeout 60 workflow run --plan-file "$T_TMP/plan.md"
+is "$RC" 0 'the run finishes without waiting out the deadline'
+like "$OUT" 'its session is gone and nothing was committed' \
+	'it says the session is gone rather than never having existed'
+is "$(cat "$rundir/t1.dispatches")" 2 'the vanished session was dispatched again immediately'
+is "$(cat "$rundir/t1.state")" merged 'and the second dispatch finished the task'
+
 ## ------------------------------------- adoption starts a reading once, not twice
 
 # t1 finished before its orchestrator died, same as the first case above, but
