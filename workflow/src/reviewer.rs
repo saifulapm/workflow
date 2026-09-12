@@ -130,7 +130,21 @@ pub fn prompt(
 You are a cold reviewer. You read the plan, the task block and the diff below,
 and nothing else: not the worker's reasoning, not its commit messages' claims.
 You are in {wt}, which holds the tree with this diff applied; read files there
-when a judgement depends on code the diff does not show.
+when a judgement depends on code the diff does not show. What to look for and
+how to answer come after the material, at the end.
+
+## The plan of record
+
+{plan}
+
+{pages}{earlier}## The task
+
+{block}
+## The diff
+
+{change}
+
+## What to look for
 
 {gate_section}
 
@@ -145,14 +159,22 @@ Two lenses, answer both:
    ruling it misses. A ruling the worker read differently from what the plan
    plainly says is a gap.
 
-A finding carries a file and line, the concrete failure, and the correct
-behaviour. \"Consider extracting this\" is a preference, and preferences do
-not block; correctness and requirement gaps do. Do not summarise the diff and
-do not review style.
+Report every defect and gap you find, the ones you are not sure of included,
+marked as such: nothing is filtered for severity or confidence here, and a
+real one held back costs a whole round. A finding carries a file and line,
+the concrete failure, and the correct behaviour, in a few lines each:
+
+    - src/cart.rs:40 -- rounds each line to the cent before summing, so a
+      basket of three 0.335 items totals 1.02 where the Done line wants
+      1.01; sum in millicents and round once.
+
+\"Consider extracting this\" is a preference, and preferences do not block;
+correctness and requirement gaps do. Do not summarise the diff and do not
+review style.
 
 ## How to answer
 
-Write your whole answer, under 400 words, to exactly this file and then stop:
+Write your whole answer to exactly this file and then stop:
 
     Answer file: {answer}
 
@@ -165,17 +187,6 @@ then the findings, most severe first, or one line saying the diff is clean.
 That file is the only thing you write. Do not edit, create or commit anything
 in the tree, do not run its tests or builds, and do not ask questions: a
 reading that changes the tree is void.
-
-## The plan of record
-
-{plan}
-
-{pages}{earlier}## The task
-
-{block}
-## The diff
-
-{change}
 ",
         id = task.id,
         wt = worktree.display(),
@@ -302,8 +313,9 @@ mod tests {
             "Answer file: /runs/t3.review",
             "VERDICT: ship",
             "VERDICT: fix",
-            "under 400 words",
-            "preferences do\nnot block",
+            "Report every defect and gap you find, the ones you are not sure of included",
+            "preferences do not block",
+            "src/cart.rs:40 -- rounds each line to the cent",
             "the only thing you write",
         ] {
             assert!(text.contains(needle), "the prompt lost {needle:?}:\n{text}");
@@ -312,6 +324,12 @@ mod tests {
             !text.contains(" x | 1 +"),
             "a diff under the cap goes in whole, not as its stat"
         );
+        // The material comes first and the instructions last: a reading of
+        // a long prompt is better when the question sits under the documents.
+        let diff = text.find("## The diff").unwrap();
+        let lenses = text.find("## What to look for").unwrap();
+        let answer = text.find("## How to answer").unwrap();
+        assert!(diff < lenses && lenses < answer, "{text}");
     }
 
     /// The gate's own commands are named and ruled out of the reading, so a
