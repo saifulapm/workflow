@@ -133,6 +133,8 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 .into_iter()
                 .filter(|w| itself_named.as_deref().is_none_or(|m| !w.contains(m))),
         );
+        f.warnings
+            .extend(included_unclaimed(&t.id, &patterns, &git));
         // A Done sentence that names a file is a claim about what the task's
         // commit holds, and the gate refuses everything outside Files: -- so
         // the two disagreeing is knowable here rather than after a worker has
@@ -504,6 +506,92 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
         }
     }
     out
+}
+
+/// `include_str!` and `include_bytes!` graft another file's bytes into the
+/// binary at compile time, so a task whose Files claims the file that
+/// includes but not the file it names owns only half the change: whatever a
+/// test asserts about those bytes is left for nobody to fix (ruling 10, wiki
+/// review-2026-09 defect 10). The literal is resolved against the including
+/// file's own directory, `..` folded, the way the compiler resolves it -- so
+/// `include_str!("../README.md")` in `src/cli.rs` names `README.md`, not
+/// `src/README.md`. Only a tracked target counts: a file the task means to
+/// create is `matches_nothing`'s business, not this one's.
+fn included_unclaimed(task: &str, files: &[String], git: &Git) -> Vec<String> {
+    let Some(root) = git.toplevel() else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut tracked: Vec<String> = Vec::new();
+    for f in files {
+        let spec = gitcmd::glob_top(f);
+        for t in zlines(&git.bytes(&["ls-files", "-z", "--", &spec])) {
+            if seen.insert(t.clone()) {
+                tracked.push(t);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for file in &tracked {
+        let Ok(text) = std::fs::read_to_string(root.join(file)) else {
+            continue;
+        };
+        let dir = Path::new(file).parent().unwrap_or(Path::new(""));
+        for literal in include_literals(&text) {
+            let target = fold_dots(&dir.join(&literal));
+            if git.bytes(&["ls-files", "-z", "--", &target]).is_empty() {
+                continue; // not a tracked path: not this check's to raise
+            }
+            if files.iter().any(|p| covers(p, &target)) {
+                continue;
+            }
+            out.push(format!(
+                "plan: task {task}: {file} includes {target} at compile time and Files does not claim it -- a test in {file} asserts its contents, so that side of the change is nobody's to make"
+            ));
+        }
+    }
+    out
+}
+
+/// The literal path of each `include_str!` or `include_bytes!` call in
+/// source text, in the order they appear: the first quoted span after the
+/// macro name, the shape both take here.
+fn include_literals(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for macro_name in ["include_str!", "include_bytes!"] {
+        let mut from = 0;
+        while let Some(at) = text[from..].find(macro_name) {
+            let start = from + at + macro_name.len();
+            from = start;
+            let rest = &text[start..];
+            let Some(open) = rest.find('"') else { continue };
+            let Some(len) = rest[open + 1..].find('"') else {
+                continue;
+            };
+            out.push(rest[open + 1..open + 1 + len].to_string());
+        }
+    }
+    out
+}
+
+/// A path with its `.` and `..` components folded away lexically, the way
+/// `include_str!`'s path resolves without touching the filesystem.
+fn fold_dots(path: &Path) -> String {
+    let mut out: Vec<std::ffi::OsString> = Vec::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(s) => out.push(s.to_os_string()),
+            _ => {}
+        }
+    }
+    out.iter()
+        .map(|s| s.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// A run dispatches from the ready set, not one wave at a time, so two tasks

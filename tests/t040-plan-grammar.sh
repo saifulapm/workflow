@@ -892,3 +892,34 @@ parse
 is "$RC" 0 'a Uses item that points into a file parses'
 unlike "$OUT" "Uses names '48'" 'a line number is a place, not a name'
 like "$OUT" "Uses names 'PlaceArm'" 'and the symbol in front of a span is still read'
+
+# `include_str!` and `include_bytes!` graft another file's bytes into the
+# binary at compile time, so a task whose Files claims the file that includes
+# but not the file it names owns only half the change (ruling 10, wiki
+# review-2026-09 defect 10).
+printf 'fn main() {\n    let _readme = include_str!("../README.md");\n}\n' >src/cli.rs
+git add src/cli.rs
+git -c core.hooksPath=/dev/null commit -qm 'a binary that includes the readme at compile time'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Ship the readme inline
+      Files: src/cli.rs
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'an unclaimed include target is a warning, never a refusal'
+like "$OUT" 'src/cli.rs includes README.md' 'the including file and its target are both named'
+like "$OUT" 'Files does not claim it' 'and the warning says Files misses it'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Ship the readme inline
+      Files: src/cli.rs README.md
+      Verify: true
+EOF2
+parse
+is "$RC" 0 'claiming the include target settles it'
+unlike "$OUT" 'includes README.md' 'and nothing warns once Files claims it'
