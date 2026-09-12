@@ -37,10 +37,12 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 4. When the run stops short, its report is on stderr and in `mem log`;
    status says why per task. Decide, record, rerun: a cause you can
    name, follow the binary's recipe; a question waiting, answer it; suites
-   that fought, WORKFLOW_MAX_WORKERS=1; failed on a reading (`the reviewer
-   wants fixes first`), read the file it names, `workflow redispatch
-   <task>`. A second fix verdict is a task cut too big or a model too
-   small, not a third dispatch; overruling it is a ruling and a plan edit.
+   that fought, WORKFLOW_MAX_WORKERS=1; failed on a reading: the run
+   dispatches the task again by itself once, with the findings in its
+   brief; a task failed on its second reading is yours: read
+   `<task>.review.2`, then either edit the plan and `workflow redispatch
+   <task>` (it reaches any failed task while the run lives) or overrule
+   the reader with a ruling.
    `no verdict`: `<task>.review-err` says why.
 5. Escalate only scope, irreversible or taste; decide the rest.
 

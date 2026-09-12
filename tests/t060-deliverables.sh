@@ -83,6 +83,29 @@ like "$plan_skill" 'roadmap' 'plan says when a plan is a roadmap instead'
 like "$orchestrate_skill" 'roadmap' 'orchestrate knows a run can be one milestone of one'
 like "$(cat "$WF_ROOT/skills/mem/SKILL.md")" 'mem roadmap' 'mem names the verb that reads the milestones'
 
+## ------------------------------------------------------- the fix-round loop
+
+# The gate runs the project's whole suite on integration, not just a task's
+# own Verify, so a task that breaks a test outside its Verify has to fix it
+# and claim it in Files -- the old wording pointed at the wrong command.
+like "$plan_skill" 'No window may be red\.' 'plan says a task fixes any test it breaks, not only its own'
+unlike "$plan_skill" 'workflow verify. is what the gate' 'and drops the stale pointer to the wrong command'
+like "$plan_skill" 'Several one-line edits of one kind across files are one task' \
+	'plan says repeated one-line edits are one task, not one per file'
+implement_skill=$(cat "$WF_ROOT/skills/implement/SKILL.md")
+like "$implement_skill" 'a literal from the spec' \
+	'implement warns against a test that recomputes what the code computes'
+# A first fix verdict now redispatches itself; only the second is the
+# orchestrator's, and it reads the fix findings, not the first review.
+like "$orchestrate_skill" 'dispatches the task again by itself once' \
+	'orchestrate knows a first fix verdict redispatches on its own'
+like "$orchestrate_skill" 'a task failed on its second reading is yours' \
+	'and a second is the orchestrator to read'
+like "$orchestrate_skill" '<task>\.review\.2' 'naming the second review file to read'
+like "$orchestrate_skill" 'the reader with a ruling' 'or overrule the reader with a ruling'
+unlike "$orchestrate_skill" 'task cut too big or a model too small, not a third dispatch' \
+	'and drops the stale third-dispatch wording'
+
 ## ---------------------------------------------------------------- the wiki
 
 # A page is read before a subsystem is touched and rewritten after it changes,

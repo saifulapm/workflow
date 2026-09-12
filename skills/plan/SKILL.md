@@ -56,9 +56,12 @@ produces a mockup first.
   `Key: value`, split at the first colon-space.
 - `Files:` is whitespace-separated globs; double-quote one with a space. `*`
   stops at a slash, `**` crosses, patterns are anchored at the repo root.
-  Both it and `Verify:` are mandatory; `workflow verify` is what the gate
-  runs. This is the ownership boundary: a write outside them is refused at
-  the merge gate, and a task owning more than eight patterns is two tasks.
+  Both it and `Verify:` are mandatory. `Verify:` is the worker's evidence;
+  the gate runs the project's whole suite on integration, so a task that
+  changes what any test outside its Verify asserts fixes that test in the
+  same task and claims it in Files. No window may be red. This is the
+  ownership boundary: a write outside them is refused at the merge gate,
+  and a task owning more than eight patterns is two tasks.
   The sweep names six classes: the registry or mount file, the lockfile,
   the barrel or index file, the test file Verify runs, the arm an
   exhaustive match demands, the dead-code guard on a sibling's symbol
@@ -83,7 +86,8 @@ a task to split, never a line to trim.
 
 Tasks that run at once must not share files. A wide refactor expands and
 contracts: add the new beside the old, move callers, remove it last, each
-its own task.
+its own task. Several one-line edits of one kind across files are one task,
+not one per file.
 
 Write `Done:` checkable and demanding, one sentence under forty words a human
 can check without the diff: "every caller migrated" forces the sweep that

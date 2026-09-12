@@ -11,7 +11,9 @@ First action of the session:
 
 ## The loop, one task at a time
 
-1. Write the failing test. Watch it fail for the right reason.
+1. Write the failing test. Watch it fail for the right reason. The expected
+   value is a literal from the spec, never recomputed the way the code
+   computes it.
 2. Write the smallest code that passes it.
 3. Run `workflow verify` — that is your evidence, and it is authoritative at
    the gate. In a task worktree it runs the task's own `Verify:` command,
