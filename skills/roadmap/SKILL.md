@@ -31,7 +31,8 @@ characters. `[after:]` orders milestones as it orders tasks. Files and Verify
 belong to the tasks inside a milestone, never to the milestone line.
 
 Then one plan per milestone, `# plan: m1-auth` in m1-auth.md beside the
-roadmap, each cut as if it were the only plan: a task saying "as in m1" sends
+roadmap, written to its file as it is settled rather than all of them
+composed before any is written, each cut as if it were the only plan: a task saying "as in m1" sends
 a worker hunting through a document it will never see. A milestone may name
 files an earlier one creates and symbols an earlier one Gives.
 

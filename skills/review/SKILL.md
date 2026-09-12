@@ -35,8 +35,11 @@ do. Give each one the range and the requirement, and one lens:
 2. **Spec compliance.** Does it do what was asked, all of it, and nothing that
    was not asked?
 
-Each answers in 400 words or less. Do not merge their reports, do not
-pre-judge, do not tell reviewer two what reviewer one said. Two independent
+Each reports every finding it has, the uncertain ones marked as such, a few
+lines per finding: severity and confidence are filtered after the reading,
+never during it, and a real defect held back as minor costs a whole round.
+Do not merge their reports, do not pre-judge, do not tell reviewer two what
+reviewer one said. Two independent
 readings are the point; one averaged reading is worth less than either.
 
 Each reviewer is a session Saiful can watch — a `claude --bg` session or an

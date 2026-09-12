@@ -26,7 +26,10 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
    brief says nobody reads, else ask Saiful.
 3. Answer each worker question now, from the plan, the code or a ruling:
    `mem answer <id> "<decision>"`; the run redispatches with it in the
-   brief. The plan of record is mem's: when it changes (a Files line too
+   brief, which clips an answer past 600 characters, so the decision and
+   the file or symbol it turns on come first. Read the code yourself to
+   answer; the run's workers and its reader are the delegation, so no
+   subagent is spawned to answer a question or to check a worker's work. The plan of record is mem's: when it changes (a Files line too
    narrow, a Verify that cannot pass here), `mem plan > tmp`, edit, `mem
    plan --stdin < tmp` carries the ticks -- unless the run was started
    with `--plan-file`, only ever a file outside the checkout; edit that

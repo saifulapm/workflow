@@ -91,7 +91,11 @@ not one per file.
 
 Write `Done:` checkable and demanding, one sentence under forty words a human
 can check without the diff: "every caller migrated" forces the sweep that
-"callers updated" lets slide. Self-review: every requirement points at a
+"callers updated" lets slide. A worker reads its block literally and does
+not carry an instruction from one item to the next unasked, so a rule that
+holds across files or callers says so ("each of the three handlers", "every
+test that asserts the old literal"), and a ruling is a literal statement --
+a file, a symbol, a value, what breaks if it is wrong -- never a metaphor. Self-review: every requirement points at a
 task, and a name two tasks share is spelled identically in both.
 
 ## 5. One approval checkpoint
