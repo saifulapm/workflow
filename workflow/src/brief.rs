@@ -207,6 +207,13 @@ em dashes. Stage only the files this task touched; never `git add -A`.
 Everything you write must match the Files: patterns; anything outside them is
 refused at the merge gate and the task is failed.
 
+A bug, a smell or a missing behaviour the task does not name goes in your
+`ready` note as a follow-up, not into this change, unless the Done line cannot
+be met without it. Where the block reads two ways, build the reading its
+wording and the surrounding code most directly support, say so in the note,
+and build no other. Commit the tests the Done line needs, sized like their
+neighbours; a scratch check is not kept.
+
 `workflow verify --gate` runs after merge: the project's verify key, else
 its ladder (Rust: `cargo test && cargo clippy -- -D warnings && cargo fmt --check`).
 A green Verify with a red gate fails the task; run it before `ready`.
@@ -348,6 +355,9 @@ mod tests {
             "cargo test && cargo clippy -- -D warnings && cargo fmt --check",
             "A green Verify with a red gate fails the task",
             "run it before `ready`",
+            "goes in your\n`ready` note as a follow-up, not into this change",
+            "build no other",
+            "a scratch check is not kept",
         ] {
             assert!(body.contains(needle), "the brief lost {needle}");
         }
