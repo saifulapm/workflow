@@ -1760,26 +1760,38 @@ impl Run {
         if let Some(prev) = git.rev_parse_commit(&self.int_branch)
             && !git.is_ancestor(&prev, &self.base)
         {
-            let from = if recorded.is_empty() {
-                self.base.clone()
+            if git.is_ancestor(&self.base, &prev) {
+                // The trunk has not moved past what integration already holds --
+                // an earlier run merged work here and stopped short, and there is
+                // nothing to reconcile. Setup's fast-forward to base is then a
+                // no-op, and the run continues on top of it.
+                let ahead = git.count(&format!("{}..{}", self.base, self.int_branch));
+                warn(format!(
+                    "{} already carries {ahead} commit(s) an earlier run merged; continuing on them",
+                    self.int_branch
+                ));
             } else {
-                recorded
-            };
-            let ahead = git.count(&format!("{from}..{}", self.int_branch));
-            warn(format!(
-                "{} holds {ahead} commit(s) an earlier run of this plan merged,",
-                self.int_branch
-            ));
-            warn("and no other branch has them. This run will not reset it.");
-            warn(format!(
-                "land that work first -- on your trunk, 'git merge {}' -- and run again;",
-                self.int_branch
-            ));
-            warn(format!(
-                "or 'git branch -D {}' if you have decided to throw it away.",
-                self.int_branch
-            ));
-            ok = false;
+                let from = if recorded.is_empty() {
+                    self.base.clone()
+                } else {
+                    recorded
+                };
+                let ahead = git.count(&format!("{from}..{}", self.int_branch));
+                warn(format!(
+                    "{} holds {ahead} commit(s) an earlier run of this plan merged,",
+                    self.int_branch
+                ));
+                warn("and no other branch has them. This run will not reset it.");
+                warn(format!(
+                    "land that work first -- on your trunk, 'git merge {}' -- and run again;",
+                    self.int_branch
+                ));
+                warn(format!(
+                    "or 'git branch -D {}' if you have decided to throw it away.",
+                    self.int_branch
+                ));
+                ok = false;
+            }
         }
 
         let mut leftovers: Vec<String> = Vec::new();

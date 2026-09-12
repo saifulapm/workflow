@@ -92,50 +92,99 @@ run git cat-file -e "integration/rerun-check:app/t1.php"
 is "$RC" 0 "run 1: t1's file is on the integration branch"
 like "$("$MEM_BIN" plan)" '\[x\] t1' 'run 1: the plan is ticked off for t1'
 
-## ------------------------------- run 2: the same plan again, and it must stop
+## ------------------------- run 2: the trunk has not moved -- it continues
 
+# Nothing landed on the trunk since run 1, so integration being ahead of it
+# is exactly what an earlier run's merge looks like: nothing to reconcile,
+# and this run picks up where that one stopped.
+rm -f "$T_TMP/misbehave-t2"
 run workflow run
-rerun_out=$OUT
-is "$RC" 2 'run 2: refused as a configuration problem, not a failed run'
-like "$rerun_out" 'integration/rerun-check holds' \
-	'run 2: the message says the branch holds work an earlier run merged'
-like "$rerun_out" 'git merge integration/rerun-check' \
-	'run 2: and names the way to land it'
-like "$rerun_out" 't2: failed last run -- resumed on its branch' \
-	'run 2: the failed task is named as resumed, not as a leftover to clear'
-
-is "$(git rev-parse integration/rerun-check)" "$int1" 'run 2: integration is untouched'
+is "$RC" 0 'run 2: the trunk has not moved, so the run continues on it'
+like "$OUT" 'integration/rerun-check already carries 1 commit\(s\) an earlier run merged; continuing on them' \
+	'run 2: and says so'
+is "$(cat "$rundir/t1.state")" merged 'run 2: t1 is still merged'
+is "$(cat "$rundir/t1.dispatches")" 1 'run 2: t1 was not dispatched again'
+is "$(cat "$rundir/t2.state")" merged 'run 2: the failed task resumed on its own branch and merged'
+is "$(cat "$rundir/t2.dispatches")" 2 'run 2: on the same branch, not a fresh one'
+is "$(cat "$rundir/t2.failed")" '' \
+	'run 2: and the failure reason from run 1 is cleared, not left to be reported forever'
+is "$(git rev-list --count "$base..integration/rerun-check")" 2 \
+	'run 2: integration now carries both tasks'
+is "$(cat "$rundir/base_sha")" "$base" 'run 2: the recorded base is unchanged'
 run git merge-base --is-ancestor "$int1" integration/rerun-check
 is "$RC" 0 "run 2: run 1's merged commit is still reachable"
 run git cat-file -e "integration/rerun-check:app/t1.php"
 is "$RC" 0 "run 2: t1's work is still on the branch"
-is "$(cat "$rundir/base_sha")" "$base" 'run 2: it did not even rewrite the recorded base'
-is "$(git worktree list | grep -c .)" 2 \
-	'run 2: it made no new worktrees beyond the one already kept for t2'
+run git cat-file -e "integration/rerun-check:app/t2.php"
+is "$RC" 0 "run 2: and now so is t2's"
+is "$(git worktree list | grep -c .)" 1 'run 2: no worktrees left behind'
 
-## --------------------------------------------- the recovery the message names
+## --------------------------- a trunk that has moved diverges -- it refuses
 
-git merge -q --ff-only integration/rerun-check
-newbase=$(git rev-parse HEAD)
-isnt "$newbase" "$base" "recovery: run 1's work is on the trunk now"
+# The continuing case above only holds while the trunk has not moved. If
+# commits land on it directly while a task from an earlier, stopped-short
+# run is still pending, integration and the trunk no longer share a tip
+# either can reach from the other, and the refusal from before stands.
+new_repo diverge
+mem_register
+php_fixture
+dbase=$(git rev-parse HEAD)
+drundir="$XDG_STATE_HOME/workflow/runs/diverge/diverge-check"
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: diverge-check
+
+- [ ] t1 First service
+      Files: app/t1.php
+      Verify: true
+- [ ] t2 Second service
+      Files: app/t2.php
+      Verify: true
+EOF
+
+: >"$T_TMP/misbehave-t2"
+run workflow run
+is "$RC" 1 'diverge run 1: t1 merges, t2 fails -- a stopped-short run'
+is "$(cat "$drundir/t1.state")" merged 'diverge run 1: t1 merged'
+dint1=$(git rev-parse integration/diverge-check)
+
+# A commit lands on the trunk directly, not through integration/diverge-check,
+# while t2's failure is still unresolved.
+printf 'unrelated\n' >OTHER.txt
+git add OTHER.txt
+git -c core.hooksPath=/dev/null commit -qm 'Unrelated trunk work'
 
 rm -f "$T_TMP/misbehave-t2"
 run workflow run
-is "$RC" 0 'run 3: the recovery path runs to completion'
-is "$(cat "$rundir/t1.state")" merged \
-	'run 3: the task ticked off in run 1 counts as merged, its commit being on integration'
-is "$(cat "$rundir/t2.state")" merged 'run 3: the failed task resumed on its own branch and merged'
-is "$(cat "$rundir/t2.dispatches")" 2 'run 3: on the same branch, not a fresh one'
-is "$(cat "$rundir/t2.failed")" '' \
-	'run 3: and the failure reason from run 1 is cleared, not left to be reported forever'
+is "$RC" 2 'diverge run 2: refused -- the trunk moved past what integration shares with it'
+like "$OUT" 'integration/diverge-check holds' \
+	'diverge run 2: the message says the branch holds work an earlier run merged'
+like "$OUT" 'git merge integration/diverge-check' \
+	'diverge run 2: and names the way to land it'
+is "$(git rev-parse integration/diverge-check)" "$dint1" 'diverge run 2: integration is untouched'
 
-run git cat-file -e "integration/rerun-check:app/t1.php"
-is "$RC" 0 "run 3: t1's work is present on integration"
-run git cat-file -e "integration/rerun-check:app/t2.php"
-is "$RC" 0 "run 3: and so is t2's"
-is "$(git rev-list --count "$newbase..integration/rerun-check")" 1 \
-	'run 3: integration is ahead of the base it started from'
-is "$(git worktree list | grep -c .)" 1 'run 3: no worktrees left behind'
+## ------------------------------- the recovery the message names
+
+git merge -q --no-edit integration/diverge-check
+dnewbase=$(git rev-parse HEAD)
+isnt "$dnewbase" "$dbase" "recovery: run 1's work is on the trunk now"
+
+run workflow run
+is "$RC" 0 'diverge run 3: the recovery path runs to completion'
+is "$(cat "$drundir/t1.state")" merged \
+	'diverge run 3: the task ticked off in run 1 counts as merged, its commit being on integration'
+is "$(cat "$drundir/t2.state")" merged 'diverge run 3: the failed task resumed on its own branch and merged'
+is "$(cat "$drundir/t2.dispatches")" 2 'diverge run 3: on the same branch, not a fresh one'
+is "$(cat "$drundir/t2.failed")" '' \
+	'diverge run 3: and the failure reason from run 1 is cleared, not left to be reported forever'
+
+run git cat-file -e "integration/diverge-check:app/t1.php"
+is "$RC" 0 "diverge run 3: t1's work is present on integration"
+run git cat-file -e "integration/diverge-check:app/t2.php"
+is "$RC" 0 "diverge run 3: and so is t2's"
+is "$(git rev-list --count "$dnewbase..integration/diverge-check")" 1 \
+	'diverge run 3: integration is ahead of the base it started from'
+is "$(git worktree list | grep -c .)" 1 'diverge run 3: no worktrees left behind'
 
 ## --------------------------- a tick whose work is nowhere near the integration
 
