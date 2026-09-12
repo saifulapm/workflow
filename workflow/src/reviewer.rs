@@ -54,13 +54,39 @@ pub fn verdict(text: &str) -> Option<Verdict> {
     })
 }
 
+/// Every earlier reading of this task, so a reader sent back after a fix
+/// does not spend its whole reading on ground the first reading already
+/// covered (ruling 3): each `<task>.review.<n>` verbatim under its own
+/// heading, then the instruction to verdict each earlier finding before
+/// reading the diff fresh for anything else.
+fn earlier_section(earlier: &[String]) -> String {
+    if earlier.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## Earlier readings of this task\n\n");
+    for (i, text) in earlier.iter().enumerate() {
+        out.push_str(&format!("### Reading {}\n\n", i + 1));
+        out.push_str(text.trim_end());
+        out.push_str("\n\n");
+    }
+    out.push_str(
+        "The worker was sent back with these and told to fix every instance of \
+         each finding's class. First verdict each earlier finding: addressed or \
+         not, with file and line. Then read the whole diff again for anything \
+         else, and name every instance of a class you find, not the first: each \
+         reading costs a round.\n\n",
+    );
+    out
+}
+
 /// The reader's brief: the plan of record whole, so the rulings and the Done
 /// line it holds the diff to are the ones the run holds it to; the wiki
 /// pages the task's Read: named, verbatim, under the same heading the
-/// worker's brief uses (ruling 1 of m1-wiki-first); the task block verbatim;
-/// the diff, or its stat past [`DIFF_CAP`]; the gate's own commands, so a red
-/// gate is never mistaken for a finding; and the contract -- one answer
-/// file, first line the verdict, nothing else written.
+/// worker's brief uses (ruling 1 of m1-wiki-first); every earlier reading of
+/// this task, if any (ruling 3); the task block verbatim; the diff, or its
+/// stat past [`DIFF_CAP`]; the gate's own commands, so a red gate is never
+/// mistaken for a finding; and the contract -- one answer file, first line
+/// the verdict, nothing else written.
 #[allow(clippy::too_many_arguments)]
 pub fn prompt(
     plan_text: &str,
@@ -71,6 +97,7 @@ pub fn prompt(
     answer: &Path,
     pages: &[(String, Option<String>)],
     gate: &str,
+    earlier: &[String],
 ) -> String {
     let change = if diff.len() > DIFF_CAP {
         format!(
@@ -143,7 +170,7 @@ reading that changes the tree is void.
 
 {plan}
 
-{pages}## The task
+{pages}{earlier}## The task
 
 {block}
 ## The diff
@@ -156,6 +183,7 @@ reading that changes the tree is void.
         answer = answer.display(),
         plan = plan_text.trim_end(),
         pages = brief::pages_section(&task.id, pages),
+        earlier = earlier_section(earlier),
         block = task.block,
         change = change,
     )
@@ -263,6 +291,7 @@ mod tests {
             Path::new("/runs/t3.review"),
             &[],
             "rust: cargo test",
+            &[],
         );
         for needle in [
             "# Review of task t3 before it merges",
@@ -299,6 +328,7 @@ mod tests {
             Path::new("/runs/t3.review"),
             &[],
             "php: ./bin/php artisan test",
+            &[],
         );
         assert!(
             text.contains(
@@ -337,6 +367,7 @@ mod tests {
             Path::new("/runs/t3.review"),
             &[],
             "",
+            &[],
         );
         assert!(
             text.contains(
@@ -369,6 +400,7 @@ mod tests {
             Path::new("/runs/t3.review"),
             &pages,
             "rust: cargo test",
+            &[],
         );
         let plan = text.find("# plan: gate-reviewer").unwrap();
         let heading = text.find("## Pages the plan names").unwrap();
@@ -379,6 +411,64 @@ mod tests {
             plan < heading && heading < run && run < gone && gone < block,
             "{text}"
         );
+    }
+
+    /// A task sent back after a fix carries its earlier readings, so a
+    /// second pass verdicts each earlier finding before it reads for
+    /// anything else (ruling 3).
+    #[test]
+    fn a_task_reviewed_before_carries_its_earlier_readings() {
+        let earlier = vec![
+            "**VERDICT: fix**\n1. app/t1.php:1 -- says draft; the Done line wants the fix.\n"
+                .to_string(),
+        ];
+        let text = prompt(
+            "# plan: gate-reviewer\n",
+            &task(),
+            "diff --git a/x b/x\n+fixed\n",
+            " x | 1 +\n",
+            Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
+            &[],
+            "rust: cargo test",
+            &earlier,
+        );
+        let heading = text.find("## Earlier readings of this task").unwrap();
+        let reading = text.find("### Reading 1").unwrap();
+        let finding = text.find("says draft").unwrap();
+        let instruction = text
+            .find("First verdict each earlier finding: addressed or not, with file and line.")
+            .unwrap();
+        let block = text.find("## The task\n").unwrap();
+        assert!(
+            heading < reading && reading < finding && finding < instruction && instruction < block,
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Then read the whole diff again for anything else, and name every \
+                 instance of a class you find, not the first: each reading costs a round."
+            ),
+            "{text}"
+        );
+    }
+
+    /// No earlier reading, no section: a task's first reading is not told to
+    /// verdict findings that do not exist.
+    #[test]
+    fn a_first_reading_carries_no_earlier_readings_section() {
+        let text = prompt(
+            "# plan: gate-reviewer\n",
+            &task(),
+            "diff --git a/x b/x\n+fixed\n",
+            " x | 1 +\n",
+            Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
+            &[],
+            "rust: cargo test",
+            &[],
+        );
+        assert!(!text.contains("## Earlier readings of this task"), "{text}");
     }
 
     #[test]
@@ -393,6 +483,7 @@ mod tests {
             Path::new("/r"),
             &[],
             "rust: cargo test",
+            &[],
         );
         assert!(text.contains(" x | 1 +"), "the stat stands in");
         assert!(

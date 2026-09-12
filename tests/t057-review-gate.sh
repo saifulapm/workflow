@@ -32,6 +32,7 @@ commit() { git -c core.hooksPath=/dev/null commit -qm "$1"; }
 case $task in
 *-review)
 	answer=$(sed -n 's/^    Answer file: //p' "$brief")
+	cp "$brief" "$WF_TMP/review-brief-${task%-review}-$(date +%s%N)"
 	printf '%s %s %s\n' "$model" "${task%-review}" "$wt" >>"$WF_TMP/reviews.log"
 	case $task in
 	t2-review) printf 'I read it twice and could not decide.\n' >"$answer" ;;
@@ -273,6 +274,15 @@ like "$(cat "$review")" 'app/t1.php:1 -- says draft' 'and t1.review.1 still keep
 second=$(ls -t "$WF_TMP"/brief-t1-* | head -1)
 like "$(cat "$second")" 'This is attempt 2\. The last one ended: the reviewer wants fixes first \(review 1\) -- read ' 'the redispatched brief says why and where'
 like "$(cat "$second")" "$rundir/t1\.review\.1" 'naming the kept review file'
+
+# The second reading carries the first, so it verdicts what it was already
+# told rather than reading the diff cold a second time (ruling 3).
+firstprompt=$(ls -t "$WF_TMP"/review-brief-t1-* | tail -1)
+secondprompt=$(ls -t "$WF_TMP"/review-brief-t1-* | head -1)
+unlike "$(cat "$firstprompt")" '## Earlier readings of this task' 't1'"'"'s first prompt carries no earlier readings'
+like "$(cat "$secondprompt")" '### Reading 1' 't1'"'"'s second prompt carries the first reading'
+like "$(cat "$secondprompt")" 'says draft' 'verbatim, findings and all'
+like "$(cat "$secondprompt")" 'First verdict each earlier finding: addressed or not' 'and the verdict-then-reread instruction'
 
 # t2 follows the first wave, and its reviewer never decides.
 : >"$WF_TMP/release-hold"

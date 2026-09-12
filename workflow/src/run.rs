@@ -1066,6 +1066,15 @@ impl Run {
             .map(|v| format!("{}: {}", v.label, v.cmd))
             .collect::<Vec<_>>()
             .join("\n");
+        // A second or later reading of the same task carries every earlier
+        // one, so it verdicts a fix against what it was asked to fix rather
+        // than reading the diff cold again (ruling 3).
+        let reviews: u64 = self.field(task, "reviews").parse().unwrap_or(0);
+        let earlier: Vec<String> = (1..=reviews)
+            .filter_map(|k| {
+                std::fs::read_to_string(self.dir.join(format!("{task}.review.{k}"))).ok()
+            })
+            .collect();
         let _ = std::fs::write(
             &prompt,
             reviewer::prompt(
@@ -1077,6 +1086,7 @@ impl Run {
                 &answer,
                 &pages,
                 &gate,
+                &earlier,
             ),
         );
         write_field(&self.dir, task, "review-tries", "0");
