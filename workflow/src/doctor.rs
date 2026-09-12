@@ -279,13 +279,13 @@ fn settings_keys(r: &mut Report) {
 fn budgets(r: &mut Report) {
     const FM_MAX: usize = 240;
     for (name, fm, body) in skill_sizes() {
-        // implement, plan and roadmap carry recorded exceptions to the 3,200
-        // byte budget: implement holds the whole loop, plan the middle-tier
-        // keys, roadmap both halves of a project planned whole -- cutting it
-        // in one session and running a milestone of it in another.
+        // implement, plan, roadmap and orchestrate carry recorded exceptions
+        // to the 3,200 byte budget: implement and orchestrate each hold a
+        // whole loop, plan the middle-tier keys, roadmap both halves of a
+        // project planned whole -- cutting it in one session and running a
+        // milestone of it in another.
         let body_max = match name.as_str() {
-            "implement" => 4800,
-            "plan" | "roadmap" => 4000,
+            "implement" | "plan" | "roadmap" | "orchestrate" => 4800,
             _ => 3200,
         };
         if fm > FM_MAX {

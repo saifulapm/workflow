@@ -121,7 +121,7 @@ rm -rf "$repo" "$repo2"
 
 skills="$T_TMP/skills"
 export WORKFLOW_SKILLS_DIR="$skills"
-mkdir -p "$skills/route" "$skills/implement"
+mkdir -p "$skills/route" "$skills/implement" "$skills/orchestrate"
 {
 	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
 	head -c 100 /dev/zero | tr '\0' 'x'
@@ -132,18 +132,24 @@ mkdir -p "$skills/route" "$skills/implement"
 	head -c 4000 /dev/zero | tr '\0' 'x'
 	printf '\n'
 } >"$skills/implement/SKILL.md"
+{
+	printf -- '---\nname: orchestrate\ndescription: run the loop\n---\n\n'
+	head -c 4000 /dev/zero | tr '\0' 'x'
+	printf '\n'
+} >"$skills/orchestrate/SKILL.md"
 run workflow doctor
 like "$OUT" 'skill route .*within budget' 'a small skill is within budget'
 like "$OUT" 'skill implement .*within budget' 'implement gets the recorded 4800 byte exception'
+like "$OUT" 'skill orchestrate .*within budget' 'orchestrate gets the recorded 4800 byte exception too'
 
 {
 	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
-	head -c 3400 /dev/zero | tr '\0' 'x'
+	head -c 4000 /dev/zero | tr '\0' 'x'
 	printf '\n'
 } >"$skills/route/SKILL.md"
 run workflow doctor
 is "$RC" 1 'an oversized body is a finding'
-like "$OUT" 'skill route.*body is 34[0-9][0-9] bytes' 'and the finding gives the size'
+like "$OUT" 'skill route.*body is 400[0-9] bytes' 'a route body of 4,000 bytes is over its 3,200 budget'
 
 {
 	printf -- '---\nname: route\n'
