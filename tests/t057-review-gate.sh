@@ -228,13 +228,15 @@ unlike "$(git -C "$wtroot/hold" log --format=%s)" 'Add the t1 service' 'onto int
 rm -f "$WF_TMP/hold-review"
 
 for _ in $(seq 1 100); do
-	[ "$(cat "$rundir/t1.reviews" 2>/dev/null)" = 1 ] && break
+	grep -q 'task t1: dispatched again with the findings on the next free slot' "$T_TMP/run.log" 2>/dev/null && break
 	sleep 0.2
 done
 # The redispatch that follows a first fix verdict is instant, on the same
-# pass that judges it -- too fast for a poll every 0.2s to ever catch t1
-# sitting failed, so the fix is read off `t1.reviews` and `t1.failed`, which
-# the run never clears, rather than off the state file.
+# pass that judges it: write_field, unwind, the copy to review.1, fail_task
+# (its own git and mem spawns) and only then the marker and this line, so
+# the poll waits on the last thing that pass writes, not the first -- a
+# reviews==1 poll can land inside that window and read t1.failed or
+# t1.review.1 before either exists.
 is "$(cat "$rundir/t1.reviews")" 1 'the fix count is one'
 like "$(cat "$rundir/t1.failed")" '^the reviewer wants fixes first \(review 1\) -- read ' 'with a note that says so and names the file'
 review=$(sed 's/.* -- read //' "$rundir/t1.failed")

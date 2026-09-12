@@ -1002,8 +1002,9 @@ impl Run {
     /// and the task's Done line and says ship or fix. Nobody named means no
     /// reading, which by the time a task gets here means a run that was told
     /// so on the way in (see [`refused`]). `fix` leaves the findings in
-    /// `<task>.review`, which the failure note names and the redispatched
-    /// worker's brief repeats.
+    /// `<task>.review.<n>`, which the failure note names and the
+    /// redispatched worker's brief repeats; `<task>.review` is the file the
+    /// next [`Run::read_start`] deletes.
     ///
     /// The reader is dispatched like a worker, through the project's backend,
     /// so it is a session Saiful can watch and attach to -- never print mode.
