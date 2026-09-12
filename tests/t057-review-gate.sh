@@ -80,6 +80,9 @@ case $task in
 			printf 'Reading...\n\n**VERDICT: fix**\n1. app/t1.php:1 -- says draft; the Done line wants the fix.\n' >"$answer"
 		fi
 		;;
+	twice-review)
+		printf 'VERDICT: fix\n1. app/twice.php:1 -- never good enough.\n' >"$answer"
+		;;
 	*) printf 'VERDICT: ship\n' >"$answer" ;;
 	esac
 	exit 0
@@ -108,6 +111,18 @@ t1)
 		printf 'draft\n' >app/t1.php
 		git add app/t1.php
 		commit 'Add the t1 service'
+	fi
+	;;
+twice)
+	mkdir -p app
+	if [ -f app/twice.php ]; then
+		printf 'again\n' >>app/twice.php
+		git add app/twice.php
+		commit 'Never good enough, apparently'
+	else
+		printf 'twice\n' >app/twice.php
+		git add app/twice.php
+		commit 'Add the twice service'
 	fi
 	;;
 *)
@@ -183,6 +198,9 @@ plan live '- [ ] hold Stay alive until released
       Verify: true
 - [ ] t3 Add the t3 service  [after: t1]
       Files: app/t3.php
+      Verify: true
+- [ ] twice Add the twice service
+      Files: app/twice.php
       Verify: true'
 rundir="$XDG_STATE_HOME/workflow/runs/app/live"
 wtroot="$XDG_STATE_HOME/workflow/worktrees/app/live"
@@ -210,17 +228,18 @@ unlike "$(git -C "$wtroot/hold" log --format=%s)" 'Add the t1 service' 'onto int
 rm -f "$WF_TMP/hold-review"
 
 for _ in $(seq 1 100); do
-	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = failed ] && break
+	[ "$(cat "$rundir/t1.reviews" 2>/dev/null)" = 1 ] && break
 	sleep 0.2
 done
-is "$(cat "$rundir/t1.state" 2>/dev/null)" failed 'a fix verdict fails the task'
+# The redispatch that follows a first fix verdict is instant, on the same
+# pass that judges it -- too fast for a poll every 0.2s to ever catch t1
+# sitting failed, so the fix is read off `t1.reviews` and `t1.failed`, which
+# the run never clears, rather than off the state file.
+is "$(cat "$rundir/t1.reviews")" 1 'the fix count is one'
 like "$(cat "$rundir/t1.failed")" '^the reviewer wants fixes first \(review 1\) -- read ' 'with a note that says so and names the file'
 review=$(sed 's/.* -- read //' "$rundir/t1.failed")
-is "$review" "$rundir/t1.review" 'which is <task>.review in the run dir'
+is "$review" "$rundir/t1.review.1" 'which is <task>.review.<n> in the run dir'
 like "$(cat "$review")" 'app/t1.php:1 -- says draft' 'and it holds the findings'
-is "$(cat "$rundir/t1.reviews")" 1 'the fix count is one'
-unlike "$(git log --format=%s integration/live)" 'Add the t1 service' 'integration was reset: the draft is not on it'
-is "$(cat "$rundir/t1.merging" 2>/dev/null)" '' 'and no merge is recorded as in flight'
 like "$(cat "$rundir/t1.review-prompt")" '# Review of task t1 before it merges' 'the prompt names the task'
 like "$(cat "$rundir/t1.review-prompt")" 'Ruling 1\. The t1 service' 'carries the plan of record'
 like "$(cat "$rundir/t1.review-prompt")" 'Done: app/t1.php carries the fix' 'the task block'
@@ -228,9 +247,10 @@ like "$(cat "$rundir/t1.review-prompt")" '^\+draft$' 'and the diff'
 like "$(cat "$WF_TMP/reviews.log")" "^fable t1 $XDG_STATE_HOME/workflow/worktrees/app/live/_integration\$" 'the reader ran as the named model in the integration worktree'
 like "$(cat "$rundir/t1.review-session")" '.' 'and its session is recorded, so it can be watched'
 like "$(cat "$T_TMP/run.log")" 'task t1: fable is reading the diff' 'the log says who is reading'
+like "$(cat "$T_TMP/run.log")" 'task t1: dispatched again with the findings on the next free slot' 'nothing had to call workflow redispatch'
 
-run workflow redispatch t1
-is "$RC" 0 'redispatch reaches the live run'
+# Nobody calls `workflow redispatch t1`: the first fix verdict sent it back
+# by itself, and the second attempt ships on the free slot that frees up.
 for _ in $(seq 1 150); do
 	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = merged ] && break
 	sleep 0.2
@@ -238,10 +258,11 @@ done
 is "$(cat "$rundir/t1.state" 2>/dev/null)" merged 'the second attempt ships and merges'
 is "$(cat "$rundir/t1.dispatches")" 2 'as a second attempt'
 is "$(cat "$rundir/t1.reviews")" 1 'the fix count stays at one'
-like "$(cat "$review")" 'VERDICT: ship' 'the review file now holds the ship verdict'
+like "$(cat "$rundir/t1.review")" 'VERDICT: ship' 't1.review now holds the ship verdict'
+like "$(cat "$review")" 'app/t1.php:1 -- says draft' 'and t1.review.1 still keeps the first fix verdict'
 second=$(ls -t "$WF_TMP"/brief-t1-* | head -1)
 like "$(cat "$second")" 'This is attempt 2\. The last one ended: the reviewer wants fixes first \(review 1\) -- read ' 'the redispatched brief says why and where'
-like "$(cat "$second")" "$rundir/t1\.review" 'naming the review file'
+like "$(cat "$second")" "$rundir/t1\.review\.1" 'naming the kept review file'
 
 # t2 follows the first wave, and its reviewer never decides.
 : >"$WF_TMP/release-hold"
@@ -258,6 +279,17 @@ is "$(grep -c '^fable t2 ' "$WF_TMP/reviews.log")" 2 'after one more reading'
 [ -f "$rundir/t2.reviews" ] && notok 'a missing verdict is not a fix' "$(cat "$rundir/t2.reviews")" || ok 'a missing verdict is not a fix'
 is "$(cat "$rundir/t3.state" 2>/dev/null)" failed 'a reader that touched the tree fails the task'
 like "$(cat "$rundir/t3.failed")" '^the reviewer changed the tree, which voids the reading -- read ' 'and says so'
+
+# twice's reader never ships: the first fix sends it back by itself, same as
+# t1, but a second fix in a row is the orchestrator's call, not the run's.
+is "$(cat "$rundir/twice.state" 2>/dev/null)" failed 'a reader that never ships fails after the second round'
+like "$(cat "$rundir/twice.failed")" '\(review 2\)' 'with the second fix verdict recorded'
+is "$(cat "$rundir/twice.reviews")" 2 'two rounds counted'
+is "$(cat "$rundir/twice.dispatches")" 2 'dispatched exactly twice, not a third time'
+[ -f "$rundir/twice.redispatch" ] && notok 'and no marker waits behind it' "$(cat "$rundir/twice.redispatch")" || ok 'and no marker waits behind it'
+like "$(cat "$rundir/twice.review.1")" 'never good enough' 'the first fix is kept'
+like "$(cat "$rundir/twice.review.2")" 'never good enough' 'and so is the second'
+
 is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/app/live/_integration" status --porcelain 2>/dev/null | wc -l)" 0 'and the integration worktree was put back'
 unlike "$(git log --format=%s integration/live)" 'Add the t3 service' 'with t3 not on integration'
 like "$(cat "$T_TMP/run.log")" 'task t1: the reviewer says ship' 'the log says what the reader said'
@@ -273,8 +305,8 @@ plan override ''
 : >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=sonnet WORKFLOW_REVIEW_MODEL=opus \
 	workflow run --plan-file "$T_TMP/override.md"
-is "$RC" 1 'the draft fails review under the run-level model too'
-like "$(cat "$WF_TMP/reviews.log")" '^opus t1 ' 'and it was that model that read'
+is "$RC" 0 'the draft still ships, after its own fix round, under the run-level model too'
+is "$(grep -c '^opus t1 ' "$WF_TMP/reviews.log")" 2 'the fix and the ship both read under it'
 like "$(cat "$WF_TMP/reviews.log")" '^opus side ' 'every task of the run'
 
 ## ------------------------------------- the reader is the one who wrote it
@@ -329,7 +361,7 @@ is "$(wc -c <"$WF_TMP/reviews.log")" 0 'with nobody called'
 plan cheap ''
 : >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/cheap.md"
-is "$RC" 1 'a worker model the reader does not share is read as before'
+is "$RC" 0 'a worker model the reader does not share is read as before'
 like "$(cat "$WF_TMP/reviews.log")" '^fable t1 ' 'by the named reader'
 
 plan off ''
@@ -425,7 +457,7 @@ plan reader ''
 : >"$WF_TMP/reviews.log"
 run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=fable \
 	workflow run --plan-file "$T_TMP/reader.md"
-is "$RC" 1 'the variable names a reader over a recorded none'
+is "$RC" 0 'the variable names a reader over a recorded none'
 unlike "$OUT" 'nobody reads this run' 'so the run does not say nobody reads it'
 like "$(cat "$WF_TMP/reviews.log")" '^fable t1 ' 'and that model read the diff'
 

@@ -1137,13 +1137,25 @@ impl Run {
                 let n = self.field(task, "reviews").parse::<u64>().unwrap_or(0) + 1;
                 write_field(&self.dir, task, "reviews", &n.to_string());
                 self.unwind(task, &prev);
+                let kept = self.dir.join(format!("{task}.review.{n}"));
+                let _ = std::fs::copy(&answer, &kept);
                 self.fail_task(
                     task,
                     &format!(
                         "the reviewer wants fixes first (review {n}) -- read {}",
-                        answer.display()
+                        kept.display()
                     ),
                 );
+                // The first fix goes back to the worker by itself, since one
+                // more attempt off the same findings is not a decision
+                // anybody needs to make; a second one is the orchestrator's
+                // call, made with both readings in hand.
+                if n == 1 {
+                    let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
+                    warn(format!(
+                        "task {task}: dispatched again with the findings on the next free slot"
+                    ));
+                }
             }
             // A reading that did not happen is not a verdict either way: one
             // more try, and then the orchestrator is told. Unless its last
