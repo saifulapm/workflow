@@ -29,7 +29,7 @@ fn the_unit_carries_every_line_that_was_missing_from_draft_one() {
     // mise's shims, every `mem` shell-out fails, and hub serves the degraded
     // page silently — on the one path that matters.
     assert!(
-        unit.contains("Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin"),
+        unit.contains("Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin"),
         "{unit}"
     );
 
@@ -37,7 +37,7 @@ fn the_unit_carries_every_line_that_was_missing_from_draft_one() {
     assert!(unit.contains("Restart=always"), "{unit}");
     assert!(unit.contains("RestartSec=5"), "{unit}");
 
-    assert!(unit.contains("ExecStart=%h/.cargo/bin/hub"), "{unit}");
+    assert!(unit.contains("ExecStart=%h/.local/bin/hub"), "{unit}");
     assert!(unit.contains("Type=simple"), "{unit}");
     assert!(unit.contains("After=network-online.target"), "{unit}");
     assert!(

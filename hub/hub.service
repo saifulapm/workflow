@@ -4,8 +4,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.cargo/bin/hub
-Environment=PATH=%h/.cargo/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/hub
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin
 Restart=always
 RestartSec=5
 

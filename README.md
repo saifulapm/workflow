@@ -19,7 +19,9 @@ that carry it into an editor session.
   `WORKFLOW_AGENT=1` in its sessions; that wiring is per-runtime and kept
   outside this repo.
 
-Install each binary with `cargo install --path <crate>`. Tests are
+Install each binary twice, because the machines run them from two places:
+`cargo install --force --path <crate> --root ~/.local` for the hooks and
+hub.service, `cargo install --path <crate>` for the shell. Tests are
 `cargo test` per crate plus `bash tests/run.sh`. `workflow doctor` and
 `mem doctor` check a machine's wiring.
 
