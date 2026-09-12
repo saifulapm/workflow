@@ -64,7 +64,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
     // stopping the run to recut the plan (friction #QX8GXNQY). It is the
     // block alone that is measured, so nothing about where the run would
     // write the brief is needed to say it here.
-    f.refusals.extend(same_wave_claims(plan, &git));
+    f.refusals.extend(concurrent_claims(plan, &git));
     for t in &plan.tasks {
         if t.checked {
             continue; // never dispatched, so its lines are history, not risk
@@ -506,14 +506,18 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
     out
 }
 
-/// Two tasks in one wave run at once, and a file both claim is one the second
-/// merge conflicts on: the rule that tasks running together never touch the
-/// same files, made checkable rather than found at the gate and hand-sequenced
-/// by the orchestrator (friction #GWD8A4BD). A pattern is judged by the tracked
-/// files it expands to, plus the literal path it names when nothing matches yet
-/// -- a file the task creates -- and each shared path refuses once, naming
-/// both tasks. A ticked task is out of it: it is not dispatched again.
-fn same_wave_claims(plan: &Plan, git: &Git) -> Vec<String> {
+/// A run dispatches from the ready set, not one wave at a time, so two tasks
+/// run at once whenever neither waits for the other -- a wave was the wrong
+/// test for this, since two tasks a level apart with no `[after:]` between
+/// them can still be dispatched together (wiki review-2026-09, defects 1 and
+/// 2). A file both claim is one the second merge conflicts on: the rule that
+/// concurrent tasks never touch the same files, made checkable rather than
+/// found at the gate and hand-sequenced by the orchestrator (friction
+/// #GWD8A4BD). A pattern is judged by the tracked files it expands to, plus
+/// the literal path it names when nothing matches yet -- a file the task
+/// creates -- and each shared path refuses once, naming both tasks in plan
+/// order. A ticked task is out of it: it is not dispatched again.
+fn concurrent_claims(plan: &Plan, git: &Git) -> Vec<String> {
     let owned = |t: &Task| -> std::collections::BTreeSet<String> {
         let mut set = std::collections::BTreeSet::new();
         for p in ownership::split_patterns(t.files.as_deref().unwrap_or("")) {
@@ -525,22 +529,23 @@ fn same_wave_claims(plan: &Plan, git: &Git) -> Vec<String> {
         }
         set
     };
+    let tasks: Vec<(&Task, std::collections::BTreeSet<String>, Vec<String>)> = plan
+        .tasks
+        .iter()
+        .filter(|t| !t.checked)
+        .map(|t| (t, owned(t), ancestors(plan, t)))
+        .collect();
     let mut out = Vec::new();
-    for wave in &plan.waves {
-        let tasks: Vec<(&Task, std::collections::BTreeSet<String>)> = wave
-            .iter()
-            .filter_map(|id| plan.get(id))
-            .filter(|t| !t.checked)
-            .map(|t| (t, owned(t)))
-            .collect();
-        for (i, (a, a_owned)) in tasks.iter().enumerate() {
-            for (b, b_owned) in &tasks[i + 1..] {
-                for path in a_owned.intersection(b_owned) {
-                    out.push(format!(
-                        "plan: tasks {} and {} run in one wave and both claim {path} -- give one an [after:] on the other",
-                        a.id, b.id
-                    ));
-                }
+    for (i, (a, a_owned, a_ancestors)) in tasks.iter().enumerate() {
+        for (b, b_owned, b_ancestors) in &tasks[i + 1..] {
+            if a_ancestors.contains(&b.id) || b_ancestors.contains(&a.id) {
+                continue; // one waits for the other, so they never run at once
+            }
+            for path in a_owned.intersection(b_owned) {
+                out.push(format!(
+                    "plan: tasks {} and {} can run at once and both claim {path} -- give one an [after:] on the other",
+                    a.id, b.id
+                ));
             }
         }
     }
@@ -1250,6 +1255,61 @@ mod tests {
         assert_eq!(quoted("say `it's \"done\"` now"), vec!["it's \"done\""]);
         // An apostrophe is not a quote, and a span never closed is nothing.
         assert!(quoted("the task's `box").is_empty());
+    }
+
+    /// Two tasks with no `[after:]` path between them, either way, are
+    /// refused for sharing a file even when a wave would have kept them
+    /// apart: t2 and t3 share no ordering even though t1 and t2 do, so the
+    /// pair test is ancestry, not level (ruling 5 and the t040 half of
+    /// ruling 6, wiki review-2026-09 defects 1 and 2).
+    #[test]
+    fn concurrent_tasks_sharing_a_file_are_refused_a_chained_pair_is_not() {
+        let git = Git::at(env!("CARGO_MANIFEST_DIR"));
+        let text = "\
+# plan: p
+
+- [ ] t1 first
+      Files: src/never-created-aaa.rs
+      Verify: true
+- [ ] t2 second
+      Files: src/never-created-aaa.rs
+      Verify: true
+";
+        let plan = crate::plan::parse(text, true).expect("the plan parses");
+        let out = concurrent_claims(&plan, &git);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].contains("t1 and t2"), "{out:?}");
+
+        let text = "\
+# plan: p
+
+- [ ] t1 first
+      Files: src/never-created-bbb.rs
+      Verify: true
+- [ ] t2 second  [after: t1]
+      Files: src/never-created-ccc.rs
+      Verify: true
+- [ ] t3 third
+      Files: src/never-created-ccc.rs
+      Verify: true
+";
+        let plan = crate::plan::parse(text, true).expect("the plan parses");
+        let out = concurrent_claims(&plan, &git);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].contains("t2 and t3"), "{out:?}");
+
+        let text = "\
+# plan: p
+
+- [ ] t1 first
+      Files: src/never-created-ddd.rs
+      Verify: true
+- [ ] t2 second  [after: t1]
+      Files: src/never-created-ddd.rs
+      Verify: true
+";
+        let plan = crate::plan::parse(text, true).expect("the plan parses");
+        assert!(concurrent_claims(&plan, &git).is_empty());
     }
 
     #[test]

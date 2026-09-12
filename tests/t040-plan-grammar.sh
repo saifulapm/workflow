@@ -527,6 +527,41 @@ is "$RC" 1 'a file two same-wave tasks would both create is refused too'
 like "$OUT" 't1 and t3' 'naming the two that run together'
 unlike "$OUT" 't1 and t2' 'and never the pair that runs in sequence'
 
+# A run dispatches from the ready set, not one wave at a time, so the pair
+# test is ancestry, not level: t3 has no [after:] path to t2 even though a
+# level walk would have put them apart, and the two still collide (wiki
+# review-2026-09, defects 1 and 2).
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: cargo test
+- [ ] t2 Change it too  [after: t1]
+      Files: src/other.rs
+      Verify: cargo test
+- [ ] t3 Change it again
+      Files: src/other.rs
+      Verify: cargo test
+EOF2
+parse
+is "$RC" 1 'two tasks with no after path between them are refused, chain or not'
+like "$OUT" 't2 and t3' 'naming the unordered pair'
+unlike "$OUT" 't1 and t2' 'never the pair a dependency already orders'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: cargo test
+- [ ] t2 Change it too  [after: t1]
+      Files: src/main.rs
+      Verify: cargo test
+EOF2
+parse
+is "$RC" 0 'two tasks sharing a file are accepted when one waits for the other'
+
 plan_file <<'EOF2'
 # plan: p
 
