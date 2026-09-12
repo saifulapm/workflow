@@ -1677,19 +1677,18 @@ impl Run {
                     let no_result = std::fs::metadata(self.dir.join(format!("{task}.json")))
                         .map(|m| m.len() == 0)
                         .unwrap_or(true);
-                    if self.field(task, "status").is_empty() && no_result {
+                    let why = if self.field(task, "status").is_empty() && no_result {
                         warn(format!(
                             "task {task}: the recorded session never existed -- dispatching again now"
                         ));
+                        "the session it was given never existed, so it never ran"
                     } else {
                         warn(format!(
                             "task {task}: its session is gone and nothing was committed -- dispatching again now"
                         ));
-                    }
-                    self.dispatch(
-                        task,
-                        "the session it was given never existed, so it never ran",
-                    );
+                        "its session is gone and nothing was committed, so start again from what is in the tree"
+                    };
+                    self.dispatch(task, why);
                     continue;
                 }
             } else if self.alive(task) || self.paused(task) {
