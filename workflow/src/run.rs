@@ -173,6 +173,19 @@ pub fn failing_checks(output: &str) -> Vec<String> {
     last
 }
 
+/// A red gate's suite runs in this run's own worktree, and a check that
+/// asserts on a command line or a path in its own output will find that
+/// worktree's path sitting there -- not a defect the gate found, but the
+/// tree it ran in. Named when the gate's combined output carries it, so
+/// whoever reads the failure knows to read the path before the words
+/// around it.
+fn path_hint(text: &str, wt_root: &Path) -> &'static str {
+    if wt_root.as_os_str().is_empty() || !text.contains(&*wt_root.to_string_lossy()) {
+        return "";
+    }
+    " -- the failure text carries this run's worktree path, which every spawned command line holds; a test asserting a word absent from a command is reading the path"
+}
+
 /// Liveness is the latest of three signals, because each one alone has a way of
 /// going quiet on a worker that is fine: a long test run writes no transcript
 /// line, an out-of-tree `CARGO_TARGET_DIR` flattens the worktree's mtime, and a worker
@@ -1374,8 +1387,9 @@ impl Run {
         } else {
             format!(": {}", checks.join(", "))
         };
+        let hint = path_hint(&text, &self.wt_root);
         Err(format!(
-            "the suite is red once the change sits on integration{named} -- see {}",
+            "the suite is red once the change sits on integration{named}{hint} -- see {}",
             file.display()
         ))
     }
@@ -3227,6 +3241,17 @@ mod tests {
         );
         // A word that is not a state stays whole, so the gate can name it.
         assert_eq!(split_state("finished"), ("finished".into(), String::new()));
+    }
+
+    #[test]
+    fn a_red_gate_names_its_own_worktree_path_when_the_output_carries_it() {
+        let wt_root = Path::new("/state/workflow/worktrees/app/demo");
+        let out = "not ok 3 - fails in /state/workflow/worktrees/app/demo/_integration\n";
+        assert_eq!(
+            path_hint(out, wt_root),
+            " -- the failure text carries this run's worktree path, which every spawned command line holds; a test asserting a word absent from a command is reading the path"
+        );
+        assert_eq!(path_hint("not ok 3 - just red\n", wt_root), "");
     }
 
     #[test]

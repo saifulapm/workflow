@@ -56,6 +56,7 @@ is "$(cat "$rundir/t1.state")" failed 't1 is failed'
 like "$(cat "$rundir/t1.failed")" 'not ok 12 - t3 merges' 'the failure note names the first failing check'
 like "$(cat "$rundir/t1.failed")" 'not ok 14 - side ships' 'and the second'
 like "$(cat "$rundir/t1.failed")" '-- see .*t1\.gate$' 'and points at the gate output file'
+unlike "$(cat "$rundir/t1.failed")" "worktree path" 'and carries no path hint when the output never names one'
 
 like "$OUT" 'not ok 12 - t3 merges' 'the run log names the first failing check too'
 like "$OUT" 'not ok 14 - side ships' 'and the second'
@@ -117,3 +118,35 @@ like "$("$MEM_BIN" log --limit 20 --json)" \
 	'and the same line is in the mem log'
 like "$(cat "$flakedir/t1.gate.1")" 'not ok 7 - the flake' "the red run's output is kept"
 like "$(cat "$flakedir/t1.gate")" 'ok 7 - the flake settles' "and the green run's sits beside it"
+
+# The suite runs in this run's own worktree, and a check that prints a path
+# from there is not proof of a defect -- the reason says so.
+new_repo wtpath
+mem_register
+
+write_exec "$T_TMP/pathy.sh" <<'FAKE'
+#!/bin/sh
+printf 'not ok 3 - broke in %s\n' "$PWD"
+exit 1
+FAKE
+"$MEM_BIN" project set verify "$T_TMP/pathy.sh" >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: wtpath
+
+- [ ] t1 The one whose gate output carries the worktree path
+      Files: app/t1.php
+      Verify: true
+- [ ] side A second task, so the plan is worth a worker
+      Files: app/side.php
+      Verify: true
+EOF
+
+wtdir="$XDG_STATE_HOME/workflow/runs/wtpath/wtpath"
+
+run workflow run
+is "$RC" 1 'the gate rejects the merge'
+like "$(cat "$wtdir/t1.failed")" 'not ok 3 - broke in' 'the failure note still names the check'
+like "$(cat "$wtdir/t1.failed")" \
+	"the failure text carries this run's worktree path, which every spawned command line holds; a test asserting a word absent from a command is reading the path" \
+	'a suite whose not ok line prints $PWD earns the hint'
