@@ -528,3 +528,52 @@ like "$(cat "$rundir/redgate.failed")" 'not ok 1 - the suite is red' 'naming the
 readerpid=$(cat "$rundir/redgate.review-pid" 2>/dev/null)
 kill -0 "$readerpid" 2>/dev/null
 isnt "$?" 0 'and its reader process was stopped'
+
+## ------------------------- the task is reviewing while the suite still runs
+
+# A reader is live for the whole gate suite, not just once it answers: the
+# suite is the long part, and a run killed while it runs must find the
+# reading on record, not a task still marked dispatched beside an orphan
+# reader. The state flips to reviewing before the suite starts, not after it
+# ends.
+new_repo slowgate
+mem_register
+"$MEM_BIN" project set review-model fable >/dev/null
+# Marks the instant its own subprocess starts, then holds until released --
+# no clock race: `gate` writes the task's state before it spawns this, so by
+# the time the marker exists the state must already have flipped.
+write_exec "$T_TMP/slowgate-verify.sh" <<'FAKE'
+#!/bin/sh
+: >"$WF_TMP/slowgate-verify-started"
+while [ -f "$WF_TMP/hold-slowgate-verify" ]; do sleep 0.1; done
+printf 'ok\n'
+exit 0
+FAKE
+"$MEM_BIN" project set verify "$T_TMP/slowgate-verify.sh" >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: slowgate
+
+- [ ] slowgate The one whose gate suite takes a moment while its reader reads
+      Files: app/slowgate.php
+      Verify: true
+- [ ] side A second task, so the plan is worth a worker
+      Files: app/side.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/slowgate/slowgate"
+: >"$WF_TMP/hold-slowgate-verify"
+env WORKFLOW_DEADLINE_MIN=0.5 workflow run >"$T_TMP/slowgate.log" 2>&1 &
+runpid=$!
+for _ in $(seq 1 200); do
+	[ -f "$WF_TMP/slowgate-verify-started" ] && break
+	sleep 0.1
+done
+[ -f "$WF_TMP/slowgate-verify-started" ]
+truthy "$?" 'the gate suite started'
+is "$(cat "$rundir/slowgate.state" 2>/dev/null)" reviewing 'and the task is already reviewing, not still dispatched, once it is running'
+rm -f "$WF_TMP/hold-slowgate-verify"
+wait "$runpid"
+is "$?" 0 'the run goes on to merge it once the suite and the reading both clear'
+is "$(cat "$rundir/slowgate.state")" merged 'the task merged'

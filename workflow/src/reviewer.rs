@@ -82,6 +82,20 @@ pub fn prompt(
     } else {
         format!("```diff\n{}\n```", diff.trim_end())
     };
+    let gate_section = if gate.trim().is_empty() {
+        "The gate runs no checks of its own here: no verifier is detected in \
+         this tree, so a compile error or a failing test is yours to name."
+            .to_string()
+    } else {
+        format!(
+            "While you read, the gate runs the project's own checks on this same tree:\n\n\
+             {}\n\n\
+             A compile error, a type error, a lint or a failing test is the gate's to\n\
+             find, and a red gate voids this reading, so never report one and never run\n\
+             them. You are here for what those cannot reach.",
+            gate.trim_end()
+        )
+    };
     format!(
         "\
 # Review of task {id} before it merges
@@ -91,13 +105,7 @@ and nothing else: not the worker's reasoning, not its commit messages' claims.
 You are in {wt}, which holds the tree with this diff applied; read files there
 when a judgement depends on code the diff does not show.
 
-While you read, the gate runs the project's own checks on this same tree:
-
-{gate}
-
-A compile error, a type error, a lint or a failing test is the gate's to
-find, and a red gate voids this reading, so never report one and never run
-them. You are here for what those cannot reach.
+{gate_section}
 
 Two lenses, answer both:
 
@@ -144,7 +152,7 @@ reading that changes the tree is void.
 ",
         id = task.id,
         wt = worktree.display(),
-        gate = gate.trim_end(),
+        gate_section = gate_section,
         answer = answer.display(),
         plan = plan_text.trim_end(),
         pages = brief::pages_section(&task.id, pages),
@@ -312,6 +320,34 @@ mod tests {
         assert!(
             !text.contains("The task's Verify command has already passed"),
             "the gate's suite replaces the worker's own Verify as what a reader defers to: {text}"
+        );
+    }
+
+    /// With no verifier detected in the tree, `gate` is the empty string and
+    /// the prompt must not tell the reader a check runs that never does
+    /// (ruling 2, amended): real breakage there is the reader's to name.
+    #[test]
+    fn no_verifier_detected_leaves_breakage_the_readers_to_name() {
+        let text = prompt(
+            "# plan: gate-reviewer\n",
+            &task(),
+            "diff --git a/x b/x\n+fixed\n",
+            " x | 1 +\n",
+            Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
+            &[],
+            "",
+        );
+        assert!(
+            text.contains(
+                "The gate runs no checks of its own here: no verifier is detected in \
+                 this tree, so a compile error or a failing test is yours to name."
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.contains("While you read, the gate runs the project's own checks"),
+            "nothing checks the tree, so the prompt must not claim otherwise: {text}"
         );
     }
 

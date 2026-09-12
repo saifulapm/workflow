@@ -994,6 +994,14 @@ impl Run {
     /// merge is final.
     fn gate(&self, task: &str, prev: &str, new: &str) -> Result<bool, String> {
         let reading = self.start_review(task, prev, new);
+        // Set before the suite runs, not after: the suite is the long part
+        // (minutes, and a red gate runs it twice), and a run killed or
+        // crashed in the middle of it must leave the reading on record for
+        // `shutdown` and `adopt_stale` to find, not an orphan reader beside
+        // a task still marked dispatched.
+        if reading {
+            self.set_state(task, REVIEWING);
+        }
         if let Err(why) = self.gate_verify(task) {
             if reading {
                 self.backend
