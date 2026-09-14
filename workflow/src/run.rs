@@ -2556,8 +2556,10 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     }
     // Said out loud, because a run that merges unread is worth noticing even
     // when it is exactly what the project asked for.
-    if run.review_model.is_none() && std::env::var("WORKFLOW_REVIEW_MODEL").is_err() {
-        warn(match recorded_none {
+    if run.review_model.is_none() {
+        let env_none = std::env::var("WORKFLOW_REVIEW_MODEL")
+            .is_ok_and(|v| v.trim().eq_ignore_ascii_case("none"));
+        warn(match recorded_none || env_none {
             true => "nobody reads this run: review-model is none",
             false => "nobody reads this run: it recorded no reader when it began",
         });
