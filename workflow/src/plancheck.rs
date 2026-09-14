@@ -458,9 +458,12 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
 /// A data file's own Files entry says nothing about what reads it: a test
 /// elsewhere can assert on its contents while owning none of the change, and
 /// the worker who edits the file never sees that test until the assertion
-/// fails on it (friction #JRS7GAA5). Each tracked file naming the basename,
-/// outside what this task's own Files claims, is worth a warning. A Files
-/// entry qualifies by its own extension -- `assets/*.toml` does, a directory
+/// fails on it (friction #JRS7GAA5). Each tracked file naming the exact
+/// tracked path, outside what this task's own Files claims, is worth a
+/// warning -- a file naming the same basename by another spelling is
+/// `included_unclaimed`'s to catch when it is an include, not this one's
+/// (friction #1TVAS5X9). A Files entry qualifies by its own extension --
+/// `assets/*.toml` does, a directory
 /// or a non-data glob like `workflow/` does not, even though `ls-files`
 /// would happily expand either into a `.toml` path underneath. A qualifying
 /// entry is then expanded through `ls-files`, the way `matches_nothing` and
@@ -492,10 +495,7 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
     }
     let mut out = Vec::new();
     for tracked in &data_files {
-        let Some(basename) = Path::new(tracked).file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let hits = zlines(&git.bytes(&["grep", "-l", "-z", "-F", basename]));
+        let hits = zlines(&git.bytes(&["grep", "-l", "-z", "-F", tracked]));
         for hit in &hits {
             if files.iter().any(|p| covers(p, hit)) {
                 continue;
@@ -1484,5 +1484,40 @@ mod tests {
         ] {
             assert!(!string_like(word), "{word}");
         }
+    }
+
+    /// A file naming the data file's basename in passing is not asserting on
+    /// its path, and used to warn on every such mention repo-wide (friction
+    /// #1TVAS5X9). The exact tracked path is a narrower claim than a
+    /// basename shared with anything else in the tree.
+    #[test]
+    fn data_file_asserted_greps_the_tracked_path_not_the_basename() {
+        let dir = std::env::temp_dir().join(format!(
+            "workflow-plancheck-data-file-asserted-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).expect("make the fixture dir");
+        std::fs::write(dir.join("assets/config.toml"), "value = 1\n").expect("write the data file");
+        std::fs::write(dir.join("caller.rs"), "// reads assets/config.toml\n")
+            .expect("write the full-path caller");
+        std::fs::write(dir.join("prose.rs"), "// mentions config.toml in passing\n")
+            .expect("write the basename-only caller");
+        let git = Git::at(&dir);
+        git.capture(&["init", "-q"]);
+        git.capture(&["add", "-A"]);
+
+        let files = vec!["assets/config.toml".to_string()];
+        let out = data_file_asserted("t1", &files, &git);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(
+            out.iter().any(|w| w.contains("caller.rs")),
+            "a file naming the full tracked path still warns: {out:?}"
+        );
+        assert!(
+            !out.iter().any(|w| w.contains("prose.rs")),
+            "a file naming only the basename no longer warns: {out:?}"
+        );
     }
 }
