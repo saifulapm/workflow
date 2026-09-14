@@ -18,6 +18,8 @@ struct TaskRow {
     /// What the worker was carrying at its last turn, when the run could see
     /// it. Plan-sizing feedback, not a ceiling (ruling #D7A4T2CH).
     context: u64,
+    /// Fix verdicts the reader has handed this task so far.
+    reviews: u64,
 }
 
 struct RunRow {
@@ -26,6 +28,12 @@ struct RunRow {
     base: String,
     integration: String,
     tasks: Vec<TaskRow>,
+    /// Fix verdicts plus one per task that reached a reading, across the run.
+    readings: u64,
+    /// Fix verdicts across the run.
+    fixes: u64,
+    /// Context carried across every task, summed.
+    context: u64,
 }
 
 fn field(dir: &Path, task: &str, ext: &str) -> String {
@@ -96,7 +104,7 @@ fn read_run(dir: &Path) -> Option<RunRow> {
     if !dir.join("plan.md").is_file() {
         return None;
     }
-    let tasks = task_ids(dir)
+    let tasks: Vec<TaskRow> = task_ids(dir)
         .into_iter()
         .map(|id| TaskRow {
             state: field(dir, &id, "state"),
@@ -106,9 +114,17 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             last_status: last_status(dir, &id),
             merged: field(dir, &id, "merged"),
             context: field(dir, &id, "context").parse().unwrap_or(0),
+            reviews: field(dir, &id, "reviews").parse().unwrap_or(0),
             id,
         })
         .collect();
+    let fixes: u64 = tasks.iter().map(|t| t.reviews).sum();
+    let readings = fixes
+        + tasks
+            .iter()
+            .filter(|t| !t.merged.is_empty() || !field(dir, &t.id, "review").is_empty())
+            .count() as u64;
+    let context: u64 = tasks.iter().map(|t| t.context).sum();
     Some(RunRow {
         live: live(dir),
         base: std::fs::read_to_string(dir.join("base_sha"))
@@ -117,6 +133,9 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             .to_string(),
         integration: format!("integration/{plan_id}"),
         tasks,
+        readings,
+        fixes,
+        context,
         plan: plan_id,
     })
 }
@@ -142,6 +161,9 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
             "live": r.live,
             "base": r.base,
             "integration": r.integration,
+            "readings": r.readings,
+            "fixes": r.fixes,
+            "context": r.context,
             "tasks": r.tasks.iter().map(|t| serde_json::json!({
                 "id": t.id,
                 "state": t.state,
@@ -151,6 +173,7 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
                 "last_status": t.last_status,
                 "merged": t.merged,
                 "context": t.context,
+                "reviews": t.reviews,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
@@ -185,7 +208,12 @@ fn print_human(rows: &[RunRow]) {
                     format!("{detail} ({carried})")
                 };
             }
-            println!("  {:<8} {:<10} {}", t.id, t.state, detail);
+            let fix = if t.reviews > 0 {
+                t.reviews.to_string()
+            } else {
+                String::new()
+            };
+            println!("  {:<8} {:<10} {:<4} {}", t.id, t.state, fix, detail);
         }
     }
 }

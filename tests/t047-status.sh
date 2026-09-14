@@ -31,6 +31,7 @@ printf 'abc123\n' >"$rundir/base_sha"
 printf 'merged\n' >"$rundir/t1.state"
 printf 'deadbeef\n' >"$rundir/t1.merged"
 printf '158502\n' >"$rundir/t1.context"
+printf '2\n' >"$rundir/t1.reviews"
 printf 'failed\n' >"$rundir/t2.state"
 printf 'the suite is red once the change sits on integration\n' >"$rundir/t2.failed"
 printf '2\n' >"$rundir/t2.dispatches"
@@ -48,6 +49,7 @@ like "$OUT" 't3 +pending' 'a task that never started says so'
 like "$OUT" 'carried 158k' 'the context a task carried is plan-sizing feedback'
 unlike "$OUT" '\$' 'and no dollar figure is reported at all'
 like "$OUT" 'last report: ready done' 'a status line punctuated ready: reports the state bare'
+like "$OUT" 't1 +merged +2 ' 'the fix column shows the reviews a task carried'
 
 run workflow status --json
 is "$RC" 0 'status --json exits 0'
@@ -57,8 +59,11 @@ like "$OUT" '"failed": *"the suite is red once the change sits on integration"' 
 like "$OUT" '"last_status": *"blocked waiting on an answer"' "json carries the worker's own last report"
 like "$OUT" '"last_status": *"ready done"' 'json reports ready for a status line punctuated ready:'
 like "$OUT" '"context": *158502' 'json carries the context a task carried'
+like "$OUT" '"reviews": *2' 'json carries the fix verdicts a task carried'
 unlike "$OUT" '"spend"' 'and no spend field'
 like "$OUT" '"live": *false' 'nobody holds the run lock'
+like "$OUT" '"readings": *3' 'json sums readings for the run: 2 fix verdicts plus 1 task read to a merge'
+like "$OUT" '"fixes": *2' 'json sums the fix verdicts for the run'
 
 # A held lock is a live orchestrator.
 if command -v flock >/dev/null 2>&1; then
