@@ -32,6 +32,16 @@ pub const DONE_PREVIOUSLY: &str = "done-previously";
 /// the id as one mem will never list.
 const QUESTION_MISS_LIMIT: u32 = 3;
 
+/// Past this many tokens in its window, a worker is not sent back into its
+/// own session: what it would gain from remembering the task it loses to a
+/// context that has already been compacted once, and a fresh session with
+/// the findings in its brief reads better than that.
+const CONTINUE_MAX_TOKENS: u64 = 120_000;
+
+/// How long a message just sent counts as a worker starting its turn, before
+/// a pane still reading as idle would be collected as a worker that ended.
+const CONTINUE_GRACE_S: i64 = 30;
+
 /// The wiki pages a task's Read: named, read live off mem, in the shape the
 /// brief and the reviewer's prompt both take: `(slug, text)`, `None` for a
 /// page mem does not have (ruling 2 of m1-wiki-first).
@@ -678,8 +688,16 @@ impl Run {
             .any(|sha| !sha.is_empty() && git.is_ancestor(sha, &self.int_branch))
     }
 
+    /// The backend's word, or a message just sent: for a few seconds after
+    /// `continue_worker` the pane still reads as idle while claude takes the
+    /// paste, and a worker collected in that window would be judged on an
+    /// empty status file.
     fn alive(&self, task: &str) -> bool {
-        self.backend.alive(&self.handle(task))
+        if self.backend.alive(&self.handle(task)) {
+            return true;
+        }
+        let sent: i64 = self.field(task, "continued_at").parse().unwrap_or(0);
+        sent > 0 && sys::now() - sent < CONTINUE_GRACE_S && self.last_status_line(task).is_none()
     }
 
     /// A failed task whose branch holds commits is not gone: the gate itself
@@ -825,6 +843,66 @@ impl Run {
         }
         warn(format!("task {task}: {what} -- one more try"));
         self.dispatch(task, after);
+    }
+
+    /// The task back to the worker that has it, in the session it has: the
+    /// brief is rewritten with what happened to its last report -- the
+    /// reader's findings, the orchestrator's answer -- and one line goes into
+    /// the pane pointing at it. Nothing about the attempt count moves; the
+    /// status file is emptied so the gate judges this report and not the
+    /// last one, and the stall clock starts over.
+    ///
+    /// `false` when there is no session to send to, the window is past
+    /// [`CONTINUE_MAX_TOKENS`], or the backend did not see the message taken
+    /// -- and in that last case the session is stopped first, since a paste
+    /// that may have landed cannot be left beside a fresh worker in the same
+    /// tree. The caller dispatches afresh on `false`.
+    fn continue_worker(&self, task: &str, why: &str) -> bool {
+        let h = self.handle(task);
+        if h.session.is_empty() || !self.backend.listed(&h) {
+            return false;
+        }
+        if self
+            .backend
+            .context_tokens(&h)
+            .is_some_and(|t| t > CONTINUE_MAX_TOKENS)
+        {
+            warn(format!(
+                "task {task}: its worker's window is past {CONTINUE_MAX_TOKENS} tokens -- a fresh session instead"
+            ));
+            return false;
+        }
+        let Some(t) = self.task_now(task) else {
+            return false;
+        };
+        let wt = self.worktree(task);
+        let brief_file = self.brief_dir.join(format!("{task}.md"));
+        let status = self.dir.join(format!("{task}.status"));
+        let prior = self.prior_attempt(task, why);
+        let prose = plan::prose(&self.plan_text().unwrap_or_default());
+        let pages = wiki_pages(&t);
+        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
+        let _ = std::fs::write(&status, "");
+        let line = format!(
+            "Read {} again: it now says what happened to your last report and what to do \
+             next. Do that, then report as it says.",
+            brief_file.display()
+        );
+        if !self.backend.send(&h, &line) {
+            self.stop(task);
+            return false;
+        }
+        let n: u64 = self.field(task, "continued").parse().unwrap_or(0) + 1;
+        write_field(&self.dir, task, "continued", &n.to_string());
+        write_field(&self.dir, task, "continued_at", &sys::now().to_string());
+        write_field(&self.dir, task, "dispatched_at", &sys::now().to_string());
+        self.set_state(task, DISPATCHED);
+        warn(format!(
+            "task {task}: sent back to its worker (session {}, continuation {n})",
+            h.session
+        ));
+        memcli::log_run(&format!("run {}: continued {task}", self.plan.plan_id));
+        true
     }
 
     fn dispatch(&self, task: &str, after: &str) {
@@ -1291,6 +1369,8 @@ impl Run {
             return false;
         };
         self.moot_reader_questions(task);
+        // The reading is over either way; the reader's pane has no more to say.
+        self.backend.stop(&h, self.kill_grace_s);
         match outcome {
             Ok(Verdict::Ship) => {
                 warn(format!("task {task}: the reviewer says ship"));
@@ -1303,22 +1383,27 @@ impl Run {
                 self.unwind(task, &prev);
                 let kept = self.dir.join(format!("{task}.review.{n}"));
                 let _ = std::fs::copy(&answer, &kept);
-                self.fail_task(
-                    task,
-                    &format!(
-                        "the reviewer wants fixes first (review {n}) -- read {}",
-                        kept.display()
-                    ),
+                let why = format!(
+                    "the reviewer wants fixes first (review {n}) -- read {}",
+                    kept.display()
                 );
                 // The first fix goes back to the worker by itself, since one
                 // more attempt off the same findings is not a decision
-                // anybody needs to make; a second one is the orchestrator's
-                // call, made with both readings in hand.
+                // anybody needs to make: into the session that wrote the
+                // diff when it still stands, else a fresh one on the next
+                // free slot. A second one is the orchestrator's call, made
+                // with both readings in hand.
                 if n == 1 {
+                    self.fail_task_keep(task, &why);
+                    if self.continue_worker(task, &why) {
+                        return true;
+                    }
                     let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
                     warn(format!(
                         "task {task}: dispatched again with the findings on the next free slot"
                     ));
+                } else {
+                    self.fail_task(task, &why);
                 }
             }
             // A reading that did not happen is not a verdict either way: one
@@ -1417,8 +1502,10 @@ impl Run {
         }
     }
 
-    /// The bookkeeping of a merge that is final: state, tick, log.
+    /// The bookkeeping of a merge that is final: state, tick, log, and the
+    /// worker's session stopped -- it has nothing more to do.
     fn land(&self, task: &str) {
+        self.stop(task);
         self.set_state(task, MERGED);
         warn(format!("task {task}: merged onto {}", self.int_branch));
         self.tick_off(task);
@@ -1566,7 +1653,17 @@ impl Run {
         }
     }
 
+    /// Failed for good as far as this run can tell: the worker's session is
+    /// stopped with it, so a pane does not stand idle for an hour over a task
+    /// nobody is sending back. [`Run::fail_task_keep`] is the other case.
     fn fail_task(&self, task: &str, why: &str) {
+        self.stop(task);
+        self.fail_task_keep(task, why);
+    }
+
+    /// Failed with the worker's session left standing, because something is
+    /// about to be sent to it: a reader's findings, an orchestrator's answer.
+    fn fail_task_keep(&self, task: &str, why: &str) {
         warn(format!("task {task}: failed -- {why}"));
         self.set_state(task, FAILED);
         write_field(&self.dir, task, "failed", why);
@@ -1634,7 +1731,7 @@ impl Run {
                 if state == "blocked"
                     && let Some(asked) = self.question_in(task, &note) =>
             {
-                self.fail_task(task, &asked);
+                self.fail_task_keep(task, &asked);
                 return;
             }
             // A worker that committed and then reported something other than
@@ -2922,6 +3019,9 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
                 .into_iter()
                 .any(|q| q.short_id == qid && q.answer.is_some());
             if answered {
+                if run.continue_worker(id, "") {
+                    continue;
+                }
                 warn(format!(
                     "task {id}: #{qid} was answered -- dispatched again with the answer"
                 ));

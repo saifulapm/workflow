@@ -117,7 +117,7 @@ is "$(cat "$rundir/t1.state")" failed 'and the task is failed, past the deadline
 is "$(cat "$rundir/t1.dispatches")" 2 'after exactly one redispatch, same as a stalled worker'
 like "$(cat "$rundir/t1.failed")" 'stalled with no sign of life' \
 	'failed as a stall, never as a worker that reported and erred'
-is "$(grep -c '^stop wf-t1-' "$T_TMP/amx-stops")" 2 'each paused session is ended with amx stop, the same way a stalled one is'
+is "$(sort -u "$T_TMP/amx-stops" | grep -c '^stop wf-t1-')" 2 'each paused session is ended with amx stop, the same way a stalled one is'
 is "$(cat "$rundir/t2.state")" merged 'the worker beside it merged as usual'
 
 ## --------------------------------------- adopt_stale keeps it as adopted

@@ -324,6 +324,15 @@ impl WorkerBackend for AmxBackend {
         let _ = amx(&["stop", &h.session]);
     }
 
+    /// `amx send <id> <text>`: a bracketed paste into the pane, confirmed
+    /// against the vendor's own prompt event. amx refuses at a question
+    /// (exit 2), on a pane it let go or an agent that ended (1), and says
+    /// failure when nothing confirmed the paste within its window -- every
+    /// one of those is a `false` here, and the run takes it from there.
+    fn send(&self, h: &Handle, text: &str) -> bool {
+        !h.session.is_empty() && amx(&["send", &h.session, text]).1
+    }
+
     /// Called only once the worker is no longer alive. amx leaves no result
     /// document, so the phase it ended in is the whole of the backend's word;
     /// the status file and the merge gate judge the work.
@@ -570,6 +579,7 @@ printf '%s\n' "$@" >> '{d}/argv'
 env > '{d}/env'
 echo "amx: $1: no capacity" >&2
 [ "$1" = new ] && [ -f '{d}/refuse' ] && exit 2
+[ "$1" = send ] && [ -f '{d}/refuse' ] && exit 2
 if [ "$1" = status ]; then
   [ "$2" = wf-t1-a3k9 ] || exit 1
   cat '{d}/status.json'
@@ -803,6 +813,19 @@ exit 0
         // No record of the session at all is not a clean ending.
         let fake = Fake::new("result", "done");
         assert!(!AmxBackend.result(&fake.handle("nope"), &out).ok);
+    }
+
+    #[test]
+    fn a_message_goes_through_amx_send_and_its_exit_code_is_the_answer() {
+        let fake = Fake::new("send", "idle");
+        assert!(AmxBackend.send(&fake.handle("wf-t1-a3k9"), "Read the brief again."));
+        assert_eq!(
+            fake.read("argv").lines().collect::<Vec<_>>(),
+            ["send", "wf-t1-a3k9", "Read the brief again."]
+        );
+        std::fs::write(fake.dir.join("refuse"), "").unwrap();
+        assert!(!AmxBackend.send(&fake.handle("wf-t1-a3k9"), "again"));
+        assert!(!AmxBackend.send(&fake.handle(""), "nobody"));
     }
 
     #[test]

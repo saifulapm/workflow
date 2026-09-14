@@ -86,6 +86,16 @@ pub trait WorkerBackend {
     fn context_tokens(&self, h: &Handle) -> Option<u64>;
     /// Stop the worker and everything it started.
     fn stop(&self, h: &Handle, grace_s: i64);
+    /// Put one more message in front of a worker whose turn has ended and
+    /// whose session still stands, so it goes on in the context it already
+    /// has -- what it wrote, what it read -- instead of a fresh session
+    /// re-reading everything. `true` only when the backend saw the message
+    /// taken; anything else and the run stops the session and dispatches
+    /// afresh, since a message that may have landed cannot be left beside a
+    /// second worker in the same tree. The process seam has no such thing.
+    fn send(&self, _h: &Handle, _text: &str) -> bool {
+        false
+    }
     /// What the worker left behind: a print-mode result document at `out`, or
     /// the agents list's word on the session named by the handle.
     fn result(&self, h: &Handle, out: &Path) -> Outcome;
