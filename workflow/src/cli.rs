@@ -81,9 +81,17 @@ A run holds its project's lock for its whole life, so a failed task used to
 wait for the run to end before anyone could act on it -- with the worker slot
 it freed sitting idle (friction #W0S44DE6). This writes a marker in the live
 run's directory; the run picks it up on its next poll and dispatches the task
-again, as long as its wave is still open. With no live run, just run the plan
+again. A dispatched task is taken too: its session is stopped and the task
+goes again on the commits it already has, so a plan edit reaches it now
+rather than after a wasted attempt. --model names a model for this task's
+dispatches for the rest of the run. With no live run, just run the plan
 again -- a fresh run retries failed tasks by itself.")]
-    Redispatch { task: String },
+    Redispatch {
+        task: String,
+        /// The model this task is dispatched with from here on.
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Report this project's runs: task states, spend, lock liveness.
     #[command(
         long_about = "Report this project's runs: task states, spend, lock liveness.
@@ -210,7 +218,7 @@ usage: workflow <command> [options]
       0 every task complete · 1 failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
-  redispatch <task>
+  redispatch <task> [--model <name>]
       ask the live run to dispatch a failed task again
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
   status [--json]

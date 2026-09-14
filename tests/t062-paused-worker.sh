@@ -128,14 +128,16 @@ printf '1\n' >"$orundir/t1.dispatches"
 printf '%s\n' "$(date -u +%s)" >"$orundir/t1.dispatched_at"
 git -C "$repo" worktree add -q -b paused-orphan/t1 "$owtroot/t1" "$base"
 git -C "$repo" worktree add -q -b paused-orphan/t2 "$owtroot/t2" "$base"
-# The listing has already forgotten this session -- no row for it anywhere
-# -- and only "started" said: paused, not dead, from a run that no longer
-# exists to watch it. The transcript it left behind is the only thing left
-# that says it was ever seen (backend.rs's `seen`, ahead of any row).
+# The listing still carries this session, idle -- the shape the usage limit
+# leaves (#17SPEY7R) -- and only "started" said: paused, not dead, from a
+# run that no longer exists to watch it. The row is what says paused; a
+# transcript with no row is a session that died with the machine, and
+# t046 covers that one being collected at once (#B3391C6H).
 osid='b2c3d400-0000-4000-8000-000000000000'
 oslug=$(printf '%s' "$owtroot/t1" | tr -c '[:alnum:]' '-')
 mkdir -p "$HOME/.claude/projects/$oslug"
 printf '{"type":"assistant"}\n' >"$HOME/.claude/projects/$oslug/$osid.jsonl"
+printf 'idle' >"$WF_TMP/agents/$osid"
 printf '%s\n' "$osid" >"$orundir/t1.session"
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$orundir/t1.status"
 

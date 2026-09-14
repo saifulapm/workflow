@@ -156,3 +156,54 @@ is "$(cat "$rundir/t3.dispatches")" 2 'as a second attempt, not a fresh task'
 : >"$WF_TMP/release-t1"
 wait "$runpid"
 is "$?" 0 'the run ends with everything merged'
+
+## ------------------------------ a dispatched task, replaced with a model of its own
+
+# A plan edit made while a task is in flight could not reach it: redispatch
+# refused anything but a failed task, so the running attempt finished against
+# the stale brief (friction #YN02YQX9). And the only way to raise one task's
+# model was the run-wide model file (friction #MVHC4XD1).
+rm -f "$WF_TMP/release-t1"
+export WORKFLOW_WORKER_CMD='printf "%s\n" {model} >>'"$WF_TMP"'/models-{task}; cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status}'"'"' > {out} 2> {err} &'
+cat >"$T_TMP/swap.md" <<'EOF2'
+# plan: swap
+
+- [ ] t1 In flight when the plan changes
+      Files: app/t1.php
+      Verify: true
+- [ ] t2 Along for the ride
+      Files: app/t2.php
+      Verify: true
+EOF2
+rundir="$XDG_STATE_HOME/workflow/runs/app/swap"
+
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
+	workflow run --plan-file "$T_TMP/swap.md" >"$T_TMP/swap.log" 2>&1 &
+runpid=$!
+
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = dispatched ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 't1 is in flight'
+first=$(cat "$rundir/t1.pid")
+
+run workflow redispatch t1 --model haiku
+is "$RC" 0 'redispatch takes a dispatched task'
+like "$OUT" 'replaced' 'and says the session is replaced'
+is "$(cat "$rundir/t1.model")" haiku 'the model rides with the task in the run dir'
+
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/t1.dispatches" 2>/dev/null)" = 2 ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.dispatches")" 2 'the task went again'
+truthy "$(kill -0 "$first" 2>/dev/null && echo 1 || echo 0)" 'the first session was stopped'
+like "$(cat "$T_TMP/swap.log")" 'replaced by request' 'the log says why'
+is "$(sed -n 2p "$WF_TMP/models-t1")" haiku 'and the second dispatch carried the model named'
+[ "$(sed -n 1p "$WF_TMP/models-t1")" = haiku ] && notok 'the first dispatch used the run model' || ok 'the first dispatch used the run model'
+
+: >"$WF_TMP/release-t1"
+wait "$runpid"
+is "$?" 0 'the run ends with t1 merged'
+is "$(cat "$rundir/t1.state")" merged 'on its second session'

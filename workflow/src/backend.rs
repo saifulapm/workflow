@@ -71,6 +71,13 @@ pub trait WorkerBackend {
     /// means still launching; at adoption, with the run that recorded the
     /// session dead, it means the session never existed (friction #9F7WT13K).
     fn seen(&self, h: &Handle) -> bool;
+    /// Does the backend's listing carry this session right now -- a row in
+    /// `claude agents`, a live pid, an amx agent? Narrower than `seen`: a
+    /// transcript on disk is a record, not a listing. This is what tells a
+    /// session the usage limit paused (listed idle) from one that died with
+    /// the machine (a transcript and nothing else), which `seen` cannot
+    /// (frictions #B3391C6H, #QT1PDNRK).
+    fn listed(&self, h: &Handle) -> bool;
     /// The most recent sign of life the backend can see, in epoch seconds.
     /// The worker's own status file is the orchestrator's signal, not the
     /// backend's, and is counted on top of this.
@@ -475,6 +482,17 @@ impl WorkerBackend for ClaudeBackend {
         }
         if paths::transcript_path(&h.worktree, &h.session).exists() {
             return true;
+        }
+        if Self::custom_template() {
+            return !h.session.is_empty() && sys::pgrep(&h.session);
+        }
+        agents_row(&h.session).is_some()
+    }
+
+    fn listed(&self, h: &Handle) -> bool {
+        let pid = Self::pid(h);
+        if !pid.is_empty() {
+            return sys::pid_alive(&pid);
         }
         if Self::custom_template() {
             return !h.session.is_empty() && sys::pgrep(&h.session);

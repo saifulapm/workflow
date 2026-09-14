@@ -151,6 +151,24 @@ pub fn failing_checks(output: &str) -> Vec<String> {
         return cargo.into_iter().take(3).collect();
     }
 
+    // vitest and jest: a red test is `✗ name`, `× name` or a `FAIL file`
+    // header; nothing in them says FAILED, so a suite of theirs used to
+    // name nothing at all (friction #6SA0S36X).
+    let js: Vec<String> = output
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            l.starts_with("✗ ")
+                || l.starts_with("× ")
+                || l.starts_with("FAIL ")
+                || l.starts_with("❯ ")
+        })
+        .map(str::to_string)
+        .collect();
+    if !js.is_empty() {
+        return js.into_iter().take(3).collect();
+    }
+
     let failed: Vec<String> = output
         .lines()
         .map(str::trim)
@@ -179,6 +197,33 @@ pub fn failing_checks(output: &str) -> Vec<String> {
 /// tree it ran in. Named when the gate's combined output carries it, so
 /// whoever reads the failure knows to read the path before the words
 /// around it.
+/// Is `wt` a worktree git still knows: a non-empty `.git` file and a row in
+/// `git worktree list` for its path.
+fn worktree_intact(git: &Git, wt: &Path) -> bool {
+    let dotgit = wt.join(".git");
+    let has_dotgit = std::fs::metadata(&dotgit).is_ok_and(|m| m.len() > 0);
+    if !has_dotgit {
+        return false;
+    }
+    let want = paths::realpath_m(wt);
+    git.out(&["worktree", "list", "--porcelain"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .any(|p| paths::realpath_m(Path::new(p)) == want)
+}
+
+/// A suite whose red test timed out asserted nothing false: the wall it hit
+/// was a clock, and the change may be right. Said in the failure line so
+/// nobody reads a wall of output to learn that (friction #6SA0S36X).
+fn timeout_hint(text: &str) -> &'static str {
+    if text.to_lowercase().contains("timed out") {
+        "; a test timed out rather than asserting"
+    } else {
+        ""
+    }
+}
+
 fn path_hint(text: &str, wt_root: &Path) -> &'static str {
     if wt_root.as_os_str().is_empty() || !text.contains(&*wt_root.to_string_lossy()) {
         return "";
@@ -620,7 +665,10 @@ impl Run {
         if !self.worker_pid(task).is_empty() {
             return false;
         }
-        if !self.backend.seen(&self.handle(task)) || self.alive(task) {
+        // Listed, not merely seen: a session that died with the machine has
+        // a transcript and no row, and matched every clause below until the
+        // stall deadline freed it (frictions #B3391C6H, #QT1PDNRK).
+        if !self.backend.listed(&self.handle(task)) || self.alive(task) {
             return false;
         }
         if self.commits(task) != 0 {
@@ -778,7 +826,10 @@ impl Run {
             status,
             rundir: self.dir.clone(),
             session: session.clone(),
-            model: self.model.clone(),
+            model: match self.field(task, "model").trim() {
+                "" => self.model.clone(),
+                m => m.to_string(),
+            },
             effort: self.effort.clone(),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env,
@@ -1286,7 +1337,9 @@ impl Run {
             return Err("the reviewer changed the tree, which voids the reading".into());
         }
         let text = std::fs::read_to_string(answer).unwrap_or_default();
-        reviewer::verdict(&text).ok_or_else(|| "the review returned no verdict".to_string())
+        // The caller's note adds the answer file and the session, so the
+        // orchestrator knows where the reading left its trace (#HTSWZS4N).
+        reviewer::verdict(&text).ok_or_else(|| "the review ended with no verdict".to_string())
     }
 
     /// A reader is told never to ask, and one that asks anyway waits on
@@ -1388,8 +1441,9 @@ impl Run {
             format!(": {}", checks.join(", "))
         };
         let hint = path_hint(&text, &self.wt_root);
+        let timed = timeout_hint(&text);
         Err(format!(
-            "the suite is red once the change sits on integration{named}{hint} -- see {}",
+            "the suite is red once the change sits on integration{named}{timed}{hint} -- see {}",
             file.display()
         ))
     }
@@ -1929,6 +1983,18 @@ impl Run {
                 return false;
             }
             self.made.push(self.int_wt.clone());
+        }
+        // A directory that is there but no worktree -- an unclean shutdown
+        // zero-truncates the `.git` file and git forgets the entry -- used
+        // to fail below as "cannot fast-forward", pointing at a history that
+        // was fine (friction #S59909Y7).
+        if !worktree_intact(&git, &self.int_wt) {
+            warn(format!(
+                "integration worktree at {} is missing or corrupt; remove that directory, run `git worktree prune`, and run again -- the branch {} is intact",
+                self.int_wt.display(),
+                self.int_branch
+            ));
+            return false;
         }
         let int = Git::at(&self.int_wt);
         if int.head().unwrap_or_default() != self.base
@@ -2529,6 +2595,17 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     let Some(parsed) = plan::parse(&source, true) else {
         return exit::USAGE;
     };
+    // What plan-check would say, said here too: the eight-pattern warning
+    // that predicted a task's two blown windows sat in plan-check's output
+    // while the run dispatched it without a word (friction #V0HFVWJK).
+    let checked = plancheck::findings(&parsed, &[], &top, plan_file);
+    for line in checked.warnings.iter().chain(checked.refusals.iter()) {
+        warn(line);
+    }
+    if !checked.refusals.is_empty() {
+        warn("run: plan-check refuses this plan -- fix it before running");
+        return exit::USAGE;
+    }
 
     let Some(base) = git.head() else {
         return exit::USAGE;
@@ -2733,6 +2810,15 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             if !marker.exists() {
                 continue;
             }
+            // A dispatched task asked to go again: the plan changed under
+            // the worker, and finishing against the stale brief costs a
+            // whole attempt (friction #YN02YQX9). Its session is stopped
+            // and the task failed with its commits kept, so the dispatch
+            // below resumes on them the way a failed task's does.
+            if run.state(id) == DISPATCHED {
+                run.stop(id);
+                run.fail_task(id, "replaced by request; its commits stay on the branch");
+            }
             if run.state(id) != FAILED {
                 let _ = std::fs::remove_file(&marker);
                 warn(format!(
@@ -2921,7 +3007,7 @@ fn shutdown(run: &Run) -> i32 {
 /// Only a run whose lock is held right now can honour it; anything else is a
 /// stopped run, and a stopped run's failed work comes back by running the
 /// plan again.
-pub fn cmd_redispatch(task: &str) -> i32 {
+pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
     if !Git::here().inside_worktree() {
         warn("redispatch: stand in the project checkout");
         return exit::USAGE;
@@ -2947,22 +3033,34 @@ pub fn cmd_redispatch(task: &str) -> i32 {
         if lock_run(&dir).is_some() {
             continue;
         }
-        if field(&dir, task, "state") != FAILED {
+        let state = field(&dir, task, "state");
+        if state != FAILED && state != DISPATCHED {
             continue;
         }
         let plan_id = dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+        // A model named here rides with the task for the rest of the run --
+        // this task's, nobody else's (friction #MVHC4XD1).
+        if let Some(m) = model {
+            let _ = std::fs::write(dir.join(format!("{task}.model")), format!("{m}\n"));
+        }
         let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
+        let how = match state.as_str() {
+            DISPATCHED => {
+                "its session is replaced on the next poll; the commits on its branch stay"
+            }
+            _ => "it goes on the next poll with a free worker slot",
+        };
         warn(format!(
-            "run {plan_id}: asked to dispatch {task} again -- it goes on the next poll with a free worker slot"
+            "run {plan_id}: asked to dispatch {task} again -- {how}"
         ));
         return exit::OK;
     }
 
     warn(format!(
-        "no live run holds {task} failed -- run the plan again to retry failed tasks"
+        "no live run holds {task} failed or dispatched -- run the plan again to retry failed tasks"
     ));
     exit::FAILED
 }
@@ -3092,6 +3190,23 @@ mod tests {
 
     fn t(id: &str, state: &str, note: &str) -> (String, String, String) {
         (id.into(), state.into(), note.into())
+    }
+
+    #[test]
+    fn failing_checks_names_vitest_lines_and_the_timeout_hint_reads_the_output() {
+        let out = "RUN v1\n ✗ renders the cart > Test timed out in 5000ms\n FAIL src/cart.test.ts\nTests 1 failed\n";
+        assert_eq!(
+            failing_checks(out),
+            vec![
+                "✗ renders the cart > Test timed out in 5000ms",
+                "FAIL src/cart.test.ts"
+            ]
+        );
+        assert_eq!(
+            timeout_hint(out),
+            "; a test timed out rather than asserting"
+        );
+        assert_eq!(timeout_hint("not ok 2 - x\n"), "");
     }
 
     #[test]

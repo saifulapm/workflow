@@ -266,6 +266,10 @@ impl WorkerBackend for AmxBackend {
         }
     }
 
+    fn listed(&self, h: &Handle) -> bool {
+        self.seen(h)
+    }
+
     fn seen(&self, h: &Handle) -> bool {
         // The exit code, not the parse: `status` exits 0 for every agent amx
         // has a record of, and a failure with no record is the one thing that
