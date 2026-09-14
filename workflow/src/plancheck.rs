@@ -266,6 +266,12 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 "plan: task {}: its Verify runs tests and its Files list no test file -- the worker cannot add the test that proves it",
                 t.id
             ));
+        } else if done_asks_test(t.done.as_deref().unwrap_or("")) && !has_test_file(&git, &patterns)
+        {
+            f.warnings.push(format!(
+                "plan: task {}: its Done asks for a test and its Files list no test file -- the worker cannot add the test it is asked for",
+                t.id
+            ));
         }
         if let Some(over) = brief::over_budget(t) {
             f.warnings.push(format!(
@@ -659,6 +665,19 @@ fn concurrent_claims(plan: &Plan, git: &Git) -> Vec<String> {
 
 fn runs_tests(verify: &str) -> bool {
     verify.contains("test")
+}
+
+/// A Done that names a test as a deliverable -- "tests for each", "a spec
+/// per screen" -- whole-word, so "latest" or "contest" say nothing
+/// (friction #8KNJHX6M: a Done demanded tests, Files claimed no test file,
+/// and the run failed the worker for writing them).
+fn done_asks_test(done: &str) -> bool {
+    done.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
+        matches!(
+            w.to_ascii_lowercase().as_str(),
+            "test" | "tests" | "spec" | "specs"
+        )
+    })
 }
 
 /// A Files pattern naming "test" is the common case; the other shape cargo
@@ -1346,6 +1365,16 @@ mod tests {
         assert!(dir_claimed(&prior, "engine/src/billing.rs"));
         assert!(!dir_claimed(&prior, "host-web/src/cart.ts"));
         assert!(!dir_claimed(&[], "engine/auth/charge.rs"));
+    }
+
+    #[test]
+    fn done_asks_test_is_whole_word() {
+        assert!(done_asks_test("tests for each screen"));
+        assert!(done_asks_test(
+            "a spec per handler and every caller migrated"
+        ));
+        assert!(!done_asks_test("the latest contest total is identical"));
+        assert!(!done_asks_test(""));
     }
 
     #[test]
