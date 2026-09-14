@@ -242,7 +242,8 @@ fn green_file(project: Option<&Project>) -> Option<PathBuf> {
     Some(paths::green_root().join(id))
 }
 
-fn cached_green(project: Option<&Project>) -> Option<String> {
+/// The tree the suite last proved green here, as `write-tree` spells it.
+pub(crate) fn cached_green(project: Option<&Project>) -> Option<String> {
     let f = green_file(project)?;
     Some(std::fs::read_to_string(f).ok()?.trim().to_string())
 }

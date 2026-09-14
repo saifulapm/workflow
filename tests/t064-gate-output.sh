@@ -10,8 +10,12 @@ t_init
 new_repo app
 mem_register
 
+# Every suite here is green on the bare trunk and red once a task's file is
+# in the tree: the run puts the trunk through the gate before it dispatches
+# anything, and a suite red from the start would be refused at the door.
 write_exec "$T_TMP/suite.sh" <<'FAKE'
 #!/bin/sh
+[ -d app ] || exit 0
 printf 'ok 1 - warm up\n'
 printf 'not ok 12 - t3 merges\n'
 printf 'ok 13 - fine\n'
@@ -82,6 +86,7 @@ mem_register
 export GATE_RUNS="$T_TMP/gate-runs"
 write_exec "$T_TMP/flaky.sh" <<'FAKE'
 #!/bin/sh
+[ -d app ] || exit 0
 n=$(cat "$GATE_RUNS" 2>/dev/null || echo 0)
 n=$((n + 1))
 printf '%s\n' "$n" >"$GATE_RUNS"
@@ -126,6 +131,7 @@ mem_register
 
 write_exec "$T_TMP/pathy.sh" <<'FAKE'
 #!/bin/sh
+[ -d app ] || exit 0
 printf 'not ok 3 - broke in %s\n' "$PWD"
 exit 1
 FAKE

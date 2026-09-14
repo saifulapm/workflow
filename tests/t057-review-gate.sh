@@ -572,8 +572,11 @@ like "$OUT" 'nobody reads this run: it recorded no reader when it began' 'and sa
 new_repo redgate
 mem_register
 "$MEM_BIN" project set review-model fable >/dev/null
+# Green on the bare trunk -- the run gates the trunk before its first
+# dispatch -- and red once the task's file is in the tree.
 write_exec "$T_TMP/redgate-verify.sh" <<'FAKE'
 #!/bin/sh
+[ -d app ] || exit 0
 printf 'not ok 1 - the suite is red\n'
 exit 1
 FAKE
@@ -617,6 +620,7 @@ mem_register
 # the time the marker exists the state must already have flipped.
 write_exec "$T_TMP/slowgate-verify.sh" <<'FAKE'
 #!/bin/sh
+[ -d app ] || exit 0 # the trunk's own gate, before any task
 : >"$WF_TMP/slowgate-verify-started"
 while [ -f "$WF_TMP/hold-slowgate-verify" ]; do sleep 0.1; done
 printf 'ok\n'

@@ -1610,6 +1610,31 @@ impl Run {
     /// redispatch that changes nothing; the second run decides. The red run's
     /// output moves to `<task>.gate.1` so both are on disk to compare, and a
     /// merge that took two goes says so.
+    /// The suite on the tree the run starts from, unless verify's green
+    /// cache already holds that tree -- every green `verify --gate` records
+    /// the tree it proved, so a trunk the gate just merged onto is known.
+    /// A red trunk fails every task at the gate, each after a whole worker,
+    /// and one red suite before the first dispatch is what that costs
+    /// instead (2026-09-14: a4bb5fa reddened three tasks in a row for 45
+    /// minutes before anyone read the gate). `Err` names the failing checks.
+    fn trunk_green(&self) -> Result<(), String> {
+        let int = Git::at(&self.int_wt);
+        let tree = int.out(&["rev-parse", "HEAD^{tree}"]).unwrap_or_default();
+        let tree = tree.trim().to_string();
+        if !tree.is_empty()
+            && verify::cached_green(memcli::project_current().as_ref()).as_deref() == Some(&tree)
+        {
+            return Ok(());
+        }
+        let tip = int.head().unwrap_or_default();
+        warn(format!(
+            "run {}: the gate has not seen {} green -- running the suite once before the first dispatch",
+            self.plan.plan_id,
+            &tip[..tip.len().min(12)]
+        ));
+        self.gate_run(&self.dir.join("base.gate"))
+    }
+
     fn gate_verify(&self, task: &str) -> Result<(), String> {
         let gate_file = self.dir.join(format!("{task}.gate"));
         let kept = self.dir.join(format!("{task}.gate.1"));
@@ -2941,6 +2966,19 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     };
 
     if !run.setup() {
+        run.rollback();
+        return exit::USAGE;
+    }
+    if let Err(why) = run.trunk_green() {
+        warn(format!(
+            "run {}: the trunk is red before anything is dispatched -- {why}",
+            run.plan.plan_id
+        ));
+        warn("fix the trunk first: a run on a red trunk fails every task at its gate");
+        memcli::log_run(&format!(
+            "run {}: refused, the trunk is red -- {why}",
+            run.plan.plan_id
+        ));
         run.rollback();
         return exit::USAGE;
     }
