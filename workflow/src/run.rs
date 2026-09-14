@@ -387,6 +387,58 @@ impl Run {
             .or_else(|| self.plan.get(id).cloned())
     }
 
+    /// Tasks the plan of record has gained since this run parsed it. The
+    /// brief and the reader already read the plan live; the ready set read
+    /// the parse from setup, so a task added mid-run sat unseen until the
+    /// next `workflow run` (friction #HJHM61GZ). Each new task joins
+    /// `self.plan` in the plan's order and starts pending; a task the plan
+    /// dropped is left as it stands, since `task_now` fails it at dispatch.
+    fn take_new_tasks(&mut self) -> Vec<String> {
+        let Some(now) = self
+            .plan_text()
+            .and_then(|text| plan::parse(&text, true))
+            .filter(|p| p.plan_id == self.plan.plan_id)
+        else {
+            return Vec::new();
+        };
+        let new: Vec<String> = now
+            .ids()
+            .into_iter()
+            .filter(|id| self.plan.get(id).is_none())
+            .collect();
+        if new.is_empty() {
+            return new;
+        }
+        let mut tasks = Vec::with_capacity(now.tasks.len() + self.plan.tasks.len());
+        for t in &now.tasks {
+            match self.plan.get(&t.id) {
+                Some(known) => tasks.push(known.clone()),
+                None => tasks.push(t.clone()),
+            }
+        }
+        for t in &self.plan.tasks {
+            if now.get(&t.id).is_none() {
+                tasks.push(t.clone());
+            }
+        }
+        self.plan.tasks = tasks;
+        for id in &new {
+            if self.plan.get(id).is_some_and(|t| t.checked) {
+                self.set_state(id, DONE_PREVIOUSLY);
+                continue;
+            }
+            if !self.make_worktree(id) {
+                self.fail_task(id, "no worktree could be made for it");
+                continue;
+            }
+            self.set_state(id, PENDING);
+            warn(format!(
+                "task {id}: added to the plan while the run is live -- pending"
+            ));
+        }
+        new
+    }
+
     /// The plan of record as it reads right now: the `--plan-file`, else
     /// mem's plan. What `task_now` parses and what the reviewer is handed.
     fn plan_text(&self) -> Option<String> {
@@ -2011,40 +2063,52 @@ impl Run {
             if t.checked {
                 continue; // already done, nothing to run
             }
-            let wt = self.worktree(&t.id);
-            if wt.is_dir() {
-                continue;
-            }
-            // A worktree hand-removed since the last run leaves its
-            // registration behind; without pruning first, git refuses to
-            // reuse the branch or the path a resumed task needs back.
-            git.quiet(&["worktree", "prune"]);
-            let branch = self.branch(&t.id);
-            if self.resumable(&t.id) {
-                // The branch already exists with the failed attempt's
-                // commits on it -- checked out again, never recreated.
-                if !git.quiet(&["worktree", "add", "-q", &wt.to_string_lossy(), &branch]) {
-                    warn(format!("cannot resume the worktree for task {}", t.id));
-                    return false;
-                }
-                self.link_deps(&wt);
-                continue; // not self.made: rollback and cleanup leave it be
-            }
-            if !git.quiet(&[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                &branch,
-                &wt.to_string_lossy(),
-                &self.base,
-            ]) {
-                warn(format!("cannot make a worktree for task {}", t.id));
+            if !self.make_worktree(&t.id) {
                 return false;
             }
-            self.made.push(wt.clone());
-            self.link_deps(&wt);
         }
+        true
+    }
+
+    /// The worktree one task works in, made if it is not there: a fresh
+    /// branch off the base, or the failed attempt's branch checked out
+    /// again when the task is resumable. Setup makes every task's; a task
+    /// the plan gains mid-run gets its own here (friction #HJHM61GZ).
+    fn make_worktree(&mut self, task: &str) -> bool {
+        let git = self.git();
+        let wt = self.worktree(task);
+        if wt.is_dir() {
+            return true;
+        }
+        // A worktree hand-removed since the last run leaves its
+        // registration behind; without pruning first, git refuses to
+        // reuse the branch or the path a resumed task needs back.
+        git.quiet(&["worktree", "prune"]);
+        let branch = self.branch(task);
+        if self.resumable(task) {
+            // The branch already exists with the failed attempt's
+            // commits on it -- checked out again, never recreated.
+            if !git.quiet(&["worktree", "add", "-q", &wt.to_string_lossy(), &branch]) {
+                warn(format!("cannot resume the worktree for task {task}"));
+                return false;
+            }
+            self.link_deps(&wt);
+            return true; // not self.made: rollback and cleanup leave it be
+        }
+        if !git.quiet(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &branch,
+            &wt.to_string_lossy(),
+            &self.base,
+        ]) {
+            warn(format!("cannot make a worktree for task {task}"));
+            return false;
+        }
+        self.made.push(wt.clone());
+        self.link_deps(&wt);
         true
     }
 
@@ -2688,7 +2752,8 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     ] {
         let _ = signal_hook::flag::register(sig, run.stop.clone());
     }
-    let stopping = || run.stop.load(std::sync::atomic::Ordering::Relaxed);
+    let stop_flag = run.stop.clone();
+    let stopping = move || stop_flag.load(std::sync::atomic::Ordering::Relaxed);
 
     let adopted = run.adopt_stale();
     memcli::log_run(&format!(
@@ -2778,7 +2843,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     };
 
     let mut warned_waiting: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let all_ids = run.plan.ids();
+    let mut all_ids = run.plan.ids();
     while run.running() > 0
         || !run.reviewing().is_empty()
         || !run.waiting(&all_ids).is_empty()
@@ -2787,6 +2852,9 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     {
         if stopping() {
             return shutdown(&run);
+        }
+        if !run.take_new_tasks().is_empty() {
+            all_ids = run.plan.ids();
         }
         for id in ready(&run) {
             if run.running() >= run.max_workers {
