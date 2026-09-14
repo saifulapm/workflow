@@ -286,6 +286,7 @@ pub fn project_current(app: &App) -> Result<i32> {
     let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
     let model = crate::project::declared(&app.store, id, "model");
     let review_model = crate::project::declared(&app.store, id, "review_model");
+    let fix_model = crate::project::declared(&app.store, id, "fix_model");
     let effort = crate::project::declared(&app.store, id, "effort");
     let review_effort = crate::project::declared(&app.store, id, "review_effort");
     // A child project keeps the checkout as its root — run dirs and worktrees
@@ -311,6 +312,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(model) = &review_model {
             doc["review_model"] = json!(model);
+        }
+        if let Some(model) = &fix_model {
+            doc["fix_model"] = json!(model);
         }
         if let Some(level) = &effort {
             doc["effort"] = json!(level);
@@ -339,6 +343,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(model) = &review_model {
             println!("review-model  {model}");
+        }
+        if let Some(model) = &fix_model {
+            println!("fix-model  {model}");
         }
         if let Some(level) = &effort {
             println!("effort  {level}");

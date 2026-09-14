@@ -121,6 +121,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Run { plan_file } => run::cmd_run(plan_file.as_deref()),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
+        Command::Accept { task } => run::cmd_accept(&task),
         Command::Status { json } => status::cmd_status(json),
         Command::PlanCheck { file, json } => cmd_plan_check(&file, json),
         Command::Ownership {

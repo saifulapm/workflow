@@ -52,6 +52,20 @@ pub fn verdict(text: &str) -> Option<Verdict> {
     })
 }
 
+/// The findings a reading marked `later`: true, worth a line in a later
+/// plan, and not worth a round of this one. Each is the line it was written
+/// on, tag stripped, so a follow-up record reads as the finding itself.
+pub fn later(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim().trim_start_matches(['*', '-', '>', ' ']);
+            let rest = line.strip_prefix("[later]")?;
+            let rest = rest.trim();
+            (!rest.is_empty()).then(|| rest.to_string())
+        })
+        .collect()
+}
+
 /// Every earlier reading of this task, so a reader sent back after a fix
 /// does not spend its whole reading on ground the first reading already
 /// covered (ruling 3): each `<task>.review.<n>` verbatim under its own
@@ -74,6 +88,16 @@ fn earlier_section(earlier: &[String]) -> String {
          else, and name every instance of a class you find, not the first: each \
          reading costs a round.\n\n",
     );
+    if earlier.len() >= 2 {
+        out.push_str(
+            "This is the third reading. Two rounds of fixes have gone into this diff \
+             and a third is the orchestrator's call, not yours: only an earlier \
+             finding still not addressed, or a defect the fixes themselves \
+             introduced, is `[blocks]` here. Anything else you find now is true \
+             and `[later]`, however real -- the lines it is on were in front of the \
+             first two readings.\n\n",
+        );
+    }
     out
 }
 
@@ -158,17 +182,25 @@ Two lenses, answer both:
    plainly says is a gap.
 
 Report every defect and gap you find, the ones you are not sure of included,
-marked as such: nothing is filtered for severity or confidence here, and a
-real one held back costs a whole round. A finding carries a file and line,
-the concrete failure, and the correct behaviour, in a few lines each:
+marked as such: nothing is held back here, and a real one left unsaid costs a
+whole round. Each finding opens with one of two tags. `[blocks]` is a defect
+or a gap the merge must not land with: wrong output, a crash, data another
+tenant can reach, a Done clause or ruling missed. `[later]` is true and worth
+fixing and not worth a round of this task -- a cap checked after the
+allocation, a bound a bind parameter could use, a surrogate a decoder folds
+-- and rides out of a ship verdict as a follow-up for a later plan. A finding
+carries a file and line, the concrete failure, and the correct behaviour, in
+a few lines each:
 
-    - src/cart.rs:40 -- rounds each line to the cent before summing, so a
-      basket of three 0.335 items totals 1.02 where the Done line wants
-      1.01; sum in millicents and round once.
+    - [blocks] src/cart.rs:40 -- rounds each line to the cent before
+      summing, so a basket of three 0.335 items totals 1.02 where the Done
+      line wants 1.01; sum in millicents and round once.
+    - [later] src/cart.rs:88 -- the basket is cloned once per line; one
+      clone before the loop does.
 
-\"Consider extracting this\" is a preference, and preferences do not block;
-correctness and requirement gaps do. Do not summarise the diff and do not
-review style.
+\"Consider extracting this\" is a preference, and preferences are not
+findings; correctness and requirement gaps are. Do not summarise the diff and
+do not review style.
 
 ## How to answer
 
@@ -181,7 +213,9 @@ Its first line is exactly one of:
     VERDICT: ship
     VERDICT: fix
 
-then the findings, most severe first, or one line saying the diff is clean.
+then the findings, `[blocks]` before `[later]`, or one line saying the diff is
+clean. `fix` only when at least one finding is `[blocks]`: a reading whose
+findings are all `[later]` ships, and each of them is kept.
 That file is the only thing you write. Do not edit, create or commit anything
 in the tree, do not run its tests or builds, and do not ask questions: a
 reading that changes the tree is void.
@@ -263,6 +297,37 @@ mod tests {
     }
 
     #[test]
+    fn later_findings_are_the_lines_so_tagged_with_the_tag_stripped() {
+        let text = "VERDICT: ship\n\
+                    - [later] src/cart.rs:88 -- one clone before the loop does.\n\
+                    - [blocks] src/cart.rs:40 -- rounds too early.\n\
+                    * [later]  src/cart.rs:90 -- a bound on the bind parameter.\n\
+                    - [later]\n";
+        assert_eq!(
+            later(text),
+            [
+                "src/cart.rs:88 -- one clone before the loop does.",
+                "src/cart.rs:90 -- a bound on the bind parameter.",
+            ]
+        );
+        assert!(later("VERDICT: ship\nThe diff is clean.").is_empty());
+    }
+
+    #[test]
+    fn the_third_reading_is_told_what_may_still_block() {
+        let two = [
+            "VERDICT: fix\n- [blocks] a".to_string(),
+            "VERDICT: fix\n- [blocks] b".to_string(),
+        ];
+        let text = earlier_section(&two);
+        assert!(text.contains("This is the third reading"), "{text}");
+        assert!(text.contains("### Reading 2"), "{text}");
+        let one = &two[..1];
+        assert!(!earlier_section(one).contains("third reading"));
+        assert!(earlier_section(&[]).is_empty());
+    }
+
+    #[test]
     fn the_verdict_is_the_first_verdict_line_however_it_is_dressed() {
         assert_eq!(
             verdict("VERDICT: ship\n\nThe diff is clean."),
@@ -312,9 +377,11 @@ mod tests {
             "VERDICT: ship",
             "VERDICT: fix",
             "Report every defect and gap you find, the ones you are not sure of included",
-            "preferences do not block",
-            "src/cart.rs:40 -- rounds each line to the cent",
-            "the only thing you write",
+            "preferences are not",
+            "[blocks] src/cart.rs:40 -- rounds each line to the cent",
+            "[later] src/cart.rs:88",
+            "`fix` only when at least one finding is `[blocks]`",
+            "That file is the only thing you write",
         ] {
             assert!(text.contains(needle), "the prompt lost {needle:?}:\n{text}");
         }

@@ -108,6 +108,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::ReviewModel { model } => {
                     verbs::project_set(&app, "review_model", model)
                 }
+                cli::ProjectSetCommand::FixModel { model } => {
+                    verbs::project_set(&app, "fix_model", model)
+                }
                 cli::ProjectSetCommand::Effort { level } => {
                     verbs::project_set(&app, "effort", level.as_str())
                 }

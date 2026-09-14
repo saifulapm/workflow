@@ -293,6 +293,7 @@ pub enum ProjectKey {
     ReviewPaths,
     Model,
     ReviewModel,
+    FixModel,
     Effort,
     ReviewEffort,
 }
@@ -305,6 +306,7 @@ impl ProjectKey {
             ProjectKey::ReviewPaths => "review_paths",
             ProjectKey::Model => "model",
             ProjectKey::ReviewModel => "review_model",
+            ProjectKey::FixModel => "fix_model",
             ProjectKey::Effort => "effort",
             ProjectKey::ReviewEffort => "review_effort",
         }
@@ -330,6 +332,13 @@ pub enum ProjectSetCommand {
     /// and a run stops to ask. WORKFLOW_REVIEW_MODEL overrides per run.
     #[command(name = "review-model")]
     ReviewModel { model: String },
+    /// The model a task is dispatched on for its second fix round, after the
+    /// reader has found fault twice: a stronger one than the workers', so a
+    /// diff a cheaper model could not get right is not sent back to it a
+    /// third time. Absent means the reader's own model. WORKFLOW_FIX_MODEL
+    /// overrides per run.
+    #[command(name = "fix-model")]
+    FixModel { model: String },
     /// How much reasoning a run's workers spend, on whatever model they run
     /// (`max` buys a cheaper model more thinking). Absent means the CLI's
     /// own default; WORKFLOW_EFFORT overrides per run, and set empty it

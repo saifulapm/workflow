@@ -82,7 +82,10 @@ case $task in
 		fi
 		;;
 	twice-review)
-		printf 'VERDICT: fix\n1. app/twice.php:1 -- never good enough.\n' >"$answer"
+		printf 'VERDICT: fix\n- [blocks] app/twice.php:1 -- never good enough.\n' >"$answer"
+		;;
+	side-review)
+		printf 'VERDICT: ship\n- [later] app/side.php:1 -- one clone before the loop does.\n' >"$answer"
 		;;
 	redgate-review)
 		# The reader starts before the suite does, so it is still reading
@@ -122,6 +125,7 @@ t1)
 	fi
 	;;
 twice)
+	printf '%s\n' "$model" >>"$WF_TMP/twice.models"
 	mkdir -p app
 	if [ -f app/twice.php ]; then
 		printf 'again\n' >>app/twice.php
@@ -301,14 +305,30 @@ is "$(cat "$rundir/t3.state" 2>/dev/null)" failed 'a reader that touched the tre
 like "$(cat "$rundir/t3.failed")" '^the reviewer changed the tree, which voids the reading -- read ' 'and says so'
 
 # twice's reader never ships: the first fix sends it back by itself, same as
-# t1, but a second fix in a row is the orchestrator's call, not the run's.
-is "$(cat "$rundir/twice.state" 2>/dev/null)" failed 'a reader that never ships fails after the second round'
-like "$(cat "$rundir/twice.failed")" '\(review 2\)' 'with the second fix verdict recorded'
-is "$(cat "$rundir/twice.reviews")" 2 'two rounds counted'
-is "$(cat "$rundir/twice.dispatches")" 2 'dispatched exactly twice, not a third time'
+# t1; the second goes to a fresh session on the fix model -- the reader's
+# own, since the project named none; and a third fix verdict is the
+# orchestrator's call, not the run's.
+is "$(cat "$rundir/twice.state" 2>/dev/null)" failed 'a reader that never ships fails after the third reading'
+like "$(cat "$rundir/twice.failed")" '\(review 3\)' 'with the third fix verdict recorded'
+like "$(cat "$rundir/twice.failed")" 'three readings is the run.s limit -- `workflow accept twice` merges it as it stands' 'and the way out named'
+is "$(cat "$rundir/twice.reviews")" 3 'three rounds counted'
+is "$(cat "$rundir/twice.dispatches")" 3 'dispatched exactly three times, not a fourth'
 [ -f "$rundir/twice.redispatch" ] && notok 'and no marker waits behind it' "$(cat "$rundir/twice.redispatch")" || ok 'and no marker waits behind it'
 like "$(cat "$rundir/twice.review.1")" 'never good enough' 'the first fix is kept'
 like "$(cat "$rundir/twice.review.2")" 'never good enough' 'and so is the second'
+like "$(cat "$rundir/twice.review.3")" 'never good enough' 'and the third'
+is "$(sed -n 2p "$WF_TMP/twice.models")" opus 'the second attempt ran on the workers'"'"' model'
+is "$(sed -n 3p "$WF_TMP/twice.models")" fable 'the third on the fix model, which defaults to the reader'"'"'s'
+is "$(cat "$rundir/twice.model")" fable 'recorded on the task for the rest of the run'
+like "$(cat "$T_TMP/run.log")" 'task twice: dispatched again on fable with both readings' 'the log says so'
+third=$(ls -t "$WF_TMP"/review-brief-twice-* | head -1)
+like "$(cat "$third")" 'This is the third reading' 'the third reading is told what may still block'
+like "$(cat "$third")" '### Reading 2' 'and carries both earlier readings'
+run_out "$MEM_BIN" log --kind fact --type followup --json
+like "$OUT" 'follow-up from live/side \(the reader marked later\): app/side.php:1 -- one clone' \
+	'a finding the reader marked later rides out of the ship verdict as a follow-up'
+unlike "$OUT" 'never good enough' 'a blocking finding is not a follow-up while its task is failed'
+like "$(cat "$T_TMP/run.log")" 'task side: 1 finding\(s\) the reader marked later -- filed as follow-ups' 'and the run says so'
 
 is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/app/live/_integration" status --porcelain 2>/dev/null | wc -l)" 0 'and the integration worktree was put back'
 unlike "$(git log --format=%s integration/live)" 'Add the t3 service' 'with t3 not on integration'
@@ -318,6 +338,49 @@ is "$(grep -c '^fable hold ' "$WF_TMP/reviews.log")" 1 'every merge is read once
 run_out "$MEM_BIN" questions --for orchestrator --json
 like "$OUT" '"task": ?"live/t3-review"' 'a question the reader asked anyway is tagged with the reading'
 like "$OUT" 'moot: the reading of t3 ended without waiting on it' 'and was closed as moot when the reading ended'
+
+## ------------------------------------------- accept lands it over the findings
+
+# A run whose reader never ships twice's diff, and an orchestrator who has
+# read the findings and lands it anyway: `workflow accept twice` while the
+# run is live. The merge runs again with no reader -- the gate's suite still
+# does -- and the last reading's findings are filed as follow-ups.
+rm -f "$WF_TMP/release-hold" "$WF_TMP/twice.models"
+plan accept '- [ ] hold Stay alive until released
+      Files: app/hold.php
+      Verify: true
+- [ ] twice Add the twice service
+      Files: app/twice.php
+      Verify: true'
+arun="$XDG_STATE_HOME/workflow/runs/app/accept"
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
+	workflow run --plan-file "$T_TMP/accept.md" >"$T_TMP/accept.log" 2>&1 &
+runpid=$!
+for _ in $(seq 1 300); do
+	grep -q 'three readings' "$arun/twice.failed" 2>/dev/null && break
+	sleep 0.2
+done
+like "$(cat "$arun/twice.failed" 2>/dev/null)" 'three readings' 'twice failed on its third reading with the run still live'
+run workflow accept twice
+is "$RC" 0 'accept is taken by the live run'
+like "$OUT" 'asked to accept twice over reading 3 -- it merges on the next poll, unread' 'and says what happens next'
+for _ in $(seq 1 100); do
+	[ "$(cat "$arun/twice.state" 2>/dev/null)" = merged ] && break
+	sleep 0.2
+done
+is "$(cat "$arun/twice.state" 2>/dev/null)" merged 'the branch merges as it stands'
+is "$(cat "$arun/twice.reviews")" 3 'with no fourth reading'
+like "$(cat "$T_TMP/accept.log")" 'task twice: accepted by request -- merging over reading 3 unread' 'the run says so'
+like "$(cat "$T_TMP/accept.log")" 'task twice: 1 finding\(s\) accepted over reading 3 -- filed as follow-ups' 'and files the findings'
+run_out "$MEM_BIN" log --kind fact --type followup --json
+like "$OUT" 'follow-up from accept/twice \(accepted over reading 3\): \[blocks\] app/twice.php:1 -- never good' \
+	'the blocking finding is now a follow-up, tag and all'
+run workflow accept twice
+is "$RC" 1 'a merged task is not accepted twice'
+: >"$WF_TMP/release-hold"
+wait "$runpid"
+is "$?" 0 'and the run completes'
+is "$(git rev-list --count "integration/accept" -- app/twice.php)" 3 'all three of its commits are on integration'
 
 ## --------------------------------------------- the variable beats the key
 

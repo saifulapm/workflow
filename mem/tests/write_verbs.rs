@@ -617,6 +617,27 @@ fn project_set_review_paths_records_the_globs_and_project_current_reports_them()
 }
 
 #[test]
+fn project_set_fix_model_records_the_choice_and_project_current_reports_it() {
+    let w = World::new("write-fix-model");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("fix_model").is_none(), "{v}");
+
+    let out = mem(&w, &repo, &["project", "set", "fix-model", "opus"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["fix_model"], serde_json::json!("opus"));
+    assert!(
+        stdout(&mem(&w, &repo, &["project", "current"])).contains("fix-model  opus"),
+        "the plain rendering names it too"
+    );
+    assert_eq!(code(&mem(&w, &repo, &["project", "unset", "fix-model"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("fix_model").is_none(), "unset is the way back: {v}");
+}
+
+#[test]
 fn project_set_review_model_records_the_choice_and_project_current_reports_it() {
     let w = World::new("write-review-model");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));

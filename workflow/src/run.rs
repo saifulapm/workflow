@@ -326,6 +326,11 @@ pub struct Run {
     /// off), else nobody.
     /// Naming the model the workers run on is the same as naming nobody.
     pub review_model: Option<String>,
+    /// Who writes the second fix round, after the reader has found fault
+    /// twice: `WORKFLOW_FIX_MODEL` for one run, else `mem project set
+    /// fix-model`, else the reader's own model. A diff a cheaper model
+    /// could not get right in two goes is not sent back to it a third time.
+    pub fix_model: Option<String>,
     /// How much reasoning the workers spend, `--effort` on either backend:
     /// `WORKFLOW_EFFORT` for one run (empty means no flag), else the
     /// project's `mem project set effort`, else nothing and the CLI's own
@@ -845,6 +850,54 @@ impl Run {
         self.dispatch(task, after);
     }
 
+    /// Findings kept as work for a later plan, one mem record each, named
+    /// for the task they came off; nothing when there are none.
+    fn file_followups(&self, task: &str, findings: &[String], how: &str) {
+        for f in findings {
+            let text = format!("follow-up from {}/{task} ({how}): {f}", self.plan.plan_id);
+            memcli::save_followup(&text);
+        }
+        if !findings.is_empty() {
+            warn(format!(
+                "task {task}: {} finding(s) {how} -- filed as follow-ups (mem log --type followup)",
+                findings.len()
+            ));
+        }
+    }
+
+    /// `workflow accept <task>`, honoured: the task failed on a reading, its
+    /// branch holds the diff, and the orchestrator is landing it over the
+    /// findings. The merge runs again -- ownership, the words, the rebase,
+    /// the gate's suite -- with no reader this time, and every finding of
+    /// the last reading is filed as a follow-up so nothing true is lost.
+    fn accept(&self, task: &str) {
+        let n: u64 = self.field(task, "reviews").parse().unwrap_or(0);
+        let last = std::fs::read_to_string(self.dir.join(format!("{task}.review.{n}")))
+            .unwrap_or_default();
+        let findings: Vec<String> = last
+            .lines()
+            .map(|l| l.trim().trim_start_matches(['*', '-', '>', ' ']))
+            .filter(|l| l.starts_with("[blocks]") || l.starts_with("[later]"))
+            .map(|l| l.to_string())
+            .collect();
+        let _ = std::fs::write(self.dir.join(format!("{task}.unread")), "");
+        warn(format!(
+            "task {task}: accepted by request -- merging over reading {n} unread"
+        ));
+        match self.merge(task) {
+            Ok(Merge::Landed) => {
+                self.file_followups(task, &findings, &format!("accepted over reading {n}"));
+                self.land(task);
+            }
+            Ok(Merge::Reading) => self.set_state(task, REVIEWING),
+            Ok(Merge::Nothing) => {
+                self.fail_task(task, "accepted, but its branch holds nothing to merge")
+            }
+            Err(why) => self.fail_task(task, &why),
+        }
+        let _ = std::fs::remove_file(self.dir.join(format!("{task}.unread")));
+    }
+
     /// The task back to the worker that has it, in the session it has: the
     /// brief is rewritten with what happened to its last report -- the
     /// reader's findings, the orchestrator's answer -- and one line goes into
@@ -1238,6 +1291,11 @@ impl Run {
         let Some(model) = self.review_model.as_deref() else {
             return false;
         };
+        // An accepted merge: the orchestrator has read the findings and is
+        // landing the diff over them. The gate's own suite still runs.
+        if self.dir.join(format!("{task}.unread")).exists() {
+            return false;
+        }
         let Some(t) = self.task_now(task) else {
             return false;
         };
@@ -1374,6 +1432,8 @@ impl Run {
         match outcome {
             Ok(Verdict::Ship) => {
                 warn(format!("task {task}: the reviewer says ship"));
+                let text = std::fs::read_to_string(&answer).unwrap_or_default();
+                self.file_followups(task, &reviewer::later(&text), "the reader marked later");
                 self.record_merged(task, &new);
                 self.land(task);
             }
@@ -1387,23 +1447,50 @@ impl Run {
                     "the reviewer wants fixes first (review {n}) -- read {}",
                     kept.display()
                 );
-                // The first fix goes back to the worker by itself, since one
-                // more attempt off the same findings is not a decision
-                // anybody needs to make: into the session that wrote the
-                // diff when it still stands, else a fresh one on the next
-                // free slot. A second one is the orchestrator's call, made
-                // with both readings in hand.
-                if n == 1 {
-                    self.fail_task_keep(task, &why);
-                    if self.continue_worker(task, &why) {
-                        return true;
+                // Two fix rounds go by themselves, and no more. The first
+                // goes back to the worker that wrote the diff -- into its
+                // session when it still stands, else a fresh one on the next
+                // free slot. The second is a fresh session on the fix model:
+                // a diff the workers' model could not get right in two goes
+                // is not sent back to it. The third reading is told only an
+                // earlier finding or a regression blocks (reviewer.rs), so a
+                // third fix verdict is the orchestrator's: accept the merge
+                // with the findings filed, or edit the plan and redispatch.
+                // Ruling in every true finding on its merits ran one task
+                // to sixteen dispatches and fourteen readings.
+                match n {
+                    1 => {
+                        self.fail_task_keep(task, &why);
+                        if self.continue_worker(task, &why) {
+                            return true;
+                        }
+                        let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
+                        warn(format!(
+                            "task {task}: dispatched again with the findings on the next free slot"
+                        ));
                     }
-                    let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
-                    warn(format!(
-                        "task {task}: dispatched again with the findings on the next free slot"
-                    ));
-                } else {
-                    self.fail_task(task, &why);
+                    2 => {
+                        self.fail_task(task, &why);
+                        let model = self.fix_model.clone().or_else(|| self.review_model.clone());
+                        if let Some(m) = &model {
+                            write_field(&self.dir, task, "model", m);
+                        }
+                        let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
+                        warn(format!(
+                            "task {task}: dispatched again on {} with both readings, on the next free slot",
+                            model.as_deref().unwrap_or(&self.model)
+                        ));
+                    }
+                    _ => {
+                        self.fail_task(
+                            task,
+                            &format!(
+                                "{why}; three readings is the run's limit -- `workflow accept {task}` \
+                                 merges it as it stands with the findings filed as follow-ups, or edit \
+                                 the plan and `workflow redispatch {task}`"
+                            ),
+                        );
+                    }
                 }
             }
             // A reading that did not happen is not a verdict either way: one
@@ -2107,6 +2194,10 @@ impl Run {
             format!("{}\n", self.review_model.as_deref().unwrap_or("")),
         );
         let _ = std::fs::write(
+            self.dir.join("fix-model"),
+            format!("{}\n", self.fix_model.as_deref().unwrap_or("")),
+        );
+        let _ = std::fs::write(
             self.dir.join("effort"),
             format!("{}\n", self.effort.as_deref().unwrap_or("")),
         );
@@ -2653,6 +2744,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let dir = paths::runs_root().join(project).join(&plan.plan_id);
     let recorded_model = recorded(&dir, "model");
     let recorded_review = recorded(&dir, "review-model");
+    let recorded_fix = recorded(&dir, "fix-model");
     let recorded_effort = recorded(&dir, "effort");
     let recorded_review_effort = recorded(&dir, "review-effort");
     Run {
@@ -2683,6 +2775,11 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
             "WORKFLOW_REVIEW_MODEL",
             recorded_review,
             memcli::project_review_model,
+        ),
+        fix_model: optional_dial(
+            "WORKFLOW_FIX_MODEL",
+            recorded_fix,
+            memcli::project_fix_model,
         ),
         effort: optional_dial("WORKFLOW_EFFORT", recorded_effort, memcli::project_effort),
         review_effort: optional_dial(
@@ -2961,6 +3058,27 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         // its whole life (friction #W0S44DE6); nothing here closes behind a
         // failed task, so the marker is honoured for as long as the run lives
         // (friction #G550QXHZ).
+        // `workflow accept <task>`: a failed reading landed over its findings.
+        for id in &all_ids {
+            let marker = run.dir.join(format!("{id}.accept"));
+            if !marker.exists() {
+                continue;
+            }
+            let _ = std::fs::remove_file(&marker);
+            if run.state(id) != FAILED || run.field(id, "reviews").parse::<u64>().unwrap_or(0) == 0
+            {
+                warn(format!(
+                    "task {id}: asked to accept, but it is {} and not failed on a reading -- ignored",
+                    run.state(id)
+                ));
+                continue;
+            }
+            if !run.reviewing().is_empty() {
+                let _ = std::fs::write(&marker, "");
+                continue; // a reader holds integration; the marker keeps
+            }
+            run.accept(id);
+        }
         for id in &all_ids {
             let marker = run.dir.join(format!("{id}.redispatch"));
             if !marker.exists() {
@@ -3220,6 +3338,57 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
 
     warn(format!(
         "no live run holds {task} failed or dispatched -- run the plan again to retry failed tasks"
+    ));
+    exit::FAILED
+}
+
+/// `workflow accept <task>` -- the marker the live run's poll loop reads for
+/// a task failed on a reading: land the diff as it stands, the findings
+/// filed as follow-ups. The orchestrator's way out of a reader that has
+/// not run out of true things to say.
+pub fn cmd_accept(task: &str) -> i32 {
+    if !Git::here().inside_worktree() {
+        warn("accept: stand in the project checkout");
+        return exit::USAGE;
+    }
+    let Some(project) = memcli::project_current() else {
+        warn("accept: mem does not know this checkout");
+        return exit::USAGE;
+    };
+    let root = paths::runs_root().join(project.dir_name());
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.join("plan.md").is_file())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        if lock_run(&dir).is_some() {
+            continue;
+        }
+        if field(&dir, task, "state") != FAILED {
+            continue;
+        }
+        let n = field(&dir, task, "reviews");
+        if n.is_empty() || n == "0" {
+            warn(format!(
+                "accept: {task} did not fail on a reading; there is nothing to accept over"
+            ));
+            return exit::USAGE;
+        }
+        let _ = std::fs::write(dir.join(format!("{task}.accept")), "");
+        warn(format!(
+            "run {}: asked to accept {task} over reading {n} -- it merges on the next poll, unread, with the findings filed as follow-ups",
+            dir.file_name()
+                .map(|d| d.to_string_lossy().to_string())
+                .unwrap_or_default()
+        ));
+        return exit::OK;
+    }
+    warn(format!(
+        "no live run holds {task} failed -- run the plan again to retry failed tasks"
     ));
     exit::FAILED
 }

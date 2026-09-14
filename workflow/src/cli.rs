@@ -92,6 +92,19 @@ again -- a fresh run retries failed tasks by itself.")]
         #[arg(long)]
         model: Option<String>,
     },
+    /// Land a task the reader failed, as it stands, with the findings filed.
+    #[command(
+        long_about = "Land a task the reader failed, as it stands, with the findings filed.
+
+Two fix rounds go by themselves and a third fix verdict is the orchestrator's.
+This writes a marker in the live run's directory; the run merges the task's
+branch on its next poll with no reader this time -- ownership, the words, the
+rebase and the gate's own suite still stand -- and every finding of the last
+reading becomes a mem follow-up (`mem log --type followup`), so nothing true
+is lost and nothing minor costs another round. The other way out is to edit
+the plan and `workflow redispatch <task>`."
+    )]
+    Accept { task: String },
     /// Report this project's runs: task states, spend, lock liveness.
     #[command(
         long_about = "Report this project's runs: task states, spend, lock liveness.

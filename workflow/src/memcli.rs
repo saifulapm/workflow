@@ -122,6 +122,12 @@ pub fn project_model() -> Option<String> {
 
 /// The reasoning dial the project set for its workers, `mem project set
 /// effort`; absent is the CLI's own default.
+/// The second fix round's model, when the project named one; absent means
+/// the reader's own.
+pub fn project_fix_model() -> Option<String> {
+    project_choice("fix_model")
+}
+
 pub fn project_effort() -> Option<String> {
     project_choice("effort")
 }
@@ -242,6 +248,13 @@ pub fn ruling_bodies(rtype: &str) -> String {
 /// m1-wiki-first).
 pub fn log_run(text: &str) {
     silent(&["log", "--type", "run", "--", text]);
+}
+
+/// A finding the reader marked `later`, or one the orchestrator accepted a
+/// merge over, kept as work for a later plan rather than lost with the
+/// reading: `mem save --type followup`.
+pub fn save_followup(text: &str) -> bool {
+    silent(&["save", "--type", "followup", "--", text])
 }
 
 pub fn plan_tick(task: &str) -> bool {
