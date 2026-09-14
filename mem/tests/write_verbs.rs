@@ -261,7 +261,9 @@ fn a_headerless_document_is_refused_and_the_record_stays_put() {
     let out = mem(&w, &repo, &["plan", "--stdin"]);
     assert_eq!(code(&out), mem::exit::USAGE, "{}", stdout(&out));
     assert!(
-        stderr(&out).contains("a plan starts with `# plan: <slug>`; to empty it use --clear"),
+        stderr(&out).contains(
+            "a plan starts with `# plan: <slug>` or `# roadmap: <slug>`; to empty it use --clear"
+        ),
         "{}",
         stderr(&out)
     );
@@ -271,11 +273,13 @@ fn a_headerless_document_is_refused_and_the_record_stays_put() {
         "the refused write left the plan of record untouched"
     );
 
-    // The roadmap is held to the same rule, worded for its own noun.
+    // The roadmap is held to the same rule.
     let out = mem(&w, &repo, &["roadmap", "--stdin"]);
     assert_eq!(code(&out), mem::exit::USAGE, "{}", stdout(&out));
     assert!(
-        stderr(&out).contains("a roadmap starts with `# roadmap: <slug>`; to empty it use --clear"),
+        stderr(&out).contains(
+            "a plan starts with `# plan: <slug>` or `# roadmap: <slug>`; to empty it use --clear"
+        ),
         "{}",
         stderr(&out)
     );
@@ -294,6 +298,17 @@ fn a_headerless_document_is_refused_and_the_record_stays_put() {
     assert_eq!(
         stdout(&mem(&w, &repo, &["roadmap"])),
         "# roadmap: demo\n- [ ] m1 ship it\n"
+    );
+
+    // A roadmap document filed as the plan of record is not mem's mistake to
+    // catch: `workflow run` refuses it on its own with a friendlier message.
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["plan", "--set-file", roadmap.to_str().unwrap()]
+        )),
+        0
     );
 }
 

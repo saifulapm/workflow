@@ -836,11 +836,12 @@ fn singleton(
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or_default();
-    if header_slug(first, which.noun).is_none() {
-        return Err(exit::usage(format!(
-            "a {0} starts with `# {0}: <slug>`; to empty it use --clear",
-            which.noun
-        )));
+    // Either header is accepted here: a roadmap filed as the plan of record
+    // is a mistake `workflow run` diagnoses on its own, not one mem refuses.
+    if header_slug(first, "plan").is_none() && header_slug(first, "roadmap").is_none() {
+        return Err(exit::usage(
+            "a plan starts with `# plan: <slug>` or `# roadmap: <slug>`; to empty it use --clear",
+        ));
     }
     let current = std::fs::read_to_string(&path).unwrap_or_default();
     let (text, kept) = crate::write::carry_ticks(&current, &text);
