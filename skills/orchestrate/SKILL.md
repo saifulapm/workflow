@@ -15,15 +15,21 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
   `workflow`, `mem` and the plan of record.
 - Truth is `workflow status --json`, `mem questions --pending --for
   orchestrator` and `mem log`: the run dir beats memory.
+- Never sleep on a clock. `workflow wait` blocks until the run needs you
+  and its exit code says what for; a `sleep N; workflow status` loop is
+  ten minutes of nothing after every event.
 - `git branch --show-current` before any merge, the binary's recipes too.
 
 ## The run
 
 1. `mem context`, then `workflow plan-check` the plan. One that does not
    parse goes back to the planner, never to you.
-2. Start `workflow run` in a background shell; every few minutes read
-   status and the questions; a task failed `asked #<id>` waits on you. Refused for no reader: `mem project set review-model none` if the
-   brief says nobody reads, else ask Saiful.
+2. Start `workflow run` in a background shell, then `workflow wait` in
+   another (backgrounded, so its exit wakes you); act on what it printed
+   and call it again. Exit 2 is a question, 1 a task failed for good, 0
+   the end, 4 a merge under `--merges`. Refused for no reader: `mem
+   project set review-model none` if the brief says nobody reads, else
+   ask Saiful. Refused for a red trunk: fix main first, never the run.
 3. Answer each worker question now, from the plan, the code or a ruling:
    `mem answer <id> "<decision>"`; the run redispatches with it in the
    brief, which clips an answer past 600 characters, so the decision and
@@ -40,12 +46,14 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 4. When the run stops short, its report is on stderr and in `mem log`;
    status says why per task. Decide, record, rerun: a cause you can
    name, follow the binary's recipe; a question waiting, answer it; suites
-   that fought, WORKFLOW_MAX_WORKERS=1; failed on a reading: the run
-   dispatches the task again by itself once, with the findings in its
-   brief; a task failed on its second reading is yours: read
-   `<task>.review.2`, then either edit the plan and `workflow redispatch
-   <task>` (it reaches any failed task while the run lives) or overrule
-   the reader with a ruling.
+   that fought, WORKFLOW_MAX_WORKERS=1. Failed on a reading: two fix
+   rounds go by themselves (the first back into the worker's session,
+   the second a fresh one on the fix model), and the third reading may
+   block only on an earlier finding or a regression. A task failed on
+   its third reading is yours: read `<task>.review.3`, then `workflow
+   accept <task>` (lands it as it stands, findings filed as follow-ups)
+   or edit the plan and `workflow redispatch <task>`. Never rule a
+   `[later]` finding in: it costs a round and is already a follow-up.
    `no verdict`: `<task>.review` is empty; `amx logs <session>` and
    `<task>.review-err` say what happened.
 5. Escalate only scope, irreversible or taste; decide the rest.

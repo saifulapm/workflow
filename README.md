@@ -100,11 +100,16 @@ Three sizes of work, three moves:
   `unset` takes either back, and `WORKFLOW_EFFORT` and
   `WORKFLOW_REVIEW_EFFORT` do it for one run (empty means no flag). With a
   `review-model` set, every task's diff is read by that model against the
-  plan before it merges, after its Verify is green: a fix verdict sends the
-  task back to its worker with the findings, so a cheaper worker's work
-  still gets a frontier reading. The run does not wait on the reading: the
-  task sits `reviewing` while the next one is dispatched, and its merge is
-  recorded when the verdict says ship. Name the model the workers already run on,
+  plan before it merges, after its Verify is green. The reader tags each
+  finding `[blocks]` or `[later]`; a fix verdict sends the task back into
+  its worker's own session with the findings, a second one to a fresh
+  session on the `fix-model` (default: the reader's), and a third is the
+  orchestrator's: `workflow accept <task>` lands it with the findings filed
+  as follow-ups. `[later]` findings on a ship are follow-ups too. The run
+  does not wait on the reading: the task sits `reviewing` while the next
+  one is dispatched, and its merge is recorded when the verdict says ship.
+  The session that owns the run waits with `workflow wait`, which returns
+  the moment a question, a failure or the end needs it. Name the model the workers already run on,
   under any spelling (`opus` and `claude-opus-5` are one model), and nothing
   is read — a model goes over its own work with its own blind spots — so the
   reading costs a session only where it can find something.

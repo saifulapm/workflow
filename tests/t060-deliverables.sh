@@ -95,16 +95,19 @@ like "$plan_skill" 'Several one-line edits of one kind across files are one task
 implement_skill=$(cat "$WF_ROOT/skills/implement/SKILL.md")
 like "$implement_skill" 'a literal from the spec' \
 	'implement warns against a test that recomputes what the code computes'
-# A first fix verdict now redispatches itself; only the second is the
-# orchestrator's, and it reads the fix findings, not the first review.
-like "$orchestrate_skill" 'dispatches the task again by itself once' \
-	'orchestrate knows a first fix verdict redispatches on its own'
-like "$orchestrate_skill" 'a task failed on its second reading is yours' \
-	'and a second is the orchestrator to read'
-like "$orchestrate_skill" '<task>\.review\.2' 'naming the second review file to read'
-like "$orchestrate_skill" 'the reader with a ruling' 'or overrule the reader with a ruling'
-unlike "$orchestrate_skill" 'task cut too big or a model too small, not a third dispatch' \
-	'and drops the stale third-dispatch wording'
+# Two fix rounds go by themselves; the third verdict is the orchestrator's,
+# who reads the third review and accepts or redispatches, and never sleeps
+# on a clock while the run works.
+like "$orchestrate_skill" 'rounds go by themselves' \
+	'orchestrate knows two fix rounds go by themselves'
+like "$orchestrate_skill" 'its third reading is yours' \
+	'and a third is the orchestrator to read'
+like "$orchestrate_skill" '<task>\.review\.3' 'naming the third review file to read'
+like "$orchestrate_skill" 'accept <task>' 'and the accept verb as the way out'
+like "$orchestrate_skill" '`\[later\]` finding in' 'a later finding is never ruled in'
+like "$orchestrate_skill" 'Never sleep on a clock' 'orchestrate never sleeps on a clock'
+like "$orchestrate_skill" 'workflow wait' 'it waits on the run instead'
+unlike "$orchestrate_skill" 'every few minutes read' 'and drops the polling wording'
 
 ## ---------------------------------------------------------------- the wiki
 
