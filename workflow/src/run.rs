@@ -2407,9 +2407,13 @@ fn optional_dial(
     project: impl FnOnce() -> Option<String>,
 ) -> Option<String> {
     match std::env::var(var) {
-        Ok(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
+        Ok(v) => Some(v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .filter(|v| !v.eq_ignore_ascii_case("none")),
         Err(_) => match recorded {
-            Some(v) => Some(v).filter(|v| !v.is_empty()),
+            Some(v) => Some(v)
+                .filter(|v| !v.is_empty())
+                .filter(|v| !v.eq_ignore_ascii_case("none")),
             None => project(),
         },
     }
@@ -2552,8 +2556,10 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     }
     // Said out loud, because a run that merges unread is worth noticing even
     // when it is exactly what the project asked for.
-    if run.review_model.is_none() && std::env::var("WORKFLOW_REVIEW_MODEL").is_err() {
-        warn(match recorded_none {
+    if run.review_model.is_none() {
+        let env_none = std::env::var("WORKFLOW_REVIEW_MODEL")
+            .is_ok_and(|v| v.trim().eq_ignore_ascii_case("none"));
+        warn(match recorded_none || env_none {
             true => "nobody reads this run: review-model is none",
             false => "nobody reads this run: it recorded no reader when it began",
         });
@@ -3160,6 +3166,36 @@ mod tests {
         // Whatever is asked for comes back as asked, so an unknown name can be
         // reported rather than quietly turning into the other worker.
         assert_eq!(backend_name(Some("amxx"), Some("amx")), "amxx");
+    }
+
+    #[test]
+    fn optional_dial_drops_none_spelled_any_case_from_env_or_recorded() {
+        let var = "WORKFLOW_TEST_OPTIONAL_DIAL_NONE";
+        unsafe { std::env::remove_var(var) };
+
+        // A recorded value spelling "none", env unset: filtered to nothing.
+        assert_eq!(
+            optional_dial(var, Some("NoNe".to_string()), || Some("opus".to_string())),
+            None
+        );
+        // A recorded value that is not "none" passes through untouched.
+        assert_eq!(
+            optional_dial(var, Some("opus".to_string()), || None),
+            Some("opus".to_string())
+        );
+        // A project key spelling "none" is not this function's to filter --
+        // memcli::project_review_model already does that for its own caller.
+        assert_eq!(
+            optional_dial(var, None, || Some("none".to_string())),
+            Some("none".to_string())
+        );
+
+        unsafe { std::env::set_var(var, "NONE") };
+        assert_eq!(
+            optional_dial(var, Some("opus".to_string()), || Some("opus".to_string())),
+            None
+        );
+        unsafe { std::env::remove_var(var) };
     }
 
     #[test]
