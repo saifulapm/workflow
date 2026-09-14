@@ -832,6 +832,16 @@ fn singleton(
     // caller's text arrived, however long that took.
     let seen = crate::atomic::read_mtime(&path);
     let text = set_text(set_file)?;
+    let first = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default();
+    if header_slug(first, which.noun).is_none() {
+        return Err(exit::usage(format!(
+            "a {0} starts with `# {0}: <slug>`; to empty it use --clear",
+            which.noun
+        )));
+    }
     let current = std::fs::read_to_string(&path).unwrap_or_default();
     let (text, kept) = crate::write::carry_ticks(&current, &text);
     if !kept.is_empty() {
@@ -870,7 +880,7 @@ fn stored_plan(
     // The header is the file name. A plan filed under a slug that is not its
     // own is what would later send a run at the wrong milestone.
     let first = text.lines().next().unwrap_or_default();
-    if plan_header_slug(first) != Some(slug) {
+    if header_slug(first, "plan") != Some(slug) {
         return Err(exit::usage(format!(
             "a stored plan's first line must be `# plan: {slug}`, and this one is `{}`",
             crate::search::truncate_bytes(first.trim(), 60)
@@ -879,11 +889,11 @@ fn stored_plan(
     land(app, &path, &text, seen, &format!("{slug}.md"))
 }
 
-/// The slug of a `# plan: <slug>` header line, read as the plan parser reads
-/// it: one hash, the word, and the slug alone to the end of the line.
-fn plan_header_slug(line: &str) -> Option<&str> {
+/// The slug of a `# <noun>: <slug>` header line, read as the plan parser
+/// reads it: one hash, the word, and the slug alone to the end of the line.
+fn header_slug<'a>(line: &'a str, noun: &str) -> Option<&'a str> {
     let rest = line.trim_start().strip_prefix('#')?.trim_start();
-    let slug = rest.strip_prefix("plan:")?.trim();
+    let slug = rest.strip_prefix(noun)?.strip_prefix(':')?.trim();
     (!slug.is_empty()).then_some(slug)
 }
 

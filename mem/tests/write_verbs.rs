@@ -216,7 +216,7 @@ fn plan_sets_prints_and_clears() {
     assert_eq!(code(&mem(&w, &repo, &["plan"])), 1);
 
     let file = w.dir.join("plan.md");
-    std::fs::write(&file, "# Migrate sessions\n- [ ] run it\n").unwrap();
+    std::fs::write(&file, "# plan: migrate-sessions\n- [ ] run it\n").unwrap();
     assert_eq!(
         code(&mem(
             &w,
@@ -226,7 +226,7 @@ fn plan_sets_prints_and_clears() {
         0
     );
     let out = mem(&w, &repo, &["plan"]);
-    assert_eq!(stdout(&out), "# Migrate sessions\n- [ ] run it\n");
+    assert_eq!(stdout(&out), "# plan: migrate-sessions\n- [ ] run it\n");
     assert_eq!(code(&out), 0);
 
     assert_eq!(code(&mem(&w, &repo, &["plan", "--clear"])), 0);
@@ -238,6 +238,62 @@ fn plan_sets_prints_and_clears() {
             &["plan", "--set-file", "/nonexistent/plan.md"]
         )),
         1
+    );
+}
+
+#[test]
+fn a_headerless_document_is_refused_and_the_record_stays_put() {
+    let w = World::new("write-headerless");
+    let repo = w.repo("thing", None);
+
+    let file = w.dir.join("plan.md");
+    std::fs::write(&file, "# plan: keep-me\n- [ ] t1 keep it\n").unwrap();
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["plan", "--set-file", file.to_str().unwrap()]
+        )),
+        0
+    );
+
+    // An empty document has no header: a closed stdin pipe is an empty read.
+    let out = mem(&w, &repo, &["plan", "--stdin"]);
+    assert_eq!(code(&out), mem::exit::USAGE, "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("a plan starts with `# plan: <slug>`; to empty it use --clear"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["plan"])),
+        "# plan: keep-me\n- [ ] t1 keep it\n",
+        "the refused write left the plan of record untouched"
+    );
+
+    // The roadmap is held to the same rule, worded for its own noun.
+    let out = mem(&w, &repo, &["roadmap", "--stdin"]);
+    assert_eq!(code(&out), mem::exit::USAGE, "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("a roadmap starts with `# roadmap: <slug>`; to empty it use --clear"),
+        "{}",
+        stderr(&out)
+    );
+
+    // A well-formed roadmap document still lands.
+    let roadmap = w.dir.join("roadmap.md");
+    std::fs::write(&roadmap, "# roadmap: demo\n- [ ] m1 ship it\n").unwrap();
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["roadmap", "--set-file", roadmap.to_str().unwrap()]
+        )),
+        0
+    );
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["roadmap"])),
+        "# roadmap: demo\n- [ ] m1 ship it\n"
     );
 }
 
