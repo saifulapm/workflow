@@ -1,15 +1,14 @@
 //! The worker backend seam (spec §12b).
 //!
 //! amx is the execution and visibility substrate, not an orchestrator: `run`
-//! dispatches *onto* a backend and keeps every policy decision -- waves,
-//! ownership, the merge gate -- to itself. The `claude` backend below
-//! launches every worker as a `claude --bg` session: visible in the agents
-//! view, attachable, ended with `claude stop`, answered for by
-//! `claude agents --json`. A custom `WORKFLOW_WORKER_CMD` template keeps the
-//! legacy process semantics (pidfile, signals, result document) -- that is
-//! the test seam. An `amx` backend maps the same four questions onto
-//! `amx new` / `amx ls` / `amx result` / `amx stop` with nothing above it
-//! changing.
+//! dispatches *onto* a backend and keeps every policy decision -- the ready
+//! set, ownership, the merge gate -- to itself. The backend that ships is
+//! [`crate::backend_amx::AmxBackend`]: every worker and every reader is an
+//! amx agent, visible in `amx ls`, attachable, ended with `amx stop`,
+//! answered for by `amx status --json`. The [`ProcessBackend`] below is the
+//! test seam and nothing else: a `WORKFLOW_WORKER_CMD` template that owns
+//! its own process shape (pidfile, signals, a print-mode result document),
+//! which is how the suite fakes a worker without a tmux server.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -56,12 +55,10 @@ pub trait WorkerBackend {
     /// A fresh handle for one dispatch. A redispatch mints a new one.
     fn mint_session(&self) -> String;
     /// Start the worker and answer with the handle it can be asked after by.
-    /// Detached: this returns as soon as it is going.
-    ///
-    /// The answer is not always the minted one. `claude --bg` mints its own
-    /// session id and says so on stderr -- `--session-id` is honoured only
-    /// with `--resume` -- so the handle a backend hands back after launch is
-    /// the authoritative one, and it is what gets recorded.
+    /// Detached: this returns as soon as it is going. The handle a backend
+    /// hands back after launch is the authoritative one and is what gets
+    /// recorded; empty means the launch was refused and nothing runs, with
+    /// the refusal on `Dispatch::err`.
     fn dispatch(&self, d: &Dispatch) -> String;
     /// Is anything of this worker still running?
     fn alive(&self, h: &Handle) -> bool;
@@ -71,12 +68,12 @@ pub trait WorkerBackend {
     /// means still launching; at adoption, with the run that recorded the
     /// session dead, it means the session never existed (friction #9F7WT13K).
     fn seen(&self, h: &Handle) -> bool;
-    /// Does the backend's listing carry this session right now -- a row in
-    /// `claude agents`, a live pid, an amx agent? Narrower than `seen`: a
-    /// transcript on disk is a record, not a listing. This is what tells a
-    /// session the usage limit paused (listed idle) from one that died with
-    /// the machine (a transcript and nothing else), which `seen` cannot
-    /// (frictions #B3391C6H, #QT1PDNRK).
+    /// Is the session standing right now -- a pane amx can still read, a
+    /// live pid? Narrower than `seen`: a record of a pane that is gone is a
+    /// record, not a listing. This is what tells a session the usage limit
+    /// paused (a pane up and idle) from one that died with the machine (a
+    /// record and nothing else), which `seen` cannot (frictions #B3391C6H,
+    /// #QT1PDNRK).
     fn listed(&self, h: &Handle) -> bool;
     /// The most recent sign of life the backend can see, in epoch seconds.
     /// The worker's own status file is the orchestrator's signal, not the
@@ -101,42 +98,6 @@ pub trait WorkerBackend {
     }
 }
 
-/// The dispatch template (spec §8.3, amended: workers are `claude --bg`
-/// sessions, never print mode -- they appear in `claude agents`, can be
-/// attached, and end as resident idle sessions). Every placeholder sits where
-/// a single shell-quoted word is legal -- at the outer level, or as a
-/// positional argument to the inner `sh -c` -- so a project whose path has a
-/// space in it dispatches like any other.
-///
-/// The `env -u` sweep is the credential scrub of spec §1. The two workflow
-/// variables go with it: an orchestrator run under WORKFLOW_ALLOW_PUSH would
-/// otherwise release the pre-push refusal for every worker it dispatches, and an
-/// inherited WORKFLOW_HOOK_SEEN would tell a worker's first commit that the gate
-/// had already run.
-///
-/// No setsid and no pidfile: `claude --bg` hands the session to its own
-/// service and returns. It also mints its own session id: `--session-id` is
-/// honoured only alongside `--resume`, and passing it to `--bg` earns a
-/// warning on stderr and nothing else. So the flag is not here, and the handle
-/// comes back the other way -- `--bg` prints the id it chose, and
-/// [`ClaudeBackend::adopt`] reads it off `{out}`.
-///
-/// No `--max-budget-usd` either: the plan is flat-rate, so a dollar ceiling
-/// guards a constraint that does not exist, and its enforcement outside print
-/// mode was never verified anyway (ruling #D7A4T2CH). The deadline, the worker
-/// cap and one-task briefs are the bounds that hold.
-///
-/// `{effort}` is the fourth positional, and `${4:+--effort "$4"}` puts the
-/// flag on the line only when there is a level to pass: empty, the expansion
-/// is no words at all, and the session starts on the CLI's own default.
-pub const WORKER_CMD_DEFAULT: &str = r#"cd {worktree} && WORKFLOW_AGENT=1 sh -c '\
-  exec env -u GITHUB_API_KEY -u WORKFLOW_ALLOW_PUSH -u WORKFLOW_HOOK_SEEN \
-  $(env | grep -oE "^[A-Za-z0-9_]*(_TOKEN|_KEY|_SECRET)=|^(GH_|GITHUB_|AWS_|STRIPE_)[A-Za-z0-9_]*=" | sed "s/=$//; s/^/-u /" | tr "\n" " ") \
-  claude --bg --dangerously-skip-permissions \
-  --model "$2" --settings "$3" ${4:+--effort "$4"} \
-  "Read $1 and execute it exactly."' \
-  workflow-worker {brief} {model} {settings} {effort} > {out} 2> {err}"#;
-
 /// `Dispatch.env` as the JSON object `--settings` takes. `env` is the key
 /// the flag reads for the session's own environment, so this is how a
 /// per-task value -- the task's own tag, its own cargo target dir -- reaches
@@ -160,27 +121,27 @@ fn subst(tpl: &str, key: &str, value: &str) -> String {
     tpl.replace(&format!("{{{key}}}"), &shq(value))
 }
 
-pub struct ClaudeBackend;
+/// The test seam: a `WORKFLOW_WORKER_CMD` template evaluated by `sh -c`,
+/// with legacy process semantics -- the template owns `cd`, `setsid`, the
+/// pidfile and the redirections, and group-kill depends on it. Every
+/// placeholder sits where a single shell-quoted word is legal, so a project
+/// whose path has a space in it dispatches like any other.
+pub struct ProcessBackend;
 
-impl ClaudeBackend {
-    fn template() -> String {
-        match std::env::var("WORKFLOW_WORKER_CMD") {
-            Ok(v) if !v.is_empty() => v,
-            _ => WORKER_CMD_DEFAULT.to_string(),
-        }
-    }
-
-    /// A custom template owns its own process shape (the test fakes write
-    /// pidfiles and result documents), so it gets the legacy process
-    /// semantics and never a `claude agents` call — which also keeps every
-    /// fixture run hermetic on a machine with real sessions running.
-    fn custom_template() -> bool {
+impl ProcessBackend {
+    /// Whether a caller asked for this seam at all. Empty is unset: the
+    /// suite's lib.sh clears the variable, it does not set it to nothing.
+    pub fn wanted() -> bool {
         std::env::var("WORKFLOW_WORKER_CMD").is_ok_and(|v| !v.is_empty())
     }
 
     pub fn command_for(d: &Dispatch) -> String {
+        Self::substitute(&std::env::var("WORKFLOW_WORKER_CMD").unwrap_or_default(), d)
+    }
+
+    fn substitute(tpl: &str, d: &Dispatch) -> String {
         let path = |p: &Path| p.to_string_lossy().to_string();
-        let mut cmd = Self::template();
+        let mut cmd = tpl.to_string();
         for (key, value) in [
             ("worktree", path(&d.worktree)),
             ("brief", path(&d.brief)),
@@ -208,155 +169,9 @@ impl ClaudeBackend {
             .filter(|c| c.is_ascii_digit())
             .collect()
     }
-
-    /// The session a just-finished dispatch actually started, as a full id.
-    ///
-    /// The minted id is not it: `--bg` ignores `--session-id` and chooses its
-    /// own. Everything downstream reads this one -- the agents row, the
-    /// transcript that answers for liveness, the `claude stop` that ends it --
-    /// so getting it wrong is not a degraded run, it is a run where no worker
-    /// is ever seen to finish and none can be stopped.
-    ///
-    /// Two ways to it, because the first is a printed line and printed lines
-    /// change: the id `--bg` announced, resolved to its full form through the
-    /// listing; failing that, the newest session standing in this worktree,
-    /// which is the one that was just started there.
-    fn adopt(d: &Dispatch) -> String {
-        let printed = std::fs::read_to_string(&d.out).unwrap_or_default();
-        let short = bg_id(&printed);
-        let rows = agents_rows();
-
-        if let Some(short) = short.as_deref()
-            && let Some(row) = rows.iter().find(|r| r.id == short)
-            && !row.session.is_empty()
-        {
-            return row.session.clone();
-        }
-
-        let wt = paths::realpath_m(&d.worktree);
-        let mine = rows
-            .iter()
-            .filter(|r| !r.session.is_empty() && paths::realpath_m(&r.cwd) == wt)
-            .max_by_key(|r| r.started);
-        if let Some(row) = mine {
-            return row.session.clone();
-        }
-
-        // Nothing to adopt. The short id is still a better handle than the
-        // minted one -- `claude stop` takes it -- and the minted one is only
-        // ever right for a template that was handed it.
-        short.unwrap_or_else(|| d.session.clone())
-    }
 }
 
-/// One row of `claude agents --json --all`. The listing is a union of two
-/// shapes and neither field is guaranteed: every session carries `sessionId`,
-/// `id` and `state`, and a session with a process still behind it carries
-/// `pid` and `status` as well.
-#[derive(Debug, Clone, Default, PartialEq)]
-struct Row {
-    id: String,
-    session: String,
-    cwd: String,
-    state: String,
-    status: String,
-    started: i64,
-}
-
-impl Row {
-    /// Is this session generating right now? `status` answers for a session
-    /// with a process behind it; `state` is all a row keeps once the process
-    /// is gone. Anything else -- idle, blocked, done, stopped -- is an ending,
-    /// and the worker's status file says which kind.
-    fn working(&self) -> bool {
-        if !self.status.is_empty() {
-            return self.status == "busy";
-        }
-        self.state == "working"
-    }
-}
-
-/// Every row `claude agents --json --all` knows about -- `--all` because a
-/// finished session leaves the live list but must still answer for its ending.
-fn agents_rows() -> Vec<Row> {
-    let Ok(out) = Command::new("claude")
-        .args(["agents", "--json", "--all"])
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    rows_in(&String::from_utf8_lossy(&out.stdout))
-}
-
-/// The pure half of `agents_rows`, so the parse is testable without a claude.
-fn rows_in(json: &str) -> Vec<Row> {
-    let Ok(serde_json::Value::Array(rows)) = serde_json::from_str(json) else {
-        return Vec::new();
-    };
-    rows.iter()
-        .map(|row| {
-            let field = |k: &str| {
-                row.get(k)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            };
-            Row {
-                id: field("id"),
-                session: field("sessionId"),
-                cwd: field("cwd"),
-                state: field("state"),
-                status: field("status"),
-                started: row.get("startedAt").and_then(|v| v.as_i64()).unwrap_or(0),
-            }
-        })
-        .collect()
-}
-
-/// The row for one handle. A handle is a full session id, but a dispatch whose
-/// id could not be resolved falls back to the short one, so both are matched.
-fn agents_row(session: &str) -> Option<Row> {
-    if session.is_empty() {
-        return None;
-    }
-    agents_rows()
-        .into_iter()
-        .find(|r| r.session == session || r.id == session)
-}
-
-/// Colour stripped, so a line printed for a terminal can be read as text.
-fn strip_ansi(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push(c);
-            continue;
-        }
-        // CSI ... final byte in @-~; anything shorter just ends the escape.
-        for e in chars.by_ref() {
-            if e.is_ascii_alphabetic() || e == '~' || e == '@' {
-                break;
-            }
-        }
-    }
-    out
-}
-
-/// What one session was carrying at its last turn, in tokens.
-///
-/// Every assistant line of a transcript records a `usage` object, and its input
-/// side -- the fresh tokens, the ones written to cache and the ones read back
-/// from it -- is the context that went into that turn. The last such line is
-/// where the task ended up.
-///
-/// A worker that compacted mid-task reports what it carried afterwards, so the
-/// number is a floor and not a high-water mark. That is enough for the one
-/// question it answers: was this task cut too big?
-fn last_context_tokens(transcript: &str) -> Option<u64> {
+pub(crate) fn last_context_tokens(transcript: &str) -> Option<u64> {
     let mut last = None;
     for line in transcript.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
@@ -382,9 +197,8 @@ fn last_context_tokens(transcript: &str) -> Option<u64> {
 /// ends before the assistant speaks has said nothing, and marker text in a
 /// user turn -- CLAUDE.md, a system reminder -- is not the worker's own word.
 ///
-/// Both backends read through this: a worker under amx is a claude session in
-/// a pane and writes the same transcript, so the file differs only in which
-/// session id names it.
+/// A worker under amx is a claude session in a pane and writes this
+/// transcript; the session id naming the file is amx's to give.
 pub(crate) fn last_words_in(transcript: &str) -> String {
     let mut last = String::new();
     for line in transcript.lines() {
@@ -422,22 +236,13 @@ pub(crate) fn last_words_in(transcript: &str) -> String {
     last
 }
 
-/// The id `claude --bg` printed on its way out. The line reads
-/// `backgrounded · <id>`, coloured, and the id is the short form every other
-/// `claude` verb takes.
-fn bg_id(out: &str) -> Option<String> {
-    let line = out.lines().find(|l| l.contains("backgrounded"))?;
-    strip_ansi(line)
-        .split_whitespace()
-        .find(|w| w.len() == 8 && w.chars().all(|c| c.is_ascii_hexdigit()))
-        .map(str::to_string)
-}
-
-impl WorkerBackend for ClaudeBackend {
+impl WorkerBackend for ProcessBackend {
     fn mint_session(&self) -> String {
         uuid::Uuid::new_v4().to_string()
     }
 
+    /// The template was handed `{session}` and honours it, so the minted id
+    /// is the handle.
     fn dispatch(&self, d: &Dispatch) -> String {
         let mut c = Command::new("sh");
         c.arg("-c").arg(Self::command_for(d));
@@ -445,59 +250,37 @@ impl WorkerBackend for ClaudeBackend {
             c.env(k, v);
         }
         let _ = c.status();
-        // A custom template was handed `{session}` and is the kind of thing
-        // that honours it; only the shipped `--bg` line mints its own.
-        if Self::custom_template() {
-            return d.session.clone();
-        }
-        Self::adopt(d)
+        d.session.clone()
     }
 
+    /// The pidfile decides; without one, something carrying the session id
+    /// still runs, or the dispatch never got that far and a transcript is
+    /// the only sign it ever started.
     fn alive(&self, h: &Handle) -> bool {
         let pid = Self::pid(h);
         if !pid.is_empty() {
             return sys::pid_alive(&pid);
         }
-        if Self::custom_template() {
-            // Legacy process semantics: no pidfile means the dispatch never
-            // got that far unless something with the session id still runs.
-            if !h.session.is_empty() && sys::pgrep(&h.session) {
-                return true;
-            }
-            return paths::transcript_path(&h.worktree, &h.session).exists();
+        if !h.session.is_empty() && sys::pgrep(&h.session) {
+            return true;
         }
-        match agents_row(&h.session) {
-            // A resident session is alive while it works; idle or waiting is
-            // an ending -- the status file says which kind.
-            Some(row) => row.working(),
-            // Not listed: either still launching (claim alive; the stall
-            // deadline decides) or long gone with a transcript behind it.
-            None => !paths::transcript_path(&h.worktree, &h.session).exists(),
-        }
+        paths::transcript_path(&h.worktree, &h.session).exists()
     }
 
     fn seen(&self, h: &Handle) -> bool {
-        if !Self::pid(h).is_empty() {
-            return true;
-        }
-        if paths::transcript_path(&h.worktree, &h.session).exists() {
-            return true;
-        }
-        if Self::custom_template() {
-            return !h.session.is_empty() && sys::pgrep(&h.session);
-        }
-        agents_row(&h.session).is_some()
+        !Self::pid(h).is_empty()
+            || paths::transcript_path(&h.worktree, &h.session).exists()
+            || (!h.session.is_empty() && sys::pgrep(&h.session))
     }
 
+    /// A process is either running or it is not; a dead one is dead, not
+    /// idle, so this never says "listed and paused".
     fn listed(&self, h: &Handle) -> bool {
         let pid = Self::pid(h);
         if !pid.is_empty() {
             return sys::pid_alive(&pid);
         }
-        if Self::custom_template() {
-            return !h.session.is_empty() && sys::pgrep(&h.session);
-        }
-        agents_row(&h.session).is_some()
+        !h.session.is_empty() && sys::pgrep(&h.session)
     }
 
     fn last_activity(&self, h: &Handle) -> i64 {
@@ -522,25 +305,15 @@ impl WorkerBackend for ClaudeBackend {
             sys::kill_group(&pid, "KILL");
             return;
         }
-        // `claude stop` ends the session and keeps its conversation.
-        if !Self::custom_template()
-            && let Some(Row { id, .. }) = agents_row(&h.session)
-            && !id.is_empty()
-        {
-            let _ = Command::new("claude")
-                .args(["stop", &id])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-            return;
-        }
         if !h.session.is_empty() {
             sys::pkill(&h.session);
         }
     }
 
-    fn result(&self, h: &Handle, out: &Path) -> Outcome {
-        // Print-mode JSON first: the fakes and any custom template speak it.
+    /// The print-mode result document the fakes write; nothing there is a
+    /// worker that ended without one, and the status file and the merge gate
+    /// judge the work.
+    fn result(&self, _h: &Handle, out: &Path) -> Outcome {
         if let Ok(text) = std::fs::read_to_string(out)
             && !text.trim().is_empty()
             && let Ok(serde_json::Value::Object(v)) =
@@ -550,22 +323,7 @@ impl WorkerBackend for ClaudeBackend {
                 ok: !v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false),
             };
         }
-        // A --bg session leaves no result document; ending non-busy in the
-        // agents list is the clean end, and the status file plus the merge
-        // gate judge the work.
-        if Self::custom_template() {
-            return Outcome::default();
-        }
-        match agents_row(&h.session) {
-            Some(row) => Outcome { ok: !row.working() },
-            // Not listed at all. A transcript means it ran and the listing has
-            // simply forgotten it -- that is an ending like any other, and the
-            // status file and the merge gate judge the work. Neither means the
-            // dispatch never happened, which is the one real error here.
-            None => Outcome {
-                ok: paths::transcript_path(&h.worktree, &h.session).exists(),
-            },
-        }
+        Outcome::default()
     }
 
     fn last_words(&self, h: &Handle) -> String {
@@ -577,6 +335,8 @@ impl WorkerBackend for ClaudeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TPL: &str = "cd {worktree} && exec worker {task} {brief} {out} {err} {pidfile} {status} {rundir} {session} {model} {effort} {turns} {settings} > {out} 2> {err}";
 
     fn fixture() -> Dispatch {
         Dispatch {
@@ -598,7 +358,7 @@ mod tests {
 
     #[test]
     fn every_placeholder_is_substituted_as_one_shell_word() {
-        let cmd = ClaudeBackend::command_for(&fixture());
+        let cmd = ProcessBackend::substitute(TPL, &fixture());
         assert!(cmd.contains("cd '/state/my project/t1'"));
         assert!(cmd.contains("'/cache/briefs/t1.md'"));
         assert!(cmd.contains("> '/runs/t1.json' 2> '/runs/t1.err'"));
@@ -625,69 +385,14 @@ mod tests {
         assert_eq!(v["env"]["WORKFLOW_TASK"], "env-carry/t1");
     }
 
+    /// An unset dial is an empty word, never `--effort ''`: the template
+    /// decides what to do with nothing, as the fakes do with `${7:+...}`.
     #[test]
-    fn the_settings_flag_carries_the_env_as_one_shell_word() {
+    fn the_effort_level_is_its_own_word_and_empty_when_unset() {
         let mut d = fixture();
-        d.env = vec![("WORKFLOW_TASK".into(), "env-carry/t1".into())];
-        let cmd = ClaudeBackend::command_for(&d);
-        let word = shq(&settings_json(&d.env));
-        assert!(
-            cmd.contains("--settings \"$3\""),
-            "the inner claude call is missing --settings \"$3\": {cmd}"
-        );
-        assert!(
-            cmd.contains(&word),
-            "the settings json is not one shell word in: {cmd}"
-        );
-    }
-
-    /// The level rides as the fourth positional, and the template's own
-    /// `${4:+...}` decides whether the flag goes on the line: an unset dial is
-    /// an empty word there, never a `--effort ''` the CLI would refuse.
-    #[test]
-    fn the_effort_level_is_the_fourth_positional_and_empty_when_unset() {
-        let mut d = fixture();
-        let settings = shq(&settings_json(&d.env));
-        let cmd = ClaudeBackend::command_for(&d);
-        assert!(
-            cmd.contains(&format!(
-                "workflow-worker '/cache/briefs/t1.md' 'sonnet' {settings} ''"
-            )),
-            "{cmd}"
-        );
+        assert!(ProcessBackend::substitute(TPL, &d).contains("'sonnet' '' '120'"));
         d.effort = Some("max".into());
-        let cmd = ClaudeBackend::command_for(&d);
-        assert!(
-            cmd.contains(&format!(
-                "workflow-worker '/cache/briefs/t1.md' 'sonnet' {settings} 'max'"
-            )),
-            "{cmd}"
-        );
-        assert!(cmd.contains(r#"${4:+--effort "$4"}"#), "{cmd}");
-    }
-
-    /// The idiom itself, run through the shell the template runs under: two
-    /// words with a level, none without.
-    #[test]
-    fn the_effort_words_vanish_when_the_level_is_empty() {
-        let words = |level: &str| {
-            let out = Command::new("sh")
-                .args([
-                    "-c",
-                    r#"printf '%s
-' "$2" ${4:+--effort "$4"}"#,
-                    "workflow-worker",
-                    "brief",
-                    "sonnet",
-                    "settings",
-                    level,
-                ])
-                .output()
-                .expect("sh runs");
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        };
-        assert_eq!(words("max"), "sonnet\n--effort\nmax");
-        assert_eq!(words(""), "sonnet");
+        assert!(ProcessBackend::substitute(TPL, &d).contains("'sonnet' 'max' '120'"));
     }
 
     #[test]
@@ -698,95 +403,12 @@ mod tests {
         );
     }
 
-    /// The two shapes the listing really serves: a session with a process
-    /// behind it carries `pid`/`status`, and one without carries only `state`.
-    const LISTING: &str = r#"[
-        {"pid":1,"id":"aa11","cwd":"/wt/one","kind":"background","sessionId":"s-one",
-         "state":"working","status":"busy","startedAt":100},
-        {"pid":2,"id":"bb22","cwd":"/wt/two","kind":"background","sessionId":"s-two",
-         "state":"working","status":"idle","startedAt":200},
-        {"id":"cc33","cwd":"/wt/three","kind":"background","sessionId":"s-three",
-         "state":"done","startedAt":300},
-        {"id":"dd44","cwd":"/wt/four","kind":"background","sessionId":"s-four",
-         "state":"blocked","startedAt":400}
-    ]"#;
-
-    fn row(session: &str) -> Row {
-        rows_in(LISTING)
-            .into_iter()
-            .find(|r| r.session == session)
-            .unwrap()
-    }
-
-    #[test]
-    fn a_session_is_working_only_while_it_generates() {
-        // A live process answers with `status`, and `busy` is the only value
-        // that means the worker is still going.
-        assert!(row("s-one").working());
-        assert!(!row("s-two").working(), "resident but idle is an ending");
-        // Once the process is gone there is only `state` to go on.
-        assert!(!row("s-three").working());
-        assert!(
-            !row("s-four").working(),
-            "waiting on a question is an ending"
-        );
-    }
-
-    #[test]
-    fn the_listing_parse_survives_the_fields_it_does_not_get() {
-        let r = row("s-three");
-        assert_eq!(r.id, "cc33");
-        assert_eq!(r.cwd, "/wt/three");
-        assert_eq!(r.started, 300);
-        assert_eq!(r.status, "", "a row with no process has no status");
-        assert!(rows_in("not json").is_empty());
-        assert!(rows_in("{}").is_empty());
-    }
-
-    #[test]
-    fn the_id_bg_prints_is_read_back_out_of_the_colour_it_prints_it_in() {
-        let printed = "backgrounded · \u{1b}[36m66c356b2\u{1b}[39m\n  \
-                       claude attach 66c356b2    open in this terminal\n";
-        assert_eq!(bg_id(printed), Some("66c356b2".into()));
-        // The minted uuid is not what comes back: --bg says so itself.
-        assert_eq!(bg_id("warning: --bg manages the session id"), None);
-        assert_eq!(bg_id(""), None);
-    }
-
     #[test]
     fn a_quote_in_a_path_cannot_end_the_word() {
         let mut d = fixture();
         d.worktree = PathBuf::from("/state/it's here");
-        let cmd = ClaudeBackend::command_for(&d);
+        let cmd = ProcessBackend::substitute(TPL, &d);
         assert!(cmd.contains(r"cd '/state/it'\''s here'"));
-    }
-
-    #[test]
-    fn the_scrub_and_the_flags_are_in_the_shipped_template() {
-        for needle in [
-            "claude --bg",
-            "--dangerously-skip-permissions",
-            "-u GITHUB_API_KEY",
-            "-u WORKFLOW_ALLOW_PUSH",
-            "-u WORKFLOW_HOOK_SEEN",
-            "WORKFLOW_AGENT=1",
-            "[A-Za-z0-9_]*(_TOKEN|_KEY|_SECRET)=",
-            r#"${4:+--effort "$4"}"#,
-        ] {
-            assert!(
-                WORKER_CMD_DEFAULT.contains(needle),
-                "the template lost {needle}"
-            );
-        }
-        // Print mode is banned for workers: sessions must be visible in the
-        // agents view and attachable, and -p is neither.
-        assert!(!WORKER_CMD_DEFAULT.contains(" -p "), "{WORKER_CMD_DEFAULT}");
-        // And --session-id is not here: --bg mints its own id, warns that it
-        // is ignoring the flag, and the handle is adopted from what it prints.
-        assert!(
-            !WORKER_CMD_DEFAULT.contains("--session-id"),
-            "{WORKER_CMD_DEFAULT}"
-        );
     }
 
     /// Two assistant turns and a user line between them. The answer is the
@@ -853,7 +475,7 @@ not json at all
 
     #[test]
     fn a_session_id_is_a_uuid_v4() {
-        let s = ClaudeBackend.mint_session();
+        let s = ProcessBackend.mint_session();
         let parts: Vec<&str> = s.split('-').collect();
         assert_eq!(
             parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
@@ -862,6 +484,6 @@ not json at all
         assert!(s.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
         assert!(parts[2].starts_with('4'));
         assert!(matches!(&parts[3][0..1], "8" | "9" | "a" | "b"));
-        assert_ne!(s, ClaudeBackend.mint_session());
+        assert_ne!(s, ProcessBackend.mint_session());
     }
 }

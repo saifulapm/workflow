@@ -241,45 +241,4 @@ is "$?" 0 'the run goes on to ship it'
 is "$(cat "$rundir/t1.state")" merged 'the poll loop, not adoption, is what collects the ship verdict'
 is "$(grep -c '^t1-review$' "$WF_TMP/reviews.log")" 1 'still one reading, start to finish'
 
-
-## ------------------------------------- the session that died with the machine
-
-# A --bg worker that reported `started`, committed nothing, and whose
-# session has a transcript on disk but no row in `claude agents` -- a power
-# cut. That used to read as paused at the usage limit and was adopted and
-# waited on until the stall deadline (frictions #B3391C6H, #QT1PDNRK). A
-# transcript is a record, not a listing: the task is collected now. The
-# shipped template is what has this shape, so the fake claude of t045 stands
-# in for it here, with an empty listing.
-rm -rf "$rundir" "$wtroot"
-git -C "$repo" worktree prune
-for b in orphan-check/t1 orphan-check/t2 integration/orphan-check; do
-	git -C "$repo" branch -D "$b" >/dev/null 2>&1
-done
-unset WORKFLOW_WORKER_CMD
-mkdir -p "$T_TMP/agents"
-write_exec "$T_TMP/bin/claude" <<'CLAUDE'
-#!/bin/sh
-case "$1" in
-agents) printf '[]\n'; exit 0 ;;
-stop) exit 0 ;;
-esac
-printf 'backgrounded · a1b2c3d4\n'
-CLAUDE
-export PATH="$T_TMP/bin:$PATH"
-
-orphan
-printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$rundir/t1.status"
-slug=$(printf '%s' "$wtroot/t1" | sed 's/[^A-Za-z0-9]/-/g')
-mkdir -p "$HOME/.claude/projects/$slug"
-printf '{"type":"assistant"}\n' >"$HOME/.claude/projects/$slug/orphan-session.jsonl"
-# The retry goes to a stub that never works, so the deadline ends the run;
-# what matters is what adoption said before that.
-run env WORKFLOW_DEADLINE_MIN=0.05 timeout 120 workflow run --plan-file "$T_TMP/plan.md"
-truthy "$([ "$RC" = 124 ] && echo 1 || echo 0)" 'the run does not sit out a deadline on the dead session'
-unlike "$OUT" 'still working, from a run that is gone -- adopted' \
-	'a session with a transcript and no listing is not adopted as paused'
-like "$OUT" 'task t1: left dispatched by a run that is gone -- collecting it' \
-	'it is collected like a worker that ended'
-
 t_done

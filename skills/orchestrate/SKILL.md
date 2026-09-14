@@ -46,8 +46,8 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
    `<task>.review.2`, then either edit the plan and `workflow redispatch
    <task>` (it reaches any failed task while the run lives) or overrule
    the reader with a ruling.
-   `no verdict`: `<task>.review` is empty; `<task>.review-out` holds the `--bg` banner
-   by design; `claude logs <session>` and `<task>.review-err` say what happened.
+   `no verdict`: `<task>.review` is empty; `amx logs <session>` and
+   `<task>.review-err` say what happened.
 5. Escalate only scope, irreversible or taste; decide the rest.
 
 ## Questions

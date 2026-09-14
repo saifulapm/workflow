@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::backend::{ClaudeBackend, Dispatch, Handle, WorkerBackend};
+use crate::backend::{Dispatch, Handle, ProcessBackend, WorkerBackend};
 use crate::backend_amx::AmxBackend;
 use crate::gitcmd::Git;
 use crate::plan::{Plan, PlanKind, Task};
@@ -700,19 +700,17 @@ impl Run {
         )
     }
 
-    /// Seen by the backend and not alive, with nothing that says it is
+    /// Listed by the backend and not alive, with nothing that says it is
     /// done: no commit on its branch and no final word past `started` or
     /// `progress` in its status file. The usage limit pauses a session
-    /// without ending it -- `claude agents` shows it idle, not gone -- and
-    /// this is what tells that apart from a worker that actually finished
-    /// or died, so it is held to the stall deadline like a live one instead
-    /// of being collected the instant `alive` goes false (friction
-    /// #17SPEY7R).
+    /// without ending it -- the pane stands, amx reads it idle, not gone --
+    /// and this is what tells that apart from a worker that actually
+    /// finished or died, so it is held to the stall deadline like a live
+    /// one instead of being collected the instant `alive` goes false
+    /// (friction #17SPEY7R).
     ///
-    /// A pidfile answers this on its own: the legacy template's process is
-    /// either running or it is not, and a dead one is dead, not idle. Only a
-    /// session with no pid to check -- the shipped `--bg` dispatch -- has a
-    /// listing that can lie this way.
+    /// A pidfile answers this on its own: the process seam's worker is
+    /// either running or it is not, and a dead one is dead, not idle.
     fn paused(&self, task: &str) -> bool {
         if !self.worker_pid(task).is_empty() {
             return false;
@@ -892,16 +890,25 @@ impl Run {
         // than one that looks untouched.
         self.set_state(task, DISPATCHED);
         let handle = self.backend.dispatch(&d);
-        // What the backend actually started, which on `claude --bg` is not
-        // what was minted. Everything that asks after this worker later --
-        // liveness, the stop, the transcript -- reads this file.
-        if !handle.is_empty() {
-            write_field(&self.dir, task, "session", &handle);
+        // No handle is a launch the backend refused -- amx at its cap, or a
+        // tmux it cannot reach -- and there is no worker to wait on. What it
+        // said on its way out is in the err file, so the task fails on that
+        // line rather than sitting out a stall deadline for a pane that
+        // never came up.
+        if handle.is_empty() {
+            let said = std::fs::read_to_string(&d.err).unwrap_or_default();
+            let line = said
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("nothing on stderr");
+            self.fail_task(task, &format!("the launch was refused: {line}"));
+            return;
         }
-        warn(format!(
-            "task {task}: dispatched (session {})",
-            if handle.is_empty() { &session } else { &handle }
-        ));
+        // What the backend actually started, which is the handle everything
+        // that asks after this worker later -- liveness, the stop, the
+        // transcript -- reads out of this file.
+        write_field(&self.dir, task, "session", &handle);
+        warn(format!("task {task}: dispatched (session {handle})"));
         memcli::log_run(&format!("run {}: dispatched {task}", self.plan.plan_id));
     }
 
@@ -1595,18 +1602,23 @@ impl Run {
             return;
         }
         if !outcome.ok {
-            // No pidfile and no result: the template never got as far as either,
-            // so this is a dispatch that did not happen rather than a worker that
-            // ran and failed. Saying "the worker exited with an error" sent
-            // whoever read it looking at a worker that never existed.
-            let no_pid = self.worker_pid(task).is_empty();
-            let no_result = std::fs::metadata(self.dir.join(format!("{task}.json")))
-                .map(|m| m.len() == 0)
-                .unwrap_or(true);
-            if no_pid && no_result {
-                self.fail_task(task, "dispatch race: worker never wrote its pidfile");
+            // No status line and no commit: the dispatch never became a
+            // worker, so the reason names the dispatch rather than sending
+            // whoever reads it looking for a worker that never existed. One
+            // that reported and then ended unclean -- an amx phase of failed
+            // or stopped, a pane that vanished -- is named for what it did,
+            // with its last words when the transcript has any.
+            if self.last_status_line(task).is_none() && self.commits(task) == 0 {
+                self.fail_task(task, "dispatch race: the worker never started");
             } else {
-                self.fail_task(task, "the worker exited with an error");
+                let said = self.backend.last_words(&self.handle(task));
+                let why = match said.lines().next() {
+                    Some(line) if !line.trim().is_empty() => {
+                        format!("the worker ended without a clean turn -- it last said: {line}")
+                    }
+                    _ => "the worker ended without a clean turn".to_string(),
+                };
+                self.fail_task(task, &why);
             }
             return;
         }
@@ -2496,34 +2508,13 @@ fn timings() -> (usize, i64, i64, f64) {
     (max_workers as usize, deadline, grace, poll)
 }
 
-/// Which worker a run dispatches onto, by name: `WORKFLOW_BACKEND` first, so
-/// one run can be moved without touching what the project stands for; then the
-/// project's own key, which is where the standing choice lives; then claude,
-/// which is what every project ran on before there was a choice.
-fn backend_name<'a>(asked: Option<&'a str>, declared: Option<&'a str>) -> &'a str {
-    [asked, declared]
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|name| !name.is_empty())
-        .unwrap_or("claude")
-}
-
-/// mem's `project set backend` takes a closed list, so a declared name is
-/// always one of these. `WORKFLOW_BACKEND` is free text and a typo in it must
-/// not silently dispatch onto the other worker.
+/// Which worker a run dispatches onto: amx, always, unless a caller set the
+/// process template that is the suite's seam.
 fn backend_for() -> Box<dyn WorkerBackend> {
-    let asked = std::env::var("WORKFLOW_BACKEND").ok();
-    let declared = memcli::project_backend();
-    match backend_name(asked.as_deref(), declared.as_deref()) {
-        "amx" => Box::new(AmxBackend),
-        "claude" => Box::new(ClaudeBackend),
-        other => {
-            warn(format!(
-                "backend '{other}' is not one this workflow has -- dispatching onto claude"
-            ));
-            Box::new(ClaudeBackend)
-        }
+    if ProcessBackend::wanted() {
+        Box::new(ProcessBackend)
+    } else {
+        Box::new(AmxBackend)
     }
 }
 
@@ -3245,7 +3236,7 @@ pub fn cmd_reap() -> i32 {
 /// The hidden seam the harness uses to check the liveness rule one signal at a
 /// time (AC7's three sources, review-3 F-10).
 pub fn cmd_stalled(rundir: &Path, wtroot: &Path, task: &str, deadline: i64) -> i32 {
-    if stalled(&ClaudeBackend, rundir, wtroot, task, deadline) {
+    if stalled(backend_for().as_ref(), rundir, wtroot, task, deadline) {
         exit::OK
     } else {
         exit::FAILED
@@ -3335,20 +3326,6 @@ mod tests {
     fn failing_checks_is_empty_on_blank_output() {
         assert!(failing_checks("").is_empty());
         assert!(failing_checks("   \n\n").is_empty());
-    }
-
-    #[test]
-    fn the_environment_beats_the_project_key_and_the_key_beats_the_default() {
-        assert_eq!(backend_name(Some("claude"), Some("amx")), "claude");
-        assert_eq!(backend_name(Some("amx"), None), "amx");
-        assert_eq!(backend_name(None, Some("amx")), "amx");
-        assert_eq!(backend_name(None, None), "claude");
-        // An exported-but-empty WORKFLOW_BACKEND is not a choice.
-        assert_eq!(backend_name(Some(""), Some("amx")), "amx");
-        assert_eq!(backend_name(Some(" \n"), None), "claude");
-        // Whatever is asked for comes back as asked, so an unknown name can be
-        // reported rather than quietly turning into the other worker.
-        assert_eq!(backend_name(Some("amxx"), Some("amx")), "amxx");
     }
 
     #[test]

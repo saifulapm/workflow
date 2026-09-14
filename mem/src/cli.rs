@@ -277,8 +277,7 @@ pub enum ProjectCommand {
         command: ProjectSetCommand,
     },
     /// Forget something `set` recorded, so the project is back on the
-    /// default: the workflow's model, the claude backend, the detected
-    /// verifier. `set` refuses an empty value, so this is the way back to
+    /// default: the workflow's model, the detected verifier. `set` refuses an empty value, so this is the way back to
     /// absent. An absent `review-model` is not the same as no reader: a run
     /// stops and asks for one. `mem project set review-model none` is how a
     /// project records that nobody reads.
@@ -292,7 +291,6 @@ pub enum ProjectCommand {
 pub enum ProjectKey {
     Verify,
     ReviewPaths,
-    Backend,
     Model,
     ReviewModel,
     Effort,
@@ -305,7 +303,6 @@ impl ProjectKey {
         match self {
             ProjectKey::Verify => "verify",
             ProjectKey::ReviewPaths => "review_paths",
-            ProjectKey::Backend => "backend",
             ProjectKey::Model => "model",
             ProjectKey::ReviewModel => "review_model",
             ProjectKey::Effort => "effort",
@@ -324,9 +321,6 @@ pub enum ProjectSetCommand {
     /// it: these are the paths that are load-bearing in THIS repository.
     #[command(name = "review-paths")]
     ReviewPaths { globs: String },
-    /// The worker this project's tasks are dispatched onto. Absent means
-    /// claude, which is what every project ran on before there was a choice.
-    Backend { backend: Backend },
     /// The model a run's workers are started on (`opus`, `sonnet`, ...).
     /// Absent means the workflow's default; WORKFLOW_MODEL overrides per run.
     Model { model: String },
@@ -351,26 +345,7 @@ pub enum ProjectSetCommand {
     Remote { url: String },
 }
 
-/// The workers a task can be dispatched onto. A closed list: an unknown name
-/// is a typo, and a typo must not leave a project pointing at nothing.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-#[value(rename_all = "lower")]
-pub enum Backend {
-    Claude,
-    Amx,
-}
-
-impl Backend {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Backend::Claude => "claude",
-            Backend::Amx => "amx",
-        }
-    }
-}
-
-/// The reasoning dial both backends take (`claude --effort`, `amx new
-/// --effort`). A closed list for the same reason `Backend` is: a level the
+/// The reasoning dial (`amx new --effort`). A closed list: a level the
 /// worker would refuse at launch must not be stored.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lower")]

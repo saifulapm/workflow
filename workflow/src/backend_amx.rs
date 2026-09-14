@@ -1,30 +1,32 @@
 //! The amx worker backend (spec §12b; the design is `mem wiki amx-backend`).
 //!
-//! Same seam, different substrate: a worker is an amx agent in a tmux pane
-//! rather than a `claude --bg` session, and nothing above [`WorkerBackend`]
-//! knows which it got. amx answers all four questions off one verb --
-//! `amx status <id> --json` -- so liveness, the record and the ending are one
-//! parse of one document rather than a listing, a transcript and a pidfile.
+//! Every worker and every reader is an amx agent in a tmux pane, and nothing
+//! above [`WorkerBackend`] knows more than that. amx answers all four
+//! questions off one verb -- `amx status <id> --json` -- so liveness, the
+//! record and the ending are one parse of one document rather than a
+//! listing, a transcript and a pidfile.
 //!
-//! The one thing that document does not carry is what the worker last said.
-//! That is in its own transcript, the same one the claude backend reads, and
-//! the conversation `status` names is what finds the file.
+//! What that document does not carry is what the worker last said and how
+//! much context it was carrying. Both are in the claude transcript the pane
+//! is running, and the conversation `status` names is what finds the file.
 //!
 //! `WORKFLOW_AMX` names the binary, defaulting to `amx` on PATH. It is this
-//! backend's test seam, the way `WORKFLOW_WORKER_CMD` is the claude backend's;
-//! the two mean nothing to each other.
+//! backend's test seam; `WORKFLOW_WORKER_CMD` selects the process seam
+//! instead, and the two mean nothing to each other.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::backend::{Dispatch, Handle, Outcome, WorkerBackend, last_words_in};
+use crate::backend::{
+    Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
+};
 use crate::{paths, sys};
 
 /// The phases that mean nothing more is coming from this agent.
 ///
 /// `waiting` is one of them: an agent stopped on a question has ended its
 /// turn, and the status file protocol is what answers it -- the worker writes
-/// `blocked` and asks through `mem ask`, exactly as under the claude backend.
+/// `blocked` and asks through `mem ask`.
 ///
 /// The live phases are the ones not here: `starting`, `working`, and
 /// `unknown`, which is amx saying it cannot read the pane rather than that the
@@ -35,8 +37,11 @@ const ENDINGS: [&str; 5] = ["waiting", "idle", "done", "failed", "stopped"];
 /// The phases that end a turn without an error. Everything else that ends --
 /// `waiting` on a question, `failed`, `stopped`, an unreadable screen -- is
 /// not a clean ending. What the work was worth is still the status file's and
-/// the merge gate's to say, exactly as for claude.
+/// the merge gate's to say.
 const CLEAN: [&str; 2] = ["idle", "done"];
+
+/// The evidence words that mean the pane is still there to be read.
+const PANE_UP: [&str; 3] = ["hooks", "screen", "unknown"];
 
 const BASE36: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -70,10 +75,14 @@ fn amx(args: &[&str]) -> (String, bool) {
     )
 }
 
-/// The three fields of `amx status --json` this backend reads.
+/// The four fields of `amx status --json` this backend reads.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Status {
     state: String,
+    /// What the phase was read off: `hooks`, `screen` or `unknown` while
+    /// the pane stands; `record` once an exit code or a stop ended it,
+    /// `gone` when the pane vanished, `parked` when amx released it idle.
+    evidence: String,
     last_event: i64,
     /// The claude conversation the pane is running, which is what names the
     /// transcript under the worker's directory. Empty for an agent that never
@@ -89,6 +98,11 @@ fn status_in(json: &str) -> Option<Status> {
     Some(Status {
         state: v
             .get("state")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        evidence: v
+            .get("evidence")
             .and_then(|s| s.as_str())
             .unwrap_or_default()
             .to_string(),
@@ -112,9 +126,8 @@ fn status(session: &str) -> Option<Status> {
     status_in(&out)
 }
 
-/// Four base36 characters, from the same random source the claude backend
-/// mints uuids out of -- the crate is already a dependency and a v4 carries
-/// far more entropy than four digits need.
+/// Four base36 characters out of a v4 uuid -- the crate is already a
+/// dependency and a v4 carries far more entropy than four digits need.
 fn suffix() -> String {
     let mut n = uuid::Uuid::new_v4().as_u128();
     (0..4)
@@ -189,13 +202,12 @@ fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
 /// The variables a worker must not inherit (spec §1), out of the names the
 /// orchestrator is carrying.
 ///
-/// The claude backend strips these with `env -u` inside its template. amx has
-/// no template: it snapshots the environment it was spawned with and replays
-/// that into the pane, so the scrub has to happen on the command itself or the
-/// worker gets every credential this process holds.
+/// amx snapshots the environment it was spawned with and replays that into
+/// the pane, so the scrub happens on the command itself or the worker gets
+/// every credential this process holds.
 ///
-/// `WORKFLOW_ALLOW_PUSH` and `WORKFLOW_HOOK_SEEN` go with the credentials for
-/// the same reason they do there: an orchestrator run under the first would
+/// `WORKFLOW_ALLOW_PUSH` and `WORKFLOW_HOOK_SEEN` go with the credentials:
+/// an orchestrator run under the first would
 /// release the pre-push refusal for every worker it dispatched, and the second
 /// would tell a worker's first commit that the gate had already run.
 fn scrubbed(names: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -238,7 +250,7 @@ impl WorkerBackend for AmxBackend {
         for (k, v) in &d.env {
             c.env(k, v);
         }
-        // What the claude template writes in front of its own command line.
+        // How a worker's hooks and mem know they are a worker's.
         c.env("WORKFLOW_AGENT", "1");
         for name in scrubbed(std::env::vars().map(|(k, _)| k)) {
             c.env_remove(name);
@@ -251,9 +263,13 @@ impl WorkerBackend for AmxBackend {
             Err(_) => Stdio::null(),
         };
         // `amx new` prints the id and returns as soon as the pane is up, so
-        // there is nothing to detach from and nothing to wait for.
-        let _ = c.stdout(Stdio::null()).stderr(err).status();
-        name
+        // there is nothing to detach from and nothing to wait for. A launch
+        // amx refused (exit 2 at its cap, 1 for anything else) started no
+        // agent: no handle, and the run reads the refusal off `err`.
+        match c.stdout(Stdio::null()).stderr(err).status() {
+            Ok(st) if st.success() => name,
+            _ => String::new(),
+        }
     }
 
     fn alive(&self, h: &Handle) -> bool {
@@ -266,8 +282,12 @@ impl WorkerBackend for AmxBackend {
         }
     }
 
+    /// A pane still standing. `record` and `gone` are an agent amx remembers
+    /// and nothing more -- the transcript-and-no-row of frictions #B3391C6H
+    /// and #QT1PDNRK -- and `parked` is a pane amx released after an hour
+    /// idle; none of those is a session the usage limit is holding.
     fn listed(&self, h: &Handle) -> bool {
-        self.seen(h)
+        status(&h.session).is_some_and(|s| PANE_UP.contains(&s.evidence.as_str()))
     }
 
     fn seen(&self, h: &Handle) -> bool {
@@ -282,11 +302,15 @@ impl WorkerBackend for AmxBackend {
         heard.max(sys::newest_mtime(&h.worktree))
     }
 
-    /// amx's status carries no token count, so this backend cannot see how
-    /// full the window got. None rather than zero: zero would claim the worker
-    /// used no context.
-    fn context_tokens(&self, _h: &Handle) -> Option<u64> {
-        None
+    /// Off the transcript of the conversation amx names, the same way the
+    /// last words are. None rather than zero when there is nothing to read:
+    /// zero would claim the worker used no context.
+    fn context_tokens(&self, h: &Handle) -> Option<u64> {
+        let session = status(&h.session)
+            .map(|s| s.session)
+            .filter(|s| !s.is_empty())?;
+        let path = paths::transcript_path(&h.worktree, &session);
+        last_context_tokens(&std::fs::read_to_string(path).ok()?)
     }
 
     /// The grace is amx's own: `amx stop` asks the pane's process group to
@@ -309,9 +333,9 @@ impl WorkerBackend for AmxBackend {
         }
     }
 
-    /// A worker under amx is a claude session in a pane, so it leaves the same
-    /// transcript the claude backend reads -- only the id naming it is amx's
-    /// to give, and `amx status --json` is what gives it. An agent whose
+    /// A worker under amx is a claude session in a pane and leaves that
+    /// session's transcript; the id naming it is amx's to give, and
+    /// `amx status --json` is what gives it. An agent whose
     /// status names no conversation has no last words: the reading ended
     /// before one existed, and the transcripts standing under the directory
     /// belong to other panes.
@@ -373,6 +397,7 @@ mod tests {
     fn the_status_json_gives_up_the_phase_and_the_last_thing_heard() {
         let s = status_in(STATUS).unwrap();
         assert_eq!(s.state, "working");
+        assert_eq!(s.evidence, "hooks");
         assert_eq!(s.last_event, 1787939754);
         // The conversation the pane is running, which is the transcript this
         // backend reads a reader's last words out of.
@@ -468,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn the_scrub_takes_what_the_claude_template_takes() {
+    fn the_scrub_takes_every_credential_shape_of_spec_1() {
         let held = [
             "GITHUB_API_KEY",
             "WORKFLOW_ALLOW_PUSH",
@@ -544,6 +569,7 @@ mod tests {
 printf '%s\n' "$@" >> '{d}/argv'
 env > '{d}/env'
 echo "amx: $1: no capacity" >&2
+[ "$1" = new ] && [ -f '{d}/refuse' ] && exit 2
 if [ "$1" = status ]; then
   [ "$2" = wf-t1-a3k9 ] || exit 1
   cat '{d}/status.json'
@@ -683,11 +709,56 @@ exit 0
         assert!(AmxBackend.alive(&fake.handle("nope")));
         // Never dispatched at all.
         assert!(!AmxBackend.seen(&fake.handle("")));
-        assert!(
-            AmxBackend
-                .context_tokens(&fake.handle("wf-t1-a3k9"))
-                .is_none()
+        // The window is read off the conversation amx names: nothing to
+        // read is None, never zero.
+        let h = fake.handle("wf-t1-a3k9");
+        assert!(AmxBackend.context_tokens(&h).is_none());
+        fake.transcript(
+            SESSION,
+            "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":3,\"cache_read_input_tokens\":1200}}}\n",
         );
+        assert_eq!(AmxBackend.context_tokens(&h), Some(1203));
+    }
+
+    #[test]
+    fn listed_means_the_pane_is_still_standing() {
+        for (evidence, listed) in [
+            ("hooks", true),
+            ("screen", true),
+            ("unknown", true),
+            ("record", false),
+            ("gone", false),
+            ("parked", false),
+        ] {
+            let fake = Fake::new("listed", "idle");
+            let path = fake.dir.join("status.json");
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(
+                &path,
+                text.replace(
+                    "\"evidence\": \"hooks\"",
+                    &format!("\"evidence\": \"{evidence}\""),
+                ),
+            )
+            .unwrap();
+            let h = fake.handle("wf-t1-a3k9");
+            assert_eq!(AmxBackend.listed(&h), listed, "{evidence}");
+            // Seen either way: amx has the record.
+            assert!(AmxBackend.seen(&h), "{evidence}");
+        }
+        let fake = Fake::new("listed", "idle");
+        assert!(!AmxBackend.listed(&fake.handle("nope")));
+    }
+
+    #[test]
+    fn a_launch_amx_refuses_hands_back_no_handle() {
+        let fake = Fake::new("refused", "working");
+        std::fs::write(fake.dir.join("refuse"), "").unwrap();
+        let mut d = fixture();
+        d.worktree = fake.dir.clone();
+        d.err = fake.dir.join("t1.err");
+        assert_eq!(AmxBackend.dispatch(&d), "");
+        assert_eq!(fake.read("t1.err").trim(), "amx: new: no capacity");
     }
 
     #[test]

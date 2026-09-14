@@ -4,6 +4,11 @@
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
+# Every worker here is fabricated in the process seam's shape -- a pidfile, a
+# result document, a transcript -- so reap and run read them through that
+# seam; the sections that dispatch set their own template over this one.
+export WORKFLOW_WORKER_CMD=true
+
 new_repo reapme
 mem_register
 printf '{"name":"acme/app"}\n' >composer.json
@@ -229,7 +234,7 @@ run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
 	WORKFLOW_WORKER_CMD='true' workflow run --plan-file "$T_TMP/racy.md"
 is "$RC" 1 'a dispatch that produced nothing fails the task'
 racy="$XDG_STATE_HOME/workflow/runs/racy/racy"
-is "$(cat "$racy/t1.failed")" 'dispatch race: worker never wrote its pidfile' \
+is "$(cat "$racy/t1.failed")" 'dispatch race: the worker never started' \
 	'and names the dispatch, not a worker that never ran'
 is "$(cat "$racy/model" 2>/dev/null)" opus \
 	'setup records the model this run dispatches on'

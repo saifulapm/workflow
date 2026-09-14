@@ -91,10 +91,8 @@ Three sizes of work, three moves:
 - **A whole plan in parallel** — tell a session "orchestrate the <plan-id>
   run". It starts `workflow run`, reads `workflow status`, decides retries
   and cleanup itself, and asks you only what is genuinely yours. Workers are
-  background claude sessions by default: watch them in `claude agents`,
-  attach to any. `mem project set backend amx` puts a project's workers in
-  tmux panes instead, listed by `amx ls` and watched with `amx attach <id>`;
-  waves, ownership and the merge gate are the same either way. Workers run
+  amx agents in tmux panes, listed by `amx ls` and watched with
+  `amx attach <id>`. Workers run
   on opus unless the project says otherwise (`mem project set model sonnet`)
   or one run does (`WORKFLOW_MODEL=sonnet workflow run`). A cheaper model
   can be given more reasoning: `mem project set effort max` starts every

@@ -101,5 +101,5 @@ is "$RC" 1 'a dispatch that never produces anything still ends failed'
 hdir="$XDG_STATE_HOME/workflow/runs/hopeless/hopeless"
 is "$(cat "$hdir/t1.state")" failed 'failed, not retried forever'
 is "$(cat "$hdir/t1.dispatches")" 2 'after the one retry it is allowed'
-is "$(cat "$hdir/t1.failed")" 'dispatch race: worker never wrote its pidfile' \
+is "$(cat "$hdir/t1.failed")" 'dispatch race: the worker never started' \
 	'and the reason still names the dispatch, not a worker that never ran'

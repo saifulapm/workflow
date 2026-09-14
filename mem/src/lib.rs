@@ -104,9 +104,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::ReviewPaths { globs } => {
                     verbs::project_set(&app, "review_paths", globs)
                 }
-                cli::ProjectSetCommand::Backend { backend } => {
-                    verbs::project_set(&app, "backend", backend.as_str())
-                }
                 cli::ProjectSetCommand::Model { model } => verbs::project_set(&app, "model", model),
                 cli::ProjectSetCommand::ReviewModel { model } => {
                     verbs::project_set(&app, "review_model", model)

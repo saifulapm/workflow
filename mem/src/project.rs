@@ -546,7 +546,7 @@ pub fn unset_key(store: &Store, project_id: &str, key: &str) -> Result<(PathBuf,
 }
 
 /// A choice this project declared with `mem project set <key>` -- the worker
-/// backend, the worker model.
+/// model, the reader.
 ///
 /// Read straight out of the document, which is also how `set_key` writes it:
 /// mem stores the choice and hands it to whoever dispatches the work, so there

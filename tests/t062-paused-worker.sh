@@ -1,68 +1,81 @@
 #!/usr/bin/env bash
-# A worker the usage limit pauses without ending: the agents listing carries
-# it idle rather than gone, so it is seen but not alive, and it says nothing
-# past `started` in its own status file. Neither dead nor working, it is held
-# to the stall deadline like a live worker, not collected the instant `alive`
-# goes false (friction #17SPEY7R).
+# A worker the usage limit pauses without ending: its pane stands and amx
+# reads it idle, so it is listed but not alive, and it says nothing past
+# `started` in its own status file. Neither dead nor working, it is held to
+# the stall deadline like a live worker, not collected the instant `alive`
+# goes false (friction #17SPEY7R). A session that died with the machine
+# looks the same in every way but one -- amx's evidence says the pane is
+# gone -- and that one is collected at once (frictions #B3391C6H,
+# #QT1PDNRK).
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
 export WF_TMP="$T_TMP"
-mkdir -p "$T_TMP/agents"
-# A dispatch mints its own session, the way --bg does, then goes idle at
-# once -- paused, not working, but the listing still carries it -- and
-# writes `started` to its own status file before it goes quiet. A real
-# worker learns its status path from the brief; this stub reads it back off
-# its cwd, which the template already puts it in.
-write_exec "$T_TMP/bin/claude" <<'CLAUDE'
-#!/bin/sh
-case "$1" in
-agents)
-	out='['; sep=''
-	for f in "$WF_TMP/agents"/*; do
-		[ -f "$f" ] || continue
-		sid=$(basename "$f")
-		out="$out$sep{\"id\":\"${sid%%-*}\",\"cwd\":\"\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"state\":\"$(cat "$f")\",\"startedAt\":1}"
-		sep=','
-	done
-	printf '%s]\n' "$out"
-	exit 0 ;;
-stop)
-	printf 'stop %s\n' "$2" >>"$WF_TMP/claude-stops"
-	for f in "$WF_TMP/agents"/*; do
-		[ -f "$f" ] || continue
-		sid=$(basename "$f")
-		[ "${sid%%-*}" = "$2" ] && printf 'stopped' >"$f"
-	done
-	exit 0 ;;
-esac
-n=$(cat "$WF_TMP/seq" 2>/dev/null || echo 0)
-n=$((n + 1)); printf '%s' "$n" >"$WF_TMP/seq"
-short=$(printf 'a1b2c3%02x' "$n")
-sid="$short-0000-4000-8000-000000000000"
-printf 'idle' >"$WF_TMP/agents/$sid"
-task=$(basename "$PWD")
-rundir=$(dirname "$PWD" | sed 's#/worktrees/#/runs/#')
-printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$rundir/$task.status"
-# The transcript a real session leaves behind, standing after it goes idle.
-slug=$(printf '%s' "$PWD" | tr -c '[:alnum:]' '-')
-mkdir -p "$HOME/.claude/projects/$slug"
-printf '{"type":"assistant"}\n' >"$HOME/.claude/projects/$slug/$sid.jsonl"
-printf 'backgrounded · %s\n' "$short"
-CLAUDE
+export AMX_DIR="$T_TMP/amx"
+mkdir -p "$AMX_DIR"
 
-is "$(command -v claude)" "$T_TMP/bin/claude" 'the stub is the claude on PATH'
-[ "$(command -v claude)" = "$T_TMP/bin/claude" ] || exit 1
+# A dispatch writes `started` to the task's status file and goes idle at
+# once -- paused, not working, with the pane still up -- unless the agent's
+# name says it is one that should run to `ready`. Status answers out of the
+# phase and evidence last written for the name; stop is recorded.
+write_exec "$T_TMP/fake-amx" <<'AMX'
+#!/bin/sh
+verb=$1
+shift
+case $verb in
+new)
+	name= dir= text=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--name) name=$2; shift 2 ;;
+		--dir) dir=$2; shift 2 ;;
+		--model | --effort) shift 2 ;;
+		--no-worktree) shift ;;
+		*) text=$1; shift ;;
+		esac
+	done
+	brief=${text#Read }
+	brief=${brief% and execute it exactly.}
+	status=$(sed -n 's/^Append one line per state change to \(.*\):$/\1/p' "$brief")
+	printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+	case $name in
+	wf-t2-* | wf-two-*)
+		cd "$dir" || exit 1
+		task=$(basename "$brief" .md)
+		file=$(sed -n 's/^ *Files: *//p' "$brief" | head -1)
+		mkdir -p "$(dirname "$file")"
+		printf '%s\n' "$task" >"$file"
+		git add "$file"
+		git -c core.hooksPath=/dev/null commit -qm "Add the $task file"
+		printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+		printf 'done record\n' >"$AMX_DIR/$name.state"
+		;;
+	*) printf 'idle hooks\n' >"$AMX_DIR/$name.state" ;;
+	esac
+	;;
+status)
+	[ -f "$AMX_DIR/$1.state" ] || exit 1
+	read -r state evidence <"$AMX_DIR/$1.state"
+	printf '{"id":"%s","state":"%s","evidence":"%s","last_event":0,"session":""}\n' "$1" "$state" "$evidence"
+	;;
+stop)
+	printf 'stop %s\n' "$1" >>"$WF_TMP/amx-stops"
+	printf 'stopped record\n' >"$AMX_DIR/$1.state"
+	;;
+esac
+exit 0
+AMX
+export WORKFLOW_AMX="$T_TMP/fake-amx"
 
 new_repo app
 mem_register
 printf '{"name":"acme/app"}\n' >composer.json
 printf '#!/bin/sh\nexit 0\n' >artisan
 chmod +x artisan
-write_exec bin/php <<-'EOF'
+write_exec bin/php <<-'PHP'
 	#!/bin/sh
 	exit 0
-EOF
+PHP
 git add -A
 git -c core.hooksPath=/dev/null commit -qm 'project files'
 base=$(git rev-parse HEAD)
@@ -70,7 +83,7 @@ repo=$PWD
 
 ## ------------------------------------------------ reap_pass holds the line
 
-cat >"$T_TMP/plan.md" <<'EOF'
+cat >"$T_TMP/plan.md" <<'PLAN'
 # plan: paused-worker
 
 - [ ] t1 A worker that pauses without a final word
@@ -79,7 +92,7 @@ cat >"$T_TMP/plan.md" <<'EOF'
 - [ ] t2 A second task so the run is worth having
       Files: app/Two.php
       Verify: true
-EOF
+PLAN
 rundir="$XDG_STATE_HOME/workflow/runs/app/paused-worker"
 
 env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.05 \
@@ -96,7 +109,7 @@ is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 'the worker is dispatched'
 # worker used to be collected on the very next pass.
 sleep 0.7
 is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched \
-	'paused -- seen, not alive, nothing past "started" -- is not collected before the deadline'
+	'paused -- listed, not alive, nothing past "started" -- is not collected before the deadline'
 
 wait "$runpid"
 is "$?" 1 'the run fails once the deadline is spent'
@@ -104,123 +117,61 @@ is "$(cat "$rundir/t1.state")" failed 'and the task is failed, past the deadline
 is "$(cat "$rundir/t1.dispatches")" 2 'after exactly one redispatch, same as a stalled worker'
 like "$(cat "$rundir/t1.failed")" 'stalled with no sign of life' \
 	'failed as a stall, never as a worker that reported and erred'
-stops=$(sort -u "$T_TMP/claude-stops" | grep -c '^stop a1b2c3')
-is "$(($stops >= 1))" 1 'a paused session is ended with claude stop, the same way a stalled one is'
+is "$(grep -c '^stop wf-t1-' "$T_TMP/amx-stops")" 2 'each paused session is ended with amx stop, the same way a stalled one is'
+is "$(cat "$rundir/t2.state")" merged 'the worker beside it merged as usual'
 
 ## --------------------------------------- adopt_stale keeps it as adopted
 
-cat >"$T_TMP/orphan-plan.md" <<'EOF'
-# plan: paused-orphan
+# The pane still stands, idle -- the shape the usage limit leaves
+# (#17SPEY7R) -- and only "started" said: paused, not dead, from a run that
+# no longer exists to watch it.
+orphan() {
+	cat >"$T_TMP/$1.md" <<-PLAN
+	# plan: $1
 
-- [ ] t1 A worker paused by a run that is gone
-      Files: app/One.php
-      Verify: true
-- [ ] t2 A second task so the run is worth having
-      Files: app/Two.php
-      Verify: true
-EOF
-orundir="$XDG_STATE_HOME/workflow/runs/app/paused-orphan"
-owtroot="$XDG_STATE_HOME/workflow/worktrees/app/paused-orphan"
-mkdir -p "$orundir"
-printf '%s\n' "$base" >"$orundir/base_sha"
-printf 'dispatched\n' >"$orundir/t1.state"
-printf '1\n' >"$orundir/t1.dispatches"
-printf '%s\n' "$(date -u +%s)" >"$orundir/t1.dispatched_at"
-git -C "$repo" worktree add -q -b paused-orphan/t1 "$owtroot/t1" "$base"
-git -C "$repo" worktree add -q -b paused-orphan/t2 "$owtroot/t2" "$base"
-# The listing still carries this session, idle -- the shape the usage limit
-# leaves (#17SPEY7R) -- and only "started" said: paused, not dead, from a
-# run that no longer exists to watch it. The row is what says paused; a
-# transcript with no row is a session that died with the machine, and
-# t046 covers that one being collected at once (#B3391C6H).
-osid='b2c3d400-0000-4000-8000-000000000000'
-oslug=$(printf '%s' "$owtroot/t1" | tr -c '[:alnum:]' '-')
-mkdir -p "$HOME/.claude/projects/$oslug"
-printf '{"type":"assistant"}\n' >"$HOME/.claude/projects/$oslug/$osid.jsonl"
-printf 'idle' >"$WF_TMP/agents/$osid"
-printf '%s\n' "$osid" >"$orundir/t1.session"
-printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$orundir/t1.status"
+	- [ ] t1 A worker left by a run that is gone
+	      Files: app/One.php
+	      Verify: true
+	- [ ] two A second task so the run is worth having
+	      Files: app/Two.php
+	      Verify: true
+	PLAN
+	orundir="$XDG_STATE_HOME/workflow/runs/app/$1"
+	owtroot="$XDG_STATE_HOME/workflow/worktrees/app/$1"
+	mkdir -p "$orundir"
+	printf '%s\n' "$base" >"$orundir/base_sha"
+	printf 'dispatched\n' >"$orundir/t1.state"
+	printf '1\n' >"$orundir/t1.dispatches"
+	printf '%s\n' "$(date -u +%s)" >"$orundir/t1.dispatched_at"
+	git -C "$repo" worktree add -q -b "$1/t1" "$owtroot/t1" "$base"
+	git -C "$repo" worktree add -q -b "$1/two" "$owtroot/two" "$base"
+	printf '%s\n' "wf-t1-$2" >"$orundir/t1.session"
+	printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$orundir/t1.status"
+}
 
-run env WORKFLOW_DEADLINE_MIN=0.05 workflow run --plan-file "$T_TMP/orphan-plan.md"
+orphan paused-orphan pau1
+printf 'idle hooks\n' >"$AMX_DIR/wf-t1-pau1.state"
+run env WORKFLOW_DEADLINE_MIN=0.05 workflow run --plan-file "$T_TMP/paused-orphan.md"
 like "$OUT" 'task t1: still working, from a run that is gone -- adopted' \
 	'a paused task from a dead run is adopted like a live one, not collected at once'
 is "$(cat "$orundir/t1.state")" failed 'the deadline still ends it eventually'
 like "$(cat "$orundir/t1.failed")" 'stalled with no sign of life' \
 	'failed as a stall, not mis-read as a worker that ran and erred'
 
-## ------------------------- a worker that committed and left goes to the gate
+## ------------------------------------- the session that died with the machine
 
-# It writes `started`, commits its file and exits without ever saying `ready`
-# -- the way a worker that ran out of turns mid-task leaves things. What it
-# left on the branch is still worth judging.
-write_exec "$T_TMP/bin/claude" <<'CLAUDE'
-#!/bin/sh
-case "$1" in
-agents)
-	out='['; sep=''
-	if [ -f "$WF_TMP/sessions" ]; then
-		while read -r sid cwd; do
-			out="$out$sep{\"id\":\"${sid%%-*}\",\"cwd\":\"$cwd\",\"kind\":\"background\",\"sessionId\":\"$sid\",\"state\":\"done\",\"startedAt\":1}"
-			sep=','
-		done <"$WF_TMP/sessions"
-	fi
-	printf '%s]\n' "$out"
-	exit 0 ;;
-stop) exit 0 ;;
-esac
-for a in "$@"; do prompt=$a; done
-brief=$(printf '%s' "$prompt" | sed -n 's/^Read \(.*\) and execute it exactly\.$/\1/p')
-[ -r "$brief" ] || { printf 'no brief\n' >&2; exit 1; }
-task=$(basename "$brief" .md)
-status=$(sed -n 's/^Append one line per state change to \(.*\):$/\1/p' "$brief")
-file=$(sed -n 's/^ *Files: *//p' "$brief" | head -1)
-printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
-mkdir -p "$(dirname "$file")"
-printf '%s\n' "$task" >"$file"
-git add "$file"
-git -c core.hooksPath=/dev/null commit -qm "Add the $task file"
-n=$(cat "$WF_TMP/seq" 2>/dev/null || echo 0)
-n=$((n + 1)); printf '%s' "$n" >"$WF_TMP/seq"
-short=$(printf 'a1b2c3%02x' "$n")
-sid="$short-0000-4000-8000-000000000000"
-printf '%s %s\n' "$sid" "$PWD" >>"$WF_TMP/sessions"
-printf 'backgrounded · %s\n' "$short"
-CLAUDE
-
-new_repo committed
-mem_register
-printf '{"name":"acme/committed"}\n' >composer.json
-printf '#!/bin/sh\nexit 0\n' >artisan
-chmod +x artisan
-write_exec bin/php <<-'EOF'
-	#!/bin/sh
-	exit 0
-EOF
-git add -A
-git -c core.hooksPath=/dev/null commit -qm 'project files'
-cbase=$(git rev-parse HEAD)
-
-cat >"$T_TMP/committed-plan.md" <<'EOF'
-# plan: committed-left
-
-- [ ] t1 A worker that commits and leaves
-      Files: app/One.php
-      Verify: true
-- [ ] t2 A second task so the run is worth having
-      Files: app/Two.php
-      Verify: true
-EOF
-
-run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
-	workflow run --plan-file "$T_TMP/committed-plan.md"
-is "$RC" 0 'a worker that committed and left still lands the run clean'
-crundir="$XDG_STATE_HOME/workflow/runs/committed/committed-left"
-is "$(cat "$crundir/t1.state")" merged \
-	'the task merged, judged by the gate rather than failed on its last word'
-like "$OUT" "task t1: its worker committed and left without reporting ready -- the gate judges the branch" \
-	'and the run log carries the warning'
-is "$(cat "$crundir/t1.dispatches")" 1 'counted once, not retried'
-is "$(git rev-list --count "$cbase..integration/committed-left")" 2 \
-	'and both commits reached the integration branch'
+# Same record, same status file, but amx's evidence says the pane is gone: a
+# power cut. That used to read as paused and was waited on until the stall
+# deadline; a record is not a listing, and the task is collected now.
+orphan dead-orphan dea1
+printf 'stopped gone\n' >"$AMX_DIR/wf-t1-dea1.state"
+run env WORKFLOW_DEADLINE_MIN=0.05 timeout 120 workflow run --plan-file "$T_TMP/dead-orphan.md"
+is "$RC" 1 'the run ends on its own rather than sitting out a deadline on the dead session'
+unlike "$OUT" 'still working, from a run that is gone -- adopted' \
+	'a session whose pane is gone is not adopted as paused'
+like "$OUT" 'task t1: left dispatched by a run that is gone -- collecting it' \
+	'it is collected at once, like a worker that ended'
+is "$(cat "$orundir/t1.failed")" 'the worker ended without a clean turn' \
+	'and failed for what it did: reported started, then ended unclean'
 
 t_done

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # The reasoning dial. `mem project set effort <level>` and `set review-effort
-# <level>` reach the worker and the reader as `--effort` on whichever backend
-# the project chose; WORKFLOW_EFFORT and WORKFLOW_REVIEW_EFFORT take one run,
+# <level>` reach the worker and the reader as `--effort` on either seam
+# WORKFLOW_EFFORT and WORKFLOW_REVIEW_EFFORT take one run,
 # an empty one meaning no flag at all; and the run records both levels beside
-# `model` and `review-model`. The claude side runs through the template seam,
-# which hands the level over as its own placeholder; the amx side through a
+# `model` and `review-model`. The process seam hands the level over as its
+# own placeholder; amx gets it as `--effort` on `amx new`, checked through a
 # fake that records every argv.
 source "$(dirname -- "$0")/lib.sh"
 t_init
@@ -90,7 +90,7 @@ saw() {
 	if grep -qxF -- "$1" "$AMX_DIR/argv"; then ok "$2"; else notok "$2" "$(cat "$AMX_DIR/argv")"; fi
 }
 
-# handed <task> <level> <desc> -- what the claude fake logged for one dispatch.
+# handed <task> <level> <desc> -- what the process-seam fake logged for one dispatch.
 handed() {
 	is "$(sed -n "s/^$1 //p" "$WF_TMP/effort.log" | head -1)" "$2" "$3"
 }
@@ -153,7 +153,7 @@ is "$(cat "$XDG_STATE_HOME/workflow/runs/app/once/review-effort")" low 'for both
 
 ## ------------------------------------------------- the same keys under amx
 
-"$MEM_BIN" project set backend amx >/dev/null
+unset WORKFLOW_WORKER_CMD
 : >"$AMX_DIR/argv"
 plan panes
 run workflow run --plan-file "$T_TMP/panes.md"

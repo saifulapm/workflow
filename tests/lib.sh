@@ -119,6 +119,12 @@ t_init() {
 	export PATH="$T_TMP/bin:$PATH"
 	export WORKFLOW_MEM="$MEM_BIN"
 	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true
+	# amx is the backend, and nothing in a sandbox may reach the machine's:
+	# a test that wants one points WORKFLOW_AMX at its own fake, and every
+	# other dispatch goes through the WORKFLOW_WORKER_CMD process seam. A
+	# binary that is not there fails every amx call, which reads as "no
+	# record" rather than as somebody's real agent.
+	export WORKFLOW_AMX="$T_TMP/bin/no-amx"
 
 	# Every run test but the review gate's runs unread. `workflow run` refuses
 	# a run nobody is named to read, and the empty variable is how a caller
@@ -140,7 +146,7 @@ t_init() {
 	# nobody meant for it.
 	unset WORKFLOW_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH WORKFLOW_SUITE_LOCK_HELD
 	unset WORKFLOW_MODEL WORKFLOW_TASK CARGO_TARGET_DIR
-	unset WORKFLOW_HOME WORKFLOW_SKILLS_DIR WORKFLOW_SITES WORKFLOW_BACKEND WORKFLOW_AMX
+	unset WORKFLOW_HOME WORKFLOW_SKILLS_DIR WORKFLOW_SITES
 	unset WORKFLOW_EFFORT WORKFLOW_REVIEW_EFFORT WORKFLOW_WORKER_CMD WORKFLOW_MAX_WORKERS
 	unset WORKFLOW_DEADLINE_MIN WORKFLOW_REVIEW_DEADLINE_MIN WORKFLOW_MAX_TURNS
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE

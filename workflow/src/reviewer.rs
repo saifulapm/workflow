@@ -8,10 +8,8 @@
 //! record, the task block and the diff, and answers `VERDICT: ship` or
 //! `VERDICT: fix` with findings; `fix` takes the path a red Verify takes.
 //!
-//! The reader is a worker like any other: dispatched through the project's
-//! backend (a `claude --bg` session or an amx pane, never print mode), so it
-//! shows up in `claude agents` or `amx ls` and can be attached to while it
-//! reads. It writes its answer to one file and ends; the gate reads the
+//! The reader is a worker like any other: an amx agent in a pane, never print
+//! mode, so it shows up in `amx ls` and can be attached to while it reads. It writes its answer to one file and ends; the gate reads the
 //! verdict off that file and checks the tree it read is untouched.
 
 use std::path::Path;

@@ -116,10 +116,6 @@ pub fn project_choice(key: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-pub fn project_backend() -> Option<String> {
-    project_choice("backend")
-}
-
 pub fn project_model() -> Option<String> {
     project_choice("model")
 }

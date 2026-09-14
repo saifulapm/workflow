@@ -284,7 +284,6 @@ pub fn project_current(app: &App) -> Result<i32> {
     let declared = Registry::load(&app.store).by_id(id).cloned();
     let verify = declared.as_ref().and_then(|p| p.verify.clone());
     let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
-    let backend = crate::project::declared(&app.store, id, "backend");
     let model = crate::project::declared(&app.store, id, "model");
     let review_model = crate::project::declared(&app.store, id, "review_model");
     let effort = crate::project::declared(&app.store, id, "effort");
@@ -306,9 +305,6 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(paths) = &review_paths {
             doc["review_paths"] = json!(paths);
-        }
-        if let Some(backend) = &backend {
-            doc["backend"] = json!(backend);
         }
         if let Some(model) = &model {
             doc["model"] = json!(model);
@@ -337,9 +333,6 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(paths) = &review_paths {
             println!("review-paths  {paths}");
-        }
-        if let Some(backend) = &backend {
-            println!("backend  {backend}");
         }
         if let Some(model) = &model {
             println!("model  {model}");
@@ -398,7 +391,7 @@ pub fn project_add(app: &App, subdir: &str, name: Option<&str>) -> Result<i32> {
 }
 
 /// `mem project set <key> "<value>"` — the per-project verification command,
-/// the per-project review paths, the worker backend. Unlike other write
+/// the per-project review paths, the models. Unlike other write
 /// verbs, `project set` and `project unset` configure a project rather than
 /// record against one, so they resolve in `Mode::Read` and refuse an
 /// unregistered checkout instead of registering it; `claim_note` only
@@ -451,8 +444,8 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
 }
 
 /// `mem project unset <key>` -- the way back to absent. `set` refuses an
-/// empty value, and until this the only way to take a reader, a model or a
-/// backend off a project was to edit project.toml by hand.
+/// empty value, and until this the only way to take a reader or a model off
+/// a project was to edit project.toml by hand.
 pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     let identity = writable_project_identity(app)?;
     let Some(id) = identity.id() else {
