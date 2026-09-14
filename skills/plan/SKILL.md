@@ -6,7 +6,6 @@ description: Use when route sent a change to the plan lane, to turn it into a ta
 # plan
 
 Work bigger than one plan is a roadmap of milestones: `roadmap`.
-
 ## 1. Questions, once
 
 One numbered round, batched at the frontier of what you cannot work out. Each
@@ -55,23 +54,22 @@ produces a mockup first.
   lowercase, up to 16 chars). Continuation lines indent 2+ spaces as
   `Key: value`, split at the first colon-space.
 - `Files:` is whitespace-separated globs; double-quote one with a space. `*`
-  stops at a slash, `**` crosses, patterns are anchored at the repo root.
-  Both it and `Verify:` are mandatory. `Verify:` is the worker's evidence;
-  the gate runs the project's whole suite on integration, so a task that
-  changes what any test outside its Verify asserts fixes that test in the
-  same task and claims it in Files. No window may be red. This is the
-  ownership boundary: a write outside them is refused at the merge gate,
-  and a task owning more than eight patterns is two tasks.
-  The sweep names six classes: the registry or mount file, the lockfile,
-  the barrel or index file, the test file Verify runs, the arm an
-  exhaustive match demands, the dead-code guard on a sibling's symbol
-  this task first calls. Each one missed stops the task to ask.
+  stops at a slash, `**` crosses, patterns are anchored at the repo root. Both
+  it and `Verify:` are mandatory. `Verify:` is the worker's evidence; the gate
+  runs the project's whole suite on integration, so a task that changes what
+  any test outside its Verify asserts fixes that test in the same task and
+  claims it in Files. No window may be red. This is the ownership boundary: a
+  write outside them is refused at the merge gate, and a task owning more than
+  eight patterns is two tasks. The sweep names six classes: the registry or
+  mount file, the lockfile, the barrel or index file, the test file Verify
+  runs, the arm an exhaustive match demands, the dead-code guard on a sibling's
+  symbol this task first calls. Each one missed stops the task to ask.
 - `Read:`, `Uses:`, `Gives:` and `Pattern:` carry the middle tier: files to
-  open before editing (`Read:` may name `wiki:<slug>`, a wiki page),
-  interfaces consumed and produced across task boundaries (exact
-  signatures, items joined with ` · `), and one analog to copy the shape
-  of. A worker sees its block and the plan's prose, not a sibling's block:
-  restate every symbol another task defines, or it hunts.
+  open before editing (`Read:` may name `wiki:<slug>`, a wiki page), interfaces
+  consumed and produced across task boundaries (exact signatures, items joined
+  with ` · `), and one analog to copy the shape of. A worker sees its block and
+  the plan's prose, not a sibling's block: restate every symbol another task
+  defines, or it hunts.
 - An unknown dependency id or a cycle is a hard error.
 
 Check it from the checkout:
@@ -88,17 +86,15 @@ Tasks that run at once must not share files. A wide refactor expands and
 contracts: add the new beside the old, move callers, remove it last, each
 its own task. Several one-line edits of one kind across files are one task,
 not one per file.
-
-Write `Done:` checkable and demanding, one sentence under forty words a human
+ Write `Done:` checkable and demanding, one sentence under forty words a human
 can check without the diff: "every caller migrated" forces the sweep that
-"callers updated" lets slide. A worker reads its block literally and does
-not carry an instruction from one item to the next unasked, so a rule that
-holds across files or callers says so ("each of the three handlers", "every
-test that asserts the old literal"), and a ruling is a literal statement --
-a file, a symbol, a value, what breaks if it is wrong -- never a metaphor. Self-review: every requirement points at a
+"callers updated" lets slide. A worker reads its block literally and carries no
+instruction from one item to the next unasked, so a rule across files or
+callers says so ("each of the three handlers", "every test that asserts the old
+literal"), and a ruling is literal -- a file, a symbol, a value, what breaks if
+it is wrong -- never a metaphor. Self-review: every requirement points at a
 task, and a name two tasks share is spelled identically in both.
 
 ## 5. One approval checkpoint
-
 Present it once, whole; `implement` or `workflow run` takes it after
 approval.
