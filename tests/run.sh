@@ -6,6 +6,12 @@
 #
 # Each test script is a separate process printing TAP-ish lines; this runner
 # tallies them. WF_KEEP_TMP=1 leaves the sandboxes behind for inspection.
+#
+# Files run WF_JOBS at a time (default: the machine's cores), each into its
+# own sandbox (lib.sh t_init gives every file a throwaway HOME, so the suite
+# lock a test takes is its own). Output is printed per file, in name order,
+# once every file has ended: the 42 files took eight minutes in a row and the
+# merge gate paid that per task.
 
 set -uo pipefail
 
@@ -49,14 +55,37 @@ failed=0
 files=0
 failed_files=()
 failed_checks=""
+jobs=${WF_JOBS:-$(nproc 2>/dev/null || echo 4)}
+outs=$(mktemp -d "${TMPDIR:-/tmp}/wf-suite.XXXXXX")
 
+selected=()
 for t in "$root"/tests/t*.sh; do
 	name=$(basename -- "$t")
 	if [ -n "$pattern" ] && [[ $name != *"$pattern"* ]]; then continue; fi
+	selected+=("$t")
+done
+
+running=0
+for t in "${selected[@]}"; do
+	name=$(basename -- "$t")
+	(
+		bash "$t" >"$outs/$name.out" 2>&1
+		echo $? >"$outs/$name.status"
+	) &
+	running=$((running + 1))
+	if [ "$running" -ge "$jobs" ]; then
+		wait -n
+		running=$((running - 1))
+	fi
+done
+wait
+
+for t in "${selected[@]}"; do
+	name=$(basename -- "$t")
 	files=$((files + 1))
 	printf '\n== %s\n' "$name"
-	out=$(bash "$t" 2>&1)
-	status=$?
+	out=$(cat "$outs/$name.out")
+	status=$(cat "$outs/$name.status" 2>/dev/null || echo 1)
 	printf '%s\n' "$out"
 	n_ok=$(printf '%s\n' "$out" | grep -c '^ok ')
 	n_no=$(printf '%s\n' "$out" | grep -c '^not ok ')
@@ -70,6 +99,7 @@ for t in "$root"/tests/t*.sh; do
 		failed_checks+=$(printf '%s\n' "$out" | grep '^not ok ' | sed "s/^/$name: /")$'\n'
 	fi
 done
+rm -rf "$outs"
 
 printf '\n----\n%d files, %d checks, %d failed\n' "$files" "$total" "$failed"
 if [ ${#failed_files[@]} -gt 0 ]; then
