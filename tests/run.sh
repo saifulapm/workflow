@@ -7,11 +7,14 @@
 # Each test script is a separate process printing TAP-ish lines; this runner
 # tallies them. WF_KEEP_TMP=1 leaves the sandboxes behind for inspection.
 #
-# Files run WF_JOBS at a time (default: the machine's cores), each into its
-# own sandbox (lib.sh t_init gives every file a throwaway HOME, so the suite
-# lock a test takes is its own). Output is printed per file, in name order,
-# once every file has ended: the 42 files took eight minutes in a row and the
-# merge gate paid that per task.
+# Files run WF_JOBS at a time (default: half the machine's cores, at least
+# two), each into its own sandbox (lib.sh t_init gives every file a throwaway
+# HOME, so the suite lock a test takes is its own). Output is printed per
+# file, in name order, once every file has ended: the 42 files took eight
+# minutes in a row and the merge gate paid that per task. Half the cores, not
+# all: a run test under heavier load than that saw mem's question listing
+# lag past the run's three-poll tolerance and end a run over an answer that
+# was on its way.
 
 set -uo pipefail
 
@@ -55,7 +58,8 @@ failed=0
 files=0
 failed_files=()
 failed_checks=""
-jobs=${WF_JOBS:-$(nproc 2>/dev/null || echo 4)}
+cores=$(nproc 2>/dev/null || echo 4)
+jobs=${WF_JOBS:-$((cores / 2 > 2 ? cores / 2 : 2))}
 outs=$(mktemp -d "${TMPDIR:-/tmp}/wf-suite.XXXXXX")
 
 selected=()

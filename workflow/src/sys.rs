@@ -10,6 +10,13 @@ pub fn now() -> i64 {
     jiff::Timestamp::now().as_second()
 }
 
+/// The clock as the status files spell it: `2026-09-15T08:30:00Z`.
+pub fn utc_now() -> String {
+    jiff::Timestamp::now()
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+        .to_string()
+}
+
 /// Seconds since the epoch, 0 when there is nothing there.
 pub fn mtime(p: &Path) -> i64 {
     std::fs::metadata(p)

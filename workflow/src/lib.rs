@@ -40,6 +40,7 @@ pub mod status;
 pub mod sys;
 pub mod testdecl;
 pub mod verify;
+pub mod wait;
 
 use clap::Parser;
 
@@ -123,6 +124,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
         Command::Accept { task } => run::cmd_accept(&task),
         Command::Status { json } => status::cmd_status(json),
+        Command::Wait { timeout, merges } => wait::cmd_wait(timeout, merges),
         Command::PlanCheck { file, json } => cmd_plan_check(&file, json),
         Command::Ownership {
             repo,

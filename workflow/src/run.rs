@@ -1470,7 +1470,7 @@ impl Run {
                         ));
                     }
                     2 => {
-                        self.fail_task(task, &why);
+                        self.fail_task_quiet(task, &why);
                         let model = self.fix_model.clone().or_else(|| self.review_model.clone());
                         if let Some(m) = &model {
                             write_field(&self.dir, task, "model", m);
@@ -1595,6 +1595,7 @@ impl Run {
         self.stop(task);
         self.set_state(task, MERGED);
         warn(format!("task {task}: merged onto {}", self.int_branch));
+        self.event(&format!("merged {task}"));
         self.tick_off(task);
         memcli::log_run(&format!("run {}: merged {task}", self.plan.plan_id));
     }
@@ -1740,10 +1741,37 @@ impl Run {
         }
     }
 
+    /// One line the orchestrator wants to hear about, appended to the run
+    /// dir's `events` file for `workflow wait` to block on: a question, a
+    /// task failed for good, a merge, the end of the run. Stderr says
+    /// everything; this says what needs somebody.
+    pub fn event(&self, line: &str) {
+        let path = self.dir.join("events");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "{} {line}", sys::utc_now());
+        }
+    }
+
     /// Failed for good as far as this run can tell: the worker's session is
     /// stopped with it, so a pane does not stand idle for an hour over a task
-    /// nobody is sending back. [`Run::fail_task_keep`] is the other case.
+    /// nobody is sending back, and the orchestrator is told. The other
+    /// cases: [`Run::fail_task_keep`] for a task something is about to be
+    /// sent back to, [`Run::fail_task_quiet`] for one the run itself
+    /// dispatches again.
     fn fail_task(&self, task: &str, why: &str) {
+        self.stop(task);
+        self.fail_task_keep(task, why);
+        self.event(&format!("failed {task} -- {why}"));
+    }
+
+    /// Failed and stopped, and not an event: the run dispatches it again by
+    /// itself on the next free slot.
+    fn fail_task_quiet(&self, task: &str, why: &str) {
         self.stop(task);
         self.fail_task_keep(task, why);
     }
@@ -1819,6 +1847,7 @@ impl Run {
                     && let Some(asked) = self.question_in(task, &note) =>
             {
                 self.fail_task_keep(task, &asked);
+                self.event(&format!("question {task} -- {asked}"));
                 return;
             }
             // A worker that committed and then reported something other than
@@ -3174,6 +3203,9 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         "run {}: {merged} merged, {failed} failed, {blocked} never started",
         run.plan.plan_id
     ));
+    run.event(&format!(
+        "ended {merged} merged, {failed} failed, {blocked} never started"
+    ));
     let sizing: Vec<String> = run
         .plan
         .ids()
@@ -3275,6 +3307,10 @@ fn shutdown(run: &Run) -> i32 {
     memcli::log_run(&format!(
         "run {}: stopped by signal with {} worker(s) ended",
         run.plan.plan_id,
+        live.len()
+    ));
+    run.event(&format!(
+        "ended stopped by signal with {} worker(s) left dispatched",
         live.len()
     ));
     exit::FAILED

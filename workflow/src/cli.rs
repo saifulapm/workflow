@@ -117,6 +117,31 @@ state change. --json is the shape a session that owns a run polls."
         #[arg(long)]
         json: bool,
     },
+    /// Block until the live run needs the orchestrator, and say what for.
+    #[command(
+        long_about = "Block until the live run needs the orchestrator, and say what for.
+
+The run appends one line per event to its run dir -- a worker's question, a
+task failed for good, a merge, the end of the run -- and this waits on that
+file, printing each new line, and exits the moment there is something to act
+on. Exit 2: a question is pending (`mem questions --pending --for
+orchestrator`, then `mem answer`). Exit 1: a task failed and the run will not
+retry it by itself; `workflow status` says why. Exit 0: the run ended, or no
+run is live here. Exit 4: a merge, only under --merges. Exit 3: --timeout
+passed with nothing new. A cursor in the run dir remembers what was already
+reported, so calling this again after acting picks up where it left off.
+
+Meant to be run in a background shell that wakes the session when it exits;
+nothing here sleeps on a fixed clock."
+    )]
+    Wait {
+        /// Give up after this many seconds with exit 3.
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u64>,
+        /// Return on each merge too, with exit 4.
+        #[arg(long)]
+        merges: bool,
+    },
     /// Check this machine's wiring.
     Doctor,
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
