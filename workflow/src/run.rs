@@ -3237,13 +3237,32 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
 
     run.cleanup();
 
+    let ids = run.plan.ids();
+    let fixes: u64 = ids
+        .iter()
+        .map(|t| run.field(t, "reviews").parse().unwrap_or(0))
+        .sum();
+    let readings: u64 = fixes
+        + ids
+            .iter()
+            .filter(|t| !run.field(t, "merged").is_empty() || !run.field(t, "review").is_empty())
+            .count() as u64;
+    let context: u64 = ids
+        .iter()
+        .map(|t| run.field(t, "context").parse().unwrap_or(0))
+        .sum();
+
     warn(format!(
         "run {}: {merged} merged, {failed} failed, {blocked} never started",
         run.plan.plan_id
     ));
-    run.event(&format!(
-        "ended {merged} merged, {failed} failed, {blocked} never started"
-    ));
+    let ended = format!(
+        "ended {merged} merged, {failed} failed, {blocked} never started, \
+{readings} readings, {fixes} fix verdicts, {} context",
+        tokens(context)
+    );
+    run.event(&ended);
+    memcli::log_run(&format!("run {}: {ended}", run.plan.plan_id));
     let sizing: Vec<String> = run
         .plan
         .ids()
