@@ -97,4 +97,4 @@ task. Self-review: every requirement points at a task, and a name two tasks
 share is spelled identically in both.
 
 ## 5. One approval checkpoint
-Present it once, whole; `implement` or `workflow run` takes it after approval.
+Present it once, whole; `implement` takes it after approval.

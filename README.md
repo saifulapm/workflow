@@ -93,10 +93,13 @@ Three sizes of work, three moves:
 - **Small change** — just ask a session for it. Route makes it a one-shot:
   implement, `workflow verify`, one commit, one `mem log` line. No ceremony.
 - **Feature** — say "plan this". Answer one round of questions, approve the
-  plan once, and either let the session build it task by task or hand the
-  plan to a run.
-- **A whole plan in parallel** — tell a session "orchestrate the <plan-id>
-  run". It starts `workflow run`, reads `workflow status`, decides retries
+  plan once, and let the session build it task by task. Measured
+  2026-09-15: one strong session landed three milestones in the time a run
+  spent on one task's fix rounds, so a run is for the case below only.
+- **A whole plan in parallel** — for tasks independent enough to run three
+  wide on a machine that carries three workers, with workers on the
+  strongest model and no reader unless the project's numbers earn one: tell
+  a session "orchestrate the <plan-id> run". It starts `workflow run`, reads `workflow status`, decides retries
   and cleanup itself, and asks you only what is genuinely yours. Workers are
   amx agents in tmux panes, listed by `amx ls` and watched with
   `amx attach <id>`. Workers run

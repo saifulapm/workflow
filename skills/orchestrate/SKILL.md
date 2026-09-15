@@ -10,6 +10,11 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 
 ## Ground rules
 
+- A run is the exception. A milestone is one strong session with
+  `implement` unless its tasks are independent enough to run three wide on
+  a machine that carries three workers; then workers on the strongest model
+  and `review-model none`, since fix rounds cost more than the defects they
+  catch (measured 2026-09-15).
 - One run per session: one plan, or one milestone of a `roadmap`.
   Never edit project code or write in a worktree; your hands are
   `workflow`, `mem` and the plan of record.

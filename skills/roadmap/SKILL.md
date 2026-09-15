@@ -70,8 +70,14 @@ milestones before it have landed and the tree has moved under it. The check
 reads the plan of record itself, because `--from` writes it into mem's store
 and a `plan.md` in the checkout is some earlier session's leftover.
 
-Then `orchestrate` owns the run. A run that merges every task ticks its
-milestone off in the roadmap by itself.
+Then this session builds it with `implement`, task by task on main: `mem
+plan --tick <task>` after each commit, `mem roadmap --tick <slug>` when the
+last one lands. Measured 2026-09-15: one strong session landed three
+milestones in the time a run spent on one task's fix rounds. Hand a plan to
+`orchestrate` only when its tasks are independent enough to run three wide
+and the machine can carry three workers -- workers on the strongest model,
+`review-model none` -- and a run that merges every task ticks the milestone
+itself.
 
 ## 4. Drift
 
