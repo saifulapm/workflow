@@ -547,6 +547,33 @@ fn reindex_in(tx: &Transaction<'_>, store: &Store, full: bool) -> Result<Reindex
         [],
     )?;
     tx.execute("DELETE FROM seen", [])?;
+    for path in &files {
+        tx.execute(
+            "INSERT OR IGNORE INTO seen(path) VALUES(?1)",
+            params![path.to_string_lossy().to_string()],
+        )?;
+    }
+
+    // The delete phase runs first, before anything is inserted. An item that
+    // moved between two directories -- the one repair the store has, since a
+    // note's project is the directory it sits in -- is the same id at a new
+    // path, and inserting the new row while the old path's row was still there
+    // failed the whole pass on `items.id UNIQUE`. A store root that is not
+    // there yet is not a store full of deletions.
+    if store_present {
+        let stale: Vec<i64> = {
+            let mut stmt =
+                tx.prepare("SELECT rowid FROM items WHERE path NOT IN (SELECT path FROM seen)")?;
+            let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for rowid in stale {
+            delete_row(tx, rowid)?;
+            outcome.deleted += 1;
+        }
+    } else {
+        outcome.delete_phase_skipped = true;
+    }
 
     for path in &files {
         let path_text = path.to_string_lossy().to_string();
@@ -554,10 +581,6 @@ fn reindex_in(tx: &Transaction<'_>, store: &Store, full: bool) -> Result<Reindex
             continue;
         };
         let current = stamp(&meta);
-        tx.execute(
-            "INSERT OR IGNORE INTO seen(path) VALUES(?1)",
-            params![path_text],
-        )?;
 
         let previous = known.get(&path_text).copied();
         if !full && previous.is_some_and(|(_, s)| s == current) {
@@ -579,22 +602,6 @@ fn reindex_in(tx: &Transaction<'_>, store: &Store, full: bool) -> Result<Reindex
         }
         insert_row(tx, store, &registry, path, &path_text, current, &item)?;
         outcome.indexed += 1;
-    }
-
-    // A store root that is not there yet is not a store full of deletions.
-    if store_present {
-        let stale: Vec<i64> = {
-            let mut stmt =
-                tx.prepare("SELECT rowid FROM items WHERE path NOT IN (SELECT path FROM seen)")?;
-            let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        for rowid in stale {
-            delete_row(tx, rowid)?;
-            outcome.deleted += 1;
-        }
-    } else {
-        outcome.delete_phase_skipped = true;
     }
 
     // `active` and `superseded_by` derive from the supersedes edges and the

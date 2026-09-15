@@ -101,6 +101,41 @@ fn a_deleted_file_leaves_no_row_and_no_fts_hit() {
     assert_eq!(fts_hits(&index, "keepertoken"), 1);
 }
 
+/// A note's project is the directory it sits in, so filing a misfiled one is a
+/// move: the same id at a new path. The pass has to lose the old path before it
+/// writes the new one, or the insert collides with the row still standing at
+/// the old path and takes the whole reindex down with `items.id UNIQUE`.
+#[test]
+fn an_item_moved_between_projects_reindexes_under_its_new_one() {
+    let w = World::new("idx-moved");
+    let from = w.project("01K2AAAAAAAAAAAAAAAAAAAAAA", "from");
+    let to = w.project("01K2BBBBBBBBBBBBBBBBBBBBBB", "to");
+    let store = w.store();
+    let mut it = item(Kind::Fact, "misfiled", "movingtoken belongs elsewhere");
+    let old_path = put(&store, Some(&from), &it);
+
+    reindex(&w);
+    let index = open_read(&w);
+    assert_eq!(fts_hits(&index, "movingtoken"), 1);
+
+    it.meta.project = Some("to".to_string());
+    let new_path = store.write_item(&store.project_items(&to), &it).unwrap();
+    std::fs::remove_file(&old_path).unwrap();
+    assert_ne!(old_path, new_path);
+
+    let outcome = index
+        .reindex(&store, false)
+        .expect("a move is not a failure");
+    assert_eq!(outcome.indexed, 1);
+    assert_eq!(outcome.deleted, 1);
+    assert_eq!(index.count_items().unwrap(), 1);
+    assert_eq!(fts_hits(&index, "movingtoken"), 1);
+
+    let rows = index.recent("fact", Some(&to), 5).unwrap();
+    assert_eq!(rows.len(), 1, "it is the new project's now");
+    assert!(index.recent("fact", Some(&from), 5).unwrap().is_empty());
+}
+
 #[test]
 fn a_same_size_edit_is_detected_and_the_old_text_stops_matching() {
     let w = World::new("idx-edit");
