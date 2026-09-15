@@ -15,9 +15,10 @@ stop condition, not a lane, and it comes first: ask, do not choose.
 
 ## Then, blast radius
 
-Zero blast radius means all five hold: no unintended consequence elsewhere ·
-the intent needs no questions asked · no architectural decision · no new
-dependency · no public contract changed (API, schema, signature, CLI).
+Zero blast radius means all five are true: no plausible path to an unintended
+consequence elsewhere · the intent is clear enough that you would ask no
+questions · no architectural decision · no new dependency · no public contract
+changed (API, schema, exported signature, CLI surface).
 
 Uncertain about any of them means not zero. Uncertainty fails upward, into the
 plan lane, because that is the cheap direction to be wrong in.
@@ -32,11 +33,10 @@ however small the diff looks. Exit 1 leaves the judgement above standing.
 
 ## Zero → the one-shot lane
 
-Implement it, then `workflow verify` (0 green · 1 failed · 2 no verifier ·
-3 test removal). Past sixty lines, or a `review-needed` diff, `workflow
-read` runs first; under that the suite is the floor. Commit in ordinary
-engineering voice, staging only the files this change touched. One `mem
-log` line: what changed, and why. No plan, no subagents, no questions.
+Implement it, then `workflow verify` (0 green · 1 failed · 2 no verifier · 3
+test removal). Past sixty lines, or a `review-needed` diff, `workflow read`
+runs first; else the suite is the floor. Commit plainly, staging touched
+files, one `mem log` line: what and why. No plan, no subagents, no questions.
 
 ## Non-zero → the plan lane
 

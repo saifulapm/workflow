@@ -29,10 +29,11 @@ Merged with the table, never replacing it.
     workflow read [--range <r>] [--against <text|wiki:slug>]
 
 Run before the commit: the same reader the merge gate uses, over the working
-tree or the range. Exit 0 (`ship`) means commit. Exit 1 (`fix`) means the
-answer carries `[blocks]` findings — fix them, then read again. Two reads
-with a `[blocks]` finding still open is not a third read: it is the
-ruling-and-ask stop — `mem save --kind ruling` naming what is unresolved,
-`mem ask` to the human. Exit 2 names no reader configured (`mem project set
-review-model`); exit 3 is the deadline or a session that ended with no
-verdict, naming the answer file to read by hand.
+tree or the range. Exit 0 (`ship`) means commit — file any `[later]`
+findings with `mem save` first, so nothing true is lost. Exit 1 (`fix`)
+means the answer carries `[blocks]` findings — fix them, then read again.
+Two reads with a `[blocks]` finding still open is not a third read: it is
+the ruling-and-ask stop — `mem save --kind ruling` naming what is
+unresolved, `mem ask` to the human. Exit 2 names no reader configured (`mem
+project set review-model`); exit 3 means no verdict came back, the reason
+on stderr.
