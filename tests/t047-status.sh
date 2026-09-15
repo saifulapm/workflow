@@ -35,6 +35,7 @@ printf '2\n' >"$rundir/t1.reviews"
 printf 'failed\n' >"$rundir/t2.state"
 printf 'the suite is red once the change sits on integration\n' >"$rundir/t2.failed"
 printf '2\n' >"$rundir/t2.dispatches"
+printf '4000\n' >"$rundir/t2.context"
 printf '2026-08-21T10:00:00Z blocked waiting on an answer\n' >"$rundir/t2.status"
 printf 'pending\n' >"$rundir/t3.state"
 printf 'dispatched\n' >"$rundir/t4.state"
@@ -64,6 +65,7 @@ unlike "$OUT" '"spend"' 'and no spend field'
 like "$OUT" '"live": *false' 'nobody holds the run lock'
 like "$OUT" '"readings": *3' 'json sums readings for the run: 2 fix verdicts plus 1 task read to a merge'
 like "$OUT" '"fixes": *2' 'json sums the fix verdicts for the run'
+like "$OUT" '"context": *162502' 'json sums context for the run, distinct from any one task'
 
 # A held lock is a live orchestrator.
 if command -v flock >/dev/null 2>&1; then
