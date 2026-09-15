@@ -33,9 +33,10 @@ of them committed:
     cd ~/Sites/github/thing
     mem log "picking this up"        # first write registers the project
 
-    # the four route lines, kept out of git for good:
-    printf 'CLAUDE.md\n.claude/\n' >> .git/info/exclude
-    $EDITOR CLAUDE.md                # copy the block from any other project
+    # the route lines, kept out of git for good:
+    printf 'AGENTS.md\nCLAUDE.md\n.claude/\n' >> .git/info/exclude
+    $EDITOR AGENTS.md                # copy the block from any other project
+    printf '@AGENTS.md\n' > CLAUDE.md  # pi, codex and opencode read AGENTS.md; Claude Code imports it
 
     mem project set verify "pnpm test"          # what green means here
     mem project set review-paths "scripts/**"   # extra risky globs, optional
@@ -202,7 +203,7 @@ compacting.
 2. Move the knowledge worth keeping into mem: each decision or gotcha as one
    `mem save`, the current state as `mem status --set`, the next action as
    `mem handoff --set`. Skip anything the code or git log already says.
-3. Do the three-step start above (register, CLAUDE.md via info/exclude,
+3. Do the three-step start above (register, AGENTS.md via info/exclude,
    verifier).
 4. Commit the deletions in ordinary voice; the gate is already watching.
 
