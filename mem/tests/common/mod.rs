@@ -60,6 +60,11 @@ impl World {
         }
     }
 
+    /// Where `mem doctor` looks for pi's extension in a test.
+    pub fn pi_agent_dir(&self) -> PathBuf {
+        self.dir.join("pi-agent")
+    }
+
     pub fn store(&self) -> mem::store::Store {
         mem::store::Store::new(self.dirs().store())
     }
@@ -140,6 +145,10 @@ pub fn mem(w: &World, cwd: &Path, args: &[&str]) -> std::process::Output {
 /// The same, with extra environment — the seams (`MEM_SYNC_CMD`,
 /// `MEM_NOTIFY_CMD`) that keep a test from shelling out to the real thing.
 ///
+/// `PI_AGENT_DIR` points inside the World because pi's extension directory is
+/// the one path mem does not take from XDG: without it `mem doctor` reads, and
+/// `--fix` writes, the developer's own `~/.pi`. A caller that names it wins.
+///
 /// `WORKFLOW_TASK` and `CARGO_TARGET_DIR` are stripped so a test run inside a
 /// task worktree — where both are already set for the outer cargo process —
 /// does not leak them into the mem it spawns.
@@ -152,6 +161,7 @@ pub fn mem_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> st
         .env("XDG_CACHE_HOME", &dirs.cache)
         .env("XDG_STATE_HOME", &dirs.state)
         .env("XDG_CONFIG_HOME", &dirs.config)
+        .env("PI_AGENT_DIR", w.pi_agent_dir())
         .env_remove("MEM_SESSION_ID")
         .env_remove("WORKFLOW_TASK")
         .env_remove("CARGO_TARGET_DIR");

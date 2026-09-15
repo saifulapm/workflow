@@ -76,22 +76,6 @@ fn page(w: &World, slug: &str, text: &str) {
     std::fs::write(dir.join(format!("{slug}.md")), text).unwrap();
 }
 
-/// `mem doctor`, always with a World-local `PI_AGENT_DIR`. doctor reads the pi
-/// extension and `--fix` writes it; the default path is the developer's own
-/// `~/.pi`, which no test may touch.
-fn doctor(w: &World, cwd: &Path, args: &[&str]) -> std::process::Output {
-    doctor_env(w, cwd, args, &[])
-}
-
-fn doctor_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
-    let pi_dir = w.dir.join("pi-agent");
-    let mut argv = vec!["doctor"];
-    argv.extend_from_slice(args);
-    let mut vars = vec![("PI_AGENT_DIR", pi_dir.to_str().unwrap())];
-    vars.extend_from_slice(env);
-    mem_env(w, cwd, &argv, &vars)
-}
-
 fn details(out: &std::process::Output, check: &str) -> Vec<String> {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json output");
     v["findings"]
@@ -198,7 +182,7 @@ fn doctor_reports_strays_conflicts_forks_and_secrets() {
         &item(Kind::Fact, "leaky", "AKIAIOSFODNN7EXAMPLE is in here"),
     );
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
     assert_eq!(code(&out), 0, "findings are exit 0");
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let checks: Vec<&str> = v["findings"]
@@ -243,7 +227,7 @@ fn doctor_names_the_item_files_nothing_can_read() {
         "the reindex counts them"
     );
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
     assert_eq!(code(&out), 0, "findings are exit 0");
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let unreadable: Vec<String> = v["findings"]
@@ -297,7 +281,7 @@ fn doctor_reads_the_wiki() {
         "# Deploy\n\nThe key is AKIAIOSFODNN7EXAMPLE, apparently.\n",
     );
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
     assert_eq!(code(&out), 0, "findings are exit 0");
 
     let links = details(&out, "wiki link");
@@ -354,7 +338,7 @@ fn a_tidy_wiki_gives_doctor_nothing_to_say() {
          and its [README](README.md).\n",
     );
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
     assert_eq!(code(&out), 0);
     for check in ["wiki link", "wiki index", "wiki size", "secret"] {
         assert!(
@@ -385,7 +369,7 @@ fn a_stub_that_left_the_index_is_not_drift() {
     // Short and out of the index but pointing nowhere: still drift.
     page(&w, "shipping", "# Shipping\n\nZones, and nothing else.\n");
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
     assert_eq!(code(&out), 0);
 
     let drift = details(&out, "wiki index");
@@ -407,7 +391,7 @@ fn a_wiki_with_no_index_page_is_one_finding_rather_than_one_per_page() {
     page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
     page(&w, "shipping", "# Shipping\n\nZones, and nothing else.\n");
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
     let drift = details(&out, "wiki index");
     assert_eq!(
         drift.len(),
@@ -470,7 +454,7 @@ fn a_newer_store_refuses_writes_and_still_serves_reads() {
 
     let out = mem(&w, &repo, &["search", "fact"]);
     assert_eq!(code(&out), 0, "reads must still work");
-    let out = doctor(&w, &repo, &[]);
+    let out = mem(&w, &repo, &["doctor"]);
     assert!(stdout(&out).contains("version"), "{}", stdout(&out));
 
     // §3 asks reads to degrade rather than refuse, and to say so in one line —
@@ -492,10 +476,10 @@ fn the_outbox_holds_a_write_the_store_could_not_take_and_doctor_replays_it() {
     maint::spool(&outbox, &spooled).unwrap();
     assert_eq!(maint::outbox_backlog(&outbox).len(), 1);
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &[]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor"]);
     assert!(stdout(&out).contains("spooled write"), "{}", stdout(&out));
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--fix"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--fix"]);
     assert_eq!(code(&out), 0);
     assert!(stdout(&out).contains("replayed 1"), "{}", stdout(&out));
     assert!(maint::outbox_backlog(&outbox).is_empty());
@@ -783,10 +767,10 @@ fn doctor_reports_the_missing_adapter_hooks() {
             "PreCompact": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem precompact --hook-json || true"}]}]
         }}"#,
     );
-    let out = doctor_env(
+    let out = mem_env(
         &w,
         &cwd,
-        &["--json"],
+        &["doctor", "--json"],
         &[("CLAUDE_CONFIG_DIR", wired.to_str().unwrap())],
     );
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
@@ -801,10 +785,10 @@ fn doctor_reports_the_missing_adapter_hooks() {
             "PostToolBatch": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context --brief --hook-json || true"}]}]
         }}"#,
     );
-    let out = doctor_env(
+    let out = mem_env(
         &w,
         &cwd,
-        &["--json"],
+        &["doctor", "--json"],
         &[("CLAUDE_CONFIG_DIR", half_wired.to_str().unwrap())],
     );
     let hooks = details(&out, "hooks");
@@ -814,10 +798,10 @@ fn doctor_reports_the_missing_adapter_hooks() {
     // No settings file at all: one finding naming the path.
     let missing = w.dir.join("claude-missing");
     std::fs::create_dir_all(&missing).unwrap();
-    let out = doctor_env(
+    let out = mem_env(
         &w,
         &cwd,
-        &["--json"],
+        &["doctor", "--json"],
         &[("CLAUDE_CONFIG_DIR", missing.to_str().unwrap())],
     );
     let hooks = details(&out, "hooks");
@@ -834,44 +818,45 @@ fn doctor_reports_the_pi_extension_missing_stale_and_written() {
     let w = World::new("maint-pi-extension");
     w.project(P, "thing");
     let cwd = w.plain_dir("cwd");
-    let pi_dir = w.dir.join("pi-agent");
+    let pi_dir = w.pi_agent_dir();
     let extension_path = pi_dir.join("extensions/mem.ts");
 
     // Missing: one finding naming the path.
-    let out = doctor(&w, &cwd, &["--json"]);
+    let out = mem(&w, &cwd, &["doctor", "--json"]);
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     let missing = details(&out, "pi extension");
     assert_eq!(missing.len(), 1, "{missing:?}");
     assert!(missing[0].contains("missing"), "{missing:?}");
 
     // --fix writes it, matching what this binary ships byte for byte, and the
-    // shipped extension wires all four events the ruling names.
-    let out = doctor(&w, &cwd, &["--fix", "--json"]);
+    // shipped extension wires the three events the ruling names.
+    let out = mem(&w, &cwd, &["doctor", "--fix", "--json"]);
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     assert!(extension_path.exists());
     let written = std::fs::read_to_string(&extension_path).unwrap();
     assert_eq!(written, maint::PI_EXTENSION);
-    for event in [
-        "before_agent_start",
-        "tool_result",
-        "session_before_compact",
-        "agent_settled",
-    ] {
-        assert!(written.contains(event), "{event} missing: {written}");
+    for event in ["before_agent_start", "tool_result", "agent_settled"] {
+        assert!(written.contains(&format!("pi.on(\"{event}\"")), "{written}");
     }
+    // The compaction seam stays open: pi 0.85.1 has no way to hand mem's
+    // instruction to the summarizer without killing the turn.
+    assert!(
+        !written.contains("pi.on(\"session_before_compact\""),
+        "{written}"
+    );
 
     // A second doctor, against a matching copy, has nothing to say.
-    let out = doctor(&w, &cwd, &["--json"]);
+    let out = mem(&w, &cwd, &["doctor", "--json"]);
     assert!(details(&out, "pi extension").is_empty(), "{}", stdout(&out));
 
     // Stale: an edited copy is reported again, and --fix overwrites it.
     std::fs::write(&extension_path, "// edited\n").unwrap();
-    let out = doctor(&w, &cwd, &["--json"]);
+    let out = mem(&w, &cwd, &["doctor", "--json"]);
     let stale = details(&out, "pi extension");
     assert_eq!(stale.len(), 1, "{stale:?}");
     assert!(stale[0].contains("stale"), "{stale:?}");
 
-    let out = doctor(&w, &cwd, &["--fix", "--json"]);
+    let out = mem(&w, &cwd, &["doctor", "--fix", "--json"]);
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     assert_eq!(
         std::fs::read_to_string(&extension_path).unwrap(),
@@ -891,7 +876,7 @@ fn a_pi_extension_that_cannot_be_written_leaves_the_rest_of_the_fixes_alone() {
     spooled.meta.project = Some("thing".to_string());
     maint::spool(&outbox, &spooled).unwrap();
 
-    let pi_dir = w.dir.join("pi-agent");
+    let pi_dir = w.pi_agent_dir();
     std::fs::create_dir_all(&pi_dir).unwrap();
     std::fs::set_permissions(&pi_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
     // A run as root ignores the mode, and then there is nothing here to see.
@@ -900,7 +885,7 @@ fn a_pi_extension_that_cannot_be_written_leaves_the_rest_of_the_fixes_alone() {
         return;
     }
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--fix", "--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--fix", "--json"]);
     std::fs::set_permissions(&pi_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
@@ -934,7 +919,7 @@ fn doctor_flags_broken_child_projects_and_context_stays_separated() {
     assert!(ctx.contains("root work"), "{ctx}");
     assert!(!ctx.contains("child work"), "{ctx}");
 
-    let out = doctor(&w, &w.plain_dir("cwd"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let checks: Vec<&str> = v["findings"]
         .as_array()
@@ -976,7 +961,7 @@ fn doctor_flags_broken_child_projects_and_context_stays_separated() {
     gone.subdir = Some("apps/vanished".to_string());
     mem::project::write_project(&store, &gone).unwrap();
 
-    let out = doctor(&w, &w.plain_dir("cwd2"), &["--json"]);
+    let out = mem(&w, &w.plain_dir("cwd2"), &["doctor", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let details: Vec<String> = v["findings"]
         .as_array()

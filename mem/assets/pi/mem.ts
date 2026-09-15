@@ -3,8 +3,14 @@
 // mem writes this file and `mem doctor --fix` puts it back the way it ships, so
 // an edit here is an edit that goes. It does for pi what mem's Claude hooks do
 // for Claude Code: brief the first prompt of a session, steer every fifth tool
-// result with mem's context, hand a compaction summarizer mem's instruction,
-// and nudge a session that settled without writing anything down.
+// result with mem's context, and nudge a session that settled without writing
+// anything down.
+//
+// The fourth Claude hook, PreCompact, has no counterpart here: in pi 0.85.1 a
+// session_before_compact handler can only cancel the compaction or hand back a
+// whole summary of its own, and ctx.compact aborts the turn it was called
+// from, so there is no way to give the summarizer mem's one instruction
+// without stopping the work. The seam stays open until pi grows one.
 //
 // Every command is fire-and-forget where nothing waits on it, and nothing
 // here throws.
@@ -78,7 +84,6 @@ function steer(pi, content: string): void {
 export default function (pi: ExtensionAPI) {
   let firstPrompt = true;
   let batches = 0;
-  let compacting = false;
 
   pi.on("session_start", () => {
     firstPrompt = true;
@@ -99,21 +104,6 @@ export default function (pi: ExtensionAPI) {
     const id = sessionId(ctx);
     if (!id) return;
     steer(pi, await run(["context", "--brief", "--session-id", id]));
-  });
-
-  // pi 0.85.1 reads no instructions off this event -- only off ctx.compact --
-  // so a threshold compaction is cancelled and rerun through it instead. A
-  // manual or overflow compaction, or one already in flight, runs as pi's
-  // own default.
-  pi.on("session_before_compact", async (event, ctx) => {
-    if (event.reason !== "threshold" || compacting) return;
-    compacting = true;
-    const clear = () => {
-      compacting = false;
-    };
-    const customInstructions = await run(["precompact"]);
-    ctx.compact({ customInstructions, onComplete: clear, onError: clear });
-    return { cancel: true };
   });
 
   // Without an id there is nothing to check: a bare `session-check` would read
