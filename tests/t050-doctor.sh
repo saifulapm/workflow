@@ -164,9 +164,7 @@ like "$OUT" 'skill route.*frontmatter is' 'an oversized frontmatter is a finding
 
 # An installed machine runs a copied binary: no checkout above the exe, so the
 # hook-identity comparison has nothing to compare against. Doctor must say so
-# instead of healthy, and must still catch a foreign hook squatting on a slot
-# -- git-lfs writes its own pre-push into a global hooksPath
-# (friction #13D9MGCP).
+# instead of healthy.
 {
 	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
 	printf 'short body\n'
@@ -174,26 +172,8 @@ like "$OUT" 'skill route.*frontmatter is' 'an oversized frontmatter is a finding
 cp -L "$T_TMP/bin/workflow" "$T_TMP/installed-workflow"
 chmod +x "$T_TMP/installed-workflow"
 
-ghooks="$T_TMP/ghooks"
-mkdir -p "$ghooks"
-ln -sf "$HOOKS/pre-commit" "$ghooks/pre-commit"
-ln -sf "$HOOKS/commit-msg" "$ghooks/commit-msg"
-write_exec "$ghooks/pre-push" <<'EOF'
-#!/bin/sh
-command -v git-lfs >/dev/null 2>&1 || exit 0
-git lfs pre-push "$@"
-EOF
-git config --global core.hooksPath "$ghooks"
-
-run workflow doctor
-is "$RC" 1 'a checkout binary flags the foreign file by path'
-like "$OUT" 'hook pre-push.*does not resolve' 'and says where it points instead'
-
 run "$T_TMP/installed-workflow" doctor
 is "$RC" 1 'the installed binary has findings too'
-like "$OUT" 'hook pre-push.*never invokes' 'the foreign pre-push is caught by content'
-like "$OUT" 'git lfs update' 'and the remedy moves lfs into per-repo hooks'
-unlike "$OUT" 'hook pre-commit' 'the real stubs pass the content check'
 like "$OUT" 'WORKFLOW_HOME' 'unverifiable identity and budgets are said out loud'
 unlike "$OUT" 'healthy' 'an unverifiable machine is not called healthy'
 
@@ -229,23 +209,21 @@ git config --global core.hooksPath "$wfhooks"
 run "$T_TMP/installed-workflow" doctor
 unlike "$OUT" 'no workflow checkout found' \
 	'a checkout holding hooks/pre-commit and skills/ answers the third door'
-unlike "$OUT" 'does not resolve' 'and the stubs resolve to its own hooks'
 like "$OUT" 'skill route .*within budget' 'and the root it names is read for its own skills'
 
 # A linked worktree of that checkout must still resolve to the main checkout,
-# not to itself: every worktree the orchestrator makes is a full tree, so
-# hooks/pre-commit and skills/ sit on the worktree too, and a marker check
-# alone would not catch door three naming the worktree by mistake -- only the
-# hooks it actually resolves against does (review 2's regression).
+# not to itself: every worktree the orchestrator makes is a full tree, so a
+# marker check alone would not catch door three naming the worktree by
+# mistake (review 2's regression).
 git worktree add -q ../workflow-wt -b wt-branch
 cd "$T_TMP/workflow-wt" || exit 1
 run "$T_TMP/installed-workflow" doctor
-unlike "$OUT" 'does not resolve' \
-	'from a linked worktree, the stubs still resolve to the main checkout'
+unlike "$OUT" 'no workflow checkout found' \
+	'from a linked worktree, door three still answers'
 like "$OUT" 'skill route .*within budget' 'and the skills read are the main checkout'\''s'
 cd "$T_TMP" || exit 1
 
-git config --global core.hooksPath "$ghooks"
+git config --global core.hooksPath "$HOOKS"
 
 # The poshra repro from review 1 of doctor: an unrelated repo standing at
 # this cwd, with neither marker, must still be refused.
@@ -254,3 +232,56 @@ run "$T_TMP/installed-workflow" doctor
 is "$RC" 1 'an unrelated repo with neither marker is still a finding'
 like "$OUT" 'no workflow checkout found' 'the third door refuses it'
 cd "$T_TMP" || exit 1
+
+## ------------------------------------------- the embedded skills and stubs
+
+# A bare HOME has none of the eight skills in either harness directory, and
+# none of the three hook stubs at the fixed git hooks path: nineteen entries
+# missing, none of them read through checkout() or WORKFLOW_SKILLS_DIR.
+export HOME="$T_TMP/embedded-home"
+mkdir -p "$HOME"
+
+run workflow doctor
+is "$RC" 1 'a bare HOME has findings'
+n=$(grep -c 'missing at' <<<"$OUT")
+is "$n" 19 'nineteen entries are missing: eight skills times two homes, plus three hooks'
+like "$OUT" 'skill route \(claude\).*missing at .*\.claude/skills/route/SKILL\.md' \
+	'a skill missing from the claude skills dir is named'
+like "$OUT" 'skill route \(agents\).*missing at .*\.agents/skills/route/SKILL\.md' \
+	'and the same skill missing from the agents skills dir'
+like "$OUT" 'hook pre-commit.*missing at .*\.config/git/hooks/pre-commit' \
+	'a missing hook stub is named too'
+
+run workflow doctor --fix
+n=$(grep -c '^  .* wrote ' <<<"$OUT")
+is "$n" 19 '--fix writes all nineteen'
+is "$(cat "$HOME/.claude/skills/route/SKILL.md")" "$(cat "$WF_ROOT/skills/route/SKILL.md")" \
+	'the claude copy matches the embedded text'
+is "$(cat "$HOME/.agents/skills/route/SKILL.md")" "$(cat "$WF_ROOT/skills/route/SKILL.md")" \
+	'and so does the agents copy'
+is "$(cat "$HOME/.config/git/hooks/pre-commit")" "$(cat "$WF_ROOT/hooks/pre-commit")" \
+	'and the hook stub'
+is "$(stat -c %a "$HOME/.config/git/hooks/pre-commit")" 755 'the stub is written executable'
+
+run workflow doctor
+unlike "$OUT" 'missing at' 'a second doctor after --fix finds nothing missing'
+unlike "$OUT" 'differs at' 'nor anything differing'
+unlike "$OUT" 'symlink at' 'nor a symlink'
+
+printf 'edited\n' >>"$HOME/.claude/skills/route/SKILL.md"
+run workflow doctor
+like "$OUT" 'skill route \(claude\).*differs at' 'an edited copy is reported as differing'
+unlike "$OUT" 'skill route \(agents\).*differs at' 'the untouched copy is not'
+
+rm "$HOME/.agents/skills/mem/SKILL.md"
+ln -s "$WF_ROOT/skills/mem/SKILL.md" "$HOME/.agents/skills/mem/SKILL.md"
+run workflow doctor
+like "$OUT" 'skill mem \(agents\).*symlink at' \
+	'a symlinked skill is reported as a symlink, not as healthy'
+
+run workflow doctor --fix
+like "$OUT" 'skill mem \(agents\).*wrote' 'fixing the symlink is one of the lines --fix prints'
+is "$([ -L "$HOME/.agents/skills/mem/SKILL.md" ] && echo symlink || echo 'regular file')" \
+	'regular file' 'the symlink is replaced by a plain copy'
+is "$(cat "$HOME/.agents/skills/mem/SKILL.md")" "$(cat "$WF_ROOT/skills/mem/SKILL.md")" \
+	'holding the embedded text'

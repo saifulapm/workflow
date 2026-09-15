@@ -153,7 +153,7 @@ pub fn run(cli: Cli) -> i32 {
             deadline,
             task,
         } => run::cmd_stalled(&rundir, &wtroot, &task, deadline),
-        Command::Doctor => doctor::cmd_doctor(),
+        Command::Doctor { fix } => doctor::cmd_doctor(fix),
         Command::SettingsMerge { file, dry_run } => {
             settings::cmd_settings_merge(file.as_deref(), dry_run)
         }

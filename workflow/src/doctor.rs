@@ -1,6 +1,8 @@
 //! `workflow doctor` -- what this machine's wiring actually says (spec §7, §11).
-//! It reports and never edits.
+//! Plain `doctor` only reports; `--fix` writes the embedded skills and hook
+//! stubs, the one edit this command makes.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -133,51 +135,6 @@ fn hooks(r: &mut Report) {
         );
     } else {
         r.note("hooks path", &installed);
-    }
-
-    let home = checkout();
-    for name in ["pre-commit", "commit-msg", "pre-push"] {
-        if installed.is_empty() {
-            continue;
-        }
-        let h = PathBuf::from(&installed).join(name);
-        if !gitcmd::exists_x(&h) {
-            r.finding(
-                &format!("hook {name}"),
-                format!("missing or not executable at {}", h.display()),
-            );
-            continue;
-        }
-        let target = paths::realpath(&h).unwrap_or_else(|| h.clone());
-        match &home {
-            Some(home) => {
-                if target != home.join("hooks").join(name) {
-                    r.finding(
-                        &format!("hook {name}"),
-                        format!(
-                            "does not resolve to this checkout's hooks/{name} (it is {})",
-                            target.display()
-                        ),
-                    );
-                }
-            }
-            // No checkout to compare paths against, so judge the slot by what
-            // the file does: the stub's whole job is to exec `workflow hook`,
-            // and a hook that never does was written by something else --
-            // git-lfs installs its own pre-push here (friction #13D9MGCP).
-            None => {
-                let text = std::fs::read_to_string(&h).unwrap_or_default();
-                if !text.contains("workflow hook") {
-                    r.finding(
-                        &format!("hook {name}"),
-                        format!(
-                            "{} never invokes `workflow hook`, so the gate is not on this slot -- move its owner into the repos' own hooks (git-lfs: `git lfs update` per repo; the stub chains to a repo's own hook with stdin intact) and symlink the checkout's hooks/{name} here",
-                            h.display()
-                        ),
-                    );
-                }
-            }
-        }
     }
 
     for repo in sites_checkouts() {
@@ -320,7 +277,125 @@ fn tools(r: &mut Report) {
     }
 }
 
-pub fn cmd_doctor() -> i32 {
+/// The skills this repo ships, embedded so a copied binary carries them
+/// wherever it runs (spec ruling 2): `doctor --fix` writes each verbatim to
+/// every harness's skills directory rather than relying on a symlink into a
+/// dev checkout.
+const SKILLS: [(&str, &str); 8] = [
+    ("implement", include_str!("../../skills/implement/SKILL.md")),
+    ("mem", include_str!("../../skills/mem/SKILL.md")),
+    (
+        "orchestrate",
+        include_str!("../../skills/orchestrate/SKILL.md"),
+    ),
+    ("plan", include_str!("../../skills/plan/SKILL.md")),
+    ("review", include_str!("../../skills/review/SKILL.md")),
+    ("roadmap", include_str!("../../skills/roadmap/SKILL.md")),
+    ("route", include_str!("../../skills/route/SKILL.md")),
+    ("unslop", include_str!("../../skills/unslop/SKILL.md")),
+];
+
+/// The three git hook stubs, embedded the same way.
+const STUBS: [(&str, &str); 3] = [
+    ("pre-commit", include_str!("../../hooks/pre-commit")),
+    ("commit-msg", include_str!("../../hooks/commit-msg")),
+    ("pre-push", include_str!("../../hooks/pre-push")),
+];
+
+/// The directory pi, codex and opencode all read, beside Claude Code's own.
+fn skill_dirs() -> [(&'static str, PathBuf); 2] {
+    [
+        ("claude", paths::home().join(".claude/skills")),
+        ("agents", paths::home().join(".agents/skills")),
+    ]
+}
+
+fn hooks_dir() -> PathBuf {
+    paths::home().join(".config/git/hooks")
+}
+
+enum Copy {
+    Missing,
+    Differs,
+    Symlink,
+}
+
+/// How `path` compares to the embedded `expected` text: `None` for a plain
+/// file that already holds exactly that text.
+fn compare(path: &Path, expected: &str) -> Option<Copy> {
+    if path.is_symlink() {
+        return Some(Copy::Symlink);
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) if text == expected => None,
+        Ok(_) => Some(Copy::Differs),
+        Err(_) => Some(Copy::Missing),
+    }
+}
+
+/// Write `expected` to `path` as a plain file: a symlink is removed rather
+/// than followed, and a differing file is overwritten. `mode` is applied
+/// after the write; the hook stubs need 755, a skill needs nothing beyond
+/// what the write gave it.
+fn write_copy(path: &Path, expected: &str, mode: Option<u32>) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if path.is_symlink() {
+        std::fs::remove_file(path)?;
+    }
+    std::fs::write(path, expected)?;
+    if let Some(mode) = mode {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
+}
+
+/// Report `path` as missing, differing or a symlink, or -- in `--fix` --
+/// write it and note the write. A healthy copy is silent either way.
+fn check_or_write(
+    r: &mut Report,
+    label: &str,
+    path: &Path,
+    expected: &str,
+    fix: bool,
+    mode: Option<u32>,
+) {
+    let Some(status) = compare(path, expected) else {
+        return;
+    };
+    if !fix {
+        let word = match status {
+            Copy::Missing => "missing",
+            Copy::Differs => "differs",
+            Copy::Symlink => "symlink",
+        };
+        r.finding(label, format!("{word} at {}", path.display()));
+        return;
+    }
+    match write_copy(path, expected, mode) {
+        Ok(()) => r.note(label, format!("wrote {}", path.display())),
+        Err(_) => r.finding(label, format!("could not write {}", path.display())),
+    }
+}
+
+/// The eight skills into both harness directories, and the three hook stubs,
+/// against the copy this binary carries (spec ruling 2, wiki seam 2).
+fn install(r: &mut Report, fix: bool) {
+    for (name, text) in SKILLS {
+        for (dest, dir) in skill_dirs() {
+            let path = dir.join(name).join("SKILL.md");
+            check_or_write(r, &format!("skill {name} ({dest})"), &path, text, fix, None);
+        }
+    }
+    let hooks = hooks_dir();
+    for (name, text) in STUBS {
+        let path = hooks.join(name);
+        check_or_write(r, &format!("hook {name}"), &path, text, fix, Some(0o755));
+    }
+}
+
+pub fn cmd_doctor(fix: bool) -> i32 {
     println!("workflow doctor");
     let mut r = Report::default();
     tools(&mut r);
@@ -336,6 +411,7 @@ pub fn cmd_doctor() -> i32 {
     hooks(&mut r);
     settings_keys(&mut r);
     budgets(&mut r);
+    install(&mut r, fix);
 
     if r.findings == 0 {
         println!("healthy: nothing to fix");

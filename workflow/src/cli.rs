@@ -143,7 +143,12 @@ nothing here sleeps on a fixed clock."
         merges: bool,
     },
     /// Check this machine's wiring.
-    Doctor,
+    Doctor {
+        /// Write the embedded skills and hook stubs where they are missing,
+        /// differ or are a symlink.
+        #[arg(long)]
+        fix: bool,
+    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
@@ -262,7 +267,9 @@ usage: workflow <command> [options]
   status [--json]
       report this project's runs: task states, spend, lock liveness
       0 reported · 2 outside a project
-  doctor
+  doctor [--fix]
+      --fix writes the embedded skills and hook stubs where they are missing,
+      differ or are a symlink
       0 healthy · 1 findings
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's
