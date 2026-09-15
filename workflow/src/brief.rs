@@ -177,6 +177,20 @@ pub(crate) fn pages_section(task_id: &str, pages: &[(String, Option<String>)]) -
     out
 }
 
+/// The page a change falsifies is the worker's to rewrite, said only when
+/// the plan names a page (ruling 3 of m4-lines).
+fn rewrite_sentence(pages: &[(String, Option<String>)]) -> &'static str {
+    if pages.is_empty() {
+        ""
+    } else {
+        " A page the plan\n\
+         names that your change falsifies is yours to rewrite before `ready`:\n\
+         `mem wiki <slug> > page.md`, edit, `mem wiki <slug> --stdin --note\n\
+         \"<what changed and why>\" <page.md`; the reader holds your diff to the\n\
+         page as it stands at the gate."
+    }
+}
+
 /// `## Advice`, after "How to work", only when the run has an advisor to
 /// name (m3-advise ruling 2): when to ask, the cap, and what stays a
 /// question.
@@ -234,7 +248,7 @@ A bug, a smell or a missing behaviour the task does not name goes in your
 be met without it. Where the block reads two ways, build the reading its
 wording and the surrounding code most directly support, say so in the note,
 and build no other. Commit the tests the Done line needs, sized like their
-neighbours; a scratch check is not kept.
+neighbours; a scratch check is not kept.{rewrite}
 
 `workflow verify --gate` runs after merge: the project's verify key, else
 its ladder (Rust: `cargo test && cargo clippy -- -D warnings && cargo fmt --check`).
@@ -276,6 +290,7 @@ your last act. The state is one bare word, then a space, then the note.
         block = task.block,
         prior = prior.section(),
         advice = advice_section(advisor),
+        rewrite = rewrite_sentence(pages),
         status = status_file.display(),
         states = STATES.join(", "),
     )
@@ -410,6 +425,22 @@ mod tests {
             advised.len() <= 3200,
             "the fixed prose with the Advice section is {} bytes",
             advised.len()
+        );
+        // A named page adds the rewrite sentence (ruling 3 of m4-lines) and
+        // the page's own heading; the ceiling rises by their length.
+        let paged = text(
+            &task,
+            Path::new("/state/worktrees/app/plan/t1"),
+            Path::new("/state/runs/app/plan/t1.status"),
+            &Prior::default(),
+            "",
+            &[("run".to_string(), Some(String::new()))],
+            Some("opus"),
+        );
+        assert!(
+            paged.len() <= 3550,
+            "the fixed prose with the Advice section and a named page is {} bytes",
+            paged.len()
         );
         let how = advised.find("## How to work").unwrap();
         let advice = advised.find("## Advice").unwrap();
@@ -616,6 +647,42 @@ mod tests {
         assert!(body.contains("the reader at the merge gate holds your diff to them"));
         let bare = text(&task, wt, status, &Prior::default(), "  \n", &[], None);
         assert!(!bare.contains("The plan this task belongs to"), "{bare}");
+    }
+
+    /// A page the change falsifies is the worker's to rewrite before
+    /// `ready`, said in "How to work" after the follow-up sentence, and only
+    /// when the plan names a page (ruling 3 of m4-lines).
+    #[test]
+    fn a_worker_with_a_named_page_is_told_to_rewrite_what_it_falsifies() {
+        let task = Task {
+            id: "t1".into(),
+            title: "Do it".into(),
+            block: "- [ ] t1 Do it\n      Files: a\n      Verify: true\n".into(),
+            ..Task::default()
+        };
+        let wt = Path::new("/state/worktrees/app/plan/t1");
+        let status = Path::new("/state/runs/app/plan/t1.status");
+        let sentence =
+            "A page the plan\nnames that your change falsifies is yours to rewrite before `ready`";
+        let bare = text(&task, wt, status, &Prior::default(), "", &[], None);
+        assert!(
+            !bare.contains("falsifies"),
+            "no page named, nothing to rewrite: {bare}"
+        );
+        let pages = vec![("run".to_string(), Some("The run drives waves.".to_string()))];
+        let body = text(&task, wt, status, &Prior::default(), "", &pages, None);
+        let followup = body.find("as a follow-up, not into this change").unwrap();
+        let rewrite = body.find(sentence).expect("the rewrite sentence");
+        let gate = body
+            .find("`workflow verify --gate` runs after merge")
+            .unwrap();
+        assert!(followup < rewrite && rewrite < gate, "{body}");
+        for needle in [
+            "`mem wiki <slug> > page.md`, edit, `mem wiki <slug> --stdin --note\n\"<what changed and why>\" <page.md`",
+            "the reader holds your diff to the\npage as it stands at the gate.",
+        ] {
+            assert!(body.contains(needle), "the brief lost {needle:?}: {body}");
+        }
     }
 
     /// A page named on Read: rides verbatim under its own heading, after the
