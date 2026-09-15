@@ -8,16 +8,15 @@ description: Use when route sent a change to the plan lane, to turn it into a ta
 Work bigger than one plan is a roadmap of milestones: `roadmap`.
 ## 1. Questions, once
 
-One numbered round, batched at the frontier of what you cannot work out. Each
-carries a recommended answer, so silence answers small trade-offs; a scope
-question (what the product is, what stays, what goes) is never resolved by
-silence. Facts are researched, not asked. A question that leaves the session
-(`mem ask`, read on a phone) is one decision, the choices, a recommendation,
-under 100 words.
+One numbered round of what you cannot work out. Each carries a recommended
+answer, so silence answers small trade-offs; a scope question (what the product
+is, what stays, what goes) is never resolved by silence. Facts are researched,
+not asked. A question that leaves the session (`mem ask`, read on a phone) is
+one decision, the choices, a recommendation, under 100 words.
 
 Read the project's pages before cutting tasks: `mem wiki`, then each page the
-change touches; they hold decisions code cannot show. A rewrite inventories
-the predecessor's whole surface into pages first; cuts are Saiful's.
+change touches; they hold decisions code cannot show. A rewrite inventories the
+predecessor's whole surface into pages first; cuts are Saiful's.
 
 ## 2. The spec
 
@@ -29,10 +28,9 @@ Write it in a scratch dir, never the checkout, then store it in mem:
     d=$(mktemp -d)
     mem plan --stdin < "$d/plan.md"
 
-Aim for 1,500–3,500 tokens (bytes ÷ 4): under that the tasks are wishes, over
-it nobody reads them. Reference paths, classes, commits. A plan cut from
-the friction queue names the ids it answers, so shipping closes them. UI work
-produces a mockup first.
+Aim for 1,500–3,500 tokens (bytes ÷ 4): fewer are wishes, more go unread.
+Reference paths, classes, commits. A plan cut from the friction queue names the
+ids it answers, so shipping closes them. UI work produces a mockup first.
 
 ## 3. The grammar
 
@@ -50,26 +48,28 @@ produces a mockup first.
           Done: cart totals identical for the fixture basket
 
 - `# plan: <slug>` opens it, naming the run's branches and worktrees; a task
-  line is `- [ ] <id> <title>` with an optional `[after: a, b]` (ids:
-  lowercase, up to 16 chars). Continuation lines indent 2+ spaces as
-  `Key: value`, split at the first colon-space.
+  line is `- [ ] <id> <title>` with an optional `[after: a, b]` (ids: lowercase,
+  up to 16 chars). Continuation lines indent 2+ spaces as `Key: value`, split
+  at the first colon-space.
 - `Files:` is whitespace-separated globs; double-quote one with a space. `*`
   stops at a slash, `**` crosses, patterns are anchored at the repo root. Both
   it and `Verify:` are mandatory. `Verify:` is the worker's evidence; the gate
   runs the project's whole suite on integration, so a task that changes what
   any test outside its Verify asserts fixes that test in the same task and
-  claims it in Files. No window may be red. This is the ownership boundary: a
-  write outside them is refused at the merge gate, and a task owning more than
-  eight patterns is two tasks. The sweep names six classes: the registry or
-  mount file, the lockfile, the barrel or index file, the test file Verify
+  claims it in Files. No window may be red. A Done line about what a user sees
+  or touches -- a gesture, a layout, a rendered page -- wants a Verify that
+  renders or replays it: a fixture replay, a screenshot compared to a stored
+  one, a playwright script; a unit test that cannot reach the pixels leaves the
+  defect to the reader. Files is the ownership boundary; a task owning more
+  than eight patterns is two tasks. The sweep names six classes: the registry
+  or mount file, the lockfile, the barrel or index file, the test file Verify
   runs, the arm an exhaustive match demands, the dead-code guard on a sibling's
   symbol this task first calls. Each one missed stops the task to ask.
-- `Read:`, `Uses:`, `Gives:` and `Pattern:` carry the middle tier: files to
-  open before editing (`Read:` may name `wiki:<slug>`, a wiki page), interfaces
-  consumed and produced across task boundaries (exact signatures, items joined
-  with ` · `), and one analog to copy the shape of. A worker sees its block and
-  the plan's prose, not a sibling's block: restate every symbol another task
-  defines, or it hunts.
+- `Read:`, `Uses:`, `Gives:` and `Pattern:` carry the middle tier: files to open
+  before editing (`Read:` may name `wiki:<slug>`), interfaces consumed and
+  produced across task boundaries (exact signatures, items joined with ` · `),
+  and one analog to copy. A worker sees its block and the plan's prose, not a
+  sibling's: restate every symbol another task defines, or it hunts.
 - An unknown dependency id or a cycle is a hard error.
 
 Check it from the checkout:
@@ -77,24 +77,24 @@ Check it from the checkout:
     workflow plan-check "$d/plan.md"
 
 It reads the tree, runs nothing: an unpassable Verify or deferral language
-("for now", "TBD") is refused; ungrounded lines warn. A block over budget is
-a task to split, never a line to trim.
+("for now", "TBD") is refused; ungrounded lines warn. A block over budget is a
+task to split, never a line to trim.
 
 ## 4. Shape
 
 Tasks that run at once must not share files. A wide refactor expands and
-contracts: add the new beside the old, move callers, remove it last, each
-its own task. Several one-line edits of one kind across files are one task,
-not one per file.
- Write `Done:` checkable and demanding, one sentence under forty words a human
+contracts: add the new beside the old, move callers, remove it last, each its
+own task. Several one-line edits of one kind across files are one task, not
+one per file.
+Write `Done:` checkable and demanding, one sentence under forty words a human
 can check without the diff: "every caller migrated" forces the sweep that
-"callers updated" lets slide. A worker reads its block literally and carries no
-instruction from one item to the next unasked, so a rule across files or
-callers says so ("each of the three handlers", "every test that asserts the old
-literal"), and a ruling is literal -- a file, a symbol, a value, what breaks if
-it is wrong -- never a metaphor. Self-review: every requirement points at a
-task, and a name two tasks share is spelled identically in both.
+"callers updated" lets slide. A worker reads its block literally, so a rule
+across files or callers says so ("each of the three handlers", "every test that
+asserts the old literal"), and a ruling is literal -- a file, a symbol, a
+value, what breaks if it is wrong -- never a metaphor. A worker's open question
+that is not a stop is `workflow advise`, which answers without stopping the
+task. Self-review: every requirement points at a task, and a name two tasks
+share is spelled identically in both.
 
 ## 5. One approval checkpoint
-Present it once, whole; `implement` or `workflow run` takes it after
-approval.
+Present it once, whole; `implement` or `workflow run` takes it after approval.

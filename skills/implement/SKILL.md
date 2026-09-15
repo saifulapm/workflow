@@ -13,17 +13,22 @@ First action of the session:
 
 1. Write the failing test. Watch it fail for the right reason. The expected
    value is a literal from the spec, never recomputed the way the code
-   computes it.
+   computes it. A block that reads two ways is a question for `workflow
+   advise "<question>" --file <path>`: it asks the run's advisor and prints
+   the answer without ending your turn. A decision -- scope, taste, a broken
+   plan -- is a stop below, never advice.
 2. Write the smallest code that passes it.
 3. Run `workflow verify` — that is your evidence, and it is authoritative at
    the gate. In a task worktree it runs the task's own `Verify:` command,
    under the machine's suite lock; a raw suite run beside the merge gate's is
-   how a timing-sensitive test goes red (friction #DKMYMTDH). A single
-   targeted test while iterating is fine — the full suite is not. Exit codes:
-   0 green · 1 failed · 2 no verifier · 3 test removal.
+   how a timing-sensitive test goes red. A single targeted test while
+   iterating is fine — the full suite is not. Exit codes: 0 green · 1 failed
+   · 2 no verifier · 3 test removal.
 4. Commit. Ordinary engineering voice, present tense, says what changed and
    why. Plain words, no puffery; the unslop skill is the standard for any
    longer prose. Stage only the files this task touched; never `git add -A`.
+   A one-shot over sixty changed lines gets `workflow read --against "<the
+   ask, one sentence>"` before its commit, and a `fix` verdict is fixed first.
 5. `mem log "<what landed>"`.
 6. `/clear`, then the next task. (Interactive sessions only.)
 
@@ -37,11 +42,9 @@ The note is the page's history, so it says what changed, not that something
 did. A page nobody corrected is worse than no page: the next session believes
 it. New page, new line in `index`.
 
-Stay inside the task's `Files:` patterns. In an orchestrated run, anything
-outside them is refused at the merge gate and the task fails. A brief whose
-"attempt before this one" names a review file: read it first. Its findings
-are the task now, beside the Done line, and a reader will hold your next
-diff to both.
+Stay inside the task's `Files:` patterns. A brief whose "attempt before this
+one" names a review file: read it first. Its findings are the task now,
+beside the Done line, and a reader will hold your next diff to both.
 
 **A background session works exactly one task, then ends.** A task is sized to
 one fresh context window; a session that rolls into the next task is working

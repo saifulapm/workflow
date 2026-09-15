@@ -55,7 +55,9 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
    or edit the plan and `workflow redispatch <task>`. Never rule a
    `[later]` finding in: it costs a round and is already a follow-up.
    `no verdict`: `<task>.review` is empty; `amx logs <session>` and
-   `<task>.review-err` say what happened.
+   `<task>.review-err` say what happened. A task that consulted the
+   advisor left `<task>.advice.<n>` in the run dir and an `advised` line
+   in `mem log --type run`; read both before deciding.
 5. Escalate only scope, irreversible or taste; decide the rest.
 
 ## Questions
@@ -80,7 +82,9 @@ compact.
 Open questions are yours to answer or `moot`. A shipped plan supersedes
 each friction it names: `mem save "friction #<id> closed: <how>"
 --supersedes <id>`. A merged task that changed workflow or mem is followed
-by `cargo install --path <crate>`, so the gate and next run use it. A task
+by `cargo install --path <crate>`, so the gate and next run use it, and one
+that changed a skill or a hook stub by `workflow doctor --fix`, so the
+copies match the binary. A task
 that ended near a full window was cut too big; say so. Nothing is pushed.
 Leave the checkout on main. On context pressure, `mem handoff --set
 "<state>"` and stop; the next session adopts the run.
