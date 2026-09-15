@@ -1856,6 +1856,21 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
         findings.push(finding("version", warning));
     }
     findings.extend(crate::maint::hook_findings(&app.dirs.claude_settings()));
+
+    let pi_extension = app.dirs.pi_extension();
+    if fix && !crate::maint::pi_extension_findings(&pi_extension).is_empty() {
+        if let Some(parent) = pi_extension.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::atomic::write_atomic(&pi_extension, crate::maint::PI_EXTENSION.as_bytes())?;
+        findings.push(finding(
+            "pi extension",
+            format!("wrote {}", pi_extension.display()),
+        ));
+    } else {
+        findings.extend(crate::maint::pi_extension_findings(&pi_extension));
+    }
+
     match crate::sync::Status::read(&app.dirs.qshell_status_json()) {
         Some(status) => match status.unit(crate::sync::UNIT) {
             Some(unit) if unit.ok == Some(false) => findings.push(finding(

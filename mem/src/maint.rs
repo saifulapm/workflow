@@ -305,6 +305,26 @@ fn hook_wired(doc: &serde_json::Value, event: &str, wants: &str) -> bool {
         .any(|cmd| cmd.contains(wants))
 }
 
+/// The pi extension mem ships, embedded so `mem doctor` can tell an installed
+/// copy from what this binary would write (ruling 3).
+pub const PI_EXTENSION: &str = include_str!("../assets/pi/mem.ts");
+
+/// `pi extension missing` when nothing is at `path`; `pi extension stale` when
+/// what is there does not match the embedded copy; nothing when it does.
+pub fn pi_extension_findings(path: &Path) -> Vec<Finding> {
+    match std::fs::read_to_string(path) {
+        Ok(text) if text == PI_EXTENSION => Vec::new(),
+        Ok(_) => vec![finding(
+            "pi extension",
+            format!("{} is stale — mem doctor --fix writes it", path.display()),
+        )],
+        Err(_) => vec![finding(
+            "pi extension",
+            format!("{} is missing — mem doctor --fix writes it", path.display()),
+        )],
+    }
+}
+
 /// The secret shapes worth refusing to keep: an AWS key, a PEM header, or a
 /// long unbroken run that looks like encoded bytes.
 pub fn looks_like_a_secret(text: &str) -> Option<&'static str> {

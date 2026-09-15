@@ -814,6 +814,57 @@ fn doctor_reports_the_missing_adapter_hooks() {
 }
 
 #[test]
+fn doctor_reports_the_pi_extension_missing_stale_and_written() {
+    let w = World::new("maint-pi-extension");
+    w.project(P, "thing");
+    let cwd = w.plain_dir("cwd");
+    let pi_dir = w.dir.join("pi-agent");
+    let pi_env = [("PI_AGENT_DIR", pi_dir.to_str().unwrap())];
+    let extension_path = pi_dir.join("extensions/mem.ts");
+
+    // Missing: one finding naming the path.
+    let out = mem_env(&w, &cwd, &["doctor", "--json"], &pi_env);
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    let missing = details(&out, "pi extension");
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert!(missing[0].contains("missing"), "{missing:?}");
+
+    // --fix writes it, matching what this binary ships byte for byte, and the
+    // shipped extension wires all four events the ruling names.
+    let out = mem_env(&w, &cwd, &["doctor", "--fix", "--json"], &pi_env);
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    assert!(extension_path.exists());
+    let written = std::fs::read_to_string(&extension_path).unwrap();
+    assert_eq!(written, maint::PI_EXTENSION);
+    for event in [
+        "before_agent_start",
+        "tool_result",
+        "session_before_compact",
+        "agent_settled",
+    ] {
+        assert!(written.contains(event), "{event} missing: {written}");
+    }
+
+    // A second doctor, against a matching copy, has nothing to say.
+    let out = mem_env(&w, &cwd, &["doctor", "--json"], &pi_env);
+    assert!(details(&out, "pi extension").is_empty(), "{}", stdout(&out));
+
+    // Stale: an edited copy is reported again, and --fix overwrites it.
+    std::fs::write(&extension_path, "// edited\n").unwrap();
+    let out = mem_env(&w, &cwd, &["doctor", "--json"], &pi_env);
+    let stale = details(&out, "pi extension");
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert!(stale[0].contains("stale"), "{stale:?}");
+
+    let out = mem_env(&w, &cwd, &["doctor", "--fix", "--json"], &pi_env);
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(&extension_path).unwrap(),
+        maint::PI_EXTENSION
+    );
+}
+
+#[test]
 fn doctor_flags_broken_child_projects_and_context_stays_separated() {
     let w = World::new("maint-children");
     let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
