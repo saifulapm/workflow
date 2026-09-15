@@ -195,3 +195,73 @@ prompt=$(ls -t "$WF_TMP"/advice-prompt-* | head -1)
 like "$(cat "$prompt")" "The child thing is the child's alone" "and the prompt carries the child project's plan, not the root's"
 like "$("$MEM_BIN" --project child log --type run --json)" 'task t2: advised \(1\)' "and the log line lands in the child project's log"
 unlike "$("$MEM_BIN" --project mono log --type run --json)" 'task t2: advised' 'not the root project'"'"'s'
+
+## ---------------------------------------- a run with an advisor says so
+
+# Ruling 2: a run resolves its advisor at start, records it in the run dir,
+# resets the consult count at every dispatch, and its briefs carry an Advice
+# section -- only when there is an advisor to name.
+
+write_exec "$T_TMP/run-worker.sh" <<'FAKE'
+#!/bin/sh
+task=$1; status=$3
+say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$status"; }
+say started
+mkdir -p src
+printf '%s\n' "$task" >"src/$task.txt"
+git add "src/$task.txt"
+git -c core.hooksPath=/dev/null commit -qm "Add $task"
+say ready
+printf '{"is_error":false,"result":"ok"}\n'
+FAKE
+export FAKE="$T_TMP/run-worker.sh"
+
+new_repo advrun
+mem_register
+"$MEM_BIN" project set verify true >/dev/null
+mkdir -p src
+printf '\n' >src/.keep
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'seed'
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: advised
+
+- [ ] t1 The advised task
+      Files: src/t1.txt
+      Verify: true
+- [ ] t2 The other advised task
+      Files: src/t2.txt
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/advrun/advised"
+mkdir -p "$rundir"
+printf '3\n' >"$rundir/t1.advised"
+run env WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 0 'a run with an advisor completes'
+is "$(cat "$rundir/advisor")" sage 'and records who advises in the run dir'
+is "$(cat "$rundir/t1.advised")" 0 'a dispatch resets the consult count to zero'
+brief=$(cat "$XDG_CACHE_HOME/workflow/briefs/advrun/advised/t1.md")
+like "$brief" '## Advice' 'the brief carries an Advice section'
+like "$brief" 'workflow advise "<question>" --file <path>` asks sage' 'naming the verb and the advisor'
+like "$brief" 'three consults an attempt' 'and the cap'
+like "$brief" 'is `mem ask`, never advice' 'and what stays a question'
+is "$(printf '%s\n' "$brief" | grep '^## ' | grep -A1 'How to work' | tail -1)" '## Advice' 'the section follows How to work'
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: plain
+
+- [ ] u1 The plain task
+      Files: src/u1.txt
+      Verify: true
+- [ ] u2 The other plain task
+      Files: src/u2.txt
+      Verify: true
+EOF
+
+run env WORKFLOW_REVIEW_MODEL= WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 0 'a run with no advisor and no reader completes'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/advrun/plain/advisor")" '' 'and records nobody'
+brief=$(cat "$XDG_CACHE_HOME/workflow/briefs/advrun/plain/u1.md")
+unlike "$brief" '[Aa]dvi[cs]' 'its brief carries no word of advice'

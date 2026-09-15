@@ -331,6 +331,11 @@ pub struct Run {
     /// fix-model`, else the reader's own model. A diff a cheaper model
     /// could not get right in two goes is not sent back to it a third time.
     pub fix_model: Option<String>,
+    /// Who a worker's `workflow advise` asks: `WORKFLOW_ADVISOR` for one
+    /// run, else what the run dir recorded, else the reader's own model by
+    /// its own rungs (m3-advise ruling 2). Nobody means the brief says no
+    /// word of advice.
+    pub advisor: Option<String>,
     /// How much reasoning the workers spend, `--effort` on either backend:
     /// `WORKFLOW_EFFORT` for one run (empty means no flag), else the
     /// project's `mem project set effort`, else nothing and the CLI's own
@@ -934,7 +939,16 @@ impl Run {
         let prior = self.prior_attempt(task, why);
         let prose = plan::prose(&self.plan_text().unwrap_or_default());
         let pages = wiki_pages(&t);
-        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
+        brief::write(
+            &t,
+            &wt,
+            &status,
+            &prior,
+            &prose,
+            &pages,
+            self.advisor.as_deref(),
+            &brief_file,
+        );
         let _ = std::fs::write(&status, "");
         let line = format!(
             "Read {} again: it now says what happened to your last report and what to do \
@@ -976,6 +990,9 @@ impl Run {
         // attempt, and a stale `ready` from the last one would pass for it.
         // What it said lives on in the brief instead.
         let _ = std::fs::write(&status, "");
+        // The consult cap is per attempt (m3-advise ruling 2): `workflow
+        // advise` counts up from here.
+        write_field(&self.dir, task, "advised", "0");
         for ext in ["json", "err", "pid"] {
             let _ = std::fs::remove_file(self.dir.join(format!("{task}.{ext}")));
         }
@@ -983,7 +1000,16 @@ impl Run {
         // orchestrator makes mid-run is in the next attempt's brief.
         let prose = plan::prose(&self.plan_text().unwrap_or_default());
         let pages = wiki_pages(&t);
-        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
+        brief::write(
+            &t,
+            &wt,
+            &status,
+            &prior,
+            &prose,
+            &pages,
+            self.advisor.as_deref(),
+            &brief_file,
+        );
         // The gate reads this from inside the worktree: the task is held to its
         // own Verify command there, not to the repo-wide suite (verify.rs).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
@@ -2252,6 +2278,10 @@ impl Run {
             format!("{}\n", self.fix_model.as_deref().unwrap_or("")),
         );
         let _ = std::fs::write(
+            self.dir.join("advisor"),
+            format!("{}\n", self.advisor.as_deref().unwrap_or("")),
+        );
+        let _ = std::fs::write(
             self.dir.join("effort"),
             format!("{}\n", self.effort.as_deref().unwrap_or("")),
         );
@@ -2808,6 +2838,16 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let recorded_fix = recorded(&dir, "fix-model");
     let recorded_effort = recorded(&dir, "effort");
     let recorded_review_effort = recorded(&dir, "review-effort");
+    let recorded_advisor = recorded(&dir, "advisor");
+    let review_model = optional_dial(
+        "WORKFLOW_REVIEW_MODEL",
+        recorded_review,
+        memcli::project_review_model,
+    );
+    // The advisor has no project key of its own (mem's keys are a closed
+    // set), so past the override and the record it is the reader.
+    let advisor = optional_dial("WORKFLOW_ADVISOR", recorded_advisor, || None)
+        .or_else(|| review_model.clone());
     Run {
         dir,
         brief_dir: paths::briefs_root().join(project).join(&plan.plan_id),
@@ -2832,11 +2872,8 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
                 .or_else(memcli::project_model)
                 .unwrap_or_else(|| "opus".into()),
         },
-        review_model: optional_dial(
-            "WORKFLOW_REVIEW_MODEL",
-            recorded_review,
-            memcli::project_review_model,
-        ),
+        review_model,
+        advisor,
         fix_model: optional_dial(
             "WORKFLOW_FIX_MODEL",
             recorded_fix,
