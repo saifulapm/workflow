@@ -33,6 +33,7 @@ pub fn run_scrubbed(cmd: &str) -> bool {
         "GIT_INDEX_FILE",
         "GIT_PREFIX",
         "WORKFLOW_AGENT",
+        "PI_CODING_AGENT",
         "WORKFLOW_HOOK_SEEN",
     ] {
         c.env_remove(key);

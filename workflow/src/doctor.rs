@@ -303,7 +303,7 @@ const STUBS: [(&str, &str); 3] = [
 fn skill_dirs() -> [(&'static str, PathBuf); 2] {
     [
         ("claude", paths::home().join(".claude/skills")),
-        ("agents", paths::home().join(".agents/skills")),
+        ("agents", paths::agents_skills()),
     ]
 }
 

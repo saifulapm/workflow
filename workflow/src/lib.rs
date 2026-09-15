@@ -165,8 +165,16 @@ pub fn run(cli: Cli) -> i32 {
         Command::SettingsMerge { file, dry_run } => {
             settings::cmd_settings_merge(file.as_deref(), dry_run)
         }
-        Command::Enable { global, dry_run } => settings::cmd_skills("on", global, dry_run),
-        Command::Disable { global, dry_run } => settings::cmd_skills("off", global, dry_run),
+        Command::Enable {
+            global,
+            pi,
+            dry_run,
+        } => settings::cmd_skills("on", global, pi, dry_run),
+        Command::Disable {
+            global,
+            pi,
+            dry_run,
+        } => settings::cmd_skills("off", global, pi, dry_run),
     }
 }
 

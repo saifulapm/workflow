@@ -35,10 +35,10 @@ is "$RC" 1 'php project: failing suite exits 1'
 
 # The child suite is scrubbed of the git and workflow variables (spec §7).
 run env GIT_DIR="$PWD/.git" GIT_INDEX_FILE="$PWD/.git/index" GIT_PREFIX=x/ \
-	WORKFLOW_AGENT=1 WORKFLOW_HOOK_SEEN=/somewhere workflow verify
+	WORKFLOW_AGENT=1 PI_CODING_AGENT=true WORKFLOW_HOOK_SEEN=/somewhere workflow verify
 is "$RC" 0 'scrub: verify still passes with the git environment inherited'
-unlike "$(cat php-env)" '^(GIT_DIR|GIT_INDEX_FILE|GIT_PREFIX|WORKFLOW_AGENT|WORKFLOW_HOOK_SEEN)=' \
-	'scrub: the child suite sees none of the five scrubbed variables'
+unlike "$(cat php-env)" '^(GIT_DIR|GIT_INDEX_FILE|GIT_PREFIX|WORKFLOW_AGENT|PI_CODING_AGENT|WORKFLOW_HOOK_SEEN)=' \
+	'scrub: the child suite sees none of the six scrubbed variables'
 
 # Run from a subdirectory: verify works from the toplevel.
 mkdir -p deep/er

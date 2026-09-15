@@ -43,6 +43,19 @@ pub fn briefs_root() -> PathBuf {
     cache_home().join("workflow/briefs")
 }
 
+/// The skills directory pi, codex and opencode all read, beside Claude Code's
+/// own. `doctor --fix` writes the embedded skills here; `enable --pi` and
+/// `disable --pi` name the files it wrote.
+pub fn agents_skills() -> PathBuf {
+    home().join(".agents/skills")
+}
+
+/// pi's own config directory -- `$PI_CODING_AGENT_DIR`, else `~/.pi/agent`.
+/// Not under XDG: pi does not honour it here.
+pub fn pi_agent_dir() -> PathBuf {
+    env_dir("PI_CODING_AGENT_DIR").unwrap_or_else(|| home().join(".pi/agent"))
+}
+
 pub fn cwd() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }

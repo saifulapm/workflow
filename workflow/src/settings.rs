@@ -1,11 +1,12 @@
-//! The edits this workflow makes to a Claude Code settings file, and nothing
+//! The edits this workflow makes to a harness settings file, and nothing
 //! else in it (spec §3, AC5b).
 //!
 //! `settings-merge` is the install's edit: the agent flag and the attribution
-//! keys, in the user's file. `enable` and `disable` are the per-project switch
-//! for the skills this repo ships -- off in the user's file, on in the projects
-//! that want them, which is the only way Claude Code scopes a skill to a
-//! project (frontmatter and env vars cannot).
+//! keys, in Claude Code's user file. `enable` and `disable` are the per-project
+//! switch for the skills this repo ships -- off in the user's file, on in the
+//! projects that want them, which is the only way Claude Code scopes a skill to
+//! a project (frontmatter and env vars cannot). `--pi` writes the same switch in
+//! pi's shape, which is a different key in a different file.
 //!
 //! Both merge, never replace: existing `attribution.commit` / `attribution.pr`
 //! values survive, including empty strings, which are meaningful (they mean
@@ -52,6 +53,20 @@ pub const SKILLS: [&str; 8] = [
 pub fn project_file() -> PathBuf {
     let root = gitcmd::Git::here().toplevel().unwrap_or_else(paths::cwd);
     root.join(".claude").join("settings.json")
+}
+
+/// pi's own settings file for this machine.
+pub fn pi_default_file() -> PathBuf {
+    paths::pi_agent_dir().join("settings.json")
+}
+
+/// Where a project tells pi which skills it may see. pi reads
+/// `.pi/settings.json` from the directory a session starts in and walks no
+/// further up, so this is the toplevel -- where a session is started -- and a
+/// session begun deeper in the tree reads nothing.
+pub fn pi_project_file() -> PathBuf {
+    let root = gitcmd::Git::here().toplevel().unwrap_or_else(paths::cwd);
+    root.join(".pi").join("settings.json")
 }
 
 /// The three keys the install sets, merged into whatever is already there.
@@ -103,6 +118,62 @@ pub fn merge_skills(current: &Value, state: &str) -> Result<Value, String> {
         over.insert(skill.into(), json!(state));
     }
     out.insert("skillOverrides".into(), Value::Object(over));
+
+    Ok(Value::Object(out))
+}
+
+/// The file `doctor --fix` wrote a skill to, which is the name pi knows it by.
+fn pi_skill_path(name: &str) -> String {
+    paths::agents_skills()
+        .join(name)
+        .join("SKILL.md")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// A `skills` entry without its pattern prefix. `!` excludes, `+` force-includes
+/// and `-` force-excludes; anything else is a plain path.
+fn unprefixed(entry: &str) -> &str {
+    entry.strip_prefix(['!', '+', '-']).unwrap_or(entry)
+}
+
+/// Every skill this repo ships, set to one state in pi's `skills` array.
+///
+/// pi has no `skillOverrides`. A skill it discovered under `~/.agents/skills` is
+/// switched by naming its file twice: once plain, which brings the path into
+/// this file's scope, and once with the `+` or `-` force prefix that decides it
+/// (pi 0.85.1 `package-manager.js` `isEnabledByOverrides`; `pi config -l` writes
+/// the same pair). A project's `+` beats the user file's `-`, so the switch runs
+/// either way round, as Claude's does.
+///
+/// Other entries in the array are left alone: this rewrites the entries naming
+/// the eight skills in `SKILLS` and nothing else.
+pub fn merge_pi_skills(current: &Value, state: &str) -> Result<Value, String> {
+    let Value::Object(root) = current else {
+        return Err("the merge failed; nothing was written".into());
+    };
+    let mut out = root.clone();
+
+    let existing = match out.get("skills") {
+        Some(Value::Array(a)) => a.clone(),
+        None | Some(Value::Null) => Vec::new(),
+        Some(_) => return Err("skills is not an array; fix it by hand first".into()),
+    };
+
+    let ours: Vec<String> = SKILLS.iter().map(|s| pi_skill_path(s)).collect();
+    let mut kept: Vec<Value> = existing
+        .into_iter()
+        .filter(|v| match v.as_str() {
+            Some(s) => !ours.iter().any(|p| p == unprefixed(s)),
+            None => true,
+        })
+        .collect();
+    let mark = if state == "on" { '+' } else { '-' };
+    for path in &ours {
+        kept.push(json!(path));
+        kept.push(json!(format!("{mark}{path}")));
+    }
+    out.insert("skills".into(), Value::Array(kept));
 
     Ok(Value::Object(out))
 }
@@ -236,13 +307,14 @@ pub fn cmd_settings_merge(file: Option<&Path>, dry_run: bool) -> i32 {
 
 /// `workflow enable` and `workflow disable`: this repo's skills turned on or
 /// off in one settings file -- this project's by default, the user's with
-/// `--global`.
-pub fn cmd_skills(state: &str, global: bool, dry_run: bool) -> i32 {
+/// `--global`, Claude Code's by default and pi's with `--pi`.
+pub fn cmd_skills(state: &str, global: bool, pi: bool, dry_run: bool) -> i32 {
     let prefix = if state == "on" { "enable" } else { "disable" };
-    let file = if global {
-        default_file()
-    } else {
-        project_file()
+    let file = match (pi, global) {
+        (true, true) => pi_default_file(),
+        (true, false) => pi_project_file(),
+        (false, true) => default_file(),
+        (false, false) => project_file(),
     };
 
     let Ok(found) = read_current(&file, prefix) else {
@@ -251,7 +323,12 @@ pub fn cmd_skills(state: &str, global: bool, dry_run: bool) -> i32 {
     let existed = found.is_some();
     let current = found.unwrap_or_else(|| json!({}));
 
-    let merged = match merge_skills(&current, state) {
+    let merged = if pi {
+        merge_pi_skills(&current, state)
+    } else {
+        merge_skills(&current, state)
+    };
+    let merged = match merged {
         Ok(v) => v,
         Err(e) => {
             warn_as(prefix, e);
@@ -301,15 +378,31 @@ pub fn cmd_skills(state: &str, global: bool, dry_run: bool) -> i32 {
         }
     }
 
+    // pi only reads this file in a project it trusts, and only when the session
+    // started in the directory holding it. Both are easy to miss and look like
+    // the write not working.
+    if pi && !global {
+        warn_as(
+            prefix,
+            "pi reads .pi/settings.json from the directory the session started in, and only in a trusted project: keep `.pi/` out of git, and answer pi's trust prompt once (amx panes send --approve)",
+        );
+    }
+
     // A project file that turns the skills on says nothing unless something
     // turns them off first. Saying so here is cheaper than wondering later why
     // every project still lists them.
-    if !global && state == "on" && !gated_globally() {
+    if !global && state == "on" && !gated_globally(pi) {
         warn_as(
             prefix,
             format!(
-                "note: {} does not turn them off, so they are on everywhere already -- `workflow disable --global` is what makes this file mean something",
-                default_file().display()
+                "note: {} does not turn them off, so they are on everywhere already -- `workflow disable --global{}` is what makes this file mean something",
+                if pi {
+                    pi_default_file()
+                } else {
+                    default_file()
+                }
+                .display(),
+                if pi { " --pi" } else { "" }
             ),
         );
     }
@@ -318,14 +411,31 @@ pub fn cmd_skills(state: &str, global: bool, dry_run: bool) -> i32 {
 
 /// Does the user's settings file turn these skills off? Read-only, and a file
 /// that is missing or unreadable answers no.
-fn gated_globally() -> bool {
-    let file = default_file();
+fn gated_globally(pi: bool) -> bool {
+    let file = if pi {
+        pi_default_file()
+    } else {
+        default_file()
+    };
     let Ok(text) = std::fs::read_to_string(&file) else {
         return false;
     };
     let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
         return false;
     };
+    if pi {
+        let Some(Value::Array(entries)) = root.get("skills") else {
+            return false;
+        };
+        let excluded: Vec<&str> = entries
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(|e| e.strip_prefix('-'))
+            .collect();
+        return SKILLS
+            .iter()
+            .all(|s| excluded.contains(&pi_skill_path(s).as_str()));
+    }
     let Some(Value::Object(over)) = root.get("skillOverrides") else {
         return false;
     };
@@ -389,6 +499,61 @@ mod tests {
     #[test]
     fn a_skill_overrides_that_is_not_a_map_is_refused() {
         assert!(merge_skills(&json!({ "skillOverrides": "all" }), "on").is_err());
+    }
+
+    /// pi's switch is the pair `pi config -l` writes: the path, which brings it
+    /// into this file's scope, and the force prefix that decides it.
+    #[test]
+    fn pi_names_each_skill_file_twice_with_the_force_prefix() {
+        let merged = merge_pi_skills(&json!({}), "off").unwrap();
+        let entries: Vec<&str> = merged["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(entries.len(), SKILLS.len() * 2);
+        for skill in SKILLS {
+            let path = pi_skill_path(skill);
+            assert!(entries.contains(&path.as_str()), "{skill} plain");
+            assert!(entries.contains(&format!("-{path}").as_str()), "{skill} -");
+        }
+        assert!(entries.iter().all(|e| e.ends_with("/SKILL.md")));
+    }
+
+    /// Switching sides rewrites our entries rather than stacking a second
+    /// verdict on top of the first, which `isEnabledByOverrides` would let win
+    /// by prefix rather than by order.
+    #[test]
+    fn pi_switching_state_replaces_our_entries_and_keeps_everybody_elses() {
+        let current = json!({
+            "theme": "qshell",
+            "skills": ["~/work/skills", "-~/work/skills/noisy/SKILL.md"]
+        });
+        let off = merge_pi_skills(&current, "off").unwrap();
+        let on = merge_pi_skills(&off, "on").unwrap();
+        let entries: Vec<&str> = on["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(on["theme"], json!("qshell"));
+        assert!(entries.contains(&"~/work/skills"));
+        assert!(entries.contains(&"-~/work/skills/noisy/SKILL.md"));
+        for skill in SKILLS {
+            let path = pi_skill_path(skill);
+            assert!(entries.contains(&format!("+{path}").as_str()), "{skill} +");
+            assert!(!entries.contains(&format!("-{path}").as_str()), "{skill} -");
+        }
+        assert_eq!(merge_pi_skills(&on, "on").unwrap(), on);
+    }
+
+    /// A `skills` that is not an array is the same mistake as a `skillOverrides`
+    /// that is not a map.
+    #[test]
+    fn a_pi_skills_that_is_not_an_array_is_refused() {
+        assert!(merge_pi_skills(&json!({ "skills": "all" }), "off").is_err());
     }
 
     /// `~/.claude/settings.json` is a chezmoi symlink into `~/.dotfiles` on this

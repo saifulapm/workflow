@@ -124,3 +124,56 @@ cd "$T_TMP/loose" || exit 1
 run workflow enable
 is "$RC" 0 'outside a repo it still writes'
 is "$(jq -r '.skillOverrides.mem' "$T_TMP/loose/.claude/settings.json")" 'on' 'in the working directory'
+
+## ------------------------------------------------------- the same for pi
+
+# pi has no skillOverrides. A skill it discovered under ~/.agents/skills is
+# switched by naming the file twice: the path, which brings it into this
+# file's scope, and the `+`/`-` that decides it. Verified against pi 0.85.1's
+# own resolver, both directions.
+export PI_CODING_AGENT_DIR="$HOME/.pi/agent"
+piuser="$PI_CODING_AGENT_DIR/settings.json"
+new_repo piapp
+pi_entries() { jq -r '.skills[]' "$1"; }
+
+run workflow disable --global --pi
+is "$RC" 0 'disable --global --pi exits 0'
+for s in $skills; do
+	path="$HOME/.agents/skills/$s/SKILL.md"
+	is "$(pi_entries "$piuser" | grep -cFx "$path")" '1' "the pi user file names $s"
+	is "$(pi_entries "$piuser" | grep -cFx -- "-$path")" '1' "and force-excludes $s"
+done
+unlike "$(cat "$piuser")" 'skillOverrides' 'and it writes no Claude key'
+
+run workflow enable --pi
+is "$RC" 0 'enable --pi exits 0'
+piproj=$PWD/.pi/settings.json
+truthy "$([ -f "$piproj" ] && echo 0 || echo 1)" 'it writes .pi/settings.json at the toplevel'
+truthy "$([ ! -e "$PWD/.claude/settings.json" ] && echo 0 || echo 1)" 'and leaves the Claude file alone'
+for s in $skills; do
+	path="$HOME/.agents/skills/$s/SKILL.md"
+	is "$(pi_entries "$piproj" | grep -cFx -- "+$path")" '1' "the project force-includes $s"
+done
+like "$OUT" 'trusted project' 'it says pi only reads it in a trusted project'
+unlike "$OUT" 'does not turn them off' 'and with the pi gate in place it stays quiet'
+
+# Turning them off here rewrites our entries rather than stacking a second
+# verdict, and leaves another skill directory of the user's where it was.
+jq '.skills += ["'"$T_TMP"'/other-skills"]' "$piproj" >"$piproj.tmp" && mv "$piproj.tmp" "$piproj"
+run workflow disable --pi
+for s in $skills; do
+	path="$HOME/.agents/skills/$s/SKILL.md"
+	is "$(pi_entries "$piproj" | grep -cFx -- "-$path")" '1' "the project now force-excludes $s"
+	is "$(pi_entries "$piproj" | grep -cFx -- "+$path")" '0' "and the old verdict for $s is gone"
+done
+is "$(pi_entries "$piproj" | grep -cFx "$T_TMP/other-skills")" '1' "another entry of the user's survives"
+
+# A skills array that is not an array is refused, like a skillOverrides that
+# is not a map.
+printf '{"skills": "all"}\n' >"$piproj"
+run workflow enable --pi
+is "$RC" 1 'a skills that is not an array fails'
+is "$(jq -r '.skills' "$piproj")" 'all' 'and that file is untouched'
+
+run workflow disable --help
+like "$OUT" 'PI_CODING_AGENT_DIR' 'disable --help names the pi file it would write'

@@ -22,7 +22,7 @@ use crate::{exit, lint, memcli, paths, verify, warn};
 
 /// Step 2, the fire condition: a location-sane union (review-4 B-2). An
 /// orchestrator worktree, or an agent standing in a checkout mem knows.
-/// `WORKFLOW_AGENT` is inherited by everything an agent starts, so the env
+/// The env markers are inherited by everything an agent starts, so the env
 /// branch alone would gate every scratch repo a test suite creates.
 fn fires(git: &Git) -> bool {
     if let Some(top) = git.toplevel()
@@ -30,10 +30,17 @@ fn fires(git: &Git) -> bool {
     {
         return true;
     }
-    match std::env::var("WORKFLOW_AGENT") {
-        Ok(v) if !v.is_empty() => memcli::knows_this_checkout(),
-        _ => false,
-    }
+    agent_marked() && memcli::knows_this_checkout()
+}
+
+/// Is an agent driving this commit? `WORKFLOW_AGENT` is ours, set by the Claude
+/// Code settings file and by the run's dispatch. `PI_CODING_AGENT` is pi's own,
+/// which pi exports to every process it starts: pi has no `env` key in its
+/// settings, so it is the only marker a hand-started pi session carries.
+pub fn agent_marked() -> bool {
+    ["WORKFLOW_AGENT", "PI_CODING_AGENT"]
+        .iter()
+        .any(|key| std::env::var(key).is_ok_and(|v| !v.is_empty()))
 }
 
 /// Step 4, the check itself.

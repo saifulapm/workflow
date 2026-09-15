@@ -40,10 +40,16 @@ git add README.md
 run env WORKFLOW_AGENT=1 git -c core.hooksPath="$HOOKS" commit -m 'Change the readme'
 isnt "$RC" 0 'registered checkout + WORKFLOW_AGENT: blocked'
 
+# pi has no `env` key in its settings, so a hand-started pi session carries no
+# WORKFLOW_AGENT. PI_CODING_AGENT is pi's own marker, exported to everything it
+# starts, and the gate reads it the same way.
+run env -u WORKFLOW_AGENT PI_CODING_AGENT=true git -c core.hooksPath="$HOOKS" commit -m 'Change the readme'
+isnt "$RC" 0 'registered checkout + PI_CODING_AGENT: blocked too'
+
 ## ------------------------------------------ and nowhere else it should not
 
 # The same commit by a human. `env -u WORKFLOW_AGENT` is the bypass, stated.
-run env -u WORKFLOW_AGENT git -c core.hooksPath="$HOOKS" commit -m 'Change the readme'
+run env -u WORKFLOW_AGENT -u PI_CODING_AGENT git -c core.hooksPath="$HOOKS" commit -m 'Change the readme'
 is "$RC" 0 'human commit in the same repo: untouched'
 
 # An unregistered scratch repo, agent environment and all: ungated. Without

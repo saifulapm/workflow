@@ -15,9 +15,10 @@ that carry it into an editor session.
   questions with their answers, wiki pages and the runs on that machine.
 - `skills/` holds the session-facing instructions (route, plan, roadmap,
   implement, review, orchestrate, mem, unslop). `hooks/` holds the three git
-  hook stubs. Another runtime joins by reading the same skills and exporting
-  `WORKFLOW_AGENT=1` in its sessions; that wiring is per-runtime and kept
-  outside this repo.
+  hook stubs. Another runtime joins by reading the same skills and marking its
+  sessions for the gate: `WORKFLOW_AGENT=1`, or pi's own `PI_CODING_AGENT`,
+  which the gate reads too because pi has no way to set an environment
+  variable per session.
 
 Install each binary twice, because the machines run them from two places:
 `cargo install --force --path <crate> --root ~/.local` for the hooks and
@@ -85,6 +86,15 @@ way round:
 Settings are the only lever. Claude Code builds the skill list from its
 settings files, the frontmatter switch is global to the skill, and no
 environment variable is consulted for it.
+
+`--pi` is the same switch for pi, which has no `skillOverrides`: it writes
+pi's `skills` array — `.pi/settings.json` at the toplevel, or
+`$PI_CODING_AGENT_DIR/settings.json` with `--global` — naming each skill file
+under `~/.agents/skills` twice, plain and with `+` or `-`. A project's entry
+outranks the user's the same way round. Two things pi asks for and Claude
+does not: it reads `.pi/settings.json` only from the directory a session
+started in, and only in a project it trusts, so keep `.pi/` out of git beside
+`.claude/` and answer pi's trust prompt once (amx panes send `--approve`).
 
 ## Daily use
 
