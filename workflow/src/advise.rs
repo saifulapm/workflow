@@ -502,8 +502,9 @@ fn cmd_advise_standalone(
 /// *root* project and a child project's consult would compute a run dir
 /// under the monorepo instead of under the child. The worktree and the run
 /// dir carry the identical component (run.rs writes both from
-/// `project.dir_name()`), so inside one the path is the answer; verify.rs
-/// `task_verify_cmd` reads it the same way.
+/// `project.dir_name()`), so inside one the path is the answer, and the
+/// name every mem call is made under; verify.rs `task_verify_cmd` reads it
+/// the same way.
 fn project_from_worktree(top: &Path) -> Option<String> {
     let root = crate::paths::realpath_m(crate::paths::worktrees_root());
     let real = crate::paths::realpath(top)?;
@@ -541,11 +542,19 @@ pub fn cmd_advise(question: &str, files: &[PathBuf], against: Option<&str>) -> i
         return exit::USAGE;
     };
 
-    let project_dir = project_from_worktree(&top).unwrap_or_else(|| {
-        memcli::project_current()
+    // Inside a task worktree the path names the project, and so does every
+    // mem call from here on: mem's own answer at a worktree root is the
+    // monorepo's root project, whose plan, pages and log are not this
+    // task's (ruling 1 as amended).
+    let project_dir = match project_from_worktree(&top) {
+        Some(name) => {
+            memcli::name_project(&name);
+            name
+        }
+        None => memcli::project_current()
             .map(|p| p.dir_name())
-            .unwrap_or_else(|| crate::paths::path_slug(&top))
-    });
+            .unwrap_or_else(|| crate::paths::path_slug(&top)),
+    };
 
     let task_env = std::env::var("WORKFLOW_TASK")
         .ok()

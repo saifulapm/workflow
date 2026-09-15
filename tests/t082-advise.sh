@@ -151,6 +151,10 @@ cd apps/child
 "$MEM_BIN" plan --stdin >/dev/null <<'EOF'
 # plan: child-advise
 
+## Spec
+
+Ruling 1. The child thing is the child's alone.
+
 - [ ] t1 Add the child thing
       Files: apps/child/src/**
       Verify: true
@@ -184,3 +188,10 @@ run env WORKFLOW_TASK=child-advise/t2 WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODE
 is "$RC" 0 'a consult from a worktree root exits 0'
 is "$(cat "$childdir/t2.advised")" 1 "and the run dir is the worktree path's project"
 [ -e "$XDG_STATE_HOME/workflow/runs/mono/child-advise" ] && notok 'nothing was written under the monorepo root' || ok 'nothing was written under the monorepo root'
+# mem, asked from that same root, cannot see the child either: the plan, the
+# pages and the log line would all be the monorepo root's. Every mem call
+# names the project the worktree path names instead.
+prompt=$(ls -t "$WF_TMP"/advice-prompt-* | head -1)
+like "$(cat "$prompt")" "The child thing is the child's alone" "and the prompt carries the child project's plan, not the root's"
+like "$("$MEM_BIN" --project child log --type run --json)" 'task t2: advised \(1\)' "and the log line lands in the child project's log"
+unlike "$("$MEM_BIN" --project mono log --type run --json)" 'task t2: advised' 'not the root project'"'"'s'

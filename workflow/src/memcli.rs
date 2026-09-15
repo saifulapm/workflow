@@ -62,10 +62,26 @@ pub fn resolve_from_here() {
     }
 }
 
+static PROJECT: OnceLock<String> = OnceLock::new();
+
+/// Name the project every mem call acts on, `--project <name>`, instead of
+/// the one mem infers from the caller's directory. A worker's cwd is its
+/// worktree root, and mem resolves a monorepo child by the path relative to
+/// the toplevel: at the root that path is empty, no child owns it, and mem
+/// answers with the root project -- its plan, its wiki, its log -- for a
+/// task the worktree path already files under the child (m3-advise ruling
+/// 1 as amended, #J6YAWMSJ).
+pub fn name_project(name: &str) {
+    let _ = PROJECT.set(name.to_string());
+}
+
 fn command() -> Command {
     let mut c = Command::new(bin());
     if let Some(dir) = CALLER_DIR.get() {
         c.current_dir(dir);
+    }
+    if let Some(name) = PROJECT.get() {
+        c.arg("--project").arg(name);
     }
     c
 }
