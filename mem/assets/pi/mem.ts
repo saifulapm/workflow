@@ -86,8 +86,8 @@ export default function (pi: ExtensionAPI) {
     batches += 1;
     if (batches % BATCH_EVERY !== 0) return;
     const id = sessionId(ctx);
-    const args = ["context", "--brief", "--session-id", id];
-    steer(pi, await run(args));
+    if (!id) return;
+    steer(pi, await run(["context", "--brief", "--session-id", id]));
   });
 
   pi.on("session_before_compact", async (event) => {
@@ -99,6 +99,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("agent_settled", async (_event, ctx) => {
     const id = sessionId(ctx);
-    steer(pi, await run(["session-check", "--session-id", id]));
+    const args = id ? ["session-check", "--session-id", id] : ["session-check"];
+    steer(pi, await run(args));
   });
 }
