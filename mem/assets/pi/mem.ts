@@ -68,6 +68,7 @@ function steer(pi, content: string): void {
 export default function (pi: ExtensionAPI) {
   let firstPrompt = true;
   let batches = 0;
+  let compacting = false;
 
   pi.on("session_start", () => {
     firstPrompt = true;
@@ -90,11 +91,19 @@ export default function (pi: ExtensionAPI) {
     steer(pi, await run(["context", "--brief", "--session-id", id]));
   });
 
-  pi.on("session_before_compact", async (event) => {
-    const summary = await run(["precompact"]);
-    if (summary && typeof event.customInstructions === "string") {
-      event.customInstructions = `${event.customInstructions}\n${summary}`;
-    }
+  // pi 0.85.1 reads no instructions off this event -- only off ctx.compact --
+  // so a threshold compaction is cancelled and rerun through it instead. A
+  // manual or overflow compaction, or one already in flight, runs as pi's
+  // own default.
+  pi.on("session_before_compact", async (event, ctx) => {
+    if (event.reason !== "threshold" || compacting) return;
+    compacting = true;
+    const clear = () => {
+      compacting = false;
+    };
+    const customInstructions = await run(["precompact"]);
+    ctx.compact({ customInstructions, onComplete: clear, onError: clear });
+    return { cancel: true };
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
