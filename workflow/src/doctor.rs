@@ -133,6 +133,14 @@ fn hooks(r: &mut Report) {
             "hooks path",
             "no global core.hooksPath: the gate is not installed on this machine",
         );
+    } else if paths::realpath_m(&installed) != paths::realpath_m(hooks_dir()) {
+        r.finding(
+            "hooks path",
+            format!(
+                "core.hooksPath={installed} does not resolve to {}: git never reads the stubs doctor writes there",
+                hooks_dir().display()
+            ),
+        );
     } else {
         r.note("hooks path", &installed);
     }
@@ -321,24 +329,37 @@ enum Copy {
 }
 
 /// How `path` compares to the embedded `expected` text: `None` for a plain
-/// file that already holds exactly that text.
-fn compare(path: &Path, expected: &str) -> Option<Copy> {
-    if path.is_symlink() {
+/// file that already holds exactly that text (and, when `mode` calls for an
+/// executable, already has the x bit). Dotfiles link the *name directory*
+/// (`~/.claude/skills/<name>`), not the leaf file, so the leaf itself is
+/// never the symlink to catch -- `path.parent()` is.
+fn compare(path: &Path, expected: &str, mode: Option<u32>) -> Option<Copy> {
+    if path.is_symlink() || path.parent().is_some_and(|p| p.is_symlink()) {
         return Some(Copy::Symlink);
     }
     match std::fs::read_to_string(path) {
-        Ok(text) if text == expected => None,
+        Ok(text) if text == expected => {
+            let needs_x = mode.is_some_and(|m| m & 0o111 != 0);
+            if needs_x && !gitcmd::exists_x(path) {
+                Some(Copy::Differs)
+            } else {
+                None
+            }
+        }
         Ok(_) => Some(Copy::Differs),
         Err(_) => Some(Copy::Missing),
     }
 }
 
-/// Write `expected` to `path` as a plain file: a symlink is removed rather
-/// than followed, and a differing file is overwritten. `mode` is applied
-/// after the write; the hook stubs need 755, a skill needs nothing beyond
-/// what the write gave it.
+/// Write `expected` to `path` as a plain file: a symlinked name directory or
+/// leaf is removed rather than followed, and a differing file is
+/// overwritten. `mode` is applied after the write; the hook stubs need 755,
+/// a skill needs nothing beyond what the write gave it.
 fn write_copy(path: &Path, expected: &str, mode: Option<u32>) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
+        if dir.is_symlink() {
+            std::fs::remove_file(dir)?;
+        }
         std::fs::create_dir_all(dir)?;
     }
     if path.is_symlink() {
@@ -361,7 +382,7 @@ fn check_or_write(
     fix: bool,
     mode: Option<u32>,
 ) {
-    let Some(status) = compare(path, expected) else {
+    let Some(status) = compare(path, expected, mode) else {
         return;
     };
     if !fix {

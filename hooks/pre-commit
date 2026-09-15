@@ -1,6 +1,7 @@
 #!/bin/sh
-# The workflow gate, pre-commit half. Symlinked into ~/.config/git/hooks/ at
-# install; a global core.hooksPath points every repo on this machine here.
+# The workflow gate, pre-commit half. Copied into ~/.config/git/hooks/ by
+# `workflow doctor --fix`; a global core.hooksPath points every repo on this
+# machine here.
 #
 # The five steps of spec §7 live in `workflow hook` (spec §12b). Two lines are
 # left here, and both have to be here:

@@ -285,3 +285,58 @@ is "$([ -L "$HOME/.agents/skills/mem/SKILL.md" ] && echo symlink || echo 'regula
 	'regular file' 'the symlink is replaced by a plain copy'
 is "$(cat "$HOME/.agents/skills/mem/SKILL.md")" "$(cat "$WF_ROOT/skills/mem/SKILL.md")" \
 	'holding the embedded text'
+
+## ---------------------------------------------- a symlinked name directory
+
+# dotfiles link the name directory, not the leaf: `ln -s <checkout>/skills/route
+# ~/.claude/skills/route`. The leaf SKILL.md this reaches is then a regular
+# file read through the link, so is_symlink() on the leaf alone misses it.
+fake="$T_TMP/fake-checkout/skills/route"
+mkdir -p "$fake"
+printf 'stale content from the dev checkout\n' >"$fake/SKILL.md"
+rm -rf "$HOME/.claude/skills/route"
+ln -s "$fake" "$HOME/.claude/skills/route"
+
+run workflow doctor
+like "$OUT" 'skill route \(claude\).*symlink at' \
+	'a symlinked name directory is reported as a symlink, not as differs'
+
+run workflow doctor --fix
+like "$OUT" 'skill route \(claude\).*wrote' 'fixing it is one of the lines --fix prints'
+is "$([ -L "$HOME/.claude/skills/route" ] && echo symlink || echo 'regular dir')" \
+	'regular dir' 'the link is replaced by a real directory'
+is "$(cat "$HOME/.claude/skills/route/SKILL.md")" "$(cat "$WF_ROOT/skills/route/SKILL.md")" \
+	'holding the embedded text'
+is "$(cat "$fake/SKILL.md")" 'stale content from the dev checkout' \
+	'and the dev checkout the link pointed at was never touched'
+
+## --------------------------------------------------- a stub with no x bit
+
+# Content alone is not enough: a copy tool that drops the mode leaves a stub
+# git silently skips.
+chmod 644 "$HOME/.config/git/hooks/pre-commit"
+run workflow doctor
+like "$OUT" 'hook pre-commit.*differs at' \
+	'a correct-content stub missing its x bit is a finding, not healthy'
+
+run workflow doctor --fix
+is "$(stat -c %a "$HOME/.config/git/hooks/pre-commit")" 755 '--fix restores the x bit'
+
+## ------------------------------------------------- a hooksPath that misses
+
+# git runs whatever core.hooksPath names; a global hooksPath aimed elsewhere
+# means the stubs doctor writes at the fixed path are never read.
+foreign="$T_TMP/ghooks"
+mkdir -p "$foreign"
+printf '#!/bin/sh\nexit 0\n' >"$foreign/pre-push"
+chmod +x "$foreign/pre-push"
+git config --global core.hooksPath "$foreign"
+
+run workflow doctor
+like "$OUT" 'hooks path.*does not resolve to.*\.config/git/hooks' \
+	'a hooksPath aimed elsewhere is a finding naming the fixed path'
+
+git config --global core.hooksPath "$HOME/.config/git/hooks"
+run workflow doctor
+unlike "$OUT" 'does not resolve to' \
+	'once hooksPath matches the fixed path, the finding is gone'
