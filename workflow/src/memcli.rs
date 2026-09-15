@@ -143,14 +143,6 @@ pub fn project_review_effort() -> Option<String> {
 /// -- and a run is refused over that one rather than merged unread.
 const NO_READER: &str = "none";
 
-/// The model `workflow advise` asks, `mem project set advisor`; absent means
-/// the reader's own, by the same rungs (ruling 1 of m3-advise). Filtered the
-/// same way as [`project_review_model`], or `mem project set advisor none`
-/// would dispatch the advisor on a model literally named "none" (#3JX1AHGY).
-pub fn project_advisor() -> Option<String> {
-    project_choice("advisor").filter(|m| !m.eq_ignore_ascii_case(NO_READER))
-}
-
 /// The model that reads each task's diff at the merge gate, or nothing:
 /// nothing covers both a project that never named one and one that recorded
 /// [`NO_READER`], since neither leaves a model to dispatch.

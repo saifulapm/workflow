@@ -55,7 +55,8 @@ mkdir -p "$rundir"
 
 run env WORKFLOW_TASK=live/t1 WORKFLOW_ADVISOR= WORKFLOW_REVIEW_MODEL= workflow advise 'which file owns rounding?'
 is "$RC" 2 'with no advisor and no reader the consult is refused'
-like "$OUT" 'mem project set advisor' 'naming the remedy'
+like "$OUT" 'WORKFLOW_ADVISOR' 'naming the override'
+like "$OUT" 'mem project set review-model' 'and the key that names who advises by default'
 [ -f "$rundir/t1.advised" ] && notok 'and no consult was counted' "$(cat "$rundir/t1.advised")" || ok 'and no consult was counted'
 
 ## ----------------------------------------------------------- the first ask

@@ -96,17 +96,12 @@ fn reader_effort(run_dir: Option<&Path>) -> Option<String> {
     )
 }
 
-/// `WORKFLOW_ADVISOR`, else the run dir's `advisor` record, else `mem
-/// project set advisor`, else the reader's own model by the same rungs
-/// (ruling 1).
+/// `WORKFLOW_ADVISOR`, else the run dir's `advisor` record, else the
+/// reader's own model by its own rungs (ruling 1). There is no project rung
+/// of its own: mem's project keys are a closed set and `advisor` is not one
+/// of them, so a project names its advisor by naming its reader.
 fn advisor_model(run_dir: Option<&Path>) -> Option<String> {
-    dial(
-        "WORKFLOW_ADVISOR",
-        run_dir,
-        "advisor",
-        memcli::project_advisor,
-    )
-    .or_else(|| reader_model(run_dir))
+    dial("WORKFLOW_ADVISOR", run_dir, "advisor", || None).or_else(|| reader_model(run_dir))
 }
 
 /// The first eighty characters of a question, for the log line (ruling 1):
@@ -346,7 +341,7 @@ fn base_dispatch(
 fn no_advisor_refusal() -> i32 {
     warn("advise: nobody is named to advise.");
     warn(
-        "name one with `mem project set advisor <model>`, or point WORKFLOW_ADVISOR at one for this call.",
+        "point WORKFLOW_ADVISOR at a model for this call, or name the project's reader with `mem project set review-model <model>`, which is who advises when nothing else says.",
     );
     exit::USAGE
 }
