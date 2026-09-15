@@ -2759,7 +2759,7 @@ fn timings() -> (usize, i64, i64, f64) {
 
 /// Which worker a run dispatches onto: amx, always, unless a caller set the
 /// process template that is the suite's seam.
-fn backend_for() -> Box<dyn WorkerBackend> {
+pub(crate) fn backend_for() -> Box<dyn WorkerBackend> {
     if ProcessBackend::wanted() {
         Box::new(ProcessBackend)
     } else {

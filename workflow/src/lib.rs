@@ -31,6 +31,7 @@ pub mod ownership;
 pub mod paths;
 pub mod plan;
 pub mod plancheck;
+pub mod read;
 pub mod repo;
 pub mod review;
 pub mod reviewer;
@@ -120,6 +121,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::ReviewNeeded { diff } => review::cmd_review_needed(diff.as_deref()),
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Run { plan_file } => run::cmd_run(plan_file.as_deref()),
+        Command::Read { range, against } => read::cmd_read(range.as_deref(), against.as_deref()),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
         Command::Accept { task } => run::cmd_accept(&task),

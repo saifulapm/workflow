@@ -72,6 +72,26 @@ dispatches the first wave for real."
         #[arg(long = "plan-file", value_name = "FILE")]
         plan_file: Option<PathBuf>,
     },
+    /// Start the gate's own reader over a working tree or a range, and print its verdict.
+    #[command(
+        long_about = "Start the gate's own reader over a working tree or a range, and print its verdict.
+
+The mechanism the merge gate uses, run cold and by hand: with no --range, the
+diff is what the working tree carries against HEAD, untracked files inlined;
+with one, `git diff <range>`. --against is what the diff is held to -- a
+`wiki:<slug>` resolves through mem, plain text stands as written -- and
+without it the project's own plan stands in, else a generic requirement.
+Exit 0 is a ship verdict, 1 is fix, 2 is nobody named to read, 3 is a reading
+that ended with no verdict."
+    )]
+    Read {
+        /// git diff <r> instead of git diff HEAD.
+        #[arg(long, value_name = "RANGE")]
+        range: Option<String>,
+        /// What the diff is held to.
+        #[arg(long, value_name = "TEXT")]
+        against: Option<String>,
+    },
     /// Collect finished or stalled workers.
     Reap,
     /// Ask the live run to dispatch a failed task again.
@@ -259,6 +279,9 @@ usage: workflow <command> [options]
   run [--plan-file <f>]
       run a plan's tasks in worktrees; this dispatches real workers
       0 every task complete · 1 failed tasks · 2 config or plan error
+  read [--range <r>] [--against <text>]
+      start the gate's own reader over a working tree or a range
+      0 ship · 1 fix · 2 no reader named · 3 no verdict
   reap
       0 nothing to do · 1 reaped something
   redispatch <task> [--model <name>]
