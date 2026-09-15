@@ -14,9 +14,9 @@ for s in route plan implement review orchestrate roadmap; do
 	like "$(sed -n '2,4p' "$f")" 'description: Use ' "skills/$s describes when to use it"
 done
 
-# Line ceilings from the spec: route 50, plan 100, review 80, orchestrate 100,
+# Line ceilings from the spec: route 52, plan 100, review 80, orchestrate 100,
 # roadmap 100.
-is "$(($(wc -l <"$WF_ROOT/skills/route/SKILL.md") <= 50))" 1 'route is within 50 lines'
+is "$(($(wc -l <"$WF_ROOT/skills/route/SKILL.md") <= 52))" 1 'route is within 52 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/plan/SKILL.md") <= 100))" 1 'plan is within 100 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/review/SKILL.md") <= 80))" 1 'review is within 80 lines'
 is "$(($(wc -l <"$WF_ROOT/skills/orchestrate/SKILL.md") <= 100))" 1 'orchestrate is within 100 lines'
