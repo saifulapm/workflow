@@ -42,6 +42,11 @@ function run(args: string[]): Promise<string> {
     }
     let out = "";
     child.on("error", () => resolve(""));
+    // Decoding on the stream keeps a UTF-8 sequence split across two chunks
+    // whole; an unlistened stream `error` would be rethrown out of an IO
+    // callback and take pi down with it.
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("error", () => {});
     child.stdout.on("data", (chunk) => {
       out += chunk;
     });
@@ -59,10 +64,15 @@ function sessionId(ctx): string | undefined {
 }
 
 // A steer that reaches the model the same way, whether it came off a tool
-// batch or a settled turn.
+// batch or a settled turn. `triggerTurn` is what carries the settled one: the
+// run is over by then, and without it pi appends the message to the branch and
+// starts nothing.
 function steer(pi, content: string): void {
   if (!content) return;
-  pi.sendMessage({ customType: "mem", content, display: false }, { deliverAs: "steer" });
+  pi.sendMessage(
+    { customType: "mem", content, display: false },
+    { deliverAs: "steer", triggerTurn: true },
+  );
 }
 
 export default function (pi: ExtensionAPI) {
@@ -106,9 +116,11 @@ export default function (pi: ExtensionAPI) {
     return { cancel: true };
   });
 
+  // Without an id there is nothing to check: a bare `session-check` would read
+  // MEM_SESSION_ID out of the environment and spend some other session's nudge.
   pi.on("agent_settled", async (_event, ctx) => {
     const id = sessionId(ctx);
-    const args = id ? ["session-check", "--session-id", id] : ["session-check"];
-    steer(pi, await run(args));
+    if (!id) return;
+    steer(pi, await run(["session-check", "--session-id", id]));
   });
 }
