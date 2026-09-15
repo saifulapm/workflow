@@ -10,24 +10,6 @@ use serde_json::Value;
 use crate::gitcmd::{self, Git};
 use crate::{exit, have, paths, settings};
 
-/// The checkout this run of `doctor` is about, in the order ruling 8 sets:
-/// `WORKFLOW_HOME`, then the directory above the binary -- both answered by
-/// [`paths::wf_home`] -- then the checkout that owns the cwd: the parent of
-/// `git rev-parse --path-format=absolute --git-common-dir`, which from a
-/// linked worktree is the main checkout and from a plain checkout is itself.
-/// That root is accepted only when it itself holds `hooks/pre-commit` and
-/// `skills/`, so an unrelated repo at this cwd never answers. No mem call:
-/// mem's `project current` root is cwd-derived and names a worktree as
-/// itself, which is the wrong answer for hook identity and skill budgets.
-pub fn checkout() -> Option<PathBuf> {
-    if let Some(h) = paths::wf_home() {
-        return Some(h);
-    }
-    let common = Git::here().out(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
-    let root = PathBuf::from(common).parent()?.to_path_buf();
-    (root.join("hooks/pre-commit").exists() && root.join("skills").is_dir()).then_some(root)
-}
-
 #[derive(Default)]
 struct Report {
     findings: usize,
@@ -80,48 +62,55 @@ fn sites_checkouts() -> Vec<PathBuf> {
     found
 }
 
-/// "<name> <frontmatter bytes> <body bytes>" per skill.
+/// "<name> <frontmatter bytes> <body bytes>" per skill: the skills this
+/// binary carries, or the directory `WORKFLOW_SKILLS_DIR` names, which is
+/// how the suite hands doctor a skill to measure.
 fn skill_sizes() -> Vec<(String, usize, usize)> {
-    let dir = match std::env::var("WORKFLOW_SKILLS_DIR") {
-        Ok(v) if !v.is_empty() => PathBuf::from(v),
-        _ => match checkout() {
-            Some(h) => h.join("skills"),
-            None => return Vec::new(),
-        },
-    };
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return out;
-    };
-    let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    dirs.sort();
-    for d in dirs {
-        let f = d.join("SKILL.md");
-        let Ok(text) = std::fs::read_to_string(&f) else {
-            continue;
-        };
-        let name = d
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let (mut fm, mut body, mut in_fm) = (0usize, 0usize, false);
-        for (i, line) in text.lines().enumerate() {
-            let n = line.len() + 1;
-            if i == 0 && line == "---" {
-                in_fm = true;
-                fm += n;
-            } else if in_fm && line == "---" {
-                in_fm = false;
-                fm += n;
-            } else if in_fm {
-                fm += n;
-            } else {
-                body += n;
+    match std::env::var("WORKFLOW_SKILLS_DIR") {
+        Ok(v) if !v.is_empty() => {
+            let mut out = Vec::new();
+            let Ok(entries) = std::fs::read_dir(PathBuf::from(v)) else {
+                return out;
+            };
+            let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            dirs.sort();
+            for d in dirs {
+                let Ok(text) = std::fs::read_to_string(d.join("SKILL.md")) else {
+                    continue;
+                };
+                let name = d
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                out.push(sizes_of(name, &text));
             }
+            out
         }
-        out.push((name, fm, body));
+        _ => SKILLS
+            .iter()
+            .map(|(name, text)| sizes_of(name.to_string(), text))
+            .collect(),
     }
-    out
+}
+
+/// The frontmatter and body byte counts of one SKILL.md.
+fn sizes_of(name: String, text: &str) -> (String, usize, usize) {
+    let (mut fm, mut body, mut in_fm) = (0usize, 0usize, false);
+    for (i, line) in text.lines().enumerate() {
+        let n = line.len() + 1;
+        if i == 0 && line == "---" {
+            in_fm = true;
+            fm += n;
+        } else if in_fm && line == "---" {
+            in_fm = false;
+            fm += n;
+        } else if in_fm {
+            fm += n;
+        } else {
+            body += n;
+        }
+    }
+    (name, fm, body)
 }
 
 fn hooks(r: &mut Report) {
@@ -420,15 +409,6 @@ pub fn cmd_doctor(fix: bool) -> i32 {
     println!("workflow doctor");
     let mut r = Report::default();
     tools(&mut r);
-    // Without a checkout the hook-identity and skill-budget checks have
-    // nothing to read; a silent pass here reported an ungated machine as
-    // healthy (friction #13D9MGCP).
-    if checkout().is_none() {
-        r.finding(
-            "checkout",
-            "no workflow checkout found above this binary -- set WORKFLOW_HOME so hook identity and skill budgets can be checked",
-        );
-    }
     hooks(&mut r);
     settings_keys(&mut r);
     budgets(&mut r);

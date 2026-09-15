@@ -162,9 +162,9 @@ like "$OUT" 'skill route.*frontmatter is' 'an oversized frontmatter is a finding
 
 ## ------------------------------------- an installed binary, an occupied slot
 
-# An installed machine runs a copied binary: no checkout above the exe, so the
-# hook-identity comparison has nothing to compare against. Doctor must say so
-# instead of healthy.
+# An installed machine runs a copied binary with no checkout above the exe.
+# Since the skills and stubs ride inside the binary, doctor needs no checkout:
+# it measures its own skills and compares the copies with its own text.
 {
 	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
 	printf 'short body\n'
@@ -174,7 +174,7 @@ chmod +x "$T_TMP/installed-workflow"
 
 run "$T_TMP/installed-workflow" doctor
 is "$RC" 1 'the installed binary has findings too'
-like "$OUT" 'WORKFLOW_HOME' 'unverifiable identity and budgets are said out loud'
+unlike "$OUT" 'no workflow checkout found' 'no checkout is asked for: the binary carries the skills'
 unlike "$OUT" 'healthy' 'an unverifiable machine is not called healthy'
 
 ## ------------------------------------------------------- the third door
@@ -230,7 +230,7 @@ git config --global core.hooksPath "$HOOKS"
 new_repo other-project
 run "$T_TMP/installed-workflow" doctor
 is "$RC" 1 'an unrelated repo with neither marker is still a finding'
-like "$OUT" 'no workflow checkout found' 'the third door refuses it'
+unlike "$OUT" 'no workflow checkout found' 'an unrelated repo at the cwd is no finding either'
 cd "$T_TMP" || exit 1
 
 ## ------------------------------------------- the embedded skills and stubs
