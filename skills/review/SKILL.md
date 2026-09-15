@@ -24,40 +24,15 @@ in *this* one goes in beside them:
 
 Merged with the table, never replacing it.
 
-## Two cold reviewers
+## The read
 
-Cold means they read the diff and the spec, and nothing else: not your
-reasoning, not each other's findings, not a summary of what you were trying to
-do. Give each one the range and the requirement, and one lens:
+    workflow read [--range <r>] [--against <text|wiki:slug>]
 
-1. **Reproduce the defect.** Find a concrete input or state where this code
-   does the wrong thing. Failure scenario or nothing.
-2. **Spec compliance.** Does it do what was asked, all of it, and nothing that
-   was not asked?
-
-Each reports every finding it has, the uncertain ones marked as such, a few
-lines per finding: severity and confidence are filtered after the reading,
-never during it, and a real defect held back as minor costs a whole round.
-Do not merge their reports, do not pre-judge, do not tell reviewer two what
-reviewer one said. Two independent
-readings are the point; one averaged reading is worth less than either.
-
-Each reviewer is a session Saiful can watch — an amx agent, never print
-mode — on a model other than the one that wrote the
-diff: a model reads its own work with its own blind spots, which is the rule
-the merge gate's reader holds to as well. Where no such session can be
-started, say so and record a ruling rather than quietly skipping the review.
-
-## The fix loop, bounded
-
-- Attempts 1–3: same reviewers, they check their own findings.
-- Attempts 4–5: fresh reviewers. If three tries did not close it, the reading
-  is stuck, not the code.
-- Still open after five: stop. Record what is unresolved as a ruling —
-  *what — why — cost if wrong* — and take it to the human.
-
-## What a finding must carry
-
-A file and line, a concrete failure scenario, and what the correct behaviour
-would be. "Consider extracting this" is not a finding; it is a preference, and
-preferences do not block. Correctness and requirement gaps block.
+Run before the commit: the same reader the merge gate uses, over the working
+tree or the range. Exit 0 (`ship`) means commit. Exit 1 (`fix`) means the
+answer carries `[blocks]` findings — fix them, then read again. Two reads
+with a `[blocks]` finding still open is not a third read: it is the
+ruling-and-ask stop — `mem save --kind ruling` naming what is unresolved,
+`mem ask` to the human. Exit 2 names no reader configured (`mem project set
+review-model`); exit 3 is the deadline or a session that ended with no
+verdict, naming the answer file to read by hand.
