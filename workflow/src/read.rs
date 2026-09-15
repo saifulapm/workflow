@@ -34,11 +34,29 @@ fn model() -> Option<String> {
     }
 }
 
-/// `git status --porcelain`'s untracked paths, each under its own heading with
-/// its contents inlined past [`UNTRACKED_CAP`], or a note that it went past
-/// the cap: the diff alone never shows a brand-new file (review-3 F-12).
+/// The reasoning dial: `WORKFLOW_REVIEW_EFFORT` over the project's own
+/// `review-effort`, `none` in either meaning no dial at all -- the same drop
+/// `model` above already applies.
+fn effort() -> Option<String> {
+    match std::env::var("WORKFLOW_REVIEW_EFFORT") {
+        Ok(v) => {
+            let v = v.trim();
+            (!v.is_empty() && !v.eq_ignore_ascii_case("none")).then(|| v.to_string())
+        }
+        Err(_) => memcli::project_review_effort().filter(|v| !v.eq_ignore_ascii_case("none")),
+    }
+}
+
+/// `git status --porcelain --untracked-files=all`'s paths, each under its own
+/// heading with its contents inlined past [`UNTRACKED_CAP`], or a note that
+/// it went past the cap: the diff alone never shows a brand-new file
+/// (review-3 F-12). The default `-unormal` collapses a new directory into one
+/// entry that is not a file `fs::read` can open, so every untracked path is
+/// asked for by name.
 fn untracked_section(git: &Git) -> String {
-    let listed = git.out(&["status", "--porcelain"]).unwrap_or_default();
+    let listed = git
+        .out(&["status", "--porcelain", "--untracked-files=all"])
+        .unwrap_or_default();
     let paths: Vec<&str> = listed
         .lines()
         .filter_map(|line| line.strip_prefix("?? "))
@@ -77,14 +95,44 @@ fn requirement(against: Option<&str>) -> String {
         .unwrap_or_else(|| DEFAULT_REQUIREMENT.to_string())
 }
 
+/// The diff to read and its stat, cold. `Git::out` cannot tell a failed
+/// command from an empty one, so a range is asked for with `capture` and a
+/// non-zero status is refused by name rather than read as an empty, clean
+/// diff.
+fn diff_and_stat(git: &Git, range: Option<&str>) -> Result<(String, String), String> {
+    match range {
+        Some(r) => {
+            let out = git.capture(&["diff", r]);
+            if !out.ok {
+                let err = String::from_utf8_lossy(&out.stderr);
+                let line = err
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("git diff failed")
+                    .to_string();
+                return Err(line);
+            }
+            let diff = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stat = git.out(&["diff", "--stat", r]).unwrap_or_default();
+            Ok((diff, stat))
+        }
+        None => {
+            let mut diff = git.out(&["diff", "HEAD"]).unwrap_or_default();
+            diff.push_str(&untracked_section(git));
+            let stat = git.out(&["diff", "--stat", "HEAD"]).unwrap_or_default();
+            Ok((diff, stat))
+        }
+    }
+}
+
 pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     if !Git::here().inside_worktree() {
         warn("read: not inside a git work tree");
-        return exit::FAILED;
+        return exit::USAGE;
     }
     let Some((git, top)) = repo::goto_toplevel() else {
         warn("read: cannot resolve the repository toplevel");
-        return exit::FAILED;
+        return exit::USAGE;
     };
 
     let Some(model) = model() else {
@@ -95,20 +143,17 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         return NO_READER;
     };
 
-    let (diff, stat) = match range {
-        Some(r) => (
-            git.out(&["diff", r]).unwrap_or_default(),
-            git.out(&["diff", "--stat", r]).unwrap_or_default(),
-        ),
-        None => {
-            let mut diff = git.out(&["diff", "HEAD"]).unwrap_or_default();
-            diff.push_str(&untracked_section(&git));
-            (
-                diff,
-                git.out(&["diff", "--stat", "HEAD"]).unwrap_or_default(),
-            )
+    let (diff, stat) = match diff_and_stat(&git, range) {
+        Ok(v) => v,
+        Err(line) => {
+            warn(format!("read: {line}"));
+            return NO_VERDICT;
         }
     };
+    if diff.trim().is_empty() {
+        warn("read: nothing to read -- no diff and no untracked files");
+        return NO_VERDICT;
+    }
 
     let requirement = requirement(against);
     let title = top
@@ -135,13 +180,18 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         .as_ref()
         .map(|p| p.dir_name())
         .unwrap_or_else(|| paths::path_slug(&top));
+    let backend = run::backend_for();
+    let mint = backend.mint_session();
+    // Keyed by the second and a minted suffix: two calls starting in the same
+    // second in the same project each get their own directory rather than
+    // wiping each other's answer and pidfile mid-poll.
     let dir = paths::runs_root()
         .join(&project_dir)
         .join("_read")
-        .join(sys::now().to_string());
+        .join(format!("{}-{mint}", sys::now()));
     if let Err(e) = std::fs::create_dir_all(&dir) {
         warn(format!("read: cannot make {} ({e})", dir.display()));
-        return exit::FAILED;
+        return exit::USAGE;
     }
 
     let gate = verify::detect_verifiers(&top, project.as_ref())
@@ -153,17 +203,11 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     let prompt_path = dir.join("read.review-prompt");
     let answer = dir.join("read.review");
     let pidfile = dir.join("read.review-pid");
-    // The directory is keyed by the second, and two calls inside the same
-    // one land in it together: drop whatever the last reading left before
-    // this one starts, the way `read_start` does for a task's own review.
-    let _ = std::fs::remove_file(&answer);
-    let _ = std::fs::remove_file(&pidfile);
     let _ = std::fs::write(
         &prompt_path,
         reviewer::prompt("", &task, &diff, &stat, &top, &answer, &[], &gate, &[]),
     );
 
-    let backend = run::backend_for();
     let d = Dispatch {
         task: "read-review".into(),
         worktree: top.clone(),
@@ -173,19 +217,41 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         pidfile,
         status: dir.join("read.review-status"),
         rundir: dir.clone(),
-        session: backend.mint_session(),
+        session: mint,
         model,
-        effort: std::env::var("WORKFLOW_REVIEW_EFFORT")
-            .ok()
-            .filter(|v| !v.is_empty()),
+        effort: effort(),
         turns: match std::env::var("WORKFLOW_MAX_TURNS") {
             Ok(v) if !v.is_empty() => v,
             _ => "120".into(),
         },
         env: Vec::new(),
     };
+
+    // The reader is dispatched into the caller's own live working tree, the
+    // one holding the diff it is reading: a before-and-after snapshot is
+    // enough to warn if it left something behind (wiki:merge-gate step 6
+    // voids a reading that does this at the gate).
+    let before_tree = git
+        .out(&["status", "--porcelain", "--untracked-files=all"])
+        .unwrap_or_default();
+
+    let dispatched = backend.dispatch(&d);
+    // No handle is a launch the backend refused -- amx at its cap, or a tmux
+    // it cannot reach -- and there is no reading to wait on. What it said is
+    // in the err file, so this fails on that line rather than spinning out
+    // the full deadline on a session that never came up (run.rs does the
+    // same at its own dispatch).
+    if dispatched.is_empty() {
+        let said = std::fs::read_to_string(&d.err).unwrap_or_default();
+        let line = said
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("nothing on stderr");
+        warn(format!("read: the launch was refused: {line}"));
+        return NO_VERDICT;
+    }
     let h = Handle {
-        session: backend.dispatch(&d),
+        session: dispatched,
         pidfile: d.pidfile.clone(),
         worktree: top.clone(),
     };
@@ -193,18 +259,30 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     let deadline_s = reviewer::deadline_s();
     let grace_s = (deadline_s / 2).clamp(1, 30);
     let started = sys::now();
+    let mut timed_out = false;
     while backend.alive(&h) {
         if sys::now() - started >= deadline_s {
-            backend.stop(&h, grace_s);
-            warn(format!(
-                "read: the reading ran past its {deadline_s} second deadline and was stopped -- read {}",
-                answer.display()
-            ));
-            return NO_VERDICT;
+            timed_out = true;
+            break;
         }
         sys::sleep(1.0);
     }
     backend.stop(&h, grace_s);
+
+    let after_tree = git
+        .out(&["status", "--porcelain", "--untracked-files=all"])
+        .unwrap_or_default();
+    if after_tree != before_tree {
+        warn("read: the reading left the working tree changed");
+    }
+
+    if timed_out {
+        warn(format!(
+            "read: the reading ran past its {deadline_s} second deadline and was stopped -- read {}",
+            answer.display()
+        ));
+        return NO_VERDICT;
+    }
 
     let text = std::fs::read_to_string(&answer).unwrap_or_default();
     match reviewer::verdict(&text) {
