@@ -88,6 +88,12 @@ struct Status {
     /// transcript under the worker's directory. Empty for an agent that never
     /// got as far as one.
     session: String,
+    /// The context the worker was carrying, per amx's own reading of its
+    /// transcript. Absent (missing key or `null`) on an amx without
+    /// `status-context`, which is when the transcript is read instead.
+    context: Option<u64>,
+    /// The worker's last text, the same way. Absent the same way.
+    last_words: Option<String>,
 }
 
 /// The pure half of [`status`], so the parse is testable without an amx.
@@ -112,6 +118,11 @@ fn status_in(json: &str) -> Option<Status> {
             .and_then(|s| s.as_str())
             .unwrap_or_default()
             .to_string(),
+        context: v.get("context").and_then(|n| n.as_u64()),
+        last_words: v
+            .get("last_words")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
     })
 }
 
@@ -302,14 +313,19 @@ impl WorkerBackend for AmxBackend {
         heard.max(sys::newest_mtime(&h.worktree))
     }
 
-    /// Off the transcript of the conversation amx names, the same way the
-    /// last words are. None rather than zero when there is nothing to read:
-    /// zero would claim the worker used no context.
+    /// `status --json`'s own reading when amx ships one; else the transcript
+    /// of the conversation amx names, the same way the last words are. None
+    /// rather than zero when there is nothing to read: zero would claim the
+    /// worker used no context.
     fn context_tokens(&self, h: &Handle) -> Option<u64> {
-        let session = status(&h.session)
-            .map(|s| s.session)
-            .filter(|s| !s.is_empty())?;
-        let path = paths::transcript_path(&h.worktree, &session);
+        let s = status(&h.session)?;
+        if s.context.is_some() {
+            return s.context;
+        }
+        if s.session.is_empty() {
+            return None;
+        }
+        let path = paths::transcript_path(&h.worktree, &s.session);
         last_context_tokens(&std::fs::read_to_string(path).ok()?)
     }
 
@@ -342,20 +358,23 @@ impl WorkerBackend for AmxBackend {
         }
     }
 
-    /// A worker under amx is a claude session in a pane and leaves that
-    /// session's transcript; the id naming it is amx's to give, and
-    /// `amx status --json` is what gives it. An agent whose
-    /// status names no conversation has no last words: the reading ended
-    /// before one existed, and the transcripts standing under the directory
-    /// belong to other panes.
+    /// `status --json`'s own reading when amx ships one. Else, a worker under
+    /// amx is a claude session in a pane and leaves that session's
+    /// transcript; the id naming it is amx's to give, and `amx status --json`
+    /// is what gives it. An agent whose status names no conversation has no
+    /// last words: the reading ended before one existed, and the transcripts
+    /// standing under the directory belong to other panes.
     fn last_words(&self, h: &Handle) -> String {
-        let Some(session) = status(&h.session)
-            .map(|s| s.session)
-            .filter(|s| !s.is_empty())
-        else {
+        let Some(s) = status(&h.session) else {
             return String::new();
         };
-        let path = paths::transcript_path(&h.worktree, &session);
+        if let Some(words) = s.last_words {
+            return words;
+        }
+        if s.session.is_empty() {
+            return String::new();
+        }
+        let path = paths::transcript_path(&h.worktree, &s.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
 }
@@ -417,6 +436,31 @@ mod tests {
         assert_eq!(status_in("[]"), None);
         assert_eq!(status_in("amx: no agent `nope`"), None);
         assert_eq!(status_in(""), None);
+    }
+
+    #[test]
+    fn status_in_reads_context_and_last_words_when_amx_ships_them() {
+        // An amx before status-context: the keys are not there at all, and
+        // both answer None rather than a guess.
+        let s = status_in(STATUS).unwrap();
+        assert_eq!(s.context, None);
+        assert_eq!(s.last_words, None);
+
+        // An amx with status-context.
+        let with_fields = STATUS.replace(
+            "\"created\": 1787939721",
+            "\"created\": 1787939721, \"context\": 4213, \"last_words\": \"done already\"",
+        );
+        let s = status_in(&with_fields).unwrap();
+        assert_eq!(s.context, Some(4213));
+        assert_eq!(s.last_words, Some("done already".to_string()));
+
+        // A context of `null` reads the same as the key being absent.
+        let null_context = STATUS.replace(
+            "\"created\": 1787939721",
+            "\"created\": 1787939721, \"context\": null",
+        );
+        assert_eq!(status_in(&null_context).unwrap().context, None);
     }
 
     #[test]
@@ -728,6 +772,25 @@ exit 0
             "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":3,\"cache_read_input_tokens\":1200}}}\n",
         );
         assert_eq!(AmxBackend.context_tokens(&h), Some(1203));
+    }
+
+    #[test]
+    fn context_and_last_words_come_off_the_json_before_the_transcript() {
+        let fake = Fake::new("json-fields", "idle");
+        let path = fake.dir.join("status.json");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace(
+                "\"created\": 1787939721",
+                "\"created\": 1787939721, \"context\": 4213, \"last_words\": \"done already\"",
+            ),
+        )
+        .unwrap();
+        let h = fake.handle("wf-t1-a3k9");
+        // No transcript on disk at all -- the JSON field is the whole answer.
+        assert_eq!(AmxBackend.context_tokens(&h), Some(4213));
+        assert_eq!(AmxBackend.last_words(&h), "done already");
     }
 
     #[test]
