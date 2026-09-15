@@ -78,6 +78,12 @@ like "$rbody" '### wiki:missing' 'and the same absent page'
 brief2="$XDG_CACHE_HOME/workflow/briefs/app/wiki/t2.md"
 unlike "$(cat "$brief2")" 'Pages the plan names' 't2 named no pages, so no heading'
 
+# The merge line names the pages the task's Read named, so a page a merged
+# task may have falsified can be found from the run log alone (m4-lines).
+runlog=$("$MEM_BIN" log --type run --json)
+like "$runlog" 'run wiki: merged t1 -- pages named: run, missing' "t1's merge line names its pages"
+like "$runlog" 'run wiki: merged t2"' "t2's merge line names none"
+
 ## -------------------------------------------- pages past the byte cap
 
 fits=$(head -c 12000 /dev/zero | tr '\0' 'x')

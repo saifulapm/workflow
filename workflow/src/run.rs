@@ -1623,7 +1623,19 @@ impl Run {
         warn(format!("task {task}: merged onto {}", self.int_branch));
         self.event(&format!("merged {task}"));
         self.tick_off(task);
-        memcli::log_run(&format!("run {}: merged {task}", self.plan.plan_id));
+        // The pages the task's Read named ride on the merge line, so a page
+        // a merged task may have falsified can be found from the run log
+        // alone (m4-lines).
+        let pages = self
+            .task_now(task)
+            .map(|t| t.wiki_slugs())
+            .unwrap_or_default();
+        let named = if pages.is_empty() {
+            String::new()
+        } else {
+            format!(" -- pages named: {}", pages.join(", "))
+        };
+        memcli::log_run(&format!("run {}: merged {task}{named}", self.plan.plan_id));
     }
 
     /// verify, on the integration branch, as its own process: the same
