@@ -3,8 +3,12 @@
 //! wiki:merge-gate). No run, no worktree of its own: one prompt, one reader,
 //! one verdict file, and the exit code says what it found.
 
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+
 use crate::backend::{Dispatch, Handle};
-use crate::gitcmd::Git;
+use crate::gitcmd::{self, Git};
 use crate::plan::Task;
 use crate::reviewer::{self, Verdict};
 use crate::{exit, memcli, paths, repo, run, sys, verify, warn};
@@ -47,36 +51,89 @@ fn effort() -> Option<String> {
     }
 }
 
-/// `git status --porcelain --untracked-files=all`'s paths, each under its own
-/// heading with its contents inlined past [`UNTRACKED_CAP`], or a note that
-/// it went past the cap: the diff alone never shows a brand-new file
-/// (review-3 F-12). The default `-unormal` collapses a new directory into one
-/// entry that is not a file `fs::read` can open, so every untracked path is
-/// asked for by name.
-fn untracked_section(git: &Git) -> String {
-    let listed = git
-        .out(&["status", "--porcelain", "--untracked-files=all"])
-        .unwrap_or_default();
-    let paths: Vec<&str> = listed
-        .lines()
-        .filter_map(|line| line.strip_prefix("?? "))
+/// Claude Code's own scratch inside the tree: a sub-agent's memory under
+/// `.claude/agent-memory/`, the permissions a session allowed in
+/// `.claude/settings.local.json`. The gate never counts it as a task's write
+/// (ownership.rs `harness_scratch`) and a reading must not either -- the
+/// reader is not here to judge the harness, and the reader's own session
+/// writes scratch into the very tree it is reading, which would trip the
+/// before-and-after check in [`cmd_read`] on a change nobody made. Only the
+/// untracked record is waved through, as at the gate: a tracked file under
+/// `.claude/` that the change touches is still its write.
+fn harness_scratch(field: &[u8]) -> bool {
+    let Some(path) = field.strip_prefix(b"?? ") else {
+        return false;
+    };
+    path.starts_with(b".claude/") || path.windows(9).any(|w| w == b"/.claude/")
+}
+
+/// The working tree's status, as fields git wrote them.
+///
+/// `-z` because it is the only output that does not quote: a path holding a
+/// space or a byte outside ASCII comes back from `--porcelain` alone wrapped
+/// in double quotes, and a quoted path is not one `fs::read` can open
+/// (ownership.rs says the same, in as many words). `-uall` because the
+/// default collapses a brand-new directory into one entry that is not a file
+/// either.
+///
+/// A rename is two fields rather than one record, which is enough here: this
+/// is read for the `??` entries and for a before-and-after equality check,
+/// and neither cares where one record ends.
+fn status_fields(git: &Git) -> Vec<Vec<u8>> {
+    gitcmd::nul_fields(&git.bytes(&["status", "--porcelain", "-uall", "-z"]))
+        .into_iter()
+        .filter(|f| !harness_scratch(f))
+        .collect()
+}
+
+/// A fence longer than the longest backtick run the contents hold, so an
+/// untracked markdown file cannot close its own block early and read as prose
+/// beside the question.
+fn fence_for(text: &str) -> String {
+    let mut longest = 0usize;
+    let mut run = 0usize;
+    for c in text.chars() {
+        if c == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    "`".repeat(longest.max(2) + 1)
+}
+
+/// The untracked paths, each under its own heading with its contents inlined
+/// under [`UNTRACKED_CAP`], or a note saying why not: the diff alone never
+/// shows a brand-new file (review-3 F-12). Bytes that are not UTF-8 are named
+/// and not inlined -- a binary fixture rendered through `from_utf8_lossy` is
+/// a screenful of replacement characters that tells the reader nothing.
+fn untracked_section(fields: &[Vec<u8>]) -> String {
+    let paths: Vec<&[u8]> = fields
+        .iter()
+        .filter_map(|f| f.strip_prefix(b"?? ".as_slice()))
         .collect();
     if paths.is_empty() {
         return String::new();
     }
     let mut out = String::from("\n\nUntracked files\n");
     for path in paths {
-        out.push_str(&format!("\n{path}:\n"));
-        match std::fs::read(path) {
-            Ok(bytes) if bytes.len() <= UNTRACKED_CAP => {
-                out.push_str("```\n");
-                out.push_str(&String::from_utf8_lossy(&bytes));
-                out.push_str("\n```\n");
-            }
-            Ok(bytes) => out.push_str(&format!(
+        out.push_str(&format!("\n{}:\n", String::from_utf8_lossy(path)));
+        match std::fs::read(Path::new(OsStr::from_bytes(path))) {
+            Ok(bytes) if bytes.len() > UNTRACKED_CAP => out.push_str(&format!(
                 "{} bytes, past what this brief carries inline.\n",
                 bytes.len()
             )),
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => {
+                    let fence = fence_for(&text);
+                    out.push_str(&format!(
+                        "{fence}\n{}\n{fence}\n",
+                        text.trim_end_matches('\n')
+                    ));
+                }
+                Err(e) => out.push_str(&format!("binary, {} bytes.\n", e.as_bytes().len())),
+            },
             Err(e) => out.push_str(&format!("cannot be read ({e}).\n")),
         }
     }
@@ -95,34 +152,41 @@ fn requirement(against: Option<&str>) -> String {
         .unwrap_or_else(|| DEFAULT_REQUIREMENT.to_string())
 }
 
-/// The diff to read and its stat, cold. `Git::out` cannot tell a failed
-/// command from an empty one, so a range is asked for with `capture` and a
-/// non-zero status is refused by name rather than read as an empty, clean
-/// diff.
-fn diff_and_stat(git: &Git, range: Option<&str>) -> Result<(String, String), String> {
-    match range {
-        Some(r) => {
-            let out = git.capture(&["diff", r]);
-            if !out.ok {
-                let err = String::from_utf8_lossy(&out.stderr);
-                let line = err
-                    .lines()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("git diff failed")
-                    .to_string();
-                return Err(line);
-            }
-            let diff = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let stat = git.out(&["diff", "--stat", r]).unwrap_or_default();
-            Ok((diff, stat))
-        }
-        None => {
-            let mut diff = git.out(&["diff", "HEAD"]).unwrap_or_default();
-            diff.push_str(&untracked_section(git));
-            let stat = git.out(&["diff", "--stat", "HEAD"]).unwrap_or_default();
-            Ok((diff, stat))
-        }
+/// The first thing something said, for a refusal that fits on one line.
+fn first_line(text: &str, fallback: &str) -> String {
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+/// The diff to read and its stat, cold, with the untracked files beside it
+/// when the diff is the working tree's own.
+///
+/// `Git::out` cannot tell a failed command from an empty one, so the diff is
+/// asked for with `capture` and a non-zero status is refused by name. That is
+/// not only about a range nobody can resolve: `git diff HEAD` exits 128 on an
+/// unborn HEAD, and reading that as an empty diff would hand the reader the
+/// untracked files alone while every staged file stayed invisible.
+fn diff_and_stat(
+    git: &Git,
+    range: Option<&str>,
+    fields: &[Vec<u8>],
+) -> Result<(String, String), String> {
+    let rev = range.unwrap_or("HEAD");
+    let out = git.capture(&["diff", rev]);
+    if !out.ok {
+        return Err(first_line(
+            &String::from_utf8_lossy(&out.stderr),
+            "git diff failed",
+        ));
     }
+    let mut diff = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stat = git.out(&["diff", "--stat", rev]).unwrap_or_default();
+    if range.is_none() {
+        diff.push_str(&untracked_section(fields));
+    }
+    Ok((diff, stat))
 }
 
 pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
@@ -143,7 +207,11 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         return NO_READER;
     };
 
-    let (diff, stat) = match diff_and_stat(&git, range) {
+    // The one listing behind both the untracked section and the snapshot the
+    // reading is judged against below.
+    let before_tree = status_fields(&git);
+
+    let (diff, stat) = match diff_and_stat(&git, range, &before_tree) {
         Ok(v) => v,
         Err(line) => {
             warn(format!("read: {line}"));
@@ -203,9 +271,23 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     let prompt_path = dir.join("read.review-prompt");
     let answer = dir.join("read.review");
     let pidfile = dir.join("read.review-pid");
+    // The requirement is both the Done line (ruling 1) and the plan of record:
+    // there is no plan document behind a read, and `reviewer::prompt` opens on
+    // an empty "## The plan of record" heading otherwise, while the reader is
+    // asked to judge the plan's rulings.
     let _ = std::fs::write(
         &prompt_path,
-        reviewer::prompt("", &task, &diff, &stat, &top, &answer, &[], &gate, &[]),
+        reviewer::prompt(
+            &requirement,
+            &task,
+            &diff,
+            &stat,
+            &top,
+            &answer,
+            &[],
+            &gate,
+            &[],
+        ),
     );
 
     let d = Dispatch {
@@ -228,13 +310,9 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     };
 
     // The reader is dispatched into the caller's own live working tree, the
-    // one holding the diff it is reading: a before-and-after snapshot is
-    // enough to warn if it left something behind (wiki:merge-gate step 6
-    // voids a reading that does this at the gate).
-    let before_tree = git
-        .out(&["status", "--porcelain", "--untracked-files=all"])
-        .unwrap_or_default();
-
+    // one holding the diff it is reading: the snapshot taken above and the
+    // one below are enough to warn if it left something behind
+    // (wiki:merge-gate step 6 voids a reading that does this at the gate).
     let dispatched = backend.dispatch(&d);
     // No handle is a launch the backend refused -- amx at its cap, or a tmux
     // it cannot reach -- and there is no reading to wait on. What it said is
@@ -243,10 +321,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     // same at its own dispatch).
     if dispatched.is_empty() {
         let said = std::fs::read_to_string(&d.err).unwrap_or_default();
-        let line = said
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("nothing on stderr");
+        let line = first_line(&said, "nothing on stderr");
         warn(format!("read: the launch was refused: {line}"));
         return NO_VERDICT;
     }
@@ -269,10 +344,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     }
     backend.stop(&h, grace_s);
 
-    let after_tree = git
-        .out(&["status", "--porcelain", "--untracked-files=all"])
-        .unwrap_or_default();
-    if after_tree != before_tree {
+    if status_fields(&git) != before_tree {
         warn("read: the reading left the working tree changed");
     }
 

@@ -79,4 +79,53 @@ prompt=$(ls -t "$WF_TMP"/read-prompt-* | head -1)
 like "$(cat "$prompt")" 'Untracked files' 'the untracked heading is there'
 like "$(cat "$prompt")" 'a scratch note about the widget' 'and its contents are inlined'
 like "$(cat "$prompt")" 'Done: the widget adds up cleanly' 'and the --against text is the requirement'
+plan_section=$(sed -n '/^## The plan of record$/,/^## The task$/p' "$prompt")
+like "$plan_section" 'the widget adds up cleanly' 'the requirement is the plan of record too'
+rm -f app/notes.txt
+
+## ------------------------------------ a path git quotes, and harness scratch
+
+printf 'good\n' >app/t1.php
+printf 'a note about spacing\n' >'app/plain note.txt'
+mkdir -p app/.claude/agent-memory
+printf '{"permissions": {}}\n' >app/.claude/settings.local.json
+printf 'what a sub-agent remembered\n' >app/.claude/agent-memory/reviewer.md
+run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
+is "$RC" 0 'an untracked path git would quote still ships'
+prompt=$(ls -t "$WF_TMP"/read-prompt-* | head -1)
+like "$(cat "$prompt")" '^app/plain note.txt:$' 'the path is listed unquoted'
+like "$(cat "$prompt")" 'a note about spacing' 'and its contents are inlined'
+unlike "$(cat "$prompt")" 'settings.local.json|what a sub-agent remembered' \
+	'the harness own scratch under .claude/ is not part of the change'
+unlike "$OUT" 'left the working tree changed' 'and scratch does not trip the tree check'
+rm -f 'app/plain note.txt'
+rm -rf app/.claude
+
+## -------------------------------------- bytes that are not lines of a source
+
+printf 'good\n' >app/t1.php
+printf '\211PNG\r\n\032\n\000\377\376' >app/logo.png
+printf 'a doc\n```\nfenced\n```\ntail line\n' >app/doc.md
+run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
+is "$RC" 0 'a binary untracked file still ships'
+prompt=$(ls -t "$WF_TMP"/read-prompt-* | head -1)
+like "$(cat "$prompt")" 'binary, [0-9]+ bytes' 'binary bytes are named, not inlined'
+like "$(cat "$prompt")" '^````$' 'a file holding a fence is wrapped in a longer one'
+like "$(cat "$prompt")" '^tail line$' 'so its last line is still content'
+rm -f app/logo.png app/doc.md
+
+## -------------------------------- a git command that failed is not a clean diff
+
+git checkout -q -- app/t1.php
+run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read --range no-such-ref..also-none
+is "$RC" 3 'a range git cannot resolve is refused'
+like "$OUT" 'read: fatal' 'naming what git said'
+
+printf 'good\n' >app/t1.php
+git add app/t1.php
+git checkout -q --orphan fresh
+printf 'a scratch note\n' >app/notes.txt
+run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
+is "$RC" 3 'an unborn HEAD is refused, not read as untracked files alone'
+like "$OUT" 'read: fatal' 'naming what git said about HEAD'
 rm -f app/notes.txt
