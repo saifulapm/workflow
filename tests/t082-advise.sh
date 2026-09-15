@@ -12,14 +12,15 @@ write_exec "$T_TMP/worker.sh" <<'FAKE'
 #!/bin/sh
 task=$1; brief=$5
 case $task in
-*-advice-1)
-	answer=$(sed -n 's/^    Answer file: //p' "$brief")
-	cp "$brief" "$WF_TMP/advice-prompt-$(date +%s%N)"
-	printf 'use the service\n' >"$answer"
-	;;
 *-advice-2)
 	cp "$brief" "$WF_TMP/advice-prompt-$(date +%s%N)"
 	# writes nothing: the session ends with no answer
+	;;
+*-advice-*)
+	answer=$(sed -n 's/^    Answer file: //p' "$brief")
+	cp "$brief" "$WF_TMP/advice-prompt-$(date +%s%N)"
+	printf '%s\n' "$WORKFLOW_TASK" >"$WF_TMP/advice-task"
+	printf 'use the service\n' >"$answer"
 	;;
 esac
 exit 0
@@ -72,6 +73,7 @@ like "$(cat "$prompt")" 'which file owns rounding\?' 'and the question'
 like "$(cat "$prompt")" 'draft' 'and the named file, inlined'
 like "$(cat "$prompt")" 'Answer file: '"$rundir"'/t1\.advice\.1' 'naming where the answer goes'
 like "$("$MEM_BIN" log --type run --json)" 'task t1: advised \(1\) -- which file owns rounding\?' 'the log line names the consult and the question'
+is "$(cat "$WF_TMP/advice-task")" 'live/t1-advice-1' 'the advisor carries its own task tag, not the worker'"'"'s'
 
 ## --------------------------------------------------------------- the second, silent
 
@@ -79,6 +81,37 @@ run env WORKFLOW_TASK=live/t1 WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= WORKF
 is "$RC" 1 'a session that ends with no answer exits 1'
 is "$(cat "$rundir/t1.advised")" 2 'the consult count is two'
 [ -f "$rundir/t1.advice.2" ] && notok 'and nothing was kept for it' "$(cat "$rundir/t1.advice.2")" || ok 'and nothing was kept for it'
+
+## ------------------------------------------------ the plan of record moved
+
+# `mem plan --from <slug>`, or a roadmap taking up the next milestone, swaps
+# the plan under a live run, and `t1` is an id every plan here uses. The
+# advisor is told the task is not in the plan of record rather than handed
+# the other plan's t1 under this task's heading.
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: next
+
+## Spec
+
+Ruling 1. The next milestone is about invoices.
+
+- [ ] t1 Add the invoice service
+      Files: app/inv.php
+      Verify: true
+EOF
+
+run env WORKFLOW_TASK=live/t1 WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= workflow advise 'still the same plan?'
+is "$RC" 0 'a consult under a moved plan of record still answers'
+prompt=$(ls -t "$WF_TMP"/advice-prompt-* | head -1)
+like "$(cat "$prompt")" 'This task is not in the plan of record' 'and says the task is not in the plan of record'
+unlike "$(cat "$prompt")" 'invoice' 'carrying nothing from the plan that replaced it'
+
+## ------------------------------------------- a run dir that is not there
+
+run env WORKFLOW_TASK=nosuch/t1 WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= workflow advise 'where does this go?'
+is "$RC" 1 'a prompt that cannot be written refuses instead of dispatching'
+like "$OUT" 'cannot write the prompt' 'and says which file'
 
 ## ------------------------------------------------------- capped at three
 
@@ -133,3 +166,20 @@ is "$(cat "$childdir/t1.advised")" 1 'and the count lands in the child run dir, 
 like "$(cat "$childdir/t1.advice.1")" 'use the service' 'the advisor answered'
 prompt=$(ls -t "$WF_TMP"/advice-prompt-* | head -1)
 like "$(cat "$prompt")" 'child note' "the relative --file resolved against the caller's cwd"
+
+## ----------------------------------- from a worker's own worktree root
+
+# A worker is dispatched with its cwd at the worktree root, where mem cannot
+# see the child project at all: the path relative to the toplevel is empty,
+# so mem answers with the monorepo root and the run dir would come out under
+# it. Inside a worktree the path decides instead.
+
+cd "$T_TMP/mono"
+wt="$XDG_STATE_HOME/workflow/worktrees/child/child-advise/t2"
+mkdir -p "$(dirname "$wt")"
+git -c core.hooksPath=/dev/null worktree add -q -b t2 "$wt"
+cd "$wt"
+run env WORKFLOW_TASK=child-advise/t2 WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= workflow advise 'from the worktree root?'
+is "$RC" 0 'a consult from a worktree root exits 0'
+is "$(cat "$childdir/t2.advised")" 1 "and the run dir is the worktree path's project"
+[ -e "$XDG_STATE_HOME/workflow/runs/mono/child-advise" ] && notok 'nothing was written under the monorepo root' || ok 'nothing was written under the monorepo root'

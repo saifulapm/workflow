@@ -32,6 +32,21 @@ fn write_field(dir: &Path, task: &str, key: &str, value: &str) {
     }
 }
 
+/// The advisor's prompt, written where the dispatch hands it over. A failed
+/// write dispatches a session against a brief that is not there, which comes
+/// back as no answer after the whole deadline with nothing saying why, so it
+/// refuses instead.
+fn write_prompt(path: &Path, text: &str) -> bool {
+    if let Err(e) = std::fs::write(path, text) {
+        warn(format!(
+            "advise: cannot write the prompt {} ({e}) -- nothing was dispatched",
+            path.display()
+        ));
+        return false;
+    }
+    true
+}
+
 /// A run dir field, trimmed; `None` when the file is not there.
 fn field(dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(dir.join(name))
@@ -342,6 +357,7 @@ fn no_advisor_refusal() -> i32 {
 /// (ruling 1).
 fn cmd_advise_in_run(
     dir: &Path,
+    plan_id: &str,
     task_id: &str,
     top: &Path,
     question: &str,
@@ -362,7 +378,11 @@ fn cmd_advise_in_run(
     write_field(dir, task_id, "advised", &n.to_string());
 
     let plan_text = memcli::plan().unwrap_or_default();
-    let parsed = plan::parse(&plan_text, false);
+    // The plan of record moves under a live run (`mem plan --from <slug>`, a
+    // roadmap taking up the next milestone) and ids like `t1` repeat across
+    // plans, so a plan that is not this run's is no plan at all here rather
+    // than another plan's `t1` under this task's heading (run.rs `task_now`).
+    let parsed = plan::parse(&plan_text, false).filter(|p| p.plan_id == plan_id);
     let task = parsed.as_ref().and_then(|p| p.get(task_id));
     let pages: Vec<(String, Option<String>)> = task
         .map(|t| t.wiki_slugs())
@@ -373,7 +393,11 @@ fn cmd_advise_in_run(
             (slug, text)
         })
         .collect();
-    let body = plan_and_task_section(&plan::prose(&plan_text), task.map_or("", |t| &t.block));
+    let prose = parsed
+        .as_ref()
+        .map(|_| plan::prose(&plan_text))
+        .unwrap_or_default();
+    let body = plan_and_task_section(&prose, task.map_or("", |t| &t.block));
 
     let status = dir.join(format!("{task_id}.status"));
     let answer = dir.join(format!("{task_id}.advice.{n}"));
@@ -387,12 +411,14 @@ fn cmd_advise_in_run(
         &answer,
     );
     let brief = dir.join(format!("{task_id}.advice-prompt.{n}"));
-    let _ = std::fs::write(&brief, &prompt_text);
+    if !write_prompt(&brief, &prompt_text) {
+        return exit::FAILED;
+    }
 
     let backend = run::backend_for();
     let session = backend.mint_session();
     let stem = format!("{task_id}.advice-{n}");
-    let d = base_dispatch(
+    let mut d = base_dispatch(
         format!("{task_id}-advice-{n}"),
         top.to_path_buf(),
         brief,
@@ -402,12 +428,22 @@ fn cmd_advise_in_run(
         model,
         reader_effort(Some(dir)),
     );
+    // The advisor gets its own task tag, the way the reader's dispatch does
+    // (run.rs `read_start`): inheriting the worker's verbatim would file the
+    // advisor's `mem ask` under the worker's task and spend the worker's own
+    // consults.
+    d.env.push((
+        "WORKFLOW_TASK".into(),
+        format!("{plan_id}/{task_id}-advice-{n}"),
+    ));
     dispatch_and_wait(backend.as_ref(), &d, &answer, Some((task_id, n, question)))
 }
 
 /// Outside a run: `--against <text>` stands in for the plan and the task
 /// block, and is required; the answer goes to
-/// `paths::runs_root()/<project>/_advice/<unix seconds>/advice` (ruling 1).
+/// `paths::runs_root()/<project>/_advice/<unix seconds>-<mint>/advice`
+/// (ruling 1 as amended, #WCX5RB28: two consults in the same second are two
+/// directories).
 fn cmd_advise_standalone(
     project_dir: &str,
     top: &Path,
@@ -447,7 +483,9 @@ fn cmd_advise_standalone(
         &answer,
     );
     let brief = dir.join("advice-prompt");
-    let _ = std::fs::write(&brief, &prompt_text);
+    if !write_prompt(&brief, &prompt_text) {
+        return exit::FAILED;
+    }
 
     let d = base_dispatch(
         "advice".into(),
@@ -460,6 +498,27 @@ fn cmd_advise_standalone(
         reader_effort(None),
     );
     dispatch_and_wait(backend.as_ref(), &d, &answer, None)
+}
+
+/// The `<project>` component of a task worktree,
+/// `worktrees_root()/<project>/<plan>/<task>`. A worker's cwd is its
+/// worktree root, and mem resolves a child project by the path relative to
+/// the toplevel: at the root that path is empty, so mem answers with the
+/// *root* project and a child project's consult would compute a run dir
+/// under the monorepo instead of under the child. The worktree and the run
+/// dir carry the identical component (run.rs writes both from
+/// `project.dir_name()`), so inside one the path is the answer; verify.rs
+/// `task_verify_cmd` reads it the same way.
+fn project_from_worktree(top: &Path) -> Option<String> {
+    let root = crate::paths::realpath_m(crate::paths::worktrees_root());
+    let real = crate::paths::realpath(top)?;
+    let rel = real.strip_prefix(&root).ok()?;
+    let mut parts = rel.components();
+    let (project, _plan, _task) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(project.as_os_str().to_string_lossy().to_string())
 }
 
 pub fn cmd_advise(question: &str, files: &[PathBuf], against: Option<&str>) -> i32 {
@@ -487,11 +546,11 @@ pub fn cmd_advise(question: &str, files: &[PathBuf], against: Option<&str>) -> i
         return exit::USAGE;
     };
 
-    let project = memcli::project_current();
-    let project_dir = project
-        .as_ref()
-        .map(|p| p.dir_name())
-        .unwrap_or_else(|| crate::paths::path_slug(&top));
+    let project_dir = project_from_worktree(&top).unwrap_or_else(|| {
+        memcli::project_current()
+            .map(|p| p.dir_name())
+            .unwrap_or_else(|| crate::paths::path_slug(&top))
+    });
 
     let task_env = std::env::var("WORKFLOW_TASK")
         .ok()
@@ -499,7 +558,7 @@ pub fn cmd_advise(question: &str, files: &[PathBuf], against: Option<&str>) -> i
     match task_env.as_deref().and_then(|v| v.split_once('/')) {
         Some((plan_id, task_id)) => {
             let dir = crate::paths::runs_root().join(&project_dir).join(plan_id);
-            cmd_advise_in_run(&dir, task_id, &top, question, files)
+            cmd_advise_in_run(&dir, plan_id, task_id, &top, question, files)
         }
         None => cmd_advise_standalone(&project_dir, &top, question, files, against),
     }
