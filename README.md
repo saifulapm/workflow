@@ -21,14 +21,20 @@ that carry it into an editor session.
 
 Install each binary twice, because the machines run them from two places:
 `cargo install --force --path <crate> --root ~/.local` for the hooks and
-hub.service, `cargo install --path <crate>` for the shell. Tests are
-`cargo test` per crate plus `bash tests/run.sh`. `workflow doctor` and
+hub.service, `cargo install --path <crate>` for the shell. The skills and
+the git hook stubs ride inside the workflow binary: `workflow doctor --fix`
+writes them to `~/.claude/skills`, `~/.agents/skills` (what pi, codex and
+opencode read) and `~/.config/git/hooks`, and reports a copy that has
+drifted from the binary until it is run again. The dotfiles call it after
+every build, so it is the step after `cargo install` on any machine. Tests
+are `cargo test` per crate plus `bash tests/run.sh`. `workflow doctor` and
 `mem doctor` check a machine's wiring.
 
 ## Starting a project (new or existing)
 
-The gate and the hooks are global; a project only needs three things, none
-of them committed:
+The gate and the hooks are global, put in place once per machine by
+`workflow doctor --fix` (the dotfiles run it after the build); a project only
+needs three things, none of them committed:
 
     cd ~/Sites/github/thing
     mem log "picking this up"        # first write registers the project
@@ -114,6 +120,23 @@ Three sizes of work, three moves:
   under any spelling (`opus` and `claude-opus-5` are one model), and nothing
   is read — a model goes over its own work with its own blind spots — so the
   reading costs a session only where it can find something.
+
+A diff can be read before it is committed. `workflow read` starts the
+gate's own reader, cold, over the working tree (`--range <r>` for a range)
+and prints its verdict: exit 0 ships, 1 is fix, 2 is nobody named to read,
+3 is a reading that ended with no verdict. `--against "<one sentence>"` or
+`--against wiki:<slug>` says what the diff is held to; without it the plan
+of record stands in. Route sends a one-shot past sixty changed lines through
+it before the commit, and the review skill is this verb.
+
+A worker can ask a stronger model without stopping. From a task worktree,
+`workflow advise "<question>" --file <path>` sends the plan's prose, the
+task block, the pages it names, the worker's own reports and the question to
+the run's advisor (`WORKFLOW_ADVISOR` for one run, else the reader's model),
+prints the answer, and the task goes on; the brief says when to ask. Three
+consults an attempt, and a decision (scope, taste, a broken plan) is still
+`mem ask`. Outside a run, `--against "<text>"` says what the question is
+held to.
 
 Questions find you: on screen while a machine is watched, on the phone
 (ntfy via hub) when everything is locked. Answer in the session, with
