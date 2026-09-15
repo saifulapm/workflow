@@ -108,8 +108,8 @@ unlike "$OUT" 'question' 'the question is not reported again'
 : >"$WF_TMP/release-hold"
 run timeout 60 workflow wait
 is "$RC" 0 'the run ending wakes it with exit 0'
-like "$OUT" ' ended 3 merged, 1 failed, 0 never started, 3 readings, 0 fix verdicts, 0 context$' \
-	'with the tally, readings, fix verdicts and context'
+like "$OUT" ' ended 3 merged, 1 failed, 0 never started, 0 readings, 0 fix verdicts, 0 context$' \
+	'with the tally, and no reader means no readings or fix verdicts'
 wait "$runpid"
 like "$(cat "$rundir/events")" '^[0-9T:Z-]+ question ask' 'the events file opens with the question'
 is "$(grep -c ' merged ' "$rundir/events")" 3 'carries every merge'

@@ -3245,22 +3245,19 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     let readings: u64 = fixes
         + ids
             .iter()
-            .filter(|t| !run.field(t, "merged").is_empty() || !run.field(t, "review").is_empty())
+            .filter(|t| !run.field(t, "review").is_empty())
             .count() as u64;
     let context: u64 = ids
         .iter()
         .map(|t| run.field(t, "context").parse().unwrap_or(0))
         .sum();
 
-    warn(format!(
-        "run {}: {merged} merged, {failed} failed, {blocked} never started",
-        run.plan.plan_id
-    ));
     let ended = format!(
         "ended {merged} merged, {failed} failed, {blocked} never started, \
 {readings} readings, {fixes} fix verdicts, {} context",
         tokens(context)
     );
+    warn(format!("run {}: {}", run.plan.plan_id, &ended[6..]));
     run.event(&ended);
     memcli::log_run(&format!("run {}: {ended}", run.plan.plan_id));
     let sizing: Vec<String> = run
