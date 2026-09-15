@@ -92,6 +92,28 @@ that ended with no verdict."
         #[arg(long, value_name = "TEXT")]
         against: Option<String>,
     },
+    /// Ask a stronger model at a decision point, without ending your turn.
+    #[command(
+        long_about = "Ask a stronger model at a decision point, without ending your turn.
+
+Inside a run -- WORKFLOW_TASK set in the environment -- the question goes to
+the advisor with the plan's rulings, this task's block and the pages its
+Read: names; outside one, --against <text> says what the question is held to
+and is required. Either way a --file is inlined under 24 KB, named with its
+size past it. The answer prints and the task goes on: a decision -- scope,
+taste, a broken plan -- is `mem ask`, never this. Exit 0 is an answer
+printed, 1 is a session that ended or was stopped with none, 2 is nobody
+named to advise or a fourth consult this attempt."
+    )]
+    Advise {
+        question: String,
+        /// A file to inline for the advisor, under 24 KB; repeatable.
+        #[arg(long, value_name = "PATH")]
+        file: Vec<PathBuf>,
+        /// What the question is held to, outside a run.
+        #[arg(long, value_name = "TEXT")]
+        against: Option<String>,
+    },
     /// Collect finished or stalled workers.
     Reap,
     /// Ask the live run to dispatch a failed task again.
@@ -282,6 +304,9 @@ usage: workflow <command> [options]
   read [--range <r>] [--against <text>]
       start the gate's own reader over a working tree or a range
       0 ship · 1 fix · 2 no reader named · 3 no verdict
+  advise <question> [--file <path>]... [--against <text>]
+      ask a stronger model at a decision point, without ending your turn
+      0 answered · 1 no answer · 2 nobody named, or a fourth consult
   reap
       0 nothing to do · 1 reaped something
   redispatch <task> [--model <name>]

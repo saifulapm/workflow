@@ -17,6 +17,7 @@
 //! Process state lives in mem, never in the repo. Everything here is driven by
 //! git and mem, so it works the same under any agent runtime.
 
+pub mod advise;
 pub mod backend;
 pub mod backend_amx;
 pub mod brief;
@@ -122,6 +123,11 @@ pub fn run(cli: Cli) -> i32 {
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Run { plan_file } => run::cmd_run(plan_file.as_deref()),
         Command::Read { range, against } => read::cmd_read(range.as_deref(), against.as_deref()),
+        Command::Advise {
+            question,
+            file,
+            against,
+        } => advise::cmd_advise(&question, &file, against.as_deref()),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
         Command::Accept { task } => run::cmd_accept(&task),

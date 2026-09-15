@@ -138,6 +138,12 @@ pub fn project_review_effort() -> Option<String> {
     project_choice("review_effort")
 }
 
+/// The model `workflow advise` asks, `mem project set advisor`; absent means
+/// the reader's own, by the same rungs (ruling 1 of m3-advise).
+pub fn project_advisor() -> Option<String> {
+    project_choice("advisor")
+}
+
 /// What `review-model` is set to by a project that has decided nobody reads
 /// its merges. Absent is a different answer -- a project that has not decided
 /// -- and a run is refused over that one rather than merged unread.
