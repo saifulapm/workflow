@@ -29,8 +29,12 @@ Merged with the table, never replacing it.
     workflow read [--range <r>] [--against <text|wiki:slug>]
 
 Run before the commit: the same reader the merge gate uses, over the working
-tree or the range. Exit 0 (`ship`) means commit — file any `[later]`
-findings with `mem save` first, so nothing true is lost. Exit 1 (`fix`)
+tree or the range. Always pass `--against`, one sentence of what this change
+was asked to do or a `wiki:<slug>`: without it the reader is handed the
+project's plan of record, which is a different change, and answers fix on
+the mismatch. Exit 0 (`ship`) means commit — file any `[later]` findings
+with `mem save --type followup` first, the stream follow-ups are collected
+from, so nothing true is lost. Exit 1 (`fix`)
 means the answer carries `[blocks]` findings — fix them, then read again.
 Two reads with a `[blocks]` finding still open is not a third read: it is
 the ruling-and-ask stop — `mem save --kind ruling` naming what is
