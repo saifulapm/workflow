@@ -19,11 +19,17 @@ const FILE_CAP: usize = 24 * 1024;
 /// `mem ask` (ruling 1).
 const CONSULT_LIMIT: u64 = 3;
 
-/// One task's field in a run dir, written the way `run.rs`'s own
-/// `write_field` does: `<dir>/<task>.<key>`, trimmed to nothing readable
-/// but its value plus a newline.
+/// One task's field in a run dir: `<dir>/<task>.<key>`, its value plus a
+/// newline. A failed write means the consult count silently stops
+/// advancing, so it warns the way `run.rs`'s own `write_field` does.
 fn write_field(dir: &Path, task: &str, key: &str, value: &str) {
-    let _ = std::fs::write(dir.join(format!("{task}.{key}")), format!("{value}\n"));
+    let path = dir.join(format!("{task}.{key}"));
+    if let Err(e) = std::fs::write(&path, format!("{value}\n")) {
+        warn(format!(
+            "task {task}: cannot write {} ({e}) -- this run's account of it is now unreliable",
+            path.display()
+        ));
+    }
 }
 
 /// A run dir field, trimmed; `None` when the file is not there.
@@ -98,6 +104,23 @@ fn clip80(text: &str) -> String {
     text[..end].to_string()
 }
 
+/// A fence one backtick longer than the longest run already in `text`, so a
+/// named file that itself contains a ``` line (a README, a SKILL.md) cannot
+/// close the fence early (same defect as #22H29SZR).
+fn fence_for(text: &str) -> String {
+    let mut longest = 0usize;
+    let mut run = 0usize;
+    for c in text.chars() {
+        if c == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    "`".repeat((longest + 1).max(3))
+}
+
 /// `## Files the worker named`: each path inlined under [`FILE_CAP`] bytes,
 /// named with its size past that, and a read error said plainly.
 fn files_section(files: &[PathBuf]) -> String {
@@ -115,7 +138,9 @@ fn files_section(files: &[PathBuf]) -> String {
             )),
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                out.push_str(&format!("```\n{}\n```\n\n", text.trim_end_matches('\n')));
+                let text = text.trim_end_matches('\n');
+                let fence = fence_for(text);
+                out.push_str(&format!("{fence}\n{text}\n{fence}\n\n"));
             }
             Err(e) => out.push_str(&format!("cannot be read ({e}).\n\n")),
         }
@@ -233,6 +258,7 @@ fn dispatch_and_wait(
         worktree: d.worktree.clone(),
     };
     let deadline_s = reviewer::deadline_s();
+    let grace_s = (deadline_s / 2).clamp(1, 30);
     let started = sys::now();
     let mut timed_out = false;
     while backend.alive(&h) {
@@ -242,12 +268,20 @@ fn dispatch_and_wait(
         }
         sys::sleep(1.0);
     }
+    // The consult is over either way; its pane has no more to say.
+    backend.stop(&h, grace_s);
     if timed_out {
-        let grace_s = (deadline_s / 2).clamp(1, 30);
-        backend.stop(&h, grace_s);
+        warn(format!(
+            "advise: the consult ran past its {deadline_s} second deadline and was stopped -- read {}",
+            answer.display()
+        ));
         return exit::FAILED;
     }
     if !answer.exists() {
+        warn(format!(
+            "advise: the session ended with no answer -- read {}",
+            answer.display()
+        ));
         return exit::FAILED;
     }
     let text = std::fs::read_to_string(answer).unwrap_or_default();
@@ -433,6 +467,21 @@ pub fn cmd_advise(question: &str, files: &[PathBuf], against: Option<&str>) -> i
         warn("advise: not inside a git work tree");
         return exit::USAGE;
     }
+    memcli::resolve_from_here();
+    // Resolved against the caller's cwd before goto_toplevel() chdirs the
+    // process, or a relative --file would be read against the wrong tree.
+    let cwd = crate::paths::cwd();
+    let files: Vec<PathBuf> = files
+        .iter()
+        .map(|f| {
+            if f.is_absolute() {
+                f.clone()
+            } else {
+                cwd.join(f)
+            }
+        })
+        .collect();
+    let files = files.as_slice();
     let Some((_, top)) = repo::goto_toplevel() else {
         warn("advise: cannot resolve the repository toplevel");
         return exit::USAGE;
@@ -487,6 +536,20 @@ mod tests {
                 "the project must not be asked"
             )),
             None
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_file_holding_a_fence_does_not_close_the_advisors_own() {
+        let dir = std::env::temp_dir().join(format!("wf-advise-fence-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = dir.join("SKILL.md");
+        std::fs::write(&doc, "before\n```\ncode\n```\nafter\n").unwrap();
+        let section = files_section(&[doc]);
+        assert!(
+            section.contains("````\nbefore\n```\ncode\n```\nafter\n````"),
+            "{section}"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

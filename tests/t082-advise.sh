@@ -97,3 +97,39 @@ like "$OUT" 'against.*required' 'and says so'
 
 run env WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= workflow advise 'is this cache safe?' --against 'the cache never outlives a request'
 is "$RC" 1 'the process seam never answers outside a run either, so the call still ends without one'
+
+## ------------------------------------------------ a monorepo child project
+
+# mem resolves a monorepo subdir to its child project by cwd; a command that
+# chdirs to the repo toplevel before asking mem would always get the root
+# project instead (frictions #GCYJFZT3, #FFSFMBDH), and a relative --file
+# would be read against the toplevel rather than where the worker typed it.
+
+new_repo mono
+mem_register
+mkdir -p apps/child/src
+printf 'seed\n' >apps/child/src/seed.txt
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'mono files'
+"$MEM_BIN" project add apps/child >/dev/null
+
+cd apps/child
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: child-advise
+
+- [ ] t1 Add the child thing
+      Files: apps/child/src/**
+      Verify: true
+EOF
+
+childdir="$XDG_STATE_HOME/workflow/runs/child/child-advise"
+mkdir -p "$childdir"
+printf 'child note\n' >src/note.txt
+
+cd src
+run env WORKFLOW_TASK=child-advise/t1 WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= workflow advise 'does this file matter?' --file note.txt
+is "$RC" 0 'a consult from the child subdir resolves the child project'
+is "$(cat "$childdir/t1.advised")" 1 'and the count lands in the child run dir, not the root'
+like "$(cat "$childdir/t1.advice.1")" 'use the service' 'the advisor answered'
+prompt=$(ls -t "$WF_TMP"/advice-prompt-* | head -1)
+like "$(cat "$prompt")" 'child note' "the relative --file resolved against the caller's cwd"
