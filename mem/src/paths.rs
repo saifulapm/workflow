@@ -84,11 +84,13 @@ impl Dirs {
         .join("settings.json")
     }
 
-    /// pi's own extension directory -- `$PI_AGENT_DIR/extensions/mem.ts`, else
-    /// `$HOME/.pi/agent/extensions/mem.ts`. Not under `self.config`: pi does
-    /// not honour XDG here.
+    /// pi's own extension directory -- `$PI_CODING_AGENT_DIR/extensions/mem.ts`,
+    /// else `$HOME/.pi/agent/extensions/mem.ts`. Not under `self.config`: pi
+    /// does not honour XDG here. The variable is pi's own, and the only one it
+    /// reads for this: a name of our own choosing would write the extension
+    /// where pi does not look on any machine that moves its config directory.
     pub fn pi_extension(&self) -> PathBuf {
-        match std::env::var_os("PI_AGENT_DIR") {
+        match std::env::var_os("PI_CODING_AGENT_DIR") {
             Some(v) if !v.is_empty() => PathBuf::from(v),
             _ => PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".pi/agent"),
         }

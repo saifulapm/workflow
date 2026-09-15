@@ -862,6 +862,21 @@ fn doctor_reports_the_pi_extension_missing_stale_and_written() {
         std::fs::read_to_string(&extension_path).unwrap(),
         maint::PI_EXTENSION
     );
+
+    // The directory is pi's to name. `PI_CODING_AGENT_DIR` is the variable pi
+    // documents and reads; a name of our own invention would send the write
+    // somewhere pi never looks on a machine that moves its config directory.
+    let decoy = w.plain_dir("decoy-agent-dir");
+    std::fs::remove_file(&extension_path).unwrap();
+    let out = common::mem_env(
+        &w,
+        &cwd,
+        &["doctor", "--fix", "--json"],
+        &[("PI_AGENT_DIR", decoy.to_str().unwrap())],
+    );
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    assert!(extension_path.exists(), "{}", stdout(&out));
+    assert!(!decoy.join("extensions/mem.ts").exists());
 }
 
 #[test]
