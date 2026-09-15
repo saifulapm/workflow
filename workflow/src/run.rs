@@ -2644,7 +2644,14 @@ fn last_reader(dir: &Path) -> Option<String> {
 /// under a second spelling.
 fn same_model(a: &str, b: &str) -> bool {
     const FAMILIES: [&str; 4] = ["fable", "opus", "sonnet", "haiku"];
-    let (a, b) = (a.trim().to_ascii_lowercase(), b.trim().to_ascii_lowercase());
+    let strip_provider = |name: &str| {
+        let name = name.trim().to_ascii_lowercase();
+        match name.rfind('/') {
+            Some(i) => name[i + 1..].to_string(),
+            None => name,
+        }
+    };
+    let (a, b) = (strip_provider(a), strip_provider(b));
     if a == b {
         return true;
     }
@@ -3821,6 +3828,9 @@ mod tests {
         // A name outside the families is compared as spelled.
         assert!(same_model("my-model", "my-model"));
         assert!(!same_model("my-model", "opus"));
+        // A provider prefix is stripped before the comparison.
+        assert!(same_model("zai/glm-5.3-flash", "glm-5.3-flash"));
+        assert!(!same_model("openai/gpt-5-mini", "opus"));
     }
 
     fn doc(kind: PlanKind) -> Plan {
