@@ -113,10 +113,66 @@ fn a_batch_with_nothing_to_say_emits_nothing() {
     }
 }
 
+/// Registration is the gate. mem speaks where it has something to say about
+/// this project and nowhere else: in ~/.dotfiles, which mem had never heard of,
+/// the adapter still injected a digest and then spent a woken turn steering
+/// "call `mem log`" at a model that had just been denied the mem skill.
+#[test]
+fn the_adapter_is_silent_outside_a_registered_project() {
+    let w = World::new("hook-unregistered");
+    w.project(P, "elsewhere");
+    let unregistered = w.repo("stranger", None);
+    let plain = w.plain_dir("nowhere");
+
+    for (what, cwd) in [
+        ("an unregistered checkout", &unregistered),
+        ("a non-git directory", &plain),
+    ] {
+        for args in [
+            vec!["context"],
+            vec!["context", "--brief"],
+            vec!["context", "--brief", "--hook-json", "--session-id", "s"],
+            vec!["session-check", "--session-id", "s", "--hook-json"],
+        ] {
+            let out = mem(&w, cwd, &args);
+            assert_eq!(code(&out), 0, "{what} {args:?}: {}", stderr(&out));
+            assert!(
+                stdout(&out).is_empty(),
+                "{what} {args:?} said: {}",
+                stdout(&out)
+            );
+        }
+
+        // A human who runs it by hand still learns why there is no body.
+        assert!(
+            !stderr(&mem(&w, cwd, &["context"])).trim().is_empty(),
+            "{what}: the note belongs on stderr, where a hook drops it"
+        );
+    }
+
+    // And the nudge was never spent, so the session that registers gets it.
+    let v = json(&mem(
+        &w,
+        &plain,
+        &["session-check", "--session-id", "s", "--json"],
+    ));
+    assert_eq!(v["nudged"], serde_json::json!(false));
+}
+
 #[test]
 fn the_stop_nudge_appears_only_in_a_session_that_wrote_nothing() {
     let w = World::new("hook-stop");
     let repo = w.repo("thing", None);
+    // A write registers the checkout, and this one is another session's: the
+    // nudge is about what *this* session recorded.
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["log", "registering", "--session-id", "earlier"]
+        )),
+        0
+    );
 
     let out = mem(
         &w,
@@ -187,6 +243,14 @@ fn the_stop_nudge_fires_at_most_once_in_a_session() {
     // repeats never stops repeating. One session, one nudge.
     let w = World::new("hook-stop-once");
     let repo = w.repo("thing", None);
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["log", "registering", "--session-id", "earlier"]
+        )),
+        0
+    );
     let args = ["session-check", "--session-id", "loop", "--hook-json"];
 
     let first = mem(&w, &repo, &args);

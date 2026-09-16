@@ -67,7 +67,9 @@ fn zero_is_anything_that_worked_including_every_empty_state() {
         let out = run(&args, &w, &dir);
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
     }
-    assert!(stdout(&run(&["context"], &w, &dir)).contains("nothing recorded"));
+    // `nowhere` is not a project mem knows, so context has nothing to say and
+    // says it in no bytes at all -- still exit 0, which is what this test is.
+    assert!(stdout(&run(&["context"], &w, &dir)).is_empty());
 }
 
 #[test]

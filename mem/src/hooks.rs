@@ -69,9 +69,6 @@ pub fn post_tool_batch(app: &App, brief: &str) -> Result<i32> {
 /// `mem session-check` — the Stop hook. A session that recorded nothing gets one
 /// nudge; a session that wrote gets silence.
 pub fn session_check(app: &App, hook_json: bool) -> Result<i32> {
-    // No project resolution: session activity is machine-local and the answer
-    // does not depend on where the session ran, so the Stop hook does not pay
-    // for a git call it cannot use.
     let activity = match &app.session_id {
         Some(session) => crate::session::read(&app.dirs.sessions_dir(), session),
         None => crate::session::Activity::default(),
@@ -103,6 +100,19 @@ pub fn session_check(app: &App, hook_json: bool) -> Result<i32> {
     let Some(session) = app.session_id.as_deref() else {
         return Ok(exit::OK);
     };
+
+    // And a project mem does not know is a project there is nothing to record
+    // for: the nudge names `mem log` and `mem handoff`, which would register a
+    // checkout nobody asked mem to keep. Resolution costs one git call, which
+    // the comment this replaced was avoiding — measured at 4ms, against a woken
+    // turn every time this fires where it should not.
+    if !matches!(
+        app.identity(crate::project::Mode::Read),
+        Ok(crate::project::Identity::Known { .. })
+    ) {
+        return Ok(exit::OK);
+    }
+
     if let Some(nudge) = nudge {
         if activity.nudged {
             return Ok(exit::OK);

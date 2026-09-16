@@ -347,12 +347,21 @@ fn the_hook_envelopes_match_the_shapes_the_runtime_validates() {
         last = Some(mem(&w, &cwd, &hook));
     }
     validate("hook-post-tool-batch.json", &last.unwrap());
+    // Named the same way the brief above is: the nudge exists only for a
+    // project mem knows, and this cwd is a bare directory.
     validate(
         "hook-stop.json",
         &mem(
             &w,
             &cwd,
-            &["session-check", "--session-id", "s1", "--hook-json"],
+            &[
+                "--project",
+                "thing",
+                "session-check",
+                "--session-id",
+                "s1",
+                "--hook-json",
+            ],
         ),
     );
 }

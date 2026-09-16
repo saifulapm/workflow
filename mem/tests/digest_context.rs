@@ -34,9 +34,11 @@ fn an_empty_project_gets_one_line_and_the_hint() {
     assert_eq!(d.text, format!("{EMPTY}\n{HINT}\n"));
     assert!(!d.truncated);
 
+    // The builder still has the empty state to render; the CLI no longer has
+    // anywhere to render it. Outside a project mem knows, the adapter is quiet.
     let out = mem(&w, &w.plain_dir("cwd"), &["context"]);
     assert_eq!(code(&out), 0, "the empty state is still exit 0");
-    assert!(stdout(&out).contains(EMPTY));
+    assert!(stdout(&out).is_empty(), "{}", stdout(&out));
 }
 
 #[test]

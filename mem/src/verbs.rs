@@ -18,8 +18,22 @@ use crate::timefmt::date;
 /// `mem context` — the digest (spec §8). Always exit 0 when anything is
 /// emitted, the empty state included: a hook that gets a non-zero exit here
 /// would drop the whole thing.
+///
+/// Outside a project mem knows there is no digest to print. Registration is the
+/// adapter's whole gate: a checkout mem has never been told about gets silence
+/// rather than two lines saying so, because those two lines are injected into a
+/// session that then has to decide what to do about them. `--json` still prints
+/// its document — machines read that, not the adapter.
 pub fn context(app: &App, budget: Option<usize>, brief: bool, hook_json: bool) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
+    if !app.json && !matches!(identity, Identity::Known { .. }) {
+        if let Some(note) = unknown_project_note(&identity)
+            && !app.quiet
+        {
+            eprintln!("mem: {note}");
+        }
+        return Ok(exit::OK);
+    }
     let index = app.read_index()?;
     let staleness =
         crate::sync::staleness_line(&app.dirs.qshell_status_json(), jiff::Timestamp::now());
