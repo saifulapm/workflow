@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Every worktree's node_modules is a symlink to the checkout's, so the one task
-# that changes the lockfile could not install: pnpm refuses a node_modules that
-# resolves outside the worktree, and a worker that forced it would be rewriting
-# what its siblings read (friction #A0WC5ABM). The task whose Files claim the
-# manifest or the lockfile gets a directory of its own at dispatch, and so does
-# a task dispatched after the lockfile changed on integration -- the shared
-# directory does not carry what a sibling added until someone installs there.
+# Every worktree gets a node_modules of its own, installed from the lockfile
+# when the worktree is made. A symlink to the checkout's used to stand there,
+# and under pnpm 11 that fails every `pnpm run` in the tree before the script
+# starts: the runner's deps check tries an install and refuses a node_modules
+# that resolves outside the worktree (friction #EVAD8X1G). A task dispatched
+# after the lockfile changed on integration is installed again at dispatch,
+# since its directory does not carry what a sibling added (#A0WC5ABM).
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -73,11 +73,11 @@ rundir="$XDG_STATE_HOME/workflow/runs/app/deps"
 for t in t1 t2 t3; do
 	is "$(cat "$rundir/$t.state")" merged "$t merged"
 done
-is "$(cat "$WF_TMP/t3.deps")" link 'a task that leaves the lockfile alone shares the checkout node_modules'
-is "$(cat "$WF_TMP/t1.deps")" own 'the task whose Files claim the lockfile has a node_modules of its own'
-is "$(cat "$WF_TMP/t2.deps")" own 'and so does the task dispatched after the lockfile changed on integration'
+for t in t1 t2 t3; do
+	is "$(cat "$WF_TMP/$t.deps")" own "$t has a node_modules of its own, no symlink"
+done
 wt="$XDG_STATE_HOME/workflow/worktrees/app/deps"
-like "$(cat "$WF_TMP/pnpm.log")" "^$wt/t1 install --frozen-lockfile\$" 'pnpm installed into the t1 worktree'
-like "$(cat "$WF_TMP/pnpm.log")" "^$wt/t2 install --frozen-lockfile\$" 'and into the t2 worktree'
-is "$(grep -c "^$wt/t3 " "$WF_TMP/pnpm.log")" 0 'and never into t3'
+is "$(grep -c "^$wt/t1 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'pnpm installed into the t1 worktree once, when it was made'
+is "$(grep -c "^$wt/t3 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'and into t3 once'
+is "$(grep -c "^$wt/t2 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 2 'and into t2 twice: when it was made, and again at dispatch after the lockfile changed on integration'
 [ -e "$T_TMP/app/node_modules/.own" ] && notok 'the checkout node_modules is untouched' 'pnpm ran in the checkout' || ok 'the checkout node_modules is untouched'

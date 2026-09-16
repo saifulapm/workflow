@@ -2408,68 +2408,64 @@ impl Run {
         true
     }
 
-    /// Dependencies are shared, not reinstalled: this machine's git already
-    /// carries `worktree.symlinkDirectories` for exactly these two.
+    /// Furnish a fresh worktree with its dependencies. `vendor` is a symlink
+    /// to the checkout's, made here and by nothing else: git itself carries
+    /// nothing across worktrees. `node_modules` is never shared. Under pnpm
+    /// 11 every `pnpm run` first checks the tree's dependencies and refuses a
+    /// `node_modules` that resolves outside the project root, so a symlinked
+    /// one fails every script in the tree before it starts, and no setting
+    /// short of a flag on the command line turns that check off (friction
+    /// #EVAD8X1G). An install per worktree costs about a second: pnpm's store
+    /// is content-addressable, so a second install of the same lockfile is
+    /// symlinks and no download.
     fn link_deps(&self, wt: &Path) {
-        for d in ["node_modules", "vendor"] {
-            let from = self.repo.join(d);
-            let to = wt.join(d);
-            if from.is_dir() && !to.exists() {
-                let _ = std::os::unix::fs::symlink(&from, &to);
-            }
+        let from = self.repo.join("vendor");
+        let to = wt.join("vendor");
+        if from.is_dir() && !to.exists() {
+            let _ = std::os::unix::fs::symlink(&from, &to);
         }
         self.install_deps(wt);
     }
 
-    /// The shared dependencies are the checkout's, and a task that changes the
-    /// lockfile cannot install into them: pnpm refuses a `node_modules` that
-    /// resolves outside the worktree, and a worker that forces it is rewriting
-    /// what its siblings are reading (friction #A0WC5ABM). So the task whose
-    /// Files claim the manifest or the lockfile gets a directory of its own,
-    /// and so does one whose lockfile no longer matches the checkout's: a
-    /// dependency a sibling merged is not in the shared directory until
-    /// someone installs there. Judged at dispatch, after the catch-up.
+    /// A worktree's dependencies are the lockfile's as it stood when the
+    /// worktree was made, and a dependency a sibling merged since is not in
+    /// them until someone installs again (friction #A0WC5ABM). Judged at
+    /// dispatch, after the catch-up: a `node_modules` whose lockfile no
+    /// longer matches the checkout's is installed again in place. The shared
+    /// `vendor` is the checkout's, and a task that changes the lockfile
+    /// cannot install into it without rewriting what its siblings read, so
+    /// the task whose Files claim the manifest or the lockfile gets a
+    /// directory of its own, and so does one whose lockfile changed.
     fn own_deps(&self, task: &str) {
         let wt = self.worktree(task);
+        let changed = |lock: &str| {
+            std::fs::read(wt.join(lock)).ok() != std::fs::read(self.repo.join(lock)).ok()
+        };
+        if wt.join("node_modules").is_dir() && changed("pnpm-lock.yaml") {
+            self.pnpm_install(&wt);
+        }
+        let link = wt.join("vendor");
+        if !link.is_symlink() {
+            return;
+        }
         let claims = self
             .task_now(task)
             .and_then(|t| t.files)
             .map(|f| ownership::split_patterns(&f))
             .unwrap_or_default();
-        for (dir, lock, manifest) in [
-            ("node_modules", "pnpm-lock.yaml", "package.json"),
-            ("vendor", "composer.lock", "composer.json"),
-        ] {
-            let link = wt.join(dir);
-            if !link.is_symlink() {
-                continue;
-            }
-            let claimed = claims
-                .iter()
-                .any(|p| plancheck::covers(p, lock) || plancheck::covers(p, manifest));
-            let changed =
-                std::fs::read(wt.join(lock)).ok() != std::fs::read(self.repo.join(lock)).ok();
-            if claimed || changed {
-                let _ = std::fs::remove_file(&link);
-                self.install_deps(&wt);
-            }
+        let claimed = claims.iter().any(|p| {
+            plancheck::covers(p, "composer.lock") || plancheck::covers(p, "composer.json")
+        });
+        if claimed || changed("composer.lock") {
+            let _ = std::fs::remove_file(&link);
+            self.install_deps(&wt);
         }
     }
 
     /// Install into a worktree that has no dependencies of its own yet.
     fn install_deps(&self, wt: &Path) {
         if !wt.join("node_modules").exists() && wt.join("pnpm-lock.yaml").is_file() {
-            let ok = Command::new("pnpm")
-                .args(["install", "--frozen-lockfile"])
-                .current_dir(wt)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if !ok {
-                warn(format!("pnpm install failed in {}", wt.display()));
-            }
+            self.pnpm_install(wt);
         }
         if !wt.join("vendor").exists()
             && wt.join("composer.lock").is_file()
@@ -2486,6 +2482,20 @@ impl Run {
             if !ok {
                 warn(format!("composer install failed in {}", wt.display()));
             }
+        }
+    }
+
+    fn pnpm_install(&self, wt: &Path) {
+        let ok = Command::new("pnpm")
+            .args(["install", "--frozen-lockfile"])
+            .current_dir(wt)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            warn(format!("pnpm install failed in {}", wt.display()));
         }
     }
 
