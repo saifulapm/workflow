@@ -757,13 +757,14 @@ fn doctor_reports_the_missing_adapter_hooks() {
     w.project(P, "thing");
     let cwd = w.plain_dir("cwd");
 
-    // All three commands present: no finding.
+    // All four commands present: no finding.
     let wired = w.dir.join("claude-wired");
     claude_settings(
         &wired,
         r#"{"hooks": {
             "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context || true"}]}],
             "PostToolBatch": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context --brief --hook-json || true"}]}],
+            "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem session-check --session-id \"$CLAUDE_CODE_SESSION_ID\" --hook-json || true"}]}],
             "PreCompact": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem precompact --hook-json || true"}]}]
         }}"#,
     );
@@ -776,7 +777,7 @@ fn doctor_reports_the_missing_adapter_hooks() {
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     assert!(details(&out, "hooks").is_empty(), "{}", stdout(&out));
 
-    // PreCompact missing: exactly one finding, naming it.
+    // PreCompact and Stop missing: one finding each, naming them.
     let half_wired = w.dir.join("claude-half-wired");
     claude_settings(
         &half_wired,
@@ -792,8 +793,16 @@ fn doctor_reports_the_missing_adapter_hooks() {
         &[("CLAUDE_CONFIG_DIR", half_wired.to_str().unwrap())],
     );
     let hooks = details(&out, "hooks");
-    assert_eq!(hooks.len(), 1, "{hooks:?}");
-    assert!(hooks[0].contains("PreCompact"), "{hooks:?}");
+    assert_eq!(hooks.len(), 2, "{hooks:?}");
+    assert!(hooks.iter().any(|h| h.contains("PreCompact")), "{hooks:?}");
+
+    // The Stop row is the one that was specified and never wired: every session
+    // on this machine ran without it from the day the hooks landed.
+    let stop = hooks
+        .iter()
+        .find(|h| h.contains("Stop"))
+        .unwrap_or_else(|| panic!("no Stop finding: {hooks:?}"));
+    assert!(stop.contains("mem session-check --session-id"), "{stop}");
 
     // No settings file at all: one finding naming the path.
     let missing = w.dir.join("claude-missing");
