@@ -1441,11 +1441,11 @@ impl Run {
         // first moments is a dispatch still coming up, not an ending. The
         // deadline below is an ending too: a session stopped there has been
         // talking for the whole wait and has last words of its own, same as
-        // one that simply exited without a verdict.
+        // one that simply exited without a verdict. The stop for it is the
+        // one below, after the pane has been asked what it was showing.
         let outcome = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
             self.judge_reading(&new, &answer)
         } else if waited >= deadline_s {
-            self.backend.stop(&h, self.kill_grace_s);
             Err(format!(
                 "the review ran past its {deadline_s} second deadline and was stopped"
             ))
