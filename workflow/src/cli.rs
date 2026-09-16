@@ -256,6 +256,20 @@ entry outranks the user's the same way round."
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
+    /// Print this binary's skills, or one of them whole.
+    #[command(long_about = "Print the skills this binary carries.
+
+With no name, one `<name> — <description>` line per skill, in name order: this
+is what `mem context` appends to a project's digest, so a session learns which
+skills exist where mem knows the project. With a name, that SKILL.md whole.
+
+The skills are embedded in the binary rather than written to a harness's skills
+directory, so there is no copy to drift and nothing on disk to gate. mem serves
+the mem skill the same way: `mem skill mem`.")]
+    Skill {
+        /// The skill to print whole. Omit to list them.
+        name: Option<String>,
+    },
     /// Turn attribution off and set WORKFLOW_AGENT in a Claude Code settings file.
     #[command(name = "settings-merge")]
     SettingsMerge {

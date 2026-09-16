@@ -9,6 +9,7 @@
 //!   workflow status          report this project's runs, --json for machines
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
+//!   workflow skill           the skills this binary carries, or one whole
 //!   workflow enable/disable  this repo's skills, on in a project or off
 //!   workflow settings-merge  the install's settings edit
 //!
@@ -38,6 +39,7 @@ pub mod review;
 pub mod reviewer;
 pub mod run;
 pub mod settings;
+pub mod skill;
 pub mod status;
 pub mod sys;
 pub mod testdecl;
@@ -162,6 +164,7 @@ pub fn run(cli: Cli) -> i32 {
             task,
         } => run::cmd_stalled(&rundir, &wtroot, &task, deadline),
         Command::Doctor { fix } => doctor::cmd_doctor(fix),
+        Command::Skill { name } => skill::cmd_skill(name.as_deref()),
         Command::SettingsMerge { file, dry_run } => {
             settings::cmd_settings_merge(file.as_deref(), dry_run)
         }
