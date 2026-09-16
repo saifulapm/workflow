@@ -61,6 +61,12 @@ pub struct Sources {
     pub rulings: Vec<Row>,
     pub facts: Vec<Row>,
     pub logs: Vec<Row>,
+    /// The skills a session can open, as `crate::skills::section` renders them:
+    /// the instruction line and one line per skill. Gathered rather than built
+    /// here because naming workflow's skills means running `workflow skill`,
+    /// and a digest builder that shells out is a digest builder no test can
+    /// pin down. Empty is a section that is simply not there.
+    pub skills: String,
 }
 
 impl Sources {
@@ -69,6 +75,7 @@ impl Sources {
         store: &Store,
         project_id: Option<&str>,
         staleness: Option<String>,
+        skills: String,
     ) -> Result<Sources> {
         let plan = project_id
             .map(|id| store.plan_path(id))
@@ -99,6 +106,7 @@ impl Sources {
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
             logs: recent_non_run_logs(index, project_id, 5)?,
+            skills,
         })
     }
 
@@ -271,6 +279,13 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
             if n == 1 { "" } else { "s" }
         ));
     }
+    // Mandatory: a session that cannot see what it may open is a session that
+    // does the work the long way round. Counted against WARN with the rest, and
+    // never dropped to make room.
+    for line in sources.skills.lines() {
+        mandatory.push(line.to_string());
+    }
+
     if sources.is_empty() {
         // Nothing recorded yet still means the warning lines: they are the only
         // mandatory content an empty project can have, and a machine reading a

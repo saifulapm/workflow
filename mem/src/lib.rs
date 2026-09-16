@@ -19,6 +19,7 @@ pub mod project;
 pub mod questions;
 pub mod search;
 pub mod session;
+pub mod skills;
 pub mod store;
 pub mod sync;
 pub mod timefmt;
@@ -77,6 +78,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             session_id,
             hook_json,
         } => hooks::session_check(&with_session(app, session_id), *hook_json),
+        cli::Command::Skill { name } => Ok(skills::cmd_skill(name.as_deref())),
         cli::Command::Precompact { hook_json: _ } => hooks::precompact(&app),
         cli::Command::Search {
             query,

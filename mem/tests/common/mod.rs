@@ -145,6 +145,11 @@ pub fn mem(w: &World, cwd: &Path, args: &[&str]) -> std::process::Output {
 /// The same, with extra environment — the seams (`MEM_SYNC_CMD`,
 /// `MEM_NOTIFY_CMD`) that keep a test from shelling out to the real thing.
 ///
+/// `WORKFLOW_BIN` points at nothing so the digest's skills section holds mem's
+/// own skill and no more: the real `workflow skill` on this developer's PATH
+/// would put seven more lines into every digest a test reads. A caller that
+/// names it wins, which is how the one test that wants both halves gets them.
+///
 /// `PI_CODING_AGENT_DIR` points inside the World because pi's extension
 /// directory is the one path mem does not take from XDG: without it `mem
 /// doctor` reads, and `--fix` writes, the developer's own `~/.pi`. A caller
@@ -166,6 +171,7 @@ pub fn mem_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> st
         .env("XDG_STATE_HOME", &dirs.state)
         .env("XDG_CONFIG_HOME", &dirs.config)
         .env("PI_CODING_AGENT_DIR", w.pi_agent_dir())
+        .env("WORKFLOW_BIN", "/nonexistent/workflow")
         .env_remove("MEM_SESSION_ID")
         .env_remove("PI_SESSION_ID")
         .env_remove("CLAUDE_CODE_SESSION_ID")

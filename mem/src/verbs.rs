@@ -37,7 +37,13 @@ pub fn context(app: &App, budget: Option<usize>, brief: bool, hook_json: bool) -
     let index = app.read_index()?;
     let staleness =
         crate::sync::staleness_line(&app.dirs.qshell_status_json(), jiff::Timestamp::now());
-    let sources = Sources::gather(&index, &app.store, identity.id(), staleness)?;
+    let sources = Sources::gather(
+        &index,
+        &app.store,
+        identity.id(),
+        staleness,
+        crate::skills::section(),
+    )?;
 
     if brief {
         let text = crate::digest::brief(&sources, jiff::Timestamp::now());

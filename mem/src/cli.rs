@@ -61,6 +61,15 @@ pub enum Command {
         hook_json: bool,
     },
     /// The instruction a compaction summarizer must follow (the PreCompact hook).
+    /// Print the skills this binary carries, or one of them whole.
+    ///
+    /// With no name, one `<name> — <description>` line per skill mem owns;
+    /// with a name, that SKILL.md whole. `mem context` names these and
+    /// workflow's together, so a session learns what it may open.
+    Skill {
+        /// The skill to print whole. Omit to list them.
+        name: Option<String>,
+    },
     Precompact {
         /// Accepted for symmetry: PreCompact's channel is plain stdout, so the
         /// output is the same either way (spec §9).

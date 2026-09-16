@@ -14,7 +14,7 @@ const P: &str = "01K2AAAAAAAAAAAAAAAAAAAAAA";
 fn sources(w: &World, staleness: Option<String>) -> (Index, Sources) {
     let index = Index::open(&w.index_path(), Purpose::Read).unwrap();
     index.reindex(&w.store(), false).unwrap();
-    let s = Sources::gather(&index, &w.store(), Some(P), staleness).unwrap();
+    let s = Sources::gather(&index, &w.store(), Some(P), staleness, String::new()).unwrap();
     (index, s)
 }
 
@@ -493,4 +493,78 @@ fn context_on_an_unregistered_checkout_serves_global_and_exits_zero() {
         !w.store().projects_dir().exists(),
         "context must not register"
     );
+}
+
+/// A skill is text in a binary now, not a file a harness discovered, and the
+/// digest is where a session learns which ones exist. mem serves its own and
+/// appends workflow's, because a skill belongs to the binary it is about.
+#[test]
+fn mem_serves_its_own_skill_and_refuses_the_rest() {
+    let w = World::new("skills-verb");
+    let dir = w.plain_dir("anywhere");
+
+    let out = mem(&w, &dir, &["skill"]);
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    assert_eq!(stdout(&out).lines().count(), 1, "{}", stdout(&out));
+    assert!(stdout(&out).starts_with("mem — "), "{}", stdout(&out));
+
+    let out = mem(&w, &dir, &["skill", "mem"]);
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    assert!(stdout(&out).starts_with("---\nname: mem"), "the whole file");
+    assert!(stdout(&out).len() > 1000, "not just the description");
+
+    // route is workflow's, and saying so beats reporting a skill that exists.
+    let out = mem(&w, &dir, &["skill", "route"]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        common::stderr(&out).contains("workflow skill route"),
+        "{}",
+        common::stderr(&out)
+    );
+}
+
+#[test]
+fn the_digest_names_every_skill_and_how_to_open_one() {
+    let w = World::new("skills-section");
+    w.project(P, "thing");
+    let repo = w.plain_dir("cwd");
+
+    // A stand-in for the workflow on this machine: mem appends what it prints
+    // without parsing a byte of it.
+    let fake = w.dir.join("fake-workflow");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nprintf 'route — pick the lane\\nplan — cut the tasks\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+
+    let out = common::mem_env(
+        &w,
+        &repo,
+        &["context", "thing"],
+        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
+    );
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("mem skill <name>"), "{text}");
+    assert!(text.contains("workflow skill <name>"), "{text}");
+    assert!(text.contains("mem — "), "mem names its own: {text}");
+    assert!(text.contains("route — pick the lane"), "verbatim: {text}");
+    assert!(text.contains("plan — cut the tasks"), "verbatim: {text}");
+
+    // A workflow that exits nonzero costs its seven and nothing else.
+    std::fs::write(&fake, "#!/bin/sh\nexit 3\n").unwrap();
+    let text = stdout(&common::mem_env(
+        &w,
+        &repo,
+        &["context", "thing"],
+        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
+    ));
+    assert!(text.contains("mem — "), "{text}");
+    assert!(!text.contains("route — "), "{text}");
+
+    // And outside a project mem knows, none of it is said at all.
+    let out = mem(&w, &w.plain_dir("stranger"), &["context"]);
+    assert!(stdout(&out).is_empty(), "{}", stdout(&out));
 }
