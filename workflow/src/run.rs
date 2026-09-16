@@ -2354,6 +2354,10 @@ impl Run {
             ));
             return false;
         }
+        // Furnished the way a task worktree is: the gate runs the whole suite
+        // here, and a tree with no node_modules is red before anything is
+        // dispatched (friction #XJ9TZ2PW).
+        self.link_deps(&self.int_wt);
 
         for t in self.plan.tasks.clone() {
             if t.checked {

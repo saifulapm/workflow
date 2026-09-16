@@ -42,7 +42,10 @@ export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'
 
 new_repo app
 mem_register
-"$MEM_BIN" project set verify true >/dev/null
+# The gate's suite passes only in a tree pnpm installed into: the integration
+# worktree is furnished the same way a task's is, or the trunk reads as red
+# before anything is dispatched (friction #XJ9TZ2PW).
+"$MEM_BIN" project set verify 'test -f node_modules/.own' >/dev/null
 printf '{"name":"app"}\n' >package.json
 printf 'lockfileVersion: 9\n' >pnpm-lock.yaml
 printf 'node_modules\n' >.gitignore
@@ -80,4 +83,5 @@ wt="$XDG_STATE_HOME/workflow/worktrees/app/deps"
 is "$(grep -c "^$wt/t1 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'pnpm installed into the t1 worktree once, when it was made'
 is "$(grep -c "^$wt/t3 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'and into t3 once'
 is "$(grep -c "^$wt/t2 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 2 'and into t2 twice: when it was made, and again at dispatch after the lockfile changed on integration'
+is "$(grep -c "^$wt/_integration install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'and into the integration worktree once, before the gate first ran the suite there'
 [ -e "$T_TMP/app/node_modules/.own" ] && notok 'the checkout node_modules is untouched' 'pnpm ran in the checkout' || ok 'the checkout node_modules is untouched'
