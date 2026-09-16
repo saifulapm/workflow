@@ -31,13 +31,33 @@ pub struct Activity {
     pub last: String,
 }
 
-/// The session id from the flag or the environment, in that order. An empty one
-/// is no id at all: hooks are wired as `--session-id "$CLAUDE_CODE_SESSION_ID"`,
-/// and an unset variable must not become a session file named "".
+/// The variables that name the session mem is running inside, nearest first:
+/// mem's own, then the harness's. pi exports `PI_SESSION_ID` into every bash
+/// call it makes and Claude Code exports `CLAUDE_CODE_SESSION_ID`, both from the
+/// same id their adapters pass on the flag — so a `mem log` the model runs for
+/// itself lands on the session that ran it.
+const ID_VARS: [&str; 3] = ["MEM_SESSION_ID", "PI_SESSION_ID", "CLAUDE_CODE_SESSION_ID"];
+
+/// The session id from the flag, else the first variable in [`ID_VARS`] that
+/// carries one.
+///
+/// A flag that was passed decides on its own, empty included: the hooks are
+/// wired as `--session-id "$CLAUDE_CODE_SESSION_ID"`, so an empty flag is a
+/// runtime saying it has no id for this session, not an invitation to go
+/// looking — and an unset variable must not become a session file named "".
+/// Among the variables an empty one is simply skipped.
 pub fn id_from(flag: Option<&str>) -> Option<String> {
-    flag.map(|s| s.to_string())
-        .or_else(|| std::env::var("MEM_SESSION_ID").ok())
-        .filter(|s| !s.trim().is_empty())
+    if let Some(flag) = flag {
+        return nonempty(flag);
+    }
+    ID_VARS
+        .iter()
+        .filter_map(|var| std::env::var(var).ok())
+        .find_map(|value| nonempty(&value))
+}
+
+fn nonempty(id: &str) -> Option<String> {
+    (!id.trim().is_empty()).then(|| id.to_string())
 }
 
 /// A session id is used as a filename, so it may not wander out of the

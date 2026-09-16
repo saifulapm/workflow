@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{World, code, item, mem, put, stderr, stdout};
+use common::{World, code, item, mem, mem_env, put, stderr, stdout};
 use mem::item::Kind;
 
 const P: &str = "01K2AAAAAAAAAAAAAAAAAAAAAA";
@@ -258,6 +258,69 @@ fn precompact_speaks_plain_text_because_it_has_no_json_channel() {
 
     // Same text with no flag: the flag says how it is being run, not what to say.
     assert_eq!(stdout(&mem(&w, &dir, &["precompact"])), text);
+}
+
+/// A model that runs `mem log` inside a session passes no flag and mem's own
+/// variable is not set for it, so until the harness's own id was read the write
+/// was attributed to nobody: 401 session files on this machine, `writes` zero in
+/// every one, and 11 nudges spent on sessions that had recorded something.
+#[test]
+fn a_write_with_no_flag_is_attributed_to_the_harness_session() {
+    for (var, id) in [
+        ("PI_SESSION_ID", "pi-abc"),
+        ("CLAUDE_CODE_SESSION_ID", "claude-abc"),
+    ] {
+        let w = World::new(&format!("hook-fallback-{id}"));
+        let repo = w.repo("thing", None);
+        let out = mem_env(&w, &repo, &["log", "an entry"], &[(var, id)]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+        let activity = std::fs::read_to_string(w.dirs().sessions_dir().join(id))
+            .unwrap_or_else(|e| panic!("{var} should name the session file: {e}"));
+        assert!(activity.contains("\"writes\":1"), "{var}: {activity}");
+    }
+}
+
+/// The rungs are ordered so the nearer answer wins: mem's own variable over the
+/// harness's, pi's over Claude's for a pi session started from a Claude one.
+#[test]
+fn the_nearest_session_id_wins() {
+    let w = World::new("hook-fallback-order");
+    let repo = w.repo("thing", None);
+    let all = [
+        ("MEM_SESSION_ID", "mem-id"),
+        ("PI_SESSION_ID", "pi-id"),
+        ("CLAUDE_CODE_SESSION_ID", "claude-id"),
+    ];
+
+    // The flag beats every variable.
+    let out = mem_env(&w, &repo, &["log", "one", "--session-id", "flag-id"], &all);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(w.dirs().sessions_dir().join("flag-id").exists());
+
+    // Then MEM_SESSION_ID, then PI_SESSION_ID, then Claude's.
+    for (skip, winner) in [(0, "mem-id"), (1, "pi-id"), (2, "claude-id")] {
+        let env: Vec<(&str, &str)> = all[skip..].to_vec();
+        let out = mem_env(&w, &repo, &["log", "two"], &env);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            w.dirs().sessions_dir().join(winner).exists(),
+            "{winner} should have won {env:?}"
+        );
+    }
+
+    // An empty rung is skipped, not fatal.
+    let out = mem_env(
+        &w,
+        &repo,
+        &["log", "three"],
+        &[
+            ("PI_SESSION_ID", "  "),
+            ("CLAUDE_CODE_SESSION_ID", "last-id"),
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(w.dirs().sessions_dir().join("last-id").exists());
 }
 
 #[test]

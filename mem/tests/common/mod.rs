@@ -152,7 +152,10 @@ pub fn mem(w: &World, cwd: &Path, args: &[&str]) -> std::process::Output {
 ///
 /// `WORKFLOW_TASK` and `CARGO_TARGET_DIR` are stripped so a test run inside a
 /// task worktree — where both are already set for the outer cargo process —
-/// does not leak them into the mem it spawns.
+/// does not leak them into the mem it spawns. `PI_SESSION_ID` and
+/// `CLAUDE_CODE_SESSION_ID` go for the same reason now that `session::id_from`
+/// reads them: a suite run from inside a live agent session would otherwise
+/// attribute every write in every test to whoever ran `cargo test`.
 pub fn mem_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
     let dirs = w.dirs();
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_mem"));
@@ -164,6 +167,8 @@ pub fn mem_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> st
         .env("XDG_CONFIG_HOME", &dirs.config)
         .env("PI_CODING_AGENT_DIR", w.pi_agent_dir())
         .env_remove("MEM_SESSION_ID")
+        .env_remove("PI_SESSION_ID")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("WORKFLOW_TASK")
         .env_remove("CARGO_TARGET_DIR");
     for (key, value) in env {
