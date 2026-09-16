@@ -1714,6 +1714,9 @@ impl Run {
     /// merge cannot stand, naming the checks that broke out of what the run
     /// left there.
     fn gate_run(&self, file: &Path) -> Result<(), String> {
+        // The merge just landed may have changed the lockfile; the suite
+        // that judges it runs against dependencies that match.
+        self.node_deps(&self.int_wt);
         let stdout = std::fs::File::create(file)
             .map_err(|e| format!("cannot write {} ({e})", file.display()))?;
         let stderr = stdout
@@ -2449,20 +2452,15 @@ impl Run {
     /// A worktree's dependencies are the lockfile's as it stood when the
     /// worktree was made, and a dependency a sibling merged since is not in
     /// them until someone installs again (friction #A0WC5ABM). Judged at
-    /// dispatch, after the catch-up: a `node_modules` whose lockfile no
-    /// longer matches the checkout's is installed again in place. The shared
-    /// `vendor` is the checkout's, and a task that changes the lockfile
-    /// cannot install into it without rewriting what its siblings read, so
-    /// the task whose Files claim the manifest or the lockfile gets a
-    /// directory of its own, and so does one whose lockfile changed.
+    /// dispatch, after the catch-up: `node_modules` is brought up to the
+    /// lockfile in place. The shared `vendor` is the checkout's, and a task
+    /// that changes the lockfile cannot install into it without rewriting
+    /// what its siblings read, so the task whose Files claim the manifest or
+    /// the lockfile gets a directory of its own, and so does one whose
+    /// lockfile differs from the checkout's.
     fn own_deps(&self, task: &str) {
         let wt = self.worktree(task);
-        let changed = |lock: &str| {
-            std::fs::read(wt.join(lock)).ok() != std::fs::read(self.repo.join(lock)).ok()
-        };
-        if wt.join("node_modules").is_dir() && changed("pnpm-lock.yaml") {
-            self.pnpm_install(&wt);
-        }
+        self.node_deps(&wt);
         let link = wt.join("vendor");
         if !link.is_symlink() {
             return;
@@ -2475,7 +2473,9 @@ impl Run {
         let claimed = claims.iter().any(|p| {
             plancheck::covers(p, "composer.lock") || plancheck::covers(p, "composer.json")
         });
-        if claimed || changed("composer.lock") {
+        let changed = std::fs::read(wt.join("composer.lock")).ok()
+            != std::fs::read(self.repo.join("composer.lock")).ok();
+        if claimed || changed {
             let _ = std::fs::remove_file(&link);
             self.install_deps(&wt);
         }
@@ -2483,9 +2483,7 @@ impl Run {
 
     /// Install into a worktree that has no dependencies of its own yet.
     fn install_deps(&self, wt: &Path) {
-        if !wt.join("node_modules").exists() && wt.join("pnpm-lock.yaml").is_file() {
-            self.pnpm_install(wt);
-        }
+        self.node_deps(wt);
         if !wt.join("vendor").exists()
             && wt.join("composer.lock").is_file()
             && crate::have("composer")
@@ -2502,6 +2500,32 @@ impl Run {
                 warn(format!("composer install failed in {}", wt.display()));
             }
         }
+    }
+
+    /// `node_modules` brought up to the tree's lockfile: installed when it is
+    /// missing, and installed again when pnpm's own record of what it
+    /// installed from, `node_modules/.pnpm/lock.yaml`, no longer matches.
+    /// That record is exact where comparing against the checkout's lockfile
+    /// was a proxy: a worktree that caught up to a merged lockfile, an
+    /// integration worktree the last run left behind, and a checkout that
+    /// moved on all read the same way. A symlink standing there is an
+    /// earlier link_deps's and goes first, since pnpm refuses to install
+    /// through it. Nothing to do without a `pnpm-lock.yaml`.
+    fn node_deps(&self, wt: &Path) {
+        let lock = wt.join("pnpm-lock.yaml");
+        if !lock.is_file() {
+            return;
+        }
+        let nm = wt.join("node_modules");
+        if nm.is_symlink() {
+            let _ = std::fs::remove_file(&nm);
+        }
+        if nm.is_dir()
+            && std::fs::read(&lock).ok() == std::fs::read(nm.join(".pnpm/lock.yaml")).ok()
+        {
+            return;
+        }
+        self.pnpm_install(wt);
     }
 
     fn pnpm_install(&self, wt: &Path) {

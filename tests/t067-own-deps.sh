@@ -12,11 +12,13 @@ t_init
 export WF_TMP="$T_TMP"
 
 # pnpm as the run sees it: where it ran and what it was asked, then a
-# directory that is nobody's symlink.
+# directory that is nobody's symlink, carrying what pnpm itself leaves there:
+# a copy of the lockfile it installed from at node_modules/.pnpm/lock.yaml.
 write_exec "$T_TMP/bin/pnpm" <<'FAKE'
 #!/bin/sh
 printf '%s %s\n' "$(pwd)" "$*" >>"$WF_TMP/pnpm.log"
-mkdir -p node_modules
+mkdir -p node_modules/.pnpm
+cp pnpm-lock.yaml node_modules/.pnpm/lock.yaml
 : >node_modules/.own
 FAKE
 
@@ -42,10 +44,12 @@ export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'
 
 new_repo app
 mem_register
-# The gate's suite passes only in a tree pnpm installed into: the integration
-# worktree is furnished the same way a task's is, or the trunk reads as red
-# before anything is dispatched (friction #XJ9TZ2PW).
-"$MEM_BIN" project set verify 'test -f node_modules/.own' >/dev/null
+# The gate's suite passes only in a tree whose node_modules pnpm installed from
+# the lockfile the tree carries: the integration worktree is furnished the same
+# way a task's is, or the trunk reads as red before anything is dispatched
+# (friction #XJ9TZ2PW), and it is installed again once a merge changes its
+# lockfile, or the suite that decides the next merge runs on the old one.
+"$MEM_BIN" project set verify 'cmp -s pnpm-lock.yaml node_modules/.pnpm/lock.yaml' >/dev/null
 printf '{"name":"app"}\n' >package.json
 printf 'lockfileVersion: 9\n' >pnpm-lock.yaml
 printf 'node_modules\n' >.gitignore
@@ -83,5 +87,5 @@ wt="$XDG_STATE_HOME/workflow/worktrees/app/deps"
 is "$(grep -c "^$wt/t1 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'pnpm installed into the t1 worktree once, when it was made'
 is "$(grep -c "^$wt/t3 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'and into t3 once'
 is "$(grep -c "^$wt/t2 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 2 'and into t2 twice: when it was made, and again at dispatch after the lockfile changed on integration'
-is "$(grep -c "^$wt/_integration install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'and into the integration worktree once, before the gate first ran the suite there'
+is "$(grep -c "^$wt/_integration install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 2 'and into the integration worktree twice: when it was made, and before the gate after t1 landed its lockfile there'
 [ -e "$T_TMP/app/node_modules/.own" ] && notok 'the checkout node_modules is untouched' 'pnpm ran in the checkout' || ok 'the checkout node_modules is untouched'
