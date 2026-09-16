@@ -75,7 +75,7 @@ fn amx(args: &[&str]) -> (String, bool) {
     )
 }
 
-/// The four fields of `amx status --json` this backend reads.
+/// The fields of `amx status --json` this backend reads.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Status {
     state: String,
@@ -94,6 +94,9 @@ struct Status {
     context: Option<u64>,
     /// The worker's last text, the same way. Absent the same way.
     last_words: Option<String>,
+    /// The text of the question the pane is stopped at, off `question.text`.
+    /// `null` while nothing is asked.
+    question: Option<String>,
 }
 
 /// The pure half of [`status`], so the parse is testable without an amx.
@@ -121,6 +124,11 @@ fn status_in(json: &str) -> Option<Status> {
         context: v.get("context").and_then(|n| n.as_u64()),
         last_words: v
             .get("last_words")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
+        question: v
+            .get("question")
+            .and_then(|q| q.get("text"))
             .and_then(|s| s.as_str())
             .map(|s| s.to_string()),
     })
@@ -377,6 +385,15 @@ impl WorkerBackend for AmxBackend {
         let path = paths::transcript_path(&h.worktree, &s.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
+
+    /// What amx read off the pane: a question drawn in front of the session
+    /// -- claude's folder-trust screen, a permission prompt -- is on the
+    /// screen and nowhere else, and amx is what reads screens.
+    fn question(&self, h: &Handle) -> String {
+        status(&h.session)
+            .and_then(|s| s.question)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -461,6 +478,21 @@ mod tests {
             "\"created\": 1787939721, \"context\": null",
         );
         assert_eq!(status_in(&null_context).unwrap().context, None);
+    }
+
+    #[test]
+    fn status_in_reads_the_question_the_pane_is_stopped_at() {
+        // `"question": null` is the fixture's own: nothing asked.
+        assert_eq!(status_in(STATUS).unwrap().question, None);
+        let asked = STATUS.replace(
+            "\"question\": null",
+            "\"question\": {\"text\": \"Quick safety check: Is this a project you created or one you trust?\", \
+             \"options\": [\"Yes, I trust this folder\", \"No, exit\"], \"kind\": \"question\"}",
+        );
+        assert_eq!(
+            status_in(&asked).unwrap().question,
+            Some("Quick safety check: Is this a project you created or one you trust?".to_string())
+        );
     }
 
     #[test]
@@ -791,6 +823,27 @@ exit 0
         // No transcript on disk at all -- the JSON field is the whole answer.
         assert_eq!(AmxBackend.context_tokens(&h), Some(4213));
         assert_eq!(AmxBackend.last_words(&h), "done already");
+    }
+
+    #[test]
+    fn a_readers_question_comes_off_amx_status() {
+        let fake = Fake::new("question", "waiting");
+        let h = fake.handle("wf-t1-a3k9");
+        // Waiting, but the fixture asks nothing.
+        assert_eq!(AmxBackend.question(&h), "");
+        let path = fake.dir.join("status.json");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace(
+                "\"question\": null",
+                "\"question\": {\"text\": \"Do you want to proceed?\", \"options\": [\"Yes\", \"No\"]}",
+            ),
+        )
+        .unwrap();
+        assert_eq!(AmxBackend.question(&h), "Do you want to proceed?");
+        // An agent amx has no record of asks nothing.
+        assert_eq!(AmxBackend.question(&fake.handle("nope")), "");
     }
 
     #[test]

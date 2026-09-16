@@ -106,6 +106,12 @@ pub trait WorkerBackend {
     fn last_words(&self, _h: &Handle) -> String {
         String::new()
     }
+    /// The question the worker is stopped at, when the backend can see one:
+    /// a prompt drawn in front of the session, which no hook reports and no
+    /// answer file records. Empty when there is none, or nothing can see.
+    fn question(&self, _h: &Handle) -> String {
+        String::new()
+    }
 }
 
 /// `Dispatch.env` as the JSON object `--settings` takes. `env` is the key

@@ -1452,6 +1452,15 @@ impl Run {
         } else {
             return false;
         };
+        // A reading that ended with nothing may be stopped at a question drawn
+        // in front of the session -- claude's folder-trust screen -- which no
+        // hook reports and no answer file records: the run's whole account of
+        // it was "no verdict", retried, for an hour. amx reads the screen, and
+        // is asked before the pane goes.
+        let question = match &outcome {
+            Err(_) => self.backend.question(&h),
+            Ok(_) => String::new(),
+        };
         self.moot_reader_questions(task);
         // The reading is over either way; the reader's pane has no more to say.
         self.backend.stop(&h, self.kill_grace_s);
@@ -1524,6 +1533,12 @@ impl Run {
             // words say the provider itself is why -- a second reading hits
             // the same wall, so that fails the task at once.
             Err(why) => {
+                let why = if question.is_empty() {
+                    why
+                } else {
+                    let asked = question.split_whitespace().collect::<Vec<_>>().join(" ");
+                    format!("{why}; the reader stopped at a question: \"{asked}\"")
+                };
                 // The dispatch's own stderr is already in review-err. Last
                 // words are appended, never used to overwrite it: a session
                 // that ran a while before the wall has ordinary text in its

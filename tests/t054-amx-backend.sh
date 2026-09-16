@@ -55,6 +55,16 @@ new)
 	# conversation, so the only account of why is what this launch prints.
 	answer=$(sed -n 's/^    Answer file: //p' "$brief")
 	if [ -n "$answer" ]; then
+		case $name in
+		wf-trust-review-*)
+			# Stopped at claude's folder-trust screen: no answer file at
+			# all, nothing on stderr, and a pane waiting on a question
+			# that only the screen shows.
+			printf 'Quick safety check: Is this a project you created or one you trust?' >"$AMX_DIR/$name.question"
+			printf 'waiting\n' >"$AMX_DIR/$name.state"
+			exit 0
+			;;
+		esac
 		printf 'nothing useful\n' >"$answer"
 		case $name in
 		wf-wall-review-*)
@@ -87,8 +97,10 @@ new)
 	;;
 status)
 	[ -f "$AMX_DIR/$1.state" ] || exit 1
-	printf '{"id":"%s","state":"%s","last_event":0,"session":"%s"}\n' \
-		"$1" "$(cat "$AMX_DIR/$1.state")" "$(cat "$AMX_DIR/$1.session" 2>/dev/null)"
+	question=null
+	[ -f "$AMX_DIR/$1.question" ] && question=$(printf '{"text":"%s","options":[]}' "$(cat "$AMX_DIR/$1.question")")
+	printf '{"id":"%s","state":"%s","last_event":0,"session":"%s","question":%s}\n' \
+		"$1" "$(cat "$AMX_DIR/$1.state")" "$(cat "$AMX_DIR/$1.session" 2>/dev/null)" "$question"
 	;;
 stop)
 	printf 'stopped\n' >"$AMX_DIR/$1.state"
@@ -197,3 +209,30 @@ like "$(cat "$limitdir/ceiling.failed")" '^the reader hit a provider limit: amx:
 	'on the line the launch printed'
 like "$(cat "$limitdir/ceiling.review-err")" 'rate limit exceeded' 'which the dispatch put in review-err'
 is "$(cat "$limitdir/ceiling.review-tries")" 1 'after one reading as well'
+
+## ------------------------------------- a reader stopped at a question
+
+# A question drawn in front of the session -- claude's folder-trust screen --
+# is on the screen and nowhere else: no hook reports it, no answer file is
+# written, and amx reads the pane as waiting, which is an ending. The run's
+# whole account of that used to be "no verdict", retried and failed; on
+# 2026-09-16 it took an hour to find the screen behind it. amx status --json
+# carries the question, so the failure names it.
+cat >"$T_TMP/trust.md" <<-'PLAN'
+	# plan: trust
+
+	- [ ] trust Add the trust service
+	      Files: app/trust.php
+	      Verify: true
+	- [ ] beside Add the beside service, so the plan is two tasks and runs
+	      Files: app/beside.php
+	      Verify: true
+PLAN
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/trust.md"
+is "$RC" 1 'a reader that never gets past a question fails the run'
+trustdir="$XDG_STATE_HOME/workflow/runs/app/trust"
+is "$(cat "$trustdir/trust.state" 2>/dev/null)" failed 'the task whose readers sat at the screen is failed'
+like "$(cat "$trustdir/trust.failed")" '^the review ended with no verdict; the reader stopped at a question: "Quick safety check: Is this a project you created or one you trust\?" -- read ' \
+	'and the note names the question the reader was sitting on'
+like "$OUT" 'task trust: the review ended with no verdict; the reader stopped at a question: "Quick safety check: .* -- one more reading' \
+	'and so did the line that sent the second reading'
