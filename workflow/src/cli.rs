@@ -202,60 +202,6 @@ nothing here sleeps on a fixed clock."
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Turn this workflow's skills on in this project's Claude Code settings.
-    #[command(
-        long_about = "Turn this workflow's skills on in this project's Claude Code settings.
-
-Claude Code decides which skills a session sees from its settings files, and a
-project's file outranks the user's. So the skills this repo ships -- route,
-plan, roadmap, implement, orchestrate, review, mem, unslop -- are turned off
-once in the user's file with `workflow disable --global`, and each project that
-wants them says so with this. Nothing else scopes a skill to a project: the
-frontmatter is global to the skill, and no environment variable is read for it.
-
-Writes `.claude/settings.json` at the repo's toplevel, merging into whatever is
-already there. `--pi` writes the same switch for pi instead: `.pi/settings.json`
-at the toplevel, naming each skill file under ~/.agents/skills, which pi reads
-only in a project it trusts and only when the session started there."
-    )]
-    Enable {
-        /// Write the user's settings file instead of this project's.
-        #[arg(long)]
-        global: bool,
-        /// Write pi's settings file instead of Claude Code's.
-        #[arg(long)]
-        pi: bool,
-        /// Print what the write would say, and write nothing.
-        #[arg(long = "dry-run")]
-        dry_run: bool,
-    },
-    /// Turn this workflow's skills off. `--global` is the gate itself.
-    #[command(
-        long_about = "Turn this workflow's skills off in a harness settings file.
-
-`workflow disable --global` is the gate: it hides route, plan, roadmap,
-implement, orchestrate, review, mem and unslop from every session on this
-machine, and `workflow enable` in a project takes them back for that project
-alone. Without `--global` it writes this project's file, which is how a project
-inside a machine that has no gate is kept clear of them.
-
-Both forms take `--pi`, which writes pi's `skills` array rather than Claude
-Code's `skillOverrides`: `.pi/settings.json` at the toplevel, or
-$PI_CODING_AGENT_DIR/settings.json with --global. pi reads the eight skills out
-of ~/.agents/skills, where `workflow doctor --fix` puts them, and a project's
-entry outranks the user's the same way round."
-    )]
-    Disable {
-        /// Write the user's settings file instead of this project's.
-        #[arg(long)]
-        global: bool,
-        /// Write pi's settings file instead of Claude Code's.
-        #[arg(long)]
-        pi: bool,
-        /// Print what the write would say, and write nothing.
-        #[arg(long = "dry-run")]
-        dry_run: bool,
-    },
     /// Print this binary's skills, or one of them whole.
     #[command(long_about = "Print the skills this binary carries.
 
@@ -344,15 +290,13 @@ usage: workflow <command> [options]
       report this project's runs: task states, spend, lock liveness
       0 reported · 2 outside a project
   doctor [--fix]
-      --fix writes the embedded skills and hook stubs where they are missing,
-      differ or are a symlink
+      --fix writes the hook stubs where they are missing, differ or are a
+      symlink, and takes the skills an older --fix installed back off disk
       0 healthy · 1 findings
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's
-  enable [--global] [--pi] [--dry-run]
-      turn this workflow's skills on in this project's Claude Code settings
-  disable [--global] [--pi] [--dry-run]
-      turn them off; --global is the gate that keeps them out of every project
-      that has not said `workflow enable`; --pi writes pi's settings instead
+  skill [<name>]
+      the skills this binary carries, one `name — description` line each;
+      with a name, that SKILL.md whole
   settings-merge [<file>] [--dry-run]
 ";

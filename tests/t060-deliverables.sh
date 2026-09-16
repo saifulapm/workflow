@@ -132,15 +132,19 @@ like "$orchestrate_skill" 'mem doctor' 'orchestrate lints the wiki in a batch re
 like "$orchestrate_skill" 'compact' 'and compacts the pages that have outgrown themselves'
 like "$(cat "$WF_ROOT/README.md")" 'mem wiki' 'the README puts the wiki among the reads'
 
-# The README spells the skill list out twice by hand -- what skills/ holds,
-# and what enable and disable write. A skill missing from either list is one a
-# reader has no way to learn is there.
+# The README spells out what skills/ holds. The other list is not written down
+# any more: `workflow skill` is the listing, read off the binary, and mem
+# serves its own. A skill missing from either is one a reader cannot learn of.
 holds=$(grep -A1 'session-facing instructions' "$WF_ROOT/README.md")
-writes=$(grep -A1 'write one key' "$WF_ROOT/README.md")
+served=$(workflow skill)
 for s in route plan roadmap implement orchestrate review mem unslop; do
 	like "$holds" "$s" "the README counts $s among the skills it ships"
-	like "$writes" "$s" "and among the ones enable and disable write"
 done
+for s in route plan roadmap implement orchestrate review unslop; do
+	like "$served" "^$s — " "and \`workflow skill\` serves $s with its description"
+done
+# mem's is mem's to serve, so workflow's listing must not claim it.
+unlike "$served" '^mem — ' 'and leaves the mem skill to mem'
 
 ## ------------------------------------------------------------ the adapters
 

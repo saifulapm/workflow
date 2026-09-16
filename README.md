@@ -7,8 +7,8 @@ that carry it into an editor session.
   logs, handoffs, blocking questions and a wiki of design pages, kept as
   markdown outside every project repo and synced between machines.
 - `workflow/` is the gate and the orchestrator: `verify`, `lint-msg`,
-  `review-needed`, plan-driven `run`, `status`, `reap`,
-  `enable`/`disable`, `doctor`, and the body of the git hook stubs.
+  `review-needed`, plan-driven `run`, `status`, `reap`, `skill`, `doctor`,
+  and the body of the git hook stubs.
 - `hub/` is a small web view over mem, served tailnet-only, so a phone can
   answer an open question and read any project's memory: `/p/<project>`
   shows its status, handoff, roadmap, plan, stored plans, log, rulings,
@@ -70,31 +70,27 @@ the root project's verify.
 
 ## Which projects see the skills
 
-`workflow enable` and `workflow disable` write one key, `skillOverrides`,
-naming route, plan, roadmap, implement, orchestrate, review, mem and unslop one
-by one.
-`--global` writes the user's settings file; without it, `.claude/settings.json`
-at the repo's toplevel, which outranks the user's. So the switch runs either
-way round:
+A project mem knows. That is the whole answer, and it is the same answer to
+"which projects does mem speak in".
 
-    workflow enable --global     # the skills are there by default
-    workflow disable             # except in this project
+The skills are not files on disk. `workflow skill` lists the seven this binary
+carries, one `name — description` line each; `workflow skill route` prints that
+one whole; `mem skill mem` does the same for the skill about mem. `mem context`
+names them in the digest it injects at the start of a session, so a session
+learns which skills exist, and what each is for, exactly where mem has a
+project to talk about.
 
-    workflow disable --global    # or: nowhere by default
-    workflow enable              # except in this project
+Outside such a project — a checkout mem has never been told about, or a
+directory that is not a checkout at all — mem says nothing and the skills go
+unnamed. Registering a project is how you opt in:
 
-Settings are the only lever. Claude Code builds the skill list from its
-settings files, the frontmatter switch is global to the skill, and no
-environment variable is consulted for it.
+    mem log "first note"        # a write registers this checkout
 
-`--pi` is the same switch for pi, which has no `skillOverrides`: it writes
-pi's `skills` array — `.pi/settings.json` at the toplevel, or
-`$PI_CODING_AGENT_DIR/settings.json` with `--global` — naming each skill file
-under `~/.agents/skills` twice, plain and with `+` or `-`. A project's entry
-outranks the user's the same way round. Two things pi asks for and Claude
-does not: it reads `.pi/settings.json` only from the directory a session
-started in, and only in a project it trusts, so keep `.pi/` out of git beside
-`.claude/` and answer pi's trust prompt once (amx panes send `--approve`).
+There used to be a switch per harness for this: `skillOverrides` in Claude
+Code's settings, a `skills` array in pi's, two grammars, a trust rule, and a
+doctor check to catch a copy on disk that had drifted from the binary. All of
+it is gone. `workflow doctor --fix` takes the old copies back off disk, leaving
+anything you edited by hand where it is.
 
 ## Daily use
 
