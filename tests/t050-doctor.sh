@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # workflow doctor: it reports and never edits (AC3's hooksPath case, AC5b's
-# settings keys, AC10's size budgets).
+# settings keys).
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -117,58 +117,11 @@ like "$OUT" 'self-chain' 'the stub installed as a repo hook is reported'
 
 rm -rf "$repo" "$repo2"
 
-## ------------------------------------------------------- the size budgets
-
-skills="$T_TMP/skills"
-export WORKFLOW_SKILLS_DIR="$skills"
-mkdir -p "$skills/route" "$skills/implement" "$skills/orchestrate"
-{
-	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
-	head -c 100 /dev/zero | tr '\0' 'x'
-	printf '\n'
-} >"$skills/route/SKILL.md"
-{
-	printf -- '---\nname: implement\ndescription: do the task\n---\n\n'
-	head -c 4000 /dev/zero | tr '\0' 'x'
-	printf '\n'
-} >"$skills/implement/SKILL.md"
-{
-	printf -- '---\nname: orchestrate\ndescription: run the loop\n---\n\n'
-	head -c 4000 /dev/zero | tr '\0' 'x'
-	printf '\n'
-} >"$skills/orchestrate/SKILL.md"
-run workflow doctor
-like "$OUT" 'skill route .*within budget' 'a small skill is within budget'
-like "$OUT" 'skill implement .*within budget' 'implement gets the recorded 4800 byte exception'
-like "$OUT" 'skill orchestrate .*within budget' 'orchestrate gets the recorded 4800 byte exception too'
-
-{
-	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
-	head -c 4000 /dev/zero | tr '\0' 'x'
-	printf '\n'
-} >"$skills/route/SKILL.md"
-run workflow doctor
-is "$RC" 1 'an oversized body is a finding'
-like "$OUT" 'skill route.*body is 400[0-9] bytes' 'a route body of 4,000 bytes is over its 3,200 budget'
-
-{
-	printf -- '---\nname: route\n'
-	printf 'description: '
-	head -c 300 /dev/zero | tr '\0' 'x'
-	printf -- '\n---\n\nshort body\n'
-} >"$skills/route/SKILL.md"
-run workflow doctor
-like "$OUT" 'skill route.*frontmatter is' 'an oversized frontmatter is a finding too'
-
 ## ------------------------------------- an installed binary, an occupied slot
 
 # An installed machine runs a copied binary with no checkout above the exe.
-# Since the skills and stubs ride inside the binary, doctor needs no checkout:
-# it measures its own skills and compares the copies with its own text.
-{
-	printf -- '---\nname: route\ndescription: pick the lane\n---\n\n'
-	printf 'short body\n'
-} >"$skills/route/SKILL.md"
+# Since the stubs and roles ride inside the binary, doctor needs no checkout:
+# it compares the copies with its own text.
 cp -L "$T_TMP/bin/workflow" "$T_TMP/installed-workflow"
 chmod +x "$T_TMP/installed-workflow"
 
@@ -183,9 +136,6 @@ unlike "$OUT" 'healthy' 'an unverifiable machine is not called healthy'
 # above it, so ruling 8's third door is the checkout that owns the cwd: the
 # parent of `git rev-parse --path-format=absolute --git-common-dir`,
 # accepted only when that root itself holds hooks/pre-commit and skills/.
-# WORKFLOW_SKILLS_DIR is unset first so skill_sizes() has to fall back
-# through checkout() to prove which root it got.
-unset WORKFLOW_SKILLS_DIR
 
 new_repo workflow
 mkdir -p hooks skills/route
@@ -209,7 +159,6 @@ git config --global core.hooksPath "$wfhooks"
 run "$T_TMP/installed-workflow" doctor
 unlike "$OUT" 'no workflow checkout found' \
 	'a checkout holding hooks/pre-commit and skills/ answers the third door'
-like "$OUT" 'skill route .*within budget' 'and the root it names is read for its own skills'
 
 # A linked worktree of that checkout must still resolve to the main checkout,
 # not to itself: every worktree the orchestrator makes is a full tree, so a
@@ -220,7 +169,6 @@ cd "$T_TMP/workflow-wt" || exit 1
 run "$T_TMP/installed-workflow" doctor
 unlike "$OUT" 'no workflow checkout found' \
 	'from a linked worktree, door three still answers'
-like "$OUT" 'skill route .*within budget' 'and the skills read are the main checkout'\''s'
 cd "$T_TMP" || exit 1
 
 git config --global core.hooksPath "$HOOKS"

@@ -18,7 +18,8 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 - The request's worker, reader and fixer are project keys: set them, never
   look them up (`mem project set model|review-model|fix-model <m>`, or the
   matching `WORKFLOW_*` variable for one run). The name is opaque, a model
-  or an amx role file; `amx new` resolves it, and nothing prints a catalog.
+  or an amx role file (`.amx/agents/<m>.md`, or `~/.config/amx/agents`);
+  `amx new` resolves it, and nothing prints a catalog.
 - One run per session: one plan, or one milestone of a `roadmap`.
   Never edit project code or write in a worktree; your hands are
   `workflow`, `mem` and the plan of record.

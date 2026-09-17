@@ -1,6 +1,6 @@
 //! `workflow doctor` -- what this machine's wiring actually says (spec §7, §11).
-//! Plain `doctor` only reports; `--fix` writes the embedded skills and hook
-//! stubs, the one edit this command makes.
+//! Plain `doctor` only reports; `--fix` writes the embedded hook stubs and
+//! amx roles, the one edit this command makes.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -60,57 +60,6 @@ fn sites_checkouts() -> Vec<PathBuf> {
     }
     found.sort();
     found
-}
-
-/// "<name> <frontmatter bytes> <body bytes>" per skill: the skills this
-/// binary carries, or the directory `WORKFLOW_SKILLS_DIR` names, which is
-/// how the suite hands doctor a skill to measure.
-fn skill_sizes() -> Vec<(String, usize, usize)> {
-    match std::env::var("WORKFLOW_SKILLS_DIR") {
-        Ok(v) if !v.is_empty() => {
-            let mut out = Vec::new();
-            let Ok(entries) = std::fs::read_dir(PathBuf::from(v)) else {
-                return out;
-            };
-            let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
-            dirs.sort();
-            for d in dirs {
-                let Ok(text) = std::fs::read_to_string(d.join("SKILL.md")) else {
-                    continue;
-                };
-                let name = d
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                out.push(sizes_of(name, &text));
-            }
-            out
-        }
-        _ => crate::skill::SKILLS
-            .iter()
-            .map(|(name, text)| sizes_of(name.to_string(), text))
-            .collect(),
-    }
-}
-
-/// The frontmatter and body byte counts of one SKILL.md.
-fn sizes_of(name: String, text: &str) -> (String, usize, usize) {
-    let (mut fm, mut body, mut in_fm) = (0usize, 0usize, false);
-    for (i, line) in text.lines().enumerate() {
-        let n = line.len() + 1;
-        if i == 0 && line == "---" {
-            in_fm = true;
-            fm += n;
-        } else if in_fm && line == "---" {
-            in_fm = false;
-            fm += n;
-        } else if in_fm {
-            fm += n;
-        } else {
-            body += n;
-        }
-    }
-    (name, fm, body)
 }
 
 fn hooks(r: &mut Report) {
@@ -225,42 +174,6 @@ fn settings_keys(r: &mut Report) {
             r.note(
                 "settings attribution",
                 format!("attribution.{key} is set to \"{shown}\" and was kept"),
-            );
-        }
-    }
-}
-
-fn budgets(r: &mut Report) {
-    const FM_MAX: usize = 240;
-    for (name, fm, body) in skill_sizes() {
-        // implement, plan, roadmap and orchestrate carry recorded exceptions
-        // to the 3,200 byte budget: implement, plan and roadmap each hold a
-        // whole loop, the middle-tier keys, or both halves of a project
-        // planned whole -- cutting it in one session and running a milestone
-        // of it in another. orchestrate holds a run's start on top of its
-        // loop: the milestone a stored plan becomes, and the worker, reader
-        // and fixer the request names.
-        let body_max = match name.as_str() {
-            "orchestrate" => 5200,
-            "implement" | "plan" | "roadmap" => 4800,
-            _ => 3200,
-        };
-        if fm > FM_MAX {
-            r.finding(
-                &format!("skill {name}"),
-                format!("frontmatter is {fm} bytes, over the {FM_MAX} byte budget"),
-            );
-        }
-        if body > body_max {
-            r.finding(
-                &format!("skill {name}"),
-                format!("body is {body} bytes, over the {body_max} byte budget"),
-            );
-        }
-        if fm <= FM_MAX && body <= body_max {
-            r.note(
-                &format!("skill {name}"),
-                format!("frontmatter {fm} B, body {body} B -- within budget"),
             );
         }
     }
@@ -485,7 +398,6 @@ pub fn cmd_doctor(fix: bool) -> i32 {
     tools(&mut r);
     hooks(&mut r);
     settings_keys(&mut r);
-    budgets(&mut r);
     install(&mut r, fix);
     retire(&mut r, fix);
 

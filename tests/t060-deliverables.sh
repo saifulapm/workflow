@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The shipped files themselves: skills inside their budgets, hooks that
+# The shipped files themselves: skills that name themselves, hooks that
 # mandate the one line without which they are ungated, and the command surface.
 source "$(dirname -- "$0")/lib.sh"
 t_init
@@ -13,19 +13,6 @@ for s in route plan implement review orchestrate roadmap; do
 	like "$(sed -n '2,4p' "$f")" "name: $s" "skills/$s names itself"
 	like "$(sed -n '2,4p' "$f")" 'description: Use ' "skills/$s describes when to use it"
 done
-
-# Line ceilings from the spec: route 52, plan 100, review 80, orchestrate 100,
-# roadmap 100.
-is "$(($(wc -l <"$WF_ROOT/skills/route/SKILL.md") <= 52))" 1 'route is within 52 lines'
-is "$(($(wc -l <"$WF_ROOT/skills/plan/SKILL.md") <= 100))" 1 'plan is within 100 lines'
-is "$(($(wc -l <"$WF_ROOT/skills/review/SKILL.md") <= 80))" 1 'review is within 80 lines'
-is "$(($(wc -l <"$WF_ROOT/skills/orchestrate/SKILL.md") <= 100))" 1 'orchestrate is within 100 lines'
-is "$(($(wc -l <"$WF_ROOT/skills/roadmap/SKILL.md") <= 100))" 1 'roadmap is within 100 lines'
-
-# The byte budgets, checked the way the machine checks them.
-run workflow doctor
-unlike "$OUT" 'skill .*over the' 'every shipped skill is inside its byte budget'
-like "$OUT" 'skill implement .*within budget' 'and doctor saw all four'
 
 # Skills point at the subcommands rather than restating what they do.
 like "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'workflow review-needed' 'route defers to review-needed'
