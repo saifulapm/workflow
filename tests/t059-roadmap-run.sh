@@ -28,8 +28,12 @@ if [ "$task" = reopen ]; then
 	"$WORKFLOW_MEM" plan --set-file "$WF_TMP/reopened-milestone.md" >/dev/null 2>"$WF_TMP/reopen.mem"
 	sed -i 's/^- \[x\] t1 /- [ ] t1 /' "$(find "$XDG_DATA_HOME/mem/store/projects" -name plan.md)"
 fi
+# Named for its plan as well as its task: once a finished milestone lands on
+# the checkout, the next plan's t1 starts over the last one's app/t1.php, and a
+# byte-identical write would leave nothing to commit.
+plan=$(basename "$(dirname "$2")")
 mkdir -p app
-printf '%s\n' "$task" >"app/$task.php"
+printf '%s %s\n' "$plan" "$task" >"app/$task.php"
 git add "app/$task.php"
 git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
 say ready
@@ -55,6 +59,7 @@ git -c core.hooksPath=/dev/null commit -qm 'project files'
 # roadmap: app-2026
 
 - [ ] filed-milestone The one whose plan is read off a file
+- [ ] copied-milestone The one run off a copy of the plan of record
 - [ ] sulky-milestone The one whose worker will not
 - [ ] done-milestone The one that finishes
 - [ ] reopened-milestone The one whose plan is rewritten under it
@@ -109,6 +114,13 @@ like "$OUT" 'milestone done-milestone is ticked off in the roadmap' 'and the run
 run_out "$MEM_BIN" roadmap
 like "$OUT" '^- \[x\] done-milestone ' 'and its slug is ticked off in the roadmap'
 like "$OUT" '^- \[ \] sulky-milestone ' 'leaving the milestones behind it alone'
+# A run that merged everything lands its integration branch on the checkout's
+# own branch, a fast-forward and nothing else, and says so; left on
+# integration it sat for hours with nobody sure whose move it was (#EVSE2061).
+run_out git rev-parse HEAD
+is "$OUT" "$(git rev-parse integration/done-milestone)" 'and the checkout is fast-forwarded to integration'
+like "$(cat "$XDG_STATE_HOME/workflow/runs/app/done-milestone/events")" 'landed integration/done-milestone on ' \
+	'with the landing in the run log'
 
 ## ------------------------------------- a milestone that stopped short is not
 
@@ -122,8 +134,9 @@ like "$OUT" '^- \[ \] sulky-milestone ' 'and the milestone stays unticked'
 
 ## ------------------------------------------- and a plan read off a file is not
 
-# A --plan-file plan need not be in mem at all, so nothing here can say which
-# milestone it is, even when the names line up.
+# A --plan-file plan need not be in mem at all: unless its slug is the plan of
+# record's, nothing here can say which milestone it is, even when the names
+# line up. The plan of record is sulky-milestone here, so this one is a stranger.
 plan filed-milestone t2
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/filed-milestone.md"
 is "$RC" 0 'a run off a plan file finishes the same way'
@@ -131,6 +144,23 @@ unlike "$OUT" 'ticked off in the roadmap' 'without a word about the roadmap'
 like "$(cat "$T_TMP/filed-milestone.md")" '^- \[x\] t1 ' 'ticking its tasks off in the file it was handed'
 run_out "$MEM_BIN" roadmap
 like "$OUT" '^- \[ \] filed-milestone ' 'and leaving the roadmap alone'
+
+## -------------------- but a copy of the plan of record ticks mem and the roadmap
+
+# The restart shape: a run started again off `mem plan > file` (the workaround
+# for a plan edited mid-run) used to tick its copy alone, so the milestone read
+# as untouched in mem and the roadmap after nine merges (friction #YY1F6P20).
+plan copied-milestone t2
+"$MEM_BIN" plan --set-file "$T_TMP/copied-milestone.md" >/dev/null
+cp "$T_TMP/copied-milestone.md" "$T_TMP/copied-milestone.copy.md"
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/copied-milestone.copy.md"
+is "$RC" 0 'a run off a copy of the plan of record finishes'
+like "$(cat "$T_TMP/copied-milestone.copy.md")" '^- \[x\] t2 ' 'ticking the file it was handed'
+run_out "$MEM_BIN" plan
+like "$OUT" '^- \[x\] t1 ' 'and the plan of record in mem'
+like "$OUT" '^- \[x\] t2 ' 'every task of it'
+run_out "$MEM_BIN" roadmap
+like "$OUT" '^- \[x\] copied-milestone ' 'and the milestone in the roadmap'
 
 ## ------------------------- a plan rewritten under the run is ticked again
 

@@ -1787,6 +1787,62 @@ impl Run {
                 file.display()
             ));
         }
+        // A file that is a copy of mem's plan of record -- the restart shape,
+        // where a run is started again off `mem plan > file` -- ticks mem too,
+        // or the milestone reads as untouched there (friction #YY1F6P20).
+        if self.mem_holds_this_plan() && !memcli::plan_tick(task) {
+            warn(format!(
+                "task {task}: mem holds this plan as the plan of record and could not tick it off"
+            ));
+        }
+    }
+
+    /// Whether mem's plan of record is this plan: the same slug in its
+    /// header. A `--plan-file` run of that plan is the plan of record run from
+    /// a copy, and its ticks belong in mem and the roadmap as much as the file.
+    fn mem_holds_this_plan(&self) -> bool {
+        self.plan_file.is_some()
+            && memcli::plan()
+                .and_then(|text| plan::slug_of(&text))
+                .is_some_and(|slug| slug == self.plan.plan_id)
+    }
+
+    /// Land the integration branch on the checkout's own branch when that is
+    /// a fast-forward the checkout can take: HEAD on a branch, no local
+    /// changes, and integration strictly ahead of it. `Ok` says where it
+    /// landed; `Err` says why it did not, for the recipe. Nothing is pushed
+    /// either way (friction #EVSE2061).
+    fn land_trunk(&self) -> Result<String, String> {
+        let git = Git::at(&self.repo);
+        let Some(branch) = git.out(&["symbolic-ref", "--quiet", "--short", "HEAD"]) else {
+            return Err("the checkout is not on a branch".to_string());
+        };
+        let Some(head) = git.head() else {
+            return Err("the checkout has no HEAD".to_string());
+        };
+        let Some(tip) = git.rev_parse_commit(&self.int_branch) else {
+            return Err(format!("{} does not exist", self.int_branch));
+        };
+        if tip == head {
+            // Landed by hand already, the recovery shape: not news, not a task.
+            return Ok(format!("{branch}, already at {}", &tip[..7]));
+        }
+        if !git.is_ancestor(&head, &self.int_branch) {
+            return Err(format!(
+                "{branch} has commits {} does not, so a fast-forward cannot take it: merge or rebase by hand",
+                self.int_branch
+            ));
+        }
+        if git
+            .out(&["status", "--porcelain", "--untracked-files=no"])
+            .is_some()
+        {
+            return Err(format!("{branch} has local changes"));
+        }
+        if !git.quiet(&["merge", "--ff-only", &self.int_branch]) {
+            return Err(format!("git merge --ff-only {} failed", self.int_branch));
+        }
+        Ok(format!("{branch} at {}", &tip[..7]))
     }
 
     /// Every task this run settled, ticked once more against the plan of
@@ -1796,22 +1852,27 @@ impl Run {
     /// the merge recorded nowhere, and the next run read the task as work
     /// still to do and built it again.
     fn tick_settled_again(&self) {
-        let Some(record) = self
-            .plan_text()
-            .and_then(|text| plan::parse(&text, false))
+        // The file, and mem's copy too when the file is the plan of record's
+        // own: a box reopened in either is a merge the next run would redo.
+        let mut records = vec![self.plan_text()];
+        if self.mem_holds_this_plan() {
+            records.push(memcli::plan());
+        }
+        let records: Vec<Plan> = records
+            .into_iter()
+            .flatten()
+            .filter_map(|text| plan::parse(&text, false))
             .filter(|p| p.plan_id == self.plan.plan_id)
-        else {
-            return;
-        };
+            .collect();
         for id in self.plan.ids() {
             let state = self.state(&id);
             if state != MERGED && state != DONE_PREVIOUSLY {
                 continue;
             }
-            let Some(task) = record.get(&id) else {
-                continue;
-            };
-            if task.checked {
+            let open = records
+                .iter()
+                .any(|record| record.get(&id).is_some_and(|task| !task.checked));
+            if !open {
                 continue;
             }
             self.tick_off(&id);
@@ -3392,10 +3453,31 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             run.plan.plan_id
         ));
     }
-    warn(format!(
-        "integration branch {} is yours to look at; nothing was pushed",
-        run.int_branch
-    ));
+    // A run that merged everything lands its own branch: left on integration
+    // it sat there for hours with nobody sure whose move it was.
+    if failed + blocked == 0 && merged > 0 {
+        let landed = match run.land_trunk() {
+            Ok(place) => format!("landed {} on {place}; nothing was pushed", run.int_branch),
+            Err(why) if why.contains("by hand") => {
+                format!(
+                    "left {} unlanded: {why}; nothing was pushed",
+                    run.int_branch
+                )
+            }
+            Err(why) => format!(
+                "left {} unlanded: {why} -- `git merge --ff-only {}` when the checkout is ready; nothing was pushed",
+                run.int_branch, run.int_branch
+            ),
+        };
+        warn(format!("run {}: {landed}", run.plan.plan_id));
+        run.event(&landed);
+        memcli::log_run(&format!("run {}: {landed}", run.plan.plan_id));
+    } else {
+        warn(format!(
+            "integration branch {} is yours to look at; nothing was pushed",
+            run.int_branch
+        ));
+    }
     // A worker's question on a task that merged anyway is moot, and left
     // pending it sits in the orchestrator's queue for ever.
     for t in run.plan.ids() {
@@ -3411,9 +3493,13 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     }
     run.tick_settled_again();
     // A milestone is finished when its plan is. The plan of record is the one
-    // the roadmap's milestone names, so only a run that read it from mem can
-    // say which box to tick: a --plan-file plan need not be in mem at all.
-    if failed + blocked == 0 && run.plan_file.is_none() && memcli::roadmap_tick(&run.plan.plan_id) {
+    // the roadmap's milestone names, so a run that read it from mem, or from a
+    // file carrying the plan of record's own slug, is the one that can say
+    // which box to tick: any other --plan-file plan need not be in mem at all.
+    if failed + blocked == 0
+        && (run.plan_file.is_none() || run.mem_holds_this_plan())
+        && memcli::roadmap_tick(&run.plan.plan_id)
+    {
         warn(format!(
             "milestone {} is ticked off in the roadmap",
             run.plan.plan_id

@@ -25,8 +25,7 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 - Truth is `workflow status --json`, `mem questions --pending --for
   orchestrator` and `mem log`: the run dir beats memory.
 - Never sleep on a clock. `workflow wait` blocks until the run needs you
-  and its exit code says what for; a `sleep N; workflow status` loop is
-  ten minutes of nothing after every event.
+  and its exit code says what for; a `sleep N; workflow status` loop does not.
 - `git branch --show-current` before any merge, the binary's recipes too.
 
 ## The run
@@ -88,13 +87,14 @@ compact.
 
 ## Ending
 
-`mem log` the counts, the context each task carried, where integration is.
+`mem log` the counts, the context each task carried, and where the work is:
+an all-merged run fast-forwards the checkout onto integration, or
+prints the `git merge --ff-only` that will; run it. Leave the checkout on main.
 Open questions are yours to answer or `moot`. A shipped plan supersedes
 each friction it names: `mem save "friction #<id> closed: <how>"
 --supersedes <id>`. A merged task that changed workflow or mem is followed
 by `cargo install --path <crate>`, so the gate and next run use it, and one
 that changed a skill or a hook stub by `workflow doctor --fix`, so the
-copies match the binary. A task
-that ended near a full window was cut too big; say so. Nothing is pushed.
-Leave the checkout on main. On context pressure, `mem handoff --set
+copies match the binary. A task that ended near a full window was cut too
+big; say so. Nothing is pushed. On context pressure, `mem handoff --set
 "<state>"` and stop; the next session adopts the run.

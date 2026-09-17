@@ -28,7 +28,10 @@ case $task in
 esac
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 mkdir -p app
-printf '%s\n' "$task" >"app/$task.php"
+# Named for its plan too: a finished plan lands on the checkout, and the next
+# plan's task over the same file needs a change to commit.
+# And stamped per dispatch: this file runs the same plan again after it landed.
+printf '%s %s %s\n' "$(basename "$(dirname "$PWD")")" "$task" "$(date +%s%N)" >"app/$task.php"
 git add "app/$task.php"
 git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
 printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"

@@ -28,7 +28,9 @@ elif [ ! -f "$WF_TMP/go-$task" ]; then
 	exit 0
 fi
 mkdir -p app
-printf '%s\n' "$task" >"app/$task.php"
+# Named for its plan too: a finished plan lands on the checkout, and the next
+# plan's task over the same file needs a change to commit.
+printf '%s %s\n' "$(basename "$(dirname "$PWD")")" "$task" >"app/$task.php"
 git add "app/$task.php"
 git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
 say ready

@@ -74,7 +74,7 @@ case $task in
 		printf 'VERDICT: ship\n' >"$answer"
 		;;
 	t1-review)
-		if grep -q '^+fixed$' "$brief"; then
+		if grep -q '^+fixed ' "$brief"; then
 			printf 'VERDICT: ship\nThe diff is clean.\n' >"$answer"
 		else
 			while [ -f "$WF_TMP/hold-review" ]; do sleep 0.2; done
@@ -113,33 +113,37 @@ hold)
 	commit 'Add the hold service'
 	;;
 t1)
+	# The draft is this plan's own: an earlier plan's t1.php lands on the
+	# checkout when that plan finishes, and must not read as a draft here.
+	plan=$(basename "$(dirname "$PWD")")
 	mkdir -p app
-	if [ -f app/t1.php ]; then
-		printf 'fixed\n' >>app/t1.php
+	if grep -qx "draft $plan" app/t1.php 2>/dev/null; then
+		printf 'fixed %s\n' "$plan" >>app/t1.php
 		git add app/t1.php
 		commit 'Fix what the review found'
 	else
-		printf 'draft\n' >app/t1.php
+		printf 'draft %s\n' "$plan" >app/t1.php
 		git add app/t1.php
 		commit 'Add the t1 service'
 	fi
 	;;
 twice)
 	printf '%s\n' "$model" >>"$WF_TMP/twice.models"
+	plan=$(basename "$(dirname "$PWD")")
 	mkdir -p app
-	if [ -f app/twice.php ]; then
+	if grep -qx "twice $plan" app/twice.php 2>/dev/null; then
 		printf 'again\n' >>app/twice.php
 		git add app/twice.php
 		commit 'Never good enough, apparently'
 	else
-		printf 'twice\n' >app/twice.php
+		printf 'twice %s\n' "$plan" >app/twice.php
 		git add app/twice.php
 		commit 'Add the twice service'
 	fi
 	;;
 *)
 	mkdir -p app
-	printf '%s\n' "$task" >"app/$task.php"
+	printf '%s %s\n' "$(basename "$(dirname "$PWD")")" "$task" >"app/$task.php"
 	git add "app/$task.php"
 	commit "Add the $task service"
 	;;
@@ -257,7 +261,7 @@ like "$(cat "$review")" 'app/t1.php:1 -- says draft' 'and it holds the findings'
 like "$(cat "$rundir/t1.review-prompt")" '# Review of task t1 before it merges' 'the prompt names the task'
 like "$(cat "$rundir/t1.review-prompt")" 'Ruling 1\. The t1 service' 'carries the plan of record'
 like "$(cat "$rundir/t1.review-prompt")" 'Done: app/t1.php carries the fix' 'the task block'
-like "$(cat "$rundir/t1.review-prompt")" '^\+draft$' 'and the diff'
+like "$(cat "$rundir/t1.review-prompt")" '^\+draft ' 'and the diff'
 like "$(cat "$rundir/t1.review-prompt")" 'artisan test' 'and the gate commands the run detected'
 like "$(cat "$WF_TMP/reviews.log")" "^fable t1 $XDG_STATE_HOME/workflow/worktrees/app/live/_integration\$" 'the reader ran as the named model in the integration worktree'
 like "$(cat "$rundir/t1.review-session")" '.' 'and its session is recorded, so it can be watched'

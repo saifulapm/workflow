@@ -225,6 +225,16 @@ pub fn prose(text: &str) -> String {
     out.join("\n").trim().to_string()
 }
 
+/// The slug in a plan's header line, `# plan: <slug>`, and nothing else
+/// read: enough to tell whether two documents are the same plan.
+pub fn slug_of(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .and_then(header)
+        .map(|(_, slug)| slug)
+}
+
 pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     let mut plan = Plan::default();
     let mut seen_header = false;
