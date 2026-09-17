@@ -879,11 +879,9 @@ impl Run {
         let n: u64 = self.field(task, "reviews").parse().unwrap_or(0);
         let last = std::fs::read_to_string(self.dir.join(format!("{task}.review.{n}")))
             .unwrap_or_default();
-        let findings: Vec<String> = last
-            .lines()
-            .map(|l| l.trim().trim_start_matches(['*', '-', '>', ' ']))
-            .filter(|l| l.starts_with("[blocks]") || l.starts_with("[later]"))
-            .map(|l| l.to_string())
+        let findings: Vec<String> = reviewer::findings(&last)
+            .into_iter()
+            .map(|(tag, body)| format!("{tag} {body}"))
             .collect();
         let _ = std::fs::write(self.dir.join(format!("{task}.unread")), "");
         warn(format!(

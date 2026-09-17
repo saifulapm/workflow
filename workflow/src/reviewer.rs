@@ -52,17 +52,58 @@ pub fn verdict(text: &str) -> Option<Verdict> {
     })
 }
 
+/// Every tagged finding in a reading, `(tag, text)`, the tag one of
+/// `[blocks]` and `[later]`. A finding is the bullet it starts on plus the
+/// lines wrapped under it: readers hard-wrap at eighty columns, and a
+/// follow-up cut at the first line lost everything after the file name
+/// (six of m08's fourteen were one clause long). A blank line, a heading, a
+/// verdict line or the next bullet ends it.
+pub fn findings(text: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut open = false;
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            open = false;
+            continue;
+        }
+        let bare = trimmed.trim_start_matches(['*', '-', '>', ' ']);
+        let starts_bullet = bare.len() != trimmed.len();
+        if let Some(tag) = ["[blocks]", "[later]"]
+            .into_iter()
+            .find(|t| bare.starts_with(t))
+        {
+            let rest = bare[tag.len()..].trim();
+            out.push((tag.to_string(), rest.to_string()));
+            open = !rest.is_empty();
+            continue;
+        }
+        let ends = starts_bullet
+            || trimmed.starts_with('#')
+            || trimmed
+                .get(..8)
+                .is_some_and(|h| h.eq_ignore_ascii_case("verdict:"));
+        if ends {
+            open = false;
+            continue;
+        }
+        if open && let Some((_, body)) = out.last_mut() {
+            body.push(' ');
+            body.push_str(trimmed);
+        }
+    }
+    out.retain(|(_, body)| !body.is_empty());
+    out
+}
+
 /// The findings a reading marked `later`: true, worth a line in a later
-/// plan, and not worth a round of this one. Each is the line it was written
-/// on, tag stripped, so a follow-up record reads as the finding itself.
+/// plan, and not worth a round of this one. Each is the whole finding, tag
+/// stripped, so a follow-up record reads as the finding itself.
 pub fn later(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| {
-            let line = line.trim().trim_start_matches(['*', '-', '>', ' ']);
-            let rest = line.strip_prefix("[later]")?;
-            let rest = rest.trim();
-            (!rest.is_empty()).then(|| rest.to_string())
-        })
+    findings(text)
+        .into_iter()
+        .filter(|(tag, _)| tag == "[later]")
+        .map(|(_, body)| body)
         .collect()
 }
 
@@ -325,6 +366,35 @@ mod tests {
             ]
         );
         assert!(later("VERDICT: ship\nThe diff is clean.").is_empty());
+    }
+
+    #[test]
+    fn a_finding_wrapped_under_its_bullet_is_read_whole() {
+        let text = "VERDICT: ship\n\
+                    - [later] src/imports.ts:277-293 (importProduct) -- productCreate\n\
+                    \x20 takes the store lock inside the savepoint, so it is held\n\
+                    \x20 until the outer transaction commits.\n\
+                    - [blocks] src/imports.ts:320 -- the failed condition\n\
+                    \x20 never fires when every row failed.\n\
+                    \n\
+                    \x20 This paragraph is prose after a blank line, not a finding.\n\
+                    - [later] src/csv.ts:12 -- one line.\n\
+                    Then the closing paragraph.\n";
+        assert_eq!(
+            later(text),
+            [
+                "src/imports.ts:277-293 (importProduct) -- productCreate takes the store lock inside the savepoint, so it is held until the outer transaction commits.",
+                "src/csv.ts:12 -- one line. Then the closing paragraph.",
+            ]
+        );
+        assert_eq!(
+            findings(text)[1],
+            (
+                "[blocks]".to_string(),
+                "src/imports.ts:320 -- the failed condition never fires when every row failed."
+                    .to_string()
+            )
+        );
     }
 
     #[test]
