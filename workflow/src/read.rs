@@ -7,11 +7,11 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use crate::backend::{Dispatch, Handle};
+use crate::backend::Dispatch;
 use crate::gitcmd::{self, Git};
 use crate::plan::Task;
 use crate::reviewer::{self, Verdict};
-use crate::{exit, memcli, paths, repo, run, sys, verify, warn};
+use crate::{advise, exit, memcli, paths, repo, run, sys, verify, warn};
 
 /// Past this many bytes an untracked file is named but not inlined: the same
 /// reasoning as the diff cap, on a much smaller document.
@@ -315,46 +315,20 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     // one holding the diff it is reading: the snapshot taken above and the
     // one below are enough to warn if it left something behind
     // (wiki:merge-gate step 6 voids a reading that does this at the gate).
-    let dispatched = backend.dispatch(&d);
-    // No handle is a launch the backend refused -- amx at its cap, or a tmux
-    // it cannot reach -- and there is no reading to wait on. What it said is
-    // in the err file, so this fails on that line rather than spinning out
-    // the full deadline on a session that never came up (run.rs does the
-    // same at its own dispatch).
-    if dispatched.is_empty() {
-        let said = std::fs::read_to_string(&d.err).unwrap_or_default();
-        let line = first_line(&said, "nothing on stderr");
-        warn(format!("read: the launch was refused: {line}"));
-        return NO_VERDICT;
-    }
-    let h = Handle {
-        session: dispatched,
-        pidfile: d.pidfile.clone(),
-        worktree: top.clone(),
-    };
-
+    // One consult: the backend starts the reader, waits for its turn and
+    // stops it. A launch refused -- amx at its cap, a tmux it cannot reach
+    // -- a deadline, or a reader stopped at a question each end here with
+    // the reason on stderr, the question in its own words when the backend
+    // read one, rather than as a bare "no verdict" (friction #HAN4WNAR).
     let deadline_s = reviewer::deadline_s();
-    let grace_s = (deadline_s / 2).clamp(1, 30);
-    let started = sys::now();
-    let mut timed_out = false;
-    while backend.alive(&h) {
-        if sys::now() - started >= deadline_s {
-            timed_out = true;
-            break;
-        }
-        sys::sleep(1.0);
-    }
-    backend.stop(&h, grace_s);
+    let c = backend.consult(&d, deadline_s);
 
     if status_fields(&git) != before_tree {
         warn("read: the reading left the working tree changed");
     }
 
-    if timed_out {
-        warn(format!(
-            "read: the reading ran past its {deadline_s} second deadline and was stopped -- read {}",
-            answer.display()
-        ));
+    if let Some(line) = advise::ending_line("read", "the reading", &c, &d, deadline_s, &answer) {
+        warn(line);
         return NO_VERDICT;
     }
 

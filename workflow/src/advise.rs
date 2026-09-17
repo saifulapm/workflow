@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::backend::{Dispatch, Handle, WorkerBackend};
+use crate::backend::{Consult, Dispatch, Ending, WorkerBackend};
 use crate::{exit, gitcmd::Git, memcli, plan, repo, reviewer, run, sys, warn};
 
 /// Past this many bytes a named file is named but not inlined, the same cap
@@ -240,51 +240,23 @@ Write your whole answer to exactly this file and then stop:
     )
 }
 
-/// Dispatch off a written prompt and wait for it: polls `alive` every
-/// second, prints the answer when the session ends and it exists (exit 0);
-/// past [`reviewer::deadline_s`] the session is stopped, and a session that
-/// ended with nothing written reads the same way -- no answer either way
-/// (exit 1). `log` is `(task, n, question)`, present only for a consult
-/// inside a run (ruling 1).
-fn dispatch_and_wait(
+/// One consult off a written prompt: the backend starts the advisor, waits
+/// for its turn and stops it (`WorkerBackend::consult`), and this reads the
+/// ending. An answer file is the answer, printed (exit 0); a launch refused,
+/// a session stopped at a question, the deadline, or a session that ended
+/// with nothing written are each said on stderr (exit 1), the question in
+/// its own words when the backend saw one. `log` is `(task, n, question)`,
+/// present only for a consult inside a run (ruling 1).
+fn consult(
     backend: &dyn WorkerBackend,
     d: &Dispatch,
     answer: &Path,
     log: Option<(&str, u64, &str)>,
 ) -> i32 {
-    let dispatched = backend.dispatch(d);
-    if dispatched.is_empty() {
-        let said = std::fs::read_to_string(&d.err).unwrap_or_default();
-        let line = said
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("nothing on stderr");
-        warn(format!("advise: the launch was refused: {line}"));
-        return exit::FAILED;
-    }
-    let h = Handle {
-        session: dispatched,
-        pidfile: d.pidfile.clone(),
-        worktree: d.worktree.clone(),
-    };
     let deadline_s = reviewer::deadline_s();
-    let grace_s = (deadline_s / 2).clamp(1, 30);
-    let started = sys::now();
-    let mut timed_out = false;
-    while backend.alive(&h) {
-        if sys::now() - started >= deadline_s {
-            timed_out = true;
-            break;
-        }
-        sys::sleep(1.0);
-    }
-    // The consult is over either way; its pane has no more to say.
-    backend.stop(&h, grace_s);
-    if timed_out {
-        warn(format!(
-            "advise: the consult ran past its {deadline_s} second deadline and was stopped -- read {}",
-            answer.display()
-        ));
+    let c = backend.consult(d, deadline_s);
+    if let Some(line) = ending_line("advise", "the consult", &c, d, deadline_s, answer) {
+        warn(line);
         return exit::FAILED;
     }
     if !answer.exists() {
@@ -303,6 +275,50 @@ fn dispatch_and_wait(
         ));
     }
     exit::OK
+}
+
+/// The stderr line for a consult that gave no answer to read, or `None` when
+/// the ending leaves the answer file to speak. `verb` opens the line; `what`
+/// names the turn ("the consult", "the reading"). A launch refused has no
+/// session and its reason on `Dispatch::err`; a question is named in its
+/// own words when the backend read one, since the folder-trust screen and
+/// its kind were "no verdict, for an hour" until it was (friction #HAN4WNAR).
+pub(crate) fn ending_line(
+    verb: &str,
+    what: &str,
+    c: &Consult,
+    d: &Dispatch,
+    deadline_s: i64,
+    answer: &Path,
+) -> Option<String> {
+    match c.ending {
+        Ending::Unclean if c.session.is_empty() => {
+            let said = std::fs::read_to_string(&d.err).unwrap_or_default();
+            let line = said
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("nothing on stderr");
+            Some(format!("{verb}: the launch was refused: {line}"))
+        }
+        Ending::TimedOut => Some(format!(
+            "{verb}: {what} ran past its {deadline_s} second deadline and was stopped -- read {}",
+            answer.display()
+        )),
+        Ending::Blocked => {
+            let asked = c.question.split_whitespace().collect::<Vec<_>>().join(" ");
+            Some(match asked.is_empty() {
+                true => format!(
+                    "{verb}: the session stopped at a question -- read {}",
+                    answer.display()
+                ),
+                false => format!(
+                    "{verb}: the session stopped at a question: \"{asked}\" -- read {}",
+                    answer.display()
+                ),
+            })
+        }
+        Ending::Answered | Ending::Unclean => None,
+    }
 }
 
 /// The command line's own dispatch, common to both branches: `turns` off
@@ -433,7 +449,7 @@ fn cmd_advise_in_run(
         "WORKFLOW_TASK".into(),
         format!("{plan_id}/{task_id}-advice-{n}"),
     ));
-    dispatch_and_wait(backend.as_ref(), &d, &answer, Some((task_id, n, question)))
+    consult(backend.as_ref(), &d, &answer, Some((task_id, n, question)))
 }
 
 /// Outside a run: `--against <text>` stands in for the plan and the task
@@ -494,7 +510,7 @@ fn cmd_advise_standalone(
         model,
         reader_effort(None),
     );
-    dispatch_and_wait(backend.as_ref(), &d, &answer, None)
+    consult(backend.as_ref(), &d, &answer, None)
 }
 
 /// The `<project>` component of a task worktree,
@@ -573,6 +589,89 @@ pub fn cmd_advise(question: &str, files: &[PathBuf], against: Option<&str>) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn consulted(ending: Ending, session: &str, question: &str) -> Consult {
+        Consult {
+            ending,
+            answer: String::new(),
+            session: session.into(),
+            question: question.into(),
+        }
+    }
+
+    #[test]
+    fn the_ending_line_names_the_question_the_refusal_and_the_deadline() {
+        let dir = std::env::temp_dir().join(format!("wf-advise-ending-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let answer = dir.join("advice");
+        let d = base_dispatch(
+            "advice".into(),
+            dir.clone(),
+            dir.join("prompt"),
+            &dir,
+            "advice",
+            "wf-a".into(),
+            "opus".into(),
+            None,
+        );
+        let line = |c: &Consult| ending_line("advise", "the consult", c, &d, 900, &answer);
+
+        // An answer, or a session that ended unclean but has a session: the
+        // file decides, so no line.
+        assert_eq!(line(&consulted(Ending::Answered, "wf-a", "")), None);
+        assert_eq!(line(&consulted(Ending::Unclean, "wf-a", "")), None);
+
+        // Refused: no session, and amx's own line off err.
+        std::fs::write(
+            &d.err,
+            "\namx sub: max_children is 8 and wf-p already has that many\n",
+        )
+        .unwrap();
+        assert_eq!(
+            line(&consulted(Ending::Unclean, "", "")).as_deref(),
+            Some(
+                "advise: the launch was refused: amx sub: max_children is 8 and wf-p already has that many"
+            )
+        );
+
+        // A question, in its own words, whitespace folded.
+        let asked = consulted(
+            Ending::Blocked,
+            "wf-a",
+            "Quick safety check:\n  Is this a project you trust?",
+        );
+        assert_eq!(
+            line(&asked).as_deref(),
+            Some(&*format!(
+                "advise: the session stopped at a question: \"Quick safety check: Is this a project you trust?\" -- read {}",
+                answer.display()
+            ))
+        );
+        assert_eq!(
+            line(&consulted(Ending::Blocked, "wf-a", "")).as_deref(),
+            Some(&*format!(
+                "advise: the session stopped at a question -- read {}",
+                answer.display()
+            ))
+        );
+        assert_eq!(
+            ending_line(
+                "read",
+                "the reading",
+                &consulted(Ending::TimedOut, "wf-a", ""),
+                &d,
+                900,
+                &answer
+            )
+            .as_deref(),
+            Some(&*format!(
+                "read: the reading ran past its 900 second deadline and was stopped -- read {}",
+                answer.display()
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_dial_reads_the_environment_then_the_run_dir_then_the_project() {
