@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::backend::{
-    Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
+    Consult, Dispatch, Ending, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
 };
 use crate::{gitcmd, paths, sys};
 
@@ -214,7 +214,8 @@ fn names_a_role(name: &str, worktree: &Path) -> bool {
     project.join(".amx/agents").join(&file).is_file() || paths::amx_roles().join(&file).is_file()
 }
 
-/// The dispatch argv, as `mem wiki amx-backend` pins it.
+/// The spawn's own words, after the verb and the name, the same on `new` and
+/// on `sub`, as `mem wiki amx-backend` pins them.
 ///
 /// `--no-worktree` because workflow has already cut this task's worktree and
 /// the merge gate anchors on its branch; a second one wrapped around it would
@@ -222,12 +223,9 @@ fn names_a_role(name: &str, worktree: &Path) -> bool {
 /// this is, whose brief amx puts in front of the task -- or the role the
 /// model dial names, which then says the model too. `--effort` only when
 /// the run has a level: absent, amx starts the agent on its own default.
-fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
+fn spawn_argv(d: &Dispatch) -> Vec<String> {
     let path = |p: &Path| p.to_string_lossy().to_string();
     let mut argv = vec![
-        "new".to_string(),
-        "--name".to_string(),
-        name.to_string(),
         "--dir".to_string(),
         path(&d.worktree),
         "--no-worktree".to_string(),
@@ -246,6 +244,76 @@ fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
     }
     argv.push(format!("Read {} and execute it exactly.", path(&d.brief)));
     argv
+}
+
+/// The dispatch argv for an agent with no parent: `amx new --name <name> ...`.
+fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
+    let mut argv = vec!["new".to_string(), "--name".to_string(), name.to_string()];
+    argv.extend(spawn_argv(d));
+    argv
+}
+
+/// The dispatch argv for a child: `amx sub --bg --json --name <name>
+/// --parent <id> ...`. `--bg` because the run keeps its own poll and needs
+/// the id now, not at the end; `--json` because that is where the id is.
+fn sub_bg_argv(d: &Dispatch, name: &str, parent: &str) -> Vec<String> {
+    let mut argv = vec![
+        "sub".to_string(),
+        "--bg".to_string(),
+        "--json".to_string(),
+        "--name".to_string(),
+        name.to_string(),
+        "--parent".to_string(),
+        parent.to_string(),
+    ];
+    argv.extend(spawn_argv(d));
+    argv
+}
+
+/// The consult argv: `amx sub --json --timeout <s> --name <name> [--parent
+/// <id>] ...`, one call that starts the agent and waits for its answer.
+fn sub_argv(d: &Dispatch, name: &str, timeout_s: i64) -> Vec<String> {
+    let mut argv = vec![
+        "sub".to_string(),
+        "--json".to_string(),
+        "--timeout".to_string(),
+        timeout_s.max(1).to_string(),
+        "--name".to_string(),
+        name.to_string(),
+    ];
+    if let Some(parent) = &d.parent {
+        argv.push("--parent".to_string());
+        argv.push(parent.clone());
+    }
+    argv.extend(spawn_argv(d));
+    argv
+}
+
+/// The two fields of `amx sub --json` this backend reads: the child's id and
+/// its answer, `null` for a turn that gave none.
+fn sub_json(json: &str) -> Option<(String, String)> {
+    let serde_json::Value::Object(v) = serde_json::from_str::<serde_json::Value>(json).ok()? else {
+        return None;
+    };
+    let id = v.get("id")?.as_str()?.to_string();
+    let answer = v
+        .get("answer")
+        .and_then(|a| a.as_str())
+        .unwrap_or_default()
+        .to_string();
+    Some((id, answer))
+}
+
+/// `amx sub`'s exit code as an ending: `result`'s codes, 0 an answer, 2 the
+/// child is asking a question, 3 the deadline, and anything else -- 1 failed
+/// or stopped, 64 usage, no code at all -- unclean.
+fn ending_of(code: Option<i32>) -> Ending {
+    match code {
+        Some(0) => Ending::Answered,
+        Some(2) => Ending::Blocked,
+        Some(3) => Ending::TimedOut,
+        _ => Ending::Unclean,
+    }
 }
 
 /// The variables a worker must not inherit (spec §1), out of the names the
@@ -285,6 +353,32 @@ fn scrubbed(names: impl IntoIterator<Item = String>) -> Vec<String> {
         .collect()
 }
 
+/// Run one spawning verb -- `new`, `sub` -- with the dispatch's environment:
+/// its own pairs set, the worker mark on, the credentials of spec 1 scrubbed,
+/// stderr where the dispatch was told to put it. None when amx could not be
+/// run at all.
+///
+/// A launch amx refuses says why on stderr and nowhere else, and for a
+/// reader that line is the whole diagnosis -- so it goes to `Dispatch::err`
+/// rather than to /dev/null.
+fn spawn(argv: &[String], d: &Dispatch) -> Option<std::process::Output> {
+    let mut c = Command::new(amx_bin());
+    c.args(argv);
+    for (k, v) in &d.env {
+        c.env(k, v);
+    }
+    // How a worker's hooks and mem know they are a worker's.
+    c.env("WORKFLOW_AGENT", "1");
+    for name in scrubbed(std::env::vars().map(|(k, _)| k)) {
+        c.env_remove(name);
+    }
+    let err = match std::fs::File::create(&d.err) {
+        Ok(f) => Stdio::from(f),
+        Err(_) => Stdio::null(),
+    };
+    c.stdout(Stdio::piped()).stderr(err).output().ok()
+}
+
 impl WorkerBackend for AmxBackend {
     /// A name amx will take, minted before the task is known. `dispatch`
     /// qualifies it with the task and hands back what it pinned.
@@ -294,30 +388,83 @@ impl WorkerBackend for AmxBackend {
 
     fn dispatch(&self, d: &Dispatch) -> String {
         let name = name_for(d);
-        let mut c = Command::new(amx_bin());
-        c.args(new_argv(d, &name));
-        for (k, v) in &d.env {
-            c.env(k, v);
-        }
-        // How a worker's hooks and mem know they are a worker's.
-        c.env("WORKFLOW_AGENT", "1");
-        for name in scrubbed(std::env::vars().map(|(k, _)| k)) {
-            c.env_remove(name);
-        }
-        // A launch amx refuses says why on stderr and nowhere else, and for a
-        // reader that line is the whole diagnosis -- so it goes where the
-        // dispatch was told to put it rather than to /dev/null.
-        let err = match std::fs::File::create(&d.err) {
-            Ok(f) => Stdio::from(f),
-            Err(_) => Stdio::null(),
+        let argv = match &d.parent {
+            Some(parent) => sub_bg_argv(d, &name, parent),
+            None => new_argv(d, &name),
         };
         // `amx new` prints the id and returns as soon as the pane is up, so
-        // there is nothing to detach from and nothing to wait for. A launch
-        // amx refused (exit 2 at its cap, 1 for anything else) started no
-        // agent: no handle, and the run reads the refusal off `err`.
-        match c.stdout(Stdio::null()).stderr(err).status() {
-            Ok(st) if st.success() => name,
+        // there is nothing to detach from and nothing to wait for; `sub --bg
+        // --json` says the same id in its object. A launch amx refused (exit
+        // 2 at its cap, 64 for a parent it has no record of, 1 for anything
+        // else) started no agent: no handle, and the run reads the refusal
+        // off `err`.
+        let Some(out) = spawn(&argv, d) else {
+            return String::new();
+        };
+        if !out.status.success() {
+            return String::new();
+        }
+        match d.parent {
+            None => name,
+            // The id is the name asked for, or the record is not the one
+            // this dispatch will be asked after by -- and a child amx did
+            // start under some other id is stopped rather than left running
+            // in the tree with nothing holding its handle.
+            Some(_) => match sub_json(&String::from_utf8_lossy(&out.stdout)) {
+                Some((id, _)) if id == name => name,
+                Some((id, _)) => {
+                    let _ = amx(&["stop", &id]);
+                    String::new()
+                }
+                None => String::new(),
+            },
+        }
+    }
+
+    /// One `amx sub --json --timeout`: the agent, its turn and its ending in
+    /// one call, the answer off the object and the ending off the exit code.
+    /// amx has stopped nothing when the deadline passes -- `result` gave up
+    /// waiting, the pane stands -- so the stop is this backend's, as it is
+    /// for every ending: a consulted agent has one answer to give.
+    fn consult(&self, d: &Dispatch, timeout_s: i64) -> Consult {
+        let name = name_for(d);
+        let refused = Consult {
+            ending: Ending::Unclean,
+            answer: String::new(),
+            session: String::new(),
+            question: String::new(),
+        };
+        let Some(out) = spawn(&sub_argv(d, &name, timeout_s), d) else {
+            return refused;
+        };
+        let Some((id, answer)) = sub_json(&String::from_utf8_lossy(&out.stdout)) else {
+            // amx prints the object on every ending it saw; a clean exit
+            // with none is a child that may be standing under the name
+            // asked for, so it is stopped before this says nothing ran.
+            if out.status.success() {
+                let _ = amx(&["stop", &name]);
+            }
+            return refused;
+        };
+        let h = Handle {
+            session: id.clone(),
+            pidfile: d.pidfile.clone(),
+            worktree: d.worktree.clone(),
+        };
+        let ending = ending_of(out.status.code());
+        // The question lives on the pane and amx forgets it with the phase
+        // the stop brings, so it is read first: exit 2 is exactly the ending
+        // whose wording the caller needs.
+        let question = match ending {
+            Ending::Blocked => self.question(&h),
             _ => String::new(),
+        };
+        self.stop(&h, (timeout_s / 2).clamp(1, 30));
+        Consult {
+            ending,
+            answer,
+            session: id,
+            question,
         }
     }
 
@@ -473,6 +620,7 @@ mod tests {
             status: PathBuf::from("/runs/t1.status"),
             rundir: PathBuf::from("/runs"),
             session: "wf-a3k9".into(),
+            parent: None,
             role: "worker".into(),
             model: "opus".into(),
             effort: None,
@@ -650,6 +798,140 @@ mod tests {
     }
 
     #[test]
+    fn a_dispatch_with_a_parent_is_a_sub_in_the_background() {
+        let mut d = fixture();
+        d.parent = Some("wf-t1-zz01".into());
+        let argv = sub_bg_argv(&d, "wf-t1-a3k9", "wf-t1-zz01");
+        assert_eq!(
+            &argv[..7],
+            [
+                "sub",
+                "--bg",
+                "--json",
+                "--name",
+                "wf-t1-a3k9",
+                "--parent",
+                "wf-t1-zz01"
+            ]
+        );
+        // The same words after the verb and the name as `new` has.
+        assert_eq!(argv[7..], new_argv(&d, "wf-t1-a3k9")[3..]);
+
+        let fake = Fake::new("child", "working");
+        d.worktree = fake.dir.clone();
+        d.err = fake.dir.join("t1.err");
+        assert_eq!(AmxBackend.dispatch(&d), "wf-t1-a3k9");
+        assert_eq!(
+            fake.read("argv").lines().collect::<Vec<_>>(),
+            sub_bg_argv(&d, "wf-t1-a3k9", "wf-t1-zz01")
+        );
+        // An id that is not the name asked for is no handle: the record amx
+        // made is not the one the run would be asking after, and the child it
+        // started is stopped rather than left running with nothing holding it.
+        std::fs::write(fake.dir.join("sub-name"), "read-the-brief-q9").unwrap();
+        assert_eq!(AmxBackend.dispatch(&d), "");
+        assert!(
+            fake.read("argv").contains("stop\nread-the-brief-q9\n"),
+            "{}",
+            fake.read("argv")
+        );
+        // A parent amx has no record of is a refusal (64), and no handle.
+        std::fs::remove_file(fake.dir.join("sub-name")).unwrap();
+        std::fs::write(fake.dir.join("sub-exit"), "64").unwrap();
+        assert_eq!(AmxBackend.dispatch(&d), "");
+    }
+
+    #[test]
+    fn a_consult_is_one_sub_call_and_its_exit_code_is_the_ending() {
+        let mut d = fixture();
+        let argv = sub_argv(&d, "wf-t1-a3k9", 900);
+        assert_eq!(
+            &argv[..6],
+            ["sub", "--json", "--timeout", "900", "--name", "wf-t1-a3k9"]
+        );
+        assert_eq!(argv[6..], new_argv(&d, "wf-t1-a3k9")[3..]);
+        d.parent = Some("wf-t1-zz01".into());
+        assert_eq!(
+            &sub_argv(&d, "wf-t1-a3k9", 900)[6..8],
+            ["--parent", "wf-t1-zz01"]
+        );
+        d.parent = None;
+
+        for (code, ending) in [
+            (0, Ending::Answered),
+            (1, Ending::Unclean),
+            (2, Ending::Blocked),
+            (3, Ending::TimedOut),
+            (64, Ending::Unclean),
+        ] {
+            let fake = Fake::new("consult", "done");
+            d.worktree = fake.dir.clone();
+            d.err = fake.dir.join("t1.err");
+            std::fs::write(fake.dir.join("sub-exit"), code.to_string()).unwrap();
+            let c = AmxBackend.consult(&d, 900);
+            assert_eq!(c.ending, ending, "exit {code}");
+            assert_eq!(c.session, "wf-t1-a3k9");
+            assert_eq!(c.answer, "the answer");
+            assert_eq!(c.question, "", "exit {code}: nothing asked");
+            // One sub, then the stop: the consulted agent has said its piece.
+            let calls: Vec<String> = fake
+                .read("argv")
+                .lines()
+                .filter(|l| *l == "sub" || *l == "stop")
+                .map(str::to_string)
+                .collect();
+            assert_eq!(calls, ["sub", "stop"], "exit {code}");
+        }
+    }
+
+    #[test]
+    fn a_blocked_consult_carries_the_question_read_before_the_stop() {
+        let fake = Fake::new("blocked", "waiting");
+        let path = fake.dir.join("status.json");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace(
+                "\"question\": null",
+                "\"question\": {\"text\": \"Is this a project you trust?\", \"options\": [\"Yes\", \"No\"]}",
+            ),
+        )
+        .unwrap();
+        std::fs::write(fake.dir.join("sub-exit"), "2").unwrap();
+        let mut d = fixture();
+        d.worktree = fake.dir.clone();
+        d.err = fake.dir.join("t1.err");
+        let c = AmxBackend.consult(&d, 900);
+        assert_eq!(c.ending, Ending::Blocked);
+        assert_eq!(c.question, "Is this a project you trust?");
+        // status (the question) was asked before stop.
+        let calls: Vec<String> = fake
+            .read("argv")
+            .lines()
+            .filter(|l| ["sub", "status", "stop"].contains(l))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(calls, ["sub", "status", "stop"]);
+    }
+
+    #[test]
+    fn the_sub_object_gives_up_the_id_and_the_answer() {
+        assert_eq!(
+            sub_json(
+                r#"{"id":"wf-x","parent":"wf-p","phase":"done","answer":"ship","evidence":"record"}"#
+            ),
+            Some(("wf-x".into(), "ship".into()))
+        );
+        assert_eq!(
+            sub_json(r#"{"id":"wf-x","answer":null}"#),
+            Some(("wf-x".into(), String::new()))
+        );
+        assert_eq!(sub_json("amx sub: no agent `nope`"), None);
+        assert_eq!(sub_json("{}"), None);
+        assert_eq!(ending_of(None), Ending::Unclean);
+    }
+
+    #[test]
     fn the_role_is_the_kind_of_agent_the_dispatch_is() {
         let mut d = fixture();
         d.role = "reader".into();
@@ -778,6 +1060,13 @@ if [ "$1" = status ] || [ "$1" = logs ]; then
 fi
 [ "$1" = logs ] && echo "amx logs: $2"
 [ "$1" = status ] && cat '{d}/status.json'
+if [ "$1" = sub ]; then
+  name=; prev=
+  for a in "$@"; do [ "$prev" = --name ] && name=$a; prev=$a; done
+  [ -f '{d}/sub-name' ] && name=$(cat '{d}/sub-name')
+  printf '{{"id":"%s","parent":null,"phase":"done","answer":"the answer","evidence":"record"}}\n' "$name"
+  [ -f '{d}/sub-exit' ] && exit "$(cat '{d}/sub-exit')"
+fi
 exit 0
 "#
                 ),

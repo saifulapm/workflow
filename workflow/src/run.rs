@@ -1043,6 +1043,7 @@ impl Run {
             status,
             rundir: self.dir.clone(),
             session: session.clone(),
+            parent: None,
             // A fixer after round two, else a worker: the field is written
             // beside the fix model and persists the same way.
             role: match self.field(task, "role").trim() {
@@ -1412,6 +1413,7 @@ impl Run {
             status: self.dir.join(format!("{task}.review-status")),
             rundir: self.dir.clone(),
             session: self.backend.mint_session(),
+            parent: None,
             role: "reader".into(),
             model: model.to_string(),
             effort: self.review_effort.clone(),

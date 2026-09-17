@@ -300,6 +300,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         status: dir.join("read.review-status"),
         rundir: dir.clone(),
         session: mint,
+        parent: None,
         role: "reader".into(),
         model,
         effort: effort(),

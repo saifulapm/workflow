@@ -28,6 +28,10 @@ pub struct Dispatch {
     pub status: PathBuf,
     pub rundir: PathBuf,
     pub session: String,
+    /// The agent this one is a child of -- the task's worker for its reader,
+    /// the session a task had before for a redispatch -- when the run knows
+    /// one. amx records it (`amx sub --parent`); the process seam ignores it.
+    pub parent: Option<String>,
     /// Which of the run's four agents this is -- `worker`, `reader`, `fixer`
     /// or `advisor` -- and so which amx role it starts under, unless `model`
     /// names a role of its own.
@@ -47,6 +51,32 @@ pub struct Handle {
     pub session: String,
     pub pidfile: PathBuf,
     pub worktree: PathBuf,
+}
+
+/// How a consulted agent's one turn ended, as `amx sub`'s exit code says it:
+/// 0 answered, 2 stopped at a question, 3 the caller's deadline, anything
+/// else (1 failed or stopped, 64 usage) unclean. The verdict is never here:
+/// it is in the answer file the prompt named, read by `reviewer::verdict`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    Answered,
+    Blocked,
+    TimedOut,
+    Unclean,
+}
+
+/// What one blocking consult -- a reading, an advice -- came back with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consult {
+    pub ending: Ending,
+    /// The agent's own last text, where the backend hands it back (amx's
+    /// `answer`); empty on the process seam, which leaves only the file.
+    pub answer: String,
+    /// The agent's id, for the record; empty when the launch was refused.
+    pub session: String,
+    /// The question a `Blocked` agent stopped at, read off the pane before
+    /// the stop took it; empty otherwise.
+    pub question: String,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -103,6 +133,48 @@ pub trait WorkerBackend {
     /// What the worker left behind: a print-mode result document at `out`, or
     /// the agents list's word on the session named by the handle.
     fn result(&self, h: &Handle, out: &Path) -> Outcome;
+    /// Start an agent and wait for its one turn to end, up to `timeout_s`,
+    /// then stop whatever is left of it: the shape of a reading or an advice,
+    /// which has one answer to give and no session to keep. amx does it in
+    /// one call (`amx sub --json --timeout`); the default is the loop the
+    /// process seam has always had -- dispatch, `alive` once a second to the
+    /// deadline, `stop` -- which cannot tell an answer from a failure and so
+    /// says `Answered` for any turn that ended inside the deadline. A launch
+    /// refused is `Unclean` with no session, the refusal on `Dispatch::err`.
+    fn consult(&self, d: &Dispatch, timeout_s: i64) -> Consult {
+        let session = self.dispatch(d);
+        if session.is_empty() {
+            return Consult {
+                ending: Ending::Unclean,
+                answer: String::new(),
+                session,
+                question: String::new(),
+            };
+        }
+        let h = Handle {
+            session: session.clone(),
+            pidfile: d.pidfile.clone(),
+            worktree: d.worktree.clone(),
+        };
+        let grace_s = (timeout_s / 2).clamp(1, 30);
+        let started = sys::now();
+        let mut ending = Ending::Answered;
+        while self.alive(&h) {
+            if sys::now() - started >= timeout_s {
+                ending = Ending::TimedOut;
+                break;
+            }
+            sys::sleep(1.0);
+        }
+        // The consult is over either way; its pane has no more to say.
+        self.stop(&h, grace_s);
+        Consult {
+            ending,
+            answer: String::new(),
+            session,
+            question: String::new(),
+        }
+    }
     /// The transcript's last text -- what the worker said on its last turn,
     /// read off its own conversation file. Empty when there is nothing to
     /// read there, which for a custom template is every time: it never
@@ -376,6 +448,7 @@ mod tests {
             status: PathBuf::from("/runs/t1.status"),
             rundir: PathBuf::from("/runs"),
             session: "018f2c7e-0000-4000-8000-000000000000".into(),
+            parent: None,
             role: "worker".into(),
             model: "sonnet".into(),
             effort: None,
