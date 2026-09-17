@@ -549,6 +549,9 @@ fn the_digest_names_every_skill_and_how_to_open_one() {
     let text = stdout(&out);
     assert!(text.contains("mem skill <name>"), "{text}");
     assert!(text.contains("workflow skill <name>"), "{text}");
+    // Ownership, not just both verbs: the listing carries no owner marker, so
+    // the line has to say mem's verb serves mem alone (friction #NBQN1S4V).
+    assert!(text.contains("serves mem's own skill only"), "{text}");
     assert!(text.contains("mem — "), "mem names its own: {text}");
     assert!(text.contains("route — pick the lane"), "verbatim: {text}");
     assert!(text.contains("plan — cut the tasks"), "verbatim: {text}");

@@ -21,10 +21,12 @@ use crate::exit;
 pub const SKILLS: [(&str, &str); 1] = [("mem", include_str!("../../skills/mem/SKILL.md"))];
 
 /// What the section tells a model to do with the names under it. It has to name
-/// both verbs: mem serves its own skill and workflow serves the rest, and a
-/// session that guesses wrong gets an exit 1 rather than the skill.
-const HOW: &str =
-    "skills — read one before doing what it covers: `mem skill <name>`, `workflow skill <name>`";
+/// both verbs and say which owns which name: mem serves its own skill and
+/// workflow serves the rest, and a session that guesses wrong gets an exit 1
+/// rather than the skill. The listing alone cannot say it — workflow's lines are
+/// appended verbatim, with no owner marker (friction #NBQN1S4V).
+const HOW: &str = "skills — read one before doing what it covers: `mem skill <name>` \
+serves mem's own skill only; every other name is `workflow skill <name>`";
 
 /// `mem skill` with no name lists what this binary owns; with one, prints that
 /// SKILL.md whole. Exit 1 is a name mem does not serve.
