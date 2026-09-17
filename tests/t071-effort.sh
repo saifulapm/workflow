@@ -48,17 +48,19 @@ write_exec "$T_TMP/fake-amx" <<'AMX'
 verb=$1
 shift
 case $verb in
-new)
+new | sub)
 	name= dir= text=
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--name) name=$2; shift 2 ;;
 		--dir) dir=$2; shift 2 ;;
 		--model | --effort) shift 2 ;;
-		--no-worktree) shift ;;
+		--no-worktree | --bg | --json) shift ;;
+		--parent | --role) shift 2 ;;
 		*) text=$1; shift ;;
 		esac
 	done
+	[ "$verb" = sub ] && printf '{"id":"%s","parent":null,"phase":"starting","answer":null,"evidence":"hooks"}\n' "$name"
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
 	answer=$(sed -n 's/^    Answer file: //p' "$brief")
@@ -167,7 +169,7 @@ sess=$(cat "$XDG_STATE_HOME/workflow/runs/app/panes/t1.session")
 saw "new|--name|$sess|--dir|$wt/t1|--no-worktree|--role|worker|--model|opus|--effort|max|Read $XDG_CACHE_HOME/workflow/briefs/app/panes/t1.md and execute it exactly." \
 	'amx new carries --effort for the worker'
 rsess=$(cat "$XDG_STATE_HOME/workflow/runs/app/panes/t1.review-session")
-saw "new|--name|$rsess|--dir|$wt/_integration|--no-worktree|--role|reader|--model|fable|--effort|high|Read $XDG_STATE_HOME/workflow/runs/app/panes/t1.review-prompt and execute it exactly." \
+saw "sub|--bg|--json|--name|$rsess|--parent|$sess|--dir|$wt/_integration|--no-worktree|--role|reader|--model|fable|--effort|high|Read $XDG_STATE_HOME/workflow/runs/app/panes/t1.review-prompt and execute it exactly." \
 	'and --effort for the reader'
 
 ## ----------------------------------------------- unset is the way back

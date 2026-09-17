@@ -23,17 +23,19 @@ write_exec "$T_TMP/fake-amx" <<'AMX'
 verb=$1
 shift
 case $verb in
-new)
+new | sub)
 	name= dir= text=
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--name) name=$2; shift 2 ;;
 		--dir) dir=$2; shift 2 ;;
 		--model | --effort) shift 2 ;;
-		--no-worktree) shift ;;
+		--no-worktree | --bg | --json) shift ;;
+		--parent | --role) shift 2 ;;
 		*) text=$1; shift ;;
 		esac
 	done
+	[ "$verb" = sub ] && printf '{"id":"%s","parent":null,"phase":"starting","answer":null,"evidence":"hooks"}\n' "$name"
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
 	status=$(sed -n 's/^Append one line per state change to \(.*\):$/\1/p' "$brief")

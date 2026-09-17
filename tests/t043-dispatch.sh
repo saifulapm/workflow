@@ -18,7 +18,7 @@ write_exec "$T_TMP/fake-amx" <<'AMX'
 verb=$1
 shift
 case $verb in
-new)
+new | sub)
 	env >"$AMX_DIR/env"
 	(IFS='|'; printf '%s\n' "$*") >>"$AMX_DIR/argv"
 	name= dir= text=
@@ -27,10 +27,12 @@ new)
 		--name) name=$2; shift 2 ;;
 		--dir) dir=$2; shift 2 ;;
 		--model | --effort) shift 2 ;;
-		--no-worktree) shift ;;
+		--no-worktree | --bg | --json) shift ;;
+		--parent | --role) shift 2 ;;
 		*) text=$1; shift ;;
 		esac
 	done
+	[ "$verb" = sub ] && printf '{"id":"%s","parent":null,"phase":"starting","answer":null,"evidence":"hooks"}\n' "$name"
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
 	[ -r "$brief" ] || { printf 'no brief\n' >&2; exit 1; }

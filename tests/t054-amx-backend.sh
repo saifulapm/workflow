@@ -31,7 +31,7 @@ write_exec "$T_TMP/fake-amx" <<'AMX'
 verb=$1
 shift
 case $verb in
-new)
+new | sub)
 	if [ -f "$AMX_DIR/refuse" ]; then
 		cat "$AMX_DIR/refuse" >&2
 		exit 2
@@ -42,10 +42,12 @@ new)
 		--name) name=$2; shift 2 ;;
 		--dir) dir=$2; shift 2 ;;
 		--model) shift 2 ;;
-		--no-worktree) shift ;;
+		--no-worktree | --bg | --json) shift ;;
+		--parent | --role) shift 2 ;;
 		*) text=$1; shift ;;
 		esac
 	done
+	[ "$verb" = sub ] && printf '{"id":"%s","parent":null,"phase":"starting","answer":null,"evidence":"hooks"}\n' "$name"
 	printf 'working\n' >"$AMX_DIR/$name.state"
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
@@ -138,13 +140,20 @@ sess=$(cat "$rundir/t1.session")
 like "$sess" '^wf-t1-[0-9a-z]{4}$' 'the handle the run records is the amx agent name'
 saw "new|--name|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/t1|--no-worktree|--role|worker|--model|opus|Read $XDG_CACHE_HOME/workflow/briefs/app/amx-run/t1.md and execute it exactly." \
 	'the dispatch is amx new into the task worktree, with the brief as the task'
+rsess=$(cat "$rundir/t1.review-session")
+like "$(grep "^sub|--bg|--json|--name|$rsess|" "$argv")" \
+	"|--parent|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/_integration|--no-worktree|--role|reader|" \
+	'the reader is dispatched as a child of the worker, through amx sub --bg'
 saw "status|$sess|--json" 'liveness and the ending are read off amx status --json'
 
 is "$(cat "$rundir/hang.state")" failed 'the worker that never reported ready is failed'
 is "$(cat "$rundir/hang.dispatches")" 2 'after exactly one redispatch'
 saw "stop|$(cat "$rundir/hang.session")" 'a stalled worker is ended with amx stop'
-is "$(grep -c '^new|--name|wf-hang-' "$argv")" 2 'and each dispatch of it ran under its own agent name'
-isnt "$(grep '^new|--name|wf-hang-' "$argv" | head -1 | cut -d'|' -f3)" "$(cat "$rundir/hang.session")" \
+is "$(grep -c '|--name|wf-hang-' "$argv")" 2 'and each dispatch of it ran under its own agent name'
+first=$(grep '^new|--name|wf-hang-' "$argv" | head -1 | cut -d'|' -f3)
+like "$(grep '^sub|--bg|--json|--name|wf-hang-' "$argv")" "|--parent|$first|--dir|" \
+	'the redispatch is a child of the first session, through amx sub'
+isnt "$first" "$(cat "$rundir/hang.session")" \
 	'the second name is not the first'
 
 ## ------------------------------------------- a launch amx refuses
@@ -171,6 +180,16 @@ is "$(cat "$fulldir/f1.failed")" 'the launch was refused: amx: 5 agents already 
 	'on the line amx printed'
 is "$(cat "$fulldir/f1.dispatches")" 1 'and not retried: the next launch meets the same cap'
 rm -f "$AMX_DIR/refuse"
+
+# The refused launch left a name amx never created in f1.session. The run
+# that retries it names no parent -- amx would refuse one it has no record
+# of, and every dispatch after -- and goes out as a plain `amx new`.
+never=$(cat "$fulldir/f1.session")
+run workflow run --plan-file "$T_TMP/full.md"
+is "$RC" 0 'with the cap lifted the plan merges'
+is "$(cat "$fulldir/f1.state")" merged 'the refused task included'
+is "$(grep -c "|--parent|$never|" "$argv")" 0 'a session amx never created is nobody's parent'
+like "$(grep '|--name|wf-f1-' "$argv" | tail -1)" '^new|--name|wf-f1-' 'so its retry is amx new'
 
 ## ------------------------------------- a reader that hit a provider limit
 

@@ -24,7 +24,9 @@ saw() {
 }
 count() { grep -cF -- "$1" "$argv"; }
 # workers <task> -- how many sessions were started for a task, its readers aside.
-workers() { grep -cE "^new\|--name\|wf-$1-[0-9a-z]{4}\|" "$argv"; }
+# A first dispatch is `amx new`; a fresh session after one is `amx sub --bg`
+# with the last session as parent, so both shapes count as a worker started.
+workers() { grep -cE "^(new|sub\|--bg\|--json)\|--name\|wf-$1-[0-9a-z]{4}\|" "$argv"; }
 
 # One fake plays worker and reader. A worker does its task on `new`; a
 # reader writes fix on its first reading of a task and ship after that. On
@@ -37,19 +39,21 @@ write_exec "$T_TMP/fake-amx" <<'AMX'
 verb=$1
 shift
 say() { printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${2:-}" >>"$status"; }
-commit() { git -c core.hooksPath=/dev/null commit -qm "$1"; }
+commit() { git -c core.hooksPath=/dev/null commit -qm "$1" >/dev/null; }
 case $verb in
-new)
+new | sub)
 	name= dir= text=
 	while [ $# -gt 0 ]; do
 		case $1 in
 		--name) name=$2; shift 2 ;;
 		--dir) dir=$2; shift 2 ;;
 		--model | --effort) shift 2 ;;
-		--no-worktree) shift ;;
+		--no-worktree | --bg | --json) shift ;;
+		--parent | --role) shift 2 ;;
 		*) text=$1; shift ;;
 		esac
 	done
+	[ "$verb" = sub ] && printf '{"id":"%s","parent":null,"phase":"starting","answer":null,"evidence":"hooks"}\n' "$name"
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
 	printf '%s\n' "$dir" >"$AMX_DIR/$name.dir"
@@ -176,6 +180,8 @@ is "$(grep -c . "$WF_TMP/asked" 2>/dev/null || echo 0)" 0 'nobody asked anything
 rsess=$(cat "$rundir/refuse.session")
 is "$(cat "$rundir/refuse.state")" merged 'refuse merged too'
 is "$(workers refuse)" 2 'after a fresh session, since the send was refused'
+like "$(grep -E "^sub\|--bg\|--json\|--name\|wf-refuse-" "$argv")" "\|--parent\|$(grep -E '^new\|--name\|wf-refuse-' "$argv" | cut -d'|' -f3)\|" \
+	'the fresh session is a child of the one the send was refused on'
 is "$(cat "$rundir/refuse.dispatches")" 2 'counted as a second attempt'
 is "$(cat "$rundir/refuse.continued" 2>/dev/null)" '' 'and not as a continuation'
 first=$(grep -E '^new\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv" | head -1 | cut -d'|' -f3)

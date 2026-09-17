@@ -982,6 +982,20 @@ impl Run {
         true
     }
 
+    /// The task's current session as a parent for its next agent -- a fresh
+    /// worker, its reader -- when the backend still has a record of it. A
+    /// name amx never created (a launch it refused leaves one in
+    /// `<task>.session`) or has since forgotten is no parent: amx refuses a
+    /// parent it has no record of, and would go on refusing every dispatch
+    /// after. Nothing named means `amx new`, as a first dispatch is.
+    fn parent_of(&self, task: &str) -> Option<String> {
+        let session = self.field(task, "session");
+        if session.is_empty() || !self.backend.seen(&self.handle(task)) {
+            return None;
+        }
+        Some(session)
+    }
+
     fn dispatch(&self, task: &str, after: &str) {
         let Some(t) = self.task_now(task) else {
             self.fail_task(task, "the plan of record no longer holds this task");
@@ -994,6 +1008,10 @@ impl Run {
         let status = self.dir.join(format!("{task}.status"));
         let session = self.backend.mint_session();
         let prior = self.prior_attempt(task, after);
+        // The session this task had before, when it had one: the fresh
+        // worker is dispatched as its child, so the wall and `amx logs` show
+        // whose task it took over. A first dispatch has no parent.
+        let parent = self.parent_of(task);
 
         write_field(&self.dir, task, "session", &session);
         // Truncated, not appended: the gate reads this file to judge THIS
@@ -1043,7 +1061,7 @@ impl Run {
             status,
             rundir: self.dir.clone(),
             session: session.clone(),
-            parent: None,
+            parent,
             // A fixer after round two, else a worker: the field is written
             // beside the fix model and persists the same way.
             role: match self.field(task, "role").trim() {
@@ -1413,7 +1431,9 @@ impl Run {
             status: self.dir.join(format!("{task}.review-status")),
             rundir: self.dir.clone(),
             session: self.backend.mint_session(),
-            parent: None,
+            // The reader is the worker's child: whose diff it reads is on
+            // the record, and the wall groups them.
+            parent: self.parent_of(task),
             role: "reader".into(),
             model: model.to_string(),
             effort: self.review_effort.clone(),
