@@ -23,6 +23,17 @@ pub fn cache_home() -> PathBuf {
     env_dir("XDG_CACHE_HOME").unwrap_or_else(|| home().join(".cache"))
 }
 
+pub fn config_home() -> PathBuf {
+    env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home().join(".config"))
+}
+
+/// The roles amx reads for a person: `~/.config/amx/agents/<name>.md`.
+/// `doctor --fix` writes the four a run dispatches on here, and the amx
+/// backend looks here to tell a role's name from a model's.
+pub fn amx_roles() -> PathBuf {
+    config_home().join("amx/agents")
+}
+
 pub fn worktrees_root() -> PathBuf {
     state_home().join("workflow/worktrees")
 }

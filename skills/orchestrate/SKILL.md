@@ -17,8 +17,8 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
   catch (measured 2026-09-15).
 - The request's worker, reader and fixer are project keys: set them, never
   look them up (`mem project set model|review-model|fix-model <m>`, or the
-  matching `WORKFLOW_*` variable for one run). The name is opaque; `amx new`
-  resolves it, and nothing prints a catalog.
+  matching `WORKFLOW_*` variable for one run). The name is opaque, a model
+  or an amx role file; `amx new` resolves it, and nothing prints a catalog.
 - One run per session: one plan, or one milestone of a `roadmap`.
   Never edit project code or write in a worktree; your hands are
   `workflow`, `mem` and the plan of record.
@@ -93,8 +93,7 @@ prints the `git merge --ff-only` that will; run it. Leave the checkout on main.
 Open questions are yours to answer or `moot`. A shipped plan supersedes
 each friction it names: `mem save "friction #<id> closed: <how>"
 --supersedes <id>`. A merged task that changed workflow or mem is followed
-by `cargo install --path <crate>`, so the gate and next run use it, and one
-that changed a skill or a hook stub by `workflow doctor --fix`, so the
-copies match the binary. A task that ended near a full window was cut too
-big; say so. Nothing is pushed. On context pressure, `mem handoff --set
+by `cargo install --path <crate>` and `workflow doctor --fix`, so the gate,
+stubs and roles match the binary. A task that ended near a full window was
+cut too big; say so. Nothing is pushed. On context pressure, `mem handoff --set
 "<state>"` and stop; the next session adopts the run.

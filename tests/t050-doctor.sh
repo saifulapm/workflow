@@ -244,17 +244,25 @@ mkdir -p "$HOME"
 run workflow doctor
 is "$RC" 1 'a bare HOME has findings'
 n=$(grep -c 'missing at' <<<"$OUT")
-is "$n" 3 'three entries are missing: the hook stubs, and nothing else'
+is "$n" 7 'seven entries are missing: the hook stubs and the four amx roles, and nothing else'
 unlike "$OUT" 'skill route.*missing at' 'no skill is missing, because none is installed'
 like "$OUT" 'hook pre-commit.*missing at .*\.config/git/hooks/pre-commit' \
 	'a missing hook stub is named'
+like "$OUT" 'role worker.*missing at .*\.config/amx/agents/worker\.md' \
+	'a missing role is named where amx reads it'
 
 run workflow doctor --fix
 n=$(grep -c '^  .* wrote ' <<<"$OUT")
-is "$n" 3 '--fix writes the three stubs'
+is "$n" 7 '--fix writes the three stubs and the four roles'
 is "$(cat "$HOME/.config/git/hooks/pre-commit")" "$(cat "$WF_ROOT/hooks/pre-commit")" \
 	'the stub holds the embedded text'
 is "$(stat -c %a "$HOME/.config/git/hooks/pre-commit")" 755 'the stub is written executable'
+# Where amx reads them: its config home is XDG's, which lib.sh pins under the
+# first HOME, not the one this section moved to.
+for role in worker reader fixer advisor; do
+	is "$(cat "$XDG_CONFIG_HOME/amx/agents/$role.md")" "$(cat "$WF_ROOT/roles/$role.md")" \
+		"the $role role holds the embedded text"
+done
 truthy "$([ ! -e "$HOME/.claude/skills" ] && echo 0 || echo 1)" \
 	'--fix creates no claude skills directory'
 truthy "$([ ! -e "$HOME/.agents/skills" ] && echo 0 || echo 1)" \

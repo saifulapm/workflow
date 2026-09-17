@@ -136,7 +136,7 @@ is "$(cat "$rundir/t1.state")" merged 'the task its amx worker finished is merge
 
 sess=$(cat "$rundir/t1.session")
 like "$sess" '^wf-t1-[0-9a-z]{4}$' 'the handle the run records is the amx agent name'
-saw "new|--name|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/t1|--no-worktree|--model|opus|Read $XDG_CACHE_HOME/workflow/briefs/app/amx-run/t1.md and execute it exactly." \
+saw "new|--name|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/t1|--no-worktree|--role|worker|--model|opus|Read $XDG_CACHE_HOME/workflow/briefs/app/amx-run/t1.md and execute it exactly." \
 	'the dispatch is amx new into the task worktree, with the brief as the task'
 saw "status|$sess|--json" 'liveness and the ending are read off amx status --json'
 

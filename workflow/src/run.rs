@@ -102,6 +102,18 @@ fn recorded(dir: &Path, name: &str) -> Option<String> {
         .map(|v| v.trim().to_string())
 }
 
+/// The clause [`Run::last_heard`] hands back: the first line the worker
+/// said, else the last line its pane showed, else nothing.
+fn last_heard_in(said: &str, dying: &str) -> String {
+    if let Some(line) = said.lines().map(str::trim).find(|l| !l.is_empty()) {
+        return format!(" -- it last said: {line}");
+    }
+    match dying.lines().map(str::trim).rfind(|l| !l.is_empty()) {
+        Some(line) => format!(" -- the pane last showed: {line}"),
+        None => String::new(),
+    }
+}
+
 /// One task's field, and a word if it could not be written. The run dir is
 /// the run's whole memory of a task: a state write that fails leaves the
 /// coordinator reading `pending` for a task it has just dispatched, and it
@@ -1031,6 +1043,12 @@ impl Run {
             status,
             rundir: self.dir.clone(),
             session: session.clone(),
+            // A fixer after round two, else a worker: the field is written
+            // beside the fix model and persists the same way.
+            role: match self.field(task, "role").trim() {
+                "" => "worker".to_string(),
+                r => r.to_string(),
+            },
             model: match self.field(task, "model").trim() {
                 "" => self.model.clone(),
                 m => m.to_string(),
@@ -1394,6 +1412,7 @@ impl Run {
             status: self.dir.join(format!("{task}.review-status")),
             rundir: self.dir.clone(),
             session: self.backend.mint_session(),
+            role: "reader".into(),
             model: model.to_string(),
             effort: self.review_effort.clone(),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
@@ -1508,6 +1527,7 @@ impl Run {
                         if let Some(m) = &model {
                             write_field(&self.dir, task, "model", m);
                         }
+                        write_field(&self.dir, task, "role", "fixer");
                         let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
                         warn(format!(
                             "task {task}: dispatched again on {} with both readings, on the next free slot",
@@ -1933,6 +1953,31 @@ impl Run {
         ));
     }
 
+    /// The last thing heard from a worker that ended, as a clause for its
+    /// note: its own last words off the transcript, else -- a session that
+    /// died before it said anything, which the two silent schema deaths of
+    /// m08 were -- the last line the pane showed. With `keep`, the whole of
+    /// what the pane showed goes into `<task>.err` for whoever reads the
+    /// note; a redispatch clears that file on its way out, so the once-more
+    /// path keeps nothing but the line. Empty when there is neither.
+    fn last_heard(&self, task: &str, keep: bool) -> String {
+        let h = self.handle(task);
+        let said = self.backend.last_words(&h);
+        let dying = match said.trim().is_empty() {
+            true => self.backend.dying_words(&h),
+            false => String::new(),
+        };
+        if keep && !dying.is_empty() {
+            let err = self.field(task, "err");
+            let kept = match err.is_empty() {
+                true => dying.clone(),
+                false => format!("{err}\n{dying}"),
+            };
+            write_field(&self.dir, task, "err", &kept);
+        }
+        last_heard_in(&said, &dying)
+    }
+
     fn finish(&self, task: &str) {
         self.record_context(task);
         let outcome = self
@@ -1948,7 +1993,10 @@ impl Run {
         if self.last_status_line(task).is_none() && self.commits(task) == 0 && tries < 2 {
             self.once_more(
                 task,
-                "its worker died leaving nothing",
+                &format!(
+                    "its worker died leaving nothing{}",
+                    self.last_heard(task, false)
+                ),
                 "its worker died before writing anything, and was dispatched again",
             );
             return;
@@ -1958,20 +2006,16 @@ impl Run {
             // worker, so the reason names the dispatch rather than sending
             // whoever reads it looking for a worker that never existed. One
             // that reported and then ended unclean -- an amx phase of failed
-            // or stopped, a pane that vanished -- is named for what it did,
-            // with its last words when the transcript has any.
-            if self.last_status_line(task).is_none() && self.commits(task) == 0 {
-                self.fail_task(task, "dispatch race: the worker never started");
+            // or stopped, a pane that vanished -- is named for what it did.
+            // Either way with its last words when the transcript has any,
+            // else what the pane showed.
+            let heard = self.last_heard(task, true);
+            let why = if self.last_status_line(task).is_none() && self.commits(task) == 0 {
+                format!("dispatch race: the worker never started{heard}")
             } else {
-                let said = self.backend.last_words(&self.handle(task));
-                let why = match said.lines().next() {
-                    Some(line) if !line.trim().is_empty() => {
-                        format!("the worker ended without a clean turn -- it last said: {line}")
-                    }
-                    _ => "the worker ended without a clean turn".to_string(),
-                };
-                self.fail_task(task, &why);
-            }
+                format!("the worker ended without a clean turn{heard}")
+            };
+            self.fail_task(task, &why);
             return;
         }
         match self.last_status_line(task) {
@@ -3798,6 +3842,27 @@ pub fn cmd_stalled(rundir: &Path, wtroot: &Path, task: &str, deadline: i64) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_thing_heard_is_the_workers_words_else_the_panes_last_line() {
+        assert_eq!(
+            last_heard_in("You've reached your limit.\nmore", ""),
+            " -- it last said: You've reached your limit."
+        );
+        // Words beat the screen, however little was said.
+        assert_eq!(
+            last_heard_in("\n ok \n", "boot\nerror"),
+            " -- it last said: ok"
+        );
+        // A worker that never spoke: the pane's last line, not its first,
+        // since a boot paints its banner first and its death last.
+        assert_eq!(
+            last_heard_in("", "claude 2.1\n\nAPI Error: 400 schema mismatch\n\n"),
+            " -- the pane last showed: API Error: 400 schema mismatch"
+        );
+        assert_eq!(last_heard_in("", ""), "");
+        assert_eq!(last_heard_in(" \n", "\n\n"), "");
+    }
 
     fn t(id: &str, state: &str, note: &str) -> (String, String, String) {
         (id.into(), state.into(), note.into())

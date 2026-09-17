@@ -328,6 +328,7 @@ fn base_dispatch(
         status: dir.join(format!("{stem}-status")),
         rundir: dir.to_path_buf(),
         session,
+        role: "advisor".into(),
         model,
         effort,
         turns: match std::env::var("WORKFLOW_MAX_TURNS") {

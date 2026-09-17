@@ -20,7 +20,7 @@ use std::process::{Command, Stdio};
 use crate::backend::{
     Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
 };
-use crate::{paths, sys};
+use crate::{gitcmd, paths, sys};
 
 /// The phases that mean nothing more is coming from this agent.
 ///
@@ -192,12 +192,36 @@ fn name_for(d: &Dispatch) -> String {
         .join("-")
 }
 
+/// Whether `name` is a role amx would find for a spawn in `worktree`: the
+/// person's `~/.config/amx/agents/<name>.md`, or the project's
+/// `.amx/agents/<name>.md`. `mem project set model <name>` may name one --
+/// a model, an agent and a brief written down once -- and a dispatch on it
+/// goes out as `--role <name>` with no `--model` beside it.
+///
+/// The project is the one amx asks for: the repository the worktree was cut
+/// from (the parent of its git common dir), not the worktree itself, so an
+/// untracked role file in the checkout is found from a fresh worktree the
+/// way amx will find it. A directory git does not know is its own project.
+fn names_a_role(name: &str, worktree: &Path) -> bool {
+    if name.is_empty() || name.contains('/') {
+        return false;
+    }
+    let file = format!("{name}.md");
+    let project = gitcmd::Git::at(worktree)
+        .common_dir()
+        .and_then(|d| d.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| worktree.to_path_buf());
+    project.join(".amx/agents").join(&file).is_file() || paths::amx_roles().join(&file).is_file()
+}
+
 /// The dispatch argv, as `mem wiki amx-backend` pins it.
 ///
 /// `--no-worktree` because workflow has already cut this task's worktree and
 /// the merge gate anchors on its branch; a second one wrapped around it would
-/// leave the commits somewhere nothing looks. `--effort` only when the run
-/// has a level: absent, amx starts the agent on its own default.
+/// leave the commits somewhere nothing looks. `--role` is the kind of agent
+/// this is, whose brief amx puts in front of the task -- or the role the
+/// model dial names, which then says the model too. `--effort` only when
+/// the run has a level: absent, amx starts the agent on its own default.
 fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
     let path = |p: &Path| p.to_string_lossy().to_string();
     let mut argv = vec![
@@ -207,9 +231,15 @@ fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
         "--dir".to_string(),
         path(&d.worktree),
         "--no-worktree".to_string(),
-        "--model".to_string(),
-        d.model.clone(),
+        "--role".to_string(),
     ];
+    if names_a_role(&d.model, &d.worktree) {
+        argv.push(d.model.clone());
+    } else {
+        argv.push(d.role.clone());
+        argv.push("--model".to_string());
+        argv.push(d.model.clone());
+    }
     if let Some(level) = &d.effort {
         argv.push("--effort".to_string());
         argv.push(level.clone());
@@ -386,6 +416,18 @@ impl WorkerBackend for AmxBackend {
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
 
+    /// `amx logs <id>`: once the pane is gone this is the recorded answer, or
+    /// what the pane's boot kept of a session that never announced a
+    /// transcript -- the one account a schema death on the first request
+    /// leaves. Called only once the worker is no longer alive and has no
+    /// last words, so a live screen is never read as an ending.
+    fn dying_words(&self, h: &Handle) -> String {
+        if h.session.is_empty() {
+            return String::new();
+        }
+        amx(&["logs", &h.session]).0.trim_end().to_string()
+    }
+
     /// What amx read off the pane: a question drawn in front of the session
     /// -- claude's folder-trust screen, a permission prompt -- is on the
     /// screen and nowhere else, and amx is what reads screens.
@@ -431,6 +473,7 @@ mod tests {
             status: PathBuf::from("/runs/t1.status"),
             rundir: PathBuf::from("/runs"),
             session: "wf-a3k9".into(),
+            role: "worker".into(),
             model: "opus".into(),
             effort: None,
             turns: "120".into(),
@@ -554,11 +597,83 @@ mod tests {
                 "--dir",
                 "/state/my project/t1",
                 "--no-worktree",
+                "--role",
+                "worker",
                 "--model",
                 "opus",
                 "Read /cache/briefs/t1.md and execute it exactly.",
             ]
         );
+    }
+
+    #[test]
+    fn a_model_that_names_a_role_goes_out_as_that_role_and_no_model() {
+        let fake = Fake::new("role", "working");
+        let mut d = fixture();
+        d.worktree = fake.dir.clone();
+        d.model = "glm-worker".into();
+        // Nothing by that name anywhere: an opaque model name, on the kind's
+        // own role.
+        let argv = new_argv(&d, "wf-t1-a3k9");
+        assert!(argv.contains(&"--model".to_string()), "{argv:?}");
+        assert_eq!(
+            argv[argv.iter().position(|a| a == "--role").unwrap() + 1],
+            "worker"
+        );
+
+        // The person's role file, where amx reads it.
+        let personal = paths::amx_roles();
+        std::fs::create_dir_all(&personal).unwrap();
+        std::fs::write(personal.join("glm-worker.md"), "---\nmodel: pi:glm\n---\n").unwrap();
+        let argv = new_argv(&d, "wf-t1-a3k9");
+        assert!(!argv.contains(&"--model".to_string()), "{argv:?}");
+        assert_eq!(
+            argv[argv.iter().position(|a| a == "--role").unwrap() + 1],
+            "glm-worker"
+        );
+
+        // The project's counts the same: the fixture is no git repository,
+        // so it is its own project and the file is read from the tree.
+        std::fs::remove_file(personal.join("glm-worker.md")).unwrap();
+        d.model = "repo-worker".into();
+        let project = fake.dir.join(".amx/agents");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("repo-worker.md"), "---\n---\n").unwrap();
+        let argv = new_argv(&d, "wf-t1-a3k9");
+        assert_eq!(
+            argv[argv.iter().position(|a| a == "--role").unwrap() + 1],
+            "repo-worker"
+        );
+        // A vendor-qualified model is never a file name.
+        d.model = "pi:opencode-go/glm-5.3".into();
+        assert!(new_argv(&d, "wf-t1-a3k9").contains(&"--model".to_string()));
+    }
+
+    #[test]
+    fn the_role_is_the_kind_of_agent_the_dispatch_is() {
+        let mut d = fixture();
+        d.role = "reader".into();
+        let argv = new_argv(&d, "wf-t1-review-a3k9");
+        assert_eq!(
+            argv[argv.iter().position(|a| a == "--role").unwrap() + 1],
+            "reader"
+        );
+    }
+
+    #[test]
+    fn dying_words_are_what_amx_logs_prints() {
+        let fake = Fake::new("dying", "failed");
+        assert_eq!(
+            AmxBackend.dying_words(&fake.handle("wf-t1-a3k9")),
+            "amx logs: wf-t1-a3k9"
+        );
+        assert_eq!(
+            fake.read("argv").lines().collect::<Vec<_>>(),
+            ["logs", "wf-t1-a3k9"]
+        );
+        // An agent amx has no record of, and one never dispatched, left none.
+        assert_eq!(AmxBackend.dying_words(&fake.handle("nope")), "");
+        assert_eq!(AmxBackend.dying_words(&fake.handle("")), "");
     }
 
     #[test]
@@ -623,6 +738,7 @@ mod tests {
     struct Fake {
         dir: PathBuf,
         home: Option<std::ffi::OsString>,
+        config_home: Option<std::ffi::OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
@@ -637,6 +753,7 @@ mod tests {
         fn new(test: &str, state: &str) -> Fake {
             let lock = ENV.lock().unwrap_or_else(|e| e.into_inner());
             let home = std::env::var_os("HOME");
+            let config_home = std::env::var_os("XDG_CONFIG_HOME");
             let dir = std::env::temp_dir().join(format!("wf-amx-{}-{test}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
@@ -656,10 +773,11 @@ env > '{d}/env'
 echo "amx: $1: no capacity" >&2
 [ "$1" = new ] && [ -f '{d}/refuse' ] && exit 2
 [ "$1" = send ] && [ -f '{d}/refuse' ] && exit 2
-if [ "$1" = status ]; then
+if [ "$1" = status ] || [ "$1" = logs ]; then
   [ "$2" = wf-t1-a3k9 ] || exit 1
-  cat '{d}/status.json'
 fi
+[ "$1" = logs ] && echo "amx logs: $2"
+[ "$1" = status ] && cat '{d}/status.json'
 exit 0
 "#
                 ),
@@ -674,10 +792,12 @@ exit 0
                 std::env::set_var("WORKFLOW_AMX", &bin);
                 std::env::set_var("GITHUB_API_KEY", "leak-me");
                 std::env::set_var("HOME", &dir);
+                std::env::remove_var("XDG_CONFIG_HOME");
             }
             Fake {
                 dir,
                 home,
+                config_home,
                 _lock: lock,
             }
         }
@@ -721,6 +841,10 @@ exit 0
                 match &self.home {
                     Some(home) => std::env::set_var("HOME", home),
                     None => std::env::remove_var("HOME"),
+                }
+                match &self.config_home {
+                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
                 }
             }
             let _ = std::fs::remove_dir_all(&self.dir);

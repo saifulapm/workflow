@@ -305,6 +305,18 @@ const STUBS: [(&str, &str); 3] = [
     ("pre-push", include_str!("../../hooks/pre-push")),
 ];
 
+/// The four amx roles a run dispatches on (`amx new --role <name>`), one per
+/// kind of agent it starts. A role's brief goes in front of the task amx
+/// hands the agent, so the rules for how to work -- narrow reads, files
+/// written in steps, an output cap -- live here and not in every brief. A
+/// project overrides one whole with `.amx/agents/<name>.md`.
+pub const ROLES: [(&str, &str); 4] = [
+    ("worker", include_str!("../../roles/worker.md")),
+    ("reader", include_str!("../../roles/reader.md")),
+    ("fixer", include_str!("../../roles/fixer.md")),
+    ("advisor", include_str!("../../roles/advisor.md")),
+];
+
 /// The two directories `--fix` used to install into, and [`retire`] now empties:
 /// Claude Code's own, and the one pi, codex and opencode all read.
 fn skill_dirs() -> [(&'static str, PathBuf); 2] {
@@ -407,6 +419,13 @@ fn install(r: &mut Report, fix: bool) {
     for (name, text) in STUBS {
         let path = hooks.join(name);
         check_or_write(r, &format!("hook {name}"), &path, text, fix, Some(0o755));
+    }
+    // The roles go where amx reads a person's: a dispatch names one on every
+    // `amx new`, and a name amx does not know is a launch refused.
+    let roles = paths::amx_roles();
+    for (name, text) in ROLES {
+        let path = roles.join(format!("{name}.md"));
+        check_or_write(r, &format!("role {name}"), &path, text, fix, None);
     }
 }
 

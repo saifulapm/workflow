@@ -28,6 +28,10 @@ pub struct Dispatch {
     pub status: PathBuf,
     pub rundir: PathBuf,
     pub session: String,
+    /// Which of the run's four agents this is -- `worker`, `reader`, `fixer`
+    /// or `advisor` -- and so which amx role it starts under, unless `model`
+    /// names a role of its own.
+    pub role: String,
     pub model: String,
     /// The reasoning dial, when the run has one to pass: `--effort` on both
     /// backends. `None` adds no flag, and the CLI's own default stands.
@@ -104,6 +108,13 @@ pub trait WorkerBackend {
     /// read there, which for a custom template is every time: it never
     /// touches `~/.claude/projects`.
     fn last_words(&self, _h: &Handle) -> String {
+        String::new()
+    }
+    /// What the pane showed when the worker has no last words: the screen,
+    /// or what its boot kept of it, of a session that died before it said
+    /// anything -- a schema error on the first request, a vendor that never
+    /// started. Empty when there is nothing, or nothing can see.
+    fn dying_words(&self, _h: &Handle) -> String {
         String::new()
     }
     /// The question the worker is stopped at, when the backend can see one:
@@ -365,6 +376,7 @@ mod tests {
             status: PathBuf::from("/runs/t1.status"),
             rundir: PathBuf::from("/runs"),
             session: "018f2c7e-0000-4000-8000-000000000000".into(),
+            role: "worker".into(),
             model: "sonnet".into(),
             effort: None,
             turns: "120".into(),
