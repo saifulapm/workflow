@@ -15,6 +15,10 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
   a machine that carries three workers; then workers on the strongest model
   and `review-model none`, since fix rounds cost more than the defects they
   catch (measured 2026-09-15).
+- The request's worker, reader and fixer are project keys: set them, never
+  look them up (`mem project set model|review-model|fix-model <m>`, or the
+  matching `WORKFLOW_*` variable for one run). The name is opaque; `amx new`
+  resolves it, and nothing prints a catalog.
 - One run per session: one plan, or one milestone of a `roadmap`.
   Never edit project code or write in a worktree; your hands are
   `workflow`, `mem` and the plan of record.
@@ -27,8 +31,9 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 
 ## The run
 
-1. `mem context`, then `workflow plan-check` the plan. One that does not
-   parse goes back to the planner, never to you.
+1. `mem context`, then `mem plan` -- a named milestone with an empty record
+   is `mem plan --from <slug>` first. `workflow plan-check <(mem plan)`; one
+   that does not parse goes back to the planner, never to you.
 2. Start `workflow run` in a background shell, then `workflow wait` in
    another (backgrounded, so its exit wakes you); act on what it printed
    and call it again. Exit 2 is a question, 1 a task failed for good, 0

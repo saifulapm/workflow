@@ -234,12 +234,15 @@ fn budgets(r: &mut Report) {
     const FM_MAX: usize = 240;
     for (name, fm, body) in skill_sizes() {
         // implement, plan, roadmap and orchestrate carry recorded exceptions
-        // to the 3,200 byte budget: implement and orchestrate each hold a
-        // whole loop, plan the middle-tier keys, roadmap both halves of a
-        // project planned whole -- cutting it in one session and running a
-        // milestone of it in another.
+        // to the 3,200 byte budget: implement, plan and roadmap each hold a
+        // whole loop, the middle-tier keys, or both halves of a project
+        // planned whole -- cutting it in one session and running a milestone
+        // of it in another. orchestrate holds a run's start on top of its
+        // loop: the milestone a stored plan becomes, and the worker, reader
+        // and fixer the request names.
         let body_max = match name.as_str() {
-            "implement" | "plan" | "roadmap" | "orchestrate" => 4800,
+            "orchestrate" => 5200,
+            "implement" | "plan" | "roadmap" => 4800,
             _ => 3200,
         };
         if fm > FM_MAX {

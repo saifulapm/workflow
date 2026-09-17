@@ -40,6 +40,17 @@ like "$(cat "$WF_ROOT/skills/review/SKILL.md")" 'workflow review-needed' 'review
 orchestrate_skill=$(cat "$WF_ROOT/skills/orchestrate/SKILL.md")
 like "$orchestrate_skill" 'workflow status --json' 'orchestrate polls status'
 like "$orchestrate_skill" 'workflow plan-check' 'orchestrate checks the plan before running it'
+# A request that names a milestone hands the orchestrator a stored plan, not
+# a plan of record: without `--from` it checks an empty file and no run
+# starts, which is the dead end one session then went source-diving in.
+like "$orchestrate_skill" 'mem plan --from <slug>' \
+	'orchestrate makes a named milestone the plan of record first'
+# And a request that names models hands it strings for three project keys.
+# The name is opaque, so nothing sends it reading a provider's config.
+like "$orchestrate_skill" 'mem project set model\|review-model\|fix-model' \
+	"orchestrate says where the request's model names go"
+like "$orchestrate_skill" 'nothing prints a catalog' \
+	'and that model names are not looked up'
 like "$orchestrate_skill" 'mem save --kind ruling' 'orchestrate records its decisions as rulings'
 # An orchestrator runs in the background with nobody to ask in, so the
 # escalation has to name the channel it goes out on, not just say to ask.

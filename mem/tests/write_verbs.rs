@@ -376,6 +376,13 @@ fn ticking_a_task_flips_one_checkbox_and_leaves_the_rest_alone() {
         "{}",
         stderr(&out)
     );
+    // The empty record carries the verb that fills it: an orchestrator that
+    // hits this has to reach `--from` without going looking for it.
+    assert!(
+        stderr(&out).contains("mem plan --from <slug>"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]

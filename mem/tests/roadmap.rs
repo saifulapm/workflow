@@ -105,6 +105,13 @@ fn the_roadmap_sets_prints_clears_and_ticks() {
         "{}",
         stderr(&out)
     );
+    // As with the plan of record, the empty message names the verb that
+    // writes one rather than leaving the caller at a dead end.
+    assert!(
+        stderr(&out).contains("mem roadmap --stdin"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(code(&mem(&w, &repo, &["roadmap", "--tick", "m1-auth"])), 1);
     assert_eq!(
         code(&mem(

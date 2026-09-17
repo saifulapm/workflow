@@ -1277,10 +1277,24 @@ fn print_singleton(
         }
         Err(_) => {
             if !app.quiet && !app.json {
-                eprintln!("mem: no {noun} recorded for this project");
+                eprintln!("mem: no {noun} recorded for this project{}", remedy(noun));
             }
             Ok(exit::NOT_FOUND)
         }
+    }
+}
+
+/// The next move when a singleton is missing, so an empty `mem plan` hands a
+/// caller the verb that fills it instead of a dead end. `status` writes no
+/// command for the caller to run, so it gets none.
+fn remedy(noun: &str) -> &'static str {
+    match noun {
+        "plan" => {
+            " — write one with `mem plan --stdin`, or make a stored milestone the \
+             record with `mem plan --from <slug>`"
+        }
+        "roadmap" => " — write one with `mem roadmap --stdin`",
+        _ => "",
     }
 }
 
