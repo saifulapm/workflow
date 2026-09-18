@@ -89,8 +89,10 @@ Check it from the checkout:
 
 It reads the tree, runs nothing: an unpassable Verify or deferral language
 ("for now", "TBD") is refused; ungrounded lines warn, and so do a Uses spelled
-unlike its Gives, a type no item defines, and prose past its budget. A block
-over budget is a task to split, never a line to trim.
+unlike its Gives, a type no item defines, a Uses some task Gives with no
+`[after:]` between the two, a block that points at a sibling ("as in t1"),
+and prose past its budget. A block over budget is a task to split, never a
+line to trim.
 
 ## 4. Shape
 

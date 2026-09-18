@@ -285,6 +285,28 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 ));
                 continue;
             }
+            // No dependency Gives it, but a task of this plan does: the plan
+            // itself says the two are coupled by this symbol and no `[after:]`
+            // orders them, so they may be dispatched at once and the worker
+            // builds against whatever the tree holds. Said here with the edge
+            // that mends it, rather than as a name nobody gives.
+            let unordered = plan
+                .tasks
+                .iter()
+                .filter(|o| o.id != t.id && !waited_for.contains(&o.id))
+                .find(|o| {
+                    gives_items(o.gives.as_deref().unwrap_or(""))
+                        .iter()
+                        .any(|g| g.contains(ident.as_str()))
+                });
+            if let Some(giver) = unordered {
+                let shown = spelled.clone().unwrap_or_else(|| ident.clone());
+                f.warnings.push(format!(
+                    "plan: task {}: Uses '{shown}' and {} Gives it, but {} does not wait on {} -- the two may run at once; add [after: {}] or order them the other way",
+                    t.id, giver.id, t.id, giver.id, giver.id
+                ));
+                continue;
+            }
             if named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()).is_empty() {
                 f.warnings.push(format!(
                     "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
@@ -292,6 +314,32 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 ));
             } else if let Some(s) = spelled {
                 from_tree.push(s);
+            }
+        }
+        // A block that points at another task -- "as in t1", "see t2", "t1's
+        // helper" -- sends the worker after a block it never sees: it has its
+        // own block and the plan's prose, nothing else. Only an id after a
+        // pointer word counts, since ids are words too (`brief`, `reader`)
+        // and a bare mention is prose.
+        let others: Vec<String> = plan
+            .ids()
+            .into_iter()
+            .filter(|id| *id != t.id)
+            .chain(prior.iter().map(|p| p.plan_id.clone()))
+            .collect();
+        let done = t.done.as_deref().unwrap_or("");
+        let gives = t.gives.as_deref().unwrap_or("");
+        for (key, text) in [
+            ("the title", t.title.as_str()),
+            ("Done", done),
+            ("Uses", uses),
+            ("Gives", gives),
+        ] {
+            for (id, phrase) in points_at(text, &others) {
+                f.warnings.push(format!(
+                    "plan: task {}: {key} says '{phrase}' -- a worker sees only its own block; say here what {id} does or gives, spelled as {id} spells it",
+                    t.id
+                ));
             }
         }
         // A type named inside a signature is a name too: `ctx: &mut ToolCtx`
@@ -910,6 +958,68 @@ fn named_by(git: &Git, ident: &str, itself: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// The words a block uses to point at another task rather than name what it
+/// gives: `as in t1`, `same as t1`, `see t1`, `like t1`, `per t1`, `from
+/// t1`, `task t1`, `milestone m1`, and the possessive `t1's`. `in t1` and
+/// `of t1` are left out: ids are words too, and "in brief" is English.
+const POINTER_WORDS: [&str; 12] = [
+    "as in",
+    "same as",
+    "like",
+    "see",
+    "per",
+    "from",
+    "mirrors",
+    "mirroring",
+    "matching",
+    "following",
+    "task",
+    "milestone",
+];
+
+/// Every place `text` points at one of `ids` -- a whole-word id after a
+/// pointer word, or with `'s` on it -- as the id and the phrase as written,
+/// so the warning can quote it. An id is a word of [a-z0-9-], so a match
+/// stops at anything else on both sides; the pointer word must be a whole
+/// word too, or `unlike t1` would read as `like t1`.
+fn points_at(text: &str, ids: &[String]) -> Vec<(String, String)> {
+    let lower = text.to_lowercase();
+    let is_id_char = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+    let mut found = Vec::new();
+    for id in ids {
+        let mut from = 0;
+        while let Some(at) = lower[from..].find(id.as_str()) {
+            let start = from + at;
+            let end = start + id.len();
+            from = end;
+            let before_ok = lower[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !is_id_char(c));
+            let after_ok = lower[end..].chars().next().is_none_or(|c| !is_id_char(c));
+            if !before_ok || !after_ok {
+                continue;
+            }
+            if lower[end..].starts_with("'s") {
+                found.push((id.clone(), format!("{id}'s")));
+                continue;
+            }
+            let before = lower[..start].trim_end();
+            let pointer = POINTER_WORDS.iter().find(|w| {
+                before.ends_with(*w)
+                    && before[..before.len() - w.len()]
+                        .chars()
+                        .next_back()
+                        .is_none_or(|c| !c.is_alphanumeric())
+            });
+            if let Some(w) = pointer {
+                found.push((id.clone(), format!("{w} {id}")));
+            }
+        }
+    }
+    found
+}
+
 /// Every task this one waits for, directly or through another. A cycle would
 /// already have been refused by the wave sort; `seen` guards anyway.
 fn ancestors(plan: &Plan, task: &Task) -> Vec<String> {
@@ -1360,6 +1470,27 @@ mod tests {
             pattern_path("scripts/build:release"),
             "scripts/build:release"
         );
+    }
+
+    /// A block points at another task only through a pointer word or a
+    /// possessive; an id that is also a word, mentioned bare, is prose.
+    #[test]
+    fn a_block_points_at_a_task_through_a_pointer_word_or_a_possessive() {
+        let ids = vec!["t1".to_string(), "brief".to_string(), "m1-auth".to_string()];
+        let phrases = |text: &str| -> Vec<String> {
+            points_at(text, &ids).into_iter().map(|(_, p)| p).collect()
+        };
+        assert_eq!(phrases("the same shape as in t1"), vec!["as in t1"]);
+        assert_eq!(phrases("Same as T1, for the reader"), vec!["same as t1"]);
+        assert_eq!(phrases("reuse t1's helper"), vec!["t1's"]);
+        assert_eq!(
+            phrases("the sessions milestone m1-auth made"),
+            vec!["milestone m1-auth"]
+        );
+        assert!(phrases("the brief carries the answer in brief").is_empty());
+        assert!(phrases("unlike t1, this one waits").is_empty());
+        assert!(phrases("see t10 for the shape").is_empty());
+        assert!(phrases("the pretty-brief file").is_empty());
     }
 
     fn idents(uses: &str) -> Vec<String> {
