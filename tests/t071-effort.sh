@@ -166,7 +166,7 @@ run workflow run --plan-file "$T_TMP/panes.md"
 is "$RC" 0 'the run merges under amx'
 wt="$XDG_STATE_HOME/workflow/worktrees/app/panes"
 sess=$(cat "$XDG_STATE_HOME/workflow/runs/app/panes/t1.session")
-saw "new|--name|$sess|--dir|$wt/t1|--no-worktree|--role|worker|--model|opus|--effort|max|Read $XDG_CACHE_HOME/workflow/briefs/app/panes/t1.md and execute it exactly." \
+saw "new|--no-parent|--name|$sess|--dir|$wt/t1|--no-worktree|--role|worker|--model|opus|--effort|max|Read $XDG_CACHE_HOME/workflow/briefs/app/panes/t1.md and execute it exactly." \
 	'amx new carries --effort for the worker'
 rsess=$(cat "$XDG_STATE_HOME/workflow/runs/app/panes/t1.review-session")
 saw "sub|--bg|--json|--name|$rsess|--parent|$sess|--dir|$wt/_integration|--no-worktree|--role|reader|--model|fable|--effort|high|Read $XDG_STATE_HOME/workflow/runs/app/panes/t1.review-prompt and execute it exactly." \

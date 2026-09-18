@@ -138,7 +138,7 @@ is "$(cat "$rundir/t1.state")" merged 'the task its amx worker finished is merge
 
 sess=$(cat "$rundir/t1.session")
 like "$sess" '^wf-t1-[0-9a-z]{4}$' 'the handle the run records is the amx agent name'
-saw "new|--name|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/t1|--no-worktree|--role|worker|--model|opus|Read $XDG_CACHE_HOME/workflow/briefs/app/amx-run/t1.md and execute it exactly." \
+saw "new|--no-parent|--name|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/t1|--no-worktree|--role|worker|--model|opus|Read $XDG_CACHE_HOME/workflow/briefs/app/amx-run/t1.md and execute it exactly." \
 	'the dispatch is amx new into the task worktree, with the brief as the task'
 rsess=$(cat "$rundir/t1.review-session")
 like "$(grep "^sub|--bg|--json|--name|$rsess|" "$argv")" \
@@ -150,7 +150,7 @@ is "$(cat "$rundir/hang.state")" failed 'the worker that never reported ready is
 is "$(cat "$rundir/hang.dispatches")" 2 'after exactly one redispatch'
 saw "stop|$(cat "$rundir/hang.session")" 'a stalled worker is ended with amx stop'
 is "$(grep -c '|--name|wf-hang-' "$argv")" 2 'and each dispatch of it ran under its own agent name'
-first=$(grep '^new|--name|wf-hang-' "$argv" | head -1 | cut -d'|' -f3)
+first=$(grep '^new|--no-parent|--name|wf-hang-' "$argv" | head -1 | cut -d'|' -f4)
 like "$(grep '^sub|--bg|--json|--name|wf-hang-' "$argv")" "|--parent|$first|--dir|" \
 	'the redispatch is a child of the first session, through amx sub'
 isnt "$first" "$(cat "$rundir/hang.session")" \
@@ -189,7 +189,7 @@ run workflow run --plan-file "$T_TMP/full.md"
 is "$RC" 0 'with the cap lifted the plan merges'
 is "$(cat "$fulldir/f1.state")" merged 'the refused task included'
 is "$(grep -c "|--parent|$never|" "$argv")" 0 'a session amx never created is nobody's parent'
-like "$(grep '|--name|wf-f1-' "$argv" | tail -1)" '^new|--name|wf-f1-' 'so its retry is amx new'
+like "$(grep '|--name|wf-f1-' "$argv" | tail -1)" '^new|--no-parent|--name|wf-f1-' 'so its retry is amx new'
 
 ## ------------------------------------- a reader that hit a provider limit
 

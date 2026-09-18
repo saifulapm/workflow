@@ -246,9 +246,21 @@ fn spawn_argv(d: &Dispatch) -> Vec<String> {
     argv
 }
 
-/// The dispatch argv for an agent with no parent: `amx new --name <name> ...`.
+/// The dispatch argv for an agent with no parent: `amx new --no-parent --name
+/// <name> ...`.
+///
+/// `--no-parent` because the orchestrator may itself be an amx agent: without
+/// it amx reads the run's own `AMX_ID` and records the worker as a child of
+/// the pane the run was started in, a depth deeper than the run meant -- deep
+/// enough, one reader later, to meet amx's `subagent_depth`. The escape is
+/// amx's own for the peer a person's shell gets by having no id to record.
 fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
-    let mut argv = vec!["new".to_string(), "--name".to_string(), name.to_string()];
+    let mut argv = vec![
+        "new".to_string(),
+        "--no-parent".to_string(),
+        "--name".to_string(),
+        name.to_string(),
+    ];
     argv.extend(spawn_argv(d));
     argv
 }
@@ -740,6 +752,7 @@ mod tests {
             new_argv(&fixture(), "wf-t1-a3k9"),
             vec![
                 "new",
+                "--no-parent",
                 "--name",
                 "wf-t1-a3k9",
                 "--dir",
@@ -815,7 +828,7 @@ mod tests {
             ]
         );
         // The same words after the verb and the name as `new` has.
-        assert_eq!(argv[7..], new_argv(&d, "wf-t1-a3k9")[3..]);
+        assert_eq!(argv[7..], spawn_argv(&d));
 
         let fake = Fake::new("child", "working");
         d.worktree = fake.dir.clone();
@@ -849,7 +862,11 @@ mod tests {
             &argv[..6],
             ["sub", "--json", "--timeout", "900", "--name", "wf-t1-a3k9"]
         );
-        assert_eq!(argv[6..], new_argv(&d, "wf-t1-a3k9")[3..]);
+        assert_eq!(argv[6..], spawn_argv(&d));
+        // A consult keeps the ambient `AMX_ID` instead: `workflow advise` runs
+        // in the worker's pane and rides that id onto the record as the
+        // advisor's parent, so `--no-parent` belongs to `new` alone.
+        assert!(!argv.contains(&"--no-parent".to_string()), "{argv:?}");
         d.parent = Some("wf-t1-zz01".into());
         assert_eq!(
             &sub_argv(&d, "wf-t1-a3k9", 900)[6..8],

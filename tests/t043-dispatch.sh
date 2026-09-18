@@ -130,7 +130,7 @@ s2=$(cat "$rundir/t2.session")
 like "$s1" '^wf-t1-[0-9a-z]{4}$' 'the handle is the agent name amx was told to pin'
 isnt "$s1" "$s2" 'each dispatch gets its own'
 wt="$XDG_STATE_HOME/workflow/worktrees/app/dispatch-check"
-like "$(cat "$AMX_DIR/argv")" "^--name\\|$s1\\|--dir\\|$wt/t1\\|--no-worktree\\|--role\\|worker\\|--model\\|haiku\\|Read $XDG_CACHE_HOME/workflow/briefs/app/dispatch-check/t1.md and execute it exactly.$" \
+like "$(cat "$AMX_DIR/argv")" "^--no-parent\\|--name\\|$s1\\|--dir\\|$wt/t1\\|--no-worktree\\|--role\\|worker\\|--model\\|haiku\\|Read $XDG_CACHE_HOME/workflow/briefs/app/dispatch-check/t1.md and execute it exactly.$" \
 	'amx new: the name, the task worktree, no second worktree, the model, and the brief as the task'
 unlike "$(cat "$AMX_DIR/argv")" '--effort' 'no effort dial when none is set'
 truthy "$([ ! -e "$rundir/costs.tsv" ] && echo 0 || echo 1)" \
