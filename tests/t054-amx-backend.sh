@@ -150,9 +150,8 @@ is "$(cat "$rundir/hang.state")" failed 'the worker that never reported ready is
 is "$(cat "$rundir/hang.dispatches")" 2 'after exactly one redispatch'
 saw "stop|$(cat "$rundir/hang.session")" 'a stalled worker is ended with amx stop'
 is "$(grep -c '|--name|wf-hang-' "$argv")" 2 'and each dispatch of it ran under its own agent name'
+is "$(grep -c '^new|--no-parent|--name|wf-hang-' "$argv")" 2 'both are top-level, so a retry does not climb the depth'
 first=$(grep '^new|--no-parent|--name|wf-hang-' "$argv" | head -1 | cut -d'|' -f4)
-like "$(grep '^sub|--bg|--json|--name|wf-hang-' "$argv")" "|--parent|$first|--dir|" \
-	'the redispatch is a child of the first session, through amx sub'
 isnt "$first" "$(cat "$rundir/hang.session")" \
 	'the second name is not the first'
 

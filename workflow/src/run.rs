@@ -982,12 +982,17 @@ impl Run {
         true
     }
 
-    /// The task's current session as a parent for its next agent -- a fresh
-    /// worker, its reader -- when the backend still has a record of it. A
-    /// name amx never created (a launch it refused leaves one in
-    /// `<task>.session`) or has since forgotten is no parent: amx refuses a
-    /// parent it has no record of, and would go on refusing every dispatch
-    /// after. Nothing named means `amx new`, as a first dispatch is.
+    /// The task's current session as a parent for its reader, when the
+    /// backend still has a record of it. A name amx never created (a launch
+    /// it refused leaves one in `<task>.session`) or has since forgotten is
+    /// no parent: amx refuses a parent it has no record of, and would go on
+    /// refusing every dispatch after.
+    ///
+    /// A fresh worker is nobody's child: chaining each redispatch onto the
+    /// session before made the worker's depth climb with every attempt, and
+    /// the reader it needs is one deeper still -- past amx's `subagent_depth`
+    /// after a single retry. The prior session's own words are in the brief,
+    /// so the wall loses a line the run already keeps.
     fn parent_of(&self, task: &str) -> Option<String> {
         let session = self.field(task, "session");
         if session.is_empty() || !self.backend.seen(&self.handle(task)) {
@@ -1008,10 +1013,6 @@ impl Run {
         let status = self.dir.join(format!("{task}.status"));
         let session = self.backend.mint_session();
         let prior = self.prior_attempt(task, after);
-        // The session this task had before, when it had one: the fresh
-        // worker is dispatched as its child, so the wall and `amx logs` show
-        // whose task it took over. A first dispatch has no parent.
-        let parent = self.parent_of(task);
 
         write_field(&self.dir, task, "session", &session);
         // Truncated, not appended: the gate reads this file to judge THIS
@@ -1061,7 +1062,7 @@ impl Run {
             status,
             rundir: self.dir.clone(),
             session: session.clone(),
-            parent,
+            parent: None,
             // A fixer after round two, else a worker: the field is written
             // beside the fix model and persists the same way.
             role: match self.field(task, "role").trim() {

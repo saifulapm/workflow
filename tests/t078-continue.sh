@@ -180,8 +180,8 @@ is "$(grep -c . "$WF_TMP/asked" 2>/dev/null || echo 0)" 0 'nobody asked anything
 rsess=$(cat "$rundir/refuse.session")
 is "$(cat "$rundir/refuse.state")" merged 'refuse merged too'
 is "$(workers refuse)" 2 'after a fresh session, since the send was refused'
-like "$(grep -E "^sub\|--bg\|--json\|--name\|wf-refuse-" "$argv")" "\|--parent\|$(grep -E '^new\|--no-parent\|--name\|wf-refuse-' "$argv" | cut -d'|' -f4)\|" \
-	'the fresh session is a child of the one the send was refused on'
+is "$(grep -cE '^sub\|--bg\|--json\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv")" 0 'the fresh session is top-level, not a child of the one the send was refused on'
+is "$(grep -cE '^new\|--no-parent\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv")" 2 'both of its sessions went out as amx new at depth 0'
 is "$(cat "$rundir/refuse.dispatches")" 2 'counted as a second attempt'
 is "$(cat "$rundir/refuse.continued" 2>/dev/null)" '' 'and not as a continuation'
 first=$(grep -E '^new\|--no-parent\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv" | head -1 | cut -d'|' -f4)
