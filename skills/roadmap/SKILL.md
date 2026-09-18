@@ -64,9 +64,9 @@ agents, findings only:
   or this machine, and every ruling read for a reading that produces the
   wrong code.
 
-Fix what they find, check again, then present. Measured 2026-09-18 on eco:
-fifty findings after a green check, four of them API facts that would each
-have cost a milestone session.
+Fix what they find, check again, then present: a green check has passed a
+roadmap carrying fifty findings, four of them API facts each worth a
+milestone session.
 
 After the check passes and Saiful approves, store them:
 
@@ -94,8 +94,8 @@ and a `plan.md` in the checkout is some earlier session's leftover.
 
 Then this session builds it with `implement`, task by task on main: `mem
 plan --tick <task>` after each commit, `mem roadmap --tick <slug>` when the
-last one lands. Measured 2026-09-15: one strong session landed three
-milestones in the time a run spent on one task's fix rounds. Hand a plan to
+last one lands. One strong session has landed three milestones in the time a
+run spent on one task's fix rounds (review-2026-09-15). Hand a plan to
 `orchestrate` only when its tasks are independent enough to run three wide
 and the machine can carry three workers -- workers on the strongest model,
 `review-model none` -- and a run that merges every task ticks the milestone

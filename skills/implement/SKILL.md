@@ -11,6 +11,9 @@ First action of the session:
 
 ## The loop, one task at a time
 
+Before the first task, read the plan whole: a task that cannot be done as
+written is a question now, not a stop at its Verify.
+
 1. Write the failing test. Watch it fail for the right reason. The expected
    value is a literal from the spec, never recomputed the way the code
    computes it. A block that reads two ways is a question for `workflow

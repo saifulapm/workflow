@@ -14,8 +14,8 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
   `implement` unless its tasks are independent enough to run three wide on
   a machine that carries three workers; then workers on the strongest model
   and `review-model none`, since fix rounds cost more than the defects they
-  catch (measured 2026-09-15).
-- The request's worker, reader and fixer are project keys: set them, never
+  catch (review-2026-09-15 has the numbers).
+- The run's worker, reader and fixer are project keys: set them, never
   look them up (`mem project set model|review-model|fix-model <m>`, or the
   matching `WORKFLOW_*` variable for one run). The name is opaque, a model
   or an amx role file (`.amx/agents/<m>.md`, or `~/.config/amx/agents`);
@@ -27,7 +27,8 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
   orchestrator` and `mem log`: the run dir beats memory.
 - Never sleep on a clock. `workflow wait` blocks until the run needs you
   and its exit code says what for; a `sleep N; workflow status` loop does not.
-- `git branch --show-current` before any merge, the binary's recipes too.
+- `git branch --show-current` before any merge, including the merge recipes
+  the binary prints.
 
 ## The run
 

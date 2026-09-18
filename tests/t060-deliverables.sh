@@ -86,7 +86,7 @@ like "$(cat "$WF_ROOT/skills/mem/SKILL.md")" 'mem roadmap' 'mem names the verb t
 # The gate runs the project's whole suite on integration, not just a task's
 # own Verify, so a task that breaks a test outside its Verify has to fix it
 # and claim it in Files -- the old wording pointed at the wrong command.
-like "$plan_skill" 'No window may be red\.' 'plan says a task fixes any test it breaks, not only its own'
+like "$plan_skill" 'the suite is green after every task' 'plan says a task fixes any test it breaks, not only its own'
 unlike "$plan_skill" 'workflow verify. is what the gate' 'and drops the stale pointer to the wrong command'
 like "$plan_skill" 'Several one-line edits of one kind across files are one task' \
 	'plan says repeated one-line edits are one task, not one per file'
