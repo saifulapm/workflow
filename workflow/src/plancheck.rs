@@ -20,6 +20,11 @@ pub struct Findings {
 
 const NO_PROSE_WARNING: &str = "plan: no prose above the tasks -- the worker and the reader see only the task blocks; write the Spec and the Rulings first";
 
+/// The plan skill's ceiling on the Spec and Rulings, the prose every worker
+/// reads before its block. Measured 2026-09-18: the plans that read well sat
+/// between 700 and 1,480 tokens of prose.
+const PROSE_TOKENS: usize = 1500;
+
 /// `prior` is the plans this one waits on: the milestones a roadmap puts ahead
 /// of it, so what their tasks write and Give is part of the tree this plan will
 /// run in. A plan of its own has none.
@@ -60,6 +65,25 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
     if plan.prose.trim().is_empty() {
         f.warnings.push(NO_PROSE_WARNING.to_string());
     }
+    // The prose is what every worker reads, so it is the part with a budget;
+    // a plan's length is otherwise its task count, each block budgeted on
+    // its own below (friction #J0RQN6WY: a whole-plan ceiling forced eco's
+    // roadmap into splits no worker would have needed).
+    if plan.prose.len() / 4 > PROSE_TOKENS {
+        f.warnings.push(format!(
+            "plan: the prose is about {} tokens (bytes ÷ 4) -- past the {PROSE_TOKENS} the plan skill sets for what every worker reads; cut the Spec to what the tasks need and move the rest to a wiki page",
+            plan.prose.len() / 4
+        ));
+    }
+    // Every type a Gives item defines, this plan's and the milestones before
+    // it, so a type named inside a signature can be asked for by name.
+    let defined: std::collections::HashSet<String> = plan
+        .tasks
+        .iter()
+        .chain(prior.iter().flat_map(|p| p.tasks.iter()))
+        .flat_map(|t| gives_items(t.gives.as_deref().unwrap_or("")))
+        .filter_map(|item| defined_type(&item))
+        .collect();
     // The block's budget was checked at dispatch alone, where the remedy is
     // stopping the run to recut the plan (friction #QX8GXNQY). It is the
     // block alone that is measured, so nothing about where the run would
@@ -217,26 +241,81 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // one that comes from neither is a name the worker will hunt for. The
         // dependency need not be a direct one: a plan chains `[after:]`, and
         // what t1 gives reaches t3 through t2 (friction #EYC8DHKV).
-        for (ident, needle, qualifier) in uses_items(t.uses.as_deref().unwrap_or("")) {
+        let uses = t.uses.as_deref().unwrap_or("");
+        // Uses items no dependency Gives, so the tree is their only ground:
+        // the types inside them are asked about below, while an item a
+        // dependency Gives is that dependency's to have defined.
+        let mut from_tree: Vec<String> = Vec::new();
+        for (ident, needle, qualifier) in uses_items(uses) {
             let Some(needle) = needle else {
                 continue;
             };
-            let given = waited_for
+            // Item for item first: a worker reads its Uses line literally,
+            // so a Gives that spells the same symbol another way -- a
+            // variant of an enum given whole, a signature that grew a return
+            // type -- is a name it hunts for (friction #J0RQN6WY). Only when
+            // no dependency names the identifier at all is the tree asked.
+            let spelled = item_spelled(uses, &ident);
+            let deps: Vec<&Task> = waited_for
                 .iter()
                 .filter_map(|d| plan.get(d))
                 .chain(prior.iter().flat_map(|p| p.tasks.iter()))
-                .any(|dep| {
-                    dep.gives
-                        .as_deref()
-                        .is_some_and(|g| g.contains(ident.as_str()))
-                });
-            if !given
-                && named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()).is_empty()
-            {
+                .collect();
+            let exact = spelled.as_deref().is_some_and(|s| {
+                deps.iter().any(|dep| {
+                    gives_items(dep.gives.as_deref().unwrap_or(""))
+                        .iter()
+                        .any(|g| g == s)
+                })
+            });
+            if exact {
+                continue;
+            }
+            let loose = deps.iter().find_map(|dep| {
+                gives_items(dep.gives.as_deref().unwrap_or(""))
+                    .into_iter()
+                    .find(|g| g.contains(ident.as_str()))
+                    .map(|g| (dep.id.clone(), g))
+            });
+            if let Some((dep_id, given)) = loose {
+                f.warnings.push(format!(
+                    "plan: task {}: Uses '{}' and {dep_id} Gives it as '{given}' -- one spelling in both, or the worker hunts",
+                    t.id,
+                    spelled.unwrap_or(ident)
+                ));
+                continue;
+            }
+            if named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()).is_empty() {
                 f.warnings.push(format!(
                     "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
                     t.id
                 ));
+            } else if let Some(s) = spelled {
+                from_tree.push(s);
+            }
+        }
+        // A type named inside a signature is a name too: `ctx: &mut ToolCtx`
+        // in a Gives, `-> Result<Outcome, SessionError>` in a Uses. One that
+        // no Gives item defines and the tree never names is what a worker
+        // spends its first turns hunting for (friction #J0RQN6WY). Names the
+        // languages' own libraries own are left alone, and so is a name the
+        // item qualifies with a lowercase path, since `tokio::sync::Receiver`
+        // says where it lives.
+        let mut asked = std::collections::HashSet::new();
+        let gives_line: Vec<String> = gives_items(t.gives.as_deref().unwrap_or(""));
+        for (key, items) in [("Uses", &from_tree), ("Gives", &gives_line)] {
+            for item in items {
+                for ty in type_tokens(item) {
+                    if defined.contains(&ty) || !asked.insert(ty.clone()) {
+                        continue;
+                    }
+                    if named_by(&git, &ty, itself.as_deref()).is_empty() {
+                        f.warnings.push(format!(
+                            "plan: task {}: {key} names type '{ty}' inside '{item}' and nothing defines it -- no Gives item here or earlier, and not the tree; give it an item of its own or the worker hunts",
+                            t.id
+                        ));
+                    }
+                }
             }
         }
         for (ident, needle, qualifier) in uses_items(t.gives.as_deref().unwrap_or("")) {
@@ -973,6 +1052,177 @@ fn uses_items(uses: &str) -> Vec<Item> {
         })
 }
 
+/// The ` · `-separated items of a Uses or Gives line, each with its
+/// whitespace folded to single spaces, so two spellings compare as the
+/// worker reads them and not as the author wrapped them.
+fn gives_items(line: &str) -> Vec<String> {
+    line.split(" · ")
+        .map(|item| item.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+/// The Uses item that `uses_items` reduced to this identifier, spelled as
+/// the line spells it, so it can be held against a Gives item for item.
+fn item_spelled(uses: &str, ident: &str) -> Option<String> {
+    gives_items(uses)
+        .into_iter()
+        .find(|item| ident_of(&without_locations(item)).as_deref() == Some(ident))
+}
+
+/// The type a Gives item defines, if it defines one: its first identifier
+/// past any declaration keyword when that identifier is capitalised.
+/// `Outcome { stop: Stop }` defines `Outcome`, `Stop::{Done, Budget}` gives
+/// `Stop` its variants, `trait ToolHost { .. }` and `type Shared = ..`
+/// define what they name, `Session::new(..)` stands for `Session`, and
+/// `scrub(text) -> Scrubbed` defines nothing by this rule -- `Scrubbed` is
+/// its own item's to define.
+fn defined_type(item: &str) -> Option<String> {
+    const KEYWORDS: [&str; 12] = [
+        "fn", "pub", "struct", "enum", "class", "function", "def", "let", "const", "type", "impl",
+        "trait",
+    ];
+    // `Receipt.cache: CacheLabel::{Verified, Unverifiable}` defines the enum
+    // whose variants it lists, wherever in the item that list sits.
+    if let Some(at) = item.find("::{") {
+        let name: String = item[..at]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return Some(name);
+        }
+    }
+    item.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .find(|t| !t.is_empty() && !KEYWORDS.contains(t))
+        .filter(|t| t.starts_with(|c: char| c.is_ascii_uppercase()))
+        .map(str::to_string)
+}
+
+/// The capitalised identifiers inside an item that stand for types it uses
+/// without defining: everything but the item's own defined name, constants
+/// spelled in capitals, names the languages' libraries own, and a name the
+/// item reaches through a lowercase path (`serde_json::Value`,
+/// `tokio::sync::broadcast::Receiver`), which says where it lives.
+fn type_tokens(item: &str) -> Vec<String> {
+    const LIBRARY: [&str; 46] = [
+        "Result",
+        "Option",
+        "Vec",
+        "String",
+        "Box",
+        "Arc",
+        "Rc",
+        "Mutex",
+        "RwLock",
+        "Path",
+        "PathBuf",
+        "Duration",
+        "Instant",
+        "SystemTime",
+        "HashMap",
+        "HashSet",
+        "BTreeMap",
+        "BTreeSet",
+        "VecDeque",
+        "Value",
+        "Self",
+        "Send",
+        "Sync",
+        "Sized",
+        "Fn",
+        "FnMut",
+        "FnOnce",
+        "Iterator",
+        "Future",
+        "Stream",
+        "Read",
+        "Write",
+        "AsyncRead",
+        "AsyncWrite",
+        "Clone",
+        "Debug",
+        "Default",
+        "Display",
+        "Promise",
+        "Array",
+        "Record",
+        "Map",
+        "Set",
+        "Date",
+        "Error",
+        "Closure",
+    ];
+    let own = defined_type(item);
+    // `Stop::{Done, Budget(BudgetKind)}` lists variants at the first brace
+    // depth and the types they carry inside their parens; a plain
+    // `Outcome { stop: Stop }` lists field types at that depth instead.
+    let variants_at_one = item.contains("::{");
+    let mut out: Vec<String> = Vec::new();
+    let mut braces = 0usize;
+    let mut parens = 0usize;
+    // A capitalised word after an article is prose inside the item -- "as a
+    // User entry", "the Fast results" -- not a type the worker must find.
+    const ARTICLES: [&str; 12] = [
+        "a", "an", "the", "as", "every", "each", "one", "any", "its", "this", "that", "no",
+    ];
+    let mut tok = String::new();
+    let mut prev_tok = String::new(); // the identifier before this one
+    let mut prev_sep: Option<&str> = None; // what stood right before the token
+    let mut tail = String::new(); // the non-identifier run since the last token
+    // A trailing space closes the last token the way any separator would.
+    for c in item.chars().chain(std::iter::once(' ')) {
+        if c.is_alphanumeric() || c == '_' {
+            if tok.is_empty() {
+                prev_sep = None;
+                if tail.ends_with("::") {
+                    prev_sep = Some("::");
+                } else if tail.chars().all(char::is_whitespace)
+                    && ARTICLES.contains(&prev_tok.as_str())
+                {
+                    prev_sep = Some("article");
+                }
+            }
+            tok.push(c);
+            continue;
+        }
+        if !tok.is_empty() {
+            let is_type = tok.starts_with(|c: char| c.is_ascii_uppercase())
+                && tok.chars().any(|c| c.is_ascii_lowercase());
+            let member = prev_sep == Some("::");
+            let prose = prev_sep == Some("article");
+            let variant = variants_at_one && braces == 1 && parens == 0;
+            let owned = tok.ends_with("Error") || tok.ends_with("Exception");
+            if is_type
+                && !member
+                && !prose
+                && !variant
+                && !owned
+                && !LIBRARY.contains(&tok.as_str())
+                && own.as_deref() != Some(tok.as_str())
+                && !out.contains(&tok)
+            {
+                out.push(tok.clone());
+            }
+            prev_tok = std::mem::take(&mut tok);
+            tail.clear();
+        }
+        tail.push(c);
+        match c {
+            '{' => braces += 1,
+            '}' => braces = braces.saturating_sub(1),
+            '(' | '<' => parens += 1,
+            ')' | '>' => parens = parens.saturating_sub(1),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// The item with its line locations taken out: `layout.rs:219`, a bare
 /// `:448`, a `:448-470` span. They point into a file and name nothing, and
 /// read as tokens the digits stood where the symbol was, so plan-check asked
@@ -1294,6 +1544,126 @@ mod tests {
         ] {
             assert!(!greppable(junk), "{junk:?} is prose, not a symbol");
         }
+    }
+
+    /// A Uses item is held against a Gives item for item: the same symbol
+    /// spelled another way -- a variant out of an enum given whole, a
+    /// signature that grew a return type -- is what a worker hunts for
+    /// (friction #J0RQN6WY).
+    #[test]
+    fn a_uses_item_is_spelled_as_its_line_spells_it() {
+        let uses = "EntryKind::FileChange · Registry::register(&mut self,   tool: Box<dyn Tool>)";
+        assert_eq!(
+            item_spelled(uses, "FileChange").as_deref(),
+            Some("EntryKind::FileChange")
+        );
+        // Whitespace folds, so a wrapped line and a flat one agree.
+        assert_eq!(
+            item_spelled(uses, "register").as_deref(),
+            Some("Registry::register(&mut self, tool: Box<dyn Tool>)")
+        );
+        assert_eq!(item_spelled(uses, "nothing"), None);
+        assert_eq!(gives_items(" a · b  c ·  · d "), vec!["a", "b c", "d"]);
+    }
+
+    /// A Gives item defines the capitalised name it opens with, past any
+    /// declaration keyword; a lowercase opener defines nothing.
+    #[test]
+    fn a_gives_item_defines_the_type_it_opens_with() {
+        assert_eq!(
+            defined_type("Outcome { stop: Stop, receipt: Receipt }").as_deref(),
+            Some("Outcome")
+        );
+        assert_eq!(
+            defined_type("Stop::{EndTurn, Budget(BudgetKind)}").as_deref(),
+            Some("Stop")
+        );
+        assert_eq!(
+            defined_type("trait ToolHost { fn defs(&self) -> Vec<ToolDef>; }").as_deref(),
+            Some("ToolHost")
+        );
+        assert_eq!(
+            defined_type("type SharedLedger = Arc<Mutex<Ledger>>").as_deref(),
+            Some("SharedLedger")
+        );
+        assert_eq!(
+            defined_type("Session::new(dir: &Path) -> Session").as_deref(),
+            Some("Session")
+        );
+        assert_eq!(
+            defined_type("Receipt.cache: CacheLabel::{Verified { hit_rate: f64 }, Unverifiable}")
+                .as_deref(),
+            Some("CacheLabel")
+        );
+        assert_eq!(defined_type("scrub(text: &str) -> Scrubbed"), None);
+        assert_eq!(defined_type("eco run --json <prompt>"), None);
+        assert_eq!(defined_type("the closing section"), None);
+    }
+
+    /// The types an item uses without defining: field and argument types,
+    /// return types, what a variant carries. Not its own name, not a variant
+    /// of its own enum, not a member reached through `::`, not a library
+    /// name, not an error type, not a constant in capitals.
+    #[test]
+    fn type_tokens_are_the_names_an_item_leans_on() {
+        assert_eq!(
+            type_tokens("Outcome { stop: Stop, receipt: Receipt }"),
+            vec!["Stop", "Receipt"]
+        );
+        assert_eq!(
+            type_tokens(
+                "Stop::{EndTurn, Budget(BudgetKind), Breaker(BreakerCause), Error(String)}"
+            ),
+            vec!["BudgetKind", "BreakerCause"]
+        );
+        assert_eq!(
+            type_tokens(
+                "Event::{Text(String), Thinking { text: String, signature: Option<String> }, Stop(StopReason)}"
+            ),
+            vec!["StopReason"]
+        );
+        assert_eq!(
+            type_tokens(
+                "Session::new(dir: &Path, gen: Box<dyn Generator>, budget: Budget) -> Result<Session, SessionError>"
+            ),
+            vec!["Generator", "Budget"]
+        );
+        assert_eq!(
+            type_tokens(
+                "Session::subscribe(&self) -> tokio::sync::broadcast::Receiver<Notification>"
+            ),
+            vec!["Notification"]
+        );
+        assert_eq!(
+            type_tokens("CheckOutcome::Flaky { passes: u8, runs: u8 } added to CheckOutcome"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            type_tokens(
+                "trait Generator { fn stream(&self, req: Request) -> BoxStream<'static, Result<Event, ProviderError>>; }"
+            ),
+            vec!["Request", "BoxStream", "Event"]
+        );
+        assert_eq!(
+            type_tokens("DEFAULT_MODEL · RPC request eco/verify/contract"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            type_tokens("CartPricing::price(Basket $b): Cents"),
+            vec!["Basket", "Cents"]
+        );
+        // Prose inside an item: a capitalised word after an article is a
+        // word, and the enum a `::{` list belongs to is defined, not used.
+        assert_eq!(
+            type_tokens(
+                "Perms::reject_cascade(&mut self, reason: &str) -> String (the steering line the dispatcher appends as a User entry)"
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            type_tokens("Receipt.cache: CacheLabel::{Verified { hit_rate: f64 }, Unverifiable}"),
+            vec!["Receipt"]
+        );
     }
 
     #[test]

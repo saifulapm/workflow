@@ -14,6 +14,13 @@ is, what stays, what goes) is never resolved by silence. Facts are researched,
 not asked. A question that leaves the session (`mem ask`, read on a phone) is
 one decision, the choices, a recommendation, under 100 words.
 
+A ruling that names a crate, a package, an API parameter, a header, a feature
+flag or a number the plan will be held to (a package count, a byte budget, a
+latency) is a fact, not a preference: fetch the docs this session (the
+provider's skill, `npx ctx7@latest`) or measure it on this machine, and write
+the date beside it. Written from memory, four such lines in one roadmap were
+all wrong (2026-09-18), and each would have cost a session to discover.
+
 Read the project's pages before cutting tasks: `mem wiki`, then each page the
 change touches; they hold decisions code cannot show. A rewrite inventories the
 predecessor's whole surface into pages first; cuts are Saiful's.
@@ -28,9 +35,11 @@ Write it in a scratch dir, never the checkout, then store it in mem:
     d=$(mktemp -d)
     mem plan --stdin < "$d/plan.md"
 
-Aim for 1,500–3,500 tokens (bytes ÷ 4): fewer are wishes, more go unread.
-Reference paths, classes, commits. A plan cut from the friction queue names the
-ids it answers, so shipping closes them. UI work produces a mockup first.
+The prose is what every worker reads before its block: keep the Spec and the
+Rulings under 1,500 tokens (bytes ÷ 4), and move what a page can hold to the
+wiki. A plan's length is its task count; a block has its own budget. Reference
+paths, classes, commits. A plan cut from the friction queue names the ids it
+answers, so shipping closes them. UI work produces a mockup first.
 
 ## 3. The grammar
 
@@ -69,7 +78,9 @@ ids it answers, so shipping closes them. UI work produces a mockup first.
   before editing (`Read:` may name `wiki:<slug>`), interfaces consumed and
   produced across task boundaries (exact signatures, items joined with ` · `),
   and one analog to copy. A worker sees its block and the plan's prose, not a
-  sibling's: restate every symbol another task defines, or it hunts.
+  sibling's: restate every symbol another task defines, spelled as that task
+  Gives it, or it hunts. A type inside a signature is a symbol too: `ctx: &mut
+  ToolCtx` obliges some task to Give `ToolCtx { .. }` as an item of its own.
 - An unknown dependency id or a cycle is a hard error.
 
 Check it from the checkout:
@@ -77,8 +88,9 @@ Check it from the checkout:
     workflow plan-check "$d/plan.md"
 
 It reads the tree, runs nothing: an unpassable Verify or deferral language
-("for now", "TBD") is refused; ungrounded lines warn. A block over budget is a
-task to split, never a line to trim.
+("for now", "TBD") is refused; ungrounded lines warn, and so do a Uses spelled
+unlike its Gives, a type no item defines, and prose past its budget. A block
+over budget is a task to split, never a line to trim.
 
 ## 4. Shape
 

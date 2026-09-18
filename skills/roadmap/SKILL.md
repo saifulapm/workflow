@@ -16,8 +16,11 @@ milestone plan. The difference is that they are cut together, while the whole
 shape is still in front of you. Read the project's pages first (`mem wiki`),
 write the spec as wiki pages before cutting a single milestone -- a page per
 subsystem the project touches, so a plan reads one with `Read: wiki:<slug>`
-instead of restating it -- then write the roadmap in a scratch dir, never
-the checkout: `d=$(mktemp -d)`
+instead of restating it. Two pages that disagree are settled on the wiki
+first, one ruling, before either sentence reaches a plan: copied as they
+stand, each plan inherits its page's side and the contradiction surfaces in
+a worker's test. Then write the roadmap in a scratch dir, never the checkout:
+`d=$(mktemp -d)`
 
     # roadmap: shop
 
@@ -36,7 +39,7 @@ composed before any is written, each cut as if it were the only plan: a task say
 a worker hunting through a document it will never see. A milestone may name
 files an earlier one creates and symbols an earlier one Gives.
 
-## 2. Checking it, then storing it
+## 2. Checking it, reviewing it, then storing it
 
     workflow plan-check "$d/roadmap.md"
 
@@ -45,6 +48,25 @@ wave order, judging each against the tree plus what the milestones it waits
 on write and Give -- so a path a later milestone reads and an earlier one
 creates is not a finding. A milestone with no plan, a plan headed under
 another slug, and a plan that does not parse each refuse the check.
+
+A green check is the grammar's opinion, not a review. Before presenting,
+three readers with one lens each go over the scratch dir, as forks or amx
+agents, findings only:
+
+- coverage: every sentence a wiki page tags with a milestone, to the task
+  that delivers it; a sentence with no task is a gap, one delivered
+  elsewhere is a misplacement, a threshold a plan changed is a contradiction;
+- consistency: one spelling for every symbol, path, key and number across
+  the plans; every Uses Given; every file a Done or a ruling edits claimed
+  by that task's Files; every ruling a worker needs restated in the plan it
+  will read;
+- feasibility: every crate, API parameter and Verify held against the docs
+  or this machine, and every ruling read for a reading that produces the
+  wrong code.
+
+Fix what they find, check again, then present. Measured 2026-09-18 on eco:
+fifty findings after a green check, four of them API facts that would each
+have cost a milestone session.
 
 After the check passes and Saiful approves, store them:
 
