@@ -2942,6 +2942,10 @@ impl Run {
     /// every worktree where it is, for the next invocation to adopt or for
     /// `workflow reap` to collect.
     fn cleanup(&self) {
+        // Every session this run started is stopped by the time it gets here,
+        // and a stopped agent is still a row on the backend's wall until
+        // somebody says otherwise (friction #RYXM5MEX).
+        self.backend.clear(&self.wt_root);
         let live = self.dispatched();
         if !live.is_empty() {
             warn(format!(

@@ -120,6 +120,15 @@ pub trait WorkerBackend {
     fn context_tokens(&self, h: &Handle) -> Option<u64>;
     /// Stop the worker and everything it started.
     fn stop(&self, h: &Handle, grace_s: i64);
+    /// Forget every finished agent whose work is under `root`. A run stops
+    /// each session it starts but says nothing to the backend's own listing,
+    /// so a finished run left a row per worker, per reader and per advisor
+    /// standing on the wall -- sixty-seven of them after one milestone, and
+    /// a wall of finished work is a wall nobody reads (friction #RYXM5MEX).
+    /// Only agents whose turn is over go, and a backend that keeps work no
+    /// commit has keeps that agent with it. The process seam has no listing
+    /// and nothing to forget.
+    fn clear(&self, _root: &Path) {}
     /// Put one more message in front of a worker whose turn has ended and
     /// whose session still stands, so it goes on in the context it already
     /// has -- what it wrote, what it read -- instead of a fresh session

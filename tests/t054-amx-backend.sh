@@ -168,6 +168,17 @@ first=$(grep '^new|--name|wf-hang-' "$argv" | head -1 | cut -d'|' -f3)
 isnt "$first" "$(cat "$rundir/hang.session")" \
 	'the second name is not the first'
 
+# The wall, swept: a finished run used to leave a row per worker and per
+# reader standing on it, done or stopped (friction #RYXM5MEX). One call over
+# the run's own worktree root, after the last session is stopped.
+wtroot="$XDG_STATE_HOME/workflow/worktrees/app/amx-run"
+saw "--dir|$wtroot|clear|--force" 'the run forgets its own finished agents when it cleans up'
+is "$(grep -c -- "^--dir|$wtroot|clear|--force$" "$argv")" 1 'once, not once a task'
+swept=$(grep -n -- "^--dir|$wtroot|clear|--force$" "$argv" | cut -d: -f1)
+laststop=$(grep -n '^stop|' "$argv" | tail -1 | cut -d: -f1)
+truthy "$([ "$swept" -gt "$laststop" ] && echo 0 || echo 1)" \
+	'and after the last stop, so nothing still running is swept'
+
 ## ------------------------------------------- a launch amx refuses
 
 # `amx new` at its cap, or with no tmux to reach, exits non-zero and starts

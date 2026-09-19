@@ -541,6 +541,14 @@ impl WorkerBackend for AmxBackend {
         let _ = amx(&["stop", &h.session]);
     }
 
+    /// `amx --dir <root> clear --force`: every agent whose work is under the
+    /// run's worktree root and whose turn is over, record and worktree, in
+    /// one call. amx keeps a worktree holding work no commit has, and that
+    /// agent's record with it, so nothing unsaved goes with the sweep.
+    fn clear(&self, root: &Path) {
+        let _ = amx(&["--dir", &root.to_string_lossy(), "clear", "--force"]);
+    }
+
     /// `amx send <id> <text>`: a bracketed paste into the pane, confirmed
     /// against the vendor's own prompt event. amx refuses at a question
     /// (exit 2), on a pane it let go or an agent that ended (1), and says
