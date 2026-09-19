@@ -277,7 +277,15 @@ fn sub_bg_argv(d: &Dispatch, name: &str, parent: &str) -> Vec<String> {
 }
 
 /// The consult argv: `amx sub --json --timeout <s> --name <name> [--parent
-/// <id>] ...`, one call that starts the agent and waits for its answer.
+/// <id>|--no-parent] ...`, one call that starts the agent and waits for its
+/// answer.
+///
+/// A reader with nobody named is a root. Without `--no-parent` amx records
+/// the ambient `$AMX_ID`, so a `workflow read` issued from inside a worker
+/// spawned its reader at depth 2 and amx refused it: the public-API read a
+/// task's own brief asks for could not run (friction #EBDZ9JY9). An advice
+/// keeps the ambient id on purpose -- it runs in the worker's own pane and
+/// rides that pane onto the record as the advisor's parent.
 fn sub_argv(d: &Dispatch, name: &str, timeout_s: i64) -> Vec<String> {
     let mut argv = vec![
         "sub".to_string(),
@@ -290,6 +298,8 @@ fn sub_argv(d: &Dispatch, name: &str, timeout_s: i64) -> Vec<String> {
     if let Some(parent) = &d.parent {
         argv.push("--parent".to_string());
         argv.push(parent.clone());
+    } else if d.role == "reader" {
+        argv.push("--no-parent".to_string());
     }
     argv.extend(spawn_argv(d));
     argv
@@ -869,16 +879,26 @@ mod tests {
             ["sub", "--json", "--timeout", "900", "--name", "wf-t1-a3k9"]
         );
         assert_eq!(argv[6..], spawn_argv(&d));
-        // A consult keeps the ambient `AMX_ID`: `workflow advise` runs in the
+        // An advice keeps the ambient `AMX_ID`: `workflow advise` runs in the
         // worker's pane and rides that id onto the record as the advisor's
         // parent, which is what a `sub` with no `--parent` does.
-        assert!(!argv.contains(&"--no-parent".to_string()), "{argv:?}");
+        d.role = "advisor".into();
+        assert!(
+            !sub_argv(&d, "wf-t1-a3k9", 900).contains(&"--no-parent".to_string()),
+            "{argv:?}"
+        );
+        // A reader with nobody named is a root instead: a `workflow read`
+        // issued inside a worker's pane would ride that pane's id to depth 2,
+        // which amx refuses.
+        d.role = "reader".into();
+        assert_eq!(&sub_argv(&d, "wf-t1-a3k9", 900)[6..7], ["--no-parent"]);
         d.parent = Some("wf-t1-zz01".into());
         assert_eq!(
             &sub_argv(&d, "wf-t1-a3k9", 900)[6..8],
             ["--parent", "wf-t1-zz01"]
         );
         d.parent = None;
+        d.role = "worker".into();
 
         for (code, ending) in [
             (0, Ending::Answered),
