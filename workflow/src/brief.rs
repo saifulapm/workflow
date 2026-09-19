@@ -110,7 +110,7 @@ impl Prior {
 
 /// A question or an answer, cut to what the budget can carry. The whole
 /// text is one `mem show` away; what the brief needs is enough to act on.
-fn clip(text: &str) -> String {
+pub(crate) fn clip(text: &str) -> String {
     const MAX: usize = 600;
     let text = text.trim();
     if text.len() <= MAX {

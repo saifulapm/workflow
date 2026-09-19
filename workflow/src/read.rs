@@ -304,6 +304,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
             &[],
             &gate,
             &[],
+            &[],
         ),
     );
 

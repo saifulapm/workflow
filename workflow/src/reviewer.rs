@@ -149,6 +149,27 @@ fn earlier_section(earlier: &[String]) -> String {
     out
 }
 
+/// What the orchestrator has already ruled on for this task: its answers to
+/// the worker's questions and the rulings saved since the run began. The
+/// plan's own Rulings are in the plan text above this; these were made after
+/// it was written, and a reader that never saw them blocked one diff on the
+/// same settled ground across three readings (frictions #WAQQSNBV,
+/// #0KT8057H).
+fn settled_section(settled: &[(String, String)]) -> String {
+    if settled.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## Already settled\n\n");
+    for (asked, ruled) in settled {
+        out.push_str(&format!("{asked}\n-> {ruled}\n\n"));
+    }
+    out.push_str(
+        "The orchestrator has already ruled on these. A finding that contradicts one is \
+         not `[blocks]`; say so as `[later]` at most, naming the ruling.\n\n",
+    );
+    out
+}
+
 /// The reader's brief: the plan of record whole, so the rulings and the Done
 /// line it holds the diff to are the ones the run holds it to; the wiki
 /// pages the task's Read: named, verbatim, under the same heading the
@@ -168,6 +189,7 @@ pub fn prompt(
     pages: &[(String, Option<String>)],
     gate: &str,
     earlier: &[String],
+    settled: &[(String, String)],
 ) -> String {
     let change = if diff.len() > DIFF_CAP {
         format!(
@@ -223,7 +245,7 @@ how to answer come after the material, at the end.
 
 {change}
 
-## What to look for
+{settled}## What to look for
 
 {gate_section}
 
@@ -288,6 +310,7 @@ reading that changes the tree is void.
         plan = plan_text.trim_end(),
         pages = brief::pages_section(&task.id, pages),
         earlier = earlier_section(earlier),
+        settled = settled_section(settled),
         block = task.block,
         change = change,
         page_lens = page_lens,
@@ -461,6 +484,7 @@ mod tests {
             &[],
             "rust: cargo test",
             &[],
+            &[],
         );
         for needle in [
             "# Review of task t3 before it merges",
@@ -507,6 +531,7 @@ mod tests {
             &[],
             "php: ./bin/php artisan test",
             &[],
+            &[],
         );
         assert!(
             text.contains(
@@ -546,6 +571,7 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
         );
         assert!(
             text.contains(
@@ -579,6 +605,7 @@ mod tests {
             &pages,
             "rust: cargo test",
             &[],
+            &[],
         );
         let plan = text.find("# plan: gate-reviewer").unwrap();
         let heading = text.find("## Pages the plan names").unwrap();
@@ -606,6 +633,7 @@ mod tests {
             &[],
             "rust: cargo test",
             &[],
+            &[],
         );
         let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let gate = flat.find("While you read, the gate runs").unwrap();
@@ -632,6 +660,7 @@ mod tests {
             &[],
             "rust: cargo test",
             &[],
+            &[],
         );
         assert!(
             !bare.contains(sentence),
@@ -647,6 +676,7 @@ mod tests {
             Path::new("/runs/t3.review"),
             &pages,
             "rust: cargo test",
+            &[],
             &[],
         );
         let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -679,6 +709,7 @@ mod tests {
             &[],
             "rust: cargo test",
             &earlier,
+            &[],
         );
         let heading = text.find("## Earlier readings of this task").unwrap();
         let reading = text.find("### Reading 1").unwrap();
@@ -714,8 +745,57 @@ mod tests {
             &[],
             "rust: cargo test",
             &[],
+            &[],
         );
         assert!(!text.contains("## Earlier readings of this task"), "{text}");
+    }
+
+    #[test]
+    fn what_the_orchestrator_settled_rides_in_front_of_the_lenses() {
+        let text = prompt(
+            "# plan: gate-reviewer\n",
+            &task(),
+            "diff --git a/x b/x\n+fixed\n",
+            " x | 1 +\n",
+            Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
+            &[],
+            "rust: cargo test",
+            &[],
+            &[(
+                "It asked: may Pending::Nothing stand?".to_string(),
+                "yes: it is the settled shape".to_string(),
+            )],
+        );
+        assert!(text.contains("## Already settled"), "{text}");
+        assert!(
+            text.contains("It asked: may Pending::Nothing stand?"),
+            "{text}"
+        );
+        assert!(text.contains("-> yes: it is the settled shape"), "{text}");
+        assert!(
+            text.contains("A finding that contradicts one is not `[blocks]`"),
+            "{text}"
+        );
+        // Before the lenses: the material comes first and the question last.
+        assert!(
+            text.find("## Already settled") < text.find("## What to look for"),
+            "{text}"
+        );
+        // Nothing settled, no heading.
+        let bare = prompt(
+            "# plan: gate-reviewer\n",
+            &task(),
+            "diff --git a/x b/x\n+fixed\n",
+            " x | 1 +\n",
+            Path::new("/state/wt/_integration"),
+            Path::new("/runs/t3.review"),
+            &[],
+            "rust: cargo test",
+            &[],
+            &[],
+        );
+        assert!(!bare.contains("## Already settled"), "{bare}");
     }
 
     #[test]
@@ -730,6 +810,7 @@ mod tests {
             Path::new("/r"),
             &[],
             "rust: cargo test",
+            &[],
             &[],
         );
         assert!(text.contains(" x | 1 +"), "the stat stands in");

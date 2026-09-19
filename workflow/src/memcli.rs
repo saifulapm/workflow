@@ -222,14 +222,12 @@ pub fn knows_this_checkout() -> bool {
     silent(&["project", "current"])
 }
 
-fn rulings(rtype: &str, since: Option<&str>) -> Vec<Item> {
-    let mut args: Vec<String> = vec![
-        "log".into(),
-        "--kind".into(),
-        "ruling".into(),
-        "--type".into(),
-        rtype.into(),
-    ];
+fn rulings(rtype: Option<&str>, since: Option<&str>) -> Vec<Item> {
+    let mut args: Vec<String> = vec!["log".into(), "--kind".into(), "ruling".into()];
+    if let Some(rtype) = rtype {
+        args.push("--type".into());
+        args.push(rtype.into());
+    }
     if let Some(s) = since {
         args.push("--since".into());
         args.push(s.into());
@@ -247,20 +245,46 @@ fn rulings(rtype: &str, since: Option<&str>) -> Vec<Item> {
 }
 
 pub fn has_ruling(rtype: &str, since: Option<&str>) -> bool {
-    !rulings(rtype, since).is_empty()
+    !rulings(Some(rtype), since).is_empty()
 }
 
 /// The bodies of every ruling of a type, run together. What a ruling *says* is
 /// what clears a named term or a named test.
 pub fn ruling_bodies(rtype: &str) -> String {
     let mut body = String::new();
-    for item in rulings(rtype, None) {
+    for item in rulings(Some(rtype), None) {
         if let Ok(text) = std::fs::read_to_string(PathBuf::from(&item.path)) {
             body.push_str(&text);
             body.push('\n');
         }
     }
     body
+}
+
+/// Every ruling saved within `since` (a mem window: `90m`, `4h`), its own
+/// text without the record's fields. The reader at the merge gate is held to
+/// the plan's rulings; a ruling the orchestrator made after the plan was
+/// written is in none of them, and a reading that never saw one blocked a
+/// diff over ground already settled (frictions #WAQQSNBV, #0KT8057H).
+pub fn rulings_since(since: &str) -> Vec<String> {
+    rulings(None, Some(since))
+        .into_iter()
+        .filter_map(|item| std::fs::read_to_string(&item.path).ok())
+        .map(|text| body_of(&text))
+        .filter(|body| !body.is_empty())
+        .collect()
+}
+
+/// An item's own text, without the `+++` frontmatter mem writes above it: a
+/// prompt carries what was written, not the record's fields.
+fn body_of(text: &str) -> String {
+    match text
+        .strip_prefix("+++\n")
+        .and_then(|rest| rest.split_once("\n+++\n"))
+    {
+        Some((_, body)) => body.trim().to_string(),
+        None => text.trim().to_string(),
+    }
 }
 
 /// Every line the run itself writes, tagged so the digest can leave them out

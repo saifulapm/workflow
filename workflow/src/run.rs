@@ -1445,6 +1445,34 @@ impl Run {
                 std::fs::read_to_string(self.dir.join(format!("{task}.review.{k}"))).ok()
             })
             .collect();
+        // What the orchestrator has already settled for this task: what it
+        // answered the worker, and every ruling saved since the run began.
+        // The plan's own Rulings ride in the plan text; these do not, and a
+        // reader that never saw them blocked one diff over the same settled
+        // ground three readings running (frictions #WAQQSNBV, #0KT8057H).
+        let mut settled: Vec<(String, String)> = memcli::questions_for(&self.task_tag(task))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|q| {
+                q.answer.map(|a| {
+                    (
+                        format!("It asked: {}", brief::clip(&q.body)),
+                        brief::clip(&a),
+                    )
+                })
+            })
+            .collect();
+        // Minutes, rounded up: mem takes a window, not an epoch, and a run
+        // younger than a minute asks for the minute it is in.
+        if let Some(started) = recorded(&self.dir, "started").and_then(|v| v.parse::<i64>().ok()) {
+            let since = format!("{}m", (sys::now() - started) / 60 + 1);
+            settled.extend(memcli::rulings_since(&since).into_iter().map(|body| {
+                (
+                    "A ruling saved during this run:".to_string(),
+                    brief::clip(&body),
+                )
+            }));
+        }
         let text = reviewer::prompt(
             &plan_text,
             &t,
@@ -1455,6 +1483,7 @@ impl Run {
             &pages,
             &gate,
             &earlier,
+            &settled,
         );
         if text.len() > reviewer::PROMPT_WARN_BYTES {
             warn(format!(

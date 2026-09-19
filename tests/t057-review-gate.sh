@@ -121,6 +121,20 @@ esac
 say started
 cp "$brief" "$WF_TMP/brief-$task-$(date +%s%N)"
 case $task in
+settled)
+	# Asks once; the answer and a ruling saved while the run is live are
+	# what the reading must be told about before it reads the diff.
+	if [ ! -f "$WF_TMP/settled-answered" ]; then
+		mem ask 'may the settled service keep its draft field?' >"$WF_TMP/settled-id"
+		say "blocked asked $(cat "$WF_TMP/settled-id")"
+		printf '{"is_error":false,"result":"blocked"}\n'
+		exit 0
+	fi
+	mkdir -p app
+	printf 'settled\n' >app/settled.php
+	git add app/settled.php
+	commit 'Add the settled service'
+	;;
 hold)
 	while [ ! -f "$WF_TMP/release-hold" ]; do
 		say progress
@@ -798,3 +812,58 @@ is "$(cat "$rundir/slowread.state")" merged 'the task merged'
 is "$(cat "$rundir/slowread.review-tries")" 1 'on its first and only reading'
 unlike "$(cat "$T_TMP/slowread.log")" 'task slowread: the review ran past' \
 	'and no deadline stopped it'
+
+
+## --------------------------- the reading is told what the orchestrator settled
+
+# The review prompt carried the plan's Rulings and nothing else the
+# orchestrator had decided since: a reader blocked the same finding across
+# three readings on ground already ruled on, which the worker could neither
+# fix (rulings bind) nor ask about again (asked once). The task's answered
+# questions and the rulings saved during the run ride in front of the lenses.
+new_repo settled
+mem_register
+"$MEM_BIN" project set review-model fable >/dev/null
+"$MEM_BIN" project set verify true >/dev/null
+rm -f "$WF_TMP/settled-id" "$WF_TMP/settled-answered"
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: settled
+
+- [ ] settled The one whose question the orchestrator answers
+      Files: app/settled.php
+      Verify: true
+- [ ] side A second task, which asks nothing
+      Files: app/side.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/settled/settled"
+# The orchestrator, played by a loop: answer the question once it is asked,
+# and record the ruling it made while deciding.
+(
+	while [ ! -f "$T_TMP/settled-done" ]; do
+		if [ -s "$WF_TMP/settled-id" ] && [ ! -f "$WF_TMP/settled-answered" ]; then
+			id=$(sed 's/^#//' "$WF_TMP/settled-id")
+			"$MEM_BIN" save --kind ruling 'the draft field stays: it is the settled shape' >/dev/null 2>&1
+			"$MEM_BIN" answer "$id" 'yes: keep the draft field' >/dev/null 2>&1 &&
+				: >"$WF_TMP/settled-answered"
+		fi
+		sleep 0.3
+	done
+) &
+answerpid=$!
+
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+: >"$T_TMP/settled-done"
+wait "$answerpid"
+is "$RC" 0 'the run merges the task it answered'
+is "$(cat "$rundir/settled.state")" merged 'the task merged'
+brief=$(ls -t "$WF_TMP"/review-brief-settled-* | head -1)
+like "$(cat "$brief")" '## Already settled' 'the reading is told what was settled'
+like "$(cat "$brief")" 'It asked: may the settled service keep its draft field\?' 'naming the question'
+like "$(cat "$brief")" '\-> yes: keep the draft field' 'and the answer it was given'
+like "$(cat "$brief")" 'the draft field stays: it is the settled shape' 'with the ruling saved during the run beside it'
+like "$(cat "$brief")" 'A finding that contradicts one is not `\[blocks\]`' 'and what to do with a finding that contradicts one'
+sidebrief=$(ls -t "$WF_TMP"/review-brief-side-* | head -1)
+unlike "$(cat "$sidebrief")" 'It asked:' 'a task that asked nothing carries no answered question'
