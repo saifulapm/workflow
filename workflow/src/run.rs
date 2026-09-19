@@ -1366,6 +1366,16 @@ impl Run {
         Ok(reading)
     }
 
+    /// The integration worktree back to a commit, clean: the tree a reading
+    /// is judged against, and the tree the next reading is handed. `unwind`
+    /// is the other direction -- back to where integration stood before this
+    /// task's fast-forward, which is not what a second reading reads.
+    fn reset_int(&self, to: &str) {
+        let int = Git::at(&self.int_wt);
+        int.quiet(&["reset", "-q", "--hard", to]);
+        int.quiet(&["clean", "-fdq"]);
+    }
+
     /// Integration back to where it stood before this task's fast-forward,
     /// and the intent line cleared: the merge did not happen.
     fn unwind(&self, task: &str, prev: &str) {
@@ -1674,6 +1684,12 @@ impl Run {
                         "task {task}: {why} -- one more reading (session {})",
                         h.session
                     ));
+                    // A reader stopped at its deadline was never asked to put
+                    // the tree back, and the next reading is judged against
+                    // the tree it was handed: the first one's residue voided
+                    // reading 2 and failed a task both readings shipped
+                    // (friction #TTVGAPAW).
+                    self.reset_int(&new);
                     self.read_start(task);
                     return false;
                 }
@@ -1704,8 +1720,7 @@ impl Run {
             .out(&["status", "--porcelain"])
             .is_some_and(|s| !s.trim().is_empty());
         if dirty || int.head().as_deref() != Some(new) {
-            int.quiet(&["reset", "-q", "--hard", new]);
-            int.quiet(&["clean", "-fdq"]);
+            self.reset_int(new);
             return Err("the reviewer changed the tree, which voids the reading".into());
         }
         let text = std::fs::read_to_string(answer).unwrap_or_default();

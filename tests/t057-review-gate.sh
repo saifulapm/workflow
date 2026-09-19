@@ -68,6 +68,18 @@ case $task in
 		echo 'Error: this session is not logged in.' >&2
 		sleep 30
 		;;
+	residue-review)
+		# The first reading leaves a stray file in the integration
+		# worktree and is still going when its deadline stops it; the
+		# second reads a clean tree and ships.
+		if [ -f "$WF_TMP/residue-read" ]; then
+			printf 'VERDICT: ship\n' >"$answer"
+		else
+			: >"$WF_TMP/residue-read"
+			printf 'stray\n' >"$wt/app/stray.txt"
+			sleep 5
+		fi
+		;;
 	t3-review)
 		mem ask 'may I run the suite myself?' >/dev/null 2>&1
 		printf 'meddling\n' >"$wt/app/t3.php"
@@ -705,3 +717,36 @@ rm -f "$WF_TMP/hold-slowgate-verify"
 wait "$runpid"
 is "$?" 0 'the run goes on to merge it once the suite and the reading both clear'
 is "$(cat "$rundir/slowgate.state")" merged 'the task merged'
+
+## --------------------------- a reader stopped at its deadline leaves residue
+
+# A reading the deadline stops is never asked to put the tree back, and the
+# next reading is judged against the tree it was handed: the first reader's
+# stray file voided reading 2 and failed a task both readings would have
+# shipped. The deadline branch resets and cleans integration before the
+# second reader starts.
+new_repo residue
+mem_register
+"$MEM_BIN" project set review-model fable >/dev/null
+"$MEM_BIN" project set verify true >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: residue
+
+- [ ] residue The one whose first reader is stopped at its deadline
+      Files: app/residue.php
+      Verify: true
+- [ ] side A second task, so the plan is worth a worker
+      Files: app/side.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/residue/residue"
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_DEADLINE_MIN=0.05 workflow run
+is "$RC" 0 'the run merges past a reading its deadline stopped'
+is "$(cat "$rundir/residue.state")" merged 'the task the second reader shipped is merged'
+is "$(cat "$rundir/residue.review-tries")" 2 'after two readings'
+like "$OUT" 'ran past its 3 second deadline' 'the first of them stopped at the deadline'
+unlike "$OUT" 'voids the reading' 'and its residue voided neither reading'
+is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/residue/residue/_integration" status --porcelain | wc -l)" 0 \
+	'with the integration worktree clean'
