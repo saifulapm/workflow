@@ -97,7 +97,11 @@ cat >"$T_TMP/plan.md" <<'PLAN'
 PLAN
 rundir="$XDG_STATE_HOME/workflow/runs/app/paused-worker"
 
-env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.05 \
+# Twelve seconds, not three: the setup below -- waiting for the dispatch,
+# then sitting out two polls -- has to fit inside the deadline with room to
+# spare, and on a loaded machine a three-second budget was spent before the
+# test got to what it measures (friction #CK3VG63H).
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.2 \
 	workflow run --plan-file "$T_TMP/plan.md" >"$T_TMP/run.log" 2>&1 &
 runpid=$!
 
@@ -109,7 +113,7 @@ is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 'the worker is dispatched'
 
 # Two polls' worth of waiting, well short of the stall deadline: a paused
 # worker used to be collected on the very next pass.
-sleep 0.7
+sleep 2.5
 is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched \
 	'paused -- listed, not alive, nothing past "started" -- is not collected before the deadline'
 

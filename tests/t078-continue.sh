@@ -202,7 +202,10 @@ PLAN
 "$MEM_BIN" project set review-model none >/dev/null
 workflow run --plan-file "$T_TMP/ask.md" >"$T_TMP/ask.log" 2>&1 &
 runpid=$!
-for _ in $(seq 1 100); do
+# Thirty seconds, not ten: the deadline exported above makes the poll three
+# seconds wide, and three polls is no margin at all beside a loaded machine
+# (friction #CK3VG63H).
+for _ in $(seq 1 300); do
 	[ -s "$WF_TMP/ask-id" ] && grep -q 'waiting on' "$T_TMP/ask.log" && break
 	sleep 0.1
 done
