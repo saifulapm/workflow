@@ -370,6 +370,9 @@ pub struct Run {
     /// gives a task one more try, reap fails it and names who tries it next
     /// (friction #F6MR6AMH).
     pub collecting: bool,
+    /// The plan of record as it last read when it would not parse, so the
+    /// refusal is said once per text rather than on every poll.
+    unparsable: String,
     made: Vec<PathBuf>,
 }
 
@@ -476,6 +479,58 @@ impl Run {
             ));
         }
         new
+    }
+
+    /// Once a poll: the plan of record put where everything that is not this
+    /// process reads it.
+    ///
+    /// `<run dir>/plan.md` is written at setup and read after that by
+    /// `status`, `wait` and `reap`; `<task>.verify` is written at dispatch
+    /// and read by the pre-commit hook inside a live worker's worktree. So
+    /// four amendments to a plan mid-run reached neither, and a worker had to
+    /// rewrite its own Verify line by hand for the hook to let its commit
+    /// through (friction #TDCT9VD8). Both are brought up to the plan as it
+    /// reads now, for every task a worker still has.
+    ///
+    /// A plan of record that does not parse is said here too. `plan::parse`
+    /// answers `None` for the whole document when one appended task is
+    /// missing a Files: line or names a dependency that is not there, which
+    /// voids the re-read and leaves the run on the copy it started with --
+    /// silently, and for the rest of the run (friction #3QY5J9BS). Said once
+    /// per text: the orchestrator is editing, and every poll would be a
+    /// wall.
+    fn refresh(&mut self) {
+        let Some(text) = self.plan_text() else {
+            return;
+        };
+        let parsed = plan::parse(&text, true).filter(|p| p.plan_id == self.plan.plan_id);
+        let Some(parsed) = parsed else {
+            if self.unparsable != text {
+                self.unparsable = text;
+                let why = plan::first_complaint()
+                    .unwrap_or_else(|| format!("it is not the plan {}", self.plan.plan_id));
+                warn(format!(
+                    "run {}: the plan of record does not parse ({why}); the run is still using the copy it started with",
+                    self.plan.plan_id
+                ));
+            }
+            return;
+        };
+        self.unparsable.clear();
+        let file = self.dir.join("plan.md");
+        if std::fs::read_to_string(&file).unwrap_or_default() != text {
+            let _ = std::fs::write(&file, &text);
+        }
+        for task in self.dispatched() {
+            if let Some(t) = parsed.get(&task) {
+                write_field(
+                    &self.dir,
+                    &task,
+                    "verify",
+                    t.verify.as_deref().unwrap_or(""),
+                );
+            }
+        }
     }
 
     /// The plan of record as it reads right now: the `--plan-file`, else
@@ -1035,6 +1090,10 @@ impl Run {
             self.advisor.as_deref(),
             &brief_file,
         );
+        // The hook in that worktree reads this file, not the brief: a task
+        // sent back to its own worker was still held to the Verify line of
+        // the plan as it read at dispatch (friction #TDCT9VD8).
+        write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
         let _ = std::fs::write(&status, "");
         let line = format!(
             "Read {} again: it now says what happened to your last report and what to do \
@@ -3330,6 +3389,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         env: Vec::new(),
         collecting: false,
+        unparsable: String::new(),
         made: Vec::new(),
     }
 }
@@ -3624,6 +3684,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         if !run.take_new_tasks().is_empty() {
             all_ids = run.plan.ids();
         }
+        run.refresh();
         // `workflow accept <task>`: a task the run settled as failed landed
         // over the reader's findings. Read before anything is dispatched, or
         // a task whose marker was written while this run was starting is

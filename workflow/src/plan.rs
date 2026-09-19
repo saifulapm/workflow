@@ -3,9 +3,35 @@
 //! Every hard error is reported before the parse gives up, so one run tells the
 //! author everything wrong with the file; unknown keys are warnings.
 
+use std::cell::RefCell;
+
 use serde::Serialize;
 
 use crate::warn;
+
+thread_local! {
+    /// What the last [`parse`] refused over, in the order it found them.
+    /// Said on stderr as ever; kept as well because a caller that re-reads
+    /// the plan of record every poll has to explain the `None` rather than
+    /// print it again (friction #3QY5J9BS).
+    static COMPLAINTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A complaint that makes the parse fail, as against a warning it goes on
+/// past.
+fn complain(msg: String) {
+    warn(&msg);
+    COMPLAINTS.with_borrow_mut(|c| c.push(msg));
+}
+
+/// The first thing the last [`parse`] on this thread refused over, with its
+/// `plan: ` prefix taken off. `None` when that parse was happy.
+pub fn first_complaint() -> Option<String> {
+    COMPLAINTS.with_borrow(|c| {
+        c.first()
+            .map(|m| m.strip_prefix("plan: ").unwrap_or(m).to_string())
+    })
+}
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Task {
@@ -243,6 +269,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     let mut seen_header = false;
     let mut cur: Option<usize> = None;
     let mut rc = true;
+    COMPLAINTS.with_borrow_mut(|c| c.clear());
 
     for (i, line) in text.lines().enumerate() {
         let n = i + 1;
@@ -256,7 +283,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                     // The slug names branches and directories, so it has to be
                     // something git will accept as a ref component.
                     if slug.contains("..") || slug.ends_with(".lock") || slug.ends_with('.') {
-                        warn(format!("plan: '{slug}' cannot be a branch name"));
+                        complain(format!("plan: '{slug}' cannot be a branch name"));
                         return None;
                     }
                     plan.plan_id = slug;
@@ -265,7 +292,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                     continue;
                 }
                 None => {
-                    warn(format!(
+                    complain(format!(
                         "plan: line {n}: the first line must be '# plan: <slug>' or '# roadmap: <slug>'"
                     ));
                     return None;
@@ -275,7 +302,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
 
         if let Some((checked, id, rest)) = task_line(line, plan.kind.max_id()) {
             if plan.get(&id).is_some() {
-                warn(format!("plan: line {n}: task id '{id}' appears twice"));
+                complain(format!("plan: line {n}: task id '{id}' appears twice"));
                 rc = false;
             }
             let (title, deps) = split_after(&rest);
@@ -303,7 +330,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
         // rather than the two the grammar accepts: `- [X]` falling through is
         // exactly that failure, one spelling further out.
         if opens_a_checkbox(line) {
-            warn(format!("plan: line {n}: this is not a task line: {line}"));
+            complain(format!("plan: line {n}: this is not a task line: {line}"));
             warn(format!(
                 "plan: the box is [ ] or [x], and the id is 1-{} characters of a-z, 0-9 and -, starting with a letter or digit",
                 plan.kind.max_id()
@@ -343,7 +370,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                 }
             };
             if slot.is_some() {
-                warn(format!("plan: line {n}: task {id} has two {key}: lines"));
+                complain(format!("plan: line {n}: task {id} has two {key}: lines"));
                 rc = false;
             }
             *slot = Some(value);
@@ -354,11 +381,11 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     }
 
     if !seen_header {
-        warn("plan: no '# plan: <slug>' or '# roadmap: <slug>' header");
+        complain("plan: no '# plan: <slug>' or '# roadmap: <slug>' header".to_string());
         return None;
     }
     if plan.tasks.is_empty() {
-        warn("plan: no tasks");
+        complain("plan: no tasks".to_string());
         return None;
     }
 
@@ -366,7 +393,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
     for t in &plan.tasks {
         for d in &t.deps {
             if !known.contains(d) {
-                warn(format!(
+                complain(format!(
                     "plan: task {} waits for '{d}', which is not a task in this plan",
                     t.id
                 ));
@@ -375,11 +402,11 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
         }
         if require_files && plan.kind == PlanKind::Plan {
             if t.files.as_deref().unwrap_or("").is_empty() {
-                warn(format!("plan: task {} has no Files: line", t.id));
+                complain(format!("plan: task {} has no Files: line", t.id));
                 rc = false;
             }
             if t.verify.as_deref().unwrap_or("").is_empty() {
-                warn(format!("plan: task {} has no Verify: line", t.id));
+                complain(format!("plan: task {} has no Verify: line", t.id));
                 rc = false;
             }
         }
@@ -446,7 +473,7 @@ fn waves(plan: &Plan) -> Option<Vec<Vec<String>>> {
                 .filter(|t| !done.contains(&t.id))
                 .map(|t| t.id.clone())
                 .collect();
-            warn(format!(
+            complain(format!(
                 "plan: these tasks wait on each other in a circle: {}",
                 left.join(" ")
             ));

@@ -74,6 +74,23 @@ for _ in $(seq 1 150); do
 done
 is "$(cat "$rundir/t2.state" 2>/dev/null)" merged 't2 merged while t1 still runs'
 
+## ------------------------- an amendment reaches the files a worker reads
+
+# t1's Verify, amended while its worker holds the worktree. The pre-commit
+# hook in that worktree reads <task>.verify, written at dispatch, and status,
+# wait and reap read the run dir's copy of the plan, written at setup -- so
+# four amendments used to reach neither and the worker had to rewrite its own
+# Verify line for the hook to let its commit through (friction #TDCT9VD8).
+sed -i '0,/^      Verify: true$/s//      Verify: test -f wanted/' "$T_TMP/grow.md"
+for _ in $(seq 1 150); do
+	[ "$(cat "$rundir/t1.verify" 2>/dev/null)" = 'test -f wanted' ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.verify")" 'test -f wanted' \
+	"a live task's own verify command follows the plan of record"
+is "$(cat "$rundir/plan.md")" "$(cat "$T_TMP/grow.md")" \
+	"and the run dir's copy of the plan is the plan as it reads now"
+
 cat >>"$T_TMP/grow.md" <<'EOF2'
 - [ ] t3 Added while the run is live  [after: t2]
       Files: app/t3.php
@@ -87,7 +104,40 @@ done
 is "$(cat "$rundir/t3.state" 2>/dev/null)" merged 'the added task is dispatched and merged by the live run'
 like "$(cat "$T_TMP/grow.log")" 'task t3: added to the plan while the run is live -- pending' 'and the log says it joined'
 
+## ------------------------------ an amendment the grammar refuses is said
+
+# The parser answers None for the whole document when one appended task is
+# slightly off, so a Verify line left out voids the entire re-read and the
+# run goes on with the copy it started with -- silently, and for the rest of
+# the run (friction #3QY5J9BS). Said once per text: the orchestrator is
+# editing, and every poll would be a wall.
+: >"$WF_TMP/go-t4"
+cat >>"$T_TMP/grow.md" <<'EOF2'
+- [ ] t4 Appended without a Verify line
+      Files: app/t4.php
+EOF2
+
+for _ in $(seq 1 150); do
+	grep -q 'does not parse' "$T_TMP/grow.log" && break
+	sleep 0.2
+done
+like "$(cat "$T_TMP/grow.log")" \
+	'run grow: the plan of record does not parse \(task t4 has no Verify: line\); the run is still using the copy it started with' \
+	'the run says the re-read was void, and what the parser stopped on'
+sleep 1
+is "$(grep -c 'does not parse' "$T_TMP/grow.log")" 1 'once for that text, not once a poll'
+is "$(cat "$rundir/t4.state" 2>/dev/null)" '' 'and nothing is dispatched for a task the grammar refused'
+
+# Repaired: the same plan parses, and the task joins the live run.
+printf '      Verify: true\n' >>"$T_TMP/grow.md"
+for _ in $(seq 1 150); do
+	[ "$(cat "$rundir/t4.state" 2>/dev/null)" = merged ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t4.state" 2>/dev/null)" merged 'the repaired task is dispatched and merged by the live run'
+is "$(grep -c 'does not parse' "$T_TMP/grow.log")" 1 'and the refusal is not said again'
+
 : >"$WF_TMP/release-t1"
 wait "$runpid"
-is "$?" 0 'the run ends with all three merged'
+is "$?" 0 'the run ends with all four merged'
 like "$(cat "$T_TMP/grow.md")" '\[x\] t3' 'and ticks the added task off in the plan it came from'
