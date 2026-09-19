@@ -39,5 +39,8 @@ means the answer carries `[blocks]` findings — fix them, then read again.
 Two reads with a `[blocks]` finding still open is not a third read: it is
 the ruling-and-ask stop — `mem save --kind ruling` naming what is
 unresolved, `mem ask` to the human. Exit 2 names no reader configured (`mem
-project set review-model`); exit 3 means no verdict came back, the reason
-on stderr.
+project set review-model`), or nothing to read; exit 3 means no verdict came
+back, the reason on stderr. The verdict is the last line on stdout too,
+`read: verdict ship|fix|none`, and sits in `read.verdict` beside the answer
+file: an exit code does not survive a relay — a read issued through `amx
+sub` comes back with the agent's own ending — and stdout does.

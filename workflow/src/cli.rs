@@ -280,7 +280,7 @@ usage: workflow <command> [options]
       0 every task complete · 1 failed tasks · 2 config or plan error
   read [--range <r>] [--against <text>]
       start the gate's own reader over a working tree or a range
-      0 ship · 1 fix · 2 no reader named · 3 no verdict
+      0 ship · 1 fix · 2 no reader named, or nothing to read · 3 no verdict
   advise <question> [--file <path>]... [--against <text>]
       ask a stronger model at a decision point, without ending your turn
       0 answered · 1 no answer · 2 nobody named, or a fourth consult

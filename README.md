@@ -133,8 +133,10 @@ Three sizes of work, three moves:
 
 A diff can be read before it is committed. `workflow read` starts the
 gate's own reader, cold, over the working tree (`--range <r>` for a range)
-and prints its verdict: exit 0 ships, 1 is fix, 2 is nobody named to read,
-3 is a reading that ended with no verdict. `--against "<one sentence>"` or
+and prints its verdict: exit 0 ships, 1 is fix, 2 is nobody named to read or
+nothing to read, 3 is a reading that ended with no verdict. The verdict is
+the last line on stdout and sits in `read.verdict` too, for a caller the exit
+code cannot reach. `--against "<one sentence>"` or
 `--against wiki:<slug>` says what the diff is held to; without it the plan
 of record stands in. Route sends a one-shot past sixty changed lines through
 it before the commit, and the review skill is this verb.

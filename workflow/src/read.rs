@@ -1,7 +1,8 @@
 //! `workflow read` -- the merge gate's own reader, started by hand over a
 //! working tree or a range, for the one-shot lane and the review skill (see
 //! wiki:merge-gate). No run, no worktree of its own: one prompt, one reader,
-//! one verdict file, and the exit code says what it found.
+//! one verdict file, and the exit code says what it found -- with the same
+//! word on stdout and in `read.verdict`, for a caller a relay stands between.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -152,6 +153,21 @@ fn requirement(against: Option<&str>) -> String {
         .unwrap_or_else(|| DEFAULT_REQUIREMENT.to_string())
 }
 
+/// The verdict where a caller can read it when the exit code cannot reach
+/// it: `<dir>/read.verdict` -- `ship`, `fix` or `none: <reason>` -- and one
+/// last line on stdout. A read issued across an `amx sub` boundary comes back
+/// with the agent's own ending, and a reading that found nothing was read as
+/// a ship (friction #W7XZQ20A); stdout survives that relay, an exit code and
+/// stderr do not.
+fn said(dir: &Path, verdict: &str, why: &str) {
+    let text = match why.is_empty() {
+        true => verdict.to_string(),
+        false => format!("{verdict}: {why}"),
+    };
+    let _ = std::fs::write(dir.join("read.verdict"), format!("{text}\n"));
+    println!("read: verdict {verdict}");
+}
+
 /// The first thing something said, for a refusal that fits on one line.
 fn first_line(text: &str, fallback: &str) -> String {
     text.lines()
@@ -215,12 +231,12 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         Ok(v) => v,
         Err(line) => {
             warn(format!("read: {line}"));
-            return NO_VERDICT;
+            return exit::USAGE;
         }
     };
     if diff.trim().is_empty() {
         warn("read: nothing to read -- no diff and no untracked files");
-        return NO_VERDICT;
+        return exit::USAGE;
     }
 
     let requirement = requirement(against);
@@ -329,6 +345,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     }
 
     if let Some(line) = advise::ending_line("read", "the reading", &c, &d, deadline_s, &answer) {
+        said(&dir, "none", &line);
         warn(line);
         return NO_VERDICT;
     }
@@ -337,13 +354,16 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     match reviewer::verdict(&text) {
         Some(Verdict::Ship) => {
             print!("{text}");
+            said(&dir, "ship", "");
             exit::OK
         }
         Some(Verdict::Fix) => {
             print!("{text}");
+            said(&dir, "fix", "");
             exit::FAILED
         }
         None => {
+            said(&dir, "none", "the reading wrote no verdict");
             warn(format!("read: no verdict -- read {}", answer.display()));
             NO_VERDICT
         }

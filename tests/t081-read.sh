@@ -49,10 +49,16 @@ like "$OUT" 'mem project set review-model' 'naming the remedy'
 
 ## ------------------------------------------------------------- a clean diff
 
+# verdict_file -- the read.verdict of the newest read directory, which is
+# where a caller that cannot see the exit code reads what came back.
+verdict_file() { ls -t "$XDG_STATE_HOME"/workflow/runs/app/_read/*/read.verdict | head -1; }
+
 printf 'good\n' >app/t1.php
 run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
 is "$RC" 0 'a diff the reader ships exits 0'
 like "$OUT" 'VERDICT: ship' 'and prints the verdict file'
+like "$OUT" '^read: verdict ship$' 'with the verdict as its own last line on stdout'
+is "$(cat "$(verdict_file)")" ship 'and in read.verdict, where an exit code need not reach'
 
 ## --------------------------------------------------------------- a bad diff
 
@@ -60,6 +66,8 @@ printf 'bad\n' >app/t1.php
 run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
 is "$RC" 1 'a diff the reader wants fixed exits 1'
 like "$OUT" '\[blocks\] app/bad.php:1' 'and prints the findings'
+like "$OUT" '^read: verdict fix$' 'and says fix on stdout'
+is "$(cat "$(verdict_file)")" fix 'and in read.verdict'
 
 ## ------------------------------------------------------- no verdict at all
 
@@ -67,6 +75,8 @@ printf 'quiet\n' >app/t1.php
 run env WORKFLOW_REVIEW_DEADLINE_MIN=0.05 workflow read
 is "$RC" 3 'a reading that ends with no verdict exits 3'
 like "$OUT" 'no verdict -- read .*\.review$' 'naming the answer file'
+like "$OUT" '^read: verdict none$' 'and says so on stdout, which a relay does not eat'
+like "$(cat "$(verdict_file)")" '^none: ' 'read.verdict carries the word and the reason'
 
 ## ----------------------------------------- the prompt carries what it reads
 
@@ -118,7 +128,7 @@ rm -f app/logo.png app/doc.md
 
 git checkout -q -- app/t1.php
 run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read --range no-such-ref..also-none
-is "$RC" 3 'a range git cannot resolve is refused'
+is "$RC" 2 'a range git cannot resolve is refused as usage, not as a missing verdict'
 like "$OUT" 'read: fatal' 'naming what git said'
 
 printf 'good\n' >app/t1.php
@@ -126,6 +136,6 @@ git add app/t1.php
 git checkout -q --orphan fresh
 printf 'a scratch note\n' >app/notes.txt
 run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
-is "$RC" 3 'an unborn HEAD is refused, not read as untracked files alone'
+is "$RC" 2 'an unborn HEAD is refused, not read as untracked files alone'
 like "$OUT" 'read: fatal' 'naming what git said about HEAD'
 rm -f app/notes.txt
