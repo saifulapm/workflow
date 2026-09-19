@@ -172,6 +172,33 @@ rsess=$(cat "$XDG_STATE_HOME/workflow/runs/app/panes/t1.review-session")
 saw "sub|--bg|--json|--name|$rsess|--parent|$sess|--dir|$wt/_integration|--no-worktree|--role|reader|--model|fable|--effort|high|Read $XDG_STATE_HOME/workflow/runs/app/panes/t1.review-prompt and execute it exactly." \
 	'and --effort for the reader'
 
+## --------------------------- the start line names where each dial came from
+
+# The record this plan wrote when it began beats the project key, on purpose
+# (#7GVER0M5) -- so a `mem project set` between two runs of the same plan is
+# ignored, and a run that never said which it kept left an orchestrator
+# reading the run directory to find out why (frictions #D535K4EF,
+# #G2R8CYFH). The second run of `panes` below runs after both keys changed.
+"$MEM_BIN" project set model haiku >/dev/null
+"$MEM_BIN" project set effort low >/dev/null
+run workflow run --plan-file "$T_TMP/panes.md"
+is "$RC" 0 'the plan is already merged, so the second run has nothing to do'
+like "$OUT" "run panes: writing with opus \(the run's record\) at effort max \(the run's record\), reading with fable \(the run's record\) at effort high \(the run's record\)" \
+	'the run says what it writes and reads with, and that it kept its own record over the changed keys'
+
+## ------------------------------- and a flag rewrites that record
+
+# Without this the only way to change a dial a run recorded was to edit the
+# run directory by hand.
+run workflow run --plan-file "$T_TMP/panes.md" --model glm --review-effort low
+is "$RC" 0 'a run with the dials named goes ahead'
+like "$OUT" 'run panes: model is now glm in this run.s record' 'it says what it rewrote'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/app/panes/model")" glm 'and the record carries it'
+like "$OUT" "run panes: writing with glm \(the run's record\) at effort max \(the run's record\), reading with fable \(the run's record\) at effort low \(the run's record\)" \
+	'the start line reads back what the flags put there'
+"$MEM_BIN" project unset model >/dev/null
+"$MEM_BIN" project set effort max >/dev/null
+
 ## ----------------------------------------------- unset is the way back
 
 "$MEM_BIN" project unset effort >/dev/null

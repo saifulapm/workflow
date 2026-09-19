@@ -361,6 +361,9 @@ pub struct Run {
     /// `mem project set review-effort`. Independent of `effort`: a cheap
     /// worker turned up does not turn the frontier reader up with it.
     pub review_effort: Option<String>,
+    /// The four dials above as one line, each naming the rung it came off,
+    /// for the run to say at its start (see [`dial_line`]).
+    pub dials: String,
     /// Raised by SIGTERM, SIGINT or SIGHUP. The poll loop reads it between
     /// passes, and the stop takes a reader down with the workers.
     pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1141,15 +1144,20 @@ impl Run {
             self.fail_task(task, "the plan of record no longer holds this task");
             return;
         };
-        // The pane the last attempt had, ended and still on the backend's
-        // books: amx parks an idle one and takes its time releasing it, and
-        // the fresh session minted a second later came up in a pane the park
-        // had not finished with -- "dispatch race: the worker never started",
+        // The pane the last attempt had, still on the backend's books: amx
+        // parks an idle one and takes its time releasing it, and the fresh
+        // session minted two seconds later came up in a pane the park had
+        // not finished with -- "dispatch race: the worker never started",
         // with the attempt's worktree already gone (friction #RN9DB37H). Stop
-        // it and wait the kill grace out before minting anything.
-        if !self.field(task, "session").is_empty() && self.backend.seen(&self.handle(task)) {
+        // it, then wait for the listing to go before minting anything, up to
+        // the kill grace.
+        let old = self.handle(task);
+        if !old.session.is_empty() && self.backend.seen(&old) {
             self.stop(task);
-            sys::sleep(self.kill_grace_s as f64);
+            let give_up = sys::now() + self.kill_grace_s;
+            while self.backend.listed(&old) && sys::now() < give_up {
+                sys::sleep(0.2);
+            }
         }
         self.catch_up(task);
         self.own_deps(task);
@@ -3295,26 +3303,81 @@ pub(crate) fn backend_for() -> Box<dyn WorkerBackend> {
     }
 }
 
+/// Which rung of the ladder a dial's value came off, so the run can say it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Dialed {
+    Env,
+    Record,
+    Project,
+    Default,
+}
+
+impl Dialed {
+    fn as_str(self) -> &'static str {
+        match self {
+            Dialed::Env => "the environment",
+            Dialed::Record => "the run's record",
+            Dialed::Project => "the project",
+            Dialed::Default => "the default",
+        }
+    }
+}
+
 /// A dial a run may or may not carry -- the reader, the two effort levels --
 /// resolved the way `new_run` describes: the variable set, even empty, is
 /// the answer for this run; else what a `setup` of this plan recorded, an
-/// empty record meaning none; else the project key.
+/// empty record meaning none; else the project key. The rung rides back with
+/// the value: a run that keeps a record over a project key changed since is
+/// doing what it was told to, and it has to say so (friction #D535K4EF).
 fn optional_dial(
     var: &str,
     recorded: Option<String>,
     project: impl FnOnce() -> Option<String>,
-) -> Option<String> {
+) -> (Option<String>, Dialed) {
     match std::env::var(var) {
-        Ok(v) => Some(v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .filter(|v| !v.eq_ignore_ascii_case("none")),
-        Err(_) => match recorded {
-            Some(v) => Some(v)
+        Ok(v) => (
+            Some(v.trim().to_string())
                 .filter(|v| !v.is_empty())
                 .filter(|v| !v.eq_ignore_ascii_case("none")),
-            None => project(),
+            Dialed::Env,
+        ),
+        Err(_) => match recorded {
+            Some(v) => (
+                Some(v)
+                    .filter(|v| !v.is_empty())
+                    .filter(|v| !v.eq_ignore_ascii_case("none")),
+                Dialed::Record,
+            ),
+            None => (project(), Dialed::Project),
         },
     }
+}
+
+/// The run's dials as one line, each naming where it came from. Printed at
+/// the start, because the precedence -- environment, then this plan's own
+/// record, then the project key -- is deliberate (#7GVER0M5) and a run that
+/// never said which it kept left an orchestrator reading the run directory
+/// to find out why `mem project set model` had no effect (frictions
+/// #D535K4EF, #G2R8CYFH).
+fn dial_line(
+    model: (&str, Dialed),
+    effort: (Option<&str>, Dialed),
+    review: (Option<&str>, Dialed),
+    review_effort: (Option<&str>, Dialed),
+) -> String {
+    let at = |(level, from): (Option<&str>, Dialed)| match level {
+        Some(l) => format!(" at effort {l} ({})", from.as_str()),
+        None => String::new(),
+    };
+    format!(
+        "writing with {} ({}){}, reading with {} ({}){}",
+        model.0,
+        model.1.as_str(),
+        at(effort),
+        review.0.unwrap_or("nobody"),
+        review.1.as_str(),
+        at(review_effort),
+    )
 }
 
 /// A `setup` of this same plan may already have written `model`,
@@ -3337,7 +3400,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let recorded_effort = recorded(&dir, "effort");
     let recorded_review_effort = recorded(&dir, "review-effort");
     let recorded_advisor = recorded(&dir, "advisor");
-    let review_model = optional_dial(
+    let (review_model, review_from) = optional_dial(
         "WORKFLOW_REVIEW_MODEL",
         recorded_review,
         memcli::project_review_model,
@@ -3345,7 +3408,25 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     // The advisor has no project key of its own (mem's keys are a closed
     // set), so past the override and the record it is the reader.
     let advisor = optional_dial("WORKFLOW_ADVISOR", recorded_advisor, || None)
+        .0
         .or_else(|| review_model.clone());
+    let (model, model_from) = match std::env::var("WORKFLOW_MODEL") {
+        Ok(v) if !v.is_empty() => (v, Dialed::Env),
+        _ => match recorded_model.filter(|v| !v.is_empty()) {
+            Some(v) => (v, Dialed::Record),
+            None => match memcli::project_model() {
+                Some(v) => (v, Dialed::Project),
+                None => ("opus".to_string(), Dialed::Default),
+            },
+        },
+    };
+    let (effort, effort_from) =
+        optional_dial("WORKFLOW_EFFORT", recorded_effort, memcli::project_effort);
+    let (review_effort, review_effort_from) = optional_dial(
+        "WORKFLOW_REVIEW_EFFORT",
+        recorded_review_effort,
+        memcli::project_review_effort,
+    );
     Run {
         dir,
         brief_dir: paths::briefs_root().join(project).join(&plan.plan_id),
@@ -3364,26 +3445,23 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         question_misses,
         max_workers,
         backend: backend_for(),
-        model: match std::env::var("WORKFLOW_MODEL") {
-            Ok(v) if !v.is_empty() => v,
-            _ => recorded_model
-                .filter(|v| !v.is_empty())
-                .or_else(memcli::project_model)
-                .unwrap_or_else(|| "opus".into()),
-        },
+        dials: dial_line(
+            (&model, model_from),
+            (effort.as_deref(), effort_from),
+            (review_model.as_deref(), review_from),
+            (review_effort.as_deref(), review_effort_from),
+        ),
+        model,
         review_model,
         advisor,
         fix_model: optional_dial(
             "WORKFLOW_FIX_MODEL",
             recorded_fix,
             memcli::project_fix_model,
-        ),
-        effort: optional_dial("WORKFLOW_EFFORT", recorded_effort, memcli::project_effort),
-        review_effort: optional_dial(
-            "WORKFLOW_REVIEW_EFFORT",
-            recorded_review_effort,
-            memcli::project_review_effort,
-        ),
+        )
+        .0,
+        effort,
+        review_effort,
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         env: Vec::new(),
         collecting: false,
@@ -3392,7 +3470,13 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     }
 }
 
-pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
+pub fn cmd_run(
+    plan_file: Option<&Path>,
+    model: Option<&str>,
+    review_model: Option<&str>,
+    effort: Option<&str>,
+    review_effort: Option<&str>,
+) -> i32 {
     if !Git::here().inside_worktree() {
         warn("run: stand in the project checkout");
         return exit::USAGE;
@@ -3452,6 +3536,32 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     if !checked.refusals.is_empty() {
         warn("run: plan-check refuses this plan -- fix it before running");
         return exit::USAGE;
+    }
+
+    // The four dials, rewritten in the run directory before anything reads
+    // them. A record a run wrote when it began is preferred to the project
+    // key on purpose (#7GVER0M5), so a plan picked up again keeps the model
+    // it started on however the project has changed since -- and editing the
+    // run directory by hand was the only way to change that (friction
+    // #G2R8CYFH). The value stands for every later run of this plan too.
+    let run_dir = paths::runs_root()
+        .join(project.dir_name())
+        .join(&parsed.plan_id);
+    for (name, value) in [
+        ("model", model),
+        ("review-model", review_model),
+        ("effort", effort),
+        ("review-effort", review_effort),
+    ] {
+        let Some(value) = value else {
+            continue;
+        };
+        let _ = std::fs::create_dir_all(&run_dir);
+        let _ = std::fs::write(run_dir.join(name), format!("{value}\n"));
+        warn(format!(
+            "run {}: {name} is now {value} in this run's record",
+            parsed.plan_id
+        ));
     }
 
     let Some(base) = git.head() else {
@@ -3587,6 +3697,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         run.plan.tasks.len(),
         run.max_workers
     ));
+    warn(format!("run {}: {}", run.plan.plan_id, run.dials));
 
     // Classified once, in plan order, before the loop dispatches anything.
     for id in run.plan.ids() {
@@ -4468,29 +4579,55 @@ mod tests {
         let var = "WORKFLOW_TEST_OPTIONAL_DIAL_NONE";
         unsafe { std::env::remove_var(var) };
 
-        // A recorded value spelling "none", env unset: filtered to nothing.
+        // A recorded value spelling "none", env unset: filtered to nothing,
+        // and the record is still the rung it came off.
         assert_eq!(
             optional_dial(var, Some("NoNe".to_string()), || Some("opus".to_string())),
-            None
+            (None, Dialed::Record)
         );
         // A recorded value that is not "none" passes through untouched.
         assert_eq!(
             optional_dial(var, Some("opus".to_string()), || None),
-            Some("opus".to_string())
+            (Some("opus".to_string()), Dialed::Record)
         );
         // A project key spelling "none" is not this function's to filter --
         // memcli::project_review_model already does that for its own caller.
         assert_eq!(
             optional_dial(var, None, || Some("none".to_string())),
-            Some("none".to_string())
+            (Some("none".to_string()), Dialed::Project)
         );
 
         unsafe { std::env::set_var(var, "NONE") };
         assert_eq!(
             optional_dial(var, Some("opus".to_string()), || Some("opus".to_string())),
-            None
+            (None, Dialed::Env)
         );
         unsafe { std::env::remove_var(var) };
+    }
+
+    #[test]
+    fn the_start_line_names_the_rung_each_dial_came_off() {
+        assert_eq!(
+            dial_line(
+                ("opus", Dialed::Record),
+                (Some("max"), Dialed::Env),
+                (Some("fable"), Dialed::Project),
+                (Some("high"), Dialed::Project),
+            ),
+            "writing with opus (the run's record) at effort max (the environment), \
+reading with fable (the project) at effort high (the project)"
+        );
+        // Nothing set for either effort is no flag and no clause; nobody
+        // reading is said in the same breath as where that came from.
+        assert_eq!(
+            dial_line(
+                ("opus", Dialed::Default),
+                (None, Dialed::Project),
+                (None, Dialed::Record),
+                (None, Dialed::Project),
+            ),
+            "writing with opus (the default), reading with nobody (the run's record)"
+        );
     }
 
     #[test]

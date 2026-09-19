@@ -67,10 +67,32 @@ dispatches the first wave for real."
         json: bool,
     },
     /// Run a plan's tasks in worktrees. This dispatches real workers.
+    #[command(
+        long_about = "Run a plan's tasks in worktrees. This dispatches real workers.
+
+The run says at its start what it writes and reads with and where each dial
+came from -- the environment, this plan's own record, the project key -- since
+a plan picked up again keeps the record it wrote when it began whatever the
+project keys say by then. The four flags here rewrite that record before the
+run reads it, so `--model opus` changes what a resumed run dispatches on, and
+keeps it for every later run of this plan."
+    )]
     Run {
         /// A plan file, instead of this project's plan in mem.
         #[arg(long = "plan-file", value_name = "FILE")]
         plan_file: Option<PathBuf>,
+        /// Record this as the model this plan's workers write with.
+        #[arg(long, value_name = "NAME")]
+        model: Option<String>,
+        /// Record this as the model that reads this plan's merges.
+        #[arg(long = "review-model", value_name = "NAME")]
+        review_model: Option<String>,
+        /// Record this as the workers' reasoning level.
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
+        /// Record this as the reader's reasoning level.
+        #[arg(long = "review-effort", value_name = "LEVEL")]
+        review_effort: Option<String>,
     },
     /// Start the gate's own reader over a working tree or a range, and print its verdict.
     #[command(
@@ -279,8 +301,11 @@ usage: workflow <command> [options]
   plan-check <file> [--json]
       read a plan and report its tasks and waves; nothing is run
       0 it holds · 1 the grammar or this checkout refused it · 2 no such file
-  run [--plan-file <f>]
+  run [--plan-file <f>] [--model <m>] [--review-model <m>]
+      [--effort <l>] [--review-effort <l>]
       run a plan's tasks in worktrees; this dispatches real workers
+      the dials rewrite this plan's own record, which a resumed run prefers
+      to the project keys; the run says at its start which it took
       0 every task complete · 1 failed tasks · 2 config or plan error
   read [--range <r>] [--against <text>]
       start the gate's own reader over a working tree or a range

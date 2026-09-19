@@ -122,7 +122,19 @@ pub fn run(cli: Cli) -> i32 {
         }
         Command::ReviewNeeded { diff } => review::cmd_review_needed(diff.as_deref()),
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
-        Command::Run { plan_file } => run::cmd_run(plan_file.as_deref()),
+        Command::Run {
+            plan_file,
+            model,
+            review_model,
+            effort,
+            review_effort,
+        } => run::cmd_run(
+            plan_file.as_deref(),
+            model.as_deref(),
+            review_model.as_deref(),
+            effort.as_deref(),
+            review_effort.as_deref(),
+        ),
         Command::Read { range, against } => read::cmd_read(range.as_deref(), against.as_deref()),
         Command::Advise {
             question,
