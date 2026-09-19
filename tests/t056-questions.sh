@@ -131,6 +131,42 @@ aftertwice)
 	say ready 'merge-ready'
 	done_json
 	;;
+cite)
+	if [ "$attempt" = 1 ]; then
+		# The blocked line quotes a ruling id before it names the question:
+		# both are eight characters, only the second is answerable.
+		mem ask 'the ruling leaves two readings open; which one?' >"$WF_TMP/cite-id"
+		say blocked "ruling #RUL1NGID stands; asked $(cat "$WF_TMP/cite-id")"
+		done_json
+		exit 0
+	fi
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/Cite.php
+	git add app/Services/Cite.php
+	commit 'Add the cite service'
+	say ready 'merge-ready'
+	done_json
+	;;
+quiet)
+	if [ "$attempt" = 1 ]; then
+		# Ends its turn on the ask itself, with work on the branch and no
+		# blocked line: the question is mem's to name.
+		mkdir -p app/Services
+		printf '<?php\n' >app/Services/Quiet.php
+		git add app/Services/Quiet.php
+		commit 'Start the quiet service'
+		say progress 'half way'
+		mem ask 'may I finish this the way the Done line reads?' >"$WF_TMP/quiet-id"
+		done_json
+		exit 0
+	fi
+	mkdir -p app/Services
+	printf '<?php\n// finished\n' >app/Services/Quiet.php
+	git add app/Services/Quiet.php
+	commit 'Finish the quiet service'
+	say ready 'merge-ready'
+	done_json
+	;;
 ghost)
 	# Never asks; the id in the note is a friction id, not a question mem
 	# will ever list for this task.
@@ -410,6 +446,52 @@ is "$?" 0 'the run finishes once both answers land'
 is "$(cat "$rundir/twice.state")" merged 'twice merged on its third attempt'
 is "$(cat "$rundir/aftertwice.state")" merged 'and the wave after it went on to merge too'
 
+## ------------------- the question in the note, and a turn that ends on one
+
+# Two ids of the same shape in one blocked line: the run keys on the one mem
+# lists as a question for the task, not on whichever was written first
+# (#SYHHNK5T). And a worker that ends its turn on `mem ask` with no blocked
+# line at all has asked all the same (#NNVWGXZ4).
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: asknote-check
+
+- [ ] cite Blocked with a ruling id quoted beside the question
+      Files: app/Services/Cite.php
+      Verify: true
+- [ ] quiet Ends its turn on the ask, with no blocked line
+      Files: app/Services/Quiet.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/app/asknote-check"
+workflow run >"$T_TMP/asknote.log" 2>&1 &
+runpid=$!
+
+# Answered only once the run has recorded what it is waiting on: an answer
+# that lands first would settle the question before the note is read.
+for _ in $(seq 1 150); do
+	[ "$(cat "$rundir/cite.state" 2>/dev/null)" = failed ] &&
+		[ "$(cat "$rundir/quiet.state" 2>/dev/null)" = failed ] && break
+	sleep 0.2
+done
+cite_id=$(sed 's/^#//' "$WF_TMP/cite-id")
+quiet_id=$(sed 's/^#//' "$WF_TMP/quiet-id")
+like "$(cat "$rundir/cite.failed" 2>/dev/null)" "^asked #$cite_id" \
+	'the question mem lists is what cite waits on, not the ruling id its note quoted first'
+unlike "$(cat "$rundir/cite.failed" 2>/dev/null)" 'asked #RUL1NGID' \
+	'the ruling id is never taken for a question'
+like "$(cat "$rundir/quiet.failed" 2>/dev/null)" "^asked #$quiet_id" \
+	'a turn that ended on mem ask without a blocked line is a question too'
+
+"$MEM_BIN" answer "$cite_id" 'the first reading is the one' >/dev/null 2>&1
+"$MEM_BIN" answer "$quiet_id" 'yes: finish it as the Done line reads' >/dev/null 2>&1
+
+wait "$runpid"
+is "$?" 0 'the run finishes once both of these answers land too'
+is "$(cat "$rundir/cite.state")" merged 'cite merged on its second attempt'
+is "$(cat "$rundir/quiet.state")" merged \
+	'and the answer continued quiet rather than a fresh worker starting over'
+
 ## ------------------------------ an id mem never lists does not wait forever
 
 "$MEM_BIN" plan --stdin >/dev/null <<'EOF'
@@ -430,3 +512,7 @@ like "$OUT" 'Plan ghost-check stopped short: 0 of 2 merged, 1 failed, 1 never st
 	'the run reports the stop instead of hanging'
 is "$(cat "$rundir/ghost.state")" failed 'ghost stays failed, its id never answerable'
 is "$(cat "$rundir/afterghost.state" 2>/dev/null)" blocked 'the wave after it never opens'
+like "$OUT" 'task ghost: #GH0STGH0 is not a question mem lists for this task -- the run ends; answer it and run again' \
+	'the run says the id is unanswerable and what to do about it'
+unlike "$OUT" 'waiting on #GH0STGH0' \
+	'and never promises to stay open for an id mem has not listed once'

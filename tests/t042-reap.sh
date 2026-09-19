@@ -329,13 +329,13 @@ truthy "$([ ! -e "$T_TMP/reap-dispatched" ] && echo 0 || echo 1)" \
 	'and started no worker for a run nobody is watching'
 unlike "$OUT" 'one more try' 'nor did it promise one'
 
-## ------------------------------ reap reads with the run's own recorded model
+## ---------------------------------------- reap starts no reader of its own
 
-# `workflow run` records the model it dispatches on and the model it reads
-# with before a single worker goes out (t3). A run killed with a finished
-# worker nobody has gated yet leaves that recorded, and reap, picking the
-# task up, reads it with the model the run named -- not the empty environment
-# every other test in this file runs reap under.
+# reap collects and never dispatches, and a reader is a dispatch: started
+# under reap it would have no run to judge it, and `workflow reap` run from
+# a checkout with a plan mid-gate spawned one anyway (friction #NNVWGXZ4).
+# The setup is a run killed with a finished worker nobody has gated yet --
+# the one shape where reap reaches the gate at all.
 new_repo modelcheck
 mem_register
 printf '{"name":"acme/models"}\n' >composer.json
@@ -403,14 +403,12 @@ unset WORKFLOW_REVIEW_MODEL
 run env WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {session} {brief} {model}'"'"' > {out} 2> {err} &' workflow reap
 unset WORKFLOW_REVIEW_MODEL
 
-for _ in $(seq 1 50); do
-	[ -s "$T_TMP/reviews.log" ] && break
-	sleep 0.2
-done
-is "$(cat "$T_TMP/reviews.log" 2>/dev/null)" 'fake-reader t1-review' \
-	'reap reads with the model the run recorded, not the empty environment reap runs under'
-like "$OUT" 'reap: reading with fake-reader as the run did' \
-	'and says so before it collects anything'
+is "$(cat "$T_TMP/reviews.log" 2>/dev/null)" '' \
+	'reap started no reader, though the run it collects for records one'
+truthy "$([ ! -e "$mrundir/t1.review-prompt" ] && echo 0 || echo 1)" \
+	'and wrote no reading prompt'
+truthy "$([ ! -e "$mrundir/t1.review-session" ] && echo 0 || echo 1)" \
+	'nor a reader session to watch'
 
 git worktree remove --force "$mwtroot/t1" 2>/dev/null
 git worktree remove --force "$mwtroot/_integration" 2>/dev/null

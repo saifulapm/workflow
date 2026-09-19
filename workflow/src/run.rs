@@ -327,6 +327,10 @@ pub struct Run {
     pub deadline_s: i64,
     pub kill_grace_s: i64,
     pub poll: f64,
+    /// How many polls running a question's id may be missing from mem's
+    /// listing before [`Run::question_open`] stops holding the run open for
+    /// it: `QUESTION_MISS_LIMIT`, or `WORKFLOW_QUESTION_MISSES`.
+    pub question_misses: u32,
     pub max_workers: usize,
     pub backend: Box<dyn WorkerBackend>,
     /// What every worker of this run is started on: `WORKFLOW_MODEL` for
@@ -510,17 +514,23 @@ impl Run {
     /// eight-character shape -- is not an unanswered question: no answer
     /// can ever land on it. It gets the reindex lag [`Self::question_in`]
     /// describes -- a few polls where a real question is briefly missing
-    /// -- but past that bound it stops holding the run open.
+    /// -- but past that bound it stops holding the run open, and the run is
+    /// told the id is one no answer can land on rather than left reading a
+    /// line that promises to wait (friction #71X38QCH). Asked once a poll,
+    /// never twice: at two calls a pass the bound is half what it says
+    /// (friction #1FKDVVD9).
     fn question_open(&self, task: &str) -> bool {
         let Some(qid) = self.asked(task) else {
             return false;
         };
-        match memcli::questions_for(&self.task_tag(task))
-            .into_iter()
-            .find(|q| q.short_id == qid)
-        {
+        // A mem that could not answer has said nothing about the question,
+        // and a miss spent on mem's own trouble is a question given up on.
+        let Some(listed) = memcli::questions_for(&self.task_tag(task)) else {
+            return true;
+        };
+        match listed.into_iter().find(|q| q.short_id == qid) {
             Some(q) => {
-                write_field(&self.dir, task, "qmiss", "");
+                write_field(&self.dir, task, "qmiss", &format!("{qid} 0"));
                 q.answer.is_none()
             }
             None => {
@@ -532,33 +542,58 @@ impl Run {
                     .unwrap_or(0)
                     + 1;
                 write_field(&self.dir, task, "qmiss", &format!("{key}{misses}"));
-                misses <= QUESTION_MISS_LIMIT
+                if misses == self.question_misses + 1 {
+                    warn(format!(
+                        "task {task}: #{qid} is not a question mem lists for this task -- the run ends; answer it and run again"
+                    ));
+                }
+                misses <= self.question_misses
             }
         }
     }
 
+    /// Has mem listed `task`'s question at least once? Until it has, the run
+    /// cannot say it stays open for it: [`Self::question_open`] gives up on
+    /// an id that never appears, and the run ends instead.
+    fn question_listed(&self, task: &str, qid: &str) -> bool {
+        self.field(task, "qmiss") == format!("{qid} 0")
+    }
+
     /// The failure note for a worker that stopped on a question, as
     /// `asked #<id>: <what>`, or nothing when its `blocked` line names no
-    /// question and mem lists none pending for the task.
+    /// question and mem lists none pending for the task. Every `#id` in the
+    /// note is a candidate, in the order it was written: a ruling or friction
+    /// id quoted in the ask body has the same shape as a question id, and
+    /// taking the first one alone keyed the task to an id no answer would
+    /// ever land on (friction #SYHHNK5T). The first one mem lists for this
+    /// task wins, unanswered before answered -- an answer that landed while
+    /// the worker was ending is still the question it asked; with none of
+    /// them listed the task's own newest open question does, and only then
+    /// the first id the worker named, whose listing may be a reindex behind.
     fn question_in(&self, task: &str, note: &str) -> Option<String> {
-        let named = note
+        let named: Vec<&str> = note
             .split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ')')
             .filter_map(|w| w.strip_prefix('#'))
             .map(|w| w.trim_end_matches(|c: char| !c.is_ascii_alphanumeric()))
-            .find(|w| w.len() == 8 && w.chars().all(|c| c.is_ascii_alphanumeric()));
-        let listed = memcli::questions_for(&self.task_tag(task));
-        if let Some(id) = named {
-            let what = listed
-                .iter()
-                .find(|q| q.short_id == id)
-                .map(|q| q.title.clone())
-                .unwrap_or_else(|| note.to_string());
-            return Some(format!("asked #{id}: {what}"));
+            .filter(|w| w.len() == 8 && w.chars().all(|c| c.is_ascii_alphanumeric()))
+            .collect();
+        let listed = memcli::questions_for(&self.task_tag(task)).unwrap_or_default();
+        let open = |q: &&memcli::Question| q.answer.is_none();
+        if let Some(q) = named
+            .iter()
+            .find_map(|id| listed.iter().filter(open).find(|q| q.short_id == *id))
+            .or_else(|| {
+                named
+                    .iter()
+                    .find_map(|id| listed.iter().find(|q| q.short_id == *id))
+            })
+        {
+            return Some(format!("asked #{}: {}", q.short_id, q.title));
         }
-        listed
-            .into_iter()
-            .find(|q| q.answer.is_none())
-            .map(|q| format!("asked #{}: {}", q.short_id, q.title))
+        if let Some(q) = listed.iter().find(open) {
+            return Some(format!("asked #{}: {}", q.short_id, q.title));
+        }
+        named.first().map(|id| format!("asked #{id}: {note}"))
     }
 
     /// Where a merged task's commit is recorded. Outside refs/heads on purpose:
@@ -836,6 +871,7 @@ impl Run {
         // and at most two: the brief's budget is the limit, and the latest
         // exchange is the one this attempt exists to act on.
         let answers = memcli::questions_for(&self.task_tag(task))
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|q| q.answer.map(|a| (q.body, a)))
             .take(2)
@@ -1350,6 +1386,11 @@ impl Run {
     /// reading in flight when the gate goes red is stopped by [`Run::gate`],
     /// never judged here. Answers whether a reading began.
     fn start_review(&self, task: &str, prev: &str, new: &str) -> bool {
+        // reap collects and never dispatches (run-recovery): a reader it
+        // started would have no run to judge it (friction #NNVWGXZ4).
+        if self.collecting {
+            return false;
+        }
         let Some(model) = self.review_model.as_deref() else {
             return false;
         };
@@ -1661,7 +1702,7 @@ impl Run {
     /// orchestrator's queue for ever under a task id no plan holds.
     fn moot_reader_questions(&self, task: &str) {
         let tag = format!("{}/{task}-review", self.plan.plan_id);
-        for q in memcli::questions_for(&tag) {
+        for q in memcli::questions_for(&tag).unwrap_or_default() {
             if q.answer.is_none() {
                 memcli::answer(
                     &q.id,
@@ -2024,6 +2065,26 @@ impl Run {
             );
             return;
         }
+        // A worker that stopped on a question is waiting on the
+        // orchestrator, and the failure note says which question: the poll
+        // loop watches it and dispatches the task again the moment an
+        // answer lands, with the answer in the brief. The id comes off the
+        // worker's own report first: mem's read verbs never wait on another
+        // invocation's reindex, so a question written a moment ago can be
+        // missing from the listing this once. Any ending but `ready` is
+        // asked this: a turn that ended on `mem ask` under `progress`, or
+        // with no report at all, is a question like any other, and failing
+        // it over "no clean turn" threw away both the answer and the work
+        // already on the branch (friction #NNVWGXZ4).
+        let last = self.last_status_line(task);
+        if !last.as_ref().is_some_and(|(state, _)| state == "ready")
+            && let Some(asked) =
+                self.question_in(task, last.as_ref().map_or("", |(_, note)| note.as_str()))
+        {
+            self.fail_task_keep(task, &asked);
+            self.event(&format!("question {task} -- {asked}"));
+            return;
+        }
         if !outcome.ok {
             // No status line and no commit: the dispatch never became a
             // worker, so the reason names the dispatch rather than sending
@@ -2041,22 +2102,7 @@ impl Run {
             self.fail_task(task, &why);
             return;
         }
-        match self.last_status_line(task) {
-            // A worker that stopped on a question is waiting on the
-            // orchestrator, and the failure note says which question: the
-            // poll loop watches it and dispatches the task again the moment
-            // an answer lands, with the answer in the brief. The id comes
-            // off the worker's own report first: mem's read verbs never wait
-            // on another invocation's reindex, so a question written a
-            // moment ago can be missing from the listing this once.
-            Some((state, note))
-                if state == "blocked"
-                    && let Some(asked) = self.question_in(task, &note) =>
-            {
-                self.fail_task_keep(task, &asked);
-                self.event(&format!("question {task} -- {asked}"));
-                return;
-            }
+        match last {
             // A worker that committed and then reported something other than
             // ready, or nothing at all, has still left work on the branch --
             // the same work a `ready` report would hand to the gate. Failing
@@ -2962,7 +3008,7 @@ pub fn tokens(n: u64) -> String {
 }
 
 /// The knobs of spec §8, all injectable (AC7).
-fn timings() -> (usize, i64, i64, f64) {
+fn timings() -> (usize, i64, i64, f64, u32) {
     let mut max_workers = std::env::var("WORKFLOW_MAX_WORKERS")
         .ok()
         .and_then(|v| v.parse::<i64>().ok())
@@ -2975,7 +3021,14 @@ fn timings() -> (usize, i64, i64, f64) {
     let grace = (deadline / 2).clamp(1, 30);
     let poll = ((deadline as f64 / 10.0) * 100.0).round() / 100.0;
     let poll = poll.clamp(0.2, 5.0);
-    (max_workers as usize, deadline, grace, poll)
+    // The reindex bound is polls, not seconds, so a suite that wants to see
+    // the ghost case give up sooner -- or a loaded machine one that wants
+    // mem given longer -- says so here.
+    let question_misses = std::env::var("WORKFLOW_QUESTION_MISSES")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(QUESTION_MISS_LIMIT);
+    (max_workers as usize, deadline, grace, poll, question_misses)
 }
 
 /// Which worker a run dispatches onto: amx, always, unless a caller set the
@@ -3021,7 +3074,7 @@ fn optional_dial(
 /// model`/`review-model`/`effort`/`review-effort`, then `opus`/nobody/the
 /// CLI's own default.
 fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
-    let (max_workers, deadline_s, kill_grace_s, poll) = timings();
+    let (max_workers, deadline_s, kill_grace_s, poll, question_misses) = timings();
     let wt_root = paths::worktrees_root().join(project).join(&plan.plan_id);
     let dir = paths::runs_root().join(project).join(&plan.plan_id);
     let recorded_model = recorded(&dir, "model");
@@ -3054,6 +3107,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         deadline_s,
         kill_grace_s,
         poll,
+        question_misses,
         max_workers,
         backend: backend_for(),
         model: match std::env::var("WORKFLOW_MODEL") {
@@ -3331,9 +3385,13 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
 
     let mut warned_waiting: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_ids = run.plan.ids();
+    // Taken once a pass and used twice -- to keep the loop open and to name
+    // what it waits on -- because asking twice spends two of the misses
+    // `question_open` counts on one poll (friction #1FKDVVD9).
+    let mut waiting = run.waiting(&all_ids);
     while run.running() > 0
         || !run.reviewing().is_empty()
-        || !run.waiting(&all_ids).is_empty()
+        || !waiting.is_empty()
         || !ready(&run).is_empty()
         || marked_failed(&run)
     {
@@ -3412,11 +3470,18 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         }
         // A task waiting on a question keeps the run open rather than
         // failing it out from under it, so said once, not on every poll
-        // while the answer is still pending.
-        for id in run.waiting(&all_ids) {
-            let Some(qid) = run.asked(&id) else {
+        // while the answer is still pending. Said only of a question mem has
+        // really listed: an id the listing never carries ends the run
+        // instead, and a line promising to stay open for it is a promise the
+        // run does not keep (friction #71X38QCH).
+        waiting = run.waiting(&all_ids);
+        for id in &waiting {
+            let Some(qid) = run.asked(id) else {
                 continue;
             };
+            if !run.question_listed(id, &qid) {
+                continue;
+            }
             if warned_waiting.insert(format!("{id} {qid}")) {
                 warn(format!(
                     "{id}: waiting on #{qid} -- the run stays open until it is answered"
@@ -3435,7 +3500,11 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             let Some(qid) = run.asked(id) else {
                 continue;
             };
+            // A mem that could not answer is not an answer that has not
+            // landed yet: either way there is nothing to send in, and the
+            // next poll asks again.
             let answered = memcli::questions_for(&run.task_tag(id))
+                .unwrap_or_default()
                 .into_iter()
                 .any(|q| q.short_id == qid && q.answer.is_some());
             if answered {
@@ -3550,7 +3619,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         if state != MERGED && state != DONE_PREVIOUSLY {
             continue;
         }
-        for q in memcli::questions_for(&run.task_tag(&t)) {
+        for q in memcli::questions_for(&run.task_tag(&t)).unwrap_or_default() {
             if q.answer.is_none() {
                 memcli::answer(&q.id, &format!("moot: {t} merged without it"));
             }
@@ -4186,10 +4255,11 @@ mod tests {
     #[test]
     fn the_deadline_knob_is_fractional_minutes_and_the_rest_derive_from_it() {
         // Nothing to inject: the defaults are the contract.
-        let (workers, deadline, grace, poll) = timings();
+        let (workers, deadline, grace, poll, misses) = timings();
         assert!((1..=3).contains(&workers));
         assert!(deadline >= 1);
         assert!((1..=30).contains(&grace));
         assert!((0.2..=5.0).contains(&poll));
+        assert_eq!(misses, QUESTION_MISS_LIMIT);
     }
 }

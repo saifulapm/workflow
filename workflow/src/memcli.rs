@@ -195,16 +195,21 @@ struct Questions {
 /// Every question the task tagged `<plan>/<task>` has asked the orchestrator,
 /// answered or not, newest first. The run reads this twice: to name what a
 /// blocked worker is waiting on, and to carry the answer into its next brief.
-pub fn questions_for(tag: &str) -> Vec<Question> {
-    let Some((_, out)) = capture(&["questions", "--for", "orchestrator", "--json"]) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Questions>(&out)
-        .map(|q| q.questions)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|q| q.task.as_deref() == Some(tag))
-        .collect()
+/// A mem that could not answer -- a spawn that failed, output that will not
+/// parse -- is `None`, never an empty listing: a caller that reads mem's own
+/// trouble as "the task has no question" gives up on a question that is
+/// really there (friction #1FKDVVD9). The exit code is not the answer here
+/// (§7 above): a listing that matches nothing prints its array and exits 1.
+pub fn questions_for(tag: &str) -> Option<Vec<Question>> {
+    let (_, out) = capture(&["questions", "--for", "orchestrator", "--json"])?;
+    Some(
+        serde_json::from_str::<Questions>(&out)
+            .ok()?
+            .questions
+            .into_iter()
+            .filter(|q| q.task.as_deref() == Some(tag))
+            .collect(),
+    )
 }
 
 pub fn answer(id: &str, text: &str) -> bool {
