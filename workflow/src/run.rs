@@ -2329,9 +2329,14 @@ impl Run {
     ///
     /// Answers with the ids it took over. They are settled for this run --
     /// merged, failed, or running -- and the classification below must not
-    /// queue them a second time.
+    /// queue them a second time. A task collected here that failed with
+    /// nothing read is the exception: it goes back to `pending` and out of
+    /// this list, for the ready set to dispatch on this very pass.
     fn adopt_stale(&self) -> Vec<String> {
         let mut taken = self.dispatched();
+        // The ones collecting sent back to the ready set, dropped from the
+        // answer below rather than while the loop is reading it.
+        let mut again: Vec<String> = Vec::new();
         // Taken before a single task below is collected: collecting one can
         // itself start a reading, and that reading is this run's own, not
         // something left behind by one that died -- the loop after must
@@ -2377,7 +2382,26 @@ impl Run {
                 "task {task}: left dispatched by a run that is gone -- collecting it"
             ));
             self.finish(task);
+            // Collected and failed with no reader's word on it, and the retry
+            // still unspent: the attempt died with its coordinator and nothing
+            // here has judged the work. Failing it ends the whole run in the
+            // same second and costs a `reap` and a second `workflow run` to
+            // get back to this point (friction #MT2WCVA2), so it goes back to
+            // the ready set and is dispatched on this pass, on whatever
+            // commits it has.
+            let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
+            if self.state(task) == FAILED
+                && tries < 2
+                && self.field(task, "reviews").parse::<u64>().unwrap_or(0) == 0
+            {
+                warn(format!(
+                    "task {task}: nobody read it and its retry is unspent -- pending again, for this run to dispatch"
+                ));
+                self.set_state(task, PENDING);
+                again.push(task.clone());
+            }
         }
+        taken.retain(|t| !again.contains(t));
         // A reading the dead run started. Its reader may still be going, and
         // its answer would be read by nobody; the merge is verified and read
         // again off the intent line, the way an interrupted merge is.

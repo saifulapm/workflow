@@ -177,7 +177,10 @@ unlike "$OUT" 'still working, from a run that is gone -- adopted' \
 	'a session whose pane is gone is not adopted as paused'
 like "$OUT" 'task t1: left dispatched by a run that is gone -- collecting it' \
 	'it is collected at once, like a worker that ended'
-is "$(cat "$orundir/t1.failed")" 'the worker ended without a clean turn' \
+like "$OUT" 'task t1: failed -- the worker ended without a clean turn' \
 	'and failed for what it did: reported started, then ended unclean'
+# Nobody read that work and the retry was unspent, so the run that collected
+# it sends it out again rather than ending on it (friction #MT2WCVA2).
+is "$(cat "$orundir/t1.dispatches")" 2 'and dispatched again in the same invocation'
 
 t_done

@@ -120,6 +120,41 @@ is "$(git -C "$repo" rev-list --count "$base..integration/orphan-check")" 2 \
 truthy "$([ ! -d "$wtroot/t1" ] && echo 0 || echo 1)" \
 	'a run that ends with nothing dispatched does clean its worktrees up'
 
+## ------------------------- collected with nothing to show: dispatched again
+
+# The same orphan, but its worker said `started` and then died with its
+# coordinator: nothing committed, nobody's word on the work. Collecting it
+# fails it -- and failing it used to end the whole run in the same second,
+# so getting the task done cost a `reap` and a second `workflow run` every
+# time (friction #MT2WCVA2). The run that collected it dispatches it.
+rm -rf "$rundir" "$wtroot"
+git -C "$repo" worktree prune
+for b in orphan-check/t1 orphan-check/t2 integration/orphan-check; do
+	git -C "$repo" branch -D "$b" >/dev/null 2>&1
+done
+# The section above landed its work on the trunk and left the ref that
+# records t1 as merged; here the task has never been done.
+git -C "$repo" update-ref -d refs/workflow/orphan-check/t1 2>/dev/null || true
+
+orphan
+# A pid the backend can still see a record of and that is certainly not
+# running: seen, not alive, and not paused either.
+sh -c 'exit 0' &
+dead=$!
+wait "$dead" 2>/dev/null
+printf '%s\n' "$dead" >"$rundir/t1.pid"
+printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$rundir/t1.status"
+
+run env WORKFLOW_DEADLINE_MIN=60 timeout 60 workflow run --plan-file "$T_TMP/plan.md"
+is "$RC" 0 'the run finishes in one invocation'
+like "$OUT" 'task t1: left dispatched by a run that is gone -- collecting it' \
+	'the collected task is still collected'
+like "$OUT" 'task t1: nobody read it and its retry is unspent -- pending again' \
+	'and the run says it is taking it back rather than ending on it'
+is "$(cat "$rundir/t1.dispatches")" 2 'it is dispatched again by the run that collected it'
+is "$(cat "$rundir/t1.state")" merged 'and merges in that same invocation'
+is "$(cat "$rundir/t2.state")" merged 'the rest of the plan runs as usual'
+
 ## --------------------------------------- the worker outlived its orchestrator
 
 # Back to nothing: the run dir, the worktrees, the branches and the
