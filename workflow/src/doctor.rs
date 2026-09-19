@@ -188,6 +188,33 @@ fn tools(r: &mut Report) {
             "workflow is not on PATH: the hook stubs skip their checks and only chain",
         );
     }
+    // A run dispatches through whichever `amx` PATH answers first. Two on PATH
+    // means the flags the run uses may belong to the other one, and a refusal
+    // that reads like a workflow bug (#PPA68Q43).
+    let amx = every_on_path("amx");
+    if amx.len() > 1 {
+        let rest: Vec<String> = amx[1..].iter().map(|p| p.display().to_string()).collect();
+        r.finding(
+            "PATH",
+            format!(
+                "{} amx on PATH: {} answers, {} shadowed -- keep one",
+                amx.len(),
+                amx[0].display(),
+                rest.join(", ")
+            ),
+        );
+    }
+}
+
+/// Every executable of that name on PATH, first match first.
+fn every_on_path(program: &str) -> Vec<PathBuf> {
+    let Ok(path) = std::env::var("PATH") else {
+        return Vec::new();
+    };
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(program))
+        .filter(|p| gitcmd::exists_x(p))
+        .collect()
 }
 
 /// The eight skills `doctor --fix` used to write into every harness's skills

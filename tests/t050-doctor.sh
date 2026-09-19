@@ -27,6 +27,19 @@ unlike "$OUT" 'WORKFLOW_AGENT is not' 'and the environment key is found'
 unlike "$OUT" 'commitTrailers is not' 'and the commit trailers are off'
 unlike "$OUT" 'sessionUrl is not' 'and the session url is off'
 
+## -------------------------------------------------- two amx on PATH (#PPA68Q43)
+
+# A run dispatches through whichever amx PATH answers first; a second one
+# further down is where a "unexpected argument" refusal comes from.
+mkdir -p "$T_TMP/amx-a" "$T_TMP/amx-b"
+printf '#!/bin/sh\nexit 0\n' >"$T_TMP/amx-a/amx"; chmod +x "$T_TMP/amx-a/amx"
+cp "$T_TMP/amx-a/amx" "$T_TMP/amx-b/amx"
+wf=$(command -v workflow)
+run env PATH="$T_TMP/amx-a:$T_TMP/amx-b:/usr/bin:/bin" "$wf" doctor
+like "$OUT" "2 amx on PATH: $T_TMP/amx-a/amx answers, $T_TMP/amx-b/amx shadowed" 'doctor names both and which wins'
+run env PATH="$T_TMP/amx-a:/usr/bin:/bin" "$wf" doctor
+unlike "$OUT" 'amx on PATH' 'one amx is no finding'
+
 ## ---------------------------------------------- the settings merge (AC5b)
 
 # This machine already sets attribution.commit and attribution.pr to the empty
