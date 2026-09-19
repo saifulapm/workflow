@@ -67,6 +67,16 @@ new | sub)
 			exit 0
 			;;
 		esac
+		case $name in
+		wf-vanish-review-*)
+			# The session died: no answer file, no conversation to
+			# read last words from, and what the pane showed kept
+			# by amx and nowhere else.
+			printf 'the agent exited: killed (signal 9)\n' >"$AMX_DIR/$name.logs"
+			printf 'done\n' >"$AMX_DIR/$name.state"
+			exit 0
+			;;
+		esac
 		printf 'nothing useful\n' >"$answer"
 		case $name in
 		wf-wall-review-*)
@@ -103,6 +113,9 @@ status)
 	[ -f "$AMX_DIR/$1.question" ] && question=$(printf '{"text":"%s","options":[]}' "$(cat "$AMX_DIR/$1.question")")
 	printf '{"id":"%s","state":"%s","last_event":0,"session":"%s","question":%s}\n' \
 		"$1" "$(cat "$AMX_DIR/$1.state")" "$(cat "$AMX_DIR/$1.session" 2>/dev/null)" "$question"
+	;;
+logs)
+	cat "$AMX_DIR/$1.logs" 2>/dev/null
 	;;
 stop)
 	printf 'stopped\n' >"$AMX_DIR/$1.state"
@@ -227,6 +240,32 @@ like "$(cat "$limitdir/ceiling.failed")" '^the reader hit a provider limit: amx:
 	'on the line the launch printed'
 like "$(cat "$limitdir/ceiling.review-err")" 'rate limit exceeded' 'which the dispatch put in review-err'
 is "$(cat "$limitdir/ceiling.review-tries")" 1 'after one reading as well'
+
+## ------------------------------------- a reader whose session is gone
+
+# A reading whose pane died has no transcript to read last words from, and
+# the run's whole account of it was "no verdict" with an empty review-err:
+# nothing to tell a flake worth retrying from a prompt that kills the session
+# every time. `amx logs` is what the pane left, and the failed note names the
+# file it is kept in.
+cat >"$T_TMP/vanished.md" <<-'PLAN'
+	# plan: vanished
+
+	- [ ] vanish Add the vanish service
+	      Files: app/vanish.php
+	      Verify: true
+	- [ ] beside Add the beside service, so the plan is two tasks and runs
+	      Files: app/beside.php
+	      Verify: true
+PLAN
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/vanished.md"
+is "$RC" 1 'a reader whose session died fails the run'
+vandir="$XDG_STATE_HOME/workflow/runs/app/vanished"
+is "$(cat "$vandir/vanish.state" 2>/dev/null)" failed 'the task is failed'
+like "$(cat "$vandir/vanish.review-err")" 'the agent exited: killed \(signal 9\)' \
+	'review-err carries what the pane left behind'
+like "$(cat "$vandir/vanish.failed")" "$vandir/vanish\\.review-err" \
+	'and the failed note names that file'
 
 ## ------------------------------------- a reader stopped at a question
 

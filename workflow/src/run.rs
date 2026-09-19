@@ -1638,10 +1638,17 @@ impl Run {
                 // transcript and the limit only on stderr, so either one
                 // losing the other would hide the line a second reading is
                 // going to meet again. A reader that never launched has no
-                // transcript at all, so last_words comes back empty and
+                // transcript and no pane, so both come back empty and
                 // review-err is left as the dispatch captured it.
                 let stderr_text = self.field(task, "review-err");
-                let last_words = self.backend.last_words(&h);
+                // Last words, else dying words: a reader whose session died
+                // took its transcript with it, and what the backend kept of
+                // the pane is then the one account of whether it crashed, was
+                // killed or hit a limit (friction #1PJ6QEJF).
+                let last_words = match self.backend.last_words(&h) {
+                    words if !words.is_empty() => words,
+                    _ => self.backend.dying_words(&h),
+                };
                 let combined = match (stderr_text.is_empty(), last_words.is_empty()) {
                     (true, _) => last_words.clone(),
                     (false, true) => stderr_text.clone(),
