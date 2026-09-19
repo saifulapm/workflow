@@ -23,10 +23,9 @@ saw() {
 	if grep -qF -- "$1" "$argv"; then ok "$2"; else notok "$2" "$(cat "$argv")"; fi
 }
 count() { grep -cF -- "$1" "$argv"; }
-# workers <task> -- how many sessions were started for a task, its readers aside.
-# A first dispatch is `amx new`; a fresh session after one is `amx sub --bg`
-# with the last session as parent, so both shapes count as a worker started.
-workers() { grep -cE "^new\|--no-parent\|--name\|wf-$1-[0-9a-z]{4}\||^sub\|--bg\|--json\|--name\|wf-$1-[0-9a-z]{4}\|" "$argv"; }
+# A first dispatch and every fresh session after one are `amx new` at depth
+# zero (e65c800); only a reader goes out as `amx sub --bg` under its worker.
+workers() { grep -cE "^new\|--name\|wf-$1-[0-9a-z]{4}\||^sub\|--bg\|--json\|--name\|wf-$1-[0-9a-z]{4}\|" "$argv"; }
 
 # One fake plays worker and reader. A worker does its task on `new`; a
 # reader writes fix on its first reading of a task and ship after that. On
@@ -181,10 +180,10 @@ rsess=$(cat "$rundir/refuse.session")
 is "$(cat "$rundir/refuse.state")" merged 'refuse merged too'
 is "$(workers refuse)" 2 'after a fresh session, since the send was refused'
 is "$(grep -cE '^sub\|--bg\|--json\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv")" 0 'the fresh session is top-level, not a child of the one the send was refused on'
-is "$(grep -cE '^new\|--no-parent\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv")" 2 'both of its sessions went out as amx new at depth 0'
+is "$(grep -cE '^new\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv")" 2 'both of its sessions went out as amx new at depth 0'
 is "$(cat "$rundir/refuse.dispatches")" 2 'counted as a second attempt'
 is "$(cat "$rundir/refuse.continued" 2>/dev/null)" '' 'and not as a continuation'
-first=$(grep -E '^new\|--no-parent\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv" | head -1 | cut -d'|' -f4)
+first=$(grep -E '^new\|--name\|wf-refuse-[0-9a-z]{4}\|' "$argv" | head -1 | cut -d'|' -f3)
 saw "stop|$first" 'the session the send was refused on is stopped before the fresh one starts'
 like "$OUT" 'task refuse: dispatched again with the findings on the next free slot' 'the run says which way it went'
 

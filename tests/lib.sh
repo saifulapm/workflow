@@ -144,7 +144,10 @@ t_init() {
 	# under the workflow has both set for its own task, and a sandbox that
 	# inherited them would see a task nobody named and build into a directory
 	# nobody meant for it.
-	unset WORKFLOW_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH WORKFLOW_SUITE_LOCK_HELD
+	# PI_CODING_AGENT is pi's own marker, exported to every child; the gate reads
+	# it beside WORKFLOW_AGENT (hook.rs agent_marked), so a suite run from inside
+	# pi would see every "human" commit as an agent's.
+	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH WORKFLOW_SUITE_LOCK_HELD
 	unset WORKFLOW_MODEL WORKFLOW_TASK CARGO_TARGET_DIR
 	unset WORKFLOW_HOME WORKFLOW_SITES
 	unset WORKFLOW_EFFORT WORKFLOW_REVIEW_EFFORT WORKFLOW_WORKER_CMD WORKFLOW_MAX_WORKERS
