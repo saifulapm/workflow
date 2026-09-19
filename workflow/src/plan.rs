@@ -23,6 +23,9 @@ pub struct Task {
     pub gives: Option<String>,
     /// One analog to copy the shape of: `path` or `path:12-25`.
     pub pattern: Option<String>,
+    /// A milestone's line: what Saiful opens, does and sees once it lands,
+    /// checked from the running product rather than from a diff.
+    pub show: Option<String>,
     pub checked: bool,
     /// The task's own lines, verbatim: the brief quotes them back.
     #[serde(skip)]
@@ -333,6 +336,7 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                 "Uses" => &mut plan.tasks[idx].uses,
                 "Gives" => &mut plan.tasks[idx].gives,
                 "Pattern" => &mut plan.tasks[idx].pattern,
+                "Show" => &mut plan.tasks[idx].show,
                 other => {
                     warn(format!("plan: line {n}: unknown key '{other}' ignored"));
                     continue;

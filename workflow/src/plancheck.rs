@@ -428,13 +428,33 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
         warnings: Vec::new(),
     };
     let mut plans: Vec<(String, Plan)> = Vec::new();
+    // The first milestone still open is the one the roadmap is stored with a
+    // plan for; the ones after it are cut when they are picked up, against
+    // the tree the earlier ones left and what Saiful said after using them.
+    let mut next_open = true;
     for id in roadmap.waves.iter().flatten() {
+        let Some(m) = roadmap.get(id) else { continue };
+        if m.checked {
+            continue;
+        }
+        if m.show.is_none() {
+            f.warnings.push(format!(
+                "roadmap: milestone {id}: no Show line -- what Saiful opens, does and sees once it lands"
+            ));
+        }
+        let first_open = std::mem::replace(&mut next_open, false);
         let path = dir.join(format!("{id}.md"));
         let shown = path.display();
         let Ok(text) = std::fs::read_to_string(&path) else {
-            f.refusals.push(format!(
-                "roadmap: milestone {id}: no plan at {shown} -- a milestone id is the slug of the plan filed beside the roadmap"
-            ));
+            if first_open {
+                f.refusals.push(format!(
+                    "roadmap: milestone {id}: no plan at {shown} -- the next milestone is stored with its plan; a milestone id is the slug of the plan filed beside the roadmap"
+                ));
+            } else {
+                f.warnings.push(format!(
+                    "roadmap: milestone {id}: no plan at {shown} -- cut it when it is picked up, after the milestones before it have landed"
+                ));
+            }
             continue;
         };
         // The grammar prints its diagnostics as it reads, while every finding

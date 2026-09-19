@@ -140,8 +140,57 @@ milestone m1-auth <<'EOF'
       Verify: cargo build
 EOF
 check
-is "$RC" 1 'a milestone with no plan beside the roadmap is refused'
-like "$ERR" 'm2-billing.*road/m2-billing.md' 'and the refusal names the file it looked for'
+is "$RC" 0 'a later milestone with no plan beside the roadmap is not refused'
+like "$ERR" 'm2-billing: no plan at road/m2-billing.md.*picked up' \
+	'but it is named, with when its plan is cut'
+# The next milestone up is the one the roadmap is stored with a plan for.
+rm road/m1-auth.md
+check
+is "$RC" 1 'the first open milestone with no plan is refused'
+like "$ERR" 'm1-auth: no plan at road/m1-auth.md' 'and the refusal names the file it looked for'
+# A landed milestone's plan has gone into the tree; nothing is read for it.
+road <<'EOF2'
+# roadmap: shop
+
+- [x] m1-auth Sign-in and sessions
+- [ ] m2-billing Billing  [after: m1-auth]
+      Show: Saiful pays a test order from the cart and sees it marked paid
+EOF2
+milestone m2-billing <<'EOF2'
+# plan: m2-billing
+
+- [ ] t1 Charge a customer
+      Files: engine/src/billing.rs
+      Verify: cargo build
+- [ ] t2 Mark the order paid  [after: t1]
+      Files: engine/src/lib.rs
+      Verify: cargo build
+EOF2
+check
+is "$RC" 0 'a ticked milestone with no plan is passed over'
+unlike "$ERR" 'm1-auth' 'and nothing is said about it'
+unlike "$ERR" 'm2-billing: no Show' 'a milestone with a Show line is not asked for one'
+# Every open milestone says what Saiful sees once it lands; a milestone whose
+# only claim is a Done line is checked from a diff, not from the product.
+road <<'EOF2'
+# roadmap: shop
+
+- [ ] m1-auth Sign-in and sessions
+- [ ] m2-billing Billing  [after: m1-auth]
+EOF2
+milestone m1-auth <<'EOF2'
+# plan: m1-auth
+
+- [ ] t1 Add the session store
+      Files: engine/src/session.rs
+      Verify: cargo build
+- [ ] t2 Read sessions at boot  [after: t1]
+      Files: engine/src/lib.rs
+      Verify: cargo build
+EOF2
+check
+like "$ERR" 'milestone m1-auth: no Show line' 'a milestone without a Show line is named'
+like "$ERR" 'milestone m2-billing: no Show line' 'each of them'
 
 # A plan filed under another milestone's name would send a run at the wrong one.
 milestone m2-billing <<'EOF'

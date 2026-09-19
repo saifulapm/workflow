@@ -239,6 +239,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         uses: None,
         gives: None,
         pattern: None,
+        show: None,
         checked: false,
         block: format!("- [ ] read {title}\n      Done: {requirement}\n"),
     };

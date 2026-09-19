@@ -2967,7 +2967,7 @@ fn timings() -> (usize, i64, i64, f64) {
         .ok()
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(2);
-    max_workers = max_workers.clamp(1, 3);
+    max_workers = max_workers.clamp(1, 5);
 
     // Fractional minutes on purpose: AC7 injects a deadline in seconds.
     let deadline = ((env_f64("WORKFLOW_DEADLINE_MIN", 30.0) * 60.0) + 0.5) as i64;

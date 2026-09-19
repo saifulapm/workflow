@@ -102,8 +102,9 @@ Three sizes of work, three moves:
   plan once, and let the session build it task by task. Measured
   2026-09-15: one strong session landed three milestones in the time a run
   spent on one task's fix rounds, so a run is for the case below only.
-- **A whole plan in parallel** — for tasks independent enough to run three
-  wide on a machine that carries three workers, with workers on the
+- **A whole plan in parallel** — for a plan whose wide wave holds three or
+  more tasks that share no files, on a machine that carries that many
+  workers (up to five), with workers on the
   strongest model and no reader unless the project's numbers earn one: tell
   a session "orchestrate the <plan-id> run". It starts `workflow run`, reads `workflow status`, decides retries
   and cleanup itself, and asks you only what is genuinely yours. Workers are

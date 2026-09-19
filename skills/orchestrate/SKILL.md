@@ -11,8 +11,9 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 ## Ground rules
 
 - A run is the exception. A milestone is one strong session with
-  `implement` unless its tasks are independent enough to run three wide on
-  a machine that carries three workers; then workers on the strongest model
+  `implement` unless its wide wave holds three or more tasks that share no
+  files, on a machine that carries that many workers (up to five,
+  `WORKFLOW_MAX_WORKERS`); then workers on the strongest model
   and `review-model none`, since fix rounds cost more than the defects they
   catch (review-2026-09-15 has the numbers).
 - The run's worker, reader and fixer are project keys: set them, never
