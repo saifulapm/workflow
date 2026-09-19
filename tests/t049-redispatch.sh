@@ -71,6 +71,10 @@ run workflow redispatch t2
 is "$RC" 1 'with no live run, redispatch says so instead of pretending'
 like "$OUT" 'no live run' 'and names the situation'
 
+run workflow redispatch t2 --review-deadline 5
+is "$RC" 1 'and a reading nobody is holding cannot be extended either'
+like "$OUT" 'the reading to extend is a live run' 'naming what it could not find'
+
 ## ----------------------------------------------- the live-run round trip
 
 env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
@@ -221,3 +225,46 @@ is "$(sed -n 2p "$WF_TMP/models-t1")" haiku 'and the second dispatch carried the
 wait "$runpid"
 is "$?" 0 'the run ends with t1 merged'
 is "$(cat "$rundir/t1.state")" merged 'on its second session'
+
+
+## ------------------------------ more time for the reading in flight
+
+# A reading's deadline was `WORKFLOW_REVIEW_DEADLINE_MIN` and nothing else,
+# and a live process's environment cannot be changed: a gate-green task whose
+# reader wanted longer was unlandable except by restarting the run (friction
+# #M0EFWGJ7). The flag writes the minutes beside the task, which the poll
+# loop reads every pass, and dispatches nothing.
+rm -f "$WF_TMP/release-t1"
+cat >"$T_TMP/longer.md" <<'EOF3'
+# plan: longer
+
+- [ ] t1 The long one
+      Files: app/t1.php
+      Verify: true
+- [ ] t2 Along for the ride
+      Files: app/t2.php
+      Verify: true
+EOF3
+rundir="$XDG_STATE_HOME/workflow/runs/app/longer"
+: >"$WF_TMP/go-t2"
+
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
+	workflow run --plan-file "$T_TMP/longer.md" >"$T_TMP/longer.log" 2>&1 &
+runpid=$!
+
+for _ in $(seq 1 100); do
+	[ "$(cat "$rundir/t1.state" 2>/dev/null)" = dispatched ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 't1 is in flight'
+
+run workflow redispatch t1 --review-deadline 7
+is "$RC" 0 'the deadline reaches the live run'
+like "$OUT" 'may read for 7 minute' 'and the line says how long its reading may take'
+is "$(cat "$rundir/t1.review-deadline")" 7 'the minutes ride with the task in the run dir'
+is "$(cat "$rundir/t1.dispatches")" 1 'and nothing was dispatched'
+[ -f "$rundir/t1.redispatch" ] && notok 'no redispatch marker was left behind' || ok 'no redispatch marker was left behind'
+
+: >"$WF_TMP/release-t1"
+wait "$runpid"
+is "$?" 0 'the run ends with everything merged'

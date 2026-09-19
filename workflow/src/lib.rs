@@ -130,7 +130,11 @@ pub fn run(cli: Cli) -> i32 {
             against,
         } => advise::cmd_advise(&question, &file, against.as_deref()),
         Command::Reap => run::cmd_reap(),
-        Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
+        Command::Redispatch {
+            task,
+            model,
+            review_deadline,
+        } => run::cmd_redispatch(&task, model.as_deref(), review_deadline),
         Command::Accept { task } => run::cmd_accept(&task),
         Command::Status { json } => status::cmd_status(json),
         Command::Wait { timeout, merges } => wait::cmd_wait(timeout, merges),

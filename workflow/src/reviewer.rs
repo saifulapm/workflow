@@ -25,6 +25,13 @@ pub const DIFF_CAP: usize = 200 * 1024;
 /// deadline.
 pub const DEADLINE_MIN_DEFAULT: f64 = 15.0;
 
+/// Past this a brief is named at dispatch: four times the size a default
+/// deadline is known to carry. Two readings of an 80 KB brief spent the whole
+/// fifteen minutes exploring it and wrote no verdict, and the lever -- a
+/// deadline for this one task -- is only of use if the orchestrator hears
+/// about the size before the time is spent (friction #M0EFWGJ7).
+pub const PROMPT_WARN_BYTES: usize = 120 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Ship,
@@ -322,7 +329,10 @@ pub fn deadline_s() -> i64 {
     )
 }
 
-fn deadline_from(value: Option<&str>) -> i64 {
+/// Minutes as the deadline in seconds: the env rung above and a task's own
+/// `review-deadline` are both read through this, so they take the same
+/// fractional value and the same floor of one second.
+pub(crate) fn deadline_from(value: Option<&str>) -> i64 {
     let minutes = value
         .and_then(|v| v.trim().parse::<f64>().ok())
         .filter(|m| *m > 0.0)

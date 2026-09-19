@@ -133,6 +133,10 @@ again -- a fresh run retries failed tasks by itself.")]
         /// The model this task is dispatched with from here on.
         #[arg(long)]
         model: Option<String>,
+        /// Minutes the reading in flight may still take. Nothing is
+        /// dispatched: the live run reads this every poll.
+        #[arg(long = "review-deadline", value_name = "MIN")]
+        review_deadline: Option<f64>,
     },
     /// Land a task the run failed, as it stands, with the findings filed.
     #[command(
@@ -286,8 +290,10 @@ usage: workflow <command> [options]
       0 answered · 1 no answer · 2 nobody named, or a fourth consult
   reap
       0 nothing to do · 1 reaped something
-  redispatch <task> [--model <name>]
-      ask the live run to dispatch a failed task again
+  redispatch <task> [--model <name>] [--review-deadline <min>]
+      ask the live run to dispatch a failed task again, or -- with
+      --review-deadline -- give the reading in flight more time and
+      dispatch nothing
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
   accept <task>
       land a task the run failed, as it stands, the findings filed

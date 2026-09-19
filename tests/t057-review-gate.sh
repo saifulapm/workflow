@@ -68,6 +68,13 @@ case $task in
 		echo 'Error: this session is not logged in.' >&2
 		sleep 30
 		;;
+	slowread-review)
+		# Reads past the run's own review deadline. The test grants it
+		# more time while it is going; without that it is stopped here
+		# and a second reading starts.
+		sleep 9
+		printf 'VERDICT: ship\n' >"$answer"
+		;;
 	residue-review)
 		# The first reading leaves a stray file in the integration
 		# worktree and is still going when its deadline stops it; the
@@ -750,3 +757,44 @@ like "$OUT" 'ran past its 3 second deadline' 'the first of them stopped at the d
 unlike "$OUT" 'voids the reading' 'and its residue voided neither reading'
 is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/residue/residue/_integration" status --porcelain | wc -l)" 0 \
 	'with the integration worktree clean'
+
+
+## ------------------------------ a reading granted more time while it reads
+
+# `WORKFLOW_REVIEW_DEADLINE_MIN` is read at call time, and a live process's
+# environment cannot be changed: a task whose reader needed longer failed,
+# and restarting the run was the only lever. The task's own rung is read
+# every poll, so a value written mid-reading extends the reading in flight.
+new_repo slowread
+mem_register
+"$MEM_BIN" project set review-model fable >/dev/null
+"$MEM_BIN" project set verify true >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: slowread
+
+- [ ] slowread The one whose reader needs longer than the run allows
+      Files: app/slowread.php
+      Verify: true
+- [ ] side A second task, so the plan is worth a worker
+      Files: app/side.php
+      Verify: true
+EOF
+
+rundir="$XDG_STATE_HOME/workflow/runs/slowread/slowread"
+env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_DEADLINE_MIN=0.1 \
+	workflow run >"$T_TMP/slowread.log" 2>&1 &
+runpid=$!
+for _ in $(seq 1 400); do
+	[ -s "$rundir/slowread.review-session" ] && break
+	sleep 0.05
+done
+run workflow redispatch slowread --review-deadline 0.5
+is "$RC" 0 'the deadline reaches the run while the reader is still reading'
+
+wait "$runpid"
+is "$?" 0 'the run merges the task its reader took longer over'
+is "$(cat "$rundir/slowread.state")" merged 'the task merged'
+is "$(cat "$rundir/slowread.review-tries")" 1 'on its first and only reading'
+unlike "$(cat "$T_TMP/slowread.log")" 'task slowread: the review ran past' \
+	'and no deadline stopped it'

@@ -1445,20 +1445,27 @@ impl Run {
                 std::fs::read_to_string(self.dir.join(format!("{task}.review.{k}"))).ok()
             })
             .collect();
-        let _ = std::fs::write(
-            &prompt,
-            reviewer::prompt(
-                &plan_text,
-                &t,
-                &diff,
-                &stat,
-                &self.int_wt,
-                &answer,
-                &pages,
-                &gate,
-                &earlier,
-            ),
+        let text = reviewer::prompt(
+            &plan_text,
+            &t,
+            &diff,
+            &stat,
+            &self.int_wt,
+            &answer,
+            &pages,
+            &gate,
+            &earlier,
         );
+        if text.len() > reviewer::PROMPT_WARN_BYTES {
+            warn(format!(
+                "task {task}: this reading's brief is {} KB, past the {} KB a default deadline is \
+                 known to carry -- `workflow redispatch {task} --review-deadline <minutes>` gives \
+                 the reading in flight more time",
+                text.len() / 1024,
+                reviewer::PROMPT_WARN_BYTES / 1024
+            ));
+        }
+        let _ = std::fs::write(&prompt, &text);
         write_field(&self.dir, task, "review-tries", "0");
         warn(format!("task {task}: {model} is reading the diff"));
         self.read_start(task);
@@ -1538,7 +1545,13 @@ impl Run {
         let h = self.review_handle(task);
         let started: i64 = self.field(task, "review-started").parse().unwrap_or(0);
         let waited = sys::now() - started;
-        let deadline_s = reviewer::deadline_s();
+        // The task's own rung first, read every pass: a value written while
+        // the reader is going extends the reading in flight, which a live
+        // process's environment cannot do (friction #M0EFWGJ7).
+        let deadline_s = match self.field(task, "review-deadline") {
+            min if min.trim().is_empty() => reviewer::deadline_s(),
+            min => reviewer::deadline_from(Some(&min)),
+        };
         // Gone with an answer is the clean end. Gone without one within the
         // first moments is a dispatch still coming up, not an ending. The
         // deadline below is an ending too: a session stopped there has been
@@ -3793,7 +3806,12 @@ fn shutdown(run: &Run) -> i32 {
 /// Only a run whose lock is held right now can honour it; anything else is a
 /// stopped run, and a stopped run's failed work comes back by running the
 /// plan again.
-pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
+///
+/// `--review-deadline` is the one flag that dispatches nothing: it writes the
+/// minutes a reading may take beside the task, which `review_pass` reads
+/// every poll, so a task reading an outsized diff can be granted the time
+/// without restarting the run (friction #M0EFWGJ7).
+pub fn cmd_redispatch(task: &str, model: Option<&str>, review_deadline: Option<f64>) -> i32 {
     if !Git::here().inside_worktree() {
         warn("redispatch: stand in the project checkout");
         return exit::USAGE;
@@ -3820,13 +3838,26 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
             continue;
         }
         let state = field(&dir, task, "state");
-        if state != FAILED && state != DISPATCHED {
-            continue;
-        }
         let plan_id = dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+        // The reading to extend belongs to a task this run holds in any
+        // state: `reviewing` is where it matters, and that is no state to
+        // dispatch from.
+        if let Some(min) = review_deadline {
+            if state.is_empty() {
+                continue;
+            }
+            write_field(&dir, task, "review-deadline", &min.to_string());
+            warn(format!(
+                "run {plan_id}: {task} may read for {min} minute(s) from when its reading started"
+            ));
+            return exit::OK;
+        }
+        if state != FAILED && state != DISPATCHED {
+            continue;
+        }
         // A model named here rides with the task for the rest of the run --
         // this task's, nobody else's (friction #MVHC4XD1).
         if let Some(m) = model {
@@ -3845,9 +3876,12 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
         return exit::OK;
     }
 
-    warn(format!(
-        "no live run holds {task} failed or dispatched -- run the plan again to retry failed tasks"
-    ));
+    warn(match review_deadline {
+        Some(_) => format!("no live run holds {task} -- the reading to extend is a live run's"),
+        None => format!(
+            "no live run holds {task} failed or dispatched -- run the plan again to retry failed tasks"
+        ),
+    });
     exit::FAILED
 }
 
