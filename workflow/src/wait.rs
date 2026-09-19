@@ -34,7 +34,12 @@ fn live_run(project_dir: &str) -> Option<PathBuf> {
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join("plan.md").is_file())
+        // `started` as well as `plan.md`: the run writes the plan down only
+        // once the trunk gate is green, and for the whole of that suite --
+        // minutes -- a held lock was invisible here and wait said no run was
+        // live (friction #KBPVJF24). A file either way, since the lock file
+        // itself makes the directory.
+        .filter(|p| p.is_dir() && (p.join("started").is_file() || p.join("plan.md").is_file()))
         .collect();
     dirs.sort();
     dirs.into_iter().find(|d| run::lock_run(d).is_none())

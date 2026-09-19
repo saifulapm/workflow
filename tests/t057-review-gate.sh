@@ -254,10 +254,12 @@ done
 # reviews==1 poll can land inside that window and read t1.failed or
 # t1.review.1 before either exists.
 is "$(cat "$rundir/t1.reviews")" 1 'the fix count is one'
-like "$(cat "$rundir/t1.failed")" '^the reviewer wants fixes first \(review 1\) -- read ' 'with a note that says so and names the file'
-review=$(sed 's/.* -- read //' "$rundir/t1.failed")
-is "$review" "$rundir/t1.review.1" 'which is <task>.review.<n> in the run dir'
-like "$(cat "$review")" 'app/t1.php:1 -- says draft' 'and it holds the findings'
+# The note the failure carried is gone by now: the task has been dispatched
+# again, and a dispatch clears the last attempt's reason so no live worker is
+# reported under it (frictions #9TJ759K3, #WBMMFJ3Y). What it named survives
+# in the kept verdict file, and in the brief the next attempt reads.
+review="$rundir/t1.review.1"
+like "$(cat "$review")" 'app/t1.php:1 -- says draft' 'the verdict is kept as <task>.review.<n> in the run dir'
 like "$(cat "$rundir/t1.review-prompt")" '# Review of task t1 before it merges' 'the prompt names the task'
 like "$(cat "$rundir/t1.review-prompt")" 'Ruling 1\. The t1 service' 'carries the plan of record'
 like "$(cat "$rundir/t1.review-prompt")" 'Done: app/t1.php carries the fix' 'the task block'
@@ -385,6 +387,51 @@ is "$RC" 1 'a merged task is not accepted twice'
 wait "$runpid"
 is "$?" 0 'and the run completes'
 is "$(git rev-list --count "integration/accept" -- app/twice.php)" 3 'all three of its commits are on integration'
+
+## --------------------------------- accept with no run live merges it here
+
+# A run ends in the same pass as the verdict that settles a task, so there
+# was never a window in which a live run could be handed a marker: accept
+# said "no live run holds t3 failed" and the only way on was racing a fresh
+# `workflow run` into its first second (frictions #C6X70T32, #V1720VEV,
+# #NM06YA8Q). And a task that failed because the reading could not be had at
+# all -- t3's reader meddles with the tree, which voids it -- has no fix
+# verdict to be accepted over, and was refused for that (friction #GWPHRDDK).
+: >"$WF_TMP/reviews.log"
+plan voided '- [ ] t2 Add the t2 service
+      Files: app/t2.php
+      Verify: true
+- [ ] t3 Add the t3 service
+      Files: app/t3.php
+      Verify: true'
+vrun="$XDG_STATE_HOME/workflow/runs/app/voided"
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/voided.md"
+is "$RC" 1 'the run stops short over the readings it could not have'
+is "$(cat "$vrun/t3.state")" failed 't3 failed on a voided reading'
+[ -f "$vrun/t3.reviews" ] && notok 'with no fix verdict to accept over' "$(cat "$vrun/t3.reviews")" || ok 'with no fix verdict to accept over'
+
+run workflow accept t3
+is "$RC" 0 'accept merges it itself with no run live'
+like "$OUT" 'accepted by request -- merging unread' 'saying it merged over no reading at all'
+is "$(cat "$vrun/t3.state")" merged 'the branch merged as it stands'
+run git cat-file -e "integration/voided:app/t3.php"
+is "$RC" 0 "and its work is on the integration branch"
+like "$(cat "$T_TMP/voided.md")" '\[x\] t3' 'ticked off in the plan file it came from'
+is "$(grep -c ' t3 ' "$WF_TMP/reviews.log")" 2 'with no reader called for the merge'
+
+## ------------------------------ a marker a run left behind is honoured first
+
+# A marker written to a run that ended before its poll read it is the next
+# run's to answer. The rerun used to reset the task to pending and dispatch a
+# fresh worker before the accept scan came round, then delete the marker
+# saying the task was dispatched and not failed (friction #Y7JTF4QR).
+: >"$vrun/t2.accept"
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/voided.md"
+is "$RC" 0 'the rerun completes'
+is "$(cat "$vrun/t2.state")" merged 'the marker it inherited is honoured'
+is "$(cat "$vrun/t2.dispatches")" 1 'with no fresh worker spent on a task already settled'
+is "$(grep -c ' t2 ' "$WF_TMP/reviews.log")" 2 'and no reading beyond the two it had'
+like "$OUT" 'task t2: accepted by request' 'the run says what it did'
 
 ## --------------------------------------------- the variable beats the key
 

@@ -200,6 +200,18 @@ for _ in $(seq 1 100); do
 	sleep 0.2
 done
 is "$(cat "$rundir/t1.dispatches")" 2 'the task went again'
+
+# The reason the last attempt ended used to stay in the run dir until
+# something merged the task, so status reported it beside a task a live
+# worker had already taken up (frictions #9TJ759K3, #WBMMFJ3Y).
+for _ in $(seq 1 100); do
+	[ -n "$(cat "$rundir/t1.failed" 2>/dev/null)" ] || break
+	sleep 0.2
+done
+is "$(cat "$rundir/t1.failed")" '' 'and the failure it was replaced over does not follow it there'
+run_out workflow status --json
+like "$OUT" '"state": *"dispatched"' 'status has it dispatched'
+unlike "$OUT" 'replaced by request' 'with no failure reason beside it'
 truthy "$(kill -0 "$first" 2>/dev/null && echo 1 || echo 0)" 'the first session was stopped'
 like "$(cat "$T_TMP/swap.log")" 'replaced by request' 'the log says why'
 is "$(sed -n 2p "$WF_TMP/models-t1")" haiku 'and the second dispatch carried the model named'

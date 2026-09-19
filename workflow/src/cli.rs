@@ -134,17 +134,20 @@ again -- a fresh run retries failed tasks by itself.")]
         #[arg(long)]
         model: Option<String>,
     },
-    /// Land a task the reader failed, as it stands, with the findings filed.
+    /// Land a task the run failed, as it stands, with the findings filed.
     #[command(
-        long_about = "Land a task the reader failed, as it stands, with the findings filed.
+        long_about = "Land a task the run failed, as it stands, with the findings filed.
 
-Two fix rounds go by themselves and a third fix verdict is the orchestrator's.
-This writes a marker in the live run's directory; the run merges the task's
-branch on its next poll with no reader this time -- ownership, the words, the
-rebase and the gate's own suite still stand -- and every finding of the last
-reading becomes a mem follow-up (`mem log --type followup`), so nothing true
-is lost and nothing minor costs another round. The other way out is to edit
-the plan and `workflow redispatch <task>`."
+Two fix rounds go by themselves and a third fix verdict is the orchestrator's;
+so is a task that failed because the reading could not be had at all. With a
+run live this writes a marker in its directory and the run merges the task's
+branch on its next poll; with no run live it does that merge itself, off the
+last run's state -- a run ends in the same pass as the verdict, so there is no
+window to hand a marker to. Either way there is no reader this time --
+ownership, the words, the rebase and the gate's own suite still stand -- and
+every finding of the last reading becomes a mem follow-up (`mem log --type
+followup`), so nothing true is lost and nothing minor costs another round. The
+other way out is to edit the plan and `workflow redispatch <task>`."
     )]
     Accept { task: String },
     /// Report this project's runs: task states, spend, lock liveness.
@@ -286,6 +289,9 @@ usage: workflow <command> [options]
   redispatch <task> [--model <name>]
       ask the live run to dispatch a failed task again
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
+  accept <task>
+      land a task the run failed, as it stands, the findings filed
+      0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
   status [--json]
       report this project's runs: task states, spend, lock liveness
       0 reported · 2 outside a project

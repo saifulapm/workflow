@@ -33,8 +33,8 @@ bad)
 	printf '{"is_error":false,"result":"ok"}\n'
 	exit 0
 	;;
-hold)
-	while [ ! -f "$WF_TMP/release-hold" ]; do sleep 0.2; done
+hold | hold2)
+	while [ ! -f "$WF_TMP/release-$task" ]; do sleep 0.2; done
 	;;
 esac
 mkdir -p app
@@ -118,5 +118,68 @@ is "$(grep -c ' ended ' "$rundir/events")" 1 'and the ending once'
 
 run workflow wait
 is "$RC" 0 'and with the run gone, wait is back to returning at once'
+
+## ------------------------------------- a new run starts the cursor afresh
+
+# The run dir is keyed by the plan, so a second run appends to the first
+# run's events file -- and its first wait used to return at once on the last
+# run's 'ended' or 'failed' line, while the live run was still dispatching
+# (frictions #RFKBV9GY, #Y1Q0H852, #WBMMFJ3Y, #9TJ759K3). The cursor is
+# stamped past what is already there when the run takes the lock.
+cat >"$T_TMP/plan2.md" <<'PLAN'
+# plan: waited
+
+- [x] hold Stay alive until released
+      Files: app/hold.php
+      Verify: true
+- [x] ask Add the ask service
+      Files: app/ask.php
+      Verify: true
+- [x] t1 Add the t1 service  [after: ask]
+      Files: app/t1.php
+      Verify: true
+- [ ] hold2 Stay alive until released too
+      Files: app/hold2.php
+      Verify: true
+PLAN
+env WORKFLOW_MAX_WORKERS=3 WORKFLOW_DEADLINE_MIN=0.5 \
+	workflow run --plan-file "$T_TMP/plan2.md" >"$T_TMP/run2.log" 2>&1 &
+run2pid=$!
+for _ in $(seq 1 300); do
+	[ "$(cat "$rundir/hold2.state" 2>/dev/null)" = dispatched ] && break
+	sleep 0.2
+done
+is "$(cat "$rundir/hold2.state" 2>/dev/null)" dispatched 'the second run is live with a worker out'
+
+run timeout 30 workflow wait --timeout 1
+is "$RC" 3 'the first wait of a second run blocks rather than replaying'
+is "$OUT" '' 'and the run before it is behind the cursor, ending and all'
+
+: >"$WF_TMP/release-hold2"
+wait "$run2pid"
+is "$(grep -c ' ended ' "$rundir/events")" 2 'both runs wrote their ending to the one events file'
+
+## --------------------------------------- a run still inside the trunk gate
+
+# `setup` writes `started` before the trunk gate and `plan.md` only once the
+# gate is green, so for the whole of that suite the held lock was invisible
+# here and wait said no run was live (friction #KBPVJF24).
+if command -v flock >/dev/null 2>&1; then
+	gating="$XDG_STATE_HOME/workflow/runs/app/gating"
+	mkdir -p "$gating"
+	printf '%s\n' "$(date +%s)" >"$gating/started"
+	flock "$gating/lock" sleep 30 &
+	locker=$!
+	# Held when this can no longer take it, however loaded the machine is.
+	for _ in $(seq 1 300); do
+		flock -n "$gating/lock" true 2>/dev/null || break
+		sleep 0.1
+	done
+	run timeout 30 workflow wait --timeout 1
+	is "$RC" 3 'a run in the trunk gate, before plan.md, is waited on by its lock alone'
+	unlike "$OUT" 'no run is live here' 'not called nothing at all'
+	kill "$locker" 2>/dev/null
+	wait "$locker" 2>/dev/null || true
+fi
 
 t_done

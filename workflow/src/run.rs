@@ -388,10 +388,13 @@ impl Run {
 
     fn set_state(&self, task: &str, state: &str) {
         write_field(&self.dir, task, "state", state);
-        if state == MERGED {
+        if state == MERGED || state == DISPATCHED {
             // A failure note used to outlive its failure: status went on
             // reporting why a task failed on one run long after another had
-            // merged it (friction #BHPS3G7D).
+            // merged it (friction #BHPS3G7D), and went on reporting "the
+            // launch was refused" beside a task a later attempt had already
+            // taken up (frictions #9TJ759K3, #WBMMFJ3Y). What the last
+            // attempt said lives on in the brief instead.
             write_field(&self.dir, task, "failed", "");
         }
     }
@@ -918,11 +921,12 @@ impl Run {
         }
     }
 
-    /// `workflow accept <task>`, honoured: the task failed on a reading, its
-    /// branch holds the diff, and the orchestrator is landing it over the
-    /// findings. The merge runs again -- ownership, the words, the rebase,
-    /// the gate's suite -- with no reader this time, and every finding of
-    /// the last reading is filed as a follow-up so nothing true is lost.
+    /// `workflow accept <task>`, honoured: the run settled the task as
+    /// failed, its branch holds the diff, and the orchestrator is landing it
+    /// over whatever the reader said. The merge runs again -- ownership, the
+    /// words, the rebase, the gate's suite -- with no reader this time, and
+    /// every finding of the last reading is filed as a follow-up so nothing
+    /// true is lost.
     fn accept(&self, task: &str) {
         let n: u64 = self.field(task, "reviews").parse().unwrap_or(0);
         let last = std::fs::read_to_string(self.dir.join(format!("{task}.review.{n}")))
@@ -932,8 +936,15 @@ impl Run {
             .map(|(tag, body)| format!("{tag} {body}"))
             .collect();
         let _ = std::fs::write(self.dir.join(format!("{task}.unread")), "");
+        // A task that failed because the reading could not be had -- voided,
+        // deadlined, no verdict -- has no fix verdict to merge over, and is
+        // accepted the same way (friction #GWPHRDDK).
         warn(format!(
-            "task {task}: accepted by request -- merging over reading {n} unread"
+            "task {task}: accepted by request -- merging {}",
+            match n {
+                0 => "unread".to_string(),
+                n => format!("over reading {n} unread"),
+            }
         ));
         match self.merge(task) {
             Ok(Merge::Landed) => {
@@ -2491,7 +2502,40 @@ impl Run {
             self.dir.join("review-effort"),
             format!("{}\n", self.review_effort.as_deref().unwrap_or("")),
         );
+        // Where a merge of this plan is ticked off, for a pass that rebuilds
+        // the run off this dir rather than off the command line: `workflow
+        // accept` with no run live ticks the file the plan came from, the
+        // way the run itself would (friction #C6X70T32).
+        let _ = std::fs::write(
+            self.dir.join("plan-file"),
+            format!(
+                "{}\n",
+                self.plan_file
+                    .as_deref()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            ),
+        );
 
+        if !self.int_worktree() {
+            return false;
+        }
+
+        for t in self.plan.tasks.clone() {
+            if t.checked {
+                continue; // already done, nothing to run
+            }
+            if !self.make_worktree(&t.id) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The integration branch and the worktree the gate merges in, made if
+    /// they are not there and brought up to the run's base. Setup's, and
+    /// `workflow accept`'s when it merges for a run that has ended.
+    fn int_worktree(&mut self) -> bool {
         let git = self.git();
         // Created once, never reset. If it is behind the base -- which is what
         // the sanctioned recovery leaves behind, the last run's work having been
@@ -2548,15 +2592,6 @@ impl Run {
         // here, and a tree with no node_modules is red before anything is
         // dispatched (friction #XJ9TZ2PW).
         self.link_deps(&self.int_wt);
-
-        for t in self.plan.tasks.clone() {
-            if t.checked {
-                continue; // already done, nothing to run
-            }
-            if !self.make_worktree(&t.id) {
-                return false;
-            }
-        }
         true
     }
 
@@ -3253,6 +3288,20 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         ));
         return exit::USAGE;
     };
+    // A run dir is keyed by plan, so this run appends its events to the last
+    // run's file. The cursor `workflow wait` keeps is stamped to the end of
+    // what is already there, or the first wait of a live run returns at once
+    // on the previous run's ending (frictions #RFKBV9GY, #Y1Q0H852,
+    // #WBMMFJ3Y, #9TJ759K3).
+    let _ = std::fs::write(
+        run.dir.join("wait.cursor"),
+        format!(
+            "{}\n",
+            std::fs::metadata(run.dir.join("events"))
+                .map(|m| m.len())
+                .unwrap_or(0)
+        ),
+    );
 
     if !run.setup() {
         run.rollback();
@@ -3361,6 +3410,13 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             run.tick_off(&id);
             continue;
         }
+        // A task the orchestrator asked to accept stays failed and waiting
+        // for that: reset to pending it was dispatched to a fresh worker
+        // before the loop below had read the marker, which is a whole
+        // attempt spent on work already settled (friction #Y7JTF4QR).
+        if run.state(&id) == FAILED && run.dir.join(format!("{id}.accept")).exists() {
+            continue;
+        }
         run.set_state(&id, PENDING);
     }
 
@@ -3376,11 +3432,15 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
             .filter(|id| run.plan.get(id).is_some_and(|t| run.deps_satisfied(t)))
             .collect()
     };
-    let marked_failed = |run: &Run| -> bool {
+    // A failed task somebody has asked something of -- to go again, or to be
+    // accepted as it stands. The marker of a run that ended before it could
+    // be honoured is this run's to answer, so the loop stays open for it
+    // (friction #Y7JTF4QR).
+    let marked = |run: &Run, ext: &str| -> bool {
         run.plan
             .ids()
             .into_iter()
-            .any(|id| run.state(&id) == FAILED && run.dir.join(format!("{id}.redispatch")).exists())
+            .any(|id| run.state(&id) == FAILED && run.dir.join(format!("{id}.{ext}")).exists())
     };
 
     let mut warned_waiting: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3393,13 +3453,42 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         || !run.reviewing().is_empty()
         || !waiting.is_empty()
         || !ready(&run).is_empty()
-        || marked_failed(&run)
+        || marked(&run, "redispatch")
+        || marked(&run, "accept")
     {
         if stopping() {
             return shutdown(&run);
         }
         if !run.take_new_tasks().is_empty() {
             all_ids = run.plan.ids();
+        }
+        // `workflow accept <task>`: a task the run settled as failed landed
+        // over the reader's findings. Read before anything is dispatched, or
+        // a task whose marker was written while this run was starting is
+        // given a fresh worker first (friction #Y7JTF4QR).
+        for id in &all_ids {
+            let marker = run.dir.join(format!("{id}.accept"));
+            if !marker.exists() {
+                continue;
+            }
+            // The counter is written only by a fix verdict, so a task that
+            // failed because the reading could not be had had none and was
+            // refused (friction #GWPHRDDK). What accept needs is a settled
+            // failure with a diff on its branch.
+            if !run.resumable(id) {
+                let _ = std::fs::remove_file(&marker);
+                warn(format!(
+                    "task {id}: asked to accept, but it is {} with {} commit(s) on its branch -- ignored",
+                    run.state(id),
+                    run.commits(id)
+                ));
+                continue;
+            }
+            if !run.reviewing().is_empty() {
+                continue; // a reader holds integration; the marker keeps
+            }
+            let _ = std::fs::remove_file(&marker);
+            run.accept(id);
         }
         for id in ready(&run) {
             if run.running() >= run.max_workers {
@@ -3418,27 +3507,6 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         // its whole life (friction #W0S44DE6); nothing here closes behind a
         // failed task, so the marker is honoured for as long as the run lives
         // (friction #G550QXHZ).
-        // `workflow accept <task>`: a failed reading landed over its findings.
-        for id in &all_ids {
-            let marker = run.dir.join(format!("{id}.accept"));
-            if !marker.exists() {
-                continue;
-            }
-            let _ = std::fs::remove_file(&marker);
-            if run.state(id) != FAILED || run.field(id, "reviews").parse::<u64>().unwrap_or(0) == 0
-            {
-                warn(format!(
-                    "task {id}: asked to accept, but it is {} and not failed on a reading -- ignored",
-                    run.state(id)
-                ));
-                continue;
-            }
-            if !run.reviewing().is_empty() {
-                let _ = std::fs::write(&marker, "");
-                continue; // a reader holds integration; the marker keeps
-            }
-            run.accept(id);
-        }
         for id in &all_ids {
             let marker = run.dir.join(format!("{id}.redispatch"));
             if !marker.exists() {
@@ -3761,15 +3829,25 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
     exit::FAILED
 }
 
-/// `workflow accept <task>` -- the marker the live run's poll loop reads for
-/// a task failed on a reading: land the diff as it stands, the findings
-/// filed as follow-ups. The orchestrator's way out of a reader that has
-/// not run out of true things to say.
+/// `workflow accept <task>` -- land a task the run settled as failed, as it
+/// stands, the findings filed as follow-ups. The orchestrator's way out of a
+/// reader that has not run out of true things to say.
+///
+/// A live run is handed a marker its poll loop reads. With nobody live it
+/// merges here: the run that failed the task ends in the same pass as the
+/// third fix verdict, so waiting for a window in which a marker could be
+/// honoured meant racing a fresh `workflow run` into its first second, and
+/// losing that race spent another worker on work already settled (frictions
+/// #C6X70T32, #V1720VEV, #NM06YA8Q).
 pub fn cmd_accept(task: &str) -> i32 {
     if !Git::here().inside_worktree() {
         warn("accept: stand in the project checkout");
         return exit::USAGE;
     }
+    memcli::resolve_from_here();
+    let Some((_git, top)) = repo::goto_toplevel() else {
+        return exit::USAGE;
+    };
     let Some(project) = memcli::project_current() else {
         warn("accept: mem does not know this checkout");
         return exit::USAGE;
@@ -3783,33 +3861,119 @@ pub fn cmd_accept(task: &str) -> i32 {
         .filter(|p| p.is_dir() && p.join("plan.md").is_file())
         .collect();
     dirs.sort();
-    for dir in dirs {
-        if lock_run(&dir).is_some() {
+    // The live run first: it holds the project lock, and a merge from out
+    // here would run beside its own.
+    for dir in &dirs {
+        if lock_run(dir).is_some() {
             continue;
         }
-        if field(&dir, task, "state") != FAILED {
+        if field(dir, task, "state") != FAILED {
             continue;
-        }
-        let n = field(&dir, task, "reviews");
-        if n.is_empty() || n == "0" {
-            warn(format!(
-                "accept: {task} did not fail on a reading; there is nothing to accept over"
-            ));
-            return exit::USAGE;
         }
         let _ = std::fs::write(dir.join(format!("{task}.accept")), "");
+        // A task that failed because the reading could not be had at all has
+        // no fix verdict to be accepted over (friction #GWPHRDDK).
+        let over = match field(dir, task, "reviews").parse::<u64>().unwrap_or(0) {
+            0 => "as it stands".to_string(),
+            n => format!("over reading {n}"),
+        };
         warn(format!(
-            "run {}: asked to accept {task} over reading {n} -- it merges on the next poll, unread, with the findings filed as follow-ups",
+            "run {}: asked to accept {task} {over} -- it merges on the next poll, unread, with the findings filed as follow-ups",
             dir.file_name()
                 .map(|d| d.to_string_lossy().to_string())
-                .unwrap_or_default()
+                .unwrap_or_default(),
         ));
         return exit::OK;
     }
+    // With nobody live it is the last run's state that is accepted, and only
+    // that one's: a task id stands in as many of a project's plans as name
+    // it, and an older run's failure is not the one just read out.
+    let last = dirs.into_iter().max_by_key(|d| {
+        recorded(d, "started")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0)
+    });
+    if let Some(dir) = last
+        && field(&dir, task, "state") == FAILED
+    {
+        return accept_here(&dir, &top, &project.dir_name(), task);
+    }
     warn(format!(
-        "no live run holds {task} failed -- run the plan again to retry failed tasks"
+        "no run here holds {task} failed -- `workflow status` says how the last one ended"
     ));
     exit::FAILED
+}
+
+/// The merge `workflow accept` does itself when no orchestrator is live: the
+/// run is rebuilt off its dir the way `workflow reap` rebuilds one, its
+/// integration worktree made again, and [`Run::accept`] runs there --
+/// ownership, the words, the rebase and the gate's own suite, no reader.
+fn accept_here(dir: &Path, top: &Path, project: &str, task: &str) -> i32 {
+    let Some(plan_id) = dir.file_name().map(|n| n.to_string_lossy().to_string()) else {
+        return exit::FAILED;
+    };
+    let Some(mut parsed) = std::fs::read_to_string(dir.join("plan.md"))
+        .ok()
+        .and_then(|text| plan::parse(&text, true))
+    else {
+        warn(format!(
+            "accept: run {plan_id} did not record a plan to merge against"
+        ));
+        return exit::FAILED;
+    };
+    parsed.plan_id = plan_id;
+    let base = std::fs::read_to_string(dir.join("base_sha"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if base.is_empty() {
+        warn(format!(
+            "accept: run {} did not record the commit it started from",
+            parsed.plan_id
+        ));
+        return exit::FAILED;
+    }
+    let mut run = new_run(parsed, top.to_path_buf(), project, base);
+    run.dir = dir.to_path_buf();
+    // Where this plan's merges are ticked off, as the run itself recorded it.
+    run.plan_file = recorded(dir, "plan-file")
+        .filter(|f| !f.is_empty())
+        .map(PathBuf::from);
+    let Some(_lock) = lock_run(&run.dir) else {
+        warn(format!(
+            "run {}: an orchestrator took this run while accept was reading it -- ask it again",
+            run.plan.plan_id
+        ));
+        return exit::FAILED;
+    };
+    if !run.resumable(task) {
+        warn(format!(
+            "accept: {task} is {} with {} commit(s) on its branch -- there is nothing to merge",
+            run.state(task),
+            run.commits(task)
+        ));
+        return exit::USAGE;
+    }
+    // The gate reads the task's own worktree for what it wrote outside its
+    // Files, and an earlier pass may have swept it.
+    if !run.int_worktree() || !run.make_worktree(task) {
+        return exit::FAILED;
+    }
+    run.accept(task);
+    let merged = run.state(task) == MERGED;
+    run.cleanup();
+    if !merged {
+        warn(format!(
+            "accept: {task} did not merge -- {}",
+            run.field(task, "failed")
+        ));
+        return exit::FAILED;
+    }
+    warn(format!(
+        "run {}: {task} is on {}; run the plan again to land it on the trunk",
+        run.plan.plan_id, run.int_branch
+    ));
+    exit::OK
 }
 
 pub fn cmd_reap() -> i32 {
