@@ -321,8 +321,9 @@ reading that changes the tree is void.
 /// reading ended -- a usage limit, a rate limit, an outage, a session that
 /// was never logged in. Case aside, since nothing pins how a provider
 /// capitalises its own message.
-const PROVIDER_LIMIT_MARKERS: [&str; 5] = [
+const PROVIDER_LIMIT_MARKERS: [&str; 6] = [
     "reached your",
+    "limit reached",
     "usage limit",
     "rate limit",
     "overloaded",
@@ -331,7 +332,9 @@ const PROVIDER_LIMIT_MARKERS: [&str; 5] = [
 
 /// The line, if any, where a reader's last words read as a provider's own
 /// refusal rather than a judgement on the diff. A match here is not a second
-/// reading's kind of problem: the run says so and stops.
+/// reading's kind of problem: the run says so and stops. A worker's pane is
+/// read the same way, to tell the session a limit paused from one that ended
+/// with nothing to show (`Run::paused`).
 pub fn provider_limit(text: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let lower = line.to_ascii_lowercase();

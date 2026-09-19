@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # A worker the usage limit pauses without ending: its pane stands and amx
-# reads it idle, so it is listed but not alive, and it says nothing past
-# `started` in its own status file. Neither dead nor working, it is held to
-# the stall deadline like a live worker, not collected the instant `alive`
-# goes false (friction #17SPEY7R). A session that died with the machine
-# looks the same in every way but one -- amx's evidence says the pane is
-# gone -- and that one is collected at once (frictions #B3391C6H,
-# #QT1PDNRK).
+# reads it idle, so it is listed but not alive, it says nothing past
+# `started` in its own status file, and the pane names the limit that
+# stopped it. Neither dead nor working, it is held to the stall deadline
+# like a live worker, not collected the instant `alive` goes false (friction
+# #17SPEY7R). A session that died with the machine looks the same in every
+# way but one -- amx's evidence says the pane is gone -- and that one is
+# collected at once (frictions #B3391C6H, #QT1PDNRK). So is a turn that
+# ended with nothing written and no limit named: nothing is coming back for
+# it (friction #VXFKQQ78).
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -15,9 +17,11 @@ export AMX_DIR="$T_TMP/amx"
 mkdir -p "$AMX_DIR"
 
 # A dispatch writes `started` to the task's status file and goes idle at
-# once -- paused, not working, with the pane still up -- unless the agent's
-# name says it is one that should run to `ready`. Status answers out of the
-# phase and evidence last written for the name; stop is recorded.
+# once -- paused, not working, with the pane still up and the provider's own
+# line drawn on it -- unless the agent's name says it is one that should run
+# to `ready`. With $WF_TMP/no-limit there the pane says nothing, which is a
+# turn that simply ended. Status answers out of the phase, the evidence and
+# the question last written for the name; stop is recorded.
 write_exec "$T_TMP/fake-amx" <<'AMX'
 #!/bin/sh
 verb=$1
@@ -39,9 +43,9 @@ new | sub)
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
 	status=$(sed -n 's/^Append one line per state change to \(.*\):$/\1/p' "$brief")
-	printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 	case $name in
 	wf-t2-* | wf-two-*)
+		printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 		cd "$dir" || exit 1
 		task=$(basename "$brief" .md)
 		file=$(sed -n 's/^ *Files: *//p' "$brief" | head -1)
@@ -52,13 +56,28 @@ new | sub)
 		printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 		printf 'done record\n' >"$AMX_DIR/$name.state"
 		;;
-	*) printf 'idle hooks\n' >"$AMX_DIR/$name.state" ;;
+	*)
+		printf 'idle hooks\n' >"$AMX_DIR/$name.state"
+		if [ -f "$WF_TMP/no-limit" ]; then
+			# A turn the provider cut off: nothing in the status file at
+			# all, and the stop reason the only account of why.
+			printf 'the turn ended: stopReason=length' >"$AMX_DIR/$name.words"
+		else
+			printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+			printf 'Weekly limit reached - Retrying in 5h' >"$AMX_DIR/$name.question"
+		fi
+		;;
 	esac
 	;;
 status)
 	[ -f "$AMX_DIR/$1.state" ] || exit 1
 	read -r state evidence <"$AMX_DIR/$1.state"
-	printf '{"id":"%s","state":"%s","evidence":"%s","last_event":0,"session":""}\n' "$1" "$state" "$evidence"
+	question=null
+	[ -f "$AMX_DIR/$1.question" ] && question=$(printf '{"text":"%s","options":[]}' "$(cat "$AMX_DIR/$1.question")")
+	words=null
+	[ -f "$AMX_DIR/$1.words" ] && words=$(printf '"%s"' "$(cat "$AMX_DIR/$1.words")")
+	printf '{"id":"%s","state":"%s","evidence":"%s","last_event":0,"session":"","question":%s,"last_words":%s}\n' \
+		"$1" "$state" "$evidence" "$question" "$words"
 	;;
 stop)
 	printf 'stop %s\n' "$1" >>"$WF_TMP/amx-stops"
@@ -124,6 +143,11 @@ is "$(cat "$rundir/t1.dispatches")" 2 'after exactly one redispatch, same as a s
 like "$(cat "$rundir/t1.failed")" 'stalled with no sign of life' \
 	'failed as a stall, never as a worker that reported and erred'
 is "$(sort -u "$T_TMP/amx-stops" | grep -c '^stop wf-t1-')" 2 'each paused session is ended with amx stop, the same way a stalled one is'
+# A pane amx is still releasing is a pane the next session must not be minted
+# into (friction #RN9DB37H): a dispatch stops the attempt before it again,
+# whatever ended it, and waits the kill grace out.
+is "$(grep -c "^$(grep '^stop wf-t1-' "$T_TMP/amx-stops" | head -1)\$" "$T_TMP/amx-stops")" 2 \
+	'and the first pane is stopped once more on the way into the redispatch'
 is "$(cat "$rundir/t2.state")" merged 'the worker beside it merged as usual'
 
 ## --------------------------------------- adopt_stale keeps it as adopted
@@ -157,6 +181,7 @@ orphan() {
 
 orphan paused-orphan pau1
 printf 'idle hooks\n' >"$AMX_DIR/wf-t1-pau1.state"
+printf 'Weekly limit reached - Retrying in 5h' >"$AMX_DIR/wf-t1-pau1.question"
 run env WORKFLOW_DEADLINE_MIN=0.05 workflow run --plan-file "$T_TMP/paused-orphan.md"
 like "$OUT" 'task t1: still working, from a run that is gone -- adopted' \
 	'a paused task from a dead run is adopted like a live one, not collected at once'
@@ -182,5 +207,37 @@ like "$OUT" 'task t1: failed -- the worker ended without a clean turn' \
 # Nobody read that work and the retry was unspent, so the run that collected
 # it sends it out again rather than ending on it (friction #MT2WCVA2).
 is "$(cat "$orundir/t1.dispatches")" 2 'and dispatched again in the same invocation'
+
+## ------------------------------- a turn that ended, with no limit named
+
+# The same pane, up and idle, with nothing on it saying a limit paused it and
+# nothing written to the status file: a provider that cut the turn off
+# mid-reasoning leaves exactly this. Nothing is coming back for it, so the
+# run collects it on the next poll and reports the stop reason rather than
+# holding the task to a stall deadline it spends in full while `wait` never
+# fires (friction #VXFKQQ78).
+: >"$WF_TMP/no-limit"
+cat >"$T_TMP/ended.md" <<'PLAN'
+# plan: ended
+
+- [ ] t1 A worker whose turn ended with nothing written
+      Files: app/One.php
+      Verify: true
+- [ ] t2 A second task so the run is worth having
+      Files: app/Two.php
+      Verify: true
+PLAN
+edir="$XDG_STATE_HOME/workflow/runs/app/ended"
+run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.2 timeout 120 \
+	workflow run --plan-file "$T_TMP/ended.md"
+is "$RC" 1 'the run ends with the task failed'
+is "$(cat "$edir/t1.state")" failed 'the task is failed'
+unlike "$(cat "$edir/t1.failed")" 'stalled' \
+	'not as a stall: the turn ended, it did not go quiet'
+like "$(cat "$edir/t1.failed")" 'the worker stopped without reporting ready -- it last said: the turn ended: stopReason=length' \
+	'and the stop reason the pane gave is the reason the run records'
+like "$(cat "$edir/events")" 'failed t1' 'the failure is an event, so wait fires on it'
+is "$(cat "$edir/t2.state")" merged 'the worker beside it merged as usual'
+rm -f "$WF_TMP/no-limit"
 
 t_done

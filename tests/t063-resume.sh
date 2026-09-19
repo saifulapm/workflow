@@ -141,3 +141,68 @@ is "$RC" 0 'pass 2: setup prunes the stale registration and resumes on the same 
 is "$(cat "$prunerun/t1.state")" merged 'pass 2: t1 merges'
 is "$(cat "$prunerun/t1.dispatches")" 2 'pass 2: on its second dispatch'
 is "$(cat "$prunerun/t2.state")" merged 'pass 2: the dependent runs and merges too'
+
+## ================== resumed on a worktree nothing was committed from ===
+
+# A worker that wrote for an hour and never committed has not left nothing:
+# its work is in the worktree and nowhere else. The run used to read that as
+# "its worker died leaving nothing", delete the worktree at cleanup, and send
+# the next attempt into a tree with no trace of the first (friction
+# #RN9DB37H). The tree is kept, and the attempt after it opens onto the work.
+
+write_exec "$T_TMP/uncommitted.sh" <<'FAKE'
+#!/bin/sh
+task=$1; status=$3
+mkdir -p app
+printf 'half a fix\n' >>"app/$task-scratch.php"
+# Nothing committed, nothing said: the shape of a turn that ran out.
+[ -f "$WF_TMP/finish-$task" ] || exit 0
+say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$status"; }
+say started
+printf '%s\n' "$task" >"app/$task.php"
+git add -A
+git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+say ready
+printf '{"is_error":false,"result":"ok"}\n'
+FAKE
+export FAKE="$T_TMP/uncommitted.sh"
+
+new_repo scratch
+mem_register
+"$MEM_BIN" project set verify true >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'PLAN'
+# plan: scratch
+
+- [ ] t1 The one that writes and never commits
+      Files: app/t1.php app/t1-scratch.php
+      Verify: true
+- [ ] t2 A second task so the plan is worth a run
+      Files: app/t2.php app/t2-scratch.php
+      Verify: true
+PLAN
+
+scratchrun="$XDG_STATE_HOME/workflow/runs/scratch/scratch"
+scratchwt="$XDG_STATE_HOME/workflow/worktrees/scratch/scratch"
+: >"$WF_TMP/finish-t2"
+
+run workflow run
+is "$RC" 1 'the run fails the task that wrote and never committed'
+like "$OUT" 'ended leaving its work uncommitted' \
+	'and says the work was left in the tree, not that the worker left nothing'
+is "$(cat "$scratchrun/t1.state")" failed 't1 failed for good'
+is "$(git rev-list --count 'main..scratch/t1' 2>/dev/null || echo 0)" 0 'with nothing on its branch'
+like "$OUT" 'its worktree holds work no commit has -- kept at' 'cleanup says it is keeping the tree'
+is "$(wc -l <"$scratchwt/t1/app/t1-scratch.php" 2>/dev/null)" 2 \
+	'and what both attempts wrote is still in that tree'
+
+## ------------------------------------------- the attempt after it
+
+: >"$WF_TMP/finish-t1"
+run workflow run
+is "$RC" 0 'the next run finishes the task'
+is "$(cat "$scratchrun/t1.state")" merged 't1 merges'
+run git cat-file -e 'integration/scratch:app/t1-scratch.php'
+is "$RC" 0 'on the work the attempts before it left in that worktree'
+[ -d "$scratchwt/t1" ] && scratchleft=yes || scratchleft=no
+is "$scratchleft" no 'and the tree is taken down once the work has landed'

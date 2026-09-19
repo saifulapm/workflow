@@ -714,6 +714,21 @@ impl Run {
         git.count(&format!("{anchor}..{}", self.branch(task)))
     }
 
+    /// Work in the task's worktree that no commit has: written, tracked or
+    /// not, and never handed to git. An attempt that ends this way has not
+    /// left nothing, whatever its branch and its status file say, so the
+    /// tree is kept for the next attempt rather than deleted out from under
+    /// it (friction #RN9DB37H).
+    fn uncommitted(&self, task: &str) -> bool {
+        let wt = self.worktree(task);
+        wt.is_dir()
+            && !Git::at(&wt)
+                .out(&["status", "--porcelain"])
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+    }
+
     /// The integration commit a task's worktree is brought up to: the branch
     /// tip, except while a reading holds a fast-forward on it that nothing
     /// has recorded -- then the commit before it, so no worker builds on
@@ -779,13 +794,21 @@ impl Run {
     }
 
     /// Listed by the backend and not alive, with nothing that says it is
-    /// done: no commit on its branch and no final word past `started` or
-    /// `progress` in its status file. The usage limit pauses a session
-    /// without ending it -- the pane stands, amx reads it idle, not gone --
-    /// and this is what tells that apart from a worker that actually
-    /// finished or died, so it is held to the stall deadline like a live
-    /// one instead of being collected the instant `alive` goes false
-    /// (friction #17SPEY7R).
+    /// done -- no commit on its branch and no final word past `started` or
+    /// `progress` -- and the pane itself naming the limit that stopped it.
+    /// The usage limit pauses a session without ending it: the pane stands,
+    /// amx reads it idle, not gone, and the session comes back by itself, so
+    /// it is held to the stall deadline like a live one instead of being
+    /// collected the instant `alive` goes false (friction #17SPEY7R).
+    ///
+    /// The limit has to be said out loud, in the question drawn on the pane
+    /// or in the worker's own last words. Every other turn that ends with an
+    /// empty status file leaves exactly the same shape -- a provider cutting
+    /// a worker off mid-reasoning, a stream that ended without a finish
+    /// reason -- and nothing is coming back for those: they sat `dispatched`
+    /// with an empty status for five minutes while `wait` never fired
+    /// (friction #VXFKQQ78). Collected now, `finish` reports each with the
+    /// last thing the pane said, so the reason lands in `<task>.failed`.
     ///
     /// A pidfile answers this on its own: the process seam's worker is
     /// either running or it is not, and a dead one is dead, not idle.
@@ -793,13 +816,19 @@ impl Run {
         if !self.worker_pid(task).is_empty() {
             return false;
         }
+        let h = self.handle(task);
         // Listed, not merely seen: a session that died with the machine has
         // a transcript and no row, and matched every clause below until the
         // stall deadline freed it (frictions #B3391C6H, #QT1PDNRK).
-        if !self.backend.listed(&self.handle(task)) || self.alive(task) {
+        if !self.backend.listed(&h) || self.alive(task) {
             return false;
         }
         if self.commits(task) != 0 {
+            return false;
+        }
+        if reviewer::provider_limit(&self.backend.question(&h)).is_none()
+            && reviewer::provider_limit(&self.backend.last_words(&h)).is_none()
+        {
             return false;
         }
         match self.last_status_line(task) {
@@ -1053,6 +1082,16 @@ impl Run {
             self.fail_task(task, "the plan of record no longer holds this task");
             return;
         };
+        // The pane the last attempt had, ended and still on the backend's
+        // books: amx parks an idle one and takes its time releasing it, and
+        // the fresh session minted a second later came up in a pane the park
+        // had not finished with -- "dispatch race: the worker never started",
+        // with the attempt's worktree already gone (friction #RN9DB37H). Stop
+        // it and wait the kill grace out before minting anything.
+        if !self.field(task, "session").is_empty() && self.backend.seen(&self.handle(task)) {
+            self.stop(task);
+            sys::sleep(self.kill_grace_s as f64);
+        }
         self.catch_up(task);
         self.own_deps(task);
         let wt = self.worktree(task);
@@ -2128,15 +2167,29 @@ impl Run {
         // Failing it stalls every dependent behind a task nobody has actually
         // attempted, so it gets the one retry a silent stall already had
         // (friction #195SW7VX).
+        //
+        // "Nothing" is the branch and the status file, and neither is the
+        // whole tree: a worker that wrote for an hour and never committed
+        // leaves its work in the worktree alone. Calling that nothing deleted
+        // the worktree at cleanup and sent the next attempt to a tree with no
+        // trace of the first, so it is said for what it is and the tree is
+        // kept (friction #RN9DB37H).
         let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
         if self.last_status_line(task).is_none() && self.commits(task) == 0 && tries < 2 {
+            let (what, after) = match self.uncommitted(task) {
+                true => (
+                    "its worker ended leaving its work uncommitted",
+                    "its worker ended without committing what it wrote; it is still in this worktree, so continue from there",
+                ),
+                false => (
+                    "its worker died leaving nothing",
+                    "its worker died before writing anything, and was dispatched again",
+                ),
+            };
             self.once_more(
                 task,
-                &format!(
-                    "its worker died leaving nothing{}",
-                    self.last_heard(task, false)
-                ),
-                "its worker died before writing anything, and was dispatched again",
+                &format!("{what}{}", self.last_heard(task, false)),
+                after,
             );
             return;
         }
@@ -2218,7 +2271,15 @@ impl Run {
                 ));
             }
             None => {
-                self.fail_task(task, "the worker stopped without reporting ready");
+                // With whatever the pane had to say, because a turn cut off
+                // by the provider ends cleanly as far as the backend can see
+                // and the stop reason is the only account of it there is
+                // (friction #VXFKQQ78).
+                let heard = self.last_heard(task, true);
+                self.fail_task(
+                    task,
+                    &format!("the worker stopped without reporting ready{heard}"),
+                );
                 return;
             }
             Some(_) => {}
@@ -2903,6 +2964,15 @@ impl Run {
             }
             if self.resumable(&t) {
                 continue; // its worktree stays for the next run to resume
+            }
+            // A failed attempt that wrote and never committed has left its
+            // work here and nowhere else (friction #RN9DB37H).
+            if self.state(&t) == FAILED && self.uncommitted(&t) {
+                warn(format!(
+                    "task {t}: its worktree holds work no commit has -- kept at {}",
+                    wt.display()
+                ));
+                continue;
             }
             if !git.quiet(&["worktree", "remove", "--force", &wt.to_string_lossy()]) {
                 let _ = std::fs::remove_dir_all(&wt);
