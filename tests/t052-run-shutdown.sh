@@ -82,4 +82,44 @@ is "$(cat "$rundir/t1.state")" dispatched \
 
 kill "$w1" "$w2" 2>/dev/null
 wait "$runpid" 2>/dev/null
+
+## ------------------------------------------------- a hangup is not that
+
+# SIGHUP is the shell that started the run going, and it has no opinion
+# about the work: every worker is a session of its own that outlives it. A
+# run backgrounded inside a pane used to die with the pane and take a worker
+# down mid-design (friction #8850J051). The workers are left where they are,
+# the tasks stay dispatched, and the next run in the checkout adopts them.
+rm -rf "$rundir" "$XDG_STATE_HOME/workflow/worktrees/app/shutdown"
+git worktree prune
+for b in shutdown/t1 shutdown/t2 integration/shutdown; do
+	git branch -D "$b" >/dev/null 2>&1
+done
+
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=5 \
+	workflow run --plan-file "$T_TMP/plan.md" >"$T_TMP/hup.log" 2>&1 &
+huppid=$!
+
+for _ in $(seq 1 100); do
+	[ -s "$rundir/t1.pid" ] && [ -s "$rundir/t2.pid" ] && break
+	sleep 0.2
+done
+h1=$(cat "$rundir/t1.pid" 2>/dev/null)
+h2=$(cat "$rundir/t2.pid" 2>/dev/null)
+isnt "$h1" '' 'both workers are running before the hangup'
+
+kill -HUP "$huppid"
+wait "$huppid"
+is "$?" 0 'a hangup is not a failure: the run exits 0'
+is "$(kill -0 "$h1" 2>/dev/null && echo alive || echo gone)" alive \
+	'the first worker is left running'
+is "$(kill -0 "$h2" 2>/dev/null && echo alive || echo gone)" alive \
+	'and so is the second'
+like "$(cat "$T_TMP/hup.log")" \
+	'the shell that started this run is gone; 2 worker\(s\) were left running -- run again in this checkout to adopt them' \
+	'and the run says how many, and how to pick them up'
+is "$(cat "$rundir/t1.state")" dispatched 'the tasks stay dispatched, for the next run to adopt'
+unlike "$(cat "$rundir/events" 2>/dev/null)" 'ended' 'and the run is not ended: only this process is'
+
+kill "$h1" "$h2" 2>/dev/null
 exit 0

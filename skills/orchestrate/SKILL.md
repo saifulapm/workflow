@@ -38,7 +38,9 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
    that does not parse goes back to the planner, never to you.
 2. Start `workflow run` in a background shell, then `workflow wait` in
    another (backgrounded, so its exit wakes you); act on what it printed
-   and call it again. Exit 2 is a question, 1 a task failed for good, 0
+   and call it again. If your own shell goes, the run exits 0 saying how
+   many workers it left running: `workflow run` again in this checkout
+   adopts them. Exit 2 is a question, 1 a task failed for good, 0
    the end, 4 a merge under `--merges`. Refused for no reader: `mem
    project set review-model none` if the brief says nobody reads, else
    ask Saiful. Refused for a red trunk: fix main first, never the run.

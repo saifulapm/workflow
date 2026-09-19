@@ -3555,15 +3555,24 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
     // loop sees it, stops every dispatched worker, and leaves the tasks
     // `dispatched` for the next run in this checkout to adopt and collect.
     // SIGKILL still can't be caught -- reap covers that aftermath.
-    for sig in [
-        signal_hook::consts::SIGTERM,
-        signal_hook::consts::SIGINT,
-        signal_hook::consts::SIGHUP,
-    ] {
+    for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
         let _ = signal_hook::flag::register(sig, run.stop.clone());
+    }
+    // A hangup means the shell that started the run is gone, and nothing
+    // about it is a decision to end the work: a run backgrounded inside a
+    // pane died with that pane and took a worker down mid-design with it
+    // (friction #8850J051). It ends this process and leaves every session
+    // standing, so the next run in the checkout adopts them. The flag is the
+    // same one so the loop comes out; which signal it was decides what
+    // happens on the way.
+    let hangup = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for flag in [run.stop.clone(), hangup.clone()] {
+        let _ = signal_hook::flag::register(signal_hook::consts::SIGHUP, flag);
     }
     let stop_flag = run.stop.clone();
     let stopping = move || stop_flag.load(std::sync::atomic::Ordering::Relaxed);
+    let hangup_flag = hangup.clone();
+    let hung_up = move || hangup_flag.load(std::sync::atomic::Ordering::Relaxed);
 
     let adopted = run.adopt_stale();
     memcli::log_run(&format!(
@@ -3677,7 +3686,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         || marked(&run, "accept")
     {
         if stopping() {
-            return shutdown(&run);
+            return shutdown(&run, hung_up());
         }
         if !run.take_new_tasks().is_empty() {
             all_ids = run.plan.ids();
@@ -3719,7 +3728,7 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
         }
         sys::sleep(run.poll);
         if stopping() {
-            return shutdown(&run);
+            return shutdown(&run, hung_up());
         }
         run.review_passes();
         run.reap_pass();
@@ -3957,8 +3966,29 @@ pub fn cmd_run(plan_file: Option<&Path>) -> i32 {
 /// `dispatched` -- the next run adopts them and judges whatever they wrote.
 /// No merging on the way out: a signal means now, and the merge gate is not
 /// a thing to run while shutting down.
-fn shutdown(run: &Run) -> i32 {
+///
+/// A hangup is the other thing. The shell that started the run has gone --
+/// a pane closed, a session ended -- and it has no opinion about the work:
+/// every worker is a session of its own that outlives it. Stopping them
+/// took a worker down mid-design because the pane the run was launched from
+/// went (friction #8850J051), so a hangup leaves them standing, says how to
+/// pick them up, and exits 0 with no `ended` event: this process is over,
+/// the run is not.
+fn shutdown(run: &Run, hangup: bool) -> i32 {
     let live = run.dispatched();
+    if hangup {
+        warn(format!(
+            "run {}: the shell that started this run is gone; {} worker(s) were left running -- run again in this checkout to adopt them",
+            run.plan.plan_id,
+            live.len()
+        ));
+        memcli::log_run(&format!(
+            "run {}: the shell that started it is gone; {} worker(s) were left running",
+            run.plan.plan_id,
+            live.len()
+        ));
+        return exit::OK;
+    }
     warn(format!(
         "run {}: told to stop -- stopping {} worker(s) before going",
         run.plan.plan_id,
