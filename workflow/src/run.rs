@@ -1918,9 +1918,9 @@ impl Run {
     /// redispatch that changes nothing; the second run decides. The red run's
     /// output moves to `<task>.gate.1` so both are on disk to compare, and a
     /// merge that took two goes says so.
-    /// The suite on the tree the run starts from, unless verify's green
-    /// cache already holds that tree -- every green `verify --gate` records
-    /// the tree it proved, so a trunk the gate just merged onto is known.
+    /// The suite on the tree the run starts from, unless verify's green set
+    /// already holds that tree -- every green verify records the tree it
+    /// proved, so a trunk the gate just merged onto is known.
     /// A red trunk fails every task at the gate, each after a whole worker,
     /// and one red suite before the first dispatch is what that costs
     /// instead (2026-09-14: a4bb5fa reddened three tasks in a row for 45
@@ -1929,9 +1929,7 @@ impl Run {
         let int = Git::at(&self.int_wt);
         let tree = int.out(&["rev-parse", "HEAD^{tree}"]).unwrap_or_default();
         let tree = tree.trim().to_string();
-        if !tree.is_empty()
-            && verify::cached_green(memcli::project_current().as_ref()).as_deref() == Some(&tree)
-        {
+        if verify::is_green(memcli::project_current().as_ref(), &tree) {
             return Ok(());
         }
         let tip = int.head().unwrap_or_default();

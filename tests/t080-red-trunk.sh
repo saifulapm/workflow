@@ -68,12 +68,30 @@ is "$RC" 0 'with the trunk green the run goes ahead'
 like "$OUT" 'running the suite once before the first dispatch' 'after one suite on the trunk'
 gdir="$XDG_STATE_HOME/workflow/runs/app/green"
 is "$(cat "$gdir/t1.state")" merged 'and merges'
-is "$(cat "$XDG_STATE_HOME"/workflow/green/*)" "$(git rev-parse 'integration/green^{tree}')" \
+tree=$(git rev-parse 'integration/green^{tree}')
+truthy "$(ls "$XDG_STATE_HOME"/workflow/green/*/ | grep -qx "$tree" && echo 0 || echo 1)" \
 	'the last green gate recorded the tree it proved, in verify'"'"'s own cache'
 
 # A second plan from the trunk the last gate merged onto: the gate has seen
 # that tree, so no suite runs before the first dispatch.
 git merge -q --ff-only integration/green
+
+# And a green earned on another tree of the same project first -- a task's
+# own gate, a pre-commit hook -- which used to overwrite the one above and
+# cost this run a whole suite on a trunk the gate had just proved (friction
+# #700H11G1). The cache is a set: both trees are green at once.
+: >unrelated
+git add unrelated
+other=$(git write-tree)
+run workflow verify --hook
+is "$RC" 0 'an unrelated tree of the same project verifies green too'
+git rm -q --cached unrelated
+rm -f unrelated
+truthy "$(ls "$XDG_STATE_HOME"/workflow/green/*/ | grep -qx "$other" && echo 0 || echo 1)" \
+	'and is recorded'
+truthy "$(ls "$XDG_STATE_HOME"/workflow/green/*/ | grep -qx "$tree" && echo 0 || echo 1)" \
+	'beside the trunk the gate proved, not over it'
+
 cat >"$T_TMP/again.md" <<-PLAN
 	# plan: again
 

@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::gitcmd::Git;
 use crate::memcli::Project;
-use crate::{exit, have, memcli, paths, repo, testdecl, warn};
+use crate::{exit, have, memcli, paths, repo, sys, testdecl, warn};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -235,7 +235,18 @@ pub fn detect_verifiers(root: &Path, project: Option<&Project>) -> Vec<Verifier>
     found
 }
 
-fn green_file(project: Option<&Project>) -> Option<PathBuf> {
+/// How many proved trees one project keeps. A run gates a trunk, a hook
+/// verifies a staged tree and a gate verifies each merge, so a handful of
+/// trees are live at once and the rest are history nobody asks after.
+const GREEN_KEEP: usize = 32;
+
+/// One empty marker file per tree the suite has proved for this project:
+/// `green/<project id>/<tree>`. A set rather than one recorded tree, because
+/// a green here is a fact about a tree and not about the last thing that ran
+/// -- one file meant any other verify of the same project overwrote the
+/// trunk's green, and the next run of the same plan paid for the whole suite
+/// again on a trunk the gate had just proved (friction #700H11G1).
+fn green_dir(project: Option<&Project>) -> Option<PathBuf> {
     let id = &project?.id;
     if id.is_empty() {
         return None;
@@ -243,25 +254,38 @@ fn green_file(project: Option<&Project>) -> Option<PathBuf> {
     Some(paths::green_root().join(id))
 }
 
-/// The tree the suite last proved green here, as `write-tree` spells it.
-pub(crate) fn cached_green(project: Option<&Project>) -> Option<String> {
-    let f = green_file(project)?;
-    Some(std::fs::read_to_string(f).ok()?.trim().to_string())
+/// Has the suite proved this tree green here, as `write-tree` spells it?
+pub(crate) fn is_green(project: Option<&Project>, tree: &str) -> bool {
+    !tree.is_empty() && green_dir(project).is_some_and(|d| d.join(tree).exists())
 }
 
 /// Only when the working tree matches the index, because only then did the
-/// suite actually run over the tree being recorded.
+/// suite actually run over the tree being recorded. The oldest markers past
+/// [`GREEN_KEEP`] go with it, so the set is bounded without ever taking a
+/// tree another verify may be about to ask after.
 fn record_green(git: &Git, project: Option<&Project>, tree: &str) {
     if tree.is_empty() || !git.quiet(&["diff", "--quiet"]) {
         return;
     }
-    let Some(f) = green_file(project) else {
+    let Some(dir) = green_dir(project) else {
         return;
     };
-    if let Some(dir) = f.parent() {
-        let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(tree), "");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut kept: Vec<(i64, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| (sys::mtime(&e.path()), e.path()))
+        .collect();
+    if kept.len() <= GREEN_KEEP {
+        return;
     }
-    let _ = std::fs::write(f, format!("{tree}\n"));
+    kept.sort_by_key(|(when, _)| -*when);
+    for (_, path) in &kept[GREEN_KEEP..] {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Every removed test is named by some test-removal ruling.
@@ -395,10 +419,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
     }
 
     let tree = git.out(&["write-tree"]).unwrap_or_default();
-    if mode == Mode::Hook
-        && !tree.is_empty()
-        && Some(&tree) == cached_green(project.as_ref()).as_ref()
-    {
+    if mode == Mode::Hook && is_green(project.as_ref(), &tree) {
         warn("staged tree already verified: cached green, suite skipped.");
         return exit::OK;
     }
