@@ -8,7 +8,7 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use crate::backend::Dispatch;
+use crate::backend::{Dispatch, Handle};
 use crate::gitcmd::{self, Git};
 use crate::plan::Task;
 use crate::reviewer::{self, Verdict};
@@ -344,7 +344,51 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
         warn("read: the reading left the working tree changed");
     }
 
-    if let Some(line) = advise::ending_line("read", "the reading", &c, &d, deadline_s, &answer) {
+    // A reader that spoke its verdict in its turn and never wrote the file
+    // has still answered: the backend hands the turn's own text back, so the
+    // answer file is written from it before the ending is judged (friction
+    // #XAGR8HS2). What is left when there is no verdict either way is why it
+    // ended, and the account of that is the reader's own last words, else
+    // what the backend kept of a pane that is gone, else -- for a reading
+    // that never reached visible text at all -- how its last turn stopped
+    // (frictions #XAGR8HS2, #7Q1EGGNM; run.rs `review_pass` reads the same
+    // two at the gate).
+    let h = Handle {
+        session: c.session.clone(),
+        pidfile: d.pidfile.clone(),
+        worktree: d.worktree.clone(),
+    };
+    if !answer.exists() && !c.answer.trim().is_empty() {
+        let _ = std::fs::write(&answer, &c.answer);
+    }
+    let spoke = reviewer::verdict(&std::fs::read_to_string(&answer).unwrap_or_default()).is_some();
+    let ending = match spoke {
+        true => None,
+        false => advise::ending_line("read", "the reading", &c, &d, deadline_s, &answer),
+    };
+    if let Some(mut line) = ending {
+        let words = match backend.last_words(&h) {
+            last if !last.trim().is_empty() => last,
+            _ => backend.dying_words(&h),
+        };
+        if words.trim().is_empty() {
+            if let Some((stop, out)) = backend.last_stop(&h) {
+                line.push_str(&format!(
+                    "; stopped with stop_reason={stop}, {out} output tokens, no visible text"
+                ));
+            }
+        } else {
+            // Appended, never used to overwrite: the dispatch's own stderr is
+            // already there, and a session that ran a while before it stopped
+            // has ordinary text in its transcript and the reason on stderr.
+            let stderr_text = std::fs::read_to_string(&d.err).unwrap_or_default();
+            let combined = match stderr_text.trim().is_empty() {
+                true => words,
+                false => format!("{}\n{words}", stderr_text.trim_end()),
+            };
+            let _ = std::fs::write(&d.err, &combined);
+            line.push_str(&format!(" -- and {}", d.err.display()));
+        }
         said(&dir, "none", &line);
         warn(line);
         return NO_VERDICT;

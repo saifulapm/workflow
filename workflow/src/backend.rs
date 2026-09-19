@@ -189,6 +189,15 @@ pub trait WorkerBackend {
     fn dying_words(&self, _h: &Handle) -> String {
         String::new()
     }
+    /// How the agent's last recorded turn ended: the transcript's own
+    /// `stop_reason` and the visible tokens that turn wrote. What tells a
+    /// reader that spent its whole completion budget reasoning from a wedged
+    /// provider or a bad prompt, since from outside both are a deadline and
+    /// nothing said (friction #7Q1EGGNM). `None` when there is nothing to
+    /// read, which for a custom template is every time.
+    fn last_stop(&self, _h: &Handle) -> Option<(String, u64)> {
+        None
+    }
     /// The question the worker is stopped at, when the backend can see one:
     /// a prompt drawn in front of the session, which no hook reports and no
     /// answer file records. Empty when there is none, or nothing can see.
@@ -285,6 +294,31 @@ pub(crate) fn last_context_tokens(transcript: &str) -> Option<u64> {
                 + field("cache_creation_input_tokens")
                 + field("cache_read_input_tokens"),
         );
+    }
+    last
+}
+
+/// The last turn on record: how it stopped and how many visible tokens it
+/// wrote. The fields are the vendor's own on the assistant message, and a
+/// record carrying no `stop_reason` is a turn still going, not an ending.
+pub(crate) fn last_stop_in(transcript: &str) -> Option<(String, u64)> {
+    let mut last = None;
+    for line in transcript.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(message) = v.get("message") else {
+            continue;
+        };
+        let Some(stop) = message.get("stop_reason").and_then(|s| s.as_str()) else {
+            continue;
+        };
+        let out = message
+            .get("usage")
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        last = Some((stop.to_string(), out));
     }
     last
 }
@@ -429,6 +463,11 @@ impl WorkerBackend for ProcessBackend {
         let path = paths::transcript_path(&h.worktree, &h.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
+
+    fn last_stop(&self, h: &Handle) -> Option<(String, u64)> {
+        let path = paths::transcript_path(&h.worktree, &h.session);
+        last_stop_in(&std::fs::read_to_string(path).ok()?)
+    }
 }
 
 #[cfg(test)]
@@ -534,6 +573,25 @@ not json at all
         // context, and the honest answer is that the backend cannot see.
         assert_eq!(last_context_tokens(""), None);
         assert_eq!(last_context_tokens("{\"type\":\"user\"}\n"), None);
+    }
+
+    #[test]
+    fn the_last_stop_is_the_last_recorded_turns_reason_and_visible_tokens() {
+        assert_eq!(
+            last_stop_in(
+                "{\"message\":{\"stop_reason\":\"end_turn\",\"usage\":{\"output_tokens\":50}}}\n\
+                 {\"message\":{\"stop_reason\":\"max_tokens\",\"usage\":{\"output_tokens\":32000}}}\n"
+            ),
+            Some(("max_tokens".to_string(), 32000))
+        );
+        // A reason with no usage beside it is still the reason.
+        assert_eq!(
+            last_stop_in(r#"{"message":{"stop_reason":"refusal"}}"#),
+            Some(("refusal".to_string(), 0))
+        );
+        // A turn still going has no ending to report.
+        assert_eq!(last_stop_in(TRANSCRIPT), None);
+        assert_eq!(last_stop_in(""), None);
     }
 
     /// A user turn, an assistant turn with a tool call and no text, and a

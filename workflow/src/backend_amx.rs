@@ -18,7 +18,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::backend::{
-    Consult, Dispatch, Ending, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
+    Consult, Dispatch, Ending, Handle, Outcome, WorkerBackend, last_context_tokens, last_stop_in,
+    last_words_in,
 };
 use crate::{gitcmd, paths, sys};
 
@@ -566,6 +567,19 @@ impl WorkerBackend for AmxBackend {
         }
         let path = paths::transcript_path(&h.worktree, &s.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
+    }
+
+    /// The transcript amx names for this agent, read for how its last turn
+    /// stopped. amx has no word of its own on this: `status --json` reports a
+    /// phase, and a turn that ended on a completion budget spent reasoning
+    /// ends in the same `done` as one that answered.
+    fn last_stop(&self, h: &Handle) -> Option<(String, u64)> {
+        let s = status(&h.session)?;
+        if s.session.is_empty() {
+            return None;
+        }
+        let path = paths::transcript_path(&h.worktree, &s.session);
+        last_stop_in(&std::fs::read_to_string(path).ok()?)
     }
 
     /// `amx logs <id>`: once the pane is gone this is the recorded answer, or

@@ -14,7 +14,13 @@ unset WORKFLOW_REVIEW_MODEL
 export WF_TMP="$T_TMP"
 write_exec "$T_TMP/worker.sh" <<'FAKE'
 #!/bin/sh
-task=$1; brief=$5
+task=$1; wt=$2; session=$4; brief=$5
+# The conversation file a session under this worktree would write.
+transcript() {
+	slug=$(printf '%s' "$wt" | sed -E 's/[^A-Za-z0-9]/-/g')
+	mkdir -p "$HOME/.claude/projects/$slug"
+	printf '%s\n' "$HOME/.claude/projects/$slug/$session.jsonl"
+}
 case $task in
 read-review)
 	answer=$(sed -n 's/^    Answer file: //p' "$brief")
@@ -23,6 +29,21 @@ read-review)
 		printf 'VERDICT: ship\nThe diff is clean.\n' >"$answer"
 	elif grep -q '^\+bad$' "$brief"; then
 		printf 'VERDICT: fix\n- [blocks] app/bad.php:1 -- never good enough.\n' >"$answer"
+	elif grep -q '^\+slow$' "$brief"; then
+		# Still reading when the deadline stops it: no verdict, and its
+		# own last words in the transcript its session names.
+		cat >"$(transcript)" <<-'LINE'
+		{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading app/t1.php against the requirement..."}]}}
+		LINE
+		sleep 5
+	elif grep -q '^\+silent$' "$brief"; then
+		# A reader that never reaches visible text: the turn ends on the
+		# completion budget it spent reasoning, and the transcript is
+		# the only place that says so.
+		cat >"$(transcript)" <<-'LINE'
+		{"type":"assistant","message":{"role":"assistant","stop_reason":"max_tokens","usage":{"output_tokens":32000},"content":[]}}
+		LINE
+		sleep 5
 	fi
 	# a diff holding neither writes nothing: the reading ends with no verdict.
 	;;
@@ -49,16 +70,16 @@ like "$OUT" 'mem project set review-model' 'naming the remedy'
 
 ## ------------------------------------------------------------- a clean diff
 
-# verdict_file -- the read.verdict of the newest read directory, which is
-# where a caller that cannot see the exit code reads what came back.
-verdict_file() { ls -t "$XDG_STATE_HOME"/workflow/runs/app/_read/*/read.verdict | head -1; }
+# newest <name> -- that file in the newest read directory, which is where a
+# caller that cannot see the exit code reads what came back.
+newest() { ls -t "$XDG_STATE_HOME"/workflow/runs/app/_read/*/"$1" | head -1; }
 
 printf 'good\n' >app/t1.php
 run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
 is "$RC" 0 'a diff the reader ships exits 0'
 like "$OUT" 'VERDICT: ship' 'and prints the verdict file'
 like "$OUT" '^read: verdict ship$' 'with the verdict as its own last line on stdout'
-is "$(cat "$(verdict_file)")" ship 'and in read.verdict, where an exit code need not reach'
+is "$(cat "$(newest read.verdict)")" ship 'and in read.verdict, where an exit code need not reach'
 
 ## --------------------------------------------------------------- a bad diff
 
@@ -67,7 +88,7 @@ run env WORKFLOW_REVIEW_DEADLINE_MIN=0.5 workflow read
 is "$RC" 1 'a diff the reader wants fixed exits 1'
 like "$OUT" '\[blocks\] app/bad.php:1' 'and prints the findings'
 like "$OUT" '^read: verdict fix$' 'and says fix on stdout'
-is "$(cat "$(verdict_file)")" fix 'and in read.verdict'
+is "$(cat "$(newest read.verdict)")" fix 'and in read.verdict'
 
 ## ------------------------------------------------------- no verdict at all
 
@@ -76,7 +97,30 @@ run env WORKFLOW_REVIEW_DEADLINE_MIN=0.05 workflow read
 is "$RC" 3 'a reading that ends with no verdict exits 3'
 like "$OUT" 'no verdict -- read .*\.review$' 'naming the answer file'
 like "$OUT" '^read: verdict none$' 'and says so on stdout, which a relay does not eat'
-like "$(cat "$(verdict_file)")" '^none: ' 'read.verdict carries the word and the reason'
+like "$(cat "$(newest read.verdict)")" '^none: ' 'read.verdict carries the word and the reason'
+
+## ------------------------------- a reading that ends with nothing to show for it
+
+# A reader stopped at its deadline said only that it had been stopped: no
+# verdict, no partial answer, and nothing about why, so a flake and a prompt
+# that kills every session read the same. Its own last words are kept beside
+# the answer file now, and the stderr line names that file.
+printf 'slow\n' >app/t1.php
+run env WORKFLOW_REVIEW_DEADLINE_MIN=0.05 workflow read
+is "$RC" 3 'a reader still going at its deadline gives no verdict'
+like "$OUT" 'ran past its 3 second deadline' 'and the line says so'
+like "$OUT" ' -- and .*read\.review-err' 'naming the file its own words are in'
+like "$(cat "$(newest read.review-err)")" 'Reading app/t1.php against the requirement' \
+	'which holds what the reader last said'
+
+# A reader that spends its whole completion budget before it says anything
+# visible is indistinguishable from a wedged provider from outside. The
+# transcript's own stop_reason and visible-token count are on the line.
+printf 'silent\n' >app/t1.php
+run env WORKFLOW_REVIEW_DEADLINE_MIN=0.05 workflow read
+is "$RC" 3 'a reader that never reached visible text gives no verdict either'
+like "$OUT" 'stop_reason=max_tokens, 32000 output tokens, no visible text' \
+	'and the line names how the turn stopped and what it spent'
 
 ## ----------------------------------------- the prompt carries what it reads
 
