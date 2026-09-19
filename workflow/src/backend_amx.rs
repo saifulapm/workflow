@@ -246,21 +246,14 @@ fn spawn_argv(d: &Dispatch) -> Vec<String> {
     argv
 }
 
-/// The dispatch argv for an agent with no parent: `amx new --no-parent --name
-/// <name> ...`.
+/// The dispatch argv for an agent with no parent: `amx new --name <name> ...`.
 ///
-/// `--no-parent` because the orchestrator may itself be an amx agent: without
-/// it amx reads the run's own `AMX_ID` and records the worker as a child of
-/// the pane the run was started in, a depth deeper than the run meant -- deep
-/// enough, one reader later, to meet amx's `subagent_depth`. The escape is
-/// amx's own for the peer a person's shell gets by having no id to record.
+/// `new` is a root whatever the pane's `AMX_ID` says, and only `amx sub`
+/// records a parent, so a run started inside an amx pane still dispatches its
+/// workers at depth zero rather than a depth deeper than it meant -- deep
+/// enough, one reader later, to meet amx's `subagent_depth`.
 fn new_argv(d: &Dispatch, name: &str) -> Vec<String> {
-    let mut argv = vec![
-        "new".to_string(),
-        "--no-parent".to_string(),
-        "--name".to_string(),
-        name.to_string(),
-    ];
+    let mut argv = vec!["new".to_string(), "--name".to_string(), name.to_string()];
     argv.extend(spawn_argv(d));
     argv
 }
@@ -752,7 +745,6 @@ mod tests {
             new_argv(&fixture(), "wf-t1-a3k9"),
             vec![
                 "new",
-                "--no-parent",
                 "--name",
                 "wf-t1-a3k9",
                 "--dir",
@@ -863,9 +855,9 @@ mod tests {
             ["sub", "--json", "--timeout", "900", "--name", "wf-t1-a3k9"]
         );
         assert_eq!(argv[6..], spawn_argv(&d));
-        // A consult keeps the ambient `AMX_ID` instead: `workflow advise` runs
-        // in the worker's pane and rides that id onto the record as the
-        // advisor's parent, so `--no-parent` belongs to `new` alone.
+        // A consult keeps the ambient `AMX_ID`: `workflow advise` runs in the
+        // worker's pane and rides that id onto the record as the advisor's
+        // parent, which is what a `sub` with no `--parent` does.
         assert!(!argv.contains(&"--no-parent".to_string()), "{argv:?}");
         d.parent = Some("wf-t1-zz01".into());
         assert_eq!(
