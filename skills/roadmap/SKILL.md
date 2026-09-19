@@ -140,7 +140,9 @@ spends on one task's fix rounds (review-2026-09-15). Hand a plan to
 `orchestrate` only when its wide wave holds three or more tasks that share
 no Files and the machine carries that many workers, up to five
 (`WORKFLOW_MAX_WORKERS`), on the strongest model with `review-model none`;
-a run that merges every task ticks the milestone itself.
+a run that merges every task ticks the milestone itself. A milestone a
+review sends back goes to unchecked with `mem roadmap --untick <slug>`
+while the fixes are made.
 
 The milestone is not done when the last task merges. Walk the Show: start
 the product (`run`), do what the line says, screenshot what appears, and

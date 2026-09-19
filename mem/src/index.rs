@@ -315,19 +315,41 @@ impl Index {
 
     /// Rows of one kind, newest first.
     pub fn recent(&self, kind: &str, project_id: Option<&str>, limit: usize) -> Result<Vec<Row>> {
-        let mut sql =
-            format!("SELECT {ROW_COLUMNS} FROM items WHERE items.active = 1 AND items.kind = ?1");
+        self.recent_filtered(Some(kind), None, project_id, limit)
+    }
+
+    /// Rows newest first, narrowed by kind, by type, by both or by neither.
+    /// Both narrowings belong in the query: `mem log --type` filtered a window
+    /// of recent rows afterwards, and a follow-up older than the window was
+    /// not in it to be found (friction #N5FCYDTC).
+    pub fn recent_filtered(
+        &self,
+        kind: Option<&str>,
+        r#type: Option<&str>,
+        project_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Row>> {
+        let mut sql = format!("SELECT {ROW_COLUMNS} FROM items WHERE items.active = 1");
+        let mut args: Vec<&str> = Vec::new();
+        for (column, value) in [("kind", kind), ("type", r#type)] {
+            if let Some(value) = value {
+                args.push(value);
+                sql.push_str(&format!(" AND items.{column} = ?{}", args.len()));
+            }
+        }
         match project_id {
-            Some(_) => sql.push_str(" AND items.project_id = ?2"),
+            Some(p) => {
+                args.push(p);
+                sql.push_str(&format!(" AND items.project_id = ?{}", args.len()));
+            }
             None => sql.push_str(" AND items.project_id IS NULL"),
         }
         sql.push_str(" ORDER BY items.modified_epoch DESC, items.id DESC LIMIT ");
         sql.push_str(&limit.to_string());
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows: rusqlite::Result<Vec<Row>> = match project_id {
-            Some(p) => stmt.query_map(params![kind, p], Row::from_sql)?.collect(),
-            None => stmt.query_map(params![kind], Row::from_sql)?.collect(),
-        };
+        let rows: rusqlite::Result<Vec<Row>> = stmt
+            .query_map(rusqlite::params_from_iter(args), Row::from_sql)?
+            .collect();
         Ok(rows?)
     }
 

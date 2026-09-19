@@ -124,6 +124,8 @@ pub enum Command {
         limit: usize,
         #[arg(long)]
         since: Option<String>,
+        /// Narrow to one kind. Log entries when nothing else narrows the
+        /// read; with --type and no --kind, every kind.
         #[arg(long)]
         kind: Option<String>,
         #[arg(long = "type")]
@@ -248,7 +250,7 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
-    /// Print roadmap.md verbatim, or replace, clear or tick it.
+    /// Print roadmap.md verbatim, or replace, clear, tick or untick it.
     Roadmap {
         #[arg(long)]
         set_file: Option<std::path::PathBuf>,
@@ -259,6 +261,10 @@ pub enum Command {
         /// Check off one milestone by its slug, in place.
         #[arg(long, value_name = "SLUG", conflicts_with_all = ["set_file", "stdin", "clear"])]
         tick: Option<String>,
+        /// Take one milestone's tick back, in place: it is not done after all,
+        /// and the run has fixes to make before it is.
+        #[arg(long, value_name = "SLUG", conflicts_with_all = ["set_file", "stdin", "clear", "tick"])]
+        untick: Option<String>,
         #[arg(long)]
         session_id: Option<String>,
     },

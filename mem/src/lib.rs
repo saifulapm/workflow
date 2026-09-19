@@ -244,6 +244,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             stdin,
             clear,
             tick,
+            untick,
             session_id,
         } => verbs::roadmap(
             &with_session(app, session_id),
@@ -251,6 +252,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             *stdin,
             *clear,
             tick.as_deref(),
+            untick.as_deref(),
         ),
     }
 }

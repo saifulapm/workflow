@@ -349,6 +349,48 @@ fn context_names_the_roadmap_and_its_next_milestone() {
 }
 
 #[test]
+fn a_milestone_the_review_sends_back_unticks() {
+    // The milestone passed every task of its plan and failed the cold review
+    // that ends it: it is not done, and a replacement cannot say so, because
+    // a write keeps the ticks the copy on disk has (friction #5ASS8BVK).
+    let w = World::new("roadmap-untick");
+    let repo = w.repo("shop", None);
+    let path = file(&w, "roadmap.md", ROADMAP);
+    assert_eq!(code(&mem(&w, &repo, &["roadmap", "--set-file", &path])), 0);
+    assert_eq!(code(&mem(&w, &repo, &["roadmap", "--tick", "m1-auth"])), 0);
+    let text = stdout(&mem(&w, &repo, &["context"]));
+    assert!(text.contains("roadmap: - [ ] m2-billing Billing"), "{text}");
+
+    let out = mem(&w, &repo, &["roadmap", "--untick", "m1-auth"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("- [ ] m1-auth"), "{}", stdout(&out));
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["roadmap"])),
+        ROADMAP,
+        "the page is back byte for byte"
+    );
+    let text = stdout(&mem(&w, &repo, &["context"]));
+    assert!(
+        text.contains("roadmap: - [ ] m1-auth Sign-in and sessions"),
+        "the digest names m1-auth as next again: {text}"
+    );
+
+    // Unticking it again is the no-op a second tick is, and an unknown
+    // milestone is exit 1 with nothing written.
+    let out = mem(&w, &repo, &["roadmap", "--untick", "m1-auth"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("(already)"), "{}", stdout(&out));
+    let out = mem(&w, &repo, &["roadmap", "--untick", "m9"]);
+    assert_eq!(code(&out), 1);
+    assert!(
+        stderr(&out).contains("no milestone 'm9' in the roadmap"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(stdout(&mem(&w, &repo, &["roadmap"])), ROADMAP);
+}
+
+#[test]
 fn replacing_the_plan_of_record_keeps_the_ticks_a_run_has_made() {
     // The orchestrator answers a worker mid-run by editing the file the run
     // started from -- unticked -- and storing it over mem's copy, which by

@@ -229,6 +229,16 @@ pub fn finding(check: &str, detail: impl Into<String>) -> Finding {
 /// second look.
 const ENCODED_RUN: usize = 120;
 
+/// How much body a PEM header has to be followed by: one unbroken run of at
+/// least this many base64 characters on a later line. A key's body lines are
+/// 64 wide, and prose about keys has no such run.
+const PEM_BODY: usize = 40;
+
+/// A character base64 can be written with.
+fn encoded_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='
+}
+
 /// One unbroken run of base64-alphabet characters, and which classes it holds.
 #[derive(Default)]
 struct Run {
@@ -331,18 +341,63 @@ pub fn pi_extension_findings(path: &Path) -> Vec<Finding> {
     }
 }
 
-/// The secret shapes worth refusing to keep: an AWS key, a PEM header, or a
+/// The longest unbroken base64 run on any one line of `text`.
+fn longest_run(text: &str) -> usize {
+    text.lines()
+        .map(|line| {
+            let mut run = Run::default();
+            let mut longest = 0;
+            for c in line.chars() {
+                if encoded_char(c) {
+                    run.push(c);
+                    longest = longest.max(run.len);
+                } else {
+                    run = Run::default();
+                }
+            }
+            longest
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// An AWS access key id is `AKIA` and sixteen more of `[A-Z0-9]`, all in one
+/// run. Counting uppercase letters anywhere in the document instead flagged
+/// prose that merely says the word.
+fn holds_aws_key(text: &str) -> bool {
+    text.match_indices("AKIA").any(|(at, _)| {
+        text[at + 4..]
+            .chars()
+            .take(16)
+            .filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            .count()
+            == 16
+    })
+}
+
+/// One `-----BEGIN … PRIVATE KEY-----` header with a body under it. The
+/// header alone is what a note quoting it looks like — a reader's follow-up
+/// about the scrubber was refused as a key (friction #7269R5F0) — so the
+/// scan wants the encoded bytes the header introduces.
+fn holds_private_key(text: &str) -> bool {
+    text.split("-----BEGIN")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("-----"))
+        .any(|(header, body)| header.contains("PRIVATE KEY") && longest_run(body) >= PEM_BODY)
+}
+
+/// The secret shapes worth refusing to keep: an AWS key, a PEM block, or a
 /// long unbroken run that looks like encoded bytes.
 pub fn looks_like_a_secret(text: &str) -> Option<&'static str> {
-    if text.contains("AKIA") && text.chars().filter(|c| c.is_ascii_uppercase()).count() > 8 {
+    if holds_aws_key(text) {
         return Some("an AWS access key");
     }
-    if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
+    if holds_private_key(text) {
         return Some("a private key");
     }
     let mut run = Run::default();
     for c in text.chars() {
-        if c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' {
+        if encoded_char(c) {
             run.push(c);
             if run.looks_encoded() {
                 return Some("a long base64 run");

@@ -404,11 +404,31 @@ fn a_wiki_with_no_index_page_is_one_finding_rather_than_one_per_page() {
 #[test]
 fn the_secret_heuristic_knows_what_it_is_looking_for() {
     assert!(maint::looks_like_a_secret("AKIAIOSFODNN7EXAMPLE").is_some());
-    assert!(maint::looks_like_a_secret("-----BEGIN RSA PRIVATE KEY-----").is_some());
+    let key = "-----BEGIN RSA PRIVATE KEY-----\n\
+               MIIEowIBAAKCAQEAvgQdbKHCZ8jkXxPZ0mTnQ1sR7fVbWpLcJyN4hGdA2eUoIbKt\n\
+               -----END RSA PRIVATE KEY-----\n";
+    assert!(maint::looks_like_a_secret(key).is_some());
     // Encoded bytes: long, unbroken, and carrying all three character classes.
     assert!(maint::looks_like_a_secret(&"aB3xY7zQ".repeat(16)).is_some());
     assert!(maint::looks_like_a_secret("sessions use redis, not the database").is_none());
     assert!(maint::looks_like_a_secret("").is_none());
+}
+
+#[test]
+fn the_secret_heuristic_wants_the_body_a_pem_header_introduces() {
+    // The note that was refused as a key: a reader's follow-up about the
+    // scrubber, quoting the header the scrubber matches (friction #7269R5F0).
+    let note = "mem doctor flags this as a private key because the scan sees \
+                'PRIVATE KEY-----' anywhere in the body: writing \
+                -----BEGIN PGP PRIVATE KEY BLOCK----- in a sentence is enough.\n";
+    assert!(
+        maint::looks_like_a_secret(note).is_none(),
+        "prose quoting the header carries no key"
+    );
+    assert!(
+        maint::looks_like_a_secret("the AKIA prefix names an access key id").is_none(),
+        "nor does prose naming the AWS prefix"
+    );
 }
 
 #[test]

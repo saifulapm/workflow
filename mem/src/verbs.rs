@@ -626,14 +626,15 @@ pub fn log(
         Some(s) => Some(crate::write::parse_since(s)?.as_second()),
         None => None,
     };
-    let mut rows = index.recent(kind.unwrap_or("log"), identity.id(), limit.max(1) * 4)?;
+    // `log` is the default kind only while nothing else narrows the read: a
+    // `--type` on its own means that type in every kind, because a follow-up
+    // is a fact and `mem log --type followup` is the hint a run prints
+    // (friction #N5FCYDTC).
+    let kind = kind.or_else(|| r#type.is_none().then_some("log"));
+    let mut rows = index.recent_filtered(kind, r#type, identity.id(), limit.max(1))?;
     if let Some(floor) = floor {
         rows.retain(|r| r.modified_epoch >= floor);
     }
-    if let Some(ty) = r#type {
-        rows.retain(|r| r.r#type.as_deref() == Some(ty));
-    }
-    rows.truncate(limit);
 
     if app.json {
         let items: Vec<serde_json::Value> = rows.iter().map(row_json).collect();
@@ -804,7 +805,7 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
     }
     let Some(slug) = args.slug else {
         return match args.tick {
-            Some(task) => tick_singleton(app, PLAN, task),
+            Some(task) => tick_singleton(app, PLAN, task, true),
             None => singleton(app, PLAN, args.set_file, args.stdin, args.clear),
         };
     };
@@ -818,17 +819,23 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
     stored_plan(app, slug, args.set_file, args.stdin, args.clear)
 }
 
-/// `mem roadmap` — the same four moves over roadmap.md.
+/// `mem roadmap` — the same four moves over roadmap.md, and one more: a
+/// milestone the end-of-milestone review sends back goes to unchecked with
+/// `--untick`, which a replacement cannot do because a write keeps the ticks
+/// the copy on disk has (friction #5ASS8BVK). The plan of record has no such
+/// move: its tasks belong to the run that is making them.
 pub fn roadmap(
     app: &App,
     set_file: Option<&std::path::Path>,
     stdin: bool,
     clear: bool,
     tick: Option<&str>,
+    untick: Option<&str>,
 ) -> Result<i32> {
-    match tick {
-        Some(slug) => tick_singleton(app, ROADMAP, slug),
-        None => singleton(app, ROADMAP, set_file, stdin, clear),
+    match (tick, untick) {
+        (Some(slug), _) => tick_singleton(app, ROADMAP, slug, true),
+        (_, Some(slug)) => tick_singleton(app, ROADMAP, slug, false),
+        _ => singleton(app, ROADMAP, set_file, stdin, clear),
     }
 }
 
@@ -994,11 +1001,11 @@ fn land(
     }
 }
 
-/// `mem plan --tick <task-id>` and `mem roadmap --tick <slug>` — the CAS-safe
-/// checkbox tick (spec §7). The project is resolved in read mode: a tick can
-/// only apply to a file that already exists, so there is never a project to
-/// invent here.
-fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
+/// `mem plan --tick <task-id>`, `mem roadmap --tick <slug>` and the roadmap's
+/// `--untick` — the CAS-safe checkbox write (spec §7), `want` being the box
+/// asked for. The project is resolved in read mode: a tick can only apply to a
+/// file that already exists, so there is never a project to invent here.
+fn tick_singleton(app: &App, which: Singleton, task: &str, want: bool) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
     let Some(id) = identity.id() else {
         return Err(exit::not_found(format!(
@@ -1007,7 +1014,7 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
         )));
     };
     let path = (which.path)(&app.store, id);
-    let outcome = crate::write::tick_task(&path, task, which.item)?;
+    let outcome = crate::write::tick_task(&path, task, which.item, want)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
     if flipped {
         self_record(app);
@@ -1022,12 +1029,13 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
             }))?
         );
     } else if !app.quiet {
+        let checkbox = if want { "[x]" } else { "[ ]" };
         println!(
             "{}",
             if flipped {
-                format!("- [x] {task}")
+                format!("- {checkbox} {task}")
             } else {
-                format!("- [x] {task} (already)")
+                format!("- {checkbox} {task} (already)")
             }
         );
     }

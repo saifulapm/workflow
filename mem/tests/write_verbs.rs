@@ -127,6 +127,54 @@ fn log_writes_with_text_and_reads_without() {
 }
 
 #[test]
+fn log_by_type_reads_every_kind_and_the_whole_history() {
+    // A follow-up is a fact of type `followup`, and the hint a run prints is
+    // `mem log --type followup`: reading it may not stop at the log entries
+    // (friction #N5FCYDTC).
+    let w = World::new("write-log-type");
+    let repo = w.repo("thing", None);
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &[
+                "save",
+                "the reader wants a second look",
+                "--type",
+                "followup"
+            ]
+        )),
+        0
+    );
+    assert_eq!(code(&mem(&w, &repo, &["log", "ran the migration"])), 0);
+
+    let out = mem(&w, &repo, &["log", "--type", "followup"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("the reader wants a second look"),
+        "{}",
+        stdout(&out)
+    );
+    let plain = stdout(&mem(&w, &repo, &["log"]));
+    assert!(
+        !plain.contains("the reader wants a second look"),
+        "a bare read is still log entries only: {plain}"
+    );
+
+    // And the typed item is found however far down the history it sits.
+    for i in 0..12 {
+        assert_eq!(code(&mem(&w, &repo, &["log", &format!("entry {i}")])), 0);
+    }
+    let out = mem(&w, &repo, &["log", "--type", "followup", "--limit", "5"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("the reader wants a second look"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn handoff_sets_and_prints_the_latest() {
     let w = World::new("write-handoff");
     let repo = w.repo("thing", None);
