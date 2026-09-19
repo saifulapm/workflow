@@ -477,6 +477,30 @@ parse
 is "$RC" 1 'cargo test --lib on a crate with no library target is refused'
 like "$OUT" 'no library target' 'and the refusal says why'
 
+# Cargo takes one TESTNAME before `--` and reads the rest as more of them, so
+# a Verify with two filters ends in a usage error (friction #5BWTDN89).
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: cargo test --bin binonly --features wide plan:: run::
+EOF2
+parse
+is "$RC" 1 'two filters before -- is refused'
+like "$OUT" "cargo test ... plan:: run::" 'the refusal quotes the filters it counted'
+like "$OUT" 'one TESTNAME' 'and says what cargo takes'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Change behaviour
+      Files: src/main.rs
+      Verify: cargo test --bin binonly --features wide plan:: -- --nocapture && cargo test -- plan:: run::
+EOF2
+parse
+is "$RC" 0 'one filter, flags and their values, and whatever follows -- are not filters'
+
 # A Verify that is the gate's own command proves nothing about the task: it
 # runs the whole suite over what is staged, not the task's own change.
 plan_file <<'EOF2'
@@ -736,10 +760,14 @@ unlike "$OUT" 'budget-check' 'and nothing warns once every naming file is owned'
 # A qualified item says which of the tree's several `label`s it means, so the
 # files naming it are narrowed to those naming the qualifier too. Without
 # that, every file with the bare word in it was reported as work nobody owns.
+# An unqualified one is asked of the declaration shapes instead: a Gives is
+# the definition moving, and a file that merely calls the name is a caller's
+# own (friction #2Q9FV251).
 printf 'pub struct Composer { name: String }\n\nimpl Composer {\n    pub fn label(&self) -> String { self.name.clone() }\n}\n' >src/composer.rs
+printf 'pub fn label(name: &str) -> String { name.to_string() }\n' >src/sidebar.rs
 printf 'assert label() reads the name\n' >tests/label-check.sh
-git add src/composer.rs tests/label-check.sh
-git -c core.hooksPath=/dev/null commit -qm 'the composer and a test naming a label'
+git add src/composer.rs src/sidebar.rs tests/label-check.sh
+git -c core.hooksPath=/dev/null commit -qm 'the composer, another label and a test naming one'
 
 plan_file <<'EOF2'
 # plan: p
@@ -762,8 +790,9 @@ plan_file <<'EOF2'
       Verify: true
 EOF2
 parse
-is "$RC" 0 'an unqualified Gives reads every file naming it'
-like "$OUT" 'tests/label-check.sh' 'and warns about the one no task claims'
+is "$RC" 0 'an unqualified Gives reads the files that define it'
+like "$OUT" 'src/sidebar.rs' 'and warns about the definition no task claims'
+unlike "$OUT" 'label-check' 'a file that only calls it is a call site, not the symbol moving'
 
 plan_file <<'EOF2'
 # plan: p
@@ -824,6 +853,35 @@ EOF2
 parse
 is "$RC" 0 'claiming the file settles it'
 unlike "$OUT" 'Done names' 'nothing warns once Files claims every file the Done names'
+
+# A Done naming a symbol asks for every file carrying it, and the ones outside
+# Files are what the gate refuses -- m1 t6 asked that nothing outside two files
+# name TOOL_NAME while Files listed three others, and the run stopped mid-wave
+# for an orchestrator answer (friction #S1RA6NS0).
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Raise the budget
+      Files: src/budget.rs
+      Verify: true
+      Done: BRIEF_BUDGET is 4000 wherever it is spelled
+EOF2
+parse
+is "$RC" 0 'a Done naming a symbol outside Files is a warning'
+like "$OUT" "Done names 'BRIEF_BUDGET'" 'the symbol is named'
+like "$OUT" 'tests/budget-check.sh' 'and so is the file carrying it that no Files claims'
+
+plan_file <<'EOF2'
+# plan: p
+
+- [ ] t1 Raise the budget
+      Files: src/budget.rs tests/budget-check.sh
+      Verify: true
+      Done: BRIEF_BUDGET is 4000 wherever it is spelled
+EOF2
+parse
+is "$RC" 0 'claiming the file settles it'
+unlike "$OUT" "Done names 'BRIEF_BUDGET'" 'a symbol every Files pattern covers is nothing to say'
 
 # A Done that quotes a literal is changing a spelling, and a test elsewhere
 # that hardcodes it goes red at the gate -- frictions-2 t3 passed plan-check

@@ -84,6 +84,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         .flat_map(|t| gives_items(t.gives.as_deref().unwrap_or("")))
         .filter_map(|item| defined_type(&item))
         .collect();
+    // Whether the gate here refuses dead code: the verifier ladder runs
+    // `cargo clippy -- -D warnings` for a crate and for nothing else.
+    let clippy_gate = root.join("Cargo.toml").is_file();
     // The block's budget was checked at dispatch alone, where the remedy is
     // stopping the run to recut the plan (friction #QX8GXNQY). It is the
     // block alone that is measured, so nothing about where the run would
@@ -98,6 +101,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             f.refusals.push(msg);
         }
         if let Some(msg) = gate_verify_as_verify(&t.id, verify) {
+            f.refusals.push(msg);
+        }
+        if let Some(msg) = cargo_test_filters(&t.id, verify) {
             f.refusals.push(msg);
         }
         // Done: states what the task delivers, so deferral there refuses. A
@@ -193,6 +199,29 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 t.id
             ));
         }
+        // A Done that names a symbol says what the task's commit does to it,
+        // and a Done asking that a name exist in no form asks for every file
+        // carrying it -- so the ones outside Files are the part of the
+        // sentence the gate will refuse (friction #S1RA6NS0: m1 t6 asked that
+        // nothing outside two files name TOOL_NAME while Files listed three
+        // others, and the run stopped mid-wave for an orchestrator answer).
+        for (symbol, files) in done_symbols(
+            &git,
+            t.done.as_deref().unwrap_or(""),
+            &owned,
+            t.gives.as_deref().unwrap_or(""),
+            itself.as_deref(),
+        ) {
+            let shown = files.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+            let more = match files.len().saturating_sub(5) {
+                0 => String::new(),
+                n => format!(" and {n} more"),
+            };
+            f.warnings.push(format!(
+                "plan: task {}: Done names '{symbol}' and {shown}{more} carry it outside Files: -- the gate refuses whatever this task writes there",
+                t.id
+            ));
+        }
         // Read and Pattern point at what the worker opens before editing. By
         // the time it runs its dependencies have landed, so a file one of them
         // writes is there to be read even though this checkout has no such
@@ -271,17 +300,30 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             if exact {
                 continue;
             }
+            // The tree carrying the name already settles it: the worker reads
+            // the symbol where it lives, so no sibling's spelling of it is
+            // drift and no missing edge hides behind it (friction #Y6A8GXMQ:
+            // a0-loop's Uses all came from a0-kernel, landed weeks before,
+            // and each was attributed to a task that never gave it).
+            let grounded =
+                !named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()).is_empty();
+            if grounded {
+                if let Some(s) = spelled {
+                    from_tree.push(s);
+                }
+                continue;
+            }
+            let used = spelled.unwrap_or(ident.clone());
             let loose = deps.iter().find_map(|dep| {
                 gives_items(dep.gives.as_deref().unwrap_or(""))
                     .into_iter()
-                    .find(|g| g.contains(ident.as_str()))
+                    .find(|g| same_symbol(g, &used))
                     .map(|g| (dep.id.clone(), g))
             });
             if let Some((dep_id, given)) = loose {
                 f.warnings.push(format!(
-                    "plan: task {}: Uses '{}' and {dep_id} Gives it as '{given}' -- one spelling in both, or the worker hunts",
-                    t.id,
-                    spelled.unwrap_or(ident)
+                    "plan: task {}: Uses '{used}' and {dep_id} Gives it as '{given}' -- one spelling in both, or the worker hunts",
+                    t.id
                 ));
                 continue;
             }
@@ -297,24 +339,19 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 .find(|o| {
                     gives_items(o.gives.as_deref().unwrap_or(""))
                         .iter()
-                        .any(|g| g.contains(ident.as_str()))
+                        .any(|g| same_symbol(g, &used))
                 });
             if let Some(giver) = unordered {
-                let shown = spelled.clone().unwrap_or_else(|| ident.clone());
                 f.warnings.push(format!(
-                    "plan: task {}: Uses '{shown}' and {} Gives it, but {} does not wait on {} -- the two may run at once; add [after: {}] or order them the other way",
+                    "plan: task {}: Uses '{used}' and {} Gives it, but {} does not wait on {} -- the two may run at once; add [after: {}] or order them the other way",
                     t.id, giver.id, t.id, giver.id, giver.id
                 ));
                 continue;
             }
-            if named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()).is_empty() {
-                f.warnings.push(format!(
-                    "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
-                    t.id
-                ));
-            } else if let Some(s) = spelled {
-                from_tree.push(s);
-            }
+            f.warnings.push(format!(
+                "plan: task {}: Uses names '{ident}' and no task it waits for Gives it, nor does the tree",
+                t.id
+            ));
         }
         // A block that points at another task -- "as in t1", "see t2", "t1's
         // helper" -- sends the worker after a block it never sees: it has its
@@ -370,11 +407,18 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             let Some(needle) = needle else {
                 continue;
             };
-            let named: Vec<String> =
-                named_under(&git, &needle, qualifier.as_deref(), itself.as_deref())
-                    .into_iter()
-                    .filter(|file| !claimed.contains(file))
-                    .collect();
+            // An unqualified bare word is asked for as a definition rather
+            // than as a call: `section(` names every call site and every
+            // `subsection(` besides, and a Gives is the definition moving
+            // (friction #2Q9FV251: fourteen files, one of them the function).
+            let carriers = match qualifier {
+                None if !greppable(&ident) => defines(&git, &ident, itself.as_deref()),
+                _ => named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()),
+            };
+            let named: Vec<String> = carriers
+                .into_iter()
+                .filter(|file| !claimed.contains(file))
+                .collect();
             if named.is_empty() {
                 continue;
             }
@@ -387,6 +431,38 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 "plan: task {}: Gives '{ident}' -- {shown}{more} also name(s) it and no task's Files claims them, so that side of the change is nobody's to make",
                 t.id
             ));
+        }
+        // A variant or a public function nothing calls until a later wave
+        // lands dead, and a gate running clippy with `-D warnings` fails the
+        // task that gave it: the expand-then-contract window the plan drew
+        // across two tasks has no green first half (friction #KAYA2QK7,
+        // setup-verb t2/t3). A crate is the whole of it -- the gate ladder
+        // runs that step for a Cargo.toml and for nothing else.
+        if clippy_gate && let Some(mine) = wave_of(plan, &t.id) {
+            for item in &gives_line {
+                if !item.contains("::{") && !item.starts_with("pub fn ") {
+                    continue;
+                }
+                let caller = plan
+                    .tasks
+                    .iter()
+                    .filter(|o| o.id != t.id && !o.checked)
+                    .filter(|o| {
+                        gives_items(o.uses.as_deref().unwrap_or(""))
+                            .iter()
+                            .any(|u| same_symbol(item, u))
+                    })
+                    .filter_map(|o| wave_of(plan, &o.id).map(|w| (w, o)))
+                    .min_by_key(|(w, _)| *w);
+                if let Some((wave, caller)) = caller
+                    && wave > mine
+                {
+                    f.warnings.push(format!(
+                        "plan: task {}: Gives '{item}' and the first task using it is {}, a wave later -- this repo's gate runs 'cargo clippy -- -D warnings', so {} cannot be green with it unused; land it with its first caller, or budget an #[allow(dead_code)] the contract task removes",
+                        t.id, caller.id, t.id
+                    ));
+                }
+            }
         }
         if runs_tests(verify) && !has_test_file(&git, &patterns) {
             f.warnings.push(format!(
@@ -569,6 +645,54 @@ fn gate_verify_as_verify(task: &str, verify: &str) -> Option<String> {
     Some(format!(
         "plan: task {task}: Verify is 'workflow verify' -- the gate's own command recurses in a worktree; name the check itself, or 'workflow verify --gate' for a task with nothing of its own to run"
     ))
+}
+
+/// `cargo test a:: b::` tests neither: cargo takes one TESTNAME before `--`
+/// and reads the rest as more of them, so the run ends in a usage error the
+/// Verify never had to reach (friction #5BWTDN89). Flags and the words they
+/// take are counted out first, and everything past a bare `--` belongs to the
+/// test harness rather than to cargo.
+fn cargo_test_filters(task: &str, verify: &str) -> Option<String> {
+    const VALUED: [&str; 13] = [
+        "--bin",
+        "--test",
+        "--example",
+        "--bench",
+        "-p",
+        "--package",
+        "--features",
+        "--manifest-path",
+        "--target",
+        "--target-dir",
+        "--profile",
+        "--jobs",
+        "-j",
+    ];
+    for segment in verify.split(['&', '|', ';']) {
+        let segment = segment.trim();
+        if !segment.starts_with("cargo test") {
+            continue;
+        }
+        let mut words = segment.split_whitespace().skip(2);
+        let mut filters: Vec<&str> = Vec::new();
+        while let Some(word) = words.next() {
+            if word == "--" {
+                break;
+            }
+            if VALUED.contains(&word) {
+                words.next();
+            } else if !word.starts_with('-') {
+                filters.push(word);
+            }
+        }
+        if filters.len() > 1 {
+            let shown = filters.join(" ");
+            return Some(format!(
+                "plan: task {task}: Verify runs 'cargo test ... {shown}' -- cargo takes one TESTNAME before '--'; use one filter, or hand the rest to the harness as 'cargo test -- {shown}'"
+            ));
+        }
+    }
+    None
 }
 
 /// Nothing tracked matches the pattern, the literal path is not there, and
@@ -912,6 +1036,43 @@ fn done_literals(
     out
 }
 
+/// The symbols a Done sentence names that live outside the task's Files,
+/// each with the tracked files carrying them. A token is a candidate when it
+/// is symbol-shaped (see [`greppable`]) and this task's Gives does not name
+/// it -- what the task gives is the Gives line's to answer for. Paths are
+/// [`done_paths`]' business, so a token with a dot or a slash is left to it,
+/// and the tree is asked whole-word: prose about a loop does not answer for
+/// `SearchLoop`.
+fn done_symbols(
+    git: &Git,
+    done: &str,
+    owned: &std::collections::HashSet<String>,
+    gives: &str,
+    itself: Option<&str>,
+) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for token in done.split_whitespace() {
+        let token = token
+            .trim_matches(|c| "`'\"()[]{},;:!?".contains(c))
+            .trim_end_matches('.');
+        if token.contains('.') || token.contains('/') || !greppable(token) {
+            continue;
+        }
+        if gives.contains(token) || out.iter().any(|(seen, _)| seen == token) {
+            continue;
+        }
+        let files: Vec<String> =
+            zlines(&git.bytes(&["grep", "-l", "-z", "-F", "-w", "-e", token, "--"]))
+                .into_iter()
+                .filter(|file| !owned.contains(file) && Some(file.as_str()) != itself)
+                .collect();
+        if !files.is_empty() {
+            out.push((token.to_string(), files));
+        }
+    }
+    out
+}
+
 /// A quoted span worth asking the tree about: one with a token that is
 /// not a word. Words are what names, paths, commands, flags and
 /// placeholders are made of -- `plan::tick`, `src/plan.rs`, `mem log`,
@@ -968,6 +1129,26 @@ fn named_under(
     };
     let under = named_by(git, qualifier, itself);
     named.into_iter().filter(|f| under.contains(f)).collect()
+}
+
+/// The tracked files that define the function, the plan's own file aside.
+/// The three declaration shapes carry the rest as substrings: `pub fn x(`
+/// holds `fn x(`, `export function x(` holds `function x(`.
+fn defines(git: &Git, ident: &str, itself: Option<&str>) -> Vec<String> {
+    let shapes = [
+        format!("fn {ident}("),
+        format!("function {ident}("),
+        format!("def {ident}("),
+    ];
+    let mut args: Vec<&str> = vec!["grep", "-l", "-z", "-F"];
+    for shape in &shapes {
+        args.push("-e");
+        args.push(shape);
+    }
+    zlines(&git.bytes(&args))
+        .into_iter()
+        .filter(|file| Some(file.as_str()) != itself)
+        .collect()
 }
 
 /// The tracked files naming the identifier, the plan's own file aside.
@@ -1038,6 +1219,13 @@ fn points_at(text: &str, ids: &[String]) -> Vec<(String, String)> {
         }
     }
     found
+}
+
+/// Which Kahn wave the run would dispatch the task in.
+fn wave_of(plan: &Plan, id: &str) -> Option<usize> {
+    plan.waves
+        .iter()
+        .position(|wave| wave.iter().any(|w| w == id))
 }
 
 /// Every task this one waits for, directly or through another. A cycle would
@@ -1397,13 +1585,66 @@ fn head_of(item: &str) -> &str {
     }
 }
 
+/// The symbol path an item names, and nothing after it: the arguments, the
+/// return type and the prose a Gives item trails are all dropped, while a
+/// `::{ .. }` variant list is kept whole -- the variants are names the item
+/// gives too. `Perms::reject_cascade(a, b) (the line the dispatcher appends)`
+/// names `Perms::reject_cascade`.
+fn symbol_path(item: &str) -> String {
+    let item = without_locations(item);
+    if let Some(at) = item.find("::{")
+        && let Some(end) = item[at..].find('}')
+    {
+        return item[..at + end + 1].trim().to_string();
+    }
+    head_of(&item).trim().to_string()
+}
+
+/// Do a Gives item and a Uses item name the same symbol? The symbol path
+/// decides, so a signature and its bare name are one name and the words
+/// inside a Gives parenthetical are none: matching by substring paired
+/// `Ledger::append` with a parenthetical saying "appends" and `BlobStore::put`
+/// with a `ToolInput` variant (friction #4BH238T4). An enum given whole meets
+/// a Uses of one variant out of it -- that pair is drift the caller reads,
+/// not a name nobody gives.
+fn same_symbol(given: &str, used: &str) -> bool {
+    let (given, used) = (symbol_path(given), symbol_path(used));
+    if given == used {
+        return true;
+    }
+    let (Some((before, variants)), Some((ty, variant))) =
+        (given.split_once("::{"), used.rsplit_once("::"))
+    else {
+        return false;
+    };
+    trailing_ident(before).as_deref() == Some(ty)
+        && variants
+            .trim_end_matches('}')
+            .split(',')
+            .any(|v| ident_of(v).as_deref() == Some(variant))
+}
+
+/// The identifier a span ends with: the enum in `Receipt.cache: CacheLabel`.
+fn trailing_ident(text: &str) -> Option<String> {
+    text.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .next_back()
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
+
 /// The type or module an item hangs its identifier off: the token before the
 /// last `::` or `.` in its head, when that separator stands right in front of
 /// the identifier. `Composer::label()` means the `label` in `Composer` and no
 /// other; `price(Basket $b)` hangs off nothing, and `src/brief.rs BUDGET`
-/// names a file beside a constant rather than a constant inside one.
+/// names a file beside a constant rather than a constant inside one. A
+/// `Stop::{Done, Budget}` list hangs off the enum wherever the list is cut,
+/// so its variants are asked of the files naming `Stop` and not of the tree
+/// at large (friction #4BH238T4).
 pub fn qualifier_of(item: &str) -> Option<String> {
     let head = head_of(item);
+    if let Some(at) = head.find("::{") {
+        return trailing_ident(&head[..at]);
+    }
     let ident = ident_of(item)?;
     let at = match (head.rfind("::"), head.rfind('.')) {
         (Some(colons), Some(dot)) => colons.max(dot),

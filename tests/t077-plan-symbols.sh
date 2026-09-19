@@ -169,3 +169,110 @@ $short
 EOF
 check
 unlike "$ERR" 'the prose is about' 'prose inside the budget does not'
+
+## ------------------------- a Gives is the symbol path, not every word in it
+
+plan <<'EOF'
+# plan: symbols
+
+## Spec
+
+Do the thing.
+
+## Rulings
+
+1. Do it well.
+
+- [ ] t1 Give the perms
+      Files: src/perms.rs
+      Gives: Perms::reject_cascade(&mut self, reason: &str) -> String (the steering line the dispatcher appends as a User entry) · HookEvent::{ToolInput(String), ToolOutput(String)}
+      Verify: true
+- [ ] t2 Use the ledger  [after: t1]
+      Files: src/loop.rs
+      Uses: Ledger::append(&mut self, kind: u8) -> u64 · BlobStore::put(bytes: Vec<u8>) -> u64
+      Verify: true
+EOF
+check
+is "$RC" 0 'a symbol nobody gives warns, it does not refuse'
+unlike "$ERR" 'Gives it as' 'prose inside a Gives parenthetical is not the symbol it gives'
+like "$ERR" "Uses names 'append'" 'so a Uses matching only that prose is a name nobody gives'
+like "$ERR" "Uses names 'put'" 'and so is one whose name only hides inside a variant'
+
+## ------------------------------ a Uses the tree already carries is silent
+
+new_repo grounded
+mkdir -p src
+printf 'pub struct Budget { pub cents: u64 }\n' >src/kernel.rs
+git add src/kernel.rs
+git -c core.hooksPath=/dev/null commit -qm 'the kernel the milestones before this one left'
+
+plan <<'EOF'
+# plan: symbols
+
+## Spec
+
+Do the thing.
+
+## Rulings
+
+1. Do it well.
+
+- [ ] t1 Give the cost model
+      Files: src/cost.rs
+      Gives: CostModel::predict(budget: Budget) -> u64
+      Verify: true
+- [ ] t2 Read the budget  [after: t1]
+      Files: src/loop.rs
+      Uses: Budget
+      Verify: true
+- [ ] t3 Read the budget elsewhere
+      Files: src/report.rs
+      Uses: Budget
+      Verify: true
+EOF
+check
+is "$RC" 0 'a tree-grounded Uses is no refusal'
+unlike "$ERR" 'Gives it as' 'a name the tree carries is not drift from a sibling signature'
+unlike "$ERR" 'may run at once' 'nor a missing edge to the task whose signature spells it'
+unlike "$ERR" "Uses names 'Budget'" 'and the tree grounds it'
+
+## ------------------------- a variant nothing calls until a later wave
+
+new_repo cargogate
+mkdir -p src
+printf '[package]\nname = "gate"\nversion = "0.1.0"\n' >Cargo.toml
+printf 'fn main() {}\n' >src/main.rs
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'a crate whose gate runs clippy'
+
+cat >"$T_TMP/dead-variant.md" <<'EOF'
+# plan: symbols
+
+## Spec
+
+Do the thing.
+
+## Rulings
+
+1. Do it well.
+
+- [ ] t1 Give the stop
+      Files: src/stop.rs
+      Gives: Stop::{Done, Budget}
+      Verify: true
+- [ ] t2 Read the stop  [after: t1]
+      Files: src/loop.rs
+      Uses: Stop::Budget
+      Verify: true
+EOF
+cp "$T_TMP/dead-variant.md" plan.md
+check
+is "$RC" 0 'a variant landing a wave before its caller warns, it does not refuse'
+like "$ERR" "plan: task t1: Gives 'Stop::\{Done, Budget\}' and the first task using it is t2, a wave later" \
+	'the giver, the variant and its first caller are named'
+like "$ERR" "cargo clippy -- -D warnings" 'and the warning says what refuses it'
+
+new_repo plaingate
+cp "$T_TMP/dead-variant.md" plan.md
+check
+unlike "$ERR" 'cargo clippy' 'a repo with no crate has no such gate to fail'
