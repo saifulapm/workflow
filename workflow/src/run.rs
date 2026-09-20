@@ -648,7 +648,8 @@ impl Run {
     /// the worker was ending is still the question it asked; with none of
     /// them listed the task's own newest open question does, and only then
     /// the first id the worker named, whose listing may be a reindex behind.
-    fn question_in(&self, task: &str, note: &str) -> Option<String> {
+    fn question_in(&self, task: &str, state: &str, note: &str) -> Option<(String, bool)> {
+        let blocked = state == "blocked";
         let named: Vec<&str> = note
             .split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == ')')
             .filter_map(|w| w.strip_prefix('#'))
@@ -657,21 +658,35 @@ impl Run {
             .collect();
         let listed = memcli::questions_for(&self.task_tag(task)).unwrap_or_default();
         let open = |q: &&memcli::Question| q.answer.is_none();
+        // An answered id named by a report that is not `blocked` is
+        // provenance -- "done per #ID" -- not an ask: reading it as one
+        // re-asked three settled questions off one ready note and sent the
+        // orchestrator three wakeups for nothing (m1-lessons ruling 3).
         if let Some(q) = named
             .iter()
             .find_map(|id| listed.iter().filter(open).find(|q| q.short_id == *id))
             .or_else(|| {
-                named
-                    .iter()
-                    .find_map(|id| listed.iter().find(|q| q.short_id == *id))
+                blocked.then(|| {
+                    named
+                        .iter()
+                        .find_map(|id| listed.iter().find(|q| q.short_id == *id))
+                })?
             })
         {
-            return Some(format!("asked #{}: {}", q.short_id, q.title));
+            return Some((
+                format!("asked #{}: {}", q.short_id, q.title),
+                q.answer.is_some(),
+            ));
         }
         if let Some(q) = listed.iter().find(open) {
-            return Some(format!("asked #{}: {}", q.short_id, q.title));
+            return Some((format!("asked #{}: {}", q.short_id, q.title), false));
         }
-        named.first().map(|id| format!("asked #{id}: {note}"))
+        if !blocked {
+            return None;
+        }
+        named
+            .first()
+            .map(|id| (format!("asked #{id}: {note}"), false))
     }
 
     /// Where a merged task's commit is recorded. Outside refs/heads on purpose:
@@ -2303,7 +2318,7 @@ impl Run {
             && !self
                 .last_status_line(task)
                 .is_some_and(|(state, _)| state == "ready" || state == "blocked")
-            && self.question_in(task, "").is_none()
+            && self.question_in(task, "", "").is_none()
             && self.nudge_worker(task)
         {
             return;
@@ -2344,11 +2359,28 @@ impl Run {
         // already on the branch (friction #NNVWGXZ4).
         let last = self.last_status_line(task);
         if !last.as_ref().is_some_and(|(state, _)| state == "ready")
-            && let Some(asked) =
-                self.question_in(task, last.as_ref().map_or("", |(_, note)| note.as_str()))
+            && let Some((asked, answered)) = self.question_in(
+                task,
+                last.as_ref().map_or("", |(state, _)| state.as_str()),
+                last.as_ref().map_or("", |(_, note)| note.as_str()),
+            )
         {
             self.fail_task_keep(task, &asked);
-            self.event(&format!("question {task} -- {asked}"));
+            // A question that already has its answer wakes nobody: the
+            // poll loop sends the answer back in by itself, and an event
+            // here woke the orchestrator to answer what it had answered
+            // (m1-lessons ruling 3).
+            if answered {
+                warn(format!(
+                    "task {task}: re-{asked} -- already answered, the answer goes back in"
+                ));
+                memcli::log_run(&format!(
+                    "run {}: {task} re-{asked} -- already answered",
+                    self.plan.plan_id
+                ));
+            } else {
+                self.event(&format!("question {task} -- {asked}"));
+            }
             return;
         }
         if !outcome.ok {

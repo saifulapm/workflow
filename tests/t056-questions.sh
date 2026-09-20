@@ -167,6 +167,37 @@ quiet)
 	say ready 'merge-ready'
 	done_json
 	;;
+reask)
+	if [ "$attempt" = 1 ]; then
+		mem ask 'reask: which spelling of the handle?' >"$WF_TMP/reask-id"
+		say blocked "asked $(cat "$WF_TMP/reask-id")"
+		done_json
+		exit 0
+	fi
+	if [ "$attempt" = 2 ]; then
+		# Blocks again naming the id already answered: the answer goes back
+		# in, and nobody is woken over a settled question.
+		say blocked "still asked $(cat "$WF_TMP/reask-id")"
+		done_json
+		exit 0
+	fi
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/Reask.php
+	git add app/Services/Reask.php
+	commit 'Add the reask service'
+	# The ids it acted on, cited as provenance in a report that is not blocked.
+	say progress "acting on $(cat "$WF_TMP/reask-id")"
+	say ready "done per $(cat "$WF_TMP/reask-id")"
+	done_json
+	;;
+afterreask)
+	mkdir -p app/Services
+	printf '<?php\n' >app/Services/AfterReask.php
+	git add app/Services/AfterReask.php
+	commit 'Add the afterreask service'
+	say ready 'merge-ready'
+	done_json
+	;;
 ghost)
 	# Never asks; the id in the note is a friction id, not a question mem
 	# will ever list for this task.
@@ -396,6 +427,36 @@ run kill -0 "$runpid"
 isnt "$RC" 0 'the coordinator is gone'
 wait "$runpid" 2>/dev/null
 is "$?" 1 'a stop while only waiting on an answer ends the run cleanly, not hung'
+
+## ------------------------ an answered id in a later report is not a new ask
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: reask-check
+
+- [ ] reask Ask once, cite the id ever after
+      Files: app/Services/Reask.php
+      Verify: true
+- [ ] afterreask Comes after the one that cites [after: reask]
+      Files: app/Services/AfterReask.php
+      Verify: true
+EOF
+rundir="$XDG_STATE_HOME/workflow/runs/app/reask-check"
+workflow run >"$T_TMP/reask.log" 2>&1 &
+runpid=$!
+for _ in $(seq 1 100); do
+	[ -s "$WF_TMP/reask-id" ] && grep -q 'waiting on' "$T_TMP/reask.log" 2>/dev/null && break
+	sleep 0.2
+done
+reask_id=$(sed 's/^#//' "$WF_TMP/reask-id")
+"$MEM_BIN" answer "$reask_id" 'the lower-case one' >/dev/null 2>&1
+wait "$runpid"
+is "$?" 0 'the run merges once the one answer is in'
+is "$(cat "$rundir/reask.state")" merged 'reask merged'
+is "$(cat "$rundir/reask.dispatches")" 3 'on its third attempt: ask, block again on the same id, work'
+is "$(grep -c ' question reask ' "$rundir/events")" 1 'one question event, for the one time it was open'
+like "$(cat "$T_TMP/reask.log")" "task reask: re-asked #$reask_id: .* -- already answered, the answer goes back in" \
+	'the second block on the answered id is said for what it is, and wakes nobody'
+unlike "$(cat "$T_TMP/reask.log")" 'stopped short' 'and the run went on by itself'
 
 ## -------------------------------- a second question is named too, not just the first
 
