@@ -174,6 +174,14 @@ twice)
 		commit 'Add the twice service'
 	fi
 	;;
+lock)
+	# A dependency added: the manifest, and the lockfile pnpm rewrites.
+	mkdir -p app
+	printf 'lock\n' >app/lock.php
+	seq 1 3000 | sed 's/^/  dep-/' >pnpm-lock.yaml
+	git add app/lock.php pnpm-lock.yaml
+	commit 'Add the lock service and its dependency'
+	;;
 *)
 	mkdir -p app
 	printf '%s %s\n' "$(basename "$(dirname "$PWD")")" "$task" >"app/$task.php"
@@ -250,6 +258,9 @@ plan live '- [ ] hold Stay alive until released
       Verify: true
 - [ ] twice Add the twice service
       Files: app/twice.php
+      Verify: true
+- [ ] lock Add the lock service and a dependency
+      Files: app/lock.php pnpm-lock.yaml
       Verify: true'
 rundir="$XDG_STATE_HOME/workflow/runs/app/live"
 wtroot="$XDG_STATE_HOME/workflow/worktrees/app/live"
@@ -298,6 +309,7 @@ like "$(cat "$rundir/t1.review-prompt")" 'Ruling 1\. The t1 service' 'carries th
 like "$(cat "$rundir/t1.review-prompt")" 'Done: app/t1.php carries the fix' 'the task block'
 like "$(cat "$rundir/t1.review-prompt")" '^\+draft ' 'and the diff'
 like "$(cat "$rundir/t1.review-prompt")" 'artisan test' 'and the gate commands the run detected'
+like "$(cat "$rundir/t1.review-prompt")" 'You have 15 minutes for this reading' 'and the minutes the reading has'
 like "$(cat "$WF_TMP/reviews.log")" "^fable t1 $XDG_STATE_HOME/workflow/worktrees/app/live/_integration\$" 'the reader ran as the named model in the integration worktree'
 like "$(cat "$rundir/t1.review-session")" '.' 'and its session is recorded, so it can be watched'
 like "$(cat "$T_TMP/run.log")" 'task t1: fable is reading the diff' 'the log says who is reading'
@@ -332,6 +344,12 @@ like "$(cat "$secondprompt")" 'First verdict each earlier finding: addressed or 
 wait "$runpid"
 is "$?" 1 'the run stops short over t2'
 is "$(cat "$rundir/hold.state")" merged 'hold merged once released'
+is "$(cat "$rundir/lock.state")" merged 'lock merged'
+unlike "$(cat "$rundir/lock.review-prompt")" '^\+  dep-' 'its reader was handed no line of the lockfile'
+like "$(cat "$rundir/lock.review-prompt")" '^\+lock$' 'only the change itself'
+like "$(cat "$rundir/lock.review-prompt")" 'Left out of the diff above' 'and told what was left out'
+like "$(cat "$rundir/lock.review-prompt")" '    pnpm-lock.yaml \| 3000 \++* -- a generated file' 'the lockfile as its stat line, named as generated'
+like "$(cat "$T_TMP/run.log")" 'task lock: 1 file\(s\) ride in the reading as stat lines -- pnpm-lock.yaml' 'said on the run log'
 is "$(cat "$rundir/side.state")" merged 'so did side'
 is "$(cat "$rundir/t2.state" 2>/dev/null)" failed 'a reviewer that prints no verdict fails the task'
 like "$(cat "$rundir/t2.failed")" '^the review ended with no verdict -- read ' 'and says so, naming the file'

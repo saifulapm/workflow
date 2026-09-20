@@ -21,6 +21,97 @@ use crate::plan::Task;
 /// files instead: a prompt that is mostly diff is a reading nobody does well.
 pub const DIFF_CAP: usize = 200 * 1024;
 
+/// Past this many bytes one file's diff goes into the prompt as its stat
+/// line: what the reader gets is the change, not a generated file's whole
+/// body (m1-lessons ruling 4: 88% of one 185 KB prompt was pnpm-lock.yaml,
+/// and two readers spent their whole deadline paging through it).
+pub const FILE_CAP: usize = 8 * 1024;
+
+/// Files the toolchain writes, never read as a diff whatever their size.
+pub const GENERATED: [&str; 7] = [
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "Cargo.lock",
+    "composer.lock",
+    "go.sum",
+    ".snap",
+];
+
+/// Whether a path is one the toolchain writes: a lockfile by name, a
+/// snapshot by suffix.
+pub fn generated(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    GENERATED.iter().any(|g| {
+        if g.starts_with('.') {
+            name.ends_with(g)
+        } else {
+            name == *g
+        }
+    })
+}
+
+/// The diff a reader is handed: every file's hunks, except that a generated
+/// file, or one whose diff is past [`FILE_CAP`], is replaced by its `--stat`
+/// line. Returns the diff and one line per file left out, naming why.
+pub fn review_diff(diff: &str, stat: &str) -> (String, Vec<String>) {
+    let mut out = String::new();
+    let mut left_out = Vec::new();
+    let mut chunks: Vec<&str> = Vec::new();
+    let mut at = 0;
+    for (i, _) in diff.match_indices("diff --git ") {
+        if i == 0 || diff.as_bytes()[i - 1] == b'\n' {
+            if i > at {
+                chunks.push(&diff[at..i]);
+            }
+            at = i;
+        }
+    }
+    chunks.push(&diff[at..]);
+    for chunk in chunks {
+        let path = chunk
+            .lines()
+            .next()
+            .and_then(|h| h.strip_prefix("diff --git "))
+            .and_then(|h| h.split_once(" b/"))
+            .map(|(_, b)| b.trim())
+            .unwrap_or("");
+        let why = if path.is_empty() {
+            None
+        } else if generated(path) {
+            Some("a generated file".to_string())
+        } else if chunk.len() > FILE_CAP {
+            Some(format!("{} KB of diff", chunk.len() / 1024))
+        } else {
+            None
+        };
+        match why {
+            None => out.push_str(chunk),
+            Some(why) => {
+                let line = stat
+                    .lines()
+                    .find(|l| {
+                        l.contains(&format!(" {path} "))
+                            || l.trim_start().starts_with(&format!("{path} "))
+                    })
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_else(|| format!("{path} | (no stat line)"));
+                left_out.push(format!("{line} -- {why}"));
+            }
+        }
+    }
+    (out, left_out)
+}
+
+/// Seconds one reading gets: the rung as it stands, scaled up with the
+/// prompt past [`PROMPT_WARN_BYTES`] -- twice the bytes, twice the time.
+/// The code printed that a prompt was past what the default carries and
+/// started the reading on the default anyway, twice (m1-lessons ruling 4).
+pub fn deadline_for(rung_s: i64, prompt_bytes: usize) -> i64 {
+    let scaled = (rung_s as f64 * prompt_bytes as f64 / PROMPT_WARN_BYTES as f64) as i64;
+    rung_s.max(scaled)
+}
+
 /// Wall clock for one reading, in fractional minutes like the run's own
 /// deadline.
 pub const DEADLINE_MIN_DEFAULT: f64 = 15.0;
@@ -191,6 +282,54 @@ pub fn prompt(
     earlier: &[String],
     settled: &[(String, String)],
 ) -> String {
+    prompt_with(
+        plan_text,
+        task,
+        diff,
+        stat,
+        worktree,
+        answer,
+        pages,
+        gate,
+        earlier,
+        settled,
+        deadline_s() / 60,
+        &[],
+    )
+}
+
+/// [`prompt`] told how many minutes the reading has and which files the
+/// diff leaves out (m1-lessons ruling 4: a reader on a clock nobody told it
+/// about had its verdict in mind at minute fourteen and wrote nothing).
+#[allow(clippy::too_many_arguments)]
+pub fn prompt_with(
+    plan_text: &str,
+    task: &Task,
+    diff: &str,
+    stat: &str,
+    worktree: &Path,
+    answer: &Path,
+    pages: &[(String, Option<String>)],
+    gate: &str,
+    earlier: &[String],
+    settled: &[(String, String)],
+    minutes: i64,
+    left_out: &[String],
+) -> String {
+    let left_out = if left_out.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nLeft out of the diff above, each as its stat line -- a generated file, or \
+             one too large to carry; read it in the worktree only where a judgement \
+             turns on it:\n\n{}\n",
+            left_out
+                .iter()
+                .map(|l| format!("    {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
     let change = if diff.len() > DIFF_CAP {
         format!(
             "The diff is {} bytes, past what this brief carries, so this is its stat; \
@@ -199,7 +338,7 @@ pub fn prompt(
             stat.trim_end()
         )
     } else {
-        format!("```diff\n{}\n```", diff.trim_end())
+        format!("```diff\n{}\n```{left_out}", diff.trim_end())
     };
     let gate_section = if gate.trim().is_empty() {
         "The gate runs no checks of its own here: no verifier is detected in \
@@ -287,6 +426,10 @@ do not review style.
 
 ## How to answer
 
+You have {minutes} minutes for this reading. With three minutes left, write
+the answer file with what you have: partial findings and a verdict beat none,
+and a reading that ends with no answer file did not happen.
+
 Write your whole answer to exactly this file and then stop:
 
     Answer file: {answer}
@@ -305,6 +448,7 @@ reading that changes the tree is void.
 ",
         id = task.id,
         wt = worktree.display(),
+        minutes = minutes,
         gate_section = gate_section,
         answer = answer.display(),
         plan = plan_text.trim_end(),
@@ -799,6 +943,73 @@ mod tests {
             &[],
         );
         assert!(!bare.contains("## Already settled"), "{bare}");
+    }
+
+    #[test]
+    fn a_generated_or_oversized_file_rides_as_its_stat_line() {
+        let big = "+x\n".repeat(FILE_CAP / 3 + 10);
+        let diff = format!(
+            "diff --git a/app/a.php b/app/a.php\n--- a/app/a.php\n+++ b/app/a.php\n@@ -0,0 +1 @@\n+small\n\
+             diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\n--- a/pnpm-lock.yaml\n+++ b/pnpm-lock.yaml\n@@ -0,0 +1 @@\n+lock\n\
+             diff --git a/app/big.txt b/app/big.txt\n--- a/app/big.txt\n+++ b/app/big.txt\n@@ -0,0 +1 @@\n{big}"
+        );
+        let stat =
+            " app/a.php | 1 +\n pnpm-lock.yaml | 1 +\n app/big.txt | 2740 +\n 3 files changed\n";
+        let (kept, left_out) = review_diff(&diff, stat);
+        assert!(kept.contains("+small"), "{kept}");
+        assert!(!kept.contains("+lock"), "{kept}");
+        assert!(!kept.contains("diff --git a/app/big.txt"), "{kept}");
+        assert_eq!(left_out.len(), 2, "{left_out:?}");
+        assert!(
+            left_out[0].starts_with("pnpm-lock.yaml | 1 + -- a generated file"),
+            "{left_out:?}"
+        );
+        assert!(
+            left_out[1].starts_with("app/big.txt | 2740 + -- "),
+            "{left_out:?}"
+        );
+        assert!(left_out[1].ends_with("KB of diff"), "{left_out:?}");
+        assert!(generated("tests/__snapshots__/a.snap"));
+        assert!(!generated("app/lock.rs"));
+    }
+
+    #[test]
+    fn the_deadline_scales_with_the_prompt_past_the_warn_size() {
+        assert_eq!(deadline_for(900, 10), 900);
+        assert_eq!(deadline_for(900, PROMPT_WARN_BYTES), 900);
+        assert_eq!(deadline_for(900, PROMPT_WARN_BYTES * 2), 1800);
+        assert_eq!(deadline_for(600, PROMPT_WARN_BYTES * 3), 1800);
+    }
+
+    #[test]
+    fn the_reader_is_told_its_minutes_and_what_the_diff_leaves_out() {
+        let text = prompt_with(
+            "# plan: p",
+            &task(),
+            "+a",
+            " a | 1 +",
+            Path::new("/wt"),
+            Path::new("/ans"),
+            &[],
+            "",
+            &[],
+            &[],
+            30,
+            &["pnpm-lock.yaml | 2692 + -- a generated file".to_string()],
+        );
+        assert!(
+            text.contains("You have 30 minutes for this reading."),
+            "{text}"
+        );
+        assert!(text.contains("Left out of the diff above"), "{text}");
+        assert!(
+            text.contains("    pnpm-lock.yaml | 2692 + -- a generated file"),
+            "{text}"
+        );
+        assert!(
+            text.find("Left out of the diff above") < text.find("## What to look for"),
+            "{text}"
+        );
     }
 
     #[test]

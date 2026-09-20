@@ -1602,8 +1602,9 @@ impl Run {
         let plan_text = self.plan_text().unwrap_or_default();
         let int = Git::at(&self.int_wt);
         let range = format!("{prev}..{new}");
-        let diff = int.out(&["diff", &range]).unwrap_or_default();
+        let full = int.out(&["diff", &range]).unwrap_or_default();
         let stat = int.out(&["diff", "--stat", &range]).unwrap_or_default();
+        let (diff, left_out) = reviewer::review_diff(&full, &stat);
         let prompt = self.dir.join(format!("{task}.review-prompt"));
         let answer = self.dir.join(format!("{task}.review"));
         let pages = wiki_pages(&t);
@@ -1649,25 +1650,57 @@ impl Run {
                 )
             }));
         }
-        let text = reviewer::prompt(
-            &plan_text,
-            &t,
-            &diff,
-            &stat,
-            &self.int_wt,
-            &answer,
-            &pages,
-            &gate,
-            &earlier,
-            &settled,
-        );
-        if text.len() > reviewer::PROMPT_WARN_BYTES {
+        // The rung the orchestrator set for this task, else the default;
+        // then the prompt's size scales it up, and the reader is told the
+        // minutes it has (m1-lessons ruling 4). Written once here, read
+        // every pass by `review_pass` beside the task's own rung.
+        let rung_s = match self.field(task, "review-deadline") {
+            min if min.trim().is_empty() => reviewer::deadline_s(),
+            min => reviewer::deadline_from(Some(&min)),
+        };
+        let render = |minutes: i64| {
+            reviewer::prompt_with(
+                &plan_text,
+                &t,
+                &diff,
+                &stat,
+                &self.int_wt,
+                &answer,
+                &pages,
+                &gate,
+                &earlier,
+                &settled,
+                minutes,
+                &left_out,
+            )
+        };
+        let mut text = render(rung_s / 60);
+        let deadline_s = reviewer::deadline_for(rung_s, text.len());
+        if deadline_s != rung_s {
+            text = render(deadline_s / 60);
             warn(format!(
-                "task {task}: this reading's brief is {} KB, past the {} KB a default deadline is \
-                 known to carry -- `workflow redispatch {task} --review-deadline <minutes>` gives \
-                 the reading in flight more time",
+                "task {task}: this reading's brief is {} KB, past the {} KB the default deadline \
+                 carries -- the reading gets {} minutes",
                 text.len() / 1024,
-                reviewer::PROMPT_WARN_BYTES / 1024
+                reviewer::PROMPT_WARN_BYTES / 1024,
+                deadline_s / 60
+            ));
+        }
+        write_field(
+            &self.dir,
+            task,
+            "review-deadline-auto",
+            &deadline_s.to_string(),
+        );
+        if !left_out.is_empty() {
+            warn(format!(
+                "task {task}: {} file(s) ride in the reading as stat lines -- {}",
+                left_out.len(),
+                left_out
+                    .iter()
+                    .map(|l| l.split(" | ").next().unwrap_or(l).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         let _ = std::fs::write(&prompt, &text);
@@ -1754,7 +1787,12 @@ impl Run {
         // the reader is going extends the reading in flight, which a live
         // process's environment cannot do (friction #M0EFWGJ7).
         let deadline_s = match self.field(task, "review-deadline") {
-            min if min.trim().is_empty() => reviewer::deadline_s(),
+            min if min.trim().is_empty() => {
+                match self.field(task, "review-deadline-auto").parse::<i64>() {
+                    Ok(s) if s > 0 => s,
+                    _ => reviewer::deadline_s(),
+                }
+            }
             min => reviewer::deadline_from(Some(&min)),
         };
         // Gone with an answer is the clean end. Gone without one within the
