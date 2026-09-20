@@ -22,6 +22,7 @@ pub mod backend;
 pub mod backend_amx;
 pub mod brief;
 pub mod cli;
+pub mod docs;
 pub mod doctor;
 pub mod exit;
 pub mod gitcmd;
@@ -145,6 +146,7 @@ pub fn run(cli: Cli) -> i32 {
             file,
             against,
         } => advise::cmd_advise(&question, &file, against.as_deref()),
+        Command::Docs { library, query } => docs::cmd_docs(&library, &query),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch {
             task,

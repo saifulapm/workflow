@@ -9,6 +9,11 @@ read it whole, then execute it exactly, and report with `workflow report
 Read narrowly: open the files the brief names and the ones they point at, in
 the ranges you need, never a directory at a time.
 
+For a library API you are not sure of, `workflow docs <library> "<query>"`
+prints its current documentation. Never read a package's built `dist` or
+`typings` to learn its API: a third such read in a row is a `workflow docs`
+or a `workflow advise`.
+
 A file the toolchain rewrites as a side effect -- a lockfile, a generated
 schema, a snapshot -- is still your write. Outside your Files it is
 stop-and-ask: `mem ask`, never a commit with a note.

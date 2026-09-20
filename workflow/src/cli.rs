@@ -143,6 +143,13 @@ named to advise or a fourth consult this attempt."
         #[arg(long, value_name = "TEXT")]
         against: Option<String>,
     },
+    /// A library's current documentation, through the Context7 CLI.
+    Docs {
+        /// The library, by the name its users know it.
+        library: String,
+        /// What about it, in a few words.
+        query: String,
+    },
     /// Collect finished or stalled workers.
     Reap,
     /// Ask the live run to dispatch a failed task again.
@@ -301,6 +308,8 @@ usage: workflow <command> [options]
 
   verify [--hook|--gate]      run the repo's suite over what is staged
       0 green · 1 failed · 2 no verifier · 3 test removal
+  docs <library> <query>      a library's current docs through Context7
+      0 printed · 1 nothing came
   report <state> [<note>]     append one status line for this worktree's task
       0 written · 2 not a state, or not a run worktree
   lint-msg [<file>] [--string <text>]

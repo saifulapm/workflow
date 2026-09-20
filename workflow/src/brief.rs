@@ -259,9 +259,10 @@ fn advice_section(advisor: Option<&str>) -> String {
 
 `workflow advise \"<question>\" --file <path>` asks {model} and prints its
 answer without ending your turn. Ask before committing to an approach this
-block leaves open, when one failure has recurred twice, and before `ready` on
-a Done line a test cannot settle; three consults an attempt. A decision --
-scope, taste, a plan that reads two ways -- is `mem ask`, never advice.
+block leaves open, on an API `workflow docs` cannot settle, when one failure
+has recurred twice, and before `ready` on a Done line a test cannot settle;
+three consults an attempt. A decision -- scope, taste, a plan that reads two
+ways -- is `mem ask`, never advice.
 
 "
     )
