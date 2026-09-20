@@ -216,13 +216,16 @@ run is live here. Exit 4: a merge, only under --merges. Exit 3: --timeout
 passed with nothing new. A cursor in the run dir remembers what was already
 reported, so calling this again after acting picks up where it left off.
 
-Meant to be run in a background shell that wakes the session when it exits;
-nothing here sleeps on a fixed clock."
+Call it in the foreground and act on the exit code; it returns 3 after the
+timeout (300 s unless --timeout says otherwise) with one line per live task,
+so a session is never held past what it can afford to miss."
     )]
     Wait {
-        /// Give up after this many seconds with exit 3.
-        #[arg(long, value_name = "SECONDS")]
-        timeout: Option<u64>,
+        /// Give up after this many seconds with exit 3. Bounded by default:
+        /// a session holding one call for half an hour cannot hear a
+        /// message queued behind it.
+        #[arg(long, value_name = "SECONDS", default_value_t = 300)]
+        timeout: u64,
         /// Return on each merge too, with exit 4.
         #[arg(long)]
         merges: bool,

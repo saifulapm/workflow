@@ -93,7 +93,20 @@ is "$(cat "$rundir/wait.cursor")" "$(wc -c <"$rundir/events")" 'the cursor stand
 
 run timeout 3 workflow wait --timeout 1
 is "$RC" 3 'nothing new: the next wait times out'
-is "$OUT" '' 'and repeats nothing'
+like "$OUT" '^still: hold dispatched [0-9]+m$' 'and says what is still live, and for how long'
+unlike "$OUT" 'still: ask' 'a task waiting on an answer is not still running'
+
+# One waiter per run: a second one is refused while the first stands.
+timeout 20 workflow wait --timeout 6 >"$T_TMP/first-wait.log" 2>&1 &
+firstpid=$!
+sleep 1
+run timeout 5 workflow wait --timeout 1
+is "$RC" 2 'a second wait on the same run is refused'
+like "$OUT" "wait: another wait \(pid [0-9]+\) already watches run waited -- one waiter per run" 'naming the first'
+wait "$firstpid"
+run timeout 3 workflow wait --timeout 1
+is "$RC" 3 'and once the first is gone the next wait is taken'
+unlike "$OUT" 'question|merged|failed|ended' 'and repeats no event'
 
 ## ------------------------------------------------- merges, on request
 
@@ -153,7 +166,8 @@ is "$(cat "$rundir/hold2.state" 2>/dev/null)" dispatched 'the second run is live
 
 run timeout 30 workflow wait --timeout 1
 is "$RC" 3 'the first wait of a second run blocks rather than replaying'
-is "$OUT" '' 'and the run before it is behind the cursor, ending and all'
+unlike "$OUT" 'question|merged|failed|ended' 'and the run before it is behind the cursor, ending and all'
+like "$OUT" '^still: hold2 dispatched' 'only what this run has live'
 
 : >"$WF_TMP/release-hold2"
 wait "$run2pid"

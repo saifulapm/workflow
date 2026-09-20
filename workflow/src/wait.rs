@@ -103,10 +103,30 @@ pub fn cmd_wait(timeout: Option<u64>, merges: bool) -> i32 {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
+    // One waiter per run: two share the cursor, and whichever reads first
+    // consumes an event into a log nobody reads (m1-lessons ruling 9).
+    let lock = dir.join("wait.lock");
+    if let Some(pid) = std::fs::read_to_string(&lock)
+        .ok()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty() && p != &std::process::id().to_string() && sys::pid_alive(p))
+    {
+        warn(format!(
+            "wait: another wait (pid {pid}) already watches run {plan} -- one waiter per run, or the two eat each other's events"
+        ));
+        return exit::USAGE;
+    }
+    let _ = std::fs::write(&lock, format!("{}\n", std::process::id()));
+    let code = wait_loop(&dir, &plan, timeout, merges);
+    let _ = std::fs::remove_file(&lock);
+    code
+}
+
+fn wait_loop(dir: &Path, plan: &str, timeout: Option<u64>, merges: bool) -> i32 {
     let started = sys::now();
-    let mut at = cursor(&dir);
+    let mut at = cursor(dir);
     loop {
-        let (lines, next) = new_lines(&dir, at);
+        let (lines, next) = new_lines(dir, at);
         // Lines that need nobody are printed and passed over; the cursor
         // moves past everything read, so nothing is printed twice.
         for line in &lines {
@@ -121,7 +141,7 @@ pub fn cmd_wait(timeout: Option<u64>, merges: bool) -> i32 {
         }
         // The lock went with the run: it ended without writing so, killed
         // outright. Say so rather than wait on a file nobody appends to.
-        if run::lock_run(&dir).is_some() {
+        if run::lock_run(dir).is_some() {
             warn(format!(
                 "wait: run {plan} is no longer live and wrote no ending -- `workflow status` and `workflow reap`"
             ));
@@ -130,10 +150,46 @@ pub fn cmd_wait(timeout: Option<u64>, merges: bool) -> i32 {
         if let Some(t) = timeout
             && sys::now() - started >= t as i64
         {
+            // Informative, not empty: what is live and for how long, so a
+            // timeout is a report rather than a shrug.
+            for line in still_lines(dir) {
+                println!("{line}");
+            }
             return TIMEOUT;
         }
         sys::sleep(POLL_S);
     }
+}
+
+/// One `still: <task> <state> <age>` line per task the run is carrying --
+/// dispatched or reviewing -- for the timeout to print.
+fn still_lines(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter_map(|n| n.strip_suffix(".state").map(str::to_string))
+        .collect();
+    names.sort();
+    for task in names {
+        let state = std::fs::read_to_string(dir.join(format!("{task}.state")))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if state != run::DISPATCHED && state != run::REVIEWING {
+            continue;
+        }
+        let since = std::fs::read_to_string(dir.join(format!("{task}.dispatched_at")))
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .map(|t| (sys::now() - t).max(0) / 60)
+            .unwrap_or(0);
+        out.push(format!("still: {task} {state} {since}m"));
+    }
+    out
 }
 
 #[cfg(test)]
