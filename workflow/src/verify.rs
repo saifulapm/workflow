@@ -424,6 +424,27 @@ pub fn cmd_verify(mode: Mode) -> i32 {
     if mode != Mode::Gate
         && let Some(cmd) = task_verify_cmd(&top)
     {
+        // The Files line first, at the commit, where the worker can still
+        // act on it (m1-lessons ruling 6).
+        if mode == Mode::Hook
+            && let Some(files) =
+                task_run_file(&top, "files").and_then(|f| std::fs::read_to_string(f).ok())
+            && !files.trim().is_empty()
+        {
+            let patterns = crate::ownership::split_patterns(&files);
+            let outside = crate::ownership::staged_violations(&top, &patterns);
+            if !outside.is_empty() {
+                warn(format!(
+                    "commit refused: staged outside this task's Files: patterns -- {}",
+                    outside.join(", ")
+                ));
+                warn(
+                    "a file the toolchain rewrote is still yours: `mem ask` if Files must widen, \
+                     never a note in the report",
+                );
+                return exit::FAILED;
+            }
+        }
         warn(format!("verify task: {cmd}"));
         let _lock = suite_lock(project.as_ref(), &top);
         if !run_scrubbed(&cmd) {

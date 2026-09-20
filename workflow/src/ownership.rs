@@ -192,6 +192,30 @@ pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) ->
     }
 }
 
+/// Every staged record the patterns do not claim: what `git commit` is about
+/// to write, judged where the worker still has its session and the
+/// stop-and-ask rule in front of it. The gate's own check ran three seconds
+/// after the session ended, when nothing could act on it (m1-lessons ruling
+/// 6: two workers saw the lockfile outside their Files, noted it, shipped,
+/// and were failed).
+pub fn staged_violations(wt: &Path, patterns: &[String]) -> Vec<String> {
+    let git = Git::at(wt);
+    let specs: Vec<String> = if patterns.is_empty() {
+        vec![gitcmd::glob_top("__nothing_is_owned__")]
+    } else {
+        patterns.iter().map(|p| gitcmd::glob_top(p)).collect()
+    };
+    let spec_args: Vec<&str> = specs.iter().map(|s| s.as_str()).collect();
+    let diff = ["diff", "--cached", "--name-status", "-z", "-M"];
+    let mut owned_args: Vec<&str> = diff.to_vec();
+    owned_args.push("--");
+    owned_args.extend(&spec_args);
+    let all = diff_records(&git.bytes(&diff));
+    let owned = diff_records(&git.bytes(&owned_args));
+    let outside: Vec<Vec<u8>> = all.difference(&owned).cloned().collect();
+    show(&outside)
+}
+
 /// The records as one line each, with the record separator shown.
 pub fn show(records: &[Vec<u8>]) -> Vec<String> {
     records

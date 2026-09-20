@@ -194,6 +194,58 @@ fn rewrite_sentence(pages: &[(String, Option<String>)]) -> &'static str {
     }
 }
 
+/// The manifests a task may add a dependency to, and the files the
+/// toolchain rewrites when it does.
+const MANIFESTS: [(&str, &[&str]); 4] = [
+    (
+        "package.json",
+        &[
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "package-lock.json",
+            "yarn.lock",
+        ],
+    ),
+    ("Cargo.toml", &["Cargo.lock"]),
+    ("composer.json", &["composer.lock"]),
+    ("go.mod", &["go.sum"]),
+];
+
+/// One sentence when the Files line claims a manifest whose lockfile the
+/// tree has: which generated file a dependency drags in, and whether the
+/// line claims it (m1-lessons ruling 6). `present` is what stands at the
+/// worktree root. Nothing when no manifest is claimed.
+pub fn lockfile_sentence(patterns: &[String], present: &[String]) -> String {
+    let claims = |name: &str| {
+        patterns.iter().any(|p| {
+            let base = p.rsplit('/').next().unwrap_or(p);
+            base == name || (p.ends_with("**") && !p.contains("test"))
+        })
+    };
+    let named = |name: &str| {
+        patterns
+            .iter()
+            .any(|p| p.rsplit('/').next().unwrap_or(p) == name)
+    };
+    let mut lines = Vec::new();
+    for (manifest, generated) in MANIFESTS {
+        if !claims(manifest) {
+            continue;
+        }
+        for g in generated.iter().filter(|g| present.iter().any(|p| p == *g)) {
+            let claimed = match named(g) {
+                true => "your Files claim it",
+                false => "your Files do not claim it: `mem ask` before staging it, never a note",
+            };
+            lines.push(format!("Adding a dependency rewrites `{g}`; {claimed}."));
+        }
+    }
+    match lines.is_empty() {
+        true => String::new(),
+        false => format!(" {}", lines.join(" ")),
+    }
+}
+
 /// `## Advice`, after "How to work", only when the run has an advisor to
 /// name (m3-advise ruling 2): when to ask, the cap, and what stays a
 /// question.
@@ -213,6 +265,16 @@ scope, taste, a plan that reads two ways -- is `mem ask`, never advice.
 
 "
     )
+}
+
+/// The generated files standing at the worktree root, by name.
+fn lockfiles_at(worktree: &Path) -> Vec<String> {
+    MANIFESTS
+        .iter()
+        .flat_map(|(_, g)| g.iter())
+        .filter(|g| worktree.join(g).is_file())
+        .map(|g| g.to_string())
+        .collect()
 }
 
 pub fn text(
@@ -243,8 +305,8 @@ atomic change in ordinary
 engineering voice -- no trailers, no session links, no words like agent, AI or
 orchestration, no puffery, plain words over fancy ones, straight quotes, no
 em dashes. Stage only the files this task touched; never `git add -A`.
-Everything you write must match the Files: patterns; anything outside them is
-refused at the merge gate and the task is failed.
+Everything you write must match the Files: patterns; the pre-commit hook
+refuses a commit outside them and the merge gate fails the task.{lockfile}
 
 A bug, a smell or a missing behaviour the task does not name goes in your
 `ready` note as a follow-up, not into this change, unless the Done line cannot
@@ -291,6 +353,10 @@ States: {states}. `ready` means merge-ready and is your last act.
         plan = plan_section(prose),
         pages = pages_section(&task.id, pages),
         block = task.block,
+        lockfile = lockfile_sentence(
+            &crate::ownership::split_patterns(task.files.as_deref().unwrap_or("")),
+            &lockfiles_at(worktree),
+        ),
         prior = prior.section(),
         advice = advice_section(advisor),
         rewrite = rewrite_sentence(pages),
@@ -351,6 +417,27 @@ pub fn write(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_brief_claiming_a_manifest_names_the_lockfile_it_drags_in() {
+        let present = vec![
+            "pnpm-lock.yaml".to_string(),
+            "pnpm-workspace.yaml".to_string(),
+        ];
+        let s = lockfile_sentence(&["apps/admin/package.json".into()], &present);
+        assert!(s.contains("Adding a dependency rewrites `pnpm-lock.yaml`; your Files do not claim it: `mem ask` before staging it, never a note."), "{s}");
+        assert!(s.contains("rewrites `pnpm-workspace.yaml`"), "{s}");
+        let s = lockfile_sentence(
+            &["apps/platform/**".into(), "pnpm-lock.yaml".into()],
+            &present,
+        );
+        assert!(
+            s.contains("rewrites `pnpm-lock.yaml`; your Files claim it."),
+            "{s}"
+        );
+        assert_eq!(lockfile_sentence(&["app/cart.php".into()], &present), "");
+        assert_eq!(lockfile_sentence(&["package.json".into()], &[]), "");
+    }
 
     #[test]
     fn the_brief_carries_the_task_and_stays_inside_its_budget() {

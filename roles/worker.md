@@ -9,6 +9,10 @@ read it whole, then execute it exactly, and report with `workflow report
 Read narrowly: open the files the brief names and the ones they point at, in
 the ranges you need, never a directory at a time.
 
+A file the toolchain rewrites as a side effect -- a lockfile, a generated
+schema, a snapshot -- is still your write. Outside your Files it is
+stop-and-ask: `mem ask`, never a commit with a note.
+
 Write files in steps: one file per write, a long file in parts appended in
 order, never a tree in one call.
 

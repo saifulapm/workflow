@@ -561,6 +561,7 @@ impl Run {
                     "verify",
                     t.verify.as_deref().unwrap_or(""),
                 );
+                write_field(&self.dir, &task, "files", t.files.as_deref().unwrap_or(""));
             }
         }
     }
@@ -1178,6 +1179,7 @@ impl Run {
         // sent back to its own worker was still held to the Verify line of
         // the plan as it read at dispatch (friction #TDCT9VD8).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
+        write_field(&self.dir, task, "files", t.files.as_deref().unwrap_or(""));
         let n: u64 = self.field(task, "continued").parse().unwrap_or(0) + 1;
         self.mark_status(task, &format!("continued {n}"));
         let line = format!(
@@ -1277,6 +1279,9 @@ impl Run {
         // The gate reads this from inside the worktree: the task is held to its
         // own Verify command there, not to the repo-wide suite (verify.rs).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
+        // And its Files line, which the pre-commit hook holds a commit to
+        // (m1-lessons ruling 6).
+        write_field(&self.dir, task, "files", t.files.as_deref().unwrap_or(""));
 
         let n = prior.attempts;
         write_field(&self.dir, task, "dispatches", &(n + 1).to_string());
