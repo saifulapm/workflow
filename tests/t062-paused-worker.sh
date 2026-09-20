@@ -83,6 +83,12 @@ stop)
 	printf 'stop %s\n' "$1" >>"$WF_TMP/amx-stops"
 	printf 'stopped record\n' >"$AMX_DIR/$1.state"
 	;;
+send)
+	# A turn that ended with nothing written is nudged once in its session
+	# before it is judged (t085). What this file is about is the judgement,
+	# so the pane refuses the line and the run judges the ending as it stands.
+	exit 2
+	;;
 esac
 exit 0
 AMX

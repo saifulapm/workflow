@@ -42,6 +42,15 @@ const CONTINUE_MAX_TOKENS: u64 = 120_000;
 /// a pane still reading as idle would be collected as a worker that ended.
 const CONTINUE_GRACE_S: i64 = 30;
 
+/// The one line a worker gets in its own session when its turn ended with
+/// nothing to judge -- no ready, no blocked, no question, no commit. A model
+/// that narrated a tool call instead of making one and a provider that cut
+/// the turn off look the same from here, and both are one line from going
+/// on; a fresh dispatch re-reads everything the session had (ruling 1 of
+/// m1-lessons: ebdify m1's gql died three times this way).
+const NUDGE_LINE: &str = "Your last turn ended without a report and without a tool call. \
+Continue; a provider cutoff looks the same from here.";
+
 /// The wiki pages a task's Read: named, read live off mem, in the shape the
 /// brief and the reviewer's prompt both take: `(slug, text)`, `None` for a
 /// page mem does not have (ruling 2 of m1-wiki-first).
@@ -281,6 +290,14 @@ pub fn stalled(
     deadline_s: i64,
 ) -> bool {
     let now = sys::now();
+    // A line just sent into the session -- a continuation, a nudge -- is a
+    // worker starting its turn for the send grace, the same grace `alive`
+    // gives it: a stall deadline shorter than that grace declared a nudged
+    // worker stalled before its turn could begin.
+    let sent: i64 = field(dir, task, "continued_at").parse().unwrap_or(0);
+    if sent > 0 && now - sent < CONTINUE_GRACE_S {
+        return false;
+    }
     let mut last = last_activity(backend, dir, wt_root, task);
     let started: i64 = field(dir, task, "dispatched_at").parse().unwrap_or(0);
     if last <= started {
@@ -1047,6 +1064,43 @@ impl Run {
         let _ = std::fs::remove_file(self.dir.join(format!("{task}.unread")));
     }
 
+    /// One line into the worker's own session after a turn that ended with
+    /// nothing to judge, once per attempt. `false` when the nudge has been
+    /// spent, there is no session standing to send to, the window is past
+    /// [`CONTINUE_MAX_TOKENS`], or the backend did not see the line taken;
+    /// under reap nothing is sent, since reap dispatches nothing. Counted in
+    /// `<task>.nudged`, apart from `continued`, and the stall clock and the
+    /// send grace start over as they do for a continuation.
+    fn nudge_worker(&self, task: &str) -> bool {
+        if self.collecting || self.field(task, "nudged").parse::<u64>().unwrap_or(0) >= 1 {
+            return false;
+        }
+        let h = self.handle(task);
+        if h.session.is_empty() || !self.backend.listed(&h) {
+            return false;
+        }
+        if self
+            .backend
+            .context_tokens(&h)
+            .is_some_and(|t| t > CONTINUE_MAX_TOKENS)
+        {
+            return false;
+        }
+        if !self.backend.send(&h, NUDGE_LINE) {
+            return false;
+        }
+        write_field(&self.dir, task, "nudged", "1");
+        write_field(&self.dir, task, "continued_at", &sys::now().to_string());
+        write_field(&self.dir, task, "dispatched_at", &sys::now().to_string());
+        self.set_state(task, DISPATCHED);
+        warn(format!(
+            "task {task}: its turn ended without a report -- nudged once in its session (session {})",
+            h.session
+        ));
+        memcli::log_run(&format!("run {}: nudged {task}", self.plan.plan_id));
+        true
+    }
+
     /// The task back to the worker that has it, in the session it has: the
     /// brief is rewritten with what happened to its last report -- the
     /// reader's findings, the orchestrator's answer -- and one line goes into
@@ -1175,6 +1229,7 @@ impl Run {
         // The consult cap is per attempt (m3-advise ruling 2): `workflow
         // advise` counts up from here.
         write_field(&self.dir, task, "advised", "0");
+        write_field(&self.dir, task, "nudged", "0");
         for ext in ["json", "err", "pid"] {
             let _ = std::fs::remove_file(self.dir.join(format!("{task}.{ext}")));
         }
@@ -2239,14 +2294,32 @@ impl Run {
         // the worktree at cleanup and sent the next attempt to a tree with no
         // trace of the first, so it is said for what it is and the tree is
         // kept (friction #RN9DB37H).
+        // Before any of that, a turn that ended with nothing to judge while
+        // the session still stands gets one line in that session (ruling 1
+        // of m1-lessons); only when that has been spent, or cannot be sent,
+        // is the ending judged.
+        let nudged = self.field(task, "nudged").parse::<u64>().unwrap_or(0) >= 1;
+        if self.commits(task) == 0
+            && !self
+                .last_status_line(task)
+                .is_some_and(|(state, _)| state == "ready" || state == "blocked")
+            && self.question_in(task, "").is_none()
+            && self.nudge_worker(task)
+        {
+            return;
+        }
         let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
         if self.last_status_line(task).is_none() && self.commits(task) == 0 && tries < 2 {
-            let (what, after) = match self.uncommitted(task) {
-                true => (
+            let (what, after) = match (self.uncommitted(task), nudged) {
+                (true, _) => (
                     "its worker ended leaving its work uncommitted",
                     "its worker ended without committing what it wrote; it is still in this worktree, so continue from there",
                 ),
-                false => (
+                (false, true) => (
+                    "its worker ended twice without a report, once after a nudge",
+                    "its worker ended its turn twice without writing anything, once after a nudge, and was dispatched again",
+                ),
+                (false, false) => (
                     "its worker died leaving nothing",
                     "its worker died before writing anything, and was dispatched again",
                 ),
