@@ -79,7 +79,8 @@ pub enum Command {
     /// Full-text search across this project and global scope.
     Search {
         /// The query. FTS5 syntax, including title:, body: and tags: filters.
-        query: String,
+        /// Left out with --kind, the kind is listed newest first.
+        query: Option<String>,
         #[arg(long)]
         kind: Option<String>,
         #[arg(long = "type")]
@@ -89,6 +90,9 @@ pub enum Command {
         #[arg(long)]
         min_score: Option<f64>,
     },
+    /// Not a verb: says which ones list.
+    #[command(hide = true)]
+    List,
     /// Print items by full ULID or exact 8-character suffix.
     Show {
         #[arg(required = true)]
@@ -240,6 +244,9 @@ pub enum Command {
         /// Check off one task by its plan id, in place.
         #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["set_file", "stdin", "clear"])]
         tick: Option<String>,
+        /// Print one task's block alone, by its plan id.
+        #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["set_file", "stdin", "clear", "tick", "list", "from"])]
+        task: Option<String>,
         /// List the stored plans: slug, bytes, date and title.
         #[arg(long, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick"])]
         list: bool,

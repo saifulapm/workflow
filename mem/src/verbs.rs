@@ -782,6 +782,7 @@ const ROADMAP: Singleton = Singleton {
 pub struct PlanArgs<'a> {
     pub slug: Option<&'a str>,
     pub set_file: Option<&'a std::path::Path>,
+    pub task: Option<&'a str>,
     pub stdin: bool,
     pub clear: bool,
     pub tick: Option<&'a str>,
@@ -804,9 +805,10 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
         return plan_from(app, slug);
     }
     let Some(slug) = args.slug else {
-        return match args.tick {
-            Some(task) => tick_singleton(app, PLAN, task, true),
-            None => singleton(app, PLAN, args.set_file, args.stdin, args.clear),
+        return match (args.tick, args.task) {
+            (Some(task), _) => tick_singleton(app, PLAN, task, true),
+            (None, Some(task)) => plan_task(app, task),
+            (None, None) => singleton(app, PLAN, args.set_file, args.stdin, args.clear),
         };
     };
     check_slug(slug, "plan")?;
@@ -817,6 +819,52 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
         ));
     }
     stored_plan(app, slug, args.set_file, args.stdin, args.clear)
+}
+
+/// `mem plan --task <id>`: one task's block, the `- [ ] <id>` line and the
+/// indented lines under it, so an orchestrator re-reading one task does not
+/// re-read a 16 KB plan to find it (m1-lessons ruling 12).
+fn plan_task(app: &App, task: &str) -> Result<i32> {
+    let identity = app.identity(Mode::Read)?;
+    let Some(id) = identity.id() else {
+        if !app.quiet {
+            eprintln!("mem: no project here");
+        }
+        return Ok(exit::NOT_FOUND);
+    };
+    let path = (PLAN.path)(&app.store, id);
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    match task_block(&text, task) {
+        Some(block) => {
+            print!("{block}");
+            Ok(0)
+        }
+        None => Err(exit::not_found(format!(
+            "no task '{task}' in the plan of record"
+        ))),
+    }
+}
+
+/// The lines of one task in a plan: its `- [ ] <id>` or `- [x] <id>` line
+/// and every indented line after it, up to the next task or a blank line.
+pub fn task_block(plan: &str, task: &str) -> Option<String> {
+    let mut lines = plan.lines();
+    let head = lines.by_ref().find(|l| {
+        let l = l.trim_start();
+        ["- [ ] ", "- [x] ", "- [X] "].iter().any(|p| {
+            l.strip_prefix(p)
+                .is_some_and(|r| r.split_whitespace().next() == Some(task))
+        })
+    })?;
+    let mut out = format!("{head}\n");
+    for l in lines {
+        if l.trim().is_empty() || !l.starts_with(' ') {
+            break;
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    Some(out)
 }
 
 /// `mem roadmap` — the same four moves over roadmap.md, and one more: a

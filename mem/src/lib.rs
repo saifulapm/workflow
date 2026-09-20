@@ -86,14 +86,24 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             r#type,
             limit,
             min_score,
-        } => verbs::search_verb(
-            &app,
-            query,
-            kind.as_deref(),
-            r#type.as_deref(),
-            *limit,
-            *min_score,
-        ),
+        } => match (query.as_deref(), kind.as_deref()) {
+            (Some(query), kind) => {
+                verbs::search_verb(&app, query, kind, r#type.as_deref(), *limit, *min_score)
+            }
+            // No query and a kind: the kind, newest first, the way `mem log
+            // --kind` lists it (m1-lessons ruling 12: rulings could not be
+            // listed without inventing a query).
+            (None, Some(kind)) => {
+                verbs::log(&app, None, *limit, None, Some(kind), r#type.as_deref())
+            }
+            (None, None) => Err(exit::usage(
+                "search takes a query, or --kind <kind> to list that kind newest first",
+            )),
+        },
+        cli::Command::List => Err(exit::usage(
+            "mem has no list: `mem log` lists recent entries, `mem search <query>` finds items, \
+             `mem search --kind <kind>` lists one kind",
+        )),
         cli::Command::Show { ids } => verbs::show(&app, ids),
         cli::Command::Projects => verbs::projects(&app),
         cli::Command::Project { command } => match command {
@@ -224,6 +234,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             stdin,
             clear,
             tick,
+            task,
             list,
             from,
             session_id,
@@ -232,6 +243,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             verbs::PlanArgs {
                 slug: slug.as_deref(),
                 set_file: set_file.as_deref(),
+                task: task.as_deref(),
                 stdin: *stdin,
                 clear: *clear,
                 tick: tick.as_deref(),
