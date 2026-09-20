@@ -22,10 +22,17 @@ use crate::plan::Task;
 pub const DIFF_CAP: usize = 200 * 1024;
 
 /// Past this many bytes one file's diff goes into the prompt as its stat
-/// line: what the reader gets is the change, not a generated file's whole
-/// body (m1-lessons ruling 4: 88% of one 185 KB prompt was pnpm-lock.yaml,
-/// and two readers spent their whole deadline paging through it).
-pub const FILE_CAP: usize = 8 * 1024;
+/// line: what the reader gets is the change, not one file's whole body
+/// (m1-lessons ruling 4: 88% of one 185 KB prompt was pnpm-lock.yaml, and
+/// two readers spent their whole deadline paging through it).
+///
+/// 32 KB, about 800 lines, and not the 8 KB that ruling estimated: the
+/// first diff measured against it put ebdify m1's gql test file -- 8.4 KB
+/// of hand-written assertions, and the centre of that reading -- on the
+/// wrong side of the line. A file the toolchain writes is caught by name
+/// whatever its size, so this bound is only for the rare hand-written file
+/// that would drown a prompt by itself.
+pub const FILE_CAP: usize = 32 * 1024;
 
 /// Files the toolchain writes, never read as a diff whatever their size.
 pub const GENERATED: [&str; 7] = [
@@ -948,15 +955,22 @@ mod tests {
     #[test]
     fn a_generated_or_oversized_file_rides_as_its_stat_line() {
         let big = "+x\n".repeat(FILE_CAP / 3 + 10);
+        // A hand-written file the size of a real test rides whole: the cap
+        // is for one file drowning a prompt, not for an ordinary big change.
+        let ordinary = "+assert!(x);\n".repeat(700);
         let diff = format!(
             "diff --git a/app/a.php b/app/a.php\n--- a/app/a.php\n+++ b/app/a.php\n@@ -0,0 +1 @@\n+small\n\
              diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\n--- a/pnpm-lock.yaml\n+++ b/pnpm-lock.yaml\n@@ -0,0 +1 @@\n+lock\n\
+             diff --git a/app/test.rs b/app/test.rs\n--- a/app/test.rs\n+++ b/app/test.rs\n@@ -0,0 +1 @@\n{ordinary}\
              diff --git a/app/big.txt b/app/big.txt\n--- a/app/big.txt\n+++ b/app/big.txt\n@@ -0,0 +1 @@\n{big}"
         );
-        let stat =
-            " app/a.php | 1 +\n pnpm-lock.yaml | 1 +\n app/big.txt | 2740 +\n 3 files changed\n";
+        let stat = " app/a.php | 1 +\n pnpm-lock.yaml | 1 +\n app/test.rs | 700 +\n app/big.txt | 2740 +\n 4 files changed\n";
         let (kept, left_out) = review_diff(&diff, stat);
         assert!(kept.contains("+small"), "{kept}");
+        assert!(
+            kept.contains("+assert!(x);"),
+            "a 700-line hand-written file is not a drowning file: {kept}"
+        );
         assert!(!kept.contains("+lock"), "{kept}");
         assert!(!kept.contains("diff --git a/app/big.txt"), "{kept}");
         assert_eq!(left_out.len(), 2, "{left_out:?}");
