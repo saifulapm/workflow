@@ -13,6 +13,8 @@ struct TaskRow {
     dispatches: u64,
     session: String,
     failed: String,
+    /// Minutes since the task's last dispatch, `-` before its first.
+    age: String,
     last_status: String,
     merged: String,
     /// What the worker was carrying at its last turn, when the run could see
@@ -96,6 +98,10 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             dispatches: field(dir, &id, "dispatches").parse().unwrap_or(0),
             session: field(dir, &id, "session"),
             failed: field(dir, &id, "failed"),
+            age: match field(dir, &id, "dispatched_at").parse::<i64>() {
+                Ok(t) if t > 0 => format!("{}m", (crate::sys::now() - t).max(0) / 60),
+                _ => String::from("-"),
+            },
             last_status: last_status(dir, &id),
             merged: field(dir, &id, "merged"),
             context: field(dir, &id, "context").parse().unwrap_or(0),
@@ -178,7 +184,11 @@ fn print_human(rows: &[RunRow]) {
         );
         for t in &r.tasks {
             let mut detail = String::new();
-            if !t.failed.is_empty() {
+            // A reason only while it is the task's state: a merged task
+            // whose .failed still held its first attempt's refusal showed
+            // that refusal on every status read after, fifty-six times in
+            // one session (m1-lessons ruling 10).
+            if !t.failed.is_empty() && (t.state == run::FAILED || t.state == run::BLOCKED) {
                 detail = t.failed.clone();
             } else if !t.last_status.is_empty() {
                 detail = format!("last report: {}", t.last_status);
@@ -203,7 +213,19 @@ fn print_human(rows: &[RunRow]) {
     }
 }
 
-pub fn cmd_status(json: bool) -> i32 {
+/// One line per task, state and age since its last dispatch, nothing else:
+/// what an orchestrator polls with, since the full report re-entered its
+/// window sixty times in one session (m1-lessons ruling 10).
+fn print_brief(rows: &[RunRow]) {
+    for r in rows {
+        println!("run {} ({})", r.plan, if r.live { "live" } else { "ended" });
+        for t in &r.tasks {
+            println!("  {:<8} {:<10} {}", t.id, t.state, t.age);
+        }
+    }
+}
+
+pub fn cmd_status(json: bool, brief: bool) -> i32 {
     if !Git::here().inside_worktree() {
         warn("status: stand in the project checkout");
         return exit::USAGE;
@@ -225,6 +247,10 @@ pub fn cmd_status(json: bool) -> i32 {
         warn(format!("status: no runs recorded for {}", project.name));
         return exit::OK;
     }
-    print_human(&rows);
+    if brief {
+        print_brief(&rows);
+    } else {
+        print_human(&rows);
+    }
     exit::OK
 }

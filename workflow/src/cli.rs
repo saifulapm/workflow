@@ -198,6 +198,9 @@ The run dir read out loud, and nothing touched: no dispatch, no cleanup, no
 state change. --json is the shape a session that owns a run polls."
     )]
     Status {
+        /// One line per task: id, state and age. No report, no reason.
+        #[arg(long)]
+        brief: bool,
         /// Print the report as JSON.
         #[arg(long)]
         json: bool,

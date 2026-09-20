@@ -52,6 +52,20 @@ unlike "$OUT" '\$' 'and no dollar figure is reported at all'
 like "$OUT" 'last report: ready done' 'a status line punctuated ready: reports the state bare'
 like "$OUT" 't1 +merged +2 ' 'the fix column shows the reviews a task carried'
 
+# A task that merged after a refused first attempt keeps its .failed text on
+# disk; status shows the report, not the stale reason.
+printf 'merged\n' >"$rundir/t1.state"
+printf 'wrote outside its Files: patterns -- M|pnpm-lock.yaml\n' >"$rundir/t1.failed"
+run workflow status
+unlike "$OUT" 't1 +merged +.*wrote outside its Files' 'a merged task does not show the reason its first attempt failed for'
+like "$OUT" 't2 +failed +the suite is red' 'a failed task still does'
+printf '%s\n' "$(($(date +%s) - 720))" >"$rundir/t2.dispatched_at"
+run workflow status --brief
+is "$RC" 0 'status --brief exits 0'
+like "$OUT" '^  t1 +merged +-$' 'brief: one line per task, state and age, a task never dispatched shows -'
+like "$OUT" '^  t2 +failed +12m$' 'and minutes since the last dispatch'
+unlike "$OUT" 'the suite is red|last report|carried' 'with no reason, report or context'
+
 run workflow status --json
 is "$RC" 0 'status --json exits 0'
 like "$OUT" '"plan": *"demo"' 'json names the plan'
