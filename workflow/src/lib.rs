@@ -236,6 +236,15 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
         for (i, w) in parsed.waves.iter().enumerate() {
             println!("  wave {}: {}", i + 1, w.join(" "));
         }
+        // What a run can carry at once, so a plan serialized into a chain
+        // by its shared files is visible rather than inferred (m1-lessons
+        // ruling 7).
+        if let Some(widest) = parsed.waves.iter().map(Vec::len).max() {
+            println!(
+                "  widest wave: {widest} task{}",
+                if widest == 1 { "" } else { "s" }
+            );
+        }
     }
     if !refusals.is_empty() {
         return exit::FAILED;

@@ -137,6 +137,51 @@ EOF
 check
 unlike "$ERR" 'Done is' 'forty words is still one sentence'
 
+## --------------------------------------------- a manifest without its lockfile
+
+printf '{"name":"shape"}\n' >package.json
+printf 'lockfileVersion: 9\n' >pnpm-lock.yaml
+printf 'packages:\n' >pnpm-workspace.yaml
+printf '[package]\nname = "shape"\n' >Cargo.toml
+git add package.json pnpm-lock.yaml pnpm-workspace.yaml Cargo.toml
+git -c core.hooksPath=/dev/null commit -qm 'manifests'
+plan <<'EOF'
+# plan: shape
+
+## Spec
+
+Do the thing.
+
+## Rulings
+
+1. Do it well.
+
+- [ ] deps Add a dependency
+      Files: apps/x/package.json apps/x/src/**
+      Verify: true
+- [ ] rust Add a crate
+      Files: Cargo.toml src/lib.rs
+      Verify: true
+- [ ] both Add a dependency and claim the lock
+      Files: package.json pnpm-lock.yaml pnpm-workspace.yaml
+      Verify: true
+- [ ] none Touch no manifest
+      Files: src/other.rs
+      Verify: true
+EOF
+check
+is "$RC" 0 'a manifest without its lockfile warns, never refuses'
+like "$ERR" "plan: task deps: Files claims package.json and not pnpm-lock.yaml and pnpm-workspace.yaml -- installing rewrites it and the gate refuses whatever a task writes outside Files \(add pnpm-lock.yaml and pnpm-workspace.yaml here and an \[after:\] to serialize it against the other lock writers\)" \
+	'naming the lockfiles the tree has for package.json, the workspace file too'
+like "$ERR" "plan: task rust: Files claims Cargo.toml and not Cargo.lock" 'and the cargo lockfile for Cargo.toml, tracked or not'
+unlike "$ERR" 'task both: Files claims' 'a task claiming the lockfiles is not warned'
+unlike "$ERR" 'task none: Files claims' 'nor one claiming no manifest'
+like "$ERR" "plan: task deps: 2 patterns match nothing here and their directories do not exist -- tasks creating them, or typos: 'apps/x/package.json', 'apps/x/src/\*\*'" \
+	'the paths a task will create are one line, naming them'
+like "$ERR" "plan: task none: 'src/other.rs' matches nothing here and its directory does not exist -- a task creating it, or a typo" \
+	'and one path keeps the one-path wording'
+like "$OUT" '^  widest wave: 4 tasks$' 'the listing ends with the widest wave'
+
 ## ------------------------------------------------------------ wiki pages
 
 printf 'The run drives waves.\n' | "$MEM_BIN" wiki run --stdin --note seed >/dev/null

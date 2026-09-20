@@ -145,12 +145,14 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 patterns.len()
             ));
         }
+        // One line per task for the paths it will create, not one per
+        // pattern: on a greenfield plan every task creates its directories,
+        // and 184 such lines taught an orchestrator to grep the checker's
+        // output away (m1-lessons ruling 7).
+        let mut fresh: Vec<&String> = Vec::new();
         for p in &patterns {
             if matches_nothing(&git, root, p) && !dir_claimed(prior, p) {
-                f.warnings.push(format!(
-                    "plan: task {}: '{p}' matches nothing here and its directory does not exist -- a task creating it, or a typo",
-                    t.id
-                ));
+                fresh.push(p);
             } else if only_ignored(&git, p) {
                 f.warnings.push(format!(
                     "plan: task {}: '{p}' matches only gitignored paths -- no worktree can carry them, so the merge gate will never see this work",
@@ -158,6 +160,21 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 ));
             }
         }
+        match fresh.as_slice() {
+            [] => {}
+            [p] => f.warnings.push(format!(
+                "plan: task {}: '{p}' matches nothing here and its directory does not exist -- a task creating it, or a typo",
+                t.id
+            )),
+            many => f.warnings.push(format!(
+                "plan: task {}: {} patterns match nothing here and their directories do not exist -- tasks creating them, or typos: {}",
+                t.id,
+                many.len(),
+                many.iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(", ")
+            )),
+        }
+        f.warnings
+            .extend(manifest_without_lockfile(&t.id, &patterns, &git));
         f.warnings.extend(
             data_file_asserted(&t.id, &patterns, &git)
                 .into_iter()
@@ -751,6 +768,54 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
 /// not once per pattern. The plan's own tracked file is excluded from a hit
 /// by the caller, the way `named_by` excludes it, since this signature has
 /// no room for that `itself` path (friction #33WY4FAR).
+/// A Files line that claims a manifest and not the lockfile installing
+/// rewrites. Every task that adds a package rewrites the lockfile, the gate
+/// refuses whatever a task writes outside its Files, and the plan skill's
+/// own sweep names the lockfile in a sentence nothing checked: three of
+/// ebdify m1's first four tasks touched pnpm-lock.yaml and one declared it
+/// (m1-lessons ruling 7). For package.json the lockfiles are the ones the
+/// tree has -- pnpm's workspace file too, which pnpm 11 writes unprompted --
+/// else pnpm-lock.yaml.
+pub fn manifest_without_lockfile(task: &str, files: &[String], git: &Git) -> Vec<String> {
+    const MANIFESTS: [(&str, &[&str], &str); 4] = [
+        (
+            "package.json",
+            &[
+                "pnpm-lock.yaml",
+                "pnpm-workspace.yaml",
+                "package-lock.json",
+                "yarn.lock",
+            ],
+            "pnpm-lock.yaml",
+        ),
+        ("Cargo.toml", &["Cargo.lock"], "Cargo.lock"),
+        ("composer.json", &["composer.lock"], "composer.lock"),
+        ("go.mod", &["go.sum"], "go.sum"),
+    ];
+    let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+    let named = |name: &str| files.iter().any(|p| base(p) == name);
+    let tracked = |name: &str| !zlines(&git.bytes(&["ls-files", "-z", "--", name])).is_empty();
+    let mut out = Vec::new();
+    for (manifest, generated, default) in MANIFESTS {
+        if !named(manifest) {
+            continue;
+        }
+        let mut present: Vec<&str> = generated.iter().copied().filter(|g| tracked(g)).collect();
+        if present.is_empty() {
+            present.push(default);
+        }
+        let missing: Vec<&str> = present.into_iter().filter(|g| !named(g)).collect();
+        if missing.is_empty() {
+            continue;
+        }
+        let list = missing.join(" and ");
+        out.push(format!(
+            "plan: task {task}: Files claims {manifest} and not {list} -- installing rewrites it and the gate refuses whatever a task writes outside Files (add {list} here and an [after:] to serialize it against the other lock writers)"
+        ));
+    }
+    out
+}
+
 fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
     const DATA_EXTENSIONS: [&str; 6] = ["toml", "json", "yaml", "yml", "csv", "txt"];
     let mut seen = std::collections::HashSet::new();
