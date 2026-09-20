@@ -780,13 +780,20 @@ mem_register
       Verify: true
 EOF
 
+# Since m1-lessons ruling 5 a deadline spent is never read cold again: the
+# reader is told to answer now where the backend can tell it (t087), and
+# where it cannot -- this process seam -- the task fails at once with the
+# answer file written, and the tree is still put back.
 rundir="$XDG_STATE_HOME/workflow/runs/residue/residue"
 run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_DEADLINE_MIN=0.05 workflow run
-is "$RC" 0 'the run merges past a reading its deadline stopped'
-is "$(cat "$rundir/residue.state")" merged 'the task the second reader shipped is merged'
-is "$(cat "$rundir/residue.review-tries")" 2 'after two readings'
-like "$OUT" 'ran past its 3 second deadline' 'the first of them stopped at the deadline'
-unlike "$OUT" 'voids the reading' 'and its residue voided neither reading'
+is "$RC" 1 'the run stops short over a reading its deadline stopped'
+is "$(cat "$rundir/residue.state")" failed 'the task is failed, not read cold again'
+is "$(cat "$rundir/residue.review-tries")" 1 'after one reading'
+like "$(cat "$rundir/residue.failed")" '^the review ran past its 3 second deadline and was stopped -- read ' 'saying so and naming the file'
+like "$(cat "$rundir/residue.review")" '^no answer: the review ran past its 3 second deadline' 'which exists, carrying the ending'
+unlike "$OUT" 'one more reading' 'and no second reading was started, of it or of its neighbour'
+unlike "$OUT" 'voids the reading' 'its residue voided nothing'
+is "$(cat "$rundir/side.state")" merged 'the task beside it merged'
 is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/residue/residue/_integration" status --porcelain | wc -l)" 0 \
 	'with the integration worktree clean'
 

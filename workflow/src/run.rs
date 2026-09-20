@@ -42,6 +42,18 @@ const CONTINUE_MAX_TOKENS: u64 = 120_000;
 /// a pane still reading as idle would be collected as a worker that ended.
 const CONTINUE_GRACE_S: i64 = 30;
 
+/// The line a reader gets in its own session when its deadline is spent:
+/// a reading past its time is told to answer with what it has, and given
+/// [`REVIEW_GRACE_S`] more, never a second cold reading of the same diff
+/// (m1-lessons ruling 5: two 15-minute readings of one prompt, both stopped
+/// holding an unwritten verdict).
+const REVIEW_ANSWER_NOW: &str = "Time is up: write your answer file now with what you have. \
+Partial findings and a verdict beat none.";
+
+/// Seconds a reader gets after [`REVIEW_ANSWER_NOW`], bounded by its own
+/// deadline so a short one under test is not a long wait.
+const REVIEW_GRACE_S: i64 = 180;
+
 /// The one line a worker gets in its own session when its turn ended with
 /// nothing to judge -- no ready, no blocked, no question, no commit. A model
 /// that narrated a tool call instead of making one and a provider that cut
@@ -1640,12 +1652,16 @@ impl Run {
             })
             .collect();
         // Minutes, rounded up: mem takes a window, not an epoch, and a run
-        // younger than a minute asks for the minute it is in.
-        if let Some(started) = recorded(&self.dir, "started").and_then(|v| v.parse::<i64>().ok()) {
+        // younger than a minute asks for the minute it is in. Since the
+        // plan's first run, not this one (m1-lessons ruling 5).
+        if let Some(started) = recorded(&self.dir, "first-started")
+            .or_else(|| recorded(&self.dir, "started"))
+            .and_then(|v| v.parse::<i64>().ok())
+        {
             let since = format!("{}m", (sys::now() - started) / 60 + 1);
             settled.extend(memcli::rulings_since(&since).into_iter().map(|body| {
                 (
-                    "A ruling saved during this run:".to_string(),
+                    "A ruling saved since this plan's first run:".to_string(),
                     brief::clip(&body),
                 )
             }));
@@ -1722,6 +1738,7 @@ impl Run {
         let pidfile = self.dir.join(format!("{task}.review-pid"));
         let out = self.dir.join(format!("{task}.review-out"));
         let _ = std::fs::remove_file(self.dir.join(format!("{task}.review")));
+        let _ = std::fs::remove_file(self.dir.join(format!("{task}.review-grace-until")));
         let _ = std::fs::remove_file(&pidfile);
         let _ = std::fs::write(&out, "");
         let mut env = self.env.clone();
@@ -1801,12 +1818,42 @@ impl Run {
         // talking for the whole wait and has last words of its own, same as
         // one that simply exited without a verdict. The stop for it is the
         // one below, after the pane has been asked what it was showing.
+        let mut at_deadline = false;
         let outcome = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
             self.judge_reading(&new, &answer)
         } else if waited >= deadline_s {
-            Err(format!(
-                "the review ran past its {deadline_s} second deadline and was stopped"
-            ))
+            at_deadline = true;
+            // Told once to answer with what it has, and given the grace;
+            // only a reader that cannot be told, or says nothing in it, is
+            // stopped (m1-lessons ruling 5).
+            let until: i64 = self.field(task, "review-grace-until").parse().unwrap_or(0);
+            let grace = REVIEW_GRACE_S.min(deadline_s.max(1));
+            if until == 0 && self.backend.send(&h, REVIEW_ANSWER_NOW) {
+                write_field(
+                    &self.dir,
+                    task,
+                    "review-grace-until",
+                    &(sys::now() + grace).to_string(),
+                );
+                warn(format!(
+                    "task {task}: the review is past its {deadline_s} second deadline -- told to \
+                     answer now, {grace} s more (session {})",
+                    h.session
+                ));
+                return false;
+            }
+            if until > 0 && sys::now() < until {
+                return false;
+            }
+            Err(match until {
+                0 => {
+                    format!("the review ran past its {deadline_s} second deadline and was stopped")
+                }
+                _ => format!(
+                    "the review ran past its {deadline_s} second deadline, was told to answer \
+                     and wrote nothing in the {grace} s after, and was stopped"
+                ),
+            })
         } else {
             return false;
         };
@@ -1935,17 +1982,21 @@ impl Run {
                     return true;
                 }
                 let tries: u64 = self.field(task, "review-tries").parse().unwrap_or(0);
-                if tries < 2 {
+                // A deadline spent is never read cold again: the second
+                // reading starts from nothing on the same prompt and takes
+                // as long (m1-lessons ruling 5). A reading that ended some
+                // other way -- no verdict, a touched tree -- gets its one
+                // more, as before.
+                // Either way the tree is cleaned before it is put back: a
+                // reader stopped mid-turn was never asked to, and its
+                // residue voided the next task's reading (friction
+                // #TTVGAPAW).
+                self.reset_int(&new);
+                if tries < 2 && !at_deadline {
                     warn(format!(
                         "task {task}: {why} -- one more reading (session {})",
                         h.session
                     ));
-                    // A reader stopped at its deadline was never asked to put
-                    // the tree back, and the next reading is judged against
-                    // the tree it was handed: the first one's residue voided
-                    // reading 2 and failed a task both readings shipped
-                    // (friction #TTVGAPAW).
-                    self.reset_int(&new);
                     self.read_start(task);
                     return false;
                 }
@@ -1960,6 +2011,16 @@ impl Run {
                         h.session
                     )
                 };
+                // The file the note sends the orchestrator to exists: a
+                // reading that wrote none gets the ending and the reader's
+                // last words in it (m1-lessons ruling 5).
+                if !answer.exists() {
+                    let body = match combined.is_empty() {
+                        true => format!("no answer: {why}\n"),
+                        false => format!("no answer: {why}\n\n{combined}\n"),
+                    };
+                    let _ = std::fs::write(&answer, body);
+                }
                 self.fail_task(task, &note);
             }
         }
@@ -2835,6 +2896,14 @@ impl Run {
         // The moment this run began, so adoption can tell its own fresh work
         // from what a run that died before it left behind.
         let _ = std::fs::write(self.dir.join("started"), format!("{}\n", sys::now()));
+        // And the moment the first run of this plan began, written once: the
+        // reader's settled section carries every ruling since then, not
+        // since this run (m1-lessons ruling 5: the ruling that answered a
+        // reader's one hard question was saved by the worker in the run
+        // before, and the reader re-derived it for thirty minutes).
+        if recorded(&self.dir, "first-started").is_none() {
+            let _ = std::fs::write(self.dir.join("first-started"), format!("{}\n", sys::now()));
+        }
         // What this run dispatches on and reads with, so a later `reap` for
         // a run that is gone reads with the same models rather than
         // whatever the environment or the project key happen to say by then.
