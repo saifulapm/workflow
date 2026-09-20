@@ -31,6 +31,13 @@ pub enum Command {
         #[arg(long)]
         gate: bool,
     },
+    /// Append one status line for the task this worktree belongs to.
+    Report {
+        /// One of started, progress, ready, blocked.
+        state: String,
+        /// What happened, in one line.
+        note: Option<String>,
+    },
     /// Check a commit message, a branch name or a PR body.
     #[command(name = "lint-msg")]
     LintMsg {
@@ -294,6 +301,8 @@ usage: workflow <command> [options]
 
   verify [--hook|--gate]      run the repo's suite over what is staged
       0 green · 1 failed · 2 no verifier · 3 test removal
+  report <state> [<note>]     append one status line for this worktree's task
+      0 written · 2 not a state, or not a run worktree
   lint-msg [<file>] [--string <text>]
       0 clean (warnings included) · 1 hard fail
   review-needed [--diff <range>]

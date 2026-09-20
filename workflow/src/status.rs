@@ -47,26 +47,11 @@ fn field(dir: &Path, task: &str, ext: &str) -> String {
 /// bare of the colon a worker punctuates it with (`run::split_state`).
 fn last_status(dir: &Path, task: &str) -> String {
     let text = std::fs::read_to_string(dir.join(format!("{task}.status"))).unwrap_or_default();
-    let mut last = String::new();
-    for line in text.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(_utc), Some(state)) = (fields.next(), fields.next()) else {
-            continue;
-        };
-        let (state, head) = run::split_state(state);
-        let rest = fields.collect::<Vec<_>>().join(" ");
-        let note = match (head.is_empty(), rest.is_empty()) {
-            (true, _) => rest,
-            (false, true) => head,
-            (false, false) => format!("{head} {rest}"),
-        };
-        last = if note.is_empty() {
-            state
-        } else {
-            format!("{state} {note}")
-        };
+    match run::last_status_in(&text) {
+        Some((state, note)) if note.is_empty() => state,
+        Some((state, note)) => format!("{state} {note}"),
+        None => String::new(),
     }
-    last
 }
 
 /// The task ids in plan order when the recorded plan still parses, and from

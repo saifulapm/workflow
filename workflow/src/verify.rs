@@ -347,6 +347,22 @@ fn check_test_removal(git: &Git) -> bool {
 /// deadlock. The merge gate never comes here: integration faces the full
 /// ladder.
 fn task_verify_cmd(top: &Path) -> Option<String> {
+    let cmd = std::fs::read_to_string(task_run_file(top, "verify")?)
+        .ok()?
+        .trim()
+        .to_string();
+    (!cmd.is_empty()).then_some(cmd)
+}
+
+/// The status file of the task this worktree belongs to, whether or not it
+/// exists yet: `workflow report` appends to it (m1-lessons, ruling 2).
+pub(crate) fn task_status_file(top: &Path) -> Option<PathBuf> {
+    task_run_file(top, "status")
+}
+
+/// `runs/<project>/<plan>/<task>.<ext>` for a run worktree at `top`
+/// (`worktrees/<project>/<plan>/<task>`), `None` for any other directory.
+fn task_run_file(top: &Path, ext: &str) -> Option<PathBuf> {
     let root = paths::realpath_m(paths::worktrees_root());
     let real = paths::realpath(top)?;
     let rel = real.strip_prefix(&root).ok()?;
@@ -355,12 +371,12 @@ fn task_verify_cmd(top: &Path) -> Option<String> {
     if parts.next().is_some() {
         return None;
     }
-    let file = paths::runs_root()
-        .join(project.as_os_str())
-        .join(plan.as_os_str())
-        .join(format!("{}.verify", task.as_os_str().to_string_lossy()));
-    let cmd = std::fs::read_to_string(file).ok()?.trim().to_string();
-    (!cmd.is_empty()).then_some(cmd)
+    Some(
+        paths::runs_root()
+            .join(project.as_os_str())
+            .join(plan.as_os_str())
+            .join(format!("{}.{ext}", task.as_os_str().to_string_lossy())),
+    )
 }
 
 /// The exit-2 path. Location picks the lane (spec §7).

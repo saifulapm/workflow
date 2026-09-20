@@ -72,7 +72,10 @@ impl Prior {
                 self.commits
             ));
         }
-        if !self.last_report.is_empty() {
+        // Not when the ending already quotes it: "the worker's last report
+        // was 'started: ...'" followed by "Its last report was 'started:
+        // ...'" read as two facts and were one.
+        if !self.last_report.is_empty() && !self.why.contains(&self.last_report) {
             s.push_str(&format!(" Its last report was '{}'.", self.last_report));
         }
         s.push_str("\nRead what it did before repeating it.\n\n");
@@ -279,8 +282,8 @@ Append one line per state change to {status}:
 
     <utc> <state> <note>
 
-States: {states}. `ready` means merge-ready and is
-your last act. The state is one bare word, then a space, then the note.
+`workflow report <state> \"<note>\"` writes that line for you, with the time.
+States: {states}. `ready` means merge-ready and is your last act.
 ",
         id = task.id,
         title = task.title,

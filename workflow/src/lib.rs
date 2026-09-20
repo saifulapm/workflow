@@ -34,6 +34,7 @@ pub mod plan;
 pub mod plancheck;
 pub mod read;
 pub mod repo;
+pub mod report;
 pub mod review;
 pub mod reviewer;
 pub mod run;
@@ -117,6 +118,9 @@ pub fn run(cli: Cli) -> i32 {
         } else {
             verify::Mode::Direct
         }),
+        Command::Report { state, note } => {
+            report::cmd_report(&state, note.as_deref().unwrap_or(""))
+        }
         Command::LintMsg { msgfile, string } => {
             lint::cmd_lint_msg(msgfile.as_deref(), string.as_deref())
         }

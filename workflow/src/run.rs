@@ -755,22 +755,22 @@ impl Run {
     /// (state, note). Lines read `<utc> <state> <note...>`.
     fn last_status_line(&self, task: &str) -> Option<(String, String)> {
         let text = std::fs::read_to_string(self.dir.join(format!("{task}.status"))).ok()?;
-        let mut last = None;
-        for line in text.lines() {
-            let mut fields = line.split_whitespace();
-            let (Some(_utc), Some(state)) = (fields.next(), fields.next()) else {
-                continue;
-            };
-            let (state, head) = split_state(state);
-            let rest = fields.collect::<Vec<_>>().join(" ");
-            let note = match (head.is_empty(), rest.is_empty()) {
-                (true, _) => rest,
-                (false, true) => head,
-                (false, false) => format!("{head} {rest}"),
-            };
-            last = Some((state, note));
-        }
-        last
+        last_status_in(&text)
+    }
+
+    /// One attempt marker appended to the status file, never a truncation:
+    /// the gate reads only what came after the last marker, and what the
+    /// last attempt said stays readable where it was said (m1-lessons ruling
+    /// 2: a worker that found its file emptied concluded the run dir had
+    /// been reset and re-surveyed the tree).
+    fn mark_status(&self, task: &str, marker: &str) {
+        use std::io::Write;
+        let status = self.dir.join(format!("{task}.status"));
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&status)
+            .and_then(|mut f| f.write_all(format!("--- {marker} ---\n").as_bytes()));
     }
 
     /// The commits this task wrote, which is not the same as the commits on its
@@ -1151,7 +1151,8 @@ impl Run {
         // sent back to its own worker was still held to the Verify line of
         // the plan as it read at dispatch (friction #TDCT9VD8).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
-        let _ = std::fs::write(&status, "");
+        let n: u64 = self.field(task, "continued").parse().unwrap_or(0) + 1;
+        self.mark_status(task, &format!("continued {n}"));
         let line = format!(
             "Read {} again: it now says what happened to your last report and what to do \
              next. Do that, then report as it says.",
@@ -1161,7 +1162,6 @@ impl Run {
             self.stop(task);
             return false;
         }
-        let n: u64 = self.field(task, "continued").parse().unwrap_or(0) + 1;
         write_field(&self.dir, task, "continued", &n.to_string());
         write_field(&self.dir, task, "continued_at", &sys::now().to_string());
         write_field(&self.dir, task, "dispatched_at", &sys::now().to_string());
@@ -1222,10 +1222,10 @@ impl Run {
         let prior = self.prior_attempt(task, after);
 
         write_field(&self.dir, task, "session", &session);
-        // Truncated, not appended: the gate reads this file to judge THIS
-        // attempt, and a stale `ready` from the last one would pass for it.
-        // What it said lives on in the brief instead.
-        let _ = std::fs::write(&status, "");
+        // Marked, never truncated: the gate reads this file after the last
+        // marker to judge THIS attempt, so a stale `ready` from the last one
+        // cannot pass for it, and what it said stays where it said it.
+        self.mark_status(task, &format!("attempt {}", prior.attempts + 1));
         // The consult cap is per attempt (m3-advise ruling 2): `workflow
         // advise` counts up from here.
         write_field(&self.dir, task, "advised", "0");
@@ -3322,6 +3322,63 @@ fn stopped_short(plan_id: &str, tasks: &[(String, String, String)]) -> String {
 /// colon is punctuation a worker adds to a word it was asked to write bare,
 /// and reading it as part of the state failed a task whose work was
 /// merge-ready (friction #W2SY30WH).
+/// The status file's text after its last attempt marker (`--- attempt N
+/// ---`, `--- continued N ---`): what this attempt reported, and nothing an
+/// earlier one did.
+pub fn status_after_marker(text: &str) -> &str {
+    let mut at = 0;
+    let mut pos = 0;
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("--- ") {
+            at = pos + line.len();
+        }
+        pos += line.len();
+    }
+    &text[at..]
+}
+
+/// One report line as (state, note). The grammar is `<utc> <state> <note>`;
+/// a line that leads with a state and follows with the time is read as what
+/// it meant (m1-lessons ruling 2: ebdify m1's auth wrote every line that
+/// way and the run never once saw its `ready`). A marker line and a line
+/// with fewer than two fields are nothing.
+pub fn status_line(line: &str) -> Option<(String, String)> {
+    if line.starts_with("--- ") {
+        return None;
+    }
+    let mut fields = line.split_whitespace();
+    let (Some(first), Some(second)) = (fields.next(), fields.next()) else {
+        return None;
+    };
+    let (lead, lead_head) = split_state(first);
+    let (state, head) = match brief::STATES.contains(&lead.as_str()) && looks_like_time(second) {
+        true => (lead, lead_head),
+        false => split_state(second),
+    };
+    let rest = fields.collect::<Vec<_>>().join(" ");
+    let note = match (head.is_empty(), rest.is_empty()) {
+        (true, _) => rest,
+        (false, true) => head,
+        (false, false) => format!("{head} {rest}"),
+    };
+    Some((state, note))
+}
+
+/// The last report in a status file's text, read after its last marker.
+pub fn last_status_in(text: &str) -> Option<(String, String)> {
+    status_after_marker(text)
+        .lines()
+        .filter_map(status_line)
+        .next_back()
+}
+
+/// `2026-09-20T13:16Z`, `2026-09-20T13:16:05Z`, or anything else a worker
+/// wrote for the time: it starts with four digits and a dash.
+fn looks_like_time(field: &str) -> bool {
+    let b = field.as_bytes();
+    b.len() > 5 && b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-'
+}
+
 pub fn split_state(token: &str) -> (String, String) {
     match token.split_once(':') {
         Some((state, rest)) => (state.to_string(), rest.trim_matches(':').to_string()),
@@ -4543,6 +4600,36 @@ pub fn cmd_stalled(rundir: &Path, wtroot: &Path, task: &str, deadline: i64) -> i
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_report_reads_the_same_with_its_fields_swapped() {
+        let a = super::status_line("2026-09-20T13:16Z ready auth in 7a2acf3: green");
+        let b = super::status_line("ready 2026-09-20T13:16Z auth in 7a2acf3: green");
+        assert_eq!(a, Some(("ready".into(), "auth in 7a2acf3: green".into())));
+        assert_eq!(a, b);
+        assert_eq!(
+            super::status_line("blocked: 2026-09-20T13:16Z asked #AB12CD34"),
+            Some(("blocked".into(), "asked #AB12CD34".into()))
+        );
+        assert_eq!(super::status_line("--- attempt 2 ---"), None);
+        assert_eq!(super::status_line("ready"), None);
+    }
+
+    #[test]
+    fn the_last_report_is_read_after_the_last_marker() {
+        let text = "--- attempt 1 ---\n2026-09-20T13:00Z started\n2026-09-20T13:01Z ready done\n--- attempt 2 ---\n";
+        assert_eq!(
+            super::last_status_in(text),
+            None,
+            "attempt 2 has said nothing yet"
+        );
+        let more = format!("{text}2026-09-20T13:05Z started again\n");
+        assert_eq!(
+            super::last_status_in(&more),
+            Some(("started".into(), "again".into()))
+        );
+        assert_eq!(super::status_after_marker("no marker\n"), "no marker\n");
+    }
+
     use super::*;
 
     #[test]
