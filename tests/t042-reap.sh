@@ -195,14 +195,17 @@ cat >"$T_TMP/again.md" <<'PLAN'
       Files: b/**
       Verify: true
 PLAN
-# The leftover holds a commit: an empty one would be swept, not refused over
-# (friction #1916K336, covered in t044).
+# The leftover holds a commit, so it is adopted rather than refused over
+# (m1-lessons ruling 11; t055 walks the adoption to its merge). An empty one
+# would be swept (friction #1916K336, covered in t044).
 git branch again/t1 "$(git commit-tree 'HEAD^{tree}' -p HEAD -m 'leftover work')"
 run workflow run --plan-file "$T_TMP/again.md"
-is "$RC" 2 'a leftover task branch stops the run before it dispatches anything'
-like "$OUT" 'still here from an earlier run' 'and says where it came from'
-like "$OUT" 'git branch -D again/t1' 'and what to type if it is not wanted'
-is "$(git worktree list | grep -c .)" 1 'nothing was created in the meantime'
+like "$OUT" 't1: left by an earlier run with 1 commit\(s\) -- adopted on its branch' \
+	'a leftover task branch with commits is adopted, for the gate and the reader to judge'
+unlike "$OUT" 'still here from an earlier run' 'never the merge-or-delete recipe that was merged by hand'
+is "$RC" 2 'this run still stops -- on the red trunk behind it, not on the leftover'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/again/again/t1.dispatches" 2>/dev/null)" '' \
+	'and nothing was dispatched in the meantime'
 
 ## -------------------------------------------------- a dispatch that never was
 

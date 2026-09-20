@@ -2863,12 +2863,32 @@ impl Run {
                 ));
                 continue;
             }
-            // What the branch holds, remembered before the recipe below sends
-            // its reader off to merge it and delete it: after that the commit
-            // is on the trunk under no name this run knows (friction
-            // #GPC1PVZJ).
+            // What the branch holds, remembered in case it lands on the
+            // trunk under no name this run knows (friction #GPC1PVZJ).
             if let Some(tip) = git.rev_parse_commit(&branch) {
                 write_field(&self.dir, &t.id, "leftover", &tip);
+            }
+            // A branch with commits on an unticked task is adopted as a
+            // task that failed with commits, which `resumable` resumes on
+            // that branch: the gate and the reader judge the work. The
+            // merge-or-delete recipe left an orchestrator merging eighteen
+            // files by hand, unread (m1-lessons ruling 11).
+            let ahead = git.count(&format!("{}..{}", self.base, branch));
+            if ahead > 0 {
+                self.set_state(&t.id, FAILED);
+                write_field(
+                    &self.dir,
+                    &t.id,
+                    "failed",
+                    &format!(
+                        "left by an earlier run with {ahead} commit(s) -- adopted on its branch"
+                    ),
+                );
+                warn(format!(
+                    "{}: left by an earlier run with {ahead} commit(s) -- adopted on its branch",
+                    t.id
+                ));
+                continue;
             }
             leftovers.push(branch);
         }
@@ -4518,6 +4538,12 @@ pub fn cmd_accept(task: &str) -> i32 {
         .filter(|p| p.is_dir() && p.join("plan.md").is_file())
         .collect();
     dirs.sort();
+    // Accept lands a diff over a reading. A task the ownership gate
+    // refused has no reading to be landed over, and the merge would run
+    // the same gate and refuse it again -- which is what happened, after
+    // a line that said it was merging (m1-lessons ruling 11).
+    let refused_ownership =
+        |dir: &Path| field(dir, task, "failed").starts_with("wrote outside its Files: patterns");
     // The live run first: it holds the project lock, and a merge from out
     // here would run beside its own.
     for dir in &dirs {
@@ -4526,6 +4552,9 @@ pub fn cmd_accept(task: &str) -> i32 {
         }
         if field(dir, task, "state") != FAILED {
             continue;
+        }
+        if refused_ownership(dir) {
+            return ownership_refusal(task);
         }
         let _ = std::fs::write(dir.join(format!("{task}.accept")), "");
         // A task that failed because the reading could not be had at all has
@@ -4553,10 +4582,22 @@ pub fn cmd_accept(task: &str) -> i32 {
     if let Some(dir) = last
         && field(&dir, task, "state") == FAILED
     {
+        if refused_ownership(&dir) {
+            return ownership_refusal(task);
+        }
         return accept_here(&dir, &top, &project.dir_name(), task);
     }
     warn(format!(
         "no run here holds {task} failed -- `workflow status` says how the last one ended"
+    ));
+    exit::FAILED
+}
+
+fn ownership_refusal(task: &str) -> i32 {
+    warn(format!(
+        "cannot accept {task}: it failed the Files gate, not a reading -- widen its Files line in \
+         the plan of record (`mem plan > tmp`, edit, `mem plan --stdin < tmp`) and `workflow \
+         redispatch {task}`"
     ));
     exit::FAILED
 }

@@ -33,7 +33,9 @@ say started
 mkdir -p app
 printf '%s\n' "$task" >"app/$task.php"
 git add "app/$task.php"
-git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+# An adopted branch already holds this commit: a worker resumed on it has
+# nothing new to add and reports ready over what is there.
+git diff --cached --quiet || git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE
@@ -70,29 +72,20 @@ git worktree add -q "$T_TMP/orphan" land/t1
 git worktree remove --force "$T_TMP/orphan"
 
 run workflow run
-is "$RC" 2 'the run refuses over the leftover branch'
-like "$OUT" 'land/t1' 'and names it'
-is "$(cat "$rundir/t1.state" 2>/dev/null)" '' 'no state was ever recorded for it -- not FAILED, not anything'
-
-## ------------------------------------------------- the recipe, followed
-
-git merge -q --no-ff -m 'Merge the orphaned branch by hand' land/t1
-git branch -qD land/t1
-is "$(git branch --list 'land/t1' | grep -c .)" 0 'the branch is gone once it is merged'
-
-## --------------------------------------------------------- the run after
-
-run workflow run
-is "$RC" 0 'the run after the recipe goes green'
-is "$(cat "$rundir/t1.state")" merged 't1 counts as landed rather than being built again'
-like "$OUT" 'already on integration/land' 'and the run says where its work is'
-is "$(cat "$rundir/t1.dispatches" 2>/dev/null)" '' 'no worker was ever sent for it'
+is "$RC" 0 'the run adopts the leftover branch and goes green'
+like "$OUT" 't1: left by an earlier run with 1 commit\(s\) -- adopted on its branch' 'saying so'
+unlike "$OUT" 'still here from an earlier run' 'never the merge-or-delete recipe'
+is "$(cat "$rundir/t1.state")" merged 't1 merged off the branch it was left on'
+is "$(cat "$rundir/t1.dispatches")" 1 'after one dispatch onto that branch'
+run git cat-file -e 'integration/land:app/t1.php'
+is "$RC" 0 "the branch's own commit is on integration"
 is "$(cat "$rundir/t2.state")" merged 'the dependent behind it runs and merges'
+like "$("$MEM_BIN" plan)" '\[x\] t1' 'and the adopted task is ticked off in mem'
 
-run git cat-file -e 'integration/land:app/t2.php'
-is "$RC" 0 "the dependent's work is on the integration branch"
-like "$("$MEM_BIN" plan)" '\[x\] t1' 'and the landed task is ticked off in mem'
+## ------------------------------------- accept refuses over the Files gate
 
+# An ownership refusal has no reading to be landed over: accept used to
+# print that it was merging, run the same gate, and fail the task again.
 ## ============================================ a gate rejection resumes ===
 
 new_repo resume
@@ -148,6 +141,12 @@ is "$RC" 1 'the gate rejects the ownership violation'
 is "$(cat "$rundir2/t1.state")" failed 't1 is failed, not merely blocked'
 is "$(git branch --list 'resume/t1' | grep -c .)" 1 'its branch is kept, holding the commit'
 is "$(cat "$rundir2/t2.state")" blocked 't2 never starts behind a failed dependency'
+
+run workflow accept t1
+is "$RC" 1 'accept over an ownership refusal is refused up front'
+like "$OUT" 'cannot accept t1: it failed the Files gate, not a reading -- widen its Files line in the plan of record' 'naming the way out'
+like "$OUT" 'workflow redispatch t1' 'and the redispatch'
+is "$(cat "$rundir2/t1.state")" failed 'and the task stands as it was'
 
 rm -f "$T_TMP/misbehave-t1"
 run workflow run
