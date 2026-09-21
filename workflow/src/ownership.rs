@@ -118,7 +118,7 @@ pub fn split_patterns(line: &str) -> Vec<String> {
     for c in line.chars() {
         match c {
             '"' => in_quotes = !in_quotes,
-            ' ' | '\t' if !in_quotes => {
+            c if c.is_ascii_whitespace() && !in_quotes => {
                 if !cur.is_empty() {
                     out.push(std::mem::take(&mut cur));
                 }
@@ -130,6 +130,35 @@ pub fn split_patterns(line: &str) -> Vec<String> {
         out.push(cur);
     }
     out
+}
+
+#[cfg(test)]
+mod split_tests {
+    #[test]
+    fn a_trailing_newline_does_not_eat_the_last_pattern() {
+        // The pre-commit hook reads the Files line out of `<task>.files`,
+        // which is written with a newline on the end. Splitting on spaces
+        // alone left the last pattern carrying that newline, so it matched
+        // nothing and the one file it named was refused -- invisible until
+        // a task staged its last pattern (ebdify m1's admin, 2026-09-21).
+        let line = "apps/admin/src/** pnpm-lock.yaml apps/platform/test/storefront.test.ts\n";
+        assert_eq!(
+            super::split_patterns(line),
+            vec![
+                "apps/admin/src/**",
+                "pnpm-lock.yaml",
+                "apps/platform/test/storefront.test.ts"
+            ]
+        );
+        assert_eq!(
+            super::split_patterns("a.rs\n\nb.rs\r\n"),
+            vec!["a.rs", "b.rs"]
+        );
+        assert_eq!(
+            super::split_patterns("\"one file.rs\" two.rs\n"),
+            vec!["one file.rs", "two.rs"]
+        );
+    }
 }
 
 /// What a task touched outside its `Files:` patterns, in the two halves the

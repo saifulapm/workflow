@@ -44,6 +44,17 @@ git reset -q pnpm-lock.yaml
 run git_gated commit -m 'Add more cart'
 is "$RC" 0 'unstaged, the commit goes through'
 
+# The last pattern on the line counts like every other. The hook reads the
+# line out of a file written with a newline on the end, and a splitter that
+# broke on spaces alone left that newline on the last pattern, so the one
+# file it named was refused (ebdify m1's admin, 2026-09-21).
+mkdir -p tests
+printf 'test\n' >tests/CartTest.php
+git add tests/CartTest.php
+run git_gated commit -m 'Add the cart test'
+is "$RC" 0 'a file named by the last pattern on the line commits'
+unlike "$OUT" 'commit refused' 'and is never refused for being last'
+
 # No Files on record: the hook holds the commit to nothing (an older run).
 rm "$rundir/t1.files"
 git add pnpm-lock.yaml

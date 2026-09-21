@@ -431,7 +431,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
                 task_run_file(&top, "files").and_then(|f| std::fs::read_to_string(f).ok())
             && !files.trim().is_empty()
         {
-            let patterns = crate::ownership::split_patterns(&files);
+            let patterns = crate::ownership::split_patterns(files.trim());
             let outside = crate::ownership::staged_violations(&top, &patterns);
             if !outside.is_empty() {
                 warn(format!(
