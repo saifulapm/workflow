@@ -2558,6 +2558,15 @@ impl Run {
             }
             Some(_) => {}
         }
+        self.settle(task);
+    }
+
+    /// The gate, and what its answer means for the task: the tail of
+    /// [`Self::finish`], and all of what a task left mid-reading needs. That
+    /// one's worker finished before the coordinator died and the machine
+    /// took the session with it, so there is no turn left to judge -- only a
+    /// merge on the intent line to verify and read again.
+    fn settle(&self, task: &str) {
         match self.merge(task) {
             Ok(Merge::Landed) => self.land(task),
             // A reader has the diff. The task waits on its verdict, and so
@@ -2765,7 +2774,12 @@ impl Run {
             warn(format!(
                 "task {task}: left mid-reading by a run that is gone -- reading it again"
             ));
-            self.finish(&task);
+            // The merge, not the worker. `finish` would ask the backend what
+            // that worker's last turn came to, and a machine that went down
+            // took the session with it, so the answer is "nothing" and the
+            // task failed with an applied merge and an unread diff behind it
+            // (ebdify m1's admin).
+            self.settle(&task);
             taken.push(task);
         }
         taken
