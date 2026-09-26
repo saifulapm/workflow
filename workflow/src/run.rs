@@ -3771,7 +3771,9 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         effort,
         review_effort,
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        env: Vec::new(),
+        // A worker stands at its worktree's root, which mem resolves to a
+        // monorepo's root project; its task belongs to this one.
+        env: vec![("MEM_PROJECT".into(), project.to_string())],
         collecting: false,
         unparsable: String::new(),
         made: Vec::new(),

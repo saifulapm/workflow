@@ -35,7 +35,7 @@ impl App {
             machine: machine_name(&dirs),
             dirs,
             cwd,
-            project: cli.project.clone(),
+            project: cli.project.clone().or_else(project_from_env),
             scope: cli.scope,
             include_archived: cli.include_archived,
             json: cli.json,
@@ -69,4 +69,15 @@ impl App {
             _ => Scope::Project(project_id),
         }
     }
+}
+
+/// `MEM_PROJECT`, for a process that cannot choose its working directory: a
+/// workflow worker stands at its worktree's root, which resolves to a
+/// monorepo's root project, while its task belongs to the child under
+/// `apps/<name>`. The flag still wins, and an empty value means unset.
+fn project_from_env() -> Option<String> {
+    std::env::var("MEM_PROJECT")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }

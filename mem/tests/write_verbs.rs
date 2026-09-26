@@ -970,3 +970,42 @@ fn project_set_remote_records_the_normalized_url() {
     let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
     assert!(text.contains("remote = \"github.com/Acme/App\""), "{text}");
 }
+
+#[test]
+fn mem_project_in_the_environment_names_the_project_and_the_flag_outranks_it() {
+    let w = World::new("env-project");
+    w.project("01K2AAAAAAAAAAAAAAAAAAAAAB", "root");
+    w.project("01K2AAAAAAAAAAAAAAAAAAAAAC", "child");
+    let dir = w.plain_dir("nowhere");
+
+    let out = common::mem_env(
+        &w,
+        &dir,
+        &["log", "from the env"],
+        &[("MEM_PROJECT", "child")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = mem(&w, &dir, &["log", "--project", "child"]);
+    assert!(stdout(&out).contains("from the env"), "{}", stdout(&out));
+    let out = mem(&w, &dir, &["log", "--project", "root"]);
+    assert!(!stdout(&out).contains("from the env"), "{}", stdout(&out));
+
+    let out = common::mem_env(
+        &w,
+        &dir,
+        &["log", "--project", "root", "from the flag"],
+        &[("MEM_PROJECT", "child")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = mem(&w, &dir, &["log", "--project", "root"]);
+    assert!(stdout(&out).contains("from the flag"), "{}", stdout(&out));
+
+    let out = common::mem_env(&w, &dir, &["log", "blank env"], &[("MEM_PROJECT", " ")]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = mem(&w, &dir, &["log", "--project", "child"]);
+    assert!(
+        !stdout(&out).contains("blank env"),
+        "a blank MEM_PROJECT is unset: {}",
+        stdout(&out)
+    );
+}

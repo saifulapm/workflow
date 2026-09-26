@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand};
 )]
 pub struct Cli {
     /// Act on this project instead of the one inferred from the working directory.
+    /// `MEM_PROJECT` in the environment does the same when the flag is absent.
     #[arg(long, global = true, value_name = "NAME")]
     pub project: Option<String>,
 
