@@ -83,6 +83,13 @@ isnt "$t1_target" "" 'each worker gets a cargo target dir'
 isnt "$t1_target" "$t2_target" 'each worker gets its own cargo target dir'
 isnt "$(cat "$T_TMP/gate-target")" 'unset' 'the gate gets a cargo target dir too'
 
+# Each worker's scratch space is its own, so one worker clearing
+# /tmp/wf-test.* cannot take a sibling's suite sandboxes (#3SXJMBTG).
+t1_tmp=$(grep '^TMPDIR=' <<<"$t1_env" | cut -d= -f2-)
+t2_tmp=$(grep '^TMPDIR=' <<<"$t2_env" | cut -d= -f2-)
+like "$t1_tmp" '/env-carry/t1\.tmp$' "t1's worker gets a TMPDIR in the run dir"
+isnt "$t1_tmp" "$t2_tmp" 'and each worker its own'
+
 # tests/run.sh must not let an outer WORKFLOW_TASK or CARGO_TARGET_DIR
 # through: a session running under the workflow has both set for its own
 # task, and the suite it runs must neither misdirect its own build with them

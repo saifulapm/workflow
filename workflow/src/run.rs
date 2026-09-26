@@ -1299,6 +1299,11 @@ impl Run {
         // How a worker's `mem ask` knows it is a worker's: mem reads this, or
         // the worktree path, and addresses the question to the orchestrator.
         env.push(("WORKFLOW_TASK".into(), self.task_tag(task)));
+        // Scratch space of its own: a worker clearing /tmp/wf-test.* took a
+        // sibling's suite sandboxes with it (#3SXJMBTG).
+        let tmp = self.dir.join(format!("{task}.tmp"));
+        let _ = std::fs::create_dir_all(&tmp);
+        env.push(("TMPDIR".into(), tmp.display().to_string()));
         let d = Dispatch {
             task: task.to_string(),
             worktree: wt,

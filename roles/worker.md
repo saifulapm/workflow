@@ -18,6 +18,9 @@ A file the toolchain rewrites as a side effect -- a lockfile, a generated
 schema, a snapshot -- is still your write. Outside your Files it is
 stop-and-ask: `mem ask`, never a commit with a note.
 
+Delete nothing outside your worktree and `$TMPDIR`: other workers' suites
+share this machine's /tmp.
+
 Write files in steps: one file per write, a long file in parts appended in
 order, never a tree in one call.
 
