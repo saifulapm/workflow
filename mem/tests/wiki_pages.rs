@@ -24,6 +24,7 @@ fn spawn(w: &World, cwd: &Path, args: &[&str]) -> std::process::Child {
         .env("XDG_STATE_HOME", &dirs.state)
         .env("XDG_CONFIG_HOME", &dirs.config)
         .env_remove("MEM_SESSION_ID")
+        .env_remove("MEM_PROJECT")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

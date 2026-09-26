@@ -189,6 +189,7 @@ fn handoff_sets_and_prints_the_latest() {
         .env("XDG_STATE_HOME", w.dirs().state)
         .env("XDG_CONFIG_HOME", w.dirs().config)
         .env("MEM_SYNC_CMD", "true")
+        .env_remove("MEM_PROJECT")
         .output()
         .unwrap();
     assert_eq!(
