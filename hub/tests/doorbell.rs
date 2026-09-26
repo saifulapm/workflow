@@ -135,6 +135,16 @@ impl World {
             self.polls() >= before + 2
         });
     }
+
+    /// Waits for the first ring to be whole. The fixture curl writes the
+    /// record marker first and the order line last, so a non-empty curl log
+    /// can still be missing the argv and the order log; a test that read them
+    /// then failed under suite load (friction #7TDNHHMV).
+    fn wait_for_ring(&self) {
+        wait_for("the doorbell to ring", Duration::from_secs(15), || {
+            std::fs::metadata(&self.order_log).is_ok_and(|m| m.len() > 0)
+        });
+    }
 }
 
 #[test]
@@ -166,9 +176,7 @@ fn the_ring_carries_no_question_text_and_never_touches_a_shell() {
     let _hub = world.hub();
     world.settle();
     world.ask("Should we deploy the thing that must not be named?");
-    wait_for("the doorbell to ring", Duration::from_secs(5), || {
-        !world.rings().is_empty()
-    });
+    world.wait_for_ring();
 
     let rings = world.rings();
     assert_eq!(rings.len(), 1, "{rings:?}");
@@ -199,9 +207,7 @@ fn the_seen_file_is_written_before_the_ring() {
     let _hub = world.hub();
     world.settle();
     world.ask("Should we use Redis?");
-    wait_for("the doorbell to ring", Duration::from_secs(5), || {
-        !world.rings().is_empty()
-    });
+    world.wait_for_ring();
 
     // A crash between the two has to lose a doorbell, not loop on one.
     let order = std::fs::read_to_string(&world.order_log).unwrap();
@@ -521,9 +527,7 @@ fn the_doorbell_link_is_the_tailnet_name_rather_than_the_machine_name() {
     );
     world.settle();
     world.ask("Should we use Redis?");
-    wait_for("the doorbell to ring", Duration::from_secs(5), || {
-        !world.rings().is_empty()
-    });
+    world.wait_for_ring();
 
     let body = world.rings()[0][4].clone();
     assert!(
@@ -552,9 +556,7 @@ fn an_explicit_hub_url_still_wins_over_the_tailnet_name() {
     );
     world.settle();
     world.ask("Should we use Redis?");
-    wait_for("the doorbell to ring", Duration::from_secs(5), || {
-        !world.rings().is_empty()
-    });
+    world.wait_for_ring();
 
     let body = world.rings()[0][4].clone();
     assert!(body.contains("http://chosen.example:8787/"), "{body}");
@@ -607,9 +609,7 @@ fn an_unwatched_machine_rings_the_phone_and_never_probes_a_sibling() {
     world.settle();
 
     world.ask("Should we use Redis?");
-    wait_for("the phone", Duration::from_secs(15), || {
-        !world.rings().is_empty()
-    });
+    world.wait_for_ring();
     world.settle();
 
     let calls = world.rings();
