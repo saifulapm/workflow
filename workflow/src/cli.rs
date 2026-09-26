@@ -110,8 +110,8 @@ diff is what the working tree carries against HEAD, untracked files inlined;
 with one, `git diff <range>`. --against is what the diff is held to -- a
 `wiki:<slug>` resolves through mem, plain text stands as written -- and
 without it the project's own plan stands in, else a generic requirement.
-Exit 0 is a ship verdict, 1 is fix, 2 is nobody named to read, 3 is a reading
-that ended with no verdict."
+Exit 0 is a ship verdict, 1 is fix, 2 is usage or nothing to read, 3 is a
+reading that ended with no verdict, 4 is nobody named to read."
     )]
     Read {
         /// git diff <r> instead of git diff HEAD.
@@ -333,7 +333,7 @@ usage: workflow <command> [options]
       0 every task complete · 1 failed tasks · 2 config or plan error
   read [--range <r>] [--against <text>]
       start the gate's own reader over a working tree or a range
-      0 ship · 1 fix · 2 no reader named, or nothing to read · 3 no verdict
+      0 ship · 1 fix · 2 nothing to read · 3 no verdict · 4 no reader named
   advise <question> [--file <path>]... [--against <text>]
       ask a stronger model at a decision point, without ending your turn
       0 answered · 1 no answer · 2 nobody named, or a fourth consult
