@@ -25,8 +25,10 @@ pub const SKILLS: [(&str, &str); 1] = [("mem", include_str!("../../skills/mem/SK
 /// workflow serves the rest, and a session that guesses wrong gets an exit 1
 /// rather than the skill. The listing alone cannot say it — workflow's lines are
 /// appended verbatim, with no owner marker (friction #NBQN1S4V).
-const HOW: &str = "skills — read one before doing what it covers: `mem skill <name>` \
-serves mem's own skill only; every other name is `workflow skill <name>`";
+/// And it says they are shell commands: a session took the names for
+/// Skill-tool skills (friction #RTSY09BG).
+const HOW: &str = "skills -- shell commands, not Skill-tool skills: read one before doing \
+what it covers with `mem skill mem` for mem's, `workflow skill <name>` for every other";
 
 /// `mem skill` with no name lists what this binary owns; with one, prints that
 /// SKILL.md whole. Exit 1 is a name mem does not serve.
