@@ -180,6 +180,15 @@ pub fn detect_verifiers(root: &Path, project: Option<&Project>) -> Vec<Verifier>
         if node_script(root, "lint") {
             add("node-lint", "pnpm lint".into());
         }
+        if node_script(root, "typecheck") {
+            add("node-typecheck", "pnpm typecheck".into());
+        }
+        if let Some(f) = ["fmt:check", "format:check"]
+            .into_iter()
+            .find(|s| node_script(root, s))
+        {
+            add("node-format", format!("pnpm {f}"));
+        }
     }
     if let Some(f) = first_file(root, &["justfile", "Justfile", ".justfile", "JUSTFILE"])
         && has_test_target(&f)
@@ -299,7 +308,7 @@ fn rulings_name_all(names: &[String]) -> bool {
 
 /// 0 when the staged diff is clear, an error when it nets away test
 /// declarations nothing has ruled on (the caller turns that into exit 3).
-fn check_test_removal(git: &Git) -> bool {
+fn check_test_removal(git: &Git, project: Option<&Project>) -> bool {
     let out = git.capture(&[
         "diff",
         "--cached",
@@ -335,7 +344,11 @@ fn check_test_removal(git: &Git) -> bool {
     for n in &names {
         warn(format!("  - {n}"));
     }
-    warn("record the decision, then re-run --");
+    match project {
+        Some(p) => warn(format!("rulings read from mem project {}", p.name)),
+        None => warn("rulings read from no mem project: mem does not know this checkout"),
+    }
+    warn("record a ruling that names the removed tests by name, then re-run --");
     warn("  mem save --kind ruling --type test-removal \"<what - why - cost if wrong>\"");
     false
 }
@@ -409,7 +422,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
     };
     let project = memcli::project_current();
 
-    if !check_test_removal(&git) {
+    if !check_test_removal(&git, project.as_ref()) {
         return exit::TEST_REMOVAL;
     }
 

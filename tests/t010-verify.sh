@@ -150,6 +150,23 @@ run workflow verify
 is "$RC" 0 'package.json without a lint script: still fine'
 is "$([ -f lint-ran ] && printf yes || printf no)" no 'node: nothing invents a lint script'
 
+new_repo node-typecheck
+printf '{"name":"n","scripts":{"test":"touch test-ran","typecheck":"touch tc-ran","fmt:check":"touch fmt-ran","format:check":"touch format-ran"}}\n' >package.json
+run workflow verify
+is "$RC" 0 'package.json with typecheck and fmt:check: all pass'
+like "$OUT" 'pnpm typecheck' 'node: typecheck named in the output'
+truthy "$([ -f tc-ran ] && printf 0 || printf 1)" 'node: pnpm typecheck ran, being scripted'
+truthy "$([ -f fmt-ran ] && printf 0 || printf 1)" 'node: pnpm fmt:check ran, being scripted'
+is "$([ -f format-ran ] && printf yes || printf no)" no 'node: only the first declared format check runs'
+
+printf '{"name":"n","scripts":{"test":"touch test-ran","format:check":"touch format-ran"}}\n' >package.json
+rm -f tc-ran fmt-ran
+run workflow verify
+is "$RC" 0 'package.json with format:check only: fine'
+truthy "$([ -f format-ran ] && printf 0 || printf 1)" 'node: pnpm format:check ran when fmt:check is absent'
+is "$([ -f tc-ran ] && printf yes || printf no)" no 'node: nothing invents a typecheck script'
+unlike "$OUT" 'typecheck|fmt:check' 'node: undeclared scripts are never named'
+
 ## ---------------------------------------------------- tier 1: what mem records
 
 php_project override

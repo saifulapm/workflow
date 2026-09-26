@@ -42,6 +42,9 @@ run workflow verify
 is "$RC" 3 'php: staging a deleted test file exits 3'
 like "$OUT" 'mem save --kind ruling --type test-removal' 'php: prints the exact clearing command'
 like "$OUT" 'testCartTotalsAreRounded' 'php: names the tests that went away'
+like "$OUT" "rulings read from mem project $("$MEM_BIN" project current --json | jq -r .name)" \
+	'php: names the mem project whose rulings it read'
+like "$OUT" 'names the removed tests by name' 'php: says the ruling must name the removed tests'
 
 # Clearing #1: any test-removal ruling inside the 8h window.
 "$MEM_BIN" save --kind ruling --type test-removal \
