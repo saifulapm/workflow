@@ -62,8 +62,12 @@ git -c core.hooksPath=/dev/null commit -qm 'Add the t1 service'
 
 ## -------------------------------------------------- nobody named to read it
 
+# Exit 4, not a usage error: nobody named is a verdict of its own, which
+# the skills answer by committing without a reading and saying so.
+run_out env WORKFLOW_REVIEW_MODEL= workflow read
+is "$RC" 4 'with no reader named the read exits 4'
+is "$OUT" 'read: verdict none -- nobody is named to read this diff' 'and says so on stdout'
 run env WORKFLOW_REVIEW_MODEL= workflow read
-is "$RC" 2 'with no reader named the read is refused'
 like "$OUT" 'mem project set review-model' 'naming the remedy'
 
 "$MEM_BIN" project set review-model fable >/dev/null

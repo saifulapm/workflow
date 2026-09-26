@@ -23,8 +23,9 @@ const DEFAULT_REQUIREMENT: &str =
 
 /// Nobody is named to read: `WORKFLOW_REVIEW_MODEL` names one over anything
 /// recorded, even empty; absent, the project's own `review-model` stands,
-/// `none` or unset there too meaning the same as nobody.
-const NO_READER: i32 = 2;
+/// `none` or unset there too meaning the same as nobody. Not a usage error:
+/// the skills read it as commit without a reading and say so.
+const NO_READER: i32 = 4;
 /// The reading ended -- by its own hand, by the deadline, or because the
 /// dispatch never started -- without a verdict to answer with.
 const NO_VERDICT: i32 = 3;
@@ -216,7 +217,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     };
 
     let Some(model) = model() else {
-        warn("read: nobody is named to read this diff.");
+        println!("read: verdict none -- nobody is named to read this diff");
         warn(
             "name one with `mem project set review-model <model>`, or point WORKFLOW_REVIEW_MODEL at one for this call.",
         );
