@@ -2726,6 +2726,23 @@ impl Run {
                 "task {task}: left dispatched by a run that is gone -- collecting it"
             ));
             self.finish(task);
+            // Collected and failed with work on it, and nothing lists the
+            // session: the machine went down under it, which is no verdict on
+            // the work. It resumes on this pass whatever its attempt count; the
+            // retry guard below ended a task on its third power cut and cost a
+            // second `workflow run` to pick up a good branch (friction
+            // #YRV5S6Z1). Listed, never seen: a record can outlive the pane.
+            if self.state(task) == FAILED
+                && !self.backend.listed(&self.handle(task))
+                && (self.commits(task) > 0 || self.uncommitted(task))
+            {
+                warn(format!(
+                    "task {task}: its session is gone with work on it -- the machine went down; resuming it"
+                ));
+                self.set_state(task, PENDING);
+                again.push(task.clone());
+                continue;
+            }
             // Collected and failed with no reader's word on it, and the retry
             // still unspent: the attempt died with its coordinator and nothing
             // here has judged the work. Failing it ends the whole run in the

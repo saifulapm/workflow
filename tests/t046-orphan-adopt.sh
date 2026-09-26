@@ -155,6 +155,41 @@ is "$(cat "$rundir/t1.dispatches")" 2 'it is dispatched again by the run that co
 is "$(cat "$rundir/t1.state")" merged 'and merges in that same invocation'
 is "$(cat "$rundir/t2.state")" merged 'the rest of the plan runs as usual'
 
+## ------------------------------ the machine went down: resumed at any attempt
+
+# A power cut takes the session with it: a record of it may stay, but nothing
+# lists it, and collecting it fails it as a worker that ended without a clean
+# turn. On a task holding work that is an outage, not a verdict, so the run
+# resumes it on this pass whatever its attempt count -- the retry guard above
+# ended ebdify m1's join on its third power cut (friction #YRV5S6Z1).
+rm -rf "$rundir" "$wtroot"
+git -C "$repo" worktree prune
+for b in orphan-check/t1 orphan-check/t2 integration/orphan-check; do
+	git -C "$repo" branch -D "$b" >/dev/null 2>&1
+done
+# And the trunk back at the base: the work committed below is the task's own,
+# not a second write over what the section above landed.
+git -C "$repo" reset -q --hard "$base"
+for t in t1 t2; do
+	git -C "$repo" update-ref -d "refs/workflow/orphan-check/$t" 2>/dev/null || true
+done
+
+orphan
+committed_t1
+printf '3\n' >"$rundir/t1.dispatches"
+sh -c 'exit 0' &
+dead=$!
+wait "$dead" 2>/dev/null
+printf '%s\n' "$dead" >"$rundir/t1.pid"
+printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$rundir/t1.status"
+
+run env WORKFLOW_DEADLINE_MIN=60 timeout 60 workflow run --plan-file "$T_TMP/plan.md"
+is "$RC" 0 'the run finishes in one invocation'
+like "$OUT" 'task t1: its session is gone with work on it -- the machine went down; resuming it' \
+	'and says the machine went down rather than failing the task'
+is "$(cat "$rundir/t1.dispatches")" 4 'it is dispatched again past the retry guard'
+is "$(cat "$rundir/t1.state")" merged 'and merges in that same invocation'
+
 ## --------------------------------------- the worker outlived its orchestrator
 
 # Back to nothing: the run dir, the worktrees, the branches and the
