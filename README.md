@@ -65,8 +65,10 @@ A monorepo holds one project per app beside the root project:
 
 Sessions inside `apps/thing` resolve to the child — its own plan, status,
 handoff, wiki and questions — and everything else in the checkout stays with
-the root. The pre-commit gate runs at the toplevel, so it always answers to
-the root project's verify.
+the root. A run puts the project's name in every worker's environment as
+`MEM_PROJECT`, which mem reads when `--project` is absent, so a worker at its
+worktree's root still writes to the child. The pre-commit gate runs at the
+toplevel, so it always answers to the root project's verify.
 
 ## Which projects see the skills
 
