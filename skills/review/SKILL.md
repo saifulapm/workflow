@@ -38,9 +38,10 @@ from, so nothing true is lost. Exit 1 (`fix`)
 means the answer carries `[blocks]` findings — fix them, then read again.
 Two reads with a `[blocks]` finding still open is not a third read: it is
 the ruling-and-ask stop — `mem save --kind ruling` naming what is
-unresolved, `mem ask` to the human. Exit 2 names no reader configured (`mem
-project set review-model`), or nothing to read; exit 3 means no verdict came
-back, the reason on stderr. The verdict is the last line on stdout too,
+unresolved, `mem ask` to the human. Exit 2 is a usage error, nothing to
+read among them; exit 3 means no verdict came back, the reason on stderr.
+Exit 4 means nobody is named to read (`mem project set review-model` names
+one): commit without a reading and say so in the `mem log` line. The verdict is the last line on stdout too,
 `read: verdict ship|fix|none`, and sits in `read.verdict` beside the answer
 file: an exit code does not survive a relay — a read issued through `amx
 sub` comes back with the agent's own ending — and stdout does.

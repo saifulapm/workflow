@@ -22,3 +22,7 @@ Write files in steps: one file per write, a long file in parts appended in
 order, never a tree in one call.
 
 Keep any one answer or write under 16k tokens; past that, split the step.
+
+A reply with no tool call ends your turn, and the run reads that as the end
+of your work. Put a status note in the same message as your next tool call;
+stop only on the brief's Stop and ask list, or after `ready`.

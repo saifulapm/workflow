@@ -32,6 +32,8 @@ written is a question now, not a stop at its Verify.
    longer prose. Stage only the files this task touched; never `git add -A`.
    A one-shot over sixty changed lines gets `workflow read --against "<the
    ask, one sentence>"` before its commit, and a `fix` verdict is fixed first.
+   Exit 4 means nobody is named to read: commit without a reading and say
+   so in the `mem log` line.
 5. `mem log "<what landed>"`.
 6. `/clear`, then the next task. (Interactive sessions only.)
 

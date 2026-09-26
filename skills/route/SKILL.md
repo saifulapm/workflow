@@ -35,7 +35,8 @@ however small the diff looks. Exit 1 leaves the judgement above standing.
 
 Implement it, then `workflow verify` (0 green · 1 failed · 2 no verifier · 3
 test removal). Past sixty changed lines, `workflow read --against "<the ask,
-one sentence>"` first. Commit in ordinary engineering voice, staging only the
+one sentence>"` first; its exit 4 means nobody is named to read, so commit
+without a reading and say so in the `mem log` line. Commit in ordinary engineering voice, staging only the
 files this change touched. One `mem log` line: what changed, and why. No plan,
 no subagents, no questions.
 
