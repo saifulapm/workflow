@@ -313,16 +313,30 @@ struct RoadmapTick {
     ticked: bool,
 }
 
-/// Check a finished plan's slug off in the project's roadmap. `false` covers
-/// every way there is nothing to say: no roadmap, no milestone under this
-/// slug, or a box that was already ticked.
-pub fn roadmap_tick(slug: &str) -> bool {
-    let Some((ok, out)) = capture(&["roadmap", "--tick", slug, "--json"]) else {
-        return false;
-    };
-    ok && serde_json::from_str::<RoadmapTick>(&out)
-        .map(|t| t.ticked)
-        .unwrap_or(false)
+/// Check a finished plan's slug off in the project's roadmap. `Ok(false)`
+/// covers every way there is nothing to say: no roadmap at all, or a box that
+/// was already ticked. Any other refusal is `Err` with what mem said, for the
+/// run to pass on: a plan the roadmap does not name was silence, and two
+/// finished milestones went unticked with nobody told (frictions #7KTQPJQK,
+/// #0W95EPF4).
+pub fn roadmap_tick(slug: &str) -> Result<bool, String> {
+    let out = command()
+        .args(["roadmap", "--tick", slug, "--json"])
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", bin()))?;
+    if out.status.success() {
+        return Ok(serde_json::from_slice::<RoadmapTick>(&out.stdout)
+            .map(|t| t.ticked)
+            .unwrap_or(false));
+    }
+    // Asked only once the tick failed, so a tick that lands is one process.
+    match capture(&["roadmap"]) {
+        Some((true, text)) if !text.trim().is_empty() => {}
+        _ => return Ok(false),
+    }
+    let said = String::from_utf8_lossy(&out.stderr);
+    let said = said.trim();
+    Err(said.strip_prefix("mem: ").unwrap_or(said).to_string())
 }
 
 /// This project's plan, as mem holds it.

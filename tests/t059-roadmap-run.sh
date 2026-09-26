@@ -198,3 +198,34 @@ like "$OUT" '^- \[x\] t1 ' 'the reopened box is ticked in the plan of record'
 like "$OUT" '^- \[x\] reopen ' 'beside the task that rewrote it'
 run_out "$MEM_BIN" roadmap
 like "$OUT" '^- \[x\] reopened-milestone ' 'and the milestone is ticked in the roadmap'
+
+## ----------------------------------------- a tick mem refuses is said out loud
+
+# m6-commerce and m9-pages read their plan from mem, merged every task and
+# never ticked the roadmap, with not a word said: a tick mem refused read the
+# same as one with nothing to do (frictions #7KTQPJQK, #0W95EPF4). mem's own
+# reason goes to the warning, the event and the run log, with the command
+# that ticks it by hand.
+plan stray-milestone t2
+"$MEM_BIN" plan --set-file "$T_TMP/stray-milestone.md" >/dev/null
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 0 'a plan the roadmap does not name still runs to the end'
+like "$OUT" "roadmap tick for stray-milestone failed: .*no milestone 'stray-milestone' in the roadmap" \
+	'the warning carries what mem said'
+like "$OUT" 'fix: mem --project app roadmap --tick stray-milestone' 'and names the command that ticks it'
+like "$(cat "$XDG_STATE_HOME/workflow/runs/app/stray-milestone/events")" \
+	'roadmap tick for stray-milestone failed: .*fix: mem --project app roadmap --tick stray-milestone' \
+	'with the same line in the run log'
+# The log's title is cut short, so the fix command is only begun there.
+like "$("$MEM_BIN" log --limit 20 --json)" \
+	"run stray-milestone: roadmap tick failed: no milestone 'stray-milestone' in the roadmap; fix: mem" \
+	'and in the mem log'
+
+## ------------------------------------------- no roadmap at all is no failure
+
+"$MEM_BIN" roadmap --clear >/dev/null
+plan unmapped-milestone t2
+"$MEM_BIN" plan --set-file "$T_TMP/unmapped-milestone.md" >/dev/null
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 0 'a plan in a project with no roadmap runs to the end'
+unlike "$OUT" 'roadmap' 'and says nothing about a roadmap it does not have'

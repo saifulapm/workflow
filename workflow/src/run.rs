@@ -4366,14 +4366,21 @@ pub fn cmd_run(
     // the roadmap's milestone names, so a run that read it from mem, or from a
     // file carrying the plan of record's own slug, is the one that can say
     // which box to tick: any other --plan-file plan need not be in mem at all.
-    if failed + blocked == 0
-        && (run.plan_file.is_none() || run.mem_holds_this_plan())
-        && memcli::roadmap_tick(&run.plan.plan_id)
-    {
-        warn(format!(
-            "milestone {} is ticked off in the roadmap",
-            run.plan.plan_id
-        ));
+    if failed + blocked == 0 && (run.plan_file.is_none() || run.mem_holds_this_plan()) {
+        let slug = &run.plan.plan_id;
+        match memcli::roadmap_tick(slug) {
+            Ok(true) => warn(format!("milestone {slug} is ticked off in the roadmap")),
+            Ok(false) => {}
+            Err(said) => {
+                let fix = format!("mem --project {} roadmap --tick {slug}", run.project);
+                let line = format!("roadmap tick for {slug} failed: {said} -- fix: {fix}");
+                warn(&line);
+                run.event(&line);
+                memcli::log_run(&format!(
+                    "run {slug}: roadmap tick failed: {said}; fix: {fix}"
+                ));
+            }
+        }
     }
     if failed + blocked > 0 {
         let tasks: Vec<(String, String, String)> = run
