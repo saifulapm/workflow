@@ -2736,7 +2736,10 @@ impl Run {
             // retry guard below ended a task on its third power cut and cost a
             // second `workflow run` to pick up a good branch (friction
             // #YRV5S6Z1). Listed, never seen: a record can outlive the pane.
+            // A worker that stopped on its own question is waiting on the
+            // answer, not on a machine: the poll loop sends it back in with it.
             if self.state(task) == FAILED
+                && self.asked(task).is_none()
                 && !self.backend.listed(&self.handle(task))
                 && (self.commits(task) > 0 || self.uncommitted(task))
             {

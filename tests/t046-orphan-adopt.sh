@@ -314,4 +314,32 @@ is "$?" 0 'the run goes on to ship it'
 is "$(cat "$rundir/t1.state")" merged 'the poll loop, not adoption, is what collects the ship verdict'
 is "$(grep -c '^t1-review$' "$WF_TMP/reviews.log")" 1 'still one reading, start to finish'
 
+## ------------------------ the machine went down under an open question
+
+# The same outage on a worker that had stopped on its own question is not
+# resumed: it waits on the answer, and a fresh attempt now would open
+# without it.
+rm -rf "$rundir" "$wtroot"
+git -C "$repo" worktree prune
+for b in orphan-check/t1 orphan-check/t2 integration/orphan-check; do
+	git -C "$repo" branch -D "$b" >/dev/null 2>&1
+done
+git -C "$repo" reset -q --hard "$base"
+for t in t1 t2; do
+	git -C "$repo" update-ref -d "refs/workflow/orphan-check/$t" 2>/dev/null || true
+done
+
+orphan
+committed_t1
+printf '3\n' >"$rundir/t1.dispatches"
+sh -c 'exit 0' &
+dead=$!
+wait "$dead" 2>/dev/null
+printf '%s\n' "$dead" >"$rundir/t1.pid"
+printf '%s blocked asked #AB12CD34\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$rundir/t1.status"
+
+run env WORKFLOW_DEADLINE_MIN=60 WORKFLOW_QUESTION_MISSES=1 timeout 60 workflow run --plan-file "$T_TMP/plan.md"
+unlike "$OUT" 'the machine went down' 'a task stopped on a question is not resumed as an outage'
+is "$(cat "$rundir/t1.dispatches")" 3 'and is not dispatched again without its answer'
+
 t_done
