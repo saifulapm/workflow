@@ -976,7 +976,10 @@ impl Run {
                 "task {task}: its worktree keeps the commits it already has, so {} was not brought in",
                 self.int_branch
             ));
+            return;
         }
+        // What merged may have moved a submodule, or added one.
+        repo::submodules(&self.repo, &wt);
     }
 
     /// What the attempt before this one came to, for the brief to carry.
@@ -2149,8 +2152,9 @@ impl Run {
     /// merge cannot stand, naming the checks that broke out of what the run
     /// left there.
     fn gate_run(&self, file: &Path) -> Result<(), String> {
-        // The merge just landed may have changed the lockfile; the suite
-        // that judges it runs against dependencies that match.
+        // The merge just landed may have changed the lockfile or moved a
+        // submodule; the suite that judges it runs against both as merged.
+        repo::submodules(&self.repo, &self.int_wt);
         self.node_deps(&self.int_wt);
         let stdout = std::fs::File::create(file)
             .map_err(|e| format!("cannot write {} ({e})", file.display()))?;
@@ -3130,6 +3134,7 @@ impl Run {
     /// is content-addressable, so a second install of the same lockfile is
     /// symlinks and no download.
     fn link_deps(&self, wt: &Path) {
+        repo::submodules(&self.repo, wt);
         let from = self.repo.join("vendor");
         let to = wt.join("vendor");
         if from.is_dir() && !to.exists() {
