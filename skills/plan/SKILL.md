@@ -93,15 +93,19 @@ It reads the tree, runs nothing: an unpassable Verify or deferral language
 ("for now", "TBD") is refused; ungrounded lines warn, and so do a Uses spelled
 unlike its Gives, a type no item defines, a Uses some task Gives with no
 `[after:]` between the two, a block that points at a sibling ("as in t1"),
-and prose past its budget. A block over budget is a task to split, never a
+a Read or Pattern path git does not track, a Verify grepping a file Files does
+not claim, and prose past its budget. A block over budget is a task to split, never a
 line to trim.
 
 ## 4. Shape
 
 Tasks that run at once must not share files. A wide refactor expands and
 contracts: add the new beside the old, move callers, remove it last, each its
-own task. Several one-line edits of one kind across files are one task, not
-one per file.
+own task. A signature is the same: a task changing one that files outside its
+Files call adds the new shape beside the old and leaves the old working, and
+the task that moves the last caller removes the old, since the suite is green
+after every task.
+Several one-line edits of one kind across files are one task, not one per file.
 Write `Done:` checkable and demanding, one sentence under forty words a human
 can check without the diff: "every caller migrated" forces the sweep that
 "callers updated" lets slide. A worker reads its block literally, so a rule
