@@ -106,4 +106,23 @@ run workflow run --plan-file "$T_TMP/again.md"
 is "$RC" 0 'a plan from the recorded commit runs'
 unlike "$OUT" 'running the suite once before the first dispatch' 'without a suite on the trunk: the gate already proved it'
 
+
+## ------------------------------------------- hung: stopped at the deadline
+
+# A suite that never ends used to hold the run for as long as it hung (a
+# mem test waiting on a FIFO held a trunk check 36 minutes, #96ZY7438). The
+# gate has a deadline of its own; past it the whole process group goes.
+"$MEM_BIN" project set verify 'sleep 31.7; test -f ok' >/dev/null
+printf 'x\n' >hung
+git add hung
+git -c core.hooksPath=/dev/null commit -qm 'Add the hung marker'
+plan hung
+start=$(date +%s)
+run env WORKFLOW_GATE_MIN=0.05 workflow run --plan-file "$T_TMP/hung.md"
+took=$(($(date +%s) - start))
+is "$RC" 2 'a suite past the gate deadline is a red trunk'
+like "$OUT" 'the gate ran past its 3 s deadline and was stopped' 'and says it was stopped, with the deadline'
+truthy "$([ "$took" -lt 25 ] && echo 0 || echo 1)" "the run did not wait the suite out (took ${took}s)"
+truthy "$(pgrep -f 'sleep 31.7' >/dev/null && echo 1 || echo 0)" 'and nothing of the suite is left running'
+
 t_done

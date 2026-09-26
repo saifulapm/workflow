@@ -354,6 +354,10 @@ pub struct Run {
     /// #TAXTZMSW). Taken early, the path names whatever stands there now.
     pub exe: PathBuf,
     pub deadline_s: i64,
+    /// How long one gate suite may run before its process group is stopped
+    /// (`WORKFLOW_GATE_MIN`, 60): a test that hangs used to hold the run for
+    /// as long as it hung (#96ZY7438).
+    pub gate_s: i64,
     pub kill_grace_s: i64,
     pub poll: f64,
     /// How many polls running a question's id may be missing from mem's
@@ -2174,17 +2178,42 @@ impl Run {
         if let Some((k, v)) = self.cargo_env("integration") {
             c.env(k, v);
         }
-        let ok = c
-            .status()
-            .map_err(|e| {
-                format!(
-                    "could not run {} verify --gate in {}: {e}",
-                    self.exe.display(),
-                    self.int_wt.display()
-                )
-            })?
-            .success();
-        if ok {
+        // A group of its own, so a hung suite goes whole: its tests and
+        // whatever they spawned, not only the verify process.
+        std::os::unix::process::CommandExt::process_group(&mut c, 0);
+        let mut child = c.spawn().map_err(|e| {
+            format!(
+                "could not run {} verify --gate in {}: {e}",
+                self.exe.display(),
+                self.int_wt.display()
+            )
+        })?;
+        let pid = child.id().to_string();
+        let started = sys::now();
+        let status = loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                break Some(status);
+            }
+            if sys::now() - started >= self.gate_s {
+                sys::kill_group(&pid, "TERM");
+                sys::sleep(2.0);
+                sys::kill_group(&pid, "KILL");
+                let _ = child.wait();
+                break None;
+            }
+            sys::sleep(0.5);
+        };
+        let Some(status) = status else {
+            let limit = match self.gate_s % 60 {
+                0 => format!("{} min", self.gate_s / 60),
+                _ => format!("{} s", self.gate_s),
+            };
+            return Err(format!(
+                "the gate ran past its {limit} deadline and was stopped (WORKFLOW_GATE_MIN) -- the last lines of {} say what was running",
+                file.display()
+            ));
+        };
+        if status.success() {
             return Ok(());
         }
         let text = std::fs::read_to_string(file).unwrap_or_default();
@@ -3725,6 +3754,7 @@ fn dial_line(
 /// CLI's own default.
 fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let (max_workers, deadline_s, kill_grace_s, poll, question_misses) = timings();
+    let gate_s = (((env_f64("WORKFLOW_GATE_MIN", 60.0) * 60.0) + 0.5) as i64).max(1);
     let wt_root = paths::worktrees_root().join(project).join(&plan.plan_id);
     let dir = paths::runs_root().join(project).join(&plan.plan_id);
     let recorded_model = recorded(&dir, "model");
@@ -3773,6 +3803,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         repo,
         base,
         deadline_s,
+        gate_s,
         kill_grace_s,
         poll,
         question_misses,
