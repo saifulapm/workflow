@@ -357,6 +357,7 @@ fn real_mem_on_path(dir: &TempDir, home: &Path) -> Option<MemCli> {
              export XDG_DATA_HOME='{}/data' XDG_CACHE_HOME='{}/cache'\n\
              export XDG_STATE_HOME='{}/state' XDG_CONFIG_HOME='{}/config'\n\
              export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true\n\
+             unset MEM_PROJECT\n\
              exec '{}' \"$@\"",
             neutral.display(),
             home.display(),
