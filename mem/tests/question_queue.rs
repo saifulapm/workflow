@@ -25,6 +25,7 @@ fn ask_env(
         .env("MEM_SYNC_CMD", "true")
         .env("MEM_POLL_MS", "50")
         .env_remove("WORKFLOW_TASK")
+        .env_remove("MEM_PROJECT")
         .env_remove("CARGO_TARGET_DIR");
     match notify_log {
         // A stub standing in for notify-send: it appends the arguments it was

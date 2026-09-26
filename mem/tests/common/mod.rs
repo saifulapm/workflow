@@ -176,6 +176,7 @@ pub fn mem_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> st
         .env_remove("PI_SESSION_ID")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("WORKFLOW_TASK")
+        .env_remove("MEM_PROJECT")
         .env_remove("CARGO_TARGET_DIR");
     for (key, value) in env {
         cmd.env(key, value);

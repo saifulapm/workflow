@@ -31,6 +31,7 @@ fn mem_stdin(w: &World, cwd: &Path, args: &[&str], input: &str) -> std::process:
         .env_remove("PI_SESSION_ID")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("WORKFLOW_TASK")
+        .env_remove("MEM_PROJECT")
         .env_remove("CARGO_TARGET_DIR")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
