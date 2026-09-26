@@ -162,3 +162,23 @@ COUNT=$(grep -Ec \
 	"plan: task t1: assets/rules\.toml is named by tests/rules_test\.sh, which Files does not claim" \
 	<<<"$ERR")
 is "$COUNT" 1 'a file two Files entries both cover is named once, not once per entry'
+
+## ------------------------------------- a Verify grepping outside Files
+
+# A Verify that greps a file the task does not own asks the worker to edit
+# it, and the commit hook refuses the edit (friction #G1JWHABM).
+plan <<'EOF'
+# plan: assets
+
+- [ ] t1 Retitle the rules
+      Files: assets/self.toml
+      Verify: grep -q 'title = "demo"' assets/rules.toml && rg -e demo -e 'a|b' assets/self.toml | grep -c demo
+EOF
+
+check
+is "$RC" 0 'warnings do not refuse the plan'
+like "$ERR" \
+	"plan: task t1: Verify greps 'assets/rules\.toml' and no Files: pattern claims it" \
+	'a grep operand outside Files warns'
+unlike "$ERR" "Verify greps 'assets/self\.toml'" 'an rg operand Files claims does not'
+unlike "$ERR" "Verify greps '(title|demo|a\|b)" 'the search pattern is not an operand'

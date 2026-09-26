@@ -5,7 +5,8 @@
 # the project has no such page -- four warnings, never a refusal. A wiki:
 # item never trips the existing "not here to be read" warning, and a
 # roadmap's milestone plan earns every one of them exactly as a plan of its
-# own would.
+# own would. A Read or Pattern path on disk that git does not track warns
+# too: no worktree has it.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -212,6 +213,41 @@ unlike "$ERR" "Read names 'wiki:run' and it is not here to be read" \
 	'a wiki: item never trips the "not here to be read" warning'
 unlike "$ERR" "Read names 'wiki:missing' and it is not here to be read" \
 	'not even an absent one'
+
+## ------------------------------------------ an untracked Read or Pattern
+
+# A file on disk that git does not track is in no worktree, so the worker
+# the Read names it to never sees it (friction #NJQXGXGE).
+mkdir -p notes
+printf 'review\n' >notes/review.md
+printf 'style\n' >notes/style.md
+plan <<'EOF'
+# plan: shape
+
+## Spec
+
+Do the thing.
+
+## Rulings
+
+1. Do it well.
+
+- [ ] t1 Do the thing
+      Files: a.rs
+      Read: notes/review.md README.md
+      Pattern: notes/style.md:1-2
+      Verify: true
+EOF
+check
+is "$RC" 0 'warnings do not refuse the plan'
+like "$ERR" "plan: task t1: Read names 'notes/review.md' and git does not track it -- no worktree will have it" \
+	'an untracked Read path warns'
+like "$ERR" "plan: task t1: Pattern points at 'notes/style.md' and git does not track it -- no worktree will have it" \
+	'an untracked Pattern path warns'
+unlike "$ERR" "'README.md' and git does not track it" 'a tracked Read path does not'
+unlike "$ERR" "'notes/review.md' and it is not here to be read" \
+	'an untracked file on disk is not called absent'
+rm -r notes
 
 ## ------------------------------------------ a milestone plan in a roadmap
 

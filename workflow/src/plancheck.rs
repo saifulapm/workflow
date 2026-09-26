@@ -106,6 +106,17 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         if let Some(msg) = cargo_test_filters(&t.id, verify) {
             f.refusals.push(msg);
         }
+        // A Verify that greps a file the task does not own asks the worker to
+        // edit it, and the commit hook refuses the edit (friction #G1JWHABM).
+        let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
+        for path in grep_operands(verify) {
+            if !patterns.iter().any(|p| covers(p, &path)) {
+                f.warnings.push(format!(
+                    "plan: task {}: Verify greps '{path}' and no Files: pattern claims it -- a worker editing it to pass is refused at commit",
+                    t.id
+                ));
+            }
+        }
         // Done: states what the task delivers, so deferral there refuses. A
         // title only warns: "Sweep every TBD out of the docs" names the
         // marker it removes, and blocking that plan would be the check
@@ -137,7 +148,6 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 t.id
             ));
         }
-        let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
         if patterns.len() > 8 {
             f.warnings.push(format!(
                 "plan: task {}: Files carries {} patterns -- a task owning more than eight is two tasks",
@@ -243,13 +253,16 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // the time it runs its dependencies have landed, so a file one of them
         // writes is there to be read even though this checkout has no such
         // path yet (friction #33WY4FAR).
+        // A path on disk that git does not track is in no worktree, so the
+        // worker is told to read what it will never see (friction #NJQXGXGE).
         let waited_for = ancestors(plan, t);
-        let missing = |p: &str| {
-            !root.join(p).exists()
-                && git.bytes(&["ls-files", "-z", "--", p]).is_empty()
+        let untracked = |p: &str| {
+            git.bytes(&["ls-files", "-z", "--", p]).is_empty()
                 && !written_by(plan, &waited_for, p)
                 && !prior.iter().any(|dep| written_by(dep, &dep.ids(), p))
         };
+        let missing = |p: &str| !root.join(p).exists() && untracked(p);
+        let on_disk_only = |p: &str| root.join(p).exists() && untracked(p);
         let read = t.read.as_deref().unwrap_or("");
         for p in ownership::split_patterns(read) {
             // A `wiki:<slug>` item addresses a page in mem, never a path in
@@ -262,6 +275,12 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             if missing(&p) {
                 f.warnings.push(format!(
                     "plan: task {}: Read names '{p}' and it is not here to be read, nor does a task it waits for write it",
+                    t.id
+                ));
+            }
+            if on_disk_only(&p) {
+                f.warnings.push(format!(
+                    "plan: task {}: Read names '{p}' and git does not track it -- no worktree will have it; commit it or drop it from Read",
                     t.id
                 ));
             }
@@ -279,6 +298,12 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             if missing(path) {
                 f.warnings.push(format!(
                     "plan: task {}: Pattern points at '{path}' and it is not here to copy from",
+                    t.id
+                ));
+            }
+            if on_disk_only(path) {
+                f.warnings.push(format!(
+                    "plan: task {}: Pattern points at '{path}' and git does not track it -- no worktree will have it; commit it or point elsewhere",
                     t.id
                 ));
             }
@@ -710,6 +735,72 @@ fn cargo_test_filters(task: &str, verify: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The file operands of every `grep` and `rg` a command line runs: the words
+/// after the search pattern that are not flags. `-e` and `-f` carry the
+/// pattern themselves, so every word after them is an operand; a grep reading
+/// a pipe has none.
+fn grep_operands(line: &str) -> Vec<String> {
+    let words = shell_words(line);
+    let mut out = Vec::new();
+    for command in words.split(|w| matches!(w.as_str(), "&&" | "||" | ";" | "|" | "&")) {
+        let mut command = command.iter().skip_while(|w| w.as_str() == "!");
+        if !command.next().is_some_and(|w| w == "grep" || w == "rg") {
+            continue;
+        }
+        let mut pattern_given = false;
+        let mut flags_done = false;
+        while let Some(word) = command.next() {
+            if !flags_done && word == "--" {
+                flags_done = true;
+            } else if !flags_done && matches!(word.as_str(), "-e" | "-f" | "--regexp" | "--file") {
+                command.next();
+                pattern_given = true;
+            } else if !flags_done && word.starts_with('-') && word.len() > 1 {
+                pattern_given |= word.starts_with("-e") || word.starts_with("--regexp=");
+            } else if pattern_given {
+                out.push(word.clone());
+            } else {
+                pattern_given = true;
+            }
+        }
+    }
+    out
+}
+
+/// A command line split into words the way a shell would, quotes taken off,
+/// with each unquoted run of `;`, `&` or `|` a word of its own.
+fn shell_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' => {
+                let w = word.get_or_insert_with(String::new);
+                for q in chars.by_ref() {
+                    if q == c {
+                        break;
+                    }
+                    w.push(q);
+                }
+            }
+            ';' | '&' | '|' => {
+                words.extend(word.take());
+                let mut op = c.to_string();
+                while let Some(&n) = chars.peek().filter(|n| matches!(n, ';' | '&' | '|')) {
+                    op.push(n);
+                    chars.next();
+                }
+                words.push(op);
+            }
+            c if c.is_whitespace() => words.extend(word.take()),
+            c => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    words.extend(word);
+    words
 }
 
 /// Nothing tracked matches the pattern, the literal path is not there, and
@@ -2236,6 +2327,16 @@ mod tests {
     /// A bare `workflow verify` proves nothing about the task that copied it:
     /// it runs the whole gate, not the task's own change. A flag or a further
     /// word makes it a real command again.
+    #[test]
+    fn a_grep_operand_is_a_word_after_the_pattern_that_is_no_flag() {
+        assert_eq!(
+            grep_operands("grep -q 'a b|c' x.css y.css && ! rg -e p -- -z.rs | grep -c 3"),
+            ["x.css", "y.css", "-z.rs"]
+        );
+        assert_eq!(grep_operands("rg --regexp=p src; cargo test grep"), ["src"]);
+        assert!(grep_operands("tests/run.sh t065 | grep ok").is_empty());
+    }
+
     #[test]
     fn a_bare_workflow_verify_is_refused_but_a_flagged_one_is_not() {
         let msg = gate_verify_as_verify("t1", "workflow verify").expect("bare is refused");
