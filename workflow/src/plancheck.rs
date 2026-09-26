@@ -109,8 +109,12 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // A Verify that greps a file the task does not own asks the worker to
         // edit it, and the commit hook refuses the edit (friction #G1JWHABM).
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
+        // Only a file git tracks counts: a pattern after `-A 3`, a
+        // redirection or a `$VAR` is a word in operand position, not a path.
         for path in grep_operands(verify) {
-            if !patterns.iter().any(|p| covers(p, &path)) {
+            let tracked_file = root.join(&path).is_file()
+                && !git.bytes(&["ls-files", "-z", "--", &path]).is_empty();
+            if tracked_file && !patterns.iter().any(|p| covers(p, &path)) {
                 f.warnings.push(format!(
                     "plan: task {}: Verify greps '{path}' and no Files: pattern claims it -- a worker editing it to pass is refused at commit",
                     t.id
@@ -738,17 +742,28 @@ fn cargo_test_filters(task: &str, verify: &str) -> Option<String> {
 }
 
 /// The file operands of every `grep` and `rg` a command line runs: the words
-/// after the search pattern that are not flags. `-e` and `-f` carry the
-/// pattern themselves, so every word after them is an operand; a grep reading
-/// a pipe has none.
+/// after the search pattern that are not flags, relative to the repo root
+/// when a `cd <dir>` ran before them. `-e` and `-f` carry the pattern
+/// themselves, so every word after them is an operand; a grep reading a pipe
+/// has none.
 fn grep_operands(line: &str) -> Vec<String> {
     let words = shell_words(line);
     let mut out = Vec::new();
+    let mut dir: Option<String> = None;
     for command in words.split(|w| matches!(w.as_str(), "&&" | "||" | ";" | "|" | "&")) {
         let mut command = command.iter().skip_while(|w| w.as_str() == "!");
-        if !command.next().is_some_and(|w| w == "grep" || w == "rg") {
+        let first = command.next();
+        if first.is_some_and(|w| w == "cd") {
+            dir = command.next().map(|d| d.trim_end_matches('/').to_string());
             continue;
         }
+        if !first.is_some_and(|w| w == "grep" || w == "rg") {
+            continue;
+        }
+        let at = |word: &str| match &dir {
+            Some(d) if !word.starts_with('/') => format!("{d}/{word}"),
+            _ => word.to_string(),
+        };
         let mut pattern_given = false;
         let mut flags_done = false;
         while let Some(word) = command.next() {
@@ -760,7 +775,7 @@ fn grep_operands(line: &str) -> Vec<String> {
             } else if !flags_done && word.starts_with('-') && word.len() > 1 {
                 pattern_given |= word.starts_with("-e") || word.starts_with("--regexp=");
             } else if pattern_given {
-                out.push(word.clone());
+                out.push(at(word));
             } else {
                 pattern_given = true;
             }
@@ -2335,6 +2350,10 @@ mod tests {
         );
         assert_eq!(grep_operands("rg --regexp=p src; cargo test grep"), ["src"]);
         assert!(grep_operands("tests/run.sh t065 | grep ok").is_empty());
+        assert_eq!(
+            grep_operands("cd hub && grep -q foo src/x.rs"),
+            ["hub/src/x.rs"]
+        );
     }
 
     #[test]

@@ -182,3 +182,16 @@ like "$ERR" \
 	'a grep operand outside Files warns'
 unlike "$ERR" "Verify greps 'assets/self\.toml'" 'an rg operand Files claims does not'
 unlike "$ERR" "Verify greps '(title|demo|a\|b)" 'the search pattern is not an operand'
+
+# A word in operand position that is no tracked file is not a path, and a
+# leading `cd <dir> &&` moves the operand under that dir.
+plan <<'EOF'
+# plan: assets
+
+- [ ] t1 Retitle the rules
+      Files: assets/self.toml
+      Verify: grep -A 3 'fn main' assets/self.toml 2>/dev/null && grep -q x "$OUT_FILE" && grep -rn x . && cd assets && grep -q demo self.toml
+EOF
+
+check
+unlike "$ERR" "Verify greps" 'patterns, redirections, variables, dirs and a cd-relative owned file do not warn'
