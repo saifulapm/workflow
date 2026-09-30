@@ -62,3 +62,43 @@ for t in t1 t2; do
 done
 is "$(grep -c . "$WF_TMP/gate.log")" "$(grep -c '^_integration files$' "$WF_TMP/gate.log")" 'every gate ran in the integration worktree with the submodule checked out'
 is "$(grep -c '^_integration files$' "$WF_TMP/gate.log")" 3 'the gate ran on the base and once for each merge, the last after t1 had landed'
+
+# A task that moves the pin lands a pointer; the checkout has to be moved to
+# it too, or its own verify tests the old engine and says green (friction
+# #G4DQTZ6H).
+printf 'core 2\n' >engine/core.txt
+git -C engine -c core.hooksPath=/dev/null commit -qam 'core 2'
+e2=$(git -C engine rev-parse HEAD)
+git -C engine checkout -q HEAD~1
+write_exec "$T_TMP/fake-worker.sh" <<FAKE
+#!/bin/sh
+task=\$1; status=\$3
+say() { printf '%s %s\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" "\$1" >>"\$status"; }
+say started
+if [ "\$task" = b1 ]; then
+	git -C engine checkout -q $e2
+	git add engine
+else
+	mkdir -p src
+	printf 'b2\n' >src/b2.js
+	git add src/b2.js
+fi
+git -c core.hooksPath=/dev/null commit -qm "Do \$task"
+say ready
+printf '{"is_error":false,"result":"ok"}\n'
+FAKE
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF2'
+# plan: bump
+
+- [ ] b1 Move the engine
+      Files: engine
+      Verify: true
+- [ ] b2 Something beside it [after: b1]
+      Files: src/b2.js
+      Verify: true
+EOF2
+run workflow run
+is "$RC" 0 'a run that moves the pin lands'
+is "$(git rev-parse HEAD:engine)" "$e2" 'the trunk pins the new engine'
+is "$(git -C engine rev-parse HEAD)" "$e2" 'and the checkout has the engine at that commit'
+

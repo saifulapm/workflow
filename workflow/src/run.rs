@@ -305,6 +305,21 @@ fn failure_text(output: &str) -> String {
     }
 }
 
+/// The submodule paths whose pinned commit differs between two commits.
+fn moved_submodules(git: &Git, from: &str, to: &str) -> Vec<String> {
+    git.out(&["diff", "--raw", "--no-renames", from, to])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let (meta, path) = line.split_once('\t')?;
+            let mut fields = meta.split_whitespace();
+            let (old_mode, new_mode) = (fields.next()?, fields.next()?);
+            (new_mode == "160000" || old_mode == ":160000").then(|| path.to_string())
+        })
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
 /// Liveness is the latest of three signals, because each one alone has a way of
 /// going quiet on a worker that is fine: a long test run writes no transcript
 /// line, an out-of-tree `CARGO_TARGET_DIR` flattens the worktree's mtime, and a worker
@@ -2506,6 +2521,24 @@ impl Run {
         }
         if !git.quiet(&["merge", "--ff-only", &self.int_branch]) {
             return Err(format!("git merge --ff-only {} failed", self.int_branch));
+        }
+        // A pin the run moved is only a pointer until the submodule is
+        // checked out at it: the checkout's own verify went on testing the
+        // old engine and said green (friction #G4DQTZ6H).
+        let behind = moved_submodules(&git, &head, &tip)
+            .into_iter()
+            .filter(|path| {
+                !git.quiet(&["submodule", "update", "--init", "--recursive", "--", path])
+                    && !(git.quiet(&["-C", path, "fetch", "-q"])
+                        && git.quiet(&["submodule", "update", "--init", "--recursive", "--", path]))
+            })
+            .collect::<Vec<_>>();
+        if !behind.is_empty() {
+            warn(format!(
+                "landed on {branch}, but {} could not be checked out at the pinned commit -- `git submodule update --init {}` before trusting a verify here",
+                behind.join(", "),
+                behind.join(" ")
+            ));
         }
         Ok(format!("{branch} at {}", &tip[..7]))
     }
