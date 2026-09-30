@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use crate::cli::{Cli, Scope as CliScope};
 use crate::index::{Index, Purpose};
 use crate::paths::{Dirs, machine_name};
-use crate::project::{Identity, Mode, resolve};
+use crate::project::{Identity, Mode, Registry, resolve};
 use crate::search::Scope;
 use crate::store::Store;
 
@@ -18,6 +18,8 @@ pub struct App {
     pub cwd: PathBuf,
     pub machine: String,
     pub project: Option<String>,
+    /// Whether `project` came from `MEM_PROJECT` rather than `--project`.
+    pub project_from_env: bool,
     pub scope: Option<CliScope>,
     pub include_archived: bool,
     pub json: bool,
@@ -36,6 +38,7 @@ impl App {
             dirs,
             cwd,
             project: cli.project.clone().or_else(project_from_env),
+            project_from_env: cli.project.is_none() && project_from_env().is_some(),
             scope: cli.scope,
             include_archived: cli.include_archived,
             json: cli.json,
@@ -45,6 +48,12 @@ impl App {
     }
 
     pub fn identity(&self, mode: Mode) -> Result<Identity> {
+        if self.project_from_env
+            && let Some(named) = self.project.as_deref()
+            && let Some(here) = self.overruled(named)
+        {
+            return Ok(here);
+        }
         resolve(
             &self.cwd,
             &self.store,
@@ -52,6 +61,36 @@ impl App {
             self.project.as_deref(),
             mode,
         )
+    }
+
+    /// The working directory's project, when `MEM_PROJECT` names another the
+    /// directory has no part in. The variable is for a process that cannot
+    /// choose its directory -- a worker at its worktree's root, which is the
+    /// named child's parent -- and a session that inherited it from another
+    /// wrote into amx's memory from shortcart's checkout, and replaced a live
+    /// run's handoff (frictions #EE2VMENP, #VMG4FV4P). A directory in no
+    /// project, the named one, its parent or its child keeps the variable.
+    fn overruled(&self, named: &str) -> Option<Identity> {
+        let here = resolve(&self.cwd, &self.store, &self.dirs, None, Mode::Read).ok()?;
+        let Identity::Known { id, name } = &here else {
+            return None;
+        };
+        let registry = Registry::load(&self.store);
+        let wanted = registry.by_name(named).ok()??;
+        let related = wanted.id == *id
+            || wanted.parent.as_deref() == Some(id.as_str())
+            || registry
+                .by_id(id)
+                .is_some_and(|p| p.parent.as_deref() == Some(wanted.id.as_str()));
+        if related {
+            return None;
+        }
+        if !self.quiet {
+            eprintln!(
+                "mem: MEM_PROJECT names {named}, but this directory is {name}'s -- acting on {name}; `--project {named}` acts on the other"
+            );
+        }
+        Some(here)
     }
 
     /// An index brought up to date with the store. A reindex that cannot take

@@ -1010,3 +1010,56 @@ fn mem_project_in_the_environment_names_the_project_and_the_flag_outranks_it() {
         stdout(&out)
     );
 }
+
+/// A session that inherited another's `MEM_PROJECT` wrote into amx's memory
+/// from shortcart's checkout (frictions #EE2VMENP, #VMG4FV4P). The directory
+/// wins over a variable naming a project it has no part in, and says so; the
+/// named project's parent and child keep the variable, which is what a
+/// worker at its worktree's root needs.
+#[test]
+fn mem_project_naming_a_stranger_to_the_directory_yields_to_the_directory() {
+    let w = World::new("env-stranger");
+    let other = w.repo("amx", Some("git@github.com:me/amx.git"));
+    assert_eq!(code(&mem(&w, &other, &["log", "amx starts"])), 0);
+    let mono = w.repo("mono", Some("git@github.com:me/mono.git"));
+    std::fs::create_dir_all(mono.join("apps/cart")).unwrap();
+    assert_eq!(code(&mem(&w, &mono, &["log", "mono starts"])), 0);
+    let out = mem(&w, &mono, &["project", "add", "apps/cart"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let cart = mono.join("apps/cart");
+
+    let out = common::mem_env(&w, &cart, &["log", "from cart"], &[("MEM_PROJECT", "amx")]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stderr(&out)
+            .contains("MEM_PROJECT names amx, but this directory is cart's -- acting on cart"),
+        "{}",
+        stderr(&out)
+    );
+    let log = |project: &str| stdout(&mem(&w, &other, &["log", "--project", project]));
+    assert!(log("cart").contains("from cart"), "{}", log("cart"));
+    assert!(!log("amx").contains("from cart"), "{}", log("amx"));
+
+    // A worker at the monorepo's root, its task the child's.
+    let out = common::mem_env(
+        &w,
+        &mono,
+        &["log", "from the root"],
+        &[("MEM_PROJECT", "cart")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("MEM_PROJECT names"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(log("cart").contains("from the root"), "{}", log("cart"));
+
+    // The context says whose memory it loaded.
+    let out = common::mem_env(&w, &cart, &["context"], &[("MEM_PROJECT", "amx")]);
+    assert!(
+        stdout(&out).starts_with("project: cart\n"),
+        "{}",
+        stdout(&out)
+    );
+}

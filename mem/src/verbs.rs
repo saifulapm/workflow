@@ -75,7 +75,21 @@ pub fn context(app: &App, budget: Option<usize>, brief: bool, hook_json: bool) -
         {
             eprintln!("mem: {note}");
         }
-        print!("{}", digest.text);
+        // Named first: a session that inherited another's MEM_PROJECT read
+        // amx's memory in shortcart's checkout and could not tell (friction
+        // #EE2VMENP).
+        // A warning about the store still leads.
+        let at = digest
+            .text
+            .split_inclusive('\n')
+            .take_while(|l| l.starts_with("! "))
+            .map(str::len)
+            .sum::<usize>();
+        print!("{}", &digest.text[..at]);
+        if let Some(name) = identity.name() {
+            println!("project: {name}");
+        }
+        print!("{}", &digest.text[at..]);
     }
     if digest.over_warn && !app.quiet {
         eprintln!(
