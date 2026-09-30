@@ -383,6 +383,11 @@ fn spawn(argv: &[String], d: &Dispatch) -> Option<std::process::Output> {
     for (k, v) in &d.env {
         c.env(k, v);
     }
+    // The pairs are this agent's alone: an agent it starts by hand is not
+    // this task, and must not file its notes and questions as it, nor write
+    // into a scratch directory the run deletes (friction #9PFJY8MX).
+    let scope: Vec<&str> = d.env.iter().map(|(k, _)| k.as_str()).collect();
+    c.env("AMX_SCOPE", scope.join(" "));
     // How a worker's hooks and mem know they are a worker's.
     c.env("WORKFLOW_AGENT", "1");
     for name in scrubbed(std::env::vars().map(|(k, _)| k)) {
@@ -395,7 +400,55 @@ fn spawn(argv: &[String], d: &Dispatch) -> Option<std::process::Output> {
     c.stdout(Stdio::piped()).stderr(err).output().ok()
 }
 
+/// The argv of `amx new --check`: a dispatch as `role` on `model` in `dir`,
+/// settled the way [`spawn_argv`] would spawn it and started nowhere.
+fn check_argv(dir: &Path, role: &str, model: &str, effort: Option<&str>) -> Vec<String> {
+    let mut argv: Vec<String> = ["new", "--check", "--dir"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    argv.push(dir.to_string_lossy().to_string());
+    argv.extend(["--no-worktree".to_string(), "--role".to_string()]);
+    if names_a_role(model, dir) {
+        argv.push(model.to_string());
+    } else {
+        argv.extend([role.to_string(), "--model".to_string(), model.to_string()]);
+    }
+    if let Some(level) = effort {
+        argv.extend(["--effort".to_string(), level.to_string()]);
+    }
+    argv.push("check".to_string());
+    argv
+}
+
 impl WorkerBackend for AmxBackend {
+    /// `amx new --check`. An amx older than the flag cannot be asked, and a
+    /// run is not refused for that: the launch says it, as it always has.
+    fn check(
+        &self,
+        dir: &Path,
+        role: &str,
+        model: &str,
+        effort: Option<&str>,
+    ) -> Result<(), String> {
+        let Ok(out) = Command::new(amx_bin())
+            .args(check_argv(dir, role, model, effort))
+            .output()
+        else {
+            return Ok(());
+        };
+        let said = String::from_utf8_lossy(&out.stderr);
+        if out.status.success() || said.contains("--check") {
+            return Ok(());
+        }
+        Err(said
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("amx refused it and said nothing")
+            .trim()
+            .to_string())
+    }
+
     /// A name amx will take, minted before the task is known. `dispatch`
     /// qualifies it with the task and hands back what it pinned.
     fn mint_session(&self) -> String {
@@ -1209,6 +1262,9 @@ exit 0
         let has = |line: &str| env.lines().any(|l| l == line);
         assert!(has("WORKFLOW_AGENT=1"), "{env}");
         assert!(has("CARGO_TARGET_DIR=/tmp/target"), "{env}");
+        // The pairs are the worker's alone: an agent it starts by hand
+        // leaves them behind (friction #9PFJY8MX).
+        assert!(has("AMX_SCOPE=CARGO_TARGET_DIR"), "{env}");
         assert!(
             !env.lines().any(|l| l.starts_with("GITHUB_API_KEY=")),
             "a credential reached the pane: {env}"

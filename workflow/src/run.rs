@@ -2119,6 +2119,68 @@ impl Run {
     /// and one red suite before the first dispatch is what that costs
     /// instead (2026-09-14: a4bb5fa reddened three tasks in a row for 45
     /// minutes before anyone read the gate). `Err` names the failing checks.
+    /// The first dial the backend would refuse to start an agent on, as the
+    /// lines to say, each name asked once; `None` when every one would start.
+    fn unstartable(&self) -> Option<String> {
+        let dials = [
+            (
+                "the workers",
+                "worker",
+                Some(&self.model),
+                &self.effort,
+                "--model",
+                "WORKFLOW_MODEL",
+            ),
+            (
+                "the second fix round",
+                "fixer",
+                self.fix_model.as_ref(),
+                &self.effort,
+                "--fix-model",
+                "WORKFLOW_FIX_MODEL",
+            ),
+            (
+                "the reader",
+                "reader",
+                self.review_model.as_ref(),
+                &self.review_effort,
+                "--review-model",
+                "WORKFLOW_REVIEW_MODEL",
+            ),
+            (
+                "the advisor",
+                "advisor",
+                self.advisor.as_ref(),
+                &self.review_effort,
+                "--review-model",
+                "WORKFLOW_ADVISOR",
+            ),
+        ];
+        let mut asked: Vec<(String, Option<String>)> = Vec::new();
+        for (who, role, model, effort, flag, var) in dials {
+            let Some(model) = model else {
+                continue;
+            };
+            let key = (model.clone(), effort.clone());
+            if asked.contains(&key) {
+                continue;
+            }
+            asked.push(key);
+            if let Err(why) = self
+                .backend
+                .check(&self.repo, role, model, effort.as_deref())
+            {
+                return Some(format!(
+                    "run {}: {who} would run on {model}, and amx will not start that -- {why}\n\
+                     name another with `workflow run {flag} <name>`, which rewrites this plan's record, \
+                     or with {var} in the environment",
+                    self.plan.plan_id
+                ));
+            }
+        }
+        None
+    }
+
     fn trunk_green(&self) -> Result<(), String> {
         let int = Git::at(&self.int_wt);
         let tree = int.out(&["rev-parse", "HEAD^{tree}"]).unwrap_or_default();
@@ -3845,6 +3907,7 @@ pub fn cmd_run(
     plan_file: Option<&Path>,
     model: Option<&str>,
     review_model: Option<&str>,
+    fix_model: Option<&str>,
     effort: Option<&str>,
     review_effort: Option<&str>,
 ) -> i32 {
@@ -3921,6 +3984,7 @@ pub fn cmd_run(
     for (name, value) in [
         ("model", model),
         ("review-model", review_model),
+        ("fix-model", fix_model),
         ("effort", effort),
         ("review-effort", review_effort),
     ] {
@@ -3954,6 +4018,16 @@ pub fn cmd_run(
         recorded_none || carried || std::env::var("WORKFLOW_REVIEW_MODEL").is_ok(),
         last_reader(&run.dir).as_deref(),
     ) {
+        for line in why.lines() {
+            warn(line);
+        }
+        return exit::USAGE;
+    }
+    // Every model the run may dispatch on, asked of the backend before
+    // anything is made: a name amx will not start used to pass the start and
+    // the base gate and then fail each launch, and the failed tasks outlived
+    // the fix to the key (frictions #H8RG7YBQ, #JJJBXH1B, #R9XAWBPG).
+    if let Some(why) = run.unstartable() {
         for line in why.lines() {
             warn(line);
         }
@@ -4024,6 +4098,28 @@ pub fn cmd_run(
     let _ = std::fs::write(run.dir.join("plan.md"), &source);
     for t in run.plan.ids() {
         if !run.dir.join(format!("{t}.state")).exists() {
+            run.set_state(&t, PENDING);
+        }
+        // A launch the backend refused started nothing: no worker ran and no
+        // attempt was spent, so the task is as untouched as a pending one. Left
+        // failed, it blocked every task after it once the dial was mended,
+        // and the restart needed a redispatch by hand (friction #T603WR5T).
+        if run.state(&t) == FAILED
+            && run
+                .field(&t, "failed")
+                .starts_with("the launch was refused")
+            && run.commits(&t) == 0
+        {
+            warn(format!(
+                "task {t}: its launch was refused last time and nothing ran -- pending again"
+            ));
+            let tries: u64 = run.field(&t, "dispatches").parse().unwrap_or(0);
+            write_field(
+                &run.dir,
+                &t,
+                "dispatches",
+                &tries.saturating_sub(1).to_string(),
+            );
             run.set_state(&t, PENDING);
         }
         // A redispatch marker nobody consumed was a request to a run that is

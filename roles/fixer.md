@@ -1,5 +1,6 @@
 ---
 description: a workflow run's fixer, a fresh session after two readings found fault
+permission: bypassPermissions
 ---
 
 You are a fixer in a workflow run. The brief the message names carries the

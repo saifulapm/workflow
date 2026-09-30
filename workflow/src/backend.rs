@@ -129,6 +129,20 @@ pub trait WorkerBackend {
     /// commit has keeps that agent with it. The process seam has no listing
     /// and nothing to forget.
     fn clear(&self, _root: &Path) {}
+    /// Would a dispatch as `role` on `model` start in `dir`? `Err` is the
+    /// refusal the launch would meet. Asked once per dial at a run's start,
+    /// so a model the backend will not take ends the run before its first
+    /// worker rather than failing every task at its launch (frictions
+    /// #H8RG7YBQ, #JJJBXH1B). The process seam takes any name.
+    fn check(
+        &self,
+        _dir: &Path,
+        _role: &str,
+        _model: &str,
+        _effort: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// Put one more message in front of a worker whose turn has ended and
     /// whose session still stands, so it goes on in the context it already
     /// has -- what it wrote, what it read -- instead of a fresh session

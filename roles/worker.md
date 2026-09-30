@@ -1,5 +1,6 @@
 ---
 description: a workflow run's worker, one task in a worktree of its own
+permission: bypassPermissions
 ---
 
 You are a worker in a workflow run. The task is the brief the message names:

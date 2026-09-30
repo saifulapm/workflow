@@ -32,6 +32,16 @@ verb=$1
 shift
 case $verb in
 new | sub)
+	# `new --check` settles the spawn and starts nothing; a cap is no part of
+	# what it asks, so only a model it will not take refuses it.
+	case " $* " in *" --check "*)
+		if [ -f "$AMX_DIR/refuse-check" ]; then
+			cat "$AMX_DIR/refuse-check" >&2
+			exit 64
+		fi
+		exit 0
+		;;
+	esac
 	if [ -f "$AMX_DIR/refuse" ]; then
 		cat "$AMX_DIR/refuse" >&2
 		exit 2
@@ -210,9 +220,45 @@ rm -f "$AMX_DIR/refuse"
 never=$(cat "$fulldir/f1.session")
 run workflow run --plan-file "$T_TMP/full.md"
 is "$RC" 0 'with the cap lifted the plan merges'
+like "$OUT" 'task f1: its launch was refused last time and nothing ran -- pending again' \
+	'the refused task is pending again, not failed, since nothing ran (friction #T603WR5T)'
 is "$(cat "$fulldir/f1.state")" merged 'the refused task included'
-is "$(grep -c "|--parent|$never|" "$argv")" 0 'a session amx never created is nobody's parent'
+is "$(grep -c "|--parent|$never|" "$argv")" 0 "a session amx never created is nobody's parent"
 like "$(grep '|--name|wf-f1-' "$argv" | tail -1)" '^new|--name|wf-f1-' 'so its retry is amx new'
+
+## ------------------------------------- a model amx will not start
+
+# `mem project set model` takes any name, and amx takes only the ones a
+# harness offers: a full claude id used to pass the start and the base gate
+# and then fail every launch (frictions #H8RG7YBQ, #JJJBXH1B). The run asks
+# amx once per model before it makes anything.
+printf 'amx: --model "claude-opus-5-5": claude accepts fable, opus, sonnet, haiku\n' >"$AMX_DIR/refuse-check"
+cat >"$T_TMP/badmodel.md" <<'PLAN'
+# plan: badmodel
+
+- [ ] b1 Add the first thing
+      Files: app/b1.php
+      Verify: true
+- [ ] b2 Add the second thing
+      Files: app/b2.php
+      Verify: true
+PLAN
+before=$(wc -l <"$argv")
+run env WORKFLOW_MODEL=claude-opus-5-5 workflow run --plan-file "$T_TMP/badmodel.md"
+is "$RC" 2 'a model amx will not start refuses the run'
+like "$OUT" 'the workers would run on claude-opus-5-5, and amx will not start that -- amx: --model "claude-opus-5-5": claude accepts fable, opus, sonnet, haiku' \
+	'naming the model and what amx said'
+like "$OUT" 'workflow run --model <name>' 'and the flag that mends it'
+is "$(tail -n +$((before + 1)) "$argv" | grep -c '^new|--name|')" 0 'before any worker is dispatched'
+saw "new|--check|--dir|$(git rev-parse --show-toplevel)|--no-worktree|--role|worker|--model|claude-opus-5-5|check" \
+	'asked as a worker would be dispatched'
+rm -f "$AMX_DIR/refuse-check"
+
+# The fix round's model is recorded like the others, so a pinned name amx
+# will not take can be moved without editing the run directory (#R9XAWBPG).
+run workflow run --plan-file "$T_TMP/badmodel.md" --fix-model sonnet
+like "$OUT" 'run badmodel: fix-model is now sonnet in this run' 'run --fix-model rewrites the record'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/app/badmodel/fix-model")" sonnet 'where a resumed run reads it'
 
 ## ------------------------------------- a reader that hit a provider limit
 
