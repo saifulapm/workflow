@@ -187,6 +187,11 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
                 many.iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(", ")
             )),
         }
+        for p in &fresh {
+            if let Some(w) = outside_tsconfig(&t.id, p, &patterns, root) {
+                f.warnings.push(w);
+            }
+        }
         f.warnings
             .extend(manifest_without_lockfile(&t.id, &patterns, &git));
         f.warnings.extend(
@@ -463,7 +468,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             };
             let named: Vec<String> = carriers
                 .into_iter()
-                .filter(|file| !claimed.contains(file))
+                .filter(|file| !claimed.contains(file) && !prose(file))
                 .collect();
             if named.is_empty() {
                 continue;
@@ -922,6 +927,118 @@ pub fn manifest_without_lockfile(task: &str, files: &[String], git: &Git) -> Vec
     out
 }
 
+/// A TypeScript file the task creates where the nearest tsconfig.json's
+/// `include` does not reach: `tsc -b` refuses whatever imports it (TS6307),
+/// and the worker whose test imported `extensions/shortcart-pixel/src` from
+/// `tests/` had to ask (friction #VFA7ECRE). Said only when the task does
+/// not claim that tsconfig, and only for a config that names an `include`,
+/// since one that names none takes every file under it.
+fn outside_tsconfig(task: &str, pattern: &str, files: &[String], root: &Path) -> Option<String> {
+    let ts = [".ts", ".tsx", ".mts", ".cts"];
+    if !ts.iter().any(|e| pattern.ends_with(e)) || pattern.ends_with(".d.ts") {
+        return None;
+    }
+    // A path the pattern stands for: `src/**/*.ts` is `src/x.ts`.
+    let path = pattern.replace("**/", "").replace('*', "x");
+    let mut dir = Path::new(&path).parent();
+    let config = loop {
+        let d = dir?;
+        let candidate = d.join("tsconfig.json");
+        if root.join(&candidate).is_file() {
+            break candidate;
+        }
+        dir = d.parent();
+    };
+    let config_path = config.to_string_lossy().to_string();
+    if files.iter().any(|p| covers(p, &config_path)) {
+        return None;
+    }
+    let text = std::fs::read_to_string(root.join(&config)).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&without_json_comments(&text)).ok()?;
+    let include: Vec<String> = json
+        .get("include")?
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(|g| g.trim_start_matches("./").trim_end_matches('/').to_string())
+        .collect();
+    let base = config.parent().unwrap_or(Path::new(""));
+    let rel = Path::new(&path)
+        .strip_prefix(base)
+        .ok()?
+        .to_string_lossy()
+        .to_string();
+    if include
+        .iter()
+        .any(|g| g == "." || g == "**" || covers(g, &rel))
+    {
+        return None;
+    }
+    Some(format!(
+        "plan: task {task}: '{pattern}' is outside the include of {config_path} ({}) -- tsc refuses a file its sources reach from there (TS6307); claim {config_path} in Files or put the file under an included path",
+        include.join(", ")
+    ))
+}
+
+/// tsconfig.json is JSON with comments and trailing commas; this is the JSON.
+fn without_json_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            match c {
+                '\\' => out.extend(chars.next()),
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match (c, chars.peek()) {
+            ('"', _) => {
+                in_string = true;
+                out.push(c);
+            }
+            ('/', Some('/')) => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            ('/', Some('*')) => {
+                chars.next();
+                let mut last = ' ';
+                for c in chars.by_ref() {
+                    if last == '*' && c == '/' {
+                        break;
+                    }
+                    last = c;
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    // A trailing comma, once no comment stands between it and the bracket.
+    let mut json = String::with_capacity(out.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, c) in out.char_indices() {
+        if in_string {
+            in_string = escaped || c != '"';
+            escaped = !escaped && c == '\\';
+        } else if c == '"' {
+            in_string = true;
+        } else if c == ',' && out[i + 1..].trim_start().starts_with([']', '}']) {
+            continue;
+        }
+        json.push(c);
+    }
+    json
+}
+
 fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
     const DATA_EXTENSIONS: [&str; 6] = ["toml", "json", "yaml", "yml", "csv", "txt"];
     let mut seen = std::collections::HashSet::new();
@@ -945,7 +1062,7 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
     for tracked in &data_files {
         let hits = zlines(&git.bytes(&["grep", "-l", "-z", "-F", tracked]));
         for hit in &hits {
-            if files.iter().any(|p| covers(p, hit)) {
+            if files.iter().any(|p| covers(p, hit)) || prose(hit) {
                 continue;
             }
             out.push(format!(
@@ -1199,6 +1316,7 @@ fn done_literals(
             zlines(&git.bytes(&["grep", "-l", "-z", "-F", "-e", &literal, "--"]))
                 .into_iter()
                 .filter(|file| !owned.contains(file) && Some(file.as_str()) != itself)
+                .filter(|file| !prose(file))
                 .collect();
         if !files.is_empty() {
             out.push((literal, files));
@@ -1222,11 +1340,9 @@ fn done_symbols(
     itself: Option<&str>,
 ) -> Vec<(String, Vec<String>)> {
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
-    for token in done.split_whitespace() {
-        let token = token
-            .trim_matches(|c| "`'\"()[]{},;:!?".contains(c))
-            .trim_end_matches('.');
-        if token.contains('.') || token.contains('/') || !greppable(token) {
+    for token in code_tokens(done) {
+        let token = token.as_str();
+        if !greppable(token) {
             continue;
         }
         if gives.contains(token) || out.iter().any(|(seen, _)| seen == token) {
@@ -1236,12 +1352,71 @@ fn done_symbols(
             zlines(&git.bytes(&["grep", "-l", "-z", "-F", "-w", "-e", token, "--"]))
                 .into_iter()
                 .filter(|file| !owned.contains(file) && Some(file.as_str()) != itself)
+                .filter(|file| !prose(file))
                 .collect();
         if !files.is_empty() {
             out.push((token.to_string(), files));
         }
     }
     out
+}
+
+/// The names a Done sentence spells in code form: every identifier inside
+/// its backticks, and a bare word only when an underscore makes it one --
+/// `TOOL_NAME`, `set_data`. A capital is no sign of code in a sentence:
+/// "The", "Flow", "Home's", "URL", "GraphQL" and "Medusa's" each named a
+/// hundred files and buried the two real warnings of a plan under twenty
+/// (frictions #36NP1EG1, #PPKAVRK1). Paths are [`done_paths`]' business.
+fn code_tokens(done: &str) -> Vec<String> {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |t: &str| {
+        if !t.is_empty() && !out.iter().any(|seen| seen == t) {
+            out.push(t.to_string());
+        }
+    };
+    for (i, span) in done.split('`').enumerate() {
+        if i % 2 == 1 {
+            // An odd count leaves the last span unclosed: prose, not code.
+            if i == done.split('`').count() - 1 {
+                continue;
+            }
+            for word in span.split_whitespace() {
+                if word.contains('/') || word.contains('.') && !word.contains("::") {
+                    continue;
+                }
+                for t in word.split(|c: char| !ident(c)) {
+                    push(t);
+                }
+            }
+            continue;
+        }
+        for word in span.split_whitespace() {
+            let word = word
+                .trim_matches(|c| "'\"()[]{},;:!?".contains(c))
+                .trim_end_matches('.');
+            if word.contains('_') && word.chars().all(ident) {
+                push(word);
+            }
+        }
+    }
+    out
+}
+
+/// Prose: a page nobody's test asserts. A Markdown file naming a symbol, a
+/// data file or a spelling is history or explanation, and warning once per
+/// historical plan doc printed ninety lines over three real findings
+/// (friction #56FFMFST).
+fn prose(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "mdx" | "rst" | "adoc"
+            )
+        })
 }
 
 /// A quoted span worth asking the tree about: one with a token that is
@@ -1750,6 +1925,14 @@ fn ident_of(item: &str) -> Option<String> {
 /// what it hands back.
 fn head_of(item: &str) -> &str {
     let head = item.split('(').next().unwrap_or(item);
+    // A shape's body is its fields: `CustomerMessage { shop: string;
+    // customerId: string }` declares `CustomerMessage`, and reading the last
+    // field as the name asked the tree about every file carrying the field
+    // (friction #36NP1EG1). A `::{ .. }` variant list is the item's own.
+    let head = match head.find('{') {
+        Some(at) if !head[..at].ends_with("::") => head[..at].trim_end(),
+        _ => head,
+    };
     match head.rsplit_once(": ") {
         Some((h, _)) if !h.is_empty() => h,
         _ => head,
@@ -1950,6 +2133,64 @@ mod tests {
     }
 
     #[test]
+    fn a_new_ts_file_outside_the_nearest_tsconfig_include_is_named() {
+        let root = std::env::temp_dir().join(format!("wf-tsconfig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("apps/cart/extensions/pixel")).unwrap();
+        std::fs::write(
+            root.join("apps/cart/tsconfig.json"),
+            "{\n  // the app\n  \"include\": [\"app/**/*\", \"tests\",],\n  /* done */\n}\n",
+        )
+        .unwrap();
+        let files = |p: &str| vec![p.to_string()];
+        let w = outside_tsconfig(
+            "t6",
+            "apps/cart/extensions/pixel/src/*.ts",
+            &files("apps/cart/extensions/pixel/src/*.ts"),
+            &root,
+        )
+        .expect("outside the include");
+        assert!(
+            w.contains("apps/cart/tsconfig.json (app/**/*, tests)"),
+            "{w}"
+        );
+        for inside in [
+            "apps/cart/app/links/new.ts",
+            "apps/cart/tests/pixel.test.ts",
+        ] {
+            assert_eq!(
+                outside_tsconfig("t6", inside, &files(inside), &root),
+                None,
+                "{inside}"
+            );
+        }
+        // A task that claims the config can widen it itself.
+        let both = vec![
+            "apps/cart/extensions/pixel/src/a.ts".to_string(),
+            "apps/cart/tsconfig.json".to_string(),
+        ];
+        assert_eq!(outside_tsconfig("t6", &both[0], &both, &root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_done_names_only_what_it_spells_in_code_form() {
+        assert_eq!(
+            code_tokens(
+                "The Flow's URL keeps Home's Level; `customerIdOf(shop, code)` and TOOL_NAME go, GraphQL stays, `Stop::Done` too"
+            ),
+            vec!["customerIdOf", "shop", "code", "TOOL_NAME", "Stop", "Done"]
+        );
+        // An unclosed backtick opens no code, and a path is done_paths' own.
+        assert_eq!(
+            code_tokens("keeps `src/plan.rs` and `Open"),
+            Vec::<String>::new()
+        );
+        assert!(prose("docs/plan/03-milestone-1-plan.md") && prose("README.MD"));
+        assert!(!prose("protocol/ops.yaml") && !prose("tests/t1.sh"));
+    }
+
+    #[test]
     fn a_uses_item_yields_the_identifier_nearest_its_call_site() {
         assert_eq!(
             idents("fn price(basket: &Basket) -> Cents · Basket::fixture(): Basket"),
@@ -1962,6 +2203,11 @@ mod tests {
         // A colon-typed item without parens names the symbol, not its type.
         assert_eq!(idents("CartPricing::price: Cents"), vec!["price"]);
         assert_eq!(idents("DEFAULT_MODEL"), vec!["DEFAULT_MODEL"]);
+        // A shape names itself, not its last field.
+        assert_eq!(
+            idents("CustomerMessage { kind: 'customer'; shop: string; customerId: string }"),
+            vec!["CustomerMessage"]
+        );
         assert!(idents("").is_empty());
     }
 
