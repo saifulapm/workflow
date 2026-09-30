@@ -4,7 +4,7 @@
 //! A filtered read that matches nothing prints `{"items":[]}` and exits 1
 //! (mem spec §7), so the array is the answer and the exit code is not.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -22,6 +22,10 @@ pub struct Project {
     /// the whole answer (friction #HK2PNTR4).
     #[serde(default)]
     pub review_paths: Option<String>,
+    /// Where a child project lives in its parent's checkout; absent on a
+    /// root project.
+    #[serde(default)]
+    pub subdir: Option<String>,
 }
 
 impl Project {
@@ -106,6 +110,23 @@ fn silent(args: &[&str]) -> bool {
 
 /// Who owns this checkout. Exit 1 there means unknown, which is a fine answer:
 /// the caller decides what to do without an identity.
+/// The project a git hook at `top` resolves to: the checkout's root project,
+/// with no `MEM_PROJECT` and no caller directory to pick a child.
+pub fn root_project_at(top: &Path) -> Option<Project> {
+    let out = Command::new(bin())
+        .args(["project", "current", "--json"])
+        .current_dir(top)
+        .env_remove("MEM_PROJECT")
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let p: Project = serde_json::from_slice(&out.stdout).ok()?;
+    if p.id.is_empty() { None } else { Some(p) }
+}
+
 pub fn project_current() -> Option<Project> {
     let (ok, out) = capture(&["project", "current", "--json"])?;
     if !ok {

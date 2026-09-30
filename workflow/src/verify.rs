@@ -487,7 +487,22 @@ pub fn cmd_verify(mode: Mode) -> i32 {
         return exit::OK;
     }
 
-    let verifiers = detect_verifiers(&top, project.as_ref());
+    // A child project's key is its own, often narrower than what the
+    // pre-commit hook runs on the trunk: a git hook stands at the toplevel,
+    // where mem answers with the root project. The gate lands on that same
+    // trunk, so it runs the hook's suite, or a run merges work the next
+    // commit on the trunk is refused for (frictions #QJ31ZJD6, #CJ5ANCP7).
+    let root = match (&mode, &project) {
+        (Mode::Gate, Some(p)) if p.subdir.is_some() => memcli::root_project_at(&top),
+        _ => None,
+    };
+    if let (Some(root), Some(child)) = (&root, &project) {
+        warn(format!(
+            "verify: {} is a project in {}'s checkout -- the gate runs {}'s suite, the one the pre-commit hook runs on the trunk",
+            child.name, root.name, root.name
+        ));
+    }
+    let verifiers = detect_verifiers(&top, root.as_ref().or(project.as_ref()));
     if verifiers.is_empty() {
         return no_verifier();
     }
@@ -522,6 +537,7 @@ mod tests {
             root: None,
             verify: None,
             review_paths: None,
+            subdir: None,
         };
         assert_eq!(suite_lock_key(Some(&known), Path::new("/x")), "01ABC");
         let unregistered = Project {
@@ -530,6 +546,7 @@ mod tests {
             root: None,
             verify: None,
             review_paths: None,
+            subdir: None,
         };
         assert_eq!(
             suite_lock_key(Some(&unregistered), Path::new("/home/x/app")),

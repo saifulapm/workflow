@@ -62,6 +62,7 @@ fn project_with_verify(cmd: &str) -> Project {
         root: None,
         verify: Some(cmd.into()),
         review_paths: None,
+        subdir: None,
     }
 }
 

@@ -436,3 +436,26 @@ is "$recorded" yes 'the run is recorded under the child project name'
 run workflow status --json
 like "$OUT" '"project": *"child"' 'status typed in the same subdir resolves the child'
 like "$OUT" '"plan": *"child-run"' 'and lists the run the dispatch recorded'
+
+# The gate lands on the trunk the pre-commit hook guards, and a hook stands at
+# the toplevel, where mem answers with the root project: a child's narrower
+# key merged work the next commit on the trunk was refused for (frictions
+# #QJ31ZJD6, #CJ5ANCP7). The gate runs the root's suite.
+"$MEM_BIN" project set verify "echo child >>'$T_TMP/child-suite'" >/dev/null
+"$MEM_BIN" project set --project mono verify "echo root >>'$T_TMP/root-suite'" >/dev/null
+cat >"$T_TMP/child-gate.md" <<'PLAN'
+# plan: child-gate
+
+- [ ] g1 Add one file
+      Files: apps/child/src/g1.txt
+      Verify: true
+- [ ] g2 Add another file
+      Files: apps/child/src/g2.txt
+      Verify: true
+PLAN
+run workflow run --plan-file "$T_TMP/child-gate.md"
+is "$RC" 0 'the child run ends green'
+like "$(cat "$XDG_STATE_HOME/workflow/runs/child/child-gate/g1.gate")" \
+	"verify: child is a project in mono's checkout -- the gate runs mono's suite" 'the gate says whose suite it runs'
+is "$(grep -c root "$T_TMP/root-suite" 2>/dev/null)" 2 "both merges ran the root's suite"
+is "$(cat "$T_TMP/child-suite" 2>/dev/null)" '' "and never the child's narrower key"
