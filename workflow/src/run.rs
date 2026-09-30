@@ -1130,6 +1130,27 @@ impl Run {
         let _ = std::fs::remove_file(self.dir.join(format!("{task}.unread")));
     }
 
+    /// `branch` merged whole onto the integration branch's tip, detached, as
+    /// one commit carrying the branch tip's message: the three-way merge
+    /// sees the branch's final tree where a replay sees each commit. `false`
+    /// leaves `int` detached at the integration tip with nothing staged.
+    fn squash_onto(&self, int: &Git, branch: &str) -> bool {
+        if !int.quiet(&["checkout", "-q", "--detach", &self.int_branch]) {
+            return false;
+        }
+        let message = self
+            .git()
+            .out(&["log", "-1", "--format=%B", branch])
+            .unwrap_or_default();
+        let merged = int.quiet(&["merge", "-q", "--squash", branch])
+            && !int.quiet(&["diff", "--cached", "--quiet"])
+            && int.quiet(&["commit", "-q", "--no-verify", "-m", message.trim()]);
+        if !merged {
+            int.quiet(&["reset", "-q", "--hard", &self.int_branch]);
+        }
+        merged
+    }
+
     /// `workflow regate <task>`, honoured: the merge a worker's `ready`
     /// starts, run again on the branch as it stands -- the suite and the
     /// reader both -- with no worker spent. A gate red twice on a test that
@@ -1506,9 +1527,35 @@ impl Run {
         // Against the run's base it would replay the siblings' commits too and
         // lean on patch-id dedup to drop them again.
         if !int.quiet(&["rebase", &self.int_branch]) {
+            let conflicted = int
+                .out(&["diff", "--name-only", "--diff-filter=U"])
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(", ");
             int.quiet(&["rebase", "--abort"]);
-            int.quiet(&["checkout", "-q", &self.int_branch]);
-            return Err("conflicts with the integration branch".into());
+            // Replayed a commit at a time, an early commit can meet a hunk
+            // the branch's own tip already agrees with integration on: the
+            // worker had redone its change on integration's file, and the
+            // task failed twice with nothing to act on (friction #JZN4M4JE).
+            // The branch merged whole is the other way to lay it on top, as
+            // one commit under the tip's message.
+            if !self.squash_onto(&int, &branch) {
+                int.quiet(&["checkout", "-q", &self.int_branch]);
+                return Err(format!(
+                    "conflicts with the integration branch in {} -- replayed a commit at a time and merged whole, both conflict; rebase {branch} onto {} and resolve them",
+                    if conflicted.is_empty() {
+                        "its files"
+                    } else {
+                        conflicted.as_str()
+                    },
+                    self.int_branch
+                ));
+            }
+            warn(format!(
+                "task {task}: its commits do not replay onto {}, but the branch merges whole -- landing it as one commit",
+                self.int_branch
+            ));
         }
         let new = int.head().unwrap_or_default();
         if !int.quiet(&["checkout", "-q", &self.int_branch]) {
