@@ -159,4 +159,40 @@ like "$OUT" 'the gate ran past its 3 s deadline and was stopped' 'and says it wa
 truthy "$([ "$took" -lt 25 ] && echo 0 || echo 1)" "the run did not wait the suite out (took ${took}s)"
 truthy "$(pgrep -f 'sleep 31.7' >/dev/null && echo 1 || echo 0)" 'and nothing of the suite is left running'
 
+## -------------------------------------- empty: nothing to prove, nothing refused
+
+# A first commit with no suite: the plan's first task adds one. The trunk
+# check has nothing to run and used to hard-fail the run on it (#NKBRS393).
+new_repo empty
+mem_register
+write_exec "$T_TMP/bootstrap.sh" <<'FAKE'
+#!/bin/sh
+task=$1; status=$3
+printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+if [ "$task" = s1 ]; then
+	printf 'test:\n\ttrue\n' >Makefile
+	git add Makefile
+else
+	printf '%s\n' "$task" >"$task.txt"
+	git add "$task.txt"
+fi
+git -c core.hooksPath=/dev/null commit -qm "Add $task"
+printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+printf '{"is_error":false,"result":"ok"}\n'
+FAKE
+cat >"$T_TMP/empty.md" <<-PLAN
+	# plan: empty
+
+	- [ ] s1 Add the suite
+	      Files: Makefile
+	      Verify: true
+	- [ ] s2 Add the first thing it proves [after: s1]
+	      Files: s2.txt
+	      Verify: true
+	PLAN
+run env FAKE="$T_TMP/bootstrap.sh" workflow run --plan-file "$T_TMP/empty.md"
+is "$RC" 0 'a plan whose first task adds the suite runs on an empty repository'
+like "$OUT" 'has no suite to run yet -- nothing to prove before the first dispatch' 'and the run says why it checked nothing'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/empty/empty/s2.state")" merged 'both tasks merge, each gated on the suite s1 added'
+
 t_done

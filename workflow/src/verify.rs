@@ -408,6 +408,10 @@ fn no_verifier() -> i32 {
             "no verifier in this repo, and this is the plan lane (an orchestrator worktree): hard fail.",
         );
         warn("a task in an orchestrated plan must be verifiable; fix the plan or add a suite.");
+        warn(
+            "a suite is a package.json test script, a justfile or Makefile test target, a Cargo.toml, \
+             or `mem project set verify <command>`; on an empty repository the first task adds one.",
+        );
         return exit::NO_VERIFIER;
     }
     if memcli::has_ruling("no-verifier", None) {

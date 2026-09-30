@@ -2278,10 +2278,23 @@ impl Run {
         let int = Git::at(&self.int_wt);
         let tree = int.out(&["rev-parse", "HEAD^{tree}"]).unwrap_or_default();
         let tree = tree.trim().to_string();
-        if verify::is_green(memcli::project_current().as_ref(), &tree) {
+        let project = memcli::project_current();
+        if verify::is_green(project.as_ref(), &tree) {
             return Ok(());
         }
         let tip = int.head().unwrap_or_default();
+        // A repository with no suite yet -- a first commit, a plan whose
+        // first task adds the tests -- has nothing a trunk check could prove,
+        // and refusing it made the plan that adds the suite unrunnable
+        // (friction #NKBRS393). Each task's gate still asks for one.
+        if verify::detect_verifiers(&self.int_wt, project.as_ref()).is_empty() {
+            warn(format!(
+                "run {}: {} has no suite to run yet -- nothing to prove before the first dispatch; each task's gate needs the suite the plan adds",
+                self.plan.plan_id,
+                &tip[..tip.len().min(12)]
+            ));
+            return Ok(());
+        }
         warn(format!(
             "run {}: the gate has not seen {} green -- running the suite once before the first dispatch",
             self.plan.plan_id,
