@@ -3121,6 +3121,26 @@ impl Run {
                     "{} already carries {ahead} commit(s) an earlier run merged; continuing on them",
                     self.int_branch
                 ));
+            } else if self
+                .plan
+                .tasks
+                .iter()
+                .all(|t| t.checked || self.state(&t.id) == MERGED)
+                && git.quiet(&["merge-tree", "--write-tree", &self.base, &self.int_branch])
+            {
+                // Every task is merged, the trunk moved on, and the two merge
+                // clean: there is nothing left to decide, only to land. The
+                // trunk is merged into integration at setup, which keeps
+                // every commit the run recorded, and the trunk check proves
+                // the result. Refusing sent `workflow accept`'s own "run the
+                // plan again to land it" into a refusal (friction #V08D6BND).
+                // With work still to do the refusal stands: which trunk it
+                // builds on is the person's call.
+                let ahead = git.count(&format!("{}..{}", self.base, self.int_branch));
+                warn(format!(
+                    "{} carries {ahead} commit(s) an earlier run merged and the trunk has moved on; merging the trunk into it",
+                    self.int_branch
+                ));
             } else {
                 let from = if recorded.is_empty() {
                     self.base.clone()
@@ -3349,9 +3369,30 @@ impl Run {
             return false;
         }
         let int = Git::at(&self.int_wt);
-        if int.head().unwrap_or_default() != self.base
-            && !int.quiet(&["merge", "-q", "--ff-only", &self.base])
+        let head = int.head().unwrap_or_default();
+        if head != self.base
+            && !int.is_ancestor(&self.base, &head)
+            && !int.is_ancestor(&head, &self.base)
         {
+            // Diverged, and preflight found the two merge clean.
+            if !int.quiet(&[
+                "-c",
+                "core.hooksPath=/dev/null",
+                "merge",
+                "-q",
+                "--no-edit",
+                "-m",
+                &format!("Merge the trunk into {}", self.int_branch),
+                &self.base,
+            ]) {
+                int.quiet(&["merge", "--abort"]);
+                warn(format!(
+                    "{} cannot take the trunk at {} in; sort it out by hand",
+                    self.int_branch, self.base
+                ));
+                return false;
+            }
+        } else if head != self.base && !int.quiet(&["merge", "-q", "--ff-only", &self.base]) {
             warn(format!(
                 "{} cannot fast-forward to {}; sort it out by hand",
                 self.int_branch, self.base
