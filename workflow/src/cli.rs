@@ -194,6 +194,18 @@ followup`), so nothing true is lost and nothing minor costs another round. The
 other way out is to edit the plan and `workflow redispatch <task>`."
     )]
     Accept { task: String },
+    /// Merge a task the gate failed again, as a worker's `ready` would.
+    #[command(
+        long_about = "Merge a task the gate failed again, as a worker's `ready` would.
+
+The gate runs a red suite twice before it fails a task, and a suite that is red
+only under load can be red both times. regate takes the task's branch through
+the whole merge again -- ownership, the words, the rebase, the suite and the
+reader -- with no worker spent, where `accept` would land it unread and file
+it as landed over findings. With a run live it writes a marker the run honours
+on its next poll; with none it does the merge itself, off the last run's state."
+    )]
+    Regate { task: String },
     /// Report this project's runs: task states, spend, lock liveness.
     #[command(
         long_about = "Report this project's runs: task states, spend, lock liveness.
@@ -350,6 +362,9 @@ usage: workflow <command> [options]
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
   accept <task>
       land a task the run failed, as it stands, the findings filed
+      0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
+  regate <task>
+      merge a task the gate failed again: suite and reader, no worker
       0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
   status [--json]
       report this project's runs: task states, spend, lock liveness

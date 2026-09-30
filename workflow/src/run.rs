@@ -268,10 +268,41 @@ fn timeout_hint(text: &str) -> &'static str {
 }
 
 fn path_hint(text: &str, wt_root: &Path) -> &'static str {
+    let text = failure_text(text);
     if wt_root.as_os_str().is_empty() || !text.contains(&*wt_root.to_string_lossy()) {
         return "";
     }
     " -- the failure text carries this run's worktree path, which every spawned command line holds; a test asserting a word absent from a command is reading the path"
+}
+
+/// The part of a red suite's output that is about the failures: TAP's `not
+/// ok` lines and the `#` lines under them, cargo's `---- name stdout ----`
+/// blocks, and vitest's and jest's failure lines with what follows each up
+/// to a blank line. The whole output where none of those shapes is there.
+/// The worktree path is in every build line a suite prints, so a hint read
+/// off the whole output explained a WouldBlock panic that named no path at
+/// all (friction #CC4DKNS9).
+fn failure_text(output: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut in_block = false;
+    for line in output.lines() {
+        let t = line.trim();
+        let opens = t.starts_with("not ok")
+            || (t.starts_with("---- ") && t.ends_with(" ----"))
+            || ["✗ ", "× ", "FAIL ", "❯ "].iter().any(|p| t.starts_with(p));
+        if opens {
+            in_block = true;
+        } else if t.is_empty() || t == "failures:" || t.starts_with("ok ") {
+            in_block = false;
+        }
+        if in_block {
+            kept.push(line);
+        }
+    }
+    match kept.is_empty() {
+        true => output.to_string(),
+        false => kept.join("\n"),
+    }
 }
 
 /// Liveness is the latest of three signals, because each one alone has a way of
@@ -1097,6 +1128,21 @@ impl Run {
             Err(why) => self.fail_task(task, &why),
         }
         let _ = std::fs::remove_file(self.dir.join(format!("{task}.unread")));
+    }
+
+    /// `workflow regate <task>`, honoured: the merge a worker's `ready`
+    /// starts, run again on the branch as it stands -- the suite and the
+    /// reader both -- with no worker spent. A gate red twice on a test that
+    /// is green alone left accept, which lands unread, as the only way on
+    /// (friction #EJ0TANB0).
+    fn regate(&self, task: &str) {
+        warn(format!("task {task}: gated again by request"));
+        match self.merge(task) {
+            Ok(Merge::Landed) => self.land(task),
+            Ok(Merge::Reading) => self.set_state(task, REVIEWING),
+            Ok(Merge::Nothing) => self.fail_task(task, "its branch holds nothing to merge"),
+            Err(why) => self.fail_task(task, &why),
+        }
     }
 
     /// One line into the worker's own session after a turn that ended with
@@ -2194,7 +2240,31 @@ impl Run {
             self.plan.plan_id,
             &tip[..tip.len().min(12)]
         ));
-        self.gate_run(&self.dir.join("base.gate"))
+        // Red is run once more, as a task's gate is: one timed-out test
+        // refused a trunk that was green alone (frictions #4TKKYYFT,
+        // #CC4DKNS9), and refusing the run is dearer than one more suite.
+        let file = self.dir.join("base.gate");
+        let kept = self.dir.join("base.gate.1");
+        let Err(red) = self.gate_run(&file) else {
+            let _ = std::fs::remove_file(&kept);
+            return Ok(());
+        };
+        if std::fs::rename(&file, &kept).is_err() {
+            return Err(red);
+        }
+        warn(format!(
+            "run {}: the trunk was red -- running the suite a second time before calling it",
+            self.plan.plan_id
+        ));
+        self.gate_run(&file)?;
+        let line = format!(
+            "run {}: the trunk was red once and green on the second run -- see {}",
+            self.plan.plan_id,
+            kept.display()
+        );
+        warn(&line);
+        memcli::log_run(&line);
+        Ok(())
     }
 
     fn gate_verify(&self, task: &str) -> Result<(), String> {
@@ -4221,7 +4291,11 @@ pub fn cmd_run(
         // for that: reset to pending it was dispatched to a fresh worker
         // before the loop below had read the marker, which is a whole
         // attempt spent on work already settled (friction #Y7JTF4QR).
-        if run.state(&id) == FAILED && run.dir.join(format!("{id}.accept")).exists() {
+        if run.state(&id) == FAILED
+            && ["accept", "regate"]
+                .iter()
+                .any(|ext| run.dir.join(format!("{id}.{ext}")).exists())
+        {
             continue;
         }
         run.set_state(&id, PENDING);
@@ -4262,6 +4336,7 @@ pub fn cmd_run(
         || !ready(&run).is_empty()
         || marked(&run, "redispatch")
         || marked(&run, "accept")
+        || marked(&run, "regate")
     {
         if stopping() {
             return shutdown(&run, hung_up());
@@ -4274,8 +4349,11 @@ pub fn cmd_run(
         // over the reader's findings. Read before anything is dispatched, or
         // a task whose marker was written while this run was starting is
         // given a fresh worker first (friction #Y7JTF4QR).
-        for id in &all_ids {
-            let marker = run.dir.join(format!("{id}.accept"));
+        for (id, ext) in all_ids
+            .iter()
+            .flat_map(|id| [(id, "accept"), (id, "regate")])
+        {
+            let marker = run.dir.join(format!("{id}.{ext}"));
             if !marker.exists() {
                 continue;
             }
@@ -4286,7 +4364,7 @@ pub fn cmd_run(
             if !run.resumable(id) {
                 let _ = std::fs::remove_file(&marker);
                 warn(format!(
-                    "task {id}: asked to accept, but it is {} with {} commit(s) on its branch -- ignored",
+                    "task {id}: asked to {ext}, but it is {} with {} commit(s) on its branch -- ignored",
                     run.state(id),
                     run.commits(id)
                 ));
@@ -4296,7 +4374,10 @@ pub fn cmd_run(
                 continue; // a reader holds integration; the marker keeps
             }
             let _ = std::fs::remove_file(&marker);
-            run.accept(id);
+            match ext {
+                "regate" => run.regate(id),
+                _ => run.accept(id),
+            }
         }
         for id in ready(&run) {
             if run.running() >= run.max_workers {
@@ -4696,9 +4777,15 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>, review_deadline: Option<f
 /// honoured meant racing a fresh `workflow run` into its first second, and
 /// losing that race spent another worker on work already settled (frictions
 /// #C6X70T32, #V1720VEV, #NM06YA8Q).
-pub fn cmd_accept(task: &str) -> i32 {
+///
+/// `regate` is `workflow regate <task>`: the merge a worker's `ready`
+/// starts -- suite and reader -- rather than accept's unread landing. It has
+/// a reading to wait on, so with nobody live the marker waits for the next
+/// run instead of a merge here.
+pub fn cmd_accept(task: &str, regate: bool) -> i32 {
+    let verb = if regate { "regate" } else { "accept" };
     if !Git::here().inside_worktree() {
-        warn("accept: stand in the project checkout");
+        warn(format!("{verb}: stand in the project checkout"));
         return exit::USAGE;
     }
     memcli::resolve_from_here();
@@ -4706,7 +4793,7 @@ pub fn cmd_accept(task: &str) -> i32 {
         return exit::USAGE;
     };
     let Some(project) = memcli::project_current() else {
-        warn("accept: mem does not know this checkout");
+        warn(format!("{verb}: mem does not know this checkout"));
         return exit::USAGE;
     };
     let root = paths::runs_root().join(project.dir_name());
@@ -4736,7 +4823,17 @@ pub fn cmd_accept(task: &str) -> i32 {
         if refused_ownership(dir) {
             return ownership_refusal(task);
         }
-        let _ = std::fs::write(dir.join(format!("{task}.accept")), "");
+        let _ = std::fs::write(dir.join(format!("{task}.{verb}")), "");
+        let run_name = dir
+            .file_name()
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if regate {
+            warn(format!(
+                "run {run_name}: asked to gate {task} again -- it merges on the next poll, suite and reader both"
+            ));
+            return exit::OK;
+        }
         // A task that failed because the reading could not be had at all has
         // no fix verdict to be accepted over (friction #GWPHRDDK).
         let over = match field(dir, task, "reviews").parse::<u64>().unwrap_or(0) {
@@ -4744,10 +4841,7 @@ pub fn cmd_accept(task: &str) -> i32 {
             n => format!("over reading {n}"),
         };
         warn(format!(
-            "run {}: asked to accept {task} {over} -- it merges on the next poll, unread, with the findings filed as follow-ups",
-            dir.file_name()
-                .map(|d| d.to_string_lossy().to_string())
-                .unwrap_or_default(),
+            "run {run_name}: asked to accept {task} {over} -- it merges on the next poll, unread, with the findings filed as follow-ups"
         ));
         return exit::OK;
     }
@@ -4764,6 +4858,16 @@ pub fn cmd_accept(task: &str) -> i32 {
     {
         if refused_ownership(&dir) {
             return ownership_refusal(task);
+        }
+        // A regate has a reading to wait on, and only a run polls one: the
+        // marker waits for the next run, which honours it before it
+        // dispatches anything.
+        if regate {
+            let _ = std::fs::write(dir.join(format!("{task}.regate")), "");
+            warn(format!(
+                "{task}: marked to gate again -- `workflow run` merges it first, suite and reader both"
+            ));
+            return exit::OK;
         }
         return accept_here(&dir, &top, &project.dir_name(), task);
     }
@@ -5037,6 +5141,22 @@ mod tests {
             "; a test timed out rather than asserting"
         );
         assert_eq!(timeout_hint("not ok 2 - x\n"), "");
+    }
+
+    #[test]
+    fn the_path_hint_reads_the_failures_and_not_the_build_lines_around_them() {
+        let wt = Path::new("/state/wt/amx/plan");
+        let cargo = "   Compiling amx v0.1.0 (/state/wt/amx/plan/_integration)\n\
+                     test spawn::tests::two_spawns_at_the_cap_start_one ... FAILED\n\n\
+                     failures:\n\n\
+                     ---- spawn::tests::two_spawns_at_the_cap_start_one stdout ----\n\
+                     nobody holds the count: WouldBlock\n\n\
+                     failures:\n";
+        assert_eq!(path_hint(cargo, wt), "", "the panic names no path");
+        let tap = "ok 1 - a\nnot ok 3 - broke in /state/wt/amx/plan/_integration\nok 4 - b\n";
+        assert!(!path_hint(tap, wt).is_empty(), "the not ok line names it");
+        // Nothing in a failure shape: the whole output is all there is.
+        assert!(!path_hint("error in /state/wt/amx/plan/x\n", wt).is_empty());
     }
 
     #[test]

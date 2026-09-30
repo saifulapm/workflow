@@ -57,6 +57,40 @@ truthy "$([ ! -d "$XDG_STATE_HOME/workflow/worktrees/app/red" ] && echo 0 || ech
 is "$(ls "$XDG_STATE_HOME/workflow/green" 2>/dev/null | wc -l)" 0 'nothing is recorded green'
 like "$("$MEM_BIN" log --type run --json)" 'run red: refused, the trunk is red' 'the log carries the refusal'
 
+## ----------------------------------------- red once: the second run decides
+
+# One timed-out test refused a trunk that was green alone (frictions
+# #4TKKYYFT, #CC4DKNS9): red is run once more, as a task's gate is.
+export TRUNK_RUNS="$T_TMP/trunk-runs"
+write_exec "$T_TMP/flaky.sh" <<'FAKE'
+#!/bin/sh
+n=$(cat "$TRUNK_RUNS" 2>/dev/null || echo 0)
+n=$((n + 1))
+printf '%s\n' "$n" >"$TRUNK_RUNS"
+if [ "$n" = 1 ]; then
+	printf 'test view::card ... FAILED\n'
+	exit 1
+fi
+exit 0
+FAKE
+"$MEM_BIN" project set verify "$T_TMP/flaky.sh" >/dev/null
+cat >"$T_TMP/flaky.md" <<-PLAN
+	# plan: flaky
+
+	- [ ] f1 Add the f1 service
+	      Files: app/f1.php
+	      Verify: true
+	- [ ] f2 Add the f2 service
+	      Files: app/f2.php
+	      Verify: true
+	PLAN
+run workflow run --plan-file "$T_TMP/flaky.md"
+is "$RC" 0 'a trunk red once and green on the second run goes ahead'
+like "$OUT" 'run flaky: the trunk was red once and green on the second run -- see .*base\.gate\.1' \
+	'and says the suite needed two goes'
+like "$(cat "$XDG_STATE_HOME/workflow/runs/app/flaky/base.gate.1")" 'view::card' "the red run's output is kept"
+"$MEM_BIN" project set verify 'test -f ok' >/dev/null
+
 ## -------------------------------------------------- green: once, then not
 
 : >ok

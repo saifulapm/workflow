@@ -156,3 +156,51 @@ like "$(cat "$wtdir/t1.failed")" 'not ok 3 - broke in' 'the failure note still n
 like "$(cat "$wtdir/t1.failed")" \
 	"the failure text carries this run's worktree path, which every spawned command line holds; a test asserting a word absent from a command is reading the path" \
 	'a suite whose not ok line prints $PWD earns the hint'
+
+# A suite red on both of the gate's runs and green alone -- a test that only
+# fails under load -- used to leave `workflow accept`, which lands unread, as
+# the only way on (friction #EJ0TANB0). `workflow regate` puts the branch
+# through the whole merge again, suite and reader, with no worker spent.
+new_repo regate
+mem_register
+
+export REGATE_RUNS="$T_TMP/regate-runs"
+write_exec "$T_TMP/loaded.sh" <<'FAKE'
+#!/bin/sh
+[ -d app ] || exit 0
+n=$(cat "$REGATE_RUNS" 2>/dev/null || echo 0)
+n=$((n + 1))
+printf '%s\n' "$n" >"$REGATE_RUNS"
+if [ "$n" -le 2 ]; then
+	printf 'not ok 9 - red under load\n'
+	exit 1
+fi
+printf 'ok 9 - green alone\n'
+FAKE
+"$MEM_BIN" project set verify "$T_TMP/loaded.sh" >/dev/null
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF2'
+# plan: regate
+
+- [ ] t1 The one the gate fails twice under load
+      Files: app/t1.php
+      Verify: true
+- [ ] side A second task, after it [after: t1]
+      Files: app/side.php
+      Verify: true
+EOF2
+
+regdir="$XDG_STATE_HOME/workflow/runs/regate/regate"
+run workflow run
+is "$RC" 1 'the gate fails the task on two red runs'
+is "$(cat "$regdir/t1.state")" failed 't1 is failed'
+
+run workflow regate t1
+is "$RC" 0 'regate with no live run is taken'
+like "$OUT" 't1: marked to gate again -- `workflow run` merges it first' 'and says the next run merges it'
+
+run workflow run
+is "$RC" 0 'the next run merges it and the rest'
+is "$(cat "$regdir/t1.state")" merged 't1 is merged'
+is "$(cat "$regdir/t1.dispatches")" 1 'with no second worker spent on it'
+like "$OUT" 'task t1: gated again by request' 'and the run says it gated it again'
