@@ -464,6 +464,14 @@ pub fn cmd_verify(mode: Mode) -> i32 {
                     "commit refused: staged outside this task's Files: patterns -- {}",
                     outside.join(", ")
                 ));
+                // What the run read, said back: an answer that told a worker
+                // its Files line was widened, over a plan edit that had
+                // failed, was otherwise indistinguishable from the hook
+                // ignoring the edit (friction #W4QRZKBH).
+                warn(format!(
+                    "Files as the run read the plan of record: {}",
+                    patterns.join(" ")
+                ));
                 warn(
                     "a file the toolchain rewrote is still yours: `mem ask` if Files must widen, \
                      never a note in the report",
