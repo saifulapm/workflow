@@ -25,7 +25,13 @@ pub struct Verifier {
 /// touched -- review-3 F-3. The lock-held marker rides along so a suite that
 /// reaches cmd_verify again (a scratch commit firing the hook) skips the lock
 /// its parent already holds instead of deadlocking against it.
-pub fn run_scrubbed(cmd: &str) -> bool {
+///
+/// The gate runs with `TURBO_FORCE=true`: turbo replayed a cached green for
+/// a package whose dependency had changed under it, and the gate passed a
+/// merge the uncached suite failed (frictions #S3PJJY0R, #N0TBJQKX). The
+/// hook and a task's own Verify keep the cache, which is what makes them
+/// quick enough to run on every commit; the gate is what has to be right.
+pub fn run_scrubbed(cmd: &str, gate: bool) -> bool {
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd);
     for key in [
@@ -39,6 +45,9 @@ pub fn run_scrubbed(cmd: &str) -> bool {
         c.env_remove(key);
     }
     c.env(SUITE_LOCK_HELD, "1");
+    if gate {
+        c.env("TURBO_FORCE", "true");
+    }
     c.status().map(|s| s.success()).unwrap_or(false)
 }
 
@@ -460,7 +469,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
         }
         warn(format!("verify task: {cmd}"));
         let _lock = suite_lock(project.as_ref(), &top);
-        if !run_scrubbed(&cmd) {
+        if !run_scrubbed(&cmd, false) {
             warn("verify task: FAILED");
             return exit::FAILED;
         }
@@ -483,7 +492,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
     let _lock = suite_lock(project.as_ref(), &top);
     for v in &verifiers {
         warn(format!("verify {}: {}", v.label, v.cmd));
-        if !run_scrubbed(&v.cmd) {
+        if !run_scrubbed(&v.cmd, mode == Mode::Gate) {
             warn(format!("verify {}: FAILED", v.label));
             rc = exit::FAILED;
         }

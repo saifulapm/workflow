@@ -39,6 +39,9 @@ run env GIT_DIR="$PWD/.git" GIT_INDEX_FILE="$PWD/.git/index" GIT_PREFIX=x/ \
 is "$RC" 0 'scrub: verify still passes with the git environment inherited'
 unlike "$(cat php-env)" '^(GIT_DIR|GIT_INDEX_FILE|GIT_PREFIX|WORKFLOW_AGENT|PI_CODING_AGENT|WORKFLOW_HOOK_SEEN)=' \
 	'scrub: the child suite sees none of the six scrubbed variables'
+unlike "$(cat php-env)" '^TURBO_FORCE=' 'the hook and a plain verify keep the turbo cache'
+run workflow verify --gate
+like "$(cat php-env)" '^TURBO_FORCE=true$' 'the gate runs turbo uncached (friction #S3PJJY0R)'
 
 # Run from a subdirectory: verify works from the toplevel.
 mkdir -p deep/er
