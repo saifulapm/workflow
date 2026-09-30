@@ -106,6 +106,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         if let Some(msg) = cargo_test_filters(&t.id, verify) {
             f.refusals.push(msg);
         }
+        if let Some(msg) = hardcoded_target(&t.id, verify) {
+            f.warnings.push(msg);
+        }
         // A Verify that greps a file the task does not own asks the worker to
         // edit it, and the commit hook refuses the edit (friction #G1JWHABM).
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
@@ -668,6 +671,22 @@ fn fixed_dir(pattern: &str) -> String {
 /// never go green -- the trap four tasks each paid an attempt to find
 /// (friction #DBHZBFY1). A workspace manifest is left alone: the member that
 /// Verify would run in is not knowable from here.
+/// A Verify that runs a binary out of a crate's own `target/`: a run gives
+/// every builder a CARGO_TARGET_DIR of its own, so the worker's build lands
+/// there and the path names a stale binary or none (friction #RF1TT6HZ).
+fn hardcoded_target(task: &str, verify: &str) -> Option<String> {
+    let path = shell_words(verify).into_iter().find(|w| {
+        (w.starts_with("target/") || w.contains("/target/"))
+            && !w.contains("CARGO_TARGET_DIR")
+            && !w.starts_with("--")
+    })?;
+    Some(format!(
+        "plan: task {task}: Verify runs '{path}', and a run builds into a CARGO_TARGET_DIR of its own -- say \"$CARGO_TARGET_DIR/{}\" or `cargo run`",
+        path.split_once("target/")
+            .map_or(path.as_str(), |(_, rest)| rest)
+    ))
+}
+
 fn lib_test_without_lib(task: &str, verify: &str, root: &Path) -> Option<String> {
     if !verify.contains("cargo test") || !verify.split_whitespace().any(|w| w == "--lib") {
         return None;
@@ -2171,6 +2190,18 @@ mod tests {
         ];
         assert_eq!(outside_tsconfig("t6", &both[0], &both, &root), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_verify_that_runs_a_binary_out_of_target_is_named() {
+        let w = hardcoded_target("t1", "cd hub && ../workflow/target/release/workflow verify")
+            .expect("a hardcoded target path");
+        assert!(w.contains("$CARGO_TARGET_DIR/release/workflow"), "{w}");
+        assert_eq!(
+            hardcoded_target("t1", "\"$CARGO_TARGET_DIR/debug/app\" --help"),
+            None
+        );
+        assert_eq!(hardcoded_target("t1", "cargo test --target-dir x"), None);
     }
 
     #[test]
