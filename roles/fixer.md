@@ -11,6 +11,11 @@ names.
 Read narrowly: the files the findings name, in the ranges they reach, never
 a directory at a time.
 
+Stop only what you started, by the pid you kept: `cmd & echo $! >
+$TMPDIR/<name>.pid`, then `kill "$(cat $TMPDIR/<name>.pid)"`. Never kill by
+name, pattern or working directory: your own session runs in this worktree
+and goes with the sweep.
+
 Write files in steps: one file per write, a long file in parts appended in
 order, never a tree in one call.
 
