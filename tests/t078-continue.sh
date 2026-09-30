@@ -75,7 +75,21 @@ new | sub)
 	cd "$dir" || exit 1
 	say started
 	case $task in
-	asker)
+	busy)
+		# Holds the one slot until the asker has had its answer sent in.
+		printf 'working hooks\n' >"$AMX_DIR/$name.state"
+		(
+			while [ ! -f "$WF_TMP/asker2-sent" ]; do sleep 0.1; done
+			mkdir -p app
+			printf 'busy\n' >app/busy.php
+			git add app/busy.php
+			commit 'Add the busy service'
+			say ready
+			printf 'idle hooks\n' >"$AMX_DIR/$name.state"
+		) >/dev/null 2>&1 &
+		exit 0
+		;;
+	asker | asker2)
 		if [ ! -f "$WF_TMP/asked" ]; then
 			mem ask 'is draft the right word?' >"$WF_TMP/ask-id"
 			: >"$WF_TMP/asked"
@@ -117,6 +131,7 @@ send)
 		commit "Add the $task service"
 	fi
 	say ready
+	: >"$WF_TMP/$task-sent"
 	printf 'idle hooks\n' >"$AMX_DIR/$name.state"
 	;;
 status)
@@ -223,5 +238,34 @@ like "$(cat "$WF_TMP/asker.answer")" 'The orchestrator answered: final is the wo
 	'and the brief it was pointed at carries the answer'
 like "$(cat "$T_TMP/ask.log")" "task asker: sent back to its worker \\(session $asess, continuation 1\\)" 'the run says so'
 is "$(cat "$askdir/asker.dispatches")" 1 'one attempt'
+
+## ------------------------- an answer goes in while every slot is taken
+
+# The asker's own session takes its answer whatever the cap says; holding it
+# for a free slot left a worker idle on its question for as long as its
+# siblings ran (frictions #FCZBJ0ZZ, #E9KPGCWQ). Here the one slot is held
+# by a task that finishes only once the asker has had its answer.
+rm -f "$WF_TMP/asked" "$WF_TMP/ask-id"
+cat >"$T_TMP/capped.md" <<'PLAN'
+# plan: capped
+
+- [ ] asker2 Add the asker2 service
+      Files: app/asker2.php
+      Verify: true
+- [ ] busy Add the busy service
+      Files: app/busy.php
+      Verify: true
+PLAN
+WORKFLOW_MAX_WORKERS=1 workflow run --plan-file "$T_TMP/capped.md" >"$T_TMP/capped.log" 2>&1 &
+runpid=$!
+for _ in $(seq 1 300); do
+	[ -s "$WF_TMP/ask-id" ] && grep -q 'waiting on' "$T_TMP/capped.log" && break
+	sleep 0.1
+done
+"$MEM_BIN" answer "$(cat "$WF_TMP/ask-id")" 'final is the word' >/dev/null
+wait "$runpid"
+is "$?" 0 'the run merges both with the one slot taken when the answer came'
+like "$(cat "$T_TMP/capped.log")" 'task asker2: sent back to its worker' 'the answer went into the waiting session'
+like "$(cat "$T_TMP/capped.log")" 'task asker2: stopped on its question -- asked #' 'and its stop was said as a question, not a failure'
 
 t_done

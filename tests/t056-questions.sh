@@ -316,7 +316,7 @@ like "$(cat "$WF_TMP/ask-answer")" \
 	'the second attempt read the answer in its brief'
 is "$(cat "$rundir/ask.state")" merged 'and merged'
 like "$(cat "$rundir/ask.failed" 2>/dev/null; "$MEM_BIN" log --limit 40)" \
-	'failed ask -- asked #[A-Z0-9]+: may I add the fixture' \
+	'ask stopped on its question -- asked #[A-Z0-9]+: may I add the fixture' \
 	'while it waited, the failure note named the question'
 
 ## ------------------------------------------ the plan of record, read live

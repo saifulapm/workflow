@@ -473,6 +473,7 @@ impl Run {
 
     fn set_state(&self, task: &str, state: &str) {
         write_field(&self.dir, task, "state", state);
+        let _ = std::fs::remove_file(self.dir.join(format!("{task}.held")));
         if state == MERGED || state == DISPATCHED {
             // A failure note used to outlive its failure: status went on
             // reporting why a task failed on one run long after another had
@@ -1164,6 +1165,15 @@ impl Run {
             int.quiet(&["reset", "-q", "--hard", &self.int_branch]);
         }
         merged
+    }
+
+    /// Why a task that could go is not going yet, for `workflow status`:
+    /// a pending task with an empty last report said nothing about what
+    /// held it (friction #XR01M9H0). Cleared by the next state change.
+    fn hold(&self, task: &str, why: &str) {
+        if self.field(task, "held") != why {
+            write_field(&self.dir, task, "held", why);
+        }
     }
 
     /// `workflow regate <task>`, honoured: the merge a worker's `ready`
@@ -2732,7 +2742,19 @@ impl Run {
                 last.as_ref().map_or("", |(_, note)| note.as_str()),
             )
         {
-            self.fail_task_keep(task, &asked);
+            // Failed is the state the poll loop watches, not what happened:
+            // "failed -- asked #X" read as a task the run had given up on,
+            // and orchestrators redispatched by hand what the run was about
+            // to send back in itself (friction #FCZBJ0ZZ).
+            warn(format!(
+                "task {task}: stopped on its question -- {asked}; the answer goes back to it"
+            ));
+            self.set_state(task, FAILED);
+            write_field(&self.dir, task, "failed", &asked);
+            memcli::log_run(&format!(
+                "run {}: {task} stopped on its question -- {asked}",
+                self.plan.plan_id
+            ));
             // A question that already has its answer wakes nobody: the
             // poll loop sends the answer back in by itself, and an event
             // here woke the orchestrator to answer what it had answered
@@ -4474,9 +4496,33 @@ pub fn cmd_run(
         }
         for id in ready(&run) {
             if run.running() >= run.max_workers {
-                break;
+                run.hold(
+                    &id,
+                    &format!(
+                        "waiting for a worker slot ({} of {} running)",
+                        run.running(),
+                        run.max_workers
+                    ),
+                );
+                continue;
             }
             run.dispatch(&id, "");
+        }
+        for id in &all_ids {
+            if run.state(id) != PENDING {
+                continue;
+            }
+            if let Some(t) = run.plan.get(id)
+                && !run.deps_satisfied(t)
+            {
+                let on: Vec<&str> = t
+                    .deps
+                    .iter()
+                    .filter(|d| run.state(d) != MERGED)
+                    .map(String::as_str)
+                    .collect();
+                run.hold(id, &format!("waiting on {} to merge", on.join(", ")));
+            }
         }
         sys::sleep(run.poll);
         if stopping() {
@@ -4544,7 +4590,7 @@ pub fn cmd_run(
         // have carried (the queue was one stopped-short question per answer,
         // all of them stale).
         for id in &all_ids {
-            if run.state(id) != FAILED || run.running() >= run.max_workers {
+            if run.state(id) != FAILED {
                 continue;
             }
             let Some(qid) = run.asked(id) else {
@@ -4558,7 +4604,23 @@ pub fn cmd_run(
                 .into_iter()
                 .any(|q| q.short_id == qid && q.answer.is_some());
             if answered {
+                // Its own session takes the answer whatever the cap says:
+                // the pane is standing already, and holding a sent-back
+                // answer for a free slot left a worker idle on its question
+                // for as long as its siblings ran (frictions #FCZBJ0ZZ,
+                // #E9KPGCWQ). Only a fresh session waits for one.
                 if run.continue_worker(id, "") {
+                    continue;
+                }
+                if run.running() >= run.max_workers {
+                    run.hold(
+                        id,
+                        &format!(
+                            "#{qid} is answered; a fresh session starts when a worker slot frees ({} of {} running)",
+                            run.running(),
+                            run.max_workers
+                        ),
+                    );
                     continue;
                 }
                 warn(format!(

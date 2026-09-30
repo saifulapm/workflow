@@ -38,6 +38,7 @@ printf '2\n' >"$rundir/t2.dispatches"
 printf '4000\n' >"$rundir/t2.context"
 printf '2026-08-21T10:00:00Z blocked waiting on an answer\n' >"$rundir/t2.status"
 printf 'pending\n' >"$rundir/t3.state"
+printf 'waiting for a worker slot (2 of 2 running)\n' >"$rundir/t3.held"
 printf 'dispatched\n' >"$rundir/t4.state"
 printf '2026-08-21T10:05:00Z ready: done\n' >"$rundir/t4.status"
 
@@ -46,7 +47,7 @@ is "$RC" 0 'status exits 0 with runs to report'
 like "$OUT" 'demo' 'the plan is named'
 like "$OUT" 't1 +merged' 'a merged task shows its state'
 like "$OUT" 't2 +failed +the suite is red' 'a failed task shows its reason'
-like "$OUT" 't3 +pending' 'a task that never started says so'
+like "$OUT" 't3 +pending +waiting for a worker slot \(2 of 2 running\)' 'a pending task says what holds it (friction #XR01M9H0)'
 like "$OUT" 'carried 158k' 'the context a task carried is plan-sizing feedback'
 unlike "$OUT" '\$' 'and no dollar figure is reported at all'
 like "$OUT" 'last report: ready done' 'a status line punctuated ready: reports the state bare'
@@ -75,6 +76,7 @@ like "$OUT" '"last_status": *"blocked waiting on an answer"' "json carries the w
 like "$OUT" '"last_status": *"ready done"' 'json reports ready for a status line punctuated ready:'
 like "$OUT" '"context": *158502' 'json carries the context a task carried'
 like "$OUT" '"reviews": *2' 'json carries the fix verdicts a task carried'
+like "$OUT" '"held": *"waiting for a worker slot \(2 of 2 running\)"' 'json carries what holds a pending task'
 unlike "$OUT" '"spend"' 'and no spend field'
 like "$OUT" '"live": *false' 'nobody holds the run lock'
 like "$OUT" '"readings": *3' 'json sums readings for the run: 2 fix verdicts plus 1 task read to a merge'

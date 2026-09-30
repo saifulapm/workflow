@@ -22,6 +22,9 @@ struct TaskRow {
     context: u64,
     /// Fix verdicts the reader has handed this task so far.
     reviews: u64,
+    /// Why a task that could go is not going yet: its dependencies, a
+    /// worker slot. Empty when nothing holds it.
+    held: String,
 }
 
 struct RunRow {
@@ -106,6 +109,7 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             merged: field(dir, &id, "merged"),
             context: field(dir, &id, "context").parse().unwrap_or(0),
             reviews: field(dir, &id, "reviews").parse().unwrap_or(0),
+            held: field(dir, &id, "held"),
             id,
         })
         .collect();
@@ -165,6 +169,7 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
                 "merged": t.merged,
                 "context": t.context,
                 "reviews": t.reviews,
+                "held": t.held,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
@@ -188,7 +193,9 @@ fn print_human(rows: &[RunRow]) {
             // whose .failed still held its first attempt's refusal showed
             // that refusal on every status read after, fifty-six times in
             // one session (m1-lessons ruling 10).
-            if !t.failed.is_empty() && (t.state == run::FAILED || t.state == run::BLOCKED) {
+            if !t.held.is_empty() {
+                detail = t.held.clone();
+            } else if !t.failed.is_empty() && (t.state == run::FAILED || t.state == run::BLOCKED) {
                 detail = t.failed.clone();
             } else if !t.last_status.is_empty() {
                 detail = format!("last report: {}", t.last_status);
