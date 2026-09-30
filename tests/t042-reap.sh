@@ -185,6 +185,9 @@ isnt "$RC" 0 'and so does a fresh write in the worktree'
 
 new_repo again
 mem_register
+# A red suite, so the run stops at its trunk check (a repository with no
+# suite at all goes ahead since #NKBRS393).
+"$MEM_BIN" project set verify false >/dev/null
 cat >"$T_TMP/again.md" <<'PLAN'
 # plan: again
 

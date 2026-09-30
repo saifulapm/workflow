@@ -437,10 +437,13 @@ impl WorkerBackend for AmxBackend {
         else {
             return Ok(());
         };
-        let said = String::from_utf8_lossy(&out.stderr);
-        if out.status.success() || said.contains("--check") {
+        // 64 is amx refusing the command line, which is what a model or a
+        // dial it will not take is; anything else -- an amx older than the
+        // flag, one that could not run -- says nothing about the model.
+        if out.status.code() != Some(64) {
             return Ok(());
         }
+        let said = String::from_utf8_lossy(&out.stderr);
         Err(said
             .lines()
             .find(|l| !l.trim().is_empty())
