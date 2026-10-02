@@ -13,7 +13,7 @@ use crate::warn;
 /// left a planner about 900 for the one part of the brief that is the task,
 /// and trimming a Done or Uses line to fit took out exactly the grounding a
 /// worker otherwise stops to ask for. Boilerplate growth must never cost the
-/// planner room, so it is not counted (the test below holds it under 2,800
+/// planner room, so it is not counted (the test below holds it under 2,900
 /// on its own). A block past this is a task to split, not a line to trim.
 /// A deviation from spec §8.4's figure, recorded as a ruling.
 pub const BUDGET: usize = 2000;
@@ -127,18 +127,20 @@ pub(crate) fn clip(text: &str) -> String {
 }
 
 /// The section the plan's prose rides in, or nothing for a plan that has
-/// none. The reader at the merge gate holds the diff to these rulings, so a
-/// worker that never saw them was being judged against text it could not
-/// have followed; every attempt carries them, read live off the plan of
-/// record, so an edit the orchestrator makes mid-run reaches the next one.
+/// none. The decisions in it are the reasons behind the work, and a worker
+/// that copies their source into a comment leaves the repository pointing
+/// at text no reader of it can see, so the section says to write the reason
+/// instead. Every attempt reads the prose live off the stored plan, so an
+/// edit made mid-run reaches the next one.
 fn plan_section(prose: &str) -> String {
     if prose.trim().is_empty() {
         return String::new();
     }
     format!(
         "## The plan this task belongs to\n\n\
-         Its rulings bind your work; the reader at the merge gate holds your diff to them. \
-         Read them before you write.\n\n\
+         Its decisions give the reasons behind the plan; read them before you write and build to them. \
+         Nothing in the repository names a plan, task, decision, ticket, memory id, agent, model or session: \
+         a comment or a commit gives the reason, never where it came from.\n\n\
          {}\n\n",
         prose.trim()
     )
@@ -306,7 +308,9 @@ Verify is answered in the code it tests, never by weakening the test. Commit eac
 atomic change in ordinary
 engineering voice -- no trailers, no session links, no words like agent, AI or
 orchestration, no puffery, plain words over fancy ones, straight quotes, no
-em dashes. Stage only the files this task touched; never `git add -A`.
+em dashes. A commit subject is under 72
+characters, imperative and about the change; the why goes in the body.
+Stage only the files this task touched; never `git add -A`.
 Everything you write must match the Files: patterns; the pre-commit hook
 refuses a commit outside them and the merge gate fails the task.{lockfile}
 
@@ -466,9 +470,10 @@ mod tests {
         assert!(over_budget(&task).is_none());
         // The fixed prose is not what BUDGET counts, and it is still held:
         // a brief nobody reads is worse than none, and this is the ceiling
-        // that catches a new paragraph before a real plan's worker does.
+        // that catches a new paragraph before a real plan's worker does. It
+        // rose by 100 bytes for the commit subject rule, which is meant.
         assert!(
-            body.len() <= 2800,
+            body.len() <= 2900,
             "the fixed prose is {} bytes",
             body.len()
         );
@@ -492,6 +497,7 @@ mod tests {
             "goes in your\n`ready` note as a follow-up, not into this change",
             "build no other",
             "a scratch check is not kept",
+            "A commit subject is under 72\ncharacters, imperative and about the change; the why goes in the body.",
         ] {
             assert!(body.contains(needle), "the brief lost {needle}");
         }
@@ -515,7 +521,7 @@ mod tests {
             Some("opus"),
         );
         assert!(
-            advised.len() <= 3200,
+            advised.len() <= 3300,
             "the fixed prose with the Advice section is {} bytes",
             advised.len()
         );
@@ -531,7 +537,7 @@ mod tests {
             Some("opus"),
         );
         assert!(
-            paged.len() <= 3550,
+            paged.len() <= 3650,
             "the fixed prose with the Advice section and a named page is {} bytes",
             paged.len()
         );
@@ -744,7 +750,19 @@ mod tests {
             block < stop && stop < section && section < rulings,
             "{body}"
         );
-        assert!(body.contains("the reader at the merge gate holds your diff to them"));
+        for needle in [
+            "Its decisions give the reasons behind the plan",
+            "Nothing in the repository names a plan, task, decision, ticket, memory id, agent, model or session",
+        ] {
+            assert!(
+                body.contains(needle),
+                "the plan section lost {needle}: {body}"
+            );
+        }
+        assert!(
+            !body.contains("holds your diff to them"),
+            "the plan section still sends a reader after the diff: {body}"
+        );
         let bare = text(&task, wt, status, &Prior::default(), "  \n", &[], None);
         assert!(!bare.contains("The plan this task belongs to"), "{bare}");
     }
