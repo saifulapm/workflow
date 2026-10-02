@@ -1,6 +1,7 @@
 //! `workflow doctor` -- what this machine's wiring actually says (spec §7, §11).
 //! Plain `doctor` only reports; `--fix` writes the embedded hook stubs and
-//! amx roles, the one edit this command makes.
+//! amx roles, the one edit this command makes. The ignore list and the
+//! settings belong to the dotfiles, so for those `--fix` prints the edit.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -133,7 +134,65 @@ fn is_one(v: Option<&Value>) -> bool {
     }
 }
 
-fn settings_keys(r: &mut Report) {
+/// The lines the global ignore list must hold so no repo on this machine
+/// tracks the files a coding harness leaves behind.
+const IGNORED: [&str; 5] = [".claude/", "CLAUDE.md", "AGENTS.md", ".scratch/", ".amx/"];
+
+/// The env keys that switch off the traffic the advisor tool depends on.
+const TRAFFIC_OFF: [&str; 3] = [
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    "DISABLE_TELEMETRY",
+    "DO_NOT_TRACK",
+];
+
+/// Under `--fix`, the change to make by hand. Both files belong to the
+/// dotfiles, which would undo any edit made here on their next apply.
+fn edit(r: &Report, fix: bool, msg: impl AsRef<str>) {
+    if fix {
+        r.note("dotfiles edit", msg);
+    }
+}
+
+fn ignore_list(r: &mut Report, fix: bool) {
+    let Some(file) = Git::here().out(&[
+        "config",
+        "--global",
+        "--type=path",
+        "--get",
+        "core.excludesFile",
+    ]) else {
+        r.finding(
+            "ignore list",
+            "no global core.excludesFile: nothing keeps harness files out of every repo",
+        );
+        edit(
+            r,
+            fix,
+            format!(
+                "set core.excludesFile to a file listing {}",
+                IGNORED.join(" ")
+            ),
+        );
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        r.finding("ignore list", format!("{file} is not there to read"));
+        edit(
+            r,
+            fix,
+            format!("create {file} listing {}", IGNORED.join(" ")),
+        );
+        return;
+    };
+    for want in IGNORED {
+        if !text.lines().any(|l| l.trim() == want) {
+            r.finding("ignore list", format!("{file} lacks {want}"));
+            edit(r, fix, format!("add {want} to {file}"));
+        }
+    }
+}
+
+fn settings_keys(r: &mut Report, fix: bool) {
     let f = settings::default_file();
     let Ok(text) = std::fs::read_to_string(&f) else {
         r.finding("settings", format!("{} is not there to read", f.display()));
@@ -175,6 +234,51 @@ fn settings_keys(r: &mut Report) {
                 "settings attribution",
                 format!("attribution.{key} is set to \"{shown}\" and was kept"),
             );
+        }
+    }
+
+    // The edit goes where the content lives, which for a linked file is the
+    // link's target in the dotfiles.
+    let target = if f.is_symlink() {
+        std::fs::canonicalize(&f).unwrap_or(f)
+    } else {
+        f
+    };
+    let target = target.display().to_string();
+    if v.get("advisorModel")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty()
+    {
+        r.finding(
+            "settings advisor",
+            "advisorModel is not set; the advisor is off",
+        );
+        edit(r, fix, format!("set advisorModel in {target}"));
+    }
+    let env = v.get("env");
+    if env
+        .and_then(|e| e.get("CLAUDE_CODE_SUBAGENT_MODEL"))
+        .and_then(Value::as_str)
+        != Some("sonnet")
+    {
+        r.finding(
+            "settings env",
+            "env.CLAUDE_CODE_SUBAGENT_MODEL is not \"sonnet\"",
+        );
+        edit(
+            r,
+            fix,
+            format!("set env.CLAUDE_CODE_SUBAGENT_MODEL to \"sonnet\" in {target}"),
+        );
+    }
+    for key in TRAFFIC_OFF {
+        if env.and_then(|e| e.get(key)).is_some() {
+            r.finding(
+                "settings env",
+                format!("env.{key} is set; the advisor needs it unset"),
+            );
+            edit(r, fix, format!("remove env.{key} from {target}"));
         }
     }
 }
@@ -424,7 +528,8 @@ pub fn cmd_doctor(fix: bool) -> i32 {
     let mut r = Report::default();
     tools(&mut r);
     hooks(&mut r);
-    settings_keys(&mut r);
+    ignore_list(&mut r, fix);
+    settings_keys(&mut r, fix);
     install(&mut r, fix);
     retire(&mut r, fix);
 

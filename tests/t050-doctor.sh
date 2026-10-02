@@ -329,3 +329,93 @@ git config --global core.hooksPath "$HOME/.config/git/hooks"
 run workflow doctor
 unlike "$OUT" 'does not resolve to' \
 	'once hooksPath matches the fixed path, the finding is gone'
+
+## ------------------------------------- the ignore list and the advisor
+
+# Every repo on the machine ignores the agent files through one global list
+# the dotfiles install, and the advisor runs on keys in the settings file.
+# doctor checks both and writes neither: --fix prints the edit to make.
+wanted=(.claude/ CLAUDE.md AGENTS.md .scratch/ .amx/)
+ignore="$HOME/.config/git/ignore"
+printf '%s\n' "${wanted[@]}" >"$ignore"
+git config --global core.excludesFile "$ignore"
+
+settings="$HOME/.claude/settings.json"
+mkdir -p "$HOME/.claude"
+workflow settings-merge "$settings" >/dev/null 2>&1
+jq '.advisorModel = "fable" | .env.CLAUDE_CODE_SUBAGENT_MODEL = "sonnet"' \
+	"$settings" >"$settings.new" && mv "$settings.new" "$settings"
+good=$(cat "$settings")
+
+# One amx or none on PATH, whatever the machine running the suite has.
+doctor() { env PATH="$T_TMP/bin:/usr/bin:/bin" "$wf" doctor "$@"; }
+
+run doctor
+is "$RC" 0 'a fully wired machine has no findings'
+like "$OUT" 'healthy: nothing to fix' 'and says so'
+
+git config --global --unset core.excludesFile
+run doctor
+is "$RC" 1 'no global excludesFile is a finding'
+like "$OUT" 'ignore list.*no global core\.excludesFile' 'and doctor says which key'
+git config --global core.excludesFile "$ignore"
+
+for line in "${wanted[@]}"; do
+	printf '%s\n' "${wanted[@]}" | grep -vxF -- "$line" >"$ignore"
+	run doctor
+	is "$RC" 1 "an ignore list without $line is a finding"
+	like "$OUT" "ignore list.*$ignore lacks $line" 'naming the file and the line'
+done
+printf '%s\n' "${wanted[@]}" >"$ignore"
+
+set_settings() { jq "$@" <<<"$good" >"$settings"; }
+
+set_settings 'del(.advisorModel)'
+run doctor
+is "$RC" 1 'settings without advisorModel are a finding'
+like "$OUT" 'settings advisor.*advisorModel is not set' 'and doctor names the key'
+
+set_settings '.env.CLAUDE_CODE_SUBAGENT_MODEL = "opus"'
+run doctor
+is "$RC" 1 'a subagent model other than sonnet is a finding'
+like "$OUT" 'settings env.*env\.CLAUDE_CODE_SUBAGENT_MODEL is not "sonnet"' 'and doctor names it'
+
+set_settings 'del(.env.CLAUDE_CODE_SUBAGENT_MODEL)'
+run doctor
+is "$RC" 1 'no subagent model is a finding too'
+like "$OUT" 'env\.CLAUDE_CODE_SUBAGENT_MODEL is not "sonnet"' 'with the same line'
+
+for key in CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_TELEMETRY DO_NOT_TRACK; do
+	set_settings --arg k "$key" '.env[$k] = "1"'
+	run doctor
+	is "$RC" 1 "env.$key is a finding"
+	like "$OUT" "settings env.*env\\.$key is set" 'and doctor names it'
+done
+
+# All of it wrong at once, and --fix: the edits are printed, nothing written.
+printf '.claude/\n' >"$ignore"
+set_settings 'del(.advisorModel) | .env.CLAUDE_CODE_SUBAGENT_MODEL = "opus" | .env.DO_NOT_TRACK = "1"'
+before_settings=$(cat "$settings")
+run doctor --fix
+is "$RC" 1 '--fix leaves these findings standing'
+like "$OUT" "dotfiles edit.*add CLAUDE\\.md to $ignore" '--fix prints the ignore line to add'
+like "$OUT" "dotfiles edit.*set advisorModel in $settings" 'and the advisor key to set'
+like "$OUT" "dotfiles edit.*set env\\.CLAUDE_CODE_SUBAGENT_MODEL to \"sonnet\" in $settings" \
+	'and the subagent model to set'
+like "$OUT" "dotfiles edit.*remove env\\.DO_NOT_TRACK from $settings" 'and the key to remove'
+is "$(cat "$settings")" "$before_settings" '--fix writes nothing to settings'
+is "$(cat "$ignore")" '.claude/' 'nor to the ignore list'
+
+# A settings file linked into the dotfiles is edited at the link's target.
+mv "$settings" "$dotfiles/linked.json"
+ln -s "$dotfiles/linked.json" "$settings"
+run doctor --fix
+like "$OUT" "dotfiles edit.*set advisorModel in $(realpath "$dotfiles/linked.json")" \
+	'a linked settings file is named by its target'
+rm -f "$settings"
+mv "$dotfiles/linked.json" "$settings"
+
+git config --global --unset core.excludesFile
+run doctor --fix
+like "$OUT" 'dotfiles edit.*set core\.excludesFile' '--fix says to set the key when it is unset'
+is "$(git config --global --get core.excludesFile)" '' 'and does not set it'
