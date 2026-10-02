@@ -29,7 +29,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the ledger
       Files: src/ledger.rs
@@ -60,7 +60,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] brief Write the brief
       Files: src/brief.rs
@@ -85,7 +85,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Use the ledger
       Files: src/reader.rs
@@ -111,7 +111,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the ledger
       Files: src/ledger.rs

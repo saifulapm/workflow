@@ -46,7 +46,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs
@@ -66,7 +66,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs b.rs c.rs d.rs e.rs f.rs g.rs h.rs i.rs
@@ -86,7 +86,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs b.rs c.rs d.rs e.rs f.rs g.rs h.rs
@@ -107,7 +107,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs
@@ -128,7 +128,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs
@@ -155,7 +155,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] deps Add a dependency
       Files: apps/x/package.json apps/x/src/**
@@ -196,7 +196,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs
@@ -230,7 +230,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs

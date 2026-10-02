@@ -75,6 +75,14 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             plan.prose.len() / 4
         ));
     }
+    // A numbered decision gets cited by its number, and the number then
+    // turns up in code and commit messages where a reader of the repository
+    // has no list to look it up in.
+    for heading in numbered_decisions(&plan.prose) {
+        f.refusals.push(format!(
+            "plan: the {heading} heading holds a numbered list -- write decisions as sentences with their reason"
+        ));
+    }
     // Every type a Gives item defines, this plan's and the milestones before
     // it, so a type named inside a signature can be asked for by name.
     let defined: std::collections::HashSet<String> = plan
@@ -108,6 +116,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         }
         if let Some(msg) = hardcoded_target(&t.id, verify) {
             f.warnings.push(msg);
+        }
+        if let Some(msg) = absolute_path(&t.id, verify) {
+            f.refusals.push(msg);
         }
         // A Verify that greps a file the task does not own asks the worker to
         // edit it, and the commit hook refuses the edit (friction #G1JWHABM).
@@ -685,6 +696,46 @@ fn hardcoded_target(task: &str, verify: &str) -> Option<String> {
         path.split_once("target/")
             .map_or(path.as_str(), |(_, rest)| rest)
     ))
+}
+
+/// A Verify naming an absolute path: it runs in the task's own worktree, so
+/// the path points into some other checkout or at nothing. A redirection's
+/// target and a `--flag=value` value are paths too; `/dev/...` is a device,
+/// never a file in any checkout.
+fn absolute_path(task: &str, verify: &str) -> Option<String> {
+    let path = shell_words(verify).into_iter().find_map(|w| {
+        let w = w.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '<' | '>' | '&'));
+        let w = w.split_once('=').map_or(w, |(_, value)| value);
+        (w.starts_with('/') && !w.starts_with("/dev/")).then(|| w.to_string())
+    })?;
+    Some(format!(
+        "plan: task {task}: Verify names '{path}' -- verify runs in a worktree: relative paths only"
+    ))
+}
+
+/// The Rulings and Decisions headings of a plan's prose that hold a numbered
+/// list item (`1.` or `1)`), each named once.
+fn numbered_decisions(prose: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut heading: Option<&str> = None;
+    for line in prose.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            let name = line.trim_start_matches('#').trim();
+            heading = ["Rulings", "Decisions"]
+                .into_iter()
+                .find(|h| name.eq_ignore_ascii_case(h));
+            continue;
+        }
+        let Some(h) = heading else { continue };
+        let rest = line.trim_start_matches(|c: char| c.is_ascii_digit());
+        let numbered =
+            rest.len() < line.len() && (rest.starts_with(". ") || rest.starts_with(") "));
+        if numbered && !found.iter().any(|f| f == h) {
+            found.push(h.to_string());
+        }
+    }
+    found
 }
 
 fn lib_test_without_lib(task: &str, verify: &str, root: &Path) -> Option<String> {
@@ -2190,6 +2241,30 @@ mod tests {
         ];
         assert_eq!(outside_tsconfig("t6", &both[0], &both, &root), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_verify_naming_an_absolute_path_is_refused() {
+        let w = absolute_path("t1", "cargo test --manifest-path=/home/me/w/Cargo.toml")
+            .expect("an absolute path");
+        assert!(w.contains("'/home/me/w/Cargo.toml'"), "{w}");
+        assert!(w.contains("relative paths only"), "{w}");
+        assert!(absolute_path("t1", "make test 2>/tmp/log").is_some());
+        for fine in [
+            "cargo test plancheck 2>/dev/null",
+            "bash tests/run.sh t102 >/dev/null 2>&1",
+            "cd workflow && cargo test",
+        ] {
+            assert_eq!(absolute_path("t1", fine), None, "{fine}");
+        }
+    }
+
+    #[test]
+    fn a_numbered_list_under_rulings_or_decisions_is_named_once() {
+        let prose = "## Spec\n\n1. Read it.\n\n## Rulings\n\n1. One.\n2. Two.\n\n### decisions\n\n3) Three.\n";
+        assert_eq!(numbered_decisions(prose), vec!["Rulings", "Decisions"]);
+        let bullets = "## Rulings\n\n- Cents, because floats drift.\n- Version 2. of the API.\n\n## Notes\n\n1. Fine here.\n";
+        assert!(numbered_decisions(bullets).is_empty());
     }
 
     #[test]

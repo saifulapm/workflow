@@ -28,7 +28,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the ledger
       Files: src/ledger.rs
@@ -56,7 +56,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the ledger
       Files: src/ledger.rs
@@ -86,7 +86,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the loop
       Files: src/loop.rs
@@ -116,7 +116,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the perms
       Files: src/perms.rs
@@ -140,7 +140,7 @@ $long
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs
@@ -161,7 +161,7 @@ $short
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Do the thing
       Files: a.rs
@@ -181,7 +181,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the perms
       Files: src/perms.rs
@@ -215,7 +215,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the cost model
       Files: src/cost.rs
@@ -254,7 +254,7 @@ Do the thing.
 
 ## Rulings
 
-1. Do it well.
+- Do it well.
 
 - [ ] t1 Give the stop
       Files: src/stop.rs
