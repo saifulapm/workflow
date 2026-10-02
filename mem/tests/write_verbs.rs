@@ -723,7 +723,10 @@ fn project_set_hygiene_exempt_records_the_globs_and_project_current_reports_them
         0
     );
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("hygiene_exempt").is_none(), "unset is the way back: {v}");
+    assert!(
+        v.get("hygiene_exempt").is_none(),
+        "unset is the way back: {v}"
+    );
 }
 
 #[test]
