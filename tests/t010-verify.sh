@@ -34,7 +34,9 @@ run env FAKE_PHP_EXIT=1 workflow verify
 is "$RC" 1 'php project: failing suite exits 1'
 
 # The child suite is scrubbed of the git and workflow variables (spec §7).
-run env GIT_DIR="$PWD/.git" GIT_INDEX_FILE="$PWD/.git/index" GIT_PREFIX=x/ \
+# TURBO_FORCE is unset here because the merge gate runs this suite with it set,
+# and the assertion below is about verify not adding it, not about inheriting it.
+run env -u TURBO_FORCE GIT_DIR="$PWD/.git" GIT_INDEX_FILE="$PWD/.git/index" GIT_PREFIX=x/ \
 	WORKFLOW_AGENT=1 PI_CODING_AGENT=true WORKFLOW_HOOK_SEEN=/somewhere workflow verify
 is "$RC" 0 'scrub: verify still passes with the git environment inherited'
 unlike "$(cat php-env)" '^(GIT_DIR|GIT_INDEX_FILE|GIT_PREFIX|WORKFLOW_AGENT|PI_CODING_AGENT|WORKFLOW_HOOK_SEEN)=' \
