@@ -15,7 +15,7 @@ is, what stays, what goes) is never resolved by silence. Facts are researched,
 not asked. A question that leaves the session (`mem ask`, read on a phone) is
 one decision, the choices, a recommendation, under 100 words.
 
-A ruling that names a crate, a package, an API parameter, a header, a feature
+A decision that names a crate, a package, an API parameter, a header, a feature
 flag or a number the plan will be held to (a package count, a byte budget, a
 latency) is a fact, not a preference: fetch the docs this session (the
 provider's skill, `npx ctx7@latest`) or measure it on this machine, and write
@@ -28,15 +28,18 @@ predecessor's whole surface into pages first; cuts are Saiful's.
 
 ## 2. The spec
 
-Prose above the tasks is mandatory: a `## Spec` section and a numbered
-`## Rulings` section, since a worker sees only its task block and this prose.
+Prose above the tasks is mandatory: a `## Spec` section and a
+`## Decisions` section of sentences, each with its reason, never numbered,
+since a worker sees only its task block and this prose. A number is a thing
+to cite, and a comment citing it means nothing to a reader who has only the
+repository; the reason is what the worker writes down instead.
 
 Write it in a scratch dir, never the checkout:
 
     d=$(mktemp -d)
 
 The prose is what every worker reads before its block: keep the Spec and the
-Rulings under 1,500 tokens (bytes ÷ 4), and move what a page can hold to the
+Decisions under 1,500 tokens (bytes ÷ 4), and move what a page can hold to the
 wiki. A plan's length is its task count; a block has its own budget. Reference
 paths, classes, commits. A plan cut from the friction queue names the ids it
 answers, so shipping closes them. UI work produces a mockup first.
@@ -110,7 +113,7 @@ Write `Done:` checkable and demanding, one sentence under forty words a human
 can check without the diff: "every caller migrated" forces the sweep that
 "callers updated" lets slide. A worker reads its block literally, so a rule
 across files or callers says so ("each of the three handlers", "every test that
-asserts the old literal"), and a ruling is literal -- a file, a symbol, a
+asserts the old literal"), and a decision is literal -- a file, a symbol, a
 value, what breaks if it is wrong -- never a metaphor. Self-review: every
 requirement points at a task, and a name two tasks share is spelled
 identically in both.

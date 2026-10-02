@@ -81,6 +81,21 @@ like "$plan_skill" 'roadmap' 'plan says when a plan is a roadmap instead'
 like "$orchestrate_skill" 'roadmap' 'orchestrate knows a run can be one milestone of one'
 like "$(cat "$WF_ROOT/skills/mem/SKILL.md")" 'mem roadmap' 'mem names the verb that reads the milestones'
 
+# A numbered decision is a number to cite, and a worker cites it in a
+# comment no reader of the repository can follow. The plan gives its
+# decisions as sentences with their reasons, and the reason is what lands.
+like "$plan_skill" '`## Decisions` section of sentences, each with its reason' \
+	'plan asks for decisions with their reasons'
+like "$plan_skill" 'never numbered' 'and never numbered'
+unlike "$plan_skill" 'numbered `## Rulings`' 'and drops the numbered rulings'
+# The hygiene check is what a commit has to pass at the gate, so the
+# one-shot and the task loop run it before committing.
+for s in implement route; do
+	skill=$(cat "$WF_ROOT/skills/$s/SKILL.md")
+	like "$skill" 'workflow hygiene --staged' "$s runs the hygiene check before a commit"
+	unlike "$skill" 'workflow read' "and $s no longer sends the diff to a reader"
+done
+
 ## ------------------------------------------------------- the fix-round loop
 
 # The gate runs the project's whole suite on integration, not just a task's

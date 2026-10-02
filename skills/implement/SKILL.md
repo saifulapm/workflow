@@ -30,10 +30,10 @@ written is a question now, not a stop at its Verify.
 4. Commit. Ordinary engineering voice, present tense, says what changed and
    why. Plain words, no puffery; the unslop skill is the standard for any
    longer prose. Stage only the files this task touched; never `git add -A`.
-   A one-shot over sixty changed lines gets `workflow read --against "<the
-   ask, one sentence>"` before its commit, and a `fix` verdict is fixed first.
-   Exit 4 means nobody is named to read: commit without a reading and say
-   so in the `mem log` line.
+   Before the commit, `workflow hygiene --staged`: it refuses a staged agent
+   file and any reference to a plan, task, decision, ticket, memory id,
+   agent, model or session, and the gate runs it again on every commit. Fix
+   what it names.
 5. `mem log "<what landed>"`.
 6. `/clear`, then the next task. (Interactive sessions only.)
 
