@@ -116,6 +116,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::ReviewPaths { globs } => {
                     verbs::project_set(&app, "review_paths", globs)
                 }
+                cli::ProjectSetCommand::HygieneExempt { globs } => {
+                    verbs::project_set(&app, "hygiene_exempt", globs)
+                }
                 cli::ProjectSetCommand::Model { model } => verbs::project_set(&app, "model", model),
                 cli::ProjectSetCommand::ReviewModel { model } => {
                     verbs::project_set(&app, "review_model", model)

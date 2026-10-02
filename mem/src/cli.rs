@@ -314,6 +314,7 @@ pub enum ProjectCommand {
 pub enum ProjectKey {
     Verify,
     ReviewPaths,
+    HygieneExempt,
     Model,
     ReviewModel,
     FixModel,
@@ -327,6 +328,7 @@ impl ProjectKey {
         match self {
             ProjectKey::Verify => "verify",
             ProjectKey::ReviewPaths => "review_paths",
+            ProjectKey::HygieneExempt => "hygiene_exempt",
             ProjectKey::Model => "model",
             ProjectKey::ReviewModel => "review_model",
             ProjectKey::FixModel => "fix_model",
@@ -346,6 +348,11 @@ pub enum ProjectSetCommand {
     /// it: these are the paths that are load-bearing in THIS repository.
     #[command(name = "review-paths")]
     ReviewPaths { globs: String },
+    /// Globs the hygiene check leaves alone, whitespace separated and
+    /// matched like a plan's Files patterns (`tests/**`): paths whose
+    /// fixtures have to carry the ids and words the check refuses elsewhere.
+    #[command(name = "hygiene-exempt")]
+    HygieneExempt { globs: String },
     /// The model a run's workers are started on (`opus`, `sonnet`, ...).
     /// Absent means the workflow's default; WORKFLOW_MODEL overrides per run.
     Model { model: String },

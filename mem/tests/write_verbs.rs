@@ -694,6 +694,39 @@ fn project_set_fix_model_records_the_choice_and_project_current_reports_it() {
 }
 
 #[test]
+fn project_set_hygiene_exempt_records_the_globs_and_project_current_reports_them() {
+    let w = World::new("write-hygiene-exempt");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("hygiene_exempt").is_none(), "{v}");
+
+    let out = mem(&w, &repo, &["project", "set", "hygiene-exempt", "tests/**"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["hygiene_exempt"], serde_json::json!("tests/**"));
+    assert!(
+        stdout(&mem(&w, &repo, &["project", "current"])).contains("hygiene-exempt  tests/**"),
+        "the plain rendering names it too"
+    );
+
+    let out = mem(&w, &repo, &["project", "set", "hygiene-exempt", "  "]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("mem project set hygiene-exempt \""),
+        "{}",
+        stderr(&out)
+    );
+
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "unset", "hygiene-exempt"])),
+        0
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("hygiene_exempt").is_none(), "unset is the way back: {v}");
+}
+
+#[test]
 fn project_set_review_model_records_the_choice_and_project_current_reports_it() {
     let w = World::new("write-review-model");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
