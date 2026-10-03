@@ -114,14 +114,22 @@ pub trait WorkerBackend {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Is the session's pane parked: released by the backend after a long
+    /// idle, gone from the screen but brought back on request? Not `listed`,
+    /// yet a message can still reach it. The process seam has no such thing.
+    fn parked(&self, _h: &Handle) -> bool {
+        false
+    }
     /// Put one more message in front of a worker whose turn has ended and
     /// whose session still stands, so it goes on in the context it already
     /// has -- what it wrote, what it read -- instead of a fresh session
-    /// re-reading everything. `true` only when the backend saw the message
-    /// taken; anything else and the run stops the session and dispatches
-    /// afresh, since a message that may have landed cannot be left beside a
-    /// second worker in the same tree. The process seam has no such thing.
-    fn send(&self, _h: &Handle, _text: &str) -> bool {
+    /// re-reading everything. A parked pane is brought back first, waiting
+    /// up to `grace_s` for it to stand. `true` only when the backend saw the
+    /// message taken; anything else and the run stops the session and
+    /// dispatches afresh, since a message that may have landed cannot be
+    /// left beside a second worker in the same tree. The process seam has no
+    /// such thing.
+    fn send(&self, _h: &Handle, _text: &str, _grace_s: i64) -> bool {
         false
     }
     /// What the worker left behind: a print-mode result document at `out`, or
@@ -147,6 +155,21 @@ pub trait WorkerBackend {
     fn question(&self, _h: &Handle) -> String {
         String::new()
     }
+    /// The last [`RECENT_LINES`] lines the worker printed, read while it may
+    /// still be running: where a provider's usage-limit message shows up on
+    /// a session that is up and saying nothing else.
+    fn recent_output(&self, _h: &Handle) -> String {
+        String::new()
+    }
+}
+
+/// How much of a worker's output [`WorkerBackend::recent_output`] reads.
+pub const RECENT_LINES: usize = 40;
+
+/// The last `n` lines of `text`.
+pub(crate) fn tail(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
 /// `Dispatch.env` as the JSON object `--settings` takes. `env` is the key
@@ -417,6 +440,16 @@ impl WorkerBackend for ProcessBackend {
     fn last_words(&self, h: &Handle) -> String {
         let path = paths::transcript_path(&h.worktree, &h.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
+    }
+
+    /// The tail of the err file the template redirects into, which sits
+    /// beside the pidfile.
+    fn recent_output(&self, h: &Handle) -> String {
+        let err = h.pidfile.with_extension("err");
+        tail(
+            &std::fs::read_to_string(err).unwrap_or_default(),
+            RECENT_LINES,
+        )
     }
 }
 

@@ -18,7 +18,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::backend::{
-    Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
+    Dispatch, Handle, Outcome, RECENT_LINES, WorkerBackend, last_context_tokens, last_words_in,
+    tail,
 };
 use crate::{gitcmd, paths, sys};
 
@@ -521,8 +522,34 @@ impl WorkerBackend for AmxBackend {
     /// (exit 2), on a pane it let go or an agent that ended (1), and says
     /// failure when nothing confirmed the paste within its window -- every
     /// one of those is a `false` here, and the run takes it from there.
-    fn send(&self, h: &Handle, text: &str) -> bool {
-        !h.session.is_empty() && amx(&["send", &h.session, text]).1
+    ///
+    /// A parked pane refuses a send, so `amx resume <id>` brings it back
+    /// first and the send waits, up to the grace, for amx to list it again.
+    fn send(&self, h: &Handle, text: &str, grace_s: i64) -> bool {
+        if h.session.is_empty() {
+            return false;
+        }
+        if self.parked(h) {
+            let _ = amx(&["resume", &h.session]);
+            let give_up = sys::now() + grace_s;
+            while !self.listed(h) && sys::now() < give_up {
+                sys::sleep(0.2);
+            }
+        }
+        amx(&["send", &h.session, text]).1
+    }
+
+    fn parked(&self, h: &Handle) -> bool {
+        status(&h.session).is_some_and(|s| s.evidence == "parked")
+    }
+
+    /// The last lines of `amx logs <id>`: the pane's own output, where a
+    /// usage-limit message lands on a session that is still up.
+    fn recent_output(&self, h: &Handle) -> String {
+        if h.session.is_empty() {
+            return String::new();
+        }
+        tail(&amx(&["logs", &h.session]).0, RECENT_LINES)
     }
 
     /// Called only once the worker is no longer alive. amx leaves no result
@@ -976,7 +1003,11 @@ if [ "$1" = status ] || [ "$1" = logs ]; then
   [ "$2" = wf-t1-a3k9 ] || exit 1
 fi
 [ "$1" = logs ] && echo "amx logs: $2"
-[ "$1" = status ] && cat '{d}/status.json'
+[ "$1" = logs ] && [ -f '{d}/logs' ] && cat '{d}/logs'
+[ "$1" = resume ] && rm -f '{d}/parked'
+if [ "$1" = status ]; then
+  if [ -f '{d}/parked' ]; then sed 's/"hooks"/"parked"/' '{d}/status.json'; else cat '{d}/status.json'; fi
+fi
 if [ "$1" = sub ]; then
   name=; prev=
   for a in "$@"; do [ "$prev" = --name ] && name=$a; prev=$a; done
@@ -1267,14 +1298,48 @@ exit 0
     #[test]
     fn a_message_goes_through_amx_send_and_its_exit_code_is_the_answer() {
         let fake = Fake::new("send", "idle");
-        assert!(AmxBackend.send(&fake.handle("wf-t1-a3k9"), "Read the brief again."));
+        assert!(AmxBackend.send(&fake.handle("wf-t1-a3k9"), "Read the brief again.", 5));
+        // The status call before it asks whether the pane is parked; a
+        // standing one is sent to as it is.
+        let argv = fake.read("argv");
+        let argv: Vec<&str> = argv.lines().collect();
+        assert!(!argv.contains(&"resume"), "{argv:?}");
         assert_eq!(
-            fake.read("argv").lines().collect::<Vec<_>>(),
+            argv[argv.len() - 3..],
             ["send", "wf-t1-a3k9", "Read the brief again."]
         );
         std::fs::write(fake.dir.join("refuse"), "").unwrap();
-        assert!(!AmxBackend.send(&fake.handle("wf-t1-a3k9"), "again"));
-        assert!(!AmxBackend.send(&fake.handle(""), "nobody"));
+        assert!(!AmxBackend.send(&fake.handle("wf-t1-a3k9"), "again", 5));
+        assert!(!AmxBackend.send(&fake.handle(""), "nobody", 5));
+    }
+
+    #[test]
+    fn a_parked_pane_is_resumed_before_the_message_goes_in() {
+        let fake = Fake::new("resume", "idle");
+        let h = fake.handle("wf-t1-a3k9");
+        std::fs::write(fake.dir.join("parked"), "").unwrap();
+        assert!(AmxBackend.parked(&h));
+        assert!(!AmxBackend.listed(&h));
+        assert!(AmxBackend.send(&h, "Read the brief again.", 5));
+        assert!(!AmxBackend.parked(&h));
+        let argv = fake.read("argv");
+        let calls: Vec<&str> = argv
+            .lines()
+            .filter(|l| ["resume", "send"].contains(l))
+            .collect();
+        assert_eq!(calls, ["resume", "send"]);
+    }
+
+    #[test]
+    fn the_recent_output_is_the_last_forty_lines_amx_logs_prints() {
+        let fake = Fake::new("recent", "working");
+        let lines: Vec<String> = (1..=60).map(|n| format!("line {n}")).collect();
+        std::fs::write(fake.dir.join("logs"), lines.join("\n") + "\n").unwrap();
+        let out = AmxBackend.recent_output(&fake.handle("wf-t1-a3k9"));
+        assert_eq!(out.lines().count(), 40);
+        assert_eq!(out.lines().next(), Some("line 21"));
+        assert_eq!(out.lines().last(), Some("line 60"));
+        assert_eq!(AmxBackend.recent_output(&fake.handle("")), "");
     }
 
     #[test]

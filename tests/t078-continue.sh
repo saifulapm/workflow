@@ -22,6 +22,7 @@ workers() { grep -cE "^new\|--name\|wf-$1-[0-9a-z]{4}\|" "$argv"; }
 
 # The fake worker does its task on `new`. On `send` the worker named does
 # what the rewritten brief asks: the task itself, for an answered question.
+# A parked pane refuses a send until `resume` stands it up again.
 write_exec "$T_TMP/fake-amx" <<'AMX'
 #!/bin/sh
 (IFS='|'; printf '%s\n' "$*") >>"$AMX_DIR/argv"
@@ -65,12 +66,14 @@ new)
 		) >/dev/null 2>&1 &
 		exit 0
 		;;
-	asker | asker2)
+	asker | asker2 | asker3)
 		if [ ! -f "$WF_TMP/asked" ]; then
 			mem ask 'is draft the right word?' >"$WF_TMP/ask-id"
 			: >"$WF_TMP/asked"
 			say blocked "asked $(cat "$WF_TMP/ask-id")"
-			printf 'idle hooks\n' >"$AMX_DIR/$name.state"
+			evidence=hooks
+			[ "$task" = asker3 ] && evidence=parked
+			printf 'idle %s\n' "$evidence" >"$AMX_DIR/$name.state"
 			exit 0
 		fi
 		;;
@@ -82,9 +85,11 @@ new)
 	say ready
 	printf 'idle hooks\n' >"$AMX_DIR/$name.state"
 	;;
+resume) printf 'idle hooks\n' >"$AMX_DIR/$1.state" ;;
 send)
 	name=$1
 	text=$2
+	grep -q parked "$AMX_DIR/$name.state" && exit 1
 	dir=$(cat "$AMX_DIR/$name.dir")
 	brief=$(printf '%s' "$text" | sed -n 's/^Read \(.*\) again: .*/\1/p')
 	cp "$brief" "$AMX_DIR/$name.sent-brief"
@@ -181,5 +186,41 @@ wait "$runpid"
 is "$?" 0 'the run merges both with the one slot taken when the answer came'
 like "$(cat "$T_TMP/capped.log")" 'task asker2: sent back to its worker' 'the answer went into the waiting session'
 like "$(cat "$T_TMP/capped.log")" 'task asker2: stopped on its question -- asked #' 'and its stop was said as a question, not a failure'
+
+## ------------------------------- a parked pane is resumed, then sent to
+
+# amx releases a pane left idle long enough and lists it `parked`: not
+# standing, yet the same session. The answer still goes to it, with `amx
+# resume` first so the send has a pane to land in.
+rm -f "$WF_TMP/asked" "$WF_TMP/ask-id"
+cat >"$T_TMP/parked.md" <<'PLAN'
+# plan: parked
+
+- [ ] asker3 Add the asker3 service
+      Files: app/asker3.php
+      Verify: true
+- [ ] other3 Add the other3 service
+      Files: app/other3.php
+      Verify: true
+PLAN
+workflow run --plan-file "$T_TMP/parked.md" >"$T_TMP/parked.log" 2>&1 &
+runpid=$!
+for _ in $(seq 1 300); do
+	[ -s "$WF_TMP/ask-id" ] && grep -q 'waiting on' "$T_TMP/parked.log" && break
+	sleep 0.1
+done
+pdir="$XDG_STATE_HOME/workflow/runs/app/parked"
+psess=$(cat "$pdir/asker3.session")
+"$MEM_BIN" answer "$(cat "$WF_TMP/ask-id")" 'final is the word' >/dev/null
+wait "$runpid"
+is "$?" 0 'the run merges the task whose pane was parked'
+is "$(workers asker3)" 1 'in the one session it had'
+resumed=$(grep -n "^resume|$psess\$" "$argv" | head -1 | cut -d: -f1)
+sent=$(grep -n "^send|$psess|Read" "$argv" | head -1 | cut -d: -f1)
+if [ -n "$resumed" ] && [ -n "$sent" ] && [ "$resumed" -lt "$sent" ]; then
+	ok 'the pane was resumed before the answer was sent into it'
+else
+	notok 'the pane was resumed before the answer was sent into it' "$(cat "$argv")"
+fi
 
 t_done

@@ -306,9 +306,9 @@ fn moved_submodules(git: &Git, from: &str, to: &str) -> Vec<String> {
 /// line, an out-of-tree `CARGO_TARGET_DIR` flattens the worktree's mtime, and a worker
 /// that is only thinking touches neither. The status file is the worker's own
 /// heartbeat and it lives in the run directory, not the worktree, so it has to
-/// be counted separately (review-3 F-10). A worker the usage limit has paused
-/// touches none of the three either -- this is the same clock [`Run::paused`]
-/// is held to, rather than being judged dead the moment `alive` goes false.
+/// be counted separately (review-3 F-10). A worker the usage limit holds
+/// touches none of the three either, which is why [`Run::rate_limited`]
+/// keeps it from being judged by this clock at all.
 pub fn last_activity(backend: &dyn WorkerBackend, dir: &Path, wt_root: &Path, task: &str) -> i64 {
     let h = Handle {
         session: field(dir, task, "session"),
@@ -337,7 +337,10 @@ pub fn stalled(
     if sent > 0 && now - sent < CONTINUE_GRACE_S {
         return false;
     }
-    let mut last = last_activity(backend, dir, wt_root, task);
+    // The last time the worker was seen waiting on the usage window is a
+    // floor like the dispatch: it gets its whole deadline once it is back.
+    let limited: i64 = field(dir, task, "limited_at").parse().unwrap_or(0);
+    let mut last = last_activity(backend, dir, wt_root, task).max(limited);
     let started: i64 = field(dir, task, "dispatched_at").parse().unwrap_or(0);
     if last <= started {
         last = if started > 0 { started } else { now };
@@ -872,52 +875,54 @@ impl Run {
         )
     }
 
-    /// Listed by the backend and not alive, with nothing that says it is
-    /// done -- no commit on its branch and no final word past `started` or
-    /// `progress` -- and the pane itself naming the limit that stopped it.
-    /// The usage limit pauses a session without ending it: the pane stands,
-    /// amx reads it idle, not gone, and the session comes back by itself, so
-    /// it is held to the stall deadline like a live one instead of being
-    /// collected the instant `alive` goes false.
+    /// Alive, or its pane standing, with no final word past `started` or
+    /// `progress`, and the provider's own limit named on the pane's
+    /// question, in the worker's last words or in its recent output. The
+    /// usage limit holds a session without ending it and the session comes
+    /// back by itself when the window opens, so such a worker is waiting,
+    /// not stalled, whatever the deadline says. Holding commits changes
+    /// nothing: a worker with work on its branch hits the window as readily
+    /// as one without.
     ///
-    /// The limit has to be said out loud, in the question drawn on the pane
-    /// or in the worker's own last words. Every other turn that ends with an
-    /// empty status file leaves exactly the same shape -- a provider cutting
-    /// a worker off mid-reasoning, a stream that ended without a finish
-    /// reason -- and nothing is coming back for those: they sat `dispatched`
-    /// with an empty status for five minutes while `wait` never fired.
-    /// Collected now, `finish` reports each with the last thing the pane said,
-    /// so the reason lands in `<task>.failed`.
+    /// While it holds, `<task>.limited_at` is stamped, and [`stalled`] counts
+    /// the deadline from it: a worker that speaks again gets a whole clock.
     ///
-    /// A pidfile answers this on its own: the process seam's worker is
-    /// either running or it is not, and a dead one is dead, not idle.
-    fn paused(&self, task: &str) -> bool {
-        if !self.worker_pid(task).is_empty() {
-            return false;
-        }
-        let h = self.handle(task);
-        // Listed, not merely seen: a session that died with the machine has
-        // a transcript and no row, and matched every clause below until the
-        // stall deadline freed it.
-        if !self.backend.listed(&h) || self.alive(task) {
-            return false;
-        }
-        if self.commits(task) != 0 {
-            return false;
-        }
-        if backend::provider_limit(&self.backend.question(&h)).is_none()
-            && backend::provider_limit(&self.backend.last_words(&h)).is_none()
+    /// The limit has to be said out loud. Every other turn that ends with an
+    /// empty status file leaves the same shape -- a provider cutting a
+    /// worker off mid-reasoning, a stream that ended without a finish reason
+    /// -- and nothing is coming back for those, so they are collected and
+    /// `finish` reports each with the last thing the pane said.
+    ///
+    /// Listed, not merely seen: a session that died with the machine has a
+    /// transcript and no row, and is gone, not waiting.
+    fn rate_limited(&self, task: &str) -> bool {
+        if let Some((state, _)) = self.last_status_line(task)
+            && state != "started"
+            && state != "progress"
         {
             return false;
         }
-        match self.last_status_line(task) {
-            None => true,
-            Some((state, _)) => state == "started" || state == "progress",
+        let h = self.handle(task);
+        if !self.backend.alive(&h) && !self.backend.listed(&h) {
+            return false;
         }
+        let limited = backend::provider_limit(&self.backend.question(&h)).is_some()
+            || backend::provider_limit(&self.backend.last_words(&h)).is_some()
+            || backend::provider_limit(&self.backend.recent_output(&h)).is_some();
+        if limited {
+            write_field(&self.dir, task, "limited_at", &sys::now().to_string());
+        }
+        limited
     }
 
     fn stop(&self, task: &str) {
         self.backend.stop(&self.handle(task), self.kill_grace_s);
+    }
+
+    /// A session a message can reach: its pane standing, or parked, which
+    /// the backend brings back before it sends.
+    fn reachable(&self, h: &Handle) -> bool {
+        self.backend.listed(h) || self.backend.parked(h)
     }
 
     // ---------------------------------------------------------------- workers
@@ -1086,7 +1091,7 @@ impl Run {
             return false;
         }
         let h = self.handle(task);
-        if h.session.is_empty() || !self.backend.listed(&h) {
+        if h.session.is_empty() || !self.reachable(&h) {
             return false;
         }
         if self
@@ -1096,7 +1101,7 @@ impl Run {
         {
             return false;
         }
-        if !self.backend.send(&h, NUDGE_LINE) {
+        if !self.backend.send(&h, NUDGE_LINE, self.kill_grace_s) {
             return false;
         }
         write_field(&self.dir, task, "nudged", "1");
@@ -1131,7 +1136,7 @@ impl Run {
 
     fn continue_worker(&self, task: &str, why: &str) -> bool {
         let h = self.handle(task);
-        if h.session.is_empty() || !self.backend.listed(&h) {
+        if h.session.is_empty() || !self.reachable(&h) {
             return false;
         }
         if self
@@ -1175,7 +1180,7 @@ impl Run {
              next. Do that, then report as it says.",
             brief_file.display()
         );
-        if !self.backend.send(&h, &line) {
+        if !self.backend.send(&h, &line, self.kill_grace_s) {
             self.stop(task);
             return false;
         }
@@ -2170,8 +2175,14 @@ impl Run {
 
     fn reap_pass(&self) -> bool {
         let mut did = false;
-        for task in self.dispatched() {
-            if self.alive(&task) || self.paused(&task) {
+        let dispatched = self.dispatched();
+        let mut limited = Vec::new();
+        for task in dispatched.iter().cloned() {
+            if self.rate_limited(&task) {
+                limited.push(task);
+                continue;
+            }
+            if self.alive(&task) {
                 if !self.stalled(&task) {
                     continue;
                 }
@@ -2197,7 +2208,30 @@ impl Run {
             did = true;
             self.finish(&task);
         }
+        self.usage_wait(
+            !dispatched.is_empty() && limited.len() == dispatched.len(),
+            &limited,
+        );
         did
+    }
+
+    /// Every dispatched worker waiting on the usage window is said once per
+    /// episode: `usage-wait` in the run dir marks one as begun, and it ends
+    /// when any worker is back.
+    fn usage_wait(&self, all: bool, tasks: &[String]) {
+        let mark = self.dir.join("usage-wait");
+        if !all {
+            let _ = std::fs::remove_file(&mark);
+            return;
+        }
+        if mark.exists() {
+            return;
+        }
+        let _ = std::fs::write(&mark, format!("{}\n", sys::now()));
+        let line = format!("waiting for the usage window -- {}", tasks.join(", "));
+        warn(format!("run {}: {line}", self.plan.plan_id));
+        self.event(&line);
+        memcli::log_run(&format!("run {}: {line}", self.plan.plan_id));
     }
 
     /// Tasks an earlier orchestrator left dispatched when it died. Its lock
@@ -2223,9 +2257,9 @@ impl Run {
             // Not seen by the backend at all: whatever `alive` would say, it
             // is gone, the way a stall deadline never has to prove -- waiting
             // it out bought nothing; dispatch again now, while the retry lasts.
-            // `alive` and `paused` are only asked of a session the backend can
-            // see, so a task that fails this check skips straight to the
-            // fall-through below.
+            // `alive` and `rate_limited` are only asked of a session the
+            // backend can see, so a task that fails this check skips straight
+            // to the fall-through below.
             if !self.backend.seen(&self.handle(task)) {
                 let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
                 if tries < 2 && self.commits(task) == 0 {
@@ -2246,7 +2280,7 @@ impl Run {
                     self.dispatch(task, why);
                     continue;
                 }
-            } else if self.alive(task) || self.paused(task) {
+            } else if self.alive(task) || self.rate_limited(task) {
                 warn(format!(
                     "task {task}: still working, from a run that is gone -- adopted"
                 ));
@@ -4211,7 +4245,7 @@ pub fn cmd_reap() -> i32 {
         let waiting: Vec<String> = run
             .dispatched()
             .into_iter()
-            .filter(|t| run.alive(t) || run.paused(t))
+            .filter(|t| run.alive(t) || run.rate_limited(t))
             .collect();
         if !waiting.is_empty() {
             adoptable = true;
@@ -4591,5 +4625,24 @@ mod tests {
         assert!((1..=30).contains(&grace));
         assert!((0.2..=5.0).contains(&poll));
         assert_eq!(misses, QUESTION_MISS_LIMIT);
+    }
+
+    /// Dispatched long ago and silent since, but seen waiting on the usage
+    /// window ten seconds ago: the deadline counts from that sighting, so a
+    /// worker that comes back from the limit gets its whole clock.
+    #[test]
+    fn a_stall_runs_from_the_last_time_the_worker_was_seen_rate_limited() {
+        let dir = std::env::temp_dir().join(format!("wf-run-limited-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let backend = crate::backend::ProcessBackend;
+        let now = sys::now();
+        write_field(&dir, "t1", "dispatched_at", &(now - 600).to_string());
+        assert!(stalled(&backend, &dir, &dir, "t1", 60));
+        write_field(&dir, "t1", "limited_at", &(now - 10).to_string());
+        assert!(!stalled(&backend, &dir, &dir, "t1", 60));
+        write_field(&dir, "t1", "limited_at", &(now - 120).to_string());
+        assert!(stalled(&backend, &dir, &dir, "t1", 60));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

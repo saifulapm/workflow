@@ -2,9 +2,10 @@
 # A worker the usage limit pauses without ending: its pane stands and amx
 # reads it idle, so it is listed but not alive, it says nothing past
 # `started` in its own status file, and the pane names the limit that
-# stopped it. Neither dead nor working, it is held to the stall deadline
-# like a live worker, not collected the instant `alive` goes false (friction
-# #17SPEY7R). A session that died with the machine looks the same in every
+# stopped it. It is waiting on the usage window, not stalled: no deadline
+# stops it, and it merges once the window opens and it goes on (friction
+# #17SPEY7R). So does a worker still running and saying nothing but the
+# limit in its output. A session that died with the machine looks the same in every
 # way but one -- amx's evidence says the pane is gone -- and that one is
 # collected at once (frictions #B3391C6H, #QT1PDNRK). So is a turn that
 # ended with nothing written and no limit named: nothing is coming back for
@@ -19,9 +20,12 @@ mkdir -p "$AMX_DIR"
 # A dispatch writes `started` to the task's status file and goes idle at
 # once -- paused, not working, with the pane still up and the provider's own
 # line drawn on it -- unless the agent's name says it is one that should run
-# to `ready`. With $WF_TMP/no-limit there the pane says nothing, which is a
-# turn that simply ended. Status answers out of the phase, the evidence and
-# the question last written for the name; stop is recorded.
+# to `ready`. With $WF_TMP/live there it stays working and the limit is in
+# its logs instead. With $WF_TMP/no-limit there the pane says nothing, which
+# is a turn that simply ended. Where to do the work when it wakes goes in
+# `<name>.job`. Status answers out of the phase, the evidence and the
+# question last written for the name; logs out of `<name>.logs`; stop is
+# recorded.
 write_exec "$T_TMP/fake-amx" <<'AMX'
 #!/bin/sh
 verb=$1
@@ -57,8 +61,13 @@ new | sub)
 		printf 'done record\n' >"$AMX_DIR/$name.state"
 		;;
 	*)
+		printf '%s\n%s\n%s\n' "$dir" "$status" "$(sed -n 's/^ *Files: *//p' "$brief" | head -1)" >"$AMX_DIR/$name.job"
 		printf 'idle hooks\n' >"$AMX_DIR/$name.state"
-		if [ -f "$WF_TMP/no-limit" ]; then
+		if [ -f "$WF_TMP/live" ]; then
+			printf 'working hooks\n' >"$AMX_DIR/$name.state"
+			printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+			printf 'Running the suite\nAPI Error: Rate limit reached for requests\n' >"$AMX_DIR/$name.logs"
+		elif [ -f "$WF_TMP/no-limit" ]; then
 			# A turn the provider cut off: nothing in the status file at
 			# all, and the stop reason the only account of why.
 			printf 'the turn ended: stopReason=length' >"$AMX_DIR/$name.words"
@@ -78,6 +87,9 @@ status)
 	[ -f "$AMX_DIR/$1.words" ] && words=$(printf '"%s"' "$(cat "$AMX_DIR/$1.words")")
 	printf '{"id":"%s","state":"%s","evidence":"%s","last_event":0,"session":"","question":%s,"last_words":%s}\n' \
 		"$1" "$state" "$evidence" "$question" "$words"
+	;;
+logs)
+	[ -f "$AMX_DIR/$1.logs" ] && cat "$AMX_DIR/$1.logs"
 	;;
 stop)
 	printf 'stop %s\n' "$1" >>"$WF_TMP/amx-stops"
@@ -108,7 +120,31 @@ git -c core.hooksPath=/dev/null commit -qm 'project files'
 base=$(git rev-parse HEAD)
 repo=$PWD
 
-## ------------------------------------------------ reap_pass holds the line
+# The window opens: the worker named by `<rundir>/<task>.session` does its
+# task where its job file says, reports ready, and its pane stops naming the
+# limit.
+wake() {
+	name=$(cat "$1/t1.session")
+	{
+		read -r dir
+		read -r status
+		read -r file
+	} <"$AMX_DIR/$name.job"
+	(
+		cd "$dir" || exit 1
+		mkdir -p "$(dirname "$file")"
+		printf 't1\n' >"$file"
+		git add "$file"
+		git -c core.hooksPath=/dev/null commit -qm 'Add a file'
+	)
+	printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+	rm -f "$AMX_DIR/$name.question" "$AMX_DIR/$name.logs"
+	printf 'idle hooks\n' >"$AMX_DIR/$name.state"
+}
+
+stops() { grep -c '^stop wf-t1-' "$T_TMP/amx-stops" 2>/dev/null; }
+
+## ------------------------------------------- reap_pass waits on the window
 
 cat >"$T_TMP/plan.md" <<'PLAN'
 # plan: paused-worker
@@ -122,11 +158,10 @@ cat >"$T_TMP/plan.md" <<'PLAN'
 PLAN
 rundir="$XDG_STATE_HOME/workflow/runs/app/paused-worker"
 
-# Twelve seconds, not three: the setup below -- waiting for the dispatch,
-# then sitting out two polls -- has to fit inside the deadline with room to
-# spare, and on a loaded machine a three-second budget was spent before the
-# test got to what it measures (friction #CK3VG63H).
-env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.2 \
+# Six seconds of deadline, slept past: the worker is never stalled, so the
+# margin a loaded machine needs is on the far side of the deadline, not
+# inside it (friction #CK3VG63H).
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.1 \
 	workflow run --plan-file "$T_TMP/plan.md" >"$T_TMP/run.log" 2>&1 &
 runpid=$!
 
@@ -136,25 +171,56 @@ for _ in $(seq 1 50); do
 done
 is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched 'the worker is dispatched'
 
-# Two polls' worth of waiting, well short of the stall deadline: a paused
-# worker used to be collected on the very next pass.
-sleep 2.5
+sleep 9
 is "$(cat "$rundir/t1.state" 2>/dev/null)" dispatched \
-	'paused -- listed, not alive, nothing past "started" -- is not collected before the deadline'
-
-wait "$runpid"
-is "$?" 1 'the run fails once the deadline is spent'
-is "$(cat "$rundir/t1.state")" failed 'and the task is failed, past the deadline'
-is "$(cat "$rundir/t1.dispatches")" 2 'after exactly one redispatch, same as a stalled worker'
-like "$(cat "$rundir/t1.failed")" 'stalled with no sign of life' \
-	'failed as a stall, never as a worker that reported and erred'
-is "$(sort -u "$T_TMP/amx-stops" | grep -c '^stop wf-t1-')" 2 'each paused session is ended with amx stop, the same way a stalled one is'
-# A pane amx is still releasing is a pane the next session must not be minted
-# into (friction #RN9DB37H): a dispatch stops the attempt before it again,
-# whatever ended it, and waits the kill grace out.
-is "$(grep -c "^$(grep '^stop wf-t1-' "$T_TMP/amx-stops" | head -1)\$" "$T_TMP/amx-stops")" 2 \
-	'and the first pane is stopped once more on the way into the redispatch'
+	'paused on the limit -- listed, not alive, nothing past "started" -- is not stalled past the deadline'
+is "$(stops)" 0 'and its session is never stopped'
 is "$(cat "$rundir/t2.state")" merged 'the worker beside it merged as usual'
+[ -f "$rundir/usage-wait" ]
+truthy "$?" 'with every worker on the limit, the run marks itself waiting'
+
+wake "$rundir"
+wait "$runpid"
+is "$?" 0 'the run merges once the window opens'
+is "$(cat "$rundir/t1.state")" merged 'and the waiting worker merged'
+is "$(cat "$rundir/t1.dispatches")" 1 'in the one session it had'
+is "$(grep -c 'waiting for the usage window' "$rundir/events")" 1 \
+	'the wait is one event, however many polls it spanned'
+is "$(grep -c 'waiting for the usage window' "$T_TMP/run.log")" 1 'and one line'
+
+## ------------------------------- a live worker with the limit in its logs
+
+# Still running, as amx reads it, and silent past the deadline but for the
+# provider's line in its output: waiting, not stalled.
+: >"$T_TMP/amx-stops"
+: >"$WF_TMP/live"
+cat >"$T_TMP/live.md" <<'PLAN'
+# plan: live-limit
+
+- [ ] t1 A worker that runs on with the limit in its logs
+      Files: app/Three.php
+      Verify: true
+- [ ] t2 A second task so the run is worth having
+      Files: app/Four.php
+      Verify: true
+PLAN
+ldir="$XDG_STATE_HOME/workflow/runs/app/live-limit"
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.1 \
+	workflow run --plan-file "$T_TMP/live.md" >"$T_TMP/live.log" 2>&1 &
+runpid=$!
+for _ in $(seq 1 50); do
+	[ "$(cat "$ldir/t1.state" 2>/dev/null)" = dispatched ] && break
+	sleep 0.05
+done
+sleep 9
+is "$(cat "$ldir/t1.state" 2>/dev/null)" dispatched \
+	'alive and silent past the deadline with a limit line in its logs is not stalled'
+is "$(stops)" 0 'and is never stopped'
+wake "$ldir"
+wait "$runpid"
+is "$?" 0 'the run merges once it goes on'
+is "$(cat "$ldir/t1.state")" merged 'and the worker merged'
+rm -f "$WF_TMP/live"
 
 ## --------------------------------------- adopt_stale keeps it as adopted
 
@@ -183,17 +249,22 @@ orphan() {
 	git -C "$repo" worktree add -q -b "$1/two" "$owtroot/two" "$base"
 	printf '%s\n' "wf-t1-$2" >"$orundir/t1.session"
 	printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$orundir/t1.status"
+	printf '%s\n%s\n%s\n' "$owtroot/t1" "$orundir/t1.status" app/One.php >"$AMX_DIR/wf-t1-$2.job"
 }
 
 orphan paused-orphan pau1
 printf 'idle hooks\n' >"$AMX_DIR/wf-t1-pau1.state"
 printf 'Weekly limit reached - Retrying in 5h' >"$AMX_DIR/wf-t1-pau1.question"
-run env WORKFLOW_DEADLINE_MIN=0.05 workflow run --plan-file "$T_TMP/paused-orphan.md"
-like "$OUT" 'task t1: still working, from a run that is gone -- adopted' \
+env WORKFLOW_DEADLINE_MIN=0.05 workflow run --plan-file "$T_TMP/paused-orphan.md" >"$T_TMP/orphan.log" 2>&1 &
+runpid=$!
+sleep 6
+like "$(cat "$T_TMP/orphan.log")" 'task t1: still working, from a run that is gone -- adopted' \
 	'a paused task from a dead run is adopted like a live one, not collected at once'
-is "$(cat "$orundir/t1.state")" failed 'the deadline still ends it eventually'
-like "$(cat "$orundir/t1.failed")" 'stalled with no sign of life' \
-	'failed as a stall, not mis-read as a worker that ran and erred'
+is "$(cat "$orundir/t1.state")" dispatched 'and the deadline does not end it'
+wake "$orundir"
+wait "$runpid"
+is "$?" 0 'the run merges once the window opens'
+is "$(cat "$orundir/t1.state")" merged 'and the adopted worker merged'
 
 ## ------------------------------------- the session that died with the machine
 
@@ -202,6 +273,9 @@ like "$(cat "$orundir/t1.failed")" 'stalled with no sign of life' \
 # deadline; a record is not a listing, and the task is collected now.
 orphan dead-orphan dea1
 printf 'stopped gone\n' >"$AMX_DIR/wf-t1-dea1.state"
+# Its redispatch ends its turn with no limit named, so the run ends on it
+# rather than waiting on a window.
+: >"$WF_TMP/no-limit"
 run env WORKFLOW_DEADLINE_MIN=0.05 timeout 120 workflow run --plan-file "$T_TMP/dead-orphan.md"
 is "$RC" 1 'the run ends on its own rather than sitting out a deadline on the dead session'
 unlike "$OUT" 'still working, from a run that is gone -- adopted' \
