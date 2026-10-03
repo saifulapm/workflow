@@ -41,8 +41,7 @@ no subagents, no questions.
 
 ## Non-zero → the plan lane
 
-Hand over to `plan`, or to `roadmap` when the work is more than one plan
-holds. Do not write code first "to see how it goes": that is how a plan-lane
+Hand over to `plan`. Do not write code first "to see how it goes": that is how a plan-lane
 change becomes an unreviewed one-shot.
 
 ## What the gate is

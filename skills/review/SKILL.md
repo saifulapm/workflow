@@ -1,48 +1,21 @@
 ---
 name: review
-description: Use before finishing a change that touches auth, payments, secrets, migrations, jobs, manifests, deploy config or a public API.
+description: Use when asked to review the diff of named tasks against a spec section, to file what a test cannot see.
 ---
 
 # review
 
-## Does this change want one?
+A review reads and reports. The code stays as it is; every change is the
+fixer's.
 
-    workflow review-needed [--diff <range>]
-
-Exit 0 means yes. The change set is the working tree plus the range, because an
-untracked `.env` or a brand-new guard file is invisible to a diff. The table is
-matched case-insensitively: on a Laravel layout the interesting files are
-`app/Http/Middleware/Authenticate.php`, `app/Policies/`, `PrivateKey.pem` —
-a case-sensitive table saw none of them.
-
-Do not argue with exit 0. It is the disqualifier for the one-shot lane too.
-
-The shipped rows are what is sensitive in any repository. What is load-bearing
-in *this* one goes in beside them:
-
-    mem project set review-paths "packages/core/** scripts/mutate.py"
-
-Merged with the table, never replacing it.
-
-## The read
-
-    workflow read [--range <r>] [--against <text|wiki:slug>]
-
-Run before the commit: the same reader the merge gate uses, over the working
-tree or the range. Always pass `--against`, one sentence of what this change
-was asked to do or a `wiki:<slug>`: without it the reader is handed the
-project's plan of record, which is a different change, and answers fix on
-the mismatch. Exit 0 (`ship`) means commit — file any `[later]` findings
-with `mem save --type followup` first, the stream follow-ups are collected
-from, so nothing true is lost. Exit 1 (`fix`)
-means the answer carries `[blocks]` findings — fix them, then read again.
-Two reads with a `[blocks]` finding still open is not a third read: it is
-the ruling-and-ask stop — `mem save --kind ruling` naming what is
-unresolved, `mem ask` to the human. Exit 2 is a usage error, nothing to
-read among them; exit 3 means no verdict came back, the reason on stderr.
-Exit 4 means nobody is named to read, as a run starts unread unless
-`WORKFLOW_REVIEW_MODEL` names a reader: commit without a reading and say so
-in the `mem log` line. The verdict is the last line on stdout too,
-`read: verdict ship|fix|none`, and sits in `read.verdict` beside the answer
-file: an exit code does not survive a relay — a read issued through `amx
-sub` comes back with the agent's own ending — and stdout does.
+1. Read the spec section you were named, `mem wiki <slug>#<section>`, and
+   the diff of each named task (`git diff <base>..<task-commit>`, or `git
+   show <commit>`). Done when you can say what the section asks of each task.
+2. Hold the diff against the section: a requirement it misses, a behaviour
+   it gets wrong, an edge no test reaches, a name or value that disagrees
+   with the spec. Done when every changed hunk has been read.
+3. Answer with findings only, one per line, each with
+   severity, location, evidence, suggestion: `blocks` or `later`,
+   `path:line`, the line or the spec sentence it breaks, what a fix does. An empty review is a valid answer:
+   say the diff meets the section. Done when every finding carries all four
+   parts.

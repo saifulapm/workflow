@@ -12,6 +12,9 @@ for s in route plan implement review orchestrate roadmap; do
 	like "$(head -1 "$f")" '^---$' "skills/$s starts with frontmatter"
 	like "$(sed -n '2,4p' "$f")" "name: $s" "skills/$s names itself"
 	like "$(sed -n '2,4p' "$f")" 'description: Use ' "skills/$s describes when to use it"
+	# The description rides along on every turn, so it stays one short line.
+	desc=$(grep -m1 '^description:' "$f")
+	truthy "$([ "${#desc}" -lt 200 ] && echo 0 || echo 1)" "skills/$s describes itself in under 200 characters"
 done
 
 # Skills point at the subcommands rather than restating what they do.
@@ -23,7 +26,6 @@ like "$plan_skill" 'workflow plan-check' 'plan defers to the parser'
 # is how an unapproved plan once dispatched live workers.
 unlike "$plan_skill" 'workflow run --plan-file plan' 'and not to the orchestrator'
 like "$(cat "$WF_ROOT/skills/implement/SKILL.md")" 'workflow verify' 'implement defers to verify'
-like "$(cat "$WF_ROOT/skills/review/SKILL.md")" 'workflow review-needed' 'review defers to review-needed'
 orchestrate_skill=$(cat "$WF_ROOT/skills/orchestrate/SKILL.md")
 like "$orchestrate_skill" 'workflow status --json' 'orchestrate polls status'
 like "$orchestrate_skill" 'workflow plan-check' 'orchestrate checks the plan before running it'
@@ -53,30 +55,36 @@ like "$orchestrate_skill" 'git branch --show-current' \
 like "$orchestrate_skill" 'Leave the checkout on main' \
 	'and puts it back on main when the run ends'
 
-# A roadmap is cut in one sitting and executed over many sessions, so the
-# skill has to carry both halves: the verbs that store and check it, and what
-# a session picking up the next milestone does.
-roadmap_skill=$(cat "$WF_ROOT/skills/roadmap/SKILL.md")
-like "$roadmap_skill" 'mem roadmap --stdin' 'roadmap stores the milestones'
-like "$roadmap_skill" 'mem plan <slug> --set-file' 'and one plan per milestone beside them'
-like "$roadmap_skill" 'workflow plan-check "\$d/roadmap\.md"' 'roadmap checks the whole thing at once'
-like "$roadmap_skill" 'mem roadmap +#' 'a later session reads which milestone is next'
-like "$roadmap_skill" 'mem plan --from <slug>' 'and makes its plan the plan of record'
-# `--from` writes the plan of record into mem's store, and nothing puts a copy
-# in the checkout. Checking a bare plan.md there reads whatever an older
-# session left lying around, and the milestone runs unchecked.
-like "$roadmap_skill" 'plan-check <\(mem plan\)' 'then checks that plan against the tree it will run in'
-unlike "$roadmap_skill" 'plan-check plan\.md' 'and not a plan.md nothing wrote'
-like "$roadmap_skill" 'One milestone' 'a session takes one milestone and no more'
-# A plan cut weeks ago meets a tree that has moved. The small difference is
-# the orchestrator's to absorb; the one that changes what is being built is
-# not, and a session that guesses builds the wrong milestone.
-like "$roadmap_skill" 'mem save --kind ruling' 'drift the orchestrator absorbs is a ruling'
-like "$roadmap_skill" 'mem ask' 'and drift that changes the scope goes back to planning'
+# The plan skill cuts the roadmap and every milestone plan in one sitting,
+# so it carries the verbs that check and store both, and the one approval.
+like "$plan_skill" 'walking skeleton' 'plan starts the roadmap with the walking skeleton'
+like "$plan_skill" 'Show:' 'every milestone carries a Show path'
+like "$plan_skill" 'Surface:' 'and a Surface the engine drives it on'
+like "$plan_skill" 'workflow plan-check "\$d/roadmap\.md"' 'plan checks the roadmap and its plans at once'
+like "$plan_skill" 'mem roadmap --set-file' 'plan stores the milestones'
+like "$plan_skill" 'mem plan <slug> --set-file' 'and one plan per milestone beside them'
+like "$plan_skill" 'mem plan <slug> --status draft' 'each stored as a draft'
+like "$plan_skill" 'plan-summary' 'plan writes the summary page the owner reads'
+like "$plan_skill" 'mem ask .*--options approve,changes --recommend approve' \
+	'and asks for the one approval with a recommendation'
+truthy "$([ "$(wc -c <"$WF_ROOT/skills/plan/SKILL.md")" -lt 9000 ] && echo 0 || echo 1)" \
+	'the plan skill stays under 9,000 bytes'
+
+# A review reads and reports; the fix is someone else's. It names no reader
+# verb, since the reading is the session itself.
+review_skill=$(cat "$WF_ROOT/skills/review/SKILL.md")
+like "$review_skill" 'git diff' 'review reads the diff'
+like "$review_skill" 'mem wiki <slug>#<section>' 'against the spec section it was named'
+like "$review_skill" 'severity, location, evidence, suggestion' 'and files findings in one shape'
+like "$review_skill" 'empty review' 'an empty review is an answer'
+unlike "$review_skill" 'workflow read' 'review names no reader verb'
+truthy "$([ "$(wc -c <"$WF_ROOT/skills/review/SKILL.md")" -lt 1500 ] && echo 0 || echo 1)" \
+	'the review skill stays under 1,500 bytes'
 
 # A skill nothing points at is one nobody loads: each lane that can find
 # itself holding a roadmap says so where that lane is decided.
-like "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'roadmap' 'route sends work bigger than one plan to roadmap'
+like "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'Hand over to `plan`' 'route hands the plan lane to plan'
+unlike "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'roadmap' 'and plan alone, which cuts any roadmap'
 like "$plan_skill" 'roadmap' 'plan says when a plan is a roadmap instead'
 like "$orchestrate_skill" 'roadmap' 'orchestrate knows a run can be one milestone of one'
 like "$(cat "$WF_ROOT/skills/mem/SKILL.md")" 'mem roadmap' 'mem names the verb that reads the milestones'
@@ -103,7 +111,7 @@ for f in skills/orchestrate/SKILL.md skills/review/SKILL.md skills/roadmap/SKILL
 		unlike "$(cat "$WF_ROOT/$f")" "$key" "$f names no $key key"
 	done
 done
-for f in skills/orchestrate/SKILL.md skills/review/SKILL.md skills/roadmap/SKILL.md README.md; do
+for f in skills/orchestrate/SKILL.md README.md; do
 	like "$(cat "$WF_ROOT/$f")" 'starts unread' "$f says a run starts unread"
 done
 
