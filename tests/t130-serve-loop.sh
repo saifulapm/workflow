@@ -11,9 +11,14 @@ mkdir -p "$XDG_CONFIG_HOME/qshell"
 printf 'here\n' >"$XDG_CONFIG_HOME/qshell/machine"
 
 # The fake worker: one commit per task, except sulk, which reports blocked.
+# Serve's leads go out through the same command; one does nothing here.
 write_exec "$T_TMP/fake-worker.sh" <<'FAKE'
 #!/bin/sh
-task=$1; status=$3
+task=$1; status=$3; brief=$4
+if sed -n '/^## GOAL/,/^## SCOPE/p' "$brief" 2>/dev/null | grep -q 'of the lead skill'; then
+	printf '{"is_error":false,"result":"ok"}\n'
+	exit 0
+fi
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$status"; }
 say started
 if [ "$task" = sulk ]; then
@@ -29,7 +34,7 @@ say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE
 export FAKE="$T_TMP/fake-worker.sh"
-export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status}'"'"' > {out} 2> {err} &'
+export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {brief}'"'"' > {out} 2> {err} &'
 
 # project <name> <slug>... -- a checkout mem knows, its suite `true`, and an
 # approved roadmap of those milestones.
