@@ -100,9 +100,8 @@ fn diff_records(bytes: &[u8]) -> BTreeSet<Vec<u8>> {
 /// `.claude/agent-memory/`, the permissions a session allowed in
 /// `.claude/settings.local.json`. The harness writes it, not the task, and no
 /// commit carries it -- and counting it failed a task before review for a
-/// file it never wrote (friction #HE9YA819). Only the untracked record is
-/// waved through: a tracked file under `.claude/` that a task changes is
-/// still its write.
+/// file it never wrote. Only the untracked record is waved through: a tracked
+/// file under `.claude/` that a task changes is still its write.
 fn harness_scratch(record: &[u8]) -> bool {
     let Some(path) = record.strip_prefix(b"?? ") else {
         return false;
@@ -140,7 +139,7 @@ mod split_tests {
         // which is written with a newline on the end. Splitting on spaces
         // alone left the last pattern carrying that newline, so it matched
         // nothing and the one file it named was refused -- invisible until
-        // a task staged its last pattern (ebdify m1's admin, 2026-09-21).
+        // a task staged its last pattern (ebdify's admin app, 2026-09-21).
         let line = "apps/admin/src/** pnpm-lock.yaml apps/platform/test/storefront.test.ts\n";
         assert_eq!(
             super::split_patterns(line),
@@ -171,8 +170,7 @@ pub struct Violations {
     /// one left -- that no commit carries. Nothing here reaches integration
     /// and the worktree goes with the merge, so these are named and waved
     /// on: refusing over them failed finished work over a lockfile a `pnpm
-    /// install` had rewritten, with no path in the reason (frictions
-    /// #SJYD304E, #PAY9TDN6).
+    /// install` had rewritten, with no path in the reason.
     pub uncommitted: Vec<Vec<u8>>,
 }
 
@@ -180,11 +178,11 @@ pub struct Violations {
 ///
 /// `anchor` is what the branch is measured against, and the measurement is
 /// from where the two last agreed -- `anchor...branch`, not `anchor..branch`.
-/// Two-dot compares tips, and both arrangements of a live run get that wrong
-/// (friction #A2JXGNB8): a branch that took the integration branch in to reach
-/// a dependency is charged with every file its siblings merged, and a branch
-/// that never needed to is charged with deleting them. Measured from the merge
-/// base, both see only what this task wrote.
+/// Two-dot compares tips, and both arrangements of a live run get that wrong:
+/// a branch that took the integration branch in to reach a dependency is
+/// charged with every file its siblings merged, and a branch that never needed
+/// to is charged with deleting them. Measured from the merge base, both see
+/// only what this task wrote.
 pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) -> Violations {
     let git = Git::at(wt);
     let specs: Vec<String> = if patterns.is_empty() {
@@ -224,9 +222,8 @@ pub fn violations(wt: &Path, anchor: &str, branch: &str, patterns: &[String]) ->
 /// Every staged record the patterns do not claim: what `git commit` is about
 /// to write, judged where the worker still has its session and the
 /// stop-and-ask rule in front of it. The gate's own check ran three seconds
-/// after the session ended, when nothing could act on it (m1-lessons ruling
-/// 6: two workers saw the lockfile outside their Files, noted it, shipped,
-/// and were failed).
+/// after the session ended, when nothing could act on it (two workers saw the
+/// lockfile outside their Files, noted it, shipped, and were failed).
 pub fn staged_violations(wt: &Path, patterns: &[String]) -> Vec<String> {
     let git = Git::at(wt);
     let specs: Vec<String> = if patterns.is_empty() {

@@ -1,7 +1,7 @@
-//! The checkout half of `workflow plan-check` (frictions #DBHZBFY1 and
-//! #6485CNC0): a plan is judged against the tree it will run in, not only
-//! against its own grammar. Everything here is knowable before dispatch, and
-//! each finding used to cost a worker a whole attempt to rediscover.
+//! The checkout half of `workflow plan-check`: a plan is judged against the
+//! tree it will run in, not only against its own grammar. Everything here is
+//! knowable before dispatch, and each finding used to cost a worker a whole
+//! attempt to rediscover.
 //!
 //! Refusals are Verify lines that cannot pass in this checkout. Warnings are
 //! Files lines that do not look like they can hold their task -- warnings,
@@ -36,7 +36,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
     };
     // A plan names every interface it plans, so it answers `git grep` for all
     // of them. Counting itself made every new symbol look like a change the
-    // plan forgot to own (friction #33WY4FAR).
+    // plan forgot to own.
     let itself = repo_relative(plan_file, root);
     // `data_file_asserted`'s Gives line carries no `itself` parameter, so the
     // exclusion is applied out here instead, against the message it already
@@ -47,7 +47,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
     // Every path some task's Files could carry. A Gives identifier living in
     // a file outside this union is a change the plan forgot to own: the value
     // moves in the files one worker holds while the file asserting it belongs
-    // to nobody (friction #8M2YDDXH).
+    // to nobody.
     let mut claimed = std::collections::HashSet::new();
     for t in plan
         .tasks
@@ -61,14 +61,14 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
     }
     // A plan with nothing above its tasks hands the worker and the reader
     // only the task blocks: no Spec to work from, no Rulings the reader can
-    // hold the diff to (ruling 3 of m1-wiki-first).
+    // hold the diff to.
     if plan.prose.trim().is_empty() {
         f.warnings.push(NO_PROSE_WARNING.to_string());
     }
     // The prose is what every worker reads, so it is the part with a budget;
     // a plan's length is otherwise its task count, each block budgeted on
-    // its own below (friction #J0RQN6WY: a whole-plan ceiling forced eco's
-    // roadmap into splits no worker would have needed).
+    // its own below (a whole-plan ceiling forced eco's roadmap into splits no
+    // worker would have needed).
     if plan.prose.len() / 4 > PROSE_TOKENS {
         f.warnings.push(format!(
             "plan: the prose is about {} tokens (bytes ÷ 4) -- past the {PROSE_TOKENS} the plan skill sets for what every worker reads; cut the Spec to what the tasks need and move the rest to a wiki page",
@@ -96,9 +96,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
     // `cargo clippy -- -D warnings` for a crate and for nothing else.
     let clippy_gate = root.join("Cargo.toml").is_file();
     // The block's budget was checked at dispatch alone, where the remedy is
-    // stopping the run to recut the plan (friction #QX8GXNQY). It is the
-    // block alone that is measured, so nothing about where the run would
-    // write the brief is needed to say it here.
+    // stopping the run to recut the plan. It is the block alone that is
+    // measured, so nothing about where the run would write the brief is needed
+    // to say it here.
     f.refusals.extend(concurrent_claims(plan, &git));
     for t in &plan.tasks {
         if t.checked {
@@ -121,7 +121,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             f.refusals.push(msg);
         }
         // A Verify that greps a file the task does not own asks the worker to
-        // edit it, and the commit hook refuses the edit (friction #G1JWHABM).
+        // edit it, and the commit hook refuses the edit.
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
         // Only a file git tracks counts: a pattern after `-A 3`, a
         // redirection or a `$VAR` is a word in operand position, not a path.
@@ -152,7 +152,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         }
         // A Done sentence this long is standing in for the fix verdict the
         // worker will get once it turns out to have shipped less than it
-        // said (ruling 3 of m1-wiki-first): split before that happens.
+        // said: split before that happens.
         let done_words = t.done.as_deref().unwrap_or("").split_whitespace().count();
         if done_words > 40 {
             f.warnings.push(format!(
@@ -176,7 +176,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // One line per task for the paths it will create, not one per
         // pattern: on a greenfield plan every task creates its directories,
         // and 184 such lines taught an orchestrator to grep the checker's
-        // output away (m1-lessons ruling 7).
+        // output away.
         let mut fresh: Vec<&String> = Vec::new();
         for p in &patterns {
             if matches_nothing(&git, root, p) && !dir_claimed(prior, p) {
@@ -218,7 +218,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // A Done sentence that names a file is a claim about what the task's
         // commit holds, and the gate refuses everything outside Files: -- so
         // the two disagreeing is knowable here rather than after a worker has
-        // spent a whole context on the task (friction #RT818QJG).
+        // spent a whole context on the task.
         let owned: std::collections::HashSet<String> = patterns
             .iter()
             .flat_map(|p| zlines(&git.bytes(&["ls-files", "-z", "--", &gitcmd::glob_top(p)])))
@@ -232,7 +232,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // A Done that quotes a literal is changing or asserting a spelling,
         // and a test elsewhere that hardcodes it goes red at the gate -- one
         // round trip through the orchestrator for a Files line the planner
-        // could have widened at the cut (friction #CS0Q2NA4).
+        // could have widened at the cut.
         for (literal, files) in done_literals(
             &git,
             t.done.as_deref().unwrap_or(""),
@@ -252,7 +252,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // A Done that names a symbol says what the task's commit does to it,
         // and a Done asking that a name exist in no form asks for every file
         // carrying it -- so the ones outside Files are the part of the
-        // sentence the gate will refuse (friction #S1RA6NS0: m1 t6 asked that
+        // sentence the gate will refuse (one task asked that
         // nothing outside two files name TOOL_NAME while Files listed three
         // others, and the run stopped mid-wave for an orchestrator answer).
         for (symbol, files) in done_symbols(
@@ -275,9 +275,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // Read and Pattern point at what the worker opens before editing. By
         // the time it runs its dependencies have landed, so a file one of them
         // writes is there to be read even though this checkout has no such
-        // path yet (friction #33WY4FAR).
+        // path yet.
         // A path on disk that git does not track is in no worktree, so the
-        // worker is told to read what it will never see (friction #NJQXGXGE).
+        // worker is told to read what it will never see.
         let waited_for = ancestors(plan, t);
         let untracked = |p: &str| {
             git.bytes(&["ls-files", "-z", "--", p]).is_empty()
@@ -290,8 +290,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         for p in ownership::split_patterns(read) {
             // A `wiki:<slug>` item addresses a page in mem, never a path in
             // this checkout, so `missing` has nothing to ask the tree about
-            // it -- its own existence is checked below instead (ruling 3 of
-            // m1-wiki-first).
+            // it -- its own existence is checked below instead.
             if p.starts_with("wiki:") {
                 continue;
             }
@@ -334,7 +333,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // A consumed interface comes from a dependency's Gives or the tree;
         // one that comes from neither is a name the worker will hunt for. The
         // dependency need not be a direct one: a plan chains `[after:]`, and
-        // what t1 gives reaches t3 through t2 (friction #EYC8DHKV).
+        // what t1 gives reaches t3 through t2.
         let uses = t.uses.as_deref().unwrap_or("");
         // Uses items no dependency Gives, so the tree is their only ground:
         // the types inside them are asked about below, while an item a
@@ -347,8 +346,8 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             // Item for item first: a worker reads its Uses line literally,
             // so a Gives that spells the same symbol another way -- a
             // variant of an enum given whole, a signature that grew a return
-            // type -- is a name it hunts for (friction #J0RQN6WY). Only when
-            // no dependency names the identifier at all is the tree asked.
+            // type -- is a name it hunts for. Only when no dependency names the
+            // identifier at all is the tree asked.
             let spelled = item_spelled(uses, &ident);
             let deps: Vec<&Task> = waited_for
                 .iter()
@@ -367,9 +366,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             }
             // The tree carrying the name already settles it: the worker reads
             // the symbol where it lives, so no sibling's spelling of it is
-            // drift and no missing edge hides behind it (friction #Y6A8GXMQ:
-            // a0-loop's Uses all came from a0-kernel, landed weeks before,
-            // and each was attributed to a task that never gave it).
+            // drift and no missing edge hides behind it (one
+            // plan's Uses all came from a plan landed weeks before, and each
+            // was attributed to a task that never gave it).
             let grounded =
                 !named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()).is_empty();
             if grounded {
@@ -447,10 +446,10 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // A type named inside a signature is a name too: `ctx: &mut ToolCtx`
         // in a Gives, `-> Result<Outcome, SessionError>` in a Uses. One that
         // no Gives item defines and the tree never names is what a worker
-        // spends its first turns hunting for (friction #J0RQN6WY). Names the
-        // languages' own libraries own are left alone, and so is a name the
-        // item qualifies with a lowercase path, since `tokio::sync::Receiver`
-        // says where it lives.
+        // spends its first turns hunting for. Names the languages' own
+        // libraries own are left alone, and so is a name the item qualifies
+        // with a lowercase path, since `tokio::sync::Receiver` says where it
+        // lives.
         let mut asked = std::collections::HashSet::new();
         let gives_line: Vec<String> = gives_items(t.gives.as_deref().unwrap_or(""));
         for (key, items) in [("Uses", &from_tree), ("Gives", &gives_line)] {
@@ -475,7 +474,7 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
             // An unqualified bare word is asked for as a definition rather
             // than as a call: `section(` names every call site and every
             // `subsection(` besides, and a Gives is the definition moving
-            // (friction #2Q9FV251: fourteen files, one of them the function).
+            // (fourteen files, one of them the function).
             let carriers = match qualifier {
                 None if !greppable(&ident) => defines(&git, &ident, itself.as_deref()),
                 _ => named_under(&git, &needle, qualifier.as_deref(), itself.as_deref()),
@@ -500,9 +499,9 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         // A variant or a public function nothing calls until a later wave
         // lands dead, and a gate running clippy with `-D warnings` fails the
         // task that gave it: the expand-then-contract window the plan drew
-        // across two tasks has no green first half (friction #KAYA2QK7,
-        // setup-verb t2/t3). A crate is the whole of it -- the gate ladder
-        // runs that step for a Cargo.toml and for nothing else.
+        // across two tasks has no green first half. A crate is the whole of it
+        // -- the gate ladder runs that step for a Cargo.toml and for nothing
+        // else.
         if clippy_gate && let Some(mine) = wave_of(plan, &t.id) {
             for item in &gives_line {
                 if !item.contains("::{") && !item.starts_with("pub fn ") {
@@ -638,8 +637,9 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
         // Which milestone a finding came from is the first thing its reader
         // needs: a roadmap prints four plans' worth of them at once. A
         // milestone plan is judged exactly as a plan of its own would be,
-        // no-prose finding included: ruling 3 names no exemption for it, and
-        // poshra's 36 prose-less plans were a roadmap's milestones.
+        // no-prose finding included: the rule that a plan carries prose names
+        // no exemption for it, and poshra's 36 prose-less plans were a
+        // roadmap's milestones.
         f.refusals
             .extend(found.refusals.into_iter().map(|m| format!("{id}: {m}")));
         f.warnings
@@ -679,12 +679,12 @@ fn fixed_dir(pattern: &str) -> String {
 }
 
 /// `cargo test --lib` in a crate with no library target runs nothing and can
-/// never go green -- the trap four tasks each paid an attempt to find
-/// (friction #DBHZBFY1). A workspace manifest is left alone: the member that
-/// Verify would run in is not knowable from here.
+/// never go green -- the trap four tasks each paid an attempt to find.
+/// A workspace manifest is left alone: the member that Verify would run in is
+/// not knowable from here.
 /// A Verify that runs a binary out of a crate's own `target/`: a run gives
 /// every builder a CARGO_TARGET_DIR of its own, so the worker's build lands
-/// there and the path names a stale binary or none (friction #RF1TT6HZ).
+/// there and the path names a stale binary or none.
 fn hardcoded_target(task: &str, verify: &str) -> Option<String> {
     let path = shell_words(verify).into_iter().find(|w| {
         (w.starts_with("target/") || w.contains("/target/"))
@@ -770,9 +770,9 @@ fn gate_verify_as_verify(task: &str, verify: &str) -> Option<String> {
 
 /// `cargo test a:: b::` tests neither: cargo takes one TESTNAME before `--`
 /// and reads the rest as more of them, so the run ends in a usage error the
-/// Verify never had to reach (friction #5BWTDN89). Flags and the words they
-/// take are counted out first, and everything past a bare `--` belongs to the
-/// test harness rather than to cargo.
+/// Verify never had to reach. Flags and the words they take are counted out
+/// first, and everything past a bare `--` belongs to the test harness rather
+/// than to cargo.
 fn cargo_test_filters(task: &str, verify: &str) -> Option<String> {
     const VALUED: [&str; 13] = [
         "--bin",
@@ -910,9 +910,9 @@ fn matches_nothing(git: &Git, root: &Path, pattern: &str) -> bool {
 
 /// Nothing tracked answers the pattern and git sees only ignored matches --
 /// files that exist on disk, which is why `matches_nothing` waves them
-/// through, but that no commit can carry (friction #A3WHPGE3). The
-/// `check-ignore` probe catches the literal path a task would create straight
-/// into an ignored directory; on a glob it never matches and decides nothing.
+/// through, but that no commit can carry. The `check-ignore` probe catches the
+/// literal path a task would create straight into an ignored directory; on a
+/// glob it never matches and decides nothing.
 fn only_ignored(git: &Git, pattern: &str) -> bool {
     let spec = gitcmd::glob_top(pattern);
     if !git.bytes(&["ls-files", "-z", "--", &spec]).is_empty() {
@@ -933,30 +933,28 @@ fn only_ignored(git: &Git, pattern: &str) -> bool {
 /// A data file's own Files entry says nothing about what reads it: a test
 /// elsewhere can assert on its contents while owning none of the change, and
 /// the worker who edits the file never sees that test until the assertion
-/// fails on it (friction #JRS7GAA5). Each tracked file naming the exact
-/// tracked path, outside what this task's own Files claims, is worth a
-/// warning -- a file naming the same basename by another spelling is
-/// `included_unclaimed`'s to catch when it is an include, not this one's
-/// (friction #1TVAS5X9). A Files entry qualifies by its own extension --
-/// `assets/*.toml` does, a directory
-/// or a non-data glob like `workflow/` does not, even though `ls-files`
-/// would happily expand either into a `.toml` path underneath. A qualifying
-/// entry is then expanded through `ls-files`, the way `matches_nothing` and
-/// `only_ignored` already resolve one, so `assets/*.toml` is judged by the
-/// data files it actually matches rather than by grepping its own literal
-/// asterisk. Entries can overlap the same tracked file, so the expansion is
-/// deduped before the grep: a file two patterns both cover is named once,
-/// not once per pattern. The plan's own tracked file is excluded from a hit
-/// by the caller, the way `named_by` excludes it, since this signature has
-/// no room for that `itself` path (friction #33WY4FAR).
+/// fails on it. Each tracked file naming the exact tracked path, outside what
+/// this task's own Files claims, is worth a warning -- a file naming the same
+/// basename by another spelling is `included_unclaimed`'s to catch when it is
+/// an include, not this one's. A Files entry qualifies by its own extension --
+/// `assets/*.toml` does, a directory or a non-data glob like `workflow/` does
+/// not, even though `ls-files` would happily expand either into a `.toml` path
+/// underneath. A qualifying entry is then expanded through `ls-files`, the way
+/// `matches_nothing` and `only_ignored` already resolve one, so `assets/*.toml`
+/// is judged by the data files it actually matches rather than by grepping its
+/// own literal asterisk. Entries can overlap the same tracked file, so the
+/// expansion is deduped before the grep: a file two patterns both cover is
+/// named once, not once per pattern. The plan's own tracked file is excluded
+/// from a hit by the caller, the way `named_by` excludes it, since this
+/// signature has no room for that `itself` path.
 /// A Files line that claims a manifest and not the lockfile installing
 /// rewrites. Every task that adds a package rewrites the lockfile, the gate
 /// refuses whatever a task writes outside its Files, and the plan skill's
 /// own sweep names the lockfile in a sentence nothing checked: three of
-/// ebdify m1's first four tasks touched pnpm-lock.yaml and one declared it
-/// (m1-lessons ruling 7). For package.json the lockfiles are the ones the
-/// tree has -- pnpm's workspace file too, which pnpm 11 writes unprompted --
-/// else pnpm-lock.yaml.
+/// ebdify's first four tasks in one milestone touched pnpm-lock.yaml and one
+/// declared it. For package.json the lockfiles are the ones the tree has --
+/// pnpm's workspace file too, which pnpm 11 writes unprompted -- else
+/// pnpm-lock.yaml.
 pub fn manifest_without_lockfile(task: &str, files: &[String], git: &Git) -> Vec<String> {
     const MANIFESTS: [(&str, &[&str], &str); 4] = [
         (
@@ -1000,9 +998,9 @@ pub fn manifest_without_lockfile(task: &str, files: &[String], git: &Git) -> Vec
 /// A TypeScript file the task creates where the nearest tsconfig.json's
 /// `include` does not reach: `tsc -b` refuses whatever imports it (TS6307),
 /// and the worker whose test imported `extensions/shortcart-pixel/src` from
-/// `tests/` had to ask (friction #VFA7ECRE). Said only when the task does
-/// not claim that tsconfig, and only for a config that names an `include`,
-/// since one that names none takes every file under it.
+/// `tests/` had to ask. Said only when the task does not claim that tsconfig,
+/// and only for a config that names an `include`, since one that names none
+/// takes every file under it.
 fn outside_tsconfig(task: &str, pattern: &str, files: &[String], root: &Path) -> Option<String> {
     let ts = [".ts", ".tsx", ".mts", ".cts"];
     if !ts.iter().any(|e| pattern.ends_with(e)) || pattern.ends_with(".d.ts") {
@@ -1146,16 +1144,15 @@ fn data_file_asserted(task: &str, files: &[String], git: &Git) -> Vec<String> {
 /// `include_str!` and `include_bytes!` graft another file's bytes into the
 /// binary at compile time, so a task whose Files claims the file that
 /// includes but not the file it names owns only half the change: whatever a
-/// test asserts about those bytes is left for nobody to fix (ruling 10, wiki
-/// review-2026-09 defect 10). Only a tracked `.rs` file has a compile time to
-/// scan -- a shell script or a page can carry the macro names in a comment or
-/// a fixture without calling either. The literal is resolved against the
-/// including file's own directory, `..` folded, the way the compiler
-/// resolves it -- so `include_str!("../README.md")` in `src/cli.rs` names
-/// `README.md`, not `src/README.md`; a literal whose `..` climbs above the
-/// repo root names nothing. Only a tracked target counts: a file the task
-/// means to create is `matches_nothing`'s business, not this one's. A (file,
-/// target) pair warns once, however many calls name it.
+/// test asserts about those bytes is left for nobody to fix. Only a tracked
+/// `.rs` file has a compile time to scan -- a shell script or a page can carry
+/// the macro names in a comment or a fixture without calling either. The
+/// literal is resolved against the including file's own directory, `..` folded,
+/// the way the compiler resolves it -- so `include_str!("../README.md")` in
+/// `src/cli.rs` names `README.md`, not `src/README.md`; a literal whose `..`
+/// climbs above the repo root names nothing. Only a tracked target counts: a
+/// file the task means to create is `matches_nothing`'s business, not this
+/// one's. A (file, target) pair warns once, however many calls name it.
 fn included_unclaimed(task: &str, files: &[String], git: &Git) -> Vec<String> {
     let Some(root) = git.toplevel() else {
         return Vec::new();
@@ -1249,12 +1246,11 @@ fn fold_dots(path: &Path) -> Option<String> {
 /// A run dispatches from the ready set, not one wave at a time, so two tasks
 /// run at once whenever neither waits for the other -- a wave was the wrong
 /// test for this, since two tasks a level apart with no `[after:]` between
-/// them can still be dispatched together (wiki review-2026-09, defects 1 and
-/// 2). A file both claim is one the second merge conflicts on: the rule that
-/// concurrent tasks never touch the same files, made checkable rather than
-/// found at the gate and hand-sequenced by the orchestrator (friction
-/// #GWD8A4BD). A pattern is judged by the tracked files it expands to, plus
-/// the literal path it names when nothing matches yet -- a file the task
+/// them can still be dispatched together. A file both claim is one the second
+/// merge conflicts on: the rule that concurrent tasks never touch the same
+/// files, made checkable rather than found at the gate and hand-sequenced by
+/// the orchestrator. A pattern is judged by the tracked files it expands to,
+/// plus the literal path it names when nothing matches yet -- a file the task
 /// creates -- and each shared path refuses once, naming both tasks in plan
 /// order. A ticked task is out of it: it is not dispatched again.
 fn concurrent_claims(plan: &Plan, git: &Git) -> Vec<String> {
@@ -1298,8 +1294,8 @@ fn runs_tests(verify: &str) -> bool {
 
 /// A Done that names a test as a deliverable -- "tests for each", "a spec
 /// per screen" -- whole-word, so "latest" or "contest" say nothing
-/// (friction #8KNJHX6M: a Done demanded tests, Files claimed no test file,
-/// and the run failed the worker for writing them).
+/// (a Done demanded tests, Files claimed no test file, and the run failed the
+/// worker for writing them).
 fn done_asks_test(done: &str) -> bool {
     done.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| {
         matches!(
@@ -1311,8 +1307,7 @@ fn done_asks_test(done: &str) -> bool {
 
 /// A Files pattern naming "test" is the common case; the other shape cargo
 /// finds without a file of its own is an inline `#[cfg(test)]` module in a
-/// tracked `.rs` file the patterns already expand to (ruling 9, wiki
-/// review-2026-09 defect 9).
+/// tracked `.rs` file the patterns already expand to.
 fn has_test_file(git: &Git, patterns: &[String]) -> bool {
     if patterns.iter().any(|p| p.to_lowercase().contains("test")) {
         return true;
@@ -1435,8 +1430,8 @@ fn done_symbols(
 /// its backticks, and a bare word only when an underscore makes it one --
 /// `TOOL_NAME`, `set_data`. A capital is no sign of code in a sentence:
 /// "The", "Flow", "Home's", "URL", "GraphQL" and "Medusa's" each named a
-/// hundred files and buried the two real warnings of a plan under twenty
-/// (frictions #36NP1EG1, #PPKAVRK1). Paths are [`done_paths`]' business.
+/// hundred files and buried the two real warnings of a plan under twenty.
+/// Paths are [`done_paths`]' business.
 fn code_tokens(done: &str) -> Vec<String> {
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     let mut out: Vec<String> = Vec::new();
@@ -1475,8 +1470,7 @@ fn code_tokens(done: &str) -> Vec<String> {
 
 /// Prose: a page nobody's test asserts. A Markdown file naming a symbol, a
 /// data file or a spelling is history or explanation, and warning once per
-/// historical plan doc printed ninety lines over three real findings
-/// (friction #56FFMFST).
+/// historical plan doc printed ninety lines over three real findings.
 fn prose(path: &str) -> bool {
     Path::new(path)
         .extension()
@@ -1714,7 +1708,7 @@ fn glob(pat: &[u8], s: &[u8]) -> bool {
 /// `set_data`, `StackEntry`, `setData`. A bare lowercase word is usually what
 /// this reader made of prose it could not parse: 'untouched' out of
 /// "engine.rs untouched", 'rs' out of "pub mod data in lib.rs". Grepping one
-/// names half the repo and says nothing (friction #33WY4FAR).
+/// names half the repo and says nothing.
 fn greppable(ident: &str) -> bool {
     ident.contains('_') || ident.chars().any(|c| c.is_ascii_uppercase())
 }
@@ -1960,7 +1954,7 @@ fn type_tokens(item: &str) -> Vec<String> {
 /// The item with its line locations taken out: `layout.rs:219`, a bare
 /// `:448`, a `:448-470` span. They point into a file and name nothing, and
 /// read as tokens the digits stood where the symbol was, so plan-check asked
-/// the tree for '448' (friction #QG0SDXQ4).
+/// the tree for '448'.
 fn without_locations(item: &str) -> String {
     item.split(' ')
         .filter_map(|tok| {
@@ -1997,8 +1991,8 @@ fn head_of(item: &str) -> &str {
     let head = item.split('(').next().unwrap_or(item);
     // A shape's body is its fields: `CustomerMessage { shop: string;
     // customerId: string }` declares `CustomerMessage`, and reading the last
-    // field as the name asked the tree about every file carrying the field
-    // (friction #36NP1EG1). A `::{ .. }` variant list is the item's own.
+    // field as the name asked the tree about every file carrying the field.
+    // A `::{ .. }` variant list is the item's own.
     let head = match head.find('{') {
         Some(at) if !head[..at].ends_with("::") => head[..at].trim_end(),
         _ => head,
@@ -2028,9 +2022,8 @@ fn symbol_path(item: &str) -> String {
 /// decides, so a signature and its bare name are one name and the words
 /// inside a Gives parenthetical are none: matching by substring paired
 /// `Ledger::append` with a parenthetical saying "appends" and `BlobStore::put`
-/// with a `ToolInput` variant (friction #4BH238T4). An enum given whole meets
-/// a Uses of one variant out of it -- that pair is drift the caller reads,
-/// not a name nobody gives.
+/// with a `ToolInput` variant. An enum given whole meets a Uses of one variant
+/// out of it -- that pair is drift the caller reads, not a name nobody gives.
 fn same_symbol(given: &str, used: &str) -> bool {
     let (given, used) = (symbol_path(given), symbol_path(used));
     if given == used {
@@ -2063,7 +2056,7 @@ fn trailing_ident(text: &str) -> Option<String> {
 /// names a file beside a constant rather than a constant inside one. A
 /// `Stop::{Done, Budget}` list hangs off the enum wherever the list is cut,
 /// so its variants are asked of the files naming `Stop` and not of the tree
-/// at large (friction #4BH238T4).
+/// at large.
 pub fn qualifier_of(item: &str) -> Option<String> {
     let head = head_of(item);
     if let Some(at) = head.find("::{") {
@@ -2340,7 +2333,7 @@ mod tests {
             Some("::price".into())
         );
         assert_eq!(needle_for("engine.rs untouched", "untouched"), None);
-        assert_eq!(needle_for("per ruling 10", "10"), None);
+        assert_eq!(needle_for("per ruling ten", "ten"), None);
         assert_eq!(
             uses_items("Basket::fixture(): Basket · engine.rs untouched"),
             vec![
@@ -2356,7 +2349,7 @@ mod tests {
 
     /// A line location points into a file and names nothing: the digits
     /// used to stand where the symbol was, and the symbol before a span
-    /// went unread (friction #QG0SDXQ4).
+    /// went unread.
     #[test]
     fn a_line_location_after_a_path_is_a_place_not_a_name() {
         assert_eq!(
@@ -2432,7 +2425,7 @@ mod tests {
 
     /// The identifiers that made the dactyl m8 plan print 45 warnings for two
     /// real ones: every junk token this reader pulled out of a prose Gives
-    /// item is a bare lowercase word (friction #33WY4FAR).
+    /// item is a bare lowercase word.
     #[test]
     fn only_a_symbol_shaped_identifier_is_worth_grepping_for() {
         for real in [
@@ -2463,8 +2456,7 @@ mod tests {
 
     /// A Uses item is held against a Gives item for item: the same symbol
     /// spelled another way -- a variant out of an enum given whole, a
-    /// signature that grew a return type -- is what a worker hunts for
-    /// (friction #J0RQN6WY).
+    /// signature that grew a return type -- is what a worker hunts for.
     #[test]
     fn a_uses_item_is_spelled_as_its_line_spells_it() {
         let uses = "EntryKind::FileChange · Registry::register(&mut self,   tool: Box<dyn Tool>)";
@@ -2597,7 +2589,7 @@ mod tests {
     }
 
     /// A plan chains `[after:]`, so what t1 gives reaches t3 through t2 --
-    /// which is why the Uses check reads the whole chain (friction #EYC8DHKV).
+    /// which is why the Uses check reads the whole chain.
     #[test]
     fn a_task_waits_for_its_dependencies_dependencies_too() {
         let text = "\
@@ -2673,7 +2665,7 @@ mod tests {
 
     /// A Files pattern naming "test" already covers most tasks; an inline
     /// `#[cfg(test)]` module is the other shape cargo finds without a file
-    /// of its own (ruling 9, wiki review-2026-09 defect 9).
+    /// of its own.
     #[test]
     fn an_inline_test_module_counts_as_a_test_file() {
         let git = Git::at(env!("CARGO_MANIFEST_DIR"));
@@ -2744,8 +2736,7 @@ mod tests {
     /// Two tasks with no `[after:]` path between them, either way, are
     /// refused for sharing a file even when a wave would have kept them
     /// apart: t2 and t3 share no ordering even though t1 and t2 do, so the
-    /// pair test is ancestry, not level (ruling 5 and the t040 half of
-    /// ruling 6, wiki review-2026-09 defects 1 and 2).
+    /// pair test is ancestry, not level.
     #[test]
     fn concurrent_tasks_sharing_a_file_are_refused_a_chained_pair_is_not() {
         let git = Git::at(env!("CARGO_MANIFEST_DIR"));
@@ -2815,9 +2806,9 @@ mod tests {
     }
 
     /// A file naming the data file's basename in passing is not asserting on
-    /// its path, and used to warn on every such mention repo-wide (friction
-    /// #1TVAS5X9). The exact tracked path is a narrower claim than a
-    /// basename shared with anything else in the tree.
+    /// its path, and used to warn on every such mention repo-wide. The exact
+    /// tracked path is a narrower claim than a basename shared with anything
+    /// else in the tree.
     #[test]
     fn data_file_asserted_greps_the_tracked_path_not_the_basename() {
         let dir = std::env::temp_dir().join(format!(

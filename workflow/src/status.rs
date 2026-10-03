@@ -18,7 +18,7 @@ struct TaskRow {
     last_status: String,
     merged: String,
     /// What the worker was carrying at its last turn, when the run could see
-    /// it. Plan-sizing feedback, not a ceiling (ruling #D7A4T2CH).
+    /// it. Plan-sizing feedback, not a ceiling.
     context: u64,
     /// Fix verdicts the reader has handed this task so far.
     reviews: u64,
@@ -192,7 +192,7 @@ fn print_human(rows: &[RunRow]) {
             // A reason only while it is the task's state: a merged task
             // whose .failed still held its first attempt's refusal showed
             // that refusal on every status read after, fifty-six times in
-            // one session (m1-lessons ruling 10).
+            // one session.
             if !t.held.is_empty() {
                 detail = t.held.clone();
             } else if !t.failed.is_empty() && (t.state == run::FAILED || t.state == run::BLOCKED) {
@@ -222,7 +222,7 @@ fn print_human(rows: &[RunRow]) {
 
 /// One line per task, state and age since its last dispatch, nothing else:
 /// what an orchestrator polls with, since the full report re-entered its
-/// window sixty times in one session (m1-lessons ruling 10).
+/// window sixty times in one session.
 fn print_brief(rows: &[RunRow]) {
     for r in rows {
         println!("run {} ({})", r.plan, if r.live { "live" } else { "ended" });

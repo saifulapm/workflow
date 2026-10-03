@@ -19,7 +19,7 @@ pub struct Project {
     pub verify: Option<String>,
     /// Globs this project wants a cold review of, whitespace separated, set
     /// with `mem project set review-paths`. Absent means the global table is
-    /// the whole answer (friction #HK2PNTR4).
+    /// the whole answer.
     #[serde(default)]
     pub review_paths: Option<String>,
     /// Where a child project lives in its parent's checkout; absent on a
@@ -59,7 +59,7 @@ static CALLER_DIR: OnceLock<PathBuf> = OnceLock::new();
 /// monorepo subdir to its child project by cwd, so a command that chdirs to
 /// the repo toplevel before asking mem would always get the root project:
 /// the wrong plan slot to read and tick, and the wrong name to record runs
-/// under (frictions #GCYJFZT3, #FFSFMBDH).
+/// under.
 pub fn resolve_from_here() {
     if let Ok(cwd) = std::env::current_dir() {
         let _ = CALLER_DIR.set(cwd);
@@ -73,8 +73,7 @@ static PROJECT: OnceLock<String> = OnceLock::new();
 /// worktree root, and mem resolves a monorepo child by the path relative to
 /// the toplevel: at the root that path is empty, no child owns it, and mem
 /// answers with the root project -- its plan, its wiki, its log -- for a
-/// task the worktree path already files under the child (m3-advise ruling
-/// 1 as amended, #J6YAWMSJ).
+/// task the worktree path already files under the child.
 pub fn name_project(name: &str) {
     let _ = PROJECT.set(name.to_string());
 }
@@ -227,8 +226,8 @@ struct Questions {
 /// A mem that could not answer -- a spawn that failed, output that will not
 /// parse -- is `None`, never an empty listing: a caller that reads mem's own
 /// trouble as "the task has no question" gives up on a question that is
-/// really there (friction #1FKDVVD9). The exit code is not the answer here
-/// (§7 above): a listing that matches nothing prints its array and exits 1.
+/// really there. The exit code is not the answer here (§7 above): a listing
+/// that matches nothing prints its array and exits 1.
 pub fn questions_for(tag: &str) -> Option<Vec<Question>> {
     let (_, out) = capture(&["questions", "--for", "orchestrator", "--json"])?;
     Some(
@@ -294,7 +293,7 @@ pub fn ruling_bodies(rtype: &str) -> String {
 /// text without the record's fields. The reader at the merge gate is held to
 /// the plan's rulings; a ruling the orchestrator made after the plan was
 /// written is in none of them, and a reading that never saw one blocked a
-/// diff over ground already settled (frictions #WAQQSNBV, #0KT8057H).
+/// diff over ground already settled.
 pub fn rulings_since(since: &str) -> Vec<String> {
     rulings(None, Some(since))
         .into_iter()
@@ -318,8 +317,7 @@ fn body_of(text: &str) -> String {
 
 /// Every line the run itself writes, tagged so the digest can leave them out
 /// of the handful of recent logs it shows and `mem log --type run` can find
-/// them apart from what a worker or a person logged (ruling 6 of
-/// m1-wiki-first).
+/// them apart from what a worker or a person logged.
 pub fn log_run(text: &str) {
     silent(&["log", "--type", "run", "--", text]);
 }
@@ -346,8 +344,7 @@ struct RoadmapTick {
 /// covers every way there is nothing to say: no roadmap at all, or a box that
 /// was already ticked. Any other refusal is `Err` with what mem said, for the
 /// run to pass on: a plan the roadmap does not name was silence, and two
-/// finished milestones went unticked with nobody told (frictions #7KTQPJQK,
-/// #0W95EPF4).
+/// finished milestones went unticked with nobody told.
 pub fn roadmap_tick(slug: &str) -> Result<bool, String> {
     let out = command()
         .args(["roadmap", "--tick", slug, "--json"])
@@ -378,11 +375,11 @@ pub fn plan() -> Option<String> {
     }
 }
 
-/// One wiki page, verbatim, read fresh off `mem wiki -- <slug>` -- the plan
-/// of record is read live the same way, so an edit to a page reaches the
+/// One wiki page, verbatim, read fresh off `mem wiki -- <slug>` -- mem's
+/// plan is read live the same way, so an edit to a page reaches the
 /// next dispatch. `None` covers both a project mem does not know and a
 /// project with no such page: the caller lists it as absent rather than
-/// refusing the dispatch over it (ruling 2 of m1-wiki-first).
+/// refusing the dispatch over it.
 pub fn wiki_page(slug: &str) -> Option<String> {
     let (ok, out) = capture(&["wiki", "--", slug])?;
     ok.then_some(out)

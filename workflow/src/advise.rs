@@ -16,7 +16,7 @@ use crate::{exit, gitcmd::Git, memcli, plan, repo, reviewer, run, sys, warn};
 const FILE_CAP: usize = 24 * 1024;
 
 /// Consults an attempt may spend before the fourth is turned back to a
-/// `mem ask` (ruling 1).
+/// `mem ask`.
 const CONSULT_LIMIT: u64 = 3;
 
 /// One task's field in a run dir: `<dir>/<task>.<key>`, its value plus a
@@ -77,7 +77,7 @@ fn dial(
 }
 
 /// The reader's own model, by its own rungs: what the advisor falls back to
-/// when nobody has named one (ruling 1).
+/// when nobody has named one.
 fn reader_model(run_dir: Option<&Path>) -> Option<String> {
     dial(
         "WORKFLOW_REVIEW_MODEL",
@@ -97,14 +97,14 @@ fn reader_effort(run_dir: Option<&Path>) -> Option<String> {
 }
 
 /// `WORKFLOW_ADVISOR`, else the run dir's `advisor` record, else the
-/// reader's own model by its own rungs (ruling 1). There is no project rung
+/// reader's own model by its own rungs. There is no project rung
 /// of its own: mem's project keys are a closed set and `advisor` is not one
 /// of them, so a project names its advisor by naming its reader.
 fn advisor_model(run_dir: Option<&Path>) -> Option<String> {
     dial("WORKFLOW_ADVISOR", run_dir, "advisor", || None).or_else(|| reader_model(run_dir))
 }
 
-/// The first eighty characters of a question, for the log line (ruling 1):
+/// The first eighty characters of a question, for the log line:
 /// cut on a char boundary, never mid character.
 fn clip80(text: &str) -> String {
     let mut end = text.len().min(80);
@@ -116,7 +116,7 @@ fn clip80(text: &str) -> String {
 
 /// A fence one backtick longer than the longest run already in `text`, so a
 /// named file that itself contains a ``` line (a README, a SKILL.md) cannot
-/// close the fence early (same defect as #22H29SZR).
+/// close the fence early.
 fn fence_for(text: &str) -> String {
     let mut longest = 0usize;
     let mut run = 0usize;
@@ -180,7 +180,7 @@ fn plan_and_task_section(prose: &str, block: &str) -> String {
     }
     out.push_str("## The task\n\n");
     if block.is_empty() {
-        out.push_str("This task is not in the plan of record.\n\n");
+        out.push_str("This task is not in mem's plan.\n\n");
     } else {
         out.push_str(block);
         out.push('\n');
@@ -246,7 +246,7 @@ Write your whole answer to exactly this file and then stop:
 /// a session stopped at a question, the deadline, or a session that ended
 /// with nothing written are each said on stderr (exit 1), the question in
 /// its own words when the backend saw one. `log` is `(task, n, question)`,
-/// present only for a consult inside a run (ruling 1).
+/// present only for a consult inside a run.
 fn consult(
     backend: &dyn WorkerBackend,
     d: &Dispatch,
@@ -282,7 +282,7 @@ fn consult(
 /// names the turn ("the consult", "the reading"). A launch refused has no
 /// session and its reason on `Dispatch::err`; a question is named in its
 /// own words when the backend read one, since the folder-trust screen and
-/// its kind were "no verdict, for an hour" until it was (friction #HAN4WNAR).
+/// its kind were "no verdict, for an hour" until it was.
 pub(crate) fn ending_line(
     verb: &str,
     what: &str,
@@ -366,8 +366,7 @@ fn no_advisor_refusal() -> i32 {
 
 /// Inside a run: `WORKFLOW_TASK=<plan>/<task>`, the run dir
 /// `paths::runs_root()/<project>/<plan>`, the plan's prose and this task's
-/// block, the pages its `Read:` names, and the worker's own status file
-/// (ruling 1).
+/// block, the pages its `Read:` names, and the worker's own status file.
 fn cmd_advise_in_run(
     dir: &Path,
     plan_id: &str,
@@ -391,7 +390,7 @@ fn cmd_advise_in_run(
     write_field(dir, task_id, "advised", &n.to_string());
 
     let plan_text = memcli::plan().unwrap_or_default();
-    // The plan of record moves under a live run (`mem plan --from <slug>`, a
+    // mem's plan moves under a live run (`mem plan --from <slug>`, a
     // roadmap taking up the next milestone) and ids like `t1` repeat across
     // plans, so a plan that is not this run's is no plan at all here rather
     // than another plan's `t1` under this task's heading (run.rs `task_now`).
@@ -455,8 +454,8 @@ fn cmd_advise_in_run(
 /// Outside a run: `--against <text>` stands in for the plan and the task
 /// block, and is required; the answer goes to
 /// `paths::runs_root()/<project>/_advice/<unix seconds>-<mint>/advice`
-/// (ruling 1 as amended, #WCX5RB28: two consults in the same second are two
-/// directories).
+/// -- the minted suffix keeps two consults in the same second in two
+/// directories.
 fn cmd_advise_standalone(
     project_dir: &str,
     top: &Path,
@@ -563,7 +562,7 @@ pub fn cmd_advise(question: &str, files: &[PathBuf], against: Option<&str>) -> i
     // Inside a task worktree the path names the project, and so does every
     // mem call from here on: mem's own answer at a worktree root is the
     // monorepo's root project, whose plan, pages and log are not this
-    // task's (ruling 1 as amended).
+    // task's.
     let project_dir = match project_from_worktree(&top) {
         Some(name) => {
             memcli::name_project(&name);
@@ -750,7 +749,7 @@ mod tests {
     fn the_prompt_carries_the_question_and_names_the_answer_file() {
         let text = prompt(
             Some("t1"),
-            &plan_and_task_section("Ruling 1. Cents.", "- [ ] t1 Do it\n"),
+            &plan_and_task_section("Ruling one. Cents.", "- [ ] t1 Do it\n"),
             &[],
             "which file owns rounding?",
             &[],
@@ -759,7 +758,7 @@ mod tests {
         );
         for needle in [
             "# Advice for t1",
-            "Ruling 1. Cents.",
+            "Ruling one. Cents.",
             "- [ ] t1 Do it",
             "which file owns rounding?",
             "Answer in under 400 words",

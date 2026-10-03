@@ -31,10 +31,9 @@ pub fn goto_toplevel() -> Option<(Git, PathBuf)> {
 
 /// Check a worktree's submodules out from the main checkout's own, with no
 /// network: `git worktree add` leaves every submodule directory empty, and
-/// the upstream a `.gitmodules` names may be private, offline or gone
-/// (friction #H8QF4ES3). A submodule the main checkout never initialised
-/// fails here like any other, with a warning; nothing about a dispatch
-/// waits on it.
+/// the upstream a `.gitmodules` names may be private, offline or gone.
+/// A submodule the main checkout never initialised fails here like any other,
+/// with a warning; nothing about a dispatch waits on it.
 pub fn submodules(main: &Path, wt: &Path) {
     if !wt.join(".gitmodules").is_file() {
         return;

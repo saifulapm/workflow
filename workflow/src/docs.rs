@@ -2,12 +2,12 @@
 //! through the Context7 CLI, for a worker that is unsure of an API.
 //!
 //! A worker with no docs channel reads a package's built `dist` to learn
-//! its shape: ebdify m1's gql worker spent 84 of 107 calls in
+//! its shape: ebdify's gql worker spent 84 of 107 calls in
 //! `node_modules/.pnpm` on Pothos, Yoga and gql.tada internals, and
-//! narrated a docs tool pi never exposed (m1-lessons ruling 8). This is
-//! the channel: `npx ctx7@latest library <name> "<query>"` for the first
-//! Context7 id, then `npx ctx7@latest docs <id> "<query>"` for the text,
-//! printed as it came. Exit 1 with the CLI's own stderr when nothing came.
+//! narrated a docs tool pi never exposed. This is the channel: `npx ctx7@latest
+//! library <name> "<query>"` for the first Context7 id, then `npx ctx7@latest
+//! docs <id> "<query>"` for the text, printed as it came. Exit 1 with the CLI's
+//! own stderr when nothing came.
 
 use std::process::Command;
 

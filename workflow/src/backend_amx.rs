@@ -283,9 +283,9 @@ fn sub_bg_argv(d: &Dispatch, name: &str, parent: &str) -> Vec<String> {
 /// A reader with nobody named is a root. Without `--no-parent` amx records
 /// the ambient `$AMX_ID`, so a `workflow read` issued from inside a worker
 /// spawned its reader at depth 2 and amx refused it: the public-API read a
-/// task's own brief asks for could not run (friction #EBDZ9JY9). An advice
-/// keeps the ambient id on purpose -- it runs in the worker's own pane and
-/// rides that pane onto the record as the advisor's parent.
+/// task's own brief asks for could not run. An advice keeps the ambient id on
+/// purpose -- it runs in the worker's own pane and rides that pane onto the
+/// record as the advisor's parent.
 fn sub_argv(d: &Dispatch, name: &str, timeout_s: i64) -> Vec<String> {
     let mut argv = vec![
         "sub".to_string(),
@@ -385,7 +385,7 @@ fn spawn(argv: &[String], d: &Dispatch) -> Option<std::process::Output> {
     }
     // The pairs are this agent's alone: an agent it starts by hand is not
     // this task, and must not file its notes and questions as it, nor write
-    // into a scratch directory the run deletes (friction #9PFJY8MX).
+    // into a scratch directory the run deletes.
     let scope: Vec<&str> = d.env.iter().map(|(k, _)| k.as_str()).collect();
     c.env("AMX_SCOPE", scope.join(" "));
     // How a worker's hooks and mem know they are a worker's.
@@ -551,9 +551,9 @@ impl WorkerBackend for AmxBackend {
     }
 
     /// A pane still standing. `record` and `gone` are an agent amx remembers
-    /// and nothing more -- the transcript-and-no-row of frictions #B3391C6H
-    /// and #QT1PDNRK -- and `parked` is a pane amx released after an hour
-    /// idle; none of those is a session the usage limit is holding.
+    /// and nothing more -- a transcript with no row behind it -- and `parked`
+    /// is a pane amx released after an hour idle; none of those is a session
+    /// the usage limit is holding.
     fn listed(&self, h: &Handle) -> bool {
         status(&h.session).is_some_and(|s| PANE_UP.contains(&s.evidence.as_str()))
     }
@@ -561,7 +561,7 @@ impl WorkerBackend for AmxBackend {
     fn seen(&self, h: &Handle) -> bool {
         // The exit code, not the parse: `status` exits 0 for every agent amx
         // has a record of, and a failure with no record is the one thing that
-        // means this session never existed (friction #9F7WT13K).
+        // means this session never existed.
         !h.session.is_empty() && amx(&["status", &h.session, "--json"]).1
     }
 
@@ -1266,7 +1266,7 @@ exit 0
         assert!(has("WORKFLOW_AGENT=1"), "{env}");
         assert!(has("CARGO_TARGET_DIR=/tmp/target"), "{env}");
         // The pairs are the worker's alone: an agent it starts by hand
-        // leaves them behind (friction #9PFJY8MX).
+        // leaves them behind.
         assert!(has("AMX_SCOPE=CARGO_TARGET_DIR"), "{env}");
         assert!(
             !env.lines().any(|l| l.starts_with("GITHUB_API_KEY=")),

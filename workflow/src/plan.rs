@@ -12,8 +12,8 @@ use crate::warn;
 thread_local! {
     /// What the last [`parse`] refused over, in the order it found them.
     /// Said on stderr as ever; kept as well because a caller that re-reads
-    /// the plan of record every poll has to explain the `None` rather than
-    /// print it again (friction #3QY5J9BS).
+    /// mem's plan every poll has to explain the `None` rather than
+    /// print it again.
     static COMPLAINTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -62,7 +62,7 @@ impl Task {
     /// The `wiki:<slug>` names on this task's Read: line, in the order they
     /// were written, each once. Neither a checkout path nor a refusal, since
     /// a page lives in mem and never in the tree a plan-check or a worker
-    /// walks (ruling 1 of m1-wiki-first).
+    /// walks.
     pub fn wiki_slugs(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for item in self.read.as_deref().unwrap_or("").split_whitespace() {
@@ -114,9 +114,8 @@ pub struct Plan {
     pub tasks: Vec<Task>,
     pub waves: Vec<Vec<String>>,
     /// What sits between the header and the first task, verbatim: the Spec
-    /// and Rulings plan-check wants a plan to carry (ruling 3 of
-    /// m1-wiki-first). Set by [`parse`], the same text [`prose`] would
-    /// return for this plan's own text.
+    /// and Rulings plan-check wants a plan to carry. Set by [`parse`], the same
+    /// text [`prose`] would return for this plan's own text.
     pub prose: String,
 }
 
@@ -510,7 +509,7 @@ Totals drift.
 
 ## Rulings
 
-- Ruling 1. Cents, never floats.
+- Ruling one. Cents, never floats.
 
 - [x] t0 Freeze the fixture
       Files: a
@@ -521,13 +520,12 @@ Totals drift.
 ";
         assert_eq!(
             prose(text),
-            "## Why\n\nTotals drift.\n\n## Rulings\n\n- Ruling 1. Cents, never floats."
+            "## Why\n\nTotals drift.\n\n## Rulings\n\n- Ruling one. Cents, never floats."
         );
         assert_eq!(prose("# plan: p\n\n- [ ] t1 Do it\n      Files: a\n"), "");
         assert_eq!(prose(""), "");
         // `parse` carries the same text on the plan it returns, so
-        // plan-check can hold a plan to having some (ruling 3 of
-        // m1-wiki-first).
+        // plan-check can hold a plan to having some.
         assert_eq!(
             parse(text, true).expect("the plan parses").prose,
             prose(text)
@@ -777,8 +775,7 @@ Totals drift.
 
     /// Ticking is how a `--plan-file` run records a merge: the file it was
     /// handed is the only copy of that plan, so the run writes the tick back
-    /// there rather than leaving the merge recorded nowhere (friction
-    /// #2213VV3P).
+    /// there rather than leaving the merge recorded nowhere.
     ///
     /// The box this writes is lowercase, and t1's `[X]` is left as its author
     /// spelled it: ticking one task is not a licence to restyle the rest of

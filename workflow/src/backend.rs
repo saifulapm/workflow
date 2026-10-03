@@ -100,21 +100,20 @@ pub trait WorkerBackend {
     /// row, a process carrying its id, a transcript, a pidfile? Distinct from
     /// `alive`: a session can be seen and ended. At dispatch time no record
     /// means still launching; at adoption, with the run that recorded the
-    /// session dead, it means the session never existed (friction #9F7WT13K).
+    /// session dead, it means the session never existed.
     fn seen(&self, h: &Handle) -> bool;
     /// Is the session standing right now -- a pane amx can still read, a
     /// live pid? Narrower than `seen`: a record of a pane that is gone is a
     /// record, not a listing. This is what tells a session the usage limit
     /// paused (a pane up and idle) from one that died with the machine (a
-    /// record and nothing else), which `seen` cannot (frictions #B3391C6H,
-    /// #QT1PDNRK).
+    /// record and nothing else), which `seen` cannot.
     fn listed(&self, h: &Handle) -> bool;
     /// The most recent sign of life the backend can see, in epoch seconds.
     /// The worker's own status file is the orchestrator's signal, not the
     /// backend's, and is counted on top of this.
     fn last_activity(&self, h: &Handle) -> i64;
     /// The context the worker was carrying at its last turn, in tokens, when
-    /// the backend can see it. Reported and never enforced (ruling #D7A4T2CH):
+    /// the backend can see it. Reported and never enforced:
     /// the plan is flat-rate, so the managed resource is the window, and a task
     /// that ends near a full one was cut too big.
     fn context_tokens(&self, h: &Handle) -> Option<u64>;
@@ -124,7 +123,7 @@ pub trait WorkerBackend {
     /// each session it starts but says nothing to the backend's own listing,
     /// so a finished run left a row per worker, per reader and per advisor
     /// standing on the wall -- sixty-seven of them after one milestone, and
-    /// a wall of finished work is a wall nobody reads (friction #RYXM5MEX).
+    /// a wall of finished work is a wall nobody reads.
     /// Only agents whose turn is over go, and a backend that keeps work no
     /// commit has keeps that agent with it. The process seam has no listing
     /// and nothing to forget.
@@ -132,8 +131,8 @@ pub trait WorkerBackend {
     /// Would a dispatch as `role` on `model` start in `dir`? `Err` is the
     /// refusal the launch would meet. Asked once per dial at a run's start,
     /// so a model the backend will not take ends the run before its first
-    /// worker rather than failing every task at its launch (frictions
-    /// #H8RG7YBQ, #JJJBXH1B). The process seam takes any name.
+    /// worker rather than failing every task at its launch. The process seam
+    /// takes any name.
     fn check(
         &self,
         _dir: &Path,
@@ -216,8 +215,8 @@ pub trait WorkerBackend {
     /// `stop_reason` and the visible tokens that turn wrote. What tells a
     /// reader that spent its whole completion budget reasoning from a wedged
     /// provider or a bad prompt, since from outside both are a deadline and
-    /// nothing said (friction #7Q1EGGNM). `None` when there is nothing to
-    /// read, which for a custom template is every time.
+    /// nothing said. `None` when there is nothing to read, which for a custom
+    /// template is every time.
     fn last_stop(&self, _h: &Handle) -> Option<(String, u64)> {
         None
     }

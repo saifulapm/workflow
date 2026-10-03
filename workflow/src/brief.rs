@@ -18,22 +18,22 @@ use crate::warn;
 /// A deviation from spec §8.4's figure, recorded as a ruling.
 pub const BUDGET: usize = 2000;
 
-/// How many bytes of wiki page text one brief carries inlined (ruling 1 of
-/// m1-wiki-first). A plan naming pages past this would otherwise blow the
-/// context window it is trying to save the worker from reading the tree for;
-/// past the cap the rest are named as a `mem wiki` command instead, and the
-/// run warns once so an over-named plan is heard about at dispatch.
+/// How many bytes of wiki page text one brief carries inlined. A plan naming
+/// pages past this would otherwise blow the context window it is trying to save
+/// the worker from reading the tree for; past the cap the rest are named as a
+/// `mem wiki` command instead, and the run warns once so an over-named plan is
+/// heard about at dispatch.
 pub const PAGES_CAP: usize = 24_000;
 
 /// The states a worker may report, in the order the brief teaches them. The
 /// gate names this list back when a report uses a word that is not on it, so
-/// the two must be the same list (friction #W2SY30WH).
+/// the two must be the same list.
 pub const STATES: [&str; 4] = ["started", "progress", "ready", "blocked"];
 
 /// What the attempt before this one came to. A redispatched worker used to
 /// wake up to the same fixed text as the first attempt, with the status file
 /// truncated behind it, so the only way to tell it anything was to leave a
-/// ruling in mem and hope it looked (friction #YCW7ND6Z).
+/// ruling in mem and hope it looked.
 #[derive(Debug, Clone, Default)]
 pub struct Prior {
     /// How many attempts have already been made, this one not counted.
@@ -100,7 +100,7 @@ impl Prior {
     }
 
     /// The reader's findings, when `why` names the file a fix-round
-    /// redispatch was sent back with (ruling 7). `None` for any other
+    /// redispatch was sent back with. `None` for any other
     /// ending, or a file the run can no longer read.
     fn review_findings(&self) -> Option<String> {
         if !self.why.starts_with("the reviewer wants fixes first") {
@@ -147,7 +147,7 @@ fn plan_section(prose: &str) -> String {
 }
 
 /// The wiki pages a task's Read: named, verbatim under one heading, for the
-/// worker's brief and the reader's prompt alike (ruling 1 of m1-wiki-first).
+/// worker's brief and the reader's prompt alike.
 /// `pages` is `(slug, text)`, absent text meaning no such page. Past
 /// [`PAGES_CAP`] bytes of page text, the rest are named as a `mem wiki`
 /// command instead of inlined, and the run is warned once for this call.
@@ -184,7 +184,7 @@ pub(crate) fn pages_section(task_id: &str, pages: &[(String, Option<String>)]) -
 }
 
 /// The page a change falsifies is the worker's to rewrite, said only when
-/// the plan names a page (ruling 3 of m4-lines).
+/// the plan names a page.
 fn rewrite_sentence(pages: &[(String, Option<String>)]) -> &'static str {
     if pages.is_empty() {
         ""
@@ -216,8 +216,8 @@ const MANIFESTS: [(&str, &[&str]); 4] = [
 
 /// One sentence when the Files line claims a manifest whose lockfile the
 /// tree has: which generated file a dependency drags in, and whether the
-/// line claims it (m1-lessons ruling 6). `present` is what stands at the
-/// worktree root. Nothing when no manifest is claimed.
+/// line claims it. `present` is what stands at the worktree root. Nothing when
+/// no manifest is claimed.
 pub fn lockfile_sentence(patterns: &[String], present: &[String]) -> String {
     let claims = |name: &str| {
         patterns.iter().any(|p| {
@@ -250,8 +250,7 @@ pub fn lockfile_sentence(patterns: &[String], present: &[String]) -> String {
 }
 
 /// `## Advice`, after "How to work", only when the run has an advisor to
-/// name (m3-advise ruling 2): when to ask, the cap, and what stays a
-/// question.
+/// name: when to ask, the cap, and what stays a question.
 fn advice_section(advisor: Option<&str>) -> String {
     let Some(model) = advisor else {
         return String::new();
@@ -375,7 +374,7 @@ States: {states}. `ready` means merge-ready and is your last act.
 /// How far over the budget a task block is, and which of its lines weighs
 /// most. `None` when it fits. The run said a bare byte count at dispatch, the
 /// one place a planner could no longer act on it; this is what the run and
-/// plan-check both say (friction #QX8GXNQY).
+/// plan-check both say.
 pub fn over_budget(task: &Task) -> Option<String> {
     let size = task.block.len();
     if size <= BUDGET {
@@ -525,8 +524,8 @@ mod tests {
             "the fixed prose with the Advice section is {} bytes",
             advised.len()
         );
-        // A named page adds the rewrite sentence (ruling 3 of m4-lines) and
-        // the page's own heading; the ceiling rises by their length.
+        // A named page adds the rewrite sentence and the page's own heading;
+        // the ceiling rises by their length.
         let paged = text(
             &task,
             Path::new("/state/worktrees/app/plan/t1"),
@@ -664,8 +663,8 @@ mod tests {
     }
 
     /// A block over its budget says by how much and which line weighs most,
-    /// so a planner can act on it before dispatch rather than after
-    /// (friction #QX8GXNQY). The fixed prose around the block is not counted:
+    /// so a planner can act on it before dispatch rather than after.
+    /// The fixed prose around the block is not counted:
     /// only the planner's own bytes can put a task over.
     #[test]
     fn a_block_over_its_budget_names_the_bytes_over_and_the_heaviest_line() {
@@ -731,20 +730,20 @@ mod tests {
         };
         let wt = Path::new("/state/worktrees/app/plan/t1");
         let status = Path::new("/state/runs/app/plan/t1.status");
-        let prose = "## Rulings\n\n- Ruling 1. Cents, never floats.";
+        let prose = "## Rulings\n\n- Ruling one. Cents, never floats.";
         let body = text(&task, wt, status, &Prior::default(), prose, &[], None);
         let section = body
             .find("## The plan this task belongs to")
             .expect("the section");
         let rulings = body
-            .find("- Ruling 1. Cents, never floats.")
+            .find("- Ruling one. Cents, never floats.")
             .expect("the prose");
         let block = body
             .find("## The task, as the plan states it")
             .expect("the block");
         // After the block and the rules, not before: the contract a worker
         // is held to sat at 80% depth behind the prose and three pages, and
-        // a flash model read the tail last (m1-lessons ruling on the brief).
+        // a flash model read the tail last.
         let stop = body.find("## Stop and ask").expect("stop and ask");
         assert!(
             block < stop && stop < section && section < rulings,
@@ -769,7 +768,7 @@ mod tests {
 
     /// A page the change falsifies is the worker's to rewrite before
     /// `ready`, said in "How to work" after the follow-up sentence, and only
-    /// when the plan names a page (ruling 3 of m4-lines).
+    /// when the plan names a page.
     #[test]
     fn a_worker_with_a_named_page_is_told_to_rewrite_what_it_falsifies() {
         let task = Task {
@@ -805,8 +804,7 @@ mod tests {
 
     /// A page named on Read: rides verbatim under its own heading, after the
     /// plan's prose and before the block; an absent page says so rather than
-    /// refusing, and a task naming none adds no heading at all (rulings 1
-    /// and 2 of m1-wiki-first).
+    /// refusing, and a task naming none adds no heading at all.
     #[test]
     fn wiki_pages_ride_after_the_prose_and_before_the_block() {
         let task = Task {
@@ -817,13 +815,13 @@ mod tests {
         };
         let wt = Path::new("/state/worktrees/app/plan/t1");
         let status = Path::new("/state/runs/app/plan/t1.status");
-        let prose = "## Rulings\n\n- Ruling 1. Cents, never floats.";
+        let prose = "## Rulings\n\n- Ruling one. Cents, never floats.";
         let pages = vec![
             ("run".to_string(), Some("The run drives waves.".to_string())),
             ("missing-page".to_string(), None),
         ];
         let body = text(&task, wt, status, &Prior::default(), prose, &pages, None);
-        let rulings = body.find("- Ruling 1. Cents, never floats.").unwrap();
+        let rulings = body.find("- Ruling one. Cents, never floats.").unwrap();
         let heading = body.find("## Pages the plan names").unwrap();
         let run_heading = body.find("### wiki:run").unwrap();
         let run_text = body.find("The run drives waves.").unwrap();
@@ -849,7 +847,7 @@ mod tests {
 
     /// A fix-round redispatch names a review file in `why`; the section
     /// reads it and inlines the findings verbatim, with the reread
-    /// instruction after them (ruling 7).
+    /// instruction after them.
     #[test]
     fn a_fix_round_inlines_the_findings_it_was_sent_back_with() {
         let review_path =
@@ -898,8 +896,8 @@ mod tests {
     }
 
     /// Past the cap, the rest of a brief's pages are named as a command
-    /// instead of inlined (ruling 1). The run's own warning is exercised at
-    /// the integration level, in t072.
+    /// instead of inlined. The run's own warning is exercised at
+    /// the integration level.
     #[test]
     fn pages_past_the_cap_become_a_command() {
         let big = "x".repeat(PAGES_CAP);

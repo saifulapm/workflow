@@ -28,9 +28,9 @@ pub struct Verifier {
 ///
 /// The gate runs with `TURBO_FORCE=true`: turbo replayed a cached green for
 /// a package whose dependency had changed under it, and the gate passed a
-/// merge the uncached suite failed (frictions #S3PJJY0R, #N0TBJQKX). The
-/// hook and a task's own Verify keep the cache, which is what makes them
-/// quick enough to run on every commit; the gate is what has to be right.
+/// merge the uncached suite failed. The hook and a task's own Verify keep the
+/// cache, which is what makes them quick enough to run on every commit; the
+/// gate is what has to be right.
 pub fn run_scrubbed(cmd: &str, gate: bool) -> bool {
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd);
@@ -62,12 +62,12 @@ fn suite_lock_key(project: Option<&Project>, top: &Path) -> String {
         .unwrap_or_else(|| paths::path_slug(top))
 }
 
-/// One suite per project at a time (friction #VTB9VB1S). Both halves of the
-/// false red -- the gate's suite on the integration branch and a worker's
-/// evidence run in its worktree -- execute through cmd_verify, so an exclusive
-/// flock keyed by project serializes them. Blocking on purpose: a suite
-/// already running is worth waiting for, and a holder that dies releases the
-/// lock with its file descriptors.
+/// One suite per project at a time. Both halves of the false red -- the gate's
+/// suite on the integration branch and a worker's evidence run in its worktree
+/// -- execute through cmd_verify, so an exclusive flock keyed by project
+/// serializes them. Blocking on purpose: a suite already running is worth
+/// waiting for, and a holder that dies releases the lock with its file
+/// descriptors.
 fn suite_lock(project: Option<&Project>, top: &Path) -> Option<std::fs::File> {
     if std::env::var_os(SUITE_LOCK_HELD).is_some() {
         return None;
@@ -263,7 +263,7 @@ const GREEN_KEEP: usize = 32;
 /// a green here is a fact about a tree and not about the last thing that ran
 /// -- one file meant any other verify of the same project overwrote the
 /// trunk's green, and the next run of the same plan paid for the whole suite
-/// again on a trunk the gate had just proved (friction #700H11G1).
+/// again on a trunk the gate had just proved.
 fn green_dir(project: Option<&Project>) -> Option<PathBuf> {
     let id = &project?.id;
     if id.is_empty() {
@@ -377,7 +377,7 @@ fn task_verify_cmd(top: &Path) -> Option<String> {
 }
 
 /// The status file of the task this worktree belongs to, whether or not it
-/// exists yet: `workflow report` appends to it (m1-lessons, ruling 2).
+/// exists yet: `workflow report` appends to it.
 pub(crate) fn task_status_file(top: &Path) -> Option<PathBuf> {
     task_run_file(top, "status")
 }
@@ -451,7 +451,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
         && let Some(cmd) = task_verify_cmd(&top)
     {
         // The Files line first, at the commit, where the worker can still
-        // act on it (m1-lessons ruling 6).
+        // act on it.
         if mode == Mode::Hook
             && let Some(files) =
                 task_run_file(&top, "files").and_then(|f| std::fs::read_to_string(f).ok())
@@ -467,9 +467,9 @@ pub fn cmd_verify(mode: Mode) -> i32 {
                 // What the run read, said back: an answer that told a worker
                 // its Files line was widened, over a plan edit that had
                 // failed, was otherwise indistinguishable from the hook
-                // ignoring the edit (friction #W4QRZKBH).
+                // ignoring the edit.
                 warn(format!(
-                    "Files as the run read the plan of record: {}",
+                    "Files as the run read the plan: {}",
                     patterns.join(" ")
                 ));
                 warn(
@@ -499,7 +499,7 @@ pub fn cmd_verify(mode: Mode) -> i32 {
     // pre-commit hook runs on the trunk: a git hook stands at the toplevel,
     // where mem answers with the root project. The gate lands on that same
     // trunk, so it runs the hook's suite, or a run merges work the next
-    // commit on the trunk is refused for (frictions #QJ31ZJD6, #CJ5ANCP7).
+    // commit on the trunk is refused for.
     let root = match (&mode, &project) {
         (Mode::Gate, Some(p)) if p.subdir.is_some() => memcli::root_project_at(&top),
         _ => None,

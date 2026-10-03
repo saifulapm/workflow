@@ -22,9 +22,9 @@ pub const NO_VERIFIER: i32 = 2;
 ///
 /// Rust's runtime ignores SIGPIPE so a write to a closed pipe comes back as
 /// EPIPE, and `println!` turns that into a panic: `workflow status | head`
-/// ended in a stack trace and exit 101, the same wart mem had (friction
-/// #ECTJYVXX). A reader that stops reading is the reader's business. End where
-/// it did, the way every other command in a pipeline does.
+/// ended in a stack trace and exit 101, the same wart mem had. A reader that
+/// stops reading is the reader's business. End where it did, the way every
+/// other command in a pipeline does.
 ///
 /// None of the codes above apply to that ending -- it is a signal, not an exit
 /// code -- which is the honest answer and the one `head` expects.

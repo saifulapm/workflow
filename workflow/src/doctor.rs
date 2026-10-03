@@ -294,7 +294,7 @@ fn tools(r: &mut Report) {
     }
     // A run dispatches through whichever `amx` PATH answers first. Two on PATH
     // means the flags the run uses may belong to the other one, and a refusal
-    // that reads like a workflow bug (#PPA68Q43).
+    // that reads like a workflow bug.
     let amx = every_on_path("amx");
     if amx.len() > 1 {
         let rest: Vec<String> = amx[1..].iter().map(|p| p.display().to_string()).collect();

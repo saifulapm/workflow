@@ -202,7 +202,7 @@ named to advise or a fourth consult this attempt."
 
 A run holds its project's lock for its whole life, so a failed task used to
 wait for the run to end before anyone could act on it -- with the worker slot
-it freed sitting idle (friction #W0S44DE6). This writes a marker in the live
+it freed sitting idle. This writes a marker in the live
 run's directory; the run picks it up on its next poll and dispatches the task
 again. A dispatched task is taken too: its session is stopped and the task
 goes again on the commits it already has, so a plan edit reaches it now

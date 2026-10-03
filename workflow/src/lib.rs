@@ -231,10 +231,10 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
         return exit::FAILED;
     };
     // The grammar is half the check: the plan must also hold in the checkout
-    // it will run in (frictions #DBHZBFY1, #6485CNC0). Warnings inform the
-    // planner; a Verify that cannot pass here is refused, after the report so
-    // the author still sees what parsed. A roadmap is checked through the
-    // milestone plans it names, one per milestone, in wave order.
+    // it will run in. Warnings inform the planner; a Verify that cannot pass
+    // here is refused, after the report so the author still sees what parsed. A
+    // roadmap is checked through the milestone plans it names, one per
+    // milestone, in wave order.
     let mut refusals = Vec::new();
     if let Some(top) = gitcmd::Git::here().toplevel() {
         let found = match parsed.kind {
@@ -263,8 +263,7 @@ fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
             println!("  wave {}: {}", i + 1, w.join(" "));
         }
         // What a run can carry at once, so a plan serialized into a chain
-        // by its shared files is visible rather than inferred (m1-lessons
-        // ruling 7).
+        // by its shared files is visible rather than inferred.
         if let Some(widest) = parsed.waves.iter().map(Vec::len).max() {
             println!(
                 "  widest wave: {widest} task{}",

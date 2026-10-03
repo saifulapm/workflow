@@ -17,8 +17,8 @@ pub const ROWS: &[&str] = &[
     "**/payment*",
     "**/billing/**",
     // Billing is usually files, not a directory: billing.server.ts,
-    // usage-billing.server.ts, billing.ts (friction #HK2PNTR4). Both rows
-    // stand, the way checkout has both of its.
+    // usage-billing.server.ts, billing.ts. Both rows stand, the way checkout
+    // has both of its.
     "**/*billing*",
     "**/stripe*",
     "**/checkout/**",
@@ -101,9 +101,9 @@ fn matches(git: &Git, range: &str, specs: &[String]) -> BTreeSet<String> {
 ///
 /// Merged, never replaced. The shipped rows are what is sensitive in every
 /// repository; the project's rows are what is load-bearing in this one --
-/// `packages/shopify-core/**` is one repo's blast radius and nobody else's
-/// (friction #HK2PNTR4). Same grammar as a task's `Files:` line, so a glob
-/// with a space in it goes in double quotes.
+/// `packages/shopify-core/**` is one repo's blast radius and nobody else's.
+/// Same grammar as a task's `Files:` line, so a glob with a space in it goes in
+/// double quotes.
 fn rows() -> Vec<String> {
     let mut rows: Vec<String> = ROWS.iter().map(|r| r.to_string()).collect();
     let declared = memcli::project_current()

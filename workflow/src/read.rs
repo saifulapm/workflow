@@ -158,8 +158,7 @@ fn requirement(against: Option<&str>) -> String {
 /// it: `<dir>/read.verdict` -- `ship`, `fix` or `none: <reason>` -- and one
 /// last line on stdout. A read issued across an `amx sub` boundary comes back
 /// with the agent's own ending, and a reading that found nothing was read as
-/// a ship (friction #W7XZQ20A); stdout survives that relay, an exit code and
-/// stderr do not.
+/// a ship; stdout survives that relay, an exit code and stderr do not.
 fn said(dir: &Path, verdict: &str, why: &str) {
     let text = match why.is_empty() {
         true => verdict.to_string(),
@@ -289,9 +288,9 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     let prompt_path = dir.join("read.review-prompt");
     let answer = dir.join("read.review");
     let pidfile = dir.join("read.review-pid");
-    // The requirement is both the Done line (ruling 1) and the plan of record:
+    // The requirement is both the Done line and the plan:
     // there is no plan document behind a read, and `reviewer::prompt` opens on
-    // an empty "## The plan of record" heading otherwise, while the reader is
+    // an empty "## The plan" heading otherwise, while the reader is
     // asked to judge the plan's rulings.
     let _ = std::fs::write(
         &prompt_path,
@@ -338,7 +337,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
     // stops it. A launch refused -- amx at its cap, a tmux it cannot reach
     // -- a deadline, or a reader stopped at a question each end here with
     // the reason on stderr, the question in its own words when the backend
-    // read one, rather than as a bare "no verdict" (friction #HAN4WNAR).
+    // read one, rather than as a bare "no verdict".
     let deadline_s = reviewer::deadline_s();
     let c = backend.consult(&d, deadline_s);
 
@@ -348,13 +347,12 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
 
     // A reader that spoke its verdict in its turn and never wrote the file
     // has still answered: the backend hands the turn's own text back, so the
-    // answer file is written from it before the ending is judged (friction
-    // #XAGR8HS2). What is left when there is no verdict either way is why it
-    // ended, and the account of that is the reader's own last words, else
-    // what the backend kept of a pane that is gone, else -- for a reading
-    // that never reached visible text at all -- how its last turn stopped
-    // (frictions #XAGR8HS2, #7Q1EGGNM; run.rs `review_pass` reads the same
-    // two at the gate).
+    // answer file is written from it before the ending is judged. What is left
+    // when there is no verdict either way is why it ended, and the account of
+    // that is the reader's own last words, else what the backend kept of a pane
+    // that is gone, else -- for a reading that never reached visible text at
+    // all -- how its last turn stopped (run.rs `review_pass` reads the same two
+    // at the gate).
     let h = Handle {
         session: c.session.clone(),
         pidfile: d.pidfile.clone(),

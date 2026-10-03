@@ -3,13 +3,12 @@
 //!
 //! A worker's report is `<utc> <state> <note>` appended to
 //! `runs/<project>/<plan>/<task>.status`, and every worker used to compose
-//! that line itself. ebdify m1's auth worker wrote the state first and the
+//! that line itself. ebdify's auth worker wrote the state first and the
 //! time second, so the run read the time as the state and never once saw a
 //! `ready` from it; its worker task hand-built the time and dated a whole
-//! attempt a day into the future (m1-lessons, ruling 2). This verb takes the
-//! state and the note, supplies the time, finds the file the way the
-//! pre-commit hook finds the task's Verify line, and refuses a state the run
-//! would not read.
+//! attempt a day into the future. This verb takes the state and the note,
+//! supplies the time, finds the file the way the pre-commit hook finds the
+//! task's Verify line, and refuses a state the run would not read.
 
 use crate::{brief, exit, paths, repo, sys, verify, warn};
 

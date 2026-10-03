@@ -37,8 +37,8 @@ fn live_run(project_dir: &str) -> Option<PathBuf> {
         // `started` as well as `plan.md`: the run writes the plan down only
         // once the trunk gate is green, and for the whole of that suite --
         // minutes -- a held lock was invisible here and wait said no run was
-        // live (friction #KBPVJF24). A file either way, since the lock file
-        // itself makes the directory.
+        // live. A file either way, since the lock file itself makes the
+        // directory.
         .filter(|p| p.is_dir() && (p.join("started").is_file() || p.join("plan.md").is_file()))
         .collect();
     dirs.sort();
@@ -104,7 +104,7 @@ pub fn cmd_wait(timeout: Option<u64>, merges: bool) -> i32 {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     // One waiter per run: two share the cursor, and whichever reads first
-    // consumes an event into a log nobody reads (m1-lessons ruling 9).
+    // consumes an event into a log nobody reads.
     let lock = dir.join("wait.lock");
     if let Some(pid) = std::fs::read_to_string(&lock)
         .ok()
