@@ -105,7 +105,7 @@ EOF
 run env WORKFLOW_TASK=live/t1 WORKFLOW_ADVISOR=sage WORKFLOW_REVIEW_MODEL= workflow advise 'still the same plan?'
 is "$RC" 0 'a consult under a moved plan of record still answers'
 prompt=$(ls -t "$WF_TMP"/advice-prompt-* | head -1)
-like "$(cat "$prompt")" 'This task is not in the plan of record' 'and says the task is not in the plan of record'
+like "$(cat "$prompt")" 'This task is not in mem'\''s plan' 'and says the task is not in the plan of record'
 unlike "$(cat "$prompt")" 'invoice' 'carrying nothing from the plan that replaced it'
 
 ## ------------------------------------------- a run dir that is not there

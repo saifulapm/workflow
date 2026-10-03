@@ -137,7 +137,7 @@ prompt=$(ls -t "$WF_TMP"/read-prompt-* | head -1)
 like "$(cat "$prompt")" 'Untracked files' 'the untracked heading is there'
 like "$(cat "$prompt")" 'a scratch note about the widget' 'and its contents are inlined'
 like "$(cat "$prompt")" 'Done: the widget adds up cleanly' 'and the --against text is the requirement'
-plan_section=$(sed -n '/^## The plan of record$/,/^## The task$/p' "$prompt")
+plan_section=$(sed -n '/^## The plan$/,/^## The task$/p' "$prompt")
 like "$plan_section" 'the widget adds up cleanly' 'the requirement is the plan of record too'
 rm -f app/notes.txt
 

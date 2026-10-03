@@ -144,7 +144,7 @@ is "$(cat "$rundir2/t2.state")" blocked 't2 never starts behind a failed depende
 
 run workflow accept t1
 is "$RC" 1 'accept over an ownership refusal is refused up front'
-like "$OUT" 'cannot accept t1: it failed the Files gate, not a reading -- widen its Files line in the plan of record' 'naming the way out'
+like "$OUT" 'cannot accept t1: it failed the Files gate, not a reading -- widen its Files line in the live plan' 'naming the way out'
 like "$OUT" 'workflow redispatch t1' 'and the redispatch'
 is "$(cat "$rundir2/t1.state")" failed 'and the task stands as it was'
 

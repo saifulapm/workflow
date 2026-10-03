@@ -186,12 +186,12 @@ run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
 is "$RC" 0 'the run finishes though the plan was rewritten under it'
 like "$(cat "$WF_TMP/reopen.mem")" 'kept the tick on t1: the plan has them ticked' \
 	'filing the plan through mem kept the tick the run had made'
-like "$OUT" 'task t1: had come unticked in the plan of record -- ticked again' \
+like "$OUT" 'task t1: had come unticked in the live plan -- ticked again' \
 	'and the box unticked behind mem is named as ticked again'
 like "$OUT" 'milestone reopened-milestone is ticked off in the roadmap' \
 	'so the milestone is finished after all'
 like "$("$MEM_BIN" log --limit 20 --json)" \
-	'task t1: had come unticked in the plan of record -- ticked again' \
+	'task t1: had come unticked in the live plan -- ticked again' \
 	'with the same line in the mem log'
 run_out "$MEM_BIN" plan
 like "$OUT" '^- \[x\] t1 ' 'the reopened box is ticked in the plan of record'

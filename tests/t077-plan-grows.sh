@@ -122,7 +122,7 @@ for _ in $(seq 1 150); do
 	sleep 0.2
 done
 like "$(cat "$T_TMP/grow.log")" \
-	'run grow: the plan of record does not parse \(task t4 has no Verify: line\); the run is still using the copy it started with' \
+	'run grow: the live plan does not parse \(task t4 has no Verify: line\); the run is still using the copy it started with' \
 	'the run says the re-read was void, and what the parser stopped on'
 sleep 1
 is "$(grep -c 'does not parse' "$T_TMP/grow.log")" 1 'once for that text, not once a poll'
