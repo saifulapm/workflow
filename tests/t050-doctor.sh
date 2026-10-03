@@ -20,7 +20,12 @@ like "$OUT" 'settings' 'and the missing settings file'
 ## ------------------------------------------------------------- the wiring
 
 git config --global core.hooksPath "$HOOKS"
-workflow settings-merge "$settings" >/dev/null 2>&1
+cat >"$settings" <<'EOF'
+{
+  "env": { "WORKFLOW_AGENT": "1" },
+  "attribution": { "commitTrailers": false, "sessionUrl": false }
+}
+EOF
 run workflow doctor
 unlike "$OUT" 'no global core.hooksPath' 'with hooksPath set, the gate is no longer reported missing'
 unlike "$OUT" 'WORKFLOW_AGENT is not' 'and the environment key is found'
@@ -39,71 +44,6 @@ run env PATH="$T_TMP/amx-a:$T_TMP/amx-b:/usr/bin:/bin" "$wf" doctor
 like "$OUT" "2 amx on PATH: $T_TMP/amx-a/amx answers, $T_TMP/amx-b/amx shadowed" 'doctor names both and which wins'
 run env PATH="$T_TMP/amx-a:/usr/bin:/bin" "$wf" doctor
 unlike "$OUT" 'amx on PATH' 'one amx is no finding'
-
-## ---------------------------------------------- the settings merge (AC5b)
-
-# This machine already sets attribution.commit and attribution.pr to the empty
-# string. Empty means "say nothing", so it has to survive the merge.
-cat >"$settings" <<'EOF'
-{
-  "model": "opus",
-  "attribution": { "commit": "", "pr": "" },
-  "env": { "SOMETHING_ELSE": "keep me" }
-}
-EOF
-workflow settings-merge "$settings" >/dev/null 2>&1
-is "$(jq -r '.attribution.commit' "$settings")" '' 'merge: the empty attribution.commit survives'
-is "$(jq -r '.attribution | has("commit")' "$settings")" 'true' 'merge: and the key is still there'
-is "$(jq -r '.attribution.pr' "$settings")" '' 'merge: the empty attribution.pr survives'
-is "$(jq -r '.attribution.commitTrailers' "$settings")" 'false' 'merge: trailers are off'
-is "$(jq -r '.attribution.sessionUrl' "$settings")" 'false' 'merge: session urls are off'
-is "$(jq -r '.env.WORKFLOW_AGENT' "$settings")" '1' 'merge: the agent flag is set'
-is "$(jq -r '.env.SOMETHING_ELSE' "$settings")" 'keep me' 'merge: other env keys are untouched'
-is "$(jq -r '.model' "$settings")" 'opus' 'merge: unrelated settings are untouched'
-
-before=$(cat "$settings")
-run workflow settings-merge "$settings"
-is "$(cat "$settings")" "$before" 'merge: running it again changes nothing'
-like "$OUT" 'already' 'merge: and it says the file already said all of this'
-
-# The merge writes through a temp file, and mktemp makes that 0600. The
-# settings file's own permissions are not the merge's business.
-chmod 640 "$settings"
-printf '{"model":"opus"}\n' >"$settings"
-chmod 640 "$settings"
-workflow settings-merge "$settings" >/dev/null 2>&1
-is "$(stat -c %a "$settings")" 640 'merge: the file keeps the mode it had'
-
-rm -f "$settings"
-workflow settings-merge "$settings" >/dev/null 2>&1
-is "$(stat -c %a "$settings")" "$(printf '%o' "$((0666 & ~$(umask)))")" \
-	'merge: a file it creates gets the mode the umask asks for'
-
-# On this machine ~/.claude/settings.json is a chezmoi symlink into ~/.dotfiles.
-# Writing over the link would leave the real file orphaned and unedited, the
-# next `chezmoi apply` would revert the merge, and doctor would report healthy
-# throughout because it reads through the link.
-dotfiles="$T_TMP/dotfiles"
-mkdir -p "$dotfiles"
-printf '{"model":"opus","attribution":{"commit":"","pr":""}}\n' >"$dotfiles/settings.json"
-chmod 640 "$dotfiles/settings.json"
-rm -f "$settings"
-ln -s "$dotfiles/settings.json" "$settings"
-workflow settings-merge "$settings" >/dev/null 2>&1
-is "$([ -L "$settings" ] && echo symlink || echo 'regular file')" symlink \
-	'merge: a settings file that is a symlink is still a symlink afterwards'
-is "$(readlink "$settings")" "$dotfiles/settings.json" 'merge: and it still points where it did'
-is "$(jq -r '.env.WORKFLOW_AGENT' "$dotfiles/settings.json")" '1' \
-	'merge: the edit landed in the file the link points at'
-is "$(jq -r '.model' "$dotfiles/settings.json")" 'opus' \
-	'merge: and the rest of that file survived'
-is "$(stat -c %a "$dotfiles/settings.json")" 640 'merge: the target keeps the mode it had'
-run workflow settings-merge "$settings"
-like "$OUT" 'already' 'merge: and through the link it can tell it has nothing to do'
-
-# Back to a plain wired settings file for the doctor runs below.
-rm -f "$settings"
-workflow settings-merge "$settings" >/dev/null 2>&1
 
 ## ---------------------------------------------------- the husky-shaped hole
 
@@ -203,7 +143,7 @@ export HOME="$T_TMP/embedded-home"
 mkdir -p "$HOME"
 
 skills=($(workflow skill | sed 's/ — .*//') mem)
-roles=(worker reader fixer advisor lead dogfood research plan plan-refresh grill)
+roles=(worker lead dogfood research plan plan-refresh grill)
 truthy "$([ "${#skills[@]}" -gt 1 ] && echo 0 || echo 1)" 'workflow skill names the skills it carries'
 is "${#roles[@]}" "$(ls "$WF_ROOT"/roles/*.md | wc -l)" 'the role list is every file under roles/'
 copies=$((3 + ${#roles[@]} + 2 * ${#skills[@]}))
@@ -329,9 +269,13 @@ git config --global core.excludesFile "$ignore"
 
 settings="$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude"
-workflow settings-merge "$settings" >/dev/null 2>&1
-jq '.advisorModel = "fable" | .env.CLAUDE_CODE_SUBAGENT_MODEL = "sonnet"' \
-	"$settings" >"$settings.new" && mv "$settings.new" "$settings"
+cat >"$settings" <<'EOF'
+{
+  "advisorModel": "fable",
+  "env": { "WORKFLOW_AGENT": "1", "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet" },
+  "attribution": { "commitTrailers": false, "sessionUrl": false }
+}
+EOF
 good=$(cat "$settings")
 
 # One amx or none on PATH, whatever the machine running the suite has.
@@ -394,6 +338,8 @@ is "$(cat "$settings")" "$before_settings" '--fix writes nothing to settings'
 is "$(cat "$ignore")" '.claude/' 'nor to the ignore list'
 
 # A settings file linked into the dotfiles is edited at the link's target.
+dotfiles="$T_TMP/dotfiles"
+mkdir -p "$dotfiles"
 mv "$settings" "$dotfiles/linked.json"
 ln -s "$dotfiles/linked.json" "$settings"
 run doctor --fix

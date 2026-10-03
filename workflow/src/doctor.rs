@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::gitcmd::{self, Git};
-use crate::{exit, have, paths, settings};
+use crate::{exit, have, paths};
 
 #[derive(Default)]
 struct Report {
@@ -192,8 +192,18 @@ fn ignore_list(r: &mut Report, fix: bool) {
     }
 }
 
+/// Claude Code's user settings file, where the attribution and advisor keys
+/// live.
+fn default_file() -> PathBuf {
+    match std::env::var("CLAUDE_CONFIG_DIR") {
+        Ok(v) if !v.is_empty() => PathBuf::from(v),
+        _ => paths::home().join(".claude"),
+    }
+    .join("settings.json")
+}
+
 fn settings_keys(r: &mut Report, fix: bool) {
-    let f = settings::default_file();
+    let f = default_file();
     let Ok(text) = std::fs::read_to_string(&f) else {
         r.finding("settings", format!("{} is not there to read", f.display()));
         return;
@@ -338,11 +348,8 @@ const STUBS: [(&str, &str); 3] = [
 /// hands the agent, so the rules for how to work -- narrow reads, files
 /// written in steps, an output cap -- live here and not in every brief. A
 /// project overrides one whole with `.amx/agents/<name>.md`.
-pub const ROLES: [(&str, &str); 10] = [
+pub const ROLES: [(&str, &str); 7] = [
     ("worker", include_str!("../../roles/worker.md")),
-    ("reader", include_str!("../../roles/reader.md")),
-    ("fixer", include_str!("../../roles/fixer.md")),
-    ("advisor", include_str!("../../roles/advisor.md")),
     ("lead", include_str!("../../roles/lead.md")),
     ("dogfood", include_str!("../../roles/dogfood.md")),
     ("research", include_str!("../../roles/research.md")),

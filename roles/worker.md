@@ -15,8 +15,7 @@ the ranges you need, never a directory at a time.
 
 For a library API you are not sure of, `workflow docs <library> "<query>"`
 prints its current documentation. Never read a package's built `dist` or
-`typings` to learn its API: a third such read in a row is a `workflow docs`
-or a `workflow advise`.
+`typings` to learn its API: a third such read in a row is a `workflow docs`.
 
 A file the toolchain rewrites as a side effect -- a lockfile, a generated
 schema, a snapshot -- is still your write. Outside your Files it is
