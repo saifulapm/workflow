@@ -20,8 +20,6 @@ struct TaskRow {
     /// What the worker was carrying at its last turn, when the run could see
     /// it. Plan-sizing feedback, not a ceiling.
     context: u64,
-    /// Fix verdicts the reader has handed this task so far.
-    reviews: u64,
     /// Why a task that could go is not going yet: its dependencies, a
     /// worker slot. Empty when nothing holds it.
     held: String,
@@ -33,10 +31,6 @@ struct RunRow {
     base: String,
     integration: String,
     tasks: Vec<TaskRow>,
-    /// Fix verdicts plus one per task that reached a reading, across the run.
-    readings: u64,
-    /// Fix verdicts across the run.
-    fixes: u64,
     /// Context carried across every task, summed.
     context: u64,
 }
@@ -108,17 +102,10 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             last_status: last_status(dir, &id),
             merged: field(dir, &id, "merged"),
             context: field(dir, &id, "context").parse().unwrap_or(0),
-            reviews: field(dir, &id, "reviews").parse().unwrap_or(0),
             held: field(dir, &id, "held"),
             id,
         })
         .collect();
-    let fixes: u64 = tasks.iter().map(|t| t.reviews).sum();
-    let readings = fixes
-        + tasks
-            .iter()
-            .filter(|t| !t.merged.is_empty() || !field(dir, &t.id, "review").is_empty())
-            .count() as u64;
     let context: u64 = tasks.iter().map(|t| t.context).sum();
     Some(RunRow {
         live: live(dir),
@@ -128,8 +115,6 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             .to_string(),
         integration: format!("integration/{plan_id}"),
         tasks,
-        readings,
-        fixes,
         context,
         plan: plan_id,
     })
@@ -156,8 +141,6 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
             "live": r.live,
             "base": r.base,
             "integration": r.integration,
-            "readings": r.readings,
-            "fixes": r.fixes,
             "context": r.context,
             "tasks": r.tasks.iter().map(|t| serde_json::json!({
                 "id": t.id,
@@ -168,7 +151,6 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
                 "last_status": t.last_status,
                 "merged": t.merged,
                 "context": t.context,
-                "reviews": t.reviews,
                 "held": t.held,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
@@ -210,12 +192,7 @@ fn print_human(rows: &[RunRow]) {
                     format!("{detail} ({carried})")
                 };
             }
-            let fix = if t.reviews > 0 {
-                t.reviews.to_string()
-            } else {
-                String::new()
-            };
-            println!("  {:<8} {:<10} {:<4} {}", t.id, t.state, fix, detail);
+            println!("  {:<8} {:<10} {}", t.id, t.state, detail);
         }
     }
 }
@@ -260,4 +237,39 @@ pub fn cmd_status(json: bool, brief: bool) -> i32 {
         print_human(&rows);
     }
     exit::OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_json_carries_no_reader_counts() {
+        let rows = [RunRow {
+            plan: "demo".into(),
+            live: false,
+            base: "abc123".into(),
+            integration: "integration/demo".into(),
+            tasks: vec![TaskRow {
+                id: "t1".into(),
+                state: "merged".into(),
+                dispatches: 1,
+                session: String::new(),
+                failed: String::new(),
+                age: "-".into(),
+                last_status: String::new(),
+                merged: "deadbeef".into(),
+                context: 4000,
+                held: String::new(),
+            }],
+            context: 4000,
+        }];
+        let doc = as_json("app", &rows);
+        let run = &doc["runs"][0];
+        assert_eq!(run["context"], 4000);
+        assert!(run.get("readings").is_none(), "{run}");
+        assert!(run.get("fixes").is_none(), "{run}");
+        assert_eq!(run["tasks"][0]["state"], "merged");
+        assert!(run["tasks"][0].get("reviews").is_none(), "{run}");
+    }
 }

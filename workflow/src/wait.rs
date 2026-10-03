@@ -161,8 +161,8 @@ fn wait_loop(dir: &Path, plan: &str, timeout: Option<u64>, merges: bool) -> i32 
     }
 }
 
-/// One `still: <task> <state> <age>` line per task the run is carrying --
-/// dispatched or reviewing -- for the timeout to print.
+/// One `still: <task> <state> <age>` line per dispatched task, for the
+/// timeout to print.
 fn still_lines(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -179,7 +179,7 @@ fn still_lines(dir: &Path) -> Vec<String> {
             .unwrap_or_default()
             .trim()
             .to_string();
-        if state != run::DISPATCHED && state != run::REVIEWING {
+        if state != run::DISPATCHED {
             continue;
         }
         let since = std::fs::read_to_string(dir.join(format!("{task}.dispatched_at")))
