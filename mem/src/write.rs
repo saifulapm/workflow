@@ -252,8 +252,8 @@ fn ticked_id(line: &str) -> Option<&str> {
 /// and the incoming copy lacks: the incoming text with those boxes checked
 /// again, and the ids it happened to. An orchestrator answering a question
 /// mid-run edits the file the run started from, unticked, and stores it over
-/// mem's copy, which by then carries every merge the run has made (friction
-/// #6K4RFP7Q). A different first line is a different document -- a new plan
+/// mem's copy, which by then carries every merge the run has made. A
+/// different first line is a different document -- a new plan
 /// under the old one's task ids -- and nothing carries over.
 pub fn carry_ticks(current: &str, incoming: &str) -> (String, Vec<String>) {
     let same = current.lines().next().map(str::trim) == incoming.lines().next().map(str::trim);

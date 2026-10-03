@@ -76,8 +76,7 @@ pub fn context(app: &App, budget: Option<usize>, brief: bool, hook_json: bool) -
             eprintln!("mem: {note}");
         }
         // Named first: a session that inherited another's MEM_PROJECT read
-        // amx's memory in shortcart's checkout and could not tell (friction
-        // #EE2VMENP).
+        // amx's memory in shortcart's checkout and could not tell.
         // A warning about the store still leads.
         let at = digest
             .text
@@ -542,7 +541,7 @@ pub fn unknown_project_note(identity: &Identity) -> Option<String> {
 /// where that is why the checkout's own remote never matched it, or names an
 /// alias collision the registry refused to pick between; `None` when no
 /// project shares the name, so the caller falls back to its own generic note.
-/// A child project is left alone (ruling 3): it shares its root's remote, so
+/// A child project is left alone: it shares its root's remote, so
 /// pointing an unrelated checkout at it by remote would fold that checkout's
 /// notes into the root's child instead of a project of its own.
 pub fn claim_note(registry: &Registry, name_hint: &str) -> Option<String> {
@@ -649,8 +648,7 @@ pub fn log(
     };
     // `log` is the default kind only while nothing else narrows the read: a
     // `--type` on its own means that type in every kind, because a follow-up
-    // is a fact and `mem log --type followup` is the hint a run prints
-    // (friction #N5FCYDTC).
+    // is a fact and `mem log --type followup` is the hint a run prints.
     let kind = kind.or_else(|| r#type.is_none().then_some("log"));
     let mut rows = index.recent_filtered(kind, r#type, identity.id(), limit.max(1))?;
     if let Some(floor) = floor {
@@ -768,7 +766,7 @@ fn self_record(app: &App) {
     }
 }
 
-/// The plan singletons: the plan of record, and the roadmap of milestones
+/// The plan singletons: the current plan, and the roadmap of milestones
 /// above it. One grammar and one set of verbs over two files, so the handling
 /// is written once and told which file it is acting on.
 #[derive(Clone, Copy)]
@@ -797,7 +795,7 @@ const ROADMAP: Singleton = Singleton {
     path: |store, id| store.roadmap_path(id),
 };
 
-/// What `mem plan` was asked for. The verb reaches from the plan of record to
+/// What `mem plan` was asked for. The verb reaches from the current plan to
 /// the stored milestone plans and back, which is more than a row of positional
 /// flags reads well as.
 pub struct PlanArgs<'a> {
@@ -811,8 +809,8 @@ pub struct PlanArgs<'a> {
     pub from: Option<&'a str>,
 }
 
-/// `mem plan` — the plan of record, the milestone plans stored beside it, and
-/// the copy that makes one of them the record.
+/// `mem plan` — the current plan, the milestone plans stored beside it, and
+/// the copy that makes one of them the current one.
 pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
     if args.list {
         return list_slug_files(
@@ -835,8 +833,8 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
     check_slug(slug, "plan")?;
     if args.tick.is_some() {
         return Err(exit::usage(
-            "a tick belongs to the plan of record — make this milestone's plan the \
-             record first with `mem plan --from <slug>`",
+            "a tick belongs to the current plan — make this milestone's plan the \
+             current one first with `mem plan --from <slug>`",
         ));
     }
     stored_plan(app, slug, args.set_file, args.stdin, args.clear)
@@ -844,7 +842,7 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
 
 /// `mem plan --task <id>`: one task's block, the `- [ ] <id>` line and the
 /// indented lines under it, so an orchestrator re-reading one task does not
-/// re-read a 16 KB plan to find it (m1-lessons ruling 12).
+/// re-read a 16 KB plan to find it.
 fn plan_task(app: &App, task: &str) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
     let Some(id) = identity.id() else {
@@ -861,7 +859,7 @@ fn plan_task(app: &App, task: &str) -> Result<i32> {
             Ok(0)
         }
         None => Err(exit::not_found(format!(
-            "no task '{task}' in the plan of record"
+            "no task '{task}' in the current plan"
         ))),
     }
 }
@@ -891,7 +889,7 @@ pub fn task_block(plan: &str, task: &str) -> Option<String> {
 /// `mem roadmap` — the same four moves over roadmap.md, and one more: a
 /// milestone the end-of-milestone review sends back goes to unchecked with
 /// `--untick`, which a replacement cannot do because a write keeps the ticks
-/// the copy on disk has (friction #5ASS8BVK). The plan of record has no such
+/// the copy on disk has. The current plan has no such
 /// move: its tasks belong to the run that is making them.
 pub fn roadmap(
     app: &App,
@@ -932,7 +930,7 @@ fn singleton(
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or_default();
-    // Either header is accepted here: a roadmap filed as the plan of record
+    // Either header is accepted here: a roadmap filed as the current plan
     // is a mistake `workflow run` diagnoses on its own, not one mem refuses.
     if header_slug(first, "plan").is_none() && header_slug(first, "roadmap").is_none() {
         return Err(exit::usage(
@@ -994,7 +992,7 @@ fn header_slug<'a>(line: &'a str, noun: &str) -> Option<&'a str> {
     (!slug.is_empty()).then_some(slug)
 }
 
-/// `mem plan --from <slug>` — a stored plan becomes the plan of record. The
+/// `mem plan --from <slug>` — a stored plan becomes the current plan. The
 /// refusal is the point: an unchecked task means a run still in flight, and
 /// overwriting plan.md under it loses what the run is ticking.
 fn plan_from(app: &App, slug: &str) -> Result<i32> {
@@ -1009,7 +1007,7 @@ fn plan_from(app: &App, slug: &str) -> Result<i32> {
     let current = std::fs::read_to_string(&path).unwrap_or_default();
     if let Some(task) = crate::digest::first_open_task(&current) {
         return Err(exit::usage(format!(
-            "the plan of record still has an unchecked task ({}) — finish it, or \
+            "the current plan still has an unchecked task ({}) — finish it, or \
              `mem plan --clear`",
             crate::search::truncate_bytes(task, 60)
         )));

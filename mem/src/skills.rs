@@ -24,9 +24,9 @@ pub const SKILLS: [(&str, &str); 1] = [("mem", include_str!("../../skills/mem/SK
 /// both verbs and say which owns which name: mem serves its own skill and
 /// workflow serves the rest, and a session that guesses wrong gets an exit 1
 /// rather than the skill. The listing alone cannot say it — workflow's lines are
-/// appended verbatim, with no owner marker (friction #NBQN1S4V).
+/// appended verbatim, with no owner marker.
 /// And it says they are shell commands: a session took the names for
-/// Skill-tool skills (friction #RTSY09BG).
+/// Skill-tool skills.
 const HOW: &str = "skills -- shell commands, not Skill-tool skills: read one before doing \
 what it covers with `mem skill mem` for mem's, `workflow skill <name>` for every other";
 

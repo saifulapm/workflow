@@ -48,7 +48,7 @@ pub struct Sources {
     pub staleness: Option<String>,
     pub handoff: Option<Row>,
     pub plan: Option<String>,
-    /// The milestones above the plan of record, when the project is planned
+    /// The milestones above the current plan, when the project is planned
     /// whole rather than one plan at a time.
     pub roadmap: Option<String>,
     pub questions: Vec<Row>,
@@ -123,9 +123,9 @@ impl Sources {
     }
 }
 
-/// The most recent logs that are not the run's own bookkeeping (ruling 6 of
-/// m1-wiki-first): a run's dispatch and merge lines would otherwise crowd out
-/// the handful of worker and person logs the digest has room for. A run can
+/// The most recent logs that are not the run's own bookkeeping: a run's
+/// dispatch and merge lines would otherwise crowd out the handful of worker
+/// and person logs the digest has room for. A run can
 /// write long unbroken bursts of run-typed lines, so a fixed-size page can
 /// come back empty after filtering; fetch growing pages until `limit` logs
 /// survive the filter or the project's log history is exhausted.
@@ -244,7 +244,7 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
             mandatory.push(format!("  {body}"));
         }
     }
-    // The roadmap sits above the plan of record, and reads that way: which
+    // The roadmap sits above the current plan, and reads that way: which
     // milestone is next, then what the plan in hand is doing about it.
     if let Some(roadmap) = &sources.roadmap {
         for line in plan_head(roadmap) {

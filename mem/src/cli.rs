@@ -234,7 +234,7 @@ pub enum Command {
     /// Print plan.md verbatim, or replace or clear it. With a slug, the stored
     /// plan of that milestone instead.
     Plan {
-        /// A milestone's stored plan. Without one, the plan of record.
+        /// A milestone's stored plan. Without one, the current plan.
         slug: Option<String>,
         #[arg(long)]
         set_file: Option<std::path::PathBuf>,
@@ -251,7 +251,7 @@ pub enum Command {
         /// List the stored plans: slug, bytes, date and title.
         #[arg(long, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick"])]
         list: bool,
-        /// Make a stored plan the plan of record. Refused while the current one
+        /// Make a stored plan the current plan. Refused while the current one
         /// still holds an unchecked task.
         #[arg(long, value_name = "SLUG", conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick", "list"])]
         from: Option<String>,

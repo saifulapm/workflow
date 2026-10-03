@@ -266,7 +266,7 @@ impl Run {
 }
 
 /// The four hooks the mem skill's wiring depends on, and the command substring
-/// that makes each one count as wired (spec ruling 7, `TESTING.md` §4).
+/// that makes each one count as wired.
 ///
 /// Stop was specified in spec §9 from the start and never wired anywhere, and
 /// this list checking only the other three is why nobody noticed: pi's
@@ -322,7 +322,7 @@ fn hook_wired(doc: &serde_json::Value, event: &str, wants: &str) -> bool {
 }
 
 /// The pi extension mem ships, embedded so `mem doctor` can tell an installed
-/// copy from what this binary would write (ruling 3).
+/// copy from what this binary would write.
 pub const PI_EXTENSION: &str = include_str!("../assets/pi/mem.ts");
 
 /// `pi extension missing` when nothing is at `path`; `pi extension stale` when
@@ -377,7 +377,7 @@ fn holds_aws_key(text: &str) -> bool {
 
 /// One `-----BEGIN … PRIVATE KEY-----` header with a body under it. The
 /// header alone is what a note quoting it looks like — a reader's follow-up
-/// about the scrubber was refused as a key (friction #7269R5F0) — so the
+/// about the scrubber was refused as a key — so the
 /// scan wants the encoded bytes the header introduces.
 fn holds_private_key(text: &str) -> bool {
     text.split("-----BEGIN")

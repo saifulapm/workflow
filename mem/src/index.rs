@@ -321,7 +321,7 @@ impl Index {
     /// Rows newest first, narrowed by kind, by type, by both or by neither.
     /// Both narrowings belong in the query: `mem log --type` filtered a window
     /// of recent rows afterwards, and a follow-up older than the window was
-    /// not in it to be found (friction #N5FCYDTC).
+    /// not in it to be found.
     pub fn recent_filtered(
         &self,
         kind: Option<&str>,

@@ -91,8 +91,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 verbs::search_verb(&app, query, kind, r#type.as_deref(), *limit, *min_score)
             }
             // No query and a kind: the kind, newest first, the way `mem log
-            // --kind` lists it (m1-lessons ruling 12: rulings could not be
-            // listed without inventing a query).
+            // --kind` lists it, so a kind can be listed without inventing a query.
             (None, Some(kind)) => {
                 verbs::log(&app, None, *limit, None, Some(kind), r#type.as_deref())
             }

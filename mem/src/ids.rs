@@ -154,8 +154,8 @@ mod tests {
             Some(IdRef::Full("01K2YR1VC0AB3DE4FG5HJ6KM7N".into()))
         );
         assert_eq!(
-            IdRef::parse("#5HJ6KM7N"),
-            Some(IdRef::Short("5HJ6KM7N".into()))
+            IdRef::parse("#QWERTYZP"),
+            Some(IdRef::Short("QWERTYZP".into()))
         );
         assert_eq!(
             IdRef::parse("5hj6km7n"),

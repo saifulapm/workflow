@@ -37,8 +37,7 @@ pub struct Project {
     /// Globs this project wants a cold review of, set by
     /// `mem project set review-paths`. Whitespace separated, merged with the
     /// global table rather than replacing it: the shipped rows are what is
-    /// sensitive everywhere, and these are what is sensitive here
-    /// (friction #HK2PNTR4).
+    /// sensitive everywhere, and these are what is sensitive here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_paths: Option<String>,
     /// The root project this one lives inside, by id. Present only on a child

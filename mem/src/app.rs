@@ -68,7 +68,7 @@ impl App {
     /// choose its directory -- a worker at its worktree's root, which is the
     /// named child's parent -- and a session that inherited it from another
     /// wrote into amx's memory from shortcart's checkout, and replaced a live
-    /// run's handoff (frictions #EE2VMENP, #VMG4FV4P). A directory in no
+    /// run's handoff. A directory in no
     /// project, the named one, its parent or its child keeps the variable.
     fn overruled(&self, named: &str) -> Option<Identity> {
         let here = resolve(&self.cwd, &self.store, &self.dirs, None, Mode::Read).ok()?;
