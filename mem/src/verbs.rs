@@ -323,6 +323,7 @@ pub fn project_current(app: &App) -> Result<i32> {
     // The keys a run reads to place and pace itself, as (shown, stored, value).
     let run_keys: Vec<(&str, &str, String)> = [
         ("runner", "runner"),
+        ("runner-since", "runner_since"),
         ("dev", "dev"),
         ("preview", "preview"),
         ("surface", "surface"),

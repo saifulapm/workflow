@@ -46,6 +46,10 @@
       "description": "Present only when a machine claimed the project with `mem project set runner`.",
       "type": "string"
     },
+    "runner_since": {
+      "description": "When the runner claimed the project, RFC 3339; present only beside runner.",
+      "type": "string"
+    },
     "dev": {
       "type": "string"
     },

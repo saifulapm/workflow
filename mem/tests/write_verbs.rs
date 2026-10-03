@@ -788,12 +788,21 @@ fn project_set_runner_stamps_the_claim_and_unset_clears_both() {
         .parse()
         .expect("runner_since is RFC 3339");
     assert!(since.as_second() >= before.as_second() - 1, "{since}");
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["runner"].as_str(), Some("mini"), "{v}");
+    assert_eq!(
+        v["runner_since"].as_str(),
+        doc["runner_since"].as_str(),
+        "{v}"
+    );
 
     let out = mem(&w, &repo, &["project", "unset", "runner"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let doc = toml_of();
     assert!(doc.get("runner").is_none(), "{doc}");
     assert!(doc.get("runner_since").is_none(), "{doc}");
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("runner_since").is_none(), "{v}");
 }
 
 #[test]
