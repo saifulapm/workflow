@@ -190,6 +190,20 @@
       "description": "Question rows in `questions --json` only: whether an answer item exists. The JSON twin of the text listing's ✓/? column.",
       "type": "boolean"
     },
+    "options": {
+      "description": "Question rows in `questions --json` only: the offered answers, empty when none were given.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommend": {
+      "description": "Question rows in `questions --json` only: the answer the asker would pick, or null when none was given.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "answer": {
       "description": "Question rows in `questions --json` only: the answer's body, or null while the question waits.",
       "type": [

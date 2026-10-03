@@ -256,7 +256,15 @@ fn every_verb_matches_its_committed_schema() {
         &mem_env(
             &w,
             &repo,
-            &["ask", "deploy on friday?", "--options", "yes,no", "--json"],
+            &[
+                "ask",
+                "deploy on friday?",
+                "--options",
+                "yes,no",
+                "--recommend",
+                "no",
+                "--json",
+            ],
             &quiet,
         ),
     );

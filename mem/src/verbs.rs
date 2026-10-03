@@ -249,11 +249,15 @@ pub fn show(app: &App, ids: &[String]) -> Result<i32> {
 }
 
 fn read_body(row: &Row) -> String {
+    read_item(row)
+        .map(|i| i.body_str().to_string())
+        .unwrap_or_default()
+}
+
+fn read_item(row: &Row) -> Option<Item> {
     std::fs::read(&row.path)
         .ok()
         .and_then(|b| Item::parse(&b).ok())
-        .map(|i| i.body_str().to_string())
-        .unwrap_or_default()
 }
 
 /// `mem projects`.
@@ -1750,6 +1754,7 @@ pub fn ask(
     app: &App,
     question: &str,
     options: &[String],
+    recommend: Option<&str>,
     audience: Option<crate::cli::Audience>,
 ) -> Result<i32> {
     let identity = app.identity(Mode::Write)?;
@@ -1762,6 +1767,7 @@ pub fn ask(
     if !options.is_empty() {
         meta.options = Some(options.to_vec());
     }
+    meta.recommend = recommend.map(str::to_string);
     let task = asking_task(app);
     let audience = match audience {
         Some(a) => a.stored(),
@@ -1785,6 +1791,7 @@ pub fn ask(
                 "id": written.id,
                 "short_id": written.short_id,
                 "options": options,
+                "recommend": recommend,
                 "audience": audience,
             }))?
         );
@@ -1842,6 +1849,11 @@ pub fn questions(
             v["answered"] = json!(answer.is_some());
             v["body"] = json!(read_body(row).trim());
             v["answer"] = json!(answer.as_ref().map(|a| read_body(a).trim().to_string()));
+            // The index keeps neither field, so they come from the item file.
+            let meta = read_item(row).map(|i| i.meta);
+            let options = meta.as_ref().and_then(|m| m.options.clone());
+            v["options"] = json!(options.unwrap_or_default());
+            v["recommend"] = json!(meta.and_then(|m| m.recommend));
             items.push(v);
         }
         println!("{}", serde_json::to_string(&json!({ "questions": items }))?);
@@ -1861,6 +1873,9 @@ pub fn questions(
                 row.short_id,
                 row.title
             );
+            if let Some(text) = read_item(row).and_then(|i| i.meta.recommend) {
+                println!("    recommended: {text}");
+            }
         }
     }
     if rows.is_empty() {

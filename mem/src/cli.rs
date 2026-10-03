@@ -187,6 +187,9 @@ pub enum Command {
         question: String,
         #[arg(long, value_delimiter = ',')]
         options: Vec<String>,
+        /// The answer the asker would pick.
+        #[arg(long, value_name = "TEXT")]
+        recommend: Option<String>,
         /// Who answers. Asked from an orchestrated task's worktree (or with
         /// WORKFLOW_TASK set) the default is the orchestrator; anywhere else
         /// it is a person, which is what the hub and the phone show.

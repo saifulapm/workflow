@@ -30,6 +30,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "archived",
     "archived_at",
     "options",
+    "recommend",
     "audience",
     "task",
     "by",
@@ -131,6 +132,10 @@ pub struct Meta {
     /// `kind = "question"` only: the offered answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<String>>,
+    /// `kind = "question"` only: the answer the asker would pick, shown with
+    /// the options so whoever answers can accept it in one step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommend: Option<String>,
     /// `kind = "question"` only: who is meant to answer. `orchestrator` is a
     /// worker's question, internals the session driving the run settles;
     /// absent means a person, which is what the hub and the phone show.
@@ -176,6 +181,7 @@ impl Meta {
             archived: None,
             archived_at: None,
             options: None,
+            recommend: None,
             audience: None,
             task: None,
             by: None,

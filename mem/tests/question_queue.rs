@@ -641,3 +641,72 @@ fn an_integration_worktree_defers_to_workflow_task_in_the_environment() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["questions"][0]["task"], "cart-v2/t9", "{v}");
 }
+
+/// A recommendation is one field on the question item: ask records it, and
+/// both listings carry it with the options, so the hub can show them under
+/// the question without reading the file itself.
+#[test]
+fn a_recommendation_rides_with_the_options_in_both_listings() {
+    let w = World::new("q-recommend");
+    let repo = w.repo("thing", None);
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &[
+            "ask",
+            "ship on friday?",
+            "--options",
+            "yes,no",
+            "--recommend",
+            "yes, the gate is green",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let asked: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(asked["recommend"], "yes, the gate is green", "{asked}");
+    let id = asked["short_id"].as_str().unwrap().to_string();
+
+    let out = ask_env(&w, &repo, &["ask", "and this one?", "--json"], None);
+    let bare: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(bare["recommend"].is_null(), "{bare}");
+
+    let check = |w: &World| {
+        let out = ask_env(w, &repo, &["questions", "--json"], None);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let rows = v["questions"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{v}");
+        for row in rows {
+            if row["short_id"] == serde_json::json!(id) {
+                assert_eq!(row["options"], serde_json::json!(["yes", "no"]), "{row}");
+                assert_eq!(row["recommend"], "yes, the gate is green", "{row}");
+            } else {
+                assert_eq!(row["options"], serde_json::json!([]), "{row}");
+                assert!(row["recommend"].is_null(), "{row}");
+            }
+        }
+    };
+    check(&w);
+
+    let out = ask_env(&w, &repo, &["questions"], None);
+    let text = stdout(&out);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "{text}");
+    let at = lines
+        .iter()
+        .position(|l| l.contains(&format!("#{id}")))
+        .unwrap();
+    assert_eq!(
+        lines[at + 1],
+        "    recommended: yes, the gate is green",
+        "{text}"
+    );
+
+    // The field lives in the item file, so a rebuilt index loses nothing.
+    let out = ask_env(&w, &repo, &["reindex"], None);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    check(&w);
+}

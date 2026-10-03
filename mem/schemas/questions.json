@@ -10,7 +10,11 @@
     "questions": {
       "type": "array",
       "items": {
-        "$ref": "item.json"
+        "$ref": "item.json",
+        "required": [
+          "options",
+          "recommend"
+        ]
       }
     }
   },

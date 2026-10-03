@@ -7,6 +7,7 @@
     "id",
     "short_id",
     "options",
+    "recommend",
     "audience"
   ],
   "properties": {
@@ -21,6 +22,13 @@
       "items": {
         "type": "string"
       }
+    },
+    "recommend": {
+      "description": "The answer the asker would pick, or null when none was given.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "audience": {
       "description": "Who the question went to: `orchestrator` for a worker's, null for a person's.",
