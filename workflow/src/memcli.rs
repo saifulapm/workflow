@@ -153,6 +153,14 @@ pub fn project_choice(key: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// The path globs this project keeps out of the hygiene check, `mem project
+/// set hygiene-exempt`, split the way a Files line is.
+pub fn project_hygiene_exempt() -> Vec<String> {
+    project_choice("hygiene_exempt")
+        .map(|globs| crate::ownership::split_patterns(&globs))
+        .unwrap_or_default()
+}
+
 pub fn project_model() -> Option<String> {
     project_choice("model")
 }

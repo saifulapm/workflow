@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -46,6 +46,47 @@ pub enum Command {
         /// Lint this text instead of a file.
         #[arg(long)]
         string: Option<String>,
+    },
+    /// Look for agent files and process references in a repository.
+    #[command(
+        group(ArgGroup::new("scope").args(["staged", "tree", "history", "message", "string"])),
+        long_about = "Look for agent files and process references in a repository.
+
+The hard tier exits 1: a file on the global ignore list tracked or staged, a
+.gitignore line naming one, and in the added lines of non-markdown files or in
+a message a numbered ruling, milestone, ticket, issue or ADR, a memory id, a
+co-author or generated-with line. A message also fails on a subject over 72
+characters and on a bare task or milestone id. The soft tier only warns, reads
+messages only, and is cleared per term by a lint-exception ruling. Paths the
+project key hygiene-exempt names are not read for content.
+
+With no mode the whole tracked tree and the last 200 commits are read."
+    )]
+    Hygiene {
+        /// The staged paths and the lines they add.
+        #[arg(long)]
+        staged: bool,
+        /// Every tracked file.
+        #[arg(long)]
+        tree: bool,
+        /// The messages of the last N commits.
+        #[arg(long, value_name = "N")]
+        history: Option<usize>,
+        /// A commit message file, git's commentary left out.
+        #[arg(long, value_name = "FILE")]
+        message: Option<PathBuf>,
+        /// A message given as text.
+        #[arg(long, value_name = "TEXT")]
+        string: Option<String>,
+        /// Read only under this directory.
+        #[arg(long, value_name = "DIR")]
+        path: Option<PathBuf>,
+        /// Print the findings as a JSON array.
+        #[arg(long)]
+        json: bool,
+        /// Untrack ignore-list files and drop their .gitignore lines first.
+        #[arg(long)]
+        fix: bool,
     },
     /// Does this change set want a cold review?
     #[command(name = "review-needed")]
@@ -336,6 +377,11 @@ usage: workflow <command> [options]
       0 written · 2 not a state, or not a run worktree
   lint-msg [<file>] [--string <text>]
       0 clean (warnings included) · 1 hard fail
+  hygiene [--staged|--tree|--history <n>|--message <file>|--string <s>]
+      [--path <dir>] [--json] [--fix]
+      agent files and process references; no mode reads the tree and the
+      last 200 commits; --fix untracks ignore-list files and their lines
+      0 clean or warned · 1 hard finding · 2 usage
   review-needed [--diff <range>]
       0 a cold review is wanted · 1 it is not
   plan-check <file> [--json]

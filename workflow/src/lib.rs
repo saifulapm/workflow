@@ -2,6 +2,7 @@
 //!
 //!   workflow verify          run this repo's suite over what is staged
 //!   workflow lint-msg        check a commit message, branch name or PR body
+//!   workflow hygiene         agent files and process references in a repo
 //!   workflow review-needed   does this change set want a cold review?
 //!   workflow plan-check      read a plan and report its tasks and waves
 //!   workflow run             run a plan's tasks in worktrees
@@ -27,6 +28,7 @@ pub mod doctor;
 pub mod exit;
 pub mod gitcmd;
 pub mod hook;
+pub mod hygiene;
 pub mod lint;
 pub mod memcli;
 pub mod ownership;
@@ -125,6 +127,27 @@ pub fn run(cli: Cli) -> i32 {
         Command::LintMsg { msgfile, string } => {
             lint::cmd_lint_msg(msgfile.as_deref(), string.as_deref())
         }
+        Command::Hygiene {
+            staged,
+            tree,
+            history,
+            message,
+            string,
+            path,
+            json,
+            fix,
+        } => hygiene::cmd_hygiene(
+            hygiene::Scope {
+                staged,
+                tree,
+                history,
+                message: message.as_deref(),
+                string: string.as_deref(),
+            },
+            path.as_deref(),
+            json,
+            fix,
+        ),
         Command::ReviewNeeded { diff } => review::cmd_review_needed(diff.as_deref()),
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Run {
