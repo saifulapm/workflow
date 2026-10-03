@@ -32,10 +32,10 @@ like "$orchestrate_skill" 'workflow plan-check' 'orchestrate checks the plan bef
 # starts, which is the dead end one session then went source-diving in.
 like "$orchestrate_skill" 'mem plan --from <slug>' \
 	'orchestrate makes a named milestone the plan of record first'
-# And a request that names models hands it strings for three project keys.
+# And a request that names a model hands it a string for the project key.
 # The name is opaque, so nothing sends it reading a provider's config.
-like "$orchestrate_skill" 'mem project set model\|review-model\|fix-model' \
-	"orchestrate says where the request's model names go"
+like "$orchestrate_skill" 'mem project set model <m>' \
+	"orchestrate says where the request's model name goes"
 like "$orchestrate_skill" 'nothing prints a catalog' \
 	'and that model names are not looked up'
 like "$orchestrate_skill" 'mem save --kind ruling' 'orchestrate records its decisions as rulings'
@@ -94,6 +94,17 @@ for s in implement route; do
 	skill=$(cat "$WF_ROOT/skills/$s/SKILL.md")
 	like "$skill" 'workflow hygiene --staged' "$s runs the hygiene check before a commit"
 	unlike "$skill" 'workflow read' "and $s no longer sends the diff to a reader"
+done
+
+# No project key names a reader any more: a run starts unread unless the
+# one run's environment names one, and every skill and the README say so.
+for f in skills/orchestrate/SKILL.md skills/review/SKILL.md skills/roadmap/SKILL.md README.md; do
+	for key in review-model fix-model review-effort; do
+		unlike "$(cat "$WF_ROOT/$f")" "$key" "$f names no $key key"
+	done
+done
+for f in skills/orchestrate/SKILL.md skills/review/SKILL.md skills/roadmap/SKILL.md README.md; do
+	like "$(cat "$WF_ROOT/$f")" 'starts unread' "$f says a run starts unread"
 done
 
 ## ------------------------------------------------------- the fix-round loop

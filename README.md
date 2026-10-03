@@ -46,8 +46,6 @@ needs three things, none of them committed:
 
     mem project set verify "pnpm test"          # what green means here
     mem project set review-paths "scripts/**"   # extra risky globs, optional
-    mem project set review-model fable          # a reader at the merge gate, if it beats the workers'
-    mem project set review-model none           # nobody reads; the run starts unread
 
 From then on every session in that directory gets the project's memory at
 start, the commit gate is armed, and the routing skill decides lanes.
@@ -156,14 +154,15 @@ Three sizes of work, three moves:
   on opus unless the project says otherwise (`mem project set model sonnet`)
   or one run does (`WORKFLOW_MODEL=sonnet workflow run`). A cheaper model
   can be given more reasoning: `mem project set effort max` starts every
-  worker with `--effort max`, `review-effort` does the same for the reader,
-  `unset` takes either back, and `WORKFLOW_EFFORT` and
-  `WORKFLOW_REVIEW_EFFORT` do it for one run (empty means no flag). With a
-  `review-model` set, every task's diff is read by that model against the
+  worker with `--effort max`, `unset` takes it back, and `WORKFLOW_EFFORT`
+  does it for one run (empty means no flag). A run starts unread: no
+  project key names a reader. With `WORKFLOW_REVIEW_MODEL` set for one run
+  (`WORKFLOW_REVIEW_EFFORT` its reasoning), every task's diff is read by
+  that model against the
   plan before it merges, after its Verify is green. The reader tags each
   finding `[blocks]` or `[later]`; a fix verdict sends the task back into
   its worker's own session with the findings, a second one to a fresh
-  session on the `fix-model` (default: the reader's), and a third is the
+  session on `WORKFLOW_FIX_MODEL` (default: the reader's), and a third is the
   orchestrator's: `workflow accept <task>` lands it with the findings filed
   as follow-ups. `[later]` findings on a ship are follow-ups too. The run
   does not wait on the reading: the task sits `reviewing` while the next

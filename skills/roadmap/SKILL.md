@@ -139,8 +139,8 @@ last one lands. One strong session lands milestones faster than a run
 spends on one task's fix rounds (review-2026-09-15). Hand a plan to
 `orchestrate` only when its wide wave holds three or more tasks that share
 no Files and the machine carries that many workers, up to five
-(`WORKFLOW_MAX_WORKERS`), on the strongest model with `review-model none`;
-a run that merges every task ticks the milestone itself. A milestone a
+(`WORKFLOW_MAX_WORKERS`), on the strongest model; a run starts unread,
+and one that merges every task ticks the milestone itself. A milestone a
 review sends back goes to unchecked with `mem roadmap --untick <slug>`
 while the fixes are made.
 

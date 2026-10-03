@@ -13,14 +13,15 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
 - A run is the exception. A milestone is one strong session with
   `implement` unless its wide wave holds three or more tasks that share no
   files, on a machine that carries that many workers (up to five,
-  `WORKFLOW_MAX_WORKERS`); then workers on the strongest model
-  and `review-model none`, since fix rounds cost more than the defects they
-  catch (review-2026-09-15 has the numbers).
-- The run's worker, reader and fixer are project keys: set them, never
-  look them up (`mem project set model|review-model|fix-model <m>`, or the
-  matching `WORKFLOW_*` variable for one run). The name is opaque, a model
-  or an amx role file (`.amx/agents/<m>.md`, or `~/.config/amx/agents`);
-  `amx new` resolves it, and nothing prints a catalog.
+  `WORKFLOW_MAX_WORKERS`); then workers on the strongest model and no
+  reader, since fix rounds cost more than the defects they catch
+  (review-2026-09-15 has the numbers).
+- The run's worker is a project key: set it, never look it up
+  (`mem project set model <m>`, or `WORKFLOW_MODEL` for one run).
+  A run starts unread and says so; `WORKFLOW_REVIEW_MODEL` names a reader
+  for one run. The name is opaque, a model or an amx role file
+  (`.amx/agents/<m>.md`, or `~/.config/amx/agents`); `amx new` resolves
+  it, and nothing prints a catalog.
 - One run per session: one plan, or one milestone of a `roadmap`.
   Never edit project code or write in a worktree; your hands are
   `workflow`, `mem` and the plan of record.
@@ -55,9 +56,8 @@ gate, locks, redispatch) and stops on anything judgment-shaped.
    Act on what it printed and call it again; never wrap it in `tail`,
    `sleep` or a longer timeout. If your own shell goes, the run exits 0
    saying how many workers it left running: `workflow run` again in this
-   checkout adopts them. Refused for no reader: `mem project set
-   review-model none` if the brief says nobody reads, else ask Saiful.
-   Refused for a red trunk: fix main first, never the run.
+   checkout adopts them. Refused for a red trunk: fix main first, never
+   the run.
 3. Answer each worker question now, from the plan, the code or a ruling.
    In this order: `ls <run dir>/<task>.advice.*` and read the newest --
    the worker may have consulted the advisor already, and one answer given
