@@ -292,8 +292,8 @@ so a session is never held past what it can afford to miss."
     },
     /// Check this machine's wiring.
     Doctor {
-        /// Write the embedded skills and hook stubs where they are missing,
-        /// differ or are a symlink.
+        /// Write the embedded hook stubs, roles and skills where they are
+        /// missing, differ or are a symlink.
         #[arg(long)]
         fix: bool,
     },
@@ -315,9 +315,9 @@ With no name, one `<name> — <description>` line per skill, in name order: this
 is what `mem context` appends to a project's digest, so a session learns which
 skills exist where mem knows the project. With a name, that SKILL.md whole.
 
-The skills are embedded in the binary rather than written to a harness's skills
-directory, so there is no copy to drift and nothing on disk to gate. mem serves
-the mem skill the same way: `mem skill mem`.")]
+The skills are embedded in the binary, and `doctor --fix` installs them as files
+where each harness looks for them. mem serves the mem skill the same way: `mem
+skill mem`.")]
     Skill {
         /// The skill to print whole. Omit to list them.
         name: Option<String>,
@@ -416,8 +416,8 @@ usage: workflow <command> [options]
       report this project's runs: task states, spend, lock liveness
       0 reported · 2 outside a project
   doctor [--fix]
-      --fix writes the hook stubs where they are missing, differ or are a
-      symlink, and takes the skills an older --fix installed back off disk
+      --fix writes the hook stubs, roles and skills where they are missing,
+      differ or are a symlink
       0 healthy · 1 findings
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's

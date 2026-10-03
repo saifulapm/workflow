@@ -194,19 +194,30 @@ is "$RC" 1 'an unrelated repo with neither marker is still a finding'
 unlike "$OUT" 'no workflow checkout found' 'an unrelated repo at the cwd is no finding either'
 cd "$T_TMP" || exit 1
 
-## --------------------------------------------- the stubs, and the retiring
+## ------------------------------------------------ the stubs, roles and skills
 
-# A bare HOME has none of the three hook stubs at the fixed git hooks path.
-# The eight skills are no longer written anywhere: they are served, by
-# `workflow skill <name>` and `mem skill mem`.
+# A bare HOME has none of the hook stubs, roles or skills. Every skill the
+# binary carries, and mem's, is installed as a file in both skills
+# directories, so each harness finds it where it looks.
 export HOME="$T_TMP/embedded-home"
 mkdir -p "$HOME"
+
+skills=($(workflow skill | sed 's/ — .*//') mem)
+roles=(worker reader fixer advisor lead dogfood research plan plan-refresh grill)
+truthy "$([ "${#skills[@]}" -gt 1 ] && echo 0 || echo 1)" 'workflow skill names the skills it carries'
+is "${#roles[@]}" "$(ls "$WF_ROOT"/roles/*.md | wc -l)" 'the role list is every file under roles/'
+copies=$((3 + ${#roles[@]} + 2 * ${#skills[@]}))
 
 run workflow doctor
 is "$RC" 1 'a bare HOME has findings'
 n=$(grep -c 'missing at' <<<"$OUT")
-is "$n" 7 'seven entries are missing: the hook stubs and the four amx roles, and nothing else'
-unlike "$OUT" 'skill route.*missing at' 'no skill is missing, because none is installed'
+is "$n" "$copies" 'the hook stubs, every role and every skill in both dirs are missing'
+for s in "${skills[@]}"; do
+	like "$OUT" "skill $s \\(claude\\).*missing at $HOME/\\.claude/skills/$s/SKILL\\.md" \
+		"a missing $s skill is named in the claude dir"
+	like "$OUT" "skill $s \\(agents\\).*missing at $HOME/\\.agents/skills/$s/SKILL\\.md" \
+		"and in the agents dir"
+done
 like "$OUT" 'hook pre-commit.*missing at .*\.config/git/hooks/pre-commit' \
 	'a missing hook stub is named'
 like "$OUT" 'role worker.*missing at .*\.config/amx/agents/worker\.md' \
@@ -214,88 +225,64 @@ like "$OUT" 'role worker.*missing at .*\.config/amx/agents/worker\.md' \
 
 run workflow doctor --fix
 n=$(grep -c '^  .* wrote ' <<<"$OUT")
-is "$n" 7 '--fix writes the three stubs and the four roles'
+is "$n" "$copies" '--fix writes the stubs, the roles and the skills'
 is "$(cat "$HOME/.config/git/hooks/pre-commit")" "$(cat "$WF_ROOT/hooks/pre-commit")" \
 	'the stub holds the embedded text'
 is "$(stat -c %a "$HOME/.config/git/hooks/pre-commit")" 755 'the stub is written executable'
 # Where amx reads them: its config home is XDG's, which lib.sh pins under the
 # first HOME, not the one this section moved to.
-for role in worker reader fixer advisor; do
+for role in "${roles[@]}"; do
 	is "$(cat "$XDG_CONFIG_HOME/amx/agents/$role.md")" "$(cat "$WF_ROOT/roles/$role.md")" \
 		"the $role role holds the embedded text"
 done
-truthy "$([ ! -e "$HOME/.claude/skills" ] && echo 0 || echo 1)" \
-	'--fix creates no claude skills directory'
-truthy "$([ ! -e "$HOME/.agents/skills" ] && echo 0 || echo 1)" \
-	'nor an agents one'
-
-run workflow doctor
-unlike "$OUT" 'missing at' 'a second doctor after --fix finds nothing missing'
-unlike "$OUT" 'is installed' 'and a machine with no skills on disk says nothing about them'
-
-# A machine upgraded from the version that installed them: the copies it wrote
-# are still on disk, where every harness goes on discovering them.
-for d in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
-	for s in route plan roadmap implement orchestrate review mem unslop; do
-		mkdir -p "$d/$s"
-		cp "$WF_ROOT/skills/$s/SKILL.md" "$d/$s/SKILL.md"
+for s in "${skills[@]}"; do
+	for d in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
+		is "$(cat "$d/$s/SKILL.md")" "$(cat "$WF_ROOT/skills/$s/SKILL.md")" \
+			"the $s skill in $d holds the embedded text"
 	done
 done
 
 run workflow doctor
-is "$RC" 1 'the copies an older doctor installed are findings'
-n=$(grep -c 'is installed; skills are served now' <<<"$OUT")
-is "$n" 16 'sixteen of them: eight skills in two directories'
-like "$OUT" 'skill route \(claude\).*is installed; skills are served now' \
-	'each is named with its path'
+unlike "$OUT" 'missing at' 'a second doctor after --fix finds nothing missing'
+unlike "$OUT" 'skill [a-z-]+ \(' 'and says nothing about the skills'
+unlike "$OUT" 'retired|served' 'and no line says skills are served or retired'
 
-run workflow doctor --fix
-n=$(grep -c '^  .* retired ' <<<"$OUT")
-is "$n" 16 '--fix retires all sixteen'
-truthy "$([ ! -e "$HOME/.claude/skills/route" ] && echo 0 || echo 1)" \
-	'the name directory is gone, not just the leaf'
-truthy "$([ ! -e "$HOME/.agents/skills/mem" ] && echo 0 || echo 1)" \
-	'mem_s copy goes too: workflow wrote it, so workflow takes it back out'
+## ---------------------------------------------- a copy that drifted
 
-run workflow doctor
-unlike "$OUT" 'is installed' 'and a retired machine says nothing about skills at all'
-unlike "$OUT" 'retired ' 'with nothing left to retire'
-
-## ------------------------------------------- a copy somebody edited by hand
-
-# Text is what tells a copy this binary wrote from one somebody worked on.
-# Deleting the second silently is data loss, so it is reported and left.
-mkdir -p "$HOME/.claude/skills/route"
+# The binary is the only source: a copy that differs is reported, and --fix
+# writes the binary's text over it.
 printf -- '---\nname: route\ndescription: mine\n---\n\nmy own notes\n' \
 	>"$HOME/.claude/skills/route/SKILL.md"
 
 run workflow doctor
-like "$OUT" 'skill route \(claude\).*is not the copy this binary wrote' \
-	'a hand-edited copy is named as such'
+is "$RC" 1 'a drifted skill copy is a finding'
+like "$OUT" "skill route \\(claude\\).*differs at $HOME/\\.claude/skills/route/SKILL\\.md" \
+	'named as differing, with its path'
 
 run workflow doctor --fix
-like "$OUT" 'skill route \(claude\).*is not the copy this binary wrote' \
-	'and --fix will not remove it either'
-is "$(grep -c 'my own notes' "$HOME/.claude/skills/route/SKILL.md")" 1 \
-	'the file is untouched'
-rm -rf "$HOME/.claude/skills/route"
+like "$OUT" 'skill route \(claude\).*wrote ' '--fix rewrites it'
+is "$(cat "$HOME/.claude/skills/route/SKILL.md")" "$(cat "$WF_ROOT/skills/route/SKILL.md")" \
+	'and the copy holds the embedded text again'
 
 ## --------------------------------------------- a symlinked name directory
 
 # dotfiles linked the name directory, not the leaf: `ln -s <checkout>/skills/route
-# ~/.claude/skills/route`. Removing that costs the link and never its target.
+# ~/.claude/skills/route`. --fix replaces the link with a plain copy and never
+# touches its target.
 fake="$T_TMP/fake-checkout/skills/route"
 mkdir -p "$fake"
 printf 'content in the dev checkout\n' >"$fake/SKILL.md"
-mkdir -p "$HOME/.claude/skills"
+rm -rf "$HOME/.claude/skills/route"
 ln -s "$fake" "$HOME/.claude/skills/route"
 
 run workflow doctor
-like "$OUT" 'skill route \(claude\).*is installed' 'a symlinked name directory is found'
+like "$OUT" 'skill route \(claude\).*symlink at' 'a symlinked name directory is found'
 
 run workflow doctor --fix
-like "$OUT" 'skill route \(claude\).*retired' 'and retired'
-truthy "$([ ! -e "$HOME/.claude/skills/route" ] && echo 0 || echo 1)" 'the link is gone'
+like "$OUT" 'skill route \(claude\).*wrote ' 'and replaced'
+truthy "$([ ! -L "$HOME/.claude/skills/route" ] && echo 0 || echo 1)" 'the link is gone'
+is "$(cat "$HOME/.claude/skills/route/SKILL.md")" "$(cat "$WF_ROOT/skills/route/SKILL.md")" \
+	'a plain copy stands in its place'
 is "$(cat "$fake/SKILL.md")" 'content in the dev checkout' \
 	'and the dev checkout it pointed at was never touched'
 

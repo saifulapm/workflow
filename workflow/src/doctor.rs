@@ -1,6 +1,6 @@
 //! `workflow doctor` -- what this machine's wiring actually says (spec §7, §11).
-//! Plain `doctor` only reports; `--fix` writes the embedded hook stubs and
-//! amx roles, the one edit this command makes. The ignore list and the
+//! Plain `doctor` only reports; `--fix` writes the embedded hook stubs, amx
+//! roles and skills, the one edit this command makes. The ignore list and the
 //! settings belong to the dotfiles, so for those `--fix` prints the edit.
 
 use std::os::unix::fs::PermissionsExt;
@@ -321,26 +321,10 @@ fn every_on_path(program: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The eight skills `doctor --fix` used to write into every harness's skills
-/// directory, kept so it can recognise its own handiwork and take it back out.
-///
-/// This is a retirement manifest, not ownership: the seven workflow serves live
-/// in [`crate::skill::SKILLS`] and mem serves its own. Text is what tells a copy
-/// this binary wrote from one somebody edited by hand, and only the first is
-/// safe to delete. Once the machines are clean this can go.
-const RETIRED: [(&str, &str); 8] = [
-    ("implement", include_str!("../../skills/implement/SKILL.md")),
-    ("mem", include_str!("../../skills/mem/SKILL.md")),
-    (
-        "orchestrate",
-        include_str!("../../skills/orchestrate/SKILL.md"),
-    ),
-    ("plan", include_str!("../../skills/plan/SKILL.md")),
-    ("review", include_str!("../../skills/review/SKILL.md")),
-    ("roadmap", include_str!("../../skills/roadmap/SKILL.md")),
-    ("route", include_str!("../../skills/route/SKILL.md")),
-    ("unslop", include_str!("../../skills/unslop/SKILL.md")),
-];
+/// mem's own skill, installed beside the ones [`crate::skill::SKILLS`] holds
+/// so a harness finds all of them in one place. mem serves the same text as
+/// `mem skill mem`.
+const MEM_SKILL: (&str, &str) = ("mem", include_str!("../../skills/mem/SKILL.md"));
 
 /// The three git hook stubs, embedded the same way.
 const STUBS: [(&str, &str); 3] = [
@@ -349,20 +333,26 @@ const STUBS: [(&str, &str); 3] = [
     ("pre-push", include_str!("../../hooks/pre-push")),
 ];
 
-/// The four amx roles a run dispatches on (`amx new --role <name>`), one per
-/// kind of agent it starts. A role's brief goes in front of the task amx
+/// The amx roles a session starts on (`amx new --role <name>`), one per kind
+/// of agent. A role's brief goes in front of the task amx
 /// hands the agent, so the rules for how to work -- narrow reads, files
 /// written in steps, an output cap -- live here and not in every brief. A
 /// project overrides one whole with `.amx/agents/<name>.md`.
-pub const ROLES: [(&str, &str); 4] = [
+pub const ROLES: [(&str, &str); 10] = [
     ("worker", include_str!("../../roles/worker.md")),
     ("reader", include_str!("../../roles/reader.md")),
     ("fixer", include_str!("../../roles/fixer.md")),
     ("advisor", include_str!("../../roles/advisor.md")),
+    ("lead", include_str!("../../roles/lead.md")),
+    ("dogfood", include_str!("../../roles/dogfood.md")),
+    ("research", include_str!("../../roles/research.md")),
+    ("plan", include_str!("../../roles/plan.md")),
+    ("plan-refresh", include_str!("../../roles/plan-refresh.md")),
+    ("grill", include_str!("../../roles/grill.md")),
 ];
 
-/// The two directories `--fix` used to install into, and [`retire`] now empties:
-/// Claude Code's own, and the one pi, codex and opencode all read.
+/// The two directories `--fix` installs the skills into: Claude Code's own,
+/// and the one pi, codex and opencode all read.
 fn skill_dirs() -> [(&'static str, PathBuf); 2] {
     [
         ("claude", paths::home().join(".claude/skills")),
@@ -452,12 +442,7 @@ fn check_or_write(
     }
 }
 
-/// The three hook stubs, against the copy this binary carries.
-///
-/// The skills used to be installed here too, into both harness directories. A
-/// skill is served now -- `workflow skill <name>`, `mem skill mem` -- so there
-/// is no copy on disk to keep in step, and nothing a harness auto-discovers to
-/// gate. [`retire`] takes the old copies back out.
+/// The hook stubs, roles and skills, against the copy this binary carries.
 fn install(r: &mut Report, fix: bool) {
     let hooks = hooks_dir();
     for (name, text) in STUBS {
@@ -471,54 +456,13 @@ fn install(r: &mut Report, fix: bool) {
         let path = roles.join(format!("{name}.md"));
         check_or_write(r, &format!("role {name}"), &path, text, fix, None);
     }
-}
-
-/// Take the installed skills back off disk, one name directory at a time.
-///
-/// Only what this binary put there: a leaf holding exactly the text in
-/// [`RETIRED`] is ours to remove, and so is a symlink at our own path, which
-/// costs the link and never its target. Anything else is a hand edit, and
-/// deleting one silently is data loss -- it is reported and left, which is also
-/// what `doctor` without `--fix` does with every copy it finds.
-///
-/// A machine with nothing left here says nothing at all.
-fn retire(r: &mut Report, fix: bool) {
-    for (name, text) in RETIRED {
+    // A harness lists the skills it finds on disk, so each is a file in both
+    // directories, verbatim: the frontmatter is where the listing reads the
+    // name and description from.
+    for (name, text) in crate::skill::SKILLS.iter().chain([&MEM_SKILL]) {
         for (dest, dir) in skill_dirs() {
-            let leaf = dir.join(name).join("SKILL.md");
-            let linked = leaf.is_symlink() || dir.join(name).is_symlink();
-            if !linked && !leaf.exists() {
-                continue;
-            }
-            let label = format!("skill {name} ({dest})");
-            let ours = linked || std::fs::read_to_string(&leaf).is_ok_and(|t| t == text);
-            if !ours {
-                r.finding(
-                    &label,
-                    format!(
-                        "{} is not the copy this binary wrote -- move it aside, or keep it",
-                        leaf.display()
-                    ),
-                );
-                continue;
-            }
-            if !fix {
-                r.finding(
-                    &label,
-                    format!("{} is installed; skills are served now", leaf.display()),
-                );
-                continue;
-            }
-            let target = dir.join(name);
-            let removed = if target.is_symlink() {
-                std::fs::remove_file(&target)
-            } else {
-                std::fs::remove_dir_all(&target)
-            };
-            match removed {
-                Ok(()) => r.note(&label, format!("retired {}", target.display())),
-                Err(_) => r.finding(&label, format!("could not remove {}", target.display())),
-            }
+            let path = dir.join(name).join("SKILL.md");
+            check_or_write(r, &format!("skill {name} ({dest})"), &path, text, fix, None);
         }
     }
 }
@@ -531,7 +475,6 @@ pub fn cmd_doctor(fix: bool) -> i32 {
     ignore_list(&mut r, fix);
     settings_keys(&mut r, fix);
     install(&mut r, fix);
-    retire(&mut r, fix);
 
     if r.findings == 0 {
         println!("healthy: nothing to fix");
