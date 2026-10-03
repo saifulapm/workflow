@@ -532,6 +532,8 @@ mod tests {
             gives: None,
             pattern: None,
             show: None,
+            effort: None,
+            surface: None,
             checked: false,
             block: "- [ ] t3 The gate step  [after: t2]\n      Files: workflow/src/run.rs\n      Verify: cargo test\n      Done: a fix verdict resets integration\n".into(),
         }

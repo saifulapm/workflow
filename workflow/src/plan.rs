@@ -50,8 +50,14 @@ pub struct Task {
     /// One analog to copy the shape of: `path` or `path:12-25`.
     pub pattern: Option<String>,
     /// A milestone's line: what Saiful opens, does and sees once it lands,
-    /// checked from the running product rather than from a diff.
+    /// checked from the running product rather than from a diff. On a task,
+    /// the evidence its worker captures before reporting done.
     pub show: Option<String>,
+    /// The reasoning level a task is dispatched at, in place of the run's.
+    pub effort: Option<String>,
+    /// A milestone's line: web, mobile, cli, emacs or lib, which picks how
+    /// the product is driven once it lands.
+    pub surface: Option<String>,
     pub checked: bool,
     /// The task's own lines, verbatim: the brief quotes them back.
     #[serde(skip)]
@@ -363,6 +369,8 @@ pub fn parse(text: &str, require_files: bool) -> Option<Plan> {
                 "Gives" => &mut plan.tasks[idx].gives,
                 "Pattern" => &mut plan.tasks[idx].pattern,
                 "Show" => &mut plan.tasks[idx].show,
+                "Effort" => &mut plan.tasks[idx].effort,
+                "Surface" => &mut plan.tasks[idx].surface,
                 other => {
                     warn(format!("plan: line {n}: unknown key '{other}' ignored"));
                     continue;
@@ -703,7 +711,7 @@ Totals drift.
 
     #[test]
     fn a_duplicate_middle_tier_key_is_refused() {
-        for key in ["Read", "Uses", "Gives", "Pattern"] {
+        for key in ["Read", "Uses", "Gives", "Pattern", "Effort", "Surface"] {
             let text = format!(
                 "# plan: p\n\n- [ ] t1 Twice over\n      Files: x\n      Verify: true\n      \
                  {key}: a\n      {key}: b\n"
@@ -713,6 +721,26 @@ Totals drift.
                 "two {key}: lines should be refused"
             );
         }
+    }
+
+    #[test]
+    fn effort_and_surface_parse_into_their_fields() {
+        let p = parse(
+            "# plan: p\n\n- [ ] t1 The hard one\n      Files: x\n      Verify: true\n      \
+             Effort: xhigh\n- [ ] t2 The usual one\n      Files: y\n      Verify: true\n",
+            true,
+        )
+        .expect("a plan with an Effort line parses");
+        assert_eq!(p.get("t1").unwrap().effort.as_deref(), Some("xhigh"));
+        assert_eq!(p.get("t2").unwrap().effort, None);
+        let r = parse(
+            "# roadmap: r\n\n- [ ] m1 The shop\n      Surface: web\n      Show: the cart\n",
+            true,
+        )
+        .expect("a roadmap with a Surface line parses");
+        let m = r.get("m1").unwrap();
+        assert_eq!(m.surface.as_deref(), Some("web"));
+        assert_eq!(m.show.as_deref(), Some("the cart"));
     }
 
     #[test]
