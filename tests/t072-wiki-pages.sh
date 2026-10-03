@@ -1,28 +1,20 @@
 #!/usr/bin/env bash
-# Wiki pages in the brief and the reader's prompt (rulings 1 and 2 of
-# m1-wiki-first). A `Read:` item shaped `wiki:<slug>` is read live off `mem
-# wiki -- <slug>` at dispatch and at the gate, and inlined verbatim under
-# '## Pages the plan names' in both the worker's brief and the reader's
-# prompt. An absent page says so rather than refusing the dispatch; past
-# PAGES_CAP bytes of page text the rest are named as a `mem wiki` command
-# instead of inlined, and the run warns once.
+# Wiki pages in the brief (rulings 1 and 2 of m1-wiki-first). A `Read:`
+# item shaped `wiki:<slug>` is read live off `mem wiki -- <slug>` at
+# dispatch, and inlined verbatim under '## Pages the plan names' in the
+# worker's brief. An absent page says so rather than refusing the
+# dispatch; past PAGES_CAP bytes of page text the rest are named as a `mem
+# wiki` command instead of inlined, and the run warns once.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
-unset WORKFLOW_REVIEW_MODEL
 export WF_TMP="$T_TMP"
 
-# One fake plays worker and reader: it logs nothing of its own, since the
-# assertions read the brief and the review-prompt the run wrote.
+# The fake worker logs nothing of its own, since the assertions read the
+# brief the run wrote.
 write_exec "$T_TMP/worker.sh" <<'FAKE'
 #!/bin/sh
-task=$1; status=$3; brief=$5
-case $task in
-*-review)
-	printf 'VERDICT: ship\n' >"$(sed -n 's/^    Answer file: //p' "$brief")"
-	exit 0
-	;;
-esac
+task=$1; status=$3
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 mkdir -p app
 # Named for its plan too: a finished plan lands on the checkout, and the next
@@ -39,7 +31,6 @@ export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'
 new_repo app
 mem_register
 "$MEM_BIN" project set verify true >/dev/null
-export WORKFLOW_REVIEW_MODEL=fable
 
 ## --------------------------------------- an existing page and an absent one
 
@@ -69,12 +60,6 @@ like "$body" '### wiki:run' 'naming the page it read'
 like "$body" 'The run drives waves and merges tasks\.' 'with its text inlined verbatim'
 like "$body" '### wiki:missing' 'and the absent page is named too'
 like "$body" 'This project has no such page' 'saying so rather than refusing the dispatch'
-
-review="$rundir/t1.review-prompt"
-rbody=$(cat "$review")
-like "$rbody" '## Pages the plan names' 'the reviewer sees the same heading'
-like "$rbody" 'The run drives waves and merges tasks\.' 'and the same page text'
-like "$rbody" '### wiki:missing' 'and the same absent page'
 
 # A task naming no pages carries no heading at all.
 brief2="$XDG_CACHE_HOME/workflow/briefs/app/wiki/t2.md"

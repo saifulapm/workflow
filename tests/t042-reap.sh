@@ -204,7 +204,7 @@ PLAN
 git branch again/t1 "$(git commit-tree 'HEAD^{tree}' -p HEAD -m 'leftover work')"
 run workflow run --plan-file "$T_TMP/again.md"
 like "$OUT" 't1: left by an earlier run with 1 commit\(s\) -- adopted on its branch' \
-	'a leftover task branch with commits is adopted, for the gate and the reader to judge'
+	'a leftover task branch with commits is adopted, for the gate to judge'
 unlike "$OUT" 'still here from an earlier run' 'never the merge-or-delete recipe that was merged by hand'
 is "$RC" 2 'this run still stops -- on the red trunk behind it, not on the leftover'
 is "$(cat "$XDG_STATE_HOME/workflow/runs/again/again/t1.dispatches" 2>/dev/null)" '' \
@@ -244,8 +244,6 @@ is "$(cat "$racy/t1.failed")" 'dispatch race: the worker never started' \
 	'and names the dispatch, not a worker that never ran'
 is "$(cat "$racy/model" 2>/dev/null)" opus \
 	'setup records the model this run dispatches on'
-is "$(cat "$racy/review-model" 2>/dev/null)" '' \
-	'and an empty review-model when nobody reads'
 
 ## ------------------------- workers still running for a run that is gone
 
@@ -334,117 +332,3 @@ is "$(cat "$srundir/t1.dispatches")" 1 'reap dispatched nothing'
 truthy "$([ ! -e "$T_TMP/reap-dispatched" ] && echo 0 || echo 1)" \
 	'and started no worker for a run nobody is watching'
 unlike "$OUT" 'one more try' 'nor did it promise one'
-
-## ---------------------------------------- reap starts no reader of its own
-
-# reap collects and never dispatches, and a reader is a dispatch: started
-# under reap it would have no run to judge it, and `workflow reap` run from
-# a checkout with a plan mid-gate spawned one anyway (friction #NNVWGXZ4).
-# The setup is a run killed with a finished worker nobody has gated yet --
-# the one shape where reap reaches the gate at all.
-new_repo modelcheck
-mem_register
-printf '{"name":"acme/models"}\n' >composer.json
-printf '#!/bin/sh\nexit 0\n' >artisan
-chmod +x artisan
-write_exec bin/php <<-'EOF'
-	#!/bin/sh
-	exit 0
-EOF
-git add -A
-git -c core.hooksPath=/dev/null commit -qm 'project files'
-cat >"$T_TMP/models.md" <<'PLAN'
-# plan: models
-
-- [ ] t1 Add the thing
-      Files: app/**
-      Verify: true
-- [ ] t2 Never dispatched
-      Files: other/**
-      Verify: true
-PLAN
-# A real run, the way the racy run above makes one, so the review model reap
-# reads below is one setup actually wrote, not a printf standing in for it.
-run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_WORKER_CMD='true' \
-	WORKFLOW_REVIEW_MODEL=fake-reader workflow run --plan-file "$T_TMP/models.md"
-mrundir="$XDG_STATE_HOME/workflow/runs/modelcheck/models"
-mwtroot="$XDG_STATE_HOME/workflow/worktrees/modelcheck/models"
-is "$(cat "$mrundir/review-model" 2>/dev/null)" fake-reader \
-	'setup records the review model this run reads with'
-
-# The race above failed both tasks and cleanup took their worktrees down;
-# rebuild them on the branches setup already made, then hand-build the
-# interruption: t1 finished and nobody has gated it, t2 was never dispatched.
-git worktree add -q "$mwtroot/_integration" integration/models
-git worktree add -q "$mwtroot/t1" models/t1
-(
-	cd "$mwtroot/t1" || exit 1
-	mkdir -p app
-	printf '<?php\n' >app/Thing.php
-	git add app/Thing.php
-	git -c core.hooksPath=/dev/null commit -qm 'Add the thing'
-)
-printf '{"is_error":false,"result":"ok"}\n' >"$mrundir/t1.json"
-printf '2026-08-19T00:00:00Z ready merge-ready\n' >"$mrundir/t1.status"
-printf '%s\n' "$(sh -c 'echo $$')" >"$mrundir/t1.pid" # a pid that has already gone
-printf '1\n' >"$mrundir/t1.dispatches"
-printf '00000000-0000-4000-8000-00000000000d\n' >"$mrundir/t1.session"
-printf 'dispatched\n' >"$mrundir/t1.state"
-rm -f "$mrundir/t1.failed" "$mrundir/t1.dispatched_at" \
-	"$mrundir/t2.failed" "$mrundir/t2.dispatches" "$mrundir/t2.dispatched_at" \
-	"$mrundir/t2.session" "$mrundir/t2.status"
-printf 'pending\n' >"$mrundir/t2.state"
-
-export WF_TMP="$T_TMP"
-write_exec "$T_TMP/reviewer.sh" <<'FAKE'
-#!/bin/sh
-task=$1; brief=$5; model=$6
-printf '%s %s\n' "$model" "$task" >>"$WF_TMP/reviews.log"
-answer=$(sed -n 's/^    Answer file: //p' "$brief")
-printf 'VERDICT: ship\n' >"$answer"
-FAKE
-export FAKE="$T_TMP/reviewer.sh"
-
-unset WORKFLOW_REVIEW_MODEL
-run env WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status} {session} {brief} {model}'"'"' > {out} 2> {err} &' workflow reap
-unset WORKFLOW_REVIEW_MODEL
-
-is "$(cat "$T_TMP/reviews.log" 2>/dev/null)" '' \
-	'reap started no reader, though the run it collects for records one'
-truthy "$([ ! -e "$mrundir/t1.review-prompt" ] && echo 0 || echo 1)" \
-	'and wrote no reading prompt'
-truthy "$([ ! -e "$mrundir/t1.review-session" ] && echo 0 || echo 1)" \
-	'nor a reader session to watch'
-
-git worktree remove --force "$mwtroot/t1" 2>/dev/null
-git worktree remove --force "$mwtroot/_integration" 2>/dev/null
-
-## ------------------- reap stays quiet about a run with nothing left to read
-
-# A finished run's directory is never removed, so every later reap keeps
-# seeing it. Naming the model it would read with is only honest for a run
-# that still has something dispatched; one with everything already settled
-# has no reading ahead of it, and saying so anyway (review 2) claims a
-# reading that never happens.
-qrundir="$XDG_STATE_HOME/workflow/runs/modelcheck/settled"
-mkdir -p "$qrundir"
-cat >"$qrundir/plan.md" <<'PLAN'
-# plan: settled
-
-- [ ] t1 Already merged
-      Files: a/**
-      Verify: true
-- [ ] t2 Already failed
-      Files: b/**
-      Verify: true
-PLAN
-git rev-parse HEAD >"$qrundir/base_sha"
-printf 'fake-reader\n' >"$qrundir/review-model"
-printf 'merged\n' >"$qrundir/t1.state"
-printf 'failed\n' >"$qrundir/t2.state"
-
-unset WORKFLOW_REVIEW_MODEL
-run workflow reap
-unset WORKFLOW_REVIEW_MODEL
-unlike "$OUT" 'reading with' \
-	'a settled run with nothing dispatched says nothing about reading'

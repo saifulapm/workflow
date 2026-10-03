@@ -126,13 +126,6 @@ t_init() {
 	# record" rather than as somebody's real agent.
 	export WORKFLOW_AMX="$T_TMP/bin/no-amx"
 
-	# Every run test but the review gate's runs unread. `workflow run` refuses
-	# a run nobody is named to read, and the empty variable is how a caller
-	# says it wants no reading and means it; a test about waves and merges
-	# would otherwise be refused before it dispatched anything. t057 unsets it
-	# again, because naming a reader is what it is about.
-	export WORKFLOW_REVIEW_MODEL=
-
 	# WORKFLOW_SUITE_LOCK_HELD comes with it: running the suite through
 	# `workflow verify` exports the marker to say the parent holds this
 	# project's lock, and a sandbox that inherited it would skip a lock it
@@ -148,10 +141,10 @@ t_init() {
 	# it beside WORKFLOW_AGENT (hook.rs agent_marked), so a suite run from inside
 	# pi would see every "human" commit as an agent's.
 	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH WORKFLOW_SUITE_LOCK_HELD
-	unset WORKFLOW_MODEL WORKFLOW_FIX_MODEL WORKFLOW_ADVISOR WORKFLOW_TASK MEM_PROJECT CARGO_TARGET_DIR
+	unset WORKFLOW_MODEL WORKFLOW_TASK MEM_PROJECT CARGO_TARGET_DIR
 	unset WORKFLOW_HOME WORKFLOW_SITES
-	unset WORKFLOW_EFFORT WORKFLOW_REVIEW_EFFORT WORKFLOW_WORKER_CMD WORKFLOW_MAX_WORKERS
-	unset WORKFLOW_DEADLINE_MIN WORKFLOW_REVIEW_DEADLINE_MIN WORKFLOW_GATE_MIN WORKFLOW_MAX_TURNS
+	unset WORKFLOW_EFFORT WORKFLOW_WORKER_CMD WORKFLOW_MAX_WORKERS
+	unset WORKFLOW_DEADLINE_MIN WORKFLOW_GATE_MIN WORKFLOW_MAX_TURNS
 	unset WORKFLOW_QUESTION_MISSES
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
 

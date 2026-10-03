@@ -3,8 +3,8 @@
 # records every call's argv, so the new/status/stop shapes are checked
 # against what the backend really sends; a stalled agent is stopped and
 # dispatched once more under a fresh name; a launch amx refuses fails the
-# task on the line it printed; and a reader that hit a provider limit fails
-# on the first reading.
+# task on the line it printed; and a model amx will not start refuses the
+# run before anything is dispatched.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -31,7 +31,7 @@ write_exec "$T_TMP/fake-amx" <<'AMX'
 verb=$1
 shift
 case $verb in
-new | sub)
+new)
 	# `new --check` settles the spawn and starts nothing; a cap is no part of
 	# what it asks, so only a model it will not take refuses it.
 	case " $* " in *" --check "*)
@@ -57,51 +57,9 @@ new | sub)
 		*) text=$1; shift ;;
 		esac
 	done
-	[ "$verb" = sub ] && printf '{"id":"%s","parent":null,"phase":"starting","answer":null,"evidence":"hooks"}\n' "$name"
 	printf 'working\n' >"$AMX_DIR/$name.state"
 	brief=${text#Read }
 	brief=${brief% and execute it exactly.}
-	# A reading, not a task: the brief names an answer file rather than a
-	# status file, and neither reader here writes a verdict. wall leaves its
-	# last words in the conversation amx names for it; ceiling never gets a
-	# conversation, so the only account of why is what this launch prints.
-	answer=$(sed -n 's/^    Answer file: //p' "$brief")
-	if [ -n "$answer" ]; then
-		case $name in
-		wf-trust-review-*)
-			# Stopped at claude's folder-trust screen: no answer file at
-			# all, nothing on stderr, and a pane waiting on a question
-			# that only the screen shows.
-			printf 'Quick safety check: Is this a project you created or one you trust?' >"$AMX_DIR/$name.question"
-			printf 'waiting\n' >"$AMX_DIR/$name.state"
-			exit 0
-			;;
-		esac
-		case $name in
-		wf-vanish-review-*)
-			# The session died: no answer file, no conversation to
-			# read last words from, and what the pane showed kept
-			# by amx and nowhere else.
-			printf 'the agent exited: killed (signal 9)\n' >"$AMX_DIR/$name.logs"
-			printf 'done\n' >"$AMX_DIR/$name.state"
-			exit 0
-			;;
-		esac
-		printf 'nothing useful\n' >"$answer"
-		case $name in
-		wf-wall-review-*)
-			sess=11111111-2222-4333-8444-555555555555
-			printf '%s\n' "$sess" >"$AMX_DIR/$name.session"
-			slug=$(printf '%s' "$dir" | sed -E 's/[^A-Za-z0-9]/-/g')
-			mkdir -p "$HOME/.claude/projects/$slug"
-			printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"You've reached your Fable limit for this session.\"}]}}" \
-				>"$HOME/.claude/projects/$slug/$sess.jsonl"
-			;;
-		*) echo 'amx: rate limit exceeded, please retry.' >&2 ;;
-		esac
-		printf 'done\n' >"$AMX_DIR/$name.state"
-		exit 0
-	fi
 	# The status file to report into is in the brief, which is where a real
 	# worker reads it too. Its name is the task's.
 	status=$(grep -oE '[^ ]+\.status' "$brief" | head -1)
@@ -163,10 +121,6 @@ sess=$(cat "$rundir/t1.session")
 like "$sess" '^wf-t1-[0-9a-z]{4}$' 'the handle the run records is the amx agent name'
 saw "new|--name|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/t1|--no-worktree|--role|worker|--model|opus|Read $XDG_CACHE_HOME/workflow/briefs/app/amx-run/t1.md and execute it exactly." \
 	'the dispatch is amx new into the task worktree, with the brief as the task'
-rsess=$(cat "$rundir/t1.review-session")
-like "$(grep "^sub|--bg|--json|--name|$rsess|" "$argv")" \
-	"|--parent|$sess|--dir|$XDG_STATE_HOME/workflow/worktrees/app/amx-run/_integration|--no-worktree|--role|reader|" \
-	'the reader is dispatched as a child of the worker, through amx sub --bg'
 saw "status|$sess|--json" 'liveness and the ending are read off amx status --json'
 
 is "$(cat "$rundir/hang.state")" failed 'the worker that never reported ready is failed'
@@ -253,99 +207,3 @@ is "$(tail -n +$((before + 1)) "$argv" | grep -c '^new|--name|')" 0 'before any 
 saw "new|--check|--dir|$(git rev-parse --show-toplevel)|--no-worktree|--role|worker|--model|claude-opus-5-5|check" \
 	'asked as a worker would be dispatched'
 rm -f "$AMX_DIR/refuse-check"
-
-# The fix round's model is recorded like the others, so a pinned name amx
-# will not take can be moved without editing the run directory (#R9XAWBPG).
-run workflow run --plan-file "$T_TMP/badmodel.md" --fix-model sonnet
-like "$OUT" 'run badmodel: fix-model is now sonnet in this run' 'run --fix-model rewrites the record'
-is "$(cat "$XDG_STATE_HOME/workflow/runs/app/badmodel/fix-model")" sonnet 'where a resumed run reads it'
-
-## ------------------------------------- a reader that hit a provider limit
-
-# The reader at the merge gate is a worker like any other, so under amx it is
-# an agent too. `amx status --json` names the conversation its pane is
-# running, which is where a reading that ended on the provider's own line left
-# its last words; a reading that never got a conversation has only what
-# `amx new` printed on its way out. Either line fails the task on the first
-# reading, since a second one meets the same wall.
-export WORKFLOW_REVIEW_MODEL=fable
-
-cat >"$T_TMP/limit.md" <<-'PLAN'
-	# plan: limit
-
-	- [ ] wall Add the wall service
-	      Files: app/wall.php
-	      Verify: true
-	- [ ] ceiling Add the ceiling service
-	      Files: app/ceiling.php
-	      Verify: true
-PLAN
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/limit.md"
-is "$RC" 1 'a reader that hit a provider limit fails the run'
-limitdir="$XDG_STATE_HOME/workflow/runs/app/limit"
-
-is "$(cat "$limitdir/wall.state" 2>/dev/null)" failed 'the task whose reader hit the wall is failed'
-like "$(cat "$limitdir/wall.failed")" "^the reader hit a provider limit: You've reached your Fable limit for this session\\. \\(session wf-wall-review-" \
-	'the note names the line and the amx agent that read'
-like "$(cat "$limitdir/wall.review-err")" "You've reached your Fable limit for this session\\." \
-	'review-err carries the line off the conversation amx named'
-is "$(cat "$limitdir/wall.review-tries")" 1 'and only one reading was tried'
-
-is "$(cat "$limitdir/ceiling.state" 2>/dev/null)" failed 'a reading with no conversation of its own is failed too'
-like "$(cat "$limitdir/ceiling.failed")" '^the reader hit a provider limit: amx: rate limit exceeded, please retry\.' \
-	'on the line the launch printed'
-like "$(cat "$limitdir/ceiling.review-err")" 'rate limit exceeded' 'which the dispatch put in review-err'
-is "$(cat "$limitdir/ceiling.review-tries")" 1 'after one reading as well'
-
-## ------------------------------------- a reader whose session is gone
-
-# A reading whose pane died has no transcript to read last words from, and
-# the run's whole account of it was "no verdict" with an empty review-err:
-# nothing to tell a flake worth retrying from a prompt that kills the session
-# every time. `amx logs` is what the pane left, and the failed note names the
-# file it is kept in.
-cat >"$T_TMP/vanished.md" <<-'PLAN'
-	# plan: vanished
-
-	- [ ] vanish Add the vanish service
-	      Files: app/vanish.php
-	      Verify: true
-	- [ ] beside Add the beside service, so the plan is two tasks and runs
-	      Files: app/beside.php
-	      Verify: true
-PLAN
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/vanished.md"
-is "$RC" 1 'a reader whose session died fails the run'
-vandir="$XDG_STATE_HOME/workflow/runs/app/vanished"
-is "$(cat "$vandir/vanish.state" 2>/dev/null)" failed 'the task is failed'
-like "$(cat "$vandir/vanish.review-err")" 'the agent exited: killed \(signal 9\)' \
-	'review-err carries what the pane left behind'
-like "$(cat "$vandir/vanish.failed")" "$vandir/vanish\\.review-err" \
-	'and the failed note names that file'
-
-## ------------------------------------- a reader stopped at a question
-
-# A question drawn in front of the session -- claude's folder-trust screen --
-# is on the screen and nowhere else: no hook reports it, no answer file is
-# written, and amx reads the pane as waiting, which is an ending. The run's
-# whole account of that used to be "no verdict", retried and failed; on
-# 2026-09-16 it took an hour to find the screen behind it. amx status --json
-# carries the question, so the failure names it.
-cat >"$T_TMP/trust.md" <<-'PLAN'
-	# plan: trust
-
-	- [ ] trust Add the trust service
-	      Files: app/trust.php
-	      Verify: true
-	- [ ] beside Add the beside service, so the plan is two tasks and runs
-	      Files: app/beside.php
-	      Verify: true
-PLAN
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/trust.md"
-is "$RC" 1 'a reader that never gets past a question fails the run'
-trustdir="$XDG_STATE_HOME/workflow/runs/app/trust"
-is "$(cat "$trustdir/trust.state" 2>/dev/null)" failed 'the task whose readers sat at the screen is failed'
-like "$(cat "$trustdir/trust.failed")" '^the review ended with no verdict; the reader stopped at a question: "Quick safety check: Is this a project you created or one you trust\?" -- read ' \
-	'and the note names the question the reader was sitting on'
-like "$OUT" 'task trust: the review ended with no verdict; the reader stopped at a question: "Quick safety check: .* -- one more reading' \
-	'and so did the line that sent the second reading'

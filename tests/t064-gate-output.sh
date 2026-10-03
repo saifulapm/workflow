@@ -160,7 +160,7 @@ like "$(cat "$wtdir/t1.failed")" \
 # A suite red on both of the gate's runs and green alone -- a test that only
 # fails under load -- used to leave `workflow accept`, which lands unread, as
 # the only way on (friction #EJ0TANB0). `workflow regate` puts the branch
-# through the whole merge again, suite and reader, with no worker spent.
+# through the whole merge again, the suite included, with no worker spent.
 new_repo regate
 mem_register
 
