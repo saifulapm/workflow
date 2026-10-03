@@ -11,7 +11,8 @@ in a project repo or CLAUDE.md.
 ## Read first
 
     mem context            # this project's memory, sized for a session start
-    mem search "<query>"   # older than the context carries
+    mem search "<query>"   # older than the context carries; a page hit is a
+                           # wiki:<slug>#<section> row with two lines of text
     mem show <id>          # the item behind a search line
     mem roadmap            # the milestones; `roadmap` runs them
 
@@ -25,18 +26,27 @@ an episodic fact. Read a page before touching it, rewrite it when it changes.
 
     mem wiki                  # the pages: slug, bytes, modified, title
     mem wiki <slug>           # one page, byte for byte
+    mem wiki <slug> --sections          # its sections: slug, bytes, heading
+    mem wiki <slug>#<section>           # one section
     mem wiki <slug> --stdin --note "<what changed and why>" <page.md
+    mem wiki <slug>#<section> --stdin --note "<what and why>" <section.md
+    mem wiki lint             # oversize, orphan and unindexed pages; exit 1
+
+A section is a `## ` heading and the text under it, its slug the heading
+lowercased with hyphens; the text before the first heading is `top`. Read
+the section a search hit names, not the page, and rewrite the section you
+falsified, not the page. An answer worth keeping becomes a page.
 
 The note is the page's whole history: write it like a commit message. Pages
-link as `[name](name.md)` and list in `index`, kept by hand; one over 8 KB
-splits by section, each part linked from index too.
+link as `[name](name.md)` and list in `index`, kept by hand; a section over
+2 KB or a page over 8 KB splits, each part linked from index too.
 
 Nothing is deleted; a deletion returns on the next sync. A finished page
 becomes a one-line stub pointing at its replacement and leaves the index.
 
 ## Write triggers
 
-Six, one command each, none blocking.
+One command each, none blocking.
 
 **A task finished** → `mem log "<what changed, and why>"`. One line in a commit
 message's voice, not a diff summary.
@@ -63,6 +73,23 @@ the phone without waiting. Never resolve your own stop condition.
 **The workflow itself got in the way** → `mem save --project workflow
 --type friction "friction: <what bit you - where - expected>"`. File it,
 move on.
+
+**Who decided what** → `mem decide "<what and why>" --by saiful|agent`,
+with `--replaces "<the old decision>"` when it overturns one.
+
+**Proof a task did what it says** → `mem evidence add --task <task> <file>
+--note "<what it shows>"`; the file is copied into the store.
+
+**A milestone check turned something up** → `mem finding add --milestone
+<slug> --step "<step>" "<what>"`, `--evidence <file>` for a screenshot;
+`mem finding close <id> --by <commit>` once fixed.
+
+**A source to keep as it was** → `mem raw add <file|url>`, never replaced.
+
+**What the project is for** → `mem brief --set "<text>"`; `mem brief`
+prints it.
+
+**An idea for later** → `mem idea "<text>"`, not a plan task.
 
 Superseding is a write too: `mem save "<new text>" --supersedes <id>`. Two live
 items that disagree is this store's failure mode.

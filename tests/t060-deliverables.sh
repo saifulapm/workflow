@@ -137,6 +137,19 @@ like "$mem_skill" 'index' 'mem says the index is maintained by hand'
 # The store's answer is to archive in place, and only the skill can say so.
 like "$mem_skill" 'stub' 'mem teaches the stub instead of a delete that will not hold'
 like "$plan_skill" 'mem wiki' 'plan reads the pages before it cuts tasks'
+# A page is read and rewritten a section at a time, so a worker replaces the
+# paragraph it falsified and not the page.
+like "$mem_skill" 'wiki:<slug>#<section>' 'mem shows the section rows search prints'
+like "$mem_skill" 'mem wiki <slug>#<section> ' 'mem shows how one section is read'
+like "$mem_skill" 'mem wiki <slug>#<section> --stdin --note' 'and how one section is replaced'
+like "$mem_skill" 'mem wiki <slug> --sections' 'and how a page lists its sections'
+like "$mem_skill" 'mem wiki lint' 'mem names the wiki lint'
+for verb in 'mem decide' 'mem evidence add' 'mem finding add' 'mem raw add' 'mem brief' 'mem idea'; do
+	like "$mem_skill" "$verb " "mem teaches $verb"
+done
+# `mem skill mem` prints the whole file, so it has to stay small.
+truthy "$([ "$(wc -c <"$WF_ROOT/skills/mem/SKILL.md")" -lt 6000 ] && echo 0 || echo 1)" \
+	'the mem skill stays under 6,000 bytes'
 implement_skill=$(cat "$WF_ROOT/skills/implement/SKILL.md")
 like "$implement_skill" 'mem wiki .*--stdin --note' 'implement rewrites the page it touched'
 # Nothing refuses an oversized or unlinked page: doctor reports it and a batch
