@@ -373,13 +373,13 @@ impl MemCli {
         self.read(&["roadmap", &format!("--project={project}"), "--json"])
     }
 
-    /// The plan of record, byte for byte, task ticks and all. No slug: the
+    /// The current plan, byte for byte, task ticks and all. No slug: the
     /// file at `plan.md`, not one filed under `plans/`.
     pub fn plan(&self, project: &str) -> Arc<Outcome> {
         self.read(&["plan", &format!("--project={project}"), "--json"])
     }
 
-    /// The stored plans beside the plan of record: slug, bytes, date — the
+    /// The stored plans beside the current plan: slug, bytes, date — the
     /// same list shape `wiki` already has.
     pub fn plan_list(&self, project: &str) -> Arc<Outcome> {
         self.read(&["plan", "--list", &format!("--project={project}"), "--json"])

@@ -29,7 +29,7 @@ const ROUTES: &[(&str, &str)] = &[
 /// still a 405 that says GET, the same answer every other route gives.
 const ROUTE_PREFIXES: &[(&str, &str)] = &[("/wiki/", "GET"), ("/p/", "GET")];
 
-/// Ruling 1: the five kinds `/p/<project>/items/<kind>` answers.
+/// The five kinds `/p/<project>/items/<kind>` answers.
 const ITEM_KINDS: [&str; 5] = ["fact", "ruling", "handoff", "question", "log"];
 
 pub struct App {
@@ -152,7 +152,7 @@ impl App {
         }
     }
 
-    /// `GET /p/<project>` and its detail routes (ruling 1): a bare name is the
+    /// `GET /p/<project>` and its detail routes: a bare name is the
     /// overview, and everything after it is checked against one of the known
     /// shapes — `log`, `roadmap`, `plan`, `plan/<slug>`, `items/<kind>`,
     /// `item/<id>` — before it reaches an argv. Anything else is a 404, as
@@ -218,7 +218,7 @@ impl App {
         }
     }
 
-    /// `GET /p/<project>/plan` — the plan of record's whole text.
+    /// `GET /p/<project>/plan` — the current plan's whole text.
     fn project_plan(&self, project: &str) -> Response {
         match model::project_view(&self.mem, project, self.now_ms()) {
             Some(view) => Response::html(html::plan_page(
@@ -232,7 +232,7 @@ impl App {
     }
 
     /// `GET /p/<project>/plan/<slug>` — one stored plan, whole. A broken mem
-    /// renders degraded (ruling 2); a slug mem simply does not have is a 404.
+    /// renders degraded; a slug mem simply does not have is a 404.
     fn project_plan_slug(&self, project: &str, slug: &str) -> Response {
         if !model::is_slug(slug) {
             return Response::not_found();
@@ -305,9 +305,9 @@ impl App {
         }
         let form = request.form();
         let id = form.get("id").unwrap_or("").trim();
-        // `mem ask` prints `#RK4B2PBW`, and that is what a human copies. The
-        // page's own form supplies the bare id, so the phone path never met
-        // this; anything typed or pasted from a terminal did, and got
+        // `mem ask` prints the id behind a `#`, and that is what a human
+        // copies. The page's own form supplies the bare id, so the phone path
+        // never met this; anything typed or pasted from a terminal did, and got
         // `?unknown=1` with the question still pending.
         let id = id.strip_prefix('#').unwrap_or(id);
         let text = form.get("text").unwrap_or("").trim();
@@ -395,9 +395,9 @@ impl App {
     }
 }
 
-/// mem's own short id: the last eight characters of a ULID. A banner reading
-/// `#28J1TSD1` matches what `mem ask` printed and what the page shows; the full
-/// 26-character id matches nothing a human has looked at.
+/// mem's own short id: the last eight characters of a ULID. A banner showing
+/// those eight behind a `#` matches what `mem ask` printed and what the page
+/// shows; the full 26-character id matches nothing a human has looked at.
 fn short(id: &str) -> String {
     // `is_ascii` as well as the length: the id came off a form, and slicing a
     // 26-byte string that is not 26 characters would panic on the connection

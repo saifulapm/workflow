@@ -31,10 +31,10 @@ pub const ACTIVITY_LIMIT: usize = 20;
 /// mem's own ceiling on a page slug (`mem/src/store.rs`).
 pub const SLUG_MAX: usize = 64;
 
-/// Ruling 1: `/p/<project>/log`'s size.
+/// `/p/<project>/log`'s size.
 pub const PROJECT_LOG_LIMIT: usize = 200;
 
-/// Ruling 1: `/p/<project>/items/<kind>`'s size.
+/// `/p/<project>/items/<kind>`'s size.
 pub const PROJECT_ITEMS_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -274,7 +274,7 @@ pub fn is_known_project(mem: &MemCli, name: &str) -> bool {
     project_names(&mem.projects()).iter().any(|p| p == name)
 }
 
-/// This machine's checkout of `name`, for the live-run read (ruling 5): the
+/// This machine's checkout of `name`, for the live-run read: the
 /// first entry of its `checkouts` row from `mem projects --json`. `None`
 /// when mem does not know the project or this machine has no checkout of it.
 pub fn checkout_of(mem: &MemCli, name: &str) -> Option<String> {
@@ -289,9 +289,9 @@ pub fn checkout_of(mem: &MemCli, name: &str) -> Option<String> {
 }
 
 /// A `/p/<project>` singleton read — a stored plan's text or one item —
-/// present, absent, or degraded when mem itself is broken (ruling 2). The two
+/// present, absent, or degraded when mem itself is broken. The two
 /// are never collapsed into one `None`: an absent slug or id is a 404, a
-/// broken mem is the degraded banner (review 1 of detail).
+/// broken mem is the degraded banner.
 #[derive(Debug)]
 pub struct Singleton<T> {
     pub degraded: Option<String>,
@@ -403,7 +403,7 @@ pub fn is_slug(slug: &str) -> bool {
         && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// Ruling 1: an id is a short id (8 base32 characters) or a full ULID (26),
+/// An id is a short id (8 base32 characters) or a full ULID (26),
 /// checked before it becomes an argument to `mem show`.
 pub fn is_item_id(id: &str) -> bool {
     let bytes = id.as_bytes();
@@ -717,7 +717,7 @@ fn project_question(row: &Value) -> ProjectQuestion {
     }
 }
 
-/// Pending first, then the last 10 answered — ruling 3.
+/// Pending first, then the last 10 answered.
 fn project_questions(outcome: &Outcome) -> Vec<ProjectQuestion> {
     let mut rows: Vec<ProjectQuestion> = outcome
         .rows("questions")
@@ -732,7 +732,7 @@ fn project_questions(outcome: &Outcome) -> Vec<ProjectQuestion> {
 }
 
 /// One task of one run, flattened with the run's own plan, integration
-/// branch and live flag (ruling 5) — the shape the overview's runs section
+/// branch and live flag — the shape the overview's runs section
 /// lists, one row per task.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RunTask {
@@ -745,10 +745,10 @@ pub struct RunTask {
     pub last_status: String,
 }
 
-/// How long `workflow status` may take before ruling 5's deadline kills it.
+/// How long `workflow status` may take before it is killed.
 const WORKFLOW_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Ruling 5: `workflow status --json`, run with `root` as its working
+/// `workflow status --json`, run with `root` as its working
 /// directory — this machine's checkout of the project, from
 /// [`checkout_of`]. `root` is `None` when this machine has none; that, a
 /// `root` that no longer exists on disk (a child project's registered

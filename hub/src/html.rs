@@ -339,7 +339,7 @@ pub fn roadmap_page(project: &str, text: Option<&str>, degraded: Option<&str>) -
 }
 
 /// `GET /p/<project>/plan` and `GET /p/<project>/plan/<slug>`: a plan's whole
-/// text, so its ticks show (ruling 4).
+/// text, so its ticks show.
 pub fn plan_page(
     project: &str,
     slug: Option<&str>,
@@ -357,9 +357,9 @@ pub fn plan_page(
 }
 
 /// `GET /p/<project>/item/<id>`: one item, whole — its body pre-wrap, like a
-/// question's text (ruling 4). `item` is `None` only when mem itself is
-/// broken (ruling 2); an id mem simply does not have never reaches this page,
-/// since the route answers 404 first.
+/// question's text. `item` is `None` only when mem itself is broken; an id
+/// mem simply does not have never reaches this page, since the route answers
+/// 404 first.
 pub fn item_page(project: &str, item: Option<&ItemDetail>, degraded: Option<&str>) -> String {
     let label = item.map(|item| item.title.as_str()).unwrap_or("item");
     let mut out = detail_head(project, label);
@@ -480,10 +480,10 @@ pub fn markdown(text: &str, project: &str) -> String {
     out
 }
 
-/// Ruling 3: cut a roadmap at 40 lines, with a link to the whole.
+/// The overview cuts a roadmap at 40 lines, with a link to the whole.
 const ROADMAP_LINES: usize = 40;
 
-/// `GET /p/<project>`: ruling 3's sections, in order.
+/// `GET /p/<project>`: the overview's sections, in order.
 pub fn project_page(view: &ProjectView, machine: &str, runs: &Section<RunTask>) -> String {
     let project = view.name.as_str();
     let mut out = head(project);
@@ -522,7 +522,7 @@ pub fn project_page(view: &ProjectView, machine: &str, runs: &Section<RunTask>) 
     out
 }
 
-/// Ruling 5: each task, with the run it belongs to. `runs.degraded` carries
+/// Each task, with the run it belongs to. `runs.degraded` carries
 /// the one sentence for no checkout, no `workflow` on PATH or a non-zero
 /// exit — never the mem banner, since this section's read is not a mem read.
 fn runs_section(runs: &Section<RunTask>, machine: &str) -> String {
@@ -557,7 +557,7 @@ fn runs_section(runs: &Section<RunTask>, machine: &str) -> String {
     out
 }
 
-/// Ruling 4: an item body renders pre-wrap like a question's text — status
+/// An item body renders pre-wrap like a question's text — status
 /// and handoff both render this way.
 fn body_block(text: Option<&str>, empty: &str) -> String {
     match text {
@@ -588,9 +588,9 @@ fn truncate_lines(text: &str, limit: usize) -> String {
 }
 
 fn plan_section(view: &ProjectView, project: &str) -> String {
-    let mut out = String::from("<h2>Plan of record</h2>\n");
+    let mut out = String::from("<h2>Current plan</h2>\n");
     match &view.plan {
-        None => out.push_str("<p class=\"empty\">No plan of record.</p>\n"),
+        None => out.push_str("<p class=\"empty\">No current plan.</p>\n"),
         Some(plan) => out.push_str(&format!(
             "<p><a href=\"{href}\">{title}</a> — {ticked}/{total}</p>\n",
             href = esc(&plan_url(project)),
