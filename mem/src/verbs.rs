@@ -2319,7 +2319,7 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let check = if name.ends_with(".path1") || name.ends_with(".path2") {
+        let check = if crate::store::is_conflict_name(&name) {
             "conflict"
         } else if name.starts_with(".tmp-") {
             "temp"

@@ -199,6 +199,59 @@ fn doctor_reports_strays_conflicts_forks_and_secrets() {
 }
 
 #[test]
+fn doctor_sees_strays_beside_pages_plans_and_singletons() {
+    let w = World::new("maint-doctor-strays");
+    w.project(P, "thing");
+    let store = w.store();
+    let dir = store.project_dir(P);
+    page(&w, "index", "# Index\n");
+    std::fs::create_dir_all(store.plans_dir(P)).unwrap();
+    for (rel, body) in [
+        ("plan.md", "# plan\n"),
+        ("roadmap.md", "# roadmap\n"),
+        ("status.md", "fine\n"),
+        ("notes.md", "dropped by hand"),
+        ("roadmap.md.conflict1", "x"),
+        ("wiki/pricing.md.conflict2", "x"),
+        ("wiki/Notes.txt", "x"),
+        ("plans/m1.md", "# m1\n"),
+        ("plans/m1.md.path1", "x"),
+        ("evidence/t1/shot.png", "png"),
+        ("evidence/t1/shot.png.conflict1", "png"),
+        ("raw/source.txt", "x"),
+    ] {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor", "--json"]);
+    assert_eq!(code(&out), 0);
+    let ends = |check: &str| -> Vec<String> {
+        let mut names: Vec<String> = details(&out, check)
+            .iter()
+            .map(|d| {
+                d.strip_prefix(&format!("{}/", dir.display()))
+                    .unwrap_or(d)
+                    .to_string()
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(
+        ends("conflict"),
+        [
+            "evidence/t1/shot.png.conflict1",
+            "plans/m1.md.path1",
+            "roadmap.md.conflict1",
+            "wiki/pricing.md.conflict2",
+        ]
+    );
+    assert_eq!(ends("stray"), ["notes.md", "wiki/Notes.txt"]);
+}
+
+#[test]
 fn doctor_names_the_item_files_nothing_can_read() {
     let w = World::new("maint-unreadable");
     w.project(P, "thing");

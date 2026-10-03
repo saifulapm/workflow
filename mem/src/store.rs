@@ -107,9 +107,11 @@ impl Store {
         item_files(&self.root)
     }
 
-    /// Files that sit where items live but are not items: dot-temps, bisync
-    /// conflict losers (`*.path1`/`*.path2`), anything hand-dropped. Never
-    /// indexed; reported by doctor.
+    /// Files that sit where items, pages, plans or a project's singletons live
+    /// but are none of them: dot-temps, sync conflict losers (`*.path1`,
+    /// `*.path2`, `*.conflict1`), anything hand-dropped. Never indexed;
+    /// reported by doctor. Evidence and raw sources are any file a user files,
+    /// so only a conflict loser is a stray there.
     pub fn stray_paths(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
         for dir in items_dirs(&self.root) {
@@ -121,6 +123,33 @@ impl Store {
                 if !is_item_filename(&name) && entry.is_file() {
                     out.push(entry);
                 }
+            }
+        }
+        for project in read_dir_sorted(&self.projects_dir()) {
+            if !project.is_dir() {
+                continue;
+            }
+            for entry in read_dir_sorted(&project) {
+                let singleton = entry.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    ["project.toml", "plan.md", "roadmap.md", "status.md"].contains(&n)
+                });
+                if entry.is_file() && !singleton {
+                    out.push(entry);
+                }
+            }
+            for dir in [project.join("wiki"), project.join("plans")] {
+                for entry in read_dir_sorted(&dir) {
+                    if entry.is_file() && read_page(&entry).is_none() {
+                        out.push(entry);
+                    }
+                }
+            }
+            for dir in [project.join("evidence"), project.join("raw")] {
+                out.extend(files_under(&dir).into_iter().filter(|path| {
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(is_conflict_name)
+                }));
             }
         }
         out
@@ -237,6 +266,25 @@ pub fn item_files(root: &Path) -> Vec<PathBuf> {
             {
                 out.push(entry);
             }
+        }
+    }
+    out
+}
+
+/// A name sync gives the loser of a conflict: bisync's `.path1`/`.path2` and
+/// rclone's `.conflict1`, `.conflict2`, ...
+pub fn is_conflict_name(name: &str) -> bool {
+    name.ends_with(".path1") || name.ends_with(".path2") || name.contains(".conflict")
+}
+
+/// Every file at any depth under `dir`, sorted within each directory.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in read_dir_sorted(dir) {
+        if entry.is_dir() {
+            out.extend(files_under(&entry));
+        } else if entry.is_file() {
+            out.push(entry);
         }
     }
     out
