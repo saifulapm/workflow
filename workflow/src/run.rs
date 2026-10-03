@@ -1405,7 +1405,9 @@ impl Run {
                 "" => self.model.clone(),
                 m => m.to_string(),
             },
-            effort: self.effort.clone(),
+            // A plan marks its few hard tasks with a level of their own; the
+            // run's dial stands for every other.
+            effort: t.effort.clone().or_else(|| self.effort.clone()),
             turns: env_str("WORKFLOW_MAX_TURNS", "120"),
             env,
         };

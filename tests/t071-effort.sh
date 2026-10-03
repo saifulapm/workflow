@@ -209,3 +209,28 @@ plan back
 run workflow run --plan-file "$T_TMP/back.md"
 is "$RC" 0 'the run merges with the keys cleared'
 is "$(grep -c -- '--effort' "$AMX_DIR/argv")" 0 'and no dispatch carries --effort'
+
+## ------------------------------ a task's Effort line beats the run's dial
+
+# For that task alone: the other one still goes out at the run's level.
+cat >"$T_TMP/hard.md" <<'PLAN'
+# plan: hard
+
+- [ ] t1 Add the t1 service
+      Files: app/t1.php
+      Effort: xhigh
+      Verify: true
+- [ ] t2 Add the t2 service
+      Files: app/t2.php
+      Verify: true
+PLAN
+: >"$AMX_DIR/argv"
+run env WORKFLOW_EFFORT=high workflow run --plan-file "$T_TMP/hard.md"
+is "$RC" 0 'the run merges with one task marked xhigh'
+wt="$XDG_STATE_HOME/workflow/worktrees/app/hard"
+sess=$(cat "$XDG_STATE_HOME/workflow/runs/app/hard/t1.session")
+saw "new|--name|$sess|--dir|$wt/t1|--no-worktree|--role|worker|--model|opus|--effort|xhigh|Read $XDG_CACHE_HOME/workflow/briefs/app/hard/t1.md and execute it exactly." \
+	'the task with an Effort line goes out at its own level'
+sess=$(cat "$XDG_STATE_HOME/workflow/runs/app/hard/t2.session")
+saw "new|--name|$sess|--dir|$wt/t2|--no-worktree|--role|worker|--model|opus|--effort|high|Read $XDG_CACHE_HOME/workflow/briefs/app/hard/t2.md and execute it exactly." \
+	'and the task without one at the run level'
