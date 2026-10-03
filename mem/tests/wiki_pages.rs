@@ -372,3 +372,172 @@ fn a_page_write_outside_a_project_is_refused() {
     assert!(stderr(&out).contains("--project"), "{}", stderr(&out));
     assert!(!w.store().projects_dir().exists());
 }
+
+const THREE: &str = "# Pricing\n\nThe cart totals in cents.\n\n## Rounding\n\nHalf up, once, at the end.\n\n## Refunds\n\nRefunds reverse the rounding.\n";
+
+#[test]
+fn a_page_lists_its_sections_top_first() {
+    let w = World::new("wiki-sections");
+    let repo = w.repo("thing", None);
+    write_page(&w, &repo, "pricing", THREE, "three sections");
+
+    let out = mem(&w, &repo, &["wiki", "pricing", "--sections"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "top  38  top\nrounding  41  Rounding\nrefunds  42  Refunds\n"
+    );
+
+    let out = mem(&w, &repo, &["--json", "wiki", "pricing", "--sections"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        json(&out)["sections"],
+        serde_json::json!([
+            {"hslug": "top", "heading": "top", "bytes": 38},
+            {"hslug": "rounding", "heading": "Rounding", "bytes": 41},
+            {"hslug": "refunds", "heading": "Refunds", "bytes": 42},
+        ])
+    );
+
+    let out = mem(&w, &repo, &["wiki", "missing", "--sections"]);
+    assert_eq!(code(&out), 1, "{}", stdout(&out));
+}
+
+#[test]
+fn one_section_prints_its_bytes_and_a_missing_one_names_the_rest() {
+    let w = World::new("wiki-section-read");
+    let repo = w.repo("thing", None);
+    write_page(&w, &repo, "pricing", THREE, "three sections");
+
+    let out = mem(&w, &repo, &["wiki", "pricing#rounding"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "## Rounding\n\nHalf up, once, at the end.\n\n"
+    );
+
+    let out = mem(&w, &repo, &["wiki", "pricing#top"]);
+    assert_eq!(stdout(&out), "# Pricing\n\nThe cart totals in cents.\n\n");
+
+    let out = mem(&w, &repo, &["--json", "wiki", "pricing#refunds"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v = json(&out);
+    assert_eq!(v["hslug"], "refunds");
+    assert_eq!(v["text"], "## Refunds\n\nRefunds reverse the rounding.\n");
+    assert_eq!(v["bytes"], 42);
+
+    let out = mem(&w, &repo, &["wiki", "pricing#taxes"]);
+    assert_eq!(code(&out), 1, "{}", stdout(&out));
+    assert!(stdout(&out).is_empty());
+    let err = stderr(&out);
+    assert!(err.contains("top, rounding, refunds"), "{err}");
+
+    let out = mem(&w, &repo, &["wiki", "missing#top"]);
+    assert_eq!(code(&out), 1, "{}", stdout(&out));
+}
+
+#[test]
+fn a_section_write_replaces_only_its_bytes_and_logs_the_section() {
+    let w = World::new("wiki-section-write");
+    let repo = w.repo("thing", None);
+    write_page(&w, &repo, "pricing", THREE, "three sections");
+
+    let out = mem_stdin(
+        &w,
+        &repo,
+        &[
+            "wiki",
+            "pricing#rounding",
+            "--stdin",
+            "--note",
+            "banker's rounding",
+        ],
+        b"## Rounding\n\nHalf to even, once, at the end.",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(page_path(&w, "pricing")).unwrap(),
+        THREE.replace(
+            "## Rounding\n\nHalf up, once, at the end.\n\n",
+            "## Rounding\n\nHalf to even, once, at the end.\n"
+        ),
+        "the section's range is replaced and a missing newline is added"
+    );
+    let log = stdout(&mem(&w, &repo, &["log"]));
+    assert!(
+        log.contains("wiki pricing#rounding: banker's rounding"),
+        "{log}"
+    );
+
+    // The top section takes any text; every other one must open on its heading.
+    let out = mem_stdin(
+        &w,
+        &repo,
+        &["wiki", "pricing#top", "--stdin", "--note", "retitled"],
+        b"# Prices\n\n",
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let page = std::fs::read_to_string(page_path(&w, "pricing")).unwrap();
+    assert!(page.starts_with("# Prices\n\n## Rounding\n"), "{page}");
+
+    let out = mem_stdin(
+        &w,
+        &repo,
+        &["wiki", "pricing#refunds", "--stdin", "--note", "headless"],
+        b"Refunds are final.\n",
+    );
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert!(stderr(&out).contains("## "), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(page_path(&w, "pricing")).unwrap(),
+        page,
+        "a refused section write leaves the page alone"
+    );
+
+    let out = mem_stdin(
+        &w,
+        &repo,
+        &["wiki", "pricing#taxes", "--stdin", "--note", "nowhere"],
+        b"## Taxes\n",
+    );
+    assert_eq!(code(&out), 1, "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("top, rounding, refunds"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_section_write_over_a_changed_page_is_a_conflict() {
+    let w = World::new("wiki-section-cas");
+    let repo = w.repo("thing", None);
+    write_page(&w, &repo, "pricing", THREE, "three sections");
+    let path = page_path(&w, "pricing");
+
+    // As in the whole-page case: eight pipes' worth of stdin keeps the writer
+    // inside its read until after the page has changed under it.
+    let big = format!("## Rounding\n\n{}", "half up.\n".repeat(900_000));
+    let mut child = spawn(
+        &w,
+        &repo,
+        &[
+            "wiki",
+            "pricing#rounding",
+            "--stdin",
+            "--note",
+            "second pass",
+        ],
+    );
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin.write_all(big.as_bytes()).expect("write stdin");
+    std::fs::write(&path, b"someone else got here first\n").unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().expect("wait");
+
+    assert_eq!(out.status.code(), Some(5), "{}", stdout(&out));
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "someone else got here first\n"
+    );
+}

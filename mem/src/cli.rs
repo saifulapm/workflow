@@ -219,11 +219,15 @@ pub enum Command {
     },
     /// The project's wiki: list pages, print one, or replace one.
     Wiki {
-        /// The page slug. Without one, list every page this project has.
+        /// The page slug. Without one, list every page this project has. With
+        /// `#<heading-slug>` after it, one section of the page.
         slug: Option<String>,
-        /// Replace the page with what is on stdin.
+        /// Replace the page, or the section named, with what is on stdin.
         #[arg(long)]
         stdin: bool,
+        /// List the page's sections: heading slug, bytes and heading.
+        #[arg(long, conflicts_with_all = ["stdin", "note"])]
+        sections: bool,
         /// What changed and why. Mandatory on a write: the note becomes the
         /// log line that is the page's history.
         #[arg(long)]

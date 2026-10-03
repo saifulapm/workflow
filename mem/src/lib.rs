@@ -226,12 +226,14 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         cli::Command::Wiki {
             slug,
             stdin,
+            sections,
             note,
             session_id,
         } => verbs::wiki(
             &with_session(app, session_id),
             slug.as_deref(),
             *stdin,
+            *sections,
             note.as_deref(),
         ),
         cli::Command::Plan {

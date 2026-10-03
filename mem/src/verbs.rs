@@ -1150,7 +1150,19 @@ fn tick_singleton(app: &App, which: Singleton, task: &str, want: bool) -> Result
 /// subsystem and updates when it changes one. There is no delete verb: bisync
 /// resurrects deletions, so an obsolete page becomes a one-line stub pointing
 /// at its replacement.
-pub fn wiki(app: &App, slug: Option<&str>, stdin: bool, note: Option<&str>) -> Result<i32> {
+pub fn wiki(
+    app: &App,
+    slug: Option<&str>,
+    stdin: bool,
+    sections: bool,
+    note: Option<&str>,
+) -> Result<i32> {
+    // `<slug>#<hslug>` addresses one section; the slug alone, the whole page.
+    let (slug, hslug) = match slug.map(|s| s.split_once('#').unwrap_or((s, ""))) {
+        Some((slug, "")) => (Some(slug), None),
+        Some((slug, hslug)) => (Some(slug), Some(hslug)),
+        None => (None, None),
+    };
     if let Some(slug) = slug {
         check_slug(slug, "page")?;
     }
@@ -1160,11 +1172,18 @@ pub fn wiki(app: &App, slug: Option<&str>, stdin: bool, note: Option<&str>) -> R
                 "name the page to write, e.g. `mem wiki index --stdin --note \"why\"`",
             ));
         };
-        return wiki_write(app, slug, stdin, note);
+        return wiki_write(app, slug, hslug, stdin, note);
     }
-    match slug {
-        Some(slug) => wiki_print(app, slug),
-        None => wiki_list(app),
+    if sections && (slug.is_none() || hslug.is_some()) {
+        return Err(exit::usage(
+            "--sections lists one page's sections, e.g. `mem wiki index --sections`",
+        ));
+    }
+    match (slug, hslug) {
+        (Some(slug), Some(hslug)) => wiki_print_section(app, slug, hslug),
+        (Some(slug), None) if sections => wiki_sections(app, slug),
+        (Some(slug), None) => wiki_print(app, slug),
+        (None, _) => wiki_list(app),
     }
 }
 
@@ -1186,6 +1205,90 @@ fn wiki_print(app: &App, slug: &str) -> Result<i32> {
         |store, id, slug| store.wiki_page(id, slug),
         format!("no page '{slug}' — `mem wiki` lists them"),
     )
+}
+
+/// The page a section verb reads, or None once the missing page is reported.
+fn read_page(app: &App, slug: &str) -> Result<Option<(std::path::PathBuf, String)>> {
+    let identity = app.identity(Mode::Read)?;
+    let found = identity
+        .id()
+        .map(|id| app.store.wiki_page(id, slug))
+        .and_then(|path| std::fs::read(&path).ok().map(|bytes| (path, bytes)));
+    let Some((path, bytes)) = found else {
+        if !app.quiet && !app.json {
+            eprintln!(
+                "mem: {}",
+                unknown_project_note(&identity)
+                    .unwrap_or_else(|| format!("no page '{slug}' — `mem wiki` lists them"))
+            );
+        }
+        return Ok(None);
+    };
+    Ok(Some((path, String::from_utf8_lossy(&bytes).into_owned())))
+}
+
+/// The refusal for a section the page lacks names the ones it has, so the
+/// next try needs no listing first.
+fn no_such_section(slug: &str, hslug: &str, sections: &[crate::sections::PageSection]) -> String {
+    let have: Vec<&str> = sections.iter().map(|s| s.hslug.as_str()).collect();
+    format!(
+        "no section '{hslug}' in {slug} — its sections: {}",
+        if have.is_empty() {
+            "none".to_string()
+        } else {
+            have.join(", ")
+        }
+    )
+}
+
+fn wiki_sections(app: &App, slug: &str) -> Result<i32> {
+    let Some((_, text)) = read_page(app, slug)? else {
+        return Ok(exit::NOT_FOUND);
+    };
+    let sections = crate::sections::split(&text);
+    if app.json {
+        let rows: Vec<serde_json::Value> = sections
+            .iter()
+            .map(|s| json!({ "hslug": s.hslug, "heading": s.heading, "bytes": s.end - s.start }))
+            .collect();
+        println!("{}", serde_json::to_string(&json!({ "sections": rows }))?);
+    } else {
+        for s in &sections {
+            println!("{}  {}  {}", s.hslug, s.end - s.start, s.heading);
+        }
+    }
+    Ok(exit::OK)
+}
+
+/// One section prints byte for byte, heading line included, as the page does.
+fn wiki_print_section(app: &App, slug: &str, hslug: &str) -> Result<i32> {
+    let Some((path, text)) = read_page(app, slug)? else {
+        return Ok(exit::NOT_FOUND);
+    };
+    let sections = crate::sections::split(&text);
+    let Some(section) = sections.iter().find(|s| s.hslug == hslug) else {
+        if !app.quiet && !app.json {
+            eprintln!("mem: {}", no_such_section(slug, hslug, &sections));
+        }
+        return Ok(exit::NOT_FOUND);
+    };
+    let body = &text[section.start..section.end];
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "slug": slug,
+                "hslug": section.hslug,
+                "heading": section.heading,
+                "text": body,
+                "bytes": body.len(),
+                "path": path.to_string_lossy(),
+            }))?
+        );
+    } else {
+        print!("{body}");
+    }
+    Ok(exit::OK)
 }
 
 /// A slug is a file name, so this is what keeps `..`, dot-temps and bisync
@@ -1288,7 +1391,13 @@ fn print_slug_file(
     Ok(exit::OK)
 }
 
-fn wiki_write(app: &App, slug: &str, stdin: bool, note: Option<&str>) -> Result<i32> {
+fn wiki_write(
+    app: &App,
+    slug: &str,
+    hslug: Option<&str>,
+    stdin: bool,
+    note: Option<&str>,
+) -> Result<i32> {
     if !stdin {
         return Err(exit::usage(
             "a note describes a write — add --stdin to replace the page",
@@ -1314,13 +1423,49 @@ fn wiki_write(app: &App, slug: &str, stdin: bool, note: Option<&str>) -> Result<
     // writer's text arrived, and `--stdin` holds that window open for as long
     // as the writer takes.
     let seen = crate::atomic::read_mtime(&path);
-    let text = crate::write::read_stdin()?;
+    // A section write splices into the page as it was when the baseline was
+    // taken, so the section must exist before stdin is read.
+    let target = match hslug {
+        Some(hslug) => {
+            let Ok(bytes) = std::fs::read(&path) else {
+                return Err(exit::not_found(format!(
+                    "no page '{slug}' — `mem wiki` lists them"
+                )));
+            };
+            let page = String::from_utf8_lossy(&bytes).into_owned();
+            let sections = crate::sections::split(&page);
+            let Some(section) = sections.iter().find(|s| s.hslug == hslug).cloned() else {
+                return Err(exit::not_found(no_such_section(slug, hslug, &sections)));
+            };
+            Some((page, section))
+        }
+        None => None,
+    };
+    let mut text = crate::write::read_stdin()?;
     if text.trim().is_empty() {
         return Err(exit::usage(
             "a page needs text — there is no delete verb, so a page that is done \
              becomes a one-line stub pointing at what replaced it",
         ));
     }
+    if let Some((page, section)) = &target {
+        // Only the preamble has no heading of its own: text without one would
+        // fold this section into the one above it.
+        if section.hslug != crate::sections::TOP && !text.starts_with("## ") {
+            return Err(exit::usage(format!(
+                "the text for {slug}#{} must open on its `## ` heading line",
+                section.hslug
+            )));
+        }
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text = format!("{}{text}{}", &page[..section.start], &page[section.end..]);
+    }
+    let label = match hslug {
+        Some(hslug) => format!("{slug}#{hslug}"),
+        None => slug.to_string(),
+    };
     if let crate::write::SingletonWrite::Conflict =
         crate::write::write_singleton_since(&path, &text, false, seen)?
     {
@@ -1334,7 +1479,7 @@ fn wiki_write(app: &App, slug: &str, stdin: bool, note: Option<&str>) -> Result<
     let written = crate::write::save(
         app,
         crate::item::Kind::Log,
-        &format!("wiki {slug}: {note}"),
+        &format!("wiki {label}: {note}"),
         None,
         Some("wiki"),
         &[],
@@ -1351,7 +1496,7 @@ fn wiki_write(app: &App, slug: &str, stdin: bool, note: Option<&str>) -> Result<
             }))?
         );
     } else if !app.quiet {
-        println!("wiki {slug}  #{}", written.short_id);
+        println!("wiki {label}  #{}", written.short_id);
     }
     Ok(exit::OK)
 }
