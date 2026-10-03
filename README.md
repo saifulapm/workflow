@@ -187,6 +187,53 @@ both files — `mem plan --tick <task>` and `mem roadmap --tick <slug>` — and
 `mem context` opens every session with the roadmap heading and the milestone
 that is next.
 
+## Serve: a roadmap run with nobody watching
+
+`workflow serve` runs every approved roadmap on this machine milestone after
+milestone. Every few seconds it looks at each project with a checkout here
+whose runner is this machine, nobody, or a machine whose claim went stale. A
+project with no run going gets a pickup lead, plan-check, then one child
+`workflow run` in its checkout. When every task lands, serve ticks the
+milestone, writes the status and handoff lines and a hygiene count, and goes
+on to the next one; with none left the roadmap goes to `maintenance`. A run
+that stops short leaves the project `waiting` until its plan, an answer or a
+request in its run dir changes. A worker's question and a task's second
+failure get a lead session of their own.
+
+    workflow doctor --fix                        # writes the workflow.service unit
+    systemctl --user enable --now workflow.service
+    workflow serve --once                        # one tick by hand, to see what it does
+
+`doctor --fix` writes the unit into the dotfiles' unit directory and links it
+into `~/.config/systemd/user`, or writes it there when there are no dotfiles.
+Enabling it is yours to do; doctor names the command.
+
+Three controls:
+
+- `workflow park <task> "<reason>"`: a lead labels a task whose question
+  went to you. Serve starts no second lead for it, and the label goes once
+  every question the task asked is answered.
+- `workflow pause [<project>]`: serve stops the project's run, which stops
+  its workers and leaves their tasks dispatched, and starts nothing.
+- `workflow resume [<project>]`: serve starts the run again on the next
+  tick, and the run adopts what the stop left.
+
+`workflow status` opens with the serve line, and `workflow status --json`
+carries the same fields: `stage` (pickup, execution, waiting, blocked-plan,
+paused, maintenance; where serve has written none, execution for a live run
+and idle otherwise), `milestone` (slug and its place in the roadmap),
+`parked` (task and reason), `findings` (open findings), `runner` (the machine
+that holds the project) and `paused`.
+
+SIGTERM or SIGINT to serve goes to every child run, which stops its workers
+and leaves the tasks dispatched; serve waits up to thirty seconds for each and
+exits 0. On start serve stops the lead sessions it recorded, and a run that
+went without finishing its loop, stopped or killed, starts again on the next
+tick and adopts its tasks, settling a merge a crash interrupted.
+`tests/t131-soak.sh` proves it in two minutes in the suite; run it for twenty,
+`WF_SOAK_MIN=20 bash tests/run.sh t131`, once before a milestone that changes
+serve is ticked.
+
 ## Reading a project's state
 
     mem wiki                     # the project's pages, one line each
