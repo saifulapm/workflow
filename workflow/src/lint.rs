@@ -151,7 +151,7 @@ const WARN: &[(&str, Warn)] = &[
 ///
 /// Only tells a substring can catch belong here: dash and quote characters,
 /// the vocabulary, the filler phrases. Shape-level tells (formulaic structure,
-/// vague attribution, sterile voice) are judgment and live in the unslop
+/// vague attribution, sterile voice) are judgment and live in the work
 /// skill, read where the text is written. Verbs are matched on their stem so
 /// every inflection hits; `landscape` and `underscore` are left out because
 /// screens have orientations and identifiers have underscores.
