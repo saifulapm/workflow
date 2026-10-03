@@ -63,6 +63,8 @@ like "$(cat "$T_TMP/seen-t1.json")" '"runner":"here"' 'while it ran the project 
 like "$(cat "$T_TMP/seen-t2.json")" '"runner":"here"' 'for every task'
 is "$(key runner)" '' 'and the claim is gone once the run ends'
 is "$(key runner_since)" '' 'with its start time'
+like "$("$MEM_BIN" log --type run --limit 100 --json)" 'run claim: claimed here' \
+	'the claim is logged with the plan and the machine'
 
 ## ------------------------- a stale claim beside a run logged minutes ago
 

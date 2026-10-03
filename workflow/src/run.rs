@@ -4218,8 +4218,11 @@ pub fn cmd_run(
         return exit::USAGE;
     }
     // Taken once nothing above can refuse, so a refusal leaves no claim.
+    // The claim holds only the machine, so the plan it runs goes in the log
+    // for the hub and a sibling machine to read.
     if let Some(here) = &here {
         memcli::claim_runner(here);
+        memcli::log_run(&format!("run {}: claimed {here}", run.plan.plan_id));
     }
     let _ = std::fs::write(run.dir.join("plan.md"), &source);
     for t in run.plan.ids() {
