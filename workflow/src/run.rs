@@ -8,20 +8,15 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::backend::{Dispatch, Handle, ProcessBackend, WorkerBackend};
-use crate::backend_amx::AmxBackend;
+use crate::backend::{self, Dispatch, Handle, WorkerBackend};
 use crate::gitcmd::Git;
 use crate::plan::{Plan, PlanKind, Task};
-use crate::reviewer::{self, Verdict};
 use crate::{
     brief, exit, hygiene, memcli, ownership, paths, plan, plancheck, repo, sys, verify, warn,
 };
 
 pub const PENDING: &str = "pending";
 pub const DISPATCHED: &str = "dispatched";
-/// Fast-forwarded onto integration and green, with a reader over the diff:
-/// the merge is recorded when the reading says ship.
-pub const REVIEWING: &str = "reviewing";
 pub const MERGED: &str = "merged";
 pub const FAILED: &str = "failed";
 pub const BLOCKED: &str = "blocked";
@@ -35,24 +30,12 @@ const QUESTION_MISS_LIMIT: u32 = 3;
 /// Past this many tokens in its window, a worker is not sent back into its
 /// own session: what it would gain from remembering the task it loses to a
 /// context that has already been compacted once, and a fresh session with
-/// the findings in its brief reads better than that.
+/// the last attempt in its brief reads better than that.
 const CONTINUE_MAX_TOKENS: u64 = 120_000;
 
 /// How long a message just sent counts as a worker starting its turn, before
 /// a pane still reading as idle would be collected as a worker that ended.
 const CONTINUE_GRACE_S: i64 = 30;
-
-/// The line a reader gets in its own session when its deadline is spent:
-/// a reading past its time is told to answer with what it has, and given
-/// [`REVIEW_GRACE_S`] more, never a second cold reading of the same diff
-/// (two 15-minute readings of one prompt, both stopped holding an unwritten
-/// verdict).
-const REVIEW_ANSWER_NOW: &str = "Time is up: write your answer file now with what you have. \
-Partial findings and a verdict beat none.";
-
-/// Seconds a reader gets after [`REVIEW_ANSWER_NOW`], bounded by its own
-/// deadline so a short one under test is not a long wait.
-const REVIEW_GRACE_S: i64 = 180;
 
 /// The one line a worker gets in its own session when its turn ended with
 /// nothing to judge -- no ready, no blocked, no question, no commit. A model
@@ -64,8 +47,7 @@ const NUDGE_LINE: &str = "Your last turn ended without a report and without a to
 Continue; a provider cutoff looks the same from here.";
 
 /// The wiki pages a task's Read: named, read live off mem, in the shape the
-/// brief and the reviewer's prompt both take: `(slug, text)`, `None` for a
-/// page mem does not have.
+/// brief takes: `(slug, text)`, `None` for a page mem does not have.
 fn wiki_pages(task: &Task) -> Vec<(String, Option<String>)> {
     task.wiki_slugs()
         .into_iter()
@@ -113,8 +95,7 @@ fn field(dir: &Path, task: &str, ext: &str) -> String {
 }
 
 /// A run-level file `setup` wrote before the first worker went out -- `model`,
-/// `review-model`, `effort`, `review-effort` -- read back for a run `reap` is
-/// rebuilding. `None`
+/// `effort` -- read back for a run `reap` is rebuilding. `None`
 /// means the file was never written: a run dir from before this, or a
 /// fixture that never went through `setup`.
 fn recorded(dir: &Path, name: &str) -> Option<String> {
@@ -366,15 +347,11 @@ pub fn stalled(
 
 /// What the gate made of a ready worker's branch.
 enum Merge {
-    /// Rebased, fast-forwarded, verified, read if a reader was named, and
-    /// recorded.
+    /// Rebased, fast-forwarded, verified and recorded.
     Landed,
     /// A ready worker with nothing to merge: its Done was already satisfied
     /// in the tree it opened onto.
     Nothing,
-    /// Fast-forwarded and verified, and a reader has the diff. The merge is
-    /// recorded when the reading says ship, or unwound when it says fix.
-    Reading,
 }
 
 pub struct Run {
@@ -415,33 +392,13 @@ pub struct Run {
     /// What every worker of this run is started on: `WORKFLOW_MODEL` for
     /// one run, else the project's `mem project set model`, else opus.
     pub model: String,
-    /// Who reads each task's diff at the gate once its verify is green:
-    /// `WORKFLOW_REVIEW_MODEL` for one run (empty or `none` turns the
-    /// reading off), else what the run dir recorded, else nobody.
-    pub review_model: Option<String>,
-    /// Who writes the second fix round, after the reader has found fault
-    /// twice: `WORKFLOW_FIX_MODEL` for one run, else what the run dir
-    /// recorded, else the reader's own model. A diff a cheaper model
-    /// could not get right in two goes is not sent back to it a third time.
-    pub fix_model: Option<String>,
-    /// Who a worker's `workflow advise` asks: `WORKFLOW_ADVISOR` for one
-    /// run, else what the run dir recorded, else the reader's own model by
-    /// its own rungs. Nobody means the brief says no word of advice.
-    pub advisor: Option<String>,
     /// How much reasoning the workers spend, `--effort` on either backend:
     /// `WORKFLOW_EFFORT` for one run (empty means no flag), else the
     /// project's `mem project set effort`, else nothing and the CLI's own
     /// default stands.
     pub effort: Option<String>,
-    /// The same dial for the reader, from `WORKFLOW_REVIEW_EFFORT` or the
-    /// run dir's record. Independent of `effort`: a cheap
-    /// worker turned up does not turn the frontier reader up with it.
-    pub review_effort: Option<String>,
-    /// The four dials above as one line, each naming the rung it came off,
-    /// for the run to say at its start (see [`dial_line`]).
-    pub dials: String,
     /// Raised by SIGTERM, SIGINT or SIGHUP. The poll loop reads it between
-    /// passes, and the stop takes a reader down with the workers.
+    /// passes.
     pub stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub env: Vec<(String, String)>,
     /// Set by `workflow reap`, which collects for a run that is gone. A
@@ -508,7 +465,7 @@ impl Run {
     }
 
     /// Tasks the live plan has gained since this run parsed it. The
-    /// brief and the reader already read the plan live; the ready set read
+    /// brief already reads the plan live; the ready set read
     /// the parse from setup, so a task added mid-run sat unseen until the
     /// next `workflow run`. Each new task joins `self.plan` in the plan's order
     /// and starts pending; a task the plan dropped is left as it stands, since
@@ -612,7 +569,7 @@ impl Run {
     }
 
     /// The live plan as it reads right now: the `--plan-file`, else
-    /// mem's plan. What `task_now` parses and what the reviewer is handed.
+    /// mem's plan. What `task_now` parses and the brief carries.
     fn plan_text(&self) -> Option<String> {
         match self.plan_file.as_deref() {
             Some(file) => std::fs::read_to_string(file).ok(),
@@ -811,17 +768,6 @@ impl Run {
         self.dispatched().len()
     }
 
-    /// Tasks whose diff a reader is going over right now. At most one: the
-    /// gate is serialized, and integration holds that task's fast-forward
-    /// unrecorded until the reading ends.
-    fn reviewing(&self) -> Vec<String> {
-        self.plan
-            .ids()
-            .into_iter()
-            .filter(|t| self.state(t) == REVIEWING)
-            .collect()
-    }
-
     /// The last line the worker reported in its own status file, as
     /// (state, note). Lines read `<utc> <state> <note...>`.
     fn last_status_line(&self, task: &str) -> Option<(String, String)> {
@@ -873,19 +819,6 @@ impl Run {
                 .unwrap_or_default()
                 .trim()
                 .is_empty()
-    }
-
-    /// The integration commit a task's worktree is brought up to: the branch
-    /// tip, except while a reading holds a fast-forward on it that nothing
-    /// has recorded -- then the commit before it, so no worker builds on
-    /// work the reader may yet send back.
-    fn integration_tip(&self) -> Option<String> {
-        for task in self.reviewing() {
-            if let Some((prev, _)) = self.pending_merge(&task) {
-                return Some(prev);
-            }
-        }
-        self.git().rev_parse_commit(&self.int_branch)
     }
 
     /// The commit some run merged for this task, or empty.
@@ -972,8 +905,8 @@ impl Run {
         if self.commits(task) != 0 {
             return false;
         }
-        if reviewer::provider_limit(&self.backend.question(&h)).is_none()
-            && reviewer::provider_limit(&self.backend.last_words(&h)).is_none()
+        if backend::provider_limit(&self.backend.question(&h)).is_none()
+            && backend::provider_limit(&self.backend.last_words(&h)).is_none()
         {
             return false;
         }
@@ -1008,7 +941,7 @@ impl Run {
             return;
         }
         let git = Git::at(&wt);
-        let Some(tip) = self.integration_tip() else {
+        let Some(tip) = self.git().rev_parse_commit(&self.int_branch) else {
             return;
         };
         if git.head().as_deref() == Some(tip.as_str()) {
@@ -1083,58 +1016,19 @@ impl Run {
         self.dispatch(task, after);
     }
 
-    /// Findings kept as work for a later plan, one mem record each, named
-    /// for the task they came off; nothing when there are none.
-    fn file_followups(&self, task: &str, findings: &[String], how: &str) {
-        for f in findings {
-            let text = format!("follow-up from {}/{task} ({how}): {f}", self.plan.plan_id);
-            memcli::save_followup(&text);
-        }
-        if !findings.is_empty() {
-            warn(format!(
-                "task {task}: {} finding(s) {how} -- filed as follow-ups (mem log --type followup)",
-                findings.len()
-            ));
-        }
-    }
-
     /// `workflow accept <task>`, honoured: the run settled the task as
     /// failed, its branch holds the diff, and the orchestrator is landing it
-    /// over whatever the reader said. The merge runs again -- ownership, the
-    /// words, the rebase, the gate's suite -- with no reader this time, and
-    /// every finding of the last reading is filed as a follow-up so nothing
-    /// true is lost.
+    /// as it stands. The merge runs again -- ownership, the words, the
+    /// rebase, the gate's suite.
     fn accept(&self, task: &str) {
-        let n: u64 = self.field(task, "reviews").parse().unwrap_or(0);
-        let last = std::fs::read_to_string(self.dir.join(format!("{task}.review.{n}")))
-            .unwrap_or_default();
-        let findings: Vec<String> = reviewer::findings(&last)
-            .into_iter()
-            .map(|(tag, body)| format!("{tag} {body}"))
-            .collect();
-        let _ = std::fs::write(self.dir.join(format!("{task}.unread")), "");
-        // A task that failed because the reading could not be had -- voided,
-        // deadlined, no verdict -- has no fix verdict to merge over, and is
-        // accepted the same way.
-        warn(format!(
-            "task {task}: accepted by request -- merging {}",
-            match n {
-                0 => "unread".to_string(),
-                n => format!("over reading {n} unread"),
-            }
-        ));
+        warn(format!("task {task}: accepted by request -- merging it"));
         match self.merge(task) {
-            Ok(Merge::Landed) => {
-                self.file_followups(task, &findings, &format!("accepted over reading {n}"));
-                self.land(task);
-            }
-            Ok(Merge::Reading) => self.set_state(task, REVIEWING),
+            Ok(Merge::Landed) => self.land(task),
             Ok(Merge::Nothing) => {
                 self.fail_task(task, "accepted, but its branch holds nothing to merge")
             }
             Err(why) => self.fail_task(task, &why),
         }
-        let _ = std::fs::remove_file(self.dir.join(format!("{task}.unread")));
     }
 
     /// `branch` merged whole onto the integration branch's tip, detached, as
@@ -1168,14 +1062,13 @@ impl Run {
     }
 
     /// `workflow regate <task>`, honoured: the merge a worker's `ready`
-    /// starts, run again on the branch as it stands -- the suite and the
-    /// reader both -- with no worker spent. A gate red twice on a test that
-    /// is green alone left accept, which lands unread, as the only way on.
+    /// starts, run again on the branch as it stands -- the suite included --
+    /// with no worker spent, for a gate red twice on a test that is green
+    /// alone.
     fn regate(&self, task: &str) {
         warn(format!("task {task}: gated again by request"));
         match self.merge(task) {
             Ok(Merge::Landed) => self.land(task),
-            Ok(Merge::Reading) => self.set_state(task, REVIEWING),
             Ok(Merge::Nothing) => self.fail_task(task, "its branch holds nothing to merge"),
             Err(why) => self.fail_task(task, &why),
         }
@@ -1220,7 +1113,7 @@ impl Run {
 
     /// The task back to the worker that has it, in the session it has: the
     /// brief is rewritten with what happened to its last report -- the
-    /// reader's findings, the orchestrator's answer -- and one line goes into
+    /// orchestrator's answer -- and one line goes into
     /// the pane pointing at it. Nothing about the attempt count moves; the
     /// status file is emptied so the gate judges this report and not the
     /// last one, and the stall clock starts over.
@@ -1254,16 +1147,7 @@ impl Run {
         let prior = self.prior_attempt(task, why);
         let prose = plan::prose(&self.plan_text().unwrap_or_default());
         let pages = wiki_pages(&t);
-        brief::write(
-            &t,
-            &wt,
-            &status,
-            &prior,
-            &prose,
-            &pages,
-            self.advisor.as_deref(),
-            &brief_file,
-        );
+        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
         // The hook in that worktree reads this file, not the brief: a task
         // sent back to its own worker was still held to the Verify line of
         // the plan as it read at dispatch.
@@ -1290,25 +1174,6 @@ impl Run {
         ));
         memcli::log_run(&format!("run {}: continued {task}", self.plan.plan_id));
         true
-    }
-
-    /// The task's current session as a parent for its reader, when the
-    /// backend still has a record of it. A name amx never created (a launch
-    /// it refused leaves one in `<task>.session`) or has since forgotten is
-    /// no parent: amx refuses a parent it has no record of, and would go on
-    /// refusing every dispatch after.
-    ///
-    /// A fresh worker is nobody's child: chaining each redispatch onto the
-    /// session before made the worker's depth climb with every attempt, and
-    /// the reader it needs is one deeper still -- past amx's `subagent_depth`
-    /// after a single retry. The prior session's own words are in the brief,
-    /// so the wall loses a line the run already keeps.
-    fn parent_of(&self, task: &str) -> Option<String> {
-        let session = self.field(task, "session");
-        if session.is_empty() || !self.backend.seen(&self.handle(task)) {
-            return None;
-        }
-        Some(session)
     }
 
     fn dispatch(&self, task: &str, after: &str) {
@@ -1343,9 +1208,6 @@ impl Run {
         // marker to judge THIS attempt, so a stale `ready` from the last one
         // cannot pass for it, and what it said stays where it said it.
         self.mark_status(task, &format!("attempt {}", prior.attempts + 1));
-        // The consult cap is per attempt: `workflow advise` counts up from
-        // here.
-        write_field(&self.dir, task, "advised", "0");
         write_field(&self.dir, task, "nudged", "0");
         for ext in ["json", "err", "pid"] {
             let _ = std::fs::remove_file(self.dir.join(format!("{task}.{ext}")));
@@ -1354,16 +1216,7 @@ impl Run {
         // orchestrator makes mid-run is in the next attempt's brief.
         let prose = plan::prose(&self.plan_text().unwrap_or_default());
         let pages = wiki_pages(&t);
-        brief::write(
-            &t,
-            &wt,
-            &status,
-            &prior,
-            &prose,
-            &pages,
-            self.advisor.as_deref(),
-            &brief_file,
-        );
+        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
         // The gate reads this from inside the worktree: the task is held to its
         // own Verify command there, not to the repo-wide suite (verify.rs).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));
@@ -1395,12 +1248,7 @@ impl Run {
             rundir: self.dir.clone(),
             session: session.clone(),
             parent: None,
-            // A fixer after round two, else a worker: the field is written
-            // beside the fix model and persists the same way.
-            role: match self.field(task, "role").trim() {
-                "" => "worker".to_string(),
-                r => r.to_string(),
-            },
+            role: "worker".to_string(),
             model: match self.field(task, "model").trim() {
                 "" => self.model.clone(),
                 m => m.to_string(),
@@ -1601,13 +1449,9 @@ impl Run {
             return Err("the rebased branch does not fast-forward onto integration".into());
         }
 
-        match self.gate(task, &prev, &new) {
-            Err(why) => {
-                self.unwind(task, &prev);
-                return Err(why);
-            }
-            Ok(true) => return Ok(Merge::Reading),
-            Ok(false) => {}
+        if let Err(why) = self.gate_verify(task) {
+            self.unwind(task, &prev);
+            return Err(why);
         }
 
         self.record_merged(task, &new);
@@ -1640,9 +1484,8 @@ impl Run {
             "task {task}: its merge reached {} before the run died -- verifying it now",
             self.int_branch
         ));
-        let why = match self.gate(task, prev, new) {
-            Ok(true) => return Ok(Merge::Reading),
-            Ok(false) => {
+        let why = match self.gate_verify(task) {
+            Ok(()) => {
                 self.record_merged(task, new);
                 return Ok(Merge::Landed);
             }
@@ -1661,544 +1504,11 @@ impl Run {
         ))
     }
 
-    /// The two readings a fast-forwarded merge faces before it is recorded:
-    /// the reviewer, dispatched first so it works alongside the suite rather
-    /// than after it, then the suite itself. `Err` is the reason the caller
-    /// resets integration to `prev` and fails the task with; a reading
-    /// already in flight is stopped and its questions mooted first, since a
-    /// red gate voids it outright. `Ok(true)` means a reader now has the
-    /// diff and the merge waits on its verdict -- its `review-started`
-    /// stamped again so the deadline counts from the gate's end, not from
-    /// before the suite ran; `Ok(false)` means nobody reads here and the
-    /// merge is final.
-    fn gate(&self, task: &str, prev: &str, new: &str) -> Result<bool, String> {
-        let reading = self.start_review(task, prev, new);
-        // Set before the suite runs, not after: the suite is the long part
-        // (minutes, and a red gate runs it twice), and a run killed or
-        // crashed in the middle of it must leave the reading on record for
-        // `shutdown` and `adopt_stale` to find, not an orphan reader beside
-        // a task still marked dispatched.
-        if reading {
-            self.set_state(task, REVIEWING);
-        }
-        if let Err(why) = self.gate_verify(task) {
-            if reading {
-                self.backend
-                    .stop(&self.review_handle(task), self.kill_grace_s);
-                self.moot_reader_questions(task);
-            }
-            return Err(why);
-        }
-        if reading {
-            write_field(&self.dir, task, "review-started", &sys::now().to_string());
-        }
-        Ok(reading)
-    }
-
-    /// The integration worktree back to a commit, clean: the tree a reading
-    /// is judged against, and the tree the next reading is handed. `unwind`
-    /// is the other direction -- back to where integration stood before this
-    /// task's fast-forward, which is not what a second reading reads.
-    fn reset_int(&self, to: &str) {
-        let int = Git::at(&self.int_wt);
-        int.quiet(&["reset", "-q", "--hard", to]);
-        int.quiet(&["clean", "-fdq"]);
-    }
-
     /// Integration back to where it stood before this task's fast-forward,
     /// and the intent line cleared: the merge did not happen.
     fn unwind(&self, task: &str, prev: &str) {
         Git::at(&self.int_wt).quiet(&["reset", "-q", "--hard", prev]);
         write_field(&self.dir, task, "merging", "");
-    }
-
-    /// The reader, started before the gate's own suite so the two run side by
-    /// side rather than one after the other. A model in a clean context reads
-    /// the diff against the live plan and the task's Done line and says ship or
-    /// fix; the gate's commands ride along in the prompt, named and ruled out,
-    /// so a red gate is never mistaken for a finding. Nobody named means no
-    /// reading, which by the time a task gets here means a run that was told so
-    /// on the way in (see [`refused`]). `fix` leaves the findings in
-    /// `<task>.review.<n>`, which the failure note names and the redispatched
-    /// worker's brief repeats; `<task>.review` is the file the next
-    /// [`Run::read_start`] deletes.
-    ///
-    /// The reader is dispatched like a worker, through the project's backend,
-    /// so it is a session Saiful can watch and attach to -- never print mode.
-    /// It works in the integration worktree, writes one answer file and ends;
-    /// a reading that changed the tree is void.
-    ///
-    /// Started here and judged by [`Run::review_pass`] from the poll loop,
-    /// never waited for: a reading may run for its whole deadline, and a
-    /// loop blocked on it dispatched nothing, stopped no stalled worker and
-    /// heard no signal meanwhile. The task sits `reviewing` in between, its
-    /// `merging` intent line still naming the fast-forward that waits. A
-    /// reading in flight when the gate goes red is stopped by [`Run::gate`],
-    /// never judged here. Answers whether a reading began.
-    fn start_review(&self, task: &str, prev: &str, new: &str) -> bool {
-        // reap collects and never dispatches (run-recovery): a reader it
-        // started would have no run to judge it.
-        if self.collecting {
-            return false;
-        }
-        let Some(model) = self.review_model.as_deref() else {
-            return false;
-        };
-        // An accepted merge: the orchestrator has read the findings and is
-        // landing the diff over them. The gate's own suite still runs.
-        if self.dir.join(format!("{task}.unread")).exists() {
-            return false;
-        }
-        let Some(t) = self.task_now(task) else {
-            return false;
-        };
-        let plan_text = self.plan_text().unwrap_or_default();
-        let int = Git::at(&self.int_wt);
-        let range = format!("{prev}..{new}");
-        let full = int.out(&["diff", &range]).unwrap_or_default();
-        let stat = int.out(&["diff", "--stat", &range]).unwrap_or_default();
-        let (diff, left_out) = reviewer::review_diff(&full, &stat);
-        let prompt = self.dir.join(format!("{task}.review-prompt"));
-        let answer = self.dir.join(format!("{task}.review"));
-        let pages = wiki_pages(&t);
-        let gate = verify::detect_verifiers(&self.int_wt, memcli::project_current().as_ref())
-            .into_iter()
-            .map(|v| format!("{}: {}", v.label, v.cmd))
-            .collect::<Vec<_>>()
-            .join("\n");
-        // A second or later reading of the same task carries every earlier
-        // one, so it verdicts a fix against what it was asked to fix rather
-        // than reading the diff cold again.
-        let reviews: u64 = self.field(task, "reviews").parse().unwrap_or(0);
-        let earlier: Vec<String> = (1..=reviews)
-            .filter_map(|k| {
-                std::fs::read_to_string(self.dir.join(format!("{task}.review.{k}"))).ok()
-            })
-            .collect();
-        // What the orchestrator has already settled for this task: what it
-        // answered the worker, and every ruling saved since the run began.
-        // The plan's own Rulings ride in the plan text; these do not, and a
-        // reader that never saw them blocked one diff over the same settled
-        // ground three readings running.
-        let mut settled: Vec<(String, String)> = memcli::questions_for(&self.task_tag(task))
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|q| {
-                q.answer.map(|a| {
-                    (
-                        format!("It asked: {}", brief::clip(&q.body)),
-                        brief::clip(&a),
-                    )
-                })
-            })
-            .collect();
-        // Minutes, rounded up: mem takes a window, not an epoch, and a run
-        // younger than a minute asks for the minute it is in. Since the
-        // plan's first run, not this one.
-        if let Some(started) = recorded(&self.dir, "first-started")
-            .or_else(|| recorded(&self.dir, "started"))
-            .and_then(|v| v.parse::<i64>().ok())
-        {
-            let since = format!("{}m", (sys::now() - started) / 60 + 1);
-            settled.extend(memcli::rulings_since(&since).into_iter().map(|body| {
-                (
-                    "A ruling saved since this plan's first run:".to_string(),
-                    brief::clip(&body),
-                )
-            }));
-        }
-        // The rung the orchestrator set for this task, else the default;
-        // then the prompt's size scales it up, and the reader is told the
-        // minutes it has. Written once here, read every pass by `review_pass`
-        // beside the task's own rung.
-        let rung_s = match self.field(task, "review-deadline") {
-            min if min.trim().is_empty() => reviewer::deadline_s(),
-            min => reviewer::deadline_from(Some(&min)),
-        };
-        let render = |minutes: i64| {
-            reviewer::prompt_with(
-                &plan_text,
-                &t,
-                &diff,
-                &stat,
-                &self.int_wt,
-                &answer,
-                &pages,
-                &gate,
-                &earlier,
-                &settled,
-                minutes,
-                &left_out,
-            )
-        };
-        let mut text = render(rung_s / 60);
-        let deadline_s = reviewer::deadline_for(rung_s, text.len());
-        if deadline_s != rung_s {
-            text = render(deadline_s / 60);
-            warn(format!(
-                "task {task}: this reading's brief is {} KB, past the {} KB the default deadline \
-                 carries -- the reading gets {} minutes",
-                text.len() / 1024,
-                reviewer::PROMPT_WARN_BYTES / 1024,
-                deadline_s / 60
-            ));
-        }
-        write_field(
-            &self.dir,
-            task,
-            "review-deadline-auto",
-            &deadline_s.to_string(),
-        );
-        if !left_out.is_empty() {
-            warn(format!(
-                "task {task}: {} file(s) ride in the reading as stat lines -- {}",
-                left_out.len(),
-                left_out
-                    .iter()
-                    .map(|l| l.split(" | ").next().unwrap_or(l).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        let _ = std::fs::write(&prompt, &text);
-        write_field(&self.dir, task, "review-tries", "0");
-        warn(format!("task {task}: {model} is reading the diff"));
-        self.read_start(task);
-        true
-    }
-
-    /// One reading: a worker dispatch in the integration worktree, off the
-    /// prompt `start_review` wrote. Counted in `review-tries`, stamped in
-    /// `review-started`, its handle in `review-session`; `review_pass` reads
-    /// all three.
-    fn read_start(&self, task: &str) {
-        let Some(model) = self.review_model.as_deref() else {
-            return;
-        };
-        let name = format!("{task}-review");
-        let pidfile = self.dir.join(format!("{task}.review-pid"));
-        let out = self.dir.join(format!("{task}.review-out"));
-        let _ = std::fs::remove_file(self.dir.join(format!("{task}.review")));
-        let _ = std::fs::remove_file(self.dir.join(format!("{task}.review-grace-until")));
-        let _ = std::fs::remove_file(&pidfile);
-        let _ = std::fs::write(&out, "");
-        let mut env = self.env.clone();
-        env.push((
-            "WORKFLOW_TASK".into(),
-            format!("{}/{name}", self.plan.plan_id),
-        ));
-        let d = Dispatch {
-            task: name,
-            worktree: self.int_wt.clone(),
-            brief: self.dir.join(format!("{task}.review-prompt")),
-            out,
-            err: self.dir.join(format!("{task}.review-err")),
-            pidfile,
-            status: self.dir.join(format!("{task}.review-status")),
-            rundir: self.dir.clone(),
-            session: self.backend.mint_session(),
-            // The reader is the worker's child: whose diff it reads is on
-            // the record, and the wall groups them.
-            parent: self.parent_of(task),
-            role: "reader".into(),
-            model: model.to_string(),
-            effort: self.review_effort.clone(),
-            turns: env_str("WORKFLOW_MAX_TURNS", "120"),
-            env,
-        };
-        let tries: u64 = self.field(task, "review-tries").parse().unwrap_or(0);
-        write_field(&self.dir, task, "review-tries", &(tries + 1).to_string());
-        write_field(&self.dir, task, "review-started", &sys::now().to_string());
-        let session = self.backend.dispatch(&d);
-        write_field(&self.dir, task, "review-session", &session);
-    }
-
-    fn review_handle(&self, task: &str) -> Handle {
-        Handle {
-            session: self.field(task, "review-session"),
-            pidfile: self.dir.join(format!("{task}.review-pid")),
-            worktree: self.int_wt.clone(),
-        }
-    }
-
-    /// Every reading in flight, judged if it has ended.
-    fn review_passes(&self) {
-        for task in self.reviewing() {
-            self.review_pass(&task);
-        }
-    }
-
-    /// The reading in flight, judged once it ends. `true` when the task is
-    /// settled either way -- merged on ship, failed on fix or on a reading
-    /// that could not be had twice -- and `false` while the reader is still
-    /// going or has just been sent again.
-    fn review_pass(&self, task: &str) -> bool {
-        let Some((prev, new)) = self.pending_merge(task) else {
-            self.fail_task(task, "the reading lost the record of what it was reading");
-            return true;
-        };
-        let answer = self.dir.join(format!("{task}.review"));
-        let h = self.review_handle(task);
-        let started: i64 = self.field(task, "review-started").parse().unwrap_or(0);
-        let waited = sys::now() - started;
-        // The task's own rung first, read every pass: a value written while
-        // the reader is going extends the reading in flight, which a live
-        // process's environment cannot do.
-        let deadline_s = match self.field(task, "review-deadline") {
-            min if min.trim().is_empty() => {
-                match self.field(task, "review-deadline-auto").parse::<i64>() {
-                    Ok(s) if s > 0 => s,
-                    _ => reviewer::deadline_s(),
-                }
-            }
-            min => reviewer::deadline_from(Some(&min)),
-        };
-        // Gone with an answer is the clean end. Gone without one within the
-        // first moments is a dispatch still coming up, not an ending. The
-        // deadline below is an ending too: a session stopped there has been
-        // talking for the whole wait and has last words of its own, same as
-        // one that simply exited without a verdict. The stop for it is the
-        // one below, after the pane has been asked what it was showing.
-        let mut at_deadline = false;
-        let outcome = if !self.backend.alive(&h) && (answer.exists() || waited >= 5) {
-            self.judge_reading(&new, &answer)
-        } else if waited >= deadline_s {
-            at_deadline = true;
-            // Told once to answer with what it has, and given the grace;
-            // only a reader that cannot be told, or says nothing in it, is
-            // stopped.
-            let until: i64 = self.field(task, "review-grace-until").parse().unwrap_or(0);
-            let grace = REVIEW_GRACE_S.min(deadline_s.max(1));
-            if until == 0 && self.backend.send(&h, REVIEW_ANSWER_NOW) {
-                write_field(
-                    &self.dir,
-                    task,
-                    "review-grace-until",
-                    &(sys::now() + grace).to_string(),
-                );
-                warn(format!(
-                    "task {task}: the review is past its {deadline_s} second deadline -- told to \
-                     answer now, {grace} s more (session {})",
-                    h.session
-                ));
-                return false;
-            }
-            if until > 0 && sys::now() < until {
-                return false;
-            }
-            Err(match until {
-                0 => {
-                    format!("the review ran past its {deadline_s} second deadline and was stopped")
-                }
-                _ => format!(
-                    "the review ran past its {deadline_s} second deadline, was told to answer \
-                     and wrote nothing in the {grace} s after, and was stopped"
-                ),
-            })
-        } else {
-            return false;
-        };
-        // A reading that ended with nothing may be stopped at a question drawn
-        // in front of the session -- claude's folder-trust screen -- which no
-        // hook reports and no answer file records: the run's whole account of
-        // it was "no verdict", retried, for an hour. amx reads the screen, and
-        // is asked before the pane goes.
-        let question = match &outcome {
-            Err(_) => self.backend.question(&h),
-            Ok(_) => String::new(),
-        };
-        self.moot_reader_questions(task);
-        // The reading is over either way; the reader's pane has no more to say.
-        self.backend.stop(&h, self.kill_grace_s);
-        match outcome {
-            Ok(Verdict::Ship) => {
-                warn(format!("task {task}: the reviewer says ship"));
-                let text = std::fs::read_to_string(&answer).unwrap_or_default();
-                self.file_followups(task, &reviewer::later(&text), "the reader marked later");
-                self.record_merged(task, &new);
-                self.land(task);
-            }
-            Ok(Verdict::Fix) => {
-                let n = self.field(task, "reviews").parse::<u64>().unwrap_or(0) + 1;
-                write_field(&self.dir, task, "reviews", &n.to_string());
-                self.unwind(task, &prev);
-                let kept = self.dir.join(format!("{task}.review.{n}"));
-                let _ = std::fs::copy(&answer, &kept);
-                let why = format!(
-                    "the reviewer wants fixes first (review {n}) -- read {}",
-                    kept.display()
-                );
-                // Two fix rounds go by themselves, and no more. The first
-                // goes back to the worker that wrote the diff -- into its
-                // session when it still stands, else a fresh one on the next
-                // free slot. The second is a fresh session on the fix model:
-                // a diff the workers' model could not get right in two goes
-                // is not sent back to it. The third reading is told only an
-                // earlier finding or a regression blocks (reviewer.rs), so a
-                // third fix verdict is the orchestrator's: accept the merge
-                // with the findings filed, or edit the plan and redispatch.
-                // Ruling in every true finding on its merits ran one task
-                // to sixteen dispatches and fourteen readings.
-                match n {
-                    1 => {
-                        self.fail_task_keep(task, &why);
-                        if self.continue_worker(task, &why) {
-                            return true;
-                        }
-                        let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
-                        warn(format!(
-                            "task {task}: dispatched again with the findings on the next free slot"
-                        ));
-                    }
-                    2 => {
-                        self.fail_task_quiet(task, &why);
-                        let model = self.fix_model.clone().or_else(|| self.review_model.clone());
-                        if let Some(m) = &model {
-                            write_field(&self.dir, task, "model", m);
-                        }
-                        write_field(&self.dir, task, "role", "fixer");
-                        let _ = std::fs::write(self.dir.join(format!("{task}.redispatch")), "");
-                        warn(format!(
-                            "task {task}: dispatched again on {} with both readings, on the next free slot",
-                            model.as_deref().unwrap_or(&self.model)
-                        ));
-                    }
-                    _ => {
-                        self.fail_task(
-                            task,
-                            &format!(
-                                "{why}; three readings is the run's limit -- `workflow accept {task}` \
-                                 merges it as it stands with the findings filed as follow-ups, or edit \
-                                 the plan and `workflow redispatch {task}`"
-                            ),
-                        );
-                    }
-                }
-            }
-            // A reading that did not happen is not a verdict either way: one
-            // more try, and then the orchestrator is told. Unless its last
-            // words say the provider itself is why -- a second reading hits
-            // the same wall, so that fails the task at once.
-            Err(why) => {
-                let why = if question.is_empty() {
-                    why
-                } else {
-                    let asked = question.split_whitespace().collect::<Vec<_>>().join(" ");
-                    format!("{why}; the reader stopped at a question: \"{asked}\"")
-                };
-                // The dispatch's own stderr is already in review-err. Last
-                // words are appended, never used to overwrite it: a session
-                // that ran a while before the wall has ordinary text in its
-                // transcript and the limit only on stderr, so either one
-                // losing the other would hide the line a second reading is
-                // going to meet again. A reader that never launched has no
-                // transcript and no pane, so both come back empty and
-                // review-err is left as the dispatch captured it.
-                let stderr_text = self.field(task, "review-err");
-                // Last words, else dying words: a reader whose session died
-                // took its transcript with it, and what the backend kept of
-                // the pane is then the one account of whether it crashed, was
-                // killed or hit a limit.
-                let last_words = match self.backend.last_words(&h) {
-                    words if !words.is_empty() => words,
-                    _ => self.backend.dying_words(&h),
-                };
-                let combined = match (stderr_text.is_empty(), last_words.is_empty()) {
-                    (true, _) => last_words.clone(),
-                    (false, true) => stderr_text.clone(),
-                    (false, false) => format!("{stderr_text}\n{last_words}"),
-                };
-                if !last_words.is_empty() {
-                    write_field(&self.dir, task, "review-err", &combined);
-                }
-                if let Some(line) = reviewer::provider_limit(&combined) {
-                    self.unwind(task, &prev);
-                    self.fail_task(
-                        task,
-                        &format!(
-                            "the reader hit a provider limit: {line} (session {})",
-                            h.session
-                        ),
-                    );
-                    return true;
-                }
-                let tries: u64 = self.field(task, "review-tries").parse().unwrap_or(0);
-                // A deadline spent is never read cold again: the second
-                // reading starts from nothing on the same prompt and takes
-                // as long. A reading that ended some other way -- no verdict, a
-                // touched tree -- gets its one more, as before.
-                // Either way the tree is cleaned before it is put back: a
-                // reader stopped mid-turn was never asked to, and its
-                // residue voided the next task's reading.
-                self.reset_int(&new);
-                if tries < 2 && !at_deadline {
-                    warn(format!(
-                        "task {task}: {why} -- one more reading (session {})",
-                        h.session
-                    ));
-                    self.read_start(task);
-                    return false;
-                }
-                self.unwind(task, &prev);
-                let note = if combined.is_empty() {
-                    format!("{why} -- read {} (session {})", answer.display(), h.session)
-                } else {
-                    format!(
-                        "{why} -- read {} and {} (session {})",
-                        answer.display(),
-                        self.dir.join(format!("{task}.review-err")).display(),
-                        h.session
-                    )
-                };
-                // The file the note sends the orchestrator to exists: a
-                // reading that wrote none gets the ending and the reader's
-                // last words in it.
-                if !answer.exists() {
-                    let body = match combined.is_empty() {
-                        true => format!("no answer: {why}\n"),
-                        false => format!("no answer: {why}\n\n{combined}\n"),
-                    };
-                    let _ = std::fs::write(&answer, body);
-                }
-                self.fail_task(task, &note);
-            }
-        }
-        true
-    }
-
-    /// What a reading that has ended came to. `Err` is a reading that did
-    /// not happen -- no verdict written, or a tree that is not the one it was
-    /// handed -- never a judgement on the code.
-    fn judge_reading(&self, new: &str, answer: &Path) -> Result<Verdict, String> {
-        // The tree it read must be the tree it was handed.
-        let int = Git::at(&self.int_wt);
-        let dirty = int
-            .out(&["status", "--porcelain"])
-            .is_some_and(|s| !s.trim().is_empty());
-        if dirty || int.head().as_deref() != Some(new) {
-            self.reset_int(new);
-            return Err("the reviewer changed the tree, which voids the reading".into());
-        }
-        let text = std::fs::read_to_string(answer).unwrap_or_default();
-        // The caller's note adds the answer file and the session, so the
-        // orchestrator knows where the reading left its trace.
-        reviewer::verdict(&text).ok_or_else(|| "the review ended with no verdict".to_string())
-    }
-
-    /// A reader is told never to ask, and one that asks anyway waits on
-    /// nobody: the gate reads its answer file, not its questions. Whatever it
-    /// asked is closed the moment its reading ends, or it sits in the
-    /// orchestrator's queue for ever under a task id no plan holds.
-    fn moot_reader_questions(&self, task: &str) {
-        let tag = format!("{}/{task}-review", self.plan.plan_id);
-        for q in memcli::questions_for(&tag).unwrap_or_default() {
-            if q.answer.is_none() {
-                memcli::answer(
-                    &q.id,
-                    &format!("moot: the reading of {task} ended without waiting on it"),
-                );
-            }
-        }
     }
 
     /// The bookkeeping of a merge that is final: state, tick, log, and the
@@ -2241,66 +1551,19 @@ impl Run {
     /// and one red suite before the first dispatch is what that costs
     /// instead (2026-09-14: a4bb5fa reddened three tasks in a row for 45
     /// minutes before anyone read the gate). `Err` names the failing checks.
-    /// The first dial the backend would refuse to start an agent on, as the
-    /// lines to say, each name asked once; `None` when every one would start.
+    /// Why the backend would refuse to start a worker on the run's model
+    /// and effort, as the lines to say; `None` when it would start one.
     fn unstartable(&self) -> Option<String> {
-        let dials = [
-            (
-                "the workers",
-                "worker",
-                Some(&self.model),
-                &self.effort,
-                "--model",
-                "WORKFLOW_MODEL",
-            ),
-            (
-                "the second fix round",
-                "fixer",
-                self.fix_model.as_ref(),
-                &self.effort,
-                "--fix-model",
-                "WORKFLOW_FIX_MODEL",
-            ),
-            (
-                "the reader",
-                "reader",
-                self.review_model.as_ref(),
-                &self.review_effort,
-                "--review-model",
-                "WORKFLOW_REVIEW_MODEL",
-            ),
-            (
-                "the advisor",
-                "advisor",
-                self.advisor.as_ref(),
-                &self.review_effort,
-                "--review-model",
-                "WORKFLOW_ADVISOR",
-            ),
-        ];
-        let mut asked: Vec<(String, Option<String>)> = Vec::new();
-        for (who, role, model, effort, flag, var) in dials {
-            let Some(model) = model else {
-                continue;
-            };
-            let key = (model.clone(), effort.clone());
-            if asked.contains(&key) {
-                continue;
-            }
-            asked.push(key);
-            if let Err(why) = self
-                .backend
-                .check(&self.repo, role, model, effort.as_deref())
-            {
-                return Some(format!(
-                    "run {}: {who} would run on {model}, and amx will not start that -- {why}\n\
-                     name another with `workflow run {flag} <name>`, which rewrites this plan's record, \
-                     or with {var} in the environment",
-                    self.plan.plan_id
-                ));
-            }
-        }
-        None
+        let why = self
+            .backend
+            .check(&self.repo, "worker", &self.model, self.effort.as_deref())
+            .err()?;
+        Some(format!(
+            "run {}: the workers would run on {}, and amx will not start that -- {why}\n\
+             name another with `workflow run --model <name>`, which rewrites this plan's record, \
+             or with WORKFLOW_MODEL in the environment",
+            self.plan.plan_id, self.model
+        ))
     }
 
     fn trunk_green(&self) -> Result<(), String> {
@@ -2611,26 +1874,9 @@ impl Run {
 
     /// Failed for good as far as this run can tell: the worker's session is
     /// stopped with it, so a pane does not stand idle for an hour over a task
-    /// nobody is sending back, and the orchestrator is told. The other
-    /// cases: [`Run::fail_task_keep`] for a task something is about to be
-    /// sent back to, [`Run::fail_task_quiet`] for one the run itself
-    /// dispatches again.
+    /// nobody is sending back, and the orchestrator is told.
     fn fail_task(&self, task: &str, why: &str) {
         self.stop(task);
-        self.fail_task_keep(task, why);
-        self.event(&format!("failed {task} -- {why}"));
-    }
-
-    /// Failed and stopped, and not an event: the run dispatches it again by
-    /// itself on the next free slot.
-    fn fail_task_quiet(&self, task: &str, why: &str) {
-        self.stop(task);
-        self.fail_task_keep(task, why);
-    }
-
-    /// Failed with the worker's session left standing, because something is
-    /// about to be sent to it: a reader's findings, an orchestrator's answer.
-    fn fail_task_keep(&self, task: &str, why: &str) {
         warn(format!("task {task}: failed -- {why}"));
         self.set_state(task, FAILED);
         write_field(&self.dir, task, "failed", why);
@@ -2643,6 +1889,7 @@ impl Run {
             "run {}: failed {task} -- {why}",
             self.plan.plan_id
         ));
+        self.event(&format!("failed {task} -- {why}"));
     }
 
     /// The last thing heard from a worker that ended, as a clause for its
@@ -2844,17 +2091,10 @@ impl Run {
     }
 
     /// The gate, and what its answer means for the task: the tail of
-    /// [`Self::finish`], and all of what a task left mid-reading needs. That
-    /// one's worker finished before the coordinator died and the machine
-    /// took the session with it, so there is no turn left to judge -- only a
-    /// merge on the intent line to verify and read again.
+    /// [`Self::finish`].
     fn settle(&self, task: &str) {
         match self.merge(task) {
             Ok(Merge::Landed) => self.land(task),
-            // A reader has the diff. The task waits on its verdict, and so
-            // does every merge behind it; the run goes on dispatching and
-            // watching its workers meanwhile.
-            Ok(Merge::Reading) => self.set_state(task, REVIEWING),
             // Ready with nothing committed: the worker found its Done already
             // satisfied -- rebuilt by hand between passes, or landed by an
             // earlier plan. Failing it skipped every dependent behind work
@@ -2884,7 +2124,7 @@ impl Run {
         let mut stopped = 0;
         for task in self.plan.ids() {
             let state = self.state(&task);
-            if state == DISPATCHED || state == PENDING || state == REVIEWING || state.is_empty() {
+            if state == DISPATCHED || state == PENDING || state.is_empty() {
                 continue; // the reap pass and the ready-set loop own these
             }
             if self.field(&task, "session").is_empty() && self.worker_pid(&task).is_empty() {
@@ -2930,14 +2170,6 @@ impl Run {
                 }
                 continue;
             }
-            // While a reader holds integration, a finished worker keeps: its
-            // merge would land on a fast-forward nothing has recorded yet.
-            // Asked per task, not per pass -- the task before it in this very
-            // pass may be the one that started the reading. It is collected
-            // on the pass after the reading ends.
-            if !self.reviewing().is_empty() {
-                continue;
-            }
             did = true;
             self.finish(&task);
         }
@@ -2955,19 +2187,14 @@ impl Run {
     ///
     /// Answers with the ids it took over. They are settled for this run --
     /// merged, failed, or running -- and the classification below must not
-    /// queue them a second time. A task collected here that failed with
-    /// nothing read is the exception: it goes back to `pending` and out of
+    /// queue them a second time. A task collected here that failed with its
+    /// retry unspent is the exception: it goes back to `pending` and out of
     /// this list, for the ready set to dispatch on this very pass.
     fn adopt_stale(&self) -> Vec<String> {
         let mut taken = self.dispatched();
         // The ones collecting sent back to the ready set, dropped from the
         // answer below rather than while the loop is reading it.
         let mut again: Vec<String> = Vec::new();
-        // Taken before a single task below is collected: collecting one can
-        // itself start a reading, and that reading is this run's own, not
-        // something left behind by one that died -- the loop after must
-        // never mistake it for the latter.
-        let mid_review = self.reviewing();
         for task in &taken {
             // Not seen by the backend at all: whatever `alive` would say, it
             // is gone, the way a stall deadline never has to prove -- waiting
@@ -3001,9 +2228,6 @@ impl Run {
                 ));
                 continue;
             }
-            if !self.reviewing().is_empty() {
-                continue; // a reader holds integration; the poll loop collects it after
-            }
             warn(format!(
                 "task {task}: left dispatched by a run that is gone -- collecting it"
             ));
@@ -3028,17 +2252,14 @@ impl Run {
                 again.push(task.clone());
                 continue;
             }
-            // Collected and failed with no reader's word on it, and the retry
-            // still unspent: the attempt died with its coordinator and nothing
-            // here has judged the work. Failing it ends the whole run in the
-            // same second and costs a `reap` and a second `workflow run` to
-            // get back to this point, so it goes back to the ready set and is
-            // dispatched on this pass, on whatever commits it has.
+            // Collected and failed with the retry still unspent: the attempt
+            // died with its coordinator and nothing here has judged the work.
+            // Failing it ends the whole run in the same second and costs a
+            // `reap` and a second `workflow run` to get back to this point, so
+            // it goes back to the ready set and is dispatched on this pass, on
+            // whatever commits it has.
             let tries: u64 = self.field(task, "dispatches").parse().unwrap_or(0);
-            if self.state(task) == FAILED
-                && tries < 2
-                && self.field(task, "reviews").parse::<u64>().unwrap_or(0) == 0
-            {
+            if self.state(task) == FAILED && tries < 2 {
                 warn(format!(
                     "task {task}: nobody read it and its retry is unspent -- pending again, for this run to dispatch"
                 ));
@@ -3047,42 +2268,6 @@ impl Run {
             }
         }
         taken.retain(|t| !again.contains(t));
-        // A reading the dead run started. Its reader may still be going, and
-        // its answer would be read by nobody; the merge is verified and read
-        // again off the intent line, the way an interrupted merge is.
-        //
-        // Over the snapshot taken above, not a fresh `reviewing()`: this run
-        // may itself have started a reading while collecting a task above,
-        // and that reading is stamped after `started` was written, never
-        // before it. Stopping and rereading it here would judge the very
-        // thing this run just dispatched, so it is left to `review_pass`.
-        let run_started = recorded(&self.dir, "started")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(i64::MAX);
-        for task in mid_review {
-            let review_started: i64 = self.field(&task, "review-started").parse().unwrap_or(0);
-            if review_started >= run_started {
-                // This run's own reading, started while collecting a task
-                // above -- settled for this run either way, so it belongs
-                // in `taken` even though it is left running.
-                taken.push(task);
-                continue;
-            }
-            let h = self.review_handle(&task);
-            if self.backend.seen(&h) && self.backend.alive(&h) {
-                self.backend.stop(&h, self.kill_grace_s);
-            }
-            warn(format!(
-                "task {task}: left mid-reading by a run that is gone -- reading it again"
-            ));
-            // The merge, not the worker. `finish` would ask the backend what
-            // that worker's last turn came to, and a machine that went down
-            // took the session with it, so the answer is "nothing" and the
-            // task failed with an applied merge and an unread diff behind it
-            // (ebdify's admin app).
-            self.settle(&task);
-            taken.push(task);
-        }
         taken
     }
 
@@ -3205,7 +2390,7 @@ impl Run {
             }
             // A branch with commits on an unticked task is adopted as a
             // task that failed with commits, which `resumable` resumes on
-            // that branch: the gate and the reader judge the work. The
+            // that branch: the gate judges the work. The
             // merge-or-delete recipe left an orchestrator merging eighteen
             // files by hand, unread.
             let ahead = git.count(&format!("{}..{}", self.base, branch));
@@ -3256,37 +2441,13 @@ impl Run {
         // The moment this run began, so adoption can tell its own fresh work
         // from what a run that died before it left behind.
         let _ = std::fs::write(self.dir.join("started"), format!("{}\n", sys::now()));
-        // And the moment the first run of this plan began, written once: the
-        // reader's settled section carries every ruling since then, not
-        // since this run (the answer to a reader's one hard question was saved
-        // by the worker in the run before, and the reader re-derived it for
-        // thirty minutes).
-        if recorded(&self.dir, "first-started").is_none() {
-            let _ = std::fs::write(self.dir.join("first-started"), format!("{}\n", sys::now()));
-        }
-        // What this run dispatches on and reads with, so a later `reap` for
-        // a run that is gone reads with the same models rather than
-        // whatever the environment or the project key happen to say by then.
+        // What this run dispatches on, so a later `reap` for a run that is
+        // gone dispatches on the same model rather than whatever the
+        // environment or the project key happen to say by then.
         let _ = std::fs::write(self.dir.join("model"), format!("{}\n", self.model));
-        let _ = std::fs::write(
-            self.dir.join("review-model"),
-            format!("{}\n", self.review_model.as_deref().unwrap_or("")),
-        );
-        let _ = std::fs::write(
-            self.dir.join("fix-model"),
-            format!("{}\n", self.fix_model.as_deref().unwrap_or("")),
-        );
-        let _ = std::fs::write(
-            self.dir.join("advisor"),
-            format!("{}\n", self.advisor.as_deref().unwrap_or("")),
-        );
         let _ = std::fs::write(
             self.dir.join("effort"),
             format!("{}\n", self.effort.as_deref().unwrap_or("")),
-        );
-        let _ = std::fs::write(
-            self.dir.join("review-effort"),
-            format!("{}\n", self.review_effort.as_deref().unwrap_or("")),
         );
         // Where a merge of this plan is ticked off, for a pass that rebuilds
         // the run off this dir rather than off the command line: `workflow
@@ -3856,16 +3017,6 @@ fn timings() -> (usize, i64, i64, f64, u32) {
     (max_workers as usize, deadline, grace, poll, question_misses)
 }
 
-/// Which worker a run dispatches onto: amx, always, unless a caller set the
-/// process template that is the suite's seam.
-pub(crate) fn backend_for() -> Box<dyn WorkerBackend> {
-    if ProcessBackend::wanted() {
-        Box::new(ProcessBackend)
-    } else {
-        Box::new(AmxBackend)
-    }
-}
-
 /// Which rung of the ladder a dial's value came off, so the run can say it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Dialed {
@@ -3886,9 +3037,9 @@ impl Dialed {
     }
 }
 
-/// A dial a run may or may not carry -- the reader, the two effort levels --
-/// resolved the way `new_run` describes: the variable set, even empty, is
-/// the answer for this run; else what a `setup` of this plan recorded, an
+/// A dial a run may or may not carry -- the workers' effort -- resolved
+/// the way `new_run` describes: the variable set, even empty, is the answer
+/// for this run; else what a `setup` of this plan recorded, an
 /// empty record meaning none; else the project key, when the dial has one.
 /// The rung rides back with
 /// the value: a run that keeps a record over a project key changed since is
@@ -3926,54 +3077,29 @@ fn optional_dial(
 /// the dials it began with) and a run that never said which it kept left an
 /// orchestrator reading the run directory to find out why `mem project set
 /// model` had no effect.
-fn dial_line(
-    model: (&str, Dialed),
-    effort: (Option<&str>, Dialed),
-    review: (Option<&str>, Dialed),
-    review_effort: (Option<&str>, Dialed),
-) -> String {
-    let at = |(level, from): (Option<&str>, Dialed)| match level {
-        Some(l) => format!(" at effort {l} ({})", from.as_str()),
-        None => String::new(),
+fn dial_line(model: (&str, Dialed), effort: (Option<&str>, Dialed)) -> String {
+    let at = match effort {
+        (Some(level), from) => format!(" at effort {level} ({})", from.as_str()),
+        (None, _) => String::new(),
     };
-    format!(
-        "writing with {} ({}){}, reading with {} ({}){}",
-        model.0,
-        model.1.as_str(),
-        at(effort),
-        review.0.unwrap_or("nobody"),
-        review.1.as_str(),
-        at(review_effort),
-    )
+    format!("writing with {} ({}){at}", model.0, model.1.as_str())
 }
 
-/// A `setup` of this same plan may already have written `model`,
-/// `review-model`, `effort` and `review-effort` into the run directory:
-/// `reap` rebuilding a run nobody is watching, or `run` picking one up after
-/// a stop. Either reads with what the run was told to read with when it
-/// began, rather than whatever the project key says by then. The environment
-/// has the last word and a project key the least:
-/// `WORKFLOW_MODEL`/`WORKFLOW_REVIEW_MODEL`/`WORKFLOW_EFFORT`/
-/// `WORKFLOW_REVIEW_EFFORT`, then what was recorded, then `mem project set
-/// model`/`effort` (the reader's two dials have no project key), then
-/// `opus`/nobody/the CLI's own default.
-fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
+/// A `setup` of this same plan may already have written `model` and `effort`
+/// into the run directory: `reap` rebuilding a run nobody is watching, or
+/// `run` picking one up after a stop. Either dispatches on what the run was
+/// told when it began, rather than whatever the project key says by then.
+/// The environment has the last word and a project key the least:
+/// `WORKFLOW_MODEL`/`WORKFLOW_EFFORT`, then what was recorded, then `mem
+/// project set model`/`effort`, then `opus`/the CLI's own default. Beside the
+/// run comes its start line, naming the rung each dial came off.
+fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> (Run, String) {
     let (max_workers, deadline_s, kill_grace_s, poll, question_misses) = timings();
     let gate_s = (((env_f64("WORKFLOW_GATE_MIN", 60.0) * 60.0) + 0.5) as i64).max(1);
     let wt_root = paths::worktrees_root().join(project).join(&plan.plan_id);
     let dir = paths::runs_root().join(project).join(&plan.plan_id);
     let recorded_model = recorded(&dir, "model");
-    let recorded_review = recorded(&dir, "review-model");
-    let recorded_fix = recorded(&dir, "fix-model");
     let recorded_effort = recorded(&dir, "effort");
-    let recorded_review_effort = recorded(&dir, "review-effort");
-    let recorded_advisor = recorded(&dir, "advisor");
-    let (review_model, review_from) =
-        optional_dial("WORKFLOW_REVIEW_MODEL", recorded_review, || None);
-    // Past the override and the record, the advisor is the reader.
-    let advisor = optional_dial("WORKFLOW_ADVISOR", recorded_advisor, || None)
-        .0
-        .or_else(|| review_model.clone());
     let (model, model_from) = match std::env::var("WORKFLOW_MODEL") {
         Ok(v) if !v.is_empty() => (v, Dialed::Env),
         _ => match recorded_model.filter(|v| !v.is_empty()) {
@@ -3986,9 +3112,8 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     };
     let (effort, effort_from) =
         optional_dial("WORKFLOW_EFFORT", recorded_effort, memcli::project_effort);
-    let (review_effort, review_effort_from) =
-        optional_dial("WORKFLOW_REVIEW_EFFORT", recorded_review_effort, || None);
-    Run {
+    let dials = dial_line((&model, model_from), (effort.as_deref(), effort_from));
+    let run = Run {
         dir,
         brief_dir: paths::briefs_root().join(project).join(&plan.plan_id),
         project: project.to_string(),
@@ -4006,19 +3131,9 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         poll,
         question_misses,
         max_workers,
-        backend: backend_for(),
-        dials: dial_line(
-            (&model, model_from),
-            (effort.as_deref(), effort_from),
-            (review_model.as_deref(), review_from),
-            (review_effort.as_deref(), review_effort_from),
-        ),
+        backend: backend::backend_for(),
         model,
-        review_model,
-        advisor,
-        fix_model: optional_dial("WORKFLOW_FIX_MODEL", recorded_fix, || None).0,
         effort,
-        review_effort,
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         // A worker stands at its worktree's root, which mem resolves to a
         // monorepo's root project; its task belongs to this one.
@@ -4026,17 +3141,11 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         collecting: false,
         unparsable: String::new(),
         made: Vec::new(),
-    }
+    };
+    (run, dials)
 }
 
-pub fn cmd_run(
-    plan_file: Option<&Path>,
-    model: Option<&str>,
-    review_model: Option<&str>,
-    fix_model: Option<&str>,
-    effort: Option<&str>,
-    review_effort: Option<&str>,
-) -> i32 {
+pub fn cmd_run(plan_file: Option<&Path>, model: Option<&str>, effort: Option<&str>) -> i32 {
     if !Git::here().inside_worktree() {
         warn("run: stand in the project checkout");
         return exit::USAGE;
@@ -4098,7 +3207,7 @@ pub fn cmd_run(
         return exit::USAGE;
     }
 
-    // The four dials, rewritten in the run directory before anything reads
+    // The two dials, rewritten in the run directory before anything reads
     // them. A record a run wrote when it began is preferred to the project
     // key on purpose, so a plan picked up again keeps the model
     // it started on however the project has changed since -- and editing the
@@ -4107,13 +3216,7 @@ pub fn cmd_run(
     let run_dir = paths::runs_root()
         .join(project.dir_name())
         .join(&parsed.plan_id);
-    for (name, value) in [
-        ("model", model),
-        ("review-model", review_model),
-        ("fix-model", fix_model),
-        ("effort", effort),
-        ("review-effort", review_effort),
-    ] {
+    for (name, value) in [("model", model), ("effort", effort)] {
         let Some(value) = value else {
             continue;
         };
@@ -4128,7 +3231,7 @@ pub fn cmd_run(
     let Some(base) = git.head() else {
         return exit::USAGE;
     };
-    let mut run = new_run(parsed, top, &project.dir_name(), base);
+    let (mut run, dials) = new_run(parsed, top, &project.dir_name(), base);
     // Resolved, not as typed: the ticks go back to this file for the rest of
     // the run, and a relative path is read against whatever the cwd is then.
     run.plan_file = plan_file.map(paths::realpath_m);
@@ -4151,12 +3254,6 @@ pub fn cmd_run(
         }
         return exit::USAGE;
     }
-    // Said out loud, because a run that merges unread is worth noticing even
-    // when it is exactly what the project asked for.
-    if run.review_model.is_none() {
-        warn("nobody reads this run");
-    }
-
     if run.plan.tasks.len() <= 1 {
         warn(format!(
             "plan '{}' has one task: do it here, in this session -- orchestrating one worker costs more than it saves.",
@@ -4292,7 +3389,7 @@ pub fn cmd_run(
         run.plan.tasks.len(),
         run.max_workers
     ));
-    warn(format!("run {}: {}", run.plan.plan_id, run.dials));
+    warn(format!("run {}: {dials}", run.plan.plan_id));
 
     // Classified once, in plan order, before the loop dispatches anything.
     for id in run.plan.ids() {
@@ -4387,7 +3484,6 @@ pub fn cmd_run(
     // `question_open` counts on one poll.
     let mut waiting = run.waiting(&all_ids);
     while run.running() > 0
-        || !run.reviewing().is_empty()
         || !waiting.is_empty()
         || !ready(&run).is_empty()
         || marked(&run, "redispatch")
@@ -4402,7 +3498,7 @@ pub fn cmd_run(
         }
         run.refresh();
         // `workflow accept <task>`: a task the run settled as failed landed
-        // over the reader's findings. Read before anything is dispatched, or
+        // as it stands. Read before anything is dispatched, or
         // a task whose marker was written while this run was starting is
         // given a fresh worker first.
         for (id, ext) in all_ids
@@ -4413,10 +3509,8 @@ pub fn cmd_run(
             if !marker.exists() {
                 continue;
             }
-            // The counter is written only by a fix verdict, so a task that
-            // failed because the reading could not be had had none and was
-            // refused. What accept needs is a settled failure with a diff on
-            // its branch.
+            // What accept needs is a settled failure with a diff on its
+            // branch.
             if !run.resumable(id) {
                 let _ = std::fs::remove_file(&marker);
                 warn(format!(
@@ -4425,9 +3519,6 @@ pub fn cmd_run(
                     run.commits(id)
                 ));
                 continue;
-            }
-            if !run.reviewing().is_empty() {
-                continue; // a reader holds integration; the marker keeps
             }
             let _ = std::fs::remove_file(&marker);
             match ext {
@@ -4469,7 +3560,6 @@ pub fn cmd_run(
         if stopping() {
             return shutdown(&run, hung_up());
         }
-        run.review_passes();
         run.reap_pass();
         // A failed task someone asked to try again, mid-run. The marker file
         // is how the request reaches a run that holds the project lock for
@@ -4593,26 +3683,7 @@ pub fn cmd_run(
 
     run.cleanup();
 
-    let ids = run.plan.ids();
-    let fixes: u64 = ids
-        .iter()
-        .map(|t| run.field(t, "reviews").parse().unwrap_or(0))
-        .sum();
-    let readings: u64 = fixes
-        + ids
-            .iter()
-            .filter(|t| !run.field(t, "review").is_empty())
-            .count() as u64;
-    let context: u64 = ids
-        .iter()
-        .map(|t| run.field(t, "context").parse().unwrap_or(0))
-        .sum();
-
-    let ended = format!(
-        "ended {merged} merged, {failed} failed, {blocked} never started, \
-{readings} readings, {fixes} fix verdicts, {} context",
-        tokens(context)
-    );
+    let ended = format!("ended {merged} merged, {failed} failed");
     warn(format!("run {}: {}", run.plan.plan_id, &ended[6..]));
     run.event(&ended);
     memcli::log_run(&format!("run {}: {ended}", run.plan.plan_id));
@@ -4793,13 +3864,6 @@ fn shutdown(run: &Run, hangup: bool) -> i32 {
         run.stop(task);
         warn(format!("task {task}: its worker was stopped"));
     }
-    for task in run.reviewing() {
-        run.backend
-            .stop(&run.review_handle(&task), run.kill_grace_s);
-        warn(format!(
-            "task {task}: its reader was stopped -- the next run reads the merge again"
-        ));
-    }
     warn("run again in this checkout to adopt and collect what they left");
     memcli::log_run(&format!(
         "run {}: stopped by signal with {} worker(s) ended",
@@ -4817,12 +3881,7 @@ fn shutdown(run: &Run, hangup: bool) -> i32 {
 /// Only a run whose lock is held right now can honour it; anything else is a
 /// stopped run, and a stopped run's failed work comes back by running the
 /// plan again.
-///
-/// `--review-deadline` is the one flag that dispatches nothing: it writes the
-/// minutes a reading may take beside the task, which `review_pass` reads
-/// every poll, so a task reading an outsized diff can be granted the time
-/// without restarting the run.
-pub fn cmd_redispatch(task: &str, model: Option<&str>, review_deadline: Option<f64>) -> i32 {
+pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
     if !Git::here().inside_worktree() {
         warn("redispatch: stand in the project checkout");
         return exit::USAGE;
@@ -4853,19 +3912,6 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>, review_deadline: Option<f
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        // The reading to extend belongs to a task this run holds in any
-        // state: `reviewing` is where it matters, and that is no state to
-        // dispatch from.
-        if let Some(min) = review_deadline {
-            if state.is_empty() {
-                continue;
-            }
-            write_field(&dir, task, "review-deadline", &min.to_string());
-            warn(format!(
-                "run {plan_id}: {task} may read for {min} minute(s) from when its reading started"
-            ));
-            return exit::OK;
-        }
         if state != FAILED && state != DISPATCHED {
             continue;
         }
@@ -4887,29 +3933,24 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>, review_deadline: Option<f
         return exit::OK;
     }
 
-    warn(match review_deadline {
-        Some(_) => format!("no live run holds {task} -- the reading to extend is a live run's"),
-        None => format!(
-            "no live run holds {task} failed or dispatched -- run the plan again to retry failed tasks"
-        ),
-    });
+    warn(format!(
+        "no live run holds {task} failed or dispatched -- run the plan again to retry failed tasks"
+    ));
     exit::FAILED
 }
 
 /// `workflow accept <task>` -- land a task the run settled as failed, as it
-/// stands, the findings filed as follow-ups. The orchestrator's way out of a
-/// reader that has not run out of true things to say.
+/// stands.
 ///
 /// A live run is handed a marker its poll loop reads. With nobody live it
 /// merges here: the run that failed the task ends in the same pass as the
-/// third fix verdict, so waiting for a window in which a marker could be
-/// honoured meant racing a fresh `workflow run` into its first second, and
-/// losing that race spent another worker on work already settled.
+/// failure, so waiting for a window in which a marker could be honoured
+/// meant racing a fresh `workflow run` into its first second, and losing
+/// that race spent another worker on work already settled.
 ///
 /// `regate` is `workflow regate <task>`: the merge a worker's `ready`
-/// starts -- suite and reader -- rather than accept's unread landing. It has
-/// a reading to wait on, so with nobody live the marker waits for the next
-/// run instead of a merge here.
+/// starts. With nobody live its marker waits for the next run instead of a
+/// merge here.
 pub fn cmd_accept(task: &str, regate: bool) -> i32 {
     let verb = if regate { "regate" } else { "accept" };
     if !Git::here().inside_worktree() {
@@ -4933,10 +3974,9 @@ pub fn cmd_accept(task: &str, regate: bool) -> i32 {
         .filter(|p| p.is_dir() && p.join("plan.md").is_file())
         .collect();
     dirs.sort();
-    // Accept lands a diff over a reading. A task the ownership gate
-    // refused has no reading to be landed over, and the merge would run
-    // the same gate and refuse it again -- which is what happened, after
-    // a line that said it was merging.
+    // A task the ownership gate refused would meet the same gate in the
+    // merge and be refused again -- which is what happened, after a line
+    // that said it was merging.
     let refused_ownership =
         |dir: &Path| field(dir, task, "failed").starts_with("wrote outside its Files: patterns");
     // The live run first: it holds the project lock, and a merge from out
@@ -4958,18 +3998,12 @@ pub fn cmd_accept(task: &str, regate: bool) -> i32 {
             .unwrap_or_default();
         if regate {
             warn(format!(
-                "run {run_name}: asked to gate {task} again -- it merges on the next poll, suite and reader both"
+                "run {run_name}: asked to gate {task} again -- it merges on the next poll, suite included"
             ));
             return exit::OK;
         }
-        // A task that failed because the reading could not be had at all has
-        // no fix verdict to be accepted over.
-        let over = match field(dir, task, "reviews").parse::<u64>().unwrap_or(0) {
-            0 => "as it stands".to_string(),
-            n => format!("over reading {n}"),
-        };
         warn(format!(
-            "run {run_name}: asked to accept {task} {over} -- it merges on the next poll, unread, with the findings filed as follow-ups"
+            "run {run_name}: asked to accept {task} as it stands -- it merges on the next poll"
         ));
         return exit::OK;
     }
@@ -4987,13 +4021,12 @@ pub fn cmd_accept(task: &str, regate: bool) -> i32 {
         if refused_ownership(&dir) {
             return ownership_refusal(task);
         }
-        // A regate has a reading to wait on, and only a run polls one: the
-        // marker waits for the next run, which honours it before it
+        // The marker waits for the next run, which honours it before it
         // dispatches anything.
         if regate {
             let _ = std::fs::write(dir.join(format!("{task}.regate")), "");
             warn(format!(
-                "{task}: marked to gate again -- `workflow run` merges it first, suite and reader both"
+                "{task}: marked to gate again -- `workflow run` merges it first, suite included"
             ));
             return exit::OK;
         }
@@ -5007,7 +4040,7 @@ pub fn cmd_accept(task: &str, regate: bool) -> i32 {
 
 fn ownership_refusal(task: &str) -> i32 {
     warn(format!(
-        "cannot accept {task}: it failed the Files gate, not a reading -- widen its Files line in \
+        "cannot accept {task}: it failed the Files gate -- widen its Files line in \
          the live plan (`mem plan > tmp`, edit, `mem plan --stdin < tmp`) and `workflow \
          redispatch {task}`"
     ));
@@ -5017,7 +4050,7 @@ fn ownership_refusal(task: &str) -> i32 {
 /// The merge `workflow accept` does itself when no orchestrator is live: the
 /// run is rebuilt off its dir the way `workflow reap` rebuilds one, its
 /// integration worktree made again, and [`Run::accept`] runs there --
-/// ownership, the words, the rebase and the gate's own suite, no reader.
+/// ownership, the words, the rebase and the gate's own suite.
 fn accept_here(dir: &Path, top: &Path, project: &str, task: &str) -> i32 {
     let Some(plan_id) = dir.file_name().map(|n| n.to_string_lossy().to_string()) else {
         return exit::FAILED;
@@ -5043,7 +4076,7 @@ fn accept_here(dir: &Path, top: &Path, project: &str, task: &str) -> i32 {
         ));
         return exit::FAILED;
     }
-    let mut run = new_run(parsed, top.to_path_buf(), project, base);
+    let (mut run, _) = new_run(parsed, top.to_path_buf(), project, base);
     run.dir = dir.to_path_buf();
     // Where this plan's merges are ticked off, as the run itself recorded it.
     run.plan_file = recorded(dir, "plan-file")
@@ -5130,7 +4163,7 @@ pub fn cmd_reap() -> i32 {
         if base.is_empty() {
             continue;
         }
-        let mut run = new_run(parsed, top.clone(), &project.dir_name(), base);
+        let (mut run, _) = new_run(parsed, top.clone(), &project.dir_name(), base);
         run.dir = dir;
         run.collecting = true;
         // A held lock means a live orchestrator is watching these workers;
@@ -5140,15 +4173,6 @@ pub fn cmd_reap() -> i32 {
         };
         if run.stop_settled_orphans() > 0 {
             did = true;
-        }
-        // A reading is the run's to judge, not reap's: reap collects, and a
-        // verdict may call for another reader.
-        for task in run.reviewing() {
-            adoptable = true;
-            warn(format!(
-                "run {}: {task} was mid-reading when its run went -- run again in the checkout to read it again",
-                run.plan.plan_id
-            ));
         }
         if run.running() == 0 {
             continue;
@@ -5188,7 +4212,13 @@ pub fn cmd_reap() -> i32 {
 /// The hidden seam the harness uses to check the liveness rule one signal at a
 /// time (AC7's three sources, review-3 F-10).
 pub fn cmd_stalled(rundir: &Path, wtroot: &Path, task: &str, deadline: i64) -> i32 {
-    if stalled(backend_for().as_ref(), rundir, wtroot, task, deadline) {
+    if stalled(
+        backend::backend_for().as_ref(),
+        rundir,
+        wtroot,
+        task,
+        deadline,
+    ) {
         exit::OK
     } else {
         exit::FAILED
@@ -5393,25 +4423,13 @@ mod tests {
     #[test]
     fn the_start_line_names_the_rung_each_dial_came_off() {
         assert_eq!(
-            dial_line(
-                ("opus", Dialed::Record),
-                (Some("max"), Dialed::Env),
-                (Some("fable"), Dialed::Project),
-                (Some("high"), Dialed::Project),
-            ),
-            "writing with opus (the run's record) at effort max (the environment), \
-reading with fable (the project) at effort high (the project)"
+            dial_line(("opus", Dialed::Record), (Some("max"), Dialed::Env)),
+            "writing with opus (the run's record) at effort max (the environment)"
         );
-        // Nothing set for either effort is no flag and no clause; nobody
-        // reading is said in the same breath as where that came from.
+        // Nothing set for the effort is no flag and no clause.
         assert_eq!(
-            dial_line(
-                ("opus", Dialed::Default),
-                (None, Dialed::Project),
-                (None, Dialed::Record),
-                (None, Dialed::Project),
-            ),
-            "writing with opus (the default), reading with nobody (the run's record)"
+            dial_line(("opus", Dialed::Default), (None, Dialed::Project)),
+            "writing with opus (the default)"
         );
     }
 

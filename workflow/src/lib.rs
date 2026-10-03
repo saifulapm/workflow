@@ -36,7 +36,6 @@ pub mod plancheck;
 pub mod repo;
 pub mod report;
 pub mod review;
-pub mod reviewer;
 pub mod run;
 pub mod skill;
 pub mod status;
@@ -149,25 +148,11 @@ pub fn run(cli: Cli) -> i32 {
         Command::Run {
             plan_file,
             model,
-            review_model,
-            fix_model,
             effort,
-            review_effort,
-        } => run::cmd_run(
-            plan_file.as_deref(),
-            model.as_deref(),
-            review_model.as_deref(),
-            fix_model.as_deref(),
-            effort.as_deref(),
-            review_effort.as_deref(),
-        ),
+        } => run::cmd_run(plan_file.as_deref(), model.as_deref(), effort.as_deref()),
         Command::Docs { library, query } => docs::cmd_docs(&library, &query),
         Command::Reap => run::cmd_reap(),
-        Command::Redispatch {
-            task,
-            model,
-            review_deadline,
-        } => run::cmd_redispatch(&task, model.as_deref(), review_deadline),
+        Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
         Command::Accept { task } => run::cmd_accept(&task, false),
         Command::Regate { task } => run::cmd_accept(&task, true),
         Command::Status { brief, json } => status::cmd_status(json, brief),

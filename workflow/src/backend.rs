@@ -222,6 +222,43 @@ impl ProcessBackend {
     }
 }
 
+/// Which worker a run dispatches onto: amx, always, unless a caller set the
+/// process template that is the suite's seam.
+pub(crate) fn backend_for() -> Box<dyn WorkerBackend> {
+    if ProcessBackend::wanted() {
+        Box::new(ProcessBackend)
+    } else {
+        Box::new(crate::backend_amx::AmxBackend)
+    }
+}
+
+/// Phrases a provider itself writes when it, not the work, is the reason a
+/// session stopped -- a usage limit, a rate limit, an outage, a session that
+/// was never logged in. Case aside, since nothing pins how a provider
+/// capitalises its own message.
+const PROVIDER_LIMIT_MARKERS: [&str; 6] = [
+    "reached your",
+    "limit reached",
+    "usage limit",
+    "rate limit",
+    "overloaded",
+    "not logged in",
+];
+
+/// The marker, if any, on which a session's words read as a provider's own
+/// refusal rather than anything the worker did. A worker's pane is read this
+/// way to tell the session a limit paused from one that ended with nothing
+/// to show (`Run::paused`).
+pub fn provider_limit(text: &str) -> Option<&'static str> {
+    text.lines().find_map(|line| {
+        let lower = line.to_ascii_lowercase();
+        PROVIDER_LIMIT_MARKERS
+            .iter()
+            .find(|marker| lower.contains(*marker))
+            .copied()
+    })
+}
+
 pub(crate) fn last_context_tokens(transcript: &str) -> Option<u64> {
     let mut last = None;
     for line in transcript.lines() {
@@ -538,5 +575,22 @@ not json at all
         assert!(parts[2].starts_with('4'));
         assert!(matches!(&parts[3][0..1], "8" | "9" | "a" | "b"));
         assert_ne!(s, ProcessBackend.mint_session());
+    }
+
+    #[test]
+    fn a_provider_limit_is_read_off_the_line_that_says_so() {
+        assert_eq!(
+            provider_limit("You've reached your Fable limit for this session."),
+            Some("reached your")
+        );
+        assert_eq!(
+            provider_limit("Working on it...\n\nError: Rate Limit exceeded, retry later\n"),
+            Some("rate limit")
+        );
+        assert_eq!(
+            provider_limit("Committed the service.\nready"),
+            None,
+            "a worker's own words name no provider"
+        );
     }
 }

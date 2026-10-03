@@ -3,7 +3,7 @@
 # file instead of sleeping on a clock, and the exit code says what woke it --
 # 2 a question, 1 a task failed for good, 4 a merge under --merges, 0 the
 # run ended or none is live, 3 a timeout. A cursor keeps a line from being
-# reported twice; a fix round the run handles itself is never an event.
+# reported twice.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -121,8 +121,7 @@ unlike "$OUT" 'question' 'the question is not reported again'
 : >"$WF_TMP/release-hold"
 run timeout 60 workflow wait
 is "$RC" 0 'the run ending wakes it with exit 0'
-like "$OUT" ' ended 3 merged, 1 failed, 0 never started, 0 readings, 0 fix verdicts, 0 context$' \
-	'with the tally, and no reader means no readings or fix verdicts'
+like "$OUT" ' ended 3 merged, 1 failed$' 'with the tally of merges and failures'
 wait "$runpid"
 like "$(cat "$rundir/events")" '^[0-9T:Z-]+ question ask' 'the events file opens with the question'
 is "$(grep -c ' merged ' "$rundir/events")" 3 'carries every merge'

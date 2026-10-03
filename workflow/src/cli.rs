@@ -118,10 +118,10 @@ dispatches the first wave for real."
     #[command(
         long_about = "Run a plan's tasks in worktrees. This dispatches real workers.
 
-The run says at its start what it writes and reads with and where each dial
-came from -- the environment, this plan's own record, the project key -- since
-a plan picked up again keeps the record it wrote when it began whatever the
-project keys say by then. The four flags here rewrite that record before the
+The run says at its start what it writes with and where each dial came
+from -- the environment, this plan's own record, the project key -- since a
+plan picked up again keeps the record it wrote when it began whatever the
+project keys say by then. The two flags here rewrite that record before the
 run reads it, so `--model opus` changes what a resumed run dispatches on, and
 keeps it for every later run of this plan. A dial amx would not start an
 agent on is refused here, before the first worker."
@@ -133,18 +133,9 @@ agent on is refused here, before the first worker."
         /// Record this as the model this plan's workers write with.
         #[arg(long, value_name = "NAME")]
         model: Option<String>,
-        /// Record this as the model that reads this plan's merges.
-        #[arg(long = "review-model", value_name = "NAME")]
-        review_model: Option<String>,
-        /// Record this as the model a task's second fix round runs on.
-        #[arg(long = "fix-model", value_name = "NAME")]
-        fix_model: Option<String>,
         /// Record this as the workers' reasoning level.
         #[arg(long, value_name = "LEVEL")]
         effort: Option<String>,
-        /// Record this as the reader's reasoning level.
-        #[arg(long = "review-effort", value_name = "LEVEL")]
-        review_effort: Option<String>,
     },
     /// A library's current documentation, through the Context7 CLI.
     Docs {
@@ -172,26 +163,16 @@ again -- a fresh run retries failed tasks by itself.")]
         /// The model this task is dispatched with from here on.
         #[arg(long)]
         model: Option<String>,
-        /// Minutes the reading in flight may still take. Nothing is
-        /// dispatched: the live run reads this every poll.
-        #[arg(long = "review-deadline", value_name = "MIN")]
-        review_deadline: Option<f64>,
     },
-    /// Land a task the run failed, as it stands, with the findings filed.
-    #[command(
-        long_about = "Land a task the run failed, as it stands, with the findings filed.
+    /// Land a task the run failed, as it stands.
+    #[command(long_about = "Land a task the run failed, as it stands.
 
-Two fix rounds go by themselves and a third fix verdict is the orchestrator's;
-so is a task that failed because the reading could not be had at all. With a
-run live this writes a marker in its directory and the run merges the task's
-branch on its next poll; with no run live it does that merge itself, off the
-last run's state -- a run ends in the same pass as the verdict, so there is no
-window to hand a marker to. Either way there is no reader this time --
-ownership, the words, the rebase and the gate's own suite still stand -- and
-every finding of the last reading becomes a mem follow-up (`mem log --type
-followup`), so nothing true is lost and nothing minor costs another round. The
-other way out is to edit the plan and `workflow redispatch <task>`."
-    )]
+With a run live this writes a marker in its directory and the run merges the
+task's branch on its next poll; with no run live it does that merge itself,
+off the last run's state -- a run ends in the same pass as the failure, so
+there is no window to hand a marker to. Either way ownership, the words, the
+rebase and the gate's own suite still stand. The other way out is to edit the
+plan and `workflow redispatch <task>`.")]
     Accept { task: String },
     /// Merge a task the gate failed again, as a worker's `ready` would.
     #[command(
@@ -199,9 +180,8 @@ other way out is to edit the plan and `workflow redispatch <task>`."
 
 The gate runs a red suite twice before it fails a task, and a suite that is red
 only under load can be red both times. regate takes the task's branch through
-the whole merge again -- ownership, the words, the rebase, the suite and the
-reader -- with no worker spent, where `accept` would land it unread and file
-it as landed over findings. With a run live it writes a marker the run honours
+the whole merge again -- ownership, the words, the rebase and the suite --
+with no worker spent. With a run live it writes a marker the run honours
 on its next poll; with none it does the merge itself, off the last run's state."
     )]
     Regate { task: String },
@@ -335,24 +315,21 @@ usage: workflow <command> [options]
   plan-check <file> [--json]
       read a plan and report its tasks and waves; nothing is run
       0 it holds · 1 the grammar or this checkout refused it · 2 no such file
-  run [--plan-file <f>] [--model <m>] [--review-model <m>]
-      [--fix-model <m>] [--effort <l>] [--review-effort <l>]
+  run [--plan-file <f>] [--model <m>] [--effort <l>]
       run a plan's tasks in worktrees; this dispatches real workers
       the dials rewrite this plan's own record, which a resumed run prefers
       to the project keys; the run says at its start which it took
       0 every task complete · 1 failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
-  redispatch <task> [--model <name>] [--review-deadline <min>]
-      ask the live run to dispatch a failed task again, or -- with
-      --review-deadline -- give the reading in flight more time and
-      dispatch nothing
+  redispatch <task> [--model <name>]
+      ask the live run to dispatch a failed task again
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
   accept <task>
-      land a task the run failed, as it stands, the findings filed
+      land a task the run failed, as it stands
       0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
   regate <task>
-      merge a task the gate failed again: suite and reader, no worker
+      merge a task the gate failed again: the suite, no worker
       0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
   status [--json]
       report this project's runs: task states, spend, lock liveness
@@ -382,6 +359,25 @@ mod tests {
                 "{verb}"
             );
             assert!(!USAGE.contains(&format!("\n  {verb} ")), "{verb}");
+        }
+    }
+
+    #[test]
+    fn the_review_and_fix_flags_are_unknown() {
+        for argv in [
+            ["workflow", "run", "--review-model", "opus"],
+            ["workflow", "run", "--fix-model", "opus"],
+            ["workflow", "run", "--review-effort", "high"],
+            ["workflow", "redispatch", "t1", "--review-deadline"],
+        ] {
+            let e = Cli::try_parse_from(argv).unwrap_err();
+            assert_eq!(
+                e.kind(),
+                clap::error::ErrorKind::UnknownArgument,
+                "{argv:?}"
+            );
+            let flag = argv.iter().find(|a| a.starts_with("--")).unwrap();
+            assert!(!USAGE.contains(flag), "{argv:?}");
         }
     }
 }
