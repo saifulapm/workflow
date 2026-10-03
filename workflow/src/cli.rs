@@ -159,6 +159,28 @@ puts the roadmap in maintenance."
         #[arg(long, value_name = "SECONDS")]
         tick: Option<f64>,
     },
+    /// Label a task of the live run as waiting on its owner.
+    #[command(long_about = "Label a task of the live run as waiting on its owner.
+
+This writes <task>.parked with the reason in the live run's directory and
+logs a run line. The run already holds the task open on its question; the
+label tells serve to start no second lead for it, and serve removes it when
+the question is answered. With no run live there is nothing to label.")]
+    Park {
+        task: String,
+        /// Why the task waits, in one line.
+        reason: String,
+    },
+    /// Hold a project's runs: serve stops the live one and starts nothing.
+    Pause {
+        /// The project, by mem's name; the checkout's when omitted.
+        project: Option<String>,
+    },
+    /// Let serve run a paused project again.
+    Resume {
+        /// The project, by mem's name; the checkout's when omitted.
+        project: Option<String>,
+    },
     /// A library's current documentation, through the Context7 CLI.
     Docs {
         /// The library, by the name its users know it.
@@ -348,6 +370,12 @@ usage: workflow <command> [options]
       run every roadmap on this machine, milestone after milestone, one
       child run per project; --once ticks once and exits
       0 --once ticked · 2 another serve is live here
+  park <task> <reason>
+      label a task of the live run as waiting on its owner
+      0 parked · 2 no live run holds the task
+  pause [<project>] · resume [<project>]
+      hold a project's runs, or let serve run it again
+      0 done · 1 mem refused · 2 no project named or here
   redispatch <task> [--model <name>]
       ask the live run to dispatch a failed task again
       0 the run was asked · 1 no live run holds that task failed, or its wave closed

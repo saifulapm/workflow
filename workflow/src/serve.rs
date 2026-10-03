@@ -41,6 +41,10 @@ const LAUNCH_S: i64 = 60;
 /// The one lead a project has at a time writes its pid here.
 const LEAD_PID: &str = "lead.pid";
 
+/// Written when a pause told the project's run to stop, so the stop is sent
+/// once and the run's end reads as a stop rather than as stopping short.
+const STOPPED: &str = "stopped";
+
 /// The roadmap statuses serve works under. A draft is not agreed yet, and a
 /// roadmap marked done is nobody's to run.
 const WORKED: [&str; 3] = ["approved", "running", "maintenance"];
@@ -457,11 +461,12 @@ impl Serve {
     fn tick_project(&mut self, p: &ServeProject) {
         let _ = std::fs::create_dir_all(p.dir());
         if p.paused {
-            self.stage(p, "paused");
+            self.hold(p);
             return;
         }
         self.claim(p, false);
         self.settle_leads(p);
+        self.unpark(p);
         self.tail_events(p);
         match self.running(p) {
             Running::Live => {
@@ -478,6 +483,33 @@ impl Serve {
             Some(at) => self.open_milestone(p, at),
             None => self.maintenance(p),
         }
+    }
+
+    /// Paused: a live run is told to stop once, which stops its workers and
+    /// leaves their tasks dispatched for the next run to adopt; a run that
+    /// has gone is reaped; nothing starts.
+    fn hold(&mut self, p: &ServeProject) {
+        let told = p.dir().join(STOPPED);
+        match self.running(p) {
+            Running::Live if !told.exists() => {
+                let pid = match self.children.get(&p.name) {
+                    Some(child) => child.id().to_string(),
+                    None => std::fs::read_to_string(p.dir().join("child.pid"))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                };
+                sys::kill_group(&pid, "TERM");
+                let _ = std::fs::write(&told, "");
+                self.log(
+                    p,
+                    "serve: paused; told its run to stop, and its tasks wait for resume",
+                );
+            }
+            Running::Ended(status) => self.reap(p, status),
+            _ => {}
+        }
+        self.stage(p, "paused");
     }
 
     fn running(&mut self, p: &ServeProject) -> Running {
@@ -701,6 +733,7 @@ impl Serve {
         let dir = p.dir();
         let started = sys::mtime(&dir.join("child.pid"));
         let _ = std::fs::remove_file(dir.join("child.pid"));
+        let stopped = std::fs::remove_file(dir.join(STOPPED)).is_ok();
         self.claim(p, true);
         let milestone = std::fs::read_to_string(dir.join("milestone")).unwrap_or_default();
         let Some(slug) = milestone.split_whitespace().next().map(str::to_string) else {
@@ -709,7 +742,9 @@ impl Serve {
         let run_dir = p.run_dir(&slug);
         let events = std::fs::read_to_string(run_dir.join("events")).unwrap_or_default();
         let ended = ended_since(&events, started);
-        if !ended && status.is_none_or(|s| s.code().is_none()) {
+        // A run a pause stopped exits by itself, but it stopped for the
+        // pause, not short: it starts again once the project is resumed.
+        if !ended && (stopped || status.is_none_or(|s| s.code().is_none())) {
             warn(format!(
                 "serve {}: the run of {slug} went without ending; it starts again next tick",
                 p.name
@@ -1007,6 +1042,53 @@ impl Serve {
         false
     }
 
+    /// A parked task whose questions are all answered is parked no longer:
+    /// the run sends it again with the answer, and a later question of its
+    /// own gets a lead.
+    fn unpark(&self, p: &ServeProject) {
+        let milestone = std::fs::read_to_string(p.dir().join("milestone")).unwrap_or_default();
+        let Some(slug) = milestone.split_whitespace().next() else {
+            return;
+        };
+        let run_dir = p.run_dir(slug);
+        let parked: Vec<String> = std::fs::read_dir(&run_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name.strip_suffix(".parked").map(str::to_string)
+            })
+            .collect();
+        if parked.is_empty() {
+            return;
+        }
+        let said = mem_on(
+            &self.mem,
+            &p.name,
+            &["questions", "--for", "orchestrator", "--json"],
+        );
+        let Ok(listed) = serde_json::from_str::<Questions>(&said.out) else {
+            return;
+        };
+        for task in parked {
+            let tag = format!("{slug}/{task}");
+            let asked: Vec<&memcli::Question> = listed
+                .questions
+                .iter()
+                .filter(|q| q.task.as_deref() == Some(tag.as_str()))
+                .collect();
+            if asked.is_empty() || asked.iter().any(|q| q.answer.is_none()) {
+                continue;
+            }
+            let _ = std::fs::remove_file(run_dir.join(format!("{task}.parked")));
+            self.log(
+                p,
+                &format!("serve {slug}: {task}'s question is answered; it is parked no longer"),
+            );
+        }
+    }
+
     /// Read the open milestone's run events from serve's own cursor and
     /// start the lead the first one that wants it asks for. An event met
     /// while a lead is going is left for a later tick.
@@ -1123,6 +1205,89 @@ impl Serve {
         warn(format!("{}: {line}", p.name));
         mem_on(&self.mem, &p.name, &["log", "--type", "run", "--", line]);
     }
+}
+
+/// `workflow park <task> "<reason>"` -- the label a lead puts on a task whose
+/// question went to the owner, in the live run's directory.
+pub fn cmd_park(task: &str, reason: &str) -> i32 {
+    if !Git::here().inside_worktree() {
+        warn("park: stand in the project checkout");
+        return exit::USAGE;
+    }
+    let Some(project) = memcli::project_current() else {
+        warn("park: mem does not know this checkout");
+        return exit::USAGE;
+    };
+    let root = paths::runs_root().join(project.dir_name());
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|d| d.join("plan.md").is_file() && d.join(format!("{task}.state")).is_file())
+        .collect();
+    dirs.sort();
+    // Taking the lock and getting it means nobody holds the run.
+    let Some(dir) = dirs.into_iter().find(|d| run::lock_run(d).is_none()) else {
+        warn(format!(
+            "park: no live run holds {task}; a task is parked only while a run holds it open on its question"
+        ));
+        return exit::USAGE;
+    };
+    let reason = reason.trim();
+    if let Err(e) = std::fs::write(dir.join(format!("{task}.parked")), format!("{reason}\n")) {
+        warn(format!("park: cannot write in {}: {e}", dir.display()));
+        return exit::FAILED;
+    }
+    memcli::log_run(&format!("park {task}: {reason}"));
+    let plan = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    warn(format!("run {plan}: {task} parked -- {reason}"));
+    exit::OK
+}
+
+/// `workflow pause [<project>]` and `workflow resume [<project>]`: the
+/// `paused` project key, which serve reads on every tick.
+pub fn cmd_pause(project: Option<&str>, pause: bool) -> i32 {
+    let verb = if pause { "pause" } else { "resume" };
+    let name = match project {
+        Some(name) => name.to_string(),
+        None => match memcli::project_current() {
+            Some(p) => p.name,
+            None => {
+                warn(format!(
+                    "{verb}: name a project, or stand in a checkout mem knows"
+                ));
+                return exit::USAGE;
+            }
+        },
+    };
+    let mem = PathBuf::from(memcli::bin());
+    let said = if pause {
+        let here = current(&mem, &name)
+            .and_then(|c| c.machine)
+            .unwrap_or_default();
+        let text = format!("{here} {}", &sys::utc_now()[..10]);
+        mem_on(&mem, &name, &["project", "set", "paused", text.trim()])
+    } else {
+        mem_on(&mem, &name, &["project", "unset", "paused"])
+    };
+    if !said.ok {
+        warn(format!("{verb}: {}", said.err.trim_start_matches("mem: ")));
+        return exit::FAILED;
+    }
+    if pause {
+        warn(format!(
+            "{name}: paused; serve stops its run and starts nothing until `workflow resume`"
+        ));
+    } else {
+        warn(format!(
+            "{name}: resumed; serve starts its run on the next tick"
+        ));
+    }
+    exit::OK
 }
 
 pub fn cmd_serve(once: bool, tick_s: Option<f64>) -> i32 {
