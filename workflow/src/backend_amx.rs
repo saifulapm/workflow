@@ -18,8 +18,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::backend::{
-    Consult, Dispatch, Ending, Handle, Outcome, WorkerBackend, last_context_tokens, last_stop_in,
-    last_words_in,
+    Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
 };
 use crate::{gitcmd, paths, sys};
 
@@ -276,35 +275,6 @@ fn sub_bg_argv(d: &Dispatch, name: &str, parent: &str) -> Vec<String> {
     argv
 }
 
-/// The consult argv: `amx sub --json --timeout <s> --name <name> [--parent
-/// <id>|--no-parent] ...`, one call that starts the agent and waits for its
-/// answer.
-///
-/// A reader with nobody named is a root. Without `--no-parent` amx records
-/// the ambient `$AMX_ID`, so a `workflow read` issued from inside a worker
-/// spawned its reader at depth 2 and amx refused it: the public-API read a
-/// task's own brief asks for could not run. An advice keeps the ambient id on
-/// purpose -- it runs in the worker's own pane and rides that pane onto the
-/// record as the advisor's parent.
-fn sub_argv(d: &Dispatch, name: &str, timeout_s: i64) -> Vec<String> {
-    let mut argv = vec![
-        "sub".to_string(),
-        "--json".to_string(),
-        "--timeout".to_string(),
-        timeout_s.max(1).to_string(),
-        "--name".to_string(),
-        name.to_string(),
-    ];
-    if let Some(parent) = &d.parent {
-        argv.push("--parent".to_string());
-        argv.push(parent.clone());
-    } else if d.role == "reader" {
-        argv.push("--no-parent".to_string());
-    }
-    argv.extend(spawn_argv(d));
-    argv
-}
-
 /// The two fields of `amx sub --json` this backend reads: the child's id and
 /// its answer, `null` for a turn that gave none.
 fn sub_json(json: &str) -> Option<(String, String)> {
@@ -318,18 +288,6 @@ fn sub_json(json: &str) -> Option<(String, String)> {
         .unwrap_or_default()
         .to_string();
     Some((id, answer))
-}
-
-/// `amx sub`'s exit code as an ending: `result`'s codes, 0 an answer, 2 the
-/// child is asking a question, 3 the deadline, and anything else -- 1 failed
-/// or stopped, 64 usage, no code at all -- unclean.
-fn ending_of(code: Option<i32>) -> Ending {
-    match code {
-        Some(0) => Ending::Answered,
-        Some(2) => Ending::Blocked,
-        Some(3) => Ending::TimedOut,
-        _ => Ending::Unclean,
-    }
 }
 
 /// The variables a worker must not inherit (spec §1), out of the names the
@@ -493,53 +451,6 @@ impl WorkerBackend for AmxBackend {
         }
     }
 
-    /// One `amx sub --json --timeout`: the agent, its turn and its ending in
-    /// one call, the answer off the object and the ending off the exit code.
-    /// amx has stopped nothing when the deadline passes -- `result` gave up
-    /// waiting, the pane stands -- so the stop is this backend's, as it is
-    /// for every ending: a consulted agent has one answer to give.
-    fn consult(&self, d: &Dispatch, timeout_s: i64) -> Consult {
-        let name = name_for(d);
-        let refused = Consult {
-            ending: Ending::Unclean,
-            answer: String::new(),
-            session: String::new(),
-            question: String::new(),
-        };
-        let Some(out) = spawn(&sub_argv(d, &name, timeout_s), d) else {
-            return refused;
-        };
-        let Some((id, answer)) = sub_json(&String::from_utf8_lossy(&out.stdout)) else {
-            // amx prints the object on every ending it saw; a clean exit
-            // with none is a child that may be standing under the name
-            // asked for, so it is stopped before this says nothing ran.
-            if out.status.success() {
-                let _ = amx(&["stop", &name]);
-            }
-            return refused;
-        };
-        let h = Handle {
-            session: id.clone(),
-            pidfile: d.pidfile.clone(),
-            worktree: d.worktree.clone(),
-        };
-        let ending = ending_of(out.status.code());
-        // The question lives on the pane and amx forgets it with the phase
-        // the stop brings, so it is read first: exit 2 is exactly the ending
-        // whose wording the caller needs.
-        let question = match ending {
-            Ending::Blocked => self.question(&h),
-            _ => String::new(),
-        };
-        self.stop(&h, (timeout_s / 2).clamp(1, 30));
-        Consult {
-            ending,
-            answer,
-            session: id,
-            question,
-        }
-    }
-
     fn alive(&self, h: &Handle) -> bool {
         match status(&h.session) {
             Some(s) => !ENDINGS.contains(&s.state.as_str()),
@@ -641,19 +552,6 @@ impl WorkerBackend for AmxBackend {
         }
         let path = paths::transcript_path(&h.worktree, &s.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
-    }
-
-    /// The transcript amx names for this agent, read for how its last turn
-    /// stopped. amx has no word of its own on this: `status --json` reports a
-    /// phase, and a turn that ended on a completion budget spent reasoning
-    /// ends in the same `done` as one that answered.
-    fn last_stop(&self, h: &Handle) -> Option<(String, u64)> {
-        let s = status(&h.session)?;
-        if s.session.is_empty() {
-            return None;
-        }
-        let path = paths::transcript_path(&h.worktree, &s.session);
-        last_stop_in(&std::fs::read_to_string(path).ok()?)
     }
 
     /// `amx logs <id>`: once the pane is gone this is the recorded answer, or
@@ -935,93 +833,6 @@ mod tests {
     }
 
     #[test]
-    fn a_consult_is_one_sub_call_and_its_exit_code_is_the_ending() {
-        let mut d = fixture();
-        let argv = sub_argv(&d, "wf-t1-a3k9", 900);
-        assert_eq!(
-            &argv[..6],
-            ["sub", "--json", "--timeout", "900", "--name", "wf-t1-a3k9"]
-        );
-        assert_eq!(argv[6..], spawn_argv(&d));
-        // An advice keeps the ambient `AMX_ID`: `workflow advise` runs in the
-        // worker's pane and rides that id onto the record as the advisor's
-        // parent, which is what a `sub` with no `--parent` does.
-        d.role = "advisor".into();
-        assert!(
-            !sub_argv(&d, "wf-t1-a3k9", 900).contains(&"--no-parent".to_string()),
-            "{argv:?}"
-        );
-        // A reader with nobody named is a root instead: a `workflow read`
-        // issued inside a worker's pane would ride that pane's id to depth 2,
-        // which amx refuses.
-        d.role = "reader".into();
-        assert_eq!(&sub_argv(&d, "wf-t1-a3k9", 900)[6..7], ["--no-parent"]);
-        d.parent = Some("wf-t1-zz01".into());
-        assert_eq!(
-            &sub_argv(&d, "wf-t1-a3k9", 900)[6..8],
-            ["--parent", "wf-t1-zz01"]
-        );
-        d.parent = None;
-        d.role = "worker".into();
-
-        for (code, ending) in [
-            (0, Ending::Answered),
-            (1, Ending::Unclean),
-            (2, Ending::Blocked),
-            (3, Ending::TimedOut),
-            (64, Ending::Unclean),
-        ] {
-            let fake = Fake::new("consult", "done");
-            d.worktree = fake.dir.clone();
-            d.err = fake.dir.join("t1.err");
-            std::fs::write(fake.dir.join("sub-exit"), code.to_string()).unwrap();
-            let c = AmxBackend.consult(&d, 900);
-            assert_eq!(c.ending, ending, "exit {code}");
-            assert_eq!(c.session, "wf-t1-a3k9");
-            assert_eq!(c.answer, "the answer");
-            assert_eq!(c.question, "", "exit {code}: nothing asked");
-            // One sub, then the stop: the consulted agent has said its piece.
-            let calls: Vec<String> = fake
-                .read("argv")
-                .lines()
-                .filter(|l| *l == "sub" || *l == "stop")
-                .map(str::to_string)
-                .collect();
-            assert_eq!(calls, ["sub", "stop"], "exit {code}");
-        }
-    }
-
-    #[test]
-    fn a_blocked_consult_carries_the_question_read_before_the_stop() {
-        let fake = Fake::new("blocked", "waiting");
-        let path = fake.dir.join("status.json");
-        let text = std::fs::read_to_string(&path).unwrap();
-        std::fs::write(
-            &path,
-            text.replace(
-                "\"question\": null",
-                "\"question\": {\"text\": \"Is this a project you trust?\", \"options\": [\"Yes\", \"No\"]}",
-            ),
-        )
-        .unwrap();
-        std::fs::write(fake.dir.join("sub-exit"), "2").unwrap();
-        let mut d = fixture();
-        d.worktree = fake.dir.clone();
-        d.err = fake.dir.join("t1.err");
-        let c = AmxBackend.consult(&d, 900);
-        assert_eq!(c.ending, Ending::Blocked);
-        assert_eq!(c.question, "Is this a project you trust?");
-        // status (the question) was asked before stop.
-        let calls: Vec<String> = fake
-            .read("argv")
-            .lines()
-            .filter(|l| ["sub", "status", "stop"].contains(l))
-            .map(str::to_string)
-            .collect();
-        assert_eq!(calls, ["sub", "status", "stop"]);
-    }
-
-    #[test]
     fn the_sub_object_gives_up_the_id_and_the_answer() {
         assert_eq!(
             sub_json(
@@ -1035,7 +846,6 @@ mod tests {
         );
         assert_eq!(sub_json("amx sub: no agent `nope`"), None);
         assert_eq!(sub_json("{}"), None);
-        assert_eq!(ending_of(None), Ending::Unclean);
     }
 
     #[test]

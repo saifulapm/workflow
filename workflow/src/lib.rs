@@ -11,14 +11,12 @@
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
 //!   workflow skill           the skills this binary carries, or one whole
-//!   workflow settings-merge  the install's settings edit
 //!
 //! Exit codes are a contract; `workflow help` prints them.
 //!
 //! Process state lives in mem, never in the repo. Everything here is driven by
 //! git and mem, so it works the same under any agent runtime.
 
-pub mod advise;
 pub mod backend;
 pub mod backend_amx;
 pub mod brief;
@@ -35,13 +33,11 @@ pub mod ownership;
 pub mod paths;
 pub mod plan;
 pub mod plancheck;
-pub mod read;
 pub mod repo;
 pub mod report;
 pub mod review;
 pub mod reviewer;
 pub mod run;
-pub mod settings;
 pub mod skill;
 pub mod status;
 pub mod sys;
@@ -165,12 +161,6 @@ pub fn run(cli: Cli) -> i32 {
             effort.as_deref(),
             review_effort.as_deref(),
         ),
-        Command::Read { range, against } => read::cmd_read(range.as_deref(), against.as_deref()),
-        Command::Advise {
-            question,
-            file,
-            against,
-        } => advise::cmd_advise(&question, &file, against.as_deref()),
         Command::Docs { library, query } => docs::cmd_docs(&library, &query),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch {
@@ -212,9 +202,6 @@ pub fn run(cli: Cli) -> i32 {
         } => run::cmd_stalled(&rundir, &wtroot, &task, deadline),
         Command::Doctor { fix } => doctor::cmd_doctor(fix),
         Command::Skill { name } => skill::cmd_skill(name.as_deref()),
-        Command::SettingsMerge { file, dry_run } => {
-            settings::cmd_settings_merge(file.as_deref(), dry_run)
-        }
     }
 }
 

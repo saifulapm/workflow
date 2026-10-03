@@ -3,9 +3,9 @@
 //! amx is the execution and visibility substrate, not an orchestrator: `run`
 //! dispatches *onto* a backend and keeps every policy decision -- the ready
 //! set, ownership, the merge gate -- to itself. The backend that ships is
-//! [`crate::backend_amx::AmxBackend`]: every worker and every reader is an
-//! amx agent, visible in `amx ls`, attachable, ended with `amx stop`,
-//! answered for by `amx status --json`. The [`ProcessBackend`] below is the
+//! [`crate::backend_amx::AmxBackend`]: every worker is an amx agent,
+//! visible in `amx ls`, attachable, ended with `amx stop`, answered for by
+//! `amx status --json`. The [`ProcessBackend`] below is the
 //! test seam and nothing else: a `WORKFLOW_WORKER_CMD` template that owns
 //! its own process shape (pidfile, signals, a print-mode result document),
 //! which is how the suite fakes a worker without a tmux server.
@@ -28,13 +28,11 @@ pub struct Dispatch {
     pub status: PathBuf,
     pub rundir: PathBuf,
     pub session: String,
-    /// The agent this one is a child of -- the task's worker for its reader,
-    /// the session a task had before for a redispatch -- when the run knows
-    /// one. amx records it (`amx sub --parent`); the process seam ignores it.
+    /// The agent this one is a child of -- the session a task had before
+    /// for a redispatch -- when the run knows one. amx records it (`amx sub --parent`); the process seam ignores it.
     pub parent: Option<String>,
-    /// Which of the run's four agents this is -- `worker`, `reader`, `fixer`
-    /// or `advisor` -- and so which amx role it starts under, unless `model`
-    /// names a role of its own.
+    /// Which kind of agent this is -- `worker` for a task -- and so which amx
+    /// role it starts under, unless `model` names a role of its own.
     pub role: String,
     pub model: String,
     /// The reasoning dial, when the run has one to pass: `--effort` on both
@@ -51,32 +49,6 @@ pub struct Handle {
     pub session: String,
     pub pidfile: PathBuf,
     pub worktree: PathBuf,
-}
-
-/// How a consulted agent's one turn ended, as `amx sub`'s exit code says it:
-/// 0 answered, 2 stopped at a question, 3 the caller's deadline, anything
-/// else (1 failed or stopped, 64 usage) unclean. The verdict is never here:
-/// it is in the answer file the prompt named, read by `reviewer::verdict`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ending {
-    Answered,
-    Blocked,
-    TimedOut,
-    Unclean,
-}
-
-/// What one blocking consult -- a reading, an advice -- came back with.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Consult {
-    pub ending: Ending,
-    /// The agent's own last text, where the backend hands it back (amx's
-    /// `answer`); empty on the process seam, which leaves only the file.
-    pub answer: String,
-    /// The agent's id, for the record; empty when the launch was refused.
-    pub session: String,
-    /// The question a `Blocked` agent stopped at, read off the pane before
-    /// the stop took it; empty otherwise.
-    pub question: String,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -155,48 +127,6 @@ pub trait WorkerBackend {
     /// What the worker left behind: a print-mode result document at `out`, or
     /// the agents list's word on the session named by the handle.
     fn result(&self, h: &Handle, out: &Path) -> Outcome;
-    /// Start an agent and wait for its one turn to end, up to `timeout_s`,
-    /// then stop whatever is left of it: the shape of a reading or an advice,
-    /// which has one answer to give and no session to keep. amx does it in
-    /// one call (`amx sub --json --timeout`); the default is the loop the
-    /// process seam has always had -- dispatch, `alive` once a second to the
-    /// deadline, `stop` -- which cannot tell an answer from a failure and so
-    /// says `Answered` for any turn that ended inside the deadline. A launch
-    /// refused is `Unclean` with no session, the refusal on `Dispatch::err`.
-    fn consult(&self, d: &Dispatch, timeout_s: i64) -> Consult {
-        let session = self.dispatch(d);
-        if session.is_empty() {
-            return Consult {
-                ending: Ending::Unclean,
-                answer: String::new(),
-                session,
-                question: String::new(),
-            };
-        }
-        let h = Handle {
-            session: session.clone(),
-            pidfile: d.pidfile.clone(),
-            worktree: d.worktree.clone(),
-        };
-        let grace_s = (timeout_s / 2).clamp(1, 30);
-        let started = sys::now();
-        let mut ending = Ending::Answered;
-        while self.alive(&h) {
-            if sys::now() - started >= timeout_s {
-                ending = Ending::TimedOut;
-                break;
-            }
-            sys::sleep(1.0);
-        }
-        // The consult is over either way; its pane has no more to say.
-        self.stop(&h, grace_s);
-        Consult {
-            ending,
-            answer: String::new(),
-            session,
-            question: String::new(),
-        }
-    }
     /// The transcript's last text -- what the worker said on its last turn,
     /// read off its own conversation file. Empty when there is nothing to
     /// read there, which for a custom template is every time: it never
@@ -210,15 +140,6 @@ pub trait WorkerBackend {
     /// started. Empty when there is nothing, or nothing can see.
     fn dying_words(&self, _h: &Handle) -> String {
         String::new()
-    }
-    /// How the agent's last recorded turn ended: the transcript's own
-    /// `stop_reason` and the visible tokens that turn wrote. What tells a
-    /// reader that spent its whole completion budget reasoning from a wedged
-    /// provider or a bad prompt, since from outside both are a deadline and
-    /// nothing said. `None` when there is nothing to read, which for a custom
-    /// template is every time.
-    fn last_stop(&self, _h: &Handle) -> Option<(String, u64)> {
-        None
     }
     /// The question the worker is stopped at, when the backend can see one:
     /// a prompt drawn in front of the session, which no hook reports and no
@@ -316,31 +237,6 @@ pub(crate) fn last_context_tokens(transcript: &str) -> Option<u64> {
                 + field("cache_creation_input_tokens")
                 + field("cache_read_input_tokens"),
         );
-    }
-    last
-}
-
-/// The last turn on record: how it stopped and how many visible tokens it
-/// wrote. The fields are the vendor's own on the assistant message, and a
-/// record carrying no `stop_reason` is a turn still going, not an ending.
-pub(crate) fn last_stop_in(transcript: &str) -> Option<(String, u64)> {
-    let mut last = None;
-    for line in transcript.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let Some(message) = v.get("message") else {
-            continue;
-        };
-        let Some(stop) = message.get("stop_reason").and_then(|s| s.as_str()) else {
-            continue;
-        };
-        let out = message
-            .get("usage")
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        last = Some((stop.to_string(), out));
     }
     last
 }
@@ -485,11 +381,6 @@ impl WorkerBackend for ProcessBackend {
         let path = paths::transcript_path(&h.worktree, &h.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
-
-    fn last_stop(&self, h: &Handle) -> Option<(String, u64)> {
-        let path = paths::transcript_path(&h.worktree, &h.session);
-        last_stop_in(&std::fs::read_to_string(path).ok()?)
-    }
 }
 
 #[cfg(test)]
@@ -595,25 +486,6 @@ not json at all
         // context, and the honest answer is that the backend cannot see.
         assert_eq!(last_context_tokens(""), None);
         assert_eq!(last_context_tokens("{\"type\":\"user\"}\n"), None);
-    }
-
-    #[test]
-    fn the_last_stop_is_the_last_recorded_turns_reason_and_visible_tokens() {
-        assert_eq!(
-            last_stop_in(
-                "{\"message\":{\"stop_reason\":\"end_turn\",\"usage\":{\"output_tokens\":50}}}\n\
-                 {\"message\":{\"stop_reason\":\"max_tokens\",\"usage\":{\"output_tokens\":32000}}}\n"
-            ),
-            Some(("max_tokens".to_string(), 32000))
-        );
-        // A reason with no usage beside it is still the reason.
-        assert_eq!(
-            last_stop_in(r#"{"message":{"stop_reason":"refusal"}}"#),
-            Some(("refusal".to_string(), 0))
-        );
-        // A turn still going has no ending to report.
-        assert_eq!(last_stop_in(TRANSCRIPT), None);
-        assert_eq!(last_stop_in(""), None);
     }
 
     /// A user turn, an assistant turn with a tool call and no text, and a
