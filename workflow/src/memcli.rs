@@ -379,9 +379,10 @@ pub fn plan() -> Option<String> {
 
 /// One wiki page, verbatim, read fresh off `mem wiki -- <slug>` -- mem's
 /// plan is read live the same way, so an edit to a page reaches the
-/// next dispatch. `None` covers both a project mem does not know and a
-/// project with no such page: the caller lists it as absent rather than
-/// refusing the dispatch over it.
+/// next dispatch. A `<slug>#<section>` reads that section alone, since mem
+/// takes the same address. `None` covers a project mem does not know and a
+/// project with no such page or section: the caller lists it as absent
+/// rather than refusing the dispatch over it.
 pub fn wiki_page(slug: &str) -> Option<String> {
     let (ok, out) = capture(&["wiki", "--", slug])?;
     ok.then_some(out)

@@ -148,7 +148,8 @@ fn plan_section(prose: &str) -> String {
 
 /// The wiki pages a task's Read: named, verbatim under one heading, for the
 /// worker's brief and the reader's prompt alike.
-/// `pages` is `(slug, text)`, absent text meaning no such page. Past
+/// `pages` is `(slug, text)`, absent text meaning no such page; a slug may
+/// carry `#<section>`, its text then that section alone. Past
 /// [`PAGES_CAP`] bytes of page text, the rest are named as a `mem wiki`
 /// command instead of inlined, and the run is warned once for this call.
 pub(crate) fn pages_section(task_id: &str, pages: &[(String, Option<String>)]) -> String {
@@ -161,6 +162,10 @@ pub(crate) fn pages_section(task_id: &str, pages: &[(String, Option<String>)]) -
     for (slug, text) in pages {
         out.push_str(&format!("### wiki:{slug}\n\n"));
         match text {
+            // A section name may be wrong in either half, so the line says so.
+            None if slug.contains('#') => {
+                out.push_str("This project has no such page or section.\n\n")
+            }
             None => out.push_str("This project has no such page.\n\n"),
             Some(body) if used + body.len() <= PAGES_CAP => {
                 used += body.len();
@@ -913,5 +918,34 @@ mod tests {
             "{section}"
         );
         assert!(!section.contains("tiny page"), "{section}");
+    }
+
+    /// A `slug#section` name keeps its heading as written and carries the
+    /// section's text alone; one mem refuses says either half may be wrong.
+    #[test]
+    fn a_section_name_rides_under_its_own_heading() {
+        let pages = vec![
+            (
+                "pricing#rounding".to_string(),
+                Some("## Rounding\n\nHalf up.".to_string()),
+            ),
+            ("pricing#taxes".to_string(), None),
+            ("gone".to_string(), None),
+        ];
+        let section = pages_section("t1", &pages);
+        assert!(
+            section.contains("### wiki:pricing#rounding\n\n## Rounding\n\nHalf up.\n\n"),
+            "{section}"
+        );
+        assert!(
+            section.contains(
+                "### wiki:pricing#taxes\n\nThis project has no such page or section.\n\n"
+            ),
+            "{section}"
+        );
+        assert!(
+            section.contains("### wiki:gone\n\nThis project has no such page.\n\n"),
+            "a bare slug keeps its own line: {section}"
+        );
     }
 }
