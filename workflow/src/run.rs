@@ -1123,6 +1123,12 @@ impl Run {
     /// -- and in that last case the session is stopped first, since a paste
     /// that may have landed cannot be left beside a fresh worker in the same
     /// tree. The caller dispatches afresh on `false`.
+    /// The stall deadline in whole minutes, rounded up, for the brief's
+    /// TIMEBOX: a deadline of 30 seconds is a minute, never none.
+    fn deadline_minutes(&self) -> u64 {
+        (self.deadline_s.max(1) as u64).div_ceil(60)
+    }
+
     fn continue_worker(&self, task: &str, why: &str) -> bool {
         let h = self.handle(task);
         if h.session.is_empty() || !self.backend.listed(&h) {
@@ -1147,7 +1153,16 @@ impl Run {
         let prior = self.prior_attempt(task, why);
         let prose = plan::prose(&self.plan_text().unwrap_or_default());
         let pages = wiki_pages(&t);
-        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
+        brief::write(
+            &t,
+            &wt,
+            &status,
+            &prior,
+            &prose,
+            &pages,
+            self.deadline_minutes(),
+            &brief_file,
+        );
         // The hook in that worktree reads this file, not the brief: a task
         // sent back to its own worker was still held to the Verify line of
         // the plan as it read at dispatch.
@@ -1216,7 +1231,16 @@ impl Run {
         // orchestrator makes mid-run is in the next attempt's brief.
         let prose = plan::prose(&self.plan_text().unwrap_or_default());
         let pages = wiki_pages(&t);
-        brief::write(&t, &wt, &status, &prior, &prose, &pages, &brief_file);
+        brief::write(
+            &t,
+            &wt,
+            &status,
+            &prior,
+            &prose,
+            &pages,
+            self.deadline_minutes(),
+            &brief_file,
+        );
         // The gate reads this from inside the worktree: the task is held to its
         // own Verify command there, not to the repo-wide suite (verify.rs).
         write_field(&self.dir, task, "verify", t.verify.as_deref().unwrap_or(""));

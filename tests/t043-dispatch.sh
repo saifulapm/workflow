@@ -142,6 +142,12 @@ brief="$XDG_CACHE_HOME/workflow/briefs/app/dispatch-check/t1.md"
 truthy "$([ -f "$brief" ] && echo 0 || echo 1)" 'the brief was written where the argv points'
 unlike "$OUT" 'over the [0-9]+ byte budget' 'the block is inside its byte budget'
 body=$(cat "$brief")
+is "$(sed -n 's/^## //p' "$brief" | tr '\n' ' ')" 'GOAL SCOPE CONTEXT ACCEPTANCE VERIFY TIMEBOX FORBIDDEN REPORT STANDING ' \
+	'the brief is nine sections, in order, the plan prose headings below them'
+like "$(sed -n '/^## GOAL$/,/^## SCOPE$/p' "$brief")" 'Files: app/Services/Cart\.php tests/Unit/Cart\*' \
+	'the task block sits under GOAL'
+like "$(sed -n '/^## REPORT$/,/^## STANDING$/p' "$brief")" "Append one line per state change to $rundir/t1\.status:" \
+	'and the status sentence under REPORT'
 like "$body" 'Extract cart pricing into a service' 'the brief carries the objective'
 like "$body" 'Files: app/Services/Cart\.php tests/Unit/Cart\*' 'and the task block verbatim'
 like "$body" 'Verify: bin/php artisan test --filter=Cart' 'including the evidence command'

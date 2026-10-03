@@ -54,16 +54,15 @@ is "$RC" 0 'a task naming a wiki page, present or absent, still merges'
 is "$(cat "$rundir/t1.state")" merged 't1 merged'
 
 brief="$XDG_CACHE_HOME/workflow/briefs/app/wiki/t1.md"
-body=$(cat "$brief")
-like "$body" '## Pages the plan names' 'the brief carries the pages heading'
-like "$body" '### wiki:run' 'naming the page it read'
+body=$(sed -n '/^## CONTEXT$/,/^## ACCEPTANCE$/p' "$brief")
+like "$body" '### wiki:run' 'the page it read sits under CONTEXT'
 like "$body" 'The run drives waves and merges tasks\.' 'with its text inlined verbatim'
 like "$body" '### wiki:missing' 'and the absent page is named too'
 like "$body" 'This project has no such page' 'saying so rather than refusing the dispatch'
 
 # A task naming no pages carries no heading at all.
 brief2="$XDG_CACHE_HOME/workflow/briefs/app/wiki/t2.md"
-unlike "$(cat "$brief2")" 'Pages the plan names' 't2 named no pages, so no heading'
+unlike "$(cat "$brief2")" '### wiki:' 't2 named no pages, so no page heading'
 
 # The merge line names the pages the task's Read named, so a page a merged
 # task may have falsified can be found from the run log alone (m4-lines).

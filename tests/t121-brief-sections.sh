@@ -56,8 +56,8 @@ EOF
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/section.md"
 is "$RC" 0 'a task naming a section, present or absent, still merges'
 
-body=$(cat "$XDG_CACHE_HOME/workflow/briefs/app/section/t1.md")
-like "$body" '### wiki:pricing#rounding' 'the heading keeps the name as written'
+body=$(sed -n '/^## CONTEXT$/,/^## ACCEPTANCE$/p' "$XDG_CACHE_HOME/workflow/briefs/app/section/t1.md")
+like "$body" '### wiki:pricing#rounding' 'the section sits under CONTEXT, its heading keeping the name as written'
 like "$body" 'Half up, once, at the end\.' "with the section's text inlined"
 unlike "$body" 'The cart totals in cents' 'and not the top of the page'
 unlike "$body" 'Refunds reverse the rounding' 'nor the sibling section'
