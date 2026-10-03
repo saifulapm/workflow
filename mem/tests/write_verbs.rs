@@ -720,6 +720,7 @@ fn project_set_records_each_run_key_and_project_current_reports_it() {
         ("dogfood-machine", "dogfood_machine", "nuc"),
         ("slots", "slots", "3"),
         ("runner", "runner", "mini"),
+        ("paused", "paused", "mini 2026-10-03"),
     ];
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     for (_, stored, _) in keys {

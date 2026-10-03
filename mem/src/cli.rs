@@ -469,6 +469,7 @@ pub enum ProjectKey {
     Surface,
     DogfoodMachine,
     Slots,
+    Paused,
 }
 
 impl ProjectKey {
@@ -486,6 +487,7 @@ impl ProjectKey {
             ProjectKey::Surface => "surface",
             ProjectKey::DogfoodMachine => "dogfood_machine",
             ProjectKey::Slots => "slots",
+            ProjectKey::Paused => "paused",
         }
     }
 }
@@ -528,6 +530,9 @@ pub enum ProjectSetCommand {
     DogfoodMachine { machine: String },
     /// How many tasks a run works on at once, a positive integer.
     Slots { count: String },
+    /// Hold this project's runs: no new milestone or task starts until
+    /// `unset paused`. The text says who paused it, usually machine and date.
+    Paused { text: String },
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },

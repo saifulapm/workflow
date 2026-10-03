@@ -66,6 +66,10 @@
       "description": "How many tasks a run works on at once.",
       "type": "integer",
       "minimum": 1
+    },
+    "paused": {
+      "description": "Present only while the project is paused with `mem project set paused`; who paused it and when.",
+      "type": "string"
     }
   },
   "additionalProperties": false

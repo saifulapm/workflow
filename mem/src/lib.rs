@@ -139,6 +139,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     verbs::project_set(&app, "dogfood_machine", machine)
                 }
                 cli::ProjectSetCommand::Slots { count } => verbs::project_set(&app, "slots", count),
+                cli::ProjectSetCommand::Paused { text } => verbs::project_set(&app, "paused", text),
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
             },
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),

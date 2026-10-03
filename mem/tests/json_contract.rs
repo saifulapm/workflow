@@ -193,6 +193,7 @@ fn every_verb_matches_its_committed_schema() {
         ("surface", "web"),
         ("dogfood-machine", "nuc"),
         ("slots", "2"),
+        ("paused", "mini 2026-10-03"),
     ] {
         assert_eq!(
             code(&mem(&w, &repo, &["project", "set", key, value])),
@@ -206,6 +207,7 @@ fn every_verb_matches_its_committed_schema() {
     );
     assert_eq!(current["runner"], serde_json::json!("mini"));
     assert_eq!(current["slots"], serde_json::json!(2));
+    assert_eq!(current["paused"], serde_json::json!("mini 2026-10-03"));
     validate("status.json", &mem(&w, &repo, &["status", "--json"]));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
     // The runner set above is another machine's claim; --force writes past it.

@@ -354,6 +354,7 @@ pub fn project_current(app: &App) -> Result<i32> {
         ("surface", "surface"),
         ("dogfood-machine", "dogfood_machine"),
         ("slots", "slots"),
+        ("paused", "paused"),
     ]
     .into_iter()
     .filter_map(|(shown, stored)| {
