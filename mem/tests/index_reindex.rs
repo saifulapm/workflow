@@ -25,9 +25,11 @@ fn fts_hits(index: &Index, token: &str) -> usize {
     index.fts_match_count(token).expect("fts count")
 }
 
-/// The same count on the page side.
+/// The same count on the page side, where a row is a section.
 fn page_hits(index: &Index, token: &str) -> usize {
-    index.pages_fts_match_count(token).expect("page fts count")
+    index
+        .sections_fts_match_count(token)
+        .expect("section fts count")
 }
 
 /// Writes a page where `mem wiki --stdin` would put it.
@@ -470,12 +472,44 @@ fn a_wiki_page_is_indexed_beside_the_items_and_leaves_with_its_file() {
     let outcome = index.reindex(&store, false).unwrap();
     assert_eq!(outcome.deleted, 1);
     assert_eq!(index.count_pages().unwrap(), 0);
+    assert_eq!(index.count_sections().unwrap(), 0);
     assert_eq!(
         page_hits(&index, "pagetoken"),
         0,
         "the FTS row must go with the page"
     );
     assert_eq!(index.count_items().unwrap(), 1, "the item is untouched");
+}
+
+#[test]
+fn a_page_is_indexed_one_row_per_section() {
+    let w = World::new("idx-wiki-sections");
+    let p = w.project("01K2AAAAAAAAAAAAAAAAAAAAAA", "thing");
+    let store = w.store();
+    page(
+        &store,
+        &p,
+        "sessions",
+        "## One\nsectiontoken onetoken\n## Two\nsectiontoken\n## Three\nsectiontoken\n",
+    );
+
+    reindex(&w);
+    let index = open_read(&w);
+    assert_eq!(index.count_pages().unwrap(), 1);
+    assert_eq!(index.count_sections().unwrap(), 3);
+    assert_eq!(page_hits(&index, "sectiontoken"), 3);
+    assert_eq!(
+        page_hits(&index, "onetoken"),
+        1,
+        "a section holds its own text"
+    );
+
+    // A rewrite to one section leaves one row, and the old text stops matching.
+    page(&store, &p, "sessions", "# Sessions\n\nrewrittentoken\n");
+    index.reindex(&store, false).unwrap();
+    assert_eq!(index.count_sections().unwrap(), 1);
+    assert_eq!(page_hits(&index, "sectiontoken"), 0);
+    assert_eq!(page_hits(&index, "rewrittentoken"), 1);
 }
 
 #[test]

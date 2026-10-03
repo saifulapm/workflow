@@ -339,17 +339,79 @@ fn a_page_is_findable_and_labelled_a_wiki_page() {
     assert_eq!(hit.row.path, store.wiki_page(P, "sessions"));
     assert_eq!(hit.row.project_id.as_deref(), Some(P));
     assert_eq!(
-        hit.row.id, "wiki:01K2AAAAAAAAAAAAAAAAAAAAAA/sessions",
-        "a page has no ULID, so its id says what it is"
+        hit.row.id, "wiki:01K2AAAAAAAAAAAAAAAAAAAAAA/sessions#top",
+        "a section has no ULID, so its id says what it is"
     );
     assert!(
-        hit.line().starts_with("wiki:sessions  "),
-        "the label is what keeps a page from reading as an item: {}",
+        hit.line().starts_with("wiki:sessions#top  "),
+        "the label is what keeps a section from reading as an item: {}",
         hit.line()
     );
 
-    // The heading is the title, so it ranks like one.
-    assert_eq!(search(&ready(&w), &q("title:sessions")).unwrap().len(), 1);
+    // The page's title heads its preamble, so it ranks like a heading.
+    assert_eq!(search(&ready(&w), &q("heading:sessions")).unwrap().len(), 1);
+}
+
+#[test]
+fn a_page_prints_one_row_per_matching_section_and_at_most_three() {
+    let w = World::new("search-wiki-sections");
+    w.project(P, "thing");
+    let store = w.store();
+    page(
+        &store,
+        "sessions",
+        "## One\nsectiontoken\n## Two\nsectiontoken\n## Three\nsectiontoken\n",
+    );
+    let hits = search(&ready(&w), &q("sectiontoken")).unwrap();
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    for hit in &hits {
+        assert!(hit.line().starts_with("wiki:sessions#"), "{}", hit.line());
+        assert_eq!(hit.row.wiki_slug(), Some("sessions"));
+    }
+
+    // Every section matches, the preamble too: the page keeps its best three
+    // and its title never prints.
+    page(
+        &store,
+        "whole",
+        "# wholetoken\n\nwholetoken\n## A\nwholetoken\n## B\nwholetoken\n## C\nwholetoken\n",
+    );
+    let hits = search(&ready(&w), &q("wholetoken")).unwrap();
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    for hit in &hits {
+        assert!(hit.line().starts_with("wiki:whole#"), "{}", hit.line());
+    }
+}
+
+#[test]
+fn a_section_row_carries_its_size_and_the_matching_line() {
+    let w = World::new("search-wiki-snippet");
+    w.project(P, "thing");
+    let store = w.store();
+    let text = "# Sessions\n\n## Storage\n\nnothing here\n\nsessions live in redis snippettoken\nthe next line\n\n## Other\n\nunrelated\n";
+    page(&store, "sessions", text);
+
+    let hits = search(&ready(&w), &q("snippettoken")).unwrap();
+    assert_eq!(hits.len(), 1);
+    let hit = &hits[0];
+    let section =
+        "## Storage\n\nnothing here\n\nsessions live in redis snippettoken\nthe next line\n\n";
+    assert_eq!(hit.bytes, section.len() as u64);
+    assert_eq!(hit.heading.as_deref(), Some("Storage"));
+    assert_eq!(
+        hit.snippet.as_deref(),
+        Some("sessions live in redis snippettoken\nthe next line")
+    );
+    let line = hit.line();
+    let lines: Vec<&str> = line.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            format!("wiki:sessions#storage  1.00  {}", section.len()).as_str(),
+            "  sessions live in redis snippettoken",
+            "  the next line",
+        ]
+    );
 }
 
 #[test]
@@ -448,7 +510,7 @@ fn filters_and_scope_tell_pages_and_items_apart() {
 }
 
 #[test]
-fn a_page_line_never_exceeds_eighty_bytes() {
+fn a_snippet_line_is_cut_at_120_bytes() {
     let w = World::new("search-wiki-line");
     w.project(P, "thing");
     let store = w.store();
@@ -456,14 +518,32 @@ fn a_page_line_never_exceeds_eighty_bytes() {
     page(
         &store,
         &slug,
-        &format!("# {}\n\nlongpagetoken\n", "a very long heading ".repeat(10)),
+        &format!(
+            "## {}\n\nlongpagetoken {}\n{}\n",
+            "a very long heading ".repeat(10),
+            "word ".repeat(40),
+            "next ".repeat(40)
+        ),
     );
 
     let hits = search(&ready(&w), &q("longpagetoken")).unwrap();
     assert_eq!(hits.len(), 1);
     let line = hits[0].line();
-    assert!(line.len() <= 80, "{} bytes: {line}", line.len());
-    assert!(line.starts_with("wiki:"), "{line}");
+    let lines: Vec<&str> = line.lines().collect();
+    assert_eq!(lines.len(), 3, "{line}");
+    assert!(
+        lines[0].starts_with(&format!("wiki:{slug}#a-very-long-heading")),
+        "{line}"
+    );
+    for snippet in &lines[1..] {
+        assert!(snippet.starts_with("  "), "{snippet}");
+        assert!(
+            snippet.len() <= 2 + 120,
+            "{} bytes: {snippet}",
+            snippet.len()
+        );
+    }
+    assert!(lines[1].starts_with("  longpagetoken"), "{line}");
 }
 
 #[test]

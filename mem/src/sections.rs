@@ -104,9 +104,15 @@ mod tests {
         let text = "# Title\n\nintro\n\n## One\nfirst\n## Two\nsecond\n";
         let sections = split(text);
         assert_eq!(slugs(text), ["top", "one", "two"]);
-        assert_eq!(&text[sections[0].start..sections[0].end], "# Title\n\nintro\n\n");
+        assert_eq!(
+            &text[sections[0].start..sections[0].end],
+            "# Title\n\nintro\n\n"
+        );
         assert_eq!(&text[sections[1].start..sections[1].end], "## One\nfirst\n");
-        assert_eq!(&text[sections[2].start..sections[2].end], "## Two\nsecond\n");
+        assert_eq!(
+            &text[sections[2].start..sections[2].end],
+            "## Two\nsecond\n"
+        );
         assert_eq!(sections[1].heading, "One");
     }
 
@@ -131,7 +137,10 @@ mod tests {
             ["top", "notes", "notes-2", "notes-3"]
         );
         assert_eq!(slugs("intro\n## Top\n"), ["top", "top-2"]);
-        assert_eq!(heading_slug("2.3 The digest (`mem context`)"), "2-3-the-digest-mem-context");
+        assert_eq!(
+            heading_slug("2.3 The digest (`mem context`)"),
+            "2-3-the-digest-mem-context"
+        );
         assert_eq!(heading_slug("  --Hello,  World--  "), "hello-world");
         assert_eq!(heading_slug("সেশন"), "section");
     }

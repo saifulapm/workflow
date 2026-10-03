@@ -29,7 +29,9 @@ use crate::store::{Store, is_valid_slug, page_title, read_dir_sorted};
 /// not an item, and nothing that counts or lists items should start seeing it.
 /// 4 added a question's audience and task, so the hub can list what is a
 /// person's to answer and a run can find what its worker asked.
-const SCHEMA_VERSION: &str = "4";
+/// 5 indexes a page by section rather than whole, so a search can hand back
+/// the part of a page that matched instead of all of it.
+const SCHEMA_VERSION: &str = "5";
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS items(
@@ -49,8 +51,12 @@ CREATE TABLE IF NOT EXISTS pages(
       rowid INTEGER PRIMARY KEY,
       project_id TEXT, project TEXT, slug TEXT, title TEXT,
       path TEXT UNIQUE, size INT, mtime INT, ctime INT, modified_epoch INT);
-CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
-      title, body,
+CREATE TABLE IF NOT EXISTS sections(
+      rowid INTEGER PRIMARY KEY,
+      page_rowid INT, project_id TEXT, slug TEXT,
+      heading TEXT, hslug TEXT, ord INT, bytes INT);
+CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
+      heading, body,
       content='', contentless_delete=1,
       tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, name TEXT, remote TEXT, aliases TEXT);
@@ -62,6 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_items_short ON items(short_id);
 -- read verb.
 CREATE INDEX IF NOT EXISTS idx_items_supersedes ON items(supersedes);
 CREATE INDEX IF NOT EXISTS idx_pages_proj ON pages(project_id, slug);
+CREATE INDEX IF NOT EXISTS idx_sections_page ON sections(page_rowid);
 "#;
 
 /// Why this connection was opened. Reads never wait on a lock; explicit writes
@@ -131,12 +138,14 @@ pub const ROW_COLUMNS: &str = "items.id, items.short_id, items.project_id, items
 /// them apart — no item has this kind.
 pub const WIKI_KIND: &str = "wiki";
 
-/// The page columns under the `Row` names, so `Row::from_sql` reads a page as
-/// happily as an item. A page has no ULID, no machine and no supersede edge:
-/// its id says what it is, and its short id is its slug.
-pub fn page_row_columns() -> String {
+/// The section columns under the `Row` names, so `Row::from_sql` reads a page
+/// section as happily as an item. A section has no ULID, no machine and no
+/// supersede edge: its id says what it is, its short id is `<slug>#<hslug>`,
+/// and its title is its page's.
+pub fn section_row_columns() -> String {
     format!(
-        "('wiki:' || pages.project_id || '/' || pages.slug) AS id, pages.slug AS short_id, \
+        "('wiki:' || pages.project_id || '/' || pages.slug || '#' || sections.hslug) AS id, \
+         (pages.slug || '#' || sections.hslug) AS short_id, \
          pages.project_id, pages.project, '{WIKI_KIND}' AS kind, NULL AS type, pages.title, \
          '[]' AS tags, '' AS machine, pages.modified_epoch AS created_epoch, \
          pages.modified_epoch, pages.path, NULL AS supersedes, NULL AS answers, 1 AS active, \
@@ -145,9 +154,16 @@ pub fn page_row_columns() -> String {
 }
 
 impl Row {
-    /// The slug, when this row is a page rather than an item.
+    /// The page slug, when this row is a page section rather than an item.
     pub fn wiki_slug(&self) -> Option<&str> {
-        (self.kind == WIKI_KIND).then_some(self.short_id.as_str())
+        (self.kind == WIKI_KIND).then(|| self.short_id.split('#').next().unwrap_or_default())
+    }
+
+    /// The heading slug, when this row is a page section.
+    pub fn wiki_hslug(&self) -> Option<&str> {
+        (self.kind == WIKI_KIND)
+            .then(|| self.short_id.split_once('#').map(|(_, hslug)| hslug))
+            .flatten()
     }
 
     pub fn from_sql(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
@@ -271,9 +287,16 @@ impl Index {
             .query_row(sql, params![token], |r| r.get::<_, i64>(0))? as usize)
     }
 
-    /// The same count on the page side.
-    pub fn pages_fts_match_count(&self, token: &str) -> Result<usize> {
-        let sql = "SELECT count(*) FROM pages_fts WHERE pages_fts MATCH ?1";
+    pub fn count_sections(&self) -> Result<usize> {
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM sections", [], |r| r.get::<_, i64>(0))?
+            as usize)
+    }
+
+    /// The same count on the page side, where a row is a section.
+    pub fn sections_fts_match_count(&self, token: &str) -> Result<usize> {
+        let sql = "SELECT count(*) FROM sections_fts WHERE sections_fts MATCH ?1";
         Ok(self
             .conn
             .query_row(sql, params![token], |r| r.get::<_, i64>(0))? as usize)
@@ -476,6 +499,7 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             conn.execute_batch(
                 "DROP TABLE IF EXISTS items; DROP TABLE IF EXISTS items_fts;
                  DROP TABLE IF EXISTS pages; DROP TABLE IF EXISTS pages_fts;
+                 DROP TABLE IF EXISTS sections; DROP TABLE IF EXISTS sections_fts;
                  DROP TABLE IF EXISTS projects; DROP TABLE IF EXISTS meta;",
             )?;
             create_schema(conn)
@@ -839,9 +863,15 @@ fn reindex_pages(
     Ok(())
 }
 
-/// The FTS row first and by rowid, for the reason `delete_row` gives.
+/// The FTS rows first and by rowid, for the reason `delete_row` gives, then
+/// the page's sections, then the page.
 fn delete_page_row(tx: &Transaction<'_>, rowid: i64) -> Result<()> {
-    tx.execute("DELETE FROM pages_fts WHERE rowid = ?1", params![rowid])?;
+    tx.execute(
+        "DELETE FROM sections_fts WHERE rowid IN
+             (SELECT rowid FROM sections WHERE page_rowid = ?1)",
+        params![rowid],
+    )?;
+    tx.execute("DELETE FROM sections WHERE page_rowid = ?1", params![rowid])?;
     tx.execute("DELETE FROM pages WHERE rowid = ?1", params![rowid])?;
     Ok(())
 }
@@ -873,11 +903,35 @@ fn insert_page_row(
             stamp.mtime_seconds(),
         ],
     )?;
-    let rowid = tx.last_insert_rowid();
-    tx.execute(
-        "INSERT INTO pages_fts(rowid, title, body) VALUES(?1, ?2, ?3)",
-        params![rowid, title, text],
-    )?;
+    let page_rowid = tx.last_insert_rowid();
+    for (ord, section) in crate::sections::split(text).iter().enumerate() {
+        let body = &text[section.start..section.end];
+        tx.execute(
+            "INSERT INTO sections(page_rowid, project_id, slug, heading, hslug, ord, bytes)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                page_rowid,
+                page.project_id,
+                page.slug,
+                section.heading,
+                section.hslug,
+                ord as i64,
+                body.len() as i64,
+            ],
+        )?;
+        let rowid = tx.last_insert_rowid();
+        // The preamble's heading line is the page's title, so the title ranks
+        // as a heading does rather than as body text.
+        let heading = if section.hslug == crate::sections::TOP && section.start == 0 {
+            page_title(body)
+        } else {
+            section.heading.clone()
+        };
+        tx.execute(
+            "INSERT INTO sections_fts(rowid, heading, body) VALUES(?1, ?2, ?3)",
+            params![rowid, heading, body],
+        )?;
+    }
     Ok(())
 }
 
