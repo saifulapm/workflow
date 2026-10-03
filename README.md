@@ -7,7 +7,7 @@ that carry it into an editor session.
   logs, handoffs, blocking questions and a wiki of design pages, kept as
   markdown outside every project repo and synced between machines.
 - `workflow/` is the gate and the orchestrator: `verify`, `lint-msg`,
-  `review-needed`, plan-driven `run`, `status`, `reap`, `skill`, `doctor`,
+  `hygiene`, `review-needed`, plan-driven `run`, `status`, `reap`, `skill`, `doctor`,
   and the body of the git hook stubs.
 - `hub/` is a small web view over mem, served tailnet-only, so a phone can
   answer an open question and read any project's memory: `/p/<project>`
@@ -40,8 +40,7 @@ needs three things, none of them committed:
     cd ~/Sites/github/thing
     mem log "picking this up"        # first write registers the project
 
-    # the route lines, kept out of git for good:
-    printf 'AGENTS.md\nCLAUDE.md\n.claude/\n' >> .git/info/exclude
+    # the route lines, kept out of git by the global ignore list:
     $EDITOR AGENTS.md                # copy the block from any other project
     printf '@AGENTS.md\n' > CLAUDE.md  # pi, codex and opencode read AGENTS.md; Claude Code imports it
 
@@ -69,6 +68,48 @@ the root. A run puts the project's name in every worker's environment as
 `MEM_PROJECT`, which mem reads when `--project` is absent, so a worker at its
 worktree's root still writes to the child. The pre-commit gate runs at the
 toplevel, so it always answers to the root project's verify.
+
+## What the gate refuses
+
+A product repo should read as if a person wrote it, so every commit in a
+checkout mem knows passes `workflow hygiene`, which looks for agent files and
+process references in two tiers. The hard tier refuses: a file on the global
+ignore list tracked or staged, a `.gitignore` line naming one, and, in the
+added lines of non-markdown files and in commit messages, a numbered ruling,
+milestone, ticket, issue or ADR, a mem id, a `Co-Authored-By` or
+`Generated with` line. A message also fails on a subject over 72 characters
+and on a bare task or milestone id such as `t3`. The soft tier only warns, and
+only on messages: lint-msg's style tables and words such as session, agent
+and handoff, each cleared for one project by a lint-exception ruling, since
+some products use agent as their own vocabulary. The pre-commit hook reads
+the staged diff, commit-msg reads the message, and the merge gate reads every
+commit of a task branch and names the one to reword. `workflow lint-msg` runs
+the message half alone. `workflow hygiene` with no mode reads the whole
+tracked tree and the last 200 commits; `--fix` untracks ignore-list files and
+drops their `.gitignore` lines.
+
+`WORKFLOW_HYGIENE=skip git commit` lets one of your own commits past the check
+with a warning. Nothing clears the hard tier for an agent: the override is
+ignored when `WORKFLOW_AGENT` (or pi's `PI_CODING_AGENT`) is set or the commit
+is in a run worktree. A project exempts paths from the content checks with
+globs, matched like a plan's Files patterns, for tests whose fixtures carry
+the very strings the check looks for:
+
+    mem project set hygiene-exempt "tests/**"
+
+The ignore list is global, through git's `core.excludesFile`: `.claude/`,
+`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.agents/`, `.cursor/`,
+`.scratch/`, `.e2e/`, `.amx/`, `.mcp.json`, `opencode.json`,
+`opencode.jsonc`, `skills-lock.json`, `.playwright-cli/` and any
+`agent-memory` directory. The dotfiles install it. `workflow doctor` reports
+an entry the file lacks and never writes it, because the dotfiles would undo
+the edit on their next apply.
+
+Plans carry their decisions as sentences, each with its reason.
+`workflow plan-check` refuses a numbered list under a Rulings or Decisions
+heading: a number gets cited in code and commit messages, where a reader of
+the repository has no list to look it up in, and the reason is what should
+land there instead.
 
 ## Which projects see the skills
 
@@ -141,8 +182,7 @@ named to read, which the skills answer by committing without a reading. The verd
 the last line on stdout and sits in `read.verdict` too, for a caller the exit
 code cannot reach. `--against "<one sentence>"` or
 `--against wiki:<slug>` says what the diff is held to; without it the plan
-of record stands in. Route sends a one-shot past sixty changed lines through
-it before the commit, and the review skill is this verb.
+of record stands in. The review skill is this verb.
 
 A worker can ask a stronger model without stopping. From a task worktree,
 `workflow advise "<question>" --file <path>` sends the plan's prose, the
@@ -241,8 +281,7 @@ compacting.
 2. Move the knowledge worth keeping into mem: each decision or gotcha as one
    `mem save`, the current state as `mem status --set`, the next action as
    `mem handoff --set`. Skip anything the code or git log already says.
-3. Do the three-step start above (register, AGENTS.md via info/exclude,
-   verifier).
+3. Do the three-step start above (register, AGENTS.md, verifier).
 4. Commit the deletions in ordinary voice; the gate is already watching.
 
 ## How the workflow improves itself

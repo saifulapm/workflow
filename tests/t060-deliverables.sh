@@ -159,6 +159,26 @@ done
 # mem's is mem's to serve, so workflow's listing must not claim it.
 unlike "$served" '^mem — ' 'and leaves the mem skill to mem'
 
+# The README explains the hygiene gate a commit has to pass, and every knob
+# on it, because a refusal names the rule and the README is where the rule
+# is read.
+gate=$(sed -n '/^## What the gate refuses/,/^## /p' "$WF_ROOT/README.md")
+like "$gate" 'hard tier' 'the README names the hard tier of hygiene'
+like "$gate" 'soft tier' 'and the soft tier'
+like "$gate" 'WORKFLOW_HYGIENE=skip' 'and the override for a human commit'
+like "$gate" 'WORKFLOW_AGENT' 'and when the gate ignores that override'
+like "$gate" 'mem project set hygiene-exempt' 'and the per-project exemption'
+like "$gate" 'core\.excludesFile' 'and the global ignore list'
+like "$gate" 'workflow doctor' 'and that doctor checks the list'
+like "$gate" 'sentences' 'and that plans carry decisions as sentences'
+like "$gate" 'workflow hygiene' 'and the verb that runs the check'
+# A verb the README names has to be one the binary answers to.
+for sub in $(grep -oE '`workflow [a-z][a-z-]*|^ +workflow [a-z][a-z-]*' "$WF_ROOT/README.md" |
+	sed -E 's/^[` ]*workflow //' | sort -u); do
+	run workflow "$sub" --frob
+	unlike "$OUT" "unknown command: $sub" "the README's workflow $sub is a real command"
+done
+
 ## ------------------------------------------------------------ the adapters
 
 # Removed 2026-08-31: other runtimes wire themselves (read the skills, export
