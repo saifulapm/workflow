@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "hub question",
-  "description": "One pending question. `title` is mem's own title, which for a batched ask is only its first line; `text` is the whole question. `asked_at` is derived from the ULID id, because mem's `created` on a list row is date-only.",
+  "description": "One pending question. `title` is mem's own title, which for a batched ask is only its first line; `text` is the whole question. `asked_at` is derived from the ULID id, because mem's `created` on a list row is date-only. `options` is empty for an open question; `recommend` is the asker's pick, or null.",
   "type": "object",
   "required": [
     "id",
@@ -11,7 +11,9 @@
     "project",
     "machine",
     "asked_at",
-    "age"
+    "age",
+    "options",
+    "recommend"
   ],
   "properties": {
     "id": {
@@ -43,6 +45,18 @@
     },
     "age": {
       "type": "string"
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommend": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "additionalProperties": false

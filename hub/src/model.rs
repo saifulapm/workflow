@@ -50,6 +50,10 @@ pub struct Question {
     /// RFC 3339, derived from the ULID. `null` if the id is not a ULID.
     pub asked_at: Option<String>,
     pub age: String,
+    /// The choices the asker offered, empty for an open question.
+    pub options: Vec<String>,
+    /// The answer the asker would pick, if they named one.
+    pub recommend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -442,6 +446,16 @@ fn question(mem: &MemCli, row: &Value, now_ms: i64) -> Question {
         machine: string(row, "machine"),
         asked_at: millis.map(rfc3339),
         age: age(millis, now_ms),
+        options: row["options"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        recommend: optional(row, "recommend"),
         id,
         title,
         text,

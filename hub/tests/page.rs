@@ -46,12 +46,13 @@ impl World {
     }
 
     fn ask(&self, question: &str) -> String {
-        let out = mem_in(
-            &self.mem,
-            &self.home,
-            &self.home.join("proj-alpha"),
-            &["ask", question],
-        );
+        self.ask_with(question, &[])
+    }
+
+    fn ask_with(&self, question: &str, flags: &[&str]) -> String {
+        let mut args = vec!["ask", question];
+        args.extend_from_slice(flags);
+        let out = mem_in(&self.mem, &self.home, &self.home.join("proj-alpha"), &args);
         assert!(out.status.success(), "{out:?}");
         let out = mem_in(
             &self.mem,
@@ -221,6 +222,28 @@ fn a_question_that_is_script_renders_as_text() {
     // The whole page opens exactly one script tag — the guarded reload the
     // head always carries. A second one anywhere is an injection.
     assert_eq!(body.matches("<script").count(), 1, "{body}");
+}
+
+#[test]
+fn a_recommendation_is_one_line_on_the_page_and_absent_elsewhere() {
+    let world = World::new("page-rec");
+    world.ask_with(
+        "Which store?",
+        &["--options", "redis,sqlite", "--recommend", "sqlite & WAL"],
+    );
+    world.ask("Should we cache the index?");
+    let hub = world.hub();
+
+    let body = body_of(&hub.get("/")).to_string();
+    let line = "<p class=\"rec\">redis · sqlite · recommended: sqlite &amp; WAL</p>";
+    assert!(body.contains(line), "{body}");
+    // Between the question text and the form, so it reads before answering.
+    let question = body.find("Which store?").unwrap();
+    let rec = body.find(line).unwrap();
+    let form = question + body[question..].find("<form").unwrap();
+    assert!(question < rec && rec < form, "{body}");
+    // The plain question gets no rec element at all.
+    assert_eq!(body.matches("class=\"rec\"").count(), 1, "{body}");
 }
 
 #[test]

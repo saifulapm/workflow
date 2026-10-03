@@ -265,6 +265,40 @@ fn a_question_document_carries_the_whole_question_and_a_real_timestamp() {
 }
 
 #[test]
+fn an_api_question_carries_its_options_and_recommendation() {
+    let dir = TempDir::new("api-recommend");
+    let (home, bin) = seeded(&dir);
+    let real = real_mem().unwrap();
+    let out = mem_in(
+        &real,
+        &home,
+        &home.join("proj-beta"),
+        &[
+            "ask",
+            "Which store?",
+            "--options",
+            "redis,sqlite",
+            "--recommend",
+            "sqlite",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+
+    let hub = Hub::spawn(&home, &[&bin], &["--port", "0"]);
+    let document = json_at(&hub, "/api/questions");
+    schema::assert_valid("questions.json", &document);
+
+    let rows = document["questions"].as_array().unwrap();
+    let store = rows.iter().find(|q| q["project"] == "proj-beta").unwrap();
+    assert_eq!(store["options"], json!(["redis", "sqlite"]), "{store:#}");
+    assert_eq!(store["recommend"], "sqlite", "{store:#}");
+    // A plain ask carries both keys, empty, never missing.
+    let plain = rows.iter().find(|q| q["project"] == "proj-alpha").unwrap();
+    assert_eq!(plain["options"], json!([]), "{plain:#}");
+    assert_eq!(plain["recommend"], Value::Null, "{plain:#}");
+}
+
+#[test]
 fn an_empty_store_is_empty_arrays_and_not_a_degraded_page() {
     let dir = TempDir::new("api-empty");
     let home = dir.join("home");
@@ -329,7 +363,9 @@ fn the_schemas_reject_documents_that_have_drifted() {
             "project": "proj-alpha",
             "machine": "macbook",
             "asked_at": "2026-08-18T22:14:30.923Z",
-            "age": "12s"
+            "age": "12s",
+            "options": ["yes", "no"],
+            "recommend": "yes"
         }]
     });
     schema::assert_valid("questions.json", &valid);
@@ -341,7 +377,7 @@ fn the_schemas_reject_documents_that_have_drifted() {
 
     // A new key on a row.
     let mut drifted = valid.clone();
-    drifted["questions"][0]["options"] = json!(["yes", "no"]);
+    drifted["questions"][0]["priority"] = json!("high");
     assert!(!schema::problems("questions.json", &drifted).is_empty());
 
     // A missing key that the page depends on.

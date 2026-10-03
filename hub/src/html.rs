@@ -757,6 +757,7 @@ fn question_block(question: &Question) -> String {
         "<article>\n\
          <div class=\"meta\">{project} · {age} · #{short}</div>\n\
          <p class=\"q\">{text}</p>\n\
+         {rec}\
          <form method=\"post\" action=\"/answer\">\n\
          <input type=\"hidden\" name=\"id\" value=\"{id}\">\n\
          <textarea name=\"text\" rows=\"3\" placeholder=\"answer\" \
@@ -770,8 +771,22 @@ fn question_block(question: &Question) -> String {
         // pre-wrap in the stylesheet, so a batched, numbered ask keeps its
         // lines instead of collapsing into one (review m-12).
         text = esc(&question.text),
+        rec = rec_line(question),
         id = esc(&question.id),
     )
+}
+
+/// The options and the asker's pick on one line, so the answer can be typed
+/// from what is already on the page. Nothing when the question has neither.
+fn rec_line(question: &Question) -> String {
+    let mut parts = question.options.clone();
+    if let Some(text) = &question.recommend {
+        parts.push(format!("recommended: {text}"));
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!("<p class=\"rec\">{}</p>\n", esc(&parts.join(" · ")))
 }
 
 fn activity_row(item: &Activity) -> String {
