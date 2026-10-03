@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
-# workflow skill: the skills this binary carries, served instead of installed.
+# workflow skill: the skills this binary carries, read out of the binary.
 #
-# A skill used to be a file on disk that every harness discovered for itself,
-# which needed a settings file per harness to gate and a doctor check to keep
-# in step with the binary. Text served from include_str! cannot disagree with
-# the binary serving it, and mem's digest names it where mem knows the project.
+# doctor --fix writes the same text to disk for the harnesses that list skills
+# from files; this verb is what mem's digest and doctor itself read, so the
+# list here is the list everywhere.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
-owned='route plan roadmap implement orchestrate review unslop'
+owned='dogfood fix garden grill lead plan research review route work'
 
 ## ------------------------------------------------------------- the listing
 
 run workflow skill
 is "$RC" 0 'workflow skill exits 0'
-for s in $owned; do
-	like "$OUT" "^$s — " "it lists $s with its description"
-done
+is "$(printf '%s\n' "$OUT" | sed 's/ — .*//' | tr '\n' ' ')" "$owned " \
+	'it lists the ten skills in name order'
+is "$(printf '%s\n' "$OUT" | wc -l)" '10' 'one line per skill and nothing else'
 
 # mem's skill is mem's to serve: one skill, one binary that owns it.
 unlike "$OUT" '^mem — ' 'it does not list the skill mem owns'
 
-is "$(printf '%s\n' "$OUT" | wc -l)" '7' 'one line per skill and nothing else'
-is "$(printf '%s\n' "$OUT" | sort | md5sum)" "$(printf '%s\n' "$OUT" | md5sum)" \
-	'in name order'
+# The description is what a harness shows on every turn, so each skill
+# carries one, on one line, short.
+for s in $owned; do
+	run workflow skill "$s"
+	is "$RC" 0 "workflow skill $s exits 0"
+	desc=$(printf '%s\n' "$OUT" | grep '^description:')
+	is "$(printf '%s\n' "$desc" | grep -c .)" '1' "$s has one description line"
+	truthy "$([ -n "$desc" ] && [ "${#desc}" -lt 200 ] && echo 0 || echo 1)" \
+		"$s describes itself in under 200 characters"
+done
 
 ## ----------------------------------------------------------- one skill whole
 

@@ -6,7 +6,7 @@ t_init
 
 ## ------------------------------------------------------------- the skills
 
-for s in route plan implement review orchestrate roadmap; do
+for s in dogfood fix garden grill lead plan research review route work mem; do
 	f="$WF_ROOT/skills/$s/SKILL.md"
 	truthy "$([ -f "$f" ] && echo 0 || echo 1)" "skills/$s/SKILL.md exists"
 	like "$(head -1 "$f")" '^---$' "skills/$s starts with frontmatter"
@@ -25,35 +25,10 @@ like "$plan_skill" 'workflow plan-check' 'plan defers to the parser'
 # The check and the run are different acts, and sending a planner to the run
 # is how an unapproved plan once dispatched live workers.
 unlike "$plan_skill" 'workflow run --plan-file plan' 'and not to the orchestrator'
-like "$(cat "$WF_ROOT/skills/implement/SKILL.md")" 'workflow verify' 'implement defers to verify'
-orchestrate_skill=$(cat "$WF_ROOT/skills/orchestrate/SKILL.md")
-like "$orchestrate_skill" 'workflow status --json' 'orchestrate polls status'
-like "$orchestrate_skill" 'workflow plan-check' 'orchestrate checks the plan before running it'
-# A request that names a milestone hands the orchestrator a stored plan, not
-# a plan of record: without `--from` it checks an empty file and no run
-# starts, which is the dead end one session then went source-diving in.
-like "$orchestrate_skill" 'mem plan --from <slug>' \
-	'orchestrate makes a named milestone the plan of record first'
-# And a request that names a model hands it a string for the project key.
-# The name is opaque, so nothing sends it reading a provider's config.
-like "$orchestrate_skill" 'mem project set model <m>' \
-	"orchestrate says where the request's model name goes"
-like "$orchestrate_skill" 'nothing prints a catalog' \
-	'and that model names are not looked up'
-like "$orchestrate_skill" 'mem save --kind ruling' 'orchestrate records its decisions as rulings'
-# An orchestrator runs in the background with nobody to ask in, so the
-# escalation has to name the channel it goes out on, not just say to ask.
-like "$orchestrate_skill" 'ask Saiful fresh with `mem ask`' \
-	'orchestrate escalates through the question channel'
-# The binary decides mechanics; the session decides judgment. A skill that
-# edits project code has crossed the line the layer exists to draw.
-like "$orchestrate_skill" 'ever edit project code' 'orchestrate forbids touching the code'
-# A merge landed on a leftover scaffold branch once. Nothing in the binary can
-# catch that: the merge is a human hand on a checkout it did not choose.
-like "$orchestrate_skill" 'git branch --show-current' \
-	'orchestrate checks which branch the checkout is on before merging'
-like "$orchestrate_skill" 'Leave the checkout on main' \
-	'and puts it back on main when the run ends'
+work_skill=$(cat "$WF_ROOT/skills/work/SKILL.md")
+like "$work_skill" 'workflow verify' 'work defers to verify'
+like "$work_skill" 'mem evidence add' 'work attaches the Show evidence'
+like "$(cat "$WF_ROOT/skills/lead/SKILL.md")" 'mem answer' 'lead answers a worker through mem'
 
 # The plan skill cuts the roadmap and every milestone plan in one sitting,
 # so it carries the verbs that check and store both, and the one approval.
@@ -86,7 +61,6 @@ truthy "$([ "$(wc -c <"$WF_ROOT/skills/review/SKILL.md")" -lt 1500 ] && echo 0 |
 like "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'Hand over to `plan`' 'route hands the plan lane to plan'
 unlike "$(cat "$WF_ROOT/skills/route/SKILL.md")" 'roadmap' 'and plan alone, which cuts any roadmap'
 like "$plan_skill" 'roadmap' 'plan says when a plan is a roadmap instead'
-like "$orchestrate_skill" 'roadmap' 'orchestrate knows a run can be one milestone of one'
 like "$(cat "$WF_ROOT/skills/mem/SKILL.md")" 'mem roadmap' 'mem names the verb that reads the milestones'
 
 # A numbered decision is a number to cite, and a worker cites it in a
@@ -98,7 +72,7 @@ like "$plan_skill" 'never numbered' 'and never numbered'
 unlike "$plan_skill" 'numbered `## Rulings`' 'and drops the numbered rulings'
 # The hygiene check is what a commit has to pass at the gate, so the
 # one-shot and the task loop run it before committing.
-for s in implement route; do
+for s in work route; do
 	skill=$(cat "$WF_ROOT/skills/$s/SKILL.md")
 	like "$skill" 'workflow hygiene --staged' "$s runs the hygiene check before a commit"
 	unlike "$skill" 'workflow read' "and $s no longer sends the diff to a reader"
@@ -106,14 +80,12 @@ done
 
 # No project key names a reader any more: a run starts unread unless the
 # one run's environment names one, and every skill and the README say so.
-for f in skills/orchestrate/SKILL.md skills/review/SKILL.md skills/roadmap/SKILL.md README.md; do
+for f in skills/review/SKILL.md README.md; do
 	for key in review-model fix-model review-effort; do
 		unlike "$(cat "$WF_ROOT/$f")" "$key" "$f names no $key key"
 	done
 done
-for f in skills/orchestrate/SKILL.md README.md; do
-	like "$(cat "$WF_ROOT/$f")" 'starts unread' "$f says a run starts unread"
-done
+like "$(cat "$WF_ROOT/README.md")" 'starts unread' 'README.md says a run starts unread'
 
 ## ------------------------------------------------------- the fix-round loop
 
@@ -124,22 +96,6 @@ like "$plan_skill" 'the suite is green after every task' 'plan says a task fixes
 unlike "$plan_skill" 'workflow verify. is what the gate' 'and drops the stale pointer to the wrong command'
 like "$plan_skill" 'Several one-line edits of one kind across files are one task' \
 	'plan says repeated one-line edits are one task, not one per file'
-implement_skill=$(cat "$WF_ROOT/skills/implement/SKILL.md")
-like "$implement_skill" 'a literal from the spec' \
-	'implement warns against a test that recomputes what the code computes'
-# Two fix rounds go by themselves; the third verdict is the orchestrator's,
-# who reads the third review and accepts or redispatches, and never sleeps
-# on a clock while the run works.
-like "$orchestrate_skill" 'rounds go by themselves' \
-	'orchestrate knows two fix rounds go by themselves'
-like "$orchestrate_skill" 'its third reading is yours' \
-	'and a third is the orchestrator to read'
-like "$orchestrate_skill" '<task>\.review\.3' 'naming the third review file to read'
-like "$orchestrate_skill" 'accept <task>' 'and the accept verb as the way out'
-like "$orchestrate_skill" '`\[later\]` finding in' 'a later finding is never ruled in'
-like "$orchestrate_skill" 'Never sleep on a clock' 'orchestrate never sleeps on a clock'
-like "$orchestrate_skill" 'workflow wait' 'it waits on the run instead'
-unlike "$orchestrate_skill" 'every few minutes read' 'and drops the polling wording'
 
 ## ---------------------------------------------------------------- the wiki
 
@@ -169,12 +125,6 @@ done
 # `mem skill mem` prints the whole file, so it has to stay small.
 truthy "$([ "$(wc -c <"$WF_ROOT/skills/mem/SKILL.md")" -lt 6000 ] && echo 0 || echo 1)" \
 	'the mem skill stays under 6,000 bytes'
-implement_skill=$(cat "$WF_ROOT/skills/implement/SKILL.md")
-like "$implement_skill" 'mem wiki .*--stdin --note' 'implement rewrites the page it touched'
-# Nothing refuses an oversized or unlinked page: doctor reports it and a batch
-# review is where someone acts on the report.
-like "$orchestrate_skill" 'mem doctor' 'orchestrate lints the wiki in a batch review'
-like "$orchestrate_skill" 'compact' 'and compacts the pages that have outgrown themselves'
 like "$(cat "$WF_ROOT/README.md")" 'mem wiki' 'the README puts the wiki among the reads'
 
 # The README spells out what skills/ holds. The other list is not written down
@@ -182,10 +132,10 @@ like "$(cat "$WF_ROOT/README.md")" 'mem wiki' 'the README puts the wiki among th
 # serves its own. A skill missing from either is one a reader cannot learn of.
 holds=$(grep -A1 'session-facing instructions' "$WF_ROOT/README.md")
 served=$(workflow skill)
-for s in route plan roadmap implement orchestrate review mem unslop; do
+for s in dogfood fix garden grill lead plan research review route work mem; do
 	like "$holds" "$s" "the README counts $s among the skills it ships"
 done
-for s in route plan roadmap implement orchestrate review unslop; do
+for s in dogfood fix garden grill lead plan research review route work; do
 	like "$served" "^$s — " "and \`workflow skill\` serves $s with its description"
 done
 # mem's is mem's to serve, so workflow's listing must not claim it.

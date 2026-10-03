@@ -13,8 +13,8 @@ that carry it into an editor session.
   answer an open question and read any project's memory: `/p/<project>`
   shows its status, handoff, roadmap, plan, stored plans, log, rulings,
   questions with their answers, wiki pages and the runs on that machine.
-- `skills/` holds the session-facing instructions (route, plan, roadmap,
-  implement, review, orchestrate, mem, unslop). `hooks/` holds the three git
+- `skills/` holds the session-facing instructions (research, grill, plan,
+  work, lead, dogfood, fix, review, garden, route, mem). `hooks/` holds the three git
   hook stubs. Another runtime joins by reading the same skills and marking its
   sessions for the gate: `WORKFLOW_AGENT=1`, or pi's own `PI_CODING_AGENT`,
   which the gate reads too because pi has no way to set an environment
@@ -24,7 +24,7 @@ Install each binary twice, because the machines run them from two places:
 `cargo install --force --path <crate> --root ~/.local` for the hooks and
 hub.service, `cargo install --path <crate>` for the shell. The skills and
 the git hook stubs ride inside the workflow binary: `workflow doctor --fix`
-writes them to `~/.claude/skills`, `~/.agents/skills` (what pi, codex and
+installs them as files in `~/.claude/skills`, `~/.agents/skills` (what pi, codex and
 opencode read) and `~/.config/git/hooks`, and reports a copy that has
 drifted from the binary until it is run again. The dotfiles call it after
 every build, so it is the step after `cargo install` on any machine. Tests
@@ -114,9 +114,9 @@ land there instead.
 A project mem knows. That is the whole answer, and it is the same answer to
 "which projects does mem speak in".
 
-The skills are not files on disk. `workflow skill` lists the seven this binary
-carries, one `name — description` line each; `workflow skill route` prints that
-one whole; `mem skill mem` does the same for the skill about mem. `mem context`
+`workflow skill` lists the ten skills this binary carries, one
+`name — description` line each; `workflow skill route` prints that one whole;
+`mem skill mem` does the same for the other, the skill about mem. `mem context`
 names them in the digest it injects at the start of a session, so a session
 learns which skills exist, and what each is for, exactly where mem has a
 project to talk about.
@@ -127,18 +127,18 @@ unnamed. Registering a project is how you opt in:
 
     mem log "first note"        # a write registers this checkout
 
-There used to be a switch per harness for this: `skillOverrides` in Claude
-Code's settings, a `skills` array in pi's, two grammars, a trust rule, and a
-doctor check to catch a copy on disk that had drifted from the binary. All of
-it is gone. `workflow doctor --fix` takes the old copies back off disk, leaving
-anything you edited by hand where it is.
+`workflow doctor --fix` installs all eleven as files, each SKILL.md verbatim
+under `~/.claude/skills/<name>/` and `~/.agents/skills/<name>/`, because Claude
+Code, pi, codex and opencode list the skills they find there. The binary is
+the only source: `workflow doctor` reports a copy that differs from it or is a
+symlink, and `--fix` writes the binary's text over it.
 
 ## Daily use
 
 Three sizes of work, three moves:
 
 - **Small change** — just ask a session for it. Route makes it a one-shot:
-  implement, `workflow verify`, one commit, one `mem log` line. No ceremony.
+  the change, `workflow verify`, one commit, one `mem log` line. No ceremony.
 - **Feature** — say "plan this". Answer one round of questions, approve the
   plan once, and let the session build it task by task. Measured
   2026-09-15: one strong session landed three milestones in the time a run
@@ -147,7 +147,7 @@ Three sizes of work, three moves:
   more tasks that share no files, on a machine that carries that many
   workers (up to five), with workers on the
   strongest model and no reader unless the project's numbers earn one: tell
-  a session "orchestrate the <plan-id> run". It starts `workflow run`, reads `workflow status`, decides retries
+  a session "run the <plan-id> plan". It starts `workflow run`, reads `workflow status`, decides retries
   and cleanup itself, and asks you only what is genuinely yours. Workers are
   amx agents in tmux panes, listed by `amx ls` and watched with
   `amx attach <id>`. Workers run

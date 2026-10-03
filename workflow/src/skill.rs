@@ -1,16 +1,11 @@
-//! `workflow skill` -- the skills this binary carries, served rather than
-//! installed.
+//! `workflow skill` -- the skills this binary carries.
 //!
-//! A skill used to be a file on disk. `doctor --fix` wrote eight of them into
-//! every directory a harness auto-discovers, which meant a settings file per
-//! harness to gate them (Claude's `skillOverrides`, pi's `skills` array, two
-//! grammars and a trust rule) and a doctor check to catch a copy that had
-//! drifted from the binary. Text read out of `include_str!` cannot drift from
-//! the binary reading it, and there is nothing on disk to gate: mem's digest
-//! names these where mem knows the project, and that is the whole switch.
+//! The text is read out of `include_str!`, so it cannot drift from the binary
+//! reading it. `doctor --fix` writes the same text to disk for the harnesses
+//! that list skills from files, and mem's digest names them from this listing.
 //!
 //! Nothing here reads a store, runs git or calls mem. It must not: `mem
-//! context` shells out to `workflow skill` to name the seven it does not own,
+//! context` shells out to `workflow skill` to name the ten it does not own,
 //! so a call back the other way is how two binaries find a way to recurse.
 
 use crate::exit;
@@ -21,17 +16,17 @@ use crate::exit;
 /// mem is not here. It ships `skills/mem/SKILL.md` inside its own binary and
 /// serves it as `mem skill mem`: a skill belongs to the binary it is about, so
 /// a machine with mem and no workflow still has the skill that explains mem.
-pub const SKILLS: [(&str, &str); 7] = [
-    ("implement", include_str!("../../skills/implement/SKILL.md")),
-    (
-        "orchestrate",
-        include_str!("../../skills/orchestrate/SKILL.md"),
-    ),
+pub const SKILLS: [(&str, &str); 10] = [
+    ("dogfood", include_str!("../../skills/dogfood/SKILL.md")),
+    ("fix", include_str!("../../skills/fix/SKILL.md")),
+    ("garden", include_str!("../../skills/garden/SKILL.md")),
+    ("grill", include_str!("../../skills/grill/SKILL.md")),
+    ("lead", include_str!("../../skills/lead/SKILL.md")),
     ("plan", include_str!("../../skills/plan/SKILL.md")),
+    ("research", include_str!("../../skills/research/SKILL.md")),
     ("review", include_str!("../../skills/review/SKILL.md")),
-    ("roadmap", include_str!("../../skills/roadmap/SKILL.md")),
     ("route", include_str!("../../skills/route/SKILL.md")),
-    ("unslop", include_str!("../../skills/unslop/SKILL.md")),
+    ("work", include_str!("../../skills/work/SKILL.md")),
 ];
 
 /// The name mem serves, so an ask for it can say where to go instead of
