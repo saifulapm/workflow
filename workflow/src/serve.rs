@@ -14,9 +14,11 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 
 use serde::Deserialize;
 
-use crate::gitcmd::Git;
+use crate::backend::{Dispatch, Handle, WorkerBackend, backend_for};
+use crate::brief::{self, LeadCtx};
+use crate::gitcmd::{self, Git};
 use crate::plan::{self, PlanKind};
-use crate::{exit, memcli, paths, plancheck, run, sys, warn};
+use crate::{exit, memcli, ownership, paths, plancheck, run, sys, warn};
 
 /// Seconds between ticks when neither `--tick` nor `WORKFLOW_TICK_S` says.
 const TICK_S: f64 = 5.0;
@@ -27,6 +29,17 @@ const SLOTS: u64 = 2;
 /// How old serve lets its own claim on a project grow before stamping it
 /// again: another machine reads a claim as abandoned at an hour.
 const RECLAIM_S: i64 = 30 * 60;
+
+/// How long serve waits on a pickup lead before it runs plan-check anyway.
+const PICKUP_S: i64 = 20 * 60;
+
+/// How long a lead the backend has no record of yet counts as launching
+/// rather than gone: the process seam writes its pidfile after dispatch
+/// returns.
+const LAUNCH_S: i64 = 60;
+
+/// The one lead a project has at a time writes its pid here.
+const LEAD_PID: &str = "lead.pid";
 
 /// The roadmap statuses serve works under. A draft is not agreed yet, and a
 /// roadmap marked done is nobody's to run.
@@ -315,6 +328,67 @@ fn markers(run_dir: &Path) -> Vec<String> {
     found
 }
 
+/// A lead session serve started for a project: one line of `<serve
+/// dir>/leads`, `<kind> <session> <started>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lead {
+    pub kind: String,
+    pub session: String,
+    pub started: i64,
+}
+
+fn read_leads(text: &str) -> Vec<Lead> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            Some(Lead {
+                kind: parts.next()?.to_string(),
+                session: parts.next()?.to_string(),
+                started: parts.next()?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+fn write_leads(leads: &[Lead]) -> String {
+    leads
+        .iter()
+        .map(|l| format!("{} {} {}\n", l.kind, l.session, l.started))
+        .collect()
+}
+
+/// An event line of the run that wants a lead.
+#[derive(Debug, PartialEq)]
+enum Wanted {
+    /// `question <task> -- asked #<id>: <title>`
+    Question { task: String, id: String },
+    /// `failed <task> -- <why>`
+    Failed { task: String, why: String },
+}
+
+fn wanted(line: &str) -> Option<Wanted> {
+    let mut parts = line.splitn(3, ' ');
+    let (_, kind, rest) = (parts.next()?, parts.next()?, parts.next()?);
+    let (task, note) = rest.split_once(" -- ").unwrap_or((rest, ""));
+    let task = task.trim().to_string();
+    match kind {
+        "question" => {
+            let id: String = note
+                .split_once('#')?
+                .1
+                .chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .collect();
+            (!id.is_empty()).then_some(Wanted::Question { task, id })
+        }
+        "failed" => Some(Wanted::Failed {
+            task,
+            why: note.trim().to_string(),
+        }),
+        _ => None,
+    }
+}
+
 /// How a project's child run stands at the top of a tick.
 enum Running {
     No,
@@ -332,6 +406,8 @@ struct Serve {
     children: HashMap<String, Child>,
     /// The projects this serve claimed, with when it last stamped the claim.
     claimed: HashMap<String, i64>,
+    /// What every lead goes out through, the same backend a run's workers do.
+    backend: Box<dyn WorkerBackend>,
 }
 
 impl Serve {
@@ -358,6 +434,8 @@ impl Serve {
             return;
         }
         self.claim(p, false);
+        self.settle_leads(p);
+        self.tail_events(p);
         match self.running(p) {
             Running::Live => {
                 self.stage(p, "execution");
@@ -479,6 +557,9 @@ impl Serve {
                 return;
             }
             let _ = std::fs::remove_file(dir.join("waiting"));
+        }
+        if !self.picked_up(p, &slug) {
+            return;
         }
         let mut text = self.plan_text(p);
         // A plan refused once is looked at again only once its text changes,
@@ -723,6 +804,282 @@ impl Serve {
         self.stage(p, "maintenance");
     }
 
+    /// The leads recorded for a project.
+    fn leads(&self, p: &ServeProject) -> Vec<Lead> {
+        read_leads(&std::fs::read_to_string(p.dir().join("leads")).unwrap_or_default())
+    }
+
+    fn lead_handle(&self, dir: &Path, root: &Path, lead: &Lead) -> Handle {
+        Handle {
+            session: lead.session.clone(),
+            pidfile: dir.join(LEAD_PID),
+            worktree: root.to_path_buf(),
+        }
+    }
+
+    /// Drop every recorded lead that ended, and stop a pickup lead that ran
+    /// past its twenty minutes, so what `leads` holds after this is live.
+    fn settle_leads(&mut self, p: &ServeProject) {
+        let dir = p.dir();
+        let was = self.leads(p);
+        let now = sys::now();
+        let mut kept = Vec::new();
+        for lead in &was {
+            let h = self.lead_handle(&dir, &p.root, lead);
+            let age = now - lead.started;
+            let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+            if live && lead.kind == "pickup" && age >= PICKUP_S {
+                self.backend.stop(&h, 10);
+                self.log(
+                    p,
+                    "serve: the pickup lead ran twenty minutes and was stopped; plan-check goes on without it",
+                );
+                continue;
+            }
+            if live {
+                kept.push(lead.clone());
+            }
+        }
+        if kept != was {
+            let _ = std::fs::write(dir.join("leads"), write_leads(&kept));
+        }
+    }
+
+    /// Every lead an earlier serve recorded is stopped: nothing is waiting
+    /// on it any longer, and one left going would be a second lead beside
+    /// the next one this serve starts.
+    fn stop_recorded_leads(&self) {
+        let dirs = std::fs::read_dir(paths::serve_root())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path());
+        for dir in dirs {
+            let file = dir.join("leads");
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for lead in read_leads(&text) {
+                self.backend.stop(&self.lead_handle(&dir, &dir, &lead), 10);
+            }
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
+    /// Start a lead on `body`, its brief at `<serve dir>/<slug>.<kind>.md`,
+    /// and record it. A launch the backend refused is logged and recorded
+    /// nowhere, so nothing waits on it.
+    fn start_lead(&mut self, p: &ServeProject, slug: &str, kind: &str, body: &str) {
+        let dir = p.dir();
+        let stem = format!("{slug}.{kind}");
+        let brief = dir.join(format!("{stem}.md"));
+        let _ = std::fs::write(&brief, body);
+        let status = dir.join(format!("{stem}.status"));
+        let _ = std::fs::write(&status, "");
+        let _ = std::fs::remove_file(dir.join(LEAD_PID));
+        let d = Dispatch {
+            task: format!("lead-{kind}"),
+            worktree: p.root.clone(),
+            brief,
+            out: dir.join(format!("{stem}.json")),
+            err: dir.join(format!("{stem}.err")),
+            pidfile: dir.join(LEAD_PID),
+            status,
+            rundir: dir.clone(),
+            session: self.backend.mint_session(),
+            parent: None,
+            role: "lead".into(),
+            // Naming the role as the model lets its role file say which
+            // model and effort a lead runs on.
+            model: "lead".into(),
+            effort: None,
+            turns: std::env::var("WORKFLOW_MAX_TURNS").unwrap_or_else(|_| "120".into()),
+            env: vec![("MEM_PROJECT".into(), p.name.clone())],
+        };
+        let session = self.backend.dispatch(&d);
+        if session.is_empty() {
+            let err = std::fs::read_to_string(&d.err).unwrap_or_default();
+            let why = err.lines().last().unwrap_or("no word from the backend");
+            self.log(
+                p,
+                &format!("serve {slug}: the {kind} lead did not start -- {why}"),
+            );
+            return;
+        }
+        let mut leads = self.leads(p);
+        leads.push(Lead {
+            kind: kind.to_string(),
+            session,
+            started: sys::now(),
+        });
+        let _ = std::fs::write(dir.join("leads"), write_leads(&leads));
+        warn(format!(
+            "serve {}: started the {kind} lead for {slug}",
+            p.name
+        ));
+    }
+
+    /// The milestone's plan as mem stores it, current or not.
+    fn stored_plan(&self, p: &ServeProject, slug: &str) -> String {
+        mem_on(&self.mem, &p.name, &["plan", slug]).out
+    }
+
+    fn lead_ctx(&self, p: &ServeProject, slug: &str, task: &str, text: &str) -> LeadCtx {
+        let block = plan::parse(text, false)
+            .and_then(|parsed| parsed.get(task).map(|t| t.block.clone()))
+            .unwrap_or_default();
+        LeadCtx {
+            project: p.name.clone(),
+            plan_slug: slug.to_string(),
+            task: task.to_string(),
+            block,
+            prose: plan::prose(text),
+        }
+    }
+
+    /// Whether the milestone's pickup is over: its lead ran and ended, or
+    /// was stopped at twenty minutes, or never started. The first time it
+    /// is asked, the pickup lead goes out and the answer is no.
+    fn picked_up(&mut self, p: &ServeProject, slug: &str) -> bool {
+        let leads = self.leads(p);
+        let brief = p.dir().join(format!("{slug}.pickup.md"));
+        // One lead at a time: a pickup waits on whatever lead is going.
+        if leads.iter().any(|l| l.kind == "pickup") || (!brief.exists() && !leads.is_empty()) {
+            self.stage(p, "pickup");
+            return false;
+        }
+        if brief.exists() {
+            return true;
+        }
+        let text = self.stored_plan(p, slug);
+        let git = Git::at(&p.root);
+        let since = std::fs::read_to_string(p.dir().join("last-landed")).unwrap_or_default();
+        let range = format!("{}..HEAD", since.trim());
+        let log = match git.capture(&["log", "--oneline", &range]) {
+            o if o.ok && !since.trim().is_empty() => gitcmd::lossy(&o.stdout),
+            _ => git.out(&["log", "--oneline", "-30"]).unwrap_or_default(),
+        };
+        let mut globs = Vec::new();
+        for t in plan::parse(&text, false)
+            .map(|p| p.tasks)
+            .unwrap_or_default()
+        {
+            for pat in ownership::split_patterns(t.files.as_deref().unwrap_or("")) {
+                let spec = gitcmd::glob_top(&pat);
+                let paths = gitcmd::nul_fields(&git.bytes(&["ls-files", "-z", "--", &spec]))
+                    .iter()
+                    .map(|f| gitcmd::lossy(f))
+                    .collect();
+                globs.push((format!("{} `{pat}`", t.id), paths));
+            }
+        }
+        let findings = mem_on(&self.mem, &p.name, &["finding", "list", "--open"]).out;
+        let body = brief::lead_pickup(&self.lead_ctx(p, slug, "", &text), &log, &globs, &findings);
+        self.start_lead(p, slug, "pickup", &body);
+        self.stage(p, "pickup");
+        false
+    }
+
+    /// Read the open milestone's run events from serve's own cursor and
+    /// start the lead the first one that wants it asks for. An event met
+    /// while a lead is going is left for a later tick.
+    fn tail_events(&mut self, p: &ServeProject) {
+        let dir = p.dir();
+        let milestone = std::fs::read_to_string(dir.join("milestone")).unwrap_or_default();
+        let Some(slug) = milestone.split_whitespace().next().map(str::to_string) else {
+            return;
+        };
+        let run_dir = p.run_dir(&slug);
+        let Ok(events) = std::fs::read_to_string(run_dir.join("events")) else {
+            return;
+        };
+        let cursor = std::fs::read_to_string(dir.join("events.cursor")).unwrap_or_default();
+        let mut at = match cursor.split_once(' ') {
+            Some((s, n)) if s == slug => n.trim().parse().unwrap_or(0),
+            _ => 0,
+        };
+        // A shorter file is a new one, read from its start.
+        let rest = match events.get(at..) {
+            Some(rest) => rest,
+            None => {
+                at = 0;
+                &events
+            }
+        };
+        for line in rest.split_inclusive('\n') {
+            // A line without its newline is still being written.
+            if !line.ends_with('\n') {
+                break;
+            }
+            if let Some(w) = wanted(line.trim_end()) {
+                if !self.leads(p).is_empty() {
+                    break;
+                }
+                self.serve_event(p, &slug, &run_dir, w);
+            }
+            at += line.len();
+        }
+        let _ = std::fs::write(dir.join("events.cursor"), format!("{slug} {at}\n"));
+    }
+
+    /// One wanted event, served at most once: a question per id, unless
+    /// its task is parked or it is answered already; a failure per task and
+    /// dispatch count.
+    fn serve_event(&mut self, p: &ServeProject, slug: &str, run_dir: &Path, w: Wanted) {
+        let served_file = p.dir().join("served");
+        let served = std::fs::read_to_string(&served_file).unwrap_or_default();
+        let key = match &w {
+            Wanted::Question { id, .. } => format!("question {id}"),
+            Wanted::Failed { task, .. } => {
+                let n = std::fs::read_to_string(run_dir.join(format!("{task}.dispatches")))
+                    .unwrap_or_default();
+                format!("failed {task} {}", n.trim())
+            }
+        };
+        if served.lines().any(|l| l == key) {
+            return;
+        }
+        let mut f = served;
+        f.push_str(&format!("{key}\n"));
+        let _ = std::fs::write(&served_file, f);
+        let text = self.stored_plan(p, slug);
+        match w {
+            Wanted::Question { task, id } => {
+                if run_dir.join(format!("{task}.parked")).exists() {
+                    return;
+                }
+                let said = mem_on(
+                    &self.mem,
+                    &p.name,
+                    &["questions", "--for", "orchestrator", "--json"],
+                );
+                let listed = serde_json::from_str::<Questions>(&said.out)
+                    .map(|q| q.questions)
+                    .unwrap_or_default();
+                let q = match listed.into_iter().find(|q| q.short_id == id) {
+                    Some(q) if q.answer.is_some() => return,
+                    Some(q) => q,
+                    // mem's listing can lag a question asked a moment ago;
+                    // the id is enough for the lead to read it.
+                    None => memcli::Question {
+                        id: id.clone(),
+                        short_id: id.clone(),
+                        title: format!("asked by {task}"),
+                        body: String::new(),
+                        task: Some(format!("{slug}/{task}")),
+                        answer: None,
+                    },
+                };
+                let body = brief::lead_question(&self.lead_ctx(p, slug, &task, &text), &q);
+                self.start_lead(p, slug, "question", &body);
+            }
+            Wanted::Failed { task, why } => {
+                let body = brief::lead_failure(&self.lead_ctx(p, slug, &task, &text), &why);
+                self.start_lead(p, slug, "failure", &body);
+            }
+        }
+    }
+
     /// One word in the stage file, said on stderr when it changes.
     fn stage(&self, p: &ServeProject, word: &str) {
         let path = p.dir().join("stage");
@@ -772,7 +1129,9 @@ pub fn cmd_serve(once: bool, tick_s: Option<f64>) -> i32 {
         machine: None,
         children: HashMap::new(),
         claimed: HashMap::new(),
+        backend: backend_for(),
     };
+    serve.stop_recorded_leads();
     loop {
         serve.tick();
         if once {
@@ -851,6 +1210,42 @@ mod tests {
         let plan = "# plan: m1\n\n- [ ] t1 A\n      Files: a\n";
         assert!(milestones(plan).is_empty());
         assert!(milestones("").is_empty());
+    }
+
+    #[test]
+    fn serve_keeps_its_leads_one_line_each() {
+        let leads = vec![Lead {
+            kind: "pickup".into(),
+            session: "wf-lead-pickup-a3k9".into(),
+            started: 1_791_000_000,
+        }];
+        let text = write_leads(&leads);
+        assert_eq!(text, "pickup wf-lead-pickup-a3k9 1791000000\n");
+        assert_eq!(read_leads(&text), leads);
+        assert!(read_leads("pickup half-written\n").is_empty());
+    }
+
+    #[test]
+    fn serve_wants_a_lead_for_a_question_and_a_failure_only() {
+        assert_eq!(
+            wanted("2026-10-03T10:00:00Z question ask -- asked #AB12CD34: may I widen Files?"),
+            Some(Wanted::Question {
+                task: "ask".into(),
+                id: "AB12CD34".into()
+            })
+        );
+        assert_eq!(
+            wanted("2026-10-03T10:00:00Z failed die -- the worker stopped without reporting ready"),
+            Some(Wanted::Failed {
+                task: "die".into(),
+                why: "the worker stopped without reporting ready".into()
+            })
+        );
+        assert_eq!(wanted("2026-10-03T10:00:00Z merged ask"), None);
+        assert_eq!(
+            wanted("2026-10-03T10:00:05Z ended 1 merged, 1 failed"),
+            None
+        );
     }
 
     #[test]
