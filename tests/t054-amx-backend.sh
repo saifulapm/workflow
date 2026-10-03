@@ -113,7 +113,7 @@ new | sub)
 	mkdir -p app
 	printf '%s\n' "$task" >"app/$task.php"
 	git add "app/$task.php"
-	git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+	git -c core.hooksPath=/dev/null commit -qm "Add a service"
 	printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 	printf 'done\n' >"$AMX_DIR/$name.state"
 	;;

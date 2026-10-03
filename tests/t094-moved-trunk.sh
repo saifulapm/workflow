@@ -20,7 +20,7 @@ say started
 mkdir -p app
 printf '%s\n' "$task" >"app/$task.php"
 git add "app/$task.php"
-git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+git -c core.hooksPath=/dev/null commit -qm "Add a service"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE

@@ -411,7 +411,7 @@ task=$1; status=$3
 printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 printf 'x\n' >"apps/child/src/$task.txt"
 git add "apps/child/src/$task.txt"
-git -c core.hooksPath=/dev/null commit -qm "Add $task"
+git -c core.hooksPath=/dev/null commit -qm "Add a file"
 printf '%s ready merge-ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 printf '{"is_error":false,"result":"ok"}\n'
 CFAKE

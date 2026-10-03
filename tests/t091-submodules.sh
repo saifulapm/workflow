@@ -18,7 +18,7 @@ if [ -f engine/core.txt ]; then echo files; else echo empty; fi >"$WF_TMP/$task.
 mkdir -p src
 printf '%s\n' "$task" >"src/$task.js"
 git add "src/$task.js"
-git -c core.hooksPath=/dev/null commit -qm "Add $task"
+git -c core.hooksPath=/dev/null commit -qm "Add a file"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE
@@ -83,7 +83,7 @@ else
 	printf 'b2\n' >src/b2.js
 	git add src/b2.js
 fi
-git -c core.hooksPath=/dev/null commit -qm "Do \$task"
+git -c core.hooksPath=/dev/null commit -qm "Do the work"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE

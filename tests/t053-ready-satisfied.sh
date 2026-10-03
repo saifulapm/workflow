@@ -18,7 +18,7 @@ if [ "$task" = t2 ]; then
 	mkdir -p app
 	printf 't2\n' >app/t2.php
 	git add app/t2.php
-	git -c core.hooksPath=/dev/null commit -qm 'Add the t2 service'
+	git -c core.hooksPath=/dev/null commit -qm 'Add a service'
 fi
 # t1 looks around, finds its Done already satisfied, and commits nothing.
 say ready

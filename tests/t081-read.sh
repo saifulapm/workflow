@@ -58,7 +58,7 @@ mem_register
 mkdir -p app
 printf 'draft\n' >app/t1.php
 git add app/t1.php
-git -c core.hooksPath=/dev/null commit -qm 'Add the t1 service'
+git -c core.hooksPath=/dev/null commit -qm 'Add a service'
 
 ## -------------------------------------------------- nobody named to read it
 

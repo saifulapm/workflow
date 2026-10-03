@@ -33,7 +33,7 @@ mem_register
 mkdir -p app
 printf 'draft\n' >app/t1.php
 git add app/t1.php
-git -c core.hooksPath=/dev/null commit -qm 'Add the t1 service'
+git -c core.hooksPath=/dev/null commit -qm 'Add a service'
 
 "$MEM_BIN" plan --stdin >/dev/null <<'EOF'
 # plan: live
@@ -210,7 +210,7 @@ say started
 mkdir -p src
 printf '%s\n' "$task" >"src/$task.txt"
 git add "src/$task.txt"
-git -c core.hooksPath=/dev/null commit -qm "Add $task"
+git -c core.hooksPath=/dev/null commit -qm "Add a file"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE

@@ -35,7 +35,7 @@ if [ "$task" = t1 ]; then
 	printf '  bullmq: 5.0.0\n' >>pnpm-lock.yaml
 	git add pnpm-lock.yaml
 fi
-git -c core.hooksPath=/dev/null commit -qm "Add $task"
+git -c core.hooksPath=/dev/null commit -qm "Add a file"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE

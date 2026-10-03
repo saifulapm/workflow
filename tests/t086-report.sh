@@ -24,7 +24,7 @@ work() {
 	mkdir -p app
 	printf 'final\n' >"app/$task.php"
 	git add "app/$task.php"
-	commit "Add the $task service"
+	commit "Add a service"
 }
 case "$task" in
 verb)

@@ -29,7 +29,7 @@ mkdir -p app
 # plan's task over the same file needs a change to commit.
 printf '%s %s\n' "$(basename "$(dirname "$PWD")")" "$task" >"app/$task.php"
 git add "app/$task.php"
-git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+git -c core.hooksPath=/dev/null commit -qm "Add a service"
 printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE

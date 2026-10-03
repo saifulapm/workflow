@@ -157,7 +157,7 @@ t1)
 	else
 		printf 'draft %s\n' "$plan" >app/t1.php
 		git add app/t1.php
-		commit 'Add the t1 service'
+		commit 'Add the draft service'
 	fi
 	;;
 twice)
@@ -186,7 +186,7 @@ lock)
 	mkdir -p app
 	printf '%s %s\n' "$(basename "$(dirname "$PWD")")" "$task" >"app/$task.php"
 	git add "app/$task.php"
-	commit "Add the $task service"
+	commit "Add a service"
 	;;
 esac
 say ready
@@ -284,7 +284,7 @@ for _ in $(seq 1 100); do
 	sleep 0.2
 done
 is "$(cat "$rundir/hold.state" 2>/dev/null)" dispatched 'and the run dispatches the next task while the reader reads'
-unlike "$(git -C "$wtroot/hold" log --format=%s)" 'Add the t1 service' 'onto integration as it stood before the unrecorded fast-forward'
+unlike "$(git -C "$wtroot/hold" log --format=%s)" 'Add the draft service' 'onto integration as it stood before the unrecorded fast-forward'
 rm -f "$WF_TMP/hold-review"
 
 for _ in $(seq 1 100); do
@@ -388,7 +388,7 @@ unlike "$OUT" 'never good enough' 'a blocking finding is not a follow-up while i
 like "$(cat "$T_TMP/run.log")" 'task side: 1 finding\(s\) the reader marked later -- filed as follow-ups' 'and the run says so'
 
 is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/app/live/_integration" status --porcelain 2>/dev/null | wc -l)" 0 'and the integration worktree was put back'
-unlike "$(git log --format=%s integration/live)" 'Add the t3 service' 'with t3 not on integration'
+is "$(git ls-tree --name-only integration/live app/t3.php)" '' 'with t3 not on integration'
 like "$(cat "$T_TMP/run.log")" 'task t1: the reviewer says ship' 'the log says what the reader said'
 like "$(cat "$T_TMP/run.log")" 'Failed - the review ended with no verdict -- read .*: t2' 'the report groups t2 under the missing verdict'
 is "$(grep -c '^fable hold ' "$WF_TMP/reviews.log")" 1 'every merge is read once'

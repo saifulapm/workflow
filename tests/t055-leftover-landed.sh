@@ -35,7 +35,7 @@ printf '%s\n' "$task" >"app/$task.php"
 git add "app/$task.php"
 # An adopted branch already holds this commit: a worker resumed on it has
 # nothing new to add and reports ready over what is there.
-git diff --cached --quiet || git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+git diff --cached --quiet || git -c core.hooksPath=/dev/null commit -qm "Add a service"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE
@@ -67,7 +67,7 @@ git worktree add -q "$T_TMP/orphan" land/t1
 	mkdir -p app
 	printf 't1\n' >app/t1.php
 	git add app/t1.php
-	git -c core.hooksPath=/dev/null commit -qm 'Add the t1 service'
+	git -c core.hooksPath=/dev/null commit -qm 'Add a service'
 )
 git worktree remove --force "$T_TMP/orphan"
 
@@ -105,14 +105,14 @@ printf '%s\n' "$task" >"app/$task.php"
 if [ -f "$WF_TMP/misbehave-$task" ]; then
 	printf 'stray\n' >app/stray.php
 	git add -A
-	commit "Add the $task service"
+	commit "Add a service"
 elif [ -f app/stray.php ]; then
 	git rm -q app/stray.php
 	git add "app/$task.php"
-	git -c core.hooksPath=/dev/null commit --amend -qm "Add the $task service"
+	git -c core.hooksPath=/dev/null commit --amend -qm "Add a service"
 else
 	git add "app/$task.php"
-	commit "Add the $task service"
+	commit "Add a service"
 fi
 say ready
 printf '{"is_error":false,"result":"ok"}\n'

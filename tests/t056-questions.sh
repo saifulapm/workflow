@@ -72,7 +72,7 @@ t1)
 	mkdir -p app/Services
 	printf '<?php\n' >app/Services/T1.php
 	git add app/Services/T1.php
-	commit 'Add the t1 service'
+	commit 'Add a service'
 	say ready 'merge-ready'
 	done_json
 	;;

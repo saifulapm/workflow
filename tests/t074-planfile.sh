@@ -36,7 +36,7 @@ printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 mkdir -p src
 printf '<?php\n' >"src/$task.php"
 git add "src/$task.php"
-git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+git -c core.hooksPath=/dev/null commit -qm "Add a service"
 printf '%s ready merge-ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 printf '{"is_error":false,"result":"ok"}\n'
 BFAKE

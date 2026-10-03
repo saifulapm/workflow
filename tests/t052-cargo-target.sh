@@ -18,7 +18,7 @@ printf '%s\n' "${CARGO_TARGET_DIR:-unset}" >"$WF_TMP/$task-target"
 mkdir -p src
 printf '%s\n' "$task" >"src/$task.rs"
 git add "src/$task.rs"
-git -c core.hooksPath=/dev/null commit -qm "Add the $task module"
+git -c core.hooksPath=/dev/null commit -qm "Add a module"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE

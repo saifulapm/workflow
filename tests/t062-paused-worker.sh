@@ -52,7 +52,7 @@ new | sub)
 		mkdir -p "$(dirname "$file")"
 		printf '%s\n' "$task" >"$file"
 		git add "$file"
-		git -c core.hooksPath=/dev/null commit -qm "Add the $task file"
+		git -c core.hooksPath=/dev/null commit -qm "Add a file"
 		printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 		printf 'done record\n' >"$AMX_DIR/$name.state"
 		;;

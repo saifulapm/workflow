@@ -40,7 +40,7 @@ esac
 mkdir -p app
 printf '%s\n' "$task" >"app/$task.php"
 git add "app/$task.php"
-commit "Add the $task service"
+commit "Add a service"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE

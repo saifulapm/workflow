@@ -27,12 +27,12 @@ elif [ -f NOTOWNED.txt ]; then
 	mkdir -p app
 	printf '%s\n' "$task" >"app/$task.php"
 	git add "app/$task.php"
-	git -c core.hooksPath=/dev/null commit --amend -qm "Add the $task service"
+	git -c core.hooksPath=/dev/null commit --amend -qm "Add a service"
 else
 	mkdir -p app
 	printf '%s\n' "$task" >"app/$task.php"
 	git add "app/$task.php"
-	commit "Add the $task service"
+	commit "Add a service"
 fi
 say ready
 printf '{"is_error":false,"result":"ok"}\n'

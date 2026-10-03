@@ -26,17 +26,17 @@ say started
 if [ "\$task" = t1 ]; then
 	printf 't1\n' >shared.txt
 	git add shared.txt
-	git -c core.hooksPath=/dev/null commit -qm 'Say t1 in the shared file'
+	git -c core.hooksPath=/dev/null commit -qm 'Write the first line of the shared file'
 else
 	tip=\$(git rev-parse HEAD)
 	git reset -q --hard $base
 	printf 't2 early\n' >shared.txt
 	git add shared.txt
-	git -c core.hooksPath=/dev/null commit -qm 'Say t2 in the shared file'
+	git -c core.hooksPath=/dev/null commit -qm 'Write the second line of the shared file'
 	git -c core.hooksPath=/dev/null merge -q "\$tip" >/dev/null 2>&1
 	printf 't1\nt2\n' >shared.txt
 	git add shared.txt
-	git -c core.hooksPath=/dev/null commit -qm 'Take t1 in beside t2'
+	git -c core.hooksPath=/dev/null commit -qm 'Keep both lines of the shared file'
 fi
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
@@ -63,4 +63,4 @@ is "$(cat "$rundir/t2.state")" merged 't2 is merged'
 like "$OUT" 'task t2: its commits do not replay onto integration/squash, but the branch merges whole -- landing it as one commit' \
 	'and says it landed the branch whole'
 is "$(git show integration/squash:shared.txt)" "$(printf 't1\nt2')" 'with the resolved file'
-is "$(git log -1 --format=%s integration/squash)" 'Take t1 in beside t2' "under the branch tip's message"
+is "$(git log -1 --format=%s integration/squash)" 'Keep both lines of the shared file' "under the branch tip's message"

@@ -21,7 +21,7 @@ mkdir -p app
 if [ -f "$WF_TMP/misbehave-$task" ]; then
 	printf 'stray\n' >app/stray.php
 	git add -A
-	commit "Add the $task service"
+	commit "Add a service"
 else
 	if [ -f app/stray.php ]; then
 		git rm -q app/stray.php
@@ -30,7 +30,7 @@ else
 	mkdir -p app
 	printf '%s\n' "$task" >"app/$task.php"
 	git add "app/$task.php"
-	commit "Add the $task service"
+	commit "Add a service"
 fi
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
@@ -161,7 +161,7 @@ say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$status"; }
 say started
 printf '%s\n' "$task" >"app/$task.php"
 git add -A
-git -c core.hooksPath=/dev/null commit -qm "Add the $task service"
+git -c core.hooksPath=/dev/null commit -qm "Add a service"
 say ready
 printf '{"is_error":false,"result":"ok"}\n'
 FAKE
