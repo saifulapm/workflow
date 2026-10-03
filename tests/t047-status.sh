@@ -80,6 +80,36 @@ like "$OUT" '"live": *false' 'nobody holds the run lock'
 unlike "$OUT" '"readings"|"fixes"' 'and no run carries readings or fixes'
 like "$OUT" '"context": *162502' 'json sums context for the run, distinct from any one task'
 
+# The serve fields, in a checkout serve has never touched: idle, no
+# milestone, nothing parked, no runner, not paused.
+is "$(printf '%s' "$OUT" | jq -r '.stage')" idle 'no serve state and no live run is stage idle'
+is "$(printf '%s' "$OUT" | jq -c '.milestone')" null 'no roadmap is no milestone'
+is "$(printf '%s' "$OUT" | jq -c '.parked')" '[]' 'nothing parked'
+is "$(printf '%s' "$OUT" | jq -c '.findings')" 0 'no open findings'
+is "$(printf '%s' "$OUT" | jq -c '.runner')" null 'no runner'
+is "$(printf '%s' "$OUT" | jq -c '.paused')" false 'not paused'
+
+# The same fields once serve, mem and a lead have each said something.
+printf '# roadmap: road\n\n- [x] m0 The groundwork\n- [ ] demo The demo\n- [ ] m2 The rest\n' |
+	"$MEM_BIN" roadmap --stdin >/dev/null
+"$MEM_BIN" project set runner here >/dev/null
+"$MEM_BIN" project set paused 'here 2026-10-04' >/dev/null
+"$MEM_BIN" finding add --milestone demo --step 1 'the cart total is off by one' >/dev/null
+printf 'the owner decides the slot count\n' >"$rundir/t3.parked"
+mkdir -p "$XDG_STATE_HOME/workflow/serve/app"
+printf 'waiting\n' >"$XDG_STATE_HOME/workflow/serve/app/stage"
+run workflow status --json
+is "$(printf '%s' "$OUT" | jq -r '.stage')" waiting 'stage is the serve stage file'
+is "$(printf '%s' "$OUT" | jq -cS '.milestone')" '{"m":3,"n":2,"slug":"demo"}' 'milestone is the first unticked one, n of m'
+is "$(printf '%s' "$OUT" | jq -cS '.parked')" '[{"reason":"the owner decides the slot count","task":"t3"}]' 'a parked task with its reason'
+is "$(printf '%s' "$OUT" | jq -c '.findings')" 1 'open findings counted'
+is "$(printf '%s' "$OUT" | jq -r '.runner')" here 'runner is the project key'
+is "$(printf '%s' "$OUT" | jq -c '.paused')" true 'paused is the key set'
+run workflow status
+like "$(printf '%s\n' "$OUT" | head -n 1)" '^stage: waiting · milestone demo \(2 of 3\) · runner here · 1 parked$' 'the human report opens with the serve line'
+rm -f "$rundir/t3.parked" "$XDG_STATE_HOME/workflow/serve/app/stage"
+"$MEM_BIN" project unset paused >/dev/null
+
 # A held lock is a live orchestrator.
 if command -v flock >/dev/null 2>&1; then
 	flock "$rundir/lock" sleep 3 &

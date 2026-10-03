@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::gitcmd::Git;
-use crate::{exit, memcli, paths, plan, run, warn};
+use crate::{exit, memcli, paths, plan, run, serve, warn};
 
 struct TaskRow {
     id: String,
@@ -33,6 +33,19 @@ struct RunRow {
     tasks: Vec<TaskRow>,
     /// Context carried across every task, summed.
     context: u64,
+}
+
+/// What serve and mem say about the project beside its runs.
+struct Serving {
+    /// The serve stage file, else `execution` with a run live, else `idle`.
+    stage: String,
+    /// The open milestone and its place, `n of m`.
+    milestone: Option<(String, usize, usize)>,
+    /// `(task, reason)` for every `<task>.parked` in a run dir.
+    parked: Vec<(String, String)>,
+    findings: usize,
+    runner: Option<String>,
+    paused: bool,
 }
 
 fn field(dir: &Path, task: &str, ext: &str) -> String {
@@ -133,9 +146,65 @@ fn runs(project_dir: &str) -> Vec<RunRow> {
     dirs.iter().filter_map(|d| read_run(d)).collect()
 }
 
-fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
+/// Every task a lead parked in one of the project's run dirs, with the
+/// reason it gave.
+fn parked(project_dir: &str) -> Vec<(String, String)> {
+    let root = paths::runs_root().join(project_dir);
+    let mut found: Vec<(String, String)> = std::fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|run| {
+            std::fs::read_dir(run.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+        })
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let task = name.strip_suffix(".parked")?.to_string();
+            let reason = std::fs::read_to_string(e.path()).unwrap_or_default();
+            Some((task, reason.trim().to_string()))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+fn serving(project: &memcli::Project, rows: &[RunRow]) -> Serving {
+    let stage = serve::stage_of(&project.name).unwrap_or_else(|| {
+        if rows.iter().any(|r| r.live) {
+            "execution".to_string()
+        } else {
+            "idle".to_string()
+        }
+    });
+    Serving {
+        stage,
+        milestone: serve::roadmap_place(&project.name),
+        parked: parked(&project.dir_name()),
+        findings: serve::open_findings(&project.name),
+        runner: memcli::project_choice("runner"),
+        paused: memcli::project_choice("paused").is_some(),
+    }
+}
+
+fn as_json(project: &str, serving: &Serving, rows: &[RunRow]) -> serde_json::Value {
     serde_json::json!({
         "project": project,
+        "stage": serving.stage,
+        "milestone": serving.milestone.as_ref().map(|(slug, n, m)| serde_json::json!({
+            "slug": slug,
+            "n": n,
+            "m": m,
+        })),
+        "parked": serving.parked.iter().map(|(task, reason)| serde_json::json!({
+            "task": task,
+            "reason": reason,
+        })).collect::<Vec<_>>(),
+        "findings": serving.findings,
+        "runner": serving.runner,
+        "paused": serving.paused,
         "runs": rows.iter().map(|r| serde_json::json!({
             "plan": r.plan,
             "live": r.live,
@@ -155,6 +224,20 @@ fn as_json(project: &str, rows: &[RunRow]) -> serde_json::Value {
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
+}
+
+/// The line the human report opens with; a milestone or a runner that is
+/// not there is left out rather than named as nothing.
+fn serving_line(s: &Serving) -> String {
+    let mut parts = vec![format!("stage: {}", s.stage)];
+    if let Some((slug, n, m)) = &s.milestone {
+        parts.push(format!("milestone {slug} ({n} of {m})"));
+    }
+    if let Some(runner) = &s.runner {
+        parts.push(format!("runner {runner}"));
+    }
+    parts.push(format!("{} parked", s.parked.len()));
+    parts.join(" · ")
 }
 
 fn print_human(rows: &[RunRow]) {
@@ -220,12 +303,16 @@ pub fn cmd_status(json: bool, brief: bool) -> i32 {
     };
     let rows = runs(&project.dir_name());
     if json {
+        let serving = serving(&project, &rows);
         println!(
             "{}",
-            serde_json::to_string_pretty(&as_json(&project.name, &rows))
+            serde_json::to_string_pretty(&as_json(&project.name, &serving, &rows))
                 .unwrap_or_else(|_| "{}".into())
         );
         return exit::OK;
+    }
+    if !brief {
+        println!("{}", serving_line(&serving(&project, &rows)));
     }
     if rows.is_empty() {
         warn(format!("status: no runs recorded for {}", project.name));
@@ -264,12 +351,60 @@ mod tests {
             }],
             context: 4000,
         }];
-        let doc = as_json("app", &rows);
+        let serving = Serving {
+            stage: "idle".into(),
+            milestone: None,
+            parked: Vec::new(),
+            findings: 0,
+            runner: None,
+            paused: false,
+        };
+        let doc = as_json("app", &serving, &rows);
         let run = &doc["runs"][0];
         assert_eq!(run["context"], 4000);
         assert!(run.get("readings").is_none(), "{run}");
         assert!(run.get("fixes").is_none(), "{run}");
         assert_eq!(run["tasks"][0]["state"], "merged");
         assert!(run["tasks"][0].get("reviews").is_none(), "{run}");
+    }
+
+    #[test]
+    fn status_json_carries_the_serve_fields() {
+        let serving = Serving {
+            stage: "waiting".into(),
+            milestone: Some(("m2".into(), 2, 3)),
+            parked: vec![("ask".into(), "the owner decides".into())],
+            findings: 4,
+            runner: Some("here".into()),
+            paused: true,
+        };
+        let doc = as_json("app", &serving, &[]);
+        assert_eq!(doc["stage"], "waiting");
+        assert_eq!(
+            doc["milestone"],
+            serde_json::json!({"slug": "m2", "n": 2, "m": 3})
+        );
+        assert_eq!(
+            doc["parked"],
+            serde_json::json!([{"task": "ask", "reason": "the owner decides"}])
+        );
+        assert_eq!(doc["findings"], 4);
+        assert_eq!(doc["runner"], "here");
+        assert_eq!(doc["paused"], true);
+        assert_eq!(
+            serving_line(&serving),
+            "stage: waiting · milestone m2 (2 of 3) · runner here · 1 parked"
+        );
+        let idle = Serving {
+            stage: "idle".into(),
+            milestone: None,
+            parked: Vec::new(),
+            findings: 0,
+            runner: None,
+            paused: false,
+        };
+        let doc = as_json("app", &idle, &[]);
+        assert!(doc["milestone"].is_null() && doc["runner"].is_null());
+        assert_eq!(serving_line(&idle), "stage: idle · 0 parked");
     }
 }

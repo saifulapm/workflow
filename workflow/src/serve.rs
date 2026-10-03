@@ -202,6 +202,33 @@ fn milestones(text: &str) -> Vec<(String, bool)> {
     }
 }
 
+/// The open milestone of a project's roadmap with its place, `(slug, n,
+/// m)`: nothing when there is no roadmap or every milestone is ticked.
+pub(crate) fn roadmap_place(project: &str) -> Option<(String, usize, usize)> {
+    let road = milestones(&roadmap(Path::new(&memcli::bin()), project).text);
+    let at = road.iter().position(|(_, ticked)| !ticked)?;
+    Some((road[at].0.clone(), at + 1, road.len()))
+}
+
+/// The project's open findings, counted; none when mem cannot say.
+pub(crate) fn open_findings(project: &str) -> usize {
+    let said = mem_on(
+        Path::new(&memcli::bin()),
+        project,
+        &["finding", "list", "--open", "--json"],
+    );
+    serde_json::from_str::<Items>(&said.out).map_or(0, |i| i.items.len())
+}
+
+/// The word serve last wrote in a project's stage file.
+pub(crate) fn stage_of(project: &str) -> Option<String> {
+    let path = paths::serve_root()
+        .join(project.replace('/', "-"))
+        .join("stage");
+    let word = std::fs::read_to_string(path).ok()?.trim().to_string();
+    (!word.is_empty()).then_some(word)
+}
+
 /// Another machine's claim that no longer holds: stamped over an hour ago,
 /// with no run line logged in the last hour, the rule a run applies before
 /// it takes a claim over.
