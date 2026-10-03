@@ -32,6 +32,14 @@ pub const KNOWN_KEYS: &[&str] = &[
     "options",
     "audience",
     "task",
+    "by",
+    "replaces",
+    "file",
+    "source",
+    "milestone",
+    "step",
+    "status",
+    "fixed_by",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +51,11 @@ pub enum Kind {
     Handoff,
     Question,
     Answer,
+    Evidence,
+    Finding,
+    Brief,
+    Idea,
+    Raw,
 }
 
 impl Kind {
@@ -54,6 +67,11 @@ impl Kind {
             Kind::Handoff => "handoff",
             Kind::Question => "question",
             Kind::Answer => "answer",
+            Kind::Evidence => "evidence",
+            Kind::Finding => "finding",
+            Kind::Brief => "brief",
+            Kind::Idea => "idea",
+            Kind::Raw => "raw",
         }
     }
 }
@@ -75,7 +93,15 @@ impl std::str::FromStr for Kind {
             "handoff" => Kind::Handoff,
             "question" => Kind::Question,
             "answer" => Kind::Answer,
-            other => bail!("unknown kind '{other}' (fact|ruling|log|handoff|question|answer)"),
+            "evidence" => Kind::Evidence,
+            "finding" => Kind::Finding,
+            "brief" => Kind::Brief,
+            "idea" => Kind::Idea,
+            "raw" => Kind::Raw,
+            other => bail!(
+                "unknown kind '{other}' \
+                 (fact|ruling|log|handoff|question|answer|evidence|finding|brief|idea|raw)"
+            ),
         })
     }
 }
@@ -114,6 +140,22 @@ pub struct Meta {
     /// `<plan>/<task>`, so the answer can be carried into its next attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_by: Option<String>,
 }
 
 impl Meta {
@@ -136,6 +178,14 @@ impl Meta {
             options: None,
             audience: None,
             task: None,
+            by: None,
+            replaces: None,
+            file: None,
+            source: None,
+            milestone: None,
+            step: None,
+            status: None,
+            fixed_by: None,
         }
     }
 

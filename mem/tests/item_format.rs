@@ -245,3 +245,84 @@ fn property_random_bodies_and_titles_round_trip() {
         roundtrip(&title, &body);
     }
 }
+
+#[test]
+fn new_kinds_parse_and_print() {
+    for (s, k) in [
+        ("evidence", Kind::Evidence),
+        ("finding", Kind::Finding),
+        ("brief", Kind::Brief),
+        ("idea", Kind::Idea),
+        ("raw", Kind::Raw),
+    ] {
+        assert_eq!(s.parse::<Kind>().unwrap(), k);
+        assert_eq!(k.to_string(), s);
+        let mut m = meta("t");
+        m.kind = k;
+        let bytes = Item::new(m, b"b\n".to_vec()).to_bytes().unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains(&format!("kind = \"{s}\"")), "{text}");
+        assert_eq!(Item::parse(&bytes).unwrap().meta.kind, k);
+    }
+}
+
+#[test]
+fn kind_error_names_every_kind() {
+    let err = "nope".parse::<Kind>().unwrap_err().to_string();
+    for k in [
+        "fact", "ruling", "log", "handoff", "question", "answer", "evidence", "finding", "brief",
+        "idea", "raw",
+    ] {
+        assert!(err.contains(k), "{err} lacks {k}");
+    }
+}
+
+#[test]
+fn verb_fields_round_trip_byte_for_byte() {
+    let mut m = meta("t");
+    m.kind = Kind::Finding;
+    m.by = Some("reviewer".into());
+    m.replaces = Some("01K2YQ1VC0AB3DE4FG5HJ6KM7N".into());
+    m.file = Some("mem/src/item.rs".into());
+    m.source = Some("https://example.com/a".into());
+    m.milestone = Some("m2".into());
+    m.step = Some("kinds".into());
+    m.status = Some("open".into());
+    m.fixed_by = Some("abc1234".into());
+    let bytes = Item::new(m.clone(), b"b\n".to_vec()).to_bytes().unwrap();
+    let back = Item::parse(&bytes).unwrap();
+    assert_eq!(back.meta, m);
+    assert!(back.extra.is_empty(), "{:?}", back.extra);
+    assert_eq!(back.to_bytes().unwrap(), bytes);
+    let text = String::from_utf8(bytes).unwrap();
+    for key in [
+        "by",
+        "replaces",
+        "file",
+        "source",
+        "milestone",
+        "step",
+        "status",
+        "fixed_by",
+    ] {
+        assert!(text.contains(&format!("\n{key} = ")), "{text} lacks {key}");
+        assert!(mem::item::KNOWN_KEYS.contains(&key), "{key} not known");
+    }
+}
+
+#[test]
+fn verb_fields_are_omitted_when_absent() {
+    let out = String::from_utf8(Item::new(meta("t"), b"b\n".to_vec()).to_bytes().unwrap()).unwrap();
+    for key in [
+        "by",
+        "replaces",
+        "file",
+        "source",
+        "milestone",
+        "step",
+        "status",
+        "fixed_by",
+    ] {
+        assert!(!out.contains(&format!("\n{key} = ")), "{out} has {key}");
+    }
+}

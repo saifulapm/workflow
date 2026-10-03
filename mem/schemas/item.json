@@ -37,7 +37,13 @@
         "log",
         "handoff",
         "question",
-        "answer"
+        "answer",
+        "evidence",
+        "finding",
+        "brief",
+        "idea",
+        "raw",
+        "wiki"
       ]
     },
     "type": {
@@ -103,6 +109,54 @@
     },
     "task": {
       "description": "Question rows asked by an orchestrated worker: `<plan>/<task>`, so the answer can be carried into the task's next attempt.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "replaces": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "milestone": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "step": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fixed_by": {
       "type": [
         "string",
         "null"
