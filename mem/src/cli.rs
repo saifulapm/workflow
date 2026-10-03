@@ -256,11 +256,16 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
-    /// The project's wiki: list pages, print one, or replace one.
+    /// The project's wiki: list pages, print one, or replace one. `mem wiki
+    /// lint` checks the wiki and exits 1 on findings.
     Wiki {
         /// The page slug. Without one, list every page this project has. With
         /// `#<heading-slug>` after it, one section of the page.
         slug: Option<String>,
+        /// With `index`: keep the prose above the first `- [` line and rewrite
+        /// the rest as one line per page.
+        #[arg(long, conflicts_with_all = ["stdin", "note", "sections"])]
+        rebuild: bool,
         /// Replace the page, or the section named, with what is on stdin.
         #[arg(long)]
         stdin: bool,

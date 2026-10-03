@@ -1264,6 +1264,7 @@ pub fn wiki(
     sections: bool,
     note: Option<&str>,
     force: bool,
+    rebuild: bool,
 ) -> Result<i32> {
     // `<slug>#<hslug>` addresses one section; the slug alone, the whole page.
     let (slug, hslug) = match slug.map(|s| s.split_once('#').unwrap_or((s, ""))) {
@@ -1273,6 +1274,23 @@ pub fn wiki(
     };
     if let Some(slug) = slug {
         check_slug(slug, "page")?;
+    }
+    if slug == Some(crate::lint::LINT) {
+        if hslug.is_some() || stdin || note.is_some() || sections || rebuild {
+            return Err(exit::usage(
+                "lint is a reserved slug — `mem wiki lint` checks the wiki, so no page \
+                 may be called that",
+            ));
+        }
+        return crate::lint::lint(app);
+    }
+    if rebuild {
+        if slug != Some(WIKI_INDEX) || hslug.is_some() {
+            return Err(exit::usage(
+                "--rebuild rewrites the index page — `mem wiki index --rebuild`",
+            ));
+        }
+        return crate::lint::rebuild_index(app);
     }
     if stdin || note.is_some() {
         let Some(slug) = slug else {
@@ -2105,7 +2123,7 @@ pub fn sync(app: &App) -> Result<i32> {
 
 /// The page every wiki has: one line per page, written by whoever writes the
 /// pages. Doctor is what keeps it honest.
-const WIKI_INDEX: &str = "index";
+pub(crate) const WIKI_INDEX: &str = "index";
 
 /// Past this a page is a page to compact. There is no hard cap — a wiki grows
 /// by being written to, and compaction is a verb, not a refusal.
@@ -2118,7 +2136,7 @@ const WIKI_STUB_MAX_BYTES: usize = 512;
 /// The slug a markdown link points at, when it points at a page in the same
 /// wiki. `[name](name.md)` is the whole convention: an anchor is trimmed, and a
 /// target with a scheme or a slash in it lives in some other tree.
-fn page_link_target(target: &str) -> Option<&str> {
+pub(crate) fn page_link_target(target: &str) -> Option<&str> {
     let target = target.split('#').next().unwrap_or_default();
     if target.contains('/') || target.contains(':') {
         return None;
@@ -2130,7 +2148,7 @@ fn page_link_target(target: &str) -> Option<&str> {
 /// The target of every `[text](target)` in a page. Enough markdown to find the
 /// links the wiki convention writes, and no more: a title after the target is
 /// dropped, and a link mem cannot recognise is left for the renderer.
-fn markdown_links(text: &str) -> Vec<&str> {
+pub(crate) fn markdown_links(text: &str) -> Vec<&str> {
     let mut targets = Vec::new();
     let mut rest = text;
     while let Some(open) = rest.find("](") {
@@ -2146,7 +2164,10 @@ fn markdown_links(text: &str) -> Vec<&str> {
 /// The wiki checks: links that point at no page, drift between the index page
 /// and the directory in both directions, pages worth compacting, and the
 /// secrets grep the item files already get.
-fn wiki_findings(app: &App, project: &crate::project::Project) -> Vec<crate::maint::Finding> {
+pub(crate) fn wiki_findings(
+    app: &App,
+    project: &crate::project::Project,
+) -> Vec<crate::maint::Finding> {
     use crate::maint::{finding, looks_like_a_secret};
     let mut findings = Vec::new();
     let pages = app.store.wiki_pages(&project.id);

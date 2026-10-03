@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod ids;
 pub mod index;
 pub mod item;
+pub mod lint;
 pub mod maint;
 pub mod paths;
 pub mod project;
@@ -273,6 +274,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         }
         cli::Command::Wiki {
             slug,
+            rebuild,
             stdin,
             sections,
             note,
@@ -285,6 +287,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             *sections,
             note.as_deref(),
             *force,
+            *rebuild,
         ),
         cli::Command::Plan {
             slug,
