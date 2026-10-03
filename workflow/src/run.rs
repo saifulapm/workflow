@@ -416,14 +416,12 @@ pub struct Run {
     /// one run, else the project's `mem project set model`, else opus.
     pub model: String,
     /// Who reads each task's diff at the gate once its verify is green:
-    /// `WORKFLOW_REVIEW_MODEL` for one run (empty turns the reading off),
-    /// else the project's `mem project set review-model` (`none` turns it
-    /// off), else nobody.
-    /// Naming the model the workers run on is the same as naming nobody.
+    /// `WORKFLOW_REVIEW_MODEL` for one run (empty or `none` turns the
+    /// reading off), else what the run dir recorded, else nobody.
     pub review_model: Option<String>,
     /// Who writes the second fix round, after the reader has found fault
-    /// twice: `WORKFLOW_FIX_MODEL` for one run, else `mem project set
-    /// fix-model`, else the reader's own model. A diff a cheaper model
+    /// twice: `WORKFLOW_FIX_MODEL` for one run, else what the run dir
+    /// recorded, else the reader's own model. A diff a cheaper model
     /// could not get right in two goes is not sent back to it a third time.
     pub fix_model: Option<String>,
     /// Who a worker's `workflow advise` asks: `WORKFLOW_ADVISOR` for one
@@ -435,8 +433,8 @@ pub struct Run {
     /// project's `mem project set effort`, else nothing and the CLI's own
     /// default stands.
     pub effort: Option<String>,
-    /// The same dial for the reader, from `WORKFLOW_REVIEW_EFFORT` and
-    /// `mem project set review-effort`. Independent of `effort`: a cheap
+    /// The same dial for the reader, from `WORKFLOW_REVIEW_EFFORT` or the
+    /// run dir's record. Independent of `effort`: a cheap
     /// worker turned up does not turn the frontier reader up with it.
     pub review_effort: Option<String>,
     /// The four dials above as one line, each naming the rung it came off,
@@ -3682,26 +3680,9 @@ impl Run {
     }
 }
 
-/// Every reason to refuse a run before it has written anything, as the lines
-/// to say; `None` means go. Said here rather than at the gate because all
-/// three are settled before the first worker starts, and a run that dispatches
-/// and only then discovers nobody reads it has spent the sessions already.
-///
-/// `asked` is whether anyone said nobody should read: `WORKFLOW_REVIEW_MODEL`
-/// set at all, empty or not, `review-model none` in the store, or this same
-/// run's own record from when it began. Any is a run saying it wants no
-/// reading and meaning it; none is a project that has not decided, and merges
-/// nobody reads are not what the gate is for. `last` is what the project's
-/// latest run recorded, said back so the decision can be made from the
-/// refusal alone: an orchestrator launched against a project that ran unread
-/// eight times cannot answer "who reads?" from the plan.
-fn refused(
-    plan: &Plan,
-    model: &str,
-    reader: Option<&str>,
-    asked: bool,
-    last: Option<&str>,
-) -> Option<String> {
+/// The reason to refuse a run before it has written anything, as the lines
+/// to say; `None` means go.
+fn refused(plan: &Plan) -> Option<String> {
     if plan.kind == PlanKind::Roadmap {
         return Some(format!(
             "run: '{}' is a roadmap, and its items are milestones rather than work a worker can take.\n\
@@ -3709,75 +3690,7 @@ fn refused(
             plan.plan_id
         ));
     }
-    let unread = "record that nobody does with `mem project set review-model none`, \
-                  or run this one unread with WORKFLOW_REVIEW_MODEL= in the environment.";
-    match reader {
-        // A model reads its own work with its own blind spots and agrees with
-        // itself, so naming the workers' own model is naming nobody -- under
-        // any spelling of it.
-        Some(reader) if same_model(reader, model) => Some(format!(
-            "run: the workers write with {}, and {reader} is the same model, so it would be reading its own work.\n\
-             name another reader with `mem project set review-model <model>`, {unread}",
-            model.trim()
-        )),
-        None if !asked => {
-            let last = last.map(|l| format!("\n{l}")).unwrap_or_default();
-            Some(format!(
-                "run: nobody is named to read what this run merges.\n\
-                 name a reader with `mem project set review-model <model>`, {unread}{last}"
-            ))
-        }
-        _ => None,
-    }
-}
-
-/// What the project's latest run other than this one recorded about its
-/// reader, as a sentence for the refusal above -- `None` when no other run
-/// has left a record. Latest by when it began, which every run writes as it
-/// sets up.
-fn last_reader(dir: &Path) -> Option<String> {
-    let siblings = std::fs::read_dir(dir.parent()?).ok()?;
-    let (plan_id, reader) = siblings
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p != dir)
-        .filter_map(|p| {
-            let started: u64 = recorded(&p, "started")?.parse().ok()?;
-            let reader = recorded(&p, "review-model")?;
-            Some((
-                started,
-                p.file_name()?.to_string_lossy().to_string(),
-                reader,
-            ))
-        })
-        .max_by_key(|(started, ..)| *started)
-        .map(|(_, plan_id, reader)| (plan_id, reader))?;
-    Some(match reader.is_empty() {
-        true => format!("the last run here, {plan_id}, recorded no reader."),
-        false => format!("the last run here, {plan_id}, read with {reader}."),
-    })
-}
-
-/// Are these two names one model? `opus`, `claude-opus-5` and `opus[1m]`
-/// all start the same model, so when both names carry a family word that
-/// word settles it; names outside the families are compared as spelled.
-/// The refusal above asks this to keep a model from reading its own work
-/// under a second spelling.
-fn same_model(a: &str, b: &str) -> bool {
-    const FAMILIES: [&str; 4] = ["fable", "opus", "sonnet", "haiku"];
-    let strip_provider = |name: &str| {
-        let name = name.trim().to_ascii_lowercase();
-        match name.rfind('/') {
-            Some(i) => name[i + 1..].to_string(),
-            None => name,
-        }
-    };
-    let (a, b) = (strip_provider(a), strip_provider(b));
-    if a == b {
-        return true;
-    }
-    let family = |name: &str| FAMILIES.iter().copied().find(|f| name.contains(f));
-    matches!((family(&a), family(&b)), (Some(x), Some(y)) if x == y)
+    None
 }
 
 /// The stopped-short report, written to be read at a glance: counts first, then
@@ -3974,7 +3887,8 @@ impl Dialed {
 /// A dial a run may or may not carry -- the reader, the two effort levels --
 /// resolved the way `new_run` describes: the variable set, even empty, is
 /// the answer for this run; else what a `setup` of this plan recorded, an
-/// empty record meaning none; else the project key. The rung rides back with
+/// empty record meaning none; else the project key, when the dial has one.
+/// The rung rides back with
 /// the value: a run that keeps a record over a project key changed since is
 /// doing what it was told to, and it has to say so.
 fn optional_dial(
@@ -3996,7 +3910,10 @@ fn optional_dial(
                     .filter(|v| !v.eq_ignore_ascii_case("none")),
                 Dialed::Record,
             ),
-            None => (project(), Dialed::Project),
+            None => match project() {
+                Some(v) => (Some(v), Dialed::Project),
+                None => (None, Dialed::Default),
+            },
         },
     }
 }
@@ -4036,8 +3953,8 @@ fn dial_line(
 /// has the last word and a project key the least:
 /// `WORKFLOW_MODEL`/`WORKFLOW_REVIEW_MODEL`/`WORKFLOW_EFFORT`/
 /// `WORKFLOW_REVIEW_EFFORT`, then what was recorded, then `mem project set
-/// model`/`review-model`/`effort`/`review-effort`, then `opus`/nobody/the CLI's
-/// own default.
+/// model`/`effort` (the reader's two dials have no project key), then
+/// `opus`/nobody/the CLI's own default.
 fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let (max_workers, deadline_s, kill_grace_s, poll, question_misses) = timings();
     let gate_s = (((env_f64("WORKFLOW_GATE_MIN", 60.0) * 60.0) + 0.5) as i64).max(1);
@@ -4049,13 +3966,9 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     let recorded_effort = recorded(&dir, "effort");
     let recorded_review_effort = recorded(&dir, "review-effort");
     let recorded_advisor = recorded(&dir, "advisor");
-    let (review_model, review_from) = optional_dial(
-        "WORKFLOW_REVIEW_MODEL",
-        recorded_review,
-        memcli::project_review_model,
-    );
-    // The advisor has no project key of its own (mem's keys are a closed
-    // set), so past the override and the record it is the reader.
+    let (review_model, review_from) =
+        optional_dial("WORKFLOW_REVIEW_MODEL", recorded_review, || None);
+    // Past the override and the record, the advisor is the reader.
     let advisor = optional_dial("WORKFLOW_ADVISOR", recorded_advisor, || None)
         .0
         .or_else(|| review_model.clone());
@@ -4071,11 +3984,8 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
     };
     let (effort, effort_from) =
         optional_dial("WORKFLOW_EFFORT", recorded_effort, memcli::project_effort);
-    let (review_effort, review_effort_from) = optional_dial(
-        "WORKFLOW_REVIEW_EFFORT",
-        recorded_review_effort,
-        memcli::project_review_effort,
-    );
+    let (review_effort, review_effort_from) =
+        optional_dial("WORKFLOW_REVIEW_EFFORT", recorded_review_effort, || None);
     Run {
         dir,
         brief_dir: paths::briefs_root().join(project).join(&plan.plan_id),
@@ -4104,12 +4014,7 @@ fn new_run(plan: Plan, repo: PathBuf, project: &str, base: String) -> Run {
         model,
         review_model,
         advisor,
-        fix_model: optional_dial(
-            "WORKFLOW_FIX_MODEL",
-            recorded_fix,
-            memcli::project_fix_model,
-        )
-        .0,
+        fix_model: optional_dial("WORKFLOW_FIX_MODEL", recorded_fix, || None).0,
         effort,
         review_effort,
         stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -4228,15 +4133,7 @@ pub fn cmd_run(
 
     // Before the lock, the worktrees and the first dispatch: nothing here has
     // written anything yet, so a refusal costs a message and no cleanup.
-    let recorded_none = memcli::reader_recorded_none();
-    let carried = recorded(&run.dir, "review-model").is_some();
-    if let Some(why) = refused(
-        &run.plan,
-        &run.model,
-        run.review_model.as_deref(),
-        recorded_none || carried || std::env::var("WORKFLOW_REVIEW_MODEL").is_ok(),
-        last_reader(&run.dir).as_deref(),
-    ) {
+    if let Some(why) = refused(&run.plan) {
         for line in why.lines() {
             warn(line);
         }
@@ -4255,12 +4152,7 @@ pub fn cmd_run(
     // Said out loud, because a run that merges unread is worth noticing even
     // when it is exactly what the project asked for.
     if run.review_model.is_none() {
-        let env_none = std::env::var("WORKFLOW_REVIEW_MODEL")
-            .is_ok_and(|v| v.trim().eq_ignore_ascii_case("none"));
-        warn(match recorded_none || env_none {
-            true => "nobody reads this run: review-model is none",
-            false => "nobody reads this run: it recorded no reader when it began",
-        });
+        warn("nobody reads this run");
     }
 
     if run.plan.tasks.len() <= 1 {
@@ -5417,12 +5309,13 @@ mod tests {
             optional_dial(var, Some("opus".to_string()), || None),
             (Some("opus".to_string()), Dialed::Record)
         );
-        // A project key spelling "none" is not this function's to filter --
-        // memcli::project_review_model already does that for its own caller.
+        // A project key spelling "none" is not this function's to filter.
         assert_eq!(
             optional_dial(var, None, || Some("none".to_string())),
             (Some("none".to_string()), Dialed::Project)
         );
+        // Nothing on any rung is the default, not the project's say.
+        assert_eq!(optional_dial(var, None, || None), (None, Dialed::Default));
 
         unsafe { std::env::set_var(var, "NONE") };
         assert_eq!(
@@ -5549,23 +5442,6 @@ reading with fable (the project) at effort high (the project)"
         assert_eq!(path_hint("not ok 3 - just red\n", wt_root), "");
     }
 
-    #[test]
-    fn a_reader_is_the_writer_under_any_spelling_of_the_same_model() {
-        assert!(same_model("opus", "opus"));
-        assert!(same_model("Opus", " opus "));
-        // The alias the CLI takes and the full id start one model.
-        assert!(same_model("opus", "claude-opus-5"));
-        assert!(same_model("opus[1m]", "claude-opus-5"));
-        assert!(!same_model("fable", "opus"));
-        assert!(!same_model("claude-fable-5-1", "claude-opus-5"));
-        // A name outside the families is compared as spelled.
-        assert!(same_model("my-model", "my-model"));
-        assert!(!same_model("my-model", "opus"));
-        // A provider prefix is stripped before the comparison.
-        assert!(same_model("zai/glm-5.3-flash", "glm-5.3-flash"));
-        assert!(!same_model("openai/gpt-5-mini", "opus"));
-    }
-
     fn doc(kind: PlanKind) -> Plan {
         Plan {
             plan_id: "amx-v2".into(),
@@ -5576,58 +5452,15 @@ reading with fable (the project) at effort high (the project)"
 
     #[test]
     fn a_roadmap_is_refused_with_the_verb_that_turns_one_into_a_plan() {
-        let why = refused(&doc(PlanKind::Roadmap), "opus", Some("fable"), true, None)
-            .expect("a roadmap is not work a worker can take");
+        let why =
+            refused(&doc(PlanKind::Roadmap)).expect("a roadmap is not work a worker can take");
         assert!(why.contains("'amx-v2' is a roadmap"), "{why}");
         assert!(why.contains("mem plan --from <slug>"), "{why}");
     }
 
     #[test]
-    fn a_run_nobody_reads_is_refused_unless_it_says_so_on_purpose() {
-        // Nobody named and nobody asked: the project has not decided.
-        let why = refused(&doc(PlanKind::Plan), "opus", None, false, None)
-            .expect("an unread run is refused");
-        assert!(why.contains("nobody is named to read"), "{why}");
-        assert!(
-            why.contains("mem project set review-model <model>"),
-            "{why}"
-        );
-        // Both ways to mean it: the key the project records once, and the
-        // variable that says it for one run.
-        assert!(why.contains("mem project set review-model none"), "{why}");
-        assert!(why.contains("WORKFLOW_REVIEW_MODEL="), "{why}");
-        // Either one is the way to mean it.
-        assert_eq!(
-            refused(&doc(PlanKind::Plan), "opus", None, true, None),
-            None
-        );
-        // What the project's last run recorded goes at the end, as given.
-        let last = "the last run here, m16, recorded no reader.";
-        let why =
-            refused(&doc(PlanKind::Plan), "opus", None, false, Some(last)).expect("still refused");
-        assert!(why.ends_with(last), "{why}");
-    }
-
-    #[test]
-    fn a_reader_that_is_the_writer_is_refused_under_either_spelling() {
-        let why = refused(
-            &doc(PlanKind::Plan),
-            "claude-opus-5",
-            Some("opus"),
-            true,
-            None,
-        )
-        .expect("a model reading its own work is no reading");
-        assert!(
-            why.contains("the workers write with claude-opus-5"),
-            "{why}"
-        );
-        assert!(why.contains("opus is the same model"), "{why}");
-        // A reader the workers do not share is the whole point of the gate.
-        assert_eq!(
-            refused(&doc(PlanKind::Plan), "sonnet", Some("fable"), false, None),
-            None
-        );
+    fn a_plan_starts_whoever_reads_it() {
+        assert_eq!(refused(&doc(PlanKind::Plan)), None);
     }
 
     #[test]

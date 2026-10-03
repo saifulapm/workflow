@@ -166,38 +166,8 @@ pub fn project_model() -> Option<String> {
 
 /// The reasoning dial the project set for its workers, `mem project set
 /// effort`; absent is the CLI's own default.
-/// The second fix round's model, when the project named one; absent means
-/// the reader's own.
-pub fn project_fix_model() -> Option<String> {
-    project_choice("fix_model")
-}
-
 pub fn project_effort() -> Option<String> {
     project_choice("effort")
-}
-
-/// The same dial for the reader at the merge gate, `mem project set
-/// review-effort`.
-pub fn project_review_effort() -> Option<String> {
-    project_choice("review_effort")
-}
-
-/// What `review-model` is set to by a project that has decided nobody reads
-/// its merges. Absent is a different answer -- a project that has not decided
-/// -- and a run is refused over that one rather than merged unread.
-const NO_READER: &str = "none";
-
-/// The model that reads each task's diff at the merge gate, or nothing:
-/// nothing covers both a project that never named one and one that recorded
-/// [`NO_READER`], since neither leaves a model to dispatch.
-pub fn project_review_model() -> Option<String> {
-    project_choice("review_model").filter(|m| !m.eq_ignore_ascii_case(NO_READER))
-}
-
-/// Did this project record that nobody reads? The run asks so it can tell the
-/// decision apart from the silence, and go ahead unread on the first.
-pub fn reader_recorded_none() -> bool {
-    project_choice("review_model").is_some_and(|m| m.eq_ignore_ascii_case(NO_READER))
 }
 
 /// A worker's question, as `mem questions --for orchestrator --json` reports

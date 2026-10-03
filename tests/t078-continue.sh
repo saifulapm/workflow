@@ -148,7 +148,7 @@ export WORKFLOW_AMX="$T_TMP/fake-amx"
 new_repo app
 mem_register
 "$MEM_BIN" project set verify true >/dev/null
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 base=$(git rev-parse HEAD)
 
 ## ------------------------------------------ the fix round goes to the worker
@@ -214,7 +214,7 @@ cat >"$T_TMP/ask.md" <<'PLAN'
       Files: app/other.php
       Verify: true
 PLAN
-"$MEM_BIN" project set review-model none >/dev/null
+export WORKFLOW_REVIEW_MODEL=
 workflow run --plan-file "$T_TMP/ask.md" >"$T_TMP/ask.log" 2>&1 &
 runpid=$!
 # Thirty seconds, not ten: the deadline exported above makes the poll three

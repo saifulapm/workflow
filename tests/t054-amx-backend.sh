@@ -268,8 +268,7 @@ is "$(cat "$XDG_STATE_HOME/workflow/runs/app/badmodel/fix-model")" sonnet 'where
 # its last words; a reading that never got a conversation has only what
 # `amx new` printed on its way out. Either line fails the task on the first
 # reading, since a second one meets the same wall.
-unset WORKFLOW_REVIEW_MODEL
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 
 cat >"$T_TMP/limit.md" <<-'PLAN'
 	# plan: limit

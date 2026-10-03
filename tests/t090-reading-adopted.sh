@@ -44,7 +44,7 @@ export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'
 new_repo app
 mem_register
 "$MEM_BIN" project set verify true >/dev/null
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 
 cat >"$T_TMP/cut.md" <<'PLAN'
 # plan: cut

@@ -55,53 +55,35 @@ fn field(dir: &Path, name: &str) -> Option<String> {
 }
 
 /// One dial's rungs: the environment variable, even set empty (which means
-/// nobody); else the run dir's own record, when there is a run dir; else the
-/// project's key. `None` all the way through is nobody having decided.
-fn dial(
-    var: &str,
-    run_dir: Option<&Path>,
-    record: &str,
-    project: impl FnOnce() -> Option<String>,
-) -> Option<String> {
+/// nobody); else the run dir's own record, when there is a run dir. `None`
+/// all the way through is nobody having decided.
+fn dial(var: &str, run_dir: Option<&Path>, record: &str) -> Option<String> {
     let clean = |v: &str| {
         let v = v.trim();
         (!v.is_empty() && !v.eq_ignore_ascii_case("none")).then(|| v.to_string())
     };
     match std::env::var(var) {
         Ok(v) => clean(&v),
-        Err(_) => match run_dir.and_then(|d| field(d, record)) {
-            Some(v) => clean(&v),
-            None => project(),
-        },
+        Err(_) => run_dir
+            .and_then(|d| field(d, record))
+            .and_then(|v| clean(&v)),
     }
 }
 
 /// The reader's own model, by its own rungs: what the advisor falls back to
 /// when nobody has named one.
 fn reader_model(run_dir: Option<&Path>) -> Option<String> {
-    dial(
-        "WORKFLOW_REVIEW_MODEL",
-        run_dir,
-        "review-model",
-        memcli::project_review_model,
-    )
+    dial("WORKFLOW_REVIEW_MODEL", run_dir, "review-model")
 }
 
 fn reader_effort(run_dir: Option<&Path>) -> Option<String> {
-    dial(
-        "WORKFLOW_REVIEW_EFFORT",
-        run_dir,
-        "review-effort",
-        memcli::project_review_effort,
-    )
+    dial("WORKFLOW_REVIEW_EFFORT", run_dir, "review-effort")
 }
 
 /// `WORKFLOW_ADVISOR`, else the run dir's `advisor` record, else the
-/// reader's own model by its own rungs. There is no project rung
-/// of its own: mem's project keys are a closed set and `advisor` is not one
-/// of them, so a project names its advisor by naming its reader.
+/// reader's own model by its own rungs.
 fn advisor_model(run_dir: Option<&Path>) -> Option<String> {
-    dial("WORKFLOW_ADVISOR", run_dir, "advisor", || None).or_else(|| reader_model(run_dir))
+    dial("WORKFLOW_ADVISOR", run_dir, "advisor").or_else(|| reader_model(run_dir))
 }
 
 /// The first eighty characters of a question, for the log line:
@@ -359,7 +341,7 @@ fn base_dispatch(
 fn no_advisor_refusal() -> i32 {
     warn("advise: nobody is named to advise.");
     warn(
-        "point WORKFLOW_ADVISOR at a model for this call, or name the project's reader with `mem project set review-model <model>`, which is who advises when nothing else says.",
+        "point WORKFLOW_ADVISOR at a model for this call, or WORKFLOW_REVIEW_MODEL at the reader, who advises when nothing else says.",
     );
     exit::USAGE
 }
@@ -673,33 +655,20 @@ mod tests {
     }
 
     #[test]
-    fn a_dial_reads_the_environment_then_the_run_dir_then_the_project() {
-        // No environment, no run dir: the project's word stands.
-        assert_eq!(
-            dial("WF_ADVISE_TEST_UNSET", None, "advisor", || Some(
-                "opus".into()
-            )),
-            Some("opus".into())
-        );
-        // A run dir record wins over the project when the environment is
-        // silent.
+    fn a_dial_reads_the_environment_then_the_run_dir() {
+        // No environment, no run dir: nobody.
+        assert_eq!(dial("WF_ADVISE_TEST_UNSET", None, "advisor"), None);
+        // A run dir record stands when the environment is silent.
         let dir = std::env::temp_dir().join(format!("wf-advise-dial-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("t1.advisor"), "sage\n").unwrap();
         assert_eq!(
-            dial("WF_ADVISE_TEST_UNSET", Some(&dir), "t1.advisor", || Some(
-                "opus".into()
-            )),
+            dial("WF_ADVISE_TEST_UNSET", Some(&dir), "t1.advisor"),
             Some("sage".into())
         );
-        // An empty record is nobody, and the project is never asked.
+        // An empty record is nobody.
         std::fs::write(dir.join("t1.advisor"), "\n").unwrap();
-        assert_eq!(
-            dial("WF_ADVISE_TEST_UNSET", Some(&dir), "t1.advisor", || panic!(
-                "the project must not be asked"
-            )),
-            None
-        );
+        assert_eq!(dial("WF_ADVISE_TEST_UNSET", Some(&dir), "t1.advisor"), None);
         std::fs::remove_dir_all(&dir).ok();
     }
 

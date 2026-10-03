@@ -7,8 +7,8 @@
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
-# t_init exports an empty WORKFLOW_REVIEW_MODEL so `workflow run` tests never
-# get refused for lack of a reader; naming one is what this file is about.
+# t_init exports an empty WORKFLOW_REVIEW_MODEL; naming a reader is what this
+# file is about, and the variable is the only way to name one.
 unset WORKFLOW_REVIEW_MODEL
 
 export WF_TMP="$T_TMP"
@@ -68,9 +68,11 @@ run_out env WORKFLOW_REVIEW_MODEL= workflow read
 is "$RC" 4 'with no reader named the read exits 4'
 is "$OUT" 'read: verdict none -- nobody is named to read this diff' 'and says so on stdout'
 run env WORKFLOW_REVIEW_MODEL= workflow read
-like "$OUT" 'mem project set review-model' 'naming the remedy'
+like "$OUT" 'point WORKFLOW_REVIEW_MODEL at a model' 'naming the remedy'
+run_out workflow read
+is "$RC" 4 'with the variable unset nobody is named either'
 
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 
 ## ------------------------------------------------------------- a clean diff
 

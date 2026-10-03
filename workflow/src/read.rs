@@ -21,36 +21,29 @@ const UNTRACKED_CAP: usize = 24 * 1024;
 const DEFAULT_REQUIREMENT: &str =
     "the change is correct, complete and changes nothing it was not asked to";
 
-/// Nobody is named to read: `WORKFLOW_REVIEW_MODEL` names one over anything
-/// recorded, even empty; absent, the project's own `review-model` stands,
-/// `none` or unset there too meaning the same as nobody. Not a usage error:
-/// the skills read it as commit without a reading and say so.
+/// Nobody is named to read: `WORKFLOW_REVIEW_MODEL` unset, empty or `none`.
+/// Not a usage error: the skills read it as commit without a reading and say
+/// so.
 const NO_READER: i32 = 4;
 /// The reading ended -- by its own hand, by the deadline, or because the
 /// dispatch never started -- without a verdict to answer with.
 const NO_VERDICT: i32 = 3;
 
-fn model() -> Option<String> {
-    match std::env::var("WORKFLOW_REVIEW_MODEL") {
-        Ok(v) => {
-            let v = v.trim();
-            (!v.is_empty() && !v.eq_ignore_ascii_case("none")).then(|| v.to_string())
-        }
-        Err(_) => memcli::project_review_model(),
-    }
+/// The value of `var`, trimmed; unset, empty and `none` all mean nothing.
+fn env_dial(var: &str) -> Option<String> {
+    let v = std::env::var(var).ok()?;
+    let v = v.trim();
+    (!v.is_empty() && !v.eq_ignore_ascii_case("none")).then(|| v.to_string())
 }
 
-/// The reasoning dial: `WORKFLOW_REVIEW_EFFORT` over the project's own
-/// `review-effort`, `none` in either meaning no dial at all -- the same drop
-/// `model` above already applies.
+fn model() -> Option<String> {
+    env_dial("WORKFLOW_REVIEW_MODEL")
+}
+
+/// The reasoning dial, `WORKFLOW_REVIEW_EFFORT`, `none` meaning no dial at
+/// all -- the same drop `model` above already applies.
 fn effort() -> Option<String> {
-    match std::env::var("WORKFLOW_REVIEW_EFFORT") {
-        Ok(v) => {
-            let v = v.trim();
-            (!v.is_empty() && !v.eq_ignore_ascii_case("none")).then(|| v.to_string())
-        }
-        Err(_) => memcli::project_review_effort().filter(|v| !v.eq_ignore_ascii_case("none")),
-    }
+    env_dial("WORKFLOW_REVIEW_EFFORT")
 }
 
 /// Claude Code's own scratch inside the tree: a sub-agent's memory under
@@ -217,9 +210,7 @@ pub fn cmd_read(range: Option<&str>, against: Option<&str>) -> i32 {
 
     let Some(model) = model() else {
         println!("read: verdict none -- nobody is named to read this diff");
-        warn(
-            "name one with `mem project set review-model <model>`, or point WORKFLOW_REVIEW_MODEL at one for this call.",
-        );
+        warn("point WORKFLOW_REVIEW_MODEL at a model to have one read.");
         return NO_READER;
     };
 

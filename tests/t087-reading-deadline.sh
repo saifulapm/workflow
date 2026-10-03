@@ -91,7 +91,7 @@ export WORKFLOW_AMX="$T_TMP/fake-amx"
 new_repo app
 mem_register
 "$MEM_BIN" project set verify true >/dev/null
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 
 ## --------------------------- a ruling from before this run, after the first
 

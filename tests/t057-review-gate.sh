@@ -8,8 +8,8 @@
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
-# lib.sh runs every other test unread; naming a reader is what this one is
-# about, so the run reads the project key again.
+# lib.sh runs every other test unread with the variable set empty; this one
+# starts with it unset, the way a run with nothing named starts.
 unset WORKFLOW_REVIEW_MODEL
 
 export WF_TMP="$T_TMP"
@@ -228,25 +228,30 @@ plan() {
 	EOF
 }
 
-## ---------------------------------------- nobody named: the run is refused
+## ---------------------------------------- nobody named: the run goes unread
 
-# The gate is the reason the workflow merges anything unattended, so a project
-# that has named nobody is asked to decide before a worker is started, not
-# after the sessions are spent.
-plan quiet ''
+# Nobody named is not a reason to stop: the run starts, merges unread and
+# says so at its start. Its tasks are its own, since what it merges lands on
+# the checkout every later plan starts from.
+cat >"$T_TMP/quiet.md" <<-'EOF'
+	# plan: quiet
+
+	- [ ] q1 Add the q1 service
+	      Files: app/q1.php
+	      Verify: true
+	- [ ] q2 Add the q2 service
+	      Files: app/q2.php
+	      Verify: true
+EOF
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/quiet.md"
-is "$RC" 2 'with no review-model and no variable the run is refused'
-like "$OUT" 'nobody is named to read what this run merges' 'saying what is missing'
-like "$OUT" 'mem project set review-model <model>' 'naming the remedy'
-like "$OUT" 'mem project set review-model none' 'the recorded way to mean nobody'
-like "$OUT" 'WORKFLOW_REVIEW_MODEL=' 'and the way to run one unread on purpose'
+is "$RC" 0 'with no reader named the run starts'
+like "$OUT" 'nobody reads this run' 'and says nobody reads it'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/app/quiet/q1.state")" merged 'and merges unread'
 [ -f "$WF_TMP/reviews.log" ] && notok 'and the reviewer was never called' "$(cat "$WF_TMP/reviews.log")" || ok 'and the reviewer was never called'
-[ -d "$XDG_STATE_HOME/workflow/worktrees/app/quiet" ] && notok 'and no worker was dispatched' 'the run set up worktrees' || ok 'and no worker was dispatched'
-is "$(git worktree list | grep -c .)" 1 'nor any worktree in the checkout'
 
-## ------------------------------------------------ the project names one
+## ------------------------------------------------ the variable names one
 
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 plan live '- [ ] hold Stay alive until released
       Files: app/hold.php
       Verify: true
@@ -484,7 +489,7 @@ is "$(cat "$vrun/t2.dispatches")" 1 'with no fresh worker spent on a task alread
 is "$(grep -c ' t2 ' "$WF_TMP/reviews.log")" 2 'and no reading beyond the two it had'
 like "$OUT" 'task t2: accepted by request' 'the run says what it did'
 
-## --------------------------------------------- the variable beats the key
+## ---------------------------------------- a run names its own reader
 
 plan override ''
 : >"$WF_TMP/reviews.log"
@@ -494,54 +499,8 @@ is "$RC" 0 'the draft still ships, after its own fix round, under the run-level 
 is "$(grep -c '^opus t1 ' "$WF_TMP/reviews.log")" 2 'the fix and the ship both read under it'
 like "$(cat "$WF_TMP/reviews.log")" '^opus side ' 'every task of the run'
 
-## ------------------------------------- the reader is the one who wrote it
+## ------------------------------------- a cheaper worker under a frontier reader
 
-# A model reading its own work agrees with itself, so naming the workers' own
-# model is the same as naming nobody -- and a run nobody reads is refused
-# before a worker is started, never merged quietly unread.
-plan mirror ''
-: >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=sonnet WORKFLOW_REVIEW_MODEL=sonnet \
-	workflow run --plan-file "$T_TMP/mirror.md"
-is "$RC" 2 'a reader that names the workers own model is refused'
-like "$OUT" 'the workers write with sonnet, and sonnet is the same model' 'the run says why'
-like "$OUT" 'name another reader with `mem project set review-model <model>`' 'and what to do about it'
-is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
-[ -e "$XDG_STATE_HOME/workflow/runs/app/mirror/t1.state" ] && notok 'and no worker was dispatched' 'a task has a state' || ok 'and no worker was dispatched'
-
-# One model under two spellings. The alias the CLI takes and the full id
-# start the same model, so a reader named by one for workers running under
-# the other is still a model reading its own work.
-plan alias ''
-: >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_MODEL=claude-opus-5 WORKFLOW_REVIEW_MODEL=opus \
-	workflow run --plan-file "$T_TMP/alias.md"
-is "$RC" 2 'a reader named by alias for the model the workers run on by full id is refused too'
-is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
-like "$OUT" 'the workers write with claude-opus-5, and opus is the same model' 'and the run names both spellings'
-
-# The workers' default is a model like any other. A project that never set
-# `model` still runs its workers on opus, so naming opus as the reader there
-# is naming the workers' own model -- the shape a project falls into by
-# setting review-model alone. Kept before the `model` key is ever written,
-# because an empty value is a usage error and not a way to clear it back.
-plan default ''
-: >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=opus workflow run --plan-file "$T_TMP/default.md"
-is "$RC" 2 'a reader that names the default the workers fell back to is refused'
-is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
-like "$OUT" 'the workers write with opus, and opus is the same model' 'and the run says so by name'
-
-# The project key and the run's model meet the same way.
-"$MEM_BIN" project set model fable >/dev/null
-"$MEM_BIN" project set review-model fable >/dev/null
-plan keys ''
-: >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/keys.md"
-is "$RC" 2 'the two project keys naming one model are refused as well'
-is "$(wc -c <"$WF_TMP/reviews.log")" 0 'with nobody called'
-
-# And a cheaper worker under a frontier reader still gets read.
 "$MEM_BIN" project set model sonnet >/dev/null
 plan cheap ''
 : >"$WF_TMP/reviews.log"
@@ -620,50 +579,23 @@ like "$(cat "$rundir/curfew.failed")" "^the reader hit a provider limit: Error: 
 like "$(cat "$rundir/curfew.review-err")" 'not logged in' 'review-err keeps the stderr the dispatch captured'
 is "$(grep -c '^fable curfew ' "$WF_TMP/reviews.log")" 1 'only one reading was tried'
 
-## ------------------------------------ the recorded way to run one unread
+## ------------------------------------ a run picked up again keeps its reader
 
-# An absent key is a project that never decided, and the run stops to ask;
-# `review-model none` is the decision, and it belongs in the store beside the
-# other project keys rather than in the environment of every run. The run goes
-# ahead unread and says whose choice that was.
-"$MEM_BIN" project set review-model none >/dev/null
+# A run reads with what it recorded when it began: `nobody` started unread,
+# and picked up again with the variable unset it is the record that says so.
 plan nobody ''
 : >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/nobody.md"
-is "$RC" 0 'review-model none runs unread with no variable set'
-like "$OUT" 'nobody reads this run: review-model is none' 'and the run says so'
-is "$(cat "$XDG_STATE_HOME/workflow/runs/app/nobody/t1.state")" merged 'the draft merges unread'
-is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
+run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL= workflow run --plan-file "$T_TMP/nobody.md"
+is "$RC" 0 'an empty variable runs unread'
 is "$(cat "$XDG_STATE_HOME/workflow/runs/app/nobody/review-model")" '' 'and the run records no reader'
 
-# The variable still beats the key, in both directions: a project that records
-# nobody can still have one run read.
-plan reader ''
-: >"$WF_TMP/reviews.log"
-run env WORKFLOW_DEADLINE_MIN=0.5 WORKFLOW_REVIEW_MODEL=fable \
-	workflow run --plan-file "$T_TMP/reader.md"
-is "$RC" 0 'the variable names a reader over a recorded none'
-unlike "$OUT" 'nobody reads this run' 'so the run does not say nobody reads it'
-like "$(cat "$WF_TMP/reviews.log")" '^fable t1 ' 'and that model read the diff'
-
-## --------------------------------- a refusal says what the last run recorded
-
-# An orchestrator launched against a project whose key was never set cannot
-# answer "who reads?" from the plan (friction #7GVER0M5); the refusal says what
-# the project's latest run recorded, and the decision can be made from that.
-"$MEM_BIN" project unset review-model >/dev/null
-plan fresh ''
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/fresh.md"
-is "$RC" 2 'with the key unset a new plan is refused again'
-like "$OUT" 'the last run here, reader, read with fable\.' 'and the refusal names what the latest run recorded'
-
-# A run picked up again after a stop reads with what it recorded when it
-# began, key or no key: `nobody` recorded no reader, and goes on unread. Its
-# work is landed first, or preflight stops it over the integration branch.
+# Its work is landed first, or preflight stops it over the integration branch.
 git merge -q integration/nobody
-run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/nobody.md"
-is "$RC" 0 'a run that recorded no reader when it began is not refused for the key'
-like "$OUT" 'nobody reads this run: it recorded no reader when it began' 'and says whose choice that was'
+run env -u WORKFLOW_REVIEW_MODEL WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/nobody.md"
+is "$RC" 0 'the rerun starts'
+like "$OUT" "reading with nobody \\(the run's record\\)" 'and keeps the no reader it recorded'
+like "$OUT" 'nobody reads this run' 'and says so'
+is "$(wc -c <"$WF_TMP/reviews.log")" 0 'nobody was called'
 
 ## ------------------------------------- a red gate stops a reader still reading
 
@@ -673,7 +605,7 @@ like "$OUT" 'nobody reads this run: it recorded no reader when it began' 'and sa
 # own words, never on a verdict that never came.
 new_repo redgate
 mem_register
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 # Green on the bare trunk -- the run gates the trunk before its first
 # dispatch -- and red once the task's file is in the tree.
 write_exec "$T_TMP/redgate-verify.sh" <<'FAKE'
@@ -716,7 +648,7 @@ isnt "$?" 0 'and its reader process was stopped'
 # ends.
 new_repo slowgate
 mem_register
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 # Marks the instant its own subprocess starts, then holds until released --
 # no clock race: `gate` writes the task's state before it spawns this, so by
 # the time the marker exists the state must already have flipped.
@@ -766,7 +698,7 @@ is "$(cat "$rundir/slowgate.state")" merged 'the task merged'
 # second reader starts.
 new_repo residue
 mem_register
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 "$MEM_BIN" project set verify true >/dev/null
 
 "$MEM_BIN" plan --stdin >/dev/null <<'EOF'
@@ -806,7 +738,7 @@ is "$(git -C "$XDG_STATE_HOME/workflow/worktrees/residue/residue/_integration" s
 # every poll, so a value written mid-reading extends the reading in flight.
 new_repo slowread
 mem_register
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 "$MEM_BIN" project set verify true >/dev/null
 
 "$MEM_BIN" plan --stdin >/dev/null <<'EOF'
@@ -848,7 +780,7 @@ unlike "$(cat "$T_TMP/slowread.log")" 'task slowread: the review ran past' \
 # questions and the rulings saved during the run ride in front of the lenses.
 new_repo settled
 mem_register
-"$MEM_BIN" project set review-model fable >/dev/null
+export WORKFLOW_REVIEW_MODEL=fable
 "$MEM_BIN" project set verify true >/dev/null
 rm -f "$WF_TMP/settled-id" "$WF_TMP/settled-answered"
 
