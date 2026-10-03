@@ -1009,10 +1009,10 @@ fn doctor_flags_broken_child_projects_and_context_stays_separated() {
         code(&mem(&w, &repo.join("apps/x"), &["log", "child work"])),
         0
     );
-    let ctx = stdout(&mem(&w, &repo.join("apps/x"), &["context"]));
+    let ctx = stdout(&mem(&w, &repo.join("apps/x"), &["context", "--full"]));
     assert!(ctx.contains("child work"), "{ctx}");
     assert!(!ctx.contains("root work"), "{ctx}");
-    let ctx = stdout(&mem(&w, &repo, &["context"]));
+    let ctx = stdout(&mem(&w, &repo, &["context", "--full"]));
     assert!(ctx.contains("root work"), "{ctx}");
     assert!(!ctx.contains("child work"), "{ctx}");
 
