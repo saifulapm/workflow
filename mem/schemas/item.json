@@ -168,6 +168,21 @@
     "score": {
       "type": "number"
     },
+    "heading": {
+      "description": "Wiki section hits in `search --json` only: the section's heading as written, `top` for the text before the first `## ` heading.",
+      "type": "string"
+    },
+    "snippet": {
+      "description": "Wiki section hits in `search --json` only: the section's line with the most query-term hits and the next line with text, newline-separated, each cut at 120 bytes; null when the page changed under the index.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bytes": {
+      "description": "Wiki section hits in `search --json` only: the section's size in bytes, heading line included.",
+      "type": "integer"
+    },
     "body": {
       "type": "string"
     },

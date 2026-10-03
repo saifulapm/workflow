@@ -144,6 +144,11 @@ fn hits_json(hits: &[Hit]) -> Vec<serde_json::Value> {
         .map(|h| {
             let mut v = row_json(&h.row);
             v["score"] = json!((h.score * 100.0).round() / 100.0);
+            if let Some(heading) = &h.heading {
+                v["heading"] = json!(heading);
+                v["snippet"] = json!(h.snippet);
+                v["bytes"] = json!(h.bytes);
+            }
             v
         })
         .collect()

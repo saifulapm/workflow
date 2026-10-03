@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{World, item, put};
+use common::{World, code, item, mem, put};
 use mem::index::{Index, Purpose};
 use mem::item::Kind;
 use mem::search::{Query, Scope, search};
@@ -507,6 +507,47 @@ fn filters_and_scope_tell_pages_and_items_apart() {
     )
     .unwrap();
     assert_eq!(all.len(), 2);
+}
+
+#[test]
+fn search_json_gives_a_section_its_heading_snippet_and_size() {
+    let w = World::new("search-wiki-json");
+    let repo = w.repo("thing", None);
+    assert_eq!(code(&mem(&w, &repo, &["save", "a jsontoken fact"])), 0);
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let dir = w.store().wiki_dir(&id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("sessions.md"),
+        "# Sessions\n\n## Storage\n\njsontoken lives here\n",
+    )
+    .unwrap();
+
+    let out = mem(&w, &repo, &["search", "jsontoken", "--json"]);
+    assert_eq!(code(&out), 0);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let hits = v["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 2, "{v}");
+    let section = hits
+        .iter()
+        .find(|h| h["kind"] == "wiki")
+        .expect("a section hit");
+    assert_eq!(section["short_id"], "sessions#storage");
+    assert_eq!(section["heading"], "Storage");
+    assert_eq!(section["snippet"], "jsontoken lives here");
+    assert_eq!(
+        section["bytes"],
+        "## Storage\n\njsontoken lives here\n".len()
+    );
+    let fact = hits
+        .iter()
+        .find(|h| h["kind"] == "fact")
+        .expect("an item hit");
+    for key in ["heading", "snippet", "bytes"] {
+        assert!(fact.get(key).is_none(), "an item row has no {key}: {fact}");
+    }
 }
 
 #[test]
