@@ -17,6 +17,7 @@ pub mod maint;
 pub mod paths;
 pub mod project;
 pub mod questions;
+pub mod records;
 pub mod search;
 pub mod sections;
 pub mod session;
@@ -223,6 +224,52 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             text.as_deref(),
             option.as_deref(),
         ),
+        cli::Command::Decide {
+            text,
+            by,
+            replaces,
+            session_id,
+        } => records::decide(
+            &with_session(app, session_id),
+            text,
+            by.as_str(),
+            replaces.as_deref(),
+        ),
+        cli::Command::Evidence { command } => match command {
+            cli::EvidenceCommand::Add {
+                task,
+                file,
+                note,
+                session_id,
+            } => records::evidence_add(&with_session(app, session_id), task, file, note),
+            cli::EvidenceCommand::List { task } => records::evidence_list(&app, task.as_deref()),
+        },
+        cli::Command::Finding { command } => match command {
+            cli::FindingCommand::Add {
+                milestone,
+                step,
+                text,
+                evidence,
+                session_id,
+            } => records::finding_add(
+                &with_session(app, session_id),
+                milestone,
+                step,
+                text,
+                evidence.as_deref(),
+            ),
+            cli::FindingCommand::List { open } => records::finding_list(&app, *open),
+            cli::FindingCommand::Close { id, by } => records::finding_close(&app, id, by),
+        },
+        cli::Command::Raw { command } => match command {
+            cli::RawCommand::Add { source } => records::raw_add(&app, source),
+        },
+        cli::Command::Brief { set, session_id } => {
+            records::brief(&with_session(app, session_id), set.as_deref())
+        }
+        cli::Command::Idea { text, session_id } => {
+            records::idea(&with_session(app, session_id), text)
+        }
         cli::Command::Wiki {
             slug,
             stdin,

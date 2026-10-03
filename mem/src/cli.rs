@@ -217,6 +217,45 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
+    /// Record a decision: who made it, and what it replaces.
+    Decide {
+        text: String,
+        #[arg(long)]
+        by: DecidedBy,
+        /// The decision this one replaces, in words.
+        #[arg(long)]
+        replaces: Option<String>,
+        #[arg(long)]
+        session_id: Option<String>,
+    },
+    /// File a task's evidence, or list what is filed.
+    Evidence {
+        #[command(subcommand)]
+        command: EvidenceCommand,
+    },
+    /// File what a milestone's check turned up, list findings, or close one.
+    Finding {
+        #[command(subcommand)]
+        command: FindingCommand,
+    },
+    /// Keep a source as it was taken: a file copied, or a URL fetched.
+    Raw {
+        #[command(subcommand)]
+        command: RawCommand,
+    },
+    /// The project brief: print the newest, or set a new one.
+    Brief {
+        #[arg(long)]
+        set: Option<String>,
+        #[arg(long)]
+        session_id: Option<String>,
+    },
+    /// Record an idea for later.
+    Idea {
+        text: String,
+        #[arg(long)]
+        session_id: Option<String>,
+    },
     /// The project's wiki: list pages, print one, or replace one.
     Wiki {
         /// The page slug. Without one, list every page this project has. With
@@ -280,6 +319,78 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
+}
+
+/// Who made a decision: Saiful, or an agent taking the default.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum DecidedBy {
+    Saiful,
+    Agent,
+}
+
+impl DecidedBy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DecidedBy::Saiful => "saiful",
+            DecidedBy::Agent => "agent",
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EvidenceCommand {
+    /// Copy a file into the project's evidence for a task, with a note.
+    Add {
+        #[arg(long)]
+        task: String,
+        file: std::path::PathBuf,
+        #[arg(long)]
+        note: String,
+        #[arg(long)]
+        session_id: Option<String>,
+    },
+    /// One `#<id>  <task>  <file>  <note>` line per item, newest first.
+    List {
+        #[arg(long)]
+        task: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FindingCommand {
+    /// File a finding against a milestone's step. It starts open.
+    Add {
+        #[arg(long)]
+        milestone: String,
+        #[arg(long)]
+        step: String,
+        text: String,
+        /// A file that shows it, copied into the project's evidence.
+        #[arg(long)]
+        evidence: Option<std::path::PathBuf>,
+        #[arg(long)]
+        session_id: Option<String>,
+    },
+    /// One `#<id>  <status>  <milestone>  <step>  <title>` line per finding.
+    List {
+        /// Only the findings nothing has fixed yet.
+        #[arg(long)]
+        open: bool,
+    },
+    /// Mark a finding fixed by a commit, in place.
+    Close {
+        id: String,
+        #[arg(long)]
+        by: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RawCommand {
+    /// Store a file or URL under the project's raw/. A name already there
+    /// is refused: a raw source is never replaced.
+    Add { source: String },
 }
 
 #[derive(Subcommand, Debug)]
