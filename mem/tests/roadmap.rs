@@ -333,6 +333,12 @@ fn context_names_the_roadmap_and_its_next_milestone() {
     let out = mem(&w, &repo, &["context"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let text = stdout(&out);
+    assert!(text.contains("roadmap: m1-auth (1 of 2)\n"), "{text}");
+    assert!(
+        !text.contains("nothing recorded"),
+        "a roadmap is something recorded: {text}"
+    );
+    let text = stdout(&mem(&w, &repo, &["context", "--full"]));
     assert!(text.contains("roadmap: # roadmap: shop"), "{text}");
     assert!(
         text.contains("roadmap: - [ ] m1-auth Sign-in and sessions"),
@@ -346,6 +352,8 @@ fn context_names_the_roadmap_and_its_next_milestone() {
     // Ticking the first milestone moves the digest on to the second.
     assert_eq!(code(&mem(&w, &repo, &["roadmap", "--tick", "m1-auth"])), 0);
     let text = stdout(&mem(&w, &repo, &["context"]));
+    assert!(text.contains("roadmap: m2-billing (2 of 2)\n"), "{text}");
+    let text = stdout(&mem(&w, &repo, &["context", "--full"]));
     assert!(text.contains("roadmap: - [ ] m2-billing Billing"), "{text}");
 }
 
@@ -360,6 +368,8 @@ fn a_milestone_the_review_sends_back_unticks() {
     assert_eq!(code(&mem(&w, &repo, &["roadmap", "--set-file", &path])), 0);
     assert_eq!(code(&mem(&w, &repo, &["roadmap", "--tick", "m1-auth"])), 0);
     let text = stdout(&mem(&w, &repo, &["context"]));
+    assert!(text.contains("roadmap: m2-billing (2 of 2)\n"), "{text}");
+    let text = stdout(&mem(&w, &repo, &["context", "--full"]));
     assert!(text.contains("roadmap: - [ ] m2-billing Billing"), "{text}");
 
     let out = mem(&w, &repo, &["roadmap", "--untick", "m1-auth"]);
@@ -371,6 +381,11 @@ fn a_milestone_the_review_sends_back_unticks() {
         "the page is back byte for byte"
     );
     let text = stdout(&mem(&w, &repo, &["context"]));
+    assert!(
+        text.contains("roadmap: m1-auth (1 of 2)\n"),
+        "the digest names m1-auth as next again: {text}"
+    );
+    let text = stdout(&mem(&w, &repo, &["context", "--full"]));
     assert!(
         text.contains("roadmap: - [ ] m1-auth Sign-in and sessions"),
         "the digest names m1-auth as next again: {text}"

@@ -41,7 +41,10 @@ pub enum Command {
     Context {
         /// Which project, when it is not the working directory's.
         project: Option<String>,
-        /// Override the assembly target in bytes.
+        /// The whole digest: facts, logs and the plan's next task.
+        #[arg(long)]
+        full: bool,
+        /// Override the full digest's assembly target in bytes.
         #[arg(long)]
         budget: Option<usize>,
         /// A hook-sized summary instead of the digest.

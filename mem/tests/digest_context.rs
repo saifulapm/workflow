@@ -200,19 +200,34 @@ fn context_names_the_first_real_task_and_none_of_the_examples() {
     w.project(P, "thing");
     std::fs::write(w.store().plan_path(P), EXAMPLES).unwrap();
 
-    let out = mem(&w, &w.plain_dir("cwd"), &["context", "thing"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["context", "thing", "--full"]);
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("plan: - [ ] t2 run the migration"), "{text}");
     assert!(!text.contains("t9"), "an indented example: {text}");
     assert!(!text.contains("t8"), "a fenced example: {text}");
+    // The small digest counts the real tasks and none of the examples.
+    let text = stdout(&mem(&w, &w.plain_dir("cwd"), &["context", "thing"]));
+    assert!(
+        text.contains("plan: Migrate sessions · tasks 1/2 merged\n"),
+        "{text}"
+    );
 
     // Nothing open left means the digest names the plan and no task under it.
     let done = EXAMPLES.replace("- [ ] t2", "- [x] t2");
     std::fs::write(w.store().plan_path(P), &done).unwrap();
-    let text = stdout(&mem(&w, &w.plain_dir("cwd"), &["context", "thing"]));
+    let text = stdout(&mem(
+        &w,
+        &w.plain_dir("cwd"),
+        &["context", "thing", "--full"],
+    ));
     assert!(text.contains("plan: # Migrate sessions"), "{text}");
     assert!(!text.contains("- [ ]"), "{text}");
+    let text = stdout(&mem(&w, &w.plain_dir("cwd"), &["context", "thing"]));
+    assert!(
+        text.contains("plan: Migrate sessions · tasks 2/2 merged\n"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -262,10 +277,19 @@ fn a_project_with_pages_opens_with_the_wiki_line_and_the_index_head() {
         "the whole index head, not just its first entry: {text}"
     );
 
-    let out = mem(&w, &w.plain_dir("cwd"), &["context", "thing"]);
+    let out = mem(&w, &w.plain_dir("cwd"), &["context", "thing", "--full"]);
     assert_eq!(code(&out), 0);
     assert!(
         stdout(&out).contains("wiki: 3 pages — mem wiki"),
+        "{}",
+        stdout(&out)
+    );
+    let out = mem(&w, &w.plain_dir("cwd"), &["context", "thing"]);
+    assert_eq!(code(&out), 0);
+    assert!(
+        stdout(&out).contains(
+            "wiki: 3 pages\n  pricing: where money is rounded\n  sessions: where a login lives\n"
+        ),
         "{}",
         stdout(&out)
     );
@@ -547,7 +571,7 @@ fn the_digest_names_every_skill_and_how_to_open_one() {
     let out = common::mem_env(
         &w,
         &repo,
-        &["context", "thing"],
+        &["context", "thing", "--full"],
         &[("WORKFLOW_BIN", fake.to_str().unwrap())],
     );
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
@@ -562,17 +586,37 @@ what it covers with `mem skill mem` for mem's, `workflow skill <name>` for every
     assert!(text.contains("mem — "), "mem names its own: {text}");
     assert!(text.contains("route — pick the lane"), "verbatim: {text}");
     assert!(text.contains("plan — cut the tasks"), "verbatim: {text}");
-
-    // A workflow that exits nonzero costs its seven and nothing else.
-    std::fs::write(&fake, "#!/bin/sh\nexit 3\n").unwrap();
+    // The small digest names them and how to open one.
     let text = stdout(&common::mem_env(
         &w,
         &repo,
         &["context", "thing"],
         &[("WORKFLOW_BIN", fake.to_str().unwrap())],
     ));
+    let small = "skills: mem, route, plan · mem skill <name> or workflow skill <name>";
+    assert!(text.lines().any(|l| l == small), "{text}");
+
+    // A workflow that exits nonzero costs its seven and nothing else.
+    std::fs::write(&fake, "#!/bin/sh\nexit 3\n").unwrap();
+    let text = stdout(&common::mem_env(
+        &w,
+        &repo,
+        &["context", "thing", "--full"],
+        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
+    ));
     assert!(text.contains("mem — "), "{text}");
     assert!(!text.contains("route — "), "{text}");
+    let text = stdout(&common::mem_env(
+        &w,
+        &repo,
+        &["context", "thing"],
+        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
+    ));
+    assert!(
+        text.lines()
+            .any(|l| l == "skills: mem · mem skill <name> or workflow skill <name>"),
+        "{text}"
+    );
 
     // And outside a project mem knows, none of it is said at all.
     let out = mem(&w, &w.plain_dir("stranger"), &["context"]);
@@ -616,9 +660,9 @@ mem — Use at the start of a session\n\
 implement — Use when working through a plan\n\
 plan — Use to cut a task list\n";
 
-#[test]
-fn the_small_digest_follows_the_spec_order_under_its_target() {
-    let w = World::new("digest-small");
+/// A project with every source the small digest reads, and more facts and
+/// logs than it has room for.
+fn populate_small(w: &World) {
     w.project(P, "thing");
     let store = w.store();
     mem::project::set_key(&store, P, "plan_status", "running").unwrap();
@@ -631,7 +675,7 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     std::fs::write(store.plan_path(P), SMALL_PLAN).unwrap();
     std::fs::write(store.roadmap_path(P), SMALL_ROADMAP).unwrap();
     put_at(
-        &w,
+        w,
         Kind::Question,
         "a worker's question",
         0,
@@ -639,20 +683,20 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     );
     for n in 0..4 {
         put_at(
-            &w,
+            w,
             Kind::Question,
             &format!("question {n} for a person"),
             10 + n,
             None,
         );
     }
-    put_at(&w, Kind::Handoff, "stopped mid migration", 20, None);
+    put_at(w, Kind::Handoff, "stopped mid migration", 20, None);
     for n in 0..5 {
-        put_at(&w, Kind::Ruling, &format!("ruling {n}"), 30 + n, None);
+        put_at(w, Kind::Ruling, &format!("ruling {n}"), 30 + n, None);
     }
     for n in 0..30 {
         put_at(
-            &w,
+            w,
             Kind::Fact,
             &format!("fact {n} the small digest drops"),
             40 + n,
@@ -661,7 +705,7 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     }
     for n in 0..5 {
         put_at(
-            &w,
+            w,
             Kind::Log,
             &format!("log {n} the small digest drops"),
             80 + n,
@@ -670,10 +714,17 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     }
     let mut index = String::from("# Index\n\nThe pages this project keeps.\n\n");
     for n in 0..7 {
-        page(&w, &format!("p{n}"), &format!("# Page {n}\n\nBody.\n"));
+        page(w, &format!("p{n}"), &format!("# Page {n}\n\nBody.\n"));
         index.push_str(&format!("- [p{n}](p{n}.md) — page {n} in one line\n"));
     }
-    page(&w, "index", &index);
+    page(w, "index", &index);
+}
+
+#[test]
+fn the_small_digest_follows_the_spec_order_under_its_target() {
+    let w = World::new("digest-small");
+    populate_small(&w);
+    let store = w.store();
 
     let (_i, s) = sources_with_skills(
         &w,
@@ -795,5 +846,55 @@ fn an_empty_project_gets_its_name_and_the_small_hint() {
     assert_eq!(
         build_small(&s, &w.store()).text,
         format!("project: thing\n{EMPTY}\n{SMALL_HINT}\n")
+    );
+}
+
+#[test]
+fn context_prints_the_small_digest_and_full_the_old_one() {
+    let w = World::new("digest-flip");
+    populate_small(&w);
+    let cwd = w.plain_dir("cwd");
+    let (_i, s) = sources(&w, None);
+
+    let out = mem(&w, &cwd, &["context", "thing"]);
+    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
+    let text = stdout(&out);
+    assert!(text.len() < SMALL_TARGET, "{} bytes: {text}", text.len());
+    assert!(
+        text.starts_with("project: thing · stage: running · runner: macbook\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("roadmap: m2-sections (2 of 3) · tasks 2/4 merged\n"),
+        "{text}"
+    );
+    assert!(!text.contains("fact "), "{text}");
+    assert!(text.ends_with(&format!("{SMALL_HINT}\n")), "{text}");
+
+    // The machine reading gets the same text the session does.
+    let out = mem(&w, &cwd, &["context", "thing", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["context"].as_str(), Some(text.as_str()));
+    assert_eq!(v["truncated"], serde_json::json!(false));
+    assert_eq!(v["project"], serde_json::json!("thing"));
+
+    let full = stdout(&mem(&w, &cwd, &["context", "thing", "--full"]));
+    assert!(full.starts_with("project: thing\n"), "{full}");
+    assert!(full.contains("fact 29 the small digest drops"), "{full}");
+    assert!(full.ends_with(&format!("{HINT}\n")), "{full}");
+    let tight = stdout(&mem(
+        &w,
+        &cwd,
+        &["context", "thing", "--full", "--budget", "8"],
+    ));
+    assert!(
+        !tight.contains("fact "),
+        "the budget still applies: {tight}"
+    );
+
+    let brief = stdout(&mem(&w, &cwd, &["context", "thing", "--brief"]));
+    assert_eq!(
+        brief,
+        format!("{}\n", mem::digest::brief(&s, jiff::Timestamp::now()))
     );
 }

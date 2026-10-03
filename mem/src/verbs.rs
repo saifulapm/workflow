@@ -15,7 +15,8 @@ use crate::project::{Identity, Mode, PathMap, Registry};
 use crate::search::{Hit, Query, search};
 use crate::timefmt::date;
 
-/// `mem context` — the digest (spec §8). Always exit 0 when anything is
+/// `mem context` — the small digest, or with `--full` the whole one (spec §8).
+/// Always exit 0 when anything is
 /// emitted, the empty state included: a hook that gets a non-zero exit here
 /// would drop the whole thing.
 ///
@@ -24,7 +25,13 @@ use crate::timefmt::date;
 /// rather than two lines saying so, because those two lines are injected into a
 /// session that then has to decide what to do about them. `--json` still prints
 /// its document — machines read that, not the adapter.
-pub fn context(app: &App, budget: Option<usize>, brief: bool, hook_json: bool) -> Result<i32> {
+pub fn context(
+    app: &App,
+    full: bool,
+    budget: Option<usize>,
+    brief: bool,
+    hook_json: bool,
+) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
     if !app.json && !matches!(identity, Identity::Known { .. }) {
         if let Some(note) = unknown_project_note(&identity)
@@ -59,7 +66,11 @@ pub fn context(app: &App, budget: Option<usize>, brief: bool, hook_json: bool) -
         return Ok(exit::OK);
     }
 
-    let digest = crate::digest::build(&sources, &app.store, budget.unwrap_or(TARGET));
+    let digest = if full {
+        crate::digest::build(&sources, &app.store, budget.unwrap_or(TARGET))
+    } else {
+        crate::digest::build_small(&sources, &app.store)
+    };
     if app.json {
         println!(
             "{}",
@@ -77,15 +88,20 @@ pub fn context(app: &App, budget: Option<usize>, brief: bool, hook_json: bool) -
         }
         // Named first: a session that inherited another's MEM_PROJECT read
         // amx's memory in shortcart's checkout and could not tell.
-        // A warning about the store still leads.
-        let at = digest
-            .text
-            .split_inclusive('\n')
-            .take_while(|l| l.starts_with("! "))
-            .map(str::len)
-            .sum::<usize>();
+        // A warning about the store still leads. The small digest names the
+        // project itself.
+        let at = if full {
+            digest
+                .text
+                .split_inclusive('\n')
+                .take_while(|l| l.starts_with("! "))
+                .map(str::len)
+                .sum::<usize>()
+        } else {
+            0
+        };
         print!("{}", &digest.text[..at]);
-        if let Some(name) = identity.name() {
+        if full && let Some(name) = identity.name() {
             println!("project: {name}");
         }
         print!("{}", &digest.text[at..]);

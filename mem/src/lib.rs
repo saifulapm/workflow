@@ -62,6 +62,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
     match command {
         cli::Command::Context {
             project,
+            full,
             budget,
             brief,
             hook_json,
@@ -76,7 +77,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             } else {
                 app
             };
-            verbs::context(&app, *budget, *brief, *hook_json)
+            verbs::context(&app, *full, *budget, *brief, *hook_json)
         }
         cli::Command::SessionCheck {
             session_id,
