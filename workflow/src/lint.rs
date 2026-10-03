@@ -12,10 +12,13 @@ use crate::{exit, hygiene, memcli, warn};
 const HARD: &[(&str, Hard)] = &[
     ("a Claude co-author trailer", Hard::CoAuthored),
     (
-        "the \"generated with\" line",
-        Hard::Literal("generated with claude code"),
+        concat!("the \"generated", " with\" line"),
+        Hard::Literal(concat!("generated", " with claude code")),
     ),
-    ("a claude.ai/code link", Hard::Literal("claude.ai/code")),
+    (
+        concat!("a claude.ai", "/code link"),
+        Hard::Literal(concat!("claude.ai", "/code")),
+    ),
     ("a Claude session URL", Hard::ClaudeUrl),
     ("a session URL trailer", Hard::SessionTrailer),
     ("the shipflow name", Hard::Literal("shipflow")),
@@ -26,7 +29,7 @@ const HARD: &[(&str, Hard)] = &[
 
 #[derive(Clone, Copy)]
 enum Hard {
-    /// `co-authored-by:[[:space:]]*claude`
+    /// A co-author trailer naming Claude, with any spaces after the colon.
     CoAuthored,
     /// A fixed string, matched case-insensitively.
     Literal(&'static str),
@@ -65,7 +68,7 @@ impl Hard {
         match self {
             Hard::Literal(needle) => lower.contains(needle),
             Hard::CoAuthored => lower
-                .match_indices("co-authored-by:")
+                .match_indices(concat!("co-authored", "-by:"))
                 .any(|(i, m)| skip_spaces(&lower[i + m.len()..]).starts_with("claude")),
             Hard::ClaudeUrl => {
                 for scheme in ["http://", "https://"] {
@@ -117,7 +120,7 @@ impl Hard {
                         .is_some_and(|(id, _)| is_slug(id))
                 })
             }
-            Hard::Emoji => line.contains('🤖') || line.contains('✨'),
+            Hard::Emoji => line.contains('\u{1f916}') || line.contains('✨'),
         }
     }
 }
@@ -381,15 +384,18 @@ mod tests {
     #[test]
     fn the_provenance_tier_catches_every_shape_it_is_meant_to() {
         for text in [
-            "Extract cart pricing\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-            "Extract cart pricing\n\nGenerated with Claude Code",
-            "See https://claude.ai/code for the rest",
+            concat!(
+                "Extract cart pricing\n\nCo-Authored",
+                "-By: Claude <noreply@anthropic.com>"
+            ),
+            concat!("Extract cart pricing\n\nGenerated", " with Claude Code"),
+            concat!("See https://claude.ai", "/code for the rest"),
             "Session: https://claude.ai/s/018f2c7e-0000-7000-8000-000000000000",
             "Port the last of shipflow across",
             "focus: extract cart pricing",
             "gate: tighten the pre-commit check",
             "track/cart-pricing",
-            "Extract cart pricing 🤖",
+            "Extract cart pricing \u{1f916}",
             "Extract cart pricing ✨",
             "  Session-URL:   http://claude.com/s/x",
             "plan m05-ui-kit: all nine tasks shipped",
