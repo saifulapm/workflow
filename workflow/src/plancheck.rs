@@ -120,9 +120,22 @@ pub fn findings(plan: &Plan, prior: &[Plan], root: &Path, plan_file: Option<&Pat
         if let Some(msg) = absolute_path(&t.id, verify) {
             f.refusals.push(msg);
         }
+        if let Some(msg) = unknown_effort(t) {
+            f.refusals.push(msg);
+        }
         // A Verify that greps a file the task does not own asks the worker to
         // edit it, and the commit hook refuses the edit.
         let patterns = ownership::split_patterns(t.files.as_deref().unwrap_or(""));
+        // A surface change with no evidence captured is what dogfooding
+        // exists to catch, so the plan says what to capture up front.
+        if t.show.is_none()
+            && let Some(p) = patterns.iter().find(|p| reaches_surface(p))
+        {
+            f.warnings.push(format!(
+                "plan: task {}: Files reach a surface ({p}) and the task has no Show line -- say what evidence to capture",
+                t.id
+            ));
+        }
         // Only a file git tracks counts: a pattern after `-A 3`, a
         // redirection or a `$VAR` is a word in operand position, not a path.
         for path in grep_operands(verify) {
@@ -582,6 +595,17 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
                 "roadmap: milestone {id}: no Show line -- what Saiful opens, does and sees once it lands"
             ));
         }
+        // The engine picks the dogfood playbook from the surface, so a
+        // milestone without a known one cannot be driven once it lands.
+        match m.surface.as_deref() {
+            Some(s) if SURFACES.contains(&s) => {}
+            Some(s) => f.refusals.push(format!(
+                "roadmap: milestone {id}: Surface '{s}' -- web, mobile, cli, emacs or lib, so the engine knows how to drive it"
+            )),
+            None => f.refusals.push(format!(
+                "roadmap: milestone {id}: no Surface line -- web, mobile, cli, emacs or lib, so the engine knows how to drive it"
+            )),
+        }
         let first_open = std::mem::replace(&mut next_open, false);
         let path = dir.join(format!("{id}.md"));
         let shown = path.display();
@@ -711,6 +735,41 @@ fn absolute_path(task: &str, verify: &str) -> Option<String> {
     Some(format!(
         "plan: task {task}: Verify names '{path}' -- verify runs in a worktree: relative paths only"
     ))
+}
+
+const SURFACES: [&str; 5] = ["web", "mobile", "cli", "emacs", "lib"];
+
+/// An Effort amx would refuse at dispatch, after the worktree is cut for it.
+fn unknown_effort(t: &Task) -> Option<String> {
+    let effort = t.effort.as_deref()?;
+    if ["low", "medium", "high", "xhigh", "max"].contains(&effort) {
+        return None;
+    }
+    Some(format!(
+        "plan: task {}: Effort '{effort}' -- one of low, medium, high, xhigh, max",
+        t.id
+    ))
+}
+
+/// A Files pattern a user sees the result of: a directory component that
+/// holds screens or commands, or a file type that renders.
+fn reaches_surface(pattern: &str) -> bool {
+    const DIRS: [&str; 8] = [
+        "ui",
+        "components",
+        "pages",
+        "views",
+        "screens",
+        "templates",
+        "cli",
+        "bin",
+    ];
+    const EXTS: [&str; 6] = ["tsx", "jsx", "vue", "svelte", "css", "html"];
+    let last = pattern.rsplit('/').next().unwrap_or("");
+    pattern.split('/').any(|c| DIRS.contains(&c))
+        || last
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| EXTS.contains(&ext))
 }
 
 /// The Rulings and Decisions headings of a plan's prose that hold a numbered

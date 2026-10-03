@@ -32,9 +32,13 @@ road <<'EOF'
 # roadmap: shop
 
 - [ ] m4-search Search
+      Surface: lib
 - [ ] m3-reports Reports  [after: m2-billing]
+      Surface: lib
 - [ ] m2-billing Billing  [after: m1-auth]
+      Surface: lib
 - [ ] m1-auth Sign-in and sessions
+      Surface: lib
 EOF
 
 milestone m1-auth <<'EOF'
@@ -127,7 +131,9 @@ road <<'EOF'
 # roadmap: shop
 
 - [ ] m1-auth Sign-in and sessions
+      Surface: lib
 - [ ] m2-billing Billing  [after: m1-auth]
+      Surface: lib
 EOF
 milestone m1-auth <<'EOF'
 # plan: m1-auth
@@ -154,6 +160,7 @@ road <<'EOF2'
 
 - [x] m1-auth Sign-in and sessions
 - [ ] m2-billing Billing  [after: m1-auth]
+      Surface: lib
       Show: Saiful pays a test order from the cart and sees it marked paid
 EOF2
 milestone m2-billing <<'EOF2'
@@ -176,7 +183,9 @@ road <<'EOF2'
 # roadmap: shop
 
 - [ ] m1-auth Sign-in and sessions
+      Surface: lib
 - [ ] m2-billing Billing  [after: m1-auth]
+      Surface: lib
 EOF2
 milestone m1-auth <<'EOF2'
 # plan: m1-auth
@@ -261,7 +270,9 @@ road <<'EOF'
 # roadmap: shop
 
 - [ ] m1-auth Sign-in and sessions
+      Surface: lib
 - [ ] m2-billing Billing  [after: m1-auth]
+      Surface: lib
 EOF
 milestone m1-auth <<'EOF'
 # plan: m1-auth

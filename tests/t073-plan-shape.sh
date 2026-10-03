@@ -259,6 +259,7 @@ cat >road/roadmap.md <<'EOF'
 # roadmap: shop
 
 - [ ] m1 First
+      Surface: lib
 EOF
 cat >road/m1.md <<'EOF'
 # plan: m1

@@ -280,7 +280,9 @@ plan_file <<'EOF'
 
 - [x] mem-stores-the-plans Store the roadmap and milestone plans in mem
 - [ ] the-roadmap-header Teach the parser the roadmap header [after: mem-stores-the-plans]
+      Surface: lib
 - [ ] the-hub-reads-it Show the roadmap on the hub [after: the-roadmap-header]
+      Surface: lib
 EOF
 parse
 is "$RC" 0 'a roadmap parses with no Files: or Verify: on its milestones'
@@ -319,6 +321,7 @@ plan_file <<EOF
 # roadmap: r
 
 - [ ] $id64 A slug the length of the rule
+      Surface: lib
 EOF
 parse
 is "$RC" 0 'a 64 character milestone id parses'
