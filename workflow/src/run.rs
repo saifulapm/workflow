@@ -14,7 +14,7 @@ use crate::gitcmd::Git;
 use crate::plan::{Plan, PlanKind, Task};
 use crate::reviewer::{self, Verdict};
 use crate::{
-    brief, exit, lint, memcli, ownership, paths, plan, plancheck, repo, sys, verify, warn,
+    brief, exit, hygiene, memcli, ownership, paths, plan, plancheck, repo, sys, verify, warn,
 };
 
 pub const PENDING: &str = "pending";
@@ -1528,17 +1528,33 @@ impl Run {
 
         // The same anchor again: a branch that took integration in to reach a
         // dependency would otherwise be held to its siblings' commit messages
-        // as well as its own.
-        let msgs = self
-            .git()
-            .out(&[
-                "log",
-                "--format=%B",
-                &format!("{}..{branch}", self.int_branch),
-            ])
-            .unwrap_or_default();
-        if !lint::lint_text(&msgs) {
-            return Err("a commit message did not pass lint-msg".into());
+        // as well as its own. Oldest first, one commit at a time, so the
+        // failure names the commit to reword. A merge is left out: git wrote
+        // its message, and that message names both branches, slugs and all.
+        let log = self.git().bytes(&[
+            "log",
+            "-z",
+            "--reverse",
+            "--no-merges",
+            "--format=%h%n%B",
+            &format!("{}..{branch}", self.int_branch),
+        ]);
+        for commit in log.split(|b| *b == 0).filter(|c| !c.is_empty()) {
+            let commit = String::from_utf8_lossy(commit);
+            let (sha, msg) = commit.split_once('\n').unwrap_or((&commit, ""));
+            let scope = hygiene::Scope {
+                staged: false,
+                tree: false,
+                history: None,
+                message: None,
+                string: Some(msg),
+            };
+            if hygiene::cmd_hygiene(scope, None, false, false) != exit::OK {
+                return Err(format!(
+                    "commit {sha} \"{}\" did not pass hygiene; reword its message",
+                    msg.lines().next().unwrap_or_default()
+                ));
+            }
         }
 
         let int = Git::at(&self.int_wt);

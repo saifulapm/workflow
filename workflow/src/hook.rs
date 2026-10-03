@@ -6,7 +6,8 @@
 //!   * the non-firing path never exits early. Every branch reaches step 5,
 //!     because a global `core.hooksPath` puts this between every human commit on
 //!     the machine and the repo's own hooks. Exiting early would silently
-//!     disable husky.
+//!     disable husky. The one exit is a refusal: a human commit in a checkout
+//!     mem knows still gets the hygiene check.
 //!   * the hook never touches its own environment. git sets `GIT_DIR` and
 //!     `GIT_INDEX_FILE` for hooks, and a partial commit's staged view lives in
 //!     that temporary index; unsetting them blinds the staged-diff checks and
@@ -18,7 +19,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::gitcmd::{self, Git};
-use crate::{exit, lint, memcli, paths, verify, warn};
+use crate::{exit, hygiene, memcli, paths, verify, warn};
 
 /// Step 2, the fire condition: a location-sane union (review-4 B-2). An
 /// orchestrator worktree, or an agent standing in a checkout mem knows.
@@ -46,11 +47,11 @@ pub fn agent_marked() -> bool {
 /// Step 4, the check itself.
 fn check(name: &str, args: &[String]) -> i32 {
     match name {
-        "pre-commit" => verify::cmd_verify(verify::Mode::Hook),
-        "commit-msg" => match args.first() {
-            Some(f) => lint::cmd_lint_msg(Some(Path::new(f)), None),
-            None => exit::OK,
+        "pre-commit" => match verify::cmd_verify(verify::Mode::Hook) {
+            exit::OK => words(name, args),
+            rc => rc,
         },
+        "commit-msg" => words(name, args),
         "pre-push" => {
             if std::env::var("WORKFLOW_ALLOW_PUSH").unwrap_or_default() == "1" {
                 exit::OK
@@ -65,6 +66,24 @@ fn check(name: &str, args: &[String]) -> i32 {
             exit::OK
         }
     }
+}
+
+/// The hygiene half of the check: the staged diff before the commit, the
+/// message after it is written. A human's commit gets only this half.
+fn words(name: &str, args: &[String]) -> i32 {
+    let message = match (name, args.first()) {
+        ("pre-commit", _) => None,
+        ("commit-msg", Some(f)) => Some(Path::new(f)),
+        _ => return exit::OK,
+    };
+    let scope = hygiene::Scope {
+        staged: message.is_none(),
+        tree: false,
+        history: None,
+        message,
+        string: None,
+    };
+    hygiene::cmd_hygiene(scope, None, false, false)
 }
 
 /// Step 5: chain to the repo's own hook. The stub's path decides whether that
@@ -115,6 +134,20 @@ pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
         if std::env::var("WORKFLOW_HOOK_SEEN").unwrap_or_default() != hd_key {
             // 4.
             let rc = check(name, args);
+            if rc != exit::OK {
+                return rc;
+            }
+        }
+    } else if !agent_marked() && memcli::knows_this_checkout() {
+        // A human commit in a checkout mem knows: hygiene, no suite. This is
+        // the only path WORKFLOW_HYGIENE=skip reaches; the firing path is
+        // an agent's or a run worktree's, and nothing clears it there.
+        if std::env::var("WORKFLOW_HYGIENE").unwrap_or_default() == "skip" {
+            warn(format!(
+                "hook: {name}: hygiene skipped by WORKFLOW_HYGIENE=skip"
+            ));
+        } else {
+            let rc = words(name, args);
             if rc != exit::OK {
                 return rc;
             }
