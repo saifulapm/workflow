@@ -37,11 +37,8 @@ runs only through `workflow verify`. Exit 0 is green, 1 failed, 2 no
 verifier, 3 a test was removed. A red Verify is answered in the code it
 tests, never by weakening the test.
 
-Red twice on the same error: ask before a third try.
-
-    workflow advise "<question>" --file <path>
-
-It prints the advisor's answer and your turn goes on.
+Red twice on the same error: consult the advisor, the tool Claude Code
+offers, before a third try. Its answer comes back and your turn goes on.
 
 Done when `workflow verify` exits 0 and the test you wrote was red before your
 code.

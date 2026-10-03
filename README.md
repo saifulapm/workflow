@@ -53,7 +53,7 @@ start, the commit gate is armed, and the routing skill decides lanes.
 A project's spec lives in the wiki, never the repo: write it as pages with
 `mem wiki <slug> --stdin`, one per subsystem. A plan names a page with
 `Read: wiki:<slug>` instead of restating it, and the run inlines that page,
-verbatim, in the worker's brief and the reader's prompt.
+verbatim, in the worker's brief.
 
 A monorepo holds one project per app beside the root project:
 
@@ -145,8 +145,7 @@ Three sizes of work, three moves:
   spent on one task's fix rounds, so a run is for the case below only.
 - **A whole plan in parallel** — for a plan whose wide wave holds three or
   more tasks that share no files, on a machine that carries that many
-  workers (up to five), with workers on the
-  strongest model and no reader unless the project's numbers earn one: tell
+  workers (up to five), with workers on the strongest model: tell
   a session "run the <plan-id> plan". It starts `workflow run`, reads `workflow status`, decides retries
   and cleanup itself, and asks you only what is genuinely yours. Workers are
   amx agents in tmux panes, listed by `amx ls` and watched with
@@ -155,42 +154,10 @@ Three sizes of work, three moves:
   or one run does (`WORKFLOW_MODEL=sonnet workflow run`). A cheaper model
   can be given more reasoning: `mem project set effort max` starts every
   worker with `--effort max`, `unset` takes it back, and `WORKFLOW_EFFORT`
-  does it for one run (empty means no flag). A run starts unread: no
-  project key names a reader. With `WORKFLOW_REVIEW_MODEL` set for one run
-  (`WORKFLOW_REVIEW_EFFORT` its reasoning), every task's diff is read by
-  that model against the
-  plan before it merges, after its Verify is green. The reader tags each
-  finding `[blocks]` or `[later]`; a fix verdict sends the task back into
-  its worker's own session with the findings, a second one to a fresh
-  session on `WORKFLOW_FIX_MODEL` (default: the reader's), and a third is the
-  orchestrator's: `workflow accept <task>` lands it with the findings filed
-  as follow-ups. `[later]` findings on a ship are follow-ups too. The run
-  does not wait on the reading: the task sits `reviewing` while the next
-  one is dispatched, and its merge is recorded when the verdict says ship.
-  The session that owns the run waits with `workflow wait`, which returns
-  the moment a question, a failure or the end needs it. Name the model the workers already run on,
-  under any spelling (`opus` and `claude-opus-5` are one model), and nothing
-  is read — a model goes over its own work with its own blind spots — so the
-  reading costs a session only where it can find something.
-
-A diff can be read before it is committed. `workflow read` starts the
-gate's own reader, cold, over the working tree (`--range <r>` for a range)
-and prints its verdict: exit 0 ships, 1 is fix, 2 is a usage error such as
-nothing to read, 3 is a reading that ended with no verdict, 4 is nobody
-named to read, which the skills answer by committing without a reading. The verdict is
-the last line on stdout and sits in `read.verdict` too, for a caller the exit
-code cannot reach. `--against "<one sentence>"` or
-`--against wiki:<slug>` says what the diff is held to; without it the plan
-of record stands in. The review skill is this verb.
-
-A worker can ask a stronger model without stopping. From a task worktree,
-`workflow advise "<question>" --file <path>` sends the plan's prose, the
-task block, the pages it names, the worker's own reports and the question to
-the run's advisor (`WORKFLOW_ADVISOR` for one run, else the reader's model),
-prints the answer, and the task goes on; the brief says when to ask. Three
-consults an attempt, and a decision (scope, taste, a broken plan) is still
-`mem ask`. Outside a run, `--against "<text>"` says what the question is
-held to.
+  does it for one run (empty means no flag). A task merges when the gate's
+  suite is green on integration. The session that owns the run waits with
+  `workflow wait`, which returns the moment a question, a failure or the
+  end needs it.
 
 Questions find you: on screen while a machine is watched, on the phone
 (ntfy via hub) when everything is locked. Answer in the session, with

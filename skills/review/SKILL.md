@@ -5,8 +5,7 @@ description: Use when asked to review the diff of named tasks against a spec sec
 
 # review
 
-A review reads and reports. The code stays as it is; every change is the
-fixer's.
+A review reads and reports. The code stays as it is.
 
 1. Read the spec section you were named, `mem wiki <slug>#<section>`, and
    the diff of each named task (`git diff <base>..<task-commit>`, or `git

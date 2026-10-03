@@ -78,14 +78,10 @@ for s in work route; do
 	unlike "$skill" 'workflow read' "and $s no longer sends the diff to a reader"
 done
 
-# No project key names a reader any more: a run starts unread unless the
-# one run's environment names one, and every skill and the README say so.
-for f in skills/review/SKILL.md README.md; do
-	for key in review-model fix-model review-effort; do
-		unlike "$(cat "$WF_ROOT/$f")" "$key" "$f names no $key key"
-	done
-done
-like "$(cat "$WF_ROOT/README.md")" 'starts unread' 'README.md says a run starts unread'
+# A worker stuck on one error consults the advisor Claude Code offers, and
+# a task merges on the gate's green suite, so no verb reads or advises.
+unlike "$work_skill" 'workflow advise' 'work names no advise verb'
+unlike "$(cat "$WF_ROOT/README.md")" 'workflow read' 'README.md names no reader verb'
 
 ## ------------------------------------------------------- the fix-round loop
 
