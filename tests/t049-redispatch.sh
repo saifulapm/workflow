@@ -221,3 +221,35 @@ is "$(sed -n 2p "$WF_TMP/models-t1")" haiku 'and the second dispatch carried the
 wait "$runpid"
 is "$?" 0 'the run ends with t1 merged'
 is "$(cat "$rundir/t1.state")" merged 'on its second session'
+
+## ------------------------------------- a stopped-short run, redispatched cold
+
+# A run that stops short with a task failed is gone before anyone can mend
+# the cause, and redispatch used to refuse it for want of a live run. The
+# marker it leaves is what tells a watcher of the run dir that something
+# changed; the next run resumes the failed task by itself.
+cat >"$T_TMP/cold.md" <<'EOF2'
+# plan: cold
+
+- [ ] t5 Fails and the run stops short behind it
+      Files: app/t5.php
+      Verify: true
+- [ ] t6 Lands beside it
+      Files: app/t6.php
+      Verify: true
+EOF2
+rundir="$XDG_STATE_HOME/workflow/runs/app/cold"
+: >"$WF_TMP/go-t6"
+
+env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.5 \
+	workflow run --plan-file "$T_TMP/cold.md" >"$T_TMP/cold.log" 2>&1
+isnt "$?" 0 'the run stops short with t5 failed'
+is "$(cat "$rundir/t5.state" 2>/dev/null)" failed 'and leaves it failed in its run dir'
+
+run workflow redispatch t5 --model haiku
+is "$RC" 0 'redispatch with nothing live takes the stopped run'
+like "$OUT" 'run cold: no run is live -- t5 goes again when the plan runs next' \
+	'and says when it goes'
+test -f "$rundir/t5.redispatch"
+truthy "$?" 'the marker is in the run dir'
+is "$(cat "$rundir/t5.model")" haiku 'with the model named beside it'

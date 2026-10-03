@@ -3936,9 +3936,10 @@ fn shutdown(run: &Run, hangup: bool) -> i32 {
 }
 
 /// `workflow redispatch <task>` -- the marker the live run's poll loop reads.
-/// Only a run whose lock is held right now can honour it; anything else is a
-/// stopped run, and a stopped run's failed work comes back by running the
-/// plan again.
+/// Only a run whose lock is held right now can honour it. With nobody live
+/// the marker still goes into the newest run that holds the task failed: the
+/// next run of that plan resumes the task by itself, and a watcher of the run
+/// dir needs to see that the cause was mended or it never starts that run.
 pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
     if !Git::here().inside_worktree() {
         warn("redispatch: stand in the project checkout");
@@ -3959,26 +3960,17 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
         .collect();
     dirs.sort();
 
-    for dir in dirs {
+    for dir in &dirs {
         // Taking the lock and succeeding means no orchestrator is live here;
         // the guard drops it again on the way past.
-        if lock_run(&dir).is_some() {
+        if lock_run(dir).is_some() {
             continue;
         }
-        let state = field(&dir, task, "state");
-        let plan_id = dir
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let state = field(dir, task, "state");
         if state != FAILED && state != DISPATCHED {
             continue;
         }
-        // A model named here rides with the task for the rest of the run --
-        // this task's, nobody else's.
-        if let Some(m) = model {
-            let _ = std::fs::write(dir.join(format!("{task}.model")), format!("{m}\n"));
-        }
-        let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
+        let plan_id = mark_redispatch(dir, task, model);
         let how = match state.as_str() {
             DISPATCHED => {
                 "its session is replaced on the next poll; the commits on its branch stay"
@@ -3991,10 +3983,40 @@ pub fn cmd_redispatch(task: &str, model: Option<&str>) -> i32 {
         return exit::OK;
     }
 
+    let cold = dirs
+        .into_iter()
+        .filter(|d| field(d, task, "state") == FAILED)
+        .max_by_key(|d| {
+            recorded(d, "started")
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0)
+        });
+    if let Some(dir) = cold {
+        let plan_id = mark_redispatch(&dir, task, model);
+        warn(format!(
+            "run {plan_id}: no run is live -- {task} goes again when the plan runs next"
+        ));
+        return exit::OK;
+    }
+
     warn(format!(
         "no live run holds {task} failed or dispatched -- run the plan again to retry failed tasks"
     ));
     exit::FAILED
+}
+
+/// Leave the redispatch marker for `task` in a run dir, and the model it is to
+/// go with when one was named. Hands back the run's plan id.
+fn mark_redispatch(dir: &Path, task: &str, model: Option<&str>) -> String {
+    // A model named here rides with the task for the rest of the run --
+    // this task's, nobody else's.
+    if let Some(m) = model {
+        let _ = std::fs::write(dir.join(format!("{task}.model")), format!("{m}\n"));
+    }
+    let _ = std::fs::write(dir.join(format!("{task}.redispatch")), "");
+    dir.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 /// `workflow accept <task>` -- land a task the run settled as failed, as it
