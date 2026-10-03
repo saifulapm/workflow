@@ -985,7 +985,7 @@ pub fn roadmap(app: &App, args: RoadmapArgs<'_>) -> Result<i32> {
     }
 }
 
-const STATUSES: [&str; 4] = ["draft", "approved", "running", "done"];
+const STATUSES: [&str; 5] = ["draft", "approved", "running", "done", "maintenance"];
 
 /// `mem plan --status` and `mem roadmap --status`: print the status, or set
 /// it in project.toml.

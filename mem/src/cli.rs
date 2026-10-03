@@ -312,7 +312,8 @@ pub enum Command {
         /// still holds an unchecked task.
         #[arg(long, value_name = "SLUG", conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick", "list"])]
         from: Option<String>,
-        /// Print the plan's status, or set it: draft, approved, running or done.
+        /// Print the plan's status, or set it: draft, approved, running, done or
+        /// maintenance.
         #[arg(long, value_name = "STATUS", num_args = 0..=1, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick", "task", "list", "from"])]
         status: Option<Option<String>>,
         /// Append the task block on stdin to the current plan. Its first line
@@ -340,7 +341,8 @@ pub enum Command {
         /// and the run has fixes to make before it is.
         #[arg(long, value_name = "SLUG", conflicts_with_all = ["set_file", "stdin", "clear", "tick"])]
         untick: Option<String>,
-        /// Print the roadmap's status, or set it: draft, approved, running or done.
+        /// Print the roadmap's status, or set it: draft, approved, running, done
+        /// or maintenance.
         #[arg(long, value_name = "STATUS", num_args = 0..=1, conflicts_with_all = ["set_file", "stdin", "clear", "tick", "untick"])]
         status: Option<Option<String>>,
         /// Write even while another machine holds the runner claim.

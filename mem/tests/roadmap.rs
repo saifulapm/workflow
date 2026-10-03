@@ -454,3 +454,25 @@ fn replacing_the_plan_of_record_keeps_the_ticks_a_run_has_made() {
     assert!(!stderr(&out).contains("kept the tick"), "{}", stderr(&out));
     assert_eq!(stdout(&mem(&w, &repo, &["plan"])), next);
 }
+
+#[test]
+fn maintenance_is_a_status_on_both_singletons() {
+    let w = World::new("roadmap-maintenance");
+    let repo = w.repo("shop", None);
+    for noun in ["plan", "roadmap"] {
+        let out = mem(&w, &repo, &[noun, "--status", "maintenance"]);
+        assert_eq!(code(&out), 0, "{noun}: {}", stderr(&out));
+        assert_eq!(
+            stdout(&mem(&w, &repo, &[noun, "--status"])),
+            "maintenance\n",
+            "{noun}"
+        );
+        let out = mem(&w, &repo, &[noun, "--status", "parked"]);
+        assert_eq!(code(&out), 2, "{noun}: {}", stderr(&out));
+        let help = stdout(&mem(&w, &repo, &[noun, "--help"]));
+        assert!(
+            help.contains("draft, approved, running, done or maintenance"),
+            "{noun}: {help}"
+        );
+    }
+}
