@@ -18,6 +18,7 @@ pub mod paths;
 pub mod project;
 pub mod questions;
 pub mod search;
+pub mod sections;
 pub mod session;
 pub mod skills;
 pub mod store;
