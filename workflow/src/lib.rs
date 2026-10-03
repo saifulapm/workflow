@@ -7,6 +7,7 @@
 //!   workflow plan-check      read a plan and report its tasks and waves
 //!   workflow run             run a plan's tasks in worktrees
 //!   workflow reap            collect finished or stalled workers
+//!   workflow serve           run every roadmap here, milestone after milestone
 //!   workflow status          report this project's runs, --json for machines
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
@@ -37,6 +38,7 @@ pub mod repo;
 pub mod report;
 pub mod review;
 pub mod run;
+pub mod serve;
 pub mod skill;
 pub mod status;
 pub mod sys;
@@ -150,6 +152,7 @@ pub fn run(cli: Cli) -> i32 {
             model,
             effort,
         } => run::cmd_run(plan_file.as_deref(), model.as_deref(), effort.as_deref()),
+        Command::Serve { once, tick } => serve::cmd_serve(once, tick),
         Command::Docs { library, query } => docs::cmd_docs(&library, &query),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),

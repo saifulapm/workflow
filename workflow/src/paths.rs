@@ -49,6 +49,12 @@ pub fn runs_root() -> PathBuf {
     state_home().join("workflow/runs")
 }
 
+/// Where `workflow serve` keeps its lock and, per project, the stage, the
+/// open milestone, the child's pid and log, and the last commit it landed.
+pub fn serve_root() -> PathBuf {
+    state_home().join("workflow/serve")
+}
+
 pub fn green_root() -> PathBuf {
     state_home().join("workflow/green")
 }

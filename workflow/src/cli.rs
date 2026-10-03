@@ -137,6 +137,28 @@ agent on is refused here, before the first worker."
         #[arg(long, value_name = "LEVEL")]
         effort: Option<String>,
     },
+    /// Run every roadmap on this machine, milestone after milestone.
+    #[command(
+        long_about = "Run every roadmap on this machine, milestone after milestone.
+
+Every few seconds serve looks at each project with a checkout here that this
+machine runs and whose roadmap is approved, running or in maintenance. A
+paused project starts nothing. A project with no run going gets its open
+milestone made mem's current plan, checked, and run by a child `workflow run`
+in its checkout; when every task lands, serve ticks the milestone, writes the
+status and handoff lines and counts the hygiene findings, and the next tick
+starts the next milestone. A run that stops short leaves the project waiting
+until its plan, an answer or a run-dir request changes. Every milestone ticked
+puts the roadmap in maintenance."
+    )]
+    Serve {
+        /// One tick over every project, then exit.
+        #[arg(long)]
+        once: bool,
+        /// Seconds between ticks; WORKFLOW_TICK_S, else 5.
+        #[arg(long, value_name = "SECONDS")]
+        tick: Option<f64>,
+    },
     /// A library's current documentation, through the Context7 CLI.
     Docs {
         /// The library, by the name its users know it.
@@ -322,6 +344,10 @@ usage: workflow <command> [options]
       0 every task complete · 1 failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
+  serve [--once] [--tick <seconds>]
+      run every roadmap on this machine, milestone after milestone, one
+      child run per project; --once ticks once and exits
+      0 --once ticked · 2 another serve is live here
   redispatch <task> [--model <name>]
       ask the live run to dispatch a failed task again
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
@@ -348,6 +374,17 @@ usage: workflow <command> [options]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serve_takes_once_and_a_tick_in_seconds() {
+        let cli = Cli::try_parse_from(["workflow", "serve", "--once", "--tick", "0.5"]).unwrap();
+        let Command::Serve { once, tick } = cli.command else {
+            panic!("not serve");
+        };
+        assert!(once);
+        assert_eq!(tick, Some(0.5));
+        assert!(USAGE.contains("\n  serve [--once] [--tick <seconds>]\n"));
+    }
 
     #[test]
     fn read_advise_and_settings_merge_are_unknown_commands() {
