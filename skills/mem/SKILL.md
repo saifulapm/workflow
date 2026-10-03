@@ -94,6 +94,12 @@ prints it.
 Superseding is a write too: `mem save "<new text>" --supersedes <id>`. Two live
 items that disagree is this store's failure mode.
 
+## Before the session ends
+
+A session writes before it ends: a `mem log` line for what it changed, a
+handoff for what is left, or a `mem decide` for what it settled. Done when
+the next session can start from `mem context` without asking what happened.
+
 ## What not to write
 
 Secrets, keys, tokens: `mem doctor` greps for them, a floor, not a filter.
