@@ -58,8 +58,10 @@ fn world(tag: &str) -> (TempDir, PathBuf, PathBuf) {
 }
 
 /// `workflow status --json`'s own shape (`workflow/src/status.rs`), one run
-/// with two tasks.
-const STATUS_DOC: &str = r#"{"project":"proj-runs","runs":[{"plan":"m1","live":true,
+/// with two tasks. The top-level serve fields ride along unread.
+const STATUS_DOC: &str = r#"{"project":"proj-runs","stage":"execution",
+"milestone":{"slug":"m1","n":1,"m":3},"parked":[{"task":"t3","reason":"waiting on an answer"}],
+"findings":2,"runner":"macbook-m2","paused":false,"runs":[{"plan":"m1","live":true,
 "base":"deadbeef","integration":"integration/m1","tasks":[
 {"id":"t1","state":"merged","dispatches":2,"session":"s1","failed":"",
  "last_status":"ready: done","merged":"abc123","context":0},

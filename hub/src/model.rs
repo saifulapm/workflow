@@ -993,6 +993,12 @@ mod tests {
     fn runs_flattens_each_run_s_plan_and_live_flag_onto_its_tasks() {
         let doc = serde_json::json!({
             "project": "proj-alpha",
+            "stage": "execution",
+            "milestone": {"slug": "m1", "n": 1, "m": 3},
+            "parked": [{"task": "t3", "reason": "waiting on an answer"}],
+            "findings": 2,
+            "runner": "macbook-m2",
+            "paused": false,
             "runs": [{
                 "plan": "m1",
                 "live": true,
