@@ -303,6 +303,38 @@ pub fn plan_tick(task: &str) -> bool {
     silent(&["plan", "--tick", task])
 }
 
+/// This machine as mem names it, so a claim the run writes is one mem's own
+/// runner check recognises as this machine's.
+pub fn machine() -> Option<String> {
+    project_choice("machine")
+}
+
+/// The machine that claimed this project to run it, and when it did.
+pub fn runner() -> Option<(String, String)> {
+    let machine = project_choice("runner")?;
+    Some((machine, project_choice("runner_since").unwrap_or_default()))
+}
+
+/// `mem project set runner`, which stamps the claim's start time with it.
+pub fn claim_runner(machine: &str) -> bool {
+    silent(&["project", "set", "runner", machine])
+}
+
+pub fn release_runner() -> bool {
+    silent(&["project", "unset", "runner"])
+}
+
+/// Whether the project logged a run line within the last hour: a run that
+/// is still going writes one as it starts, merges and ends.
+pub fn run_logged_lately() -> bool {
+    let Some((_, out)) = capture(&[
+        "log", "--kind", "log", "--type", "run", "--since", "1h", "--limit", "1", "--json",
+    ]) else {
+        return false;
+    };
+    serde_json::from_str::<Items>(&out).is_ok_and(|i| !i.items.is_empty())
+}
+
 /// What `mem roadmap --tick <slug> --json` answers. `ticked` is false for a
 /// milestone that was already checked off, which is not a failure and not news.
 #[derive(Debug, Deserialize)]

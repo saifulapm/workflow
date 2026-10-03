@@ -4174,6 +4174,16 @@ pub fn cmd_run(
         ));
         return exit::USAGE;
     };
+    // The run dir lock covers this checkout; the claim covers the project's
+    // plan and roadmap in mem, which every machine's checkout shares.
+    let here = memcli::machine();
+    if let Some((machine, since)) = here.as_deref().and_then(claimed_elsewhere) {
+        warn(format!(
+            "{} is run by {machine} since {since}",
+            project.name
+        ));
+        return exit::USAGE;
+    }
     // A run dir is keyed by plan, so this run appends its events to the last
     // run's file. The cursor `workflow wait` keeps is stamped to the end of
     // what is already there, or the first wait of a live run returns at once
@@ -4204,6 +4214,10 @@ pub fn cmd_run(
         ));
         run.rollback();
         return exit::USAGE;
+    }
+    // Taken once nothing above can refuse, so a refusal leaves no claim.
+    if let Some(here) = &here {
+        memcli::claim_runner(here);
     }
     let _ = std::fs::write(run.dir.join("plan.md"), &source);
     for t in run.plan.ids() {
@@ -4659,6 +4673,7 @@ pub fn cmd_run(
         }
     }
     run.tick_settled_again();
+    release_own_claim();
     // A milestone is finished when its plan is. mem's live plan is the one
     // the roadmap's milestone names, so a run that read it from mem, or from a
     // file carrying that plan's own slug, is the one that can say
@@ -4704,6 +4719,34 @@ pub fn cmd_run(
     exit::OK
 }
 
+/// Another machine's claim on this project that still holds: under an hour
+/// old, or beside a run logged under an hour ago whatever its age. Anything
+/// older is a run that died without clearing its claim, and is taken over.
+fn claimed_elsewhere(here: &str) -> Option<(String, String)> {
+    let (machine, since) = memcli::runner()?;
+    if machine == here {
+        return None;
+    }
+    (claim_fresh(&since, jiff::Timestamp::now()) || memcli::run_logged_lately())
+        .then_some((machine, since))
+}
+
+fn claim_fresh(since: &str, now: jiff::Timestamp) -> bool {
+    since
+        .parse::<jiff::Timestamp>()
+        .is_ok_and(|t| now.duration_since(t) < jiff::SignedDuration::from_hours(1))
+}
+
+/// Clear the runner claim if it is still this machine's: one taken over
+/// after this run went quiet belongs to whoever took it.
+fn release_own_claim() {
+    if let (Some(here), Some((machine, _))) = (memcli::machine(), memcli::runner())
+        && machine == here
+    {
+        memcli::release_runner();
+    }
+}
+
 /// Told to stop: end every dispatched worker, say so, and leave the tasks
 /// `dispatched` -- the next run adopts them and judges whatever they wrote.
 /// No merging on the way out: a signal means now, and the merge gate is not
@@ -4728,8 +4771,14 @@ fn shutdown(run: &Run, hangup: bool) -> i32 {
             run.plan.plan_id,
             live.len()
         ));
+        // The workers left standing are this run's still, and the next run
+        // in this checkout adopts them under the same claim.
+        if live.is_empty() {
+            release_own_claim();
+        }
         return exit::OK;
     }
+    release_own_claim();
     warn(format!(
         "run {}: told to stop -- stopping {} worker(s) before going",
         run.plan.plan_id,
@@ -5143,6 +5192,17 @@ pub fn cmd_stalled(rundir: &Path, wtroot: &Path, task: &str, deadline: i64) -> i
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_runner_claim_is_fresh_for_an_hour() {
+        let now: jiff::Timestamp = "2026-10-03T12:00:00Z".parse().unwrap();
+        assert!(super::claim_fresh("2026-10-03T11:30:00Z", now));
+        assert!(!super::claim_fresh("2026-10-03T10:00:00Z", now));
+        assert!(
+            !super::claim_fresh("", now),
+            "a claim with no start time is judged by the run log alone"
+        );
+    }
+
     #[test]
     fn a_report_reads_the_same_with_its_fields_swapped() {
         let a = super::status_line("2026-09-20T13:16Z ready auth in 7a2acf3: green");
