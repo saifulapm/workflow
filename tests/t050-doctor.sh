@@ -185,7 +185,7 @@ is "$(stat -c %a "$HOME/.config/git/hooks/pre-commit")" 755 'the stub is written
 truthy "$([ -f "$unit" ] && [ ! -L "$unit" ] && echo 0 || echo 1)" \
 	'with no dotfiles the unit is written straight to the config home'
 for line in 'ExecStart=%h/.local/bin/workflow serve' 'ConditionPathExists=%h/.local/bin/workflow' \
-	'Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin' 'Restart=always' \
+	'Environment=PATH=%h/.local/share/mise/shims:%h/.local/share/pnpm:%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin' 'Restart=always' \
 	'RestartSec=5' 'TimeoutStopSec=60' 'WantedBy=default.target'; do
 	truthy "$(grep -qxF -- "$line" "$unit" && echo 0 || echo 1)" "the unit holds $line"
 done

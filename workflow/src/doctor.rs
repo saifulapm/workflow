@@ -361,7 +361,9 @@ pub const ROLES: [(&str, &str); 7] = [
 
 /// The user unit that keeps `workflow serve` running. `ConditionPathExists`
 /// keeps a machine that never installed the binary from a restart loop, and
-/// PATH is spelled out because a user unit does not inherit the shell's.
+/// PATH is spelled out because a user unit does not inherit the shell's. The
+/// mise shims and pnpm directories come first: node, npm and pnpm live there,
+/// and the merge gate runs with this environment, not a login shell's.
 const WORKFLOW_UNIT: &str = "\
 [Unit]
 Description=workflow serve
@@ -369,7 +371,7 @@ ConditionPathExists=%h/.local/bin/workflow
 
 [Service]
 ExecStart=%h/.local/bin/workflow serve
-Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/share/pnpm:%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin
 Restart=always
 RestartSec=5
 TimeoutStopSec=60
