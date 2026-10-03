@@ -46,6 +46,15 @@ hard 'Extract cart pricing ✨' 'a sparkle emoji'
 hard 'plan m05-ui-kit: all nine tasks shipped' 'a plan <slug>: prefix'
 hard 'run cart: merged t3' 'a run <slug>: prefix'
 
+# lint-msg runs hygiene's message check, so its hard tier is lint-msg's too.
+hard 'Cache the supplier lookup
+
+Cached because ruling 4 says so.' 'a numbered ruling'
+hard 'Cache the supplier lookup for five minutes so the importer stays under its limit' 'an 80-character subject'
+run workflow lint-msg --string 'Finish t3 before the release'
+is "$RC" 1 'hard: a task id standing alone'
+like "$OUT" 'hard task id' 'hard: named by hygiene'"'"'s label'
+
 clean 'Extract cart pricing into a service' 'an ordinary subject'
 clean 'plan: extract the cart service' 'a bare plan: prefix stays ordinary'
 clean 'worker: consumer runner' 'a worker: prefix stays ordinary'

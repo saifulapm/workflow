@@ -1,11 +1,12 @@
 //! `workflow lint-msg` -- the three tiers of spec §3, over a commit message,
-//! a branch name or a PR body.
+//! a branch name or a PR body. The verb itself runs hygiene's message check,
+//! which reads these tiers through [`lint_text`].
 
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 use crate::gitcmd::Git;
-use crate::{exit, memcli, warn};
+use crate::{exit, hygiene, memcli, warn};
 
 /// Tier one, provenance: these never pass, and no ruling clears them.
 const HARD: &[(&str, Hard)] = &[
@@ -341,11 +342,16 @@ pub fn cmd_lint_msg(msgfile: Option<&Path>, string: Option<&str>) -> i32 {
         buf
     };
 
-    if lint_text(&text) {
-        exit::OK
-    } else {
-        exit::FAILED
-    }
+    // The message check hygiene runs, which takes in the tiers below. Its
+    // exit codes are this verb's: 0 clean or warned, 1 a hard finding.
+    let scope = hygiene::Scope {
+        staged: false,
+        tree: false,
+        history: None,
+        message: None,
+        string: Some(&text),
+    };
+    hygiene::cmd_hygiene(scope, None, false, false)
 }
 
 #[cfg(test)]
