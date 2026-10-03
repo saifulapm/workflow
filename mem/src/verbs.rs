@@ -319,10 +319,21 @@ pub fn project_current(app: &App) -> Result<i32> {
     let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
     let hygiene_exempt = crate::project::declared(&app.store, id, "hygiene_exempt");
     let model = crate::project::declared(&app.store, id, "model");
-    let review_model = crate::project::declared(&app.store, id, "review_model");
-    let fix_model = crate::project::declared(&app.store, id, "fix_model");
     let effort = crate::project::declared(&app.store, id, "effort");
-    let review_effort = crate::project::declared(&app.store, id, "review_effort");
+    // The keys a run reads to place and pace itself, as (shown, stored, value).
+    let run_keys: Vec<(&str, &str, String)> = [
+        ("runner", "runner"),
+        ("dev", "dev"),
+        ("preview", "preview"),
+        ("surface", "surface"),
+        ("dogfood-machine", "dogfood_machine"),
+        ("slots", "slots"),
+    ]
+    .into_iter()
+    .filter_map(|(shown, stored)| {
+        crate::project::declared(&app.store, id, stored).map(|v| (shown, stored, v))
+    })
+    .collect();
     // A child project keeps the checkout as its root — run dirs and worktrees
     // key on the checkout — and says where inside it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
@@ -331,6 +342,9 @@ pub fn project_current(app: &App) -> Result<i32> {
             "id": id,
             "name": name,
             "root": root.as_ref().map(|p| p.to_string_lossy()),
+            // The name mem compares a runner claim against, so a caller that
+            // claims a project writes the same spelling.
+            "machine": app.machine,
         });
         if let Some(subdir) = &subdir {
             doc["subdir"] = json!(subdir);
@@ -347,17 +361,14 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(model) = &model {
             doc["model"] = json!(model);
         }
-        if let Some(model) = &review_model {
-            doc["review_model"] = json!(model);
-        }
-        if let Some(model) = &fix_model {
-            doc["fix_model"] = json!(model);
-        }
         if let Some(level) = &effort {
             doc["effort"] = json!(level);
         }
-        if let Some(level) = &review_effort {
-            doc["review_effort"] = json!(level);
+        for (_, stored, value) in &run_keys {
+            doc[*stored] = match (*stored, value.parse::<u64>()) {
+                ("slots", Ok(n)) => json!(n),
+                _ => json!(value),
+            };
         }
         println!("{}", serde_json::to_string(&doc)?);
     } else {
@@ -381,17 +392,11 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(model) = &model {
             println!("model  {model}");
         }
-        if let Some(model) = &review_model {
-            println!("review-model  {model}");
-        }
-        if let Some(model) = &fix_model {
-            println!("fix-model  {model}");
-        }
         if let Some(level) = &effort {
             println!("effort  {level}");
         }
-        if let Some(level) = &review_effort {
-            println!("review-effort  {level}");
+        for (shown, _, value) in &run_keys {
+            println!("{shown}  {value}");
         }
     }
     Ok(exit::OK)
@@ -465,6 +470,19 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     let value = if key == "remote" {
         normalized = crate::git::normalize_remote(value);
         normalized.as_str()
+    } else if key == "slots" {
+        // A run sizes its worker pool from this; zero or a typo would stall it.
+        match value.parse::<u32>() {
+            Ok(n) if n > 0 => {
+                normalized = n.to_string();
+                normalized.as_str()
+            }
+            _ => {
+                return Err(exit::usage(format!(
+                    "slots is a positive integer, e.g. `mem project set slots 2`, not `{value}`"
+                )));
+            }
+        }
     } else {
         value
     };
@@ -473,6 +491,15 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let path = crate::project::set_key(&app.store, id, key, value)?;
+    if key == "runner" {
+        // A claim's age is what tells a live runner from a stale one.
+        crate::project::set_key(
+            &app.store,
+            id,
+            "runner_since",
+            &jiff::Timestamp::now().to_string(),
+        )?;
+    }
     let shown = key.replace('_', "-");
     if app.json {
         println!(
@@ -499,6 +526,9 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let (path, had) = crate::project::unset_key(&app.store, id, key)?;
+    if key == "runner" {
+        crate::project::unset_key(&app.store, id, "runner_since")?;
+    }
     let shown = key.replace('_', "-");
     if app.json {
         println!(

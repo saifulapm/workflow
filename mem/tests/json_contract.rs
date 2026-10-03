@@ -184,6 +184,28 @@ fn every_verb_matches_its_committed_schema() {
         &mem(&w, &repo, &["project", "current", "--json"]),
     );
     assert_eq!(current["verify"], serde_json::json!("just test"));
+    assert!(current["machine"].is_string(), "{current}");
+    // The run keys are optional fields of the same contract.
+    for (key, value) in [
+        ("runner", "mini"),
+        ("dev", "just dev"),
+        ("preview", "http://localhost:5173"),
+        ("surface", "web"),
+        ("dogfood-machine", "nuc"),
+        ("slots", "2"),
+    ] {
+        assert_eq!(
+            code(&mem(&w, &repo, &["project", "set", key, value])),
+            0,
+            "{key}"
+        );
+    }
+    let current = validate(
+        "project-current.json",
+        &mem(&w, &repo, &["project", "current", "--json"]),
+    );
+    assert_eq!(current["runner"], serde_json::json!("mini"));
+    assert_eq!(current["slots"], serde_json::json!(2));
     validate("status.json", &mem(&w, &repo, &["status", "--json"]));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
     validate(

@@ -673,27 +673,6 @@ fn project_set_review_paths_records_the_globs_and_project_current_reports_them()
 }
 
 #[test]
-fn project_set_fix_model_records_the_choice_and_project_current_reports_it() {
-    let w = World::new("write-fix-model");
-    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("fix_model").is_none(), "{v}");
-
-    let out = mem(&w, &repo, &["project", "set", "fix-model", "opus"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["fix_model"], serde_json::json!("opus"));
-    assert!(
-        stdout(&mem(&w, &repo, &["project", "current"])).contains("fix-model  opus"),
-        "the plain rendering names it too"
-    );
-    assert_eq!(code(&mem(&w, &repo, &["project", "unset", "fix-model"])), 0);
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("fix_model").is_none(), "unset is the way back: {v}");
-}
-
-#[test]
 fn project_set_hygiene_exempt_records_the_globs_and_project_current_reports_them() {
     let w = World::new("write-hygiene-exempt");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
@@ -730,73 +709,142 @@ fn project_set_hygiene_exempt_records_the_globs_and_project_current_reports_them
 }
 
 #[test]
-fn project_set_review_model_records_the_choice_and_project_current_reports_it() {
-    let w = World::new("write-review-model");
+fn project_set_records_each_run_key_and_project_current_reports_it() {
+    let w = World::new("write-run-keys");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-
-    // Nothing declared: the field is absent, and a run reviews nothing.
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let keys = [
+        ("dev", "dev", "just dev"),
+        ("preview", "preview", "http://localhost:5173"),
+        ("surface", "surface", "web"),
+        ("dogfood-machine", "dogfood_machine", "nuc"),
+        ("slots", "slots", "3"),
+        ("runner", "runner", "mini"),
+    ];
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("review_model").is_none(), "{v}");
+    for (_, stored, _) in keys {
+        assert!(v.get(stored).is_none(), "{stored}: {v}");
+    }
 
-    let out = mem(&w, &repo, &["project", "set", "review-model", "fable"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-
+    for (cmd, _, value) in keys {
+        let out = mem(&w, &repo, &["project", "set", cmd, value]);
+        assert_eq!(code(&out), 0, "{cmd}: {}", stderr(&out));
+    }
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["review_model"], serde_json::json!("fable"));
-    assert!(
-        stdout(&mem(&w, &repo, &["project", "current"])).contains("review-model  fable"),
-        "the plain rendering names it too"
-    );
-    assert!(
-        v.get("model").is_none(),
-        "the workers' model is a separate key: {v}"
-    );
+    let plain = stdout(&mem(&w, &repo, &["project", "current"]));
+    for (cmd, stored, value) in keys {
+        if stored == "slots" {
+            assert_eq!(v[stored], serde_json::json!(3), "{v}");
+        } else {
+            assert_eq!(v[stored], serde_json::json!(value), "{v}");
+        }
+        assert!(plain.contains(&format!("{cmd}  {value}\n")), "{plain}");
+    }
 
-    // Choosing again replaces the choice rather than leaving two keys behind.
-    assert_eq!(
-        code(&mem(&w, &repo, &["project", "set", "review-model", "opus"])),
-        0
-    );
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["review_model"], serde_json::json!("opus"));
     let id = mem::project::Registry::load(&w.store()).projects[0]
         .id
         .clone();
     let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
-    assert_eq!(
-        text.matches("review_model = ").count(),
-        1,
-        "one review_model key, not two: {text}"
-    );
+    assert!(text.contains("dogfood_machine = "), "{text}");
 
-    // An empty value is a usage error, not a way to clear the key.
-    assert_eq!(
-        code(&mem(&w, &repo, &["project", "set", "review-model", ""])),
-        2
-    );
+    for (cmd, stored, _) in keys {
+        let out = mem(&w, &repo, &["project", "unset", cmd]);
+        assert_eq!(code(&out), 0, "{cmd}: {}", stderr(&out));
+        let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+        assert!(v.get(stored).is_none(), "unset is the way back: {v}");
+    }
 }
 
 #[test]
-fn project_set_effort_records_a_level_for_each_dial_and_refuses_a_sixth() {
+fn project_current_names_this_machine_whatever_is_set() {
+    let w = World::new("write-machine");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    let machine = v["machine"].as_str().unwrap_or_default();
+    assert!(!machine.is_empty(), "{v}");
+}
+
+#[test]
+fn project_set_runner_stamps_the_claim_and_unset_clears_both() {
+    let w = World::new("write-runner");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let toml_of = || -> toml::Table {
+        toml::from_str(&std::fs::read_to_string(w.store().project_toml(&id)).unwrap()).unwrap()
+    };
+
+    let before = jiff::Timestamp::now();
+    let out = mem(&w, &repo, &["project", "set", "runner", "mini"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let doc = toml_of();
+    assert_eq!(doc["runner"].as_str(), Some("mini"), "{doc}");
+    let since: jiff::Timestamp = doc["runner_since"]
+        .as_str()
+        .expect("runner_since written beside runner")
+        .parse()
+        .expect("runner_since is RFC 3339");
+    assert!(since.as_second() >= before.as_second() - 1, "{since}");
+
+    let out = mem(&w, &repo, &["project", "unset", "runner"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let doc = toml_of();
+    assert!(doc.get("runner").is_none(), "{doc}");
+    assert!(doc.get("runner_since").is_none(), "{doc}");
+}
+
+#[test]
+fn project_set_slots_refuses_anything_but_a_positive_integer() {
+    let w = World::new("write-slots");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    for bad in ["0", "-1", "two", "1.5", ""] {
+        let out = mem(&w, &repo, &["project", "set", "slots", bad]);
+        assert_eq!(code(&out), 2, "{bad}: {}", stdout(&out));
+    }
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("slots").is_none(), "a refusal changes nothing: {v}");
+}
+
+#[test]
+fn project_set_has_no_reader_keys() {
+    let w = World::new("write-no-reader");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    for key in ["review-model", "fix-model", "review-effort"] {
+        let out = mem(&w, &repo, &["project", "set", key, "high"]);
+        assert_eq!(code(&out), 2, "{key}: {}", stdout(&out));
+        assert!(
+            stderr(&out).contains("unrecognized subcommand"),
+            "{}",
+            stderr(&out)
+        );
+        assert_ne!(
+            code(&mem(&w, &repo, &["project", "unset", key])),
+            0,
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn project_set_effort_records_a_level_and_refuses_a_sixth() {
     let w = World::new("write-effort");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     assert!(v.get("effort").is_none(), "{v}");
-    assert!(v.get("review_effort").is_none(), "{v}");
 
     let out = mem(&w, &repo, &["project", "set", "effort", "max"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let out = mem(&w, &repo, &["project", "set", "review-effort", "high"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     assert_eq!(v["effort"], serde_json::json!("max"));
-    assert_eq!(v["review_effort"], serde_json::json!("high"));
     let plain = stdout(&mem(&w, &repo, &["project", "current"]));
     assert!(plain.contains("effort  max"), "{plain}");
-    assert!(plain.contains("review-effort  high"), "{plain}");
 
     // The level is the list amx takes; anything else is a typo
     // that must not reach a worker's launch.
@@ -804,10 +852,7 @@ fn project_set_effort_records_a_level_for_each_dial_and_refuses_a_sixth() {
         code(&mem(&w, &repo, &["project", "set", "effort", "maximum"])),
         2
     );
-    assert_eq!(
-        code(&mem(&w, &repo, &["project", "set", "review-effort", ""])),
-        2
-    );
+    assert_eq!(code(&mem(&w, &repo, &["project", "set", "effort", ""])), 2);
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     assert_eq!(
         v["effort"],
@@ -815,7 +860,6 @@ fn project_set_effort_records_a_level_for_each_dial_and_refuses_a_sixth() {
         "a refusal changes nothing"
     );
 
-    // Each dial clears on its own.
     let out = mem(&w, &repo, &["project", "unset", "effort"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
@@ -825,11 +869,6 @@ fn project_set_effort_records_a_level_for_each_dial_and_refuses_a_sixth() {
     );
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     assert!(v.get("effort").is_none(), "{v}");
-    assert_eq!(v["review_effort"], serde_json::json!("high"));
-    assert_eq!(
-        code(&mem(&w, &repo, &["project", "unset", "review-effort"])),
-        0
-    );
     let id = mem::project::Registry::load(&w.store()).projects[0]
         .id
         .clone();
@@ -850,20 +889,20 @@ fn project_unset_takes_a_choice_off_and_leaves_the_others() {
         code(&mem(
             &w,
             &repo,
-            &["project", "set", "review-model", "fable"]
+            &["project", "set", "dogfood-machine", "nuc"]
         )),
         0
     );
 
-    let out = mem(&w, &repo, &["project", "unset", "review-model"]);
+    let out = mem(&w, &repo, &["project", "unset", "dogfood-machine"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("review-model for thing: cleared"),
+        stdout(&out).contains("dogfood-machine for thing: cleared"),
         "{}",
         stdout(&out)
     );
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("review_model").is_none(), "the reader is gone: {v}");
+    assert!(v.get("dogfood_machine").is_none(), "the key is gone: {v}");
     assert_eq!(
         v["model"],
         serde_json::json!("sonnet"),
@@ -873,10 +912,17 @@ fn project_unset_takes_a_choice_off_and_leaves_the_others() {
         .id
         .clone();
     let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
-    assert!(!text.contains("review_model"), "no key left behind: {text}");
+    assert!(
+        !text.contains("dogfood_machine"),
+        "no key left behind: {text}"
+    );
 
     // Clearing what is not set is not an error, and says so.
-    let out = mem(&w, &repo, &["project", "unset", "review-model", "--json"]);
+    let out = mem(
+        &w,
+        &repo,
+        &["project", "unset", "dogfood-machine", "--json"],
+    );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(json(&out)["was_set"], serde_json::json!(false));
 

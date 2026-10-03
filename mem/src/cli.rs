@@ -300,10 +300,9 @@ pub enum ProjectCommand {
         command: ProjectSetCommand,
     },
     /// Forget something `set` recorded, so the project is back on the
-    /// default: the workflow's model, the detected verifier. `set` refuses an empty value, so this is the way back to
-    /// absent. An absent `review-model` is not the same as no reader: a run
-    /// stops and asks for one. `mem project set review-model none` is how a
-    /// project records that nobody reads.
+    /// default: the workflow's model, the detected verifier. `set` refuses an
+    /// empty value, so this is the way back to absent. Unsetting `runner`
+    /// drops the claim's start time with it.
     Unset { key: ProjectKey },
 }
 
@@ -316,10 +315,13 @@ pub enum ProjectKey {
     ReviewPaths,
     HygieneExempt,
     Model,
-    ReviewModel,
-    FixModel,
     Effort,
-    ReviewEffort,
+    Runner,
+    Dev,
+    Preview,
+    Surface,
+    DogfoodMachine,
+    Slots,
 }
 
 impl ProjectKey {
@@ -330,10 +332,13 @@ impl ProjectKey {
             ProjectKey::ReviewPaths => "review_paths",
             ProjectKey::HygieneExempt => "hygiene_exempt",
             ProjectKey::Model => "model",
-            ProjectKey::ReviewModel => "review_model",
-            ProjectKey::FixModel => "fix_model",
             ProjectKey::Effort => "effort",
-            ProjectKey::ReviewEffort => "review_effort",
+            ProjectKey::Runner => "runner",
+            ProjectKey::Dev => "dev",
+            ProjectKey::Preview => "preview",
+            ProjectKey::Surface => "surface",
+            ProjectKey::DogfoodMachine => "dogfood_machine",
+            ProjectKey::Slots => "slots",
         }
     }
 }
@@ -356,29 +361,26 @@ pub enum ProjectSetCommand {
     /// The model a run's workers are started on (`opus`, `sonnet`, ...).
     /// Absent means the workflow's default; WORKFLOW_MODEL overrides per run.
     Model { model: String },
-    /// The model that reviews each task's diff at the merge gate, after its
-    /// Verify goes green (`fable`, `opus`, ...). `none` says nobody reads and
-    /// the run goes ahead unread; absent means the project has not decided,
-    /// and a run stops to ask. WORKFLOW_REVIEW_MODEL overrides per run.
-    #[command(name = "review-model")]
-    ReviewModel { model: String },
-    /// The model a task is dispatched on for its second fix round, after the
-    /// reader has found fault twice: a stronger one than the workers', so a
-    /// diff a cheaper model could not get right is not sent back to it a
-    /// third time. Absent means the reader's own model. WORKFLOW_FIX_MODEL
-    /// overrides per run.
-    #[command(name = "fix-model")]
-    FixModel { model: String },
     /// How much reasoning a run's workers spend, on whatever model they run
     /// (`max` buys a cheaper model more thinking). Absent means the CLI's
     /// own default; WORKFLOW_EFFORT overrides per run, and set empty it
     /// means no dial for that run.
     Effort { level: Effort },
-    /// The same dial for the reader at the merge gate. Absent means the
-    /// CLI's own default; WORKFLOW_REVIEW_EFFORT overrides per run, and set
-    /// empty it means no dial for that run.
-    #[command(name = "review-effort")]
-    ReviewEffort { level: Effort },
+    /// The machine that runs this project's workflow. Setting it also
+    /// records when, so another machine can tell a live claim from a stale
+    /// one.
+    Runner { machine: String },
+    /// The command that starts this project's dev server.
+    Dev { cmd: String },
+    /// Where a running dev server is looked at, usually a URL.
+    Preview { url: String },
+    /// What the project shows a person: `web`, `tui`, `cli`, ...
+    Surface { kind: String },
+    /// The machine where this project is used day to day.
+    #[command(name = "dogfood-machine")]
+    DogfoodMachine { machine: String },
+    /// How many tasks a run works on at once, a positive integer.
+    Slots { count: String },
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },
@@ -454,32 +456,11 @@ mod tests {
         node.render_long_help().to_string()
     }
 
-    /// Clearing the reader is not the same as saying nobody reads: a run with
-    /// no `review-model` stops and asks for one, so the help has to send a
-    /// project that means it to `none` rather than to `unset`.
+    /// The effort dial names its run override, since that is where a
+    /// project reads how to turn it up for one run.
     #[test]
-    fn unset_help_tells_an_absent_reader_apart_from_none() {
-        let help = long_help(&["project", "unset"]);
-        assert!(help.contains("ask"), "{help}");
-        assert!(help.contains("review-model none"), "{help}");
-    }
-
-    /// And the key's own help says the same, since that is where a project
-    /// setting a reader for the first time reads what the values mean.
-    /// The effort dials name their run override the way the model keys do,
-    /// since that is where a project reads how to turn one up for one run.
-    #[test]
-    fn effort_help_names_the_run_override_for_each_dial() {
+    fn effort_help_names_the_run_override() {
         let help = long_help(&["project", "set", "effort"]);
         assert!(help.contains("WORKFLOW_EFFORT"), "{help}");
-        let help = long_help(&["project", "set", "review-effort"]);
-        assert!(help.contains("WORKFLOW_REVIEW_EFFORT"), "{help}");
-    }
-
-    #[test]
-    fn review_model_help_names_none_and_what_absent_costs() {
-        let help = long_help(&["project", "set", "review-model"]);
-        assert!(help.contains("none"), "{help}");
-        assert!(help.contains("WORKFLOW_REVIEW_MODEL"), "{help}");
     }
 }

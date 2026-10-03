@@ -6,7 +6,8 @@
   "required": [
     "id",
     "name",
-    "root"
+    "root",
+    "machine"
   ],
   "properties": {
     "id": {
@@ -36,6 +37,31 @@
     "model": {
       "description": "Present only when the project chose its workers' model with `mem project set model`.",
       "type": "string"
+    },
+    "machine": {
+      "description": "This machine's name as mem spells it, the name a runner claim is compared against.",
+      "type": "string"
+    },
+    "runner": {
+      "description": "Present only when a machine claimed the project with `mem project set runner`.",
+      "type": "string"
+    },
+    "dev": {
+      "type": "string"
+    },
+    "preview": {
+      "type": "string"
+    },
+    "surface": {
+      "type": "string"
+    },
+    "dogfood_machine": {
+      "type": "string"
+    },
+    "slots": {
+      "description": "How many tasks a run works on at once.",
+      "type": "integer",
+      "minimum": 1
     }
   },
   "additionalProperties": false
