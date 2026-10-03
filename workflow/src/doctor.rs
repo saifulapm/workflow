@@ -1,6 +1,7 @@
 //! `workflow doctor` -- what this machine's wiring actually says (spec §7, §11).
 //! Plain `doctor` only reports; `--fix` writes the embedded hook stubs, amx
-//! roles and skills, the one edit this command makes. The ignore list and the
+//! roles, skills and the `workflow.service` unit, the one edit this command
+//! makes. The ignore list and the
 //! settings belong to the dotfiles, so for those `--fix` prints the edit.
 
 use std::os::unix::fs::PermissionsExt;
@@ -358,6 +359,25 @@ pub const ROLES: [(&str, &str); 7] = [
     ("grill", include_str!("../../roles/grill.md")),
 ];
 
+/// The user unit that keeps `workflow serve` running. `ConditionPathExists`
+/// keeps a machine that never installed the binary from a restart loop, and
+/// PATH is spelled out because a user unit does not inherit the shell's.
+const WORKFLOW_UNIT: &str = "\
+[Unit]
+Description=workflow serve
+ConditionPathExists=%h/.local/bin/workflow
+
+[Service]
+ExecStart=%h/.local/bin/workflow serve
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
+";
+
 /// The two directories `--fix` installs the skills into: Claude Code's own,
 /// and the one pi, codex and opencode all read.
 fn skill_dirs() -> [(&'static str, PathBuf); 2] {
@@ -474,6 +494,68 @@ fn install(r: &mut Report, fix: bool) {
     }
 }
 
+/// The `workflow.service` unit. With the dotfiles' unit directory present the
+/// text lives there and the config home holds a link to it, as chezmoi lays
+/// out every other unit; without it the config home holds the file itself.
+fn unit(r: &mut Report, fix: bool) {
+    const LABEL: &str = "unit workflow.service";
+    let path = paths::config_home().join("systemd/user/workflow.service");
+    let units = paths::dotfiles_units();
+    if units.is_dir() {
+        let source = units.join("workflow.service");
+        let wrote = fix && compare(&source, WORKFLOW_UNIT, None).is_some();
+        check_or_write(r, LABEL, &source, WORKFLOW_UNIT, fix, None);
+        let linked = path.is_symlink() && paths::realpath(&path) == paths::realpath(&source);
+        if !linked && !fix {
+            r.finding(
+                LABEL,
+                format!("{} is not a link to {}", path.display(), source.display()),
+            );
+        } else if !linked {
+            match link(&path, &source) {
+                Ok(()) => r.note(
+                    LABEL,
+                    format!("linked {} to {}", path.display(), source.display()),
+                ),
+                Err(_) => r.finding(LABEL, format!("could not link {}", path.display())),
+            }
+        }
+        if wrote {
+            r.note(LABEL, "commit the dotfiles");
+        }
+    } else {
+        check_or_write(r, LABEL, &path, WORKFLOW_UNIT, fix, None);
+    }
+
+    // Enabling starts a service on this machine, which is a person's call:
+    // doctor names the command and never runs it.
+    if !have("systemctl") {
+        return;
+    }
+    let state = std::process::Command::new("systemctl")
+        .args(["--user", "is-enabled", "workflow.service"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if state != "enabled" {
+        r.finding(
+            LABEL,
+            format!("systemctl --user is-enabled says \"{state}\": run systemctl --user enable --now workflow.service"),
+        );
+    }
+}
+
+/// Point `path` at `target`, replacing whatever stood at `path`.
+fn link(path: &Path, target: &Path) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if path.is_symlink() || path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    std::os::unix::fs::symlink(target, path)
+}
+
 pub fn cmd_doctor(fix: bool) -> i32 {
     println!("workflow doctor");
     let mut r = Report::default();
@@ -482,6 +564,7 @@ pub fn cmd_doctor(fix: bool) -> i32 {
     ignore_list(&mut r, fix);
     settings_keys(&mut r, fix);
     install(&mut r, fix);
+    unit(&mut r, fix);
 
     if r.findings == 0 {
         println!("healthy: nothing to fix");

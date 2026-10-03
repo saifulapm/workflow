@@ -10,6 +10,16 @@ mkdir -p "$WORKFLOW_SITES"
 settings="$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude"
 
+# systemctl answers is-enabled from a file, so the unit's state is the test's
+# and not the machine's.
+unit_state="$T_TMP/unit-state"
+echo enabled >"$unit_state"
+write_exec "$T_TMP/bin/systemctl" <<EOF
+#!/bin/sh
+[ "\$*" = '--user is-enabled workflow.service' ] || exit 1
+cat '$unit_state'
+EOF
+
 ## ---------------------------------------------------------- a bare machine
 
 run workflow doctor
@@ -146,7 +156,7 @@ skills=($(workflow skill | sed 's/ — .*//') mem)
 roles=(worker lead dogfood research plan plan-refresh grill)
 truthy "$([ "${#skills[@]}" -gt 1 ] && echo 0 || echo 1)" 'workflow skill names the skills it carries'
 is "${#roles[@]}" "$(ls "$WF_ROOT"/roles/*.md | wc -l)" 'the role list is every file under roles/'
-copies=$((3 + ${#roles[@]} + 2 * ${#skills[@]}))
+copies=$((4 + ${#roles[@]} + 2 * ${#skills[@]}))
 
 run workflow doctor
 is "$RC" 1 'a bare HOME has findings'
@@ -162,6 +172,8 @@ like "$OUT" 'hook pre-commit.*missing at .*\.config/git/hooks/pre-commit' \
 	'a missing hook stub is named'
 like "$OUT" 'role worker.*missing at .*\.config/amx/agents/worker\.md' \
 	'a missing role is named where amx reads it'
+unit="$XDG_CONFIG_HOME/systemd/user/workflow.service"
+like "$OUT" "unit workflow\\.service.*missing at $unit" 'a missing service unit is named'
 
 run workflow doctor --fix
 n=$(grep -c '^  .* wrote ' <<<"$OUT")
@@ -169,6 +181,15 @@ is "$n" "$copies" '--fix writes the stubs, the roles and the skills'
 is "$(cat "$HOME/.config/git/hooks/pre-commit")" "$(cat "$WF_ROOT/hooks/pre-commit")" \
 	'the stub holds the embedded text'
 is "$(stat -c %a "$HOME/.config/git/hooks/pre-commit")" 755 'the stub is written executable'
+# With no dotfiles unit directory the unit is a plain file in the config home.
+truthy "$([ -f "$unit" ] && [ ! -L "$unit" ] && echo 0 || echo 1)" \
+	'with no dotfiles the unit is written straight to the config home'
+for line in 'ExecStart=%h/.local/bin/workflow serve' 'ConditionPathExists=%h/.local/bin/workflow' \
+	'Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin' 'Restart=always' \
+	'RestartSec=5' 'TimeoutStopSec=60' 'WantedBy=default.target'; do
+	truthy "$(grep -qxF -- "$line" "$unit" && echo 0 || echo 1)" "the unit holds $line"
+done
+unlike "$OUT" 'commit the dotfiles' 'and nothing under the dotfiles asks for a commit'
 # Where amx reads them: its config home is XDG's, which lib.sh pins under the
 # first HOME, not the one this section moved to.
 for role in "${roles[@]}"; do
@@ -352,3 +373,53 @@ git config --global --unset core.excludesFile
 run doctor --fix
 like "$OUT" 'dotfiles edit.*set core\.excludesFile' '--fix says to set the key when it is unset'
 is "$(git config --global --get core.excludesFile)" '' 'and does not set it'
+
+## ------------------------------------------------------------ the service unit
+
+# Back to a fully wired machine, so the unit is all doctor has to say.
+git config --global core.excludesFile "$ignore"
+printf '%s\n' "${wanted[@]}" >"$ignore"
+printf '%s\n' "$good" >"$settings"
+
+# A drifted unit in the config home is named and rewritten.
+printf '[Service]\nExecStart=/bin/false\n' >"$unit"
+run doctor
+is "$RC" 1 'a drifted unit is a finding'
+like "$OUT" "unit workflow\\.service.*differs at $unit" 'named as differing, with its path'
+
+# With the dotfiles' unit directory present, the unit goes there and the config
+# home links to it, the way chezmoi lays out hub.service.
+units="$HOME/.dotfiles/home/dot_config/systemd/user"
+mkdir -p "$units"
+run doctor --fix
+like "$OUT" "unit workflow\\.service.*wrote $units/workflow\\.service" '--fix writes the unit under the dotfiles'
+like "$OUT" 'commit the dotfiles' 'and asks for the dotfiles to be committed'
+truthy "$([ -L "$unit" ] && echo 0 || echo 1)" 'the config home holds a link'
+is "$(readlink "$unit")" "$units/workflow.service" 'to the dotfiles copy'
+truthy "$(grep -qxF 'ExecStart=%h/.local/bin/workflow serve' "$units/workflow.service" && echo 0 || echo 1)" \
+	'and the dotfiles copy holds the unit'
+
+run doctor
+is "$RC" 0 'a linked unit is healthy'
+unlike "$OUT" 'unit workflow' 'and doctor says nothing about it'
+
+printf '[Service]\nExecStart=/bin/false\n' >"$units/workflow.service"
+run doctor
+is "$RC" 1 'a drifted dotfiles unit is a finding'
+like "$OUT" "unit workflow\\.service.*differs at $units/workflow\\.service" 'named at the dotfiles path'
+run doctor --fix
+run doctor
+is "$RC" 0 '--fix rewrites the dotfiles copy'
+
+# Enabling is a person's act: doctor names the command and never runs it.
+echo disabled >"$unit_state"
+run doctor --fix
+is "$RC" 1 'a unit systemd does not report enabled is a finding, --fix or not'
+like "$OUT" 'unit workflow\.service.*systemctl --user enable --now workflow\.service' \
+	'and the finding gives the command'
+
+mkdir -p "$T_TMP/no-systemd"
+ln -sf "$(command -v git)" "$T_TMP/no-systemd/git"
+run env PATH="$T_TMP/no-systemd" "$wf" doctor
+unlike "$OUT" 'enable --now' 'with no systemctl the enabled check is skipped'
+echo enabled >"$unit_state"

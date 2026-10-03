@@ -34,6 +34,13 @@ pub fn amx_roles() -> PathBuf {
     config_home().join("amx/agents")
 }
 
+/// The dotfiles' source directory for user units. chezmoi links each file
+/// here into `~/.config/systemd/user`, so a unit written anywhere else is
+/// undone by the next `chezmoi apply`.
+pub fn dotfiles_units() -> PathBuf {
+    home().join(".dotfiles/home/dot_config/systemd/user")
+}
+
 pub fn worktrees_root() -> PathBuf {
     state_home().join("workflow/worktrees")
 }
