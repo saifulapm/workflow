@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod atomic;
+pub mod claim;
 pub mod cli;
 pub mod digest;
 pub mod exit;
@@ -275,6 +276,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             stdin,
             sections,
             note,
+            force,
             session_id,
         } => verbs::wiki(
             &with_session(app, session_id),
@@ -282,6 +284,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             *stdin,
             *sections,
             note.as_deref(),
+            *force,
         ),
         cli::Command::Plan {
             slug,
@@ -292,6 +295,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             task,
             list,
             from,
+            status,
+            add_task,
+            force,
             session_id,
         } => verbs::plan(
             &with_session(app, session_id),
@@ -304,6 +310,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 tick: tick.as_deref(),
                 list: *list,
                 from: from.as_deref(),
+                status: status.as_ref().map(Option::as_deref),
+                add_task: *add_task,
+                force: *force,
             },
         ),
         cli::Command::Roadmap {
@@ -312,14 +321,20 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             clear,
             tick,
             untick,
+            status,
+            force,
             session_id,
         } => verbs::roadmap(
             &with_session(app, session_id),
-            set_file.as_deref(),
-            *stdin,
-            *clear,
-            tick.as_deref(),
-            untick.as_deref(),
+            verbs::RoadmapArgs {
+                set_file: set_file.as_deref(),
+                stdin: *stdin,
+                clear: *clear,
+                tick: tick.as_deref(),
+                untick: untick.as_deref(),
+                status: status.as_ref().map(Option::as_deref),
+                force: *force,
+            },
         ),
     }
 }

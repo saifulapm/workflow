@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "mem plan --json (read mode)",
+  "title": "mem plan --json and mem roadmap --json (read mode)",
   "description": "plan.md, verbatim — the orchestrator parses it. Exit 1 when there is no plan.",
   "type": "object",
   "required": [
@@ -13,6 +13,15 @@
     },
     "path": {
       "type": "string"
+    },
+    "status": {
+      "description": "plan_status (or roadmap_status for `mem roadmap --json`) from project.toml; absent when unset.",
+      "enum": [
+        "draft",
+        "approved",
+        "running",
+        "done"
+      ]
     }
   },
   "additionalProperties": false

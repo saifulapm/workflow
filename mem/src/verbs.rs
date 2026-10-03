@@ -757,7 +757,7 @@ pub fn handoff(app: &App, set: Option<&str>, stdin: bool, title: Option<&str>) -
 /// replaces it. An over-cap write still lands and reports exit 6.
 pub fn status(app: &App, set: Option<&str>, stdin: bool) -> Result<i32> {
     if set.is_none() && !stdin {
-        return print_singleton(app, "status", |store, id| store.status_path(id));
+        return print_singleton(app, "status", |store, id| store.status_path(id), None);
     }
     let identity = app.identity(Mode::Write)?;
     let Some(id) = identity.id() else {
@@ -814,6 +814,9 @@ struct Singleton {
     item: &'static str,
     /// What the file is called, for the messages that name it.
     file: &'static str,
+    /// The project.toml key its status lives under. The text is parsed by
+    /// more readers than mem, so the status stays out of it.
+    status_key: &'static str,
     path: fn(&crate::store::Store, &str) -> std::path::PathBuf,
 }
 
@@ -821,6 +824,7 @@ const PLAN: Singleton = Singleton {
     noun: "plan",
     item: "task",
     file: "plan.md",
+    status_key: "plan_status",
     path: |store, id| store.plan_path(id),
 };
 
@@ -828,6 +832,7 @@ const ROADMAP: Singleton = Singleton {
     noun: "roadmap",
     item: "milestone",
     file: "roadmap.md",
+    status_key: "roadmap_status",
     path: |store, id| store.roadmap_path(id),
 };
 
@@ -843,6 +848,10 @@ pub struct PlanArgs<'a> {
     pub tick: Option<&'a str>,
     pub list: bool,
     pub from: Option<&'a str>,
+    /// `--status` alone prints it; with a value, sets it.
+    pub status: Option<Option<&'a str>>,
+    pub add_task: bool,
+    pub force: bool,
 }
 
 /// `mem plan` — the current plan, the milestone plans stored beside it, and
@@ -859,9 +868,15 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
     if let Some(slug) = args.from {
         return plan_from(app, slug);
     }
+    if let Some(status) = args.status {
+        return singleton_status(app, PLAN, status, args.force);
+    }
+    if args.add_task {
+        return add_task(app, args.force);
+    }
     let Some(slug) = args.slug else {
         return match (args.tick, args.task) {
-            (Some(task), _) => tick_singleton(app, PLAN, task, true),
+            (Some(task), _) => tick_singleton(app, PLAN, task, true, args.force),
             (None, Some(task)) => plan_task(app, task),
             (None, None) => singleton(app, PLAN, args.set_file, args.stdin, args.clear),
         };
@@ -922,24 +937,115 @@ pub fn task_block(plan: &str, task: &str) -> Option<String> {
     Some(out)
 }
 
+/// What `mem roadmap` was asked for.
+pub struct RoadmapArgs<'a> {
+    pub set_file: Option<&'a std::path::Path>,
+    pub stdin: bool,
+    pub clear: bool,
+    pub tick: Option<&'a str>,
+    pub untick: Option<&'a str>,
+    /// `--status` alone prints it; with a value, sets it.
+    pub status: Option<Option<&'a str>>,
+    pub force: bool,
+}
+
 /// `mem roadmap` — the same four moves over roadmap.md, and one more: a
 /// milestone the end-of-milestone review sends back goes to unchecked with
 /// `--untick`, which a replacement cannot do because a write keeps the ticks
 /// the copy on disk has. The current plan has no such
 /// move: its tasks belong to the run that is making them.
-pub fn roadmap(
-    app: &App,
-    set_file: Option<&std::path::Path>,
-    stdin: bool,
-    clear: bool,
-    tick: Option<&str>,
-    untick: Option<&str>,
-) -> Result<i32> {
-    match (tick, untick) {
-        (Some(slug), _) => tick_singleton(app, ROADMAP, slug, true),
-        (_, Some(slug)) => tick_singleton(app, ROADMAP, slug, false),
-        _ => singleton(app, ROADMAP, set_file, stdin, clear),
+pub fn roadmap(app: &App, args: RoadmapArgs<'_>) -> Result<i32> {
+    if let Some(status) = args.status {
+        return singleton_status(app, ROADMAP, status, args.force);
     }
+    match (args.tick, args.untick) {
+        (Some(slug), _) => tick_singleton(app, ROADMAP, slug, true, args.force),
+        (_, Some(slug)) => tick_singleton(app, ROADMAP, slug, false, args.force),
+        _ => singleton(app, ROADMAP, args.set_file, args.stdin, args.clear),
+    }
+}
+
+const STATUSES: [&str; 4] = ["draft", "approved", "running", "done"];
+
+/// `mem plan --status` and `mem roadmap --status`: print the status, or set
+/// it in project.toml.
+fn singleton_status(app: &App, which: Singleton, status: Option<&str>, force: bool) -> Result<i32> {
+    let Some(status) = status else {
+        let identity = app.identity(Mode::Read)?;
+        let Some(value) = identity
+            .id()
+            .and_then(|id| crate::project::declared(&app.store, id, which.status_key))
+        else {
+            if !app.quiet && !app.json {
+                eprintln!(
+                    "mem: no {} status set — `mem {} --status <{}>` sets one",
+                    which.noun,
+                    which.noun,
+                    STATUSES.join("|")
+                );
+            }
+            return Ok(exit::NOT_FOUND);
+        };
+        if app.json {
+            println!("{}", serde_json::to_string(&json!({ "status": value }))?);
+        } else {
+            println!("{value}");
+        }
+        return Ok(exit::OK);
+    };
+    if !STATUSES.contains(&status) {
+        return Err(exit::usage(format!(
+            "a {} status is one of {}, not `{status}`",
+            which.noun,
+            STATUSES.join(", ")
+        )));
+    }
+    let id = writable_project(app, which.noun)?;
+    crate::claim::runner_guard(app, &id, force)?;
+    crate::project::set_key(&app.store, &id, which.status_key, status)?;
+    self_record(app);
+    Ok(exit::OK)
+}
+
+/// `mem plan --add-task`: append the block on stdin to the current plan. The
+/// id must be new, because every reader of the plan finds a task by its id.
+fn add_task(app: &App, force: bool) -> Result<i32> {
+    let id = writable_project(app, "plan")?;
+    crate::claim::runner_guard(app, &id, force)?;
+    let path = (PLAN.path)(&app.store, &id);
+    let seen = crate::atomic::read_mtime(&path);
+    let block = crate::write::read_stdin()?;
+    let first = block.lines().next().unwrap_or_default();
+    let Some(task) = first
+        .strip_prefix("- [ ] ")
+        .and_then(|rest| rest.split_once(' '))
+        .map(|(task, _)| task)
+        .filter(|task| !task.is_empty())
+    else {
+        return Err(exit::usage(format!(
+            "a task block's first line is `- [ ] <id> <title>`, and this one is `{}`",
+            crate::search::truncate_bytes(first.trim(), 60)
+        )));
+    };
+    let Ok(mut text) = std::fs::read_to_string(&path) else {
+        return Err(exit::not_found(format!(
+            "no plan recorded for this project{}",
+            remedy("plan")
+        )));
+    };
+    if task_block(&text, task).is_some() {
+        return Err(exit::usage(format!(
+            "the plan already has a task '{task}' — pick a new id"
+        )));
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&block);
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    land(app, &path, &text, seen, PLAN.file)
 }
 
 /// Print, replace or clear one of the plan singletons.
@@ -951,7 +1057,7 @@ fn singleton(
     clear: bool,
 ) -> Result<i32> {
     if !clear && set_file.is_none() && !stdin {
-        return print_singleton(app, which.noun, which.path);
+        return print_singleton(app, which.noun, which.path, Some(which.status_key));
     }
     let id = writable_project(app, which.noun)?;
     let path = (which.path)(&app.store, &id);
@@ -1108,7 +1214,7 @@ fn land(
 /// `--untick` — the CAS-safe checkbox write (spec §7), `want` being the box
 /// asked for. The project is resolved in read mode: a tick can only apply to a
 /// file that already exists, so there is never a project to invent here.
-fn tick_singleton(app: &App, which: Singleton, task: &str, want: bool) -> Result<i32> {
+fn tick_singleton(app: &App, which: Singleton, task: &str, want: bool, force: bool) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
     let Some(id) = identity.id() else {
         return Err(exit::not_found(format!(
@@ -1116,6 +1222,7 @@ fn tick_singleton(app: &App, which: Singleton, task: &str, want: bool) -> Result
             which.noun
         )));
     };
+    crate::claim::runner_guard(app, id, force)?;
     let path = (which.path)(&app.store, id);
     let outcome = crate::write::tick_task(&path, task, which.item, want)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
@@ -1156,6 +1263,7 @@ pub fn wiki(
     stdin: bool,
     sections: bool,
     note: Option<&str>,
+    force: bool,
 ) -> Result<i32> {
     // `<slug>#<hslug>` addresses one section; the slug alone, the whole page.
     let (slug, hslug) = match slug.map(|s| s.split_once('#').unwrap_or((s, ""))) {
@@ -1172,7 +1280,7 @@ pub fn wiki(
                 "name the page to write, e.g. `mem wiki index --stdin --note \"why\"`",
             ));
         };
-        return wiki_write(app, slug, hslug, stdin, note);
+        return wiki_write(app, slug, hslug, stdin, note, force);
     }
     if sections && (slug.is_none() || hslug.is_some()) {
         return Err(exit::usage(
@@ -1397,6 +1505,7 @@ fn wiki_write(
     hslug: Option<&str>,
     stdin: bool,
     note: Option<&str>,
+    force: bool,
 ) -> Result<i32> {
     if !stdin {
         return Err(exit::usage(
@@ -1427,6 +1536,9 @@ fn wiki_write(
     // taken, so the section must exist before stdin is read.
     let target = match hslug {
         Some(hslug) => {
+            // A section write edits the page in place, which is the runner's
+            // to do; a whole-page write replaces it and is not gated.
+            crate::claim::runner_guard(app, id, force)?;
             let Ok(bytes) = std::fs::read(&path) else {
                 return Err(exit::not_found(format!(
                     "no page '{slug}' — `mem wiki` lists them"
@@ -1507,6 +1619,7 @@ fn print_singleton(
     app: &App,
     noun: &str,
     which: fn(&crate::store::Store, &str) -> std::path::PathBuf,
+    status_key: Option<&str>,
 ) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
     let Some(id) = identity.id() else {
@@ -1519,13 +1632,16 @@ fn print_singleton(
     match std::fs::read(&path) {
         Ok(bytes) => {
             if app.json {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "text": String::from_utf8_lossy(&bytes),
-                        "path": path.to_string_lossy(),
-                    }))?
-                );
+                let mut out = json!({
+                    "text": String::from_utf8_lossy(&bytes),
+                    "path": path.to_string_lossy(),
+                });
+                if let Some(status) =
+                    status_key.and_then(|key| crate::project::declared(&app.store, id, key))
+                {
+                    out["status"] = json!(status);
+                }
+                println!("{}", serde_json::to_string(&out)?);
             } else {
                 print!("{}", String::from_utf8_lossy(&bytes));
             }

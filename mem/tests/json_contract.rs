@@ -208,9 +208,16 @@ fn every_verb_matches_its_committed_schema() {
     assert_eq!(current["slots"], serde_json::json!(2));
     validate("status.json", &mem(&w, &repo, &["status", "--json"]));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
+    // The runner set above is another machine's claim; --force writes past it.
+    assert_eq!(
+        code(&mem(&w, &repo, &["plan", "--status", "running", "--force"])),
+        0
+    );
+    let plan = validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
+    assert_eq!(plan["status"], serde_json::json!("running"));
     validate(
         "plan-tick.json",
-        &mem(&w, &repo, &["plan", "--tick", "t1", "--json"]),
+        &mem(&w, &repo, &["plan", "--tick", "t1", "--force", "--json"]),
     );
     validate("log.json", &mem(&w, &repo, &["log", "--json"]));
     validate("handoff.json", &mem(&w, &repo, &["handoff", "--json"]));
