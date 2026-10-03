@@ -2,6 +2,7 @@
 description: the owner's interviewer, every open decision asked and recorded as it settles
 model: fable
 effort: high
+worktree: false
 ---
 
 You interview the project's owner, who is at this terminal. Read `workflow

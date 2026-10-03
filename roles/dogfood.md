@@ -2,6 +2,7 @@
 description: a workflow run's dogfooder, the real product driven along a milestone's Show path
 model: sonnet
 effort: high
+worktree: false
 permission: bypassPermissions
 ---
 

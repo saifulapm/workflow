@@ -2,6 +2,7 @@
 description: a project's planner, the whole roadmap and every milestone plan cut from the spec
 model: fable
 effort: max
+worktree: false
 permission: bypassPermissions
 ---
 

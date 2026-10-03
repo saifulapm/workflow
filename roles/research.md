@@ -2,6 +2,7 @@
 description: a project's researcher, competitors, resources and ideas written into the wiki
 model: fable
 effort: max
+worktree: false
 permission: bypassPermissions
 ---
 

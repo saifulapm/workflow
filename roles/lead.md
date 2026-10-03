@@ -2,6 +2,7 @@
 description: a workflow run's lead, settling what the run cannot settle alone
 model: sonnet
 effort: high
+worktree: false
 permission: bypassPermissions
 ---
 

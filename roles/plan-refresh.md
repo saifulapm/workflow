@@ -2,6 +2,7 @@
 description: a run's plan refresher, one milestone plan re-cut against the tree as it stands
 model: fable
 effort: high
+worktree: false
 permission: bypassPermissions
 ---
 
