@@ -38,6 +38,10 @@ const PICKUP_S: i64 = 20 * 60;
 /// returns.
 const LAUNCH_S: i64 = 60;
 
+/// How long serve waits on each child run to stop its workers once it has
+/// passed a SIGTERM on, before it goes without it.
+const STOP_S: f64 = 30.0;
+
 /// The one lead a project has at a time writes its pid here.
 const LEAD_PID: &str = "lead.pid";
 
@@ -1189,6 +1193,52 @@ impl Serve {
         }
     }
 
+    /// Told to stop: every child run gets SIGTERM, which stops its workers
+    /// and leaves their tasks dispatched, and serve waits up to thirty
+    /// seconds on each. The pid files stay, so the next serve finds each run
+    /// gone without an end and starts it again to adopt those tasks.
+    fn shutdown(&mut self) -> i32 {
+        let ours: Vec<String> = self.children.values().map(|c| c.id().to_string()).collect();
+        // A child an earlier serve started is watched through its pid file
+        // alone, and is stopped the same way.
+        let theirs: Vec<String> = std::fs::read_dir(paths::serve_root())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| std::fs::read_to_string(e.path().join("child.pid")).ok())
+            .map(|pid| pid.trim().to_string())
+            .filter(|pid| !pid.is_empty() && !ours.contains(pid) && sys::pid_alive(pid))
+            .collect();
+        warn(format!(
+            "serve: told to stop -- stopping {} run(s) before going",
+            ours.len() + theirs.len()
+        ));
+        for pid in ours.iter().chain(&theirs) {
+            sys::kill_group(pid, "TERM");
+        }
+        for (name, mut child) in self.children.drain() {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs_f64(STOP_S);
+            // Waited on, not probed: a child that exited stays a zombie, and
+            // alive to `kill -0`, until it is reaped.
+            while matches!(child.try_wait(), Ok(None)) {
+                if std::time::Instant::now() >= until {
+                    warn(format!(
+                        "serve {name}: its run did not stop within thirty seconds; going without it"
+                    ));
+                    break;
+                }
+                sys::sleep(0.2);
+            }
+        }
+        for pid in &theirs {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs_f64(STOP_S);
+            while sys::pid_alive(pid) && std::time::Instant::now() < until {
+                sys::sleep(0.2);
+            }
+        }
+        exit::OK
+    }
+
     /// One word in the stage file, said on stderr when it changes.
     fn stage(&self, p: &ServeProject, word: &str) {
         let path = p.dir().join("stage");
@@ -1323,13 +1373,27 @@ pub fn cmd_serve(once: bool, tick_s: Option<f64>) -> i32 {
         claimed: HashMap::new(),
         backend: backend_for(),
     };
+    // The signal only raises the flag; the loop sees it between ticks and
+    // passes the stop on to every child run, as a run does to its workers.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    for sig in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
+        let _ = signal_hook::flag::register(sig, stop.clone());
+    }
+    let stopping = || stop.load(std::sync::atomic::Ordering::Relaxed);
     serve.stop_recorded_leads();
     loop {
+        if stopping() {
+            return serve.shutdown();
+        }
         serve.tick();
         if once {
             return exit::OK;
         }
-        sys::sleep(tick);
+        // Slept in slices, so a stop waits on no more than one of them.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs_f64(tick);
+        while !stopping() && std::time::Instant::now() < until {
+            sys::sleep(0.1);
+        }
     }
 }
 
