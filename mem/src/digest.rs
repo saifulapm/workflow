@@ -22,6 +22,16 @@ pub const WARN: usize = 10_000;
 pub const CEILING: usize = 24_000;
 /// `--brief` is a hook payload, not a digest.
 pub const BRIEF: usize = 480;
+/// What the small digest is shaped to stay under on a populated project.
+pub const SMALL_TARGET: usize = 2_000;
+/// What it cannot exceed: every line is cut at SMALL_LINE and the line count is
+/// fixed by the shape, so the bound holds without a truncation pass.
+pub const SMALL_CEILING: usize = 3_000;
+/// The longest line the small digest prints.
+pub const SMALL_LINE: usize = 120;
+/// How many entries of each list the small digest names.
+const SMALL_QUESTIONS: usize = 3;
+const SMALL_RULINGS: usize = 3;
 
 /// The page that lists the others. It is a page like any other, kept by hand.
 pub const INDEX_SLUG: &str = "index";
@@ -30,6 +40,8 @@ pub const INDEX_HEAD_LINES: usize = 5;
 
 pub const TRUNCATED: &str = "[digest truncated]";
 pub const HINT: &str = "detail: mem show <id> · search: mem search \"<q>\"";
+pub const SMALL_HINT: &str =
+    "detail: mem show <id> · search: mem search \"<q>\" · everything: mem context --full";
 pub const EMPTY: &str = "nothing recorded for this project yet";
 
 pub struct Digest {
@@ -46,6 +58,12 @@ pub struct Sources {
     /// another machine's sessions down and must never be silent either.
     pub version: Option<String>,
     pub staleness: Option<String>,
+    /// The project's name, for the small digest's first line.
+    pub project: Option<String>,
+    /// The plan's stage and the machine running the project, as the project
+    /// keys `plan_status` and `runner` declare them.
+    pub stage: Option<String>,
+    pub runner: Option<String>,
     pub handoff: Option<Row>,
     pub plan: Option<String>,
     /// The milestones above the current plan, when the project is planned
@@ -58,6 +76,9 @@ pub struct Sources {
     /// The text of the index page, when the project keeps one.
     pub wiki_index: Option<String>,
     pub status: Option<String>,
+    /// When status.md last changed, as a date: a status line without its age
+    /// reads as current whatever it says.
+    pub status_date: Option<String>,
     pub rulings: Vec<Row>,
     pub facts: Vec<Row>,
     pub logs: Vec<Row>,
@@ -86,6 +107,13 @@ impl Sources {
         let status = project_id
             .map(|id| store.status_path(id))
             .and_then(|p| std::fs::read_to_string(p).ok());
+        let status_date = project_id
+            .and_then(|id| std::fs::metadata(store.status_path(id)).ok())
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| date(d.as_secs() as i64));
+        let declared =
+            |key: &str| project_id.and_then(|id| crate::project::declared(store, id, key));
         let pages = project_id
             .map(|id| store.wiki_pages(id))
             .unwrap_or_default();
@@ -96,6 +124,9 @@ impl Sources {
         Ok(Sources {
             version: crate::maint::read_version_warning(store),
             staleness,
+            project: declared("name"),
+            stage: declared("plan_status"),
+            runner: declared("runner"),
             handoff: index.recent("handoff", project_id, 1)?.into_iter().next(),
             plan,
             roadmap,
@@ -103,6 +134,7 @@ impl Sources {
             pages,
             wiki_index,
             status,
+            status_date,
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
             logs: recent_non_run_logs(index, project_id, 5)?,
@@ -380,6 +412,178 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
         over_warn: mandatory_bytes > WARN,
         truncated,
     }
+}
+
+/// The small digest: the session-start text, one line per fact a session acts
+/// on, in a fixed order. What it leaves out (facts, logs, the plan's next task,
+/// what each skill is for) is a `mem show`, a `mem search` or the full digest
+/// away, and the hint line says so.
+pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
+    let mut lines: Vec<String> = Vec::new();
+    lines.extend(sources.version.iter().cloned());
+    lines.extend(sources.staleness.iter().cloned());
+    if let Some(name) = &sources.project {
+        let mut line = format!("project: {name}");
+        if let Some(stage) = &sources.stage {
+            line.push_str(&format!(" · stage: {stage}"));
+        }
+        if let Some(runner) = &sources.runner {
+            line.push_str(&format!(" · runner: {runner}"));
+        }
+        lines.push(line);
+    }
+    if let Some(first) = sources
+        .status
+        .as_deref()
+        .and_then(|s| s.lines().map(str::trim).find(|l| !l.is_empty()))
+    {
+        match &sources.status_date {
+            Some(d) => lines.push(format!("status ({d}): {first}")),
+            None => lines.push(format!("status: {first}")),
+        }
+    }
+    lines.extend(position(sources));
+    // A worker's question goes to whoever runs the work; only the ones with no
+    // audience are waiting on the person reading this.
+    let for_you: Vec<&Row> = sources
+        .questions
+        .iter()
+        .filter(|q| q.audience.is_none())
+        .collect();
+    if !for_you.is_empty() {
+        lines.push(format!("questions: {} for you", for_you.len()));
+        for q in for_you.iter().take(SMALL_QUESTIONS) {
+            lines.push(format!("  ? #{}  {}", q.short_id, q.title));
+        }
+    }
+    if let Some(handoff) = &sources.handoff {
+        lines.push(format!(
+            "handoff ({}): {}",
+            date(handoff.modified_epoch),
+            handoff.title
+        ));
+    }
+    for r in sources.rulings.iter().take(SMALL_RULINGS) {
+        lines.push(format!("ruling #{}  {}", r.short_id, r.title));
+    }
+    let skills: Vec<&str> = sources
+        .skills
+        .lines()
+        .filter_map(|l| l.split_once(" — ").map(|(name, _)| name.trim()))
+        .collect();
+    if !skills.is_empty() {
+        lines.push(format!(
+            "skills: {} · mem skill <name> or workflow skill <name>",
+            skills.join(", ")
+        ));
+    }
+    if !sources.pages.is_empty() {
+        let n = sources.pages.len();
+        lines.push(format!("wiki: {n} page{}", if n == 1 { "" } else { "s" }));
+        if let Some(index) = &sources.wiki_index {
+            lines.extend(index_entries(index));
+        }
+    }
+    if sources.is_empty() {
+        lines.push(EMPTY.to_string());
+    }
+    lines.push(SMALL_HINT.to_string());
+
+    let mut text = String::new();
+    for line in &lines {
+        text.push_str(&truncate_bytes(line, SMALL_LINE));
+        text.push('\n');
+    }
+    Digest {
+        text,
+        over_warn: false,
+        truncated: false,
+    }
+}
+
+/// Where the project stands: the first open milestone of the roadmap and its
+/// place in it, else the plan by name, with the plan's tasks merged so far.
+fn position(sources: &Sources) -> Option<String> {
+    let tasks = sources
+        .plan
+        .as_deref()
+        .map(|plan| {
+            let boxes = top_level_boxes(plan);
+            let ticked = boxes.iter().filter(|(done, _)| *done).count();
+            format!(" · tasks {ticked}/{} merged", boxes.len())
+        })
+        .unwrap_or_default();
+    if let Some(roadmap) = &sources.roadmap {
+        let milestones = top_level_boxes(roadmap);
+        if let Some(n) = milestones.iter().position(|(done, _)| !done) {
+            let name = milestones[n]
+                .1
+                .split_whitespace()
+                .next()
+                .unwrap_or_default();
+            return Some(format!(
+                "roadmap: {name} ({} of {}){tasks}",
+                n + 1,
+                milestones.len()
+            ));
+        }
+    }
+    let plan = sources.plan.as_deref()?;
+    let heading = plan
+        .lines()
+        .find(|l| l.trim_start().starts_with('#'))
+        .unwrap_or_default();
+    let title = heading.trim().trim_start_matches('#').trim();
+    let slug = title.strip_prefix("plan:").unwrap_or(title).trim();
+    Some(format!("plan: {slug}{tasks}"))
+}
+
+/// The boxes at the left margin of a plan or roadmap, ticked or not, with the
+/// text after each. An indented box belongs to the task above it and a fenced
+/// one is an example, as `first_open_task` reads them.
+fn top_level_boxes(text: &str) -> Vec<(bool, &str)> {
+    let mut fenced = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let body = line.trim_start();
+        if body.starts_with("```") || body.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let Some(rest) = line
+            .strip_prefix("- [")
+            .or_else(|| line.strip_prefix("* ["))
+        else {
+            continue;
+        };
+        let done = match rest.get(..2) {
+            Some(" ]") => false,
+            Some("x]" | "X]") => true,
+            _ => continue,
+        };
+        out.push((done, rest[2..].trim()));
+    }
+    out
+}
+
+/// The index page's first entries as `  <slug>: <what it says after the dash>`.
+fn index_entries(index: &str) -> Vec<String> {
+    index
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| {
+            let rest = line.strip_prefix("- [")?;
+            let (slug, rest) = rest.split_once(']')?;
+            Some(match rest.split_once(" — ") {
+                Some((_, text)) => format!("  {slug}: {}", text.trim()),
+                None => format!("  {slug}"),
+            })
+        })
+        .take(INDEX_HEAD_LINES)
+        .collect()
 }
 
 /// `--brief`: the smallest useful thing a hook can inject (spec §9), counted on

@@ -4,7 +4,8 @@ mod common;
 
 use common::{World, code, item, mem, put, stdout};
 use mem::digest::{
-    CEILING, EMPTY, HINT, Sources, TRUNCATED, build, first_open_task, index_head, plan_head,
+    CEILING, EMPTY, HINT, SMALL_CEILING, SMALL_HINT, SMALL_TARGET, Sources, TRUNCATED, build,
+    build_small, first_open_task, index_head, plan_head,
 };
 use mem::index::{Index, Purpose};
 use mem::item::Kind;
@@ -12,9 +13,13 @@ use mem::item::Kind;
 const P: &str = "01K2AAAAAAAAAAAAAAAAAAAAAA";
 
 fn sources(w: &World, staleness: Option<String>) -> (Index, Sources) {
+    sources_with_skills(w, staleness, String::new())
+}
+
+fn sources_with_skills(w: &World, staleness: Option<String>, skills: String) -> (Index, Sources) {
     let index = Index::open(&w.index_path(), Purpose::Read).unwrap();
     index.reindex(&w.store(), false).unwrap();
-    let s = Sources::gather(&index, &w.store(), Some(P), staleness, String::new()).unwrap();
+    let s = Sources::gather(&index, &w.store(), Some(P), staleness, skills).unwrap();
     (index, s)
 }
 
@@ -572,4 +577,223 @@ what it covers with `mem skill mem` for mem's, `workflow skill <name>` for every
     // And outside a project mem knows, none of it is said at all.
     let out = mem(&w, &w.plain_dir("stranger"), &["context"]);
     assert!(stdout(&out).is_empty(), "{}", stdout(&out));
+}
+
+/// An item written at a fixed second, so the newest-first and oldest-first
+/// readers order the fixture the way the test says.
+fn put_at(w: &World, kind: Kind, title: &str, second: i64, audience: Option<&str>) {
+    let mut it = item(kind, title, "body");
+    let at = jiff::Timestamp::from_second(1_800_000_000 + second).unwrap();
+    it.meta.created = at;
+    it.meta.modified = at;
+    it.meta.audience = audience.map(str::to_string);
+    put(&w.store(), Some(P), &it);
+}
+
+const SMALL_PLAN: &str = "# plan: m2-sections
+
+- [x] a write the index
+      Files: src/index.rs
+- [x] b write the search
+- [ ] c write the digest
+    - [ ] an example box under a task
+```
+- [ ] a fenced example
+```
+- [ ] d flip the verb
+";
+
+const SMALL_ROADMAP: &str = "# roadmap: v2
+
+- [x] m1-clean Every repo is clean
+      Show: hygiene passes
+- [ ] m2-sections mem retrieves by section  [after: m1-clean]
+- [ ] m3-hub The hub shows the run
+";
+
+const SKILLS: &str = "skills -- shell commands, not Skill-tool skills: read one\n\
+mem — Use at the start of a session\n\
+implement — Use when working through a plan\n\
+plan — Use to cut a task list\n";
+
+#[test]
+fn the_small_digest_follows_the_spec_order_under_its_target() {
+    let w = World::new("digest-small");
+    w.project(P, "thing");
+    let store = w.store();
+    mem::project::set_key(&store, P, "plan_status", "running").unwrap();
+    mem::project::set_key(&store, P, "runner", "macbook").unwrap();
+    std::fs::write(
+        store.status_path(P),
+        "m2 under way\nsecond line stays out\n",
+    )
+    .unwrap();
+    std::fs::write(store.plan_path(P), SMALL_PLAN).unwrap();
+    std::fs::write(store.roadmap_path(P), SMALL_ROADMAP).unwrap();
+    put_at(
+        &w,
+        Kind::Question,
+        "a worker's question",
+        0,
+        Some("orchestrator"),
+    );
+    for n in 0..4 {
+        put_at(
+            &w,
+            Kind::Question,
+            &format!("question {n} for a person"),
+            10 + n,
+            None,
+        );
+    }
+    put_at(&w, Kind::Handoff, "stopped mid migration", 20, None);
+    for n in 0..5 {
+        put_at(&w, Kind::Ruling, &format!("ruling {n}"), 30 + n, None);
+    }
+    for n in 0..30 {
+        put_at(
+            &w,
+            Kind::Fact,
+            &format!("fact {n} the small digest drops"),
+            40 + n,
+            None,
+        );
+    }
+    for n in 0..5 {
+        put_at(
+            &w,
+            Kind::Log,
+            &format!("log {n} the small digest drops"),
+            80 + n,
+            None,
+        );
+    }
+    let mut index = String::from("# Index\n\nThe pages this project keeps.\n\n");
+    for n in 0..7 {
+        page(&w, &format!("p{n}"), &format!("# Page {n}\n\nBody.\n"));
+        index.push_str(&format!("- [p{n}](p{n}.md) — page {n} in one line\n"));
+    }
+    page(&w, "index", &index);
+
+    let (_i, s) = sources_with_skills(
+        &w,
+        Some("! memory last synced 90 min ago".into()),
+        SKILLS.to_string(),
+    );
+    let d = build_small(&s, &store);
+
+    let status_date = s.status_date.clone().unwrap();
+    let handoff_date = mem::timefmt::date(s.handoff.as_ref().unwrap().modified_epoch);
+    let q: Vec<&str> = s
+        .questions
+        .iter()
+        .filter(|q| q.audience.is_none())
+        .map(|q| q.short_id.as_str())
+        .collect();
+    let r: Vec<&str> = s.rulings.iter().map(|r| r.short_id.as_str()).collect();
+    let expected = format!(
+        "! memory last synced 90 min ago
+project: thing · stage: running · runner: macbook
+status ({status_date}): m2 under way
+roadmap: m2-sections (2 of 3) · tasks 2/4 merged
+questions: 4 for you
+  ? #{}  question 0 for a person
+  ? #{}  question 1 for a person
+  ? #{}  question 2 for a person
+handoff ({handoff_date}): stopped mid migration
+ruling #{}  ruling 4
+ruling #{}  ruling 3
+ruling #{}  ruling 2
+skills: mem, implement, plan · mem skill <name> or workflow skill <name>
+wiki: 8 pages
+  p0: page 0 in one line
+  p1: page 1 in one line
+  p2: page 2 in one line
+  p3: page 3 in one line
+  p4: page 4 in one line
+{SMALL_HINT}
+",
+        q[0], q[1], q[2], r[0], r[1], r[2]
+    );
+    assert_eq!(d.text, expected);
+    assert!(d.text.len() < SMALL_TARGET, "{} bytes", d.text.len());
+    assert!(!d.text.contains("fact "), "{}", d.text);
+    assert!(!d.text.contains("log "), "{}", d.text);
+    assert!(!d.truncated);
+
+    // The full digest still carries what the small one drops.
+    let full = build(&s, &store, 6000).text;
+    assert!(full.contains("fact 29 the small digest drops"), "{full}");
+    assert!(!full.contains("stage: running"), "{full}");
+}
+
+#[test]
+fn a_small_digest_of_long_lines_stays_under_its_ceiling() {
+    let w = World::new("digest-small-long");
+    let long = |what: &str| format!("{what} {}", "x".repeat(200));
+    w.project(P, &long("name"));
+    let store = w.store();
+    mem::project::set_key(&store, P, "plan_status", &long("stage")).unwrap();
+    mem::project::set_key(&store, P, "runner", &long("runner")).unwrap();
+    std::fs::write(store.status_path(P), long("status")).unwrap();
+    std::fs::write(
+        store.plan_path(P),
+        format!("# plan: {}\n- [ ] {}\n", long("plan"), long("task")),
+    )
+    .unwrap();
+    std::fs::write(
+        store.roadmap_path(P),
+        format!("# roadmap: v2\n- [ ] m{}\n", "x".repeat(200)),
+    )
+    .unwrap();
+    for n in 0..5 {
+        put_at(&w, Kind::Question, &long(&format!("q{n}")), n, None);
+        put_at(&w, Kind::Ruling, &long(&format!("r{n}")), 10 + n, None);
+    }
+    put_at(&w, Kind::Handoff, &long("handoff"), 20, None);
+    let mut index = String::from("# Index\n\n");
+    for n in 0..7 {
+        let slug = format!("p{n}-{}", "x".repeat(50));
+        page(&w, &slug, "# Page\n\nBody.\n");
+        index.push_str(&format!("- [{slug}]({slug}.md) — {}\n", long("line")));
+    }
+    page(&w, "index", &index);
+    let mut skills = String::from("skills -- the instruction line\n");
+    for n in 0..11 {
+        skills.push_str(&format!("skill-number-{n} — {}\n", long("description")));
+    }
+    std::fs::write(store.version_path(), b"99\n").unwrap();
+
+    let (_i, s) = sources_with_skills(&w, Some(long("! memory last synced")), skills);
+    let d = build_small(&s, &store);
+    for line in d.text.lines() {
+        assert!(line.len() <= 120, "{} bytes: {line}", line.len());
+    }
+    assert_eq!(d.text.lines().count(), 21, "{}", d.text);
+    assert!(d.text.len() < SMALL_CEILING, "{} bytes", d.text.len());
+}
+
+#[test]
+fn a_bare_project_without_a_roadmap_names_its_plan() {
+    let w = World::new("digest-small-bare");
+    w.project(P, "thing");
+    let store = w.store();
+    std::fs::write(store.plan_path(P), SMALL_PLAN).unwrap();
+
+    let (_i, s) = sources(&w, None);
+    assert_eq!(
+        build_small(&s, &store).text,
+        format!("project: thing\nplan: m2-sections · tasks 2/4 merged\n{SMALL_HINT}\n")
+    );
+}
+
+#[test]
+fn an_empty_project_gets_its_name_and_the_small_hint() {
+    let w = World::new("digest-small-empty");
+    w.project(P, "thing");
+    let (_i, s) = sources(&w, None);
+    assert_eq!(
+        build_small(&s, &w.store()).text,
+        format!("project: thing\n{EMPTY}\n{SMALL_HINT}\n")
+    );
 }
