@@ -3,7 +3,9 @@
 # runs its roadmap milestone after milestone, one child run at a time. A
 # two-milestone roadmap ends ticked and in maintenance with its files on the
 # trunk, a paused project starts nothing, and a run that stops short leaves its
-# project waiting with no second run until something about it changes.
+# project waiting with no second run until something about it changes. A
+# milestone a run by hand landed is ticked by serve with no pickup, and a
+# milestone with no stored plan starts nothing and says so once.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -76,6 +78,19 @@ milestone i1 c1 c2
 project sulky s1
 milestone s1 w1 sulk
 
+# A milestone with no stored plan, and a plan of record that is not its own.
+project planless p1
+
+# A milestone a run by hand lands before serve starts: the run leaves the
+# roadmap to serve.
+project byhand h1
+milestone h1 d1 d2
+"$MEM_BIN" plan --from h1 >/dev/null
+run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
+is "$RC" 0 'a run by hand lands its milestone'
+like "$OUT" 'milestone h1 landed; the roadmap tick waits' 'and says serve ticks it'
+like "$("$MEM_BIN" roadmap)" '^- \[ \] h1 ' 'leaving it open in the roadmap'
+
 S="$XDG_STATE_HOME/workflow/serve"
 stage() { cat "$S/$1/stage" 2>/dev/null; }
 starts() { grep -c 'tasks, up to' "$S/$1/run.log" 2>/dev/null; }
@@ -93,7 +108,8 @@ is "$RC" 2 'a second serve on this machine is refused'
 like "$OUT" 'another serve is live on this machine' 'and says why'
 
 for _ in $(seq 120); do
-	[ "$(stage app)" = maintenance ] && [ "$(stage sulky)" = waiting ] && break
+	[ "$(stage app)" = maintenance ] && [ "$(stage sulky)" = waiting ] &&
+		[ "$(stage byhand)" = maintenance ] && break
 	sleep 1
 done
 # A few more ticks, for a waiting project to start a run it should not.
@@ -152,3 +168,21 @@ for _ in $(seq 60); do
 done
 is "$(starts sulky)" 2 'a changed plan starts the run again'
 is "$(stage sulky)" waiting 'and it waits again when the task fails again'
+
+## ---------------------------------------- a milestone with no stored plan
+
+is "$(stage planless)" needs-plan 'a milestone with no stored plan reads needs-plan'
+[ -e "$S/planless/p1.pickup.md" ] && notok 'and no pickup lead went out' || ok 'and no pickup lead went out'
+[ -e "$S/planless/run.log" ] && notok 'nor a run started' "$(cat "$S/planless/run.log")" || ok 'nor a run started'
+is "$(grep -o 'serve p1: no stored plan -- cut one with the plan skill; nothing starts until it is stored' \
+	<<<"$("$MEM_BIN" --project planless log --type run --limit 50 --json)" | wc -l)" 1 \
+	'the line is logged once over every tick'
+like "$("$MEM_BIN" --project planless roadmap)" '^- \[ \] p1 ' 'and the milestone stays open'
+
+## ----------------------------------- a milestone landed by a run by hand
+
+like "$("$MEM_BIN" --project byhand roadmap)" '^- \[x\] h1 ' 'serve ticks the milestone a run by hand landed'
+[ -e "$S/byhand/h1.pickup.md" ] && notok 'with no pickup lead' || ok 'with no pickup lead'
+is "$(starts byhand)" 1 'its one run found nothing left to do'
+like "$("$MEM_BIN" --project byhand log --type run --limit 50 --json)" 'dogfood h1: skipped, m5' \
+	'and the milestone end ran after it'

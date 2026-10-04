@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # The roadmap at run time. A roadmap is milestones, not work a worker can be
 # handed, so `workflow run` refuses one and says which verb turns a milestone
-# into the plan of record. The other half is the tick: a milestone whose plan
-# came out of mem and finished is checked off in the roadmap, and a plan that
-# stopped short or came from a file is not.
+# into the plan of record. The other half is the landing: the run never ticks
+# the roadmap, since serve ticks a milestone only once its Show path is walked,
+# so a milestone whose plan came out of mem and finished is left open with a
+# line saying serve takes it from there, and a plan that stopped short or came
+# from a file gets no such line.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -103,16 +105,17 @@ run workflow run
 is "$RC" 2 'a roadmap filed as the plan of record is refused the same way'
 like "$OUT" 'mem plan --from <slug>' 'with the same remedy'
 
-## ------------------------------------------ a finished milestone is ticked
+## ---------------------------------- a finished milestone is left for serve
 
 plan done-milestone t2
 "$MEM_BIN" plan --set-file "$T_TMP/done-milestone.md" >/dev/null
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
 is "$RC" 0 'the milestone plan runs to the end'
 is "$(cat "$XDG_STATE_HOME/workflow/runs/app/done-milestone/t2.state")" merged 'with every task merged'
-like "$OUT" 'milestone done-milestone is ticked off in the roadmap' 'and the run says what it ticked'
+like "$OUT" 'milestone done-milestone landed; the roadmap tick waits for its Show path walk -- workflow serve walks it and ticks it' \
+	'and the run says the tick is serve'"'"'s to make'
 run_out "$MEM_BIN" roadmap
-like "$OUT" '^- \[x\] done-milestone ' 'and its slug is ticked off in the roadmap'
+like "$OUT" '^- \[ \] done-milestone ' 'so its slug stays open in the roadmap'
 like "$OUT" '^- \[ \] sulky-milestone ' 'leaving the milestones behind it alone'
 # A run that merged everything lands its integration branch on the checkout's
 # own branch, a fast-forward and nothing else, and says so; left on
@@ -128,7 +131,7 @@ plan sulky-milestone sulk
 "$MEM_BIN" plan --set-file "$T_TMP/sulky-milestone.md" >/dev/null
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
 is "$RC" 1 'a task that never reported ready stops the run short'
-unlike "$OUT" 'ticked off in the roadmap' 'so the run claims no milestone'
+unlike "$OUT" 'landed; the roadmap tick waits' 'so the run claims no milestone'
 run_out "$MEM_BIN" roadmap
 like "$OUT" '^- \[ \] sulky-milestone ' 'and the milestone stays unticked'
 
@@ -140,27 +143,28 @@ like "$OUT" '^- \[ \] sulky-milestone ' 'and the milestone stays unticked'
 plan filed-milestone t2
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/filed-milestone.md"
 is "$RC" 0 'a run off a plan file finishes the same way'
-unlike "$OUT" 'ticked off in the roadmap' 'without a word about the roadmap'
+unlike "$OUT" 'landed; the roadmap tick waits' 'without a word about the roadmap'
 like "$(cat "$T_TMP/filed-milestone.md")" '^- \[x\] t1 ' 'ticking its tasks off in the file it was handed'
 run_out "$MEM_BIN" roadmap
 like "$OUT" '^- \[ \] filed-milestone ' 'and leaving the roadmap alone'
 
-## -------------------- but a copy of the plan of record ticks mem and the roadmap
+## ---------------------- but a copy of the plan of record ticks mem and lands
 
 # The restart shape: a run started again off `mem plan > file` (the workaround
 # for a plan edited mid-run) used to tick its copy alone, so the milestone read
-# as untouched in mem and the roadmap after nine merges (friction #YY1F6P20).
+# as untouched in mem after nine merges.
 plan copied-milestone t2
 "$MEM_BIN" plan --set-file "$T_TMP/copied-milestone.md" >/dev/null
 cp "$T_TMP/copied-milestone.md" "$T_TMP/copied-milestone.copy.md"
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run --plan-file "$T_TMP/copied-milestone.copy.md"
 is "$RC" 0 'a run off a copy of the plan of record finishes'
+like "$OUT" 'milestone copied-milestone landed; the roadmap tick waits' 'and says the milestone landed'
 like "$(cat "$T_TMP/copied-milestone.copy.md")" '^- \[x\] t2 ' 'ticking the file it was handed'
 run_out "$MEM_BIN" plan
 like "$OUT" '^- \[x\] t1 ' 'and the plan of record in mem'
 like "$OUT" '^- \[x\] t2 ' 'every task of it'
 run_out "$MEM_BIN" roadmap
-like "$OUT" '^- \[x\] copied-milestone ' 'and the milestone in the roadmap'
+like "$OUT" '^- \[ \] copied-milestone ' 'leaving it open in the roadmap'
 
 ## ------------------------- a plan rewritten under the run is ticked again
 
@@ -188,8 +192,8 @@ like "$(cat "$WF_TMP/reopen.mem")" 'kept the tick on t1: the plan has them ticke
 	'filing the plan through mem kept the tick the run had made'
 like "$OUT" 'task t1: had come unticked in the live plan -- ticked again' \
 	'and the box unticked behind mem is named as ticked again'
-like "$OUT" 'milestone reopened-milestone is ticked off in the roadmap' \
-	'so the milestone is finished after all'
+like "$OUT" 'milestone reopened-milestone landed; the roadmap tick waits' \
+	'so the milestone landed after all'
 like "$("$MEM_BIN" log --limit 20 --json)" \
 	'task t1: had come unticked in the live plan -- ticked again' \
 	'with the same line in the mem log'
@@ -197,29 +201,15 @@ run_out "$MEM_BIN" plan
 like "$OUT" '^- \[x\] t1 ' 'the reopened box is ticked in the plan of record'
 like "$OUT" '^- \[x\] reopen ' 'beside the task that rewrote it'
 run_out "$MEM_BIN" roadmap
-like "$OUT" '^- \[x\] reopened-milestone ' 'and the milestone is ticked in the roadmap'
+like "$OUT" '^- \[ \] reopened-milestone ' 'and the milestone waits in the roadmap for serve'
 
-## ----------------------------------------- a tick mem refuses is said out loud
+## ------------------------------ a plan the roadmap does not name is no news
 
-# m6-commerce and m9-pages read their plan from mem, merged every task and
-# never ticked the roadmap, with not a word said: a tick mem refused read the
-# same as one with nothing to do (frictions #7KTQPJQK, #0W95EPF4). mem's own
-# reason goes to the warning, the event and the run log, with the command
-# that ticks it by hand.
 plan stray-milestone t2
 "$MEM_BIN" plan --set-file "$T_TMP/stray-milestone.md" >/dev/null
 run env WORKFLOW_DEADLINE_MIN=0.5 workflow run
 is "$RC" 0 'a plan the roadmap does not name still runs to the end'
-like "$OUT" "roadmap tick for stray-milestone failed: .*no milestone 'stray-milestone' in the roadmap" \
-	'the warning carries what mem said'
-like "$OUT" 'fix: mem --project app roadmap --tick stray-milestone' 'and names the command that ticks it'
-like "$(cat "$XDG_STATE_HOME/workflow/runs/app/stray-milestone/events")" \
-	'roadmap tick for stray-milestone failed: .*fix: mem --project app roadmap --tick stray-milestone' \
-	'with the same line in the run log'
-# The log's title is cut short, so the fix command is only begun there.
-like "$("$MEM_BIN" log --limit 20 --json)" \
-	"run stray-milestone: roadmap tick failed: no milestone 'stray-milestone' in the roadmap; fix: mem" \
-	'and in the mem log'
+unlike "$OUT" 'landed; the roadmap tick waits' 'and no milestone is said to have landed'
 
 ## ------------------------------------------- no roadmap at all is no failure
 

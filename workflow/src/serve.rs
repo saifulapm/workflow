@@ -334,6 +334,12 @@ fn all_merged(run_dir: &Path) -> bool {
             .all(|s| s == run::MERGED || s == run::DONE_PREVIOUSLY)
 }
 
+/// Whether a plan has tasks and every one of them is ticked.
+fn every_task_ticked(text: &str) -> bool {
+    plan::parse(text, false)
+        .is_some_and(|p| !p.tasks.is_empty() && p.tasks.iter().all(|t| t.checked))
+}
+
 /// Why a run stopped, from what it said: its stopped-short line, else the
 /// last thing it printed.
 fn stop_reason(log: &str) -> String {
@@ -605,8 +611,9 @@ impl Serve {
     }
 
     /// The open milestone with no child: wait while nothing changed since a
-    /// run stopped short, make the milestone mem's current plan, hold the
-    /// plan to plan-check, then start the run.
+    /// run stopped short, leave a milestone with no plan alone, pick it up
+    /// unless its plan has landed already, make the milestone mem's current
+    /// plan, hold the plan to plan-check, then start the run.
     fn open_milestone(&mut self, p: &ServeProject, at: usize) {
         let dir = p.dir();
         let slug = p.milestones[at].0.clone();
@@ -621,10 +628,32 @@ impl Serve {
             }
             let _ = std::fs::remove_file(dir.join("waiting"));
         }
-        if !self.picked_up(p, &slug) {
+        let mut text = self.plan_text(p);
+        let own = plan::slug_of(&text).as_deref() == Some(slug.as_str());
+        // A lead has nothing to pick up without a plan, so the milestone
+        // waits for one, said once rather than on every tick.
+        let needs = dir.join("needs-plan");
+        if !own && self.stored_plan(p, &slug).trim().is_empty() {
+            if std::fs::read_to_string(&needs).is_ok_and(|was| was.trim() == slug) {
+                self.stage(p, "needs-plan");
+                return;
+            }
+            let _ = std::fs::write(&needs, format!("{slug}\n"));
+            self.log(
+                p,
+                &format!(
+                    "serve {slug}: no stored plan -- cut one with the plan skill; nothing starts until it is stored"
+                ),
+            );
+            self.stage(p, "needs-plan");
             return;
         }
-        let mut text = self.plan_text(p);
+        let _ = std::fs::remove_file(&needs);
+        // A run by hand landed this plan and left the roadmap tick to serve:
+        // the run starts with nothing to do and reaches the milestone end.
+        if !(own && every_task_ticked(&text)) && !self.picked_up(p, &slug) {
+            return;
+        }
         // A plan refused once is looked at again only once its text changes,
         // so a refusal is said once rather than on every tick.
         if std::fs::read_to_string(dir.join("blocked-plan")).is_ok_and(|b| b == text) {
@@ -633,7 +662,7 @@ impl Serve {
         }
         // `--from` refuses while the current plan has an open task, and a
         // milestone picked up again is mem's current plan already.
-        if plan::slug_of(&text).as_deref() != Some(slug.as_str()) {
+        if !own {
             let said = mem_on(&self.mem, &p.name, &["plan", "--from", &slug]);
             if !said.ok {
                 let why = said.err.trim_start_matches("mem: ").to_string();
@@ -795,8 +824,8 @@ impl Serve {
         )
     }
 
-    /// After the run landed every task: the roadmap tick if the run could
-    /// not make it, the dogfood stage, the plan marked done, the status and
+    /// After the run landed every task: the roadmap tick, which the run
+    /// leaves to serve, the dogfood stage, the plan marked done, the status and
     /// handoff lines, the hygiene count and the landed commit, in that order.
     fn milestone_end(&mut self, p: &ServeProject, slug: &str) {
         let mut road = milestones(&roadmap(&self.mem, &p.name).text);
@@ -1466,6 +1495,18 @@ mod tests {
         let plan = "# plan: m1\n\n- [ ] t1 A\n      Files: a\n";
         assert!(milestones(plan).is_empty());
         assert!(milestones("").is_empty());
+    }
+
+    #[test]
+    fn serve_sees_a_plan_landed_only_when_every_task_is_ticked() {
+        let task = |id: &str, mark: &str| {
+            format!("- [{mark}] {id} Add {id}\n      Files: app/{id}.php\n      Verify: true\n")
+        };
+        let landed = format!("# plan: m1\n\n{}{}", task("a1", "x"), task("a2", "x"));
+        let open = format!("# plan: m1\n\n{}{}", task("a1", "x"), task("a2", " "));
+        assert!(every_task_ticked(&landed));
+        assert!(!every_task_ticked(&open));
+        assert!(!every_task_ticked("# plan: m1\n"));
     }
 
     #[test]

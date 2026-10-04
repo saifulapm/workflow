@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+use crate::plan;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Project {
     pub id: String,
@@ -320,36 +322,21 @@ pub fn run_logged_lately() -> bool {
     serde_json::from_str::<Items>(&out).is_ok_and(|i| !i.items.is_empty())
 }
 
-/// What `mem roadmap --tick <slug> --json` answers. `ticked` is false for a
-/// milestone that was already checked off, which is not a failure and not news.
-#[derive(Debug, Deserialize)]
-struct RoadmapTick {
-    ticked: bool,
-}
-
-/// Check a finished plan's slug off in the project's roadmap. `Ok(false)`
-/// covers every way there is nothing to say: no roadmap at all, or a box that
-/// was already ticked. Any other refusal is `Err` with what mem said, for the
-/// run to pass on: a plan the roadmap does not name was silence, and two
-/// finished milestones went unticked with nobody told.
-pub fn roadmap_tick(slug: &str) -> Result<bool, String> {
-    let out = command()
-        .args(["roadmap", "--tick", slug, "--json"])
-        .output()
-        .map_err(|e| format!("cannot run {}: {e}", bin()))?;
-    if out.status.success() {
-        return Ok(serde_json::from_slice::<RoadmapTick>(&out.stdout)
-            .map(|t| t.ticked)
-            .unwrap_or(false));
+/// Whether `slug` is a milestone the project's roadmap still has open. No
+/// roadmap, or one that does not name the slug, is no.
+pub fn roadmap_open(slug: &str) -> bool {
+    let Some((true, text)) = capture(&["roadmap"]) else {
+        return false;
+    };
+    // The parser complains on stderr about a text with no header, and a
+    // project with no roadmap prints nothing.
+    if text.trim().is_empty() {
+        return false;
     }
-    // Asked only once the tick failed, so a tick that lands is one process.
-    match capture(&["roadmap"]) {
-        Some((true, text)) if !text.trim().is_empty() => {}
-        _ => return Ok(false),
-    }
-    let said = String::from_utf8_lossy(&out.stderr);
-    let said = said.trim();
-    Err(said.strip_prefix("mem: ").unwrap_or(said).to_string())
+    plan::parse(&text, false).is_some_and(|road| {
+        road.kind == plan::PlanKind::Roadmap
+            && road.tasks.iter().any(|t| t.id == slug && !t.checked)
+    })
 }
 
 /// This project's plan, as mem holds it.

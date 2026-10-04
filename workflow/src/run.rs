@@ -3808,24 +3808,17 @@ pub fn cmd_run(plan_file: Option<&Path>, model: Option<&str>, effort: Option<&st
     }
     run.tick_settled_again();
     release_own_claim();
-    // A milestone is finished when its plan is. mem's live plan is the one
-    // the roadmap's milestone names, so a run that read it from mem, or from a
-    // file carrying that plan's own slug, is the one that can say
-    // which box to tick: any other --plan-file plan need not be in mem at all.
+    // A milestone's plan landing does not tick it: serve ticks a milestone
+    // only once its Show path is walked, so a run by hand leaves it open and
+    // says who takes it from here. mem's live plan is the one the roadmap's
+    // milestone names, so only a run that read it from mem, or from a file
+    // carrying that plan's own slug, can say which milestone landed.
     if failed + blocked == 0 && (run.plan_file.is_none() || run.mem_holds_this_plan()) {
         let slug = &run.plan.plan_id;
-        match memcli::roadmap_tick(slug) {
-            Ok(true) => warn(format!("milestone {slug} is ticked off in the roadmap")),
-            Ok(false) => {}
-            Err(said) => {
-                let fix = format!("mem --project {} roadmap --tick {slug}", run.project);
-                let line = format!("roadmap tick for {slug} failed: {said} -- fix: {fix}");
-                warn(&line);
-                run.event(&line);
-                memcli::log_run(&format!(
-                    "run {slug}: roadmap tick failed: {said}; fix: {fix}"
-                ));
-            }
+        if memcli::roadmap_open(slug) {
+            warn(format!(
+                "milestone {slug} landed; the roadmap tick waits for its Show path walk -- workflow serve walks it and ticks it"
+            ));
         }
     }
     if failed + blocked > 0 {
