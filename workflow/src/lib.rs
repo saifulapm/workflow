@@ -24,6 +24,7 @@ pub mod brief;
 pub mod cli;
 pub mod docs;
 pub mod doctor;
+pub mod dogfood;
 pub mod exit;
 pub mod gitcmd;
 pub mod hook;
