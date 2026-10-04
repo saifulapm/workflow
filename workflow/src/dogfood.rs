@@ -181,6 +181,43 @@ pub fn finding_steps(listing: &str, slug: &str) -> Vec<String> {
         .collect()
 }
 
+/// The ids of the milestone's open findings a walk settles, off `mem finding
+/// list --open --json`: each on a step it walked and did not report failed.
+/// A skipped walk settles none, since it reported nothing of any step.
+pub fn fixed_findings(listing: &str, slug: &str, walked: &[usize], o: &WalkOutcome) -> Vec<String> {
+    let failed: &[usize] = match o {
+        WalkOutcome::Pass => &[],
+        WalkOutcome::Failed(steps) => steps,
+        WalkOutcome::Skipped(_) => return Vec::new(),
+    };
+    let settled = |step: &str| {
+        step.trim()
+            .parse::<usize>()
+            .is_ok_and(|n| walked.contains(&n) && !failed.contains(&n))
+    };
+    let items = serde_json::from_str::<serde_json::Value>(listing)
+        .ok()
+        .and_then(|v| v.get("items").and_then(|i| i.as_array()).cloned())
+        .unwrap_or_default();
+    items
+        .iter()
+        .filter(|i| i.get("milestone").and_then(|m| m.as_str()) == Some(slug))
+        .filter(|i| i.get("step").and_then(|s| s.as_str()).is_some_and(settled))
+        .filter_map(|i| i.get("id").and_then(|s| s.as_str()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The milestone's rows of `mem finding list --open`, whose third column is
+/// the milestone.
+pub fn milestone_rows(listing: &str, slug: &str) -> String {
+    listing
+        .lines()
+        .filter(|l| l.split_whitespace().nth(2) == Some(slug))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
 /// A failed walk held to its findings: a failed step with no open finding
 /// skips the walk, since a step the session could not drive is a finding,
 /// never a bare claim. `open` is [`finding_steps`] for the milestone.
@@ -357,5 +394,45 @@ mod tests {
             WalkOutcome::Skipped("step 3 failed with no finding".into())
         );
         assert_eq!(held_to_findings(WalkOutcome::Pass, &[]), WalkOutcome::Pass);
+    }
+
+    #[test]
+    fn a_walk_settles_the_findings_on_the_steps_it_walked_clean() {
+        let listing = r#"{"items":[
+            {"id":"F1","milestone":"cart","step":"2"},
+            {"id":"F2","milestone":"cart","step":"3"},
+            {"id":"F3","milestone":"cart","step":"1"},
+            {"id":"F4","milestone":"home","step":"2"},
+            {"id":"F5","milestone":"cart","step":null}
+        ]}"#;
+        let walked = [2, 3];
+        assert_eq!(
+            fixed_findings(listing, "cart", &walked, &WalkOutcome::Pass),
+            ["F1", "F2"]
+        );
+        assert_eq!(
+            fixed_findings(listing, "cart", &walked, &WalkOutcome::Failed(vec![3])),
+            ["F1"]
+        );
+        assert!(
+            fixed_findings(
+                listing,
+                "cart",
+                &walked,
+                &WalkOutcome::Skipped("no report".into())
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_milestone_keeps_only_its_own_finding_rows() {
+        let listing =
+            "#F1  open  cart  2  the basket stays empty\n#F2  open  home  1  the logo is gone\n";
+        assert_eq!(
+            milestone_rows(listing, "cart"),
+            "#F1  open  cart  2  the basket stays empty\n"
+        );
+        assert_eq!(milestone_rows(listing, "shop"), "");
     }
 }
