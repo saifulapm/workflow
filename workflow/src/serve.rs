@@ -18,6 +18,7 @@ use crate::backend::{Dispatch, Handle, WorkerBackend, backend_for};
 use crate::brief::{self, LeadCtx};
 use crate::dogfood::{self, NO_SHOW_PATH, OwnerFinding, WalkBrief, WalkOutcome, WalkState};
 use crate::gitcmd::{self, Git};
+use crate::maintain::{self, FixPhase, FixState};
 use crate::plan::{self, PlanKind};
 use crate::{exit, memcli, ownership, paths, plancheck, run, sys, warn};
 
@@ -48,6 +49,17 @@ const LEAD_PID: &str = "lead.pid";
 
 /// The walk a project has going, a [`WalkState`] line.
 const WALK: &str = "walk";
+
+/// The maintenance loop's finding and phase, a [`FixState`] line.
+const FIX: &str = "fix";
+
+/// The walk of the finding being fixed, a [`WalkState`] whose slug is the
+/// finding's milestone. It is kept apart from [`WALK`], which holds a
+/// milestone open until its walk is read.
+const FIX_WALK: &str = "fix-walk";
+
+/// The findings the loop leaves alone, one short id a line.
+const HELD: &str = "held";
 
 /// The sections of a project's `verify` page a walk's brief carries.
 const VERIFY_SECTIONS: [&str; 5] = ["launch", "doctor", "drive", "evidence", "cleanup"];
@@ -159,6 +171,8 @@ struct Current {
     dev: Option<String>,
     #[serde(default)]
     preview: Option<String>,
+    #[serde(default)]
+    review_paths: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -552,9 +566,10 @@ impl Serve {
     /// the strikes made is read, never one set by hand.
     fn walk_again(&mut self, p: &ServeProject) -> bool {
         let dir = p.dir();
-        let Some(walk) =
-            WalkState::read(&std::fs::read_to_string(dir.join(WALK)).unwrap_or_default())
-        else {
+        let read =
+            |f: &str| WalkState::read(&std::fs::read_to_string(dir.join(f)).unwrap_or_default());
+        // A fix walk strikes out the same way, its milestone the slug asked.
+        let Some(walk) = read(WALK).or_else(|| read(FIX_WALK)) else {
             return false;
         };
         let key = format!("strikes {}", walk.slug);
@@ -763,7 +778,8 @@ impl Serve {
             return;
         }
         let _ = std::fs::remove_file(dir.join("blocked-plan"));
-        self.start(p, &slug, at);
+        let place = format!("milestone {} of {}", at + 1, p.milestones.len());
+        self.start(p, &slug, &place);
     }
 
     fn plan_text(&self, p: &ServeProject) -> String {
@@ -790,7 +806,9 @@ impl Serve {
         self.stage(p, "blocked-plan");
     }
 
-    fn start(&mut self, p: &ServeProject, slug: &str, at: usize) {
+    /// Start the child run of mem's current plan, `place` saying in the
+    /// start line what it is the run of.
+    fn start(&mut self, p: &ServeProject, slug: &str, place: &str) {
         let dir = p.dir();
         let opened = std::fs::OpenOptions::new()
             .create(true)
@@ -832,10 +850,8 @@ impl Serve {
         }
         self.stage(p, "execution");
         warn(format!(
-            "serve {}: started the run of {slug}, milestone {} of {}",
-            p.name,
-            at + 1,
-            p.milestones.len()
+            "serve {}: started the run of {slug}, {place}",
+            p.name
         ));
     }
 
@@ -867,7 +883,14 @@ impl Serve {
             return;
         }
         if ended && all_merged(&run_dir) {
-            self.milestone_end(p, &slug);
+            match self.fix_state(p) {
+                Some(fix)
+                    if fix.phase == FixPhase::Run && maintain::fix_slug(&fix.finding) == slug =>
+                {
+                    self.fix_landed(p, &fix.finding)
+                }
+                _ => self.milestone_end(p, &slug),
+            }
             return;
         }
         let log = std::fs::read_to_string(dir.join("run.log")).unwrap_or_default();
@@ -945,8 +968,42 @@ impl Serve {
                 findings = dogfood::milestone_rows(&listing, slug);
             }
         }
-        let keys = current(&self.mem, &p.name).unwrap_or_default();
         let surface = milestone.and_then(|m| m.surface).unwrap_or_default();
+        let covered: Vec<usize> = steps.iter().map(|(n, _)| *n).collect();
+        let Some(session) = self.start_walk(p, slug, slug, surface, steps, findings) else {
+            return;
+        };
+        let walk = WalkState {
+            slug: slug.to_string(),
+            walk: n,
+            started: sys::now(),
+            steps: covered,
+            session,
+            outcome: None,
+            strikes,
+        };
+        let _ = std::fs::write(p.dir().join(WALK), walk.line());
+        self.stage(p, "dogfood");
+        warn(format!(
+            "serve {}: started the walk of {slug}, {} steps",
+            p.name,
+            walk.steps.len()
+        ));
+    }
+
+    /// Start a walk of `steps` on milestone `slug`'s Show path, its brief,
+    /// status and pid files under `key`; the session, or nothing when the
+    /// backend refused it.
+    fn start_walk(
+        &mut self,
+        p: &ServeProject,
+        key: &str,
+        slug: &str,
+        surface: String,
+        steps: Vec<(usize, String)>,
+        findings: String,
+    ) -> Option<String> {
+        let keys = current(&self.mem, &p.name).unwrap_or_default();
         let w = WalkBrief {
             project: p.name.clone(),
             slug: slug.to_string(),
@@ -970,31 +1027,13 @@ impl Serve {
             preview: keys.preview,
             findings,
         };
-        let status = p.dir().join(format!("{slug}.dogfood.status"));
+        let status = p.dir().join(format!("{key}.dogfood.status"));
         let env = vec![(
             "WORKFLOW_STATUS_FILE".to_string(),
             status.to_string_lossy().to_string(),
         )];
         let body = brief::dogfood(&w);
-        let Some(session) = self.start_session(p, slug, "dogfood", "dogfood", &body, env) else {
-            return;
-        };
-        let walk = WalkState {
-            slug: slug.to_string(),
-            walk: n,
-            started: sys::now(),
-            steps: w.steps.iter().map(|(n, _)| *n).collect(),
-            session,
-            outcome: None,
-            strikes,
-        };
-        let _ = std::fs::write(p.dir().join(WALK), walk.line());
-        self.stage(p, "dogfood");
-        warn(format!(
-            "serve {}: started the walk of {slug}, {} steps",
-            p.name,
-            walk.steps.len()
-        ));
+        self.start_session(p, key, "dogfood", "dogfood", &body, env)
     }
 
     /// The walk file read: a live session under its forty-five minutes holds
@@ -1282,6 +1321,7 @@ impl Serve {
     }
 
     /// Every milestone ticked: the roadmap is in maintenance, and serve
+    /// works its open findings one at a time through the `fix` file. It
     /// keeps ticking so an approved roadmap or a moved runner is seen.
     fn maintenance(&mut self, p: &ServeProject) {
         let _ = std::fs::remove_file(p.dir().join("milestone"));
@@ -1292,6 +1332,334 @@ impl Serve {
                 "serve: every milestone is ticked; the roadmap is in maintenance",
             );
         }
+        let Some(fix) = self.fix_state(p) else {
+            self.pick_finding(p);
+            return;
+        };
+        let id = fix.finding.clone();
+        match fix.phase {
+            FixPhase::Lead => self.fix_planned(p, &id),
+            FixPhase::Asked(question) => self.fix_answered(p, &id, &question),
+            FixPhase::Run => self.fix_run(p, &id),
+            FixPhase::Walk => self.fix_walk(p, &id),
+        }
+    }
+
+    fn fix_state(&self, p: &ServeProject) -> Option<FixState> {
+        FixState::read(&std::fs::read_to_string(p.dir().join(FIX)).unwrap_or_default())
+    }
+
+    fn set_fix(&self, p: &ServeProject, id: &str, phase: FixPhase) {
+        let fix = FixState {
+            finding: id.to_string(),
+            phase,
+        };
+        let _ = std::fs::write(p.dir().join(FIX), format!("{}\n", fix.line()));
+    }
+
+    /// With no lead going, the oldest open finding not held and not before
+    /// the owner gets its fix lead. An idea is no finding, so it starts
+    /// nothing.
+    fn pick_finding(&mut self, p: &ServeProject) {
+        self.stage(p, "maintenance");
+        if !self.leads(p).is_empty() {
+            return;
+        }
+        let held = std::fs::read_to_string(p.dir().join(HELD)).unwrap_or_default();
+        let questions = mem_on(
+            &self.mem,
+            &p.name,
+            &["questions", "--for", "human", "--json"],
+        );
+        let Some(f) = maintain::oldest(&self.open_listing(p), &held, &questions.out) else {
+            return;
+        };
+        // A walk count and its strikes belong to the finding they were
+        // counted for.
+        let _ = std::fs::remove_file(p.dir().join(FIX_WALK));
+        self.set_fix(p, &f.id, FixPhase::Lead);
+        self.fix_lead(p, &f.id);
+    }
+
+    /// The lead that stores the finding's fix plan under its own slug.
+    fn fix_lead(&mut self, p: &ServeProject, id: &str) {
+        let slug = maintain::fix_slug(id);
+        let rows = mem_on(&self.mem, &p.name, &["finding", "list", "--open"]).out;
+        let text = self.stored_plan(p, &slug);
+        let body = brief::lead_findings(
+            &self.lead_ctx(p, &slug, "", &text),
+            &maintain::lead_rows(&rows, id),
+        );
+        self.start_lead(p, &slug, "findings", &body);
+        self.stage(p, "maintenance");
+    }
+
+    /// The fix lead ended: a missing or refused plan holds the finding, one
+    /// under the limit runs, and one over it asks the owner once.
+    fn fix_planned(&mut self, p: &ServeProject, id: &str) {
+        self.stage(p, "maintenance");
+        if !self.leads(p).is_empty() {
+            return;
+        }
+        let slug = maintain::fix_slug(id);
+        let text = self.stored_plan(p, &slug);
+        if text.trim().is_empty() {
+            self.hold_finding(p, id, &format!("the lead stored no plan {slug}"));
+            return;
+        }
+        if let Some(why) = self.refusal(p, &text) {
+            self.hold_finding(p, id, &format!("the plan is refused -- {why}"));
+            return;
+        }
+        let Some(parsed) = plan::parse(&text, true) else {
+            self.hold_finding(p, id, "the plan does not parse");
+            return;
+        };
+        let review = current(&self.mem, &p.name)
+            .and_then(|c| c.review_paths)
+            .unwrap_or_default();
+        let git = Git::at(&p.root);
+        let tracked: Vec<String> = gitcmd::nul_fields(&git.bytes(&["ls-files", "-z"]))
+            .iter()
+            .map(|f| gitcmd::lossy(f))
+            .collect();
+        let why = match maintain::fix_verdict(&parsed, &tracked, &review) {
+            maintain::FixVerdict::Run => return self.fix_start(p, id),
+            maintain::FixVerdict::Ask(why) => why,
+        };
+        let question = maintain::run_question(id, parsed.tasks.len(), &why);
+        let said = mem_on(
+            &self.mem,
+            &p.name,
+            &[
+                "ask",
+                "--for",
+                "human",
+                "--options",
+                "run,hold",
+                "--recommend",
+                "run",
+                "--",
+                &question,
+            ],
+        );
+        let Some(asked) = maintain::asked_id(&said.out) else {
+            warn(format!("serve {}: cannot ask -- {}", p.name, said.err));
+            return;
+        };
+        self.set_fix(p, id, FixPhase::Asked(asked));
+        self.log(
+            p,
+            &format!("serve {slug}: over the limit, {why}; the owner is asked"),
+        );
+    }
+
+    /// The owner's answer: `run` starts the plan, anything else holds it.
+    fn fix_answered(&mut self, p: &ServeProject, id: &str, question: &str) {
+        self.stage(p, "maintenance");
+        let said = mem_on(
+            &self.mem,
+            &p.name,
+            &["questions", "--for", "human", "--json"],
+        );
+        match maintain::answer(&said.out, question) {
+            None => {}
+            Some(a) if a.eq_ignore_ascii_case("run") => self.fix_start(p, id),
+            Some(a) => self.hold_finding(p, id, &format!("the owner answered {a}")),
+        }
+    }
+
+    /// The fix plan made mem's current plan and its run started. The roadmap
+    /// stays in maintenance, so nothing is ticked when it lands.
+    fn fix_start(&mut self, p: &ServeProject, id: &str) {
+        let slug = maintain::fix_slug(id);
+        let said = mem_on(&self.mem, &p.name, &["plan", "--from", &slug]);
+        if !said.ok {
+            let why = said.err.trim_start_matches("mem: ").to_string();
+            self.hold_finding(p, id, &format!("mem plan --from {slug} refused: {why}"));
+            return;
+        }
+        self.set_fix(p, id, FixPhase::Run);
+        self.fix_run(p, id);
+    }
+
+    /// The fix run, started again unless it stopped short and nothing about
+    /// it has changed since. The milestone file names its run dir for reap,
+    /// unpark and the event tail.
+    fn fix_run(&mut self, p: &ServeProject, id: &str) {
+        let dir = p.dir();
+        let slug = maintain::fix_slug(id);
+        let _ = std::fs::write(dir.join("milestone"), format!("{slug}\n"));
+        if let Ok(was) = std::fs::read_to_string(dir.join("waiting")) {
+            if was == self.fingerprint(p, &slug) {
+                self.stage(p, "waiting");
+                return;
+            }
+            let _ = std::fs::remove_file(dir.join("waiting"));
+        }
+        self.start(p, &slug, &format!("finding #{id}"));
+    }
+
+    /// The fix run landed: the finding's step is walked again, or, with no
+    /// Show path to walk, the finding closes at once.
+    fn fix_landed(&mut self, p: &ServeProject, id: &str) {
+        let Some(f) = maintain::finding(&self.open_listing(p), id) else {
+            self.fix_done(p, &format!("finding #{id} closed before its fix landed"));
+            return;
+        };
+        let text = roadmap(&self.mem, &p.name).text;
+        let milestone = plan::parse(&text, false).and_then(|r| r.get(&f.milestone).cloned());
+        let show = milestone.as_ref().and_then(|m| m.show.clone());
+        if dogfood::show_steps(show.as_deref().unwrap_or("")).is_empty() {
+            let skipped = WalkOutcome::Skipped(NO_SHOW_PATH.into());
+            self.log(p, &dogfood::walk_line(&f.milestone, &skipped, 0));
+            self.close_finding(p, id);
+            return;
+        }
+        self.set_fix(p, id, FixPhase::Walk);
+        self.fix_walk(p, id);
+    }
+
+    /// The walk of the finding's step: started when none is going, read when
+    /// its session has ended. A pass closes the finding; a failed walk goes
+    /// back to the lead and a skipped one is walked again, each a strike,
+    /// and the third pauses the project.
+    fn fix_walk(&mut self, p: &ServeProject, id: &str) {
+        let dir = p.dir();
+        let was = WalkState::read(&std::fs::read_to_string(dir.join(FIX_WALK)).unwrap_or_default());
+        let Some(mut walk) = was.clone().filter(|w| w.outcome.is_none()) else {
+            self.fix_walk_start(p, id, was);
+            return;
+        };
+        let h = Handle {
+            session: walk.session.clone(),
+            pidfile: dir.join("dogfood.pid"),
+            worktree: p.root.clone(),
+        };
+        let age = sys::now() - walk.started;
+        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+        if live && age < dogfood::WALK_S {
+            self.stage(p, "dogfood");
+            return;
+        }
+        let slug = maintain::fix_slug(id);
+        let outcome = if live {
+            self.backend.stop(&h, 10);
+            WalkOutcome::Skipped(dogfood::WALK_TIMED_OUT.into())
+        } else {
+            let status = dir.join(format!("{slug}.dogfood.status"));
+            dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
+        };
+        self.log(p, &dogfood::walk_line(&walk.slug, &outcome, 1));
+        if outcome == WalkOutcome::Pass {
+            self.close_finding(p, id);
+            return;
+        }
+        let failed = matches!(outcome, WalkOutcome::Failed(_));
+        walk.outcome = Some(outcome);
+        walk.strikes += 1;
+        let _ = std::fs::write(dir.join(FIX_WALK), walk.line());
+        if walk.strikes >= dogfood::STRIKES {
+            // Resumed, the loop takes the finding up afresh; the fix walk
+            // file stays until then for the owner's answer to be read.
+            let _ = std::fs::remove_file(dir.join(FIX));
+            self.strike_out(p, &walk.slug);
+            return;
+        }
+        if failed {
+            self.set_fix(p, id, FixPhase::Lead);
+            self.fix_lead(p, id);
+        } else {
+            self.stage(p, "waiting");
+        }
+    }
+
+    /// A walk of the finding's step, numbered on from the last one with its
+    /// strikes. Step 0 is the launch and the doctor alone; a step the Show
+    /// path does not have walks the whole path.
+    fn fix_walk_start(&mut self, p: &ServeProject, id: &str, was: Option<WalkState>) {
+        let Some(f) = maintain::finding(&self.open_listing(p), id) else {
+            self.fix_done(p, &format!("finding #{id} closed before its walk"));
+            return;
+        };
+        let text = roadmap(&self.mem, &p.name).text;
+        let milestone = plan::parse(&text, false).and_then(|r| r.get(&f.milestone).cloned());
+        let show = milestone.as_ref().and_then(|m| m.show.clone());
+        let all: Vec<(usize, String)> = dogfood::show_steps(show.as_deref().unwrap_or(""))
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| (i + 1, s))
+            .collect();
+        let steps = match f.step.parse::<usize>() {
+            Ok(0) => vec![(0, "the product launches and its doctor passes".to_string())],
+            Ok(n) if n <= all.len() => vec![all[n - 1].clone()],
+            _ => all,
+        };
+        let rows = mem_on(&self.mem, &p.name, &["finding", "list", "--open"]).out;
+        let findings: String = dogfood::milestone_rows(&rows, &f.milestone)
+            .lines()
+            .filter(|l| l.split_whitespace().next() == Some(&format!("#{}", f.id)))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let covered: Vec<usize> = steps.iter().map(|(n, _)| *n).collect();
+        let surface = milestone.and_then(|m| m.surface).unwrap_or_default();
+        let slug = maintain::fix_slug(id);
+        let Some(session) = self.start_walk(p, &slug, &f.milestone, surface, steps, findings)
+        else {
+            return;
+        };
+        let walk = WalkState {
+            slug: f.milestone.clone(),
+            walk: was.as_ref().map_or(1, |w| w.walk + 1),
+            started: sys::now(),
+            steps: covered,
+            session,
+            outcome: None,
+            strikes: was.map_or(0, |w| w.strikes),
+        };
+        let _ = std::fs::write(p.dir().join(FIX_WALK), walk.line());
+        self.stage(p, "dogfood");
+    }
+
+    /// The finding fixed by the trunk head.
+    fn close_finding(&mut self, p: &ServeProject, id: &str) {
+        let head = Git::at(&p.root).head().unwrap_or_default();
+        mem_on(&self.mem, &p.name, &["finding", "close", id, "--by", &head]);
+        let short = &head[..head.len().min(7)];
+        let date = &sys::utc_now()[..10];
+        self.fix_done(p, &format!("finding #{id} fixed at {short} on {date}"));
+    }
+
+    /// The fix over: its plan done, `status` the status line, and the loop
+    /// free for the next finding.
+    fn fix_done(&mut self, p: &ServeProject, status: &str) {
+        mem_on(&self.mem, &p.name, &["plan", "--status", "done"]);
+        mem_on(&self.mem, &p.name, &["status", "--set", status]);
+        let dir = p.dir();
+        for file in [FIX, FIX_WALK, "milestone", "waiting"] {
+            let _ = std::fs::remove_file(dir.join(file));
+        }
+        warn(format!("serve {}: {status}", p.name));
+        self.stage(p, "maintenance");
+    }
+
+    /// The finding left alone from now on, said once in the log, so a fix
+    /// that cannot go on does not start again on every tick.
+    fn hold_finding(&mut self, p: &ServeProject, id: &str, why: &str) {
+        let dir = p.dir();
+        let mut held = std::fs::read_to_string(dir.join(HELD)).unwrap_or_default();
+        held.push_str(&format!("{id}\n"));
+        let _ = std::fs::write(dir.join(HELD), held);
+        for file in [FIX, FIX_WALK] {
+            let _ = std::fs::remove_file(dir.join(file));
+        }
+        self.log(
+            p,
+            &format!(
+                "serve {}: finding #{id} is held -- {why}",
+                maintain::fix_slug(id)
+            ),
+        );
         self.stage(p, "maintenance");
     }
 
@@ -1759,24 +2127,26 @@ pub fn cmd_park(task: &str, reason: &str) -> i32 {
     exit::OK
 }
 
-/// Zero the walk's strikes and forget the strikes question, so a later
-/// third strike asks the owner again.
+/// Zero the strikes of the milestone's walk and of the fix walk, and forget
+/// their strikes questions, so a later third strike asks the owner again.
 fn forget_strikes(dir: &Path) {
-    let file = dir.join(WALK);
-    let Some(mut walk) = WalkState::read(&std::fs::read_to_string(&file).unwrap_or_default())
-    else {
-        return;
-    };
-    let key = format!("strikes {}", walk.slug);
-    walk.strikes = 0;
-    let _ = std::fs::write(&file, walk.line());
-    let served = std::fs::read_to_string(dir.join("served")).unwrap_or_default();
-    let kept: String = served
-        .lines()
-        .filter(|l| *l != key)
-        .map(|l| format!("{l}\n"))
-        .collect();
-    let _ = std::fs::write(dir.join("served"), kept);
+    for name in [WALK, FIX_WALK] {
+        let file = dir.join(name);
+        let Some(mut walk) = WalkState::read(&std::fs::read_to_string(&file).unwrap_or_default())
+        else {
+            continue;
+        };
+        let key = format!("strikes {}", walk.slug);
+        walk.strikes = 0;
+        let _ = std::fs::write(&file, walk.line());
+        let served = std::fs::read_to_string(dir.join("served")).unwrap_or_default();
+        let kept: String = served
+            .lines()
+            .filter(|l| *l != key)
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let _ = std::fs::write(dir.join("served"), kept);
+    }
 }
 
 /// `workflow pause [<project>]` and `workflow resume [<project>]`: the

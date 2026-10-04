@@ -111,6 +111,123 @@ pub fn fix_slug(finding: &str) -> String {
     format!("fix-{}", finding.to_lowercase())
 }
 
+/// An open finding as the loop works it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    /// The short id, which names the fix plan and the owner's question.
+    pub id: String,
+    pub milestone: String,
+    pub step: String,
+}
+
+/// The findings of `mem finding list --open --json`, oldest first: the
+/// listing dates items by day only, so the order is the ULID's.
+fn open_findings(listing: &str) -> Vec<Finding> {
+    let items = serde_json::from_str::<serde_json::Value>(listing)
+        .ok()
+        .and_then(|v| v.get("items").and_then(|i| i.as_array()).cloned())
+        .unwrap_or_default();
+    let field = |i: &serde_json::Value, k: &str| {
+        i.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let mut found: Vec<(String, Finding)> = items
+        .iter()
+        .filter(|i| !field(i, "short_id").is_empty())
+        .map(|i| {
+            let f = Finding {
+                id: field(i, "short_id"),
+                milestone: field(i, "milestone"),
+                step: field(i, "step"),
+            };
+            (field(i, "id"), f)
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found.into_iter().map(|(_, f)| f).collect()
+}
+
+/// The open finding with this short id.
+pub fn finding(listing: &str, id: &str) -> Option<Finding> {
+    open_findings(listing)
+        .into_iter()
+        .find(|f| f.id.eq_ignore_ascii_case(id))
+}
+
+/// The finding the loop takes next: the oldest open one that is not in
+/// `held`, one id a line, and that no pending question of `mem questions
+/// --for human --json` names, since the owner is settling that one.
+pub fn oldest(listing: &str, held: &str, questions: &str) -> Option<Finding> {
+    let pending: Vec<String> = question_rows(questions)
+        .iter()
+        .filter(|q| q.get("answer").is_none_or(|a| a.is_null()))
+        .filter_map(|q| q.get("body").and_then(|b| b.as_str()))
+        .map(str::to_lowercase)
+        .collect();
+    open_findings(listing).into_iter().find(|f| {
+        let named = format!("#{}", f.id.to_lowercase());
+        !held.lines().any(|l| l.trim().eq_ignore_ascii_case(&f.id))
+            && !pending.iter().any(|body| body.contains(&named))
+    })
+}
+
+fn question_rows(questions: &str) -> Vec<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(questions)
+        .ok()
+        .and_then(|v| v.get("questions").and_then(|q| q.as_array()).cloned())
+        .unwrap_or_default()
+}
+
+/// The finding's row of `mem finding list --open`, with the instruction
+/// that sends its fix to a plan of its own: a ticked roadmap has no plan of
+/// record for a task to be added to.
+pub fn lead_rows(rows: &str, id: &str) -> String {
+    let row: String = rows
+        .lines()
+        .filter(|l| {
+            l.split_whitespace()
+                .next()
+                .is_some_and(|w| w.eq_ignore_ascii_case(&format!("#{id}")))
+        })
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let slug = fix_slug(id);
+    format!(
+        "{row}\nThe roadmap is in maintenance: store the fix as one plan, `mem plan {slug} --stdin`, and never `mem plan --add-task`.\n"
+    )
+}
+
+/// The owner's question for a plan over the limit.
+pub fn run_question(id: &str, tasks: usize, why: &str) -> String {
+    format!(
+        "Run fix plan {} for finding #{id}? {tasks} tasks, {why}",
+        fix_slug(id)
+    )
+}
+
+/// The short id `mem ask` prints, `#<id>`.
+pub fn asked_id(out: &str) -> Option<String> {
+    let word = out.split_whitespace().next()?.strip_prefix('#')?;
+    (!word.is_empty()).then(|| word.to_string())
+}
+
+/// The answer to the question with this short id, off `mem questions --for
+/// human --json`; none while it is pending.
+pub fn answer(questions: &str, id: &str) -> Option<String> {
+    question_rows(questions)
+        .iter()
+        .find(|q| {
+            q.get("short_id")
+                .and_then(|s| s.as_str())
+                .is_some_and(|s| s.eq_ignore_ascii_case(id))
+        })
+        .and_then(|q| q.get("answer").and_then(|a| a.as_str()))
+        .map(|a| a.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +316,59 @@ mod tests {
     #[test]
     fn the_slug_is_fix_and_the_short_id_in_lowercase() {
         assert_eq!(fix_slug("AB12CD34"), "fix-ab12cd34");
+    }
+
+    const OPEN: &str = r#"{"items":[
+        {"id":"01M3","short_id":"CC000003","milestone":"m1","step":"2"},
+        {"id":"01M1","short_id":"AA000001","milestone":"m1","step":"1"},
+        {"id":"01M2","short_id":"BB000002","milestone":"m2","step":"0"}
+    ]}"#;
+
+    #[test]
+    fn the_loop_takes_the_oldest_finding_not_held_nor_asked_of_the_owner() {
+        let none = r#"{"questions":[]}"#;
+        let oldest_id = |held: &str, q: &str| oldest(OPEN, held, q).map(|f| f.id);
+        assert_eq!(oldest_id("", none).as_deref(), Some("AA000001"));
+        assert_eq!(oldest_id("AA000001\n", none).as_deref(), Some("BB000002"));
+        let asked = r#"{"questions":[
+            {"body":"finding #aa000001: is it the build year?","answer":null},
+            {"body":"Run fix plan fix-bb000002 for finding #BB000002? 4 tasks, more than three","answer":"hold"}
+        ]}"#;
+        assert_eq!(oldest_id("", asked).as_deref(), Some("BB000002"));
+        assert_eq!(oldest_id("AA000001\nBB000002\nCC000003\n", none), None);
+        assert_eq!(
+            finding(OPEN, "bb000002"),
+            Some(Finding {
+                id: "BB000002".into(),
+                milestone: "m2".into(),
+                step: "0".into()
+            })
+        );
+    }
+
+    #[test]
+    fn the_lead_gets_its_finding_and_the_plan_to_store() {
+        let rows = "#AA000001  open  m1  1  the logo is gone\n#BB000002  open  m2  0  no launch\n";
+        let text = lead_rows(rows, "AA000001");
+        assert!(
+            text.starts_with("#AA000001  open  m1  1  the logo is gone\n"),
+            "{text}"
+        );
+        assert!(!text.contains("BB000002"), "{text}");
+        assert!(text.contains("`mem plan fix-aa000001 --stdin`"), "{text}");
+    }
+
+    #[test]
+    fn the_owners_question_is_read_by_its_short_id() {
+        assert_eq!(
+            run_question("AB12CD34", 4, "more than three"),
+            "Run fix plan fix-ab12cd34 for finding #AB12CD34? 4 tasks, more than three"
+        );
+        assert_eq!(asked_id("#QX7Z\n").as_deref(), Some("QX7Z"));
+        assert_eq!(asked_id(""), None);
+        let q = |a: &str| format!(r#"{{"questions":[{{"short_id":"QX7Z2M4P","answer":{a}}}]}}"#);
+        assert_eq!(answer(&q("null"), "QX7Z2M4P"), None);
+        assert_eq!(answer(&q(r#""run""#), "qx7z2m4p").as_deref(), Some("run"));
+        assert_eq!(answer(&q(r#""run""#), "OTHER000"), None);
     }
 }
