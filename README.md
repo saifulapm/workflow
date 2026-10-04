@@ -199,8 +199,8 @@ milestone. Every few seconds it looks at each project with a checkout here
 whose runner is this machine, nobody, or a machine whose claim went stale. A
 project with no run going gets a pickup lead, plan-check, then one child
 `workflow run` in its checkout. When every task lands, a `dogfood` session
-walks the milestone's Show path, its steps cut at the commas of the `Show:`
-line, and only a passed walk ticks the milestone, writes the status and
+walks the milestone's Show path, its steps cut at the commas and
+semicolons of the `Show:` line, and only a passed walk ticks the milestone, writes the status and
 handoff lines and a hygiene count, and goes on to the next one; with none
 left the roadmap goes to `maintenance`. A `workflow run` started by hand
 lands the plan and leaves the tick to serve, which walks that milestone on
@@ -211,8 +211,8 @@ task's second failure and a failed walk get a lead session of their own.
 The walk files a finding for every step it could not pass. A lead turns
 the findings into fix tasks on the milestone's plan, the run lands them,
 and the next walk covers only the steps that failed. The third failed walk
-of a milestone pauses the project and asks you whether to walk again;
-`workflow resume` does the same. In maintenance serve takes the oldest open
+of a milestone pauses the project and asks you once; answering `walk again`,
+or `workflow resume`, clears the pause and the count. In maintenance serve takes the oldest open
 finding, has a lead store a fix plan for it, runs the plan and walks the
 step again. A fix plan of three tasks or fewer that touches no path
 `workflow review-needed` calls risky runs unasked; a bigger one waits for
