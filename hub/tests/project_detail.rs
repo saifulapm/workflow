@@ -80,8 +80,8 @@ fn project_detail_log_page_reaches_further_back_than_the_overview() {
     );
 }
 
-/// Ruling 1 and 4: `/roadmap` renders the whole roadmap, uncut, with its task
-/// boxes.
+/// Ruling 1 and 4: `/roadmap` renders every milestone, uncut, the first open
+/// one marked current.
 #[test]
 fn project_detail_roadmap_page_is_not_cut_where_the_overview_is() {
     let world = World::new("detail-roadmap");
@@ -96,7 +96,7 @@ fn project_detail_roadmap_page_is_not_cut_where_the_overview_is() {
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/roadmap"))).to_string();
     assert!(body.contains("Milestone 1<"), "{body}");
     assert!(body.contains("Milestone 45<"), "{body}");
-    assert!(body.contains("checkbox"), "{body}");
+    assert!(body.contains("current · m1<"), "{body}");
 }
 
 /// Ruling 4: the plan of record's own page shows a ticked box.
