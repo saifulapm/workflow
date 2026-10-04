@@ -1268,6 +1268,7 @@ impl Run {
         write_field(&self.dir, task, "files", t.files.as_deref().unwrap_or(""));
 
         let n = prior.attempts;
+        let counted = self.field(task, "dispatches");
         write_field(&self.dir, task, "dispatches", &(n + 1).to_string());
         write_field(&self.dir, task, "dispatched_at", &sys::now().to_string());
 
@@ -1320,9 +1321,33 @@ impl Run {
                 .lines()
                 .find(|l| !l.trim().is_empty())
                 .unwrap_or("nothing on stderr");
+            // Except amx at its machine-wide cap, which other projects' agents
+            // fill and empty: nothing ran, so no attempt is spent, and the
+            // task waits for a slot rather than failing on a busy machine.
+            if line.contains("max_total") {
+                self.set_state(task, PENDING);
+                match counted.is_empty() {
+                    true => {
+                        let _ = std::fs::remove_file(self.dir.join(format!("{task}.dispatches")));
+                    }
+                    false => write_field(&self.dir, task, "dispatches", &counted),
+                }
+                let wait = env_f64("WORKFLOW_SPAWN_RETRY_S", 60.0) as i64;
+                write_field(
+                    &self.dir,
+                    task,
+                    "retry_at",
+                    &(sys::now() + wait).to_string(),
+                );
+                let why = format!("waiting for a machine slot: {line}");
+                warn(format!("task {task}: {why}"));
+                self.hold(task, &why);
+                return;
+            }
             self.fail_task(task, &format!("the launch was refused: {line}"));
             return;
         }
+        let _ = std::fs::remove_file(self.dir.join(format!("{task}.retry_at")));
         // What the backend actually started, which is the handle everything
         // that asks after this worker later -- liveness, the stop, the
         // transcript -- reads out of this file.
@@ -3647,6 +3672,11 @@ pub fn cmd_run(plan_file: Option<&Path>, model: Option<&str>, effort: Option<&st
             }
         }
         for id in ready(&run) {
+            // A launch amx refused at its cap is not tried again at once:
+            // the slot it needs frees as another project's agent ends.
+            if run.field(&id, "retry_at").parse::<i64>().unwrap_or(0) > sys::now() {
+                continue;
+            }
             if run.running() >= run.max_workers {
                 run.hold(
                     &id,
