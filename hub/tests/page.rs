@@ -84,7 +84,7 @@ impl World {
 }
 
 #[test]
-fn the_page_has_the_three_sections_a_header_and_a_form() {
+fn the_page_has_the_projects_the_questions_a_header_and_a_form() {
     let world = World::new("page-sections");
     world.ask("Should we use Redis?");
     let hub = world.hub();
@@ -94,11 +94,14 @@ fn the_page_has_the_three_sections_a_header_and_a_form() {
     let body = body_of(&response);
 
     assert!(body.contains("Pending questions"), "{body}");
-    assert!(body.contains("Recent activity"), "{body}");
     assert!(body.contains("Projects"), "{body}");
     assert!(body.contains("Should we use Redis?"));
-    assert!(body.contains("alpha did a thing"));
-    assert!(body.contains("proj-alpha"));
+    assert!(
+        body.contains("<a href=\"/p/proj-alpha\">proj-alpha</a>"),
+        "{body}"
+    );
+    // A project with neither a roadmap nor a research page is at its brief.
+    assert!(body.contains("<div>brief"), "{body}");
     // AC4: answering is a form POST, and there is no script on the page at all.
     assert!(
         body.contains("<form method=\"post\" action=\"/answer\">"),
@@ -114,8 +117,6 @@ fn the_page_has_the_three_sections_a_header_and_a_form() {
         body.contains("activeElement"),
         "the reload checks focus: {body}"
     );
-    // AC7: a project with no status.md is an em dash.
-    assert!(body.contains('—'));
 }
 
 #[test]
@@ -152,25 +153,6 @@ fn the_header_carries_the_machine_name_and_the_sibling_links() {
     assert!(body.contains("<a href=\"/subscribe\">"), "{body}");
     // A scheme that is not http(s) never becomes a link.
     assert!(!body.contains("javascript:"), "{body}");
-}
-
-#[test]
-fn a_project_with_no_status_renders_an_em_dash_and_one_with_a_status_renders_it() {
-    let world = World::new("page-status");
-    seed_project(&world.mem, &world.home, "proj-beta", "beta did a thing");
-    let out = mem_in(
-        &world.mem,
-        &world.home,
-        &world.home.join("proj-beta"),
-        &["status", "--set", "Green. Everything builds."],
-    );
-    assert!(out.status.success());
-
-    let hub = world.hub();
-    let body = body_of(&hub.get("/")).to_string();
-    assert!(body.contains("Green. Everything builds."), "{body}");
-    assert!(body.contains("proj-alpha"), "{body}");
-    assert!(body.contains("—"), "{body}");
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +330,7 @@ fn answering_the_same_question_twice_writes_once() {
 ///
 /// Not a contrived race: the page is JavaScript-free by AC4, so the Answer
 /// button cannot disable itself; it refreshes itself every fifteen seconds; and
-/// a render costs `2P+2+Q` serialised `mem` processes. A double tap on a link
+/// a render costs two serialised `mem` processes. A double tap on a link
 /// that feels slow puts both POSTs on the wire before the first response
 /// arrives.
 #[test]

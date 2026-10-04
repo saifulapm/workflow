@@ -1,0 +1,253 @@
+//! `GET /`: every project with its lifecycle stage, runner and progress,
+//! then the questions waiting on the owner, from two `mem` reads.
+
+mod common;
+
+use std::path::{Path, PathBuf};
+
+use common::{Hub, TempDir, body_of, fixture_bin, status_of};
+use hub::config::Config;
+use hub::html::Banner;
+use hub::memcli::{MemCli, QUESTIONS_ARGV};
+use hub::page_home::{self, lifecycle_stage};
+use serde_json::{Value, json};
+
+/// 2026-10-05T12:00:00Z, two hours after every project's last activity.
+const NOW_MS: i64 = 1_791_201_600_000;
+
+/// One `projects --json` row, every summary field at its empty value, then
+/// `fields` laid over it.
+fn row(name: &str, fields: Value) -> Value {
+    let mut row = json!({
+        "id": format!("id-{name}"), "name": name, "remote": null, "aliases": [],
+        "created": "2026-01-01", "items": 3, "current": false,
+        "checkouts": [format!("/src/{name}")],
+        "runner": "here", "paused": null, "roadmap_status": null, "milestone": null,
+        "milestones_done": 0, "milestones_total": 0,
+        "plan_slug": null, "plan_ticked": 0, "plan_total": 0,
+        "last_activity": "2026-10-05T10:00:00Z",
+        "has_brief": true, "has_research": false,
+        "has_research_summary": false, "has_spec": false,
+    });
+    for (key, value) in fields.as_object().unwrap() {
+        row[key] = value.clone();
+    }
+    row
+}
+
+/// A project at each of the eight stages, and one run on the sibling `nuc`
+/// whose plan of record is an earlier milestone's.
+fn projects() -> Value {
+    let running = |plan_ticked: u64| {
+        json!({
+            "roadmap_status": "running", "milestone": "m1-auth",
+            "milestones_done": 0, "milestones_total": 2,
+            "plan_slug": "m1-auth", "plan_ticked": plan_ticked, "plan_total": 3,
+            "has_research": true, "has_research_summary": true, "has_spec": true,
+        })
+    };
+    json!({"projects": [
+        row("p-brief", json!({})),
+        row("p-research", json!({"has_research": true})),
+        row("p-grilling", json!({"has_research": true, "has_research_summary": true})),
+        row("p-spec", json!({"has_research": true, "has_research_summary": true, "has_spec": true})),
+        row("p-planning", json!({
+            "roadmap_status": "draft", "milestone": "m1-auth", "milestones_total": 2,
+            "paused": "here 2026-10-04",
+        })),
+        // Execution and dogfooding differ in one tick and nothing else.
+        row("p-execution", running(2)),
+        row("p-dogfood", running(3)),
+        row("p-maint", json!({
+            "roadmap_status": "maintenance", "milestones_done": 2, "milestones_total": 2,
+            "plan_slug": "m2-billing", "plan_ticked": 4, "plan_total": 4,
+        })),
+        row("p-elsewhere", json!({
+            "runner": "nuc", "roadmap_status": "approved", "milestone": "m2-billing",
+            "milestones_done": 1, "milestones_total": 2,
+            "plan_slug": "m1-auth", "plan_ticked": 3, "plan_total": 3,
+        })),
+    ]})
+}
+
+/// Two questions for `p-planning`, one of them several lines long, whose
+/// title is only the first.
+fn questions() -> Value {
+    let question = |id: &str, body: &str, options: Value| {
+        json!({
+            "id": id, "short_id": &id[18..], "kind": "question", "type": null,
+            "title": body.lines().next().unwrap(), "tags": [], "project": "p-planning",
+            "machine": "here", "created": "2026-10-05", "modified": "2026-10-05",
+            "active": true, "archived": false, "answered": false, "answer": null,
+            "body": body, "options": options, "recommend": null,
+        })
+    };
+    json!({"questions": [
+        question("01K6SBE4R0AAAAAAAAAAAAAAAA", "Approve roadmap p-planning?", json!(["approve", "changes"])),
+        question("01K6SBE4R0BBBBBBBBBBBBBBBB", "Two things:\n1. Which store?\n2. Which port?", json!([])),
+    ]})
+}
+
+/// A fake `mem` that logs each argv, one per line, and answers the two
+/// reads the page makes. Anything else exits 1 with nothing on stdout. Only
+/// shell builtins: a `MemCli` built `with_path` has nothing else on PATH.
+fn fake_mem(dir: &Path) -> (PathBuf, PathBuf) {
+    let bin = dir.join("bin");
+    let log = dir.join("argv.log");
+    fixture_bin(
+        &bin,
+        "mem",
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{log}'\n\
+             case \"$1\" in\n\
+             projects) printf '%s\\n' '{projects}' ;;\n\
+             questions) printf '%s\\n' '{questions}' ;;\n\
+             *) exit 1 ;;\n\
+             esac",
+            log = log.display(),
+            projects = projects(),
+            questions = questions(),
+        ),
+    );
+    (bin, log)
+}
+
+fn siblings() -> Config {
+    Config {
+        siblings: vec!["http://nuc:8088".to_string()],
+        ..Config::default()
+    }
+}
+
+fn render(tag: &str) -> (TempDir, String, Vec<String>) {
+    let dir = TempDir::new(tag);
+    let (bin, log) = fake_mem(dir.path());
+    let mem = MemCli::with_path(bin);
+    let page = page_home::render(&mem, &siblings(), "here", NOW_MS, &Banner::None);
+    let argv = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (dir, page, argv)
+}
+
+#[test]
+fn each_stage_follows_from_the_project_summary() {
+    let projects = projects();
+    let stages: Vec<(&str, &str)> = projects["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["name"].as_str().unwrap(), lifecycle_stage(p)))
+        .collect();
+    assert_eq!(
+        stages,
+        [
+            ("p-brief", "brief"),
+            ("p-research", "research"),
+            ("p-grilling", "grilling"),
+            ("p-spec", "spec"),
+            ("p-planning", "planning"),
+            ("p-execution", "execution"),
+            ("p-dogfood", "dogfooding"),
+            ("p-maint", "maintenance"),
+            ("p-elsewhere", "execution"),
+        ]
+    );
+    let done = row("p-done", json!({"roadmap_status": "done"}));
+    assert_eq!(lifecycle_stage(&done), "maintenance");
+}
+
+#[test]
+fn the_page_costs_two_mem_spawns() {
+    let (_dir, _page, argv) = render("home-spawns");
+    assert_eq!(
+        argv,
+        ["projects --json".to_string(), QUESTIONS_ARGV.join(" ")],
+        "the page reads nothing per project and nothing per question"
+    );
+}
+
+#[test]
+fn each_project_shows_its_stage_runner_and_progress() {
+    let (_dir, page, _argv) = render("home-rows");
+    for line in [
+        "<div>brief · here</div>",
+        "<div>research · here</div>",
+        "<div>grilling · here</div>",
+        "<div>spec · here</div>",
+        "<div>planning · paused · here · milestone 1 of 2 · 2 questions</div>",
+        "<div>execution · here · milestone 1 of 2 · tasks 2 of 3</div>",
+        "<div>dogfooding · here · milestone 1 of 2 · tasks 3 of 3</div>",
+        "<div>maintenance · here · milestone 2 of 2 · tasks 4 of 4</div>",
+        "<div>execution · <a href=\"http://nuc:8088\">nuc</a> · milestone 2 of 2 · tasks 3 of 3</div>",
+    ] {
+        assert!(page.contains(line), "{line}\n{page}");
+    }
+    assert!(
+        page.contains(
+            "<li><strong><a href=\"/p/p-dogfood\">p-dogfood</a></strong> \
+             <span class=\"meta\">2h</span>"
+        ),
+        "{page}"
+    );
+}
+
+#[test]
+fn a_waiting_question_shows_its_whole_body_and_the_answer_form() {
+    let (_dir, page, _argv) = render("home-questions");
+    assert!(
+        page.contains("Two things:\n1. Which store?\n2. Which port?"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<p class=\"rec\">approve · changes</p>"),
+        "{page}"
+    );
+    assert_eq!(
+        page.matches("<form method=\"post\" action=\"/answer\">")
+            .count(),
+        2
+    );
+    assert!(
+        page.contains("<input type=\"hidden\" name=\"id\" value=\"01K6SBE4R0BBBBBBBBBBBBBBBB\">"),
+        "{page}"
+    );
+    // The guarded reload is the page's one script.
+    assert_eq!(page.matches("<script").count(), 1, "{page}");
+    assert!(page.contains("location.reload()"), "{page}");
+}
+
+#[test]
+fn the_front_page_is_served_at_the_root() {
+    let dir = TempDir::new("home-route");
+    let home = dir.join("home");
+    let (bin, _log) = fake_mem(dir.path());
+    let config = dir.join("config.toml");
+    std::fs::write(
+        &config,
+        "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
+         ntfy_base = \"http://127.0.0.1:9\"\n\
+         siblings = [\"http://nuc:8088\"]\n",
+    )
+    .unwrap();
+    let hub = Hub::spawn(
+        &home,
+        &[&bin],
+        &["--config", config.to_str().unwrap(), "--port", "0"],
+    );
+
+    let response = hub.get("/");
+    assert_eq!(status_of(&response), 200);
+    let body = body_of(&response);
+    assert!(
+        body.contains("<a href=\"/p/p-maint\">p-maint</a>"),
+        "{body}"
+    );
+    assert!(body.contains("dogfooding"), "{body}");
+    assert!(
+        body.contains("<a href=\"http://nuc:8088\">nuc</a>"),
+        "{body}"
+    );
+}
