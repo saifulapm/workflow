@@ -20,6 +20,7 @@ use crate::dogfood::{self, NO_SHOW_PATH, OwnerFinding, WalkBrief, WalkOutcome, W
 use crate::gitcmd::{self, Git};
 use crate::maintain::{self, FixPhase, FixState};
 use crate::plan::{self, PlanKind};
+use crate::request::{self, Asked, AskedWalk};
 use crate::{exit, memcli, ownership, paths, plancheck, run, sys, warn};
 
 /// Seconds between ticks when neither `--tick` nor `WORKFLOW_TICK_S` says.
@@ -57,6 +58,9 @@ const FIX: &str = "fix";
 /// finding's milestone. It is kept apart from [`WALK`], which holds a
 /// milestone open until its walk is read.
 const FIX_WALK: &str = "fix-walk";
+
+/// A walk asked for by hand that is going, an [`AskedWalk`].
+const ASKED: &str = "asked";
 
 /// The findings the loop leaves alone, one short id a line.
 const HELD: &str = "held";
@@ -327,6 +331,25 @@ pub fn scan_projects(mem: &Path, machine: &str) -> Vec<ServeProject> {
         .collect()
 }
 
+/// A project mem lists with a checkout here, as a request sees it: its name
+/// and checkout, since a requested walk reads none of its roadmap state.
+fn checked_out(listed: Listed) -> Option<ServeProject> {
+    let root = listed
+        .checkouts
+        .iter()
+        .map(PathBuf::from)
+        .find(|c| c.is_dir())?;
+    Some(ServeProject {
+        name: listed.name,
+        root,
+        runner: None,
+        paused: false,
+        slots: SLOTS,
+        roadmap_status: None,
+        milestones: Vec::new(),
+    })
+}
+
 /// Whether a run wrote its own end at or after `since`: the `ended <n>
 /// merged` event a run that finished its loop leaves. A run stopped by a
 /// signal says `ended stopped by signal`, and one that crashed says nothing.
@@ -490,6 +513,7 @@ impl Serve {
         };
         let projects = scan_projects(&self.mem, &here);
         self.drop_lost(&projects);
+        self.requests(&here);
         for p in projects.iter().filter(|p| p.worth_a_tick()) {
             self.tick_project(p);
         }
@@ -504,6 +528,11 @@ impl Serve {
             return;
         }
         self.claim(p, false);
+        // A requested walk holds the project until it is answered: a run
+        // would work beside it, and a milestone's walk shares its pid file.
+        if p.dir().join(ASKED).exists() {
+            return;
+        }
         // The milestone is open until its walk is read, so a walk not yet
         // read holds the project: a run would land the milestone again and
         // start a second walk, and a lead would work beside the walk. A
@@ -1145,6 +1174,166 @@ impl Serve {
         }
         self.stage(p, "waiting");
         false
+    }
+
+    /// Walks asked for by hand. One going is read once its session has
+    /// ended; then each pending request addressed to this machine is taken
+    /// for a project with a checkout here and nothing going, whoever its
+    /// runner is. A requested walk ticks nothing and claims nothing.
+    fn requests(&mut self, here: &str) {
+        let projects: Vec<ServeProject> = listing(&self.mem)
+            .into_iter()
+            .filter_map(checked_out)
+            .collect();
+        for p in projects.iter().filter(|p| p.dir().join(ASKED).exists()) {
+            self.settle_asked(p);
+        }
+        let pending = Command::new(&self.mem)
+            .args(["questions", "--pending", "--all-projects"])
+            .args(["--for", "orchestrator", "--json"])
+            .env_remove("MEM_PROJECT")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        for a in request::requests_for(&pending, here) {
+            match projects.iter().find(|p| p.name == a.project) {
+                Some(p) if !self.going(p) => self.take_request(p, &a),
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether the project has a run, a walk, a fix, a requested walk or a
+    /// lead going. Read off its files alone, so asking reaps no child the
+    /// tick has yet to reap.
+    fn going(&self, p: &ServeProject) -> bool {
+        let dir = p.dir();
+        ["child.pid", WALK, FIX, ASKED]
+            .iter()
+            .any(|f| dir.join(f).exists())
+            || !self.leads(p).is_empty()
+    }
+
+    /// A request taken: a head without the commit walks nothing and files
+    /// the push as a finding on step 0, since the engine never fetches,
+    /// pulls or pushes; else the session walks the steps asked for.
+    fn take_request(&mut self, p: &ServeProject, a: &Asked) {
+        let r = &a.request;
+        let _ = std::fs::create_dir_all(p.dir());
+        if !Git::at(&p.root).is_ancestor(&r.commit, "HEAD") {
+            let text = request::missing_commit(&r.commit, &r.machine);
+            mem_on(
+                &self.mem,
+                &p.name,
+                &[
+                    "finding",
+                    "add",
+                    "--milestone",
+                    &r.slug,
+                    "--step",
+                    "0",
+                    "--",
+                    &text,
+                ],
+            );
+            let open = dogfood::finding_steps(&self.open_listing(p), &r.slug);
+            self.answer(
+                p,
+                &a.question,
+                &r.slug,
+                &WalkOutcome::Failed(vec![0]),
+                open.len(),
+            );
+            return;
+        }
+        let text = roadmap(&self.mem, &p.name).text;
+        let milestone = plan::parse(&text, false).and_then(|road| road.get(&r.slug).cloned());
+        let show = milestone.as_ref().and_then(|m| m.show.clone());
+        let show = show.as_deref().unwrap_or("");
+        let steps = request::asked_steps(show, &r.steps);
+        if steps.is_empty() {
+            let why = match dogfood::show_steps(show).is_empty() {
+                true => NO_SHOW_PATH.to_string(),
+                false => "no step asked for is on the Show path".to_string(),
+            };
+            self.answer(p, &a.question, &r.slug, &WalkOutcome::Skipped(why), 0);
+            return;
+        }
+        let surface = milestone.and_then(|m| m.surface).unwrap_or_default();
+        let covered: Vec<usize> = steps.iter().map(|(n, _)| *n).collect();
+        let Some(session) = self.start_walk(p, ASKED, &r.slug, surface, steps, String::new())
+        else {
+            let skipped = WalkOutcome::Skipped("the session did not start".into());
+            self.answer(p, &a.question, &r.slug, &skipped, 0);
+            return;
+        };
+        let asked = AskedWalk {
+            question: a.question.clone(),
+            walk: WalkState {
+                slug: r.slug.clone(),
+                walk: 1,
+                started: sys::now(),
+                steps: covered,
+                session,
+                outcome: None,
+                strikes: 0,
+            },
+        };
+        let _ = std::fs::write(p.dir().join(ASKED), asked.line());
+        warn(format!(
+            "serve {}: started the asked walk of {}, {} steps",
+            p.name,
+            r.slug,
+            asked.walk.steps.len()
+        ));
+    }
+
+    /// A requested walk read once its session has ended, or stopped past
+    /// its forty-five minutes, and answered. Its findings stay open for the
+    /// maintenance loop or the next pickup lead.
+    fn settle_asked(&mut self, p: &ServeProject) {
+        let file = p.dir().join(ASKED);
+        let Some(asked) = AskedWalk::read(&std::fs::read_to_string(&file).unwrap_or_default())
+        else {
+            let _ = std::fs::remove_file(&file);
+            return;
+        };
+        let walk = &asked.walk;
+        let h = Handle {
+            session: walk.session.clone(),
+            pidfile: p.dir().join("dogfood.pid"),
+            worktree: p.root.clone(),
+        };
+        let age = sys::now() - walk.started;
+        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+        if live && age < dogfood::WALK_S {
+            return;
+        }
+        let outcome = if live {
+            self.backend.stop(&h, 10);
+            WalkOutcome::Skipped(dogfood::WALK_TIMED_OUT.into())
+        } else {
+            let status = p.dir().join(format!("{ASKED}.dogfood.status"));
+            dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
+        };
+        let open = dogfood::finding_steps(&self.open_listing(p), &walk.slug);
+        let outcome = dogfood::held_to_findings(outcome, &open);
+        self.answer(p, &asked.question, &walk.slug, &outcome, open.len());
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// A request answered with the walk's words, beside its run line.
+    fn answer(&self, p: &ServeProject, question: &str, slug: &str, o: &WalkOutcome, open: usize) {
+        let said = mem_on(&self.mem, &p.name, &["answer", question, &o.words()]);
+        if !said.ok {
+            warn(format!(
+                "serve {}: cannot answer {question} -- {}",
+                p.name, said.err
+            ));
+        }
+        self.log(p, &dogfood::walk_line(slug, o, open));
     }
 
     fn open_listing(&self, p: &ServeProject) -> String {

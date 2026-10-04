@@ -8,6 +8,7 @@
 
 use std::process::{Command, Stdio};
 
+use crate::dogfood::WalkState;
 use crate::gitcmd::Git;
 use crate::{exit, memcli, plan, warn};
 
@@ -100,6 +101,78 @@ fn last_ticked(roadmap: &str) -> Option<String> {
         .rev()
         .find(|t| t.checked)
         .map(|t| t.id)
+}
+
+/// A request one of the orchestrator's pending questions makes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asked {
+    pub project: String,
+    /// The question's id, which its answer names.
+    pub question: String,
+    pub request: WalkRequest,
+}
+
+/// The requests addressed to `machine` in `mem questions --pending
+/// --all-projects --for orchestrator --json`; none when it does not parse.
+pub fn requests_for(listing: &str, machine: &str) -> Vec<Asked> {
+    let rows = serde_json::from_str::<serde_json::Value>(listing)
+        .ok()
+        .and_then(|v| v.get("questions").and_then(|q| q.as_array()).cloned())
+        .unwrap_or_default();
+    rows.iter()
+        .filter_map(|q| {
+            Some(Asked {
+                project: q.get("project")?.as_str()?.to_string(),
+                question: q.get("id")?.as_str()?.to_string(),
+                request: parse_request(q.get("body")?.as_str()?)?,
+            })
+        })
+        .filter(|a| a.request.machine == machine)
+        .collect()
+}
+
+/// The Show path's steps a request walks, numbered on the whole path: the
+/// ones it names, or all of them when it names none.
+pub fn asked_steps(show: &str, wanted: &[usize]) -> Vec<(usize, String)> {
+    crate::dogfood::show_steps(show)
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (i + 1, s))
+        .filter(|(n, _)| wanted.is_empty() || wanted.contains(n))
+        .collect()
+}
+
+/// The step 0 finding for a commit the checkout's head does not contain.
+/// The engine never fetches, pulls or pushes, so getting the commit there is
+/// the owner's push.
+pub fn missing_commit(commit: &str, machine: &str) -> String {
+    format!("commit {commit} is not on {machine}: push it there, the engine never pushes")
+}
+
+/// A requested walk going on: `<serve dir>/asked`, the question's id on its
+/// first line and the walk's [`WalkState`] line after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskedWalk {
+    pub question: String,
+    pub walk: WalkState,
+}
+
+impl AskedWalk {
+    pub fn read(text: &str) -> Option<AskedWalk> {
+        let (question, walk) = text.split_once('\n')?;
+        let question = question.trim();
+        if question.is_empty() {
+            return None;
+        }
+        Some(AskedWalk {
+            question: question.to_string(),
+            walk: WalkState::read(walk)?,
+        })
+    }
+
+    pub fn line(&self) -> String {
+        format!("{}\n{}", self.question, self.walk.line())
+    }
 }
 
 /// `workflow dogfood [<project>] [--milestone <slug>]`: ask the engine to
@@ -222,6 +295,77 @@ mod tests {
         ] {
             assert_eq!(parse_request(body), None, "{body}");
         }
+    }
+
+    #[test]
+    fn serve_takes_only_the_requests_addressed_to_its_machine() {
+        let listing = r#"{"questions":[
+            {"id":"01A","project":"app","body":"dogfood m1 at abc on here"},
+            {"id":"01B","project":"bad","body":"dogfood m1 at abc on here steps 2"},
+            {"id":"01C","project":"away","body":"dogfood m1 at abc on mini"},
+            {"id":"01D","project":"app","body":"where does the ask service go?"}
+        ]}"#;
+        let got = requests_for(listing, "here");
+        assert_eq!(
+            got.iter()
+                .map(|a| (
+                    a.project.as_str(),
+                    a.question.as_str(),
+                    a.request.steps.clone()
+                ))
+                .collect::<Vec<_>>(),
+            [("app", "01A", vec![]), ("bad", "01B", vec![2])]
+        );
+        assert!(requests_for("not json", "here").is_empty());
+    }
+
+    #[test]
+    fn serve_walks_the_steps_a_request_names_or_all() {
+        let show = "open the home page, the heading reads Hello; then the footer shows the year";
+        assert_eq!(
+            asked_steps(show, &[]),
+            [
+                (1, "open the home page".to_string()),
+                (2, "the heading reads Hello".to_string()),
+                (3, "the footer shows the year".to_string()),
+            ]
+        );
+        assert_eq!(
+            asked_steps(show, &[2, 7]),
+            [(2, "the heading reads Hello".to_string())]
+        );
+        assert!(asked_steps("", &[]).is_empty());
+    }
+
+    #[test]
+    fn serve_reads_a_requested_walk_back_as_it_was_written() {
+        let asked = AskedWalk {
+            question: "01M43V5FDFECJZ1WDY2KTE0R8N".into(),
+            walk: WalkState {
+                slug: "m1".into(),
+                walk: 1,
+                started: 1791000000,
+                steps: vec![2],
+                session: "wf-dogfood-a3k9".into(),
+                outcome: None,
+                strikes: 0,
+            },
+        };
+        assert_eq!(
+            asked.line(),
+            "01M43V5FDFECJZ1WDY2KTE0R8N\nm1 1 1791000000 wf-dogfood-a3k9 2\n"
+        );
+        assert_eq!(AskedWalk::read(&asked.line()), Some(asked));
+        assert_eq!(AskedWalk::read("01A"), None);
+        assert_eq!(AskedWalk::read("\nm1 1 1791000000 s 2\n"), None);
+    }
+
+    #[test]
+    fn a_missing_commit_names_the_push() {
+        assert_eq!(
+            missing_commit("2c20aec", "mini"),
+            "commit 2c20aec is not on mini: push it there, the engine never pushes"
+        );
     }
 
     #[test]
