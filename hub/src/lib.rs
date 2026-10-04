@@ -14,6 +14,7 @@ pub mod html;
 pub mod http;
 pub mod memcli;
 pub mod model;
+pub mod multipart;
 pub mod origin;
 pub mod page_control;
 pub mod page_decisions;
