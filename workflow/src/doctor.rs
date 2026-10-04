@@ -349,10 +349,11 @@ const STUBS: [(&str, &str); 3] = [
 /// hands the agent, so the rules for how to work -- narrow reads, files
 /// written in steps, an output cap -- live here and not in every brief. A
 /// project overrides one whole with `.amx/agents/<name>.md`.
-pub const ROLES: [(&str, &str); 7] = [
+pub const ROLES: [(&str, &str); 8] = [
     ("worker", include_str!("../../roles/worker.md")),
     ("lead", include_str!("../../roles/lead.md")),
     ("dogfood", include_str!("../../roles/dogfood.md")),
+    ("review", include_str!("../../roles/review.md")),
     ("research", include_str!("../../roles/research.md")),
     ("plan", include_str!("../../roles/plan.md")),
     ("plan-refresh", include_str!("../../roles/plan-refresh.md")),

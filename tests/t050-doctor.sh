@@ -153,7 +153,7 @@ export HOME="$T_TMP/embedded-home"
 mkdir -p "$HOME"
 
 skills=($(workflow skill | sed 's/ — .*//') mem)
-roles=(worker lead dogfood research plan plan-refresh grill)
+roles=(worker lead dogfood review research plan plan-refresh grill)
 truthy "$([ "${#skills[@]}" -gt 1 ] && echo 0 || echo 1)" 'workflow skill names the skills it carries'
 is "${#roles[@]}" "$(ls "$WF_ROOT"/roles/*.md | wc -l)" 'the role list is every file under roles/'
 copies=$((4 + ${#roles[@]} + 2 * ${#skills[@]}))
@@ -172,6 +172,8 @@ like "$OUT" 'hook pre-commit.*missing at .*\.config/git/hooks/pre-commit' \
 	'a missing hook stub is named'
 like "$OUT" 'role worker.*missing at .*\.config/amx/agents/worker\.md' \
 	'a missing role is named where amx reads it'
+like "$OUT" 'role review.*missing at .*\.config/amx/agents/review\.md' \
+	'a missing review role is named too'
 unit="$XDG_CONFIG_HOME/systemd/user/workflow.service"
 like "$OUT" "unit workflow\\.service.*missing at $unit" 'a missing service unit is named'
 
