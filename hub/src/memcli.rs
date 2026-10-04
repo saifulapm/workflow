@@ -439,6 +439,14 @@ impl MemCli {
         self.read(&["questions", &format!("--project={project}"), "--json"])
     }
 
+    /// A write a page makes: run it, then drop every cached read, so the page
+    /// the phone lands on next shows what was just written.
+    pub fn write_through(&self, args: &[&str]) -> Run {
+        let run = self.exec(args);
+        self.invalidate();
+        run
+    }
+
     /// The one write hub makes. `--` first, so an answer beginning with a dash
     /// is text rather than a flag mem rejects with exit 2 (review m-9).
     pub fn answer(&self, id: &str, text: &str) -> Run {

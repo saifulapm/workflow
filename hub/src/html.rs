@@ -106,6 +106,8 @@ h2{font-size:1rem;text-transform:uppercase;letter-spacing:.05em;opacity:.7;\
 margin:1.5rem 0 .5rem}
 nav{margin-left:auto;font-size:.9rem}
 nav a{margin-left:.75rem}
+nav.pages{display:flex;flex-wrap:wrap;gap:.25rem .75rem;margin:0 0 1rem}
+nav.pages a{margin-left:0}
 .meta{font-size:.8rem;opacity:.65}
 .q{white-space:pre-wrap;word-break:break-word;margin:.25rem 0 .5rem;font:inherit}
 article{border:1px solid #8884;border-radius:.5rem;padding:.75rem;margin-bottom:.75rem}
@@ -376,7 +378,7 @@ pub fn item_page(project: &str, item: Option<&ItemDetail>, degraded: Option<&str
 
 /// The head and header every detail page under `/p/<project>` shares: a title
 /// naming the project and the page, and a nav back to the project and home.
-fn detail_head(project: &str, label: &str) -> String {
+pub fn detail_head(project: &str, label: &str) -> String {
     let mut out = head(&format!("{project} / {label}"));
     out.push_str(&format!(
         "<header><h1>{proj} / {label_esc}</h1>\
@@ -388,7 +390,7 @@ fn detail_head(project: &str, label: &str) -> String {
     out
 }
 
-fn degraded_banner(why: &str) -> String {
+pub fn degraded_banner(why: &str) -> String {
     format!(
         "<p class=\"banner degraded\">mem is not answering, so this page is \
          out of date: {}</p>\n",
@@ -396,7 +398,7 @@ fn degraded_banner(why: &str) -> String {
     )
 }
 
-fn markdown_article(text: Option<&str>, project: &str, empty: &str) -> String {
+pub fn markdown_article(text: Option<&str>, project: &str, empty: &str) -> String {
     match text {
         None => format!("<p class=\"empty\">{empty}</p>\n"),
         Some(text) => format!(
@@ -687,7 +689,7 @@ fn wiki_section(view: &ProjectView, project: &str) -> String {
     out
 }
 
-fn project_url(project: &str) -> String {
+pub fn project_url(project: &str) -> String {
     format!("/p/{}", encode_component(project))
 }
 
@@ -707,7 +709,7 @@ fn log_url(project: &str) -> String {
     format!("{}/log", project_url(project))
 }
 
-fn item_url(project: &str, id: &str) -> String {
+pub fn item_url(project: &str, id: &str) -> String {
     format!("{}/item/{}", project_url(project), encode_component(id))
 }
 
@@ -730,7 +732,7 @@ fn destination(dest: &str, project: &str) -> Option<String> {
         .then(|| dest.to_string())
 }
 
-fn page_url(project: &str, slug: &str) -> String {
+pub fn page_url(project: &str, slug: &str) -> String {
     format!(
         "/wiki/{}/{}",
         encode_component(project),
@@ -740,7 +742,7 @@ fn page_url(project: &str, slug: &str) -> String {
 
 /// The head every page but the dashboard shares. No reload script: there is
 /// nothing on these pages that goes stale while it is being read.
-fn head(title: &str) -> String {
+pub fn head(title: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
@@ -812,11 +814,11 @@ fn project_row(project: &Project) -> String {
 
 /// A sibling link, escaped, and only if it is http(s). A `javascript:` URL in
 /// one's own config is self-inflicted, but the check costs one line.
-fn safe_link(url: &str) -> Option<String> {
+pub fn safe_link(url: &str) -> Option<String> {
     (url.starts_with("http://") || url.starts_with("https://")).then(|| esc(url))
 }
 
-fn label(url: &str) -> String {
+pub fn label(url: &str) -> String {
     url.trim_start_matches("https://")
         .trim_start_matches("http://")
         .trim_end_matches('/')

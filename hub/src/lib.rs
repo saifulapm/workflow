@@ -15,6 +15,17 @@ pub mod http;
 pub mod memcli;
 pub mod model;
 pub mod origin;
+pub mod page_control;
+pub mod page_decisions;
+pub mod page_evidence;
+pub mod page_home;
+pub mod page_new;
+pub mod page_project;
+pub mod page_questions;
+pub mod page_roadmap;
+pub mod page_run;
+pub mod page_wiki;
+pub mod pages;
 pub mod presence;
 pub mod proc;
 

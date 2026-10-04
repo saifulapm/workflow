@@ -9,25 +9,18 @@ use crate::http::{Request, Response};
 use crate::memcli::MemCli;
 use crate::model::View;
 use crate::origin::Guard;
-use crate::{api, model};
+use crate::{api, model, pages};
 
 /// Every path hub answers, and the one method it answers it with. Anything
 /// else on a known path is a 405 that says so; anything else at all is a 404.
+/// The pages are `pages::route_page`'s; these are the rest.
 const ROUTES: &[(&str, &str)] = &[
-    ("/", "GET"),
-    ("/answer", "POST"),
     ("/api/questions", "GET"),
     ("/api/activity", "GET"),
     ("/api/projects", "GET"),
     ("/api/presence", "GET"),
     ("/subscribe", "GET"),
-    ("/wiki", "GET"),
 ];
-
-/// The routes with a path under them: `/wiki/<project>/<slug>` and
-/// `/p/<project>`. Both are prefixes so that a wrong method on a page is
-/// still a 405 that says GET, the same answer every other route gives.
-const ROUTE_PREFIXES: &[(&str, &str)] = &[("/wiki/", "GET"), ("/p/", "GET")];
 
 /// The five kinds `/p/<project>/items/<kind>` answers.
 const ITEM_KINDS: [&str; 5] = ["fact", "ruling", "handoff", "question", "log"];
@@ -87,14 +80,12 @@ impl App {
         if !self.guard.host_allowed(request.header("host")) {
             return Response::text(403, "not a host this hub answers to");
         }
+        if let Some(response) = pages::route_page(self, request) {
+            return response;
+        }
         let allowed = ROUTES
             .iter()
             .find(|(path, _)| *path == request.path)
-            .or_else(|| {
-                ROUTE_PREFIXES
-                    .iter()
-                    .find(|(prefix, _)| request.path.starts_with(prefix))
-            })
             .map(|(_, allowed)| *allowed);
         let Some(allowed) = allowed else {
             return Response::not_found();
@@ -102,15 +93,7 @@ impl App {
         if request.method != allowed {
             return Response::method_not_allowed(allowed);
         }
-        if let Some(rest) = request.path.strip_prefix("/wiki/") {
-            return self.wiki_page(rest);
-        }
-        if let Some(rest) = request.path.strip_prefix("/p/") {
-            return self.project_page(rest);
-        }
         match request.path.as_str() {
-            "/" => self.dashboard(request),
-            "/answer" => self.answer(request),
             "/api/questions" => {
                 Response::json(api::questions(&model::questions(&self.mem, self.now_ms())))
             }
@@ -124,7 +107,6 @@ impl App {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
             "/subscribe" => self.subscribe(),
-            "/wiki" => Response::html(html::wiki_index(&model::wiki(&self.mem))),
             _ => Response::not_found(),
         }
     }
@@ -136,7 +118,7 @@ impl App {
     /// percent-decoded by then, so `%2e%2e%2f` is `../` here — which is neither
     /// a slug nor a project name, and gets the same 404 as a page that is
     /// simply not there.
-    fn wiki_page(&self, rest: &str) -> Response {
+    pub fn wiki_page(&self, rest: &str) -> Response {
         let Some((project, slug)) = rest.split_once('/') else {
             return Response::not_found();
         };
@@ -157,7 +139,7 @@ impl App {
     /// shapes — `log`, `roadmap`, `plan`, `plan/<slug>`, `items/<kind>`,
     /// `item/<id>` — before it reaches an argv. Anything else is a 404, as
     /// `/wiki/` already does.
-    fn project_page(&self, rest: &str) -> Response {
+    pub fn project_page(&self, rest: &str) -> Response {
         let (project, sub) = match rest.split_once('/') {
             Some((project, sub)) => (project, Some(sub)),
             None => (rest, None),
@@ -207,7 +189,7 @@ impl App {
 
     /// `GET /p/<project>/roadmap` — the roadmap's whole text, uncut (contrast
     /// the overview's 40-line excerpt).
-    fn project_roadmap(&self, project: &str) -> Response {
+    pub fn project_roadmap(&self, project: &str) -> Response {
         match model::project_view(&self.mem, project, self.now_ms()) {
             Some(view) => Response::html(html::roadmap_page(
                 project,
@@ -291,7 +273,7 @@ impl App {
         jiff::Timestamp::now().as_millisecond()
     }
 
-    fn dashboard(&self, request: &Request) -> Response {
+    pub fn dashboard(&self, request: &Request) -> Response {
         let banner = Banner::from_query(&request.query);
         Response::html(html::page(&self.view(), &self.config, &banner))
     }
@@ -299,7 +281,7 @@ impl App {
     /// §3 and §9. The order matters: nothing runs `mem answer` until the
     /// origin has been checked, and the redirect is a 303 so a reload of the
     /// result page cannot answer twice.
-    fn answer(&self, request: &Request) -> Response {
+    pub fn answer(&self, request: &Request) -> Response {
         if !self.guard.may_write(request) {
             return Response::text(403, "cross-origin writes are refused");
         }
@@ -355,10 +337,11 @@ impl App {
         response
     }
 
-    /// The lock for one question id, created on first use.
-    fn lock_for(&self, id: &str) -> Arc<Mutex<()>> {
+    /// The lock for one key, created on first use: a question id here, and
+    /// whatever a page's write has to serialise on.
+    pub fn lock_for(&self, key: &str) -> Arc<Mutex<()>> {
         let mut map = self.answering.lock().unwrap_or_else(|e| e.into_inner());
-        Arc::clone(map.entry(id.to_string()).or_default())
+        Arc::clone(map.entry(key.to_string()).or_default())
     }
 
     /// Drops every entry no thread is holding any more.
