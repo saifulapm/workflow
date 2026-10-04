@@ -338,21 +338,27 @@ alllog=$("$MEM_BIN" log --limit 100 --json)
 like "$alllog" 'run fixture-run: started at ' 'the untyped log still lists the run lines'
 like "$alllog" 'registered by the test harness' 'beside a plain log with no type at all'
 
-## ------------------------------------------------- plans run refuses to run
+## ----------------------------------------------------- a plan of one task
 
+# A maintenance fix is usually one task, so a plan of one runs like any other.
 new_repo tiny
 mem_register
+"$MEM_BIN" project set verify true >/dev/null
 cat >"$T_TMP/one-task.md" <<'PLAN'
 # plan: one-task
 
 - [ ] t1 Just do this one thing
-      Files: src/**
+      Files: app/Services/CartPricing.php
       Verify: true
 PLAN
 run workflow run --plan-file "$T_TMP/one-task.md"
-is "$RC" 0 'a single-task plan is not worth orchestrating'
-like "$OUT" 'one task' 'and run says so instead of spinning up a worker'
-is "$(git worktree list | grep -c .)" 1 'and it made no worktrees'
+is "$RC" 0 'a single-task plan runs to the end'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/tiny/one-task/t1.state")" merged \
+	'and its one task was dispatched and merged'
+is "$(git show HEAD:app/Services/CartPricing.php 2>/dev/null)" '<?php // pricing' \
+	'and its work landed on the checkout'
+
+## ------------------------------------------------- plans run refuses to run
 
 cat >"$T_TMP/broken.md" <<'PLAN'
 # plan: broken
@@ -394,16 +400,6 @@ git -c core.hooksPath=/dev/null commit -qm 'mono files'
 "$MEM_BIN" project add apps/child >/dev/null
 
 cd apps/child
-"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
-# plan: child-solo
-
-- [ ] t1 Just one thing
-      Files: apps/child/src/**
-      Verify: true
-EOF
-run workflow run
-is "$RC" 0 'a run typed in the child subdir finds the child plan'
-like "$OUT" 'one task' 'and refuses to orchestrate it, which proves it was read'
 
 write_exec "$T_TMP/child-worker.sh" <<'CFAKE'
 #!/bin/sh
@@ -417,6 +413,18 @@ printf '{"is_error":false,"result":"ok"}\n'
 CFAKE
 export CFAKE="$T_TMP/child-worker.sh"
 export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$CFAKE" {task} {worktree} {status} {session}'"'"' > {out} 2> {err} &'
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF'
+# plan: child-solo
+
+- [ ] t1 Just one thing
+      Files: apps/child/src/**
+      Verify: true
+EOF
+run workflow run
+is "$RC" 0 'a run typed in the child subdir finds the child plan'
+is "$(cat "$XDG_STATE_HOME/workflow/runs/child/child-solo/t1.state" 2>/dev/null)" merged \
+	'and runs it under the child, which proves it was read'
 
 cat >"$T_TMP/child-run.md" <<'PLAN'
 # plan: child-run

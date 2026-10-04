@@ -643,11 +643,6 @@ pub fn roadmap_findings(roadmap: &Plan, root: &Path, file: &Path) -> Findings {
             ));
             continue;
         }
-        if plan.tasks.len() <= 1 {
-            f.warnings.push(format!(
-                "roadmap: milestone {id}: its plan has one task, and run refuses a one-task plan -- do that task in the session, or plan the whole milestone"
-            ));
-        }
         let waited_for = roadmap
             .get(id)
             .map(|m| ancestors(roadmap, m))

@@ -3351,14 +3351,6 @@ pub fn cmd_run(plan_file: Option<&Path>, model: Option<&str>, effort: Option<&st
         }
         return exit::USAGE;
     }
-    if run.plan.tasks.len() <= 1 {
-        warn(format!(
-            "plan '{}' has one task: do it here, in this session -- orchestrating one worker costs more than it saves.",
-            run.plan.plan_id
-        ));
-        return exit::OK;
-    }
-
     // Held for the whole run, taken before setup writes a single worktree:
     // two orchestrators sharing this run dir would dispatch the same tasks
     // into the same worktrees.

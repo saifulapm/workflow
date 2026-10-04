@@ -245,8 +245,8 @@ is "$RC" 1 'a milestone plan whose task has no Verify: is refused'
 like "$ERR" 'task t1 has no Verify' 'the grammar says what is wrong with it'
 like "$ERR" 'm2-billing.*does not parse' 'and the refusal names the milestone'
 
-# run refuses a one-task plan, so a milestone cut down to one is worth saying
-# out loud -- but the roadmap is not wrong, so it warns.
+# run takes a plan of one task like any other, so a milestone cut down to one
+# is nothing to say.
 milestone m2-billing <<'EOF'
 # plan: m2-billing
 
@@ -256,8 +256,7 @@ milestone m2-billing <<'EOF'
 EOF
 check
 is "$RC" 0 'a one-task milestone is not refused'
-like "$ERR" 'm2-billing.*one task' 'but it is named'
-like "$ERR" 'run refuses' 'with what run would do with it'
+unlike "$ERR" 'one task' 'nor warned about'
 
 ## ------------------------------------------- whose grammar line is whose
 
