@@ -89,3 +89,63 @@ is "$(grep -c "^$wt/t3 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 1 'and 
 is "$(grep -c "^$wt/t2 install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 2 'and into t2 twice: when it was made, and again at dispatch after the lockfile changed on integration'
 is "$(grep -c "^$wt/_integration install --frozen-lockfile\$" "$WF_TMP/pnpm.log")" 2 'and into the integration worktree twice: when it was made, and before the gate after t1 landed its lockfile there'
 [ -e "$T_TMP/app/node_modules/.own" ] && notok 'the checkout node_modules is untouched' 'pnpm ran in the checkout' || ok 'the checkout node_modules is untouched'
+
+## ------------------------------------------------------ an npm project
+
+# A tree with `package-lock.json` and no `pnpm-lock.yaml` is npm's. `npm ci`
+# leaves its own record of the lockfile it installed from at
+# node_modules/.package-lock.json, so a tree whose record is older than its
+# lockfile is installed again, and one whose record is newer is left alone:
+# each worktree is installed once, when it is made, and the passes at dispatch
+# and before each gate find nothing to do.
+write_exec "$T_TMP/bin/npm" <<'FAKE'
+#!/bin/sh
+printf '%s %s\n' "$(pwd)" "$*" >>"$WF_TMP/npm.log"
+rm -rf node_modules
+mkdir -p node_modules
+cp package-lock.json node_modules/.package-lock.json
+FAKE
+
+write_exec "$T_TMP/npm-worker.sh" <<'FAKE'
+#!/bin/sh
+task=$1; status=$3
+say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$status"; }
+say started
+mkdir -p src
+printf '%s\n' "$task" >"src/$task.js"
+git add "src/$task.js"
+git -c core.hooksPath=/dev/null commit -qm "Add a file"
+say ready
+printf '{"is_error":false,"result":"ok"}\n'
+FAKE
+
+export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$WF_TMP/npm-worker.sh" {task} {worktree} {status} {session}'"'"' > {out} 2> {err} &'
+
+new_repo npmapp
+mem_register
+"$MEM_BIN" project set verify 'cmp -s package-lock.json node_modules/.package-lock.json' >/dev/null
+printf '{"name":"npmapp"}\n' >package.json
+printf '{"lockfileVersion": 3}\n' >package-lock.json
+printf 'node_modules\n' >.gitignore
+git add -A
+git -c core.hooksPath=/dev/null commit -qm 'project files'
+
+"$MEM_BIN" plan --stdin >/dev/null <<'EOF2'
+# plan: npmdeps
+
+- [ ] n1 Add a module
+      Files: src/n1.js
+      Verify: true
+- [ ] n2 Add another beside it
+      Files: src/n2.js
+      Verify: true
+EOF2
+
+run workflow run
+is "$RC" 0 'the npm run merges both'
+wt="$XDG_STATE_HOME/workflow/worktrees/npmapp/npmdeps"
+is "$(grep -c "^$wt/n1 ci\$" "$WF_TMP/npm.log")" 1 'npm ci ran in the n1 worktree once, when it was made, and not again at dispatch'
+is "$(grep -c "^$wt/n2 ci\$" "$WF_TMP/npm.log")" 1 'and in n2 once'
+is "$(grep -c "^$wt/_integration ci\$" "$WF_TMP/npm.log")" 1 'and in the integration worktree once, with neither gate installing again over the same lockfile'
+is "$(grep -vc ' ci$' "$WF_TMP/npm.log")" 0 'npm was asked for nothing but ci'
+[ -e "$T_TMP/npmapp/node_modules" ] && notok 'npm never ran in the checkout' 'node_modules appeared there' || ok 'npm never ran in the checkout'

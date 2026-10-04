@@ -2781,15 +2781,28 @@ impl Run {
     /// integration worktree the last run left behind, and a checkout that
     /// moved on all read the same way. A symlink standing there is an
     /// earlier link_deps's and goes first, since pnpm refuses to install
-    /// through it. Nothing to do without a `pnpm-lock.yaml`.
+    /// through it, and before `npm ci` would empty the checkout's through
+    /// it. A tree with only a `package-lock.json` is npm's, and npm's record,
+    /// `node_modules/.package-lock.json`, is rewritten by every install, so
+    /// one older than the lockfile was installed from an earlier lockfile.
+    /// Nothing to do without either lockfile.
     fn node_deps(&self, wt: &Path) {
         let lock = wt.join("pnpm-lock.yaml");
-        if !lock.is_file() {
+        let npm_lock = wt.join("package-lock.json");
+        if !lock.is_file() && !npm_lock.is_file() {
             return;
         }
         let nm = wt.join("node_modules");
         if nm.is_symlink() {
             let _ = std::fs::remove_file(&nm);
+        }
+        if !lock.is_file() {
+            let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+            let installed = modified(&nm.join(".package-lock.json"));
+            if installed.is_none() || installed < modified(&npm_lock) {
+                self.npm_ci(wt);
+            }
+            return;
         }
         if nm.is_dir()
             && std::fs::read(&lock).ok() == std::fs::read(nm.join(".pnpm/lock.yaml")).ok()
@@ -2797,6 +2810,20 @@ impl Run {
             return;
         }
         self.pnpm_install(wt);
+    }
+
+    fn npm_ci(&self, wt: &Path) {
+        let ok = Command::new("npm")
+            .arg("ci")
+            .current_dir(wt)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            warn(format!("npm ci failed in {}", wt.display()));
+        }
     }
 
     fn pnpm_install(&self, wt: &Path) {
