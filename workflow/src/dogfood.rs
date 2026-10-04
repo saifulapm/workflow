@@ -49,7 +49,9 @@ pub struct WalkBrief {
 /// `<slug> <walk> <started> <session> <step>...`, the steps last because
 /// there are as many as the walk covers; a walk that was read and held the
 /// milestone has its outcome's [`WalkOutcome::words`] on a second line, and
-/// a milestone with strikes has `strikes <n>` after it.
+/// a milestone with strikes has `strikes <n>` after it. A walk asked of
+/// another machine names its request in a `far <question id>` line, and its
+/// session column names that machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalkState {
     pub slug: String,
@@ -64,6 +66,8 @@ pub struct WalkState {
     /// The milestone's failed and skipped walks since its count was last
     /// zeroed.
     pub strikes: usize,
+    /// The request's question id when another machine walks it.
+    pub far: Option<String>,
 }
 
 impl WalkState {
@@ -78,13 +82,17 @@ impl WalkState {
             steps: parts.map(|n| n.parse().ok()).collect::<Option<_>>()?,
             outcome: None,
             strikes: 0,
+            far: None,
         };
-        // No outcome's words start with `strikes `, so the two lines are
-        // told apart by it.
+        // No outcome's words start with `strikes ` or `far `, so the lines
+        // are told apart by them.
         for line in lines.map(str::trim).filter(|l| !l.is_empty()) {
-            match line.strip_prefix("strikes ") {
-                Some(n) => walk.strikes = n.trim().parse().ok()?,
-                None => walk.outcome = Some(outcome_of(line)),
+            if let Some(n) = line.strip_prefix("strikes ") {
+                walk.strikes = n.trim().parse().ok()?;
+            } else if let Some(id) = line.strip_prefix("far ") {
+                walk.far = Some(id.trim().to_string());
+            } else {
+                walk.outcome = Some(outcome_of(line));
             }
         }
         Some(walk)
@@ -92,6 +100,10 @@ impl WalkState {
 
     pub fn line(&self) -> String {
         let steps: String = self.steps.iter().map(|n| format!(" {n}")).collect();
+        let far = match &self.far {
+            Some(id) => format!("far {id}\n"),
+            None => String::new(),
+        };
         let outcome = match &self.outcome {
             Some(o) => format!("{}\n", o.words()),
             None => String::new(),
@@ -101,7 +113,7 @@ impl WalkState {
             n => format!("strikes {n}\n"),
         };
         format!(
-            "{} {} {} {}{steps}\n{outcome}{strikes}",
+            "{} {} {} {}{steps}\n{far}{outcome}{strikes}",
             self.slug, self.walk, self.started, self.session
         )
     }
@@ -450,6 +462,7 @@ mod tests {
             session: "wf-dogfood-a3k9".into(),
             outcome: None,
             strikes: 0,
+            far: None,
         };
         assert_eq!(walk.line(), "cart 2 1791000000 wf-dogfood-a3k9 2 3\n");
         assert_eq!(WalkState::read(&walk.line()), Some(walk.clone()));
@@ -467,7 +480,18 @@ mod tests {
             struck.line(),
             "cart 2 1791000000 wf-dogfood-a3k9 2 3\nskipped no report\nstrikes 2\n"
         );
-        assert_eq!(WalkState::read(&struck.line()), Some(struck));
+        assert_eq!(WalkState::read(&struck.line()), Some(struck.clone()));
+        let far = WalkState {
+            session: "mini".into(),
+            far: Some("A1B2C3D4".into()),
+            outcome: Some(WalkOutcome::Pass),
+            ..struck
+        };
+        assert_eq!(
+            far.line(),
+            "cart 2 1791000000 mini 2 3\nfar A1B2C3D4\npass\nstrikes 2\n"
+        );
+        assert_eq!(WalkState::read(&far.line()), Some(far));
         assert_eq!(WalkState::read("cart 1 1791000000"), None);
         assert_eq!(WalkState::read("cart 1 1791000000 s x"), None);
     }

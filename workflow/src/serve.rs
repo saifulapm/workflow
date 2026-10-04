@@ -20,7 +20,7 @@ use crate::dogfood::{self, NO_SHOW_PATH, OwnerFinding, WalkBrief, WalkOutcome, W
 use crate::gitcmd::{self, Git};
 use crate::maintain::{self, FixPhase, FixState};
 use crate::plan::{self, PlanKind};
-use crate::request::{self, Asked, AskedWalk};
+use crate::request::{self, Asked, AskedWalk, WalkRequest};
 use crate::{exit, memcli, ownership, paths, plancheck, run, sys, warn};
 
 /// Seconds between ticks when neither `--tick` nor `WORKFLOW_TICK_S` says.
@@ -163,6 +163,8 @@ struct Listing {
 struct Current {
     #[serde(default)]
     machine: Option<String>,
+    #[serde(default)]
+    dogfood_machine: Option<String>,
     #[serde(default)]
     runner: Option<String>,
     #[serde(default)]
@@ -999,7 +1001,7 @@ impl Serve {
         }
         let surface = milestone.and_then(|m| m.surface).unwrap_or_default();
         let covered: Vec<usize> = steps.iter().map(|(n, _)| *n).collect();
-        let Some(session) = self.start_walk(p, slug, slug, surface, steps, findings) else {
+        let Some((session, far)) = self.begin_walk(p, slug, slug, surface, steps, findings) else {
             return;
         };
         let walk = WalkState {
@@ -1010,6 +1012,7 @@ impl Serve {
             session,
             outcome: None,
             strikes,
+            far,
         };
         let _ = std::fs::write(p.dir().join(WALK), walk.line());
         self.stage(p, "dogfood");
@@ -1065,9 +1068,95 @@ impl Serve {
         self.start_session(p, key, "dogfood", "dogfood", &body, env)
     }
 
-    /// The walk file read: a live session under its forty-five minutes holds
-    /// the stage `dogfood`; one past them is stopped and skipped; an ended
-    /// one is read off its report. A pass lands the milestone and drops the
+    /// A walk begun under `key`: asked of the project's `dogfood-machine`
+    /// for the trunk head and these steps when it names another machine,
+    /// else started as a session here. The session, or that machine with the
+    /// request's question id; nothing when neither went out.
+    fn begin_walk(
+        &mut self,
+        p: &ServeProject,
+        key: &str,
+        slug: &str,
+        surface: String,
+        steps: Vec<(usize, String)>,
+        findings: String,
+    ) -> Option<(String, Option<String>)> {
+        let far = current(&self.mem, &p.name)
+            .and_then(|c| c.dogfood_machine)
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty() && Some(m) != self.machine.as_ref());
+        let Some(machine) = far else {
+            let session = self.start_walk(p, key, slug, surface, steps, findings)?;
+            return Some((session, None));
+        };
+        let commit = Git::at(&p.root).head()?;
+        let text = request::request_text(&WalkRequest {
+            slug: slug.to_string(),
+            commit,
+            machine: machine.clone(),
+            steps: steps.iter().map(|(n, _)| *n).collect(),
+        });
+        let said = mem_on(
+            &self.mem,
+            &p.name,
+            &["ask", "--for", "orchestrator", "--", &text],
+        );
+        let Some(id) = maintain::asked_id(&said.out) else {
+            warn(format!(
+                "serve {}: cannot ask {machine} for the walk of {slug} -- {}",
+                p.name, said.err
+            ));
+            return None;
+        };
+        warn(format!(
+            "serve {}: asked {machine} for the walk of {slug}, #{id}",
+            p.name
+        ));
+        Some((machine, Some(id)))
+    }
+
+    /// What a walk came to, or nothing while it goes on: a far walk's answer
+    /// once the other machine gave it, else the report in the `key` status
+    /// file once the session has ended, a session past its forty-five
+    /// minutes stopped and skipped.
+    fn walk_outcome(
+        &mut self,
+        p: &ServeProject,
+        walk: &WalkState,
+        key: &str,
+    ) -> Option<WalkOutcome> {
+        if let Some(id) = &walk.far {
+            let said = mem_on(
+                &self.mem,
+                &p.name,
+                &["questions", "--for", "orchestrator", "--json"],
+            );
+            return maintain::answer(&said.out, id).map(|a| dogfood::outcome_of(&a));
+        }
+        let dir = p.dir();
+        let h = Handle {
+            session: walk.session.clone(),
+            pidfile: dir.join("dogfood.pid"),
+            worktree: p.root.clone(),
+        };
+        let age = sys::now() - walk.started;
+        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+        if live && age < dogfood::WALK_S {
+            return None;
+        }
+        Some(if live {
+            self.backend.stop(&h, 10);
+            WalkOutcome::Skipped(dogfood::WALK_TIMED_OUT.into())
+        } else {
+            let status = dir.join(format!("{key}.dogfood.status"));
+            dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
+        })
+    }
+
+    /// The walk file read: a live session under its forty-five minutes, or a
+    /// far walk's request still pending, holds the stage `dogfood`; a session
+    /// past them is stopped and skipped; an ended one is read off its report
+    /// and an answered request off its answer. A pass lands the milestone and drops the
     /// walk file; anything else keeps it with the outcome, its run line
     /// written once. A failed or skipped walk is a strike, and the third
     /// pauses the project; short of it a skipped walk is walked again on the
@@ -1111,23 +1200,9 @@ impl Serve {
             }
             None => {}
         }
-        let h = Handle {
-            session: walk.session.clone(),
-            pidfile: dir.join("dogfood.pid"),
-            worktree: p.root.clone(),
-        };
-        let age = sys::now() - walk.started;
-        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
-        if live && age < dogfood::WALK_S {
+        let Some(outcome) = self.walk_outcome(p, &walk, &slug) else {
             self.stage(p, "dogfood");
             return false;
-        }
-        let outcome = if live {
-            self.backend.stop(&h, 10);
-            WalkOutcome::Skipped(dogfood::WALK_TIMED_OUT.into())
-        } else {
-            let status = dir.join(format!("{slug}.dogfood.status"));
-            dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
         };
         let said = mem_on(&self.mem, &p.name, &["finding", "list", "--open", "--json"]);
         let open = dogfood::finding_steps(&said.out, &slug);
@@ -1279,6 +1354,7 @@ impl Serve {
                 session,
                 outcome: None,
                 strikes: 0,
+                far: None,
             },
         };
         let _ = std::fs::write(p.dir().join(ASKED), asked.line());
@@ -1720,24 +1796,9 @@ impl Serve {
             self.fix_walk_start(p, id, was);
             return;
         };
-        let h = Handle {
-            session: walk.session.clone(),
-            pidfile: dir.join("dogfood.pid"),
-            worktree: p.root.clone(),
-        };
-        let age = sys::now() - walk.started;
-        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
-        if live && age < dogfood::WALK_S {
+        let Some(outcome) = self.walk_outcome(p, &walk, &maintain::fix_slug(id)) else {
             self.stage(p, "dogfood");
             return;
-        }
-        let slug = maintain::fix_slug(id);
-        let outcome = if live {
-            self.backend.stop(&h, 10);
-            WalkOutcome::Skipped(dogfood::WALK_TIMED_OUT.into())
-        } else {
-            let status = dir.join(format!("{slug}.dogfood.status"));
-            dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
         };
         self.log(p, &dogfood::walk_line(&walk.slug, &outcome, 1));
         if outcome == WalkOutcome::Pass {
@@ -1793,7 +1854,8 @@ impl Serve {
         let covered: Vec<usize> = steps.iter().map(|(n, _)| *n).collect();
         let surface = milestone.and_then(|m| m.surface).unwrap_or_default();
         let slug = maintain::fix_slug(id);
-        let Some(session) = self.start_walk(p, &slug, &f.milestone, surface, steps, findings)
+        let Some((session, far)) =
+            self.begin_walk(p, &slug, &f.milestone, surface, steps, findings)
         else {
             return;
         };
@@ -1805,6 +1867,7 @@ impl Serve {
             session,
             outcome: None,
             strikes: was.map_or(0, |w| w.strikes),
+            far,
         };
         let _ = std::fs::write(p.dir().join(FIX_WALK), walk.line());
         self.stage(p, "dogfood");

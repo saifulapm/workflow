@@ -349,6 +349,7 @@ mod tests {
                 session: "wf-dogfood-a3k9".into(),
                 outcome: None,
                 strikes: 0,
+                far: None,
             },
         };
         assert_eq!(
