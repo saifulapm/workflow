@@ -87,6 +87,16 @@ fn decide_records_a_ruling_with_by_and_replaces() {
         .expect("the second ruling is listed");
     assert_eq!(second["by"], "agent");
     assert!(second["replaces"].is_null(), "{second}");
+    let out = mem(
+        &w,
+        &repo,
+        &["search", "redis", "--kind", "ruling", "--json"],
+    );
+    let hits = json(&out)["hits"].as_array().unwrap().clone();
+    assert_eq!(
+        hits[0]["body"].as_str().unwrap().trim(),
+        "sessions live in redis"
+    );
 
     let out = mem(&w, &repo, &["decide", "no author", "--by", "someone"]);
     assert_eq!(code(&out), 2, "{}", stderr(&out));
