@@ -654,3 +654,333 @@ impl Drop for World {
         let _ = &self.dir;
     }
 }
+
+/// A hub over a fake `mem` that prints whatever JSON the test last put in
+/// `data/`, so a test can stage a walk, a third strike or a finished roadmap
+/// without driving the engine that writes them.
+struct Fake {
+    _dir: TempDir,
+    home: PathBuf,
+    bin: PathBuf,
+    data: PathBuf,
+    curl_log: PathBuf,
+    mem_log: PathBuf,
+    config: PathBuf,
+}
+
+impl Fake {
+    fn new(tag: &str) -> Fake {
+        let dir = TempDir::new(tag);
+        let home = dir.join("home");
+        let bin = dir.join("bin");
+        let data = dir.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let machine_file = home.join("config/qshell/machine");
+        std::fs::create_dir_all(machine_file.parent().unwrap()).unwrap();
+        std::fs::write(&machine_file, "here-hub").unwrap();
+
+        let curl_log = dir.join("curl.log");
+        fixture_bin(
+            &bin,
+            "curl",
+            &format!(
+                "printf '\\1' >> '{log}'\n\
+                 for a in \"$@\"; do printf '%s\\0' \"$a\" >> '{log}'; done\n\
+                 exit 0",
+                log = curl_log.display()
+            ),
+        );
+        let mem_log = dir.join("argv.log");
+        fixture_mem(
+            &bin,
+            &format!(
+                "printf '\\1' >> '{log}'\n\
+                 for a in \"$@\"; do printf '%s\\0' \"$a\" >> '{log}'; done\n\
+                 case \"$1\" in\n\
+                 \x20 questions) cat '{data}/questions.json'; exit 0 ;;\n\
+                 \x20 projects) cat '{data}/projects.json'; exit 0 ;;\n\
+                 \x20 log)\n\
+                 \x20   for a in \"$@\"; do case \"$a\" in --project=*) p=\"${{a#--project=}}\" ;; esac; done\n\
+                 \x20   cat \"{data}/log-$p.json\" 2>/dev/null || echo '{{\"items\":[]}}'\n\
+                 \x20   exit 0 ;;\n\
+                 esac\n\
+                 exit 1",
+                log = mem_log.display(),
+                data = data.display(),
+            ),
+        );
+
+        let config = dir.join("config.toml");
+        std::fs::write(
+            &config,
+            "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
+             ntfy_base = \"http://127.0.0.1:9\"\n\
+             hub_url = \"http://hub.test:8787/\"\n",
+        )
+        .unwrap();
+
+        let fake = Fake {
+            _dir: dir,
+            home,
+            bin,
+            data,
+            curl_log,
+            mem_log,
+            config,
+        };
+        fake.put("questions.json", "{\"questions\":[]}");
+        fake.projects("2026-10-05T09:00:00Z", "approved", 1);
+        fake
+    }
+
+    fn hub(&self) -> Hub {
+        Hub::spawn_env(
+            &self.home,
+            &[&self.bin],
+            &["--config", self.config.to_str().unwrap(), "--port", "0"],
+            &[("HUB_POLL_MS", "120")],
+        )
+    }
+
+    /// Written whole and renamed into place, so the fake never prints half a
+    /// document.
+    fn put(&self, name: &str, text: &str) {
+        let staged = self.data.join(format!(".{name}"));
+        std::fs::write(&staged, text).unwrap();
+        std::fs::rename(&staged, self.data.join(name)).unwrap();
+    }
+
+    /// proj-alpha, last active at `alpha_at`, and proj-beta, run here, with
+    /// `beta_done` of its three milestones done under `beta_status`.
+    fn projects(&self, alpha_at: &str, beta_status: &str, beta_done: u32) {
+        self.put(
+            "projects.json",
+            &format!(
+                "{{\"projects\":[\
+                 {{\"name\":\"proj-alpha\",\"last_activity\":\"{alpha_at}\",\
+                   \"roadmap_status\":\"approved\",\"milestones_done\":1,\
+                   \"milestones_total\":3,\"runner\":\"here-hub\"}},\
+                 {{\"name\":\"proj-beta\",\"last_activity\":\"2026-10-05T08:00:00Z\",\
+                   \"roadmap_status\":\"{beta_status}\",\"milestones_done\":{beta_done},\
+                   \"milestones_total\":3,\"runner\":\"here-hub\"}}]}}"
+            ),
+        );
+    }
+
+    /// proj-alpha's run log: one row per `(id, machine, title)`.
+    fn runs(&self, rows: &[(&str, &str, &str)]) {
+        let rows: Vec<String> = rows
+            .iter()
+            .map(|(id, machine, title)| {
+                format!(
+                    "{{\"id\":\"{id}\",\"kind\":\"log\",\"type\":\"run\",\
+                      \"title\":\"{title}\",\"project\":\"proj-alpha\",\
+                      \"machine\":\"{machine}\"}}"
+                )
+            })
+            .collect();
+        self.put(
+            "log-proj-alpha.json",
+            &format!("{{\"items\":[{}]}}", rows.join(",")),
+        );
+    }
+
+    /// The third strike's question, as `mem questions --json` prints it.
+    fn third_strike(&self) {
+        self.put(
+            "questions.json",
+            "{\"questions\":[{\"id\":\"01M0BF1F8BY8FXGZS428J1TS90\",\
+              \"short_id\":\"28J1TS90\",\"title\":\"m3 needs you\",\
+              \"project\":\"proj-alpha\",\"machine\":\"here-hub\",\
+              \"body\":\"m3 failed its Show path three times; answer walk again\"}]}",
+        );
+    }
+
+    /// Every ring's body, in the order curl was run.
+    fn rings(&self) -> Vec<String> {
+        invocations(&self.curl_log)
+            .into_iter()
+            .map(|argv| argv[4].clone())
+            .collect()
+    }
+
+    fn seen(&self) -> Vec<String> {
+        std::fs::read_to_string(self.home.join("state/hub/seen"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn spawns(&self, verb: &str) -> usize {
+        invocations(&self.mem_log)
+            .iter()
+            .filter(|argv| argv.first().is_some_and(|a| a == verb))
+            .count()
+    }
+
+    /// The round in flight and one whole round after it, as `World::settle`.
+    fn settle(&self) {
+        let before = self.spawns("questions");
+        wait_for("the doorbell to go round", Duration::from_secs(15), || {
+            self.spawns("questions") >= before + 2
+        });
+    }
+
+    /// The walk passed, the walk found defects, the engine paused proj-alpha
+    /// and proj-beta's roadmap finished, all at once.
+    fn all_four(&self) {
+        self.runs(&[
+            ("01M0BF1F8BY8FXGZS428J1RN01", "here-hub", "dogfood m2: pass"),
+            (
+                "01M0BF1F8BY8FXGZS428J1RN02",
+                "here-hub",
+                "dogfood m3: findings 2",
+            ),
+            (
+                "01M0BF1F8BY8FXGZS428J1RN03",
+                "here-hub",
+                "dogfood m3: no Show path",
+            ),
+            (
+                "01M0BF1F8BY8FXGZS428J1RN04",
+                "here-hub",
+                "dogfood m3: skipped the forty-five minutes",
+            ),
+        ]);
+        self.third_strike();
+        self.projects("2026-10-05T10:00:00Z", "maintenance", 3);
+    }
+}
+
+const FOUR_RINGS: [&str; 4] = [
+    "paused by the engine on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha",
+    "walk passed on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha",
+    "walk found defects on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha",
+    "roadmap finished on here-hub (proj-beta) — http://hub.test:8787/p/proj-beta",
+];
+
+#[test]
+fn a_walk_a_pause_and_a_finished_roadmap_each_ring_once_and_a_restart_rings_none() {
+    let fake = Fake::new("bell-four");
+    let hub = fake.hub();
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+
+    fake.all_four();
+    wait_for("four rings", Duration::from_secs(15), || {
+        fake.rings().len() >= 4
+    });
+    fake.settle();
+    fake.settle();
+
+    let mut rings = fake.rings();
+    for body in &rings {
+        eprintln!("rang: {body}");
+    }
+    rings.sort();
+    let mut expected = FOUR_RINGS.map(str::to_string).to_vec();
+    expected.sort();
+    assert_eq!(
+        rings, expected,
+        "no ring carries a title or a question body"
+    );
+
+    drop(hub);
+    let _hub = fake.hub();
+    fake.settle();
+    fake.settle();
+    assert_eq!(
+        fake.rings().len(),
+        4,
+        "a restart rang again: {:?}",
+        fake.rings()
+    );
+}
+
+#[test]
+fn a_run_row_another_machine_wrote_is_not_rung() {
+    let fake = Fake::new("bell-foreign-run");
+    let _hub = fake.hub();
+    fake.settle();
+
+    fake.runs(&[
+        ("01M0BF1F8BY8FXGZS428J1RN05", "far-nuc", "dogfood m2: pass"),
+        (
+            "01M0BF1F8BY8FXGZS428J1RN06",
+            "here-hub",
+            "dogfood m3: findings 1",
+        ),
+    ]);
+    fake.projects("2026-10-05T10:00:00Z", "approved", 1);
+    wait_for("the local walk to ring", Duration::from_secs(15), || {
+        !fake.rings().is_empty()
+    });
+    fake.settle();
+    fake.settle();
+    assert_eq!(
+        fake.rings(),
+        ["walk found defects on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha"],
+        "the sibling's walk is the sibling's doorbell"
+    );
+}
+
+#[test]
+fn a_first_start_records_every_ring_of_the_backlog_and_rings_none() {
+    let fake = Fake::new("bell-four-seed");
+    fake.all_four();
+    let _hub = fake.hub();
+    wait_for(
+        "the backlog to be recorded",
+        Duration::from_secs(15),
+        || fake.seen().len() == 4,
+    );
+    fake.settle();
+    fake.settle();
+
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+    let mut seen = fake.seen();
+    seen.sort();
+    assert_eq!(
+        seen,
+        [
+            "01M0BF1F8BY8FXGZS428J1RN01",
+            "01M0BF1F8BY8FXGZS428J1RN02",
+            "01M0BF1F8BY8FXGZS428J1TS90",
+            "finished proj-beta 3",
+        ]
+    );
+}
+
+#[test]
+fn a_project_whose_activity_has_not_moved_costs_no_log_spawn() {
+    let fake = Fake::new("bell-still");
+    let _hub = fake.hub();
+    fake.settle();
+    let before = fake.spawns("log");
+    fake.settle();
+    fake.settle();
+    assert_eq!(fake.spawns("log"), before, "a still project was read again");
+
+    // Its activity moves, and its run log is read once more.
+    fake.projects("2026-10-05T10:00:00Z", "approved", 1);
+    wait_for("the moved project's log", Duration::from_secs(15), || {
+        fake.spawns("log") == before + 1
+    });
+    let argv = invocations(&fake.mem_log)
+        .into_iter()
+        .rfind(|argv| argv.first().is_some_and(|a| a == "log"))
+        .unwrap();
+    assert_eq!(
+        argv,
+        [
+            "log",
+            "--type",
+            "run",
+            "--limit",
+            "20",
+            "--project=proj-alpha",
+            "--json"
+        ]
+    );
+}

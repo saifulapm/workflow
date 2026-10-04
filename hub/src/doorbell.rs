@@ -1,9 +1,11 @@
 //! The doorbell (spec §5).
 //!
 //! A background thread polls the pending queue every 15 s and rings once for
-//! every question id it has not seen. What it publishes is deliberately thin:
+//! every question id it has not seen. In the same round it rings for a walk
+//! that ended, from serve's `dogfood <slug>:` run lines, and for a roadmap
+//! that finished on this machine. What it publishes is deliberately thin:
 //! the machine, the project, and a link back here — **never the question
-//! text**.
+//! text**, nor any other item's.
 //!
 //! ### What the topic actually protects
 //!
@@ -21,7 +23,7 @@
 //! a repeated one costs trust in the doorbell. And it survives a restart, which
 //! is what makes `systemctl --user restart` silent (AC5).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -68,6 +70,7 @@ impl Doorbell {
         let mut state = State {
             seeding: loaded.is_none(),
             seen: loaded.unwrap_or_default(),
+            activity: BTreeMap::new(),
             record_failed: false,
         };
         loop {
@@ -96,37 +99,125 @@ impl Doorbell {
             let Some(id) = row["id"].as_str() else {
                 continue;
             };
-            if state.seen.contains(id) {
-                continue;
-            }
-            // Recorded and fsynced first. If it cannot be recorded, it is not
-            // rung either — otherwise a read-only state directory turns into a
-            // buzz every fifteen seconds, for ever.
-            if let Err(e) = remember(&self.seen_path, id) {
-                // Once per run of failures, not once per poll for ever: an
-                // unwritable seen file used to log four lines a minute, per
-                // stuck question, indefinitely (review m-5).
-                if !state.record_failed {
-                    eprintln!("hub: doorbell: could not record {id}: {e:#}");
-                    state.record_failed = true;
-                }
-                continue;
-            }
-            state.record_failed = false;
-            state.seen.insert(id.to_string());
-            if state.seeding {
+            if !self.record(state, id) {
                 continue;
             }
             // A question born on another machine arrives here by sync, already
             // rung for where it was asked; this hub lists and answers it but
             // does not buzz again. A row with no machine field still rings —
             // a mem too old to say is a doorbell, not a silence.
-            if row["machine"].as_str().is_some_and(|m| m != self.machine) {
+            if self.foreign(&row) {
                 continue;
             }
-            self.deliver(row["project"].as_str().unwrap_or(""));
+            let project = row["project"].as_str().unwrap_or("");
+            // The engine pauses a milestone by asking this question, so the
+            // phone hears why it stopped rather than that something waits.
+            if row["body"]
+                .as_str()
+                .is_some_and(|body| body.contains(THIRD_STRIKE))
+            {
+                self.deliver(&self.event_body("paused by the engine", project));
+            } else {
+                self.deliver(&self.body(project));
+            }
         }
-        state.seeding = false;
+        // A fault anywhere keeps the next round seeding too, so a first start
+        // never rings for a backlog it could not read whole.
+        if self.walks_and_roadmaps(mem, state) {
+            state.seeding = false;
+        }
+    }
+
+    /// The walk results and finished roadmaps, read from what serve and mem
+    /// already write. False when a read failed this round.
+    fn walks_and_roadmaps(&self, mem: &MemCli, state: &mut State) -> bool {
+        let projects = mem.refresh(&["projects", "--json"]);
+        if let Some(why) = crate::model::list_fault(&projects, "projects") {
+            eprintln!("hub: doorbell: {why}");
+            return false;
+        }
+        let mut settled = true;
+        for project in projects.rows("projects") {
+            let Some(name) = project["name"].as_str() else {
+                continue;
+            };
+            let total = project["milestones_total"].as_u64().unwrap_or(0);
+            if project["roadmap_status"].as_str() == Some("maintenance")
+                && total > 0
+                && project["milestones_done"].as_u64() == Some(total)
+                && project["runner"].as_str() == Some(self.machine.as_str())
+                // The total is in the key so a roadmap that grows and
+                // finishes again rings again.
+                && self.record(state, &format!("finished {name} {total}"))
+            {
+                self.deliver(&self.event_body("roadmap finished", name));
+            }
+
+            // A project that wrote nothing since the last round has no new
+            // run line, so it costs no `mem log`.
+            let activity = project["last_activity"].to_string();
+            if state.activity.get(name) == Some(&activity) {
+                continue;
+            }
+            let log = mem.refresh(&[
+                "log",
+                "--type",
+                "run",
+                "--limit",
+                "20",
+                &format!("--project={name}"),
+                "--json",
+            ]);
+            if let Some(why) = crate::model::list_fault(&log, "log") {
+                // Left unrecorded, so the next round reads it again.
+                eprintln!("hub: doorbell: {name}: {why}");
+                settled = false;
+                continue;
+            }
+            state.activity.insert(name.to_string(), activity);
+            for row in log.rows("items") {
+                let Some(event) = row["title"].as_str().and_then(walk_event) else {
+                    continue;
+                };
+                let Some(id) = row["id"].as_str() else {
+                    continue;
+                };
+                if self.record(state, id) && !self.foreign(&row) {
+                    self.deliver(&self.event_body(event, name));
+                }
+            }
+        }
+        settled
+    }
+
+    /// Records `key` in the seen file and says whether to ring for it: not
+    /// when it was rung before, not when it could not be recorded, and not
+    /// while the first start is seeding.
+    fn record(&self, state: &mut State, key: &str) -> bool {
+        if state.seen.contains(key) {
+            return false;
+        }
+        // Recorded and fsynced first. If it cannot be recorded, it is not
+        // rung either — otherwise a read-only state directory turns into a
+        // buzz every fifteen seconds, for ever.
+        if let Err(e) = remember(&self.seen_path, key) {
+            // Once per run of failures, not once per poll for ever: an
+            // unwritable seen file used to log four lines a minute, per
+            // stuck question, indefinitely (review m-5).
+            if !state.record_failed {
+                eprintln!("hub: doorbell: could not record {key}: {e:#}");
+                state.record_failed = true;
+            }
+            return false;
+        }
+        state.record_failed = false;
+        state.seen.insert(key.to_string());
+        !state.seeding
+    }
+
+    /// Written on another machine, which rang for it there.
+    fn foreign(&self, row: &serde_json::Value) -> bool {
+        row["machine"].as_str().is_some_and(|m| m != self.machine)
     }
 
     /// Where the bell rings: the phone, and only for an empty house. A watched
@@ -134,11 +225,11 @@ impl Doorbell {
     /// itself (a background agent asks through its own question tool when the
     /// machine is watched; `mem ask` is the locked-screen channel), so any
     /// bell here would be a duplicate on a screen already showing the thing.
-    fn deliver(&self, project: &str) {
+    fn deliver(&self, body: &str) {
         if crate::presence::sample().watching() {
             return;
         }
-        self.ring(&self.body(project));
+        self.ring(body);
     }
 
     /// One POST, by argv. Never retried: §5 says a failure is logged and
@@ -177,6 +268,33 @@ impl Doorbell {
             )
         }
     }
+
+    /// A ring for something that happened to a project, linking to its page.
+    /// Like `body`, it carries no item's text.
+    pub fn event_body(&self, event: &str, project: &str) -> String {
+        format!(
+            "{event} on {} ({project}) — {}p/{}",
+            self.machine,
+            self.hub_url,
+            crate::form::encode_component(project)
+        )
+    }
+}
+
+/// What the third-strike question says, and the only words of it read here.
+pub const THIRD_STRIKE: &str = "failed its Show path three times";
+
+/// The ring for one of serve's `dogfood <slug>: <result>` run lines, if it
+/// gets one: a pass and open findings do, `no Show path` and `skipped` do not.
+pub fn walk_event(title: &str) -> Option<&'static str> {
+    let (_slug, result) = title.strip_prefix("dogfood ")?.split_once(": ")?;
+    if result == "pass" {
+        Some("walk passed")
+    } else if result.starts_with("findings ") {
+        Some("walk found defects")
+    } else {
+        None
+    }
 }
 
 /// What one run of the doorbell carries between rounds.
@@ -185,6 +303,9 @@ struct State {
     /// True until one round has completed without a fault: the backlog is
     /// recorded, and rung for zero times.
     seeding: bool,
+    /// Each project's `last_activity` as last read, so a project that has
+    /// not moved is not asked for its run log again.
+    activity: BTreeMap<String, String>,
     /// Whether the last attempt to record an id failed, so the log says so once
     /// rather than every fifteen seconds (review m-5).
     record_failed: bool,
