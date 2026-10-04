@@ -105,16 +105,71 @@ fn matches(git: &Git, range: &str, specs: &[String]) -> BTreeSet<String> {
 /// Same grammar as a task's `Files:` line, so a glob with a space in it goes in
 /// double quotes.
 fn rows() -> Vec<String> {
-    let mut rows: Vec<String> = ROWS.iter().map(|r| r.to_string()).collect();
     let declared = memcli::project_current()
         .and_then(|p| p.review_paths)
         .unwrap_or_default();
-    for pattern in ownership::split_patterns(&declared) {
+    merged(&declared)
+}
+
+/// The shipped table with the project's `review-paths` value added.
+fn merged(review_paths: &str) -> Vec<String> {
+    let mut rows: Vec<String> = ROWS.iter().map(|r| r.to_string()).collect();
+    for pattern in ownership::split_patterns(review_paths) {
         if !rows.contains(&pattern) {
             rows.push(pattern);
         }
     }
     rows
+}
+
+/// The first of `paths` that the table or the project's `review-paths` globs
+/// match, case aside as `review-needed` matches. A fix plan is judged by this
+/// before any diff exists, so it takes paths rather than a change set.
+pub fn risky(paths: &[String], review_paths: &str) -> Option<String> {
+    let rows: Vec<String> = merged(review_paths)
+        .iter()
+        .map(|r| r.to_lowercase())
+        .collect();
+    paths
+        .iter()
+        .find(|p| {
+            let p = p.to_lowercase();
+            rows.iter().any(|r| glob_match(r, &p))
+        })
+        .cloned()
+}
+
+/// Whether `path` matches `pattern` as a `:(glob,top)` pathspec does: `*` and
+/// `?` stay inside one segment, a `**` segment spans any number of them, none
+/// included, and the pattern is anchored at the root. Case counts.
+pub fn glob_match(pattern: &str, path: &str) -> bool {
+    let pat: Vec<&str> = pattern.split('/').collect();
+    let segs: Vec<&str> = path.split('/').collect();
+    match_segments(&pat, &segs)
+}
+
+fn match_segments(pat: &[&str], segs: &[&str]) -> bool {
+    match pat.split_first() {
+        None => segs.is_empty(),
+        Some((&"**", rest)) => (0..=segs.len()).any(|i| match_segments(rest, &segs[i..])),
+        Some((p, rest)) => match segs.split_first() {
+            Some((s, more)) => {
+                match_segment(p.as_bytes(), s.as_bytes()) && match_segments(rest, more)
+            }
+            None => false,
+        },
+    }
+}
+
+fn match_segment(pat: &[u8], s: &[u8]) -> bool {
+    match pat.split_first() {
+        None => s.is_empty(),
+        Some((b'*', rest)) => (0..=s.len()).any(|i| match_segment(rest, &s[i..])),
+        Some((&c, rest)) => match s.split_first() {
+            Some((&d, more)) => (c == b'?' || c == d) && match_segment(rest, more),
+            None => false,
+        },
+    }
 }
 
 pub fn cmd_review_needed(range: Option<&str>) -> i32 {
@@ -159,6 +214,48 @@ pub fn cmd_review_needed(range: Option<&str>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn risky_names_the_first_path_a_row_matches_whatever_its_case() {
+        let paths = |ps: &[&str]| ps.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            risky(
+                &paths(&["app/Services/Cart.php", "app/billing/tax.php"]),
+                ""
+            ),
+            Some("app/billing/tax.php".into())
+        );
+        // `**/` matches no directory at all, and a row matches StudlyCase.
+        assert_eq!(
+            risky(&paths(&["billing.server.ts"]), ""),
+            Some("billing.server.ts".into())
+        );
+        assert_eq!(
+            risky(&paths(&["Auth/Guard.php"]), ""),
+            Some("Auth/Guard.php".into())
+        );
+        assert_eq!(
+            risky(&paths(&["app/Http/Middleware/Authenticate.php"]), ""),
+            Some("app/Http/Middleware/Authenticate.php".into())
+        );
+        // A root row stays at the root, and `*` stops at a slash.
+        assert_eq!(risky(&paths(&["apps/x/package.json"]), ""), None);
+        assert_eq!(
+            risky(&paths(&["package.json"]), ""),
+            Some("package.json".into())
+        );
+        assert_eq!(risky(&paths(&["app/Services/Cart.php"]), ""), None);
+    }
+
+    #[test]
+    fn risky_reads_the_projects_review_paths_too() {
+        let paths = vec!["packages/shopify-core/src/Client.ts".to_string()];
+        assert_eq!(risky(&paths, ""), None);
+        assert_eq!(
+            risky(&paths, "docs/** \"packages/shopify-core/**\""),
+            Some("packages/shopify-core/src/Client.ts".into())
+        );
+    }
 
     #[test]
     fn the_two_status_letters_come_off_and_nothing_else_does() {
