@@ -6,8 +6,68 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use common::{Hub, TempDir, header_of, status_of, wait_for};
+use common::{Hub, TempDir, fixture_mem, header_of, status_of, wait_for};
 use hub::http::{MAX_BODY, MAX_CONNECTIONS, MAX_HEADERS};
+
+const PROJECT: &str = "proj-upload";
+const MIB: usize = 1024 * 1024;
+
+/// A hub whose `mem` knows one project, so a POST under `/p/<project>` reaches
+/// its page instead of stopping at the unknown-project 404.
+fn hub_with_project(dir: &TempDir) -> Hub {
+    let bin = dir.join("bin");
+    fixture_mem(
+        &bin,
+        &format!(
+            "if [ \"$1\" = projects ]; then echo '{{\"projects\":[{{\"name\":\"{PROJECT}\"}}]}}'; \
+             else echo 'not json at all'; fi"
+        ),
+    );
+    Hub::spawn_env(
+        &dir.join("home"),
+        &[&bin],
+        &["--port", "0"],
+        &[("HUB_IO_TIMEOUT_MS", "1500")],
+    )
+}
+
+/// The head of a same-origin upload of `length` bytes to `path`.
+fn upload_head(hub: &Hub, path: &str, length: usize, extra: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\
+         Origin: http://127.0.0.1:{port}\r\nContent-Type: application/octet-stream\r\n\
+         Content-Length: {length}\r\n{extra}\r\n",
+        port = hub.port
+    )
+}
+
+fn upload(hub: &Hub, path: &str, length: usize) -> String {
+    let mut request = upload_head(hub, path, length, "").into_bytes();
+    request.resize(request.len() + length, b'a');
+    hub.raw_bytes(&request)
+}
+
+/// Sends only the head and reads the answer, timing it: a refusal on the
+/// header comes back long before the 1.5 s read timeout would.
+fn refused_on_the_header(hub: &Hub, path: &str, length: usize) -> u16 {
+    let mut stream = TcpStream::connect(("127.0.0.1", hub.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(upload_head(hub, path, length, "").as_bytes())
+        .unwrap();
+    stream.flush().unwrap();
+    let started = Instant::now();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(1400),
+        "the refusal waited for a body: {:?}",
+        started.elapsed()
+    );
+    status_of(&response)
+}
 
 /// Every test here wants a hub with a fast IO timeout, so a test that proves a
 /// stalled client is dropped does not spend ten seconds proving it.
@@ -264,4 +324,62 @@ fn a_connection_that_says_nothing_costs_nothing() {
         drop(TcpStream::connect(("127.0.0.1", hub.port)).unwrap());
     }
     assert_eq!(status_of(&hub.get("/")), 200);
+}
+
+#[test]
+fn a_photo_sized_body_reaches_the_finding_route_and_nowhere_else() {
+    let dir = TempDir::new("http-upload");
+    let hub = hub_with_project(&dir);
+
+    let finding = format!("/p/{PROJECT}/new/finding");
+    let response = upload(&hub, &finding, MIB);
+    assert_eq!(status_of(&response), 200, "{response}");
+
+    // The same megabyte to any other write is refused before it is read.
+    assert_eq!(
+        refused_on_the_header(&hub, &format!("/p/{PROJECT}/new/research"), MIB),
+        413
+    );
+    assert_eq!(refused_on_the_header(&hub, "/answer", MIB), 413);
+}
+
+#[test]
+fn an_upload_past_eight_mebibytes_is_refused_on_the_header() {
+    let dir = TempDir::new("http-upload-cap");
+    let hub = hub_with_project(&dir);
+
+    let finding = format!("/p/{PROJECT}/new/finding");
+    assert_eq!(refused_on_the_header(&hub, &finding, 8 * MIB + 1), 413);
+}
+
+#[test]
+fn a_second_upload_while_one_is_being_read_is_503_at_once() {
+    let dir = TempDir::new("http-upload-one");
+    let hub = hub_with_project(&dir);
+    let finding = format!("/p/{PROJECT}/new/finding");
+
+    // `100 Continue` is written only once the upload holds its permit, so
+    // reading it proves the first upload is the one being read.
+    let mut first = TcpStream::connect(("127.0.0.1", hub.port)).unwrap();
+    first
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    first
+        .write_all(upload_head(&hub, &finding, MIB, "Expect: 100-continue\r\n").as_bytes())
+        .unwrap();
+    first.flush().unwrap();
+    let mut interim = [0u8; 25];
+    first.read_exact(&mut interim).unwrap();
+    assert_eq!(&interim, b"HTTP/1.1 100 Continue\r\n\r\n");
+
+    assert_eq!(refused_on_the_header(&hub, &finding, MIB), 503);
+
+    first.write_all(&vec![b'a'; MIB]).unwrap();
+    first.flush().unwrap();
+    let mut response = String::new();
+    first.read_to_string(&mut response).unwrap();
+    assert_eq!(status_of(&response), 200, "{response}");
+
+    // Once the first is answered the permit is free again.
+    assert_eq!(status_of(&upload(&hub, &finding, MIB)), 200);
 }

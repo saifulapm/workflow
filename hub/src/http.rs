@@ -12,7 +12,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::form::{Form, decode_path};
@@ -23,6 +23,8 @@ pub const MAX_HEADERS: usize = 64;
 pub const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// §8: a 64 KiB body cap. A batched answer is a few hundred bytes.
 pub const MAX_BODY: usize = 64 * 1024;
+/// A phone photo with room to spare. Only the finding form takes one.
+pub const MAX_UPLOAD_BODY: usize = 8 * 1024 * 1024;
 /// A phone that walks out of wifi mid-request must not hold a thread for ever.
 pub const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -61,6 +63,57 @@ pub fn request_deadline() -> Duration {
             .map(Duration::from_millis)
             .unwrap_or(DEFAULT_REQUEST_DEADLINE)
     })
+}
+
+/// How long a body over `MAX_BODY` has to arrive once its headers have. A
+/// photo over a weak phone signal takes far longer than 15 s.
+pub const DEFAULT_UPLOAD_DEADLINE: Duration = Duration::from_secs(120);
+
+/// 120 s, or `HUB_UPLOAD_DEADLINE_MS`.
+pub fn upload_deadline() -> Duration {
+    static DEADLINE: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *DEADLINE.get_or_init(|| {
+        std::env::var("HUB_UPLOAD_DEADLINE_MS")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(DEFAULT_UPLOAD_DEADLINE)
+    })
+}
+
+/// The most body `path` may carry: `MAX_UPLOAD_BODY` for
+/// `/p/<project>/new/finding`, `MAX_BODY` for every other path. `path` is the
+/// decoded one, the same string routing matches.
+pub fn body_cap(path: &str) -> usize {
+    let project = path
+        .strip_prefix("/p/")
+        .and_then(|rest| rest.strip_suffix("/new/finding"));
+    match project {
+        Some(project) if !project.is_empty() && !project.contains('/') => MAX_UPLOAD_BODY,
+        _ => MAX_BODY,
+    }
+}
+
+/// Set while one request holds a body over `MAX_BODY`, so at most one such
+/// buffer exists at a time.
+static UPLOADING: AtomicBool = AtomicBool::new(false);
+
+/// The one-upload permit, held from the header until the response is written.
+struct UploadPermit;
+
+impl UploadPermit {
+    fn take() -> Option<UploadPermit> {
+        UPLOADING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            .then_some(UploadPermit)
+    }
+}
+
+impl Drop for UploadPermit {
+    fn drop(&mut self) {
+        UPLOADING.store(false, Ordering::Release);
+    }
 }
 
 /// Bounded, so a slow client cannot starve the doorbell thread of anything —
@@ -241,9 +294,11 @@ where
     let mut reader = BufReader::new(stream);
     let deadline = Deadline::new();
 
+    // The upload permit lives until the response is written, so the buffer
+    // it bounds is gone before another upload can start one.
     let response = match read_request(&mut reader, &mut writer, &deadline) {
         Ok(None) => return,
-        Ok(Some(request)) => handler(&request),
+        Ok(Some((request, _permit))) => handler(&request),
         Err(refusal) => Response::text(refusal.status, refusal.message),
     };
     let _ = write_response(&mut writer, &response);
@@ -257,6 +312,10 @@ struct Deadline(Instant);
 impl Deadline {
     fn new() -> Deadline {
         Deadline(Instant::now() + request_deadline())
+    }
+
+    fn upload() -> Deadline {
+        Deadline(Instant::now() + upload_deadline())
     }
 
     /// How long the next read may block: never past the deadline, and never
@@ -281,11 +340,12 @@ impl Deadline {
 
 /// Reads one request. `Ok(None)` is a connection that closed without sending
 /// anything — a port scan, or a browser opening a spare socket it never uses.
+/// A body over `MAX_BODY` comes with the upload permit it was read under.
 fn read_request(
     reader: &mut BufReader<TcpStream>,
     writer: &mut TcpStream,
     deadline: &Deadline,
-) -> Result<Option<Request>, Refusal> {
+) -> Result<Option<(Request, Option<UploadPermit>)>, Refusal> {
     let Some(line) = read_line(reader, MAX_REQUEST_LINE, deadline)? else {
         return Ok(None);
     };
@@ -309,6 +369,7 @@ fn read_request(
         Some((path, query)) => (path, query),
         None => (target, ""),
     };
+    let path = decode_path(raw_path);
 
     let mut headers: Vec<(String, String)> = Vec::new();
     let mut header_bytes = 0usize;
@@ -350,6 +411,7 @@ fn read_request(
             .map(|(_, v)| v.as_str())
     };
 
+    let mut permit = None;
     let body = if method == "POST" || method == "PUT" || method == "PATCH" {
         // §8: `Content-Length` required, chunked rejected with 411. Nothing
         // hub speaks to needs chunked, and a hand-rolled dechunker on the one
@@ -363,9 +425,19 @@ fn read_request(
         let Ok(length) = length.trim().parse::<usize>() else {
             return Err(Refusal::new(400, "malformed content-length"));
         };
-        if length > MAX_BODY {
+        if length > body_cap(&path) {
             // Refused on the header, before a byte of it is buffered.
             return Err(Refusal::new(413, "body too large"));
+        }
+        let upload_deadline;
+        let mut deadline = deadline;
+        if length > MAX_BODY {
+            permit = UploadPermit::take();
+            if permit.is_none() {
+                return Err(Refusal::new(503, "another upload is in progress"));
+            }
+            upload_deadline = Deadline::upload();
+            deadline = &upload_deadline;
         }
         // curl sends `Expect: 100-continue` for bodies past a kilobyte and
         // stalls for a second waiting for this; AC4 answers with curl.
@@ -378,14 +450,15 @@ fn read_request(
         Vec::new()
     };
 
-    Ok(Some(Request {
+    let request = Request {
         method: method.to_string(),
         target: target.to_string(),
-        path: decode_path(raw_path),
+        path,
         query: Form::parse(raw_query),
         headers,
         body,
-    }))
+    };
+    Ok(Some((request, permit)))
 }
 
 /// Exactly `length` bytes of body, against the same deadline as the headers.
@@ -509,6 +582,7 @@ fn reason(status: u16) -> &'static str {
         404 => "Not Found",
         405 => "Method Not Allowed",
         408 => "Request Timeout",
+        409 => "Conflict",
         411 => "Length Required",
         413 => "Content Too Large",
         431 => "Request Header Fields Too Large",
@@ -528,7 +602,7 @@ mod tests {
 
     #[test]
     fn every_status_hub_emits_has_a_reason_phrase() {
-        for status in [200, 303, 400, 403, 404, 405, 411, 413, 431, 503] {
+        for status in [200, 303, 400, 403, 404, 405, 409, 411, 413, 431, 503] {
             assert_ne!(reason(status), "Error", "{status} has no reason phrase");
         }
     }
