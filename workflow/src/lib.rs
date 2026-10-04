@@ -30,6 +30,7 @@ pub mod gitcmd;
 pub mod hook;
 pub mod hygiene;
 pub mod lint;
+pub mod maintain;
 pub mod memcli;
 pub mod ownership;
 pub mod paths;
