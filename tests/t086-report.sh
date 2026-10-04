@@ -30,7 +30,7 @@ case "$task" in
 verb)
 	workflow report started 'reading the brief' || printf 'report-started=%s\n' "$?" >>"$WF_TMP/verb.err"
 	work
-	workflow report ready 'done through the verb' || printf 'report-ready=%s\n' "$?" >>"$WF_TMP/verb.err"
+	WORKFLOW_STATUS_FILE="$WF_TMP/elsewhere.status" workflow report ready 'done through the verb' || printf 'report-ready=%s\n' "$?" >>"$WF_TMP/verb.err"
 	workflow report bogus 'not a state' 2>>"$WF_TMP/verb.err"; printf 'bogus=%s\n' "$?" >>"$WF_TMP/verb.err"
 	;;
 swapped)
@@ -89,6 +89,21 @@ unlike "$(cat "$WF_TMP/verb.err")" 'report-' 'and the two real reports exited 0'
 run workflow report ready 'from a checkout that is no run worktree'
 is "$RC" 2 'from outside a run worktree the verb refuses'
 like "$OUT" 'not a run worktree' 'and says so'
+[ -e "$WF_TMP/elsewhere.status" ]; is "$?" 1 'inside a run worktree WORKFLOW_STATUS_FILE is ignored'
+
+## ------------------------------------- outside a run worktree, a named file
+
+# A caller in a plain checkout has no run worktree to find its file by, so
+# it names one.
+mkdir -p "$T_TMP/plain"
+named="$T_TMP/named.status"
+run sh -c 'cd "$1" && WORKFLOW_STATUS_FILE="$2" workflow report ready "pass"' _ "$T_TMP/plain" "$named"
+is "$RC" 0 'from a plain directory the verb writes the file WORKFLOW_STATUS_FILE names'
+is "$(grep -c . "$named")" 1 'one line'
+like "$(cat "$named")" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z ready pass$' 'shaped like a run worktree status line'
+run sh -c 'cd "$1" && WORKFLOW_STATUS_FILE="$2" workflow report bogus "pass"' _ "$T_TMP/plain" "$named"
+is "$RC" 2 'a word off the list is refused with the variable set too'
+is "$(grep -c . "$named")" 1 'and writes nothing'
 
 ## ------------------------------------------------- a swapped line still reads
 

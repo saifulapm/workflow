@@ -9,6 +9,9 @@
 //! attempt a day into the future. This verb takes the state and the note,
 //! supplies the time, finds the file the way the pre-commit hook finds the
 //! task's Verify line, and refuses a state the run would not read.
+//!
+//! Outside a run worktree there is no file to find, so a caller there names
+//! one in `WORKFLOW_STATUS_FILE` and gets the same line.
 
 use crate::{brief, exit, paths, repo, sys, verify, warn};
 
@@ -21,17 +24,27 @@ pub fn cmd_report(state: &str, note: &str) -> i32 {
         ));
         return exit::USAGE;
     }
-    let Some((_, top)) = repo::goto_toplevel() else {
-        warn("report: not inside a git work tree");
-        return exit::USAGE;
-    };
-    let Some(file) = verify::task_status_file(&top) else {
-        warn(format!(
-            "report: {} is not a run worktree -- the status file is the run's, under {}",
-            top.display(),
-            paths::runs_root().display()
-        ));
-        return exit::USAGE;
+    // Read before goto_toplevel moves the cwd, so a relative name means the
+    // directory the caller was in.
+    let named = std::env::var_os("WORKFLOW_STATUS_FILE")
+        .filter(|v| !v.is_empty())
+        .and_then(|v| std::path::absolute(v).ok());
+    let top = repo::goto_toplevel().map(|(_, top)| top);
+    // A run worktree's own file wins, so a variable left in the environment
+    // cannot send a worker's report somewhere the run never reads.
+    let file = match (top.as_deref().and_then(verify::task_status_file), named) {
+        (Some(file), _) | (None, Some(file)) => file,
+        (None, None) => {
+            match top {
+                None => warn("report: not inside a git work tree"),
+                Some(top) => warn(format!(
+                    "report: {} is not a run worktree -- the status file is the run's, under {}",
+                    top.display(),
+                    paths::runs_root().display()
+                )),
+            }
+            return exit::USAGE;
+        }
     };
     let note = note.split_whitespace().collect::<Vec<_>>().join(" ");
     let line = match note.is_empty() {
