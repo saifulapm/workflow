@@ -15,6 +15,10 @@ struct TaskRow {
     failed: String,
     /// Minutes since the task's last dispatch, `-` before its first.
     age: String,
+    /// The model the task runs on: its own `.model`, else the run's.
+    model: String,
+    /// Whole minutes the task has been out, 0 unless it is dispatched now.
+    minutes: i64,
     last_status: String,
     merged: String,
     /// What the worker was carrying at its last turn, when the run could see
@@ -111,6 +115,19 @@ fn read_run(dir: &Path) -> Option<RunRow> {
             age: match field(dir, &id, "dispatched_at").parse::<i64>() {
                 Ok(t) if t > 0 => format!("{}m", (crate::sys::now() - t).max(0) / 60),
                 _ => String::from("-"),
+            },
+            model: match field(dir, &id, "model") {
+                m if m.is_empty() => std::fs::read_to_string(dir.join("model"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                m => m,
+            },
+            minutes: match field(dir, &id, "dispatched_at").parse::<i64>() {
+                Ok(t) if t > 0 && field(dir, &id, "state") == run::DISPATCHED => {
+                    (crate::sys::now() - t).max(0) / 60
+                }
+                _ => 0,
             },
             last_status: last_status(dir, &id),
             merged: field(dir, &id, "merged"),
@@ -221,6 +238,8 @@ fn as_json(project: &str, serving: &Serving, rows: &[RunRow]) -> serde_json::Val
                 "merged": t.merged,
                 "context": t.context,
                 "held": t.held,
+                "model": t.model,
+                "minutes": t.minutes,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
@@ -344,6 +363,8 @@ mod tests {
                 session: String::new(),
                 failed: String::new(),
                 age: "-".into(),
+                model: String::new(),
+                minutes: 0,
                 last_status: String::new(),
                 merged: "deadbeef".into(),
                 context: 4000,
@@ -406,5 +427,46 @@ mod tests {
         let doc = as_json("app", &idle, &[]);
         assert!(doc["milestone"].is_null() && doc["runner"].is_null());
         assert_eq!(serving_line(&idle), "stage: idle · 0 parked");
+    }
+
+    #[test]
+    fn status_json_names_each_tasks_model_and_minutes() {
+        let dir = std::env::temp_dir().join(format!("wf-status-agents-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plan.md"),
+            "# plan: demo\n\n- [ ] t1 One\n      Files: a\n      Verify: true\n\
+             - [ ] t2 Two\n      Files: b\n      Verify: true\n\
+             - [ ] t3 Three\n      Files: c\n      Verify: true\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("model"), "run-model\n").unwrap();
+        let three_ago = (crate::sys::now() - 180).to_string();
+        for (task, state) in [("t1", "dispatched"), ("t2", "dispatched"), ("t3", "merged")] {
+            std::fs::write(dir.join(format!("{task}.state")), state).unwrap();
+            std::fs::write(dir.join(format!("{task}.dispatched_at")), &three_ago).unwrap();
+        }
+        std::fs::write(dir.join("t1.model"), "task-model\n").unwrap();
+        let row = read_run(&dir).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = as_json(
+            "app",
+            &Serving {
+                stage: "idle".into(),
+                milestone: None,
+                parked: Vec::new(),
+                findings: 0,
+                runner: None,
+                paused: false,
+            },
+            &[row],
+        );
+        let tasks = &doc["runs"][0]["tasks"];
+        assert_eq!(tasks[0]["model"], "task-model");
+        assert_eq!(tasks[0]["minutes"], 3);
+        assert_eq!(tasks[1]["model"], "run-model");
+        assert_eq!(tasks[1]["minutes"], 3);
+        assert_eq!(tasks[2]["minutes"], 0);
     }
 }

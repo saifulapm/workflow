@@ -80,6 +80,28 @@ like "$OUT" '"live": *false' 'nobody holds the run lock'
 unlike "$OUT" '"readings"|"fixes"' 'and no run carries readings or fixes'
 like "$OUT" '"context": *162502' 'json sums context for the run, distinct from any one task'
 
+# Each task names the model it runs on and its minutes since dispatch: its
+# own model file, else the run's, and 0 minutes for a task not dispatched.
+is "$(printf '%s' "$OUT" | jq -c '.runs[0].tasks[3] | [.model, .minutes]')" '["",0]' 'a dispatched task with no model file and no dispatch time: empty model, 0 minutes'
+printf 'run-model\n' >"$rundir/model"
+printf 'task-model\n' >"$rundir/t4.model"
+printf '%s\n' "$(($(date +%s) - 180))" >"$rundir/t4.dispatched_at"
+printf 'dispatched\n' >"$rundir/t3.state"
+printf '%s\n' "$(($(date +%s) - 180))" >"$rundir/t3.dispatched_at"
+printf '%s\n' "$(($(date +%s) - 180))" >"$rundir/t1.dispatched_at"
+run workflow status --json
+is "$(printf '%s' "$OUT" | jq -c '.runs[0].tasks[3] | [.model, .minutes]')" '["task-model",3]' 'a dispatched task with its own model file names it, 3 minutes in'
+is "$(printf '%s' "$OUT" | jq -c '.runs[0].tasks[2] | [.model, .minutes]')" '["run-model",3]' "a dispatched task without one names the run's model"
+is "$(printf '%s' "$OUT" | jq -c '.runs[0].tasks[0] | [.model, .minutes]')" '["run-model",0]' 'a merged task reads 0 minutes'
+run workflow status --brief
+like "$OUT" '^  t1 +merged +3m$' 'brief prints what it printed before'
+unlike "$OUT" 'task-model|run-model' 'and names no model'
+run workflow status
+unlike "$OUT" 'task-model|run-model' 'the human report names no model either'
+printf 'pending\n' >"$rundir/t3.state"
+rm -f "$rundir/model" "$rundir/t4.model" "$rundir/t3.dispatched_at" "$rundir/t4.dispatched_at" "$rundir/t1.dispatched_at"
+run workflow status --json
+
 # The serve fields, in a checkout serve has never touched: idle, no
 # milestone, nothing parked, no runner, not paused.
 is "$(printf '%s' "$OUT" | jq -r '.stage')" idle 'no serve state and no live run is stage idle'
