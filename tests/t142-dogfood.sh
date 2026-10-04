@@ -6,7 +6,8 @@
 # the milestone stays open, and nothing else starts while the walk stands.
 # Once the session ends serve reads its report: a pass ticks the milestone,
 # a failed step with its finding holds it with `findings 1`, and a session
-# that never reports is skipped and holds it too.
+# that never reports is skipped, walked again on the next tick, and pauses
+# the project on its third strike.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -253,5 +254,9 @@ M="$XDG_STATE_HOME/workflow/serve/mute"
 walked mute || notok 'the silent walk is read' "$(tail -5 "$T_TMP/serve.out")"
 like "$(runs mute)" 'dogfood m1: skipped no report' 'a session that never reports is skipped'
 like "$("$MEM_BIN" --project mute roadmap)" '^- \[ \] m1 ' 'and its milestone stays open'
+for _ in $(seq 30); do [ "$(cat "$M/stage" 2>/dev/null)" = paused ] && break; sleep 1; done
+is "$(runs mute | grep -c 'dogfood m1: skipped no report')" 3 'each skipped walk is walked again on the next tick'
+is "$(grep -c '^dogfood mute$' "$T_TMP/sessions.log")" 3 'one session for each'
 is "$(sed -n 2p "$M/walk" 2>/dev/null)" 'skipped no report' 'the walk file keeps the outcome'
-is "$(cat "$M/stage" 2>/dev/null)" waiting 'the stage holds waiting'
+is "$(sed -n 3p "$M/walk" 2>/dev/null)" 'strikes 3' 'and counts the strikes'
+is "$(cat "$M/stage" 2>/dev/null)" paused 'the third strike pauses the project'

@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::backend::{Dispatch, Handle, WorkerBackend, backend_for};
 use crate::brief::{self, LeadCtx};
-use crate::dogfood::{self, NO_SHOW_PATH, WalkBrief, WalkOutcome, WalkState};
+use crate::dogfood::{self, NO_SHOW_PATH, OwnerFinding, WalkBrief, WalkOutcome, WalkState};
 use crate::gitcmd::{self, Git};
 use crate::plan::{self, PlanKind};
 use crate::{exit, memcli, ownership, paths, plancheck, run, sys, warn};
@@ -521,6 +521,9 @@ impl Serve {
     /// leaves their tasks dispatched for the next run to adopt; a run that
     /// has gone is reaped; nothing starts.
     fn hold(&mut self, p: &ServeProject) {
+        if self.walk_again(p) {
+            return;
+        }
         let told = p.dir().join(STOPPED);
         match self.running(p) {
             Running::Live if !told.exists() => {
@@ -542,6 +545,45 @@ impl Serve {
             _ => {}
         }
         self.stage(p, "paused");
+    }
+
+    /// The owner answered the strikes question `walk again`: the pause is
+    /// lifted and the count zeroed, so the next tick walks on. Only a pause
+    /// the strikes made is read, never one set by hand.
+    fn walk_again(&mut self, p: &ServeProject) -> bool {
+        let dir = p.dir();
+        let Some(walk) =
+            WalkState::read(&std::fs::read_to_string(dir.join(WALK)).unwrap_or_default())
+        else {
+            return false;
+        };
+        let key = format!("strikes {}", walk.slug);
+        let served = std::fs::read_to_string(dir.join("served")).unwrap_or_default();
+        if !served.lines().any(|l| l == key) {
+            return false;
+        }
+        let said = mem_on(
+            &self.mem,
+            &p.name,
+            &["questions", "--for", "human", "--json"],
+        );
+        if !dogfood::walk_again(&said.out, &walk.slug) {
+            return false;
+        }
+        let said = mem_on(&self.mem, &p.name, &["project", "unset", "paused"]);
+        if !said.ok {
+            warn(format!("serve {}: cannot resume -- {}", p.name, said.err));
+            return false;
+        }
+        forget_strikes(&dir);
+        self.log(
+            p,
+            &format!(
+                "serve {}: the owner asked for another walk; resumed",
+                walk.slug
+            ),
+        );
+        true
     }
 
     fn running(&mut self, p: &ServeProject) -> Running {
@@ -883,16 +925,18 @@ impl Serve {
             .enumerate()
             .map(|(i, s)| (i + 1, s))
             .collect();
-        // After a fix run only the steps of the open findings are walked
-        // again, the findings in the brief. With none open the whole path is,
-        // so a milestone never lands on an empty walk.
-        let failed =
-            WalkState::read(&std::fs::read_to_string(p.dir().join(WALK)).unwrap_or_default())
-                .filter(|w| w.slug == slug && matches!(w.outcome, Some(WalkOutcome::Failed(_))));
+        // After a fix run or a skipped walk only the steps of the open
+        // findings are walked again, the findings in the brief. With none
+        // open the whole path is, so a milestone never lands on an empty
+        // walk. The walk number and the strikes carry over.
+        let was = WalkState::read(&std::fs::read_to_string(p.dir().join(WALK)).unwrap_or_default())
+            .filter(|w| w.slug == slug && w.outcome.is_some());
         let mut n = 1;
+        let mut strikes = 0;
         let mut findings = String::new();
-        if let Some(was) = failed {
+        if let Some(was) = was {
             n = was.walk + 1;
+            strikes = was.strikes;
             let json = mem_on(&self.mem, &p.name, &["finding", "list", "--open", "--json"]).out;
             let open = dogfood::finding_steps(&json, slug);
             if steps.iter().any(|(i, _)| open.contains(&i.to_string())) {
@@ -942,6 +986,7 @@ impl Serve {
             steps: w.steps.iter().map(|(n, _)| *n).collect(),
             session,
             outcome: None,
+            strikes,
         };
         let _ = std::fs::write(p.dir().join(WALK), walk.line());
         self.stage(p, "dogfood");
@@ -955,10 +1000,14 @@ impl Serve {
     /// The walk file read: a live session under its forty-five minutes holds
     /// the stage `dogfood`; one past them is stopped and skipped; an ended
     /// one is read off its report. A pass lands the milestone and drops the
-    /// walk file; anything else keeps it with the outcome and holds the
-    /// milestone `waiting`, its run line written once. A failed walk starts
-    /// its findings lead; true once that lead has gone out, so the tick goes
-    /// on to the fix run.
+    /// walk file; anything else keeps it with the outcome, its run line
+    /// written once. A failed or skipped walk is a strike, and the third
+    /// pauses the project; short of it a skipped walk is walked again on the
+    /// next tick and a failed one starts its findings lead. The owner's
+    /// questions are read on every tick a failed walk stands: one blocking
+    /// question pending holds the milestone `waiting`, and a failed step left
+    /// only with findings asked of the owner fails nothing. True once the
+    /// findings lead has gone out, so the tick goes on to the fix run.
     fn settle_walk(&mut self, p: &ServeProject) -> bool {
         let dir = p.dir();
         let Some(mut walk) =
@@ -967,12 +1016,32 @@ impl Serve {
             self.stage(p, "dogfood");
             return false;
         };
-        if let Some(outcome) = &walk.outcome {
-            if matches!(outcome, WalkOutcome::Failed(_)) {
-                return self.findings_lead(p, &walk);
+        let slug = walk.slug.clone();
+        match walk.outcome.clone() {
+            Some(WalkOutcome::Failed(steps)) => {
+                let listing = self.open_listing(p);
+                let owners = self.owners(p);
+                return match dogfood::owner_outcome(
+                    WalkOutcome::Failed(steps),
+                    &listing,
+                    &slug,
+                    &owners,
+                ) {
+                    None => self.held(p),
+                    Some(WalkOutcome::Pass) => {
+                        self.log(p, &dogfood::walk_line(&slug, &WalkOutcome::Pass, 0));
+                        let _ = std::fs::remove_file(dir.join(WALK));
+                        self.land_milestone(p, &slug);
+                        false
+                    }
+                    Some(_) => self.findings_lead(p, &walk, &listing, &owners),
+                };
             }
-            self.stage(p, "waiting");
-            return false;
+            Some(_) => {
+                self.milestone_end(p, &slug);
+                return false;
+            }
+            None => {}
         }
         let h = Handle {
             session: walk.session.clone(),
@@ -985,7 +1054,6 @@ impl Serve {
             self.stage(p, "dogfood");
             return false;
         }
-        let slug = walk.slug.clone();
         let outcome = if live {
             self.backend.stop(&h, 10);
             WalkOutcome::Skipped(dogfood::WALK_TIMED_OUT.into())
@@ -997,16 +1065,29 @@ impl Serve {
         let open = dogfood::finding_steps(&said.out, &slug);
         let outcome = dogfood::held_to_findings(outcome, &open);
         // A finding on a step walked clean was fixed by what landed before
-        // the walk: the trunk head.
+        // the walk: the trunk head. The session's own outcome decides it, so
+        // a finding the owner holds stays open on the step it failed.
         let fixed = dogfood::fixed_findings(&said.out, &slug, &walk.steps, &outcome);
         let head = Git::at(&p.root).head().unwrap_or_default();
         for id in &fixed {
             mem_on(&self.mem, &p.name, &["finding", "close", id, "--by", &head]);
         }
+        let listing = self.open_listing(p);
+        let owners = self.owners(p);
+        let counted = dogfood::owner_outcome(outcome.clone(), &listing, &slug, &owners);
         self.log(
             p,
-            &dogfood::walk_line(&slug, &outcome, open.len().saturating_sub(fixed.len())),
+            &dogfood::walk_line(
+                &slug,
+                counted.as_ref().unwrap_or(&outcome),
+                open.len().saturating_sub(fixed.len()),
+            ),
         );
+        let Some(outcome) = counted else {
+            walk.outcome = Some(outcome);
+            let _ = std::fs::write(dir.join(WALK), walk.line());
+            return self.held(p);
+        };
         if outcome == WalkOutcome::Pass {
             let _ = std::fs::remove_file(dir.join(WALK));
             self.land_milestone(p, &slug);
@@ -1014,27 +1095,122 @@ impl Serve {
         }
         let failed = matches!(outcome, WalkOutcome::Failed(_));
         walk.outcome = Some(outcome);
+        walk.strikes += 1;
         let _ = std::fs::write(dir.join(WALK), walk.line());
+        if walk.strikes >= dogfood::STRIKES {
+            self.strike_out(p, &slug);
+            return false;
+        }
         if failed {
-            self.findings_lead(p, &walk);
+            self.findings_lead(p, &walk, &listing, &owners);
         }
         self.stage(p, "waiting");
         false
     }
 
-    /// The findings lead for a failed walk, started once per walk: true once
-    /// it has gone out, false on the tick that starts it.
-    fn findings_lead(&mut self, p: &ServeProject, walk: &WalkState) -> bool {
+    fn open_listing(&self, p: &ServeProject) -> String {
+        mem_on(&self.mem, &p.name, &["finding", "list", "--open", "--json"]).out
+    }
+
+    fn owners(&self, p: &ServeProject) -> Vec<OwnerFinding> {
+        let said = mem_on(
+            &self.mem,
+            &p.name,
+            &["questions", "--for", "human", "--json"],
+        );
+        dogfood::owner_findings(&said.out)
+    }
+
+    /// A milestone held on a blocking question: no strike and no lead until
+    /// the answer. A lead that asked it still ends and is dropped here, since
+    /// the tick goes no further.
+    fn held(&mut self, p: &ServeProject) -> bool {
+        self.settle_leads(p);
+        self.stage(p, "waiting");
+        false
+    }
+
+    /// The third strike: the project paused as `workflow pause` does it, and
+    /// the owner asked once whether to walk again.
+    fn strike_out(&mut self, p: &ServeProject, slug: &str) {
+        let here = self.machine.clone().unwrap_or_default();
+        let text = format!("{here} {}", &sys::utc_now()[..10]);
+        let said = mem_on(
+            &self.mem,
+            &p.name,
+            &["project", "set", "paused", text.trim()],
+        );
+        if !said.ok {
+            warn(format!("serve {}: cannot pause -- {}", p.name, said.err));
+        }
+        if self.serve_once(p, &format!("strikes {slug}")) {
+            let listing = mem_on(&self.mem, &p.name, &["finding", "list", "--open"]).out;
+            let question =
+                dogfood::strikes_question(slug, &dogfood::milestone_rows(&listing, slug));
+            mem_on(
+                &self.mem,
+                &p.name,
+                &[
+                    "ask",
+                    "--for",
+                    "human",
+                    "--options",
+                    "walk again,leave paused",
+                    "--recommend",
+                    "leave paused",
+                    "--",
+                    &question,
+                ],
+            );
+        }
+        self.log(
+            p,
+            &format!(
+                "serve {slug}: paused after {} failed walks; the owner is asked",
+                dogfood::STRIKES
+            ),
+        );
+        self.stage(p, "paused");
+    }
+
+    /// The findings lead for a failed walk, started once per walk and again
+    /// for an owner's answer that came after it, the answers under the
+    /// findings: true once it has gone out, false on the tick that starts it.
+    fn findings_lead(
+        &mut self,
+        p: &ServeProject,
+        walk: &WalkState,
+        open: &str,
+        owners: &[OwnerFinding],
+    ) -> bool {
         let slug = &walk.slug;
-        if !self.serve_once(p, &format!("findings {slug} {}", walk.walk)) {
+        let first = self.serve_once(p, &format!("findings {slug} {}", walk.walk));
+        // An answer waits for the lead going now, which may be the one that
+        // asked it.
+        if !first && !self.leads(p).is_empty() {
+            return true;
+        }
+        let answered: Vec<&OwnerFinding> = dogfood::owned(open, slug, owners)
+            .into_iter()
+            .filter(|o| o.answered)
+            .collect();
+        let mut fresh = false;
+        for o in &answered {
+            fresh |= self.serve_once(p, &format!("answered {slug} {}", o.finding));
+        }
+        if !first && !fresh {
             return true;
         }
         let listing = mem_on(&self.mem, &p.name, &["finding", "list", "--open"]).out;
+        let mut rows = dogfood::milestone_rows(&listing, slug);
+        for o in &answered {
+            rows.push_str(&format!(
+                "#{}  the owner answered: {}\n",
+                o.finding, o.answer
+            ));
+        }
         let text = self.stored_plan(p, slug);
-        let body = brief::lead_findings(
-            &self.lead_ctx(p, slug, "", &text),
-            &dogfood::milestone_rows(&listing, slug),
-        );
+        let body = brief::lead_findings(&self.lead_ctx(p, slug, "", &text), &rows);
         self.start_lead(p, slug, "findings", &body);
         self.stage(p, "waiting");
         false
@@ -1583,6 +1759,26 @@ pub fn cmd_park(task: &str, reason: &str) -> i32 {
     exit::OK
 }
 
+/// Zero the walk's strikes and forget the strikes question, so a later
+/// third strike asks the owner again.
+fn forget_strikes(dir: &Path) {
+    let file = dir.join(WALK);
+    let Some(mut walk) = WalkState::read(&std::fs::read_to_string(&file).unwrap_or_default())
+    else {
+        return;
+    };
+    let key = format!("strikes {}", walk.slug);
+    walk.strikes = 0;
+    let _ = std::fs::write(&file, walk.line());
+    let served = std::fs::read_to_string(dir.join("served")).unwrap_or_default();
+    let kept: String = served
+        .lines()
+        .filter(|l| *l != key)
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let _ = std::fs::write(dir.join("served"), kept);
+}
+
 /// `workflow pause [<project>]` and `workflow resume [<project>]`: the
 /// `paused` project key, which serve reads on every tick.
 pub fn cmd_pause(project: Option<&str>, pause: bool) -> i32 {
@@ -1618,6 +1814,7 @@ pub fn cmd_pause(project: Option<&str>, pause: bool) -> i32 {
             "{name}: paused; serve stops its run and starts nothing until `workflow resume`"
         ));
     } else {
+        forget_strikes(&paths::serve_root().join(name.replace('/', "-")));
         warn(format!(
             "{name}: resumed; serve starts its run on the next tick"
         ));

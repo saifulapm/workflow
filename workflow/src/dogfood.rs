@@ -48,7 +48,8 @@ pub struct WalkBrief {
 /// The walk going on for a project: `<serve dir>/walk`. Its first line is
 /// `<slug> <walk> <started> <session> <step>...`, the steps last because
 /// there are as many as the walk covers; a walk that was read and held the
-/// milestone has its outcome's [`WalkOutcome::words`] on a second line.
+/// milestone has its outcome's [`WalkOutcome::words`] on a second line, and
+/// a milestone with strikes has `strikes <n>` after it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalkState {
     pub slug: String,
@@ -60,23 +61,33 @@ pub struct WalkState {
     pub session: String,
     /// What the walk came to, once serve has read it.
     pub outcome: Option<WalkOutcome>,
+    /// The milestone's failed and skipped walks since its count was last
+    /// zeroed.
+    pub strikes: usize,
 }
 
 impl WalkState {
     pub fn read(text: &str) -> Option<WalkState> {
         let mut lines = text.lines();
         let mut parts = lines.next()?.split_whitespace();
-        Some(WalkState {
+        let mut walk = WalkState {
             slug: parts.next()?.to_string(),
             walk: parts.next()?.parse().ok()?,
             started: parts.next()?.parse().ok()?,
             session: parts.next()?.to_string(),
             steps: parts.map(|n| n.parse().ok()).collect::<Option<_>>()?,
-            outcome: lines
-                .next()
-                .filter(|l| !l.trim().is_empty())
-                .map(outcome_of),
-        })
+            outcome: None,
+            strikes: 0,
+        };
+        // No outcome's words start with `strikes `, so the two lines are
+        // told apart by it.
+        for line in lines.map(str::trim).filter(|l| !l.is_empty()) {
+            match line.strip_prefix("strikes ") {
+                Some(n) => walk.strikes = n.trim().parse().ok()?,
+                None => walk.outcome = Some(outcome_of(line)),
+            }
+        }
+        Some(walk)
     }
 
     pub fn line(&self) -> String {
@@ -85,8 +96,12 @@ impl WalkState {
             Some(o) => format!("{}\n", o.words()),
             None => String::new(),
         };
+        let strikes = match self.strikes {
+            0 => String::new(),
+            n => format!("strikes {n}\n"),
+        };
         format!(
-            "{} {} {} {}{steps}\n{outcome}",
+            "{} {} {} {}{steps}\n{outcome}{strikes}",
             self.slug, self.walk, self.started, self.session
         )
     }
@@ -242,6 +257,168 @@ pub fn walk_line(slug: &str, o: &WalkOutcome, open: usize) -> String {
     format!("dogfood {slug}: {what}")
 }
 
+/// The strike that pauses the project: a milestone that failed its walk
+/// this often wants the owner, not another fix round.
+pub const STRIKES: usize = 3;
+
+/// The owner's question on the third strike, its findings the milestone's
+/// rows of `mem finding list --open` on one line.
+pub fn strikes_question(slug: &str, rows: &str) -> String {
+    let rows: Vec<String> = rows
+        .lines()
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|l| !l.is_empty())
+        .collect();
+    let findings = match rows.is_empty() {
+        true => "no finding is open".to_string(),
+        false => rows.join("; "),
+    };
+    format!("{} {findings}", strikes_prefix(slug))
+}
+
+fn strikes_prefix(slug: &str) -> String {
+    format!("{slug} failed its Show path three times:")
+}
+
+/// Whether the owner answered the newest strikes question of the milestone
+/// `walk again`, off `mem questions --for human --json`, which lists the
+/// newest first.
+pub fn walk_again(questions: &str, slug: &str) -> bool {
+    let prefix = strikes_prefix(slug);
+    question_rows(questions)
+        .iter()
+        .find(|q| {
+            q.get("body")
+                .and_then(|b| b.as_str())
+                .is_some_and(|b| b.trim().starts_with(&prefix))
+        })
+        .and_then(|q| q.get("answer").and_then(|a| a.as_str()))
+        .is_some_and(|a| a.trim().eq_ignore_ascii_case("walk again"))
+}
+
+fn question_rows(questions: &str) -> Vec<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(questions)
+        .ok()
+        .and_then(|v| v.get("questions").and_then(|q| q.as_array()).cloned())
+        .unwrap_or_default()
+}
+
+/// A finding the lead asked the owner to settle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerFinding {
+    /// The finding's id as the question names it.
+    pub finding: String,
+    /// Asked as `blocking finding #<id>:`, which holds the milestone.
+    pub blocking: bool,
+    pub answered: bool,
+    /// Empty until answered.
+    pub answer: String,
+}
+
+/// The owner findings in `mem questions --for human --json`: each question
+/// whose body opens `finding #<id>:` or `blocking finding #<id>:`. A text
+/// prefix ties the two, since a human question stores no task.
+pub fn owner_findings(questions: &str) -> Vec<OwnerFinding> {
+    question_rows(questions)
+        .iter()
+        .filter_map(|q| {
+            let body = q.get("body")?.as_str()?.trim();
+            let (blocking, rest) = match body.strip_prefix("blocking finding #") {
+                Some(rest) => (true, rest),
+                None => (false, body.strip_prefix("finding #")?),
+            };
+            let (id, _) = rest.split_once(':')?;
+            if id.is_empty() || id.contains(char::is_whitespace) {
+                return None;
+            }
+            let answer = q.get("answer").and_then(|a| a.as_str());
+            Some(OwnerFinding {
+                finding: id.to_string(),
+                blocking,
+                answered: answer.is_some(),
+                answer: answer.unwrap_or_default().to_string(),
+            })
+        })
+        .collect()
+}
+
+/// The milestone's open findings, `(short id, step)`, off `mem finding list
+/// --open --json`.
+fn open_findings(listing: &str, slug: &str) -> Vec<(String, String)> {
+    let items = serde_json::from_str::<serde_json::Value>(listing)
+        .ok()
+        .and_then(|v| v.get("items").and_then(|i| i.as_array()).cloned())
+        .unwrap_or_default();
+    items
+        .iter()
+        .filter(|i| i.get("milestone").and_then(|m| m.as_str()) == Some(slug))
+        .filter_map(|i| {
+            let id = i.get("short_id")?.as_str()?.to_string();
+            let step = i.get("step").and_then(|s| s.as_str()).unwrap_or_default();
+            Some((id, step.trim().to_string()))
+        })
+        .collect()
+}
+
+/// The owner's questions on the milestone's open findings, each with the
+/// finding it settles.
+pub fn owned<'a>(listing: &str, slug: &str, owners: &'a [OwnerFinding]) -> Vec<&'a OwnerFinding> {
+    let open = open_findings(listing, slug);
+    owners
+        .iter()
+        .filter(|o| {
+            open.iter()
+                .any(|(id, _)| id.eq_ignore_ascii_case(&o.finding))
+        })
+        .collect()
+}
+
+/// A failed walk as the owner's questions leave it: `None` while one of the
+/// milestone's open findings waits on a blocking question, else the walk
+/// with every failed step dropped whose open findings are all asked and none
+/// blocking, a pass once none is left. `listing` is `mem finding list --open
+/// --json`; any other outcome comes back as it is.
+pub fn owner_outcome(
+    o: WalkOutcome,
+    listing: &str,
+    slug: &str,
+    owners: &[OwnerFinding],
+) -> Option<WalkOutcome> {
+    let WalkOutcome::Failed(steps) = &o else {
+        return Some(o);
+    };
+    let open = open_findings(listing, slug);
+    let asked = |id: &str| -> Vec<&OwnerFinding> {
+        owners
+            .iter()
+            .filter(|q| q.finding.eq_ignore_ascii_case(id))
+            .collect()
+    };
+    if open
+        .iter()
+        .any(|(id, _)| asked(id).iter().any(|q| q.blocking && !q.answered))
+    {
+        return None;
+    }
+    let owners_only = |n: &usize| {
+        let on: Vec<&String> = open
+            .iter()
+            .filter(|(_, step)| *step == n.to_string())
+            .map(|(id, _)| id)
+            .collect();
+        !on.is_empty()
+            && on.iter().all(|id| {
+                let qs = asked(id);
+                !qs.is_empty() && qs.iter().all(|q| !q.blocking)
+            })
+    };
+    let left: Vec<usize> = steps.iter().copied().filter(|n| !owners_only(n)).collect();
+    Some(match left.is_empty() {
+        true => WalkOutcome::Pass,
+        false => WalkOutcome::Failed(left),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +449,7 @@ mod tests {
             steps: vec![2, 3],
             session: "wf-dogfood-a3k9".into(),
             outcome: None,
+            strikes: 0,
         };
         assert_eq!(walk.line(), "cart 2 1791000000 wf-dogfood-a3k9 2 3\n");
         assert_eq!(WalkState::read(&walk.line()), Some(walk.clone()));
@@ -283,7 +461,13 @@ mod tests {
             read.line(),
             "cart 2 1791000000 wf-dogfood-a3k9 2 3\nskipped no report\n"
         );
-        assert_eq!(WalkState::read(&read.line()), Some(read));
+        assert_eq!(WalkState::read(&read.line()), Some(read.clone()));
+        let struck = WalkState { strikes: 2, ..read };
+        assert_eq!(
+            struck.line(),
+            "cart 2 1791000000 wf-dogfood-a3k9 2 3\nskipped no report\nstrikes 2\n"
+        );
+        assert_eq!(WalkState::read(&struck.line()), Some(struck));
         assert_eq!(WalkState::read("cart 1 1791000000"), None);
         assert_eq!(WalkState::read("cart 1 1791000000 s x"), None);
     }
@@ -434,5 +618,150 @@ mod tests {
             "#F1  open  cart  2  the basket stays empty\n"
         );
         assert_eq!(milestone_rows(listing, "shop"), "");
+    }
+
+    const OWNER_QUESTIONS: &str = r#"{"questions":[
+        {"body":"finding #F1: is the year in the footer the build year?","answer":null},
+        {"body":"blocking finding #F2: keep the old logo?","answer":null},
+        {"body":"blocking finding #f3: drop the banner?","answer":"Drop it"},
+        {"body":"where does the ask service go?","answer":null},
+        {"body":"finding #: no id","answer":null},
+        {"body":"m1 failed its Show path three times: none","answer":null}
+    ]}"#;
+
+    #[test]
+    fn owner_findings_are_the_human_questions_named_for_a_finding() {
+        assert_eq!(
+            owner_findings(OWNER_QUESTIONS),
+            [
+                OwnerFinding {
+                    finding: "F1".into(),
+                    blocking: false,
+                    answered: false,
+                    answer: String::new(),
+                },
+                OwnerFinding {
+                    finding: "F2".into(),
+                    blocking: true,
+                    answered: false,
+                    answer: String::new(),
+                },
+                OwnerFinding {
+                    finding: "f3".into(),
+                    blocking: true,
+                    answered: true,
+                    answer: "Drop it".into(),
+                },
+            ]
+        );
+        assert!(owner_findings("not json").is_empty());
+    }
+
+    #[test]
+    fn a_step_whose_findings_the_owner_holds_does_not_fail_the_walk() {
+        let listing = r#"{"items":[
+            {"id":"01AF1","short_id":"F1","milestone":"cart","step":"3"},
+            {"id":"01AF4","short_id":"F4","milestone":"cart","step":"2"},
+            {"id":"01AF5","short_id":"F5","milestone":"home","step":"2"}
+        ]}"#;
+        let owners = owner_findings(OWNER_QUESTIONS);
+        // Step 3's one finding is asked and not blocking.
+        assert_eq!(
+            owner_outcome(WalkOutcome::Failed(vec![3]), listing, "cart", &owners),
+            Some(WalkOutcome::Pass)
+        );
+        assert_eq!(
+            owner_outcome(WalkOutcome::Failed(vec![2, 3]), listing, "cart", &owners),
+            Some(WalkOutcome::Failed(vec![2]))
+        );
+        assert_eq!(
+            owner_outcome(WalkOutcome::Failed(vec![2]), listing, "cart", &[]),
+            Some(WalkOutcome::Failed(vec![2]))
+        );
+        let skipped = WalkOutcome::Skipped("no report".into());
+        assert_eq!(
+            owner_outcome(skipped.clone(), listing, "cart", &owners),
+            Some(skipped)
+        );
+    }
+
+    #[test]
+    fn a_pending_blocking_finding_holds_the_walk_until_it_is_answered() {
+        let listing = |id: &str| {
+            format!(
+                r#"{{"items":[{{"id":"01A","short_id":"{id}","milestone":"cart","step":"1"}}]}}"#
+            )
+        };
+        let owners = owner_findings(OWNER_QUESTIONS);
+        // F2 stands on step 1, which did not fail: it holds the milestone.
+        assert_eq!(
+            owner_outcome(
+                WalkOutcome::Failed(vec![1]),
+                &listing("F2"),
+                "cart",
+                &owners
+            ),
+            None
+        );
+        // F3 was answered: an ordinary finding again, counted on its step.
+        assert_eq!(
+            owner_outcome(
+                WalkOutcome::Failed(vec![1]),
+                &listing("F3"),
+                "cart",
+                &owners
+            ),
+            Some(WalkOutcome::Failed(vec![1]))
+        );
+        // Another milestone's blocking finding holds nothing here.
+        assert_eq!(
+            owner_outcome(
+                WalkOutcome::Failed(vec![1]),
+                &listing("F2"),
+                "home",
+                &owners
+            ),
+            Some(WalkOutcome::Failed(vec![1]))
+        );
+    }
+
+    #[test]
+    fn the_strikes_question_names_the_open_findings() {
+        assert_eq!(
+            strikes_question(
+                "cart",
+                "#F1  open  cart  2  the basket stays empty\n#F2  open  cart  3  no total\n"
+            ),
+            "cart failed its Show path three times: #F1 open cart 2 the basket stays empty; #F2 open cart 3 no total"
+        );
+        assert_eq!(
+            strikes_question("cart", ""),
+            "cart failed its Show path three times: no finding is open"
+        );
+    }
+
+    #[test]
+    fn only_the_newest_strikes_answer_walk_again_walks_again() {
+        let q = |answers: &[(&str, Option<&str>)]| {
+            let rows: Vec<String> = answers
+                .iter()
+                .map(|(body, a)| {
+                    let a = a.map_or("null".to_string(), |a| format!("{a:?}"));
+                    format!(r#"{{"body":{body:?},"answer":{a}}}"#)
+                })
+                .collect();
+            format!(r#"{{"questions":[{}]}}"#, rows.join(","))
+        };
+        let asked = strikes_question("cart", "");
+        assert!(walk_again(&q(&[(&asked, Some("Walk again"))]), "cart"));
+        assert!(!walk_again(&q(&[(&asked, Some("leave paused"))]), "cart"));
+        assert!(!walk_again(&q(&[(&asked, None)]), "cart"));
+        assert!(!walk_again(&q(&[(&asked, Some("walk again"))]), "home"));
+        // mem lists the newest first: a pending question outranks an old answer.
+        assert!(!walk_again(
+            &q(&[(&asked, None), (&asked, Some("walk again"))]),
+            "cart"
+        ));
+        assert!(!walk_again("not json", "cart"));
     }
 }
