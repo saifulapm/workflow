@@ -66,6 +66,27 @@ printf '{"name":"n","scripts":{"test":"echo \\"Error: no test specified\\" && ex
 run workflow verify
 is "$RC" 2 'node project with the npm placeholder test script: no verifier, exit 2'
 
+# The lockfile names the package manager: npm's alone means npm runs the
+# scripts, and verify installs nothing either way.
+new_repo node-npm
+printf '{"name":"n","scripts":{"test":"touch test-ran","lint":"touch lint-ran"}}\n' >package.json
+printf '{"lockfileVersion":3}\n' >package-lock.json
+run workflow verify
+is "$RC" 0 'npm project with a test script: exits 0'
+like "$OUT" 'verify node: npm run test' 'npm project: package-lock.json makes npm the runner'
+like "$OUT" 'verify node-lint: npm run lint' 'npm project: every script goes through npm run'
+unlike "$OUT" 'pnpm' 'npm project: pnpm is never named'
+truthy "$([ -f test-ran ] && printf 0 || printf 1)" 'npm project: the test script really ran'
+is "$([ -f pnpm-lock.yaml ] && printf yes || printf no)" no 'npm project: no pnpm lockfile is written'
+
+new_repo node-both-locks
+printf '{"name":"n","scripts":{"test":"exit 0"}}\n' >package.json
+printf '{"lockfileVersion":3}\n' >package-lock.json
+printf "lockfileVersion: '9.0'\n" >pnpm-lock.yaml
+run workflow verify
+is "$RC" 0 'both lockfiles: exits 0'
+like "$OUT" 'verify node: pnpm run test' 'both lockfiles: pnpm-lock.yaml keeps pnpm'
+
 new_repo rust
 printf '[package]\nname = "probe"\nversion = "0.0.0"\nedition = "2021"\n' >Cargo.toml
 mkdir -p src

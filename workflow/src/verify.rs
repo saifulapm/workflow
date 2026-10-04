@@ -183,20 +183,29 @@ pub fn detect_verifiers(root: &Path, project: Option<&Project>) -> Vec<Verifier>
         declared_php = true;
     }
     if root.join("package.json").is_file() {
+        // The lockfile names the package manager. Running npm's project under
+        // pnpm resolves dependencies its lockfile never pinned; pnpm stays the
+        // default when there is no lockfile or both.
+        let npm =
+            root.join("package-lock.json").is_file() && !root.join("pnpm-lock.yaml").is_file();
+        let run = if npm { "npm run" } else { "pnpm" };
         if node_script(root, "test") {
-            add("node", "pnpm run test".into());
+            add(
+                "node",
+                format!("{} test", if npm { "npm run" } else { "pnpm run" }),
+            );
         }
         if node_script(root, "lint") {
-            add("node-lint", "pnpm lint".into());
+            add("node-lint", format!("{run} lint"));
         }
         if node_script(root, "typecheck") {
-            add("node-typecheck", "pnpm typecheck".into());
+            add("node-typecheck", format!("{run} typecheck"));
         }
         if let Some(f) = ["fmt:check", "format:check"]
             .into_iter()
             .find(|s| node_script(root, s))
         {
-            add("node-format", format!("pnpm {f}"));
+            add("node-format", format!("{run} {f}"));
         }
     }
     if let Some(f) = first_file(root, &["justfile", "Justfile", ".justfile", "JUSTFILE"])
@@ -584,6 +593,46 @@ mod tests {
             std::fs::write(&f, body).unwrap();
             assert_eq!(has_test_target(&f), want, "{body:?}");
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_node_lockfile_picks_the_package_manager() {
+        let dir = std::env::temp_dir().join(format!("wf-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"scripts":{"test":"x","lint":"x","typecheck":"x","fmt:check":"x"}}"#,
+        )
+        .unwrap();
+        let cmds = |dir: &Path| -> Vec<String> {
+            detect_verifiers(dir, None)
+                .into_iter()
+                .map(|v| v.cmd)
+                .collect()
+        };
+
+        assert_eq!(
+            cmds(&dir),
+            [
+                "pnpm run test",
+                "pnpm lint",
+                "pnpm typecheck",
+                "pnpm fmt:check"
+            ]
+        );
+        std::fs::write(dir.join("package-lock.json"), "{}").unwrap();
+        assert_eq!(
+            cmds(&dir),
+            [
+                "npm run test",
+                "npm run lint",
+                "npm run typecheck",
+                "npm run fmt:check"
+            ]
+        );
+        std::fs::write(dir.join("pnpm-lock.yaml"), "").unwrap();
+        assert_eq!(cmds(&dir)[0], "pnpm run test");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
