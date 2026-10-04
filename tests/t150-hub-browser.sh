@@ -82,3 +82,6 @@ like "$url" '^http://127\.0\.0\.1:[0-9]+/$' 'shot names the sandbox it took'
 is "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url")" 000 'whose hub is gone once shot returns'
 is "$(pgrep -f -- "$T_TMP/tmp" | tr '\n' ' ')" "" 'with no process left running from its directory'
 is "$(ls -A "$T_TMP/tmp")" "" 'and the directory empty'
+sessions=$(env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME \
+	HOME="$real_home" playwright-cli list 2>/dev/null)
+unlike "$sessions" 'hub-sandbox-' 'and no browser session of its own'

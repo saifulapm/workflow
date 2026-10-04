@@ -28,8 +28,6 @@ lock=$short_tmp/hub-browser.lock
 shot() {
 	local path=$1 out=$2 url
 	case $out in /*) ;; *) out=$PWD/$out ;; esac
-	exec 9>"$lock"
-	flock 9
 	shot_tmp=$(mktemp -d "${TMPDIR:-/tmp}/hub-shot.XXXXXX")
 	session=hub-sandbox-$$
 	bash "$0" >"$shot_tmp/out" &
@@ -48,6 +46,8 @@ shot() {
 		return 1
 	fi
 	head -n 1 "$shot_tmp/out"
+	exec 9>"$lock"
+	flock 9
 	pw open "${url%/}$path"
 	pw resize 390 844
 	pw screenshot --filename "$out"
