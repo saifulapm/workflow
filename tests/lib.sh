@@ -98,6 +98,13 @@ t_init() {
 	# mem write, not about reinstalling rust inside every test.
 	export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
 	export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+	# mise too, and for a second reason: it reads a config.toml in any ancestor
+	# of the cwd. With TMPDIR under the real HOME the scratch repos sit below
+	# ~/.config/mise, and once HOME moves that file is no longer the global
+	# config but an untrusted project one, so every shimmed node, npm and pnpm
+	# refuses to start.
+	export MISE_CONFIG_DIR="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}"
+	export MISE_DATA_DIR="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}"
 
 	export HOME="$T_TMP/home"
 	export XDG_DATA_HOME="$HOME/.local/share"
