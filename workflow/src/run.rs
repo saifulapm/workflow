@@ -1201,6 +1201,17 @@ impl Run {
             self.fail_task(task, "the live plan no longer holds this task");
             return;
         };
+        // What is filed already, so the gate counts only what this attempt
+        // files: an earlier attempt's capture shows an earlier branch. A
+        // continuation or a nudge keeps the attempt, and the list with it.
+        if t.show.is_some() {
+            write_field(
+                &self.dir,
+                task,
+                "evidence_seen",
+                &memcli::evidence_ids(task).join("\n"),
+            );
+        }
         // The pane the last attempt had, still on the backend's books: amx
         // parks an idle one and takes its time releasing it, and the fresh
         // session minted two seconds later came up in a pane the park had
@@ -1328,6 +1339,24 @@ impl Run {
 
     // ------------------------------------------------------------ merge gate
 
+    /// Whether mem holds an evidence item for `task` that was not there when
+    /// the task last went out. mem keys evidence by the bare id.
+    fn shown(&self, task: &str) -> bool {
+        let seen = self.field(task, "evidence_seen");
+        let seen: Vec<&str> = seen.lines().map(str::trim).collect();
+        memcli::evidence_ids(task)
+            .iter()
+            .any(|id| !seen.contains(&id.as_str()))
+    }
+
+    /// What the gate says to a Show task with nothing filed since its
+    /// dispatch, and what the next brief carries as the attempt before.
+    fn show_refusal(&self, task: &str) -> String {
+        format!(
+            "no Show evidence since its dispatch -- capture it and file it: mem evidence add --task {task} <file> --note \"<what it shows>\""
+        )
+    }
+
     /// Serialized, one task at a time, and in this order: ownership, then the
     /// words, then rebase onto the integration branch, and only then verify --
     /// verifying before the rebase lets a semantic conflict land green
@@ -1356,12 +1385,13 @@ impl Run {
             return Ok(Merge::Nothing);
         }
 
-        let patterns = ownership::split_patterns(
-            self.task_now(task)
-                .and_then(|t| t.files)
-                .as_deref()
-                .unwrap_or(""),
-        );
+        let now = self.task_now(task);
+        if now.as_ref().is_some_and(|t| t.show.is_some()) && !self.shown(task) {
+            return Err(self.show_refusal(task));
+        }
+
+        let patterns =
+            ownership::split_patterns(now.and_then(|t| t.files).as_deref().unwrap_or(""));
         // Anchored on the integration branch, not the run's base: what this
         // task owns is what it wrote, never what a sibling merged while it
         // worked.
@@ -2138,6 +2168,15 @@ impl Run {
                     "run {}: {task} was already satisfied, nothing to merge",
                     self.plan.plan_id
                 ));
+            }
+            // A worker that did the work and filed nothing is told the command
+            // once, the way a silent death gets its one more try; a second
+            // refusal is a gate failure like any other.
+            Err(why)
+                if why == self.show_refusal(task) && self.field(task, "show_asked").is_empty() =>
+            {
+                write_field(&self.dir, task, "show_asked", "1");
+                self.once_more(task, &why, &why);
             }
             Err(why) => self.fail_task(task, &why),
         }

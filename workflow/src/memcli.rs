@@ -197,6 +197,27 @@ pub fn questions_for(tag: &str) -> Option<Vec<Question>> {
     )
 }
 
+#[derive(Debug, Deserialize)]
+struct EvidenceItem {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EvidenceList {
+    items: Vec<EvidenceItem>,
+}
+
+/// The ids of every evidence item filed under `task`, newest first. Ids, not
+/// dates: mem dates an item by the day, so only an id can tell an item filed
+/// after a dispatch from one filed before it. Empty when mem cannot answer,
+/// which the merge gate reads as no evidence.
+pub fn evidence_ids(task: &str) -> Vec<String> {
+    capture(&["evidence", "list", "--task", task, "--json"])
+        .and_then(|(_, out)| serde_json::from_str::<EvidenceList>(&out).ok())
+        .map(|l| l.items.into_iter().map(|i| i.id).collect())
+        .unwrap_or_default()
+}
+
 pub fn answer(id: &str, text: &str) -> bool {
     silent(&["answer", id, text])
 }

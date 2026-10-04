@@ -320,7 +320,8 @@ pub fn text(
     }
     let show = match task.show.as_deref() {
         Some(show) => format!(
-            "Show: {show}\n\nCapture the Show: evidence as written and attach it with `mem evidence add` before `ready`.\n\n"
+            "Show: {show}\n\nCapture it as written, a `playwright-cli screenshot`, a `tmux capture-pane -p` or a transcript holding the command, its output and its exit code, and file it before `ready`: `mem evidence add --task {id} <file> --note \"<what it shows>\"`. Only evidence filed in this session counts.\n\n",
+            id = task.id
         ),
         None => String::new(),
     };
@@ -664,7 +665,9 @@ mod tests {
     /// new paragraph is a cost every worker pays. It rose from 2,900 when
     /// the brief became nine sections carrying the Done, Verify and Show
     /// lines on their own, a timebox and the standing rules, which is meant.
-    const CEILING: usize = 3950;
+    /// It rose from 3,950 when a Show task's brief named the evidence command
+    /// and the three captures, since the gate refuses a task without them.
+    const CEILING: usize = 4100;
 
     /// The `## ` headings of a brief, in order, without the marks.
     fn headings(body: &str) -> Vec<&str> {
@@ -805,6 +808,11 @@ mod tests {
             "Show: the cart page with the fixture basket",
             "`workflow verify`",
             "`workflow verify --gate` runs after merge",
+            "`mem evidence add --task t1 <file> --note \"<what it shows>\"`",
+            "`playwright-cli screenshot`",
+            "`tmux capture-pane -p`",
+            "a transcript holding the command, its output and its exit code",
+            "Only evidence filed in this session counts",
         ] {
             assert!(verify.contains(needle), "VERIFY lost {needle}: {verify}");
         }
