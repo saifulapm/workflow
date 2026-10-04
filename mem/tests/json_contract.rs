@@ -451,6 +451,69 @@ fn an_empty_filtered_read_still_answers_with_a_document() {
 }
 
 #[test]
+fn projects_carry_the_summary_a_project_page_reads() {
+    let (w, repo) = populated("json-contract-projects");
+    let row = |w: &World| {
+        let out = validate("projects.json", &mem(w, &repo, &["projects", "--json"]));
+        out["projects"][0].clone()
+    };
+
+    // Nothing but the plan yet: every other field is null, zero or false.
+    let p = row(&w);
+    assert!(p["runner"].is_null(), "{p}");
+    assert!(p["paused"].is_null(), "{p}");
+    assert!(p["roadmap_status"].is_null(), "{p}");
+    assert!(p["milestone"].is_null(), "{p}");
+    assert_eq!(p["milestones_done"], 0);
+    assert_eq!(p["milestones_total"], 0);
+    assert_eq!(p["plan_slug"], "migrate");
+    assert_eq!(p["plan_ticked"], 0);
+    assert_eq!(p["plan_total"], 1);
+    assert!(p["last_activity"].as_str().unwrap().ends_with('Z'), "{p}");
+    assert_eq!(p["has_brief"], false);
+    assert_eq!(p["has_research"], false);
+    assert_eq!(p["has_research_summary"], false);
+    assert_eq!(p["has_spec"], false);
+
+    let roadmap = w.dir.join("roadmap.md");
+    std::fs::write(
+        &roadmap,
+        "# roadmap: thing\n\n- [ ] m1-auth Sign-in\n- [ ] m2-billing Billing\n",
+    )
+    .unwrap();
+    let set = |args: &[&str]| assert_eq!(code(&mem(&w, &repo, args)), 0, "{args:?}");
+    set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
+    set(&["roadmap", "--status", "draft"]);
+    set(&["brief", "--set", "a shop that sells one thing"]);
+    set(&["project", "set", "runner", "mini"]);
+    set(&["project", "set", "paused", "mini 2026-10-05"]);
+    let id = mem::project::Registry::load(&w.store()).projects[0]
+        .id
+        .clone();
+    let wiki = w.store().wiki_dir(&id);
+    std::fs::create_dir_all(&wiki).unwrap();
+    std::fs::write(wiki.join("research-competitors.md"), "# Competitors\n").unwrap();
+    std::fs::write(wiki.join("spec.md"), "# Spec\n").unwrap();
+
+    let p = row(&w);
+    assert_eq!(p["runner"], "mini");
+    assert_eq!(p["paused"], "mini 2026-10-05");
+    assert_eq!(p["roadmap_status"], "draft");
+    assert_eq!(p["milestone"], "m1-auth");
+    assert_eq!(p["milestones_done"], 0);
+    assert_eq!(p["milestones_total"], 2);
+    assert_eq!(p["has_brief"], true);
+    assert_eq!(p["has_research"], true);
+    assert_eq!(p["has_research_summary"], false);
+    assert_eq!(p["has_spec"], true);
+
+    set(&["roadmap", "--tick", "m1-auth", "--force"]);
+    let p = row(&w);
+    assert_eq!(p["milestone"], "m2-billing");
+    assert_eq!(p["milestones_done"], 1);
+}
+
+#[test]
 fn every_schema_is_covered_by_this_test() {
     // A schema nobody validates is a document, not a contract.
     let mut files: BTreeSet<String> = std::fs::read_dir(schema_dir())

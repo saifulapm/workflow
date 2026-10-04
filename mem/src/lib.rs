@@ -97,9 +97,15 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             }
             // No query and a kind: the kind, newest first, the way `mem log
             // --kind` lists it, so a kind can be listed without inventing a query.
-            (None, Some(kind)) => {
-                verbs::log(&app, None, *limit, None, Some(kind), r#type.as_deref())
-            }
+            (None, Some(kind)) => verbs::log(
+                &app,
+                None,
+                *limit,
+                None,
+                Some(kind),
+                r#type.as_deref(),
+                true,
+            ),
             (None, None) => Err(exit::usage(
                 "search takes a query, or --kind <kind> to list that kind newest first",
             )),
@@ -175,6 +181,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             since.as_deref(),
             kind.as_deref(),
             r#type.as_deref(),
+            false,
         ),
         cli::Command::Handoff {
             set,
@@ -254,6 +261,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 session_id,
             } => records::evidence_add(&with_session(app, session_id), task, file, note),
             cli::EvidenceCommand::List { task } => records::evidence_list(&app, task.as_deref()),
+            cli::EvidenceCommand::Cat { id } => records::evidence_cat(&app, id),
         },
         cli::Command::Finding { command } => match command {
             cli::FindingCommand::Add {

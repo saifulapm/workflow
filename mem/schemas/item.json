@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mem item",
-  "description": "One indexed item, as every read verb reports it. `score` is present only on search hits; `body` only where the verb reads the file (show, handoff, questions --wait).",
+  "description": "One indexed item, as every read verb reports it. `score` is present only on search hits; `body` only where the verb reads the file (show, handoff, questions --wait, finding list, search --kind).",
   "type": "object",
   "required": [
     "id",
@@ -21,7 +21,9 @@
     "answers",
     "audience",
     "task",
-    "path"
+    "path",
+    "by",
+    "replaces"
   ],
   "properties": {
     "id": {

@@ -387,6 +387,8 @@ pub enum EvidenceCommand {
         #[arg(long)]
         task: Option<String>,
     },
+    /// Write the file an evidence item or a finding names to stdout, as stored.
+    Cat { id: String },
 }
 
 #[derive(Subcommand, Debug)]

@@ -12,7 +12,7 @@
       "items": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "project",
-        "description": "One registered project.",
+        "description": "One registered project, with the summary a project page reads: run keys from project.toml, counts from roadmap.md and plan.md, which wiki pages exist, and the newest item's time.",
         "type": "object",
         "required": [
           "id",
@@ -22,7 +22,21 @@
           "created",
           "items",
           "current",
-          "checkouts"
+          "checkouts",
+          "runner",
+          "paused",
+          "roadmap_status",
+          "milestone",
+          "milestones_done",
+          "milestones_total",
+          "plan_slug",
+          "plan_ticked",
+          "plan_total",
+          "last_activity",
+          "has_brief",
+          "has_research",
+          "has_research_summary",
+          "has_spec"
         ],
         "properties": {
           "id": {
@@ -57,6 +71,66 @@
             "items": {
               "type": "string"
             }
+          },
+          "runner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paused": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roadmap_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "milestone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "milestones_done": {
+            "type": "integer"
+          },
+          "milestones_total": {
+            "type": "integer"
+          },
+          "plan_slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan_ticked": {
+            "type": "integer"
+          },
+          "plan_total": {
+            "type": "integer"
+          },
+          "last_activity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_brief": {
+            "type": "boolean"
+          },
+          "has_research": {
+            "type": "boolean"
+          },
+          "has_research_summary": {
+            "type": "boolean"
+          },
+          "has_spec": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

@@ -139,7 +139,7 @@ pub fn search_verb(
     if app.json {
         println!(
             "{}",
-            serde_json::to_string(&json!({ "hits": hits_json(&hits) }))?
+            serde_json::to_string(&json!({ "hits": hits_json(&hits, kind.is_some()) }))?
         );
     } else {
         for hit in &hits {
@@ -155,11 +155,16 @@ pub fn search_verb(
     Ok(exit::OK)
 }
 
-fn hits_json(hits: &[Hit]) -> Vec<serde_json::Value> {
+/// A search narrowed to one kind is a listing a page renders whole, so its
+/// item rows carry their text; a page section has its snippet instead.
+fn hits_json(hits: &[Hit], bodies: bool) -> Vec<serde_json::Value> {
     hits.iter()
         .map(|h| {
             let mut v = row_json(&h.row);
             v["score"] = json!((h.score * 100.0).round() / 100.0);
+            if bodies && h.row.kind != crate::index::WIKI_KIND {
+                v["body"] = json!(read_body(&h.row));
+            }
             if let Some(heading) = &h.heading {
                 v["heading"] = json!(heading);
                 v["snippet"] = json!(h.snippet);
@@ -170,7 +175,11 @@ fn hits_json(hits: &[Hit]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// `by` and `replaces` are read from the item's file: the index keeps neither,
+/// and a reader of rulings wants both on the row.
 pub fn row_json(row: &Row) -> serde_json::Value {
+    let item = read_item(row);
+    let meta = item.as_ref().map(|i| &i.meta);
     json!({
         "id": row.id,
         "short_id": row.short_id,
@@ -189,6 +198,8 @@ pub fn row_json(row: &Row) -> serde_json::Value {
         "answers": row.answers,
         "audience": row.audience,
         "task": row.task,
+        "by": meta.and_then(|m| m.by.as_deref()),
+        "replaces": meta.and_then(|m| m.replaces.as_deref()),
         "path": row.path.to_string_lossy(),
     })
 }
@@ -282,7 +293,7 @@ pub fn projects(app: &App) -> Result<i32> {
                         None => root.to_string_lossy().to_string(),
                     })
                     .collect();
-                json!({
+                let mut row = json!({
                     "id": p.id,
                     "name": p.name,
                     "remote": p.remote,
@@ -291,7 +302,11 @@ pub fn projects(app: &App) -> Result<i32> {
                     "items": index.count_for_project(&p.id).unwrap_or(0),
                     "current": current == Some(p.id.as_str()),
                     "checkouts": checkouts,
-                })
+                });
+                for (key, value) in project_summary(app, &index, &p.id) {
+                    row[key] = value;
+                }
+                row
             })
             .collect();
         println!("{}", serde_json::to_string(&json!({ "projects": rows }))?);
@@ -317,6 +332,84 @@ pub fn projects(app: &App) -> Result<i32> {
         );
     }
     Ok(exit::OK)
+}
+
+/// What a project page shows of one project, from project.toml, the two
+/// singletons, the wiki directory and the index. No item file is opened: this
+/// runs for every project on every read of the project list.
+fn project_summary(
+    app: &App,
+    index: &crate::index::Index,
+    id: &str,
+) -> Vec<(&'static str, serde_json::Value)> {
+    let declared = |key| crate::project::declared(&app.store, id, key);
+    let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap_or_default();
+    let roadmap_text = read(app.store.roadmap_path(id));
+    let roadmap = checkboxes(&roadmap_text);
+    let plan_text = read(app.store.plan_path(id));
+    let plan = checkboxes(&plan_text);
+    let plan_slug = plan_text
+        .lines()
+        .next()
+        .and_then(|first| header_slug(first, "plan"));
+    let last_activity = index
+        .recent_filtered(None, None, Some(id), 1)
+        .ok()
+        .and_then(|rows| rows.into_iter().next())
+        .and_then(|row| jiff::Timestamp::from_second(row.modified_epoch).ok())
+        .map(|ts| ts.to_string());
+    let has_brief = index
+        .recent("brief", Some(id), 1)
+        .is_ok_and(|rows| !rows.is_empty());
+    let pages = app.store.wiki_pages(id);
+    let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
+    vec![
+        ("runner", json!(declared("runner"))),
+        ("paused", json!(declared("paused"))),
+        ("roadmap_status", json!(declared(ROADMAP.status_key))),
+        (
+            "milestone",
+            json!(roadmap.iter().find(|(_, done)| !done).map(|(slug, _)| slug)),
+        ),
+        (
+            "milestones_done",
+            json!(roadmap.iter().filter(|(_, done)| *done).count()),
+        ),
+        ("milestones_total", json!(roadmap.len())),
+        ("plan_slug", json!(plan_slug)),
+        (
+            "plan_ticked",
+            json!(plan.iter().filter(|(_, done)| *done).count()),
+        ),
+        ("plan_total", json!(plan.len())),
+        ("last_activity", json!(last_activity)),
+        ("has_brief", json!(has_brief)),
+        (
+            "has_research",
+            json!(has_page(|s| s.starts_with("research"))),
+        ),
+        (
+            "has_research_summary",
+            json!(has_page(|s| s == "research-summary")),
+        ),
+        ("has_spec", json!(has_page(|s| s == "spec"))),
+    ]
+}
+
+/// The `- [ ] <id>` and `- [x] <id>` lines of a plan or a roadmap, as the id
+/// and whether it is ticked, in order.
+fn checkboxes(text: &str) -> Vec<(&str, bool)> {
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim_start();
+            let (rest, done) = if let Some(rest) = l.strip_prefix("- [ ] ") {
+                (rest, false)
+            } else {
+                (l.strip_prefix("- [x] ").or(l.strip_prefix("- [X] "))?, true)
+            };
+            Some((rest.split_whitespace().next()?, done))
+        })
+        .collect()
 }
 
 /// `mem project current` — the sanctioned identity source for external tooling
@@ -683,6 +776,7 @@ fn report_written(
 }
 
 /// `mem log` — dual mode: positional text writes, no text reads (spec §7).
+/// `bodies` puts each row's text on its JSON, for `mem search --kind`.
 pub fn log(
     app: &App,
     text: Option<&str>,
@@ -690,6 +784,7 @@ pub fn log(
     since: Option<&str>,
     kind: Option<&str>,
     r#type: Option<&str>,
+    bodies: bool,
 ) -> Result<i32> {
     if let Some(text) = text {
         let written =
@@ -713,7 +808,16 @@ pub fn log(
     }
 
     if app.json {
-        let items: Vec<serde_json::Value> = rows.iter().map(row_json).collect();
+        let items: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|row| {
+                let mut v = row_json(row);
+                if bodies {
+                    v["body"] = json!(read_body(row));
+                }
+                v
+            })
+            .collect();
         println!("{}", serde_json::to_string(&json!({ "items": items }))?);
     } else {
         for row in &rows {

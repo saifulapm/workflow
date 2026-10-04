@@ -69,6 +69,49 @@ pub fn evidence_list(app: &App, task: Option<&str>) -> Result<i32> {
     list(app, &rows, print, to_json)
 }
 
+/// `mem evidence cat <id>`: the bytes of the file an evidence item or a
+/// finding names, so a reader gets them by id and never builds a store path.
+/// Every miss is exit 1 with nothing on stdout: the file is read whole before
+/// a byte is written.
+pub fn evidence_cat(app: &App, id: &str) -> Result<i32> {
+    let Some(id_ref) = IdRef::parse(id) else {
+        return Err(exit::not_found(format!("'{id}' is not an id")));
+    };
+    let index = app.read_index()?;
+    let mut rows = index.resolve_ref(&id_ref)?;
+    let row = match rows.len() {
+        0 => return Err(exit::not_found(format!("no item {id}"))),
+        1 => rows.remove(0),
+        _ => {
+            return Err(exit::coded(
+                exit::AMBIGUOUS,
+                format!("'{id}' is ambiguous — use the full ULID"),
+            ));
+        }
+    };
+    let item = crate::store::read_item(&row.path)?;
+    if !matches!(item.meta.kind, Kind::Evidence | Kind::Finding) {
+        return Err(exit::not_found(format!(
+            "#{} is a {}, which names no file",
+            row.short_id, item.meta.kind
+        )));
+    }
+    // `file` is written as a plain relative path; anything else could reach
+    // outside the project's directory.
+    let file = item.meta.file.as_deref().map(Path::new).filter(|f| {
+        f.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    });
+    let (Some(file), Some(project)) = (file, row.project_id.as_deref()) else {
+        return Err(exit::not_found(format!("#{} names no file", row.short_id)));
+    };
+    let path = app.store.project_dir(project).join(file);
+    let bytes =
+        std::fs::read(&path).map_err(|e| exit::not_found(format!("{}: {e}", path.display())))?;
+    std::io::Write::write_all(&mut std::io::stdout().lock(), &bytes)?;
+    Ok(exit::OK)
+}
+
 /// `mem finding add --milestone <slug> --step <n> "<text>" [--evidence <file>]`.
 /// The evidence file is filed by milestone, where a task's evidence is filed
 /// by task: a finding belongs to a milestone's step, not to a task.
@@ -120,6 +163,7 @@ pub fn finding_list(app: &App, open: bool) -> Result<i32> {
         v["status"] = json!(item.meta.status);
         v["fixed_by"] = json!(item.meta.fixed_by);
         v["file"] = json!(item.meta.file);
+        v["body"] = json!(item.body_str());
         v
     };
     list(app, &rows, print, to_json)

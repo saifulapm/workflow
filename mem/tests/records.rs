@@ -73,6 +73,20 @@ fn decide_records_a_ruling_with_by_and_replaces() {
         item.meta.replaces.as_deref(),
         Some("sessions live in the database")
     );
+    // The row itself carries both, and the whole text, so a reader needs no
+    // second call per ruling.
+    assert_eq!(first["by"], "saiful");
+    assert_eq!(first["replaces"], "sessions live in the database");
+    assert_eq!(
+        first["body"].as_str().unwrap().trim(),
+        "sessions live in redis"
+    );
+    let second = rows
+        .iter()
+        .find(|r| r["title"] == "use sqlite for the index")
+        .expect("the second ruling is listed");
+    assert_eq!(second["by"], "agent");
+    assert!(second["replaces"].is_null(), "{second}");
 
     let out = mem(&w, &repo, &["decide", "no author", "--by", "someone"]);
     assert_eq!(code(&out), 2, "{}", stderr(&out));
@@ -259,6 +273,10 @@ fn finding_close_records_the_fix_and_drops_it_from_the_open_list() {
     let items = json(&out)["items"].as_array().unwrap().clone();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["status"], "open");
+    assert_eq!(
+        items[0]["body"].as_str().unwrap().trim(),
+        "the search box loses focus"
+    );
 
     // Only a finding closes.
     let idea = json(&mem(&w, &repo, &["idea", "dark mode", "--json"]));
@@ -274,6 +292,123 @@ fn finding_close_records_the_fix_and_drops_it_from_the_open_list() {
         ],
     );
     assert_ne!(code(&out), 0);
+}
+
+/// The refusal shape every `evidence cat` miss shares: exit 1, one line on
+/// stderr and not a byte on stdout, so a caller streaming stdout as an image
+/// never sends half of one.
+#[track_caller]
+fn refused(out: &std::process::Output) {
+    assert_eq!(code(out), 1, "{}", stderr(out));
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+    assert_eq!(stderr(out).lines().count(), 1, "{}", stderr(out));
+}
+
+#[test]
+fn evidence_cat_prints_the_stored_file_and_refuses_what_has_none() {
+    let w = World::new("records-evidence-cat");
+    let repo = w.repo("thing", None);
+    // A PNG signature and bytes that are not UTF-8: the copy must be raw.
+    let png: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe\x00";
+    let shot = w.dir.join("checkout.png");
+    std::fs::write(&shot, png).unwrap();
+    let out = mem(
+        &w,
+        &repo,
+        &[
+            "evidence",
+            "add",
+            "--task",
+            "pay",
+            shot.to_str().unwrap(),
+            "--note",
+            "the pay button renders",
+            "--json",
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let evidence = json(&out);
+    let out = mem(
+        &w,
+        &repo,
+        &["evidence", "cat", evidence["short_id"].as_str().unwrap()],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(out.stdout, png);
+
+    let photo = w.dir.join("broken.png");
+    std::fs::write(&photo, b"finding photo").unwrap();
+    let out = mem(
+        &w,
+        &repo,
+        &[
+            "finding",
+            "add",
+            "--milestone",
+            "m3",
+            "--step",
+            "2",
+            "the price shows twice",
+            "--evidence",
+            photo.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let finding = json(&out);
+    let out = mem(
+        &w,
+        &repo,
+        &["evidence", "cat", finding["id"].as_str().unwrap()],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(out.stdout, b"finding photo");
+
+    let ruling = json(&mem(
+        &w,
+        &repo,
+        &[
+            "decide",
+            "sessions live in redis",
+            "--by",
+            "saiful",
+            "--json",
+        ],
+    ));
+    refused(&mem(
+        &w,
+        &repo,
+        &["evidence", "cat", ruling["short_id"].as_str().unwrap()],
+    ));
+
+    let bare = json(&mem(
+        &w,
+        &repo,
+        &[
+            "finding",
+            "add",
+            "--milestone",
+            "m3",
+            "--step",
+            "4",
+            "the search box loses focus",
+            "--json",
+        ],
+    ));
+    refused(&mem(
+        &w,
+        &repo,
+        &["evidence", "cat", bare["short_id"].as_str().unwrap()],
+    ));
+
+    std::fs::remove_file(project_dir(&evidence).join("evidence/pay/checkout.png")).unwrap();
+    refused(&mem(
+        &w,
+        &repo,
+        &["evidence", "cat", evidence["short_id"].as_str().unwrap()],
+    ));
+
+    refused(&mem(&w, &repo, &["evidence", "cat", "ZZZZZZZZ"]));
 }
 
 #[test]
