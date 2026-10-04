@@ -155,7 +155,12 @@ Three sizes of work, three moves:
   can be given more reasoning: `mem project set effort max` starts every
   worker with `--effort max`, `unset` takes it back, and `WORKFLOW_EFFORT`
   does it for one run (empty means no flag). A task merges when the gate's
-  suite is green on integration. The session that owns the run waits with
+  suite is green on integration, and a task with a `Show:` line also needs
+  evidence its worker filed since its dispatch,
+  `mem evidence add --task <id> <file> --note "<what it shows>"`, keyed by
+  the bare task id; an older capture does not count. The run ticks each task in its plan as it lands
+  and leaves a milestone's roadmap tick to serve, which ticks it after its
+  Show path walk passed. The session that owns the run waits with
   `workflow wait`, which returns the moment a question, a failure or the
   end needs it.
 
@@ -193,12 +198,35 @@ that is next.
 milestone. Every few seconds it looks at each project with a checkout here
 whose runner is this machine, nobody, or a machine whose claim went stale. A
 project with no run going gets a pickup lead, plan-check, then one child
-`workflow run` in its checkout. When every task lands, serve ticks the
-milestone, writes the status and handoff lines and a hygiene count, and goes
-on to the next one; with none left the roadmap goes to `maintenance`. A run
-that stops short leaves the project `waiting` until its plan, an answer or a
-request in its run dir changes. A worker's question and a task's second
-failure get a lead session of their own.
+`workflow run` in its checkout. When every task lands, a `dogfood` session
+walks the milestone's Show path, its steps cut at the commas of the `Show:`
+line, and only a passed walk ticks the milestone, writes the status and
+handoff lines and a hygiene count, and goes on to the next one; with none
+left the roadmap goes to `maintenance`. A `workflow run` started by hand
+lands the plan and leaves the tick to serve, which walks that milestone on
+its next tick. A run that stops short leaves the project `waiting` until its
+plan, an answer or a request in its run dir changes. A worker's question, a
+task's second failure and a failed walk get a lead session of their own.
+
+The walk files a finding for every step it could not pass. A lead turns
+the findings into fix tasks on the milestone's plan, the run lands them,
+and the next walk covers only the steps that failed. The third failed walk
+of a milestone pauses the project and asks you whether to walk again;
+`workflow resume` does the same. In maintenance serve takes the oldest open
+finding, has a lead store a fix plan for it, runs the plan and walks the
+step again. A fix plan of three tasks or fewer that touches no path
+`workflow review-needed` calls risky runs unasked; a bigger one waits for
+your `run` or `hold`.
+
+    workflow dogfood [<project>] [--milestone <slug>]
+
+asks for a landed milestone to be walked again, the roadmap's last ticked
+one unless named, at the checkout's head. It is a question for the engine,
+and serve on the project's `dogfood-machine` (`mem project set
+dogfood-machine <host>`, else this machine) walks it and answers with the
+result. Milestone end asks that machine the same way when it is another
+one. The engine never fetches or pushes: when the commit is not on that
+machine the walk files a finding saying so, and the push is yours.
 
     workflow doctor --fix                        # writes the workflow.service unit
     systemctl --user enable --now workflow.service
@@ -220,8 +248,9 @@ Three controls:
 
 `workflow status` opens with the serve line, and `workflow status --json`
 carries the same fields: `stage` (pickup, execution, waiting, blocked-plan,
-paused, maintenance; where serve has written none, execution for a live run
-and idle otherwise), `milestone` (slug and its place in the roadmap),
+paused, dogfood, needs-plan, maintenance; where serve has written none,
+execution for a live run and idle otherwise; needs-plan is a milestone with
+no stored plan, which nothing starts until the plan skill stores one), `milestone` (slug and its place in the roadmap),
 `parked` (task and reason), `findings` (open findings), `runner` (the machine
 that holds the project) and `paused`.
 

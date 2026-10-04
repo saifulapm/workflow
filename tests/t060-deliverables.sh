@@ -179,6 +179,16 @@ like "$gate" 'core\.excludesFile' 'and the global ignore list'
 like "$gate" 'workflow doctor' 'and that doctor checks the list'
 like "$gate" 'sentences' 'and that plans carry decisions as sentences'
 like "$gate" 'workflow hygiene' 'and the verb that runs the check'
+
+# Serve ticks a milestone only after its Show path walk, and a Show task
+# merges only on evidence filed since its dispatch, so the README says how
+# a walk is asked for, what serve is doing meanwhile, and how evidence is filed.
+serve=$(sed -n '/^## Serve/,/^## Reading/p' "$WF_ROOT/README.md")
+like "$serve" 'workflow dogfood \[<project>\] \[--milestone <slug>\]' 'the README names the request verb'
+like "$serve" 'dogfood-machine' 'and the key that says where the walk runs'
+like "$serve" 'needs-plan' 'and the stage of a milestone with no stored plan'
+like "$serve" 'paused, dogfood' 'and the stage of a walk'
+like "$(cat "$WF_ROOT/README.md")" 'mem evidence add --task <id>' 'the README says how Show evidence is filed'
 # A verb the README names has to be one the binary answers to.
 for sub in $(grep -oE '`workflow [a-z][a-z-]*|^ +workflow [a-z][a-z-]*' "$WF_ROOT/README.md" |
 	sed -E 's/^[` ]*workflow //' | sort -u); do
