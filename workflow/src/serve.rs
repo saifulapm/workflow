@@ -494,7 +494,7 @@ impl Serve {
         // read holds the project: a run would land the milestone again and
         // start a second walk, and a lead would work beside the walk.
         if p.dir().join(WALK).exists() {
-            self.stage(p, "dogfood");
+            self.settle_walk(p);
             return;
         }
         self.settle_leads(p);
@@ -904,6 +904,7 @@ impl Serve {
             started: sys::now(),
             steps: w.steps.iter().map(|(n, _)| *n).collect(),
             session,
+            outcome: None,
         };
         let _ = std::fs::write(p.dir().join(WALK), walk.line());
         self.stage(p, "dogfood");
@@ -912,6 +913,56 @@ impl Serve {
             p.name,
             walk.steps.len()
         ));
+    }
+
+    /// The walk file read: a live session under its forty-five minutes holds
+    /// the stage `dogfood`; one past them is stopped and skipped; an ended
+    /// one is read off its report. A pass lands the milestone and drops the
+    /// walk file; anything else keeps it with the outcome and holds the
+    /// milestone `waiting`, its run line written once.
+    fn settle_walk(&mut self, p: &ServeProject) {
+        let dir = p.dir();
+        let Some(mut walk) =
+            WalkState::read(&std::fs::read_to_string(dir.join(WALK)).unwrap_or_default())
+        else {
+            self.stage(p, "dogfood");
+            return;
+        };
+        if walk.outcome.is_some() {
+            self.stage(p, "waiting");
+            return;
+        }
+        let h = Handle {
+            session: walk.session.clone(),
+            pidfile: dir.join("dogfood.pid"),
+            worktree: p.root.clone(),
+        };
+        let age = sys::now() - walk.started;
+        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+        if live && age < dogfood::WALK_S {
+            self.stage(p, "dogfood");
+            return;
+        }
+        let slug = walk.slug.clone();
+        let outcome = if live {
+            self.backend.stop(&h, 10);
+            WalkOutcome::Skipped(dogfood::WALK_TIMED_OUT.into())
+        } else {
+            let status = dir.join(format!("{slug}.dogfood.status"));
+            dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
+        };
+        let said = mem_on(&self.mem, &p.name, &["finding", "list", "--open", "--json"]);
+        let open = dogfood::finding_steps(&said.out, &slug);
+        let outcome = dogfood::held_to_findings(outcome, &open);
+        self.log(p, &dogfood::walk_line(&slug, &outcome, open.len()));
+        if outcome == WalkOutcome::Pass {
+            let _ = std::fs::remove_file(dir.join(WALK));
+            self.land_milestone(p, &slug);
+            return;
+        }
+        walk.outcome = Some(outcome);
+        let _ = std::fs::write(dir.join(WALK), walk.line());
+        self.stage(p, "waiting");
     }
 
     /// One page or section of a project's wiki; empty when it has none.

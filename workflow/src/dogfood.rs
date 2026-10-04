@@ -45,9 +45,10 @@ pub struct WalkBrief {
     pub findings: String,
 }
 
-/// The walk going on for a project: `<serve dir>/walk`, one line,
-/// `<slug> <walk> <started> <session> <step>...`. The steps come last
-/// because there are as many as the walk covers.
+/// The walk going on for a project: `<serve dir>/walk`. Its first line is
+/// `<slug> <walk> <started> <session> <step>...`, the steps last because
+/// there are as many as the walk covers; a walk that was read and held the
+/// milestone has its outcome's [`WalkOutcome::words`] on a second line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalkState {
     pub slug: String,
@@ -57,24 +58,35 @@ pub struct WalkState {
     /// The step numbers this walk covers.
     pub steps: Vec<usize>,
     pub session: String,
+    /// What the walk came to, once serve has read it.
+    pub outcome: Option<WalkOutcome>,
 }
 
 impl WalkState {
     pub fn read(text: &str) -> Option<WalkState> {
-        let mut parts = text.split_whitespace();
+        let mut lines = text.lines();
+        let mut parts = lines.next()?.split_whitespace();
         Some(WalkState {
             slug: parts.next()?.to_string(),
             walk: parts.next()?.parse().ok()?,
             started: parts.next()?.parse().ok()?,
             session: parts.next()?.to_string(),
             steps: parts.map(|n| n.parse().ok()).collect::<Option<_>>()?,
+            outcome: lines
+                .next()
+                .filter(|l| !l.trim().is_empty())
+                .map(outcome_of),
         })
     }
 
     pub fn line(&self) -> String {
         let steps: String = self.steps.iter().map(|n| format!(" {n}")).collect();
+        let outcome = match &self.outcome {
+            Some(o) => format!("{}\n", o.words()),
+            None => String::new(),
+        };
         format!(
-            "{} {} {} {}{steps}\n",
+            "{} {} {} {}{steps}\n{outcome}",
             self.slug, self.walk, self.started, self.session
         )
     }
@@ -146,6 +158,42 @@ fn verdict(text: &str) -> Option<WalkOutcome> {
     (!steps.is_empty()).then_some(WalkOutcome::Failed(steps))
 }
 
+/// How long a walk's session may run. One alive past it is stopped and the
+/// walk skipped, so a hung browser does not hold the project; the bound is a
+/// first guess.
+pub const WALK_S: i64 = 45 * 60;
+
+/// Why a walk stopped at [`WALK_S`] is skipped.
+pub const WALK_TIMED_OUT: &str = "the session ran forty-five minutes";
+
+/// The steps of a milestone's open findings, one per finding, off
+/// `mem finding list --open --json`; none when the listing does not parse.
+pub fn finding_steps(listing: &str, slug: &str) -> Vec<String> {
+    let items = serde_json::from_str::<serde_json::Value>(listing)
+        .ok()
+        .and_then(|v| v.get("items").and_then(|i| i.as_array()).cloned())
+        .unwrap_or_default();
+    items
+        .iter()
+        .filter(|i| i.get("milestone").and_then(|m| m.as_str()) == Some(slug))
+        .filter_map(|i| i.get("step").and_then(|s| s.as_str()))
+        .map(|s| s.trim().to_string())
+        .collect()
+}
+
+/// A failed walk held to its findings: a failed step with no open finding
+/// skips the walk, since a step the session could not drive is a finding,
+/// never a bare claim. `open` is [`finding_steps`] for the milestone.
+pub fn held_to_findings(o: WalkOutcome, open: &[String]) -> WalkOutcome {
+    let WalkOutcome::Failed(steps) = &o else {
+        return o;
+    };
+    match steps.iter().find(|n| !open.contains(&n.to_string())) {
+        Some(n) => WalkOutcome::Skipped(format!("step {n} failed with no finding")),
+        None => o,
+    }
+}
+
 /// The `mem log --type run` line for a walk. A failed walk is counted by
 /// `open`, the milestone's open findings, since those are what a lead turns
 /// into fix tasks.
@@ -186,9 +234,19 @@ mod tests {
             started: 1791000000,
             steps: vec![2, 3],
             session: "wf-dogfood-a3k9".into(),
+            outcome: None,
         };
         assert_eq!(walk.line(), "cart 2 1791000000 wf-dogfood-a3k9 2 3\n");
-        assert_eq!(WalkState::read(&walk.line()), Some(walk));
+        assert_eq!(WalkState::read(&walk.line()), Some(walk.clone()));
+        let read = WalkState {
+            outcome: Some(WalkOutcome::Skipped("no report".into())),
+            ..walk
+        };
+        assert_eq!(
+            read.line(),
+            "cart 2 1791000000 wf-dogfood-a3k9 2 3\nskipped no report\n"
+        );
+        assert_eq!(WalkState::read(&read.line()), Some(read));
         assert_eq!(WalkState::read("cart 1 1791000000"), None);
         assert_eq!(WalkState::read("cart 1 1791000000 s x"), None);
     }
@@ -279,5 +337,25 @@ mod tests {
             ),
             "dogfood cart: skipped step 2 failed with no finding"
         );
+    }
+
+    #[test]
+    fn a_failed_step_counts_only_with_an_open_finding_of_the_milestone() {
+        let listing = r#"{"items":[
+            {"milestone":"cart","step":"2","file":"evidence/cart/a.png"},
+            {"milestone":"home","step":"3","file":null}
+        ]}"#;
+        let open = finding_steps(listing, "cart");
+        assert_eq!(open, ["2"]);
+        assert!(finding_steps("not json", "cart").is_empty());
+        assert_eq!(
+            held_to_findings(WalkOutcome::Failed(vec![2]), &open),
+            WalkOutcome::Failed(vec![2])
+        );
+        assert_eq!(
+            held_to_findings(WalkOutcome::Failed(vec![2, 3]), &open),
+            WalkOutcome::Skipped("step 3 failed with no finding".into())
+        );
+        assert_eq!(held_to_findings(WalkOutcome::Pass, &[]), WalkOutcome::Pass);
     }
 }
