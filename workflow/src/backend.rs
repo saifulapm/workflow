@@ -155,21 +155,10 @@ pub trait WorkerBackend {
     fn question(&self, _h: &Handle) -> String {
         String::new()
     }
-    /// The last [`RECENT_LINES`] lines the worker printed, read while it may
-    /// still be running: where a provider's usage-limit message shows up on
-    /// a session that is up and saying nothing else.
-    fn recent_output(&self, _h: &Handle) -> String {
-        String::new()
-    }
-}
-
-/// How much of a worker's output [`WorkerBackend::recent_output`] reads.
-pub const RECENT_LINES: usize = 40;
-
-/// The last `n` lines of `text`.
-pub(crate) fn tail(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    lines[lines.len().saturating_sub(n)..].join("\n")
+    /// [`limit_notice_in`] over the session's transcript: the harness's own
+    /// word that a request was refused, the one sign of a limit no test
+    /// output or worker can forge.
+    fn limit_notice(&self, h: &Handle) -> Option<String>;
 }
 
 /// `Dispatch.env` as the JSON object `--settings` takes. `env` is the key
@@ -259,8 +248,9 @@ pub(crate) fn backend_for() -> Box<dyn WorkerBackend> {
 /// session stopped -- a usage limit, a rate limit, an outage, a session that
 /// was never logged in. Case aside, since nothing pins how a provider
 /// capitalises its own message.
-const PROVIDER_LIMIT_MARKERS: [&str; 6] = [
+const PROVIDER_LIMIT_MARKERS: [&str; 7] = [
     "reached your",
+    "hit your",
     "limit reached",
     "usage limit",
     "rate limit",
@@ -269,9 +259,10 @@ const PROVIDER_LIMIT_MARKERS: [&str; 6] = [
 ];
 
 /// The marker, if any, on which a session's words read as a provider's own
-/// refusal rather than anything the worker did. A worker's pane is read this
-/// way to tell the session a limit paused from one that ended with nothing
-/// to show (`Run::paused`).
+/// refusal rather than anything the worker did. Asked only of words the
+/// worker did not write -- the harness's error entry, a question drawn on
+/// the pane -- since a test run printing the same phrase is no limit
+/// (`Run::rate_limited`).
 pub fn provider_limit(text: &str) -> Option<&'static str> {
     text.lines().find_map(|line| {
         let lower = line.to_ascii_lowercase();
@@ -322,29 +313,55 @@ pub(crate) fn last_words_in(transcript: &str) -> String {
         if message.get("role").and_then(|r| r.as_str()) != Some("assistant") {
             continue;
         }
-        let Some(content) = message.get("content") else {
-            continue;
-        };
-        let text = match content {
-            serde_json::Value::String(s) => s.trim().to_string(),
-            serde_json::Value::Array(items) => items
-                .iter()
-                .filter_map(|b| {
-                    (b.get("type").and_then(|t| t.as_str()) == Some("text"))
-                        .then(|| b.get("text").and_then(|t| t.as_str()))
-                        .flatten()
-                })
-                .collect::<Vec<_>>()
-                .join("")
-                .trim()
-                .to_string(),
-            _ => String::new(),
-        };
+        let text = text_of(message);
         if !text.is_empty() {
             last = text;
         }
     }
     last
+}
+
+/// A message's text blocks joined, or its content when that is one string.
+fn text_of(message: &serde_json::Value) -> String {
+    match message.get("content") {
+        Some(serde_json::Value::String(s)) => s.trim().to_string(),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|b| {
+                (b.get("type").and_then(|t| t.as_str()) == Some("text"))
+                    .then(|| b.get("text").and_then(|t| t.as_str()))
+                    .flatten()
+            })
+            .collect::<Vec<_>>()
+            .join("")
+            .trim()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+/// The harness's own account of why the session stopped: when the newest
+/// turn in the transcript is the entry it writes in the model's place on an
+/// API error -- `"model":"<synthetic>"`, `"isApiErrorMessage":true` -- that
+/// entry's text with its `error` word first, `rate_limit: You've hit your
+/// weekly limit`. A turn is a line carrying a `message`; the bookkeeping the
+/// harness appends after the entry (a turn's duration, the last prompt)
+/// carries none and leaves it newest. A worker's own words never count here,
+/// whatever they say: a model ran to write them.
+pub fn limit_notice_in(transcript: &str) -> Option<String> {
+    let newest = transcript
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|v| v.get("message").is_some())?;
+    let message = &newest["message"];
+    if newest.get("isApiErrorMessage").and_then(|f| f.as_bool()) != Some(true)
+        || message.get("model").and_then(|m| m.as_str()) != Some("<synthetic>")
+    {
+        return None;
+    }
+    let error = newest.get("error").and_then(|e| e.as_str()).unwrap_or("");
+    Some(format!("{error}: {}", text_of(message)))
 }
 
 impl WorkerBackend for ProcessBackend {
@@ -442,14 +459,9 @@ impl WorkerBackend for ProcessBackend {
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
 
-    /// The tail of the err file the template redirects into, which sits
-    /// beside the pidfile.
-    fn recent_output(&self, h: &Handle) -> String {
-        let err = h.pidfile.with_extension("err");
-        tail(
-            &std::fs::read_to_string(err).unwrap_or_default(),
-            RECENT_LINES,
-        )
+    fn limit_notice(&self, h: &Handle) -> Option<String> {
+        let path = paths::transcript_path(&h.worktree, &h.session);
+        limit_notice_in(&std::fs::read_to_string(path).unwrap_or_default())
     }
 }
 
@@ -621,9 +633,62 @@ not json at all
             Some("rate limit")
         );
         assert_eq!(
+            provider_limit("You've hit your weekly limit · resets Aug 17, 10am"),
+            Some("hit your")
+        );
+        assert_eq!(
             provider_limit("Committed the service.\nready"),
             None,
             "a worker's own words name no provider"
         );
+    }
+
+    /// The entry the harness writes in the worker's place when the provider
+    /// refuses a request: no model ran, so the model is `<synthetic>`.
+    const LIMIT_ENTRY: &str = r#"{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your weekly limit · resets Aug 17, 10am"}]},"isApiErrorMessage":true,"error":"rate_limit"}"#;
+
+    #[test]
+    fn a_limit_notice_is_the_harnesss_own_error_entry_with_its_error_word_first() {
+        let notice =
+            Some("rate_limit: You've hit your weekly limit · resets Aug 17, 10am".to_string());
+        assert_eq!(
+            limit_notice_in(&format!("{WORDS_TRANSCRIPT}{LIMIT_ENTRY}\n")),
+            notice
+        );
+        // The harness keeps writing its own bookkeeping after the entry; none
+        // of it is a turn, so none of it hides the notice.
+        assert_eq!(
+            limit_notice_in(&format!(
+                "{LIMIT_ENTRY}\n{{\"type\":\"system\",\"subtype\":\"turn_duration\"}}\n{{\"type\":\"last-prompt\"}}\n"
+            )),
+            notice
+        );
+        // Any other error the harness reports is a notice too; whether it is
+        // a limit is the caller's reading.
+        assert_eq!(
+            limit_notice_in(
+                r#"{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Connection lost mid-response."}]},"isApiErrorMessage":true,"error":"server_error"}"#
+            ),
+            Some("server_error: API Error: Connection lost mid-response.".to_string())
+        );
+    }
+
+    #[test]
+    fn a_limit_phrase_the_worker_wrote_is_no_limit_notice() {
+        // A session that went on after the limit: the newest turn is not it.
+        assert_eq!(
+            limit_notice_in(&format!(
+                "{LIMIT_ENTRY}\n{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"go on\"}}}}\n"
+            )),
+            None
+        );
+        // The worker's own words naming a limit, from a model that ran.
+        assert_eq!(limit_notice_in(WORDS_TRANSCRIPT), None);
+        // The error flag without the synthetic model is not the harness's.
+        assert_eq!(
+            limit_notice_in(&LIMIT_ENTRY.replace("<synthetic>", "claude-opus-5")),
+            None
+        );
+        assert_eq!(limit_notice_in(""), None);
     }
 }

@@ -4,8 +4,10 @@
 # `started` in its own status file, and the pane names the limit that
 # stopped it. It is waiting on the usage window, not stalled: no deadline
 # stops it, and it merges once the window opens and it goes on (friction
-# #17SPEY7R). So does a worker still running and saying nothing but the
-# limit in its output. A session that died with the machine looks the same in every
+# #17SPEY7R). So does a worker still running whose transcript ends in the
+# harness's own rate-limit entry. A worker whose output only prints a limit
+# phrase -- a test run, say -- is not limited: it is stalled at its deadline
+# and stopped. A session that died with the machine looks the same in every
 # way but one -- amx's evidence says the pane is gone -- and that one is
 # collected at once (frictions #B3391C6H, #QT1PDNRK). So is a turn that
 # ended with nothing written and no limit named: nothing is coming back for
@@ -20,12 +22,14 @@ mkdir -p "$AMX_DIR"
 # A dispatch writes `started` to the task's status file and goes idle at
 # once -- paused, not working, with the pane still up and the provider's own
 # line drawn on it -- unless the agent's name says it is one that should run
-# to `ready`. With $WF_TMP/live there it stays working and the limit is in
-# its logs instead. With $WF_TMP/no-limit there the pane says nothing, which
-# is a turn that simply ended. Where to do the work when it wakes goes in
-# `<name>.job`. Status answers out of the phase, the evidence and the
-# question last written for the name; logs out of `<name>.logs`; stop is
-# recorded.
+# to `ready`. With $WF_TMP/live there it stays working and the limit is the
+# newest entry in its session's transcript instead, the one `<name>.session`
+# names. With $WF_TMP/logs-only there it stays working and only its logs
+# print a limit phrase. With $WF_TMP/no-limit there the pane says nothing,
+# which is a turn that simply ended. Where to do the work when it wakes goes
+# in `<name>.job`. Status answers out of the phase, the evidence, the session
+# and the question last written for the name; logs out of `<name>.logs`;
+# stop is recorded.
 write_exec "$T_TMP/fake-amx" <<'AMX'
 #!/bin/sh
 verb=$1
@@ -66,6 +70,17 @@ new | sub)
 		if [ -f "$WF_TMP/live" ]; then
 			printf 'working hooks\n' >"$AMX_DIR/$name.state"
 			printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
+			printf 'conv-%s\n' "$name" >"$AMX_DIR/$name.session"
+			projects="$HOME/.claude/projects/$(printf %s "$dir" | sed 's/[^A-Za-z0-9]/-/g')"
+			mkdir -p "$projects"
+			cat >"$projects/conv-$name.jsonl" <<-'JSONL'
+				{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Running the suite"}]}}
+				{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your weekly limit"}]},"isApiErrorMessage":true,"error":"rate_limit"}
+				{"type":"system","subtype":"turn_duration"}
+			JSONL
+		elif [ -f "$WF_TMP/logs-only" ]; then
+			printf 'working hooks\n' >"$AMX_DIR/$name.state"
+			printf '%s started\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
 			printf 'Running the suite\nAPI Error: Rate limit reached for requests\n' >"$AMX_DIR/$name.logs"
 		elif [ -f "$WF_TMP/no-limit" ]; then
 			# A turn the provider cut off: nothing in the status file at
@@ -85,8 +100,10 @@ status)
 	[ -f "$AMX_DIR/$1.question" ] && question=$(printf '{"text":"%s","options":[]}' "$(cat "$AMX_DIR/$1.question")")
 	words=null
 	[ -f "$AMX_DIR/$1.words" ] && words=$(printf '"%s"' "$(cat "$AMX_DIR/$1.words")")
-	printf '{"id":"%s","state":"%s","evidence":"%s","last_event":0,"session":"","question":%s,"last_words":%s}\n' \
-		"$1" "$state" "$evidence" "$question" "$words"
+	session=
+	[ -f "$AMX_DIR/$1.session" ] && session=$(cat "$AMX_DIR/$1.session")
+	printf '{"id":"%s","state":"%s","evidence":"%s","last_event":0,"session":"%s","question":%s,"last_words":%s}\n' \
+		"$1" "$state" "$evidence" "$session" "$question" "$words"
 	;;
 logs)
 	[ -f "$AMX_DIR/$1.logs" ] && cat "$AMX_DIR/$1.logs"
@@ -138,7 +155,7 @@ wake() {
 		git -c core.hooksPath=/dev/null commit -qm 'Add a file'
 	)
 	printf '%s ready\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$status"
-	rm -f "$AMX_DIR/$name.question" "$AMX_DIR/$name.logs"
+	rm -f "$AMX_DIR/$name.question" "$AMX_DIR/$name.logs" "$AMX_DIR/$name.session"
 	printf 'idle hooks\n' >"$AMX_DIR/$name.state"
 }
 
@@ -188,10 +205,11 @@ is "$(grep -c 'waiting for the usage window' "$rundir/events")" 1 \
 	'the wait is one event, however many polls it spanned'
 is "$(grep -c 'waiting for the usage window' "$T_TMP/run.log")" 1 'and one line'
 
-## ------------------------------- a live worker with the limit in its logs
+## ------------------------ a live worker the harness says the limit stopped
 
-# Still running, as amx reads it, and silent past the deadline but for the
-# provider's line in its output: waiting, not stalled.
+# Still running, as amx reads it, and silent past the deadline, with the
+# harness's rate-limit entry the newest turn in its transcript: waiting, not
+# stalled.
 : >"$T_TMP/amx-stops"
 : >"$WF_TMP/live"
 cat >"$T_TMP/live.md" <<'PLAN'
@@ -214,13 +232,45 @@ for _ in $(seq 1 50); do
 done
 sleep 9
 is "$(cat "$ldir/t1.state" 2>/dev/null)" dispatched \
-	'alive and silent past the deadline with a limit line in its logs is not stalled'
+	'alive and silent past the deadline with a rate-limit entry in its transcript is not stalled'
 is "$(stops)" 0 'and is never stopped'
 wake "$ldir"
 wait "$runpid"
 is "$?" 0 'the run merges once it goes on'
 is "$(cat "$ldir/t1.state")" merged 'and the worker merged'
 rm -f "$WF_TMP/live"
+
+## ------------------------------ a limit phrase in its logs and nowhere else
+
+# The same live worker, but the limit line is only something its output
+# printed and the harness wrote no entry for it: a test that greps for the
+# phrase looks exactly like this. It is stalled at its deadline and stopped,
+# dispatched once more since it committed nothing, and failed the second time.
+: >"$T_TMP/amx-stops"
+: >"$WF_TMP/logs-only"
+cat >"$T_TMP/logs-only.md" <<'PLAN'
+# plan: logs-only
+
+- [ ] t1 A worker whose output prints a limit phrase
+      Files: app/Five.php
+      Verify: true
+- [ ] t2 A second task so the run is worth having
+      Files: app/Six.php
+      Verify: true
+PLAN
+odir="$XDG_STATE_HOME/workflow/runs/app/logs-only"
+run env WORKFLOW_MAX_WORKERS=2 WORKFLOW_DEADLINE_MIN=0.05 timeout 120 \
+	workflow run --plan-file "$T_TMP/logs-only.md"
+is "$RC" 1 'the run ends with the task failed rather than waiting'
+is "$(cat "$odir/t1.state")" failed 'the task is failed'
+like "$(cat "$odir/t1.failed")" 'stalled' 'as a stall'
+is "$(printf '%s\n' "$OUT" | grep -c 'task t1: nothing has moved for')" 2 \
+	'reaped at the deadline of each dispatch'
+[ "$(stops)" -ge 2 ]
+truthy "$?" 'its session stopped each time'
+is "$(cat "$odir/t1.dispatches")" 2 'after one more dispatch'
+is "$(cat "$odir/t2.state")" merged 'the worker beside it merged as usual'
+rm -f "$WF_TMP/logs-only"
 
 ## --------------------------------------- adopt_stale keeps it as adopted
 

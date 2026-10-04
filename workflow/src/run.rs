@@ -876,13 +876,17 @@ impl Run {
     }
 
     /// Alive, or its pane standing, with no final word past `started` or
-    /// `progress`, and the provider's own limit named on the pane's
-    /// question, in the worker's last words or in its recent output. The
-    /// usage limit holds a session without ending it and the session comes
-    /// back by itself when the window opens, so such a worker is waiting,
-    /// not stalled, whatever the deadline says. Holding commits changes
-    /// nothing: a worker with work on its branch hits the window as readily
-    /// as one without.
+    /// `progress`, and a limit named by something the worker did not write:
+    /// the harness's own error entry newest in its transcript, read as a
+    /// limit on its `rate_limit` word or a provider's phrase, or the
+    /// provider's phrase on a question drawn on the pane. The worker's last
+    /// words and its output are not asked: a test run that prints a limit
+    /// phrase would hold a stuck worker past every deadline. The usage limit
+    /// holds a session without ending it and the session comes back by
+    /// itself when the window opens, so such a worker is waiting, not
+    /// stalled, whatever the deadline says. Holding commits changes nothing:
+    /// a worker with work on its branch hits the window as readily as one
+    /// without.
     ///
     /// While it holds, `<task>.limited_at` is stamped, and [`stalled`] counts
     /// the deadline from it: a worker that speaks again gets a whole clock.
@@ -906,9 +910,9 @@ impl Run {
         if !self.backend.alive(&h) && !self.backend.listed(&h) {
             return false;
         }
-        let limited = backend::provider_limit(&self.backend.question(&h)).is_some()
-            || backend::provider_limit(&self.backend.last_words(&h)).is_some()
-            || backend::provider_limit(&self.backend.recent_output(&h)).is_some();
+        let limited = self.backend.limit_notice(&h).is_some_and(|notice| {
+            notice.starts_with("rate_limit:") || backend::provider_limit(&notice).is_some()
+        }) || backend::provider_limit(&self.backend.question(&h)).is_some();
         if limited {
             write_field(&self.dir, task, "limited_at", &sys::now().to_string());
         }

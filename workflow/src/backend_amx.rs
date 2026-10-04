@@ -18,8 +18,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::backend::{
-    Dispatch, Handle, Outcome, RECENT_LINES, WorkerBackend, last_context_tokens, last_words_in,
-    tail,
+    Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in, limit_notice_in,
 };
 use crate::{gitcmd, paths, sys};
 
@@ -543,15 +542,6 @@ impl WorkerBackend for AmxBackend {
         status(&h.session).is_some_and(|s| s.evidence == "parked")
     }
 
-    /// The last lines of `amx logs <id>`: the pane's own output, where a
-    /// usage-limit message lands on a session that is still up.
-    fn recent_output(&self, h: &Handle) -> String {
-        if h.session.is_empty() {
-            return String::new();
-        }
-        tail(&amx(&["logs", &h.session]).0, RECENT_LINES)
-    }
-
     /// Called only once the worker is no longer alive. amx leaves no result
     /// document, so the phase it ended in is the whole of the backend's word;
     /// the status file and the merge gate judge the work.
@@ -579,6 +569,17 @@ impl WorkerBackend for AmxBackend {
         }
         let path = paths::transcript_path(&h.worktree, &s.session);
         last_words_in(&std::fs::read_to_string(path).unwrap_or_default())
+    }
+
+    /// Off the transcript of the conversation `amx status --json` names, as
+    /// `last_words` reads it; amx ships no reading of its own for this.
+    fn limit_notice(&self, h: &Handle) -> Option<String> {
+        let s = status(&h.session)?;
+        if s.session.is_empty() {
+            return None;
+        }
+        let path = paths::transcript_path(&h.worktree, &s.session);
+        limit_notice_in(&std::fs::read_to_string(path).ok()?)
     }
 
     /// `amx logs <id>`: once the pane is gone this is the recorded answer, or
@@ -1145,6 +1146,28 @@ exit 0
     }
 
     #[test]
+    fn a_limit_notice_comes_off_the_conversation_amx_names() {
+        let fake = Fake::new("notice", "idle");
+        let h = fake.handle("wf-t1-a3k9");
+        assert_eq!(AmxBackend.limit_notice(&h), None);
+
+        fake.transcript(
+            SESSION,
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"<synthetic>\",\
+             \"role\":\"assistant\",\"content\":[{\"type\":\"text\",\
+             \"text\":\"You've hit your weekly limit\"}]},\
+             \"isApiErrorMessage\":true,\"error\":\"rate_limit\"}\n",
+        );
+        assert_eq!(
+            AmxBackend.limit_notice(&h).as_deref(),
+            Some("rate_limit: You've hit your weekly limit")
+        );
+        // A record with no session names no conversation to read.
+        fake.nameless();
+        assert_eq!(AmxBackend.limit_notice(&h), None);
+    }
+
+    #[test]
     fn liveness_and_the_record_are_read_off_amx_status() {
         let fake = Fake::new("alive", "working");
         assert!(AmxBackend.alive(&fake.handle("wf-t1-a3k9")));
@@ -1328,18 +1351,6 @@ exit 0
             .filter(|l| ["resume", "send"].contains(l))
             .collect();
         assert_eq!(calls, ["resume", "send"]);
-    }
-
-    #[test]
-    fn the_recent_output_is_the_last_forty_lines_amx_logs_prints() {
-        let fake = Fake::new("recent", "working");
-        let lines: Vec<String> = (1..=60).map(|n| format!("line {n}")).collect();
-        std::fs::write(fake.dir.join("logs"), lines.join("\n") + "\n").unwrap();
-        let out = AmxBackend.recent_output(&fake.handle("wf-t1-a3k9"));
-        assert_eq!(out.lines().count(), 40);
-        assert_eq!(out.lines().next(), Some("line 21"));
-        assert_eq!(out.lines().last(), Some("line 60"));
-        assert_eq!(AmxBackend.recent_output(&fake.handle("")), "");
     }
 
     #[test]
