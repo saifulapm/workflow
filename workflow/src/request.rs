@@ -5,6 +5,11 @@
 //! its answer.
 //!
 //!   dogfood <slug> at <commit> on <machine>[ steps <n>,<n>]
+//!
+//! Research is asked for the same way, a first look or a round after a
+//! roadmap:
+//!
+//!   research[ round] on <machine>
 
 use std::process::{Command, Stdio};
 
@@ -105,16 +110,17 @@ fn last_ticked(roadmap: &str) -> Option<String> {
 
 /// A request one of the orchestrator's pending questions makes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Asked {
+pub struct Asked<R = WalkRequest> {
     pub project: String,
     /// The question's id, which its answer names.
     pub question: String,
-    pub request: WalkRequest,
+    pub request: R,
 }
 
-/// The requests addressed to `machine` in `mem questions --pending
-/// --all-projects --for orchestrator --json`; none when it does not parse.
-pub fn requests_for(listing: &str, machine: &str) -> Vec<Asked> {
+/// The questions in `mem questions --pending --all-projects --for
+/// orchestrator --json` that `parse` reads as a request; none when the
+/// listing does not parse.
+fn asked<R>(listing: &str, parse: fn(&str) -> Option<R>) -> Vec<Asked<R>> {
     let rows = serde_json::from_str::<serde_json::Value>(listing)
         .ok()
         .and_then(|v| v.get("questions").and_then(|q| q.as_array()).cloned())
@@ -124,9 +130,54 @@ pub fn requests_for(listing: &str, machine: &str) -> Vec<Asked> {
             Some(Asked {
                 project: q.get("project")?.as_str()?.to_string(),
                 question: q.get("id")?.as_str()?.to_string(),
-                request: parse_request(q.get("body")?.as_str()?)?,
+                request: parse(q.get("body")?.as_str()?)?,
             })
         })
+        .collect()
+}
+
+/// The walk requests addressed to `machine` in the pending listing.
+pub fn requests_for(listing: &str, machine: &str) -> Vec<Asked> {
+    asked(listing, parse_request)
+        .into_iter()
+        .filter(|a| a.request.machine == machine)
+        .collect()
+}
+
+/// Research asked for on a machine: a first look at the brief, or a round
+/// that looks at what changed since the last roadmap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchRequest {
+    pub round: bool,
+    pub machine: String,
+}
+
+/// The question's text, which [`parse_research`] reads back.
+pub fn research_text(r: &ResearchRequest) -> String {
+    match r.round {
+        true => format!("research round on {}", r.machine),
+        false => format!("research on {}", r.machine),
+    }
+}
+
+/// A question's body as a research request, or `None` for any other question.
+pub fn parse_research(body: &str) -> Option<ResearchRequest> {
+    let words: Vec<&str> = body.split_whitespace().collect();
+    let (round, machine) = match words.as_slice() {
+        ["research", "on", machine] => (false, machine),
+        ["research", "round", "on", machine] => (true, machine),
+        _ => return None,
+    };
+    Some(ResearchRequest {
+        round,
+        machine: machine.to_string(),
+    })
+}
+
+/// The research requests addressed to `machine` in the pending listing.
+pub fn research_for(listing: &str, machine: &str) -> Vec<Asked<ResearchRequest>> {
+    asked(listing, parse_research)
+        .into_iter()
         .filter(|a| a.request.machine == machine)
         .collect()
 }
@@ -172,6 +223,34 @@ impl AskedWalk {
 
     pub fn line(&self) -> String {
         format!("{}\n{}", self.question, self.walk.line())
+    }
+}
+
+/// Research going for a request: `<serve dir>/research`, the question's
+/// id, the session and when it started, so a session the backend has no
+/// record of yet reads as launching rather than ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskedResearch {
+    pub question: String,
+    pub session: String,
+    pub started: i64,
+}
+
+impl AskedResearch {
+    pub fn read(text: &str) -> Option<AskedResearch> {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let [question, session, started] = words.as_slice() else {
+            return None;
+        };
+        Some(AskedResearch {
+            question: question.to_string(),
+            session: session.to_string(),
+            started: started.parse().ok()?,
+        })
+    }
+
+    pub fn line(&self) -> String {
+        format!("{} {} {}\n", self.question, self.session, self.started)
     }
 }
 
@@ -359,6 +438,69 @@ mod tests {
         assert_eq!(AskedWalk::read(&asked.line()), Some(asked));
         assert_eq!(AskedWalk::read("01A"), None);
         assert_eq!(AskedWalk::read("\nm1 1 1791000000 s 2\n"), None);
+    }
+
+    #[test]
+    fn a_research_request_names_its_machine_and_whether_it_is_a_round() {
+        let first = ResearchRequest {
+            round: false,
+            machine: "mini".into(),
+        };
+        assert_eq!(research_text(&first), "research on mini");
+        assert_eq!(parse_research("research on mini"), Some(first));
+        let round = ResearchRequest {
+            round: true,
+            machine: "mini".into(),
+        };
+        assert_eq!(research_text(&round), "research round on mini");
+        assert_eq!(parse_research("research round on mini"), Some(round));
+        for body in [
+            "research",
+            "research on",
+            "research mini",
+            "research round mini",
+            "research on mini and more",
+            "research again on mini",
+            "dogfood m1 at abc on mini",
+            "finding #AB12CD34: research on mini",
+        ] {
+            assert_eq!(parse_research(body), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn serve_takes_only_the_research_addressed_to_its_machine() {
+        let listing = r#"{"questions":[
+            {"id":"01A","project":"app","body":"research on here"},
+            {"id":"01B","project":"old","body":"research round on here"},
+            {"id":"01C","project":"away","body":"research on mini"},
+            {"id":"01D","project":"app","body":"dogfood m1 at abc on here"}
+        ]}"#;
+        let got = research_for(listing, "here");
+        assert_eq!(
+            got.iter()
+                .map(|a| (a.project.as_str(), a.question.as_str(), a.request.round))
+                .collect::<Vec<_>>(),
+            [("app", "01A", false), ("old", "01B", true)]
+        );
+        assert_eq!(requests_for(listing, "here").len(), 1);
+        assert!(research_for("not json", "here").is_empty());
+    }
+
+    #[test]
+    fn serve_reads_research_going_back_as_it_was_written() {
+        let going = AskedResearch {
+            question: "01M43V5FDFECJZ1WDY2KTE0R8N".into(),
+            session: "wf-research-a3k9".into(),
+            started: 1791000000,
+        };
+        assert_eq!(
+            going.line(),
+            "01M43V5FDFECJZ1WDY2KTE0R8N wf-research-a3k9 1791000000\n"
+        );
+        assert_eq!(AskedResearch::read(&going.line()), Some(going));
+        assert_eq!(AskedResearch::read("01A wf-research-a3k9"), None);
+        assert_eq!(AskedResearch::read("01A wf-research-a3k9 soon"), None);
     }
 
     #[test]

@@ -20,7 +20,7 @@ use crate::dogfood::{self, NO_SHOW_PATH, OwnerFinding, WalkBrief, WalkOutcome, W
 use crate::gitcmd::{self, Git};
 use crate::maintain::{self, FixPhase, FixState};
 use crate::plan::{self, PlanKind};
-use crate::request::{self, Asked, AskedWalk, WalkRequest};
+use crate::request::{self, Asked, AskedResearch, AskedWalk, ResearchRequest, WalkRequest};
 use crate::{exit, memcli, ownership, paths, plancheck, run, sys, warn};
 
 /// Seconds between ticks when neither `--tick` nor `WORKFLOW_TICK_S` says.
@@ -61,6 +61,10 @@ const FIX_WALK: &str = "fix-walk";
 
 /// A walk asked for by hand that is going, an [`AskedWalk`].
 const ASKED: &str = "asked";
+
+/// Research asked for by hand that is going, an [`AskedResearch`]. Its
+/// session's brief, status and pid files share the name.
+const RESEARCH: &str = "research";
 
 /// The findings the loop leaves alone, one short id a line.
 const HELD: &str = "held";
@@ -1251,10 +1255,11 @@ impl Serve {
         false
     }
 
-    /// Walks asked for by hand. One going is read once its session has
-    /// ended; then each pending request addressed to this machine is taken
-    /// for a project with a checkout here and nothing going, whoever its
-    /// runner is. A requested walk ticks nothing and claims nothing.
+    /// Walks and research asked for by hand. One going is read once its
+    /// session has ended; then each pending request addressed to this
+    /// machine is taken for a project with a checkout here and nothing going,
+    /// whoever its runner is and whatever its roadmap says. A request ticks
+    /// nothing and claims nothing.
     fn requests(&mut self, here: &str) {
         let projects: Vec<ServeProject> = listing(&self.mem)
             .into_iter()
@@ -1262,6 +1267,9 @@ impl Serve {
             .collect();
         for p in projects.iter().filter(|p| p.dir().join(ASKED).exists()) {
             self.settle_asked(p);
+        }
+        for p in projects.iter().filter(|p| p.dir().join(RESEARCH).exists()) {
+            self.settle_research(p);
         }
         let pending = Command::new(&self.mem)
             .args(["questions", "--pending", "--all-projects"])
@@ -1278,14 +1286,20 @@ impl Serve {
                 _ => {}
             }
         }
+        for a in request::research_for(&pending, here) {
+            match projects.iter().find(|p| p.name == a.project) {
+                Some(p) if !self.going(p) => self.take_research(p, &a),
+                _ => {}
+            }
+        }
     }
 
-    /// Whether the project has a run, a walk, a fix, a requested walk or a
-    /// lead going. Read off its files alone, so asking reaps no child the
-    /// tick has yet to reap.
+    /// Whether the project has a run, a walk, a fix, a requested walk,
+    /// requested research or a lead going. Read off its files alone, so
+    /// asking reaps no child the tick has yet to reap.
     fn going(&self, p: &ServeProject) -> bool {
         let dir = p.dir();
-        ["child.pid", WALK, FIX, ASKED]
+        ["child.pid", WALK, FIX, ASKED, RESEARCH]
             .iter()
             .any(|f| dir.join(f).exists())
             || !self.leads(p).is_empty()
@@ -1398,6 +1412,60 @@ impl Serve {
         let outcome = dogfood::held_to_findings(outcome, &open);
         self.answer(p, &asked.question, &walk.slug, &outcome, open.len());
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// Research taken: one research session on the brief, or on what changed
+    /// since the last roadmap for a round. A session the backend refused is
+    /// answered skipped at once.
+    fn take_research(&mut self, p: &ServeProject, a: &Asked<ResearchRequest>) {
+        let _ = std::fs::create_dir_all(p.dir());
+        let body = brief::research(&p.name, a.request.round);
+        let Some(session) = self.start_session(p, RESEARCH, RESEARCH, RESEARCH, &body, Vec::new())
+        else {
+            self.answer_research(p, &a.question, "skipped the session did not start");
+            return;
+        };
+        let going = AskedResearch {
+            question: a.question.clone(),
+            session,
+            started: sys::now(),
+        };
+        let _ = std::fs::write(p.dir().join(RESEARCH), going.line());
+        warn(format!("serve {}: started the asked research", p.name));
+    }
+
+    /// Research read once its session has ended and answered `done`. It has
+    /// no outcome to read: what it found is in the wiki.
+    fn settle_research(&mut self, p: &ServeProject) {
+        let file = p.dir().join(RESEARCH);
+        let Some(going) = AskedResearch::read(&std::fs::read_to_string(&file).unwrap_or_default())
+        else {
+            let _ = std::fs::remove_file(&file);
+            return;
+        };
+        let h = Handle {
+            session: going.session.clone(),
+            pidfile: p.dir().join(format!("{RESEARCH}.pid")),
+            worktree: p.root.clone(),
+        };
+        let age = sys::now() - going.started;
+        if self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h)) {
+            return;
+        }
+        self.answer_research(p, &going.question, "done");
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// A research request answered, beside its run line.
+    fn answer_research(&self, p: &ServeProject, question: &str, words: &str) {
+        let said = mem_on(&self.mem, &p.name, &["answer", question, words]);
+        if !said.ok {
+            warn(format!(
+                "serve {}: cannot answer {question} -- {}",
+                p.name, said.err
+            ));
+        }
+        self.log(p, &format!("research {}: {words}", p.name));
     }
 
     /// A request answered with the walk's words, beside its run line.
