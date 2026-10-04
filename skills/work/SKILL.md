@@ -46,12 +46,18 @@ code.
 ## 3. Show
 
 When the task has a `Show:` line, capture the evidence exactly as written
-there and attach each file:
+there. A capture is one of three:
+`playwright-cli screenshot`, `tmux capture-pane -p`, or a transcript
+holding the command, its output and its exit code. Attach each file under
+the task id in the brief's GOAL, bare as the plan spells it:
 
     mem evidence add --task <id> <file> --note "<what it shows>"
 
-Done when every `Show:` item has an evidence entry whose note says what a
-reader sees in it.
+The merge gate counts only evidence filed in this session, so a capture an
+earlier attempt filed is taken again.
+
+Done when every `Show:` item has an evidence entry filed in this session
+whose note says what a reader sees in it.
 
 ## 4. Commit
 

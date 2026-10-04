@@ -30,6 +30,35 @@ like "$work_skill" 'workflow verify' 'work defers to verify'
 like "$work_skill" 'mem evidence add' 'work attaches the Show evidence'
 like "$(cat "$WF_ROOT/skills/lead/SKILL.md")" 'mem answer' 'lead answers a worker through mem'
 
+# The gate counts only evidence filed since the dispatch, keyed by the bare
+# task id, so the worker has to know both and which captures count.
+like "$work_skill" 'playwright-cli screenshot`, `tmux capture-pane -p`, or a transcript' \
+	'work names the three captures'
+like "$work_skill" 'the task id in the brief.s GOAL' 'and keys the evidence by the task id'
+like "$work_skill" 'counts only evidence filed in this session' 'and says an older capture does not count'
+# The engine cuts the steps and reads the walk's outcome off the last status
+# line, so the session walks what the brief numbers and reports in its words.
+dogfood_skill=$(cat "$WF_ROOT/skills/dogfood/SKILL.md")
+like "$dogfood_skill" 'The brief numbers the steps' 'dogfood takes its steps from the brief'
+like "$dogfood_skill" 'mem --project workflow wiki dogfood-playbooks#<name>' \
+	'and reads a linked playbook section from the workflow project'
+like "$dogfood_skill" 'no verify page' 'a missing verify page is written from what worked'
+like "$dogfood_skill" 'only the steps the brief names' 'a later walk takes only the named steps'
+like "$dogfood_skill" 'off the runner machine' 'a refused wiki write is skipped'
+like "$dogfood_skill" 'workflow report ready "failed <n> <n>"' 'and the last act reports the failed steps'
+# Inside a milestone the lead appends to the plan of record; in maintenance
+# there is none, so it stores one plan the engine runs under the limit.
+lead_skill=$(cat "$WF_ROOT/skills/lead/SKILL.md")
+like "$lead_skill" 'mem plan fix-<id> --stdin' 'lead stores one fix plan in maintenance'
+like "$lead_skill" 'three tasks or fewer' 'and names the limit it runs unasked under'
+like "$lead_skill" '"blocking finding #<id>: ' 'and the owner prefix that holds the milestone'
+like "$lead_skill" '"finding #<id>: ' 'and the one that lets it tick'
+# The walk after the landing is what closes a finding, so a fix ends on
+# its Show captured again rather than on a close of its own.
+fix_skill=$(cat "$WF_ROOT/skills/fix/SKILL.md")
+like "$fix_skill" 'its evidence file' 'fix opens from the finding and its evidence'
+like "$fix_skill" 'the engine closes the finding' 'and leaves the close to the engine'
+
 # The plan skill cuts the roadmap and every milestone plan in one sitting,
 # so it carries the verbs that check and store both, and the one approval.
 like "$plan_skill" 'walking skeleton' 'plan starts the roadmap with the walking skeleton'

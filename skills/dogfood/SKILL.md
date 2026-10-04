@@ -12,19 +12,26 @@ drive is a finding of class `undriveable`; a tick is only what you saw.
 
 ## 1. Launch
 
-Read the `verify` page's Launch, Doctor, Drive, Evidence and Cleanup
-sections (`mem wiki verify#launch`, and so on) and the milestone's Show path
-in `mem roadmap`. Number the Show path's steps from 1. Launch the product as
-Launch says, then run Doctor.
+The brief numbers the steps and carries the `verify` page's Launch, Doctor,
+Drive, Evidence and Cleanup sections and the playbook for the Surface. A
+section the playbook links to lives in the workflow project:
 
-A Doctor that fails is one finding with its output, and the walk ends there;
-go on to step 5:
+    mem --project workflow wiki dogfood-playbooks#<name>
+
+Launch the product as Launch says, then run Doctor. A project with no
+verify page is launched as its README says; keep what worked for step 4.
+
+A Doctor that fails is one finding on step 0 with its output, and the walk
+ends there; go on to step 5:
 
     mem finding add --milestone <slug> --step 0 "cannot launch: <what Doctor said>" --evidence doctor.txt
 
 Done when Doctor passes, or the cannot-launch finding is filed.
 
 ## 2. Walk the Show path
+
+A later walk takes only the steps the brief names, under their numbers on
+the whole Show path; the rest passed before.
 
 Take each step as a user would, on the real surface, with the tool Drive
 names: the browser through `playwright-cli`, a terminal through a tmux pane,
@@ -69,7 +76,13 @@ A section write refuses a heading the page lacks, so a new feature goes in
 through the whole page: `mem wiki verify > verify.md`, add the `## <feature>`
 section, `mem wiki verify --stdin --note "<feature>: first driven" < verify.md`.
 
-Done when every feature on the Show path has a current section on `verify`.
+A project with no verify page gets one here, written from what worked:
+Launch, Doctor, Drive, Evidence and Cleanup, then a section per feature.
+A wiki write refused off the runner machine is skipped; the findings and
+the report carry the walk.
+
+Done when every feature on the Show path has a current section on `verify`,
+or the write was refused off the runner machine.
 
 ## 5. Clean up
 
@@ -79,9 +92,16 @@ finding was filed; confirm that copy survived:
 
 Done when Cleanup has run and every finding you filed lists its file.
 
-## 6. Record
+## 6. Report
 
-    mem log "dogfood <slug>: <ticks>/<steps> steps passed; findings #<id>, #<id>"
+The last act is one of these, the failed step numbers after `failed`:
 
-Done when every step has a tick or a finding and the log line gives the
-count and every finding id.
+    workflow report ready "pass"
+    workflow report ready "failed <n> <n>"
+
+A failed step is one with a finding filed on it; a cannot-launch walk
+reports `failed 0`. The engine reads this line, logs the walk and closes the
+findings a later walk sees fixed.
+
+Done when the report is sent and every step it names failed has an open
+finding.

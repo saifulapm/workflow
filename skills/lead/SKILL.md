@@ -70,8 +70,8 @@ of defect appears twice, or a finding sits in auth, payment or data code:
     amx new --role review --name review-<slug> "<task ids> against spec#<section>"
     amx result review-<slug>
 
-Each finding, the review's included, becomes one fix task appended to the
-current plan:
+Each finding, the review's included, becomes one fix task. Inside a
+milestone, append each task to the plan of record:
 
     mem plan --add-task <<'EOF'
     - [ ] fix-<n> <what the fix makes true>
@@ -82,7 +82,24 @@ current plan:
           Done: <the finding's expected behaviour, checkable>
     EOF
 
-A finding of an owner kind is asked as in step 2 instead.
+In maintenance, when `mem roadmap` shows every milestone ticked, there is
+no plan of record, so the finding the brief names gets one plan of its own,
+its tasks in the same shape, `<id>` the finding's short id in lowercase:
+
+    workflow plan-check plan.md
+    mem plan fix-<id> --stdin < plan.md
+
+The engine runs it unasked at three tasks or fewer on no path
+`workflow review-needed` calls risky, and asks the owner first otherwise.
+
+A finding of an owner kind is asked as in step 2, the question opening with
+the finding it settles:
+
+    mem ask --for human "finding #<id>: <question>" --options "<a>,<b>" --recommend "<a>"
+    mem ask --for human "blocking finding #<id>: <question>" --options "<a>,<b>" --recommend "<a>"
+
+The first lets the milestone tick with the finding open; the second holds
+the milestone until the owner answers.
 
 Done when every open finding has a fix task or an owner question, and
 `workflow plan-check` exits 0.

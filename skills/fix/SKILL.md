@@ -8,6 +8,10 @@ description: Use to diagnose a finding or a twice-failed task: a tight loop that
 A fix starts as a diagnosis. Code changed before a loop shows red lands a
 fix that may never touch the cause.
 
+A fix for a finding opens from the finding and its evidence file:
+`mem finding list --open --json` gives its step, its text and the `file`
+the walk captured. That capture is the red the tight loop has to show.
+
 ## 1. Build the tight loop
 
 One command that shows red on the defect, runs in seconds, and gives the same
@@ -59,3 +63,16 @@ and what the test pins.
 
 Done when `git diff` holds only the fix and its test, and the commit body
 names the cause.
+
+## 7. Show it again
+
+A fix for a finding ends on its `Show:` step captured again, the way the
+walk captured it, and filed:
+
+    mem evidence add --task <id> <file> --note "<what it shows now>"
+
+The walk after the landing walks that step again, and on a pass
+the engine closes the finding.
+
+Done when the new capture is filed and shows the step the finding failed
+working.
