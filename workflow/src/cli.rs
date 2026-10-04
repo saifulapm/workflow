@@ -181,6 +181,24 @@ the question is answered. With no run live there is nothing to label.")]
         /// The project, by mem's name; the checkout's when omitted.
         project: Option<String>,
     },
+    /// Ask the engine to walk a landed milestone's Show path again.
+    #[command(
+        long_about = "Ask the engine to walk a landed milestone's Show path again.
+
+This asks one question for the orchestrator, `dogfood <slug> at <commit> on
+<machine>`, and prints its id. The milestone is the one named, else the
+roadmap's last ticked one; the commit is the checkout's head; the machine is
+the project's dogfood-machine key, else this one. Serve on that machine walks
+the milestone and answers with the walk's result. The engine never pushes:
+a commit that is not on that machine is the owner's to push there."
+    )]
+    Dogfood {
+        /// The project, by mem's name; the checkout's when omitted.
+        project: Option<String>,
+        /// The milestone to walk; the roadmap's last ticked one when omitted.
+        #[arg(long, value_name = "SLUG")]
+        milestone: Option<String>,
+    },
     /// A library's current documentation, through the Context7 CLI.
     Docs {
         /// The library, by the name its users know it.
@@ -376,6 +394,11 @@ usage: workflow <command> [options]
   pause [<project>] · resume [<project>]
       hold a project's runs, or let serve run it again
       0 done · 1 mem refused · 2 no project named or here
+  dogfood [<project>] [--milestone <slug>]
+      ask the engine to walk a landed milestone, the last ticked one unless
+      named, at the checkout's head on the project's dogfood-machine
+      0 asked, its #<id> printed · 1 mem refused · 2 no project, or no
+      ticked milestone
   redispatch <task> [--model <name>]
       ask the live run to dispatch a failed task again
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
@@ -412,6 +435,17 @@ mod tests {
         assert!(once);
         assert_eq!(tick, Some(0.5));
         assert!(USAGE.contains("\n  serve [--once] [--tick <seconds>]\n"));
+    }
+
+    #[test]
+    fn dogfood_takes_a_project_and_a_milestone() {
+        let cli = Cli::try_parse_from(["workflow", "dogfood", "app", "--milestone", "m1"]).unwrap();
+        let Command::Dogfood { project, milestone } = cli.command else {
+            panic!("not dogfood");
+        };
+        assert_eq!(project.as_deref(), Some("app"));
+        assert_eq!(milestone.as_deref(), Some("m1"));
+        assert!(USAGE.contains("\n  dogfood [<project>] [--milestone <slug>]\n"));
     }
 
     #[test]

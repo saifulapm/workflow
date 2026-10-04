@@ -8,6 +8,7 @@
 //!   workflow run             run a plan's tasks in worktrees
 //!   workflow reap            collect finished or stalled workers
 //!   workflow serve           run every roadmap here, milestone after milestone
+//!   workflow dogfood         ask the engine to walk a landed milestone again
 //!   workflow status          report this project's runs, --json for machines
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
@@ -38,6 +39,7 @@ pub mod plan;
 pub mod plancheck;
 pub mod repo;
 pub mod report;
+pub mod request;
 pub mod review;
 pub mod run;
 pub mod serve;
@@ -158,6 +160,9 @@ pub fn run(cli: Cli) -> i32 {
         Command::Park { task, reason } => serve::cmd_park(&task, &reason),
         Command::Pause { project } => serve::cmd_pause(project.as_deref(), true),
         Command::Resume { project } => serve::cmd_pause(project.as_deref(), false),
+        Command::Dogfood { project, milestone } => {
+            request::cmd_dogfood(project.as_deref(), milestone.as_deref())
+        }
         Command::Docs { library, query } => docs::cmd_docs(&library, &query),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),

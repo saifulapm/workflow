@@ -1,0 +1,234 @@
+//! A walk requested by hand: `workflow dogfood` asks the engine to walk a
+//! landed milestone's Show path again. The request is a question for the
+//! orchestrator and its answer is the result, so it needs no kind of its own
+//! in mem: a question already syncs at once, lists as pending and pairs with
+//! its answer.
+//!
+//!   dogfood <slug> at <commit> on <machine>[ steps <n>,<n>]
+
+use std::process::{Command, Stdio};
+
+use crate::gitcmd::Git;
+use crate::{exit, memcli, plan, warn};
+
+/// One requested walk: the milestone, the commit to walk it at, the machine
+/// to walk it on, and the step numbers to walk, empty for all of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalkRequest {
+    pub slug: String,
+    pub commit: String,
+    pub machine: String,
+    pub steps: Vec<usize>,
+}
+
+/// The question's text, which [`parse_request`] reads back.
+pub fn request_text(r: &WalkRequest) -> String {
+    let mut text = format!("dogfood {} at {} on {}", r.slug, r.commit, r.machine);
+    if !r.steps.is_empty() {
+        let steps: Vec<String> = r.steps.iter().map(usize::to_string).collect();
+        text.push_str(&format!(" steps {}", steps.join(",")));
+    }
+    text
+}
+
+/// A question's body as a walk request, or `None` for any other question.
+pub fn parse_request(body: &str) -> Option<WalkRequest> {
+    let words: Vec<&str> = body.split_whitespace().collect();
+    let steps = match words.as_slice() {
+        ["dogfood", _, "at", _, "on", _] => Vec::new(),
+        ["dogfood", _, "at", _, "on", _, "steps", list] => list
+            .split(',')
+            .map(|n| n.parse().ok())
+            .collect::<Option<Vec<usize>>>()?,
+        _ => return None,
+    };
+    Some(WalkRequest {
+        slug: words[1].to_string(),
+        commit: words[3].to_string(),
+        machine: words[5].to_string(),
+        steps,
+    })
+}
+
+/// One mem call about a named project, so a project named from outside its
+/// checkout and the checkout's own project are asked the same way.
+fn mem_on(project: &str, args: &[&str]) -> Option<(bool, String)> {
+    let out = Command::new(memcli::bin())
+        .arg("--project")
+        .arg(project)
+        .args(args)
+        .env_remove("MEM_PROJECT")
+        .stdin(Stdio::null())
+        .stderr(Stdio::inherit())
+        .output()
+        .ok()?;
+    Some((
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+    ))
+}
+
+/// The project's checkout on this machine: the one the caller stands in,
+/// else the first one mem lists that is a directory here, as serve picks it.
+fn checkout(name: &str, root: Option<String>) -> Option<String> {
+    root.or_else(|| {
+        let (_, out) = mem_on(name, &["projects", "--json"])?;
+        let listing: serde_json::Value = serde_json::from_str(&out).ok()?;
+        listing["projects"]
+            .as_array()?
+            .iter()
+            .find(|p| p["name"].as_str() == Some(name))?["checkouts"]
+            .as_array()?
+            .iter()
+            .filter_map(|c| c.as_str())
+            .find(|c| std::path::Path::new(c).is_dir())
+            .map(str::to_string)
+    })
+}
+
+/// The roadmap's last ticked milestone: the one landed most recently.
+fn last_ticked(roadmap: &str) -> Option<String> {
+    if roadmap.trim().is_empty() {
+        return None;
+    }
+    let road = plan::parse(roadmap, false)?;
+    if road.kind != plan::PlanKind::Roadmap {
+        return None;
+    }
+    road.tasks
+        .into_iter()
+        .rev()
+        .find(|t| t.checked)
+        .map(|t| t.id)
+}
+
+/// `workflow dogfood [<project>] [--milestone <slug>]`: ask the engine to
+/// walk a landed milestone at the checkout's head, on the project's
+/// `dogfood-machine` or this machine, and print the question's id.
+pub fn cmd_dogfood(project: Option<&str>, milestone: Option<&str>) -> i32 {
+    let name = match project {
+        Some(name) => name.to_string(),
+        None => match memcli::project_current() {
+            Some(p) => p.name,
+            None => {
+                warn("dogfood: name a project, or stand in a checkout mem knows");
+                return exit::USAGE;
+            }
+        },
+    };
+    let record = match mem_on(&name, &["project", "current", "--json"]) {
+        Some((true, out)) => serde_json::from_str::<serde_json::Value>(&out).ok(),
+        _ => None,
+    };
+    let Some(record) = record else {
+        warn(format!("dogfood: mem knows no project {name}"));
+        return exit::USAGE;
+    };
+    let key = |k: &str| {
+        record
+            .get(k)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let slug = match milestone {
+        Some(slug) => slug.to_string(),
+        None => {
+            let road = mem_on(&name, &["roadmap"]).map(|(_, out)| out);
+            match road.as_deref().and_then(last_ticked) {
+                Some(slug) => slug,
+                None => {
+                    warn(format!(
+                        "dogfood: {name} has no ticked milestone; name one with --milestone"
+                    ));
+                    return exit::USAGE;
+                }
+            }
+        }
+    };
+    let Some(commit) = checkout(&name, key("root")).and_then(|dir| Git::at(dir).head()) else {
+        warn(format!(
+            "dogfood: {name} has no checkout here to take a head from"
+        ));
+        return exit::USAGE;
+    };
+    let Some(machine) = key("dogfood_machine").or_else(|| key("machine")) else {
+        warn("dogfood: mem names no machine for this one");
+        return exit::USAGE;
+    };
+    let text = request_text(&WalkRequest {
+        slug,
+        commit,
+        machine,
+        steps: Vec::new(),
+    });
+    match mem_on(&name, &["ask", "--for", "orchestrator", "--", &text]) {
+        Some((true, out)) => {
+            print!("{out}");
+            exit::OK
+        }
+        _ => {
+            warn(format!("dogfood: mem did not take the request: {text}"));
+            exit::FAILED
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(steps: Vec<usize>) -> WalkRequest {
+        WalkRequest {
+            slug: "m2".into(),
+            commit: "2c20aecf3c7cf96d08ceb5ac854616d1e0a00fe3".into(),
+            machine: "mini".into(),
+            steps,
+        }
+    }
+
+    #[test]
+    fn a_request_for_every_step_names_none() {
+        let r = request(Vec::new());
+        assert_eq!(
+            request_text(&r),
+            "dogfood m2 at 2c20aecf3c7cf96d08ceb5ac854616d1e0a00fe3 on mini"
+        );
+        assert_eq!(parse_request(&request_text(&r)), Some(r));
+    }
+
+    #[test]
+    fn a_request_for_some_steps_lists_them_after_the_machine() {
+        let r = request(vec![1, 3]);
+        assert_eq!(
+            request_text(&r),
+            "dogfood m2 at 2c20aecf3c7cf96d08ceb5ac854616d1e0a00fe3 on mini steps 1,3"
+        );
+        assert_eq!(parse_request(&request_text(&r)), Some(r));
+    }
+
+    #[test]
+    fn any_other_question_is_not_a_request() {
+        for body in [
+            "where does the ask service go?",
+            "dogfood m2 at abc",
+            "dogfood m2 on mini at abc",
+            "dogfood m2 at abc on mini steps",
+            "dogfood m2 at abc on mini steps 1,x",
+            "dogfood m2 at abc on mini steps 1,,2",
+            "dogfood m2 at abc on mini and more",
+            "finding #AB12CD34: dogfood m2 at abc on mini",
+        ] {
+            assert_eq!(parse_request(body), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn the_last_ticked_milestone_is_the_one_a_request_defaults_to() {
+        let road = "# roadmap: r\n\n- [x] m1 One\n- [x] m2 Two\n- [ ] m3 Three\n";
+        assert_eq!(last_ticked(road).as_deref(), Some("m2"));
+        assert_eq!(last_ticked("# roadmap: r\n\n- [ ] m1 One\n"), None);
+        assert_eq!(last_ticked(""), None);
+    }
+}
