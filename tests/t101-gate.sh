@@ -91,9 +91,15 @@ export FAKE="$T_TMP/worker.sh"
 export WORKFLOW_WORKER_CMD='cd {worktree} && WORKFLOW_AGENT=1 setsid sh -c '"'"'echo $$ > {pidfile}; exec sh "$FAKE" {task} {worktree} {status}'"'"' > {out} 2> {err} &'
 export WORKFLOW_DEADLINE_MIN=0.5
 
+# The suite the gate runs says where its scratch space is.
+write_exec "$T_TMP/suite" <<SUITE
+#!/bin/sh
+printf '%s\\n' "\$TMPDIR" >>"$T_TMP/suite-tmpdir"
+SUITE
+
 new_repo app
 mem_register
-"$MEM_BIN" project set verify true >/dev/null
+"$MEM_BIN" project set verify "$T_TMP/suite" >/dev/null
 "$MEM_BIN" plan --stdin >/dev/null <<'PLAN'
 # plan: gate
 
@@ -113,3 +119,6 @@ like "$(cat "$rundir/t1.failed")" 'commit [0-9a-f]{7,} "Cache the supplier looku
 	'merge gate: the failure names the commit whose message failed'
 like "$OUT" 'hard numbered ruling: Cached because ruling 4 says so' 'merge gate: and the run output names the line'
 is "$(git log --oneline integration/gate 2>/dev/null | grep -c 'supplier lookup')" 0 'merge gate: nothing landed on integration'
+is "$(sort -u "$T_TMP/suite-tmpdir")" "$rundir/gate.tmp" \
+	'merge gate: its suite keeps scratch under the run directory, not the shared /tmp'
+is "$(ls -A "$rundir/gate.tmp" 2>/dev/null)" '' 'merge gate: and nothing is left in it'

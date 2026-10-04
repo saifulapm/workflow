@@ -1755,6 +1755,12 @@ impl Run {
         if let Some((k, v)) = self.cargo_env("integration") {
             c.env(k, v);
         }
+        // Scratch space under the run directory, as a worker's is: /tmp holds
+        // 3 GB for each user, and a suite's sandboxes there run out of it
+        // beside the workers' own.
+        let tmp = self.dir.join("gate.tmp");
+        let _ = std::fs::create_dir_all(&tmp);
+        c.env("TMPDIR", &tmp);
         // A group of its own, so a hung suite goes whole: its tests and
         // whatever they spawned, not only the verify process.
         std::os::unix::process::CommandExt::process_group(&mut c, 0);
@@ -1780,6 +1786,7 @@ impl Run {
             }
             sys::sleep(0.5);
         };
+        let _ = std::fs::remove_dir_all(&tmp);
         let Some(status) = status else {
             let limit = match self.gate_s % 60 {
                 0 => format!("{} min", self.gate_s / 60),
