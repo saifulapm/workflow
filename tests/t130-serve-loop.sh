@@ -130,8 +130,8 @@ head=$(git -C "$T_TMP/app" rev-parse HEAD)
 is "$(cat "$S/app/last-landed" 2>/dev/null)" "$head" 'last-landed is the trunk head'
 is "$("$MEM_BIN" --project app plan --status)" done 'the last plan is done'
 runs=$("$MEM_BIN" --project app log --type run --limit 200 --json)
-like "$runs" 'dogfood m1: skipped, m5' 'the dogfood stage ran for the first milestone'
-like "$runs" 'dogfood m2: skipped, m5' 'and for the second'
+like "$runs" 'dogfood m1: no Show path' 'a milestone with no Show line lands with nothing to walk'
+like "$runs" 'dogfood m2: no Show path' 'and so does the second'
 like "$runs" 'hygiene m1: [0-9]+ findings' 'the hygiene count is logged for the first'
 like "$runs" 'hygiene m2: [0-9]+ findings' 'and for the second'
 run_out "$MEM_BIN" --project app status
@@ -184,5 +184,5 @@ like "$("$MEM_BIN" --project planless roadmap)" '^- \[ \] p1 ' 'and the mileston
 like "$("$MEM_BIN" --project byhand roadmap)" '^- \[x\] h1 ' 'serve ticks the milestone a run by hand landed'
 [ -e "$S/byhand/h1.pickup.md" ] && notok 'with no pickup lead' || ok 'with no pickup lead'
 is "$(starts byhand)" 1 'its one run found nothing left to do'
-like "$("$MEM_BIN" --project byhand log --type run --limit 50 --json)" 'dogfood h1: skipped, m5' \
+like "$("$MEM_BIN" --project byhand log --type run --limit 50 --json)" 'dogfood h1: no Show path' \
 	'and the milestone end ran after it'

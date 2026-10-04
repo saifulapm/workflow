@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::backend::{Dispatch, Handle, WorkerBackend, backend_for};
 use crate::brief::{self, LeadCtx};
+use crate::dogfood::{self, NO_SHOW_PATH, WalkBrief, WalkOutcome, WalkState};
 use crate::gitcmd::{self, Git};
 use crate::plan::{self, PlanKind};
 use crate::{exit, memcli, ownership, paths, plancheck, run, sys, warn};
@@ -44,6 +45,16 @@ const STOP_S: f64 = 30.0;
 
 /// The one lead a project has at a time writes its pid here.
 const LEAD_PID: &str = "lead.pid";
+
+/// The walk a project has going, a [`WalkState`] line.
+const WALK: &str = "walk";
+
+/// The sections of a project's `verify` page a walk's brief carries.
+const VERIFY_SECTIONS: [&str; 5] = ["launch", "doctor", "drive", "evidence", "cleanup"];
+
+/// The project whose wiki holds `dogfood-playbooks`, the per-surface how-to
+/// every project's walk reads.
+const WORKFLOW: &str = "workflow";
 
 /// Written when a pause told the project's run to stop, so the stop is sent
 /// once and the run's end reads as a stop rather than as stopping short.
@@ -144,6 +155,10 @@ struct Current {
     paused: Option<String>,
     #[serde(default)]
     slots: Option<u64>,
+    #[serde(default)]
+    dev: Option<String>,
+    #[serde(default)]
+    preview: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -466,8 +481,8 @@ impl Serve {
         }
     }
 
-    /// Paused, a live child, the open milestone, nothing to do: in that
-    /// order, so a pause is honoured before anything else is looked at.
+    /// Paused, a walk, a live child, the open milestone, nothing to do: in
+    /// that order, so a pause is honoured before anything else is looked at.
     fn tick_project(&mut self, p: &ServeProject) {
         let _ = std::fs::create_dir_all(p.dir());
         if p.paused {
@@ -475,6 +490,13 @@ impl Serve {
             return;
         }
         self.claim(p, false);
+        // The milestone is open until its walk is read, so a walk not yet
+        // read holds the project: a run would land the milestone again and
+        // start a second walk, and a lead would work beside the walk.
+        if p.dir().join(WALK).exists() {
+            self.stage(p, "dogfood");
+            return;
+        }
         self.settle_leads(p);
         self.unpark(p);
         self.tail_events(p);
@@ -824,10 +846,84 @@ impl Serve {
         )
     }
 
-    /// After the run landed every task: the roadmap tick, which the run
-    /// leaves to serve, the dogfood stage, the plan marked done, the status and
-    /// handoff lines, the hygiene count and the landed commit, in that order.
+    /// After the run landed every task: the walk of the milestone's Show
+    /// path. A milestone with no Show line has nothing to walk and lands at
+    /// once; any other lands only once its walk is read.
     fn milestone_end(&mut self, p: &ServeProject, slug: &str) {
+        let text = roadmap(&self.mem, &p.name).text;
+        let milestone = plan::parse(&text, false).and_then(|r| r.get(slug).cloned());
+        let show = milestone.as_ref().and_then(|m| m.show.clone());
+        let steps = dogfood::show_steps(show.as_deref().unwrap_or(""));
+        if steps.is_empty() {
+            let skipped = WalkOutcome::Skipped(NO_SHOW_PATH.into());
+            self.log(p, &dogfood::walk_line(slug, &skipped, 0));
+            self.land_milestone(p, slug);
+            return;
+        }
+        let keys = current(&self.mem, &p.name).unwrap_or_default();
+        let surface = milestone.and_then(|m| m.surface).unwrap_or_default();
+        let w = WalkBrief {
+            project: p.name.clone(),
+            slug: slug.to_string(),
+            playbook: match surface.as_str() {
+                "" => String::new(),
+                s => self.wiki(WORKFLOW, &format!("dogfood-playbooks#{s}")),
+            },
+            surface,
+            steps: steps
+                .into_iter()
+                .enumerate()
+                .map(|(i, s)| (i + 1, s))
+                .collect(),
+            verify: VERIFY_SECTIONS
+                .iter()
+                .map(|s| {
+                    self.wiki(&p.name, &format!("verify#{s}"))
+                        .trim()
+                        .to_string()
+                })
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            dev: keys.dev,
+            preview: keys.preview,
+            findings: String::new(),
+        };
+        let status = p.dir().join(format!("{slug}.dogfood.status"));
+        let env = vec![(
+            "WORKFLOW_STATUS_FILE".to_string(),
+            status.to_string_lossy().to_string(),
+        )];
+        let body = brief::dogfood(&w);
+        let Some(session) = self.start_session(p, slug, "dogfood", "dogfood", &body, env) else {
+            return;
+        };
+        let walk = WalkState {
+            slug: slug.to_string(),
+            walk: 1,
+            started: sys::now(),
+            steps: w.steps.iter().map(|(n, _)| *n).collect(),
+            session,
+        };
+        let _ = std::fs::write(p.dir().join(WALK), walk.line());
+        self.stage(p, "dogfood");
+        warn(format!(
+            "serve {}: started the walk of {slug}, {} steps",
+            p.name,
+            walk.steps.len()
+        ));
+    }
+
+    /// One page or section of a project's wiki; empty when it has none.
+    fn wiki(&self, project: &str, slug: &str) -> String {
+        let said = mem_on(&self.mem, project, &["wiki", "--", slug]);
+        if said.ok { said.out } else { String::new() }
+    }
+
+    /// A milestone walked, or with nothing to walk: the roadmap tick, which
+    /// the run leaves to serve, the plan marked done, the status and handoff
+    /// lines, the hygiene count and the landed commit, in that order.
+    fn land_milestone(&mut self, p: &ServeProject, slug: &str) {
         let mut road = milestones(&roadmap(&self.mem, &p.name).text);
         if !road.iter().any(|(s, ticked)| s == slug && *ticked) {
             let said = mem_on(&self.mem, &p.name, &["roadmap", "--tick", slug]);
@@ -840,8 +936,6 @@ impl Serve {
                 ));
             }
         }
-        // Dogfooding the landed milestone is a later stage; it passes for now.
-        self.log(p, &format!("dogfood {slug}: skipped, m5"));
         mem_on(&self.mem, &p.name, &["plan", "--status", "done"]);
         let head = Git::at(&p.root).head().unwrap_or_default();
         let short = &head[..head.len().min(7)];
@@ -961,35 +1055,53 @@ impl Serve {
         }
     }
 
-    /// Start a lead on `body`, its brief at `<serve dir>/<slug>.<kind>.md`,
-    /// and record it. A launch the backend refused is logged and recorded
-    /// nowhere, so nothing waits on it.
-    fn start_lead(&mut self, p: &ServeProject, slug: &str, kind: &str, body: &str) {
+    /// Start a session as `role` on `body` in the checkout, its brief at
+    /// `<serve dir>/<slug>.<kind>.md` and its pid at `<serve dir>/<role>.pid`,
+    /// with `env` beside `MEM_PROJECT`. The session the backend started, or
+    /// nothing when it refused the launch, which is logged.
+    fn start_session(
+        &mut self,
+        p: &ServeProject,
+        slug: &str,
+        kind: &str,
+        role: &str,
+        body: &str,
+        env: Vec<(String, String)>,
+    ) -> Option<String> {
         let dir = p.dir();
         let stem = format!("{slug}.{kind}");
         let brief = dir.join(format!("{stem}.md"));
         let _ = std::fs::write(&brief, body);
         let status = dir.join(format!("{stem}.status"));
         let _ = std::fs::write(&status, "");
-        let _ = std::fs::remove_file(dir.join(LEAD_PID));
+        let pidfile = dir.join(format!("{role}.pid"));
+        let _ = std::fs::remove_file(&pidfile);
+        // A walk is its own kind: `dogfood`, not `dogfood-dogfood`.
+        let (task, what) = match kind == role {
+            true => (role.to_string(), format!("{role} session")),
+            false => (format!("{role}-{kind}"), format!("{kind} {role}")),
+        };
         let d = Dispatch {
-            task: format!("lead-{kind}"),
+            task,
             worktree: p.root.clone(),
             brief,
             out: dir.join(format!("{stem}.json")),
             err: dir.join(format!("{stem}.err")),
-            pidfile: dir.join(LEAD_PID),
+            pidfile,
             status,
             rundir: dir.clone(),
             session: self.backend.mint_session(),
             parent: None,
-            role: "lead".into(),
+            role: role.into(),
             // Naming the role as the model lets its role file say which
-            // model and effort a lead runs on.
-            model: "lead".into(),
+            // model and effort the session runs on.
+            model: role.into(),
             effort: None,
             turns: std::env::var("WORKFLOW_MAX_TURNS").unwrap_or_else(|_| "120".into()),
-            env: vec![("MEM_PROJECT".into(), p.name.clone())],
+            env: [("MEM_PROJECT".to_string(), p.name.clone())]
+                .into_iter()
+                .chain(env)
+                .collect(),
         };
         let session = self.backend.dispatch(&d);
         if session.is_empty() {
@@ -997,10 +1109,20 @@ impl Serve {
             let why = err.lines().last().unwrap_or("no word from the backend");
             self.log(
                 p,
-                &format!("serve {slug}: the {kind} lead did not start -- {why}"),
+                &format!("serve {slug}: the {what} did not start -- {why}"),
             );
-            return;
+            return None;
         }
+        Some(session)
+    }
+
+    /// Start a lead on `body` and record it. A launch the backend refused is
+    /// recorded nowhere, so nothing waits on it.
+    fn start_lead(&mut self, p: &ServeProject, slug: &str, kind: &str, body: &str) {
+        let Some(session) = self.start_session(p, slug, kind, "lead", body, Vec::new()) else {
+            return;
+        };
+        let dir = p.dir();
         let mut leads = self.leads(p);
         leads.push(Lead {
             kind: kind.to_string(),

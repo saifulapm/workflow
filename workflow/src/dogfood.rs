@@ -45,6 +45,41 @@ pub struct WalkBrief {
     pub findings: String,
 }
 
+/// The walk going on for a project: `<serve dir>/walk`, one line,
+/// `<slug> <walk> <started> <session> <step>...`. The steps come last
+/// because there are as many as the walk covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalkState {
+    pub slug: String,
+    /// Which walk of the milestone this is, from 1.
+    pub walk: usize,
+    pub started: i64,
+    /// The step numbers this walk covers.
+    pub steps: Vec<usize>,
+    pub session: String,
+}
+
+impl WalkState {
+    pub fn read(text: &str) -> Option<WalkState> {
+        let mut parts = text.split_whitespace();
+        Some(WalkState {
+            slug: parts.next()?.to_string(),
+            walk: parts.next()?.parse().ok()?,
+            started: parts.next()?.parse().ok()?,
+            session: parts.next()?.to_string(),
+            steps: parts.map(|n| n.parse().ok()).collect::<Option<_>>()?,
+        })
+    }
+
+    pub fn line(&self) -> String {
+        let steps: String = self.steps.iter().map(|n| format!(" {n}")).collect();
+        format!(
+            "{} {} {} {}{steps}\n",
+            self.slug, self.walk, self.started, self.session
+        )
+    }
+}
+
 /// What a walk came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WalkOutcome {
@@ -141,6 +176,21 @@ mod tests {
             ["run `app list`", "the new row shows"]
         );
         assert_eq!(show_steps("the home page loads"), ["the home page loads"]);
+    }
+
+    #[test]
+    fn a_walk_reads_back_as_it_was_written() {
+        let walk = WalkState {
+            slug: "cart".into(),
+            walk: 2,
+            started: 1791000000,
+            steps: vec![2, 3],
+            session: "wf-dogfood-a3k9".into(),
+        };
+        assert_eq!(walk.line(), "cart 2 1791000000 wf-dogfood-a3k9 2 3\n");
+        assert_eq!(WalkState::read(&walk.line()), Some(walk));
+        assert_eq!(WalkState::read("cart 1 1791000000"), None);
+        assert_eq!(WalkState::read("cart 1 1791000000 s x"), None);
     }
 
     #[test]
