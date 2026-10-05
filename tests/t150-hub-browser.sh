@@ -120,11 +120,11 @@ like "$answered" 'Which hour does the nag go out\?</p><p class="meta">answer: ni
 # 3. Open gamma's screenshot from its evidence.
 if [ -n "$browser" ]; then
 	pw goto "$base/p/gamma/evidence" >/dev/null
-	pw click 'a:has(img)' >/dev/null
+	pw click 'a:has(img[alt$="week.png"])' >/dev/null
 	type=$(js 'document.contentType')
 	pw screenshot --filename "$shots/step-3.png" >/dev/null
 else
-	href=$(get /p/gamma/evidence | sed -n 's/.*<a href="\([^"]*\)"><img .*/\1/p' | head -n 1)
+	href=$(get /p/gamma/evidence | sed -n 's/.*<a href="\([^"]*\)"><img [^>]*alt="[^"]*week\.png".*/\1/p' | head -n 1)
 	type=$(curl -s -o /dev/null -w '%{content_type}' --max-time 30 "$base$href")
 fi
 is "$type" image/png 'the evidence opens its screenshot as image/png'
@@ -164,6 +164,15 @@ if [ -n "$browser" ]; then
 		[ -n "$w" ] && [ "$w" -le 390 ] || wide+="$page ${w:-none}"$'\n'
 	done
 	is "$wide" "" "no page is wider than 390 px (${#widths[@]} pages)"
+
+	# The gallery's lazy image widens the page only once it has arrived, so
+	# the width is read after it decodes.
+	pw goto "$base/p/gamma/evidence" >/dev/null
+	fit=$(js 'async () => { const i = document.querySelector("img[alt$=\"wide.png\"]"); await i.decode(); return i.naturalWidth + " " + document.documentElement.scrollWidth; }')
+	natural=${fit%% *}
+	w=${fit##* }
+	[ "$natural" = 1280 ] && [ -n "$w" ] && [ "$w" -le 390 ] && fit=fits
+	is "$fit" fits 'the 1280 px screenshot fits the evidence page at 390 px'
 	pw close >/dev/null
 	trap t_done EXIT
 	exec 9>&-

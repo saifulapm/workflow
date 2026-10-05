@@ -211,6 +211,10 @@ mem ask --for human --options 'nine,eight,ten' --recommend nine 'Which hour does
 # so the gallery has an image a screenshot can show without a browser.
 base64 -d >"$sb/week.png" <<<'iVBORw0KGgoAAAANSUhEUgAAAKAAAAB4CAIAAAD6wG44AAABJElEQVR42u3RsQ0AIAgAQWdxJ5d0JisrS0dwCCwIuQ81CVy7Kl3zAsACLMACLMACLMCAVQl47ROcX0v6HMFJdU6GJYABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwEmBVTjAgAVYgAVYgAVYgAGrTA9RzR3lkHFmKgAAAABJRU5ErkJggg=='
 mem evidence add --task g2-t1 "$sb/week.png" --note 'the week view with one habit ticked' >/dev/null
+# A plain black screenshot as wide as a laptop's, 1280 by 720, so the
+# gallery shows how it fits a phone.
+base64 -d >"$sb/wide.png" <<<'iVBORw0KGgoAAAANSUhEUgAABQAAAALQAQAAAADnBuD7AAAAh0lEQVR42u3BMQEAAADCoPVPbQlPoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4GsTfAAGc95RKAAAAAElFTkSuQmCC'
+mem evidence add --task g2-t1 "$sb/wide.png" --note 'the week view on a laptop screen' >/dev/null
 printf 'ticked at 00:00, listed under yesterday\n' >"$sb/midnight.txt"
 printf 'the nag fires twice at nine\n' >"$sb/twice.txt"
 mem finding add --milestone g1-log --step 1 --evidence "$sb/midnight.txt" 'a habit ticked at midnight lands on the wrong day' >/dev/null

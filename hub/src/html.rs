@@ -89,6 +89,7 @@ nav a{margin-left:.75rem}
 nav.pages{display:flex;flex-wrap:wrap;gap:.25rem .75rem;margin:0 0 1rem}
 nav.pages a{margin-left:0}
 .meta{font-size:.8rem;opacity:.65}
+img{max-width:100%;height:auto}
 .q{white-space:pre-wrap;word-break:break-word;margin:.25rem 0 .5rem;font:inherit}
 article{border:1px solid #8884;border-radius:.5rem;padding:.75rem;margin-bottom:.75rem}
 textarea{width:100%;font:inherit;padding:.5rem;border-radius:.4rem;\
