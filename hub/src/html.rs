@@ -188,23 +188,6 @@ pub fn wiki_index(section: &Section<WikiProject>) -> String {
     out
 }
 
-/// `GET /wiki/<project>/<slug>`: one page, rendered.
-pub fn wiki_page(project: &str, slug: &str, text: &str) -> String {
-    let mut out = head(&format!("{project}/{slug}"));
-    out.push_str(&format!(
-        "<header><h1>{proj_esc} / {slug_esc}</h1>\
-         <nav><a href=\"{proj_href}\">{proj_esc}</a><a href=\"/wiki\">wiki</a>\
-         <a href=\"/\">home</a></nav></header>\n",
-        proj_esc = esc(project),
-        slug_esc = esc(slug),
-        proj_href = esc(&project_url(project)),
-    ));
-    out.push_str("<article class=\"md\">\n");
-    out.push_str(&markdown(text, project));
-    out.push_str("</article>\n</body>\n</html>\n");
-    out
-}
-
 /// `GET /p/<project>/log`: the last 200 log lines, whole.
 pub fn log_page(project: &str, rows: &[Activity], degraded: Option<&str>) -> String {
     let mut out = detail_head(project, "log");
