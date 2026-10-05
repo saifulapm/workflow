@@ -69,6 +69,10 @@ const RESEARCH: &str = "research";
 /// The findings the loop leaves alone, one short id a line.
 const HELD: &str = "held";
 
+/// The sessions whose folder-trust screen serve answered, one `<session>
+/// <when>` a line, so a screen is answered once.
+const TRUSTED: &str = "trusted";
+
 /// The sections of a project's `verify` page a walk's brief carries.
 const VERIFY_SECTIONS: [&str; 5] = ["launch", "doctor", "drive", "evidence", "cleanup"];
 
@@ -1176,7 +1180,7 @@ impl Serve {
             worktree: p.root.clone(),
         };
         let age = sys::now() - walk.started;
-        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+        let live = self.live(p, &h, walk.started, &format!("the walk of {}", walk.slug));
         if live && age < dogfood::WALK_S {
             return None;
         }
@@ -1429,7 +1433,8 @@ impl Serve {
             worktree: p.root.clone(),
         };
         let age = sys::now() - walk.started;
-        let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+        let what = format!("the asked walk of {}", walk.slug);
+        let live = self.live(p, &h, walk.started, &what);
         if live && age < dogfood::WALK_S {
             return;
         }
@@ -1480,8 +1485,7 @@ impl Serve {
             pidfile: p.dir().join(format!("{RESEARCH}.pid")),
             worktree: p.root.clone(),
         };
-        let age = sys::now() - going.started;
-        if self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h)) {
+        if self.live(p, &h, going.started, "the research session") {
             return;
         }
         self.answer_research(p, &going.question, "done");
@@ -2015,6 +2019,62 @@ impl Serve {
         self.stage(p, "maintenance");
     }
 
+    /// Whether the session `what` started at `started` is still going: alive,
+    /// not yet seen by the backend inside its launch, or waiting at a prompt,
+    /// since a walk read as ended at its first prompt was skipped seconds in.
+    /// A folder-trust screen is answered once with its yes option; one with
+    /// no yes, or still up a launch after the answer, is stopped, and so is
+    /// any other prompt past twenty minutes, each said once in the log.
+    fn live(&mut self, p: &ServeProject, h: &Handle, started: i64, what: &str) -> bool {
+        let now = sys::now();
+        if self.backend.alive(h) || (now - started < LAUNCH_S && !self.backend.seen(h)) {
+            return true;
+        }
+        let Some(at) = self.backend.at_prompt(h) else {
+            return false;
+        };
+        let dir = h.worktree.display();
+        let line = if at.kind == "trust" {
+            let file = p.dir().join(TRUSTED);
+            let mut trusted = std::fs::read_to_string(&file).unwrap_or_default();
+            let answered = trusted.lines().find_map(|l| {
+                let (session, when) = l.split_once(' ')?;
+                (session == h.session).then(|| when.parse::<i64>().unwrap_or(0))
+            });
+            let yes = at
+                .options
+                .iter()
+                .position(|o| o.trim().to_lowercase().starts_with("yes"));
+            match (answered, yes) {
+                (Some(when), _) if now - when < LAUNCH_S => return true,
+                (None, Some(i)) => {
+                    // A press amx did not take leaves the screen up, and the
+                    // launch's grace after it stops the session all the same.
+                    let _ = self.backend.answer_prompt(h, &(i + 1).to_string());
+                    trusted.push_str(&format!("{} {now}\n", h.session));
+                    let _ = std::fs::write(&file, trusted);
+                    return true;
+                }
+                _ => format!(
+                    "serve: {what} sat on the folder-trust screen of {dir} -- open claude there once and accept it"
+                ),
+            }
+        } else if now - started < PICKUP_S {
+            return true;
+        } else {
+            let kind = match at.kind.as_str() {
+                "" => String::new(),
+                k => format!("{k} "),
+            };
+            format!(
+                "serve: {what} sat on a {kind}prompt in {dir} for twenty minutes and was stopped"
+            )
+        };
+        self.backend.stop(h, 10);
+        self.log(p, &line);
+        false
+    }
+
     /// The leads recorded for a project.
     fn leads(&self, p: &ServeProject) -> Vec<Lead> {
         read_leads(&std::fs::read_to_string(p.dir().join("leads")).unwrap_or_default())
@@ -2038,7 +2098,7 @@ impl Serve {
         for lead in &was {
             let h = self.lead_handle(&dir, &p.root, lead);
             let age = now - lead.started;
-            let live = self.backend.alive(&h) || (age < LAUNCH_S && !self.backend.seen(&h));
+            let live = self.live(p, &h, lead.started, &format!("the {} lead", lead.kind));
             if live && lead.kind == "pickup" && age >= PICKUP_S {
                 self.backend.stop(&h, 10);
                 self.log(
