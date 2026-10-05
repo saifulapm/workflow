@@ -9,10 +9,9 @@ that carry it into an editor session.
 - `workflow/` is the gate and the orchestrator: `verify`, `lint-msg`,
   `hygiene`, `review-needed`, plan-driven `run`, `status`, `reap`, `skill`, `doctor`,
   and the body of the git hook stubs.
-- `hub/` is a small web view over mem, served tailnet-only, so a phone can
-  answer an open question and read any project's memory: `/p/<project>`
-  shows its status, handoff, roadmap, plan, stored plans, log, rulings,
-  questions with their answers, wiki pages and the runs on that machine.
+- `hub/` is a small web server over mem, served tailnet-only, so a phone can
+  follow every project through its lifecycle, answer its questions and press
+  its buttons (see The hub below).
 - `skills/` holds the session-facing instructions (research, grill, plan,
   work, lead, dogfood, fix, review, garden, route, mem). `hooks/` holds the three git
   hook stubs. Another runtime joins by reading the same skills and marking its
@@ -302,6 +301,63 @@ deleted, because a deletion comes back on the next sync, so a page that is
 done becomes a one-line stub pointing at what replaced it. `mem doctor`
 reports dead links, pages missing from the index and pages big enough to want
 compacting.
+
+## The hub
+
+`hub` is the phone's view of every project: a page per part of the
+lifecycle, each 390 px wide with no script, read through `mem ... --json` and
+`workflow status --json`. `hub.service` runs it on loopback and `tailscale
+serve` publishes it on the tailnet.
+
+- `/`: every project with its stage, runner, progress, the questions waiting
+  on you and its last activity, then the sibling hubs.
+- `/p/<project>`: the stage's front page, its progress and its buttons.
+- `/p/<project>/roadmap`: the milestones with their Show paths and plans, and
+  Approve and Request changes while the roadmap is a draft.
+- `/p/<project>/run`: the task board, the live workers and the run log.
+- `/p/<project>/questions`: each question with its options as buttons, the
+  recommended one marked, a text box, and the answered ones with their answers.
+- `/p/<project>/evidence`: the gallery by task, 24 a page, and the findings
+  open and fixed. An image's bytes come through `mem evidence cat <id>`, so
+  the hub never reads the store or a path a request names.
+- `/p/<project>/wiki` and `/wiki/<project>/<slug>`: the pages, one page by
+  section with its contents, and a search whose section hits open at the
+  heading.
+- `/p/<project>/decisions`: the rulings, who took each and what was
+  recommended.
+- `/p/<project>/new`: the forms.
+
+A button or a form writes mem and nothing else, naming its project with
+`--project=<name>`. The engine reads the write on its next tick, and the page
+says `sent, waiting for the engine` until mem and `workflow status --json`
+show it taken.
+
+| Button or form | Writes |
+|---|---|
+| Approve | `mem roadmap --status approved`, then answers the pending `Approve roadmap` question `approve`. When another machine's runner holds the project, mem refuses, the hub writes nothing else and links that machine's hub. |
+| Request changes | answers that question `changes: <text>`, or logs `roadmap changes requested: <text>` when none waits |
+| Pause | `mem project set paused "<machine> <date>"`, the words `workflow pause` writes |
+| Resume | `mem project unset paused`; a project paused after its third failed walk is resumed by answering its question `walk again` |
+| A question's option or text box | `mem answer <id> <text>` |
+| Idea | `mem idea <text>` |
+| Brief | `mem brief --set <text>` |
+| Finding | `mem finding add --milestone <slug> --step <n> --evidence <photo> <text>`, the photo a JPEG, PNG or WebP of 8 MiB at most |
+| Ask for research, Ask for a research round | a question for the engine, `research on <machine>` or `research round on <machine>` |
+
+The doorbell rings ntfy for a question waiting on you, a roadmap's approval
+among them, and three more: a walk that ended (`walk passed` or `walk found
+defects`, from serve's `dogfood <slug>:` run lines), the engine pausing a
+project after its third failed walk, and a roadmap finished on this machine.
+Each rings once, from the machine that wrote it, and carries the machine, the
+project and the link, never the text.
+
+    bash hub/tests/sandbox.sh                    # the hub from this checkout over a seeded throwaway store
+    bash hub/tests/sandbox.sh shot / home.png    # one 390 px screenshot of a page, then stop
+
+The sandbox prints `sandbox http://127.0.0.1:<port>/` and serves four projects,
+one per stage, until killed, then removes its store. `shot` takes the
+machine-wide lock `tests/t150-hub-browser.sh` takes to walk the Show path in a
+browser, because one browser at a time is what this machine's memory holds.
 
 ## Pausing, moving, finishing
 

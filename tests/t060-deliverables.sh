@@ -189,6 +189,13 @@ like "$serve" 'dogfood-machine' 'and the key that says where the walk runs'
 like "$serve" 'needs-plan' 'and the stage of a milestone with no stored plan'
 like "$serve" 'paused, dogfood' 'and the stage of a walk'
 like "$(cat "$WF_ROOT/README.md")" 'mem evidence add --task <id>' 'the README says how Show evidence is filed'
+# A hub button writes mem and the engine acts on its next tick, so the page
+# says it is waiting; the README says the same, where the bytes of an image
+# come from, and how to see the hub without a real store.
+hub=$(sed -n '/^## The hub/,/^## /p' "$WF_ROOT/README.md")
+like "$hub" 'waiting for the engine' 'the README says a button waits for the engine'
+like "$hub" 'mem evidence cat' 'and that images come through mem evidence cat'
+like "$hub" 'hub/tests/sandbox\.sh' 'and names the sandbox script'
 # A verb the README names has to be one the binary answers to.
 for sub in $(grep -oE '`workflow [a-z][a-z-]*|^ +workflow [a-z][a-z-]*' "$WF_ROOT/README.md" |
 	sed -E 's/^[` ]*workflow //' | sort -u); do
