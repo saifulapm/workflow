@@ -143,16 +143,21 @@ fn run_section(status: &Value) -> String {
     }
     out.push_str("<ul>\n");
     for task in agents {
-        let model = match task["model"].as_str().unwrap_or_default() {
-            "" => "-",
-            model => model,
-        };
+        // Each part is labelled, so a row still reads when status left a
+        // field empty.
+        let mut parts = Vec::new();
+        if let Some(session) = task["session"].as_str().filter(|s| !s.is_empty()) {
+            parts.push(esc(session));
+        }
+        parts.push(match task["model"].as_str().unwrap_or_default() {
+            "" => "model -".to_string(),
+            model => format!("model {}", esc(model)),
+        });
+        parts.push(format!("{} min", task["minutes"].as_u64().unwrap_or(0)));
         out.push_str(&format!(
-            "<li><strong>{}</strong>\n<div class=\"meta\">{} · {} · {} min</div>{}</li>\n",
+            "<li><strong>{}</strong>\n<div class=\"meta\">{}</div>{}</li>\n",
             esc(task["id"].as_str().unwrap_or_default()),
-            esc(task["session"].as_str().unwrap_or_default()),
-            esc(model),
-            task["minutes"].as_u64().unwrap_or(0),
+            parts.join(" · "),
             status_line(task)
         ));
     }
