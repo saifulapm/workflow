@@ -332,8 +332,9 @@ fn a_photo_sized_body_reaches_the_finding_route_and_nowhere_else() {
     let hub = hub_with_project(&dir);
 
     let finding = format!("/p/{PROJECT}/new/finding");
+    // Read whole and handed to the route, which refuses it as no finding form.
     let response = upload(&hub, &finding, MIB);
-    assert_eq!(status_of(&response), 200, "{response}");
+    assert_eq!(status_of(&response), 400, "{response}");
 
     // The same megabyte to any other write is refused before it is read.
     assert_eq!(
@@ -378,8 +379,9 @@ fn a_second_upload_while_one_is_being_read_is_503_at_once() {
     first.flush().unwrap();
     let mut response = String::new();
     first.read_to_string(&mut response).unwrap();
-    assert_eq!(status_of(&response), 200, "{response}");
+    // Not a finding form, so the route answers 400 once the body is read.
+    assert_eq!(status_of(&response), 400, "{response}");
 
     // Once the first is answered the permit is free again.
-    assert_eq!(status_of(&upload(&hub, &finding, MIB)), 200);
+    assert_eq!(status_of(&upload(&hub, &finding, MIB)), 400);
 }

@@ -174,7 +174,7 @@ fn render(world: &World, query: &str) -> (String, Vec<Vec<String>>) {
 }
 
 #[test]
-fn the_page_shows_four_forms_for_three_spawns() {
+fn the_page_shows_four_forms_for_four_spawns() {
     let world = World::new("new-page");
     let (body, spawns) = render(&world, "");
     assert_eq!(
@@ -190,6 +190,7 @@ fn the_page_shows_four_forms_for_three_spawns() {
                 "--project=proj-alpha",
                 "--json"
             ]),
+            argv(&["roadmap", "--project=proj-alpha", "--json"]),
         ]
     );
     for form in ["idea", "brief", "research", "round"] {
