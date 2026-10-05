@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, Timer } from 'claude-code'
 
 import { bandLine } from './band'
+import { refusal } from './guard'
 
 // The switch is read from the environment, fixed when the session starts, so
 // a session cannot turn the mods off for every other one with a command.
@@ -63,6 +64,21 @@ export const register: Register = on => {
       if (await read($, interactive)) await refreshBand($)
     }
     return next(e)
+  })
+
+  // Asks the binary whether the path is a new instruction file in a checkout
+  // mem knows. Exit 0, an older binary's exit 2, a run that fails to start or
+  // times out all let the write through; the pre-commit hook stays the gate.
+  on('tool.call', { tool: ['Write', 'Edit', 'NotebookEdit'] }, async ($, e, next) => {
+    if (await off($)) return next(e)
+    const path = e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path
+    const run = await $.process.run(['workflow', 'hygiene', '--would-create', path], {
+      cwd: await $.session.cwd(),
+      timeoutMs: 3000,
+    })
+    if (run.exitCode !== 1) return next(e)
+    $.ui.toast(`refused a new agent file: ${path}`)
+    return { deny: refusal(run.stdout.trim()) }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
