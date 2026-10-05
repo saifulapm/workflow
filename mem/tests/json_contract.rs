@@ -514,6 +514,84 @@ fn projects_carry_the_summary_a_project_page_reads() {
 }
 
 #[test]
+fn the_brief_says_where_the_project_stands() {
+    let (w, repo) = populated("json-contract-brief");
+    let brief = |cwd: &Path| {
+        validate(
+            "context-brief.json",
+            &mem(&w, cwd, &["context", "--brief", "--json"]),
+        )
+    };
+    let set = |args: &[&str]| assert_eq!(code(&mem(&w, &repo, args)), 0, "{args:?}");
+    let ask = |args: &[&str]| {
+        let out = mem_env(&w, &repo, args, &[("MEM_NOTIFY_CMD", "true")]);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+    };
+
+    let roadmap = w.dir.join("roadmap.md");
+    std::fs::write(
+        &roadmap,
+        "# roadmap: thing\n\n- [ ] m1-auth Sign-in\n- [ ] m2-billing Billing\n",
+    )
+    .unwrap();
+    set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
+    set(&["roadmap", "--status", "running", "--force"]);
+    set(&["roadmap", "--tick", "m1-auth", "--force"]);
+    let plan = w.dir.join("plan.md");
+    std::fs::write(
+        &plan,
+        "# plan: billing\n- [ ] t1 one\n- [ ] t2 two\n- [ ] t3 three\n",
+    )
+    .unwrap();
+    set(&["plan", "--set-file", plan.to_str().unwrap(), "--force"]);
+    set(&["plan", "--tick", "t1", "--force"]);
+    set(&["project", "set", "runner", "mini"]);
+    set(&["project", "set", "paused", "mini 2026-10-05"]);
+    ask(&["ask", "ship on friday?"]);
+    // A question for the orchestrator is not one a person has to answer.
+    ask(&["ask", "retry t2?", "--for", "orchestrator"]);
+
+    let b = brief(&repo);
+    assert!(b["brief"].is_string(), "{b}");
+    assert_eq!(b["project"], "thing");
+    assert_eq!(b["roadmap_status"], "running");
+    assert_eq!(b["milestone"], "m2-billing");
+    assert_eq!(b["milestones_done"], 1);
+    assert_eq!(b["milestones_total"], 2);
+    assert_eq!(b["plan_slug"], "billing");
+    assert_eq!(b["plan_ticked"], 1);
+    assert_eq!(b["plan_total"], 3);
+    assert_eq!(b["runner"], "mini");
+    assert_eq!(b["paused"], true);
+    assert_eq!(b["questions_human"], 1);
+
+    // Outside a project mem knows, the same keys say there is nothing to tell.
+    for cwd in [w.plain_dir("loose"), w.repo("stranger", None)] {
+        let b = brief(&cwd);
+        assert!(b["brief"].is_string(), "{b}");
+        for key in [
+            "project",
+            "roadmap_status",
+            "milestone",
+            "plan_slug",
+            "runner",
+        ] {
+            assert!(b[key].is_null(), "{key}: {b}");
+        }
+        for key in [
+            "milestones_done",
+            "milestones_total",
+            "plan_ticked",
+            "plan_total",
+            "questions_human",
+        ] {
+            assert_eq!(b[key], 0, "{key}: {b}");
+        }
+        assert_eq!(b["paused"], false, "{b}");
+    }
+}
+
+#[test]
 fn every_schema_is_covered_by_this_test() {
     // A schema nobody validates is a document, not a contract.
     let mut files: BTreeSet<String> = std::fs::read_dir(schema_dir())
