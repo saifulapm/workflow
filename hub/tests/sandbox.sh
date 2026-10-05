@@ -165,6 +165,9 @@ mem ask --for human --options approve,changes --recommend approve 'Approve roadm
 project gamma
 mem brief --set 'A habit tracker that nags once and then lets go.' >/dev/null
 for slug in index spec research-summary; do page "$slug" "gamma $slug"; done
+# A word no other item carries, so a search for it has one hit, a section.
+{ mem wiki spec; printf '\n## Quiet hours\n\nNo nag goes out between ten at night and seven in the morning.\n'; } |
+	mem wiki spec --stdin --note 'add the quiet hours' >/dev/null
 mem roadmap --stdin >/dev/null <<'ROAD'
 # roadmap: gamma
 
@@ -204,8 +207,9 @@ printf 'wf-g2-t2-k7qm\n' >"$run/g2-t2.session"
 printf 'pending\n' >"$run/g2-t3.state"
 printf 'waiting on g2-t2\n' >"$run/g2-t3.held"
 mem ask --for human --options 'nine,eight,ten' --recommend nine 'Which hour does the nag go out?' >/dev/null
-# A PNG of one pixel, so the gallery has an image without a browser.
-base64 -d >"$sb/week.png" <<<'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+# A week of seven days with one ticked, small enough to sit here as text,
+# so the gallery has an image a screenshot can show without a browser.
+base64 -d >"$sb/week.png" <<<'iVBORw0KGgoAAAANSUhEUgAAAKAAAAB4CAIAAAD6wG44AAABJElEQVR42u3RsQ0AIAgAQWdxJ5d0JisrS0dwCCwIuQ81CVy7Kl3zAsACLMACLMACLMCAVQl47ROcX0v6HMFJdU6GJYABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwEmBVTjAgAVYgAVYgAVYgAGrTA9RzR3lkHFmKgAAAABJRU5ErkJggg=='
 mem evidence add --task g2-t1 "$sb/week.png" --note 'the week view with one habit ticked' >/dev/null
 printf 'ticked at 00:00, listed under yesterday\n' >"$sb/midnight.txt"
 printf 'the nag fires twice at nine\n' >"$sb/twice.txt"

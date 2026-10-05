@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# hub/tests/sandbox.sh: the hub built from this checkout, over a seeded
-# throwaway store. Every page the seed gives something to show answers 200,
-# and `shot` leaves a phone-width PNG behind and nothing running.
+# The hub over hub/tests/sandbox.sh's seeded store, in a browser at phone
+# width: every seeded page answers 200; the Show path walks in one browser,
+# approving beta's draft roadmap, answering gamma's question, opening its
+# screenshot and following a wiki section hit; no page is wider than the
+# phone; and `shot` leaves a phone-width PNG behind and nothing running.
+# With no playwright-cli the walk runs over curl and the rest is skipped.
 source "$(dirname -- "$0")/lib.sh"
 # The browser lives under the caller's HOME, which t_init replaces.
 real_home=$HOME
@@ -56,6 +59,118 @@ if [ -n "$root" ]; then
 	like "$(store_env "$root" "$MEM_BIN" --project delta roadmap --status 2>/dev/null)" maintenance 'delta is in maintenance'
 fi
 
+## ------------------------------------------------------------ the walk
+
+# One browser at a time on this machine, the same lock sandbox.sh's `shot`
+# takes: the suite and two evidence captures would otherwise run three.
+base=${url%/}
+shots="$T_TMP/shots"
+mkdir -p "$shots" "$T_TMP/pw"
+browser=""
+command -v playwright-cli >/dev/null 2>&1 && [ -n "$url" ] && browser=1
+short_tmp=${XDG_RUNTIME_DIR:-/tmp}
+session=hub-walk-$$
+# The browser keeps its config under the caller's HOME, its socket under a
+# TMPDIR short enough for a socket path, and its snapshots in its cwd.
+pw() {
+	(cd "$T_TMP/pw" && env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME \
+		HOME="$real_home" TMPDIR="$short_tmp" playwright-cli -s="$session" "$@" 2>/dev/null)
+}
+# js <expression>: its value in the open page, as text.
+js() { pw --raw eval "$1" | jq -r 'if type == "string" then . else tostring end' 2>/dev/null; }
+# post <path> <form>: the status of a same-origin form POST.
+post() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 -H "Origin: $base" --data "$2" "$base$1"; }
+get() { curl -s --max-time 30 "$base$1"; }
+if [ -n "$browser" ]; then
+	printf '# shots: %s\n' "$shots"
+	exec 9>"$short_tmp/hub-browser.lock"
+	flock 9
+	trap 'st=$?; pw close >/dev/null; (exit $st); t_done' EXIT
+	pw open "$base/" >/dev/null
+	pw resize 390 844 >/dev/null
+fi
+
+# 1. Approve beta's draft roadmap.
+if [ -n "$browser" ]; then
+	pw goto "$base/p/beta/roadmap" >/dev/null
+	pw click 'role=button[name="Approve"]' >/dev/null
+	roadmap=$(js 'document.documentElement.outerHTML')
+	pw screenshot --filename "$shots/step-1.png" >/dev/null
+else
+	post /p/beta/control do=approve >/dev/null
+	roadmap=$(get /p/beta/roadmap)
+fi
+like "$roadmap" 'approved: sent, waiting for the engine' 'Approve leaves beta sent, waiting for the engine'
+
+# 2. Answer gamma's question with the recommended option.
+if [ -n "$browser" ]; then
+	pw goto "$base/p/gamma/questions" >/dev/null
+	pw click 'button.recommended' >/dev/null
+	questions=$(js 'document.documentElement.outerHTML')
+	pw screenshot --filename "$shots/step-2.png" >/dev/null
+else
+	id=$(get /p/gamma/questions | grep -B3 'class="recommended"' | sed -n 's/.*name="id" value="\([^"]*\)".*/\1/p')
+	post /answer "id=$id&project=gamma&text=nine" >/dev/null
+	questions=$(get /p/gamma/questions)
+fi
+answered=$(printf '%s\n' "$questions" | sed -n '/<h2>Answered<\/h2>/,$p' | tr -d '\n')
+like "$answered" 'Which hour does the nag go out\?</p><p class="meta">answer: nine</p>' \
+	'the recommended option answers the question, listed under answered'
+
+# 3. Open gamma's screenshot from its evidence.
+if [ -n "$browser" ]; then
+	pw goto "$base/p/gamma/evidence" >/dev/null
+	pw click 'a:has(img)' >/dev/null
+	type=$(js 'document.contentType')
+	pw screenshot --filename "$shots/step-3.png" >/dev/null
+else
+	href=$(get /p/gamma/evidence | sed -n 's/.*<a href="\([^"]*\)"><img .*/\1/p' | head -n 1)
+	type=$(curl -s -o /dev/null -w '%{content_type}' --max-time 30 "$base$href")
+fi
+is "$type" image/png 'the evidence opens its screenshot as image/png'
+
+# 4. Search gamma's wiki and follow the section hit to its heading.
+if [ -n "$browser" ]; then
+	pw goto "$base/p/gamma/wiki" >/dev/null
+	pw fill 'input[name=q]' quiet >/dev/null
+	pw press Enter >/dev/null
+	pw click 'a[href*="#"]' >/dev/null
+	hit=$(js 'location.hash + " " + (document.querySelector(":target:is(h1,h2,h3,h4,h5,h6)")?.textContent ?? "")')
+	pw screenshot --filename "$shots/step-4.png" >/dev/null
+else
+	href=$(get '/p/gamma/wiki?q=quiet' | sed -n 's/.*<li><a href="\([^"]*#[^"]*\)".*/\1/p' | head -n 1)
+	anchor=${href#*#}
+	heading=$(get "${href%%#*}" | sed -n "s/.*<h[1-6] id=\"$anchor\">\([^<]*\)<.*/\1/p")
+	hit="#$anchor $heading"
+fi
+is "$hit" '#quiet-hours Quiet hours' 'the search hit leads to its section heading'
+
+if [ -n "$browser" ]; then
+	shot_widths=""
+	for n in 1 2 3 4; do
+		shot_widths+="$(file -b "$shots/step-$n.png" 2>/dev/null | sed -n 's/^PNG image data, \([0-9]*\) x .*/\1/p') "
+	done
+	is "$shot_widths" '390 390 390 390 ' 'each step leaves a 390 px screenshot'
+
+	# The phone's width: no page scrolls sideways.
+	wide=""
+	widths=(/ /p/gamma /wiki/gamma/spec)
+	for page in roadmap run questions evidence wiki decisions new; do
+		widths+=("/p/gamma/$page")
+	done
+	for page in "${widths[@]}"; do
+		pw goto "$base$page" >/dev/null
+		w=$(js 'document.documentElement.scrollWidth')
+		[ -n "$w" ] && [ "$w" -le 390 ] || wide+="$page ${w:-none}"$'\n'
+	done
+	is "$wide" "" "no page is wider than 390 px (${#widths[@]} pages)"
+	pw close >/dev/null
+	trap t_done EXIT
+	exec 9>&-
+else
+	printf '# skip: playwright-cli is not installed\n'
+fi
+
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
 is "$( [ -n "$root" ] && [ -e "$root" ] && echo left || echo gone)" gone 'killed, the sandbox removes its directory'
@@ -64,10 +179,7 @@ port=${port%/}
 code=$([ -n "$port" ] && curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url")
 is "$code" 000 'and its hub is no longer listening'
 
-if ! command -v playwright-cli >/dev/null 2>&1; then
-	printf '# skip: playwright-cli is not installed\n'
-	exit 0
-fi
+[ -n "$browser" ] || exit 0
 
 # The browser and its config sit under the caller's own HOME and XDG roots,
 # not the ones t_init made; TMPDIR is this test's so what is left is visible.
