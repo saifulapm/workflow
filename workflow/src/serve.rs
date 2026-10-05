@@ -87,7 +87,7 @@ const WORKED: [&str; 3] = ["approved", "running", "maintenance"];
 /// One project as a tick sees it.
 pub struct ServeProject {
     pub name: String,
-    /// The first checkout mem lists for it that is a directory here.
+    /// The checkout its runs use here, as [`root_of`] chooses it.
     pub root: PathBuf,
     pub runner: Option<String>,
     pub paused: bool,
@@ -297,6 +297,38 @@ fn logged_lately(mem: &Path, project: &str) -> bool {
     serde_json::from_str::<Items>(&said.out).is_ok_and(|i| !i.items.is_empty())
 }
 
+/// The directory a project's sessions start in: the checkout named by the
+/// newest `checkout` file its runs wrote, when mem lists it and it is a
+/// directory here, else the first listed checkout that is one. mem lists
+/// checkouts sorted by path, so on a machine with two clones of a project
+/// the first may not be the one its runs use.
+fn root_of(project: &str, checkouts: &[String]) -> Option<PathBuf> {
+    let listed: Vec<PathBuf> = checkouts
+        .iter()
+        .map(PathBuf::from)
+        .filter(|c| c.is_dir())
+        .collect();
+    let newest = std::fs::read_dir(paths::runs_root().join(project.replace('/', "-")))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join("checkout"))
+        .filter_map(|f| Some((std::fs::metadata(&f).ok()?.modified().ok()?, f)))
+        .max()
+        .and_then(|(_, f)| std::fs::read_to_string(f).ok());
+    // Compared resolved, since the run writes the top git reports and mem
+    // may list the same directory by another spelling; a path that is gone
+    // resolves to nothing and matches no listed one.
+    let used = newest.and_then(|n| paths::realpath(n.trim()));
+    used.and_then(|u| {
+        listed
+            .iter()
+            .find(|c| paths::realpath(c).as_ref() == Some(&u))
+            .cloned()
+    })
+    .or_else(|| listed.into_iter().next())
+}
+
 /// Every project with a checkout on this machine that is this machine's to
 /// run: its runner names `machine`, or nobody, or a machine whose claim went
 /// stale. A project another machine runs is left out.
@@ -305,11 +337,7 @@ pub fn scan_projects(mem: &Path, machine: &str) -> Vec<ServeProject> {
     listing(mem)
         .into_iter()
         .filter_map(|listed| {
-            let root = listed
-                .checkouts
-                .iter()
-                .map(PathBuf::from)
-                .find(|c| c.is_dir())?;
+            let root = root_of(&listed.name, &listed.checkouts)?;
             let cur = current(mem, &listed.name)?;
             if let Some(runner) = cur.runner.as_deref()
                 && runner != machine
@@ -340,11 +368,7 @@ pub fn scan_projects(mem: &Path, machine: &str) -> Vec<ServeProject> {
 /// A project mem lists with a checkout here, as a request sees it: its name
 /// and checkout, since a requested walk reads none of its roadmap state.
 fn checked_out(listed: Listed) -> Option<ServeProject> {
-    let root = listed
-        .checkouts
-        .iter()
-        .map(PathBuf::from)
-        .find(|c| c.is_dir())?;
+    let root = root_of(&listed.name, &listed.checkouts)?;
     Some(ServeProject {
         name: listed.name,
         root,

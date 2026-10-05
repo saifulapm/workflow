@@ -2574,6 +2574,13 @@ impl Run {
         // The moment this run began, so adoption can tell its own fresh work
         // from what a run that died before it left behind.
         let _ = std::fs::write(self.dir.join("started"), format!("{}\n", sys::now()));
+        // The work tree this run stands in, rewritten on every start: serve
+        // starts the project's sessions there, since mem lists a project's
+        // checkouts by path and the first of them may be another clone.
+        let _ = std::fs::write(
+            self.dir.join("checkout"),
+            format!("{}\n", self.repo.display()),
+        );
         // What this run dispatches on, so a later `reap` for a run that is
         // gone dispatches on the same model rather than whatever the
         // environment or the project key happen to say by then.
