@@ -3,17 +3,21 @@
 # parks the task whose question it cannot answer; serve starts no second lead
 # for it and drops the label once the question is answered. A pause stops the
 # project's run once and starts nothing; resume lets serve start it again.
+# A walk that ends while its project is paused is read: a pass ticks the
+# milestone, a failure waits in the walk file, and nothing starts until resume.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
 export WF_TMP="$T_TMP"
+unset WORKFLOW_STATUS_FILE
 mkdir -p "$XDG_CONFIG_HOME/qshell"
 printf 'here\n' >"$XDG_CONFIG_HOME/qshell/machine"
 
 # The fake worker plays the lead when its brief's GOAL names a pickup, a
 # question or a failure, and a worker otherwise. The question lead parks the
 # task. cart lands a commit; ask asks until its brief carries the answer, then
-# ends without a word.
+# ends without a word. A walk waits for its go file, then walked passes and
+# walkfail files a finding on step 2 and fails it.
 write_exec "$T_TMP/fake-worker.sh" <<'FAKE'
 #!/bin/sh
 task=$1; status=$3; brief=$4
@@ -21,6 +25,23 @@ say() { printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${2:-}" >>"$s
 done_json() { printf '{"is_error":false,"result":"ok"}\n'; }
 goal=$(sed -n '/^## GOAL/,/^## SCOPE/p' "$brief")
 case "$goal" in
+*'Walk the Show path'*)
+	printf 'dogfood %s\n' "$MEM_PROJECT" >>"$WF_TMP/sessions.log"
+	while [ ! -e "$WF_TMP/go-$MEM_PROJECT" ]; do sleep 1; done
+	if [ "$MEM_PROJECT" = walkfail ]; then
+		mem finding add --milestone m1 --step 2 'the heading reads Helo' >/dev/null
+		workflow report ready 'failed 2'
+	else
+		workflow report ready pass
+	fi
+	done_json
+	exit 0
+	;;
+*'Turn the open findings into fix tasks'*)
+	printf 'lead findings %s\n' "$MEM_PROJECT" >>"$WF_TMP/sessions.log"
+	done_json
+	exit 0
+	;;
 *'Pick up the plan'*)
 	done_json
 	exit 0
@@ -75,6 +96,26 @@ printf '# roadmap: app-road\n\n- [ ] m1 The first milestone\n' | "$MEM_BIN" road
       Files: app/ask.php
       Verify: true
 EOF
+
+# walker <name>: a checkout whose one milestone has a two-step Show line and
+# a plan of the one task cart.
+walker() {
+	new_repo "$1"
+	mem_register
+	"$MEM_BIN" project set verify true >/dev/null
+	printf '# roadmap: %s-road\n\n- [ ] m1 The home page\n      Surface: web\n      Show: open the home page, the heading reads Hello\n' "$1" |
+		"$MEM_BIN" roadmap --stdin >/dev/null
+	"$MEM_BIN" roadmap --status approved >/dev/null
+	"$MEM_BIN" plan m1 --stdin >/dev/null <<-EOF
+	# plan: m1
+
+	- [ ] cart Add the cart
+	      Files: app/cart.php
+	      Verify: true
+	EOF
+}
+walker walked
+walker walkfail
 
 S="$XDG_STATE_HOME/workflow/serve/app"
 R="$XDG_STATE_HOME/workflow/runs/app/m1"
@@ -156,3 +197,45 @@ run workflow park ask 'too late'
 is "$RC" 2 'park with no live run exits 2'
 like "$OUT" 'no live run' 'and says why'
 [ -e "$R/ask.parked" ] && notok 'and writes nothing' || ok 'and writes nothing'
+
+## ------------------------------------------------- a walk read while paused
+
+cd "$T_TMP" || exit 1
+serve_dir() { printf '%s/workflow/serve/%s' "$XDG_STATE_HOME" "$1"; }
+stage_of() { cat "$(serve_dir "$1")/stage" 2>/dev/null; }
+sessions() { grep -c "^$1 $2$" "$T_TMP/sessions.log" 2>/dev/null; }
+road() { "$MEM_BIN" --project "$1" roadmap; }
+until_() { for _ in $(seq "$1"); do eval "$2" && return 0; sleep 1; done; return 1; }
+# paused_walk <name>: pause the project while its walk session goes, then let
+# the session report.
+paused_walk() {
+	local n=$1
+	until_ 120 '[ -e "$(serve_dir "$n")/walk" ] && [ "$(sessions dogfood "$n")" = 1 ]' ||
+		notok "$n walks" "$(tail -15 "$T_TMP/serve.out")"
+	workflow pause "$n" >/dev/null 2>&1
+	until_ 30 '[ "$(stage_of "$n")" = paused ]'
+	is "$(stage_of "$n")" paused "$n is paused while its walk goes"
+	touch "$T_TMP/go-$n"
+}
+
+W=$(serve_dir walked)
+paused_walk walked
+until_ 60 'road walked | grep -q "^- \[x\] m1 "'
+like "$(road walked)" '^- \[x\] m1 ' 'a walk that passes while paused ticks the milestone'
+[ -e "$W/walk" ] && notok 'the walk file goes with the pass' "$(cat "$W/walk")" || ok 'the walk file goes with the pass'
+sleep 3
+is "$(stage_of walked)" paused 'the stage stays paused'
+is "$(sessions dogfood walked)" 1 'and no second walk starts'
+
+F=$(serve_dir walkfail)
+paused_walk walkfail
+until_ 60 '[ "$(sed -n 2p "$F/walk" 2>/dev/null)" = "failed 2" ]'
+is "$(sed -n 2p "$F/walk" 2>/dev/null)" 'failed 2' 'a walk that fails while paused writes its outcome'
+is "$(sed -n 3p "$F/walk" 2>/dev/null)" 'strikes 1' 'and its strike'
+sleep 3
+is "$(stage_of walkfail)" paused 'the stage stays paused'
+is "$(sessions 'lead findings' walkfail)" 0 'no findings lead starts while paused'
+like "$(road walkfail)" '^- \[ \] m1 ' 'the milestone stays open'
+workflow resume walkfail >/dev/null 2>&1
+until_ 60 '[ "$(sessions "lead findings" walkfail)" = 1 ]'
+is "$(sessions 'lead findings' walkfail)" 1 'the findings lead goes out after resume'

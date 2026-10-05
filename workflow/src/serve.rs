@@ -602,12 +602,19 @@ impl Serve {
         }
     }
 
-    /// Paused: a live run is told to stop once, which stops its workers and
-    /// leaves their tasks dispatched for the next run to adopt; a run that
-    /// has gone is reaped; nothing starts.
+    /// Paused: a walk that has ended is read first, since landing its
+    /// milestone starts nothing; a live run is told to stop once, which stops
+    /// its workers and leaves their tasks dispatched for the next run to
+    /// adopt; a run that has gone is reaped; nothing starts. A walk already
+    /// read waits in its file for resume.
     fn hold(&mut self, p: &ServeProject) {
         if self.walk_again(p) {
             return;
+        }
+        let walk =
+            WalkState::read(&std::fs::read_to_string(p.dir().join(WALK)).unwrap_or_default());
+        if let Some(walk) = walk.filter(|w| w.outcome.is_none()) {
+            self.read_walk(p, walk, true);
         }
         let told = p.dir().join(STOPPED);
         match self.running(p) {
@@ -1207,7 +1214,7 @@ impl Serve {
     /// findings lead has gone out, so the tick goes on to the fix run.
     fn settle_walk(&mut self, p: &ServeProject) -> bool {
         let dir = p.dir();
-        let Some(mut walk) =
+        let Some(walk) =
             WalkState::read(&std::fs::read_to_string(dir.join(WALK)).unwrap_or_default())
         else {
             self.stage(p, "dogfood");
@@ -1240,8 +1247,21 @@ impl Serve {
             }
             None => {}
         }
+        self.read_walk(p, walk, false)
+    }
+
+    /// A walk with no outcome yet, read: nothing while it goes on, else its
+    /// run line, the findings a clean step fixed closed, and the milestone
+    /// landed on a pass or the outcome and strike written into the walk file.
+    /// Paused, the project starts nothing and keeps its stage: no findings
+    /// lead and no hold, the failed walk left in the file for resume.
+    fn read_walk(&mut self, p: &ServeProject, mut walk: WalkState, paused: bool) -> bool {
+        let dir = p.dir();
+        let slug = walk.slug.clone();
         let Some(outcome) = self.walk_outcome(p, &walk, &slug) else {
-            self.stage(p, "dogfood");
+            if !paused {
+                self.stage(p, "dogfood");
+            }
             return false;
         };
         let said = mem_on(&self.mem, &p.name, &["finding", "list", "--open", "--json"]);
@@ -1269,7 +1289,7 @@ impl Serve {
         let Some(outcome) = counted else {
             walk.outcome = Some(outcome);
             let _ = std::fs::write(dir.join(WALK), walk.line());
-            return self.held(p);
+            return if paused { false } else { self.held(p) };
         };
         if outcome == WalkOutcome::Pass {
             let _ = std::fs::remove_file(dir.join(WALK));
@@ -1280,8 +1300,13 @@ impl Serve {
         walk.outcome = Some(outcome);
         walk.strikes += 1;
         let _ = std::fs::write(dir.join(WALK), walk.line());
+        // The third strike asks its question even paused, since a question
+        // starts no session.
         if walk.strikes >= dogfood::STRIKES {
             self.strike_out(p, &slug);
+            return false;
+        }
+        if paused {
             return false;
         }
         if failed {
