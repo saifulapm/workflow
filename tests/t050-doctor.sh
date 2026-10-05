@@ -146,9 +146,10 @@ cd "$T_TMP" || exit 1
 
 ## ------------------------------------------------ the stubs, roles and skills
 
-# A bare HOME has none of the hook stubs, roles or skills. Every skill the
-# binary carries, and mem's, is installed as a file in both skills
-# directories, so each harness finds it where it looks.
+# A bare HOME has none of the hook stubs, roles, skills or plugin files. Every
+# skill the binary carries, and mem's, is installed as a file in both skills
+# directories, so each harness finds it where it looks; the plugin goes under
+# Claude Code's alone.
 export HOME="$T_TMP/embedded-home"
 mkdir -p "$HOME"
 
@@ -156,17 +157,22 @@ skills=($(workflow skill | sed 's/ — .*//') mem)
 roles=(worker lead dogfood review research plan plan-refresh grill)
 truthy "$([ "${#skills[@]}" -gt 1 ] && echo 0 || echo 1)" 'workflow skill names the skills it carries'
 is "${#roles[@]}" "$(ls "$WF_ROOT"/roles/*.md | wc -l)" 'the role list is every file under roles/'
-copies=$((4 + ${#roles[@]} + 2 * ${#skills[@]}))
+plugin=(.claude-plugin/plugin.json hooks/hooks.json hooks/register.ts hooks/band.ts hooks/guard.ts hooks/relay.ts)
+installed="$HOME/.claude/skills/workflow"
+copies=$((4 + ${#roles[@]} + 2 * ${#skills[@]} + ${#plugin[@]}))
 
 run workflow doctor
 is "$RC" 1 'a bare HOME has findings'
 n=$(grep -c 'missing at' <<<"$OUT")
-is "$n" "$copies" 'the hook stubs, every role and every skill in both dirs are missing'
+is "$n" "$copies" 'the hook stubs, every role, every skill in both dirs and the plugin are missing'
 for s in "${skills[@]}"; do
 	like "$OUT" "skill $s \\(claude\\).*missing at $HOME/\\.claude/skills/$s/SKILL\\.md" \
 		"a missing $s skill is named in the claude dir"
 	like "$OUT" "skill $s \\(agents\\).*missing at $HOME/\\.agents/skills/$s/SKILL\\.md" \
 		"and in the agents dir"
+done
+for f in "${plugin[@]}"; do
+	like "$OUT" "plugin $f.*missing at $installed/$f" "a missing plugin file $f is named"
 done
 like "$OUT" 'hook pre-commit.*missing at .*\.config/git/hooks/pre-commit' \
 	'a missing hook stub is named'
@@ -179,7 +185,7 @@ like "$OUT" "unit workflow\\.service.*missing at $unit" 'a missing service unit 
 
 run workflow doctor --fix
 n=$(grep -c '^  .* wrote ' <<<"$OUT")
-is "$n" "$copies" '--fix writes the stubs, the roles and the skills'
+is "$n" "$copies" '--fix writes the stubs, the roles, the skills and the plugin'
 is "$(cat "$HOME/.config/git/hooks/pre-commit")" "$(cat "$WF_ROOT/hooks/pre-commit")" \
 	'the stub holds the embedded text'
 is "$(stat -c %a "$HOME/.config/git/hooks/pre-commit")" 755 'the stub is written executable'
@@ -205,8 +211,13 @@ for s in "${skills[@]}"; do
 	done
 done
 
+for f in "${plugin[@]}"; do
+	is "$(cat "$installed/$f")" "$(cat "$WF_ROOT/plugin/$f")" "the plugin file $f holds the embedded text"
+done
+
 run workflow doctor
 unlike "$OUT" 'missing at' 'a second doctor after --fix finds nothing missing'
+unlike "$OUT" 'plugin ' 'and says nothing about the plugin'
 unlike "$OUT" 'skill [a-z-]+ \(' 'and says nothing about the skills'
 unlike "$OUT" 'retired|served' 'and no line says skills are served or retired'
 
@@ -226,6 +237,20 @@ run workflow doctor --fix
 like "$OUT" 'skill route \(claude\).*wrote ' '--fix rewrites it'
 is "$(cat "$HOME/.claude/skills/route/SKILL.md")" "$(cat "$WF_ROOT/skills/route/SKILL.md")" \
 	'and the copy holds the embedded text again'
+
+# The same goes for the plugin: a file gone and a file edited are each named.
+rm "$installed/hooks/band.ts"
+printf '// my own hooks\n' >>"$installed/hooks/register.ts"
+run workflow doctor
+is "$RC" 1 'a drifted plugin is a finding'
+like "$OUT" "plugin hooks/band\\.ts.*missing at $installed/hooks/band\\.ts" 'the missing file is named'
+like "$OUT" "plugin hooks/register\\.ts.*differs at $installed/hooks/register\\.ts" \
+	'the edited file is named as differing'
+
+run workflow doctor --fix
+for f in hooks/band.ts hooks/register.ts; do
+	is "$(cat "$installed/$f")" "$(cat "$WF_ROOT/plugin/$f")" "--fix restores $f"
+done
 
 ## --------------------------------------------- a symlinked name directory
 
@@ -248,6 +273,27 @@ is "$(cat "$HOME/.claude/skills/route/SKILL.md")" "$(cat "$WF_ROOT/skills/route/
 	'a plain copy stands in its place'
 is "$(cat "$fake/SKILL.md")" 'content in the dev checkout' \
 	'and the dev checkout it pointed at was never touched'
+
+# A linked `workflow` directory sits two levels above the plugin's hook
+# files; --fix must replace the link, not write through it.
+fakeplug="$T_TMP/fake-checkout/plugin"
+mkdir -p "$fakeplug/hooks"
+printf 'register in the dev checkout\n' >"$fakeplug/hooks/register.ts"
+rm -rf "$installed"
+ln -s "$fakeplug" "$installed"
+
+run workflow doctor
+like "$OUT" "plugin hooks/register\\.ts.*symlink at $installed/hooks/register\\.ts" \
+	'a symlinked workflow directory is found from a file below it'
+
+run workflow doctor --fix
+like "$OUT" 'plugin hooks/register\.ts.*wrote ' 'and replaced'
+truthy "$([ ! -L "$installed" ] && echo 0 || echo 1)" 'the link is gone'
+is "$(cat "$installed/hooks/register.ts")" "$(cat "$WF_ROOT/plugin/hooks/register.ts")" \
+	'a plain copy stands in its place'
+is "$(cat "$fakeplug/hooks/register.ts")" 'register in the dev checkout' \
+	'and the directory it pointed at was never touched'
+is "$(find "$fakeplug" -type f | wc -l)" 1 'nor written into'
 
 ## --------------------------------------------------- a stub with no x bit
 

@@ -381,6 +381,33 @@ TimeoutStopSec=60
 WantedBy=default.target
 ";
 
+/// The plugin's hooks, by their paths inside the plugin directory. Claude Code
+/// loads the copy `--fix` installs into every session; the checkout's own is
+/// for trying a change with `claude --plugin-dir plugin`.
+const PLUGIN: [(&str, &str); 6] = [
+    (
+        ".claude-plugin/plugin.json",
+        include_str!("../../plugin/.claude-plugin/plugin.json"),
+    ),
+    (
+        "hooks/hooks.json",
+        include_str!("../../plugin/hooks/hooks.json"),
+    ),
+    (
+        "hooks/register.ts",
+        include_str!("../../plugin/hooks/register.ts"),
+    ),
+    ("hooks/band.ts", include_str!("../../plugin/hooks/band.ts")),
+    (
+        "hooks/guard.ts",
+        include_str!("../../plugin/hooks/guard.ts"),
+    ),
+    (
+        "hooks/relay.ts",
+        include_str!("../../plugin/hooks/relay.ts"),
+    ),
+];
+
 /// The two directories `--fix` installs the skills into: Claude Code's own,
 /// and the one pi, codex and opencode all read.
 fn skill_dirs() -> [(&'static str, PathBuf); 2] {
@@ -400,13 +427,30 @@ enum Copy {
     Symlink,
 }
 
+/// The directories a write to `path` must not go through, outermost first:
+/// its parent, and every directory above that still inside a skills
+/// directory. Dotfiles link the *name directory* (`~/.claude/skills/<name>`),
+/// not the leaf file, and the plugin's hooks sit two levels below theirs.
+fn guarded_dirs(path: &Path) -> Vec<&Path> {
+    let skills = skill_dirs();
+    let inside = |dir: &Path| skills.iter().any(|(_, s)| dir != s && dir.starts_with(s));
+    let mut dirs: Vec<&Path> = path
+        .ancestors()
+        .skip(1)
+        .enumerate()
+        .take_while(|(i, dir)| *i == 0 || inside(dir))
+        .map(|(_, dir)| dir)
+        .collect();
+    dirs.reverse();
+    dirs
+}
+
 /// How `path` compares to the embedded `expected` text: `None` for a plain
 /// file that already holds exactly that text (and, when `mode` calls for an
-/// executable, already has the x bit). Dotfiles link the *name directory*
-/// (`~/.claude/skills/<name>`), not the leaf file, so the leaf itself is
-/// never the symlink to catch -- `path.parent()` is.
+/// executable, already has the x bit). A link at the leaf or at any of
+/// [`guarded_dirs`] is reported as one.
 fn compare(path: &Path, expected: &str, mode: Option<u32>) -> Option<Copy> {
-    if path.is_symlink() || path.parent().is_some_and(|p| p.is_symlink()) {
+    if path.is_symlink() || guarded_dirs(path).iter().any(|d| d.is_symlink()) {
         return Some(Copy::Symlink);
     }
     match std::fs::read_to_string(path) {
@@ -423,15 +467,19 @@ fn compare(path: &Path, expected: &str, mode: Option<u32>) -> Option<Copy> {
     }
 }
 
-/// Write `expected` to `path` as a plain file: a symlinked name directory or
-/// leaf is removed rather than followed, and a differing file is
-/// overwritten. `mode` is applied after the write; the hook stubs need 755,
-/// a skill needs nothing beyond what the write gave it.
+/// Write `expected` to `path` as a plain file: a symlinked directory among
+/// [`guarded_dirs`] or a symlinked leaf is removed rather than followed, and a
+/// differing file is overwritten. The outermost link goes first, so nothing
+/// under it is looked at through the link. `mode` is applied after the write;
+/// the hook stubs need 755, a skill needs nothing beyond what the write gave
+/// it.
 fn write_copy(path: &Path, expected: &str, mode: Option<u32>) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
+    for dir in guarded_dirs(path) {
         if dir.is_symlink() {
             std::fs::remove_file(dir)?;
         }
+    }
+    if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     if path.is_symlink() {
@@ -472,7 +520,8 @@ fn check_or_write(
     }
 }
 
-/// The hook stubs, roles and skills, against the copy this binary carries.
+/// The hook stubs, roles, skills and plugin, against the copy this binary
+/// carries.
 fn install(r: &mut Report, fix: bool) {
     let hooks = hooks_dir();
     for (name, text) in STUBS {
@@ -494,6 +543,17 @@ fn install(r: &mut Report, fix: bool) {
             let path = dir.join(name).join("SKILL.md");
             check_or_write(r, &format!("skill {name} ({dest})"), &path, text, fix, None);
         }
+    }
+    let plugin = paths::home().join(".claude/skills/workflow");
+    for (name, text) in PLUGIN {
+        check_or_write(
+            r,
+            &format!("plugin {name}"),
+            &plugin.join(name),
+            text,
+            fix,
+            None,
+        );
     }
 }
 

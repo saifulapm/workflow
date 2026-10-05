@@ -359,6 +359,36 @@ one per stage, until killed, then removes its store. `shot` takes the
 machine-wide lock `tests/t150-hub-browser.sh` takes to walk the Show path in a
 browser, because one browser at a time is what this machine's memory holds.
 
+## The mods
+
+`plugin/` is a Claude Code plugin of three mods. The workflow does not depend
+on them; they show a session what mem already knows.
+
+- **band** draws one dim line above the prompt: the project, its stage
+  (`paused` or the roadmap status), the milestone and its tasks, the questions
+  waiting on you and the runner. It reads `mem context --brief --json` when a
+  session starts, after each turn and once a minute, and stays empty outside a
+  project mem knows.
+- **clean-repo-guard** refuses a tool call that would create an agent
+  instruction file in a product repo mem knows, and a `git commit` whose
+  staged diff trips the hard tier the pre-commit hook refuses. It refuses only
+  a path that does not exist yet, so a repo not yet cleaned can still edit the
+  files it tracks.
+- **answer-relay** hands a session the answer to a question it asked with
+  `mem ask`, once, as soon as the answer is in.
+
+`workflow doctor --fix` installs them under `~/.claude/skills/workflow/`, the
+six plugin files verbatim from the binary, and `workflow doctor` reports a
+copy that is missing, differs or is a symlink, as it does for the skills. To
+try the checkout's own copy instead, start a session with it:
+
+    claude --plugin-dir plugin
+
+Every hook fails open, so a mod that breaks leaves the session as it was.
+`WORKFLOW_MODS=off` in a session's environment turns all three off; the
+environment is fixed when a session starts, so a command inside one cannot
+turn the guard off for the others.
+
 ## Pausing, moving, finishing
 
 - **Leaving a machine mid-work**: commit or stash, and
