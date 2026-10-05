@@ -109,37 +109,6 @@ pub struct Section<T> {
     pub rows: Vec<T>,
 }
 
-/// Everything one render needs, assembled from `mem`.
-#[derive(Debug, Clone)]
-pub struct View {
-    pub machine: String,
-    pub questions: Section<Question>,
-    pub activity: Section<Activity>,
-    pub projects: Section<Project>,
-}
-
-impl View {
-    /// The three sections. They share the mem cache, so the `mem projects`
-    /// call that both activity and projects need is made once.
-    pub fn build(mem: &MemCli, machine: &str, now_ms: i64) -> View {
-        View {
-            machine: machine.to_string(),
-            questions: questions(mem, now_ms),
-            activity: activity(mem, now_ms),
-            projects: projects(mem, now_ms),
-        }
-    }
-
-    /// The first reason any section gives, for the page-wide banner.
-    pub fn degraded(&self) -> Option<&str> {
-        self.questions
-            .degraded
-            .as_deref()
-            .or(self.activity.degraded.as_deref())
-            .or(self.projects.degraded.as_deref())
-    }
-}
-
 /// Pending questions, everywhere, newest first. This one call is
 /// cwd-independent — the review confirmed byte-identical output from inside a
 /// project and from a plain directory — so it is safe wherever systemd starts

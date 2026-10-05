@@ -7,7 +7,6 @@ use crate::config::Config;
 use crate::html::{self, Banner};
 use crate::http::{Request, Response};
 use crate::memcli::MemCli;
-use crate::model::View;
 use crate::origin::Guard;
 use crate::{api, model, pages};
 
@@ -265,17 +264,8 @@ impl App {
         }
     }
 
-    pub fn view(&self) -> View {
-        View::build(&self.mem, &self.machine, self.now_ms())
-    }
-
     fn now_ms(&self) -> i64 {
         jiff::Timestamp::now().as_millisecond()
-    }
-
-    pub fn dashboard(&self, request: &Request) -> Response {
-        let banner = Banner::from_query(&request.query);
-        Response::html(html::page(&self.view(), &self.config, &banner))
     }
 
     /// §3 and §9. The order matters: nothing runs `mem answer` until the

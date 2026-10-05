@@ -1,4 +1,4 @@
-//! The dashboard (spec §3), escaped (spec §9.1).
+//! The parts every page shares, escaped (spec §9.1).
 //!
 //! Every value that reaches this page came from `mem`, and mem's questions are
 //! written by an agent that has been reading repositories and web pages. A
@@ -11,10 +11,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark};
 
 use crate::config::Config;
 use crate::form::encode_component;
-use crate::model::{
-    Activity, ItemDetail, Project, ProjectView, Question, RunTask, Section, View, WikiProject,
-    is_slug,
-};
+use crate::model::{Activity, ItemDetail, ProjectView, RunTask, Section, WikiProject, is_slug};
 
 /// The one escaping function. `'` and `"` are in here because values also land
 /// in attributes (`value="…"`, `href="…"`).
@@ -76,23 +73,6 @@ impl Banner {
             Banner::Failed => "?failed=1".to_string(),
         }
     }
-
-    fn render(&self) -> String {
-        let (kind, text) = match self {
-            Banner::None => return String::new(),
-            Banner::Answered(id) => ("ok", format!("Answered #{}.", esc(id))),
-            Banner::Unknown => (
-                "warn",
-                "That id is not in the pending queue — it may already be answered.".to_string(),
-            ),
-            Banner::Empty => ("warn", "Type an answer first.".to_string()),
-            Banner::Failed => (
-                "warn",
-                "mem could not record that answer. Nothing was written.".to_string(),
-            ),
-        };
-        format!("<p class=\"banner {kind}\">{text}</p>\n")
-    }
 }
 
 const STYLE: &str = "\
@@ -133,88 +113,6 @@ article.md table{border-collapse:collapse}
 article.md th,article.md td{border:1px solid #8884;padding:.3rem .5rem}
 article.md blockquote{margin:0;padding-left:.8rem;border-left:3px solid #8884}
 ";
-
-/// The whole page. A guarded reload keeps it live: `<meta http-equiv=refresh>`
-/// reloaded unconditionally, and twice on the first real day it ate an answer
-/// being typed on iOS Safari. The script reloads only when it cannot cost
-/// anything — nothing focused, nothing typed. With JS disabled the page is
-/// simply still (answering already worked without JS, AC4); a stale page is
-/// the cheaper loss than a swallowed answer.
-pub fn page(view: &View, config: &Config, banner: &Banner) -> String {
-    let mut out = String::with_capacity(4096);
-    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
-    out.push_str("<meta charset=\"utf-8\">\n");
-    out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
-    out.push_str(
-        "<script>setInterval(function(){\
-         var a=document.activeElement;\
-         if(a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'))return;\
-         var f=document.querySelectorAll('textarea,input');\
-         for(var i=0;i<f.length;i++){if(f[i].value)return;}\
-         location.reload();},15000);</script>\n",
-    );
-    out.push_str(&format!("<title>hub — {}</title>\n", esc(&view.machine)));
-    out.push_str(&format!("<style>{STYLE}</style>\n"));
-    out.push_str("</head>\n<body>\n");
-
-    out.push_str("<header>\n");
-    out.push_str(&format!("<h1>{}</h1>\n", esc(&view.machine)));
-    out.push_str("<nav>");
-    for sibling in &config.siblings {
-        if let Some(link) = safe_link(sibling) {
-            out.push_str(&format!(
-                "<a href=\"{}\">{}</a>",
-                link,
-                esc(&label(sibling))
-            ));
-        }
-    }
-    out.push_str("<a href=\"/wiki\">wiki</a>");
-    out.push_str("<a href=\"/subscribe\">subscribe</a>");
-    out.push_str("</nav>\n</header>\n");
-
-    out.push_str(&banner.render());
-    if let Some(why) = view.degraded() {
-        out.push_str(&format!(
-            "<p class=\"banner degraded\">mem is not answering, so this page is \
-             out of date: {}</p>\n",
-            esc(why)
-        ));
-    }
-
-    out.push_str("<h2>Pending questions</h2>\n");
-    if view.questions.rows.is_empty() {
-        out.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
-    }
-    for question in &view.questions.rows {
-        out.push_str(&question_block(question));
-    }
-
-    out.push_str("<h2>Recent activity</h2>\n");
-    if view.activity.rows.is_empty() {
-        out.push_str("<p class=\"empty\">Nothing recorded yet.</p>\n");
-    } else {
-        out.push_str("<ul>\n");
-        for item in &view.activity.rows {
-            out.push_str(&activity_row(item));
-        }
-        out.push_str("</ul>\n");
-    }
-
-    out.push_str("<h2>Projects</h2>\n");
-    if view.projects.rows.is_empty() {
-        out.push_str("<p class=\"empty\">No projects registered.</p>\n");
-    } else {
-        out.push_str("<ul>\n");
-        for project in &view.projects.rows {
-            out.push_str(&project_row(project));
-        }
-        out.push_str("</ul>\n");
-    }
-
-    out.push_str("</body>\n</html>\n");
-    out
-}
 
 /// `GET /subscribe` (spec §3): the topic, both links, and the sentence that
 /// says accurately what subscribing exposes. No QR, and therefore no image
@@ -782,65 +680,6 @@ pub fn head(title: &str) -> String {
          <title>hub — {}</title>\n\
          <style>{STYLE}</style>\n</head>\n<body>\n",
         esc(title),
-    )
-}
-
-fn question_block(question: &Question) -> String {
-    let project = question.project.as_deref().unwrap_or("—");
-    format!(
-        "<article>\n\
-         <div class=\"meta\">{project} · {age} · #{short}</div>\n\
-         <p class=\"q\">{text}</p>\n\
-         {rec}\
-         <form method=\"post\" action=\"/answer\">\n\
-         <input type=\"hidden\" name=\"id\" value=\"{id}\">\n\
-         <textarea name=\"text\" rows=\"3\" placeholder=\"answer\" \
-         aria-label=\"answer\"></textarea>\n\
-         <button type=\"submit\">Answer</button>\n\
-         </form>\n\
-         </article>\n",
-        project = esc(project),
-        age = esc(&question.age),
-        short = esc(&question.short_id),
-        // pre-wrap in the stylesheet, so a batched, numbered ask keeps its
-        // lines instead of collapsing into one (review m-12).
-        text = esc(&question.text),
-        rec = rec_line(question),
-        id = esc(&question.id),
-    )
-}
-
-/// The options and the asker's pick on one line, so the answer can be typed
-/// from what is already on the page. Nothing when the question has neither.
-fn rec_line(question: &Question) -> String {
-    let mut parts = question.options.clone();
-    if let Some(text) = &question.recommend {
-        parts.push(format!("recommended: {text}"));
-    }
-    if parts.is_empty() {
-        return String::new();
-    }
-    format!("<p class=\"rec\">{}</p>\n", esc(&parts.join(" · ")))
-}
-
-fn activity_row(item: &Activity) -> String {
-    format!(
-        "<li>{title}<div class=\"meta\">{project} · {age}</div></li>\n",
-        title = esc(&item.title),
-        project = esc(item.project.as_deref().unwrap_or("—")),
-        age = esc(&item.age),
-    )
-}
-
-fn project_row(project: &Project) -> String {
-    format!(
-        "<li><strong><a href=\"{href}\">{name}</a></strong> <span class=\"meta\">{age}</span>\
-         <div>{status}</div></li>\n",
-        href = esc(&project_url(&project.name)),
-        name = esc(&project.name),
-        age = esc(project.last_activity_age.as_deref().unwrap_or("—")),
-        // AC7: a project with no status.md is an em dash, not an error.
-        status = esc(project.status.as_deref().unwrap_or("—")),
     )
 }
 
