@@ -165,6 +165,19 @@ if [ -n "$browser" ]; then
 	done
 	is "$wide" "" "no page is wider than 390 px (${#widths[@]} pages)"
 
+	# The seeded answer is one word longer than the phone's line, and it
+	# wraps inside its box rather than widening the page.
+	pw goto "$base/p/gamma/questions" >/dev/null
+	answered=$(js 'document.documentElement.outerHTML' | sed -n '/<h2>Answered<\/h2>/,$p' | tr -d '\n')
+	w=$(js 'document.documentElement.scrollWidth')
+	fit="${w:-none}"
+	case $answered in
+	*the_streak_kept_every_single_day_from_the_first_tick_to_the_last_without_a_break*)
+		[ -n "$w" ] && [ "$w" -le 390 ] && fit=fits ;;
+	*) fit="no long answer, width ${w:-none}" ;;
+	esac
+	is "$fit" fits 'a long unbroken answer wraps on the questions page at 390 px'
+
 	# The gallery's lazy image widens the page only once it has arrived, so
 	# the width is read after it decodes.
 	pw goto "$base/p/gamma/evidence" >/dev/null

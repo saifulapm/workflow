@@ -207,6 +207,10 @@ printf 'wf-g2-t2-k7qm\n' >"$run/g2-t2.session"
 printf 'pending\n' >"$run/g2-t3.state"
 printf 'waiting on g2-t2\n' >"$run/g2-t3.held"
 mem ask --for human --options 'nine,eight,ten' --recommend nine 'Which hour does the nag go out?' >/dev/null
+# An answer of one word longer than a phone's line, so the questions page
+# shows how an unbroken answer fits.
+named=$(mem ask --for human 'What is the streak called?' | sed -n 's/^#\([^ ]*\).*/\1/p')
+mem answer "$named" the_streak_kept_every_single_day_from_the_first_tick_to_the_last_without_a_break >/dev/null
 # A week of seven days with one ticked, small enough to sit here as text,
 # so the gallery has an image a screenshot can show without a browser.
 base64 -d >"$sb/week.png" <<<'iVBORw0KGgoAAAANSUhEUgAAAKAAAAB4CAIAAAD6wG44AAABJElEQVR42u3RsQ0AIAgAQWdxJ5d0JisrS0dwCCwIuQ81CVy7Kl3zAsACLMACLMACLMCAVQl47ROcX0v6HMFJdU6GJYABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwIABAwYMGDBgwEmBVTjAgAVYgAVYgAVYgAGrTA9RzR3lkHFmKgAAAABJRU5ErkJggg=='
