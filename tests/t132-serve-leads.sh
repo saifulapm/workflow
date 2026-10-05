@@ -133,3 +133,32 @@ is "$(cat "$R/die.state" 2>/dev/null)" failed 'and failed'
 is "$(leads failure)" 1 'one failure lead for it'
 like "$(cat "$T_TMP/leads.log")" 'failure die' 'naming the task'
 [ -s "$S/leads" ] && notok 'no lead is left recorded' "$(cat "$S/leads")" || ok 'no lead is left recorded'
+
+## ------------------------------------------- a takeover with old failures
+
+# A serve taking over a run reads its events from the start. Of three
+# tasks the events say failed, two have merged since, and only the one
+# still failed gets a lead.
+kill "$serve_pid" 2>/dev/null
+wait "$serve_pid" 2>/dev/null
+grep -v ' question ' "$R/events" >"$T_TMP/events"
+{
+	cat "$T_TMP/events"
+	printf '2026-10-03T10:00:00Z failed ask -- the worker stopped without reporting ready\n'
+	printf '2026-10-03T10:00:01Z failed old -- the worker stopped without reporting ready\n'
+} >"$R/events"
+printf 'merged\n' >"$R/old.state"
+rm -f "$S/events.cursor" "$S/served"
+before=$(leads failure)
+WORKFLOW_DEADLINE_MIN=0.5 workflow serve --tick 1 >>"$T_TMP/serve.out" 2>&1 &
+serve_pid=$!
+for _ in $(seq 60); do
+	[ "$(cat "$S/events.cursor" 2>/dev/null)" = "m1 $(stat -c %s "$R/events")" ] && break
+	sleep 1
+done
+sleep 3
+
+is "$(cat "$S/events.cursor" 2>/dev/null)" "m1 $(stat -c %s "$R/events")" 'serve read every event'
+is "$(leads failure)" "$((before + 1))" 'one failure lead on the takeover'
+is "$(grep '^failure' "$T_TMP/leads.log" | tail -n 1)" 'failure die' 'for the task still failed'
+is "$(cat "$S/served" 2>/dev/null)" 'failed die 2' 'and served holds only its key'

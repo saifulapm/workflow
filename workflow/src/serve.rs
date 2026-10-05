@@ -488,6 +488,14 @@ fn wanted(line: &str) -> Option<Wanted> {
     }
 }
 
+/// Whether a failure is still the task's state. The run sets the state
+/// before it writes the `failed` event, so a failure just written always
+/// stands, and one whose task has since merged or gone out again is history.
+fn failure_stands(run_dir: &Path, task: &str) -> bool {
+    std::fs::read_to_string(run_dir.join(format!("{task}.state")))
+        .is_ok_and(|s| s.trim() == run::FAILED)
+}
+
 /// How a project's child run stands at the top of a tick.
 enum Running {
     No,
@@ -2278,8 +2286,13 @@ impl Serve {
 
     /// One wanted event, served at most once: a question per id, unless
     /// its task is parked or it is answered already; a failure per task and
-    /// dispatch count.
+    /// dispatch count, while the task stands failed.
     fn serve_event(&mut self, p: &ServeProject, slug: &str, run_dir: &Path, w: Wanted) {
+        // A serve that takes over a run reads its events from the start, so
+        // a failure its task has moved on from is passed over unrecorded.
+        if matches!(&w, Wanted::Failed { task, .. } if !failure_stands(run_dir, task)) {
+            return;
+        }
         let key = match &w {
             Wanted::Question { id, .. } => format!("question {id}"),
             Wanted::Failed { task, .. } => {
@@ -2686,6 +2699,23 @@ mod tests {
             wanted("2026-10-03T10:00:05Z ended 1 merged, 1 failed"),
             None
         );
+    }
+
+    #[test]
+    fn serve_serves_a_failure_only_while_its_task_stands_failed() {
+        let dir = std::env::temp_dir().join(format!("wf-serve-failed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("t1.state"), "failed\n").unwrap();
+        std::fs::write(dir.join("t2.state"), "merged\n").unwrap();
+        std::fs::write(dir.join("t3.state"), "dispatched\n").unwrap();
+        std::fs::write(dir.join("t4.state"), "pending\n").unwrap();
+        assert!(failure_stands(&dir, "t1"));
+        assert!(!failure_stands(&dir, "t2"), "merged since");
+        assert!(!failure_stands(&dir, "t3"), "sent out again");
+        assert!(!failure_stands(&dir, "t4"), "put back to pending");
+        assert!(!failure_stands(&dir, "t5"), "no state file");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
