@@ -2,6 +2,8 @@
 # workflow doctor: it reports and never edits (AC3's hooksPath case, AC5b's
 # settings keys).
 source "$(dirname -- "$0")/lib.sh"
+# claude is looked up on the caller's PATH, which t_init narrows.
+claude_bin=$(command -v claude 2>/dev/null)
 t_init
 
 export WORKFLOW_SITES="$T_TMP/sites"
@@ -157,7 +159,7 @@ skills=($(workflow skill | sed 's/ — .*//') mem)
 roles=(worker lead dogfood review research plan plan-refresh grill)
 truthy "$([ "${#skills[@]}" -gt 1 ] && echo 0 || echo 1)" 'workflow skill names the skills it carries'
 is "${#roles[@]}" "$(ls "$WF_ROOT"/roles/*.md | wc -l)" 'the role list is every file under roles/'
-plugin=(.claude-plugin/plugin.json hooks/hooks.json hooks/register.ts hooks/band.ts hooks/guard.ts hooks/relay.ts)
+plugin=(.claude-plugin/plugin.json hooks/hooks.json hooks/register.ts hooks/band.ts hooks/guard.ts hooks/relay.ts types/index.d.ts)
 installed="$HOME/.claude/skills/workflow"
 copies=$((4 + ${#roles[@]} + 2 * ${#skills[@]} + ${#plugin[@]}))
 
@@ -214,6 +216,15 @@ done
 for f in "${plugin[@]}"; do
 	is "$(cat "$installed/$f")" "$(cat "$WF_ROOT/plugin/$f")" "the plugin file $f holds the embedded text"
 done
+# The copy --fix wrote is what Claude Code loads, so it has to validate on its
+# own. 2.1.287 is the first build with function hooks.
+version=$([ -n "$claude_bin" ] && "$claude_bin" --version 2>/dev/null | sed -n '1s/^\([0-9][0-9.]*\).*/\1/p')
+if [ -z "$version" ] || [ "$(printf '%s\n' 2.1.287 "$version" | sort -V | head -n 1)" != 2.1.287 ]; then
+	printf '# skip: claude 2.1.287 or newer is not installed\n'
+else
+	run "$claude_bin" plugin validate "$installed"
+	is "$RC" 0 'claude plugin validate passes on the installed plugin'
+fi
 
 run workflow doctor
 unlike "$OUT" 'missing at' 'a second doctor after --fix finds nothing missing'

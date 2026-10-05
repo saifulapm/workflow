@@ -381,10 +381,10 @@ TimeoutStopSec=60
 WantedBy=default.target
 ";
 
-/// The plugin's hooks, by their paths inside the plugin directory. Claude Code
+/// The plugin's files, by their paths inside the plugin directory. Claude Code
 /// loads the copy `--fix` installs into every session; the checkout's own is
 /// for trying a change with `claude --plugin-dir plugin`.
-const PLUGIN: [(&str, &str); 6] = [
+const PLUGIN: [(&str, &str); 7] = [
     (
         ".claude-plugin/plugin.json",
         include_str!("../../plugin/.claude-plugin/plugin.json"),
@@ -405,6 +405,10 @@ const PLUGIN: [(&str, &str); 6] = [
     (
         "hooks/relay.ts",
         include_str!("../../plugin/hooks/relay.ts"),
+    ),
+    (
+        "types/index.d.ts",
+        include_str!("../../plugin/types/index.d.ts"),
     ),
 ];
 
