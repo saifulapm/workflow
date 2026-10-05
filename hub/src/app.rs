@@ -110,25 +110,21 @@ impl App {
         }
     }
 
-    /// `GET /p/<project>` and its detail routes: a bare name is the
-    /// overview, and everything after it is checked against one of the known
-    /// shapes — `log`, `roadmap`, `plan`, `plan/<slug>`, `items/<kind>`,
-    /// `item/<id>` — before it reaches an argv. Anything else is a 404, as
-    /// `/wiki/` already does.
+    /// The detail routes under `GET /p/<project>/`: everything after the
+    /// project is checked against one of the known shapes — `log`, `plan`,
+    /// `plan/<slug>`, `items/<kind>`, `item/<id>` — before it reaches an argv.
+    /// Anything else is a 404, as `/wiki/` already does.
     pub fn project_page(&self, rest: &str) -> Response {
-        let (project, sub) = match rest.split_once('/') {
-            Some((project, sub)) => (project, Some(sub)),
-            None => (rest, None),
+        let Some((project, sub)) = rest.split_once('/') else {
+            return Response::not_found();
         };
         if project.is_empty() || !model::is_known_project(&self.mem, project) {
             return Response::not_found();
         }
         match sub {
-            None => self.project_overview(project),
-            Some("log") => self.project_log(project),
-            Some("roadmap") => self.project_roadmap(project),
-            Some("plan") => self.project_plan(project),
-            Some(sub) => {
+            "log" => self.project_log(project),
+            "plan" => self.project_plan(project),
+            sub => {
                 if let Some(slug) = sub.strip_prefix("plan/") {
                     self.project_plan_slug(project, slug)
                 } else if let Some(kind) = sub.strip_prefix("items/") {
@@ -142,17 +138,6 @@ impl App {
         }
     }
 
-    fn project_overview(&self, project: &str) -> Response {
-        match model::project_view(&self.mem, project, self.now_ms()) {
-            Some(view) => {
-                let root = model::checkout_of(&self.mem, project);
-                let runs = model::runs(root.as_deref());
-                Response::html(html::project_page(&view, &self.machine, &runs))
-            }
-            None => Response::not_found(),
-        }
-    }
-
     /// `GET /p/<project>/log`.
     fn project_log(&self, project: &str) -> Response {
         let section = model::log_lines(&self.mem, project, self.now_ms());
@@ -161,19 +146,6 @@ impl App {
             &section.rows,
             section.degraded.as_deref(),
         ))
-    }
-
-    /// `GET /p/<project>/roadmap` — the roadmap's whole text, uncut (contrast
-    /// the overview's 40-line excerpt).
-    pub fn project_roadmap(&self, project: &str) -> Response {
-        match model::project_view(&self.mem, project, self.now_ms()) {
-            Some(view) => Response::html(html::roadmap_page(
-                project,
-                view.roadmap.as_deref(),
-                view.degraded.as_deref(),
-            )),
-            None => Response::not_found(),
-        }
     }
 
     /// `GET /p/<project>/plan` — the current plan's whole text.

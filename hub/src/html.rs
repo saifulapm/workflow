@@ -11,7 +11,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark};
 
 use crate::config::Config;
 use crate::form::encode_component;
-use crate::model::{Activity, ItemDetail, ProjectView, RunTask, Section, WikiProject, is_slug};
+use crate::model::{Activity, ItemDetail, Section, WikiProject, is_slug};
 
 /// The one escaping function. `'` and `"` are in here because values also land
 /// in attributes (`value="…"`, `href="…"`).
@@ -210,17 +210,6 @@ pub fn items_page(project: &str, kind: &str, rows: &[Activity], degraded: Option
     out
 }
 
-/// `GET /p/<project>/roadmap`: the roadmap's whole text, uncut.
-pub fn roadmap_page(project: &str, text: Option<&str>, degraded: Option<&str>) -> String {
-    let mut out = detail_head(project, "roadmap");
-    if let Some(why) = degraded {
-        out.push_str(&degraded_banner(why));
-    }
-    out.push_str(&markdown_article(text, project, "No roadmap recorded."));
-    out.push_str("</body>\n</html>\n");
-    out
-}
-
 /// `GET /p/<project>/plan` and `GET /p/<project>/plan/<slug>`: a plan's whole
 /// text, so its ticks show.
 pub fn plan_page(
@@ -395,83 +384,6 @@ pub fn markdown_ids(text: &str, project: &str, ids: &[(String, String)]) -> Stri
     out
 }
 
-/// The overview cuts a roadmap at 40 lines, with a link to the whole.
-const ROADMAP_LINES: usize = 40;
-
-/// `GET /p/<project>`: the overview's sections, in order.
-pub fn project_page(view: &ProjectView, machine: &str, runs: &Section<RunTask>) -> String {
-    let project = view.name.as_str();
-    let mut out = head(project);
-    out.push_str(&format!(
-        "<header><h1>{}</h1><nav><a href=\"/wiki\">wiki</a><a href=\"/\">home</a></nav></header>\n",
-        esc(project),
-    ));
-    if let Some(why) = &view.degraded {
-        out.push_str(&format!(
-            "<p class=\"banner degraded\">mem is not answering, so this page is \
-             out of date: {}</p>\n",
-            esc(why)
-        ));
-    }
-
-    out.push_str("<h2>Status</h2>\n");
-    out.push_str(&body_block(view.status.as_deref(), "No status recorded."));
-
-    out.push_str("<h2>Handoff</h2>\n");
-    out.push_str(&body_block(view.handoff.as_deref(), "No handoff recorded."));
-
-    out.push_str(&roadmap_section(view, project));
-    out.push_str(&plan_section(view, project));
-    out.push_str(&stored_plans_section(view, project));
-    out.push_str(&questions_section(view));
-    out.push_str(&item_list_section("Rulings", &view.rulings, project));
-    out.push_str(&item_list_section("Log", &view.log, project));
-    out.push_str(&format!(
-        "<p><a href=\"{}\">full log</a></p>\n",
-        esc(&log_url(project))
-    ));
-    out.push_str(&wiki_section(view, project));
-    out.push_str(&runs_section(runs, machine));
-
-    out.push_str("</body>\n</html>\n");
-    out
-}
-
-/// Each task, with the run it belongs to. `runs.degraded` carries
-/// the one sentence for no checkout, no `workflow` on PATH or a non-zero
-/// exit — never the mem banner, since this section's read is not a mem read.
-fn runs_section(runs: &Section<RunTask>, machine: &str) -> String {
-    let mut out = format!("<h2>Runs on {}</h2>\n", esc(machine));
-    if let Some(why) = &runs.degraded {
-        out.push_str(&format!("<p class=\"empty\">{}</p>\n", esc(why)));
-        return out;
-    }
-    if runs.rows.is_empty() {
-        out.push_str("<p class=\"empty\">No runs.</p>\n");
-        return out;
-    }
-    out.push_str("<ul>\n");
-    for task in &runs.rows {
-        out.push_str(&format!(
-            "<li>{plan} <span class=\"meta\">{integration}</span>{live} · {id} \
-             <span class=\"meta\">{state} · {dispatches} dispatches{last}</span></li>\n",
-            plan = esc(&task.plan),
-            integration = esc(&task.integration),
-            live = if task.live { " (live)" } else { "" },
-            id = esc(&task.id),
-            state = esc(&task.state),
-            dispatches = task.dispatches,
-            last = if task.last_status.is_empty() {
-                String::new()
-            } else {
-                format!(" · {}", esc(&task.last_status))
-            },
-        ));
-    }
-    out.push_str("</ul>\n");
-    out
-}
-
 /// An item body renders pre-wrap like a question's text — status
 /// and handoff both render this way.
 fn body_block(text: Option<&str>, empty: &str) -> String {
@@ -479,89 +391,6 @@ fn body_block(text: Option<&str>, empty: &str) -> String {
         Some(text) => format!("<p class=\"q\">{}</p>\n", esc(text)),
         None => format!("<p class=\"empty\">{empty}</p>\n"),
     }
-}
-
-fn roadmap_section(view: &ProjectView, project: &str) -> String {
-    let mut out = String::from("<h2>Roadmap</h2>\n");
-    match &view.roadmap {
-        None => out.push_str("<p class=\"empty\">No roadmap recorded.</p>\n"),
-        Some(text) => {
-            out.push_str("<article class=\"md\">\n");
-            out.push_str(&markdown(&truncate_lines(text, ROADMAP_LINES), project));
-            out.push_str("</article>\n");
-            out.push_str(&format!(
-                "<p><a href=\"{}\">full roadmap</a></p>\n",
-                esc(&roadmap_url(project))
-            ));
-        }
-    }
-    out
-}
-
-fn truncate_lines(text: &str, limit: usize) -> String {
-    text.lines().take(limit).collect::<Vec<_>>().join("\n")
-}
-
-fn plan_section(view: &ProjectView, project: &str) -> String {
-    let mut out = String::from("<h2>Current plan</h2>\n");
-    match &view.plan {
-        None => out.push_str("<p class=\"empty\">No current plan.</p>\n"),
-        Some(plan) => out.push_str(&format!(
-            "<p><a href=\"{href}\">{title}</a> — {ticked}/{total}</p>\n",
-            href = esc(&plan_url(project)),
-            title = esc(&plan.title),
-            ticked = plan.ticked,
-            total = plan.total,
-        )),
-    }
-    out
-}
-
-fn stored_plans_section(view: &ProjectView, project: &str) -> String {
-    let mut out = String::from("<h2>Stored plans</h2>\n");
-    if view.stored_plans.is_empty() {
-        out.push_str("<p class=\"empty\">No stored plans.</p>\n");
-    } else {
-        out.push_str("<ul>\n");
-        for plan in &view.stored_plans {
-            out.push_str(&format!(
-                "<li><a href=\"{href}\">{slug}</a>\
-                 <div class=\"meta\">{bytes} bytes · {date}</div></li>\n",
-                href = esc(&stored_plan_url(project, &plan.slug)),
-                slug = esc(&plan.slug),
-                bytes = plan.bytes,
-                date = esc(plan.modified.as_deref().unwrap_or("—")),
-            ));
-        }
-        out.push_str("</ul>\n");
-    }
-    out
-}
-
-fn questions_section(view: &ProjectView) -> String {
-    let mut out = String::from("<h2>Questions</h2>\n");
-    if view.questions.is_empty() {
-        out.push_str("<p class=\"empty\">No questions.</p>\n");
-        return out;
-    }
-    for question in &view.questions {
-        out.push_str(&format!(
-            "<article>\n<div class=\"meta\">#{short} · {state}</div>\n\
-             <p class=\"q\">{text}</p>\n",
-            short = esc(&question.short_id),
-            state = if question.answered {
-                "answered"
-            } else {
-                "pending"
-            },
-            text = esc(&question.text),
-        ));
-        if let Some(answer) = &question.answer {
-            out.push_str(&format!("<p class=\"q\">{}</p>\n", esc(answer)));
-        }
-        out.push_str("</article>\n");
-    }
-    out
 }
 
 /// Rulings and log both list `Activity` rows, each linked to its own item.
@@ -584,42 +413,8 @@ fn item_list_section(title: &str, rows: &[Activity], project: &str) -> String {
     out
 }
 
-fn wiki_section(view: &ProjectView, project: &str) -> String {
-    let mut out = String::from("<h2>Wiki</h2>\n");
-    if view.wiki.is_empty() {
-        out.push_str("<p class=\"empty\">No pages yet.</p>\n");
-    } else {
-        out.push_str("<ul>\n");
-        for page in &view.wiki {
-            out.push_str(&format!(
-                "<li><a href=\"{href}\">{title}</a></li>\n",
-                href = esc(&page_url(project, &page.slug)),
-                title = esc(&page.title),
-            ));
-        }
-        out.push_str("</ul>\n");
-    }
-    out
-}
-
 pub fn project_url(project: &str) -> String {
     format!("/p/{}", encode_component(project))
-}
-
-fn roadmap_url(project: &str) -> String {
-    format!("{}/roadmap", project_url(project))
-}
-
-fn plan_url(project: &str) -> String {
-    format!("{}/plan", project_url(project))
-}
-
-fn stored_plan_url(project: &str, slug: &str) -> String {
-    format!("{}/plan/{}", project_url(project), encode_component(slug))
-}
-
-fn log_url(project: &str) -> String {
-    format!("{}/log", project_url(project))
 }
 
 pub fn item_url(project: &str, id: &str) -> String {
