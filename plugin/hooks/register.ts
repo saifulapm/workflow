@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, Timer } from 'claude-code'
 
 import { bandLine } from './band'
-import { refusal } from './guard'
+import { commitsHere, refusal } from './guard'
 
 // The switch is read from the environment, fixed when the session starts, so
 // a session cannot turn the mods off for every other one with a command.
@@ -79,6 +79,22 @@ export const register: Register = on => {
     if (run.exitCode !== 1) return next(e)
     $.ui.toast(`refused a new agent file: ${path}`)
     return { deny: refusal(run.stdout.trim()) }
+  })
+
+  // Asks the binary about the staged diff before a commit in a checkout mem
+  // knows, so the session reads the finding before git runs. Anything but
+  // exit 1 lets the commit through; the pre-commit hook stays the gate, also
+  // for `git commit -a`, whose changes are staged only as it runs.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if ((await off($)) || !commitsHere(e.command)) return next(e)
+    const run = await $.process.run(['workflow', 'hygiene', '--staged', '--known'], {
+      cwd: await $.session.cwd(),
+      timeoutMs: 5000,
+    })
+    const finding = run.stdout.split('\n').find(l => l.includes(' hard '))
+    if (run.exitCode !== 1 || finding === undefined) return next(e)
+    $.ui.toast(`refused a commit: ${finding}`)
+    return { deny: refusal(finding) }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
