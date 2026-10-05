@@ -1,0 +1,10 @@
+{
+  "name": "workflow",
+  "version": "0.1.0",
+  "description": "Mods that decorate a Claude Code session for the workflow; WORKFLOW_MODS=off switches them off",
+  "author": {
+    "name": "Saiful Islam",
+    "email": "saiful.apm@gmail.com"
+  },
+  "types": "./types/index.d.ts"
+}
