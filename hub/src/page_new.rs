@@ -57,6 +57,11 @@ pub const WAITING: &str = "sent, waiting for the engine";
 pub fn new_post(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
     let form = ctx.rest;
+    // The photo upload already posts here under its own body cap; its form
+    // has no handler yet, so it answers the bare page and writes nothing.
+    if form == "finding" {
+        return Response::html(page_shell("new", ctx.project, ""));
+    }
     if !FORMS.contains(&form) {
         return Response::not_found();
     }
