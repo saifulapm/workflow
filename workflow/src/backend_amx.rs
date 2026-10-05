@@ -18,7 +18,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::backend::{
-    Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in, limit_notice_in,
+    AtPrompt, Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
+    limit_notice_in,
 };
 use crate::{gitcmd, paths, sys};
 
@@ -97,6 +98,11 @@ struct Status {
     /// The text of the question the pane is stopped at, off `question.text`.
     /// `null` while nothing is asked.
     question: Option<String>,
+    /// What sort of prompt the pane is at: `permission`, `question` or
+    /// `trust`. Empty when amx could not tell (`null`).
+    kind: String,
+    /// The prompt's choices, by label, in screen order.
+    options: Vec<String>,
 }
 
 /// The pure half of [`status`], so the parse is testable without an amx.
@@ -131,6 +137,29 @@ fn status_in(json: &str) -> Option<Status> {
             .and_then(|q| q.get("text"))
             .and_then(|s| s.as_str())
             .map(|s| s.to_string()),
+        kind: v
+            .get("kind")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        options: v
+            .get("options")
+            .and_then(|o| o.as_array())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+/// The prompt a status document says its pane is at. amx keeps the last
+/// prompt's fields after it is answered, so only `waiting` means one is up.
+fn prompt(s: Status) -> Option<AtPrompt> {
+    (s.state == "waiting").then_some(AtPrompt {
+        kind: s.kind,
+        options: s.options,
     })
 }
 
@@ -348,6 +377,9 @@ fn spawn(argv: &[String], d: &Dispatch) -> Option<std::process::Output> {
     c.env("AMX_SCOPE", scope.join(" "));
     // How a worker's hooks and mem know they are a worker's.
     c.env("WORKFLOW_AGENT", "1");
+    // How a hook tells a session the engine started from one the owner did:
+    // `WORKFLOW_AGENT` is in the owner's settings too, and nothing else sets this.
+    c.env("WORKFLOW_ENGINE", "1");
     for name in scrubbed(std::env::vars().map(|(k, _)| k)) {
         c.env_remove(name);
     }
@@ -602,6 +634,20 @@ impl WorkerBackend for AmxBackend {
             .and_then(|s| s.question)
             .unwrap_or_default()
     }
+
+    /// Off the same document as `question`: amx reads the prompt's kind and
+    /// choices off the pane.
+    fn at_prompt(&self, h: &Handle) -> Option<AtPrompt> {
+        status(&h.session).and_then(prompt)
+    }
+
+    /// `amx answer <id> <key>`, which presses the key at the prompt.
+    fn answer_prompt(&self, h: &Handle, key: &str) -> bool {
+        if h.session.is_empty() {
+            return false;
+        }
+        amx(&["answer", &h.session, key]).1
+    }
 }
 
 #[cfg(test)]
@@ -703,6 +749,37 @@ mod tests {
             status_in(&asked).unwrap().question,
             Some("Quick safety check: Is this a project you created or one you trust?".to_string())
         );
+    }
+
+    #[test]
+    fn status_in_reads_the_prompt_kind_and_its_choices() {
+        // `"kind": null` is amx not telling what the prompt is.
+        let s = status_in(STATUS).unwrap();
+        assert_eq!(s.kind, "");
+        assert!(s.options.is_empty());
+
+        let trust = STATUS
+            .replace("\"state\": \"working\"", "\"state\": \"waiting\"")
+            .replace("\"kind\": null", "\"kind\": \"trust\"")
+            .replace(
+                "\"options\": []",
+                "\"options\": [\"Yes, I trust this folder\", \"No, exit\"]",
+            );
+        assert_eq!(
+            prompt(status_in(&trust).unwrap()),
+            Some(AtPrompt {
+                kind: "trust".to_string(),
+                options: vec![
+                    "Yes, I trust this folder".to_string(),
+                    "No, exit".to_string()
+                ],
+            })
+        );
+
+        // Only a waiting session is at a prompt, whatever amx last kept.
+        assert_eq!(prompt(status_in(STATUS).unwrap()), None);
+        let idle = trust.replace("\"state\": \"waiting\"", "\"state\": \"idle\"");
+        assert_eq!(prompt(status_in(&idle).unwrap()), None);
     }
 
     #[test]
@@ -1106,6 +1183,7 @@ exit 0
         let env = fake.read("env");
         let has = |line: &str| env.lines().any(|l| l == line);
         assert!(has("WORKFLOW_AGENT=1"), "{env}");
+        assert!(has("WORKFLOW_ENGINE=1"), "{env}");
         assert!(has("CARGO_TARGET_DIR=/tmp/target"), "{env}");
         // The pairs are the worker's alone: an agent it starts by hand
         // leaves them behind.

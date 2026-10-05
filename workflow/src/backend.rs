@@ -57,6 +57,17 @@ pub struct Outcome {
     pub ok: bool,
 }
 
+/// A prompt drawn in front of a session: what sort it is and the choices it
+/// offers, as the backend read them off the screen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AtPrompt {
+    /// `permission`, `question` or `trust`; empty when the backend could not
+    /// tell.
+    pub kind: String,
+    /// The choices' labels in the order the screen draws them.
+    pub options: Vec<String>,
+}
+
 pub trait WorkerBackend {
     /// A fresh handle for one dispatch. A redispatch mints a new one.
     fn mint_session(&self) -> String;
@@ -154,6 +165,18 @@ pub trait WorkerBackend {
     /// answer file records. Empty when there is none, or nothing can see.
     fn question(&self, _h: &Handle) -> String {
         String::new()
+    }
+    /// The prompt the session is stopped at, while it is stopped at one. A
+    /// folder-trust screen is answered here rather than in the vendor's own
+    /// trust file, which is not ours to write. The process seam has no
+    /// screen to read.
+    fn at_prompt(&self, _h: &Handle) -> Option<AtPrompt> {
+        None
+    }
+    /// Press `key` at the prompt the session is stopped at. `true` only when
+    /// the backend took the answer.
+    fn answer_prompt(&self, _h: &Handle, _key: &str) -> bool {
+        false
     }
     /// [`limit_notice_in`] over the session's transcript: the harness's own
     /// word that a request was refused, the one sign of a limit no test
