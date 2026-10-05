@@ -432,6 +432,16 @@ fn capitalize(word: &str) -> String {
 ///   that fetches from a third party without being asked, and a page is read on
 ///   a phone over the tailnet.
 pub fn markdown(text: &str, project: &str) -> String {
+    markdown_ids(text, project, &[])
+}
+
+/// `markdown`, with ids on headings: a heading whose text is a pair's first
+/// gets that pair's second as its id, so a contents list or a search hit can
+/// link to it. The text is the heading's source line without its `#`s, which
+/// is how mem names a section, so a heading with `code` in it still matches.
+/// Each pair is used once and in order, so a repeated heading takes the ids
+/// mem numbered for it one after the other.
+pub fn markdown_ids(text: &str, project: &str, ids: &[(String, String)]) -> String {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -441,8 +451,30 @@ pub fn markdown(text: &str, project: &str) -> String {
     // Links do not nest in CommonMark, so one flag is exact: it says whether
     // the link now open is one whose `Start` was kept.
     let mut link_open = false;
-    for event in Parser::new_ext(text, options) {
+    let mut used = vec![false; ids.len()];
+    for (event, range) in Parser::new_ext(text, options).into_offset_iter() {
         match event {
+            Event::Start(Tag::Heading {
+                level,
+                id: _,
+                classes,
+                attrs,
+            }) => {
+                let source = text[range].lines().next().unwrap_or_default();
+                let heading = source.trim_start().trim_start_matches('#').trim();
+                let id = ids.iter().enumerate().find_map(|(n, (name, id))| {
+                    (!used[n] && name == heading).then(|| {
+                        used[n] = true;
+                        id.clone().into()
+                    })
+                });
+                events.push(Event::Start(Tag::Heading {
+                    level,
+                    id,
+                    classes,
+                    attrs,
+                }));
+            }
             // A block of raw HTML keeps its place in the flow, as a paragraph
             // of text saying what was written.
             Event::Start(Tag::HtmlBlock) => events.push(Event::Start(Tag::Paragraph)),
@@ -925,6 +957,21 @@ mod tests {
         ] {
             assert_eq!(destination(dest, "p"), None, "{dest}");
         }
+    }
+
+    #[test]
+    fn a_heading_named_by_a_pair_takes_its_id_once_and_in_order() {
+        let ids = [("Notes", "notes"), ("Notes", "notes-2"), ("`x` y", "x-y")]
+            .map(|(name, id)| (name.to_string(), id.to_string()));
+        let out = markdown_ids("# Title\n\n## Notes\n\n## Notes\n\n## `x` y\n", "p", &ids);
+        assert!(out.contains("<h1>Title</h1>"), "{out}");
+        let first = out.find("<h2 id=\"notes\">Notes</h2>").expect(&out);
+        let second = out.find("<h2 id=\"notes-2\">Notes</h2>").expect(&out);
+        assert!(first < second, "{out}");
+        assert!(
+            out.contains("<h2 id=\"x-y\"><code>x</code> y</h2>"),
+            "{out}"
+        );
     }
 
     #[test]
