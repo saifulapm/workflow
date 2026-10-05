@@ -207,6 +207,9 @@ pub enum Command {
         /// Only the questions this audience answers.
         #[arg(long = "for", value_name = "AUDIENCE")]
         audience: Option<Audience>,
+        /// Only the questions this session asked, from any project.
+        #[arg(long, value_name = "SESSION")]
+        asked_by: Option<String>,
         /// Wait for this question to be answered.
         #[arg(long, value_name = "ID")]
         wait: Option<String>,

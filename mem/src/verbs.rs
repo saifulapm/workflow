@@ -1917,6 +1917,13 @@ pub fn ask(
         meta.task = task;
     }
     let written = crate::write::write_item(app, &identity, meta, question.to_string())?;
+    // The run hands the orchestrator's answers back itself; the session list
+    // is for answers a person gives.
+    if audience != Some("orchestrator")
+        && let Some(session) = &app.session_id
+    {
+        crate::session::record_asked(&app.dirs.sessions_dir(), session, &written.short_id);
+    }
     // No bell here: hub's doorbell owns delivery, and it knows whether anyone
     // is watching. When mem rang its own notify-send too, every question
     // arrived twice — and this one carried the question text, which the
@@ -1945,32 +1952,47 @@ pub fn ask(
 /// a person's, the session driving a run asks for the orchestrator's. The
 /// JSON carries the body and the answer, so a run can hand a worker's
 /// answered question to its next attempt without a second verb.
+///
+/// `--asked-by` lists what one session asked, from its session file, in any
+/// project and answered or not.
 pub fn questions(
     app: &App,
     pending: bool,
     all_projects: bool,
     audience: Option<crate::cli::Audience>,
+    asked_by: Option<&str>,
     wait: Option<&str>,
     timeout: &str,
 ) -> Result<i32> {
+    if asked_by.is_some() && wait.is_some() {
+        return Err(exit::usage(
+            "--asked-by lists questions; --wait waits on one",
+        ));
+    }
     // A wait resolves its own scope from the question, so this checkout's
     // identity — and the git call behind it — is only the listing's business.
     if let Some(id) = wait {
         return wait_for(app, id, timeout);
     }
 
-    let identity = app.identity(Mode::Read)?;
     let index = app.read_index()?;
-    let mut rows = if all_projects {
-        let mut all = index.pending_questions(None)?;
-        for project in crate::project::Registry::load(&app.store).projects {
-            all.extend(index.pending_questions(Some(&project.id))?);
+    // A session's own list spans projects, so it needs no checkout.
+    let mut rows = match asked_by {
+        Some(session) => asked_questions(app, &index, session, pending)?,
+        None => {
+            let identity = app.identity(Mode::Read)?;
+            if all_projects {
+                let mut all = index.pending_questions(None)?;
+                for project in crate::project::Registry::load(&app.store).projects {
+                    all.extend(index.pending_questions(Some(&project.id))?);
+                }
+                all
+            } else if pending {
+                index.pending_questions(identity.id())?
+            } else {
+                index.recent("question", identity.id(), 50)?
+            }
         }
-        all
-    } else if pending {
-        index.pending_questions(identity.id())?
-    } else {
-        index.recent("question", identity.id(), 50)?
     };
     if let Some(audience) = audience {
         rows.retain(|row| row.audience.as_deref() == audience.stored());
@@ -2023,6 +2045,28 @@ pub fn questions(
         return Ok(exit::NOT_FOUND);
     }
     Ok(exit::OK)
+}
+
+/// The questions a session's file names, in the order it asked them. A short
+/// id that no longer resolves to a question (pruned, say) is skipped.
+fn asked_questions(
+    app: &App,
+    index: &crate::index::Index,
+    session: &str,
+    pending: bool,
+) -> Result<Vec<crate::index::Row>> {
+    let mut rows = Vec::new();
+    for short in crate::session::read(&app.dirs.sessions_dir(), session).asked {
+        let Some(id_ref) = crate::ids::IdRef::parse(&short) else {
+            continue;
+        };
+        for row in index.resolve_ref(&id_ref)? {
+            if row.kind == "question" && !(pending && index.answer_to(&row.id)?.is_some()) {
+                rows.push(row);
+            }
+        }
+    }
+    Ok(rows)
 }
 
 fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {

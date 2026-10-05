@@ -14,6 +14,21 @@ fn ask_env(
     args: &[&str],
     notify_log: Option<&std::path::Path>,
 ) -> std::process::Output {
+    let mut cmd = mem_cmd(w, cwd, args);
+    match notify_log {
+        // A stub standing in for notify-send: it appends the arguments it was
+        // called with to a file the test can read.
+        Some(path) => {
+            cmd.env("MEM_NOTIFY_CMD", path.display().to_string());
+        }
+        None => {
+            cmd.env("MEM_NOTIFY_CMD", "true");
+        }
+    }
+    cmd.output().expect("run mem")
+}
+
+fn mem_cmd(w: &World, cwd: &std::path::Path, args: &[&str]) -> std::process::Command {
     let dirs = w.dirs();
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_mem"));
     cmd.current_dir(cwd)
@@ -27,17 +42,7 @@ fn ask_env(
         .env_remove("WORKFLOW_TASK")
         .env_remove("MEM_PROJECT")
         .env_remove("CARGO_TARGET_DIR");
-    match notify_log {
-        // A stub standing in for notify-send: it appends the arguments it was
-        // called with to a file the test can read.
-        Some(path) => {
-            cmd.env("MEM_NOTIFY_CMD", path.display().to_string());
-        }
-        None => {
-            cmd.env("MEM_NOTIFY_CMD", "true");
-        }
-    }
-    cmd.output().expect("run mem")
+    cmd
 }
 
 /// A stand-in for notify-send that records the arguments it was given.
@@ -709,4 +714,151 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
     let out = ask_env(&w, &repo, &["reindex"], None);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     check(&w);
+}
+
+/// mem run by a session: `MEM_SESSION_ID` outranks whatever id the test
+/// process itself inherited.
+fn as_session(
+    w: &World,
+    cwd: &std::path::Path,
+    session: &str,
+    args: &[&str],
+) -> std::process::Output {
+    let mut cmd = mem_cmd(w, cwd, args);
+    cmd.env("MEM_NOTIFY_CMD", "true")
+        .env("MEM_SESSION_ID", session);
+    cmd.output().expect("run mem")
+}
+
+fn asked_short(out: &std::process::Output) -> String {
+    assert_eq!(code(out), 0, "{}", stderr(out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["short_id"].as_str().unwrap().to_string()
+}
+
+/// The session that asked is kept in mem's machine-local session file, so a
+/// session can list its own questions with their answers, across projects.
+#[test]
+fn a_session_lists_the_questions_it_asked() {
+    let w = World::new("q-asked-by");
+    let repo = w.repo("thing", None);
+    let other = w.repo("other", None);
+
+    let first = asked_short(&as_session(
+        &w,
+        &repo,
+        "s1",
+        &["ask", "first from s1?", "--json"],
+    ));
+    let second = asked_short(&as_session(
+        &w,
+        &other,
+        "s1",
+        &["ask", "second from s1?", "--json"],
+    ));
+    let theirs = asked_short(&as_session(&w, &repo, "s2", &["ask", "from s2?", "--json"]));
+    // A question for the orchestrator reaches the session another way.
+    let routed = asked_short(&as_session(
+        &w,
+        &repo,
+        "s1",
+        &["ask", "for the run?", "--for", "orchestrator", "--json"],
+    ));
+
+    let out = ask_env(&w, &repo, &["answer", &first, "yes, go"], None);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--asked-by", "s1", "--json"],
+        None,
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let rows = v["questions"].as_array().unwrap();
+    let shorts: Vec<&str> = rows
+        .iter()
+        .map(|r| r["short_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(shorts, [first.as_str(), second.as_str()], "{v}");
+    assert!(!shorts.contains(&theirs.as_str()) && !shorts.contains(&routed.as_str()));
+    assert_eq!(rows[0]["title"], "first from s1?", "{v}");
+    assert_eq!(rows[0]["answered"], true, "{v}");
+    assert_eq!(rows[0]["answer"], "yes, go", "{v}");
+    assert_eq!(rows[1]["answered"], false, "{v}");
+    assert!(rows[1]["answer"].is_null(), "{v}");
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--asked-by", "s1", "--pending", "--json"],
+        None,
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"][0]["short_id"], second.as_str(), "{v}");
+    assert_eq!(v["questions"].as_array().unwrap().len(), 1, "{v}");
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--asked-by", "s2", "--json"],
+        None,
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"].as_array().unwrap().len(), 1, "{v}");
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--asked-by", "nobody", "--json"],
+        None,
+    );
+    assert_eq!(code(&out), 1, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"], serde_json::json!([]), "{v}");
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--asked-by", "s1", "--wait", &second],
+        None,
+    );
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+}
+
+/// A session file written before mem kept the asked list still reads, and
+/// the first question adds the list to it.
+#[test]
+fn a_session_file_from_before_the_asked_list_still_reads() {
+    let w = World::new("q-asked-old");
+    let repo = w.repo("thing", None);
+    let sessions = w.dirs().sessions_dir();
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("s3"),
+        r#"{"writes":4,"batches":2,"nudged":true,"last":"2026-10-01T00:00:00Z"}"#,
+    )
+    .unwrap();
+
+    let short = asked_short(&as_session(
+        &w,
+        &repo,
+        "s3",
+        &["ask", "still read?", "--json"],
+    ));
+    let out = ask_env(
+        &w,
+        &repo,
+        &["questions", "--asked-by", "s3", "--json"],
+        None,
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"][0]["short_id"], short.as_str(), "{v}");
+
+    let kept: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(sessions.join("s3")).unwrap()).unwrap();
+    assert_eq!(kept["writes"], 5, "{kept}");
+    assert_eq!(kept["nudged"], true, "{kept}");
 }

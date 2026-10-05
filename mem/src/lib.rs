@@ -221,6 +221,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             pending,
             all_projects,
             audience,
+            asked_by,
             wait,
             timeout,
         } => verbs::questions(
@@ -228,6 +229,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             *pending,
             *all_projects,
             *audience,
+            asked_by.as_deref(),
             wait.as_deref(),
             timeout,
         ),
