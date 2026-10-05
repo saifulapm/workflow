@@ -49,7 +49,7 @@ pub enum Command {
     },
     /// Look for agent files and process references in a repository.
     #[command(
-        group(ArgGroup::new("scope").args(["staged", "tree", "history", "message", "string"])),
+        group(ArgGroup::new("scope").args(["staged", "tree", "history", "message", "string", "would_create"])),
         long_about = "Look for agent files and process references in a repository.
 
 The hard tier exits 1: a file on the global ignore list tracked or staged, a
@@ -59,6 +59,10 @@ co-author or generated-with line. A message also fails on a subject over 72
 characters and on a bare task or milestone id. The soft tier only warns, reads
 messages only, and is cleared per term by a lint-exception ruling. Paths the
 project key hygiene-exempt names are not read for content.
+
+--would-create asks about one path before it is written: it exits 1 and names
+it only when it does not exist yet, lands in a work tree mem knows, and is an
+agent instruction file there.
 
 With no mode the whole tracked tree and the last 200 commits are read."
     )]
@@ -78,6 +82,12 @@ With no mode the whole tracked tree and the last 200 commits are read."
         /// A message given as text.
         #[arg(long, value_name = "TEXT")]
         string: Option<String>,
+        /// Would writing this path add an agent instruction file?
+        #[arg(long, value_name = "PATH")]
+        would_create: Option<PathBuf>,
+        /// With --staged, read nothing in a checkout mem does not know.
+        #[arg(long, requires = "staged")]
+        known: bool,
         /// Read only under this directory.
         #[arg(long, value_name = "DIR")]
         path: Option<PathBuf>,
@@ -367,10 +377,11 @@ usage: workflow <command> [options]
       0 written · 2 not a state, or not a run worktree
   lint-msg [<file>] [--string <text>]
       0 clean (warnings included) · 1 hard fail
-  hygiene [--staged|--tree|--history <n>|--message <file>|--string <s>]
-      [--path <dir>] [--json] [--fix]
+  hygiene [--staged [--known]|--tree|--history <n>|--message <file>
+      |--string <s>|--would-create <path>] [--path <dir>] [--json] [--fix]
       agent files and process references; no mode reads the tree and the
-      last 200 commits; --fix untracks ignore-list files and their lines
+      last 200 commits; --fix untracks ignore-list files and their lines;
+      --would-create refuses a new agent file in a checkout mem knows
       0 clean or warned · 1 hard finding · 2 usage
   review-needed [--diff <range>]
       0 a cold review is wanted · 1 it is not
