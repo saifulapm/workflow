@@ -4,7 +4,7 @@
 //! The front page follows the project's stage: a header with the stage, the
 //! runner and the progress, the Pause or Resume button, then what that stage
 //! is about. It costs at most five `mem` spawns: the projects list the route
-//! already read, then at most three reads for the body. A running project
+//! already read, then at most four reads for the body. A running project
 //! adds one `workflow status` in this machine's checkout.
 
 use serde_json::Value;
@@ -14,9 +14,10 @@ use crate::http::Response;
 use crate::memcli::Outcome;
 use crate::model;
 use crate::page_decisions::{ruling_block, ruling_rows};
+use crate::page_evidence::{FindingRow, finding_rows, findings_section};
 use crate::page_home::{ProjectSummary, project_summaries};
 use crate::page_questions::question_rows;
-use crate::page_roadmap::roadmap_body;
+use crate::page_roadmap::{roadmap_body, roadmap_rows};
 use crate::page_run::{BOARD, engine_status};
 use crate::pages::{PageCtx, page_shell, sibling_hub};
 
@@ -54,6 +55,8 @@ pub fn get(ctx: &PageCtx) -> Response {
         "grilling" => grilling_body(ctx, project),
         "spec" => spec_body(ctx, project),
         "planning" => roadmap_body(ctx),
+        "dogfooding" => walk_body(ctx, project),
+        "maintenance" => backlog_body(ctx, project),
         _ => status_body(ctx, project),
     });
     Response::html(page_shell(summary.stage, ctx.project, &body))
@@ -378,5 +381,177 @@ fn status_body(ctx: &PageCtx, project: &str) -> String {
         };
         out.push_str(&markdown_article(text, project, empty));
     }
+    out
+}
+
+/// The open milestone's Show path as numbered steps, each marked by the
+/// milestone's open findings and its newest walk, then those findings and
+/// the way to file one.
+fn walk_body(ctx: &PageCtx, project: &str) -> String {
+    let roadmap = ctx.app.mem.roadmap(project);
+    let text = match &*roadmap {
+        Outcome::Broken(why) => return degraded_banner(why),
+        Outcome::Json(doc) => doc["text"].as_str().unwrap_or_default(),
+        Outcome::Absent => "",
+    };
+    let Some(milestone) = roadmap_rows(text).into_iter().find(|row| !row.ticked) else {
+        return "<p class=\"empty\">No open milestone.</p>\n".to_string();
+    };
+    let slug = &milestone.slug;
+    let mut out = format!(
+        "<h2>Show path</h2>\n<p class=\"meta\">{} · {}</p>\n",
+        esc(slug),
+        esc(&milestone.title)
+    );
+    let findings: Vec<FindingRow> = open_findings(ctx, project, &mut out)
+        .into_iter()
+        .filter(|f| f.milestone == *slug)
+        .collect();
+    let steps = show_steps(milestone.show.as_deref().unwrap_or_default());
+    if steps.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"empty\">{} has no Show path.</p>\n",
+            esc(slug)
+        ));
+    } else {
+        // The doorbell reads run lines with these same arguments, so the
+        // page often finds them cached.
+        let runs = ctx.app.mem.read(&[
+            "log",
+            "--type",
+            "run",
+            "--limit",
+            "20",
+            &format!("--project={project}"),
+            "--json",
+        ]);
+        if let Some(why) = model::list_fault(&runs, "log") {
+            out.push_str(&degraded_banner(&why));
+        }
+        let passed = walk_passed(&runs.rows("items"), slug);
+        out.push_str("<ul>\n");
+        for (i, step) in steps.iter().enumerate() {
+            let n = i + 1;
+            out.push_str(&format!(
+                "<li>{} {n}. {}</li>\n",
+                step_mark(n, &findings, passed),
+                esc(step)
+            ));
+        }
+        out.push_str("</ul>\n");
+    }
+    out.push_str(&findings_section(&findings, project));
+    out.push_str(&format!(
+        "<p><a href=\"{}/new\">File a finding</a></p>\n",
+        esc(&project_url(project))
+    ));
+    out
+}
+
+/// A Show line as its steps, in order; step `n` is index `n - 1`. Cut the
+/// way the engine cuts it, so a step number here is the one a finding names
+/// with `mem finding add --step`.
+pub fn show_steps(show: &str) -> Vec<String> {
+    show.split(", ")
+        .flat_map(|part| part.split("; "))
+        .map(|step| {
+            let step = step.trim();
+            step.strip_prefix("and ")
+                .or_else(|| step.strip_prefix("then "))
+                .unwrap_or(step)
+        })
+        .filter(|step| !step.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// A cross where an open finding names step `n`, a tick once the newest
+/// walk passed, a dash otherwise. A finding outweighs the pass, since a
+/// finding filed after the walk still stands.
+pub fn step_mark(n: usize, findings: &[FindingRow], passed: bool) -> &'static str {
+    if findings.iter().any(|f| f.step.trim() == n.to_string()) {
+        "✗"
+    } else if passed {
+        "✓"
+    } else {
+        "-"
+    }
+}
+
+/// Whether the milestone's newest `dogfood <slug>:` run line reads `pass`.
+/// mem lists run lines newest first.
+pub fn walk_passed(rows: &[Value], slug: &str) -> bool {
+    let prefix = format!("dogfood {slug}: ");
+    rows.iter()
+        .find_map(|row| row["title"].as_str()?.strip_prefix(&prefix))
+        == Some("pass")
+}
+
+/// The project's open findings in mem's order; a fault leaves a banner in
+/// `out` and no rows.
+fn open_findings(ctx: &PageCtx, project: &str, out: &mut String) -> Vec<FindingRow> {
+    let outcome = ctx.app.mem.read(&[
+        "finding",
+        "list",
+        "--open",
+        &format!("--project={project}"),
+        "--json",
+    ]);
+    if let Some(why) = model::list_fault(&outcome, "finding list") {
+        out.push_str(&degraded_banner(&why));
+    }
+    finding_rows(&outcome.rows("items"))
+        .into_iter()
+        .filter(|f| f.open)
+        .collect()
+}
+
+/// The status, the last handoff, the open findings and the ideas, with the
+/// way to start a new round or file an idea.
+fn backlog_body(ctx: &PageCtx, project: &str) -> String {
+    let mut out = status_body(ctx, project);
+    let findings = open_findings(ctx, project, &mut out);
+    out.push_str(&findings_section(&findings, project));
+
+    out.push_str("<h2>Ideas</h2>\n");
+    let ideas = ctx.app.mem.read(&[
+        "search",
+        "--kind",
+        "idea",
+        "--limit",
+        "20",
+        &format!("--project={project}"),
+        "--json",
+    ]);
+    if let Some(why) = model::list_fault(&ideas, "search") {
+        out.push_str(&degraded_banner(&why));
+    }
+    let rows: Vec<String> = ideas
+        .rows("items")
+        .iter()
+        .filter_map(|row| {
+            // mem keeps the body with a newline either side.
+            row["body"]
+                .as_str()
+                .or_else(|| row["title"].as_str())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(esc)
+        })
+        .collect();
+    if rows.is_empty() {
+        out.push_str("<p class=\"empty\">No ideas.</p>\n");
+    } else {
+        out.push_str("<ul>\n");
+        for idea in rows {
+            out.push_str(&format!("<li>{idea}</li>\n"));
+        }
+        out.push_str("</ul>\n");
+    }
+
+    let base = esc(&project_url(project));
+    out.push_str(&format!(
+        "<p><a href=\"{base}/new\">New round</a> · <a href=\"{base}/new\">File an idea</a></p>\n"
+    ));
     out
 }
