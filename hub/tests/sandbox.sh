@@ -199,6 +199,8 @@ git rev-parse HEAD >"$run/g2-t1.merged"
 printf 'dispatched\n' >"$run/g2-t2.state"
 printf '%s\n' "$(($(date +%s) - 300))" >"$run/g2-t2.dispatched_at"
 printf '%s started: reading the due store\n' "$(date -u +%FT%TZ)" >"$run/g2-t2.status"
+printf 'sonnet\n' >"$run/g2-t2.model"
+printf 'wf-g2-t2-k7qm\n' >"$run/g2-t2.session"
 printf 'pending\n' >"$run/g2-t3.state"
 printf 'waiting on g2-t2\n' >"$run/g2-t3.held"
 mem ask --for human --options 'nine,eight,ten' --recommend nine 'Which hour does the nag go out?' >/dev/null
