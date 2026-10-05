@@ -4,6 +4,7 @@
 mod common;
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use common::{
     Hub, TempDir, body_of, header_of, invocations, mem_in, real_mem, recording_mem, seed_project,
@@ -71,6 +72,23 @@ impl World {
         let out = mem_in(&self.mem, &self.home, &self.home.join(PROJECT), args);
         assert!(out.status.success(), "mem {args:?}: {out:?}");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A read of what the hub wrote, once `ready` holds of it. mem serves a
+    /// read from the index as it was when another process holds the reindex
+    /// lock, which the doorbell's own reads do now and then, so the first
+    /// read after a write may not show it yet.
+    fn read_back(&self, args: &[&str], ready: impl Fn(&str) -> bool) -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let out = mem_in(&self.mem, &self.home, &self.home.join(PROJECT), args);
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if out.status.success() && ready(&text) {
+                return text;
+            }
+            assert!(Instant::now() < deadline, "mem {args:?}: {out:?}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     fn roadmap_status(&self) -> String {
@@ -238,7 +256,9 @@ fn changes_with_no_question_pending_is_logged() {
         ])]
     );
     assert_eq!(world.roadmap_status(), "draft");
-    let log = world.mem(&["log", "--json"]);
+    let log = world.read_back(&["log", "--json"], |log| {
+        log.contains("roadmap changes requested: -drop m2")
+    });
     assert!(log.contains("roadmap changes requested: -drop m2"), "{log}");
 }
 
