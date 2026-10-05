@@ -1,227 +1,240 @@
-//! `GET /p/<project>` — one project's memory, read-only, on one page
-//! (m2-hub-pages).
+//! `GET /p/<project>`: the front page follows the project's stage. A header
+//! with the stage, runner and progress, then what that stage is about.
 
 mod common;
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
 
-use common::{
-    Hub, TempDir, body_of, fixture_mem, mem_in, real_mem, recording_mem, seed_project, status_of,
-};
+use common::{Hub, TempDir, body_of, fixture_mem, status_of};
 
-/// One project, seeded through the real `mem` with a fact in every section
-/// ruling 3 lists, and a `mem` on PATH that records every argv before
-/// running the real binary.
+/// One row per stage, carrying the flags the hub works the stage out from.
+const PROJECTS_DOC: &str = r#"{"projects":[
+{"name":"alpha","has_brief":true,"runner":"desk"},
+{"name":"bare"},
+{"name":"rho","has_brief":true,"has_research":true},
+{"name":"gamma","has_research":true,"has_research_summary":true},
+{"name":"sigma","has_research_summary":true,"has_spec":true},
+{"name":"beta","roadmap_status":"draft","runner":"laptop","paused":"laptop 2026-10-04",
+ "milestones_done":0,"milestones_total":2,"plan_ticked":1,"plan_total":3},
+{"name":"exec","roadmap_status":"running","milestone":"e2","plan_slug":"e2",
+ "milestones_done":1,"milestones_total":3,"plan_ticked":1,"plan_total":4}
+]}"#;
+
+const BRIEF_DOC: &str = r#"{"id":"01K0BRIEF","kind":"brief",
+"body":"A shared **shopping list** two phones keep in step."}"#;
+
+const WIKI_DOC: &str = r#"{"pages":[
+{"slug":"index","title":"Index"},
+{"slug":"research-apps","title":"Apps like it"},
+{"slug":"research","title":"Research"},
+{"slug":"notes","title":"Notes"}
+]}"#;
+
+const RULINGS_DOC: &str = r#"{"items":[
+{"id":"01K0RULE2","kind":"ruling","title":"Sync by polling","body":"Sync by polling every minute"},
+{"id":"01K0RULE1","kind":"ruling","title":"Store lists in SQLite","body":"Store lists in SQLite"}
+]}"#;
+
+const QUESTIONS_DOC: &str = r#"{"questions":[
+{"id":"01K0Q1","title":"Do lists sync offline?","body":"Do lists sync offline?",
+ "answered":false,"options":["yes","no"]}
+]}"#;
+
+const SECTIONS_DOC: &str = r#"{"sections":[
+{"hslug":"1-the-list","heading":"1. The list","bytes":40},
+{"hslug":"2-sync","heading":"2. Sync","bytes":30}
+]}"#;
+
+const ROADMAP_DOC: &str = r##"{"status":"draft","text":"# roadmap: beta\n\n- [ ] b1-box Recipes are stored and listed\n      Show: a recipe added on the phone is listed on the laptop\n- [ ] b2-scale A recipe scales to any number of people\n"}"##;
+
+/// A fake `mem` answering every project's reads, each call appended to
+/// `calls`. Anything it was not told about exits 1 with nothing printed,
+/// which is how mem says there is none.
 struct World {
     _dir: TempDir,
     home: PathBuf,
     bin: PathBuf,
-    mem: PathBuf,
+    calls: PathBuf,
 }
-
-const PROJECT: &str = "proj-solo";
 
 impl World {
     fn new(tag: &str) -> World {
         let dir = TempDir::new(tag);
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let (bin, _log) = recording_mem(dir.path(), &home);
-        let mem = real_mem().unwrap();
-        seed_project(&mem, &home, PROJECT, "solo did a thing");
+        let bin = dir.join("bin");
+        let calls = dir.join("calls");
+        // printf rather than echo: a dash echo would turn the roadmap's `\n`
+        // into real newlines inside the JSON string.
+        fixture_mem(
+            &bin,
+            &format!(
+                "echo \"$*\" >>'{calls}'\n\
+                 p() {{ printf '%s\\n' \"$1\"; }}\n\
+                 case \"$*\" in\n\
+                 projects*) p '{PROJECTS_DOC}' ;;\n\
+                 brief*--project=alpha*) p '{BRIEF_DOC}' ;;\n\
+                 wiki*--project=rho*) p '{WIKI_DOC}' ;;\n\
+                 log*--kind=ruling*--project=gamma*) p '{RULINGS_DOC}' ;;\n\
+                 questions*--project=gamma*) p '{QUESTIONS_DOC}' ;;\n\
+                 wiki*--sections*--project=sigma*spec) p '{SECTIONS_DOC}' ;;\n\
+                 roadmap*--project=beta*) p '{ROADMAP_DOC}' ;;\n\
+                 plan*--list*--project=beta*) p '{{\"plans\":[{{\"slug\":\"b1-box\"}}]}}' ;;\n\
+                 status*--project=exec*) p '{{\"text\":\"Two of four tasks merged.\"}}' ;;\n\
+                 handoff*--project=exec*) p '{{\"body\":\"Picking up at e2-t3.\"}}' ;;\n\
+                 *) exit 1 ;;\n\
+                 esac",
+                calls = calls.display(),
+            ),
+        );
         World {
             _dir: dir,
             home,
             bin,
-            mem,
+            calls,
         }
     }
 
-    fn run(&self, args: &[&str]) -> std::process::Output {
-        let out = mem_in(&self.mem, &self.home, &self.home.join(PROJECT), args);
-        assert!(out.status.success(), "{args:?}: {out:?}");
-        out
-    }
-
-    fn ask(&self, text: &str) -> String {
-        let out = self.run(&["ask", text, "--json"]);
-        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        doc["id"].as_str().unwrap().to_string()
-    }
-
-    fn last_ruling(&self) -> (String, String) {
-        let out = self.run(&["log", "--kind", "ruling", "--limit", "1", "--json"]);
-        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        let row = &doc["items"][0];
-        (
-            row["id"].as_str().unwrap().to_string(),
-            row["title"].as_str().unwrap().to_string(),
+    /// A hub that knows one sibling, the machine `laptop`.
+    fn hub(&self) -> Hub {
+        let config = self.home.join("config.toml");
+        std::fs::write(
+            &config,
+            "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
+             ntfy_base = \"http://127.0.0.1:9\"\n\
+             siblings = [\"http://laptop:8088\"]\n",
+        )
+        .unwrap();
+        Hub::spawn(
+            &self.home,
+            &[&self.bin],
+            &["--config", config.to_str().unwrap(), "--port", "0"],
         )
     }
 
-    fn wiki_page(&self, slug: &str, text: &str) {
-        let child = Command::new(&self.mem)
-            .args(["wiki", slug, "--stdin", "--note", "seeding a page"])
-            .current_dir(self.home.join(PROJECT))
-            .env_clear()
-            .env("HOME", &self.home)
-            .env("PATH", "/usr/bin:/bin")
-            .env("XDG_CONFIG_HOME", self.home.join("config"))
-            .env("XDG_STATE_HOME", self.home.join("state"))
-            .env("XDG_DATA_HOME", self.home.join("data"))
-            .env("XDG_CACHE_HOME", self.home.join("cache"))
-            .env("MEM_SYNC_CMD", "true")
-            .env("MEM_NOTIFY_CMD", "true")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("run mem wiki");
-        {
-            use std::io::Write;
-            let mut stdin = child.stdin.as_ref().expect("stdin");
-            stdin.write_all(text.as_bytes()).unwrap();
-        }
-        let out = child.wait_with_output().unwrap();
-        assert!(out.status.success(), "writing {slug}: {out:?}");
+    /// The page's own reads: the doorbell's poll of every project's
+    /// questions runs on its own clock and is left out.
+    fn calls(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.calls)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.contains("--all-projects"))
+            .map(str::to_string)
+            .collect()
     }
 
-    fn hub(&self) -> Hub {
-        Hub::spawn(&self.home, &[&self.bin], &["--port", "0"])
+    /// The front page's body, after checking it cost at most five `mem`
+    /// spawns on a cold cache.
+    fn page(&self, project: &str) -> String {
+        let hub = self.hub();
+        let before = self.calls().len();
+        let response = hub.get(&format!("/p/{project}"));
+        assert_eq!(status_of(&response), 200, "{response}");
+        let calls = self.calls();
+        assert!(calls.len() - before <= 5, "{:?}", &calls[before..]);
+        body_of(&response).to_string()
     }
 }
 
-fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
-    let path = dir.join(name);
-    std::fs::write(&path, text).unwrap();
-    path
-}
-
-/// The whole overview: every section ruling 3 lists, seeded through the real
-/// `mem` and found on the page.
 #[test]
-fn the_project_page_shows_every_section() {
-    let world = World::new("project-page-overview");
+fn a_brief_project_shows_its_brief_and_a_start_research_button() {
+    let world = World::new("project-page-brief");
+    let body = world.page("alpha");
 
-    world.run(&["status", "--set", "All green."]);
-    world.run(&["handoff", "--set", "Picking up from here."]);
-
-    let roadmap = write(
-        &world.home,
-        "roadmap.md",
-        "# roadmap: demo\n\n- [ ] m1 First milestone\n",
-    );
-    world.run(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
-
-    let plan = write(
-        &world.home,
-        "plan.md",
-        "# plan: demo\n\n- [x] t1 Done thing\n- [ ] t2 Open thing\n",
-    );
-    world.run(&["plan", "--set-file", plan.to_str().unwrap()]);
-
-    let stored = write(
-        &world.home,
-        "stored.md",
-        "# plan: sub-slug\n\n- [ ] t1 Task\n",
-    );
-    world.run(&["plan", "sub-slug", "--set-file", stored.to_str().unwrap()]);
-
-    world.run(&["save", "--kind", "ruling", "a ruling was made here"]);
-    let (ruling_id, ruling_title) = world.last_ruling();
-
-    let pending_id = world.ask("Should we ship on Friday?");
-    let answered_id = world.ask("Is the roadmap current?");
-    world.run(&["answer", &answered_id, "Yes, just updated it."]);
-
-    world.wiki_page("index", "# Index\n\nWhat this project is.\n");
-
-    let hub = world.hub();
-    let response = hub.get(&format!("/p/{PROJECT}"));
-    assert_eq!(status_of(&response), 200);
-    let body = body_of(&response).to_string();
-
-    assert!(body.contains("All green."), "status: {body}");
-    assert!(body.contains("Picking up from here."), "handoff: {body}");
-
-    assert!(body.contains("First milestone"), "roadmap: {body}");
-    assert!(body.contains("checkbox"), "roadmap task box: {body}");
-    assert!(
-        body.contains(&format!("href=\"/p/{PROJECT}/roadmap\"")),
-        "roadmap link: {body}"
-    );
-
-    assert!(body.contains("1/2"), "plan ticked/total: {body}");
-    assert!(
-        body.contains(&format!("href=\"/p/{PROJECT}/plan\"")),
-        "plan link: {body}"
-    );
-
-    assert!(body.contains("sub-slug"), "stored plan: {body}");
-    assert!(
-        body.contains(&format!("href=\"/p/{PROJECT}/plan/sub-slug\"")),
-        "stored plan link: {body}"
-    );
-
-    assert!(
-        body.contains("Should we ship on Friday?"),
-        "pending question: {body}"
-    );
-    assert!(
-        body.contains("Is the roadmap current?"),
-        "answered question: {body}"
-    );
-    assert!(body.contains("Yes, just updated it."), "answer: {body}");
-    let pending_at = body.find("Should we ship on Friday?").unwrap();
-    let answered_at = body.find("Is the roadmap current?").unwrap();
-    assert!(
-        pending_at < answered_at,
-        "pending sorts before answered: {body}"
-    );
-    let _ = &pending_id;
-
-    assert!(body.contains(&ruling_title), "ruling title: {body}");
-    assert!(
-        body.contains(&format!("href=\"/p/{PROJECT}/item/{ruling_id}\"")),
-        "ruling link: {body}"
-    );
-
-    assert!(body.contains("solo did a thing"), "log entry: {body}");
-    assert!(
-        body.contains(&format!("href=\"/p/{PROJECT}/log\"")),
-        "full log link: {body}"
-    );
-
-    assert!(
-        body.contains(&format!("href=\"/wiki/{PROJECT}/index\"")),
-        "wiki link: {body}"
-    );
-
-    assert!(body.contains("Runs on"), "runs heading: {body}");
-    assert!(!body.contains("banner degraded"), "{body}");
+    assert!(body.contains("brief"), "{body}");
+    assert!(body.contains("<strong>shopping list</strong>"), "{body}");
+    assert!(body.contains("action=\"/p/alpha/new/research\""), "{body}");
+    assert!(body.contains("Start research</button>"), "{body}");
 }
 
-/// Ruling 3: a roadmap past 40 lines is cut, with a link to the whole.
 #[test]
-fn a_long_roadmap_on_the_project_page_is_cut_at_forty_lines_with_a_link_to_the_whole() {
-    let world = World::new("project-page-roadmap-cut");
-    let mut text = "# roadmap: demo\n\n".to_string();
-    for n in 1..=45 {
-        text.push_str(&format!("- [ ] m{n} Milestone {n}\n"));
-    }
-    let roadmap = write(&world.home, "roadmap.md", &text);
-    world.run(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
-    let hub = world.hub();
+fn a_project_with_no_brief_links_to_the_new_page() {
+    let world = World::new("project-page-no-brief");
+    let body = world.page("bare");
 
-    let body = body_of(&hub.get(&format!("/p/{PROJECT}"))).to_string();
+    assert!(body.contains("href=\"/p/bare/new\""), "{body}");
+    assert!(!body.contains("Start research"), "{body}");
+}
 
-    assert!(body.contains("Milestone 1<"), "{body}");
-    assert!(!body.contains("Milestone 45"), "{body}");
+#[test]
+fn a_research_project_lists_only_its_research_pages() {
+    let world = World::new("project-page-research");
+    let body = world.page("rho");
+
+    assert!(body.contains("href=\"/wiki/rho/research-apps\""), "{body}");
+    assert!(body.contains("Apps like it"), "{body}");
+    assert!(body.contains("href=\"/wiki/rho/research\""), "{body}");
+    assert!(!body.contains("/wiki/rho/notes"), "{body}");
+    assert!(!body.contains("/wiki/rho/index\""), "{body}");
+}
+
+#[test]
+fn a_grilling_project_shows_its_rulings_and_its_pending_questions() {
+    let world = World::new("project-page-grilling");
+    let body = world.page("gamma");
+
+    assert!(body.contains("grilling"), "{body}");
+    let newer = body.find("Sync by polling every minute").expect(&body);
+    let older = body.find("Store lists in SQLite").expect(&body);
+    assert!(newer < older, "newest ruling first: {body}");
+    assert!(body.contains("Do lists sync offline?"), "{body}");
+    assert!(body.contains("href=\"/p/gamma/questions\""), "{body}");
+}
+
+#[test]
+fn a_spec_project_lists_the_spec_sections_linked_to_their_anchors() {
+    let world = World::new("project-page-spec");
+    let body = world.page("sigma");
+
     assert!(
-        body.contains(&format!("href=\"/p/{PROJECT}/roadmap\"")),
+        body.contains("href=\"/wiki/sigma/spec#1-the-list\">1. The list</a>"),
         "{body}"
     );
+    assert!(
+        body.contains("href=\"/wiki/sigma/spec#2-sync\">2. Sync</a>"),
+        "{body}"
+    );
+}
+
+#[test]
+fn a_planning_project_shows_its_milestones_and_the_approval_forms() {
+    let world = World::new("project-page-planning");
+    let body = world.page("beta");
+
+    assert!(body.contains("Recipes are stored and listed"), "{body}");
+    assert!(
+        body.contains("A recipe scales to any number of people"),
+        "{body}"
+    );
+    assert!(body.contains("Approve</button>"), "{body}");
+    assert!(body.contains("Request changes</button>"), "{body}");
+}
+
+#[test]
+fn the_header_shows_stage_runner_progress_and_paused() {
+    let world = World::new("project-page-header");
+    let body = world.page("beta");
+
+    for part in [
+        "planning",
+        "<a href=\"http://laptop:8088\">laptop</a>",
+        "milestone 1 of 2",
+        "tasks 1 of 3",
+        "paused",
+    ] {
+        assert!(body.contains(part), "{part}: {body}");
+    }
+}
+
+#[test]
+fn an_execution_project_shows_its_status_and_handoff() {
+    let world = World::new("project-page-execution");
+    let body = world.page("exec");
+
+    assert!(body.contains("execution"), "{body}");
+    assert!(body.contains("milestone 2 of 3"), "{body}");
+    assert!(body.contains("Two of four tasks merged."), "{body}");
+    assert!(body.contains("Picking up at e2-t3."), "{body}");
 }
 
 #[test]
@@ -232,30 +245,8 @@ fn an_unknown_project_page_is_a_404() {
     assert_eq!(status_of(&hub.get("/p/no-such-project")), 404);
 }
 
-/// Ruling 6: the home page's project rows link to `/p/<name>`.
-#[test]
-fn the_home_page_links_to_the_project_page() {
-    let world = World::new("project-page-home-link");
-    let hub = world.hub();
-
-    let body = body_of(&hub.get("/")).to_string();
-
-    assert!(body.contains(&format!("href=\"/p/{PROJECT}\"")), "{body}");
-}
-
-/// Ruling 6: a wiki page's nav gains a link to its project's page.
-#[test]
-fn a_wiki_page_links_back_to_its_project_page() {
-    let world = World::new("project-page-wiki-nav");
-    world.wiki_page("index", "# Index\n\nHello.\n");
-    let hub = world.hub();
-
-    let body = body_of(&hub.get(&format!("/wiki/{PROJECT}/index"))).to_string();
-
-    assert!(body.contains(&format!("href=\"/p/{PROJECT}\"")), "{body}");
-}
-
-/// §4a again: mem being broken is a banner on a page that still renders.
+/// mem printing something that is not JSON is a banner on a page that still
+/// renders.
 #[test]
 fn a_broken_mem_leaves_the_project_page_degraded_rather_than_missing() {
     let dir = TempDir::new("project-page-degraded");
@@ -263,14 +254,12 @@ fn a_broken_mem_leaves_the_project_page_degraded_rather_than_missing() {
     let bin = dir.join("bin");
     fixture_mem(
         &bin,
-        &format!(
-            "if [ \"$1\" = projects ]; then echo '{{\"projects\":[{{\"name\":\"{PROJECT}\"}}]}}'; \
-             else echo 'not json at all'; fi"
-        ),
+        "if [ \"$1\" = projects ]; then echo '{\"projects\":[{\"name\":\"alpha\"}]}'; \
+         else echo 'not json at all'; fi",
     );
     let hub = Hub::spawn(&home, &[&bin], &["--port", "0"]);
 
-    let response = hub.get(&format!("/p/{PROJECT}"));
+    let response = hub.get("/p/alpha");
     assert_eq!(status_of(&response), 200);
     let body = body_of(&response);
     assert!(body.contains("not JSON"), "{body}");
