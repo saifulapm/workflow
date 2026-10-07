@@ -345,3 +345,26 @@ fn an_approved_roadmap_offers_no_approve() {
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
     assert!(!body.contains("value=\"approve\""), "{body}");
 }
+
+#[test]
+fn the_frame_takes_the_height_the_shell_leaves() {
+    // A height worked out from the bar's height breaks whenever the bar,
+    // a banner or the approve block changes: the page then scrolls as well
+    // as the frame, two scrollers on a phone.
+    let world = World::new("plan-height");
+    world.store_plan("h1-demo", PLAN_PAGE);
+    let hub = world.hub();
+
+    let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
+    assert!(
+        body.contains(
+            "body{display:flex;flex-direction:column;height:100vh;height:100dvh;padding-bottom:0}"
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains("iframe.plan{display:block;flex:1;min-height:0;"),
+        "{body}"
+    );
+    assert!(!body.contains("height:calc(100vh - 6rem)"), "{body}");
+}

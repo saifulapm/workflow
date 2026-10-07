@@ -313,8 +313,9 @@ fn served_runtime() -> String {
 }
 
 const SHELL_STYLE: &str = "<style>\
+body{display:flex;flex-direction:column;height:100vh;height:100dvh;padding-bottom:0}\
 details.approve{margin-block:.5rem}details.approve summary{font-weight:600;cursor:pointer}\
-iframe.plan{display:block;max-width:none;width:100%;height:calc(100vh - 6rem);border:0;\
+iframe.plan{display:block;flex:1;min-height:0;max-width:none;width:100%;border:0;\
 border-top:1px solid var(--line)}\
 </style>\n";
 
