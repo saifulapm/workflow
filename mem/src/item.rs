@@ -35,6 +35,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "task",
     "by",
     "replaces",
+    "about",
     "file",
     "source",
     "milestone",
@@ -149,6 +150,9 @@ pub struct Meta {
     pub by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaces: Option<String>,
+    /// The part of a page this comments on, as `plan:<slug>#<anchor>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +190,7 @@ impl Meta {
             task: None,
             by: None,
             replaces: None,
+            about: None,
             file: None,
             source: None,
             milestone: None,

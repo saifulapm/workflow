@@ -227,6 +227,7 @@ pub fn row_json(row: &Row) -> serde_json::Value {
         "task": row.task,
         "by": meta.and_then(|m| m.by.as_deref()),
         "replaces": meta.and_then(|m| m.replaces.as_deref()),
+        "about": meta.and_then(|m| m.about.as_deref()),
         "path": row.path.to_string_lossy(),
     })
 }
@@ -766,18 +767,29 @@ fn unregistered_project_note(app: &App, identity: &Identity) -> String {
     }
 }
 
+/// What `mem save` was told about the item besides its text.
+pub struct SaveMeta<'a> {
+    pub title: Option<&'a str>,
+    pub r#type: Option<&'a str>,
+    pub tags: &'a [String],
+    pub supersedes: Option<&'a str>,
+    pub about: Option<&'a str>,
+}
+
 /// `mem save "<text>"`.
-pub fn save(
-    app: &App,
-    kind: &str,
-    text: &str,
-    title: Option<&str>,
-    r#type: Option<&str>,
-    tags: &[String],
-    supersedes: Option<&str>,
-) -> Result<i32> {
+pub fn save(app: &App, kind: &str, text: &str, with: SaveMeta) -> Result<i32> {
     let kind: crate::item::Kind = kind.parse().map_err(|e| exit::usage(format!("{e}")))?;
-    let written = crate::write::save(app, kind, text, title, r#type, tags, supersedes)?;
+    let (identity, mut meta) = crate::write::new_meta(
+        app,
+        kind,
+        text,
+        with.title,
+        with.r#type,
+        with.tags,
+        with.supersedes,
+    )?;
+    meta.about = with.about.map(str::to_string);
+    let written = crate::write::write_item(app, &identity, meta, text.to_string())?;
     report_written(app, &written, kind)
 }
 
@@ -1897,6 +1909,7 @@ pub fn ask(
     options: &[String],
     recommend: Option<&str>,
     audience: Option<crate::cli::Audience>,
+    about: Option<&str>,
 ) -> Result<i32> {
     let identity = app.identity(Mode::Write)?;
     let mut meta = crate::item::Meta::new(
@@ -1909,6 +1922,7 @@ pub fn ask(
         meta.options = Some(options.to_vec());
     }
     meta.recommend = recommend.map(str::to_string);
+    meta.about = about.map(str::to_string);
     let task = asking_task(app);
     let audience = match audience {
         Some(a) => a.stored(),
@@ -2048,6 +2062,47 @@ pub fn questions(
         return Ok(exit::NOT_FOUND);
     }
     Ok(exit::OK)
+}
+
+/// `mem questions --about <prefix>` and `mem log --about <prefix>`: every
+/// item about a part of a page, oldest first, the way a thread reads, each
+/// with its text, and a question with its answer. `about` lives only in the
+/// item's file, so every item of the kind is read.
+pub fn about(app: &App, kind: &str, prefix: &str) -> Result<i32> {
+    let identity = app.identity(Mode::Read)?;
+    let index = app.read_index()?;
+    let kind = (kind == "question").then_some(kind);
+    let mut rows = index.recent_filtered(kind, None, identity.id(), usize::MAX >> 1)?;
+    rows.retain(|row| {
+        read_item(row)
+            .and_then(|i| i.meta.about)
+            .is_some_and(|about| about.starts_with(prefix))
+    });
+    rows.reverse();
+    let mut items = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let mut v = row_json(row);
+        v["body"] = json!(read_body(row).trim());
+        if kind.is_some() {
+            let answer = index.answer_to(&row.id)?;
+            v["answered"] = json!(answer.is_some());
+            v["answer"] = json!(answer.as_ref().map(|a| read_body(a).trim().to_string()));
+        }
+        items.push(v);
+    }
+    let key = if kind.is_some() { "questions" } else { "items" };
+    if app.json {
+        println!("{}", serde_json::to_string(&json!({ key: items }))?);
+    } else {
+        for row in &rows {
+            println!("#{}  {}", row.short_id, row.title);
+        }
+    }
+    Ok(if rows.is_empty() {
+        exit::NOT_FOUND
+    } else {
+        exit::OK
+    })
 }
 
 /// The questions a session's file names, in the order it asked them. A short

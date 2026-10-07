@@ -157,22 +157,32 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             title,
             tags,
             supersedes,
+            about,
             session_id,
         } => verbs::save(
             &with_session(app, session_id),
             kind,
             text,
-            title.as_deref(),
-            r#type.as_deref(),
-            tags,
-            supersedes.as_deref(),
+            verbs::SaveMeta {
+                title: title.as_deref(),
+                r#type: r#type.as_deref(),
+                tags,
+                supersedes: supersedes.as_deref(),
+                about: about.as_deref(),
+            },
         ),
+        cli::Command::Log {
+            text: None,
+            about: Some(prefix),
+            ..
+        } => verbs::about(&app, "log", prefix),
         cli::Command::Log {
             text,
             limit,
             since,
             kind,
             r#type,
+            about: _,
             session_id,
         } => verbs::log(
             &with_session(app, session_id),
@@ -209,6 +219,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             options,
             recommend,
             audience,
+            about,
             session_id,
         } => verbs::ask(
             &with_session(app, session_id),
@@ -216,7 +227,12 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             options,
             recommend.as_deref(),
             *audience,
+            about.as_deref(),
         ),
+        cli::Command::Questions {
+            about: Some(prefix),
+            ..
+        } => verbs::about(&app, "question", prefix),
         cli::Command::Questions {
             pending,
             all_projects,
@@ -224,6 +240,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             asked_by,
             wait,
             timeout,
+            about: None,
         } => verbs::questions(
             &app,
             *pending,

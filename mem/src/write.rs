@@ -99,6 +99,20 @@ pub fn save(
     tags: &[String],
     supersedes: Option<&str>,
 ) -> Result<Written> {
+    let (identity, meta) = new_meta(app, kind, text, title, r#type, tags, supersedes)?;
+    write_item(app, &identity, meta, text.to_string())
+}
+
+/// What `save` writes, for a caller that adds to it first.
+pub fn new_meta(
+    app: &App,
+    kind: Kind,
+    text: &str,
+    title: Option<&str>,
+    r#type: Option<&str>,
+    tags: &[String],
+    supersedes: Option<&str>,
+) -> Result<(Identity, Meta)> {
     let identity = app.identity(Mode::Write)?;
     let mut meta = Meta::new(
         String::new(),
@@ -128,7 +142,7 @@ pub fn save(
             }
         }
     }
-    write_item(app, &identity, meta, text.to_string())
+    Ok((identity, meta))
 }
 
 /// Reads `--stdin` content. Bytes that are not text are the caller holding it

@@ -23,7 +23,8 @@
     "task",
     "path",
     "by",
-    "replaces"
+    "replaces",
+    "about"
   ],
   "properties": {
     "id": {
@@ -123,6 +124,12 @@
       ]
     },
     "replaces": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "about": {
       "type": [
         "string",
         "null"

@@ -121,6 +121,9 @@ pub enum Command {
         tags: Vec<String>,
         #[arg(long)]
         supersedes: Option<String>,
+        /// The part of a page this is about, as `plan:<slug>#<anchor>`.
+        #[arg(long)]
+        about: Option<String>,
         #[arg(long)]
         session_id: Option<String>,
     },
@@ -137,6 +140,10 @@ pub enum Command {
         kind: Option<String>,
         #[arg(long = "type")]
         r#type: Option<String>,
+        /// Every item, of any kind, about a part starting with this, with
+        /// its text.
+        #[arg(long, value_name = "PREFIX", conflicts_with = "text")]
+        about: Option<String>,
         #[arg(long)]
         session_id: Option<String>,
     },
@@ -194,6 +201,9 @@ pub enum Command {
         /// it is a person, which is what the hub and the phone show.
         #[arg(long = "for", value_name = "AUDIENCE")]
         audience: Option<Audience>,
+        /// The part of a page this is about, as `plan:<slug>#<anchor>`.
+        #[arg(long)]
+        about: Option<String>,
         #[arg(long)]
         session_id: Option<String>,
     },
@@ -206,6 +216,9 @@ pub enum Command {
         /// Only the questions this audience answers.
         #[arg(long = "for", value_name = "AUDIENCE")]
         audience: Option<Audience>,
+        /// Every question, answered or not, about a part starting with this.
+        #[arg(long, value_name = "PREFIX", conflicts_with_all = ["wait", "asked_by"])]
+        about: Option<String>,
         /// Only the questions this session asked, from any project.
         #[arg(long, value_name = "SESSION")]
         asked_by: Option<String>,
