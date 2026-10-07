@@ -26,7 +26,6 @@ fn mem_stdin(w: &World, cwd: &Path, args: &[&str], input: &str) -> std::process:
         .env("XDG_STATE_HOME", &dirs.state)
         .env("XDG_CONFIG_HOME", &dirs.config)
         .env("PI_CODING_AGENT_DIR", w.pi_agent_dir())
-        .env("WORKFLOW_BIN", "/nonexistent/workflow")
         .env_remove("MEM_SESSION_ID")
         .env_remove("PI_SESSION_ID")
         .env_remove("CLAUDE_CODE_SESSION_ID")

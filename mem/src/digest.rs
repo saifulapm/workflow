@@ -82,12 +82,6 @@ pub struct Sources {
     pub rulings: Vec<Row>,
     pub facts: Vec<Row>,
     pub logs: Vec<Row>,
-    /// The skills a session can open, as `crate::skills::section` renders them:
-    /// the instruction line and one line per skill. Gathered rather than built
-    /// here because naming workflow's skills means running `workflow skill`,
-    /// and a digest builder that shells out is a digest builder no test can
-    /// pin down. Empty is a section that is simply not there.
-    pub skills: String,
 }
 
 impl Sources {
@@ -96,7 +90,6 @@ impl Sources {
         store: &Store,
         project_id: Option<&str>,
         staleness: Option<String>,
-        skills: String,
     ) -> Result<Sources> {
         let plan = project_id
             .map(|id| store.plan_path(id))
@@ -138,7 +131,6 @@ impl Sources {
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
             logs: recent_non_run_logs(index, project_id, 5)?,
-            skills,
         })
     }
 
@@ -311,13 +303,6 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
             if n == 1 { "" } else { "s" }
         ));
     }
-    // Mandatory: a session that cannot see what it may open is a session that
-    // does the work the long way round. Counted against WARN with the rest, and
-    // never dropped to make room.
-    for line in sources.skills.lines() {
-        mandatory.push(line.to_string());
-    }
-
     if sources.is_empty() {
         // Nothing recorded yet still means the warning lines: they are the only
         // mandatory content an empty project can have, and a machine reading a
@@ -415,9 +400,9 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
 }
 
 /// The small digest: the session-start text, one line per fact a session acts
-/// on, in a fixed order. What it leaves out (facts, logs, the plan's next task,
-/// what each skill is for) is a `mem show`, a `mem search` or the full digest
-/// away, and the hint line says so.
+/// on, in a fixed order. What it leaves out (facts, logs, the plan's next task)
+/// is a `mem show`, a `mem search` or the full digest away, and the hint line
+/// says so.
 pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
     let mut lines: Vec<String> = Vec::new();
     lines.extend(sources.version.iter().cloned());
@@ -465,17 +450,6 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
     }
     for r in sources.rulings.iter().take(SMALL_RULINGS) {
         lines.push(format!("ruling #{}  {}", r.short_id, r.title));
-    }
-    let skills: Vec<&str> = sources
-        .skills
-        .lines()
-        .filter_map(|l| l.split_once(" — ").map(|(name, _)| name.trim()))
-        .collect();
-    if !skills.is_empty() {
-        lines.push(format!(
-            "skills: {} · mem skill <name> or workflow skill <name>",
-            skills.join(", ")
-        ));
     }
     if !sources.pages.is_empty() {
         let n = sources.pages.len();

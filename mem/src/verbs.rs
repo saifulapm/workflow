@@ -44,13 +44,7 @@ pub fn context(
     let index = app.read_index()?;
     let staleness =
         crate::sync::staleness_line(&app.dirs.qshell_status_json(), jiff::Timestamp::now());
-    let sources = Sources::gather(
-        &index,
-        &app.store,
-        identity.id(),
-        staleness,
-        crate::skills::section(),
-    )?;
+    let sources = Sources::gather(&index, &app.store, identity.id(), staleness)?;
 
     if brief {
         let text = crate::digest::brief(&sources, jiff::Timestamp::now());
