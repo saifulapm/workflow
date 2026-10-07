@@ -10,8 +10,8 @@ use crate::html;
 use crate::http::{Request, Response};
 use crate::model;
 use crate::{
-    page_control, page_decisions, page_evidence, page_home, page_new, page_project, page_questions,
-    page_roadmap, page_wiki, plan_page,
+    assets, page_control, page_decisions, page_evidence, page_home, page_new, page_project,
+    page_questions, page_roadmap, page_wiki, plan_page,
 };
 
 /// What a page module is handed.
@@ -73,6 +73,9 @@ fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
             return Some(("GET", None, "", plan_page::asset_get));
         }
         _ => {}
+    }
+    if path.starts_with("/assets/") {
+        return Some(("GET", None, "", assets::get));
     }
     if let Some(rest) = path.strip_prefix("/wiki/") {
         // No slash at all is left to the wiki handler, which 404s it.
