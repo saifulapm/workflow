@@ -54,7 +54,10 @@ you know the exact command for a targeted test and for the whole suite.
 
 Turn the plan's claims into tasks. Each task is a vertical slice that ends
 in a passing test, and each is small enough to land in under an hour. Write
-them as the current plan:
+them as the current plan, under a first line naming the milestone (mem
+refuses a checklist without it, and the hub reads progress from it):
+
+    # plan: <milestone-slug>
 
     - [ ] t1 Store a scheduled message with its send time
     - [ ] t2 List scheduled messages in the composer  [after: t1]
