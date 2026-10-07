@@ -175,7 +175,7 @@ fn live_pill(s: &ProjectSummary, slug: &str) -> String {
 }
 
 /// The orchestrator amx runs for the current milestone, or why there is
-/// none: stalled, or parked on a question. Nothing when amx cannot be asked,
+/// none, stalled or parked on a question, with the button that starts one. Nothing when amx cannot be asked,
 /// and the handoff is read only when no orchestrator is live, so a running
 /// project's page costs no extra read for it.
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
@@ -197,7 +197,7 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                 _ => String::new(),
             };
             let milestone = s.milestone.as_deref().unwrap_or_default();
-            if live::stalled(s, &run, &handoff, machine) {
+            let (pill, meta) = if live::stalled(s, &run, &handoff, machine) {
                 (
                     "<span class=\"pill bad\">stalled</span>",
                     format!("no live orchestrator for {milestone}"),
@@ -207,7 +207,22 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                     "<span class=\"pill wait\">parked</span>",
                     format!("{milestone} is waiting on you"),
                 )
-            }
+            };
+            // A project nothing has handed off yet has never run.
+            let label = if handoff.trim().is_empty() {
+                "Start"
+            } else {
+                "Resume"
+            };
+            return format!(
+                "<p class=\"row\">{pill} <span class=\"meta\">{}</span></p>\n\
+                 <form method=\"post\" action=\"{}/control\">\n\
+                 <input type=\"hidden\" name=\"do\" value=\"go\">\n\
+                 <button type=\"submit\">{label}</button>\n\
+                 </form>\n",
+                esc(&meta),
+                esc(&project_url(project))
+            );
         }
         _ => return String::new(),
     };

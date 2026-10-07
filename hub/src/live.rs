@@ -120,6 +120,23 @@ pub fn idle(s: &ProjectSummary, run: &Run, machine: &str) -> bool {
         && matches!(run, Run::Dead(_))
 }
 
+/// What Start and Resume run. `workflow go` starts amx, whose tmux server
+/// would otherwise begin inside hub.service's cgroup and die with the next
+/// restart of the hub; a scope of its own outlives it.
+pub fn go_argv(project: &str) -> Vec<String> {
+    [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "workflow",
+        "go",
+        project,
+    ]
+    .map(str::to_string)
+    .to_vec()
+}
+
 /// One `amx ls`, and when it was read.
 type Cached = Option<(Instant, Result<Vec<Agent>, String>)>;
 
@@ -273,6 +290,22 @@ mod tests {
         assert_eq!(
             orchestrator(&dead, "alpha", "m1"),
             Run::Dead(Some("alpha-m1-2".to_string()))
+        );
+    }
+
+    #[test]
+    fn go_starts_outside_the_hubs_cgroup() {
+        assert_eq!(
+            go_argv("workflow"),
+            [
+                "systemd-run",
+                "--user",
+                "--scope",
+                "--quiet",
+                "workflow",
+                "go",
+                "workflow"
+            ]
         );
     }
 

@@ -180,3 +180,94 @@ fn without_amx_nothing_is_flagged() {
     assert!(!body.contains("pill\">running"), "{body}");
     assert!(body.contains("<h2>Last moves</h2>"), "{body}");
 }
+
+/// A hub over `world`, after the doorbell's first round, with a fake
+/// `systemd-run` that records its argv and exits `code`, saying `said`.
+fn hub_with_systemd_run(world: &World, code: i32, said: &str) -> (Hub, PathBuf) {
+    let argv = world.dir.join("systemd-run.log");
+    fixture_bin(
+        &world.bin,
+        "systemd-run",
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{argv}'\nprintf '%s\\n' '{said}' >&2\nexit {code}",
+            argv = argv.display()
+        ),
+    );
+    let config = world.dir.join("config.toml");
+    std::fs::write(
+        &config,
+        "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
+         ntfy_base = \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
+    let hub = Hub::spawn(
+        &world.home,
+        &[&world.bin],
+        &["--port", "0", "--config", config.to_str().unwrap()],
+    );
+    (hub, argv)
+}
+
+#[test]
+fn resume_runs_workflow_go_outside_the_hubs_cgroup() {
+    let world = world("live-resume", "o2-t1 landed at 1a2b3c.", Some(DEAD));
+    let (hub, argv) = hub_with_systemd_run(&world, 0, "omega-o2-sync-2");
+
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(
+        body.contains(
+            "<form method=\"post\" action=\"/p/omega/control\">\n\
+             <input type=\"hidden\" name=\"do\" value=\"go\">\n\
+             <button type=\"submit\">Resume</button>"
+        ),
+        "{body}"
+    );
+
+    let response = hub.post_form("/p/omega/control", "do=go");
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(
+        common::header_of(&response, "location"),
+        Some("/p/omega"),
+        "{response}"
+    );
+    assert_eq!(
+        lines(&argv),
+        ["--user --scope --quiet workflow go omega"],
+        "one workflow go, in a scope of its own"
+    );
+}
+
+#[test]
+fn a_project_with_no_handoff_offers_start() {
+    let world = world("live-start", "", Some(DEAD));
+    let (hub, _) = hub_with_systemd_run(&world, 0, "");
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(
+        body.contains("<button type=\"submit\">Start</button>"),
+        "{body}"
+    );
+}
+
+#[test]
+fn a_live_orchestrator_is_not_started_twice() {
+    let world = world("live-twice", "", Some(LIVE));
+    let (hub, argv) = hub_with_systemd_run(&world, 0, "");
+
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(!body.contains("value=\"go\""), "{body}");
+    let response = hub.post_form("/p/omega/control", "do=go");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(lines(&argv).is_empty(), "{:?}", lines(&argv));
+}
+
+#[test]
+fn a_refused_go_says_why() {
+    let world = world("live-refused", "", Some(DEAD));
+    let (hub, _) = hub_with_systemd_run(&world, 2, "go: omega: the roadmap is not approved");
+    let response = hub.post_form("/p/omega/control", "do=go");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(
+        body_of(&response).contains("go: omega: the roadmap is not approved"),
+        "{response}"
+    );
+}

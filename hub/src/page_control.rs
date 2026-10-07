@@ -8,7 +8,9 @@
 
 use crate::html::{esc, project_url};
 use crate::http::Response;
+use crate::live;
 use crate::memcli::{Outcome, Run};
+use crate::page_home::summary_of;
 use crate::pages::{PageCtx, page_shell, sibling_hub};
 
 /// How a pending approval question starts, as the engine asks it.
@@ -17,6 +19,9 @@ pub const APPROVAL_QUESTION: &str = "Approve roadmap";
 /// How the plan skill asks for the same approval: "Review the <name> roadmap
 /// and its plan pages", by its start and its end.
 pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap and its plan pages");
+
+/// How long `workflow go` may take: an `amx new` and a few mem reads.
+const GO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// mem's exit when another machine's runner claim refuses an in-place write.
 pub const RUNNER_REFUSED: i32 = 5;
@@ -30,7 +35,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
     let form = ctx.request.form();
     let verb = form.get("do").unwrap_or("");
     let text = form.get("text").unwrap_or("").trim();
-    if !matches!(verb, "approve" | "changes" | "pause" | "resume") {
+    if !matches!(verb, "approve" | "changes" | "pause" | "resume" | "go") {
         return Response::text(400, "unknown control");
     }
     let roadmap = format!("{}/roadmap", project_url(project));
@@ -85,6 +90,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             }
             Response::see_other(&roadmap)
         }
+        "go" => go(ctx, project),
         _ => {
             let run = if verb == "pause" {
                 // The words the paused key holds: this machine and the UTC date.
@@ -102,6 +108,52 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             }
             Response::see_other(&project_url(project))
         }
+    }
+}
+
+/// Start or Resume: `workflow go`, once the project is read again as it is
+/// now, so a second tap or a second phone cannot start a second orchestrator.
+/// Called with the control lock held.
+fn go(ctx: &PageCtx, project: &str) -> Response {
+    let mem = &ctx.app.mem;
+    mem.invalidate();
+    let summary = mem
+        .refresh(&["projects", "--json"])
+        .rows("projects")
+        .iter()
+        .map(summary_of)
+        .find(|s| s.name == project);
+    let Some(summary) = summary else {
+        return Response::not_found();
+    };
+    let run = match ctx.app.amx.agents_fresh() {
+        Ok(agents) => match summary.milestone.as_deref() {
+            Some(milestone) => live::orchestrator(&agents, project, milestone),
+            None => live::Run::Dead(None),
+        },
+        Err(why) => live::Run::Unknown(why),
+    };
+    if !live::idle(&summary, &run, &ctx.app.machine) {
+        let why = match &run {
+            live::Run::Live(agent) => format!("{} is already running.", agent.id),
+            live::Run::Unknown(why) => format!("amx cannot be asked: {why}."),
+            live::Run::Dead(_) => "There is no approved milestone here to start.".to_string(),
+        };
+        return conflict(ctx, &why);
+    }
+    let argv = live::go_argv(project);
+    let mut command = std::process::Command::new(&argv[0]);
+    command.args(&argv[1..]);
+    match crate::proc::output_within(&mut command, GO_TIMEOUT) {
+        crate::proc::Ended::Exited(done) if done.code == Some(0) => {
+            Response::see_other(&project_url(project))
+        }
+        crate::proc::Ended::Exited(done) => {
+            let said = String::from_utf8_lossy(&done.stderr);
+            conflict(ctx, said.trim())
+        }
+        crate::proc::Ended::TimedOut => conflict(ctx, "workflow go did not finish in time."),
+        crate::proc::Ended::Failed(why) => conflict(ctx, &format!("cannot run workflow go: {why}")),
     }
 }
 
