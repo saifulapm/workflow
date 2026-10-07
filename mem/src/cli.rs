@@ -349,10 +349,7 @@ pub enum EvidenceCommand {
         session_id: Option<String>,
     },
     /// One `#<id>  <task>  <file>  <note>` line per item, newest first.
-    List {
-        #[arg(long)]
-        task: Option<String>,
-    },
+    List,
     /// Write the file an evidence item or a finding names to stdout, as stored.
     Cat { id: String },
 }

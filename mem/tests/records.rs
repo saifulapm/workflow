@@ -166,10 +166,9 @@ fn evidence_add_records_a_copy_under_the_project_and_lists_it() {
         "{listed}"
     );
 
+    // The listing is always whole; the hub groups it by task itself.
     let out = mem(&w, &repo, &["evidence", "list", "--task", "pay"]);
-    let listed = stdout(&out);
-    assert!(listed.contains("  pay  "), "{listed}");
-    assert!(!listed.contains("  cart  "), "{listed}");
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
 
     let out = mem(&w, &repo, &["evidence", "list", "--json"]);
     let items = json(&out)["items"].as_array().unwrap().clone();

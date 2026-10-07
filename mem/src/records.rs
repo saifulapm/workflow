@@ -45,12 +45,9 @@ pub fn evidence_add(app: &App, task: &str, file: &Path, note: &str) -> Result<i3
     report(app, &written, Kind::Evidence)
 }
 
-/// `mem evidence list [--task <id>]`, newest first.
-pub fn evidence_list(app: &App, task: Option<&str>) -> Result<i32> {
-    let mut rows = rows_of(app, Kind::Evidence)?;
-    if let Some(task) = task {
-        rows.retain(|(row, _)| row.task.as_deref() == Some(task));
-    }
+/// `mem evidence list`, newest first.
+pub fn evidence_list(app: &App) -> Result<i32> {
+    let rows = rows_of(app, Kind::Evidence)?;
     let print = |row: &Row, item: &Item| {
         format!(
             "#{}  {}  {}  {}",
