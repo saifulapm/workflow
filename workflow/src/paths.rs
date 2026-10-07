@@ -4,11 +4,11 @@
 use std::path::{Path, PathBuf};
 
 /// `$HOME`, which every path the installer writes is made from, so a test can
-/// point it at a scratch directory.
-pub fn home() -> PathBuf {
+/// point it at a scratch directory. Unset is no answer, never `/`.
+pub fn home() -> Option<PathBuf> {
     match std::env::var("HOME") {
-        Ok(v) if !v.is_empty() => PathBuf::from(v),
-        _ => PathBuf::from("/"),
+        Ok(v) if !v.is_empty() => Some(PathBuf::from(v)),
+        _ => None,
     }
 }
 

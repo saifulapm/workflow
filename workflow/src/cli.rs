@@ -82,6 +82,19 @@ With no mode the whole tracked tree and the last 200 commits are read."
         #[arg(long)]
         fix: bool,
     },
+    /// Write the embedded skills, agents and hook stubs where they are read.
+    #[command(
+        long_about = "Write the embedded skills, agents and hook stubs where they are read.
+
+The binary carries the repository's skills/, agents/ and hooks/ directories.
+Each skill goes to ~/.claude/skills and ~/.agents/skills, each agent to
+~/.claude/agents, each hook stub to ~/.config/git/hooks with mode 0755. A
+symlink in the way is replaced by the file, never written through, and a file
+a shipped skill no longer has is deleted. The skill directories and amx roles
+older installs wrote that nothing ships now are removed; every other name in
+those directories is left alone. One line is printed per change."
+    )]
+    Install,
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
@@ -108,4 +121,8 @@ usage: workflow <command> [options]
       0 clean (warnings included) · 1 hard fail
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's
+  install
+      write the embedded skills, agents and hook stubs where they are read,
+      replacing symlinks with files and removing what older installs left
+      0 installed · 1 something could not be written or removed
 ";

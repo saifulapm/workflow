@@ -3,6 +3,7 @@
 //!   workflow hygiene         agent files and process references in a repo
 //!   workflow lint-msg        check a commit message, branch name or PR body
 //!   workflow hook            the body of a git hook stub
+//!   workflow install         write the embedded skills, agents and hook stubs
 //!
 //! Exit codes are a contract; `workflow help` prints them.
 //!
@@ -10,10 +11,12 @@
 //! git and mem, so it works the same under any agent runtime.
 
 pub mod cli;
+pub mod embedded;
 pub mod exit;
 pub mod gitcmd;
 pub mod hook;
 pub mod hygiene;
+pub mod install;
 pub mod lint;
 pub mod memcli;
 pub mod paths;
@@ -105,5 +108,6 @@ pub fn run(cli: Cli) -> i32 {
             ),
         },
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
+        Command::Install => install::cmd_install(),
     }
 }

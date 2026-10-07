@@ -3,6 +3,7 @@
 //!
 //!   lint-msg       0 clean (warnings included) · 1 hard fail
 //!   hygiene        0 clean or warned · 1 hard finding · 2 usage
+//!   install        0 installed · 1 something could not be written or removed
 
 pub const OK: i32 = 0;
 pub const FAILED: i32 = 1;
