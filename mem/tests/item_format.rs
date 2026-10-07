@@ -1,4 +1,4 @@
-//! Item frontmatter round-trip (spec §4, AC5).
+//! Item frontmatter round-trip.
 
 mod common;
 
@@ -16,7 +16,7 @@ fn meta(title: &str) -> Meta {
 
 /// Round-trips one item and returns the title it came back as. Bodies are
 /// always byte-exact; a title is byte-exact unless it would have emitted a bare
-/// `+++` line, in which case its newlines are collapsed (spec §4 fence guard).
+/// `+++` line, in which case its newlines are collapsed (the fence guard).
 fn roundtrip(title: &str, body: &[u8]) -> String {
     let item = Item::new(meta(title), body.to_vec());
     let bytes = item.to_bytes().expect("serialize");

@@ -1,4 +1,4 @@
-//! Write integrity (spec §7 write path, AC4).
+//! Write integrity on the write path.
 
 mod common;
 

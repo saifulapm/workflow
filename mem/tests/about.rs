@@ -1,6 +1,6 @@
 //! A comment on a plan page names the part it is about: `mem ask --about`
 //! and `mem save --about` keep it on the item, and `--about <prefix>` reads
-//! back every comment on one page (h4-designed-plans).
+//! back every comment on one page.
 
 mod common;
 

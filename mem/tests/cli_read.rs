@@ -1,4 +1,4 @@
-//! The read verbs through the binary: exit codes and empty states (AC13, AC15).
+//! The read verbs through the binary: exit codes and empty states.
 
 mod common;
 

@@ -1,16 +1,16 @@
-//! The performance harness of AC2: 1,000 items across 10 projects, warm search
+//! The performance harness: 1,000 items across 10 projects, warm search
 //! p95 under 50 ms end to end (reindex included) and a full rebuild under 1 s.
 //!
 //! Every number here is measured on the **release binary**, one process per
 //! measurement. An earlier version of this harness called `search()` in process
 //! and passed with 4 ms of headroom while the real `mem search` took twice the
-//! ceiling (code review 1, finding 1): everything the CLI does around the query
+//! ceiling: everything the CLI does around the query
 //! — resolving the project, opening the index, the incremental reindex — is
 //! exactly what the acceptance criterion measures, so the harness pays for it
 //! too. `CARGO_BIN_EXE_mem` is the binary cargo built for this profile, which
 //! is what makes `--release` the whole build step.
 //!
-//! Ignored in a debug build — the numbers in the spec are for an optimised
+//! Ignored in a debug build — the ceilings above are for an optimised
 //! binary, and in release this is an ordinary test. Run it with
 //! `cargo test --release --test perf_corpus -- --nocapture`.
 

@@ -1,9 +1,9 @@
-//! AC15, first half: every verb's `--json` validates against the committed
-//! schema next to it in `mem/schemas/`.
+//! Every verb's `--json` output validates against the committed schema next to
+//! it in `mem/schemas/`.
 //!
 //! The validator below is deliberately small — the schemas are written to the
 //! subset it understands (see `mem/schemas/README.md`), because a JSON Schema
-//! crate is not in spec §12 and a contract nobody can check is not a contract.
+//! crate is not a dependency and a contract nobody can check is not a contract.
 
 mod common;
 
@@ -392,7 +392,7 @@ fn the_hook_envelopes_match_the_shapes_the_runtime_validates() {
 
 #[test]
 fn an_empty_filtered_read_still_answers_with_a_document() {
-    // Spec §7: exit 1, and an empty array on stdout — the caller for whom empty
+    // Exit 1, and an empty array on stdout — the caller for whom empty
     // is a fine answer tests the array, not the code.
     let w = World::new("json-empty");
     let repo = w.repo("thing", None);

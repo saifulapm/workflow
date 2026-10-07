@@ -1,4 +1,4 @@
-//! Incremental reindex, delete detection and lock behaviour (spec §6, AC7–AC9).
+//! Incremental reindex, delete detection and lock behaviour.
 
 mod common;
 

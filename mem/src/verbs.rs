@@ -2207,7 +2207,7 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
             }
             None => findings.push(finding(
                 "sync",
-                "qshell-sync has no memory unit yet — see mem/TESTING.md for the unit block",
+                "qshell-sync has no memory unit yet; the dotfiles' bin/qshell-sync script sets up the unit `memory`",
             )),
         },
         None => findings.push(finding(

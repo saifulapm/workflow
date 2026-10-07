@@ -1,4 +1,4 @@
-//! Project identity, registration and the machine-local path map (spec §5).
+//! Project identity, registration and the machine-local path map .
 
 mod common;
 
@@ -410,7 +410,7 @@ fn project_identity_roots_skips_a_common_dir_not_named_git() {
 
 #[test]
 fn project_identity_json_names_a_childs_checkout_through_its_parents_root() {
-    // paths.toml stays root-only (ruling #Y57A9FE7's fix), so the child's row
+    // paths.toml stays root-only, so the child's row
     // in `mem projects --json` must look its checkout up under the parent's
     // id and join its own subdir onto the parent's root.
     let w = common::World::new("ident-checkouts-json");

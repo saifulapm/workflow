@@ -1,4 +1,4 @@
-//! The write verbs (spec §7, §4): registration, CAS, budgets, session activity.
+//! The write verbs: registration, CAS, budgets, session activity.
 
 mod common;
 
@@ -129,8 +129,7 @@ fn log_writes_with_text_and_reads_without() {
 #[test]
 fn log_by_type_reads_every_kind_and_the_whole_history() {
     // A follow-up is a fact of type `followup`, and the hint a run prints is
-    // `mem log --type followup`: reading it may not stop at the log entries
-    // (friction #N5FCYDTC).
+    // `mem log --type followup`: reading it may not stop at the log entries.
     let w = World::new("write-log-type");
     let repo = w.repo("thing", None);
     assert_eq!(
@@ -861,7 +860,7 @@ fn mem_project_in_the_environment_names_the_project_and_the_flag_outranks_it() {
 }
 
 /// A session that inherited another's `MEM_PROJECT` wrote into amx's memory
-/// from shortcart's checkout (frictions #EE2VMENP, #VMG4FV4P). The directory
+/// from shortcart's checkout. The directory
 /// wins over a variable naming a project it has no part in, and says so; the
 /// named project's parent and child keep the variable, which is what a
 /// worker at its worktree's root needs.

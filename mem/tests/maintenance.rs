@@ -1,5 +1,4 @@
-//! Maintenance: prune, snapshot, doctor, reindex, sync and the version gate
-//! (spec §7, §10, AC14).
+//! Maintenance: prune, snapshot, doctor, reindex, sync and the version gate.
 
 mod common;
 
@@ -470,7 +469,7 @@ fn the_secret_heuristic_knows_what_it_is_looking_for() {
 #[test]
 fn the_secret_heuristic_wants_the_body_a_pem_header_introduces() {
     // The note that was refused as a key: a reader's follow-up about the
-    // scrubber, quoting the header the scrubber matches (friction #7269R5F0).
+    // scrubber, quoting the header the scrubber matches.
     let note = "mem doctor flags this as a private key because the scan sees \
                 'PRIVATE KEY-----' anywhere in the body: writing \
                 -----BEGIN PGP PRIVATE KEY BLOCK----- in a sentence is enough.\n";
@@ -530,7 +529,7 @@ fn a_newer_store_refuses_writes_and_still_serves_reads() {
     let out = mem(&w, &repo, &["doctor"]);
     assert!(stdout(&out).contains("version"), "{}", stdout(&out));
 
-    // §3 asks reads to degrade rather than refuse, and to say so in one line —
+    // Reads degrade rather than refuse, and say so in one line —
     // a synced VERSION bump must not take another machine's sessions down, but
     // it must not be silent either.
     let out = mem(&w, &repo, &["context"]);
@@ -866,7 +865,7 @@ fn doctor_reports_the_missing_adapter_hooks() {
     assert_eq!(hooks.len(), 2, "{hooks:?}");
     assert!(hooks.iter().any(|h| h.contains("PreCompact")), "{hooks:?}");
 
-    // The Stop row is the one that was specified and never wired: every session
+    // The Stop row is the one that was never wired: every session
     // on this machine ran without it from the day the hooks landed.
     let stop = hooks
         .iter()

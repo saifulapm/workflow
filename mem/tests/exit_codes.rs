@@ -1,6 +1,5 @@
-//! AC15, second half: every documented exit code (spec §7) is exercised here,
-//! through the binary, so the table in the spec and the table in `exit.rs` are
-//! not just two prose documents that agree.
+//! Every documented exit code is exercised here, through the binary, so the
+//! table in `exit.rs` and the behaviour of the binary cannot drift apart.
 
 mod common;
 
@@ -36,7 +35,7 @@ fn run_with_stdin(args: &[&str], w: &World, cwd: &Path, input: &[u8]) -> std::pr
         .expect("spawn mem");
     // A refused verb exits before it reads stdin, and under load the child can
     // win that race, closing the pipe under this write. The early exit is the
-    // behavior under test, so EPIPE is a pass, not a panic (friction #D6TP86YJ).
+    // behavior under test, so EPIPE is a pass, not a panic.
     if let Err(e) = child.stdin.take().expect("stdin").write_all(input)
         && e.kind() != std::io::ErrorKind::BrokenPipe
     {

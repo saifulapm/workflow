@@ -1,4 +1,4 @@
-//! Digest assembly and budgets (spec §8, AC10, AC13).
+//! Digest assembly and budgets.
 
 mod common;
 

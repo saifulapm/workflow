@@ -1,4 +1,4 @@
-//! Short-ID minting and store-wide uniqueness (spec §4, AC6).
+//! Short-ID minting and store-wide uniqueness .
 
 mod common;
 

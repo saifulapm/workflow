@@ -1,6 +1,6 @@
-//! The runtime hook modes (spec §9). Each of these is the machine half of an
-//! AC11 row: the transcript-level halves are in `mem/TESTING.md`, because they
-//! need a live Claude Code session.
+//! The runtime hook modes. These cover the machine half of each hook; the
+//! transcript-level half needs a live Claude Code session and is not tested
+//! here.
 //!
 //! Two shapes are load-bearing and were checked against the 2.1.233 binary:
 //! PostToolBatch and Stop read `hookSpecificOutput.additionalContext` (and the

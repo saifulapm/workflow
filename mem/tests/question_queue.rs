@@ -1,4 +1,4 @@
-//! The question queue (spec §7b, AC12).
+//! The question queue.
 
 mod common;
 

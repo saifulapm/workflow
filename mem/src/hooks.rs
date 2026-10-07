@@ -48,7 +48,7 @@ pub fn envelope(event: &str, context: &str) -> serde_json::Value {
 /// file because the hook input carries no batch index.
 ///
 /// Without a session id there is nowhere to count, so every batch emits — the
-/// wiring in `mem/TESTING.md` always passes one.
+/// hook wiring always passes one.
 pub fn post_tool_batch(app: &App, brief: &str) -> Result<i32> {
     if let Some(session) = &app.session_id {
         let n = crate::session::record_batch(&app.dirs.sessions_dir(), session);

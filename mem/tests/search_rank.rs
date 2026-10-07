@@ -1,4 +1,4 @@
-//! Search, the ranking formula and the query ladder (spec §6).
+//! Search, the ranking formula and the query ladder.
 
 mod common;
 
