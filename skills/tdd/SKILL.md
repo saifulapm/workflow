@@ -87,7 +87,7 @@ reader.
 - The subject is under 72 characters, imperative, and about the change:
   "Refuse an unknown effort level". The body gives the why.
 - A comment gives the reason the code is this way, in a line or two.
-- Name the actor: "the gate reruns hygiene", not "hygiene is rerun".
+- Name the actor: "the hook reruns hygiene", not "hygiene is rerun".
 - Use plain words (use, help, is), and put a number or a mechanism where an
   adverb wanted to go.
 - Use a comma or a full stop where a dash wanted to go. No em or en dashes.

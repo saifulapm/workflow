@@ -3,8 +3,8 @@
 //! install` writes out. A file added to one of the directories is carried
 //! without any code change.
 //!
-//! Hidden files and directories are left out (`agents/.gitkeep` keeps an empty
-//! directory in git), and `agents/` carries only its `.md` files.
+//! Hidden files and directories are left out, and `agents/` carries only its
+//! `.md` files.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

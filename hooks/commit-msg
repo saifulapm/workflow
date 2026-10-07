@@ -1,5 +1,5 @@
 #!/bin/sh
-# The workflow gate, commit-msg half. See hooks/pre-commit for why these two
+# The workflow hooks, commit-msg half. See hooks/pre-commit for why these two
 # lines stay in the stub and everything else lives in `workflow hook`.
 
 [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || exit 0

@@ -1,10 +1,10 @@
 #!/bin/sh
-# The workflow gate, pre-commit half. Copied into ~/.config/git/hooks/ by
+# The workflow hooks, pre-commit half. Copied into ~/.config/git/hooks/ by
 # `workflow install`; a global core.hooksPath points every repo on this
 # machine here.
 #
-# The five steps of spec §7 live in `workflow hook` (spec §12b). Two lines are
-# left here, and both have to be here:
+# Everything the hook checks lives in `workflow hook`. Two lines are left here,
+# and both have to be here:
 #
 #   * the work-tree guard. `git rev-parse --show-toplevel` fatals in a bare
 #     repo, so nothing may ask git anything else before this.

@@ -93,7 +93,7 @@ The project is the argument, else the one the current directory belongs to.
 The milestone is --milestone, else the first unticked line of the project's
 roadmap; with none left it says the roadmap is done and exits 0. Without
 --milestone the roadmap's status must be approved. It refuses, exit 2, while
-another live amx agent of the project is running an orchestrator; the caller
+another live amx agent is running that milestone's orchestrator; the caller
 itself ($AMX_ID) does not count, so an orchestrator can start its successor.
 The agent is `amx new --name <project>-<milestone>` in the project's checkout,
 on the goal that milestone's landing is the proof of; a name amx has taken by
@@ -148,5 +148,5 @@ usage: workflow <command> [options]
       start the orchestrator for the project's next milestone as an amx agent
       and print its name; --dry-run prints the amx command line instead
       0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
-      the roadmap is not approved, or the project already has an orchestrator
+      the roadmap is not approved, or the milestone already has an orchestrator
 ";
