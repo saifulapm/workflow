@@ -80,7 +80,7 @@ impl World {
                  wiki*--sections*--project=sigma*spec) p '{SECTIONS_DOC}' ;;\n\
                  roadmap*--project=beta*) p '{ROADMAP_DOC}' ;;\n\
                  plan*--list*--project=beta*) p '{{\"plans\":[{{\"slug\":\"b1-box\"}}]}}' ;;\n\
-                 status*--project=exec*) p '{{\"text\":\"Two of four tasks merged.\"}}' ;;\n\
+                 log\\ --limit\\ 5\\ --project=exec*) p '{{\"items\":[{{\"id\":\"01K0LOG0000000000000000001\",\"kind\":\"log\",\"title\":\"Two of four tasks merged.\"}}]}}' ;;\n\
                  handoff*--project=exec*) p '{{\"body\":\"Picking up at e2-t3.\"}}' ;;\n\
                  *) exit 1 ;;\n\
                  esac",
@@ -227,13 +227,14 @@ fn the_header_shows_stage_runner_progress_and_paused() {
 }
 
 #[test]
-fn an_execution_project_shows_its_status_and_handoff() {
+fn an_execution_project_shows_its_last_moves_and_handoff() {
     let world = World::new("project-page-execution");
     let body = world.page("exec");
 
     assert!(body.contains("execution"), "{body}");
     assert!(body.contains("milestone 2 of 3"), "{body}");
-    assert!(body.contains("Two of four tasks merged."), "{body}");
+    assert!(body.contains("<h2>Last moves</h2>"), "{body}");
+    assert!(body.contains(">Two of four tasks merged.</a>"), "{body}");
     assert!(body.contains("Picking up at e2-t3."), "{body}");
 }
 

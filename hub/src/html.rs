@@ -485,7 +485,7 @@ fn body_block(text: Option<&str>, empty: &str) -> String {
 }
 
 /// Rulings and log both list `Activity` rows, each linked to its own item.
-fn item_list_section(title: &str, rows: &[Activity], project: &str) -> String {
+pub fn item_list_section(title: &str, rows: &[Activity], project: &str) -> String {
     let mut out = format!("<h2>{}</h2>\n", esc(title));
     if rows.is_empty() {
         out.push_str("<p class=\"empty\">Nothing yet.</p>\n");

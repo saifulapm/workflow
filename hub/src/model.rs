@@ -29,6 +29,8 @@ pub const SLUG_MAX: usize = 64;
 
 /// `/p/<project>/log`'s size.
 pub const PROJECT_LOG_LIMIT: usize = 200;
+/// How many log lines a building project's front page shows.
+pub const LAST_MOVES: usize = 5;
 
 /// `/p/<project>/items/<kind>`'s size.
 pub const PROJECT_ITEMS_LIMIT: usize = 100;
@@ -265,6 +267,20 @@ pub fn plan_slug_text(mem: &MemCli, project: &str, slug: &str) -> Singleton<Stri
 /// `/p/<project>/log`: the last 200 log lines, whole.
 pub fn log_lines(mem: &MemCli, project: &str, now_ms: i64) -> Section<Activity> {
     let outcome = mem.log_n(project, PROJECT_LOG_LIMIT);
+    let rows = outcome
+        .rows("items")
+        .iter()
+        .map(|row| activity_item(row, now_ms))
+        .collect();
+    Section {
+        degraded: list_fault(&outcome, "log"),
+        rows,
+    }
+}
+
+/// A building project's last five log lines, for its front page.
+pub fn last_moves(mem: &MemCli, project: &str, now_ms: i64) -> Section<Activity> {
+    let outcome = mem.log_n(project, LAST_MOVES);
     let rows = outcome
         .rows("items")
         .iter()

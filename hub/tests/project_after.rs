@@ -97,7 +97,7 @@ fn world(tag: &str, roadmap: Value, findings: Value, runs: Value) -> World {
              roadmap*--project=delta*) p '{delta_roadmap}' ;;\n\
              plan\\ --list*--project=omega*) p '{{\"plans\":[{{\"slug\":\"o1-store\"}}]}}' ;;\n\
              plan\\ --list*--project=delta*) p '{{\"plans\":[{{\"slug\":\"d1-rename\"}}]}}' ;;\n\
-             status*--project=omega*) p '{{\"text\":\"One of three tasks merged.\"}}' ;;\n\
+             log\\ --limit\\ 5\\ --project=omega*) p '{{\"items\":[]}}' ;;\n\
              handoff*--project=omega*) p '{{\"body\":\"Picking up at o2-t2.\"}}' ;;\n\
              plan\\ --list*--project=kappa*) p '{{\"plans\":[{{\"slug\":\"k1-log\"}},{{\"slug\":\"k2-walk\"}}]}}' ;;\n\
              finding\\ list\\ --open*--project=kappa*) p '{findings}' ;;\n\
@@ -354,7 +354,7 @@ fn a_building_project_draws_its_timeline_within_five_reads() {
         [
             "roadmap --project=omega --json",
             "plan --list --project=omega --json",
-            "status --project=omega --json",
+            "log --limit 5 --project=omega --json",
             "handoff --project=omega --json",
         ],
         "four reads and the route's projects read"

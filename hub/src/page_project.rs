@@ -9,8 +9,11 @@
 use serde_json::Value;
 
 use crate::form::encode_component;
-use crate::html::{self, degraded_banner, esc, markdown_article, page_url, project_url};
+use crate::html::{
+    self, degraded_banner, esc, item_list_section, markdown_article, page_url, project_url,
+};
 use crate::http::Response;
+use crate::live::{self, Run};
 use crate::memcli::Outcome;
 use crate::model;
 use crate::page_decisions::{ruling_block, ruling_rows};
@@ -38,6 +41,9 @@ pub fn get(ctx: &PageCtx) -> Response {
     };
     let mut body = stage_header(&summary, ctx);
     let running = matches!(summary.stage, "execution" | "dogfooding");
+    if running {
+        body.push_str(&orchestrator_line(ctx, &summary));
+    }
     if summary.stage == "execution" {
         body.push_str(&run_summary(ctx, project));
     }
@@ -56,6 +62,7 @@ pub fn get(ctx: &PageCtx) -> Response {
         "planning" => roadmap_body(ctx),
         "dogfooding" => walk_body(ctx, project),
         "maintenance" => backlog_body(ctx, project),
+        "execution" => building_body(ctx, project),
         _ => status_body(ctx, project),
     });
     Response::html(page_shell(summary.stage, ctx.project, &body))
@@ -165,6 +172,49 @@ fn live_pill(s: &ProjectSummary, slug: &str) -> String {
     } else {
         "<span class=\"pill\">live</span>".to_string()
     }
+}
+
+/// The orchestrator amx runs for the current milestone, or why there is
+/// none: stalled, or parked on a question. Nothing when amx cannot be asked,
+/// and the handoff is read only when no orchestrator is live, so a running
+/// project's page costs no extra read for it.
+fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
+    let project = s.name.as_str();
+    let run = ctx.app.amx.run(project, s.milestone.as_deref());
+    let machine = ctx.app.machine.as_str();
+    let (pill, meta) = match &run {
+        Run::Live(agent) => (
+            "<span class=\"pill\">running</span>",
+            format!(
+                "{} · {}",
+                agent.id,
+                agent.state.as_deref().unwrap_or("unknown")
+            ),
+        ),
+        Run::Dead(_) if live::idle(s, &run, machine) => {
+            let handoff = match &*ctx.app.mem.handoff(project) {
+                Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default().to_string(),
+                _ => String::new(),
+            };
+            let milestone = s.milestone.as_deref().unwrap_or_default();
+            if live::stalled(s, &run, &handoff, machine) {
+                (
+                    "<span class=\"pill bad\">stalled</span>",
+                    format!("no live orchestrator for {milestone}"),
+                )
+            } else {
+                (
+                    "<span class=\"pill wait\">parked</span>",
+                    format!("{milestone} is waiting on you"),
+                )
+            }
+        }
+        _ => return String::new(),
+    };
+    format!(
+        "<p class=\"row\">{pill} <span class=\"meta\">{}</span></p>\n",
+        esc(&meta)
+    )
 }
 
 /// Under the header of a running project: the questions waiting on the owner,
@@ -378,6 +428,33 @@ fn status_body(ctx: &PageCtx, project: &str) -> String {
             Outcome::Absent => None,
         };
         out.push_str(&markdown_article(text, project, empty));
+    }
+    out
+}
+
+/// The last moves and the last handoff, for a building project.
+fn building_body(ctx: &PageCtx, project: &str) -> String {
+    let moves = model::last_moves(
+        &ctx.app.mem,
+        project,
+        jiff::Timestamp::now().as_millisecond(),
+    );
+    let mut out = String::new();
+    if let Some(why) = &moves.degraded {
+        out.push_str(&degraded_banner(why));
+    }
+    out.push_str(&item_list_section("Last moves", &moves.rows, project));
+    out.push_str("<h2>Handoff</h2>\n");
+    match &*ctx.app.mem.handoff(project) {
+        Outcome::Broken(why) => out.push_str(&degraded_banner(why)),
+        Outcome::Json(doc) => {
+            let text = doc["body"]
+                .as_str()
+                .map(str::trim)
+                .filter(|t| !t.is_empty());
+            out.push_str(&markdown_article(text, project, "No handoff recorded."));
+        }
+        Outcome::Absent => out.push_str(&markdown_article(None, project, "No handoff recorded.")),
     }
     out
 }
