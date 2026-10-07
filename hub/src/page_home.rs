@@ -1,13 +1,15 @@
-//! `GET /`: every project with its stage, runner and progress, then the
-//! questions waiting on the owner, from two `mem` reads.
+//! `GET /`: every project with its stage, runner, progress and week, then
+//! the questions waiting on the owner.
 //!
-//! The hub runs one `mem` at a time, so this page reads nothing per project
-//! and nothing per question: `projects --json` carries each project's
-//! summary and `questions --json` each question's whole body.
+//! The hub runs one `mem` at a time, so this page reads nothing per question
+//! and one thing per project: `projects --json` carries each project's
+//! summary, `questions --json` each question's whole body, and the week is
+//! the project's run lines, which the cache answers for its TTL.
 
 use serde_json::Value;
 
 use crate::config::Config;
+use crate::cost::{parse_cost, summary};
 use crate::html::{self, Banner, esc};
 use crate::http::Response;
 use crate::memcli::MemCli;
@@ -147,7 +149,15 @@ pub fn render(
                 .iter()
                 .filter(|q| q["project"].as_str() == Some(project.name.as_str()))
                 .count();
-            body.push_str(&project_row(project, waiting, config, machine, now_ms));
+            let week = week_line(mem, &project.name);
+            body.push_str(&project_row(
+                project,
+                waiting,
+                week.as_deref(),
+                config,
+                machine,
+                now_ms,
+            ));
         }
         body.push_str("</ul>\n");
     }
@@ -163,9 +173,37 @@ pub fn render(
     page_shell(machine, None, &body)
 }
 
+/// What the project's sessions of the last seven days spent, or `None` when
+/// it has no cost line in them. A `milestone` line sums sessions already
+/// counted, so the week leaves it out.
+fn week_line(mem: &MemCli, project: &str) -> Option<String> {
+    let rows: Vec<_> = mem
+        .run_lines_since(project, "7d")
+        .rows("items")
+        .iter()
+        .filter_map(|item| item["title"].as_str().and_then(parse_cost))
+        .map(|(_, row)| row)
+        .filter(|row| row.kind != "milestone")
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let total = |field: fn(&crate::cost::CostRow) -> u64| rows.iter().map(field).sum();
+    Some(format!(
+        "week: {}",
+        summary(
+            rows.len() as u64,
+            total(|r| r.minutes),
+            total(|r| r.input),
+            total(|r| r.output),
+        )
+    ))
+}
+
 fn project_row(
     project: &ProjectSummary,
     waiting: usize,
+    week: Option<&str>,
     config: &Config,
     machine: &str,
     now_ms: i64,
@@ -198,8 +236,12 @@ fn project_row(
         .map(|at| model::age(Some(at.as_millisecond()), now_ms))
         .map(|age| format!(" <span class=\"meta\">{}</span>", esc(&age)))
         .unwrap_or_default();
+    // Its own line: the week is joined by the same dots as `parts`.
+    let week = week
+        .map(|week| format!("\n<div class=\"meta\">{}</div>", esc(week)))
+        .unwrap_or_default();
     format!(
-        "<li><strong><a href=\"{href}\">{name}</a></strong>{age}\n<div>{parts}</div></li>\n",
+        "<li><strong><a href=\"{href}\">{name}</a></strong>{age}\n<div>{parts}</div>{week}</li>\n",
         href = esc(&html::project_url(&project.name)),
         name = esc(&project.name),
         parts = parts.join(" · "),

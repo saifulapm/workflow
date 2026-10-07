@@ -9,8 +9,8 @@
 # stderr. HUB_SANDBOX_PORT picks the port; 0, the default, picks a free one.
 #
 # Four projects cover the hub's stages: alpha has a brief only, beta a draft
-# roadmap waiting on approval, gamma a running milestone with a run, evidence,
-# findings, a wiki and rulings, and delta is in maintenance.
+# roadmap waiting on approval, gamma a running milestone with a run, cost lines,
+# evidence, findings, a wiki and rulings, and delta is in maintenance.
 
 set -euo pipefail
 
@@ -227,6 +227,12 @@ fixed=$(mem finding list | sed -n 's/^#\([^ ]*\) .*wrong day.*/\1/p')
 mem finding close --by "$(git rev-parse --short HEAD)" "$fixed" >/dev/null
 mem log --type run 'dogfood g1-log: findings 1' >/dev/null
 mem log --type run 'dogfood g1-log: pass' >/dev/null
+# What g1-log cost: two workers and the walk, then the sum the engine writes
+# when the milestone lands, so the home page has a week and the roadmap a cost.
+mem log --type run 'cost g1-log worker g1-t1: minutes=14 context=82000 in=1840000 out=23400 model=sonnet' >/dev/null
+mem log --type run 'cost g1-log worker g1-t2: minutes=9 context=61000 in=920000 out=15800 model=sonnet' >/dev/null
+mem log --type run 'cost g1-log walk g1-log: minutes=6 context=47000 in=380000 out=6100 role=dogfood' >/dev/null
+mem log --type run 'cost g1-log milestone g1-log: sessions=3 minutes=29 context=190000 in=3140000 out=45300' >/dev/null
 mem decide --by saiful 'Nag by notification, not by email' >/dev/null
 mem decide --by saiful --replaces 'Nag by notification, not by email' 'Nag by notification, once a day at most' >/dev/null
 

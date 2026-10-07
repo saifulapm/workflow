@@ -1,5 +1,5 @@
-//! `GET /`: every project with its lifecycle stage, runner and progress,
-//! then the questions waiting on the owner, from two `mem` reads.
+//! `GET /`: every project with its lifecycle stage, runner, progress and
+//! week, then the questions waiting on the owner.
 
 mod common;
 
@@ -88,8 +88,22 @@ fn questions() -> Value {
     ]})
 }
 
-/// A fake `mem` that logs each argv, one per line, and answers the two
-/// reads the page makes. Anything else exits 1 with nothing on stdout. Only
+/// p-execution's run lines of the week: three sessions, a milestone's sum
+/// the week leaves out, and a walk line that is not a cost at all.
+fn week_lines() -> Value {
+    let item = |title: &str| json!({"kind": "log", "type": "run", "title": title});
+    json!({"items": [
+        item("cost m1-auth worker m1-t1: minutes=12 context=84000 in=1250000 out=21000 model=sonnet"),
+        item("cost m1-auth worker m1-t2: minutes=8 in=310000 out=9400 model=sonnet"),
+        item("cost m1-auth lead m1-auth: minutes=3 in=40500 out=800 role=lead"),
+        item("cost m0-setup milestone m0-setup: sessions=9 minutes=99 in=9000000 out=99000"),
+        item("dogfood m1-auth: pass"),
+    ]})
+}
+
+/// A fake `mem` that logs each argv, one per line, and answers the reads
+/// the page makes: run lines for p-execution only, mem's empty listing for
+/// every other project. Anything else exits 1 with nothing on stdout. Only
 /// shell builtins: a `MemCli` built `with_path` has nothing else on PATH.
 fn fake_mem(dir: &Path) -> (PathBuf, PathBuf) {
     let bin = dir.join("bin");
@@ -102,11 +116,16 @@ fn fake_mem(dir: &Path) -> (PathBuf, PathBuf) {
              case \"$1\" in\n\
              projects) printf '%s\\n' '{projects}' ;;\n\
              questions) printf '%s\\n' '{questions}' ;;\n\
+             log) case \"$*\" in\n\
+             *--project=p-execution*) printf '%s\\n' '{week}' ;;\n\
+             *) printf '%s\\n' '{{\"items\":[]}}'; exit 1 ;;\n\
+             esac ;;\n\
              *) exit 1 ;;\n\
              esac",
             log = log.display(),
             projects = projects(),
             questions = questions(),
+            week = week_lines(),
         ),
     );
     (bin, log)
@@ -160,13 +179,38 @@ fn each_stage_follows_from_the_project_summary() {
 }
 
 #[test]
-fn the_page_costs_two_mem_spawns() {
+fn the_page_reads_the_run_lines_once_per_project() {
     let (_dir, _page, argv) = render("home-spawns");
-    assert_eq!(
-        argv,
-        ["projects --json".to_string(), QUESTIONS_ARGV.join(" ")],
-        "the page reads nothing per project and nothing per question"
+    let mut expected = vec!["projects --json".to_string(), QUESTIONS_ARGV.join(" ")];
+    for name in [
+        "p-brief",
+        "p-research",
+        "p-grilling",
+        "p-spec",
+        "p-planning",
+        "p-execution",
+        "p-dogfood",
+        "p-maint",
+        "p-elsewhere",
+    ] {
+        expected.push(format!(
+            "log --type run --since 7d --limit 500 --project={name} --json"
+        ));
+    }
+    assert_eq!(argv, expected, "nothing is read per question");
+}
+
+#[test]
+fn cost_of_the_week_shows_under_a_project_with_lines_and_nowhere_else() {
+    let (_dir, page, _argv) = render("home-week");
+    let line = "<div class=\"meta\">week: 3 sessions · 23 min · 1.6M in · 31.2k out</div>";
+    assert!(
+        page.contains(&format!(
+            "<div>execution · here · milestone 1 of 2 · tasks 2 of 3</div>\n{line}"
+        )),
+        "{page}"
     );
+    assert_eq!(page.matches("week:").count(), 1, "{page}");
 }
 
 #[test]
