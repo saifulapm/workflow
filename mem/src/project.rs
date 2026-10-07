@@ -499,8 +499,8 @@ pub fn write_project(store: &Store, project: &Project) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// One `mem project set <key> "<value>"` — the verification command, the review
-/// paths, and whatever else the project comes to own.
+/// One `mem project set <key> "<value>"` — the verification command, the
+/// hygiene exemptions, and whatever else the project comes to own.
 ///
 /// The edit goes through the parsed document rather than through `Project`, so
 /// a key a later version of mem writes and this one has never heard of survives

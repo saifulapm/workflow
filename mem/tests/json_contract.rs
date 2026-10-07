@@ -194,6 +194,14 @@ fn every_verb_matches_its_committed_schema() {
     );
     assert_eq!(current["hygiene_exempt"], serde_json::json!("tests/**"));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
+    // The roadmap prints through the same shape, with its status beside it.
+    let roadmap = w.dir.join("roadmap.md");
+    std::fs::write(&roadmap, "# roadmap: thing\n\n- [ ] m1-auth Sign-in\n").unwrap();
+    let set = |args: &[&str]| assert_eq!(code(&mem(&w, &repo, args)), 0, "{args:?}");
+    set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
+    set(&["roadmap", "--status", "approved"]);
+    let doc = validate("plan.json", &mem(&w, &repo, &["roadmap", "--json"]));
+    assert_eq!(doc["status"], "approved", "{doc}");
     validate(
         "plan-tick.json",
         &mem(&w, &repo, &["plan", "--tick", "t1", "--json"]),
