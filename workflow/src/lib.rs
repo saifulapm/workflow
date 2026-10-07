@@ -1,48 +1,22 @@
-//! `workflow` -- the verification gate and the interim orchestrator.
+//! `workflow` -- hygiene checks and the git hooks that run them.
 //!
-//!   workflow verify          run this repo's suite over what is staged
-//!   workflow lint-msg        check a commit message, branch name or PR body
 //!   workflow hygiene         agent files and process references in a repo
-//!   workflow review-needed   does this change set want a cold review?
-//!   workflow plan-check      read a plan and report its tasks and waves
-//!   workflow run             run a plan's tasks in worktrees
-//!   workflow reap            collect finished or stalled workers
-//!   workflow doctor          check this machine's wiring
+//!   workflow lint-msg        check a commit message, branch name or PR body
 //!   workflow hook            the body of a git hook stub
-//!   workflow skill           the skills this binary carries, or one whole
 //!
 //! Exit codes are a contract; `workflow help` prints them.
 //!
 //! Process state lives in mem, never in the repo. Everything here is driven by
 //! git and mem, so it works the same under any agent runtime.
 
-pub mod backend;
-pub mod backend_amx;
-pub mod brief;
 pub mod cli;
-pub mod cost;
-pub mod docs;
-pub mod doctor;
-pub mod dogfood;
 pub mod exit;
 pub mod gitcmd;
 pub mod hook;
 pub mod hygiene;
 pub mod lint;
 pub mod memcli;
-pub mod ownership;
 pub mod paths;
-pub mod plan;
-pub mod plancheck;
-pub mod repo;
-pub mod report;
-pub mod review;
-pub mod run;
-pub mod skill;
-pub mod sys;
-pub mod testdecl;
-pub mod verify;
-pub mod wait;
 
 use clap::Parser;
 
@@ -52,17 +26,6 @@ use cli::{Cli, Command};
 /// stays the answer.
 pub fn warn(msg: impl AsRef<str>) {
     eprintln!("workflow: {}", msg.as_ref());
-}
-
-pub fn warn_as(prefix: &str, msg: impl AsRef<str>) {
-    eprintln!("{prefix}: {}", msg.as_ref());
-}
-
-pub fn have(program: &str) -> bool {
-    let Ok(path) = std::env::var("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| gitcmd::exists_x(&dir.join(program)))
 }
 
 /// `help`, no command and an unknown command are answered here rather than by
@@ -109,16 +72,6 @@ pub fn main(argv: Vec<String>) -> i32 {
 
 pub fn run(cli: Cli) -> i32 {
     match cli.command {
-        Command::Verify { hook, gate } => verify::cmd_verify(if hook {
-            verify::Mode::Hook
-        } else if gate {
-            verify::Mode::Gate
-        } else {
-            verify::Mode::Direct
-        }),
-        Command::Report { state, note } => {
-            report::cmd_report(&state, note.as_deref().unwrap_or(""))
-        }
         Command::LintMsg { msgfile, string } => {
             lint::cmd_lint_msg(msgfile.as_deref(), string.as_deref())
         }
@@ -151,107 +104,6 @@ pub fn run(cli: Cli) -> i32 {
                 fix,
             ),
         },
-        Command::ReviewNeeded { diff } => review::cmd_review_needed(diff.as_deref()),
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
-        Command::Run {
-            plan_file,
-            model,
-            effort,
-        } => run::cmd_run(plan_file.as_deref(), model.as_deref(), effort.as_deref()),
-        Command::Docs { library, query } => docs::cmd_docs(&library, &query),
-        Command::Reap => run::cmd_reap(),
-        Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
-        Command::Accept { task } => run::cmd_accept(&task, false),
-        Command::Regate { task } => run::cmd_accept(&task, true),
-        Command::Wait { timeout, merges } => wait::cmd_wait(Some(timeout), merges),
-        Command::PlanCheck { file, json } => cmd_plan_check(&file, json),
-        Command::Ownership {
-            repo,
-            base,
-            branch,
-            patterns,
-        } => {
-            let found = ownership::violations(&repo, &base, &branch, &patterns);
-            for line in ownership::show(&found.uncommitted)
-                .into_iter()
-                .chain(ownership::show(&found.committed))
-            {
-                println!("{line}");
-            }
-            exit::OK
-        }
-        Command::SplitPatterns { line } => {
-            for p in ownership::split_patterns(&line) {
-                println!("{p}");
-            }
-            exit::OK
-        }
-        Command::Stalled {
-            rundir,
-            wtroot,
-            deadline,
-            task,
-        } => run::cmd_stalled(&rundir, &wtroot, &task, deadline),
-        Command::Doctor { fix } => doctor::cmd_doctor(fix),
-        Command::Skill { name } => skill::cmd_skill(name.as_deref()),
     }
-}
-
-/// The plan grammar, run over a file and reported. This is what a planner runs
-/// before asking for approval, and it is also the harness's way of checking the
-/// parser against written-down expectations (AC12). It touches nothing: no
-/// worktree, no branch, no worker.
-fn cmd_plan_check(file: &std::path::Path, json: bool) -> i32 {
-    let Ok(text) = std::fs::read_to_string(file) else {
-        warn(format!("plan-check: cannot read {}", file.display()));
-        return exit::USAGE;
-    };
-    let Some(parsed) = plan::parse(&text, true) else {
-        return exit::FAILED;
-    };
-    // The grammar is half the check: the plan must also hold in the checkout
-    // it will run in. Warnings inform the planner; a Verify that cannot pass
-    // here is refused, after the report so the author still sees what parsed. A
-    // roadmap is checked through the milestone plans it names, one per
-    // milestone, in wave order.
-    let mut refusals = Vec::new();
-    if let Some(top) = gitcmd::Git::here().toplevel() {
-        let found = match parsed.kind {
-            plan::PlanKind::Roadmap => plancheck::roadmap_findings(&parsed, &top, file),
-            plan::PlanKind::Plan => plancheck::findings(&parsed, &[], &top, Some(file)),
-        };
-        for w in &found.warnings {
-            warn(w);
-        }
-        for r in &found.refusals {
-            warn(r);
-        }
-        refusals = found.refusals;
-    }
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string(&parsed).unwrap_or_else(|_| "{}".into())
-        );
-    } else {
-        println!("{}: {}", parsed.kind.word(), parsed.plan_id);
-        for t in &parsed.tasks {
-            println!("  {} {}", t.id, t.title);
-        }
-        for (i, w) in parsed.waves.iter().enumerate() {
-            println!("  wave {}: {}", i + 1, w.join(" "));
-        }
-        // What a run can carry at once, so a plan serialized into a chain
-        // by its shared files is visible rather than inferred.
-        if let Some(widest) = parsed.waves.iter().map(Vec::len).max() {
-            println!(
-                "  widest wave: {widest} task{}",
-                if widest == 1 { "" } else { "s" }
-            );
-        }
-    }
-    if !refusals.is_empty() {
-        return exit::FAILED;
-    }
-    exit::OK
 }

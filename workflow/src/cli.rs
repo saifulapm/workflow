@@ -1,8 +1,8 @@
-//! The command surface (spec §7 plus the three scripts §12b folded in).
+//! The command surface.
 //!
 //! `help`, no command at all and an unknown command are handled in
 //! [`crate::main`] rather than by clap, because their output and their exit
-//! codes are part of the contract the test suite reads.
+//! codes are part of the contract the tests read.
 
 use std::path::PathBuf;
 
@@ -12,7 +12,7 @@ use clap::{ArgGroup, Parser, Subcommand};
 #[command(
     name = "workflow",
     version,
-    about = "The verification gate and the interim orchestrator",
+    about = "Hygiene checks and the git hooks that run them",
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -22,22 +22,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Run this repo's suite over what is staged.
-    Verify {
-        /// The pre-commit path: the green cache and the opt-out ruling apply.
-        #[arg(long)]
-        hook: bool,
-        /// The merge gate's path: authoritative, nothing downgrades it.
-        #[arg(long)]
-        gate: bool,
-    },
-    /// Append one status line for the task this worktree belongs to.
-    Report {
-        /// One of started, progress, ready, blocked.
-        state: String,
-        /// What happened, in one line.
-        note: Option<String>,
-    },
     /// Check a commit message, a branch name or a PR body.
     #[command(name = "lint-msg")]
     LintMsg {
@@ -98,138 +82,6 @@ With no mode the whole tracked tree and the last 200 commits are read."
         #[arg(long)]
         fix: bool,
     },
-    /// Does this change set want a cold review?
-    #[command(name = "review-needed")]
-    ReviewNeeded {
-        /// Also consider what this range changed.
-        #[arg(long, value_name = "RANGE")]
-        diff: Option<String>,
-    },
-    /// Read a plan and report what the grammar made of it. Nothing is run.
-    #[command(
-        name = "plan-check",
-        long_about = "Read a plan and report what the grammar made of it. Nothing is run.
-
-This is how a plan is checked before anyone approves it: it parses the file,
-prints the plan id, the tasks and the waves they fall into, and touches
-nothing else. Run it from the project checkout and the plan is judged against
-the tree too: a Verify that cannot pass here is refused, and a Files line
-that does not look like it can hold its task is warned about. `workflow run`
-is the other thing -- it creates a worktree and a branch per task and
-dispatches the first wave for real."
-    )]
-    PlanCheck {
-        file: PathBuf,
-        /// Print the parse as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Run a plan's tasks in worktrees. This dispatches real workers.
-    #[command(
-        long_about = "Run a plan's tasks in worktrees. This dispatches real workers.
-
-The run says at its start what it writes with and where each dial came
-from -- the environment, this plan's own record, the project key -- since a
-plan picked up again keeps the record it wrote when it began whatever the
-project keys say by then. The two flags here rewrite that record before the
-run reads it, so `--model opus` changes what a resumed run dispatches on, and
-keeps it for every later run of this plan. A dial amx would not start an
-agent on is refused here, before the first worker."
-    )]
-    Run {
-        /// A plan file, instead of this project's plan in mem.
-        #[arg(long = "plan-file", value_name = "FILE")]
-        plan_file: Option<PathBuf>,
-        /// Record this as the model this plan's workers write with.
-        #[arg(long, value_name = "NAME")]
-        model: Option<String>,
-        /// Record this as the workers' reasoning level.
-        #[arg(long, value_name = "LEVEL")]
-        effort: Option<String>,
-    },
-    /// A library's current documentation, through the Context7 CLI.
-    Docs {
-        /// The library, by the name its users know it.
-        library: String,
-        /// What about it, in a few words.
-        query: String,
-    },
-    /// Collect finished or stalled workers.
-    Reap,
-    /// Ask the live run to dispatch a failed task again.
-    #[command(long_about = "Ask the live run to dispatch a failed task again.
-
-A run holds its project's lock for its whole life, so a failed task used to
-wait for the run to end before anyone could act on it -- with the worker slot
-it freed sitting idle. This writes a marker in the live
-run's directory; the run picks it up on its next poll and dispatches the task
-again. A dispatched task is taken too: its session is stopped and the task
-goes again on the commits it already has, so a plan edit reaches it now
-rather than after a wasted attempt. --model names a model for this task's
-dispatches for the rest of the run. With no live run, just run the plan
-again -- a fresh run retries failed tasks by itself.")]
-    Redispatch {
-        task: String,
-        /// The model this task is dispatched with from here on.
-        #[arg(long)]
-        model: Option<String>,
-    },
-    /// Land a task the run failed, as it stands.
-    #[command(long_about = "Land a task the run failed, as it stands.
-
-With a run live this writes a marker in its directory and the run merges the
-task's branch on its next poll; with no run live it does that merge itself,
-off the last run's state -- a run ends in the same pass as the failure, so
-there is no window to hand a marker to. Either way ownership, the words, the
-rebase and the gate's own suite still stand. The other way out is to edit the
-plan and `workflow redispatch <task>`.")]
-    Accept { task: String },
-    /// Merge a task the gate failed again, as a worker's `ready` would.
-    #[command(
-        long_about = "Merge a task the gate failed again, as a worker's `ready` would.
-
-The gate runs a red suite twice before it fails a task, and a suite that is red
-only under load can be red both times. regate takes the task's branch through
-the whole merge again -- ownership, the words, the rebase and the suite --
-with no worker spent. With a run live it writes a marker the run honours
-on its next poll; with none it does the merge itself, off the last run's state."
-    )]
-    Regate { task: String },
-    /// Block until the live run needs the orchestrator, and say what for.
-    #[command(
-        long_about = "Block until the live run needs the orchestrator, and say what for.
-
-The run appends one line per event to its run dir -- a worker's question, a
-task failed for good, a merge, the end of the run -- and this waits on that
-file, printing each new line, and exits the moment there is something to act
-on. Exit 2: a question is pending (`mem questions --pending --for
-orchestrator`, then `mem answer`). Exit 1: a task failed and the run will not
-retry it by itself; `workflow status` says why. Exit 0: the run ended, or no
-run is live here. Exit 4: a merge, only under --merges. Exit 3: --timeout
-passed with nothing new. A cursor in the run dir remembers what was already
-reported, so calling this again after acting picks up where it left off.
-
-Call it in the foreground and act on the exit code; it returns 3 after the
-timeout (300 s unless --timeout says otherwise) with one line per live task,
-so a session is never held past what it can afford to miss."
-    )]
-    Wait {
-        /// Give up after this many seconds with exit 3. Bounded by default:
-        /// a session holding one call for half an hour cannot hear a
-        /// message queued behind it.
-        #[arg(long, value_name = "SECONDS", default_value_t = 300)]
-        timeout: u64,
-        /// Return on each merge too, with exit 4.
-        #[arg(long)]
-        merges: bool,
-    },
-    /// Check this machine's wiring.
-    Doctor {
-        /// Write the embedded hook stubs, roles and skills where they are
-        /// missing, differ or are a symlink.
-        #[arg(long)]
-        fix: bool,
-    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
@@ -241,136 +93,19 @@ so a session is never held past what it can afford to miss."
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Print this binary's skills, or one of them whole.
-    #[command(long_about = "Print the skills this binary carries.
-
-With no name, one `<name> — <description>` line per skill, in name order: this
-is what `mem context` appends to a project's digest, so a session learns which
-skills exist where mem knows the project. With a name, that SKILL.md whole.
-
-The skills are embedded in the binary, and `doctor --fix` installs them as files
-where each harness looks for them. mem serves the mem skill the same way: `mem
-skill mem`.")]
-    Skill {
-        /// The skill to print whole. Omit to list them.
-        name: Option<String>,
-    },
-    // ------------------------------------------------------------- test seams
-    //
-    // Hidden, and the port's replacement for sourcing the bash with
-    // WORKFLOW_LIB=1: the ownership evaluator and the liveness rule are
-    // checked against written-down expectations rather than against
-    // themselves (AC12). The parser's seam is `plan-check`, which turned out
-    // to be the verb a planner wanted too, and is no longer hidden.
-    /// Print every record a task touched that its patterns do not claim.
-    #[command(name = "ownership", hide = true)]
-    Ownership {
-        #[arg(long, value_name = "DIR")]
-        repo: PathBuf,
-        #[arg(long, value_name = "SHA")]
-        base: String,
-        #[arg(long, value_name = "REF")]
-        branch: String,
-        patterns: Vec<String>,
-    },
-    /// Split a Files: line into patterns, one per line.
-    #[command(name = "split-patterns", hide = true)]
-    SplitPatterns { line: String },
-    /// Exit 0 when a task's three liveness signals are all older than the deadline.
-    #[command(name = "stalled", hide = true)]
-    Stalled {
-        #[arg(long, value_name = "DIR")]
-        rundir: PathBuf,
-        #[arg(long, value_name = "DIR")]
-        wtroot: PathBuf,
-        #[arg(long, value_name = "SECONDS")]
-        deadline: i64,
-        task: String,
-    },
 }
 
 pub const USAGE: &str = "\
 usage: workflow <command> [options]
 
-  verify [--hook|--gate]      run the repo's suite over what is staged
-      0 green · 1 failed · 2 no verifier · 3 test removal
-  docs <library> <query>      a library's current docs through Context7
-      0 printed · 1 nothing came
-  report <state> [<note>]     append one status line for this worktree's task
-      0 written · 2 not a state, or not a run worktree
-  lint-msg [<file>] [--string <text>]
-      0 clean (warnings included) · 1 hard fail
   hygiene [--staged [--known]|--tree|--history <n>|--message <file>
       |--string <s>|--would-create <path>] [--path <dir>] [--json] [--fix]
       agent files and process references; no mode reads the tree and the
       last 200 commits; --fix untracks ignore-list files and their lines;
       --would-create refuses a new agent file in a checkout mem knows
       0 clean or warned · 1 hard finding · 2 usage
-  review-needed [--diff <range>]
-      0 a cold review is wanted · 1 it is not
-  plan-check <file> [--json]
-      read a plan and report its tasks and waves; nothing is run
-      0 it holds · 1 the grammar or this checkout refused it · 2 no such file
-  run [--plan-file <f>] [--model <m>] [--effort <l>]
-      run a plan's tasks in worktrees; this dispatches real workers
-      the dials rewrite this plan's own record, which a resumed run prefers
-      to the project keys; the run says at its start which it took
-      0 every task complete · 1 failed tasks · 2 config or plan error
-  reap
-      0 nothing to do · 1 reaped something
-  redispatch <task> [--model <name>]
-      ask the live run to dispatch a failed task again
-      0 the run was asked · 1 no live run holds that task failed, or its wave closed
-  accept <task>
-      land a task the run failed, as it stands
-      0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
-  regate <task>
-      merge a task the gate failed again: the suite, no worker
-      0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
-  doctor [--fix]
-      --fix writes the hook stubs, roles and skills where they are missing,
-      differ or are a symlink
-      0 healthy · 1 findings
+  lint-msg [<file>] [--string <text>]
+      0 clean (warnings included) · 1 hard fail
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's
-  skill [<name>]
-      the skills this binary carries, one `name — description` line each;
-      with a name, that SKILL.md whole
 ";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn read_advise_and_settings_merge_are_unknown_commands() {
-        for verb in ["read", "advise", "settings-merge"] {
-            let e = Cli::try_parse_from(["workflow", verb]).unwrap_err();
-            assert_eq!(
-                e.kind(),
-                clap::error::ErrorKind::InvalidSubcommand,
-                "{verb}"
-            );
-            assert!(!USAGE.contains(&format!("\n  {verb} ")), "{verb}");
-        }
-    }
-
-    #[test]
-    fn the_review_and_fix_flags_are_unknown() {
-        for argv in [
-            ["workflow", "run", "--review-model", "opus"],
-            ["workflow", "run", "--fix-model", "opus"],
-            ["workflow", "run", "--review-effort", "high"],
-            ["workflow", "redispatch", "t1", "--review-deadline"],
-        ] {
-            let e = Cli::try_parse_from(argv).unwrap_err();
-            assert_eq!(
-                e.kind(),
-                clap::error::ErrorKind::UnknownArgument,
-                "{argv:?}"
-            );
-            let flag = argv.iter().find(|a| a.starts_with("--")).unwrap();
-            assert!(!USAGE.contains(flag), "{argv:?}");
-        }
-    }
-}

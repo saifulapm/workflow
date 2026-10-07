@@ -1,7 +1,6 @@
-//! Talking to git. Every question the gate asks goes through here so the
-//! environment rule of spec §7 is kept in one place: git is queried with the
-//! environment we inherited (a partial commit's index lives in it), and only
-//! the child test suite is scrubbed.
+//! Talking to git. Every question the hooks ask goes through here so the
+//! environment rule is kept in one place: git is queried with the environment
+//! we inherited, because a partial commit's index lives in it.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -9,9 +8,6 @@ use std::process::{Command, Stdio};
 #[derive(Clone, Debug, Default)]
 pub struct Git {
     cwd: Option<PathBuf>,
-    /// Overrides applied to every invocation: `GIT_INDEX_FILE` and `GIT_DIR`
-    /// made absolute before a chdir, and nothing else.
-    env: Vec<(String, String)>,
 }
 
 pub struct Out {
@@ -37,22 +33,13 @@ impl Git {
     pub fn at(dir: impl Into<PathBuf>) -> Git {
         Git {
             cwd: Some(dir.into()),
-            env: Vec::new(),
         }
-    }
-
-    pub fn with_env(mut self, key: &str, value: impl Into<String>) -> Git {
-        self.env.push((key.to_string(), value.into()));
-        self
     }
 
     fn command(&self, args: &[&str]) -> Command {
         let mut c = Command::new("git");
         if let Some(dir) = &self.cwd {
             c.current_dir(dir);
-        }
-        for (k, v) in &self.env {
-            c.env(k, v);
         }
         c.args(args);
         c
@@ -100,14 +87,6 @@ impl Git {
             .unwrap_or(false)
     }
 
-    /// Did it work? Output goes where ours goes.
-    pub fn loud(&self, args: &[&str]) -> bool {
-        self.command(args)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-
     pub fn inside_worktree(&self) -> bool {
         self.out(&["rev-parse", "--is-inside-work-tree"]).as_deref() == Some("true")
     }
@@ -123,56 +102,6 @@ impl Git {
         self.out(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
             .map(PathBuf::from)
     }
-
-    pub fn head(&self) -> Option<String> {
-        self.out(&["rev-parse", "HEAD"])
-    }
-
-    pub fn rev_parse_commit(&self, rev: &str) -> Option<String> {
-        self.out(&[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("{rev}^{{commit}}"),
-        ])
-    }
-
-    pub fn is_ancestor(&self, a: &str, b: &str) -> bool {
-        self.quiet(&["merge-base", "--is-ancestor", a, b])
-    }
-
-    pub fn count(&self, range: &str) -> u64 {
-        self.out(&["rev-list", "--count", range])
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0)
-    }
-}
-
-/// Split `-z` output into its NUL-separated fields, empties dropped.
-pub fn nul_fields(bytes: &[u8]) -> Vec<Vec<u8>> {
-    bytes
-        .split(|b| *b == 0)
-        .filter(|f| !f.is_empty())
-        .map(|f| f.to_vec())
-        .collect()
-}
-
-/// A pathspec that means what the author wrote: `*` stops at `/`, `**` crosses,
-/// and the pattern is anchored at the repo root wherever git is standing
-/// (spec §5.3).
-pub fn glob_top(pattern: &str) -> String {
-    format!(":(glob,top){pattern}")
-}
-
-/// The same, case-insensitively: the review table's rows (spec §9, review-4
-/// B-1). Ownership deliberately does not use this.
-pub fn glob_icase_top(pattern: &str) -> String {
-    format!(":(glob,icase,top){pattern}")
-}
-
-/// A path git printed, as a string we can compare and show.
-pub fn lossy(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).to_string()
 }
 
 pub fn exists_x(p: &Path) -> bool {

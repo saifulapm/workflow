@@ -13,7 +13,6 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::gitcmd::Git;
-use crate::plancheck::covers;
 use crate::{exit, lint, memcli, warn};
 
 /// Directories an agent harness or its tools write. Anywhere in the tree,
@@ -423,6 +422,44 @@ fn exempt(globs: &[String], path: &str) -> bool {
     globs.iter().any(|g| covers(g, path))
 }
 
+/// Does the pattern claim the path? A pattern with no glob in it is the path
+/// itself or a directory holding it; otherwise `*` stops at a slash and `**`
+/// crosses one, as in a pathspec.
+fn covers(pattern: &str, path: &str) -> bool {
+    let pattern = pattern.trim_end_matches('/');
+    if pattern == path {
+        return true;
+    }
+    if !pattern.contains(['*', '?']) {
+        return path.starts_with(&format!("{pattern}/"));
+    }
+    glob(pattern.as_bytes(), path.as_bytes())
+}
+
+fn glob(pat: &[u8], s: &[u8]) -> bool {
+    match pat.first() {
+        None => s.is_empty(),
+        Some(b'*') if pat.get(1) == Some(&b'*') => {
+            // `a/**/b` covers `a/b` too, so the crossing wildcard may eat the
+            // separator that follows it or nothing at all.
+            let rest = &pat[2..];
+            let rest = if rest.first() == Some(&b'/') {
+                &rest[1..]
+            } else {
+                rest
+            };
+            (0..=s.len()).any(|i| glob(rest, &s[i..]))
+        }
+        Some(b'*') => {
+            let rest = &pat[1..];
+            let stop = s.iter().position(|c| *c == b'/').unwrap_or(s.len());
+            (0..=stop).any(|i| glob(rest, &s[i..]))
+        }
+        Some(b'?') => !s.is_empty() && s[0] != b'/' && glob(&pat[1..], &s[1..]),
+        Some(c) => s.first() == Some(c) && glob(&pat[1..], &s[1..]),
+    }
+}
+
 fn with_spec<'a>(args: &[&'a str], spec: &'a [String]) -> Vec<&'a str> {
     let mut v = args.to_vec();
     v.push("--");
@@ -799,5 +836,20 @@ new file mode 100644
         for ((p, n, t), (wp, wn, wt)) in got.iter().zip(want) {
             assert_eq!((p.as_str(), *n, t.as_str()), (wp, wn, wt));
         }
+    }
+
+    #[test]
+    fn a_pattern_covers_the_paths_its_pathspec_would() {
+        assert!(covers("engine/src/data.rs", "engine/src/data.rs"));
+        assert!(covers("engine", "engine/src/data.rs"));
+        assert!(covers("engine/", "engine/src/data.rs"));
+        assert!(covers("engine/tests/*.rs", "engine/tests/repeat.rs"));
+        assert!(covers("engine/**/*.rs", "engine/src/a/b.rs"));
+        assert!(covers("docs/**", "docs/plan/11.md"));
+        // `*` stops at a separator; `**` is how a pattern crosses one.
+        assert!(!covers("engine/*.rs", "engine/src/data.rs"));
+        assert!(!covers("engine/src/data.rs", "engine/src/data.rs.bak"));
+        assert!(!covers("engine", "engineer/x.rs"));
+        assert!(!covers("host-web/src/*.ts", "engine/src/data.rs"));
     }
 }
