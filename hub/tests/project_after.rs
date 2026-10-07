@@ -64,12 +64,12 @@ fn world(tag: &str, roadmap: Value, findings: Value, runs: Value) -> World {
     let bin = dir.join("bin");
     let log = dir.join("mem.log");
     let projects = json!({"projects": [
-        {"name": "kappa", "roadmap_status": "running", "runner": "laptop",
+        {"name": "kappa", "roadmap_status": "running",
          "milestone": "k2-walk", "plan_slug": "k2-walk",
          "milestones_done": 1, "milestones_total": 3, "plan_ticked": 2, "plan_total": 2},
-        {"name": "delta", "roadmap_status": "maintenance", "runner": "laptop",
+        {"name": "delta", "roadmap_status": "maintenance",
          "milestones_done": 1, "milestones_total": 1},
-        {"name": "omega", "roadmap_status": "running", "runner": "laptop",
+        {"name": "omega", "roadmap_status": "running",
          "milestone": "o2-sync", "plan_slug": "o2-sync",
          "milestones_done": 1, "milestones_total": 2, "plan_ticked": 1, "plan_total": 3},
     ]});

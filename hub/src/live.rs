@@ -105,17 +105,19 @@ pub fn orchestrator(agents: &[Agent], project: &str, milestone: &str) -> Run {
 /// Approved work left on this machine, nothing running it, and no
 /// orchestrator that parked on purpose. A parked milestone has a question
 /// waiting, which has rung already.
-pub fn stalled(s: &ProjectSummary, run: &Run, handoff: &str, machine: &str) -> bool {
-    idle(s, run, machine) && !handoff.trim_start().starts_with("parked")
+pub fn stalled(s: &ProjectSummary, run: &Run, handoff: &str) -> bool {
+    idle(s, run) && !handoff.trim_start().starts_with("parked")
 }
 
 /// Approved work left on this machine and nothing running it, parked or not:
-/// when the Start or Resume button shows.
-pub fn idle(s: &ProjectSummary, run: &Run, machine: &str) -> bool {
+/// when the Start or Resume button shows. Only a project with a checkout
+/// here, since `workflow go` refuses one without, so a hub never offers or
+/// rings for work its machine cannot run.
+pub fn idle(s: &ProjectSummary, run: &Run) -> bool {
     let (done, total) = s.milestones;
     s.roadmap_status.as_deref() == Some("approved")
         && done < total
-        && s.runner.as_deref().is_none_or(|runner| runner == machine)
+        && s.checked_out
         && matches!(run, Run::Dead(_))
 }
 
@@ -233,7 +235,7 @@ mod tests {
             name: "workflow".to_string(),
             stage: "execution",
             roadmap_status: Some("approved".to_string()),
-            runner: Some("macbook-m2".to_string()),
+            checked_out: true,
             milestone: Some("h3-hub-live".to_string()),
             milestones: (done, total),
             plan_slug: None,
@@ -315,16 +317,14 @@ mod tests {
     #[test]
     fn a_parked_milestone_is_not_stalled() {
         let dead = Run::Dead(Some("workflow-h3-hub-live".to_string()));
-        let me = "macbook-m2";
-        assert!(stalled(&summary(2, 3), &dead, "h2 landed at b5e1ad1", me));
+        assert!(stalled(&summary(2, 3), &dead, "h2 landed at b5e1ad1"));
         assert!(!stalled(
             &summary(2, 3),
             &dead,
-            "\nparked: waiting on a question",
-            me
+            "\nparked: waiting on a question"
         ));
         assert!(
-            idle(&summary(2, 3), &dead, me),
+            idle(&summary(2, 3), &dead),
             "a parked one can still be resumed"
         );
     }
@@ -332,18 +332,17 @@ mod tests {
     #[test]
     fn only_approved_unfinished_local_work_without_an_agent_stalls() {
         let dead = Run::Dead(None);
-        let me = "macbook-m2";
-        assert!(!stalled(&summary(3, 3), &dead, "", me), "finished");
-        assert!(
-            !stalled(&summary(2, 3), &dead, "", "nuc"),
-            "another runner's"
-        );
+        assert!(!stalled(&summary(3, 3), &dead, ""), "finished");
+        let mut elsewhere = summary(2, 3);
+        elsewhere.checked_out = false;
+        assert!(!stalled(&elsewhere, &dead, ""), "no checkout here");
+        assert!(!idle(&elsewhere, &dead), "no Start without a checkout");
         let unknown = Run::Unknown("cannot run amx".to_string());
-        assert!(!stalled(&summary(2, 3), &unknown, "", me), "amx unreadable");
+        assert!(!stalled(&summary(2, 3), &unknown, ""), "amx unreadable");
         let live = orchestrator(&parse(LS).unwrap(), "workflow", "h3-hub-live");
-        assert!(!stalled(&summary(2, 3), &live, "", me), "running");
+        assert!(!stalled(&summary(2, 3), &live, ""), "running");
         let mut draft = summary(2, 3);
         draft.roadmap_status = Some("draft".to_string());
-        assert!(!stalled(&draft, &dead, "", me), "not approved");
+        assert!(!stalled(&draft, &dead, ""), "not approved");
     }
 }

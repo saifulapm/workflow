@@ -5,7 +5,6 @@
 //! change without touching the same file.
 
 use crate::app::App;
-use crate::config::Config;
 use crate::html;
 use crate::http::{Request, Response};
 use crate::model;
@@ -199,47 +198,4 @@ fn nav(project: Option<&str>, title: &str) -> String {
     }
     out.push_str("</nav>\n");
     out
-}
-
-/// The hub of the machine named `machine`: the sibling whose host starts with
-/// that name. Config takes no other key for it, and the siblings already hold
-/// every other hub's address.
-pub fn sibling_hub(config: &Config, machine: &str) -> Option<String> {
-    if machine.is_empty() {
-        return None;
-    }
-    config
-        .siblings
-        .iter()
-        .find(|url| {
-            let host = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
-            host.starts_with(machine)
-        })
-        .cloned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_sibling_is_found_by_the_start_of_its_host() {
-        let config = Config {
-            siblings: vec![
-                "http://nuc:8088".to_string(),
-                "https://macbook-m2.tail1234.ts.net/".to_string(),
-            ],
-            ..Config::default()
-        };
-        assert_eq!(
-            sibling_hub(&config, "macbook-m2").as_deref(),
-            Some("https://macbook-m2.tail1234.ts.net/")
-        );
-        assert_eq!(
-            sibling_hub(&config, "nuc").as_deref(),
-            Some("http://nuc:8088")
-        );
-        assert_eq!(sibling_hub(&config, "desk"), None);
-        assert_eq!(sibling_hub(&config, ""), None);
-    }
 }

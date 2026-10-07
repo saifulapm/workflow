@@ -1,15 +1,16 @@
 //! `GET /p/<project>`: one project's front page, and its log, plan and item
 //! routes.
 //!
-//! The front page follows the project's stage: a header with the stage, the
-//! runner and the progress, then what that stage is about. It costs at most five `mem` spawns: the projects list the route
-//! already read, then at most four reads for the body.
+//! The front page follows the project's stage: a header with the stage and
+//! the progress, then what that stage is about. It costs at most five `mem`
+//! spawns: the projects list the route already read, then at most four reads
+//! for the body.
 
 use serde_json::Value;
 
 use crate::form::encode_component;
 use crate::html::{
-    self, degraded_banner, esc, item_list_section, markdown_article, page_url, project_url,
+    degraded_banner, esc, item_list_section, markdown_article, page_url, project_url,
 };
 use crate::http::Response;
 use crate::live::{self, Run};
@@ -20,7 +21,7 @@ use crate::page_evidence::{FindingRow, finding_rows, findings_section};
 use crate::page_home::{ProjectSummary, project_summaries, stage_pill};
 use crate::page_questions::question_rows;
 use crate::page_roadmap::{roadmap_body, roadmap_rows};
-use crate::pages::{PageCtx, page_shell, sibling_hub};
+use crate::pages::{PageCtx, page_shell};
 
 /// How many rulings a grilling project shows; the decisions page has them
 /// all.
@@ -38,7 +39,7 @@ pub fn get(ctx: &PageCtx) -> Response {
     else {
         return Response::not_found();
     };
-    let mut body = stage_header(&summary, ctx);
+    let mut body = stage_header(&summary);
     let running = matches!(summary.stage, "execution" | "dogfooding");
     if running {
         body.push_str(&orchestrator_line(ctx, &summary));
@@ -66,27 +67,15 @@ pub fn get(ctx: &PageCtx) -> Response {
     Response::html(page_shell(summary.stage, ctx.project, &body))
 }
 
-/// The stage, then the runner, the open milestone's place and the
+/// The stage, then the open milestone's place and the
 /// current plan's ticks, as the front page lists them.
-pub fn stage_header(s: &ProjectSummary, ctx: &PageCtx) -> String {
+pub fn stage_header(s: &ProjectSummary) -> String {
     let pills = format!(
         "<span class=\"{}\">{}</span>",
         stage_pill(s.stage),
         esc(s.stage)
     );
     let mut parts = Vec::new();
-    if let Some(runner) = &s.runner {
-        // Linked only when another machine runs it and this hub knows that
-        // machine's hub.
-        let link = (*runner != ctx.app.machine)
-            .then(|| sibling_hub(&ctx.app.config, runner))
-            .flatten()
-            .and_then(|url| html::safe_link(&url));
-        parts.push(match link {
-            Some(link) => format!("<a href=\"{link}\">{}</a>", esc(runner)),
-            None => esc(runner),
-        });
-    }
     let (done, total) = s.milestones;
     if total > 0 {
         parts.push(format!("milestone {} of {total}", (done + 1).min(total)));
@@ -176,7 +165,6 @@ fn live_pill(s: &ProjectSummary, slug: &str) -> String {
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
     let run = ctx.app.amx.run(project, s.milestone.as_deref());
-    let machine = ctx.app.machine.as_str();
     let (pill, meta) = match &run {
         Run::Live(agent) => (
             "<span class=\"pill\">running</span>",
@@ -186,13 +174,13 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                 agent.state.as_deref().unwrap_or("unknown")
             ),
         ),
-        Run::Dead(_) if live::idle(s, &run, machine) => {
+        Run::Dead(_) if live::idle(s, &run) => {
             let handoff = match &*ctx.app.mem.handoff(project) {
                 Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default().to_string(),
                 _ => String::new(),
             };
             let milestone = s.milestone.as_deref().unwrap_or_default();
-            let (pill, meta) = if live::stalled(s, &run, &handoff, machine) {
+            let (pill, meta) = if live::stalled(s, &run, &handoff) {
                 (
                     "<span class=\"pill bad\">stalled</span>",
                     format!("no live orchestrator for {milestone}"),

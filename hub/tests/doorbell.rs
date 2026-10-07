@@ -760,8 +760,9 @@ impl Fake {
         std::fs::rename(&staged, self.data.join(name)).unwrap();
     }
 
-    /// proj-alpha, last active at `alpha_at`, and proj-beta, run here, with
-    /// `beta_done` of its three milestones done under `beta_status`.
+    /// proj-alpha, last active at `alpha_at`, and proj-beta, both checked out
+    /// here, with `beta_done` of beta's three milestones done under
+    /// `beta_status`.
     fn projects(&self, alpha_at: &str, beta_status: &str, beta_done: u32) {
         self.put(
             "projects.json",
@@ -769,10 +770,10 @@ impl Fake {
                 "{{\"projects\":[\
                  {{\"name\":\"proj-alpha\",\"last_activity\":\"{alpha_at}\",\
                    \"roadmap_status\":\"approved\",\"milestones_done\":1,\
-                   \"milestones_total\":3,\"runner\":\"here-hub\"}},\
+                   \"milestones_total\":3,\"checkouts\":[\"/src/proj-alpha\"]}},\
                  {{\"name\":\"proj-beta\",\"last_activity\":\"2026-10-05T08:00:00Z\",\
                    \"roadmap_status\":\"{beta_status}\",\"milestones_done\":{beta_done},\
-                   \"milestones_total\":3,\"runner\":\"here-hub\"}}]}}"
+                   \"milestones_total\":3,\"checkouts\":[\"/src/proj-beta\"]}}]}}"
             ),
         );
     }
@@ -995,14 +996,21 @@ fn a_project_whose_activity_has_not_moved_costs_no_log_spawn() {
     );
 }
 
-/// proj-alpha building m2 on this machine, whose orchestrators amx lists as
-/// `(id, state)`.
+/// proj-alpha building m2 from a checkout on this machine, whose
+/// orchestrators amx lists as `(id, state)`.
 fn building(fake: &Fake, agents: &[(&str, &str)]) {
+    building_at(fake, agents, "[\"/src/proj-alpha\"]");
+}
+
+/// `building`, with proj-alpha's checkouts on this machine as `checkouts`.
+fn building_at(fake: &Fake, agents: &[(&str, &str)], checkouts: &str) {
     fake.put(
         "projects.json",
-        "{\"projects\":[{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
-          \"roadmap_status\":\"approved\",\"milestone\":\"m2\",\"milestones_done\":1,\
-          \"milestones_total\":3,\"runner\":\"here-hub\"}]}",
+        &format!(
+            "{{\"projects\":[{{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
+              \"roadmap_status\":\"approved\",\"milestone\":\"m2\",\"milestones_done\":1,\
+              \"milestones_total\":3,\"checkouts\":{checkouts}}}]}}"
+        ),
     );
     let rows: Vec<String> = agents
         .iter()
@@ -1050,6 +1058,20 @@ fn a_dead_orchestrator_rings_once_and_its_successors_death_rings_again() {
 }
 
 #[test]
+fn a_project_with_no_checkout_here_does_not_ring_its_stall() {
+    let fake = Fake::new("bell-elsewhere");
+    building_at(&fake, &[("proj-alpha-m2", "working")], "[]");
+    let _hub = fake.hub();
+    fake.settle();
+
+    building_at(&fake, &[("proj-alpha-m2", "stopped")], "[]");
+    // Past the grace a milestone with no orchestrator waits for.
+    std::thread::sleep(Duration::from_secs(2));
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+}
+
+#[test]
 fn a_parked_milestone_does_not_ring() {
     let fake = Fake::new("bell-parked");
     building(&fake, &[]);
@@ -1080,7 +1102,7 @@ fn a_milestone_no_orchestrator_ever_ran_rings_once_after_a_grace() {
         "projects.json",
         "{\"projects\":[{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
           \"roadmap_status\":\"approved\",\"milestone\":\"m3\",\"milestones_done\":2,\
-          \"milestones_total\":3,\"runner\":\"here-hub\"}]}",
+          \"milestones_total\":3,\"checkouts\":[\"/src/proj-alpha\"]}]}",
     );
     fake.settle();
     assert!(

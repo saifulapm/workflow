@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{
-    Hub, TempDir, body_of, header_of, invocations, mem_in, real_mem, recording_mem, seed_project,
+    Hub, TempDir, header_of, invocations, mem_in, real_mem, recording_mem, seed_project,
     status_of,
 };
 
@@ -15,7 +15,6 @@ const PROJECT: &str = "proj-alpha";
 /// Written to the machine file both hub and mem read, so the two agree on a
 /// name no real machine has.
 const MACHINE: &str = "here-box";
-const SIBLING: &str = "http://other-box.tail1234.ts.net:8088";
 
 /// A store with one project and a draft roadmap, and a hub whose `mem` records
 /// every argv before running the real binary. The seeding runs the real
@@ -43,8 +42,7 @@ impl World {
             &config,
             format!(
                 "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
-                 ntfy_base = \"http://127.0.0.1:9\"\n\
-                 siblings = [\"http://nuc:8088\", \"{SIBLING}\"]\n"
+                 ntfy_base = \"http://127.0.0.1:9\"\n"
             ),
         )
         .unwrap();
@@ -289,40 +287,6 @@ fn approve_and_changes_refuse_a_roadmap_that_is_not_a_draft() {
     }
     assert_eq!(world.writes(), Vec::<Vec<String>>::new());
     assert_eq!(world.roadmap_status(), "running");
-    let question = world.question("Approve roadmap alpha?");
-    assert_eq!(question["id"], id.as_str());
-    assert_eq!(question["answered"], false);
-}
-
-#[test]
-fn approve_off_the_runner_writes_nothing_and_links_the_runners_hub() {
-    let world = World::new("control-runner");
-    let id = world.ask_approval();
-    world.mem(&["project", "set", "runner", "other-box"]);
-    let hub = world.hub();
-
-    let response = world.post(&hub, "do=approve");
-    assert_eq!(status_of(&response), 409, "{response}");
-    let body = body_of(&response);
-    assert!(
-        body.contains("proj-alpha is run by other-box since"),
-        "{body}"
-    );
-    assert!(
-        body.contains(&format!("<a href=\"{SIBLING}\">other-box</a>")),
-        "{body}"
-    );
-    // The refused status write is the only one: the question is not answered.
-    assert_eq!(
-        world.writes(),
-        vec![argv(&[
-            "roadmap",
-            "--project=proj-alpha",
-            "--status",
-            "approved"
-        ])]
-    );
-    assert_eq!(world.roadmap_status(), "draft");
     let question = world.question("Approve roadmap alpha?");
     assert_eq!(question["id"], id.as_str());
     assert_eq!(question["answered"], false);

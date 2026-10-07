@@ -11,7 +11,7 @@ use crate::http::Response;
 use crate::live;
 use crate::memcli::{Outcome, Run};
 use crate::page_home::summary_of;
-use crate::pages::{PageCtx, page_shell, sibling_hub};
+use crate::pages::{PageCtx, page_shell};
 
 /// How a pending approval question starts, as the engine asks it.
 pub const APPROVAL_QUESTION: &str = "Approve roadmap";
@@ -22,9 +22,6 @@ pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap and its plan
 
 /// How long `workflow go` may take: an `amx new` and a few mem reads.
 const GO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// mem's exit when another machine's runner claim refuses an in-place write.
-pub const RUNNER_REFUSED: i32 = 5;
 
 pub fn get(ctx: &PageCtx) -> Response {
     Response::html(page_shell("control", ctx.project, ""))
@@ -64,9 +61,6 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             }
             if verb == "approve" {
                 let run = mem.write_through(&["roadmap", &flag, "--status", "approved"]);
-                if run.code == Some(RUNNER_REFUSED) {
-                    return refused(ctx, &run);
-                }
                 if !run.ok() {
                     return failed(&run);
                 }
@@ -116,7 +110,7 @@ fn go(ctx: &PageCtx, project: &str) -> Response {
         },
         Err(why) => live::Run::Unknown(why),
     };
-    if !live::idle(&summary, &run, &ctx.app.machine) {
+    if !live::idle(&summary, &run) {
         let why = match &run {
             live::Run::Live(agent) => format!("{} is already running.", agent.id),
             live::Run::Unknown(why) => format!("amx cannot be asked: {why}."),
@@ -162,33 +156,6 @@ fn is_approval(body: &str) -> bool {
         || body.starts_with(REVIEW_QUESTION.0) && body.trim_end().ends_with(REVIEW_QUESTION.1)
 }
 
-/// mem's refusal, and the runner's name linked to its hub when a sibling is
-/// that machine's, so the phone can approve there.
-pub fn refused(ctx: &PageCtx, run: &Run) -> Response {
-    let project = ctx.project.unwrap_or_default();
-    let current = ctx.app.mem.exec(&[
-        "project",
-        "current",
-        &format!("--project={project}"),
-        "--json",
-    ]);
-    let runner = serde_json::from_slice::<serde_json::Value>(&current.stdout)
-        .ok()
-        .and_then(|doc| doc["runner"].as_str().map(str::to_string))
-        .unwrap_or_default();
-    let line = run.stderr.trim();
-    let line = line.strip_prefix("mem: ").unwrap_or(line);
-    let mut body = format!("<p class=\"banner\">{}</p>\n", esc(line));
-    if !runner.is_empty() {
-        let name = match sibling_hub(&ctx.app.config, &runner) {
-            Some(url) => format!("<a href=\"{}\">{}</a>", esc(&url), esc(&runner)),
-            None => esc(&runner),
-        };
-        body.push_str(&format!("<p>Approve it on {name}.</p>\n"));
-    }
-    page(ctx, &body)
-}
-
 pub fn conflict(ctx: &PageCtx, why: &str) -> Response {
     page(ctx, &format!("<p class=\"banner\">{}</p>\n", esc(why)))
 }
@@ -201,7 +168,7 @@ pub fn page(ctx: &PageCtx, body: &str) -> Response {
     )
 }
 
-/// A write mem did not take, for a reason other than the runner claim.
+/// A write mem did not take.
 pub fn failed(run: &Run) -> Response {
     eprintln!("hub: control: mem exited {:?}: {}", run.code, run.stderr);
     Response::text(502, "mem did not take the write")

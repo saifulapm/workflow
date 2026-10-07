@@ -1,4 +1,4 @@
-//! `GET /`: every project with its lifecycle stage, runner, progress and
+//! `GET /`: every project with its lifecycle stage, progress and
 //! week, then the questions waiting on the owner.
 
 mod common;
@@ -22,7 +22,7 @@ fn row(name: &str, fields: Value) -> Value {
         "id": format!("id-{name}"), "name": name, "remote": null, "aliases": [],
         "created": "2026-01-01", "items": 3, "current": false,
         "checkouts": [format!("/src/{name}")],
-        "runner": "here", "roadmap_status": null, "milestone": null,
+        "roadmap_status": null, "milestone": null,
         "milestones_done": 0, "milestones_total": 0,
         "plan_slug": null, "plan_ticked": 0, "plan_total": 0,
         "last_activity": "2026-10-05T10:00:00Z",
@@ -35,8 +35,8 @@ fn row(name: &str, fields: Value) -> Value {
     row
 }
 
-/// A project at each of the eight stages, and one run on the sibling `nuc`
-/// whose plan of record is an earlier milestone's.
+/// A project at each of the eight stages, and one with no checkout on this
+/// machine whose plan of record is an earlier milestone's.
 fn projects() -> Value {
     let running = |plan_ticked: u64| {
         json!({
@@ -62,7 +62,7 @@ fn projects() -> Value {
             "plan_slug": "m2-billing", "plan_ticked": 4, "plan_total": 4,
         })),
         row("p-elsewhere", json!({
-            "runner": "nuc", "roadmap_status": "approved", "milestone": "m2-billing",
+            "checkouts": [], "roadmap_status": "approved", "milestone": "m2-billing",
             "milestones_done": 1, "milestones_total": 2,
             "plan_slug": "m1-auth", "plan_ticked": 3, "plan_total": 3,
         })),
@@ -221,53 +221,56 @@ fn card<'a>(page: &'a str, name: &str) -> &'a str {
 }
 
 #[test]
-fn each_project_is_a_card_with_its_stage_runner_and_progress() {
+fn each_project_is_a_card_with_its_stage_and_progress() {
     let (_dir, page, _argv) = render("home-rows");
     for (name, pill, meta) in [
-        ("p-brief", "<span class=\"pill mut\">brief</span>", "here"),
+        ("p-brief", "<span class=\"pill mut\">brief</span>", None),
         (
             "p-research",
             "<span class=\"pill mut\">research</span>",
-            "here",
+            None,
         ),
         (
             "p-grilling",
             "<span class=\"pill mut\">grilling</span>",
-            "here",
+            None,
         ),
-        ("p-spec", "<span class=\"pill mut\">spec</span>", "here"),
+        ("p-spec", "<span class=\"pill mut\">spec</span>", None),
         (
             "p-planning",
             "<span class=\"pill wait\">planning</span>",
-            "here · m1-auth · milestone 1 of 2",
+            Some("m1-auth · milestone 1 of 2"),
         ),
         (
             "p-execution",
             "<span class=\"pill\">execution</span>",
-            "here · m1-auth · milestone 1 of 2 · tasks 2 of 3",
+            Some("m1-auth · milestone 1 of 2 · tasks 2 of 3"),
         ),
         (
             "p-dogfood",
             "<span class=\"pill\">dogfooding</span>",
-            "here · m1-auth · milestone 1 of 2 · tasks 3 of 3",
+            Some("m1-auth · milestone 1 of 2 · tasks 3 of 3"),
         ),
         (
             "p-maint",
             "<span class=\"pill ok\">maintenance</span>",
-            "here · milestone 2 of 2 · tasks 4 of 4",
+            Some("milestone 2 of 2 · tasks 4 of 4"),
         ),
         (
             "p-elsewhere",
             "<span class=\"pill\">execution</span>",
-            "<a href=\"http://nuc:8088\">nuc</a> · m2-billing · milestone 2 of 2 · tasks 3 of 3",
+            Some("m2-billing · milestone 2 of 2 · tasks 3 of 3"),
         ),
     ] {
         let card = card(&page, name);
         assert!(card.contains(pill), "{name}: {card}");
-        assert!(
-            card.contains(&format!("<div class=\"meta\">{meta}</div>")),
-            "{name}: {card}"
-        );
+        match meta {
+            Some(meta) => assert!(
+                card.contains(&format!("<div class=\"meta\">{meta}</div>")),
+                "{name}: {card}"
+            ),
+            None => assert!(!card.contains("<div class=\"meta\">"), "{name}: {card}"),
+        }
     }
     assert!(
         card(&page, "p-dogfood")
@@ -368,8 +371,4 @@ fn the_front_page_is_served_at_the_root() {
         "{body}"
     );
     assert!(body.contains("dogfooding"), "{body}");
-    assert!(
-        body.contains("<a href=\"http://nuc:8088\">nuc</a>"),
-        "{body}"
-    );
 }

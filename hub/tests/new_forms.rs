@@ -54,13 +54,6 @@ impl World {
         }
     }
 
-    /// The real `mem`, run from inside the project's checkout.
-    fn mem(&self, args: &[&str]) -> String {
-        let out = mem_in(&self.mem, &self.home, &self.home.join(PROJECT), args);
-        assert!(out.status.success(), "mem {args:?}: {out:?}");
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
     /// A read of what the hub wrote, once `ready` holds of it. mem serves a
     /// read from the index as it was when another process holds the reindex
     /// lock, which the doorbell's own reads do now and then, so the first
@@ -181,7 +174,6 @@ fn the_page_shows_four_forms_for_four_spawns() {
         spawns,
         vec![
             argv(&["projects", "--json"]),
-            argv(&["project", "current", "--project=proj-alpha", "--json"]),
             argv(&[
                 "questions",
                 "--pending",
@@ -341,32 +333,4 @@ fn research_asks_the_engine_on_this_hubs_machine_then_waits() {
     }
     assert_eq!(world.writes().len(), 1);
     assert_eq!(world.engine_questions(), ["research on here-box"]);
-}
-
-#[test]
-fn a_round_names_the_projects_runner() {
-    let world = World::new("new-round");
-    world.mem(&["project", "set", "runner", "other-box"]);
-    let hub = world.hub();
-
-    let response = world.post(&hub, "round", "");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(
-        header_of(&response, "Location"),
-        Some(sent("round").as_str())
-    );
-    assert_eq!(
-        world.writes(),
-        vec![argv(&[
-            "ask",
-            "--project=proj-alpha",
-            "--for",
-            "orchestrator",
-            "--",
-            "research round on other-box"
-        ])]
-    );
-    assert_eq!(world.engine_questions(), ["research round on other-box"]);
-    let body = hub.get(&format!("/p/{PROJECT}/new")).to_string();
-    assert!(body.contains(WAITING), "{body}");
 }

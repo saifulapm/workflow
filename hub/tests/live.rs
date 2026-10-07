@@ -17,9 +17,20 @@ struct World {
     log: PathBuf,
 }
 
-/// omega is building o2-sync on this machine, which is called laptop. `amx`
-/// prints `agents` when given, and is missing from PATH when not.
+/// omega is building o2-sync from a checkout on this machine, which is
+/// called laptop. `amx` prints `agents` when given, and is missing from PATH
+/// when not.
 fn world(tag: &str, handoff: &str, agents: Option<&str>) -> World {
+    world_with(tag, handoff, agents, json!(["/src/omega"]))
+}
+
+/// `world`, with omega's checkouts on this machine as `checkouts`.
+fn world_with(
+    tag: &str,
+    handoff: &str,
+    agents: Option<&str>,
+    checkouts: serde_json::Value,
+) -> World {
     let dir = TempDir::new(tag);
     let home = dir.join("home");
     let bin = dir.join("bin");
@@ -27,7 +38,7 @@ fn world(tag: &str, handoff: &str, agents: Option<&str>) -> World {
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::write(home.join("config/qshell/machine"), "laptop\n").unwrap();
     let projects = json!({"projects": [
-        {"name": "omega", "roadmap_status": "approved", "runner": "laptop",
+        {"name": "omega", "roadmap_status": "approved", "checkouts": checkouts,
          "milestone": "o2-sync", "plan_slug": "o2-sync",
          "milestones_done": 1, "milestones_total": 2, "plan_ticked": 1, "plan_total": 3},
     ]});
@@ -175,6 +186,20 @@ fn a_parked_milestone_is_not_stalled() {
         body.contains("<button type=\"submit\">Resume</button>"),
         "{body}"
     );
+}
+
+#[test]
+fn a_project_with_no_checkout_here_offers_no_start_and_is_not_stalled() {
+    for handoff in ["", "o2-t1 landed at 1a2b3c."] {
+        let world = world_with("live-elsewhere", handoff, Some(DEAD), json!([]));
+        let (body, _) = page(&world);
+
+        assert!(!body.contains("stalled"), "{body}");
+        assert!(!body.contains("value=\"go\""), "{body}");
+        assert!(!body.contains(">Start</button>"), "{body}");
+        assert!(!body.contains(">Resume</button>"), "{body}");
+        assert!(body.contains("<h2>Last moves</h2>"), "{body}");
+    }
 }
 
 #[test]

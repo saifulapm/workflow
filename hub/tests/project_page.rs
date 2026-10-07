@@ -1,5 +1,5 @@
 //! `GET /p/<project>`: the front page follows the project's stage. A header
-//! with the stage, runner and progress, then what that stage is about.
+//! with the stage and progress, then what that stage is about.
 
 mod common;
 
@@ -9,12 +9,12 @@ use common::{Hub, TempDir, body_of, fixture_mem, status_of};
 
 /// One row per stage, carrying the flags the hub works the stage out from.
 const PROJECTS_DOC: &str = r#"{"projects":[
-{"name":"alpha","has_brief":true,"runner":"desk"},
+{"name":"alpha"},
 {"name":"bare"},
 {"name":"rho","has_brief":true,"has_research":true},
 {"name":"gamma","has_research":true,"has_research_summary":true},
 {"name":"sigma","has_research_summary":true,"has_spec":true},
-{"name":"beta","roadmap_status":"draft","runner":"laptop",
+{"name":"beta","roadmap_status":"draft",
  "milestones_done":0,"milestones_total":2,"plan_ticked":1,"plan_total":3},
 {"name":"exec","roadmap_status":"running","milestone":"e2","plan_slug":"e2",
  "milestones_done":1,"milestones_total":3,"plan_ticked":1,"plan_total":4}
@@ -211,13 +211,12 @@ fn a_planning_project_shows_its_milestones_and_the_approval_forms() {
 }
 
 #[test]
-fn the_header_shows_stage_runner_and_progress() {
+fn the_header_shows_stage_and_progress() {
     let world = World::new("project-page-header");
     let body = world.page("beta");
 
     for part in [
         "planning",
-        "<a href=\"http://laptop:8088\">laptop</a>",
         "milestone 1 of 2",
         "tasks 1 of 3",
     ] {

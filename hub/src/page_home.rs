@@ -1,4 +1,4 @@
-//! `GET /`: every project with its stage, runner, progress and week, then
+//! `GET /`: every project with its stage, progress and week, then
 //! the questions waiting on the owner.
 //!
 //! The hub runs one `mem` at a time, so this page reads nothing per question
@@ -14,7 +14,7 @@ use crate::html::{self, Banner, esc};
 use crate::http::Response;
 use crate::memcli::MemCli;
 use crate::model::{self, list_fault};
-use crate::pages::{PageCtx, page_shell, sibling_hub};
+use crate::pages::{PageCtx, page_shell};
 
 /// The reload that keeps the page live. It fires only when nothing is
 /// focused and nothing is typed, so it never costs an answer being written.
@@ -31,7 +31,9 @@ pub struct ProjectSummary {
     pub name: String,
     pub stage: &'static str,
     pub roadmap_status: Option<String>,
-    pub runner: Option<String>,
+    /// Whether this machine has a checkout of it, which `workflow go`
+    /// needs.
+    pub checked_out: bool,
     /// The open milestone's slug, while a roadmap has one.
     pub milestone: Option<String>,
     /// Milestones ticked on the roadmap, and in all.
@@ -66,7 +68,9 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
         name: text(row, "name").unwrap_or_default(),
         stage: lifecycle_stage(row),
         roadmap_status: text(row, "roadmap_status"),
-        runner: text(row, "runner"),
+        checked_out: row["checkouts"]
+            .as_array()
+            .is_some_and(|dirs| !dirs.is_empty()),
         milestone: text(row, "milestone"),
         plan_slug: text(row, "plan_slug"),
         milestones: (
@@ -78,9 +82,8 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
     }
 }
 
-/// The lifecycle stage of one `projects --json` row. mem stores no stage and
-/// serve's stage file exists only on the runner, so the hub works it out from
-/// what the summary holds.
+/// The lifecycle stage of one `projects --json` row. mem stores no stage, so
+/// the hub works it out from what the summary holds.
 pub fn lifecycle_stage(row: &Value) -> &'static str {
     match row["roadmap_status"].as_str() {
         Some("draft") => "planning",
@@ -181,8 +184,6 @@ pub fn render(
                 project,
                 waiting(&project.name),
                 week.as_deref(),
-                config,
-                machine,
                 now_ms,
             ));
         }
@@ -220,14 +221,12 @@ fn week_line(mem: &MemCli, project: &str) -> Option<String> {
 }
 
 /// One project as a card: its name, its stage and whatever waits on the
-/// owner as pills, the runner and the open milestone, then a bar filled by
+/// owner as pills, the open milestone, then a bar filled by
 /// the plan's ticks, or the roadmap's when there is no plan.
 fn project_card(
     project: &ProjectSummary,
     waiting: usize,
     week: Option<&str>,
-    config: &Config,
-    machine: &str,
     now_ms: i64,
 ) -> String {
     let mut pills = format!(
@@ -242,9 +241,6 @@ fn project_card(
         ));
     }
     let mut parts = Vec::new();
-    if let Some(runner) = &project.runner {
-        parts.push(runner_html(runner, config, machine));
-    }
     if let Some(milestone) = &project.milestone {
         parts.push(esc(milestone));
     }
@@ -306,19 +302,6 @@ pub fn bar(done: u64, total: u64) -> String {
         "<div class=\"bar\"><i style=\"width:{}%\"></i></div>\n",
         done.min(total) * 100 / total
     )
-}
-
-/// The runner's name, linked to its own hub when it is another machine that
-/// this hub knows as a sibling.
-fn runner_html(runner: &str, config: &Config, machine: &str) -> String {
-    let link = (runner != machine)
-        .then(|| sibling_hub(config, runner))
-        .flatten()
-        .and_then(|url| html::safe_link(&url));
-    match link {
-        Some(link) => format!("<a href=\"{link}\">{}</a>", esc(runner)),
-        None => esc(runner),
-    }
 }
 
 /// One waiting question and its answer form. The text is the row's whole

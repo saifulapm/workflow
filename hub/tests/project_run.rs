@@ -52,7 +52,7 @@ fn world(tag: &str, row: Row) -> World {
     let workflow_log = dir.join("workflow.log");
     let ticked = if row.dogfooding { 3 } else { 1 };
     let project = json!({
-        "name": PROJECT, "roadmap_status": "running", "runner": "laptop",
+        "name": PROJECT, "roadmap_status": "running",
         "milestone": "g2-nag", "plan_slug": "g2-nag",
         "milestones_done": 1, "milestones_total": 3,
         "plan_ticked": ticked, "plan_total": 3,

@@ -33,7 +33,8 @@ pub fn get(ctx: &PageCtx) -> Response {
     } else if query.get("empty").is_some() {
         body.push_str("<p class=\"banner warn\">Type something first.</p>\n");
     }
-    let machine = machine(ctx, project);
+    // Research runs on this hub's machine.
+    let machine = &ctx.app.machine;
     body.push_str(&text_form(
         project,
         "idea",
@@ -52,7 +53,7 @@ pub fn get(ctx: &PageCtx) -> Response {
     if research_pending(ctx, project) {
         body.push_str(&format!("<p class=\"banner ok\">{WAITING}</p>\n"));
     } else {
-        body.push_str(&format!("<p class=\"meta\">on {}</p>\n", esc(&machine)));
+        body.push_str(&format!("<p class=\"meta\">on {}</p>\n", esc(machine)));
         body.push_str(&button_form(project, "research", "Ask for research"));
         body.push_str(&button_form(project, "round", "Ask for a research round"));
     }
@@ -98,7 +99,7 @@ pub fn new_post(ctx: &PageCtx) -> Response {
             } else {
                 "research round on"
             };
-            let question = format!("{words} {}", machine(ctx, project));
+            let question = format!("{words} {}", ctx.app.machine);
             mem.write_through(&["ask", &flag, "--for", "orchestrator", "--", &question])
         }
     };
@@ -107,20 +108,6 @@ pub fn new_post(ctx: &PageCtx) -> Response {
         return Response::text(502, "mem did not take the write");
     }
     Response::see_other(&format!("{page}?sent={form}"))
-}
-
-/// The machine research runs on: the project's runner, else this hub's.
-pub fn machine(ctx: &PageCtx, project: &str) -> String {
-    let flag = format!("--project={project}");
-    let runner = match &*ctx.app.mem.read(&["project", "current", &flag, "--json"]) {
-        Outcome::Json(doc) => doc["runner"].as_str().unwrap_or("").to_string(),
-        _ => String::new(),
-    };
-    if runner.is_empty() {
-        ctx.app.machine.clone()
-    } else {
-        runner
-    }
 }
 
 /// Whether a research request of the project's still waits for the engine.

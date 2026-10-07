@@ -152,7 +152,7 @@ impl Doorbell {
             if project["roadmap_status"].as_str() == Some("maintenance")
                 && total > 0
                 && project["milestones_done"].as_u64() == Some(total)
-                && project["runner"].as_str() == Some(self.machine.as_str())
+                && summary_of(&project).checked_out
                 // The total is in the key so a roadmap that grows and
                 // finishes again rings again.
                 && self.record(state, &format!("finished {name} {total}"))
@@ -235,7 +235,7 @@ impl Doorbell {
     ) -> Option<Stall> {
         let s = summary_of(project);
         let milestone = s.milestone.as_deref()?;
-        if !live::idle(&s, &Run::Dead(None), &self.machine) {
+        if !live::idle(&s, &Run::Dead(None)) {
             return None;
         }
         let agents = agents.get_or_insert_with(|| self.amx.agents_fresh());
@@ -249,7 +249,7 @@ impl Doorbell {
             Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default(),
             _ => return None,
         };
-        if !live::stalled(&s, &run, handoff, &self.machine) {
+        if !live::stalled(&s, &run, handoff) {
             return None;
         }
         Some(match dead {
