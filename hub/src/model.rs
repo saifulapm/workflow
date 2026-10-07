@@ -1,8 +1,8 @@
-//! What the pages are made of (spec §3, §4b).
+//! What the pages are made of.
 //!
 //! **Time comes from the id, not from `created`.** Every list verb reports
 //! `"created":"2026-08-18"` — date only — so a question asked thirty seconds
-//! ago and one asked twenty hours ago are the same string (review M-1). The
+//! ago and one asked twenty hours ago are the same string. The
 //! `id` is a ULID whose first ten characters are milliseconds since the epoch,
 //! so that is where the age and the ordering come from.
 
@@ -55,15 +55,16 @@ pub struct WikiProject {
 /// when it is.
 #[derive(Debug, Clone)]
 pub struct Section<T> {
-    /// Set only when mem itself is broken (§4a's last row): a missing binary,
-    /// or output that will not parse. An empty store is not degraded.
+    /// Set only when mem itself is broken: a missing binary, or output that
+    /// will not parse. An empty store is not degraded.
     pub degraded: Option<String>,
     pub rows: Vec<T>,
 }
 
 /// Why a list verb's answer is not usable, or `None` if it is.
 ///
-/// §4a's "exit 1 + empty stdout = absent, render an em dash" row is about
+/// The "exit 1 + empty stdout = absent, render an em dash" row of memcli's
+/// table is about
 /// `status`, which is a singleton. A **list** verb that matched nothing still
 /// prints its document — that is mem's contract, in its own schema README: *"a
 /// filtered read that matches nothing prints this document with an empty array
@@ -174,8 +175,7 @@ pub struct ItemDetail {
     pub body: String,
     /// The item's own project, from `mem show`'s row. `mem show` has no
     /// `--project` — it resolves an id against the whole index — so the route
-    /// compares this against the project in the URL and 404s on a mismatch
-    /// (review 1 of detail).
+    /// compares this against the project in the URL and 404s on a mismatch.
     pub project: Option<String>,
 }
 
@@ -327,7 +327,7 @@ pub fn age(millis: Option<i64>, now_ms: i64) -> String {
 }
 
 /// Only a broken read is a fault for a singleton file: an absent one is a
-/// project that has simply not written it yet (memcli's own §4a table).
+/// project that has simply not written it yet (memcli's exit-code table).
 fn singleton_fault(outcome: &Outcome) -> Option<String> {
     match outcome {
         Outcome::Broken(why) => Some(why.clone()),
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn a_ulid_carries_its_own_timestamp() {
-        // Minted by the real mem during the spec review, on 2026-08-18.
+        // Minted by the real mem on 2026-08-18.
         let millis = ulid_millis("01M0BF1F8BY8FXGZS428J1TSD1").unwrap();
         assert!(
             rfc3339(millis).starts_with("2026-08-18T"),
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn ids_minted_a_minute_apart_still_sort_by_id() {
-        // The three the review recorded, which share eight leading characters
+        // Three ids minted by the real mem, which share eight leading characters
         // — and are still correctly ordered by the ninth.
         let mut ids = [
             "01M0BF3B9VWD6PMF213HNZ1Q1D",

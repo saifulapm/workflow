@@ -1,11 +1,11 @@
-//! Who is allowed to POST an answer (spec §9.2).
+//! Who is allowed to POST an answer.
 //!
 //! The tailnet is a *network* boundary and a browser is not bound by it. A form
 //! POST of `application/x-www-form-urlencoded` is a CORS-simple request: any
 //! page open in Safari on the phone — itself a tailnet node — can silently
 //! submit `<form action="http://macbook:8787/answer" method="post">` with an
 //! attacker-chosen id and text, and never needs to read the response, because
-//! the *write* was the payload (review B-4a).
+//! the *write* was the payload.
 //!
 //! Two gates, and a request has to pass both:
 //!
@@ -20,7 +20,7 @@ use crate::config::Config;
 pub struct Guard {
     port: u16,
     /// Lowercased: the machine-name file's value and `uname -n`, which on this
-    /// machine are two different strings (review m-10).
+    /// machine are two different strings.
     names: Vec<String>,
     /// `host[:port]` for every entry in the config's `origins`.
     extra: Vec<String>,
@@ -55,8 +55,8 @@ impl Guard {
     ///   cannot know its own tailnet name without asking tailscale, and a
     ///   single-label name is not something a web attacker can register — the
     ///   rebinding they would need starts with a domain they control;
-    /// - **anything under `.ts.net`**, which is §9's "this machine's `*.ts.net`
-    ///   name", generalised for the same reason: Tailscale controls those
+    /// - **anything under `.ts.net`**, which covers this machine's `*.ts.net`
+    ///   name and generalises it for the same reason: Tailscale controls those
     ///   records, and none of them can be pointed at 127.0.0.1 by an outsider;
     /// - **whatever the config's `origins` names**, which is how this is
     ///   narrowed to the exact two hostnames if that is ever wanted.
@@ -107,13 +107,13 @@ impl Guard {
         }
     }
 
-    /// §9.2, in full. `Sec-Fetch-Site: same-origin` is enough on its own;
+    /// `Sec-Fetch-Site: same-origin` is enough on its own;
     /// otherwise an `Origin` or a `Referer` has to name one of ours. A request
     /// carrying none of the three is refused — which includes a bare `curl`,
-    /// and is why `hub/TESTING.md` gives AC4's curl an `-H Origin:`.
+    /// so a curl against `/answer` needs an `-H Origin:`.
     pub fn may_write(&self, headers: &impl HeaderSource) -> bool {
         if let Some(site) = headers.header("sec-fetch-site") {
-            // Defence in depth (review m-1): an explicit claim of anything but
+            // Defence in depth: an explicit claim of anything but
             // `same-origin` used to be overridden by the first `Origin` header
             // that followed it, so `cross-site` plus an `Origin` of ours wrote.
             // No browser can produce that contradiction — `Origin` on a

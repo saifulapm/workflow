@@ -1,6 +1,6 @@
-//! H5 — the dashboard, the answer path, and §9 in full.
+//! The dashboard and the answer path.
 //!
-//! AC9's three tests are `a_foreign_origin_is_refused_and_runs_no_mem_answer`,
+//! The origin-guard tests are `a_foreign_origin_is_refused_and_runs_no_mem_answer`,
 //! `a_question_that_is_script_renders_as_text` and
 //! `an_answer_that_is_a_shell_command_leaves_no_file`.
 
@@ -105,7 +105,7 @@ fn the_page_has_the_projects_the_questions_a_header_and_a_form() {
         body.contains("<span class=\"pill mut\">brief</span>"),
         "{body}"
     );
-    // AC4: answering is a form POST, and there is no script on the page at all.
+    // Answering is a form POST, and there is no script on the page at all.
     assert!(
         body.contains("<form method=\"post\" action=\"/answer\">"),
         "{body}"
@@ -159,7 +159,7 @@ fn the_header_carries_the_machine_name_and_the_sibling_links() {
 }
 
 // ---------------------------------------------------------------------------
-// AC9, three tests.
+// The origin guard and the shell-safety tests.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -265,7 +265,7 @@ fn ac10_the_decoded_answer_reaches_mem_byte_for_byte() {
     let id = world.ask("Should we use Redis?");
     let hub = world.hub();
 
-    // §10 AC10's string, end to end: over the socket, through the decoder, out
+    // The decoder's string, end to end: over the socket, through the decoder, out
     // as one argv element.
     let body = format!("id={id}&text=a+b%26c%3Dd%2B%F0%9F%99%82");
     assert_eq!(status_of(&hub.post_form("/answer", &body)), 303);
@@ -324,14 +324,14 @@ fn answering_the_same_question_twice_writes_once() {
 
 /// Six answers to one question, all released off the same barrier.
 ///
-/// The sequential test above passed throughout review B-1 and could not detect
-/// it: `invalidate` → `is_pending` → `answer` was check-then-act with the lock
+/// The sequential test above passed while the race existed and could not
+/// detect it: `invalidate` → `is_pending` → `answer` was check-then-act with the lock
 /// dropped in the middle, so every racer read the question as pending before
 /// any racer wrote. Twelve rounds out of twelve wrote more than once, all six
 /// got the green banner, and `mem questions --wait` unblocked the orchestrator
 /// with whichever landed first — not the one the phone was told about.
 ///
-/// Not a contrived race: the page is JavaScript-free by AC4, so the Answer
+/// Not a contrived race: the page is JavaScript-free, so the Answer
 /// button cannot disable itself; it refreshes itself every fifteen seconds; and
 /// a render costs two serialised `mem` processes. A double tap on a link
 /// that feels slow puts both POSTs on the wire before the first response
@@ -495,7 +495,7 @@ fn a_hash_that_is_the_whole_id_is_still_an_empty_field() {
     assert!(world.answers().is_empty(), "no id, no write");
 }
 
-/// review m-1: an explicit `cross-site` claim used to be overridden by the
+/// An explicit `cross-site` claim used to be overridden by the
 /// first `Origin` header that followed it.
 #[test]
 fn a_cross_site_claim_is_believed_even_with_an_origin_of_ours_behind_it() {
@@ -607,7 +607,7 @@ fn sec_fetch_site_same_origin_is_accepted_on_its_own() {
 }
 
 // ---------------------------------------------------------------------------
-// AC1, the round trip that is the whole point.
+// The round trip that is the whole point.
 // ---------------------------------------------------------------------------
 
 #[test]

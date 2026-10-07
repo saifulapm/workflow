@@ -1,11 +1,10 @@
-//! Unbounded time holding a bounded resource — review M-2 and M-3.
+//! Unbounded time holding a bounded resource.
 //!
-//! Both findings are the same shape. `MAX_CONNECTIONS` bounds how many
+//! Both cases have the same shape. `MAX_CONNECTIONS` bounds how many
 //! connections may exist and `MemCli`'s gate bounds how many `mem` children may
-//! run, but before this round neither had a bound on *how long* one of them
-//! could hold its slot. So sixteen dribbling sockets, or one `mem` that did not
-//! return, took every route down — including the routes that touch no `mem` at
-//! all, because the shed happens before routing. `Restart=always` never fired
+//! run, but neither bounded *how long* one of them could hold its slot. So
+//! sixteen dribbling sockets, or one `mem` that did not return, took every
+//! route down — including the routes that touch no `mem` at all, because the shed happens before routing. `Restart=always` never fired
 //! either: nothing had exited.
 //!
 //! The doorbell survives both, on its own thread, which is the worst ordering
@@ -172,10 +171,10 @@ fn clients_that_dribble_for_ever_cannot_hold_the_service_down() {
 
 /// A `mem` that never returns is a degraded page, not a dead service.
 ///
-/// Every data route queues on one gate, so before this round a single stuck
-/// child blocked `/`, all three API routes and `POST /answer` — and then each
-/// of those requests held a connection permit for ever, which is M-2 again by
-/// another road: sixteen page loads, four minutes of the page's own refresh,
+/// Every data route queues on one gate, so a single stuck child used to block
+/// `/`, all three API routes and `POST /answer` — and then each of those
+/// requests held a connection permit for ever, which exhausted the connection
+/// limit by another road: sixteen page loads, four minutes of the page's own refresh,
 /// and the whole service was shed.
 #[test]
 fn a_mem_that_never_returns_does_not_take_every_route_with_it() {
@@ -207,7 +206,7 @@ fn a_mem_that_never_returns_does_not_take_every_route_with_it() {
     assert_eq!(
         status_of(&response),
         200,
-        "a mem that will not answer is what §4a's last row is for"
+        "a mem that will not answer is what the degraded path is for"
     );
     assert!(
         started.elapsed() < Duration::from_secs(20),

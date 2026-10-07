@@ -1,8 +1,8 @@
-//! A hand-rolled HTTP/1.1 server for four routes (spec §8).
+//! A hand-rolled HTTP/1.1 server for four routes.
 //!
-//! There is no server crate here on purpose: §8's ruling is that v1 adds no
+//! There is no server crate here on purpose: hub adds no
 //! crates, and `tiny_http` would still have left the form decoder, the query
-//! decoder and the body cap to write by hand (review M-7). What it would have
+//! decoder and the body cap to write by hand. What it would have
 //! given away for free is the part that bites — the caps — so they are named
 //! constants with tests rather than an afterthought.
 //!
@@ -21,7 +21,7 @@ use crate::form::{Form, decode_path};
 pub const MAX_REQUEST_LINE: usize = 8 * 1024;
 pub const MAX_HEADERS: usize = 64;
 pub const MAX_HEADER_BYTES: usize = 16 * 1024;
-/// §8: a 64 KiB body cap. A batched answer is a few hundred bytes.
+/// A 64 KiB body cap. A batched answer is a few hundred bytes.
 pub const MAX_BODY: usize = 64 * 1024;
 /// A phone photo with room to spare. Only the finding form takes one.
 pub const MAX_UPLOAD_BODY: usize = 8 * 1024 * 1024;
@@ -50,7 +50,7 @@ pub fn io_timeout() -> Duration {
 /// those took every route down — including the ones that touch no `mem` at all,
 /// because the shed happens before routing. Meanwhile the doorbell is on its
 /// own thread and kept ringing, so the phone buzzed, Saiful opened the link,
-/// and got `503 busy` (review M-2).
+/// and got `503 busy`.
 pub const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(15);
 
 /// 15 s, or `HUB_REQUEST_DEADLINE_MS` — the seam the slowloris test uses.
@@ -121,7 +121,7 @@ impl Drop for UploadPermit {
 /// resource here and sixteen is not many — Safari opens several connections per
 /// page and the page reloads itself every fifteen seconds — so the ceiling
 /// wants to sit well above the number of real clients while the deadline above
-/// does the actual bounding (review M-2).
+/// does the actual bounding.
 pub const MAX_CONNECTIONS: usize = 64;
 
 #[derive(Debug)]
@@ -411,7 +411,7 @@ fn read_request(
 
     let mut permit = None;
     let body = if method == "POST" || method == "PUT" || method == "PATCH" {
-        // §8: `Content-Length` required, chunked rejected with 411. Nothing
+        // `Content-Length` is required, chunked rejected with 411. Nothing
         // hub speaks to needs chunked, and a hand-rolled dechunker on the one
         // path that runs `mem answer` is not a trade worth making.
         if header("transfer-encoding").is_some() {
@@ -438,7 +438,7 @@ fn read_request(
             deadline = &upload_deadline;
         }
         // curl sends `Expect: 100-continue` for bodies past a kilobyte and
-        // stalls for a second waiting for this; AC4 answers with curl.
+        // stalls for a second waiting for this, and curl is what answers from a shell.
         if header("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
             let _ = writer.write_all(b"HTTP/1.1 100 Continue\r\n\r\n");
             let _ = writer.flush();
@@ -503,7 +503,7 @@ fn read_line(
         // `fill_buf` internally and each of those reads gets the socket timeout
         // afresh, so a client sending one *byte* just inside it would hold the
         // connection for `limit` × the timeout — hours, on one line, which is
-        // the shape of M-2 that arming per line does not close.
+        // the slowloris shape that arming per line does not close.
         deadline.arm(reader)?;
         let (chunk, newline_at) = {
             let available = match reader.fill_buf() {

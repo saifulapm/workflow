@@ -1,4 +1,4 @@
-//! The routing table (spec §3), and the one object the routes share.
+//! The routing table, and the one object the routes share.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -29,7 +29,7 @@ pub struct App {
     /// The orchestrators, shared with the doorbell like `mem`.
     pub amx: Arc<Amx>,
     pub guard: Guard,
-    /// One answer at a time, per question id (review B-1).
+    /// One answer at a time, per question id.
     ///
     /// `MemCli`'s gate serialises the child *processes*; it cannot serialise
     /// the sequence around them, because it is released between "is this still
@@ -47,7 +47,7 @@ pub struct App {
 /// Whether a question is still waiting — and the third answer, which matters:
 /// "mem could not tell us" is not "no such question". Answering the second way
 /// would report an unknown id for a store that is merely slow, and now that a
-/// `mem` child can be killed on a deadline (review M-3) that is reachable.
+/// `mem` child can be killed on a deadline, that is reachable.
 enum Pending {
     Yes,
     No,
@@ -69,7 +69,7 @@ impl App {
     }
 
     pub fn handle(&self, request: &Request) -> Response {
-        // §9.2. On every route, not only the write: a rebinding attack that
+        // On every route, not only the write: a rebinding attack that
         // reaches `GET /` has read the question text.
         if !self.guard.host_allowed(request.header("host")) {
             return Response::text(403, "not a host this hub answers to");
@@ -153,7 +153,7 @@ impl App {
 
     /// `GET /p/<project>/item/<id>` — one item, whole. `mem show` has no
     /// `--project`, so an id that resolves under another project 404s here
-    /// rather than leaking that project's item (review 1 of detail).
+    /// rather than leaking that project's item.
     fn project_item(&self, project: &str, id: &str) -> Response {
         if !model::is_item_id(id) {
             return Response::not_found();
@@ -171,7 +171,7 @@ impl App {
         }
     }
 
-    /// §3 and §9. The order matters: nothing runs `mem answer` until the
+    /// The order matters: nothing runs `mem answer` until the
     /// origin has been checked, and the redirect is a 303 so a reload of the
     /// result page cannot answer twice.
     pub fn answer(&self, request: &Request) -> Response {
@@ -193,14 +193,14 @@ impl App {
         let response = {
             let lock = self.lock_for(id);
             // Held across all three steps. Dropping it between the read and the
-            // write is precisely B-1.
+            // write is the race.
             let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
 
             // The queue as it is right now, not as it was up to five seconds
             // ago. Without this the answered question stays on screen for the
             // rest of the TTL and a second tap writes a second answer — which
             // mem accepts, and which the waiting agent never sees, because the
-            // first one won (review M-2).
+            // first one won.
             self.mem.invalidate();
             match self.is_pending(id) {
                 Pending::No => self.back(Banner::Unknown),
@@ -213,8 +213,8 @@ impl App {
                     self.mem.invalidate();
                     match run.code {
                         Some(0) => self.back(Banner::Answered(short(id))),
-                        // §4a: exit 1 with a plain-text stderr is "no such
-                        // question", and §3 says that is a banner, not a 500.
+                        // Exit 1 with a plain-text stderr is "no such
+                        // question", which is a banner, not a 500.
                         Some(1) => self.back(Banner::Unknown),
                         _ => {
                             if !run.stderr.is_empty() {
@@ -265,7 +265,7 @@ impl App {
         Response::see_other(&format!("/{}", banner.query()))
     }
 
-    /// §3: the topic as plain text and as both links. No QR, no image crate.
+    /// The topic as plain text and as both links. No QR, no image crate.
     fn subscribe(&self) -> Response {
         Response::html(html::subscribe_page(&self.config, &self.machine))
     }

@@ -1,4 +1,4 @@
-//! The doorbell (spec §5).
+//! The doorbell.
 //!
 //! A background thread polls the pending queue every 15 s and rings once for
 //! every question id it has not seen. In the same round it rings for a
@@ -21,7 +21,7 @@
 //! It is written and fsynced **before** the ring, so a crash between the two
 //! loses a doorbell rather than looping on one — a missed buzz costs a delay,
 //! a repeated one costs trust in the doorbell. And it survives a restart, which
-//! is what makes `systemctl --user restart` silent (AC5).
+//! is what makes `systemctl --user restart` silent.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -38,7 +38,7 @@ use crate::memcli::{MemCli, Outcome};
 use crate::page_home::summary_of;
 
 pub const DEFAULT_POLL: Duration = Duration::from_secs(15);
-/// §5's own command line: `curl -fsS -m 10 -d <body> <ntfy_base>/<topic>`.
+/// The command line is `curl -fsS -m 10 -d <body> <ntfy_base>/<topic>`.
 pub const CURL_TIMEOUT_SECONDS: &str = "10";
 
 pub struct Doorbell {
@@ -87,12 +87,12 @@ impl Doorbell {
         // Fresh, not cached: a stale queue here is a late doorbell, and the
         // poll interval is already the rate limit.
         let outcome = mem.questions_fresh();
-        // Silence is not an empty queue (review M-1). This used to ask
-        // `outcome.broken()`, which is `None` for `Outcome::Absent`, so §4a's
-        // "exit non-zero, empty stdout" row fell through, the loop over no rows
+        // Silence is not an empty queue. This used to ask
+        // `outcome.broken()`, which is `None` for `Outcome::Absent`, so an
+        // "exit non-zero, empty stdout" answer fell through, the loop over no rows
         // did nothing, and `seeding` was cleared anyway — a first start that
         // met one such poll then rang for the entire backlog. `list_fault` is
-        // the page's own reading of §4a (decision 6.7), shared here so the two
+        // the page's own reading of silence, shared here so the two
         // readings of silence cannot drift apart again.
         if let Some(why) = crate::model::list_fault(&outcome, "questions") {
             // Not fatal, and not a reason to seed: try again next round.
@@ -233,7 +233,7 @@ impl Doorbell {
         if let Err(e) = remember(&self.seen_path, key) {
             // Once per run of failures, not once per poll for ever: an
             // unwritable seen file used to log four lines a minute, per
-            // stuck question, indefinitely (review m-5).
+            // stuck question, indefinitely.
             if !state.record_failed {
                 eprintln!("hub: doorbell: could not record {key}: {e:#}");
                 state.record_failed = true;
@@ -262,7 +262,7 @@ impl Doorbell {
         self.ring(body);
     }
 
-    /// One POST, by argv. Never retried: §5 says a failure is logged and
+    /// One POST, by argv. Never retried: a failure is logged and
     /// forgotten, and the seen file has already moved on.
     fn ring(&self, body: &str) {
         let result = Command::new("curl")
@@ -330,7 +330,7 @@ struct State {
     /// recorded, and rung for zero times.
     seeding: bool,
     /// Whether the last attempt to record an id failed, so the log says so once
-    /// rather than every fifteen seconds (review m-5).
+    /// rather than every fifteen seconds.
     record_failed: bool,
     /// When each project was first seen stalled with no orchestrator ever
     /// run, so it rings only once that has lasted.

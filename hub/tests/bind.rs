@@ -1,4 +1,4 @@
-//! H1/AC4 — hub binds loopback and nothing else.
+//! hub binds loopback and nothing else.
 
 mod common;
 
@@ -44,7 +44,7 @@ fn the_listener_is_loopback_only() {
         let result = TcpStream::connect_timeout(&target, Duration::from_millis(500));
         assert!(
             result.is_err(),
-            "hub answered on {target}; §7 says 127.0.0.1 only"
+            "hub answered on {target}; hub binds 127.0.0.1 only"
         );
     }
 }

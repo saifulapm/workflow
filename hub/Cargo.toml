@@ -3,11 +3,11 @@ name = "hub"
 version = "0.1.0"
 edition = "2024"
 
-# Spec §8: no new crates. `std::net::TcpListener` and a hand-rolled HTTP/1.1
+# No server crate. `std::net::TcpListener` and a hand-rolled HTTP/1.1
 # reader do the serving; these five are the family mem and workflow already
-# vendor. `tiny_http` stays pending per-item approval.
+# vendor.
 #
-# pulldown-cmark is the sixth, approved per-item for the wiki: a markdown parser
+# pulldown-cmark is the sixth, added for the wiki: a markdown parser
 # is not something to hand-roll on the origin that owns `POST /answer`.
 # `default-features = false` drops `getopts`, which only the crate's own binary
 # needs.

@@ -48,7 +48,7 @@ impl Drop for TempDir {
 }
 
 /// Writes an executable `mem` into `dir` whose whole behaviour is the shell
-/// script `body`. This is how the §4a exit-code matrix is exercised without a
+/// script `body`. This is how the exit-code matrix is exercised without a
 /// real store: put `dir` first on the child's PATH.
 pub fn fixture_mem(dir: &Path, body: &str) -> PathBuf {
     fixture_bin(dir, "mem", body)
@@ -92,7 +92,7 @@ pub fn mem_build(root: &Path) -> Command {
 
 /// The repo's own `mem`, built here when it is missing. Never the machine's
 /// installed binary: verify's answer went red or green with whatever happened
-/// to be on PATH (friction #6SQKR4HE), so these tests pin the mem they drive
+/// to be on PATH, so these tests pin the mem they drive
 /// to this checkout.
 pub fn real_mem() -> Option<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))

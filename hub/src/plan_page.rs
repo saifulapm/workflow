@@ -1,4 +1,4 @@
-//! A stored plan page in the hub (h1-plan-pages, h4-designed-plans): the
+//! A stored plan page in the hub: the
 //! shell the hub draws around it, the frame the page itself runs in, and the
 //! comments and decisions sent from it.
 //!

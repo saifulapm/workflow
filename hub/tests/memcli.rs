@@ -1,4 +1,5 @@
-//! H3 — §4a's table as a test matrix, and the cache in front of it.
+//! The exit-code table in `src/memcli.rs` as a test matrix, and the cache in
+//! front of it.
 //!
 //! The matrix runs against a fixture `mem` on PATH so every row can be produced
 //! on demand; the last two tests run the **real** binary against a throwaway
@@ -402,7 +403,7 @@ fn the_table_holds_against_the_real_binary() {
         .collect();
     assert_eq!(names, vec!["proj-alpha", "proj-beta"]);
 
-    // AC7: a project with no handoff is absent, not an error — and this is
+    // A project with no handoff is absent, not an error — and this is
     // the row a fixture is least able to prove.
     let handoff = mem.handoff("proj-alpha");
     assert!(matches!(*handoff, Outcome::Absent), "{handoff:?}");
@@ -465,7 +466,7 @@ fn a_real_answer_round_trips_and_an_unknown_id_is_a_clean_exit_one() {
     assert_eq!(rows[0]["project"], "proj-alpha");
 
     // An answer that begins with a dash: without the `--`, clap reads it as a
-    // flag and mem exits 2 before writing anything (review m-9).
+    // flag and mem exits 2 before writing anything.
     let run = mem.answer(&id, "-x use sqlite");
     assert!(run.ok(), "{run:?}");
 
@@ -475,7 +476,7 @@ fn a_real_answer_round_trips_and_an_unknown_id_is_a_clean_exit_one() {
         "the answered question left the pending queue"
     );
 
-    // §3's failure mode: exit 1 and plain text, which the page turns into a
+    // The failure mode: exit 1 and plain text, which the page turns into a
     // banner rather than a 500.
     let run = mem.answer("DEADBEEF", "no such question");
     assert_eq!(run.code, Some(1));

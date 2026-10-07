@@ -1,10 +1,9 @@
-//! `application/x-www-form-urlencoded`, by hand (spec §8).
+//! `application/x-www-form-urlencoded`, by hand.
 //!
-//! Hand-rolled because there is no approved crate for it: `tiny_http` would not
-//! have supplied it either (review M-7), so this decoder exists in every version
-//! of the plan. It is also where a wrong answer would be silent — the
-//! orchestrator acts on whatever text comes out of here — so the adversarial
-//! cases in §10 AC10 are tests, not comments.
+//! Hand-rolled because hub depends on no crate for it: `tiny_http` would not
+//! have supplied it either. It is also where a wrong answer would be silent,
+//! since the orchestrator acts on whatever text comes out of here, so the
+//! adversarial cases are tests, not comments.
 
 /// One decoded form or query string, in the order the pairs arrived.
 #[derive(Debug, Default, Clone)]

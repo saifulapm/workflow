@@ -1,4 +1,4 @@
-//! Running a child with a ceiling on how long it may take (review M-3).
+//! Running a child with a ceiling on how long it may take.
 //!
 //! `Command::output()` waits for ever. Everything hub knows it learned by
 //! running `mem`, and those runs are serialised behind one gate, so a single
@@ -7,7 +7,7 @@
 //! verb would have answered instantly. `Restart=always` never fires either,
 //! because nothing has exited.
 //!
-//! There is no `wait_timeout` in `std` and §8's ruling adds no crates, so this
+//! There is no `wait_timeout` in `std` and hub adds no crates, so this
 //! is: spawn, drain both pipes on their own threads, and poll `try_wait`
 //! against a deadline.
 //!

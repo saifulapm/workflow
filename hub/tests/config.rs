@@ -1,4 +1,4 @@
-//! H1 — the config file and the topic (spec §5, §6).
+//! The config file and the topic.
 
 mod common;
 
@@ -50,7 +50,7 @@ fn the_topic_is_twenty_six_base32_characters_and_never_starts_with_a_timestamp()
     }
 
     // A ULID would share its leading characters across a run of ids minted in
-    // the same millisecond — review M-4, and the reason §5 says /dev/urandom.
+    // the same millisecond, which is why the topic comes from /dev/urandom.
     let firsts: std::collections::BTreeSet<&str> = topics
         .iter()
         .map(|t| &t["workflow-".len()..][..6])

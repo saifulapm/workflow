@@ -1,4 +1,4 @@
-//! `~/.config/hub/config.toml` (spec §6) and the doorbell topic (spec §5).
+//! `~/.config/hub/config.toml` and the doorbell topic.
 //!
 //! Every key is optional. The file is created on first run so the topic has
 //! somewhere to live; after that it is read verbatim and never rewritten, which
@@ -25,22 +25,22 @@ pub struct Config {
     /// Generated on first run; 128 bits from `/dev/urandom`, never a ULID.
     #[serde(default)]
     pub topic: String,
-    /// Static links to the other machines' hubs (v1 has no merge-on-read).
+    /// Static links to the other machines' hubs (there is no merge-on-read).
     #[serde(default)]
     pub siblings: Vec<String>,
     /// So a self-hosted ntfy — or a test sink — replaces ntfy.sh without code.
     #[serde(default = "default_ntfy_base")]
     pub ntfy_base: String,
-    /// Extra origins allowed to POST /answer (spec §9.2).
+    /// Extra origins allowed to POST /answer.
     #[serde(default)]
     pub origins: Vec<String>,
     /// The URL the doorbell tells the phone to open. Defaults to
     /// `http://<machine>:<port>/`.
     ///
-    /// Not in §6's list: added because the machine-name file, `uname -n` and
-    /// the MagicDNS name are three different strings on this machine (review
-    /// m-10), so a derived click-URL can point at a name the phone cannot
-    /// resolve. One optional key is cheaper than a doorbell that opens nothing.
+    /// Optional because the machine-name file, `uname -n` and the MagicDNS
+    /// name are three different strings on this machine, so a derived
+    /// click-URL can point at a name the phone cannot resolve. One optional key is cheaper than a
+    /// doorbell that opens nothing.
     #[serde(default)]
     pub hub_url: Option<String>,
 }
@@ -135,7 +135,7 @@ pub fn load_or_create(path: &Path) -> Result<Config> {
 
 fn rendered(config: &Config) -> String {
     format!(
-        "# hub's config (spec §6). Every key is optional; the topic is the one\n\
+        "# hub's config. Every key is optional; the topic is the one\n\
          # secret here, which is why this file is 0600.\n\
          topic = \"{}\"\n\
          # port = {DEFAULT_PORT}\n\
@@ -175,7 +175,7 @@ fn write_private(path: &Path, body: &str) -> Result<()> {
 /// `workflow-` plus 128 bits from `/dev/urandom`, Crockford base32.
 ///
 /// Not a ULID: a ULID's first ten characters are a millisecond timestamp with
-/// no entropy in them (review M-4), so it would publish the install time to a
+/// no entropy in them, so it would publish the install time to a
 /// service that logs topic names, and leave 80 bits rather than 128.
 pub fn new_topic() -> Result<String> {
     let bytes = urandom::<16>()?;

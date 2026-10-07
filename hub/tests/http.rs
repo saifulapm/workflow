@@ -1,4 +1,4 @@
-//! H2 — the framing rules and the caps of spec §8, over a real socket.
+//! The framing rules and the caps, over a real socket.
 
 mod common;
 

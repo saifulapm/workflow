@@ -1,9 +1,8 @@
-//! H7 — the unit file and `GET /subscribe`.
+//! The unit file and `GET /subscribe`.
 //!
-//! The unit is checked as a file, not by running `systemctl`: the brief wires
-//! nothing, and every line of §7's unit is a fix for something the cold review
-//! found, so the file's contents are the deliverable. `hub/TESTING.md` §3.3
-//! carries the half that needs a live systemd.
+//! The unit is checked as a file, not by running `systemctl`: every line of it
+//! has a reason, so the file's contents are what is under test. The half that
+//! needs a live systemd is not covered here.
 
 mod common;
 
@@ -50,10 +49,10 @@ fn the_unit_carries_every_line_that_was_missing_from_draft_one() {
 fn hub_installs_nothing_of_its_own_when_it_runs() {
     // This used to read the *real* `$HOME` and assert that
     // `~/.config/systemd/user/hub.service` did not exist. That is not something
-    // a test can own: `TESTING.md` §4.3 tells the reader to install exactly
-    // that file, so the moment they follow their own instructions the suite is
+    // a test can own: installing hub means putting exactly
+    // that file there, so the moment they follow their own instructions the suite is
     // red for ever, on the machine where running it matters most — 109 pass, 1
-    // fail, and the failure was detecting a *correct* deployment (review M-4).
+    // fail, and the failure was detecting a *correct* deployment.
     //
     // What the suite can own is hub's own footprint: running it creates its
     // config and its state directory, and installs no unit anywhere. The unit
@@ -74,7 +73,7 @@ fn hub_installs_nothing_of_its_own_when_it_runs() {
         !home.join("config/systemd").exists(),
         "hub created a systemd directory"
     );
-    // And nothing outside the two places §4.2 names.
+    // And nothing outside the config and state directories.
     assert!(home.join("config/hub").is_dir(), "its config directory");
 }
 
@@ -114,7 +113,7 @@ fn subscribe_prints_the_topic_both_links_and_what_it_costs() {
         body.contains("http://127.0.0.1:9/workflow-0123456789ABCDEFGHJKMNPQ"),
         "{body}"
     );
-    // m-1: the accurate sentence, not "content stays on the tailnet".
+    // The accurate sentence, not "content stays on the tailnet".
     assert!(body.contains("never leaves the tailnet"), "{body}");
     assert!(
         body.contains("anyone holding it can also publish"),

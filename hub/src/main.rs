@@ -89,7 +89,7 @@ fn run() -> Result<()> {
         return pair_device(&config, port);
     }
 
-    // Spec §7: loopback only. Exposure is `tailscale serve`'s job, and a bind
+    // Loopback only. Exposure is `tailscale serve`'s job, and a bind
     // to 0.0.0.0 would put this on every café network the laptop joins.
     let listener = TcpListener::bind(("127.0.0.1", port))
         .with_context(|| format!("binding 127.0.0.1:{port}"))?;
@@ -102,7 +102,7 @@ fn run() -> Result<()> {
 
     let app = Arc::new(App::new(config, bound.port(), hub::machine_name()));
 
-    // §5. A doorbell that cannot start is a doorbell that does not ring; it is
+    // A doorbell that cannot start is a doorbell that does not ring; it is
     // not a reason to refuse to serve the page.
     match Doorbell::from_app(&app) {
         Ok(doorbell) => {

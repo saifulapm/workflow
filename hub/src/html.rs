@@ -1,9 +1,9 @@
-//! The parts every page shares, escaped (spec §9.1).
+//! The parts every page shares, escaped.
 //!
 //! Every value that reaches this page came from `mem`, and mem's questions are
 //! written by an agent that has been reading repositories and web pages. A
 //! title containing `<script>` would otherwise become script on the origin that
-//! owns `POST /answer` — no external attacker required (review B-4b). So there
+//! owns `POST /answer` — no external attacker required. So there
 //! is exactly one way text gets into the page, `esc`, and no format string in
 //! this file interpolates a value without it.
 
@@ -191,9 +191,9 @@ article.md th{background:var(--bg)}
 article.md blockquote{margin:0 0 10px;padding:2px 0 2px 12px;border-left:3px solid var(--accent);color:var(--mut)}
 "#;
 
-/// `GET /subscribe` (spec §3): the topic, both links, and the sentence that
+/// `GET /subscribe`: the topic, both links, and the sentence that
 /// says accurately what subscribing exposes. No QR, and therefore no image
-/// crate — §3 offered three options and settled this one.
+/// crate.
 pub fn subscribe_page(config: &Config, machine: &str) -> String {
     let topic = esc(&config.topic);
     let subscribe = esc(&config.subscribe_url());

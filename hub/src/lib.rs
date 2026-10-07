@@ -1,9 +1,9 @@
-//! hub — mem's phone-facing view (spec `specs/hub-v1.md`, draft 2).
+//! hub — mem's phone-facing view.
 //!
 //! Everything hub knows it learned by running the `mem` binary; it never
-//! touches mem's store. The modules are the spec's sections: `config` is §6,
-//! `memcli` is §4, `http` is §8, `page` and `answer` are §3 and §9, `doorbell`
-//! is §5.
+//! touches mem's store. `config` reads the config file and the doorbell topic,
+//! `memcli` runs `mem`, `http` is the hand-rolled server, the page modules and
+//! `answer` render and accept answers, and `doorbell` rings the phone.
 
 pub mod api;
 pub mod app;
@@ -38,9 +38,9 @@ pub mod proc;
 /// starts.
 const TAILSCALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// `~/.config/qshell/machine` else `uname -n` — the same rule as mem §7, so the
+/// `~/.config/qshell/machine` else `uname -n` — the same rule as mem, so the
 /// name hub prints and the `machine` field mem stamps on an item cannot drift
-/// apart (review m-10).
+/// apart.
 pub fn machine_name() -> String {
     if let Ok(config) = config::config_home()
         && let Ok(text) = std::fs::read_to_string(config.join("qshell/machine"))

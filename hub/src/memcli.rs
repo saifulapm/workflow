@@ -1,14 +1,14 @@
-//! Running `mem` (spec §4, §4a, §9.3).
+//! Running `mem`.
 //!
 //! Two rules govern everything here.
 //!
 //! **argv, never a shell.** The text this module passes to `mem answer` was
 //! typed into a form on a phone; with `sh -c` anywhere on the path, that field
-//! is arbitrary command execution as Saiful (review B-4c). There is no string
+//! is arbitrary command execution as Saiful. There is no string
 //! interpolation into a command line in this file, and there is no `sh`.
 //!
-//! **An exit code from mem is not a yes/no.** §4a's table, verified live
-//! against the built binary:
+//! **An exit code from mem is not a yes/no.** The table below was verified
+//! live against the built binary:
 //!
 //! | call | exit | stdout |
 //! |---|---|---|
@@ -45,14 +45,14 @@ pub const QUESTIONS_ARGV: [&str; 6] = [
     "--json",
 ];
 
-/// §4: "a small in-process cache (5 s TTL) so a phone refresh doesn't
-/// stampede". The key is the whole argv, so it is per-project by construction
-/// (review m-5).
+/// A small in-process cache with a 5 s TTL, so a phone refresh doesn't
+/// stampede. The key is the whole argv, so it is per-project by construction.
 pub const CACHE_TTL: Duration = Duration::from_secs(5);
 
-/// How long one `mem` may take before it is killed (review M-3). §4a's last row
-/// exists for a mem that cannot answer; before this there was no way to reach
-/// it, because a child that never returns never fails either.
+/// How long one `mem` may take before it is killed. The "mem is broken" row of
+/// the table above exists for a mem that cannot answer; without a ceiling there
+/// would be no way to reach it, because a child that never returns never fails
+/// either.
 pub const DEFAULT_MEM_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 5 s, or `HUB_MEM_TIMEOUT_MS` — the same kind of seam as `HUB_POLL_MS`, so
@@ -67,7 +67,7 @@ pub fn mem_timeout() -> Duration {
         .unwrap_or(DEFAULT_MEM_TIMEOUT)
 }
 
-/// What one `mem` call meant, once §4a's table has been applied to it.
+/// What one `mem` call meant, once the table above has been applied to it.
 #[derive(Debug, Clone)]
 pub enum Outcome {
     /// A document. Possibly one with an empty array in it — that is a result,
@@ -109,7 +109,7 @@ impl Outcome {
 pub struct Run {
     pub code: Option<i32>,
     pub stdout: Vec<u8>,
-    /// Plain text under `--json` too (§4a), so it is never parsed — only shown.
+    /// Plain text under `--json` too, so it is never parsed — only shown.
     pub stderr: String,
 }
 
@@ -156,17 +156,17 @@ pub struct MemCli {
     path: Option<OsString>,
     cache: Mutex<Cache>,
     ttl: Duration,
-    /// How long one child may take (review M-3).
+    /// How long one child may take.
     timeout: Duration,
     /// When mem may be tried again, after a child had to be killed.
     ///
     /// A timeout alone is not enough. One page render is `2P+2+Q` serialised
     /// calls, so a store that has stalled — a bisync window, a wedged mount, a
     /// machine resuming — would cost five seconds *each*, the render would
-    /// outlive the connection it is answering, and sixteen of those are M-2
-    /// again by another road. One kill therefore puts mem out of bounds for the
+    /// outlive the connection it is answering, and sixteen of those would
+    /// pile up connections the same way. One kill therefore puts mem out of bounds for the
     /// cache TTL: the calls behind it fail at once and the page renders
-    /// degraded, which is what §4a's last row is for.
+    /// degraded, which is what the "mem is broken" outcome is for.
     unavailable_until: Mutex<Option<Instant>>,
 }
 
@@ -300,7 +300,7 @@ impl MemCli {
     /// Drops every cached read. Called synchronously after a successful
     /// `mem answer`, **before** the redirect: without it the 5 s TTL leaves the
     /// answered question on screen, and a second tap writes a second answer
-    /// that mem accepts and the waiter never sees (review M-2).
+    /// that mem accepts and the waiter never sees.
     pub fn invalidate(&self) {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
@@ -440,13 +440,13 @@ impl MemCli {
     }
 
     /// The one write hub makes. `--` first, so an answer beginning with a dash
-    /// is text rather than a flag mem rejects with exit 2 (review m-9).
+    /// is text rather than a flag mem rejects with exit 2.
     pub fn answer(&self, id: &str, text: &str) -> Run {
         self.exec(&["answer", "--", id, text])
     }
 }
 
-/// §4a, in one place.
+/// The exit-code table from the module docs, in one place.
 fn classify(run: &Run) -> Outcome {
     let stdout = String::from_utf8_lossy(&run.stdout);
     let trimmed = stdout.trim();
@@ -457,7 +457,7 @@ fn classify(run: &Run) -> Outcome {
     if trimmed.is_empty() {
         // Never hand empty stdout to a JSON parser. On a zero exit this is a
         // verb with no document (`handoff --set`); on a non-zero one it is
-        // §4a's absent/unknown row. Both render the same.
+        // the absent/unknown row. Both render the same.
         return Outcome::Absent;
     }
     match serde_json::from_str::<Value>(trimmed) {

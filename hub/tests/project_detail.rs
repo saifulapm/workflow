@@ -1,5 +1,5 @@
 //! `GET /p/<project>/{roadmap,plan,plan/<slug>,item/<id>}` —
-//! the detail pages under a project's overview, read-only (m2-hub-pages).
+//! the detail pages under a project's overview, read-only.
 
 mod common;
 
@@ -64,7 +64,7 @@ fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     path
 }
 
-/// Ruling 1 and 4: `/roadmap` renders every milestone, uncut, the first open
+/// `/roadmap` renders every milestone, uncut, the first open
 /// one marked current.
 #[test]
 fn project_detail_roadmap_page_is_not_cut_where_the_overview_is() {
@@ -86,7 +86,7 @@ fn project_detail_roadmap_page_is_not_cut_where_the_overview_is() {
     );
 }
 
-/// Ruling 4: the plan of record's own page shows a ticked box.
+/// the plan of record's own page shows a ticked box.
 #[test]
 fn project_detail_plan_page_shows_a_ticked_box() {
     let world = World::new("detail-plan");
@@ -112,7 +112,7 @@ fn project_detail_plan_page_shows_a_ticked_box() {
     assert_eq!(reads, ["plan --project=proj-solo --json"]);
 }
 
-/// Ruling 1: `/plan/<slug>` is a stored plan, distinct from the plan of
+/// `/plan/<slug>` is a stored plan, distinct from the plan of
 /// record.
 #[test]
 fn project_detail_stored_plan_page_shows_its_own_text() {
@@ -129,7 +129,7 @@ fn project_detail_stored_plan_page_shows_its_own_text() {
     assert!(body.contains("A stored task"), "{body}");
 }
 
-/// Ruling 4: `/item/<id>` shows the item's whole body, not only its title.
+/// `/item/<id>` shows the item's whole body, not only its title.
 #[test]
 fn project_detail_item_page_shows_the_whole_body() {
     let world = World::new("detail-item");
@@ -150,7 +150,7 @@ fn project_detail_item_page_shows_the_whole_body() {
     );
 }
 
-/// Ruling 1: a bad kind, slug or id is a 404 before it reaches `mem`, on every
+/// a bad kind, slug or id is a 404 before it reaches `mem`, on every
 /// detail route and for a project mem does not know either.
 #[test]
 fn project_detail_routes_404_for_a_bad_kind_slug_id_or_project() {
@@ -186,7 +186,7 @@ fn project_detail_routes_404_for_a_bad_kind_slug_id_or_project() {
     assert_eq!(status_of(&hub.get(&format!("{good}/item/{id}"))), 200);
 }
 
-/// Ruling 2: mem being broken is a banner on the plan page, which still
+/// mem being broken is a banner on the plan page, which still
 /// renders, not an empty page that reads as "nothing here".
 #[test]
 fn project_detail_a_broken_mem_leaves_the_plan_page_degraded_rather_than_empty() {
@@ -208,9 +208,9 @@ fn project_detail_a_broken_mem_leaves_the_plan_page_degraded_rather_than_empty()
     assert!(body.contains("not JSON"), "{body}");
 }
 
-/// Ruling 2: the same holds for the two singleton detail reads, the stored
+/// The same holds for the two singleton detail reads, the stored
 /// plan and the item — a broken mem must not be mistaken for a slug or id
-/// mem simply does not have (review 1 of detail).
+/// mem simply does not have.
 #[test]
 fn project_detail_a_broken_mem_leaves_the_plan_slug_and_item_pages_degraded_rather_than_404() {
     let dir = TempDir::new("detail-degraded-singleton");

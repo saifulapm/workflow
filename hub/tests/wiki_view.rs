@@ -356,7 +356,7 @@ fn the_wiki_answers_get_and_nothing_else() {
     }
 }
 
-/// §4a again: mem being broken is a banner on a page that still renders, not a
+/// Mem being broken is a banner on a page that still renders, not a
 /// 500 and not an empty wiki that reads as "there are no pages".
 #[test]
 fn a_broken_mem_leaves_the_wiki_degraded_rather_than_empty() {

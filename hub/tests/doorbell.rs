@@ -1,4 +1,4 @@
-//! H6 — the doorbell (spec §5, AC2, AC5).
+//! The doorbell.
 //!
 //! `ntfy_base` never points at ntfy.sh in this file. Most tests put a fixture
 //! `curl` on PATH, which records the argv and the state of the seen file at the
@@ -49,7 +49,7 @@ impl World {
         let order_log = dir.join("order.log");
         let seen = home.join("state/hub/seen");
         // Records the argv, then whether the id being rung for was already
-        // durable — which is the ordering §5 is specific about.
+        // durable — which is the ordering that matters.
         fixture_bin(
             &bin,
             "curl",
@@ -128,7 +128,7 @@ impl World {
     /// any, and one whole round after it, so whatever the queue held at the
     /// call has been seen and judged. This used to be a fixed sleep, and under
     /// suite load the seeding round outlasted it: a question asked after the
-    /// sleep was swallowed as backlog and never rang (friction #VDVH24X0).
+    /// sleep was swallowed as backlog and never rang.
     fn settle(&self) {
         let before = self.polls();
         wait_for("the doorbell to go round", Duration::from_secs(15), || {
@@ -139,7 +139,7 @@ impl World {
     /// Waits for the first ring to be whole. The fixture curl writes the
     /// record marker first and the order line last, so a non-empty curl log
     /// can still be missing the argv and the order log; a test that read them
-    /// then failed under suite load (friction #7TDNHHMV).
+    /// then failed under suite load.
     fn wait_for_ring(&self) {
         wait_for("the doorbell to ring", Duration::from_secs(15), || {
             std::fs::metadata(&self.order_log).is_ok_and(|m| m.len() > 0)
@@ -181,7 +181,7 @@ fn the_ring_carries_no_question_text_and_never_touches_a_shell() {
     let rings = world.rings();
     assert_eq!(rings.len(), 1, "{rings:?}");
     let argv = &rings[0];
-    // §5's own command line, argument for argument.
+    // The documented command line, argument for argument.
     assert_eq!(argv[0], "-fsS");
     assert_eq!(argv[1], "-m");
     assert_eq!(argv[2], "10");
@@ -381,11 +381,11 @@ fn a_state_directory_that_cannot_be_written_does_not_become_a_ring_every_poll() 
     assert_eq!(status_of(&hub.get("/")), 200, "and the page still renders");
 }
 
-/// review M-1: one empty-stdout poll at first start used to throw the seeding
+/// One empty-stdout poll at first start used to throw the seeding
 /// guard away and ring for the whole backlog.
 ///
 /// The gate was `outcome.broken()`, which is `None` for `Outcome::Absent`, so
-/// §4a's "exit non-zero, empty stdout" row fell straight through it: the loop
+/// an "exit non-zero, empty stdout" answer fell straight through it: the loop
 /// over no rows did nothing and `seeding` was cleared anyway, and the next poll
 /// treated every already-pending question as new. On the live machine that
 /// first round wrote eleven ids — eleven push notifications to a public broker,

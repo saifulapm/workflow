@@ -1,4 +1,4 @@
-//! A plan page in the hub (h1-plan-pages, h4-designed-plans): the shell and
+//! A plan page in the hub: the shell and
 //! its frame, the designed page with its pins, the comments and decisions it
 //! sends, an old html-plan page as text, and the approval it offers.
 
@@ -10,7 +10,7 @@ use common::{Hub, TempDir, body_of, header_of, real_mem, recording_mem, seed_pro
 
 const PROJECT: &str = "proj-plans";
 
-/// An html-plan page, the format h1-h3 were stored in. mem no longer takes
+/// An html-plan page, the older format plan pages were stored in. mem no longer takes
 /// one, so the tests plant it in the store the way those pages lie there.
 const PLAN_PAGE: &str = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n\
 <title>Demo Plan</title>\n<link rel=\"stylesheet\" href=\"htmlplan.css\">\n\

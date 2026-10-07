@@ -1,4 +1,4 @@
-//! H2 — §10 AC10's decoder cases, and the ones around them.
+//! The form decoder's cases, and the ones around them.
 //!
 //! Every line here is a way a free-text answer typed on a phone can come back
 //! wrong, and a wrong answer is one the orchestrator then acts on.
