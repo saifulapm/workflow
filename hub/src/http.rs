@@ -127,8 +127,6 @@ pub const MAX_CONNECTIONS: usize = 64;
 #[derive(Debug)]
 pub struct Request {
     pub method: String,
-    /// The raw request target, query string and all.
-    pub target: String,
     /// The path, percent-decoded, without the query.
     pub path: String,
     pub query: Form,
@@ -452,7 +450,6 @@ fn read_request(
 
     let request = Request {
         method: method.to_string(),
-        target: target.to_string(),
         path,
         query: Form::parse(raw_query),
         headers,

@@ -42,14 +42,6 @@ impl Form {
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
     }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.pairs.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pairs.is_empty()
-    }
 }
 
 /// Form decoding: `+` is a space, `%XX` is a byte, anything else is itself.

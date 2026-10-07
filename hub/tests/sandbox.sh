@@ -76,7 +76,7 @@ fi
 # A session started under the workflow carries these for its own task; the
 # seed would then write to that project, and its questions would be asked of
 # the orchestrator rather than the person the hub shows them to.
-unset MEM_PROJECT WORKFLOW_TASK GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+unset MEM_PROJECT GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 bin_of() {
 	local crate=$1 target=${CARGO_TARGET_DIR:-$root/$1/target}
@@ -148,10 +148,8 @@ mem roadmap --stdin >/dev/null <<'ROAD'
 # roadmap: beta
 
 - [ ] b1-box Recipes are stored and listed
-      Surface: web
       Show: a recipe added on the phone is listed on the laptop
 - [ ] b2-scale A recipe scales to any number of people  [after: b1-box]
-      Surface: web
       Show: a recipe for four, set to six, lists half again of every amount
 ROAD
 mem roadmap --status draft >/dev/null
@@ -167,8 +165,6 @@ mem plan b2-scale --stdin >/dev/null <<'PLAN'
 # plan: b2-scale
 
 - [ ] b2-t1 The first change
-      Files: src/b2-scale.rs
-      Verify: cargo test
 PLAN
 # Asked the way the plan skill asks it.
 mem ask --for human --options approve,changes --recommend approve 'Review the beta roadmap and its plan pages' >/dev/null
@@ -183,10 +179,8 @@ mem roadmap --stdin >/dev/null <<'ROAD'
 # roadmap: gamma
 
 - [x] g1-log Habits are logged from the phone
-      Surface: web
       Show: a habit ticked on the phone shows on the week view
 - [ ] g2-nag A missed habit nags once
-      Surface: web
       Show: a habit missed by nine is nagged at nine and never again that day
 ROAD
 mem roadmap --status approved >/dev/null
@@ -194,14 +188,8 @@ mem plan --stdin >/dev/null <<'PLAN'
 # plan: g2-nag
 
 - [x] g2-t1 Store when a habit is due
-      Files: src/due.rs
-      Verify: cargo test
 - [ ] g2-t2 Send the nag
-      Files: src/nag.rs
-      Verify: cargo test
 - [ ] g2-t3 Stop after one nag a day
-      Files: src/nag.rs
-      Verify: cargo test
 PLAN
 mem ask --for human --options 'nine,eight,ten' --recommend nine 'Which hour does the nag go out?' >/dev/null
 # An answer of one word longer than a phone's line, so the questions page
@@ -231,7 +219,6 @@ mem roadmap --stdin >/dev/null <<'ROAD'
 # roadmap: delta
 
 - [x] d1-rename Photos are renamed by date
-      Surface: cli
       Show: a folder of camera names becomes a folder of dates
 ROAD
 mem roadmap --status approved >/dev/null

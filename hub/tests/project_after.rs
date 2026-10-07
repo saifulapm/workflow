@@ -26,8 +26,8 @@ fn roadmap(show: Option<&str>) -> Value {
         "status": "approved",
         "text": format!(
             "# roadmap: kappa\n\n\
-             - [x] k1-log Habits are logged\n      Surface: web\n      Show: a habit is logged\n\
-             - [ ] k2-walk Habits are walked\n      Surface: web\n{show}\
+             - [x] k1-log Habits are logged\n      Show: a habit is logged\n\
+             - [ ] k2-walk Habits are walked\n{show}\
              - [ ] k3-later Later work\n      Show: something later\n"
         ),
     })

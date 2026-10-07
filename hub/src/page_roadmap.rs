@@ -15,9 +15,7 @@ pub struct MilestoneRow {
     pub slug: String,
     pub title: String,
     pub ticked: bool,
-    pub surface: Option<String>,
     pub show: Option<String>,
-    pub done: Option<String>,
 }
 
 pub fn get(ctx: &PageCtx) -> Response {
@@ -35,14 +33,10 @@ pub fn roadmap_rows(text: &str) -> Vec<MilestoneRow> {
         } else if let Some(rest) = line.strip_prefix("- [x] ").or(line.strip_prefix("- [X] ")) {
             (rest, true)
         } else {
-            if let Some(row) = rows.last_mut() {
-                if let Some(value) = line.strip_prefix("Surface:") {
-                    row.surface = Some(value.trim().to_string());
-                } else if let Some(value) = line.strip_prefix("Show:") {
-                    row.show = Some(value.trim().to_string());
-                } else if let Some(value) = line.strip_prefix("Done:") {
-                    row.done = Some(value.trim().to_string());
-                }
+            if let Some(row) = rows.last_mut()
+                && let Some(value) = line.strip_prefix("Show:")
+            {
+                row.show = Some(value.trim().to_string());
             }
             continue;
         };
@@ -60,9 +54,7 @@ pub fn roadmap_rows(text: &str) -> Vec<MilestoneRow> {
             slug: slug.to_string(),
             title: title.trim().to_string(),
             ticked,
-            surface: None,
             show: None,
-            done: None,
         });
     }
     rows
@@ -110,10 +102,8 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
             slug = esc(&row.slug),
             title = esc(&row.title),
         ));
-        for (label, value) in [("Show", &row.show), ("Done", &row.done)] {
-            if let Some(value) = value {
-                out.push_str(&format!("<p class=\"q\">{label}: {}</p>\n", esc(value)));
-            }
+        if let Some(show) = &row.show {
+            out.push_str(&format!("<p class=\"q\">Show: {}</p>\n", esc(show)));
         }
         if plans.contains(&row.slug) {
             out.push_str(&format!(

@@ -11,7 +11,7 @@ use common::{Hub, TempDir, body_of, fixture_mem, status_of};
 const PROJECTS_DOC: &str = r#"{"projects":[
 {"name":"alpha"},
 {"name":"bare"},
-{"name":"rho","has_brief":true,"has_research":true},
+{"name":"rho","has_research":true},
 {"name":"gamma","has_research":true,"has_research_summary":true},
 {"name":"sigma","has_research_summary":true,"has_spec":true},
 {"name":"beta","roadmap_status":"draft",

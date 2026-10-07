@@ -202,11 +202,6 @@ impl MemCli {
         self
     }
 
-    pub fn with_timeout(mut self, timeout: Duration) -> MemCli {
-        self.timeout = timeout;
-        self
-    }
-
     /// Runs `mem` with exactly these arguments. No shell, no interpolation,
     /// never at the same time as another one (see `gate`), and never for longer
     /// than `timeout` (see `unavailable_until`).

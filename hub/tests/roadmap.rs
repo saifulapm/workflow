@@ -11,11 +11,8 @@ use hub::page_roadmap::{MilestoneRow, roadmap_rows};
 const ROADMAP: &str = "# roadmap: beta
 
 - [x] b1-box Recipes are stored and listed
-      Surface: web
       Show: a recipe added on the phone is listed on the laptop
-      Done: the laptop lists the recipe within a minute
 - [ ] b2-scale A recipe scales to any number of people  [after: b1-box]
-      Surface: web
       Show: a recipe for four, set to six, lists half again of every amount
 - [ ] b3-share A recipe is shared by link
 ";
@@ -107,27 +104,21 @@ fn roadmap_rows_reads_each_milestone_and_its_indented_lines() {
                 slug: "b1-box".to_string(),
                 title: "Recipes are stored and listed".to_string(),
                 ticked: true,
-                surface: Some("web".to_string()),
                 show: Some("a recipe added on the phone is listed on the laptop".to_string()),
-                done: Some("the laptop lists the recipe within a minute".to_string()),
             },
             MilestoneRow {
                 slug: "b2-scale".to_string(),
                 title: "A recipe scales to any number of people".to_string(),
                 ticked: false,
-                surface: Some("web".to_string()),
                 show: Some(
                     "a recipe for four, set to six, lists half again of every amount".to_string()
                 ),
-                done: None,
             },
             MilestoneRow {
                 slug: "b3-share".to_string(),
                 title: "A recipe is shared by link".to_string(),
                 ticked: false,
-                surface: None,
                 show: None,
-                done: None,
             },
         ]
     );
@@ -144,7 +135,6 @@ fn roadmap_a_draft_shows_each_milestone_its_plan_and_both_forms() {
         "A recipe scales to any number of people<",
         "a recipe added on the phone is listed on the laptop",
         "a recipe for four, set to six, lists half again of every amount",
-        "the laptop lists the recipe within a minute",
         "href=\"/p/beta/plan/b1-box\"",
         "href=\"/p/beta/plan/b2-scale\"",
     ] {

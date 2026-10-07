@@ -26,7 +26,7 @@ fn row(name: &str, fields: Value) -> Value {
         "milestones_done": 0, "milestones_total": 0,
         "plan_slug": null, "plan_ticked": 0, "plan_total": 0,
         "last_activity": "2026-10-05T10:00:00Z",
-        "has_brief": true, "has_research": false,
+        "has_research": false,
         "has_research_summary": false, "has_spec": false,
     });
     for (key, value) in fields.as_object().unwrap() {

@@ -20,10 +20,6 @@ pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap and its plan
 /// How long `workflow go` may take: an `amx new` and a few mem reads.
 const GO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-pub fn get(ctx: &PageCtx) -> Response {
-    Response::html(page_shell("control", ctx.project, ""))
-}
-
 pub fn control_post(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
     let form = ctx.request.form();

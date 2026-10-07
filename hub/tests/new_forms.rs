@@ -141,7 +141,6 @@ fn render(world: &World, query: &str) -> (String, Vec<Vec<String>>) {
     app.mem = Arc::new(MemCli::with_path(&clean));
     let request = Request {
         method: "GET".to_string(),
-        target: format!("/p/{PROJECT}/new?{query}"),
         path: format!("/p/{PROJECT}/new"),
         query: Form::parse(query),
         headers: Vec::new(),
