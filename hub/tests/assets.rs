@@ -67,3 +67,17 @@ fn the_fonts_answer_a_frame_with_no_origin() {
         Some("*")
     );
 }
+
+#[test]
+fn the_comment_layer_is_served_as_javascript() {
+    // A designed plan page loads it from its sandboxed frame.
+    let (_dir, hub) = hub("assets-annotate");
+    let response = hub.get("/assets/annotate.js");
+    assert_eq!(status_of(&response), 200, "{response}");
+    assert!(
+        header_of(&response, "content-type")
+            .unwrap()
+            .starts_with("text/javascript")
+    );
+    assert!(body_of(&response).contains("plan-comment"));
+}

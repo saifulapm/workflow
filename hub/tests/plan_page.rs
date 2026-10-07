@@ -405,6 +405,12 @@ fn the_shell_sends_a_comment_only_on_a_live_tap() {
         "{body}"
     );
     assert!(!body.contains("plan-respond"), "{body}");
+    // A send without a live tap is refused back to the frame, so its box
+    // does not wait on "Sending…" for good.
+    assert!(
+        body.contains("reply(d, { ok: false, error: 'Tap send again.' })"),
+        "{body}"
+    );
 }
 
 #[test]

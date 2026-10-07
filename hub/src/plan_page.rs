@@ -127,15 +127,18 @@ if (!label) return;\
 label.textContent = n ? 'Approve the roadmap (' + n + ' not opened)' : 'Approve the roadmap';\
 line.textContent = n ? ' · ' + n + (n === 1 ? ' decision' : ' decisions') + ' not opened' : '';\
 }\
-function send(frame, d) {\
+function send(d) {\
 var fields = d.type === 'plan-comment' ? ['anchor', 'text', 'quote'] : ['name', 'value', 'label', 'was', 'question'];\
-var body = new URLSearchParams(), anchor = d.type === 'plan-comment' ? d.anchor : 'decision-' + d.name + '@' + d.value;\
+var body = new URLSearchParams();\
 fields.forEach(function (f) { body.set(f, String(d[f] == null ? '' : d[f])); });\
 if (d.queue) body.set('queue', '1');\
-function reply(m) { m.type = 'plan-sent'; m.anchor = anchor; frame.contentWindow.postMessage(m, '*'); }\
 fetch(base + (d.type === 'plan-comment' ? 'comment' : 'decision'), { method: 'POST', body: body, credentials: 'same-origin' })\
 .then(function (r) { return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t || r.status); }); })\
-.then(function (j) { reply({ ok: true, id: j.id }); }, function (e) { reply({ ok: false, error: e.message }); });\
+.then(function (j) { reply(d, { ok: true, id: j.id }); }, function (e) { reply(d, { ok: false, error: e.message }); });\
+}\
+function reply(d, m) {\
+m.type = 'plan-sent'; m.anchor = d.type === 'plan-comment' ? d.anchor : 'decision-' + d.name + '@' + d.value;\
+document.querySelector('iframe.plan').contentWindow.postMessage(m, '*');\
 }\
 addEventListener('message', function (e) {\
 var frame = document.querySelector('iframe.plan'), d = e.data;\
@@ -143,7 +146,10 @@ if (!frame || e.source !== frame.contentWindow || !d) return;\
 if (d.type === 'plan-ready') frame.contentWindow.postMessage({ type: 'plan-restore', state: get() }, '*');\
 else if (d.type === 'plan-draft') put(d.state);\
 else if (d.type === 'plan-state' && typeof d.unopened === 'number') unopened(d.unopened);\
-else if ((d.type === 'plan-comment' || d.type === 'plan-decision') && navigator.userActivation && navigator.userActivation.isActive) send(frame, d);\
+else if (d.type === 'plan-comment' || d.type === 'plan-decision') {\
+if (navigator.userActivation && navigator.userActivation.isActive) send(d);\
+else reply(d, { ok: false, error: 'Tap send again.' });\
+}\
 });\
 })();</script>\n";
 

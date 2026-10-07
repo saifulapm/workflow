@@ -1,5 +1,5 @@
-//! Maple Mono, the hub's one typeface, and its license, carried in the
-//! binary. A page read over the tailnet loads nothing from another host, and
+//! Maple Mono, the hub's one typeface, its license, and the comment layer a
+//! designed plan page loads, carried in the binary. A page read over the tailnet loads nothing from another host, and
 //! a release changes these bytes only with the binary, so they cache for a
 //! year. A plan page runs in a sandboxed frame with an opaque origin, and a
 //! font is a CORS fetch, so every asset answers any origin.
@@ -26,6 +26,10 @@ pub fn get(ctx: &PageCtx) -> Response {
         "/assets/maple-mono-400-italic.woff2" => (
             "font/woff2",
             include_bytes!("../assets/maple-mono-400-italic.woff2"),
+        ),
+        "/assets/annotate.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../assets/annotate.js"),
         ),
         "/assets/maple-mono-OFL.txt" => (
             "text/plain; charset=utf-8",
