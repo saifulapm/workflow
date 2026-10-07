@@ -1,4 +1,4 @@
-//! `workflow lint-msg` -- the three tiers of spec §3, over a commit message,
+//! `workflow lint-msg` -- the three tiers, over a commit message,
 //! a branch name or a PR body. The verb itself runs hygiene's message check,
 //! which reads these tiers through [`lint_text`].
 
@@ -21,8 +21,6 @@ const HARD: &[(&str, Hard)] = &[
     ),
     ("a Claude session URL", Hard::ClaudeUrl),
     ("a session URL trailer", Hard::SessionTrailer),
-    ("the shipflow name", Hard::Literal("shipflow")),
-    ("a focus:, gate: or track/ prefix", Hard::ProcessPrefix),
     ("a plan <slug>: or run <slug>: prefix", Hard::SlugPrefix),
     ("a robot or sparkle emoji", Hard::Emoji),
 ];
@@ -37,8 +35,6 @@ enum Hard {
     ClaudeUrl,
     /// `^[[:space:]]*session(-url)?:[[:space:]]*https?://`
     SessionTrailer,
-    /// `^[[:space:]]*(focus:|gate:|track/)`
-    ProcessPrefix,
     /// `^[[:space:]]*(plan|run) [a-z0-9][a-z0-9.-]*:`
     SlugPrefix,
     Emoji,
@@ -106,12 +102,6 @@ impl Hard {
                     None => false,
                 }
             }
-            Hard::ProcessPrefix => {
-                let head = skip_spaces(&lower);
-                head.starts_with("focus:")
-                    || head.starts_with("gate:")
-                    || head.starts_with("track/")
-            }
             Hard::SlugPrefix => {
                 let head = skip_spaces(&lower);
                 ["plan ", "run "].iter().any(|kw| {
@@ -151,7 +141,7 @@ const WARN: &[(&str, Warn)] = &[
 ///
 /// Only tells a substring can catch belong here: dash and quote characters,
 /// the vocabulary, the filler phrases. Shape-level tells (formulaic structure,
-/// vague attribution, sterile voice) are judgment and live in the work
+/// vague attribution, sterile voice) are judgment and live in the tdd
 /// skill, read where the text is written. Verbs are matched on their stem so
 /// every inflection hits; `landscape` and `underscore` are left out because
 /// screens have orientations and identifiers have underscores.
@@ -391,10 +381,6 @@ mod tests {
             concat!("Extract cart pricing\n\nGenerated", " with Claude Code"),
             concat!("See https://claude.ai", "/code for the rest"),
             "Session: https://claude.ai/s/018f2c7e-0000-7000-8000-000000000000",
-            "Port the last of shipflow across",
-            "focus: extract cart pricing",
-            "gate: tighten the pre-commit check",
-            "track/cart-pricing",
             "Extract cart pricing \u{1f916}",
             "Extract cart pricing ✨",
             "  Session-URL:   http://claude.com/s/x",

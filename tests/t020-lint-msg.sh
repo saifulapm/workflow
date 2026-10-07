@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# workflow lint-msg: the three tiers of spec §3, --string for branch names and
-# PR bodies, and clearing a warn term with a lint-exception ruling (AC4).
+# workflow lint-msg: the three tiers, --string for branch names and PR
+# bodies, and clearing a warn term with a lint-exception ruling.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -37,10 +37,6 @@ hard 'See https://claude.ai/code for the rest' 'a claude.ai/code link'
 hard 'Extract cart pricing
 
 Session: https://claude.ai/s/018f2c7e-0000-7000-8000-000000000000' 'a session URL'
-hard 'Port the last of shipflow across' 'the shipflow name'
-hard 'focus: extract cart pricing' 'a focus: subject prefix'
-hard 'gate: tighten the pre-commit check' 'a gate: subject prefix'
-hard 'track/cart-pricing' 'a track/ branch name'
 hard 'Extract cart pricing 🤖' 'a robot emoji'
 hard 'Extract cart pricing ✨' 'a sparkle emoji'
 hard 'plan m05-ui-kit: all nine tasks shipped' 'a plan <slug>: prefix'
@@ -122,7 +118,7 @@ Extract cart pricing into a service
 # Please enter the commit message for your changes. Lines starting
 # with '#' will be ignored, and an empty message aborts the commit.
 #
-# On branch track/cart-pricing
+# On branch cart-pricing
 # Changes to be committed:
 #	new file:   app/Services/Orchestration.php
 # ------------------------ >8 ------------------------
@@ -138,8 +134,8 @@ unlike "$OUT" 'warn' 'msgfile: nor do they raise warnings'
 
 run workflow lint-msg --string 'cart-pricing-v2'
 is "$RC" 0 '--string: an ordinary branch name passes'
-run workflow lint-msg --string 'gate:cart'
-is "$RC" 1 '--string: a gate: branch name fails'
+run workflow lint-msg --string 'cart-pricing-🤖'
+is "$RC" 1 '--string: a branch name with a robot emoji fails'
 run workflow lint-msg --string '## Summary
 
 Extracts cart pricing into a service.
