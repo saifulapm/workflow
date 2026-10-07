@@ -1,107 +1,95 @@
 ---
 name: dogfood
-description: Use when the engine starts you to use a milestone's real product along its Show path, judge each step on screen, and file every defect as a finding with evidence.
+description: Use as the dogfooder subagent, or when asked to dogfood a milestone. Use the real product along its Show path the way a person would, judge every step on screen, and file each defect in mem with evidence and the assertion a test should make.
 ---
 
 # dogfood
 
-You are the milestone's first user. The Show path is the milestone's `Show:`
-line, cut into numbered steps, one per action a user takes. Every step ends
-in a tick (seen working on the real surface) or a finding. A step you cannot
-drive is a finding of class `undriveable`; a tick is only what you saw.
+You are the milestone's first user. The orchestrator gives you numbered
+steps, one per action a person takes, plus the launch command and the
+project's `verify` wiki page when there is one. Every step ends in a tick
+(seen working on the real surface) or a finding. A tick is only what you
+saw.
 
-## 1. Launch
+Keep the walk short: launch within 2 minutes, aim for 5 to 8 minutes and 12
+steps, and stop at 15 minutes with what you have.
 
-The brief numbers the steps and carries the `verify` page's Launch, Doctor,
-Drive, Evidence and Cleanup sections and the playbook for the Surface. A
-section the playbook links to lives in the workflow project:
+## 1. Pick the surface
 
-    mem --project workflow wiki dogfood-playbooks#<name>
+Drive the product through the entry points a person uses, on a surface of
+its own. Never use your shortcuts.
 
-Launch the product as Launch says, then run Doctor. A project with no
-verify page is launched as its README says; keep what worked for step 4.
+- **Web app.** An isolated browser through `playwright-cli`, started from a
+  scratch directory (`cd "$(mktemp -d)"`) so its files never land in the
+  repo. Check at 390 px and 1280 px wide.
+- **CLI or TUI.** A tmux session of its own: `tmux new -d -s walk-<n>`, then
+  `send-keys` and `capture-pane -p`.
+- **The desktop shell.** A nested niri, as the `desktop` skill describes,
+  never the live session.
 
-A Doctor that fails is one finding on step 0 with its output, and the walk
-ends there; go on to step 5:
+Drive Saiful's live desktop only when he asked for it, or when the hub says
+he is away and the screen is unlocked:
 
-    mem finding add --milestone <slug> --step 0 "cannot launch: <what Doctor said>" --evidence doctor.txt
+    curl -s http://127.0.0.1:8787/api/presence   # "watching": false and "locked": false
 
-Done when Doctor passes, or the cannot-launch finding is filed.
+The `desktop` skill holds the tools and their rules (text before pixels,
+region screenshots, OCR before reading an image). Load it before the walk.
 
-## 2. Walk the Show path
+## 2. Launch
 
-A later walk takes only the steps the brief names, under their numbers on
-the whole Show path; the rest passed before.
+Launch the product the way `mem wiki verify#launch` (or the orchestrator's
+brief) says, then run one read-only check that it is worth driving: a page
+that loads, a `--help` that prints, a health URL. Build or start what is at
+`HEAD`, and check that the binary or bundle is newer than the last commit.
 
-Take each step as a user would, on the real surface, with the tool Drive
-names: the browser through `playwright-cli`, a terminal through a tmux pane,
-never a shortcut the user does not have. Then judge what the step shows and
-capture it:
+A product that does not start is one finding on step 0, with the output,
+and the walk ends there:
 
-    jev check "<what the step should show>"
-    playwright-cli screenshot --filename step-<n>.png
+    mem finding add --milestone <slug> --step 0 "cannot launch: <what it said>" --evidence launch.txt
 
-On a terminal surface, `jev pane <session> "<claim>"` judges the pane and
-`tmux capture-pane -p -t <session> > step-<n>.txt` is the capture. jev exit
-2 is a defect; exit 3 means look at the capture yourself. jev reads text
-only, so colour and layout are judged from the screenshot.
+## 3. Walk
 
-A mutation (a save, a send, a delete) is proven by a read-only second view:
-a reload, the list it should appear in, a query. The confirmation message
-alone proves nothing.
+Take each step as a person would, then judge what the step shows. Read text
+first: the page's accessibility snapshot, the pane, the console and network
+logs. `jev check "<claim>"` judges a page and `jev pane <session> "<claim>"`
+judges a terminal. jev exit 2 is a defect, and exit 3 means look yourself.
+jev cannot see colour or layout, so judge those from a region screenshot.
 
-Done when every step has a jev answer, a capture, and a tick or a defect
-noted against its number.
+Prove a mutation (a save, a send, a delete) with a read-only second view,
+such as a reload, the list it should appear in, or a query. A confirmation
+message alone proves nothing. Retry a step once when the walker itself
+failed (a stale ref, a page still compiling), and do not file that as a
+defect.
 
-## 3. File each defect
+Capture each step: `playwright-cli screenshot --filename step-<n>.png` (a
+region, not the full screen), or `tmux capture-pane -p > step-<n>.txt`.
 
-One finding per defect, with the capture that shows it:
+## 4. File each defect
 
-    mem finding add --milestone <slug> --step <n> "<what happened>; expected <what the Show path says>" --evidence step-<n>.png
+One finding per defect, filed before cleanup (mem copies the file in):
 
-A step you could not drive is filed the same way, its text starting
-`undriveable: ` and saying what stopped you.
+    mem finding add --milestone <slug> --step <n> "<what happened>; expected <what the step says>; a test should assert <the check>" --evidence step-<n>.png
 
-Done when every step without a tick has a finding with evidence.
+The "a test should assert" part lets the orchestrator write the red test.
+A step you could not drive is a finding too, starting `undriveable: `
+and saying what stopped you. Never file taste as a defect. Name it in your
+report instead.
 
-## 4. Map what you drove
+## 5. Map what worked
 
-Each feature you drove gets a section on `verify`: how to get to it, how you
-drove it, the gotchas you hit. An existing section is rewritten in place:
+Each feature you drove gets a section on the `verify` wiki page. A section
+says how to launch the product, how to reach the feature, how you drove it,
+and the gotchas you hit. Keeping it current lets the next walk start in
+seconds:
 
-    mem wiki verify#<feature> > section.md
-    mem wiki verify#<feature> --stdin --note "<feature>: <what changed>" < section.md
+    mem wiki verify > "$d/verify.md"     # $d from mktemp -d; add or edit sections
+    mem wiki verify --stdin --note "<feature>: <what changed>" < "$d/verify.md"
 
-A section write refuses a heading the page lacks, so a new feature goes in
-through the whole page: `mem wiki verify > verify.md`, add the `## <feature>`
-section, `mem wiki verify --stdin --note "<feature>: first driven" < verify.md`.
+## 6. Clean up and report
 
-A project with no verify page gets one here, written from what worked:
-Launch, Doctor, Drive, Evidence and Cleanup, then a section per feature.
-A wiki write refused off the runner machine is skipped; the findings and
-the report carry the walk.
+Stop what you started (the server, the tmux session, the browser), by the
+pid or name you kept. Then report to the orchestrator:
 
-Done when every feature on the Show path has a current section on `verify`,
-or the write was refused off the runner machine.
-
-## 5. Clean up
-
-Run Cleanup as the page says. mem copied each evidence file in when the
-finding was filed; confirm that copy survived:
-`mem finding list --open --json` shows a `file` on each of your findings.
-
-Done when Cleanup has run and every finding you filed lists its file.
-
-## 6. Report
-
-The last act is one of these, the failed step numbers after `failed`:
-
-    workflow report ready "pass"
-    workflow report ready "failed <n> <n>"
-
-A failed step is one with a finding filed on it; a cannot-launch walk
-reports `failed 0`. The engine reads this line, logs the walk and closes the
-findings a later walk sees fixed.
-
-Done when the report is sent and every step it names failed has an open
-finding.
+- `pass`, or `failed <n> <n>` with each failed step's finding id
+- the walk's minutes and the steps taken
+- anything that looked wrong but is taste, for Saiful to judge

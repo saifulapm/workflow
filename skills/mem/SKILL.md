@@ -14,7 +14,8 @@ in a project repo or CLAUDE.md.
     mem search "<query>"   # older than the context carries; a page hit is a
                            # wiki:<slug>#<section> row with two lines of text
     mem show <id>          # the item behind a search line
-    mem roadmap            # the milestones; `roadmap` runs them
+    mem roadmap            # the milestones, ticked as they land
+    mem plan <slug>        # a milestone's plan page (html-plan)
 
 A hook runs `mem context` at session start; a staleness line at the top
 means the sync unit is behind, so say so before trusting it.
@@ -63,16 +64,16 @@ was right: it is how Saiful overturns you cheaply.
 **Session end with work unfinished** → `mem handoff --set "<state and the next
 action>"`, the action as a runnable command.
 
-**A stop condition** → a question, on the right channel. Interactive sessions
-ask in the conversation. An orchestrated worker asks `mem ask "<question>"`,
-which is the orchestrator's to answer, and the next attempt opens with the
-answer. A background session outside a run uses its own question tool while
-the machine is watched (hub `/api/presence`), else `mem ask`, which reaches
-the phone without waiting. Never resolve your own stop condition.
+**A stop condition** → a question, on the right channel. An interactive
+session asks in the conversation. A subagent reports the stop to the
+orchestrator that sent it. An orchestrator asks Saiful with `mem ask --for
+human "<question>" --options "<a>,<b>" --recommend "<a>"`, which reaches the
+hub and the phone without waiting, and keeps working on what does not depend
+on the answer. Never resolve your own stop condition.
 
-**The workflow itself got in the way** → `mem save --project workflow
---type friction "friction: <what bit you - where - expected>"`. File it,
-move on.
+**The workflow itself got in the way** → a lesson on the workflow
+project's `lessons` page (`mem --project workflow wiki lessons`): what
+happened, the rule, how to apply it. Every orchestrator reads that page.
 
 **Who decided what** → `mem decide "<what and why>" --by saiful|agent`,
 with `--replaces "<the old decision>"` when it overturns one.
@@ -108,6 +109,6 @@ a memory that records everything is one nobody reads.
 
 ## Waiting
 
-Only an orchestrator waits: `mem questions --wait <id> --timeout 5m`, where
-exit 4 is a timeout. Any machine answers: `mem answer <id> "<text>"`.
-`mem questions --pending --for orchestrator` is what a run's workers wait on.
+Nobody waits idle. `mem questions` lists what is open, and `mem questions
+--wait <id> --timeout 5m` waits for one answer (exit 4 is a timeout). Any
+machine answers: `mem answer <id> "<text>"`, or the hub.
