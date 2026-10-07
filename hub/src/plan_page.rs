@@ -8,8 +8,10 @@
 
 use crate::html::{detail_head, esc, project_url};
 use crate::http::Response;
+use crate::memcli::Outcome;
 use crate::model;
 use crate::page_control::{failed, pending_approval};
+use crate::page_roadmap::roadmap_rows;
 use crate::pages::PageCtx;
 
 /// The html-plan runtime, one copy, in the plan skill. The hub serves its own
@@ -92,6 +94,7 @@ pub fn get(ctx: &PageCtx) -> Response {
             } else if ctx.request.query.get("saved").is_some() {
                 banner = "<p class=\"banner ok\">Saved for the next planner.</p>\n".to_string();
             }
+            banner.push_str(&approval(ctx, project));
             Response::html(plan_shell(project, slug, text, &banner))
         }
         _ => {
@@ -99,6 +102,46 @@ pub fn get(ctx: &PageCtx) -> Response {
             ctx.app.project_page(path)
         }
     }
+}
+
+/// While the roadmap is a draft, its approval: what it covers, then the
+/// control route's Approve. The shell's script adds how many of this page's
+/// decisions were never opened, since a default kept unread is not agreement.
+fn approval(ctx: &PageCtx, project: &str) -> String {
+    let roadmap = ctx.app.mem.roadmap(project);
+    let Outcome::Json(doc) = &*roadmap else {
+        return String::new();
+    };
+    if doc["status"] != "draft" {
+        return String::new();
+    }
+    let milestones: Vec<String> = roadmap_rows(doc["text"].as_str().unwrap_or_default())
+        .into_iter()
+        .map(|row| row.slug)
+        .collect();
+    let pages = ctx
+        .app
+        .mem
+        .plan_list(project)
+        .rows("plans")
+        .iter()
+        .filter(|row| {
+            row["slug"]
+                .as_str()
+                .is_some_and(|slug| milestones.iter().any(|m| m == slug))
+        })
+        .count();
+    let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+    format!(
+        "<details class=\"approve\"><summary id=\"plan-approve\">Approve the roadmap</summary>\n\
+         <p>{} · {}<span id=\"plan-unopened\"></span></p>\n\
+         <form method=\"post\" action=\"{}\">\
+         <input type=\"hidden\" name=\"do\" value=\"approve\">\
+         <button type=\"submit\">Approve</button></form>\n</details>\n",
+        plural(milestones.len(), "milestone"),
+        plural(pages, "plan page"),
+        esc(&format!("{}/control", project_url(project))),
+    )
 }
 
 /// The page around the frame: the hub's header, the form a response is
@@ -130,11 +173,18 @@ try { store = localStorage; } catch (e) {}\
 function get() { try { return store.getItem(key); } catch (e) { return null; } }\
 function put(v) { try { v == null ? store.removeItem(key) : store.setItem(key, v); } catch (e) {} }\
 if (/[?&](sent|saved)=/.test(location.search)) put(null);\
+function unopened(n) {\
+var label = document.getElementById('plan-approve'), line = document.getElementById('plan-unopened');\
+if (!label) return;\
+label.textContent = n ? 'Approve the roadmap (' + n + ' not opened)' : 'Approve the roadmap';\
+line.textContent = n ? ' · ' + n + (n === 1 ? ' decision' : ' decisions') + ' not opened' : '';\
+}\
 addEventListener('message', function (e) {\
 var frame = document.querySelector('iframe.plan'), d = e.data;\
 if (!frame || e.source !== frame.contentWindow || !d) return;\
 if (d.type === 'plan-ready') frame.contentWindow.postMessage({ type: 'plan-restore', state: get() }, '*');\
 else if (d.type === 'plan-draft') put(d.state);\
+else if (d.type === 'plan-state' && typeof d.md === 'string') unopened((d.md.match(/not opened; default kept/g) || []).length);\
 else if (d.type === 'plan-respond' && typeof d.md === 'string') {\
 var form = document.getElementById('plan-respond'); form.md.value = d.md; form.submit();\
 }\
@@ -261,6 +311,7 @@ fn served_runtime() -> String {
 
 const SHELL_STYLE: &str = "<style>\
 body{max-width:none}\
+details.approve{margin:.5rem 0}details.approve summary{font-weight:600;cursor:pointer}\
 iframe.plan{display:block;width:100%;height:calc(100vh - 6rem);border:0;\
 border-top:1px solid #e3e3df}\
 </style>\n";

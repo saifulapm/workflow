@@ -302,3 +302,46 @@ fn a_response_keeps_plain_line_breaks() {
     assert_eq!(status_of(&response), 303, "{response}");
     assert_eq!(world.question(REVIEW)["answer"], "# Re\n\n- one");
 }
+
+fn set_roadmap(world: &World, status: &str) {
+    let roadmap = write(
+        &world.home,
+        "roadmap.md",
+        "# roadmap: plans\n\n- [ ] h1-demo First\n- [ ] h2-next Second  [after: h1-demo]\n",
+    );
+    world.run(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
+    world.run(&["roadmap", "--status", status]);
+}
+
+#[test]
+fn a_draft_roadmap_is_approved_from_its_plan_page() {
+    let world = World::new("plan-approve");
+    world.store_plan("h1-demo", PLAN_PAGE);
+    set_roadmap(&world, "draft");
+    let hub = world.hub();
+
+    let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
+    assert!(
+        body.contains(&format!("action=\"/p/{PROJECT}/control\"")),
+        "{body}"
+    );
+    assert!(
+        body.contains("<input type=\"hidden\" name=\"do\" value=\"approve\">"),
+        "{body}"
+    );
+    assert!(body.contains("2 milestones · 1 plan page"), "{body}");
+    // Counted from the response the frame reports, so Approve says how many
+    // decisions were never opened before it is pressed.
+    assert!(body.contains("not opened; default kept"), "{body}");
+}
+
+#[test]
+fn an_approved_roadmap_offers_no_approve() {
+    let world = World::new("plan-approved");
+    world.store_plan("h1-demo", PLAN_PAGE);
+    set_roadmap(&world, "approved");
+    let hub = world.hub();
+
+    let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
+    assert!(!body.contains("value=\"approve\""), "{body}");
+}
