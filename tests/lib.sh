@@ -125,21 +125,18 @@ t_init() {
 	[ -x "$MEM_BIN" ] && ln -sf "$MEM_BIN" "$T_TMP/bin/mem"
 	export PATH="$T_TMP/bin:$PATH"
 	export WORKFLOW_MEM="$MEM_BIN"
-	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true
+	export MEM_SYNC_CMD=true
 	# amx is what `workflow go` starts agents with, and nothing in a sandbox may
 	# reach the machine's: a test that wants one points WORKFLOW_AMX at its own
 	# fake. A binary that is not there fails every amx call rather than
 	# touching somebody's real agent.
 	export WORKFLOW_AMX="$T_TMP/bin/no-amx"
 
-	# WORKFLOW_TASK is set for a session running under the workflow, and mem
-	# reads it to tell whose question a question is: a sandbox that inherited
-	# it would see a task nobody named.
 	# PI_CODING_AGENT is pi's own marker, exported to every child; the hooks
 	# read it beside WORKFLOW_AGENT (hook.rs agent_marked), so a suite run from
 	# inside pi would see every "human" commit as an agent's.
 	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_ALLOW_PUSH
-	unset WORKFLOW_TASK MEM_PROJECT
+	unset MEM_PROJECT
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
 
 	HOOKS="$WF_ROOT/hooks"

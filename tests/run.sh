@@ -19,9 +19,8 @@ pattern=${1:-}
 
 # Built every time, not only when it is missing: a stale binary next to changed
 # sources passes tests that the code it stands for would fail. CARGO_TARGET_DIR
-# is pinned here rather than left to whatever the caller's shell has: a session
-# running under the workflow already has one set for its own task, and that
-# value would otherwise carry the binary off to a path this suite never checks.
+# is pinned here rather than left to whatever the caller's shell has, which
+# would otherwise carry the binary off to a path this suite never checks.
 mem_bin=${MEM_BIN:-$root/mem/target/release/mem}
 if [ -z "${MEM_BIN:-}" ] || [ ! -x "$mem_bin" ]; then
 	printf 'building mem (tests need %s)\n' "$mem_bin"
@@ -94,7 +93,7 @@ for t in "${selected[@]}"; do
 		[ "$n_no" -eq 0 ] && failed=$((failed + 1))
 		failed_files+=("$name")
 		# Repeated in the tail summary: a red that scrolled away unnamed cannot
-		# be pinned afterwards (friction #BJVD1YCD).
+		# be pinned afterwards.
 		failed_checks+=$(printf '%s\n' "$out" | grep '^not ok ' | sed "s/^/$name: /")$'\n'
 	fi
 done
