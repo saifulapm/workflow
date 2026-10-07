@@ -25,11 +25,10 @@ fn hub(tag: &str) -> (TempDir, Hub) {
     (dir, hub)
 }
 
-const NAV: [&str; 9] = [
+const NAV: [&str; 8] = [
     "href=\"/\"",
     "href=\"/p/proj-pages\"",
     "href=\"/p/proj-pages/roadmap\"",
-    "href=\"/p/proj-pages/run\"",
     "href=\"/p/proj-pages/questions\"",
     "href=\"/p/proj-pages/evidence\"",
     "href=\"/p/proj-pages/wiki\"",
@@ -40,7 +39,7 @@ const NAV: [&str; 9] = [
 #[test]
 fn each_plain_page_answers_200_with_the_project_and_the_nav() {
     let (_dir, hub) = hub("routes-pages");
-    for page in ["run", "questions", "evidence", "wiki", "decisions", "new"] {
+    for page in ["questions", "evidence", "wiki", "decisions", "new"] {
         let response = hub.get(&format!("/p/{PROJECT}/{page}"));
         assert_eq!(status_of(&response), 200, "{page}: {response}");
         let body = body_of(&response);
@@ -54,16 +53,23 @@ fn each_plain_page_answers_200_with_the_project_and_the_nav() {
 #[test]
 fn a_page_of_an_unknown_project_is_404() {
     let (_dir, hub) = hub("routes-unknown");
-    for page in ["run", "questions", "evidence", "wiki", "decisions", "new"] {
+    for page in ["questions", "evidence", "wiki", "decisions", "new"] {
         let response = hub.get(&format!("/p/no-such-project/{page}"));
         assert_eq!(status_of(&response), 404, "{page}: {response}");
     }
 }
 
 #[test]
+fn there_is_no_run_page() {
+    let (_dir, hub) = hub("routes-no-run");
+    let response = hub.get(&format!("/p/{PROJECT}/run"));
+    assert_eq!(status_of(&response), 404, "{response}");
+}
+
+#[test]
 fn a_wrong_method_is_405_naming_the_right_one() {
     let (_dir, hub) = hub("routes-methods");
-    let response = hub.post_form(&format!("/p/{PROJECT}/run"), "");
+    let response = hub.post_form(&format!("/p/{PROJECT}/questions"), "");
     assert_eq!(status_of(&response), 405, "{response}");
     assert_eq!(header_of(&response, "Allow"), Some("GET"), "{response}");
 

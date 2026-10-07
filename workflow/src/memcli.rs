@@ -1,41 +1,39 @@
 //! Everything the workflow asks mem. Process state lives there and nowhere
-//! else, and the registry is never re-implemented here (spec §3).
+//! else, and the registry is never re-implemented here.
 //!
-//! A filtered read that matches nothing prints `{"items":[]}` and exits 1
-//! (mem spec §7), so the array is the answer and the exit code is not.
+//! A filtered read that matches nothing prints `{"items":[]}` and exits 1, so
+//! the array is the answer and the exit code is not.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-use crate::plan;
-
+/// The project a directory belongs to, as `mem project current --json` names
+/// it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Project {
     pub id: String,
     pub name: String,
+    /// The checkout the answer was read in; null when mem was told the project
+    /// by name from outside one.
     pub root: Option<String>,
-    #[serde(default)]
-    pub verify: Option<String>,
-    /// Globs this project wants a cold review of, whitespace separated, set
-    /// with `mem project set review-paths`. Absent means the global table is
-    /// the whole answer.
-    #[serde(default)]
-    pub review_paths: Option<String>,
-    /// Where a child project lives in its parent's checkout; absent on a
-    /// root project.
-    #[serde(default)]
-    pub subdir: Option<String>,
 }
 
-impl Project {
-    /// The project name as a single path component: it names directories under
-    /// the run and worktree roots.
-    pub fn dir_name(&self) -> String {
-        self.name.replace('/', "-")
-    }
+/// One project of `mem projects --json`: only what `go` reads of it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectRow {
+    pub name: String,
+    /// The paths of this project's checkouts on this machine.
+    #[serde(default)]
+    pub checkouts: Vec<String>,
+    #[serde(default)]
+    pub roadmap_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Projects {
+    projects: Vec<ProjectRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -55,29 +53,12 @@ pub fn bin() -> String {
     }
 }
 
-static CALLER_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-/// Pin every mem call to the directory the caller stood in. mem resolves a
-/// monorepo subdir to its child project by cwd, so a command that chdirs to
-/// the repo toplevel before asking mem would always get the root project:
-/// the wrong plan slot to read and tick, and the wrong name to record runs
-/// under.
-pub fn resolve_from_here() {
-    if let Ok(cwd) = std::env::current_dir() {
-        let _ = CALLER_DIR.set(cwd);
-    }
-}
-
-fn command() -> Command {
-    let mut c = Command::new(bin());
-    if let Some(dir) = CALLER_DIR.get() {
-        c.current_dir(dir);
-    }
-    c
-}
-
 fn capture(args: &[&str]) -> Option<(bool, String)> {
-    let out = command().args(args).stderr(Stdio::null()).output().ok()?;
+    let out = Command::new(bin())
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
     Some((
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).to_string(),
@@ -85,7 +66,7 @@ fn capture(args: &[&str]) -> Option<(bool, String)> {
 }
 
 fn silent(args: &[&str]) -> bool {
-    command()
+    Command::new(bin())
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -94,25 +75,9 @@ fn silent(args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-/// Who owns this checkout. Exit 1 there means unknown, which is a fine answer:
-/// the caller decides what to do without an identity.
-/// The project a git hook at `top` resolves to: the checkout's root project,
-/// with no `MEM_PROJECT` and no caller directory to pick a child.
-pub fn root_project_at(top: &Path) -> Option<Project> {
-    let out = Command::new(bin())
-        .args(["project", "current", "--json"])
-        .current_dir(top)
-        .env_remove("MEM_PROJECT")
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let p: Project = serde_json::from_slice(&out.stdout).ok()?;
-    if p.id.is_empty() { None } else { Some(p) }
-}
-
+/// The project mem files the working directory under. Exit 1 there means
+/// unknown, which is a fine answer: the caller decides what to do without an
+/// identity.
 pub fn project_current() -> Option<Project> {
     let (ok, out) = capture(&["project", "current", "--json"])?;
     if !ok {
@@ -122,13 +87,34 @@ pub fn project_current() -> Option<Project> {
     if p.id.is_empty() { None } else { Some(p) }
 }
 
-/// A choice this project declared with `mem project set <key>`: the worker
-/// backend, the workers' model.
+/// Every project of the store, `None` when mem cannot say.
+pub fn projects() -> Option<Vec<ProjectRow>> {
+    let (ok, out) = capture(&["projects", "--json"])?;
+    if !ok {
+        return None;
+    }
+    parse_projects(&out)
+}
+
+pub fn parse_projects(text: &str) -> Option<Vec<ProjectRow>> {
+    serde_json::from_str::<Projects>(text)
+        .ok()
+        .map(|p| p.projects)
+}
+
+/// A project's roadmap text, verbatim. `None` when mem cannot be run or
+/// refuses; a project with no roadmap prints nothing, which is an empty text.
+pub fn roadmap(project: &str) -> Option<String> {
+    let (ok, out) = capture(&["roadmap", "--project", project])?;
+    ok.then_some(out)
+}
+
+/// A choice this project declared with `mem project set <key>`.
 ///
 /// Read straight out of the document rather than modelled on [`Project`],
 /// which is how mem holds it: mem stores the choice and hands it to whoever
-/// dispatches the work, and nothing else in the workflow asks. `None` covers
-/// both an unregistered checkout and one that never chose.
+/// needs it. `None` covers both an unregistered checkout and one that never
+/// chose.
 pub fn project_choice(key: &str) -> Option<String> {
     let (ok, out) = capture(&["project", "current", "--json"])?;
     if !ok {
@@ -143,83 +129,30 @@ pub fn project_choice(key: &str) -> Option<String> {
 /// set hygiene-exempt`, split the way a Files line is.
 pub fn project_hygiene_exempt() -> Vec<String> {
     project_choice("hygiene_exempt")
-        .map(|globs| crate::ownership::split_patterns(&globs))
+        .map(|globs| split_patterns(&globs))
         .unwrap_or_default()
 }
 
-pub fn project_model() -> Option<String> {
-    project_choice("model")
-}
-
-/// The reasoning dial the project set for its workers, `mem project set
-/// effort`; absent is the CLI's own default.
-pub fn project_effort() -> Option<String> {
-    project_choice("effort")
-}
-
-/// A worker's question, as `mem questions --for orchestrator --json` reports
-/// it: the orchestrator's to answer, tagged with the task that asked.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Question {
-    pub id: String,
-    pub short_id: String,
-    pub title: String,
-    #[serde(default)]
-    pub body: String,
-    #[serde(default)]
-    pub task: Option<String>,
-    #[serde(default)]
-    pub answer: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Questions {
-    questions: Vec<Question>,
-}
-
-/// Every question the task tagged `<plan>/<task>` has asked the orchestrator,
-/// answered or not, newest first. The run reads this twice: to name what a
-/// blocked worker is waiting on, and to carry the answer into its next brief.
-/// A mem that could not answer -- a spawn that failed, output that will not
-/// parse -- is `None`, never an empty listing: a caller that reads mem's own
-/// trouble as "the task has no question" gives up on a question that is
-/// really there. The exit code is not the answer here (§7 above): a listing
-/// that matches nothing prints its array and exits 1.
-pub fn questions_for(tag: &str) -> Option<Vec<Question>> {
-    let (_, out) = capture(&["questions", "--for", "orchestrator", "--json"])?;
-    Some(
-        serde_json::from_str::<Questions>(&out)
-            .ok()?
-            .questions
-            .into_iter()
-            .filter(|q| q.task.as_deref() == Some(tag))
-            .collect(),
-    )
-}
-
-#[derive(Debug, Deserialize)]
-struct EvidenceItem {
-    id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct EvidenceList {
-    items: Vec<EvidenceItem>,
-}
-
-/// The ids of every evidence item filed under `task`, newest first. Ids, not
-/// dates: mem dates an item by the day, so only an id can tell an item filed
-/// after a dispatch from one filed before it. Empty when mem cannot answer,
-/// which the merge gate reads as no evidence.
-pub fn evidence_ids(task: &str) -> Vec<String> {
-    capture(&["evidence", "list", "--task", task, "--json"])
-        .and_then(|(_, out)| serde_json::from_str::<EvidenceList>(&out).ok())
-        .map(|l| l.items.into_iter().map(|i| i.id).collect())
-        .unwrap_or_default()
-}
-
-pub fn answer(id: &str, text: &str) -> bool {
-    silent(&["answer", id, text])
+/// Whitespace-separated globs, double quotes around one that contains a space.
+pub fn split_patterns(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    for c in line.chars() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_ascii_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 /// Does this directory belong to a project mem knows? The hook's half of the
@@ -228,21 +161,10 @@ pub fn knows_this_checkout() -> bool {
     silent(&["project", "current"])
 }
 
-fn rulings(rtype: Option<&str>, since: Option<&str>) -> Vec<Item> {
-    let mut args: Vec<String> = vec!["log".into(), "--kind".into(), "ruling".into()];
-    if let Some(rtype) = rtype {
-        args.push("--type".into());
-        args.push(rtype.into());
-    }
-    if let Some(s) = since {
-        args.push("--since".into());
-        args.push(s.into());
-    }
-    args.push("--limit".into());
-    args.push("100".into());
-    args.push("--json".into());
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let Some((_, out)) = capture(&refs) else {
+fn rulings(rtype: &str) -> Vec<Item> {
+    let Some((_, out)) = capture(&[
+        "log", "--kind", "ruling", "--type", rtype, "--limit", "100", "--json",
+    ]) else {
         return Vec::new();
     };
     serde_json::from_str::<Items>(&out)
@@ -250,15 +172,11 @@ fn rulings(rtype: Option<&str>, since: Option<&str>) -> Vec<Item> {
         .unwrap_or_default()
 }
 
-pub fn has_ruling(rtype: &str, since: Option<&str>) -> bool {
-    !rulings(Some(rtype), since).is_empty()
-}
-
 /// The bodies of every ruling of a type, run together. What a ruling *says* is
-/// what clears a named term or a named test.
+/// what clears a named term.
 pub fn ruling_bodies(rtype: &str) -> String {
     let mut body = String::new();
-    for item in rulings(Some(rtype), None) {
+    for item in rulings(rtype) {
         if let Ok(text) = std::fs::read_to_string(PathBuf::from(&item.path)) {
             body.push_str(&text);
             body.push('\n');
@@ -267,116 +185,50 @@ pub fn ruling_bodies(rtype: &str) -> String {
     body
 }
 
-/// Every ruling saved within `since` (a mem window: `90m`, `4h`), its own
-/// text without the record's fields. The reader at the merge gate is held to
-/// the plan's rulings; a ruling the orchestrator made after the plan was
-/// written is in none of them, and a reading that never saw one blocked a
-/// diff over ground already settled.
-pub fn rulings_since(since: &str) -> Vec<String> {
-    rulings(None, Some(since))
-        .into_iter()
-        .filter_map(|item| std::fs::read_to_string(&item.path).ok())
-        .map(|text| body_of(&text))
-        .filter(|body| !body.is_empty())
-        .collect()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// An item's own text, without the `+++` frontmatter mem writes above it: a
-/// prompt carries what was written, not the record's fields.
-fn body_of(text: &str) -> String {
-    match text
-        .strip_prefix("+++\n")
-        .and_then(|rest| rest.split_once("\n+++\n"))
-    {
-        Some((_, body)) => body.trim().to_string(),
-        None => text.trim().to_string(),
+    #[test]
+    fn a_trailing_newline_does_not_eat_the_last_pattern() {
+        let line = "apps/admin/src/** pnpm-lock.yaml apps/platform/test/storefront.test.ts\n";
+        assert_eq!(
+            split_patterns(line),
+            vec![
+                "apps/admin/src/**",
+                "pnpm-lock.yaml",
+                "apps/platform/test/storefront.test.ts"
+            ]
+        );
+        assert_eq!(split_patterns("a.rs\n\nb.rs\r\n"), vec!["a.rs", "b.rs"]);
     }
-}
 
-/// Every line the run itself writes, tagged so the digest can leave them out
-/// of the handful of recent logs it shows and `mem log --type run` can find
-/// them apart from what a worker or a person logged.
-pub fn log_run(text: &str) {
-    silent(&["log", "--type", "run", "--", text]);
-}
-
-/// A finding the reader marked `later`, or one the orchestrator accepted a
-/// merge over, kept as work for a later plan rather than lost with the
-/// reading: `mem save --type followup`.
-pub fn save_followup(text: &str) -> bool {
-    silent(&["save", "--type", "followup", "--", text])
-}
-
-pub fn plan_tick(task: &str) -> bool {
-    silent(&["plan", "--tick", task])
-}
-
-/// This machine as mem names it, so a claim the run writes is one mem's own
-/// runner check recognises as this machine's.
-pub fn machine() -> Option<String> {
-    project_choice("machine")
-}
-
-/// The machine that claimed this project to run it, and when it did.
-pub fn runner() -> Option<(String, String)> {
-    let machine = project_choice("runner")?;
-    Some((machine, project_choice("runner_since").unwrap_or_default()))
-}
-
-/// `mem project set runner`, which stamps the claim's start time with it.
-pub fn claim_runner(machine: &str) -> bool {
-    silent(&["project", "set", "runner", machine])
-}
-
-pub fn release_runner() -> bool {
-    silent(&["project", "unset", "runner"])
-}
-
-/// Whether the project logged a run line within the last hour: a run that
-/// is still going writes one as it starts, merges and ends.
-pub fn run_logged_lately() -> bool {
-    let Some((_, out)) = capture(&[
-        "log", "--kind", "log", "--type", "run", "--since", "1h", "--limit", "1", "--json",
-    ]) else {
-        return false;
-    };
-    serde_json::from_str::<Items>(&out).is_ok_and(|i| !i.items.is_empty())
-}
-
-/// Whether `slug` is a milestone the project's roadmap still has open. No
-/// roadmap, or one that does not name the slug, is no.
-pub fn roadmap_open(slug: &str) -> bool {
-    let Some((true, text)) = capture(&["roadmap"]) else {
-        return false;
-    };
-    // The parser complains on stderr about a text with no header, and a
-    // project with no roadmap prints nothing.
-    if text.trim().is_empty() {
-        return false;
+    #[test]
+    fn quotes_keep_a_pattern_with_a_space_whole() {
+        assert_eq!(
+            split_patterns("a/b \"one path/with space.php\" c"),
+            vec!["a/b", "one path/with space.php", "c"]
+        );
+        assert_eq!(
+            split_patterns("\"one file.rs\" two.rs\n"),
+            vec!["one file.rs", "two.rs"]
+        );
+        assert!(split_patterns("   ").is_empty());
     }
-    plan::parse(&text, false).is_some_and(|road| {
-        road.kind == plan::PlanKind::Roadmap
-            && road.tasks.iter().any(|t| t.id == slug && !t.checked)
-    })
-}
 
-/// This project's plan, as mem holds it.
-pub fn plan() -> Option<String> {
-    let (_, out) = capture(&["plan"])?;
-    if out.trim().is_empty() {
-        None
-    } else {
-        Some(out)
+    #[test]
+    fn the_projects_listing_reads_only_what_go_needs() {
+        let text = r#"{"projects":[
+            {"name":"alpha","checkouts":["/a","/b"],"roadmap_status":"approved","items":3},
+            {"name":"beta","checkouts":[],"roadmap_status":null}
+        ]}"#;
+        let rows = parse_projects(text).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "alpha");
+        assert_eq!(rows[0].checkouts, ["/a", "/b"]);
+        assert_eq!(rows[0].roadmap_status.as_deref(), Some("approved"));
+        assert!(rows[1].checkouts.is_empty());
+        assert_eq!(rows[1].roadmap_status, None);
+        assert!(parse_projects("not json").is_none());
     }
-}
-
-/// One wiki page, verbatim, read fresh off `mem wiki -- <slug>` -- mem's
-/// plan is read live the same way, so an edit to a page reaches the
-/// next dispatch. A `<slug>#<section>` reads that section alone, since mem
-/// takes the same address. `None` covers a project mem does not know and a
-/// project with no such page or section: the caller lists it as absent
-/// rather than refusing the dispatch over it.
-pub fn wiki_page(slug: &str) -> Option<String> {
-    let (ok, out) = capture(&["wiki", "--", slug])?;
-    ok.then_some(out)
 }

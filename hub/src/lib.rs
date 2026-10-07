@@ -25,7 +25,6 @@ pub mod page_new;
 pub mod page_project;
 pub mod page_questions;
 pub mod page_roadmap;
-pub mod page_run;
 pub mod page_wiki;
 pub mod pages;
 pub mod presence;

@@ -48,7 +48,7 @@ isnt() {
 # A here-string, not a pipe from printf: grep -q quits on the first match, and
 # under load a printf still writing behind it took SIGPIPE, which pipefail then
 # read as the check failing. That was one in two hundred checks going red on a
-# text that matched, only when the whole verify chain was running.
+# text that matched, only under load.
 like() {
 	if grep -Eq -- "$2" <<<"$1"; then ok "$3"; else notok "$3" "no match for /$2/ in:
 $1"; fi
@@ -126,33 +126,20 @@ t_init() {
 	export PATH="$T_TMP/bin:$PATH"
 	export WORKFLOW_MEM="$MEM_BIN"
 	export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true
-	# amx is the backend, and nothing in a sandbox may reach the machine's:
-	# a test that wants one points WORKFLOW_AMX at its own fake, and every
-	# other dispatch goes through the WORKFLOW_WORKER_CMD process seam. A
-	# binary that is not there fails every amx call, which reads as "no
-	# record" rather than as somebody's real agent.
+	# amx is what `workflow go` starts agents with, and nothing in a sandbox may
+	# reach the machine's: a test that wants one points WORKFLOW_AMX at its own
+	# fake. A binary that is not there fails every amx call rather than
+	# touching somebody's real agent.
 	export WORKFLOW_AMX="$T_TMP/bin/no-amx"
 
-	# WORKFLOW_SUITE_LOCK_HELD comes with it: running the suite through
-	# `workflow verify` exports the marker to say the parent holds this
-	# project's lock, and a sandbox that inherited it would skip a lock it
-	# does not hold -- which is what t012 exists to catch.
-	# WORKFLOW_MODEL goes too: a session running under the workflow has it set
-	# to whatever model it was dispatched on, and a test about who reads whose
-	# work would then be judging that model instead of the one it named.
-	# WORKFLOW_TASK and CARGO_TARGET_DIR go the same way: a session running
-	# under the workflow has both set for its own task, and a sandbox that
-	# inherited them would see a task nobody named and build into a directory
-	# nobody meant for it.
-	# PI_CODING_AGENT is pi's own marker, exported to every child; the gate reads
-	# it beside WORKFLOW_AGENT (hook.rs agent_marked), so a suite run from inside
-	# pi would see every "human" commit as an agent's.
-	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH WORKFLOW_SUITE_LOCK_HELD
-	unset WORKFLOW_MODEL WORKFLOW_TASK MEM_PROJECT CARGO_TARGET_DIR
-	unset WORKFLOW_HOME WORKFLOW_SITES
-	unset WORKFLOW_EFFORT WORKFLOW_WORKER_CMD WORKFLOW_MAX_WORKERS
-	unset WORKFLOW_DEADLINE_MIN WORKFLOW_GATE_MIN WORKFLOW_MAX_TURNS
-	unset WORKFLOW_QUESTION_MISSES
+	# WORKFLOW_TASK is set for a session running under the workflow, and mem
+	# reads it to tell whose question a question is: a sandbox that inherited
+	# it would see a task nobody named.
+	# PI_CODING_AGENT is pi's own marker, exported to every child; the hooks
+	# read it beside WORKFLOW_AGENT (hook.rs agent_marked), so a suite run from
+	# inside pi would see every "human" commit as an agent's.
+	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH
+	unset WORKFLOW_TASK MEM_PROJECT
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
 
 	HOOKS="$WF_ROOT/hooks"

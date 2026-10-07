@@ -1,8 +1,8 @@
-//! The command surface (spec §7 plus the three scripts §12b folded in).
+//! The command surface.
 //!
 //! `help`, no command at all and an unknown command are handled in
 //! [`crate::main`] rather than by clap, because their output and their exit
-//! codes are part of the contract the test suite reads.
+//! codes are part of the contract the tests read.
 
 use std::path::PathBuf;
 
@@ -12,7 +12,7 @@ use clap::{ArgGroup, Parser, Subcommand};
 #[command(
     name = "workflow",
     version,
-    about = "The verification gate and the interim orchestrator",
+    about = "Hygiene checks and the git hooks that run them",
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -22,22 +22,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Run this repo's suite over what is staged.
-    Verify {
-        /// The pre-commit path: the green cache and the opt-out ruling apply.
-        #[arg(long)]
-        hook: bool,
-        /// The merge gate's path: authoritative, nothing downgrades it.
-        #[arg(long)]
-        gate: bool,
-    },
-    /// Append one status line for the task this worktree belongs to.
-    Report {
-        /// One of started, progress, ready, blocked.
-        state: String,
-        /// What happened, in one line.
-        note: Option<String>,
-    },
     /// Check a commit message, a branch name or a PR body.
     #[command(name = "lint-msg")]
     LintMsg {
@@ -98,214 +82,48 @@ With no mode the whole tracked tree and the last 200 commits are read."
         #[arg(long)]
         fix: bool,
     },
-    /// Does this change set want a cold review?
-    #[command(name = "review-needed")]
-    ReviewNeeded {
-        /// Also consider what this range changed.
-        #[arg(long, value_name = "RANGE")]
-        diff: Option<String>,
-    },
-    /// Read a plan and report what the grammar made of it. Nothing is run.
+    /// Write the embedded skills, agents and hook stubs where they are read.
     #[command(
-        name = "plan-check",
-        long_about = "Read a plan and report what the grammar made of it. Nothing is run.
+        long_about = "Write the embedded skills, agents and hook stubs where they are read.
 
-This is how a plan is checked before anyone approves it: it parses the file,
-prints the plan id, the tasks and the waves they fall into, and touches
-nothing else. Run it from the project checkout and the plan is judged against
-the tree too: a Verify that cannot pass here is refused, and a Files line
-that does not look like it can hold its task is warned about. `workflow run`
-is the other thing -- it creates a worktree and a branch per task and
-dispatches the first wave for real."
+The binary carries the repository's skills/, agents/ and hooks/ directories.
+Each skill goes to ~/.claude/skills and ~/.agents/skills, each agent to
+~/.claude/agents, each hook stub to ~/.config/git/hooks with mode 0755. A
+symlink in the way is replaced by the file, never written through, and a file
+a shipped skill no longer has is deleted. The skill directories and amx roles
+older installs wrote that nothing ships now are removed; every other name in
+those directories is left alone. One line is printed per change."
     )]
-    PlanCheck {
-        file: PathBuf,
-        /// Print the parse as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Run a plan's tasks in worktrees. This dispatches real workers.
+    Install,
+    /// Start the orchestrator for a project's next milestone as an amx agent.
     #[command(
-        long_about = "Run a plan's tasks in worktrees. This dispatches real workers.
+        long_about = "Start the orchestrator for a project's next milestone as an amx agent.
 
-The run says at its start what it writes with and where each dial came
-from -- the environment, this plan's own record, the project key -- since a
-plan picked up again keeps the record it wrote when it began whatever the
-project keys say by then. The two flags here rewrite that record before the
-run reads it, so `--model opus` changes what a resumed run dispatches on, and
-keeps it for every later run of this plan. A dial amx would not start an
-agent on is refused here, before the first worker."
+The project is the argument, else the one the current directory belongs to.
+The milestone is --milestone, else the first unticked line of the project's
+roadmap; with none left it says the roadmap is done and exits 0. Without
+--milestone the roadmap's status must be approved. It refuses, exit 2, while
+another live amx agent of the project is running an orchestrator; the caller
+itself ($AMX_ID) does not count, so an orchestrator can start its successor.
+The agent is `amx new --name <project>-<milestone>` in the project's checkout,
+on the goal that milestone's landing is the proof of; a name amx has taken by
+an agent that ended gets a -2, -3, ... suffix. Prints the agent's name."
     )]
-    Run {
-        /// A plan file, instead of this project's plan in mem.
-        #[arg(long = "plan-file", value_name = "FILE")]
-        plan_file: Option<PathBuf>,
-        /// Record this as the model this plan's workers write with.
-        #[arg(long, value_name = "NAME")]
-        model: Option<String>,
-        /// Record this as the workers' reasoning level.
-        #[arg(long, value_name = "LEVEL")]
-        effort: Option<String>,
-    },
-    /// Run every roadmap on this machine, milestone after milestone.
-    #[command(
-        long_about = "Run every roadmap on this machine, milestone after milestone.
-
-Every few seconds serve looks at each project with a checkout here that this
-machine runs and whose roadmap is approved, running or in maintenance. A
-paused project starts nothing. A project with no run going gets its open
-milestone made mem's current plan, checked, and run by a child `workflow run`
-in its checkout; when every task lands, serve ticks the milestone, writes the
-status and handoff lines and counts the hygiene findings, and the next tick
-starts the next milestone. A run that stops short leaves the project waiting
-until its plan, an answer or a run-dir request changes. Every milestone ticked
-puts the roadmap in maintenance."
-    )]
-    Serve {
-        /// One tick over every project, then exit.
-        #[arg(long)]
-        once: bool,
-        /// Seconds between ticks; WORKFLOW_TICK_S, else 5.
-        #[arg(long, value_name = "SECONDS")]
-        tick: Option<f64>,
-    },
-    /// Label a task of the live run as waiting on its owner.
-    #[command(long_about = "Label a task of the live run as waiting on its owner.
-
-This writes <task>.parked with the reason in the live run's directory and
-logs a run line. The run already holds the task open on its question; the
-label tells serve to start no second lead for it, and serve removes it when
-the question is answered. With no run live there is nothing to label.")]
-    Park {
-        task: String,
-        /// Why the task waits, in one line.
-        reason: String,
-    },
-    /// Hold a project's runs: serve stops the live one and starts nothing.
-    Pause {
-        /// The project, by mem's name; the checkout's when omitted.
+    Go {
+        /// The project, by mem's name; the current directory's when omitted.
         project: Option<String>,
-    },
-    /// Let serve run a paused project again.
-    Resume {
-        /// The project, by mem's name; the checkout's when omitted.
-        project: Option<String>,
-    },
-    /// Ask the engine to walk a landed milestone's Show path again.
-    #[command(
-        long_about = "Ask the engine to walk a landed milestone's Show path again.
-
-This asks one question for the orchestrator, `dogfood <slug> at <commit> on
-<machine>`, and prints its id. The milestone is the one named, else the
-roadmap's last ticked one; the commit is the checkout's head; the machine is
-the project's dogfood-machine key, else this one. Serve on that machine walks
-the milestone and answers with the walk's result. The engine never pushes:
-a commit that is not on that machine is the owner's to push there."
-    )]
-    Dogfood {
-        /// The project, by mem's name; the checkout's when omitted.
-        project: Option<String>,
-        /// The milestone to walk; the roadmap's last ticked one when omitted.
+        /// The milestone to run, by slug; the roadmap's next open one when omitted.
         #[arg(long, value_name = "SLUG")]
         milestone: Option<String>,
-    },
-    /// A library's current documentation, through the Context7 CLI.
-    Docs {
-        /// The library, by the name its users know it.
-        library: String,
-        /// What about it, in a few words.
-        query: String,
-    },
-    /// Collect finished or stalled workers.
-    Reap,
-    /// Ask the live run to dispatch a failed task again.
-    #[command(long_about = "Ask the live run to dispatch a failed task again.
-
-A run holds its project's lock for its whole life, so a failed task used to
-wait for the run to end before anyone could act on it -- with the worker slot
-it freed sitting idle. This writes a marker in the live
-run's directory; the run picks it up on its next poll and dispatches the task
-again. A dispatched task is taken too: its session is stopped and the task
-goes again on the commits it already has, so a plan edit reaches it now
-rather than after a wasted attempt. --model names a model for this task's
-dispatches for the rest of the run. With no live run, just run the plan
-again -- a fresh run retries failed tasks by itself.")]
-    Redispatch {
-        task: String,
-        /// The model this task is dispatched with from here on.
-        #[arg(long)]
+        /// The model the orchestrator runs on.
+        #[arg(long, value_name = "NAME")]
         model: Option<String>,
-    },
-    /// Land a task the run failed, as it stands.
-    #[command(long_about = "Land a task the run failed, as it stands.
-
-With a run live this writes a marker in its directory and the run merges the
-task's branch on its next poll; with no run live it does that merge itself,
-off the last run's state -- a run ends in the same pass as the failure, so
-there is no window to hand a marker to. Either way ownership, the words, the
-rebase and the gate's own suite still stand. The other way out is to edit the
-plan and `workflow redispatch <task>`.")]
-    Accept { task: String },
-    /// Merge a task the gate failed again, as a worker's `ready` would.
-    #[command(
-        long_about = "Merge a task the gate failed again, as a worker's `ready` would.
-
-The gate runs a red suite twice before it fails a task, and a suite that is red
-only under load can be red both times. regate takes the task's branch through
-the whole merge again -- ownership, the words, the rebase and the suite --
-with no worker spent. With a run live it writes a marker the run honours
-on its next poll; with none it does the merge itself, off the last run's state."
-    )]
-    Regate { task: String },
-    /// Report this project's runs: task states, spend, lock liveness.
-    #[command(
-        long_about = "Report this project's runs: task states, spend, lock liveness.
-
-The run dir read out loud, and nothing touched: no dispatch, no cleanup, no
-state change. --json is the shape a session that owns a run polls."
-    )]
-    Status {
-        /// One line per task: id, state and age. No report, no reason.
+        /// How much reasoning effort it spends.
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
+        /// Print the amx command line instead of running it.
         #[arg(long)]
-        brief: bool,
-        /// Print the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Block until the live run needs the orchestrator, and say what for.
-    #[command(
-        long_about = "Block until the live run needs the orchestrator, and say what for.
-
-The run appends one line per event to its run dir -- a worker's question, a
-task failed for good, a merge, the end of the run -- and this waits on that
-file, printing each new line, and exits the moment there is something to act
-on. Exit 2: a question is pending (`mem questions --pending --for
-orchestrator`, then `mem answer`). Exit 1: a task failed and the run will not
-retry it by itself; `workflow status` says why. Exit 0: the run ended, or no
-run is live here. Exit 4: a merge, only under --merges. Exit 3: --timeout
-passed with nothing new. A cursor in the run dir remembers what was already
-reported, so calling this again after acting picks up where it left off.
-
-Call it in the foreground and act on the exit code; it returns 3 after the
-timeout (300 s unless --timeout says otherwise) with one line per live task,
-so a session is never held past what it can afford to miss."
-    )]
-    Wait {
-        /// Give up after this many seconds with exit 3. Bounded by default:
-        /// a session holding one call for half an hour cannot hear a
-        /// message queued behind it.
-        #[arg(long, value_name = "SECONDS", default_value_t = 300)]
-        timeout: u64,
-        /// Return on each merge too, with exit 4.
-        #[arg(long)]
-        merges: bool,
-    },
-    /// Check this machine's wiring.
-    Doctor {
-        /// Write the embedded hook stubs, roles and skills where they are
-        /// missing, differ or are a symlink.
-        #[arg(long)]
-        fix: bool,
+        dry_run: bool,
     },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
@@ -318,176 +136,28 @@ so a session is never held past what it can afford to miss."
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Print this binary's skills, or one of them whole.
-    #[command(long_about = "Print the skills this binary carries.
-
-With no name, one `<name> — <description>` line per skill, in name order: this
-is what `mem context` appends to a project's digest, so a session learns which
-skills exist where mem knows the project. With a name, that SKILL.md whole.
-
-The skills are embedded in the binary, and `doctor --fix` installs them as files
-where each harness looks for them. mem serves the mem skill the same way: `mem
-skill mem`.")]
-    Skill {
-        /// The skill to print whole. Omit to list them.
-        name: Option<String>,
-    },
-    // ------------------------------------------------------------- test seams
-    //
-    // Hidden, and the port's replacement for sourcing the bash with
-    // WORKFLOW_LIB=1: the ownership evaluator and the liveness rule are
-    // checked against written-down expectations rather than against
-    // themselves (AC12). The parser's seam is `plan-check`, which turned out
-    // to be the verb a planner wanted too, and is no longer hidden.
-    /// Print every record a task touched that its patterns do not claim.
-    #[command(name = "ownership", hide = true)]
-    Ownership {
-        #[arg(long, value_name = "DIR")]
-        repo: PathBuf,
-        #[arg(long, value_name = "SHA")]
-        base: String,
-        #[arg(long, value_name = "REF")]
-        branch: String,
-        patterns: Vec<String>,
-    },
-    /// Split a Files: line into patterns, one per line.
-    #[command(name = "split-patterns", hide = true)]
-    SplitPatterns { line: String },
-    /// Exit 0 when a task's three liveness signals are all older than the deadline.
-    #[command(name = "stalled", hide = true)]
-    Stalled {
-        #[arg(long, value_name = "DIR")]
-        rundir: PathBuf,
-        #[arg(long, value_name = "DIR")]
-        wtroot: PathBuf,
-        #[arg(long, value_name = "SECONDS")]
-        deadline: i64,
-        task: String,
-    },
 }
 
 pub const USAGE: &str = "\
 usage: workflow <command> [options]
 
-  verify [--hook|--gate]      run the repo's suite over what is staged
-      0 green · 1 failed · 2 no verifier · 3 test removal
-  docs <library> <query>      a library's current docs through Context7
-      0 printed · 1 nothing came
-  report <state> [<note>]     append one status line for this worktree's task
-      0 written · 2 not a state, or not a run worktree
-  lint-msg [<file>] [--string <text>]
-      0 clean (warnings included) · 1 hard fail
   hygiene [--staged [--known]|--tree|--history <n>|--message <file>
       |--string <s>|--would-create <path>] [--path <dir>] [--json] [--fix]
       agent files and process references; no mode reads the tree and the
       last 200 commits; --fix untracks ignore-list files and their lines;
       --would-create refuses a new agent file in a checkout mem knows
       0 clean or warned · 1 hard finding · 2 usage
-  review-needed [--diff <range>]
-      0 a cold review is wanted · 1 it is not
-  plan-check <file> [--json]
-      read a plan and report its tasks and waves; nothing is run
-      0 it holds · 1 the grammar or this checkout refused it · 2 no such file
-  run [--plan-file <f>] [--model <m>] [--effort <l>]
-      run a plan's tasks in worktrees; this dispatches real workers
-      the dials rewrite this plan's own record, which a resumed run prefers
-      to the project keys; the run says at its start which it took
-      0 every task complete · 1 failed tasks · 2 config or plan error
-  reap
-      0 nothing to do · 1 reaped something
-  serve [--once] [--tick <seconds>]
-      run every roadmap on this machine, milestone after milestone, one
-      child run per project; --once ticks once and exits
-      0 --once ticked · 2 another serve is live here
-  park <task> <reason>
-      label a task of the live run as waiting on its owner
-      0 parked · 2 no live run holds the task
-  pause [<project>] · resume [<project>]
-      hold a project's runs, or let serve run it again
-      0 done · 1 mem refused · 2 no project named or here
-  dogfood [<project>] [--milestone <slug>]
-      ask the engine to walk a landed milestone, the last ticked one unless
-      named, at the checkout's head on the project's dogfood-machine
-      0 asked, its #<id> printed · 1 mem refused · 2 no project, or no
-      ticked milestone
-  redispatch <task> [--model <name>]
-      ask the live run to dispatch a failed task again
-      0 the run was asked · 1 no live run holds that task failed, or its wave closed
-  accept <task>
-      land a task the run failed, as it stands
-      0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
-  regate <task>
-      merge a task the gate failed again: the suite, no worker
-      0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
-  status [--json]
-      report this project's runs: task states, spend, lock liveness
-      0 reported · 2 outside a project
-  doctor [--fix]
-      --fix writes the hook stubs, roles and skills where they are missing,
-      differ or are a symlink
-      0 healthy · 1 findings
+  lint-msg [<file>] [--string <text>]
+      0 clean (warnings included) · 1 hard fail
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's
-  skill [<name>]
-      the skills this binary carries, one `name — description` line each;
-      with a name, that SKILL.md whole
+  install
+      write the embedded skills, agents and hook stubs where they are read,
+      replacing symlinks with files and removing what older installs left
+      0 installed · 1 something could not be written or removed
+  go [<project>] [--milestone <slug>] [--model <m>] [--effort <l>] [--dry-run]
+      start the orchestrator for the project's next milestone as an amx agent
+      and print its name; --dry-run prints the amx command line instead
+      0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
+      the roadmap is not approved, or the project already has an orchestrator
 ";
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn serve_takes_once_and_a_tick_in_seconds() {
-        let cli = Cli::try_parse_from(["workflow", "serve", "--once", "--tick", "0.5"]).unwrap();
-        let Command::Serve { once, tick } = cli.command else {
-            panic!("not serve");
-        };
-        assert!(once);
-        assert_eq!(tick, Some(0.5));
-        assert!(USAGE.contains("\n  serve [--once] [--tick <seconds>]\n"));
-    }
-
-    #[test]
-    fn dogfood_takes_a_project_and_a_milestone() {
-        let cli = Cli::try_parse_from(["workflow", "dogfood", "app", "--milestone", "m1"]).unwrap();
-        let Command::Dogfood { project, milestone } = cli.command else {
-            panic!("not dogfood");
-        };
-        assert_eq!(project.as_deref(), Some("app"));
-        assert_eq!(milestone.as_deref(), Some("m1"));
-        assert!(USAGE.contains("\n  dogfood [<project>] [--milestone <slug>]\n"));
-    }
-
-    #[test]
-    fn read_advise_and_settings_merge_are_unknown_commands() {
-        for verb in ["read", "advise", "settings-merge"] {
-            let e = Cli::try_parse_from(["workflow", verb]).unwrap_err();
-            assert_eq!(
-                e.kind(),
-                clap::error::ErrorKind::InvalidSubcommand,
-                "{verb}"
-            );
-            assert!(!USAGE.contains(&format!("\n  {verb} ")), "{verb}");
-        }
-    }
-
-    #[test]
-    fn the_review_and_fix_flags_are_unknown() {
-        for argv in [
-            ["workflow", "run", "--review-model", "opus"],
-            ["workflow", "run", "--fix-model", "opus"],
-            ["workflow", "run", "--review-effort", "high"],
-            ["workflow", "redispatch", "t1", "--review-deadline"],
-        ] {
-            let e = Cli::try_parse_from(argv).unwrap_err();
-            assert_eq!(
-                e.kind(),
-                clap::error::ErrorKind::UnknownArgument,
-                "{argv:?}"
-            );
-            let flag = argv.iter().find(|a| a.starts_with("--")).unwrap();
-            assert!(!USAGE.contains(flag), "{argv:?}");
-        }
-    }
-}

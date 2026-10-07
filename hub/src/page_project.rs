@@ -4,8 +4,7 @@
 //! The front page follows the project's stage: a header with the stage, the
 //! runner and the progress, the Pause or Resume button, then what that stage
 //! is about. It costs at most five `mem` spawns: the projects list the route
-//! already read, then at most four reads for the body. A running project
-//! adds one `workflow status` in this machine's checkout.
+//! already read, then at most four reads for the body.
 
 use serde_json::Value;
 
@@ -18,7 +17,6 @@ use crate::page_evidence::{FindingRow, finding_rows, findings_section};
 use crate::page_home::{ProjectSummary, project_summaries};
 use crate::page_questions::question_rows;
 use crate::page_roadmap::{roadmap_body, roadmap_rows};
-use crate::page_run::{BOARD, engine_status};
 use crate::pages::{PageCtx, page_shell, sibling_hub};
 
 /// How many rulings a grilling project shows; the decisions page has them
@@ -38,17 +36,11 @@ pub fn get(ctx: &PageCtx) -> Response {
         return Response::not_found();
     };
     let mut body = stage_header(&summary, ctx);
-    // The engine is read only where Pause is offered: before the roadmap is
-    // approved no engine reads the key, so its stage would never agree.
     let running = matches!(summary.stage, "execution" | "dogfooding");
-    let engine = match (&summary.checkout, running) {
-        (Some(root), true) => Engine::Status(engine_status(root)),
-        _ => Engine::Unread,
-    };
     if summary.stage == "execution" {
-        body.push_str(&run_summary(ctx, project, &summary, &engine));
+        body.push_str(&run_summary(ctx, project));
     }
-    body.push_str(&controls(&summary, project, running, &engine));
+    body.push_str(&controls(&summary, project, running));
     body.push_str(&match summary.stage {
         "brief" => brief_body(ctx, project),
         "research" => research_body(ctx, project),
@@ -92,33 +84,10 @@ pub fn stage_header(s: &ProjectSummary, ctx: &PageCtx) -> String {
     format!("<p class=\"meta\">{}</p>\n", parts.join(" · "))
 }
 
-/// What this page knows of the engine: nothing when the project is not
-/// running or this machine has no checkout of it, else what `workflow
-/// status --json` printed, `None` when it gave no answer.
-pub enum Engine {
-    Unread,
-    Status(Option<Value>),
-}
-
-/// Under the header of a running project: the engine's stage word, the
-/// newest run's task counts by state, the dispatched tasks, the questions
-/// waiting on the owner, and links to the pages that hold them.
-pub fn run_summary(ctx: &PageCtx, project: &str, s: &ProjectSummary, engine: &Engine) -> String {
+/// Under the header of a running project: the questions waiting on the owner,
+/// and links to the pages that hold them.
+pub fn run_summary(ctx: &PageCtx, project: &str) -> String {
     let mut out = String::from("<h2>Run</h2>\n");
-    match (engine, &s.checkout) {
-        (Engine::Status(Some(status)), _) => out.push_str(&run_counts(status)),
-        (Engine::Status(None), Some(root)) => out.push_str(&format!(
-            "<p class=\"banner warn\">workflow status gave no answer in {}</p>\n",
-            esc(root)
-        )),
-        _ => out.push_str(&format!(
-            "<p class=\"empty\">No checkout of this project on this machine{}.</p>\n",
-            s.runner
-                .as_deref()
-                .map(|r| format!("; {} runs it", esc(r)))
-                .unwrap_or_default()
-        )),
-    }
 
     let questions = ctx.app.mem.read(&[
         "questions",
@@ -146,43 +115,15 @@ pub fn run_summary(ctx: &PageCtx, project: &str, s: &ProjectSummary, engine: &En
 
     let base = esc(&project_url(project));
     out.push_str(&format!(
-        "<p><a href=\"{base}/run\">run</a> · <a href=\"{base}/questions\">questions</a> · \
+        "<p><a href=\"{base}/questions\">questions</a> · \
          <a href=\"{base}/evidence\">evidence</a></p>\n"
     ));
     out
 }
 
-/// The stage word and the newest run's counts, then the ids of its
-/// dispatched tasks. Status lists runs oldest first.
-fn run_counts(status: &Value) -> String {
-    let mut parts = vec![esc(status["stage"].as_str().unwrap_or_default())];
-    let Some(run) = status["runs"].as_array().and_then(|runs| runs.last()) else {
-        parts.push("no run yet".to_string());
-        return format!("<p class=\"meta\">{}</p>\n", parts.join(" · "));
-    };
-    let tasks: Vec<&Value> = run["tasks"].as_array().into_iter().flatten().collect();
-    for state in BOARD {
-        let n = tasks.iter().filter(|t| t["state"] == state).count();
-        if n > 0 {
-            parts.push(format!("{n} {state}"));
-        }
-    }
-    let mut out = format!("<p class=\"meta\">{}</p>\n", parts.join(" · "));
-    let out_now: Vec<String> = tasks
-        .iter()
-        .filter(|t| t["state"] == "dispatched")
-        .map(|t| esc(t["id"].as_str().unwrap_or_default()))
-        .collect();
-    if !out_now.is_empty() {
-        out.push_str(&format!("<p>dispatched: {}</p>\n", out_now.join(", ")));
-    }
-    out
-}
-
-/// Pause on a running project, Resume on a paused one in any stage, and the
-/// line that shows until the engine's stage agrees with the key. Worked out
-/// from mem and the engine, so a reload or a second phone reads the same.
-pub fn controls(s: &ProjectSummary, project: &str, running: bool, engine: &Engine) -> String {
+/// Pause on a running project, Resume on a paused one in any stage. Worked out
+/// from mem, so a reload or a second phone reads the same.
+pub fn controls(s: &ProjectSummary, project: &str, running: bool) -> String {
     let paused = s.paused.is_some();
     if !paused && !running {
         return String::new();
@@ -192,36 +133,13 @@ pub fn controls(s: &ProjectSummary, project: &str, running: bool, engine: &Engin
     } else {
         ("pause", "Pause")
     };
-    let mut out = format!(
+    format!(
         "<form method=\"post\" action=\"{}/control\">\n\
          <input type=\"hidden\" name=\"do\" value=\"{verb}\">\n\
          <button type=\"submit\">{label}</button>\n\
          </form>\n",
         esc(&project_url(project))
-    );
-    let line = match engine {
-        Engine::Status(Some(status)) => {
-            let stopped = status["stage"] == "paused";
-            if paused && !stopped {
-                Some("pause sent, waiting for the engine".to_string())
-            } else if !paused && stopped {
-                Some("resume sent, waiting for the engine".to_string())
-            } else {
-                None
-            }
-        }
-        // With no checkout here the engine's stage cannot be read; serve's
-        // tick is fifteen minutes, so that is how long the key can wait.
-        Engine::Unread if paused && running && s.checkout.is_none() => Some(format!(
-            "pause sent; {}'s engine reads the key within fifteen minutes",
-            esc(s.runner.as_deref().unwrap_or("the runner"))
-        )),
-        _ => None,
-    };
-    if let Some(line) = line {
-        out.push_str(&format!("<p class=\"meta\">{line}</p>\n"));
-    }
-    out
+    )
 }
 
 /// The brief and the button that asks the engine for research, or the way

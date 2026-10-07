@@ -341,7 +341,7 @@ fn pause_sets_the_key_and_resume_clears_it() {
     assert_eq!(status_of(&response), 303, "{response}");
     assert_eq!(header_of(&response, "Location"), Some("/p/proj-alpha"));
     let paused = world.current()["paused"].as_str().unwrap().to_string();
-    // The words `workflow pause` writes: the machine, then the UTC date.
+    // The words the paused key holds: the machine, then the UTC date.
     let (machine, date) = paused.split_once(' ').unwrap();
     assert_eq!(machine, MACHINE);
     assert_eq!(date, &jiff::Timestamp::now().to_string()[..10]);

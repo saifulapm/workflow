@@ -11,7 +11,7 @@ use crate::http::{Request, Response};
 use crate::model;
 use crate::{
     page_control, page_decisions, page_evidence, page_home, page_new, page_project, page_questions,
-    page_roadmap, page_run, page_wiki,
+    page_roadmap, page_wiki,
 };
 
 /// What a page module is handed.
@@ -28,11 +28,10 @@ pub struct PageCtx<'a> {
 
 pub type Handler = fn(&PageCtx) -> Response;
 
-/// The seven pages under `/p/<project>/` the nav links to, after home and the
+/// The six pages under `/p/<project>/` the nav links to, after home and the
 /// project itself.
-pub const PAGES: [&str; 7] = [
+pub const PAGES: [&str; 6] = [
     "roadmap",
-    "run",
     "questions",
     "evidence",
     "wiki",
@@ -83,7 +82,6 @@ fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
     let (project, sub) = rest.split_once('/').unwrap_or((rest, ""));
     let (method, rest, handler): (&str, &str, Handler) = match sub {
         "roadmap" => ("GET", "", page_roadmap::get),
-        "run" => ("GET", "", page_run::get),
         "questions" => ("GET", "", page_questions::get),
         "evidence" => ("GET", "", page_evidence::get),
         "wiki" => ("GET", "", page_wiki::get),
@@ -120,7 +118,7 @@ pub fn page_shell(title: &str, project: Option<&str>, body: &str) -> String {
     out
 }
 
-/// Home, and with a project the project and its seven pages. One link per
+/// Home, and with a project the project and its six pages. One link per
 /// line, so the row wraps at 390 px rather than running off the side.
 fn nav(project: Option<&str>) -> String {
     let mut out = String::from("<nav class=\"pages\">\n<a href=\"/\">home</a>\n");

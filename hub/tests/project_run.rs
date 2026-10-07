@@ -1,7 +1,6 @@
-//! `GET /p/<project>` while a run is going: the engine's stage, the task
-//! counts, the dispatched tasks and the waiting questions under the header,
-//! the Pause and Resume forms, and the line that shows until the engine
-//! agrees with the key. Over a fake `mem` and a fake `workflow`.
+//! `GET /p/<project>` while a run is going: the waiting questions and the
+//! links under the header, and the Pause and Resume forms. Over a fake `mem`,
+//! with a fake `workflow` on the path that must never be called.
 
 mod common;
 
@@ -12,35 +11,6 @@ use common::{Hub, TempDir, body_of, fixture_bin, status_of, wait_for};
 use serde_json::{Value, json};
 
 const PROJECT: &str = "gamma";
-
-/// `workflow status --json` with the engine at `stage`: an older run first,
-/// the newest last, and in the newest two pending tasks and one of each
-/// other state.
-fn status_doc(stage: &str) -> Value {
-    let task = |id: &str, state: &str| {
-        json!({
-            "id": id, "state": state, "dispatches": 1, "session": "", "failed": "",
-            "last_status": "", "merged": "", "context": 0, "held": "",
-            "model": "", "minutes": 0,
-        })
-    };
-    json!({
-        "project": PROJECT, "stage": stage,
-        "milestone": {"slug": "g2-nag", "n": 2, "m": 3},
-        "parked": [], "findings": 0, "runner": "here", "paused": false,
-        "runs": [
-            {"plan": "g1-log", "live": false, "tasks": [task("g1-old", "merged")]},
-            {"plan": "g2-nag", "live": true, "tasks": [
-                task("g2-t1", "merged"),
-                task("g2-t2", "dispatched"),
-                task("g2-t3", "pending"),
-                task("g2-t4", "pending"),
-                task("g2-t5", "failed"),
-                task("g2-t6", "blocked"),
-            ]},
-        ],
-    })
-}
 
 /// Two questions waiting on the owner and one already answered.
 fn questions_doc() -> Value {
@@ -57,13 +27,11 @@ struct Row {
     /// The plan's tasks are all ticked, so the milestone waits on its walk.
     dogfooding: bool,
     paused: bool,
-    checkout: bool,
 }
 
 const RUNNING: Row = Row {
     dogfooding: false,
     paused: false,
-    checkout: true,
 };
 
 struct World {
@@ -72,18 +40,15 @@ struct World {
     bins: PathBuf,
     mem_log: PathBuf,
     workflow_log: PathBuf,
-    checkout: PathBuf,
 }
 
 /// A fake `mem` answering the page's reads, and the doorbell's poll of every
-/// project with no questions, and a fake `workflow` printing the status of
-/// an engine at `stage`. Each logs its argv, `workflow` with where it ran.
-fn world(tag: &str, row: Row, stage: &str) -> World {
+/// project with no questions, and a fake `workflow` that only logs the call.
+/// Each logs its argv, `workflow` with where it ran.
+fn world(tag: &str, row: Row) -> World {
     let dir = TempDir::new(tag);
     let home = dir.join("home");
     let bins = dir.join("bin");
-    let checkout = dir.join("checkout");
-    std::fs::create_dir_all(&checkout).unwrap();
     let mem_log = dir.join("mem.log");
     let workflow_log = dir.join("workflow.log");
     let ticked = if row.dogfooding { 3 } else { 1 };
@@ -92,7 +57,6 @@ fn world(tag: &str, row: Row, stage: &str) -> World {
         "milestone": "g2-nag", "plan_slug": "g2-nag",
         "milestones_done": 1, "milestones_total": 3,
         "plan_ticked": ticked, "plan_total": 3,
-        "checkouts": if row.checkout { vec![checkout.display().to_string()] } else { vec![] },
     });
     if row.paused {
         project["paused"] = json!("laptop 2026-10-05");
@@ -121,9 +85,8 @@ fn world(tag: &str, row: Row, stage: &str) -> World {
         &bins,
         "workflow",
         &format!(
-            "printf '%s %s\\n' \"$PWD\" \"$*\" >> '{log}'\nprintf '%s\\n' '{status}'",
+            "printf '%s %s\\n' \"$PWD\" \"$*\" >> '{log}'\nexit 1",
             log = workflow_log.display(),
-            status = status_doc(stage),
         ),
     );
     World {
@@ -132,7 +95,6 @@ fn world(tag: &str, row: Row, stage: &str) -> World {
         bins,
         mem_log,
         workflow_log,
-        checkout,
     }
 }
 
@@ -183,48 +145,35 @@ fn lines(path: &Path) -> Vec<String> {
 
 const PAUSE: &str = "<input type=\"hidden\" name=\"do\" value=\"pause\">";
 const RESUME: &str = "<input type=\"hidden\" name=\"do\" value=\"resume\">";
-const PAUSE_SENT: &str = "pause sent, waiting for the engine";
-const RESUME_SENT: &str = "resume sent, waiting for the engine";
 
 #[test]
-fn a_running_project_shows_the_engine_stage_counts_and_waiting_questions() {
-    let world = world("project-run-counts", RUNNING, "execution");
+fn a_running_project_shows_its_waiting_questions_and_links() {
+    let world = world("project-run-counts", RUNNING);
     let (body, mem) = page(&world);
 
     for part in [
         "execution",
-        "1 dispatched",
-        "2 pending",
-        "1 failed",
-        "1 blocked",
-        "1 merged",
-        "g2-t2",
         "2 questions",
-        "href=\"/p/gamma/run\"",
         "href=\"/p/gamma/questions\"",
         "href=\"/p/gamma/evidence\"",
     ] {
         assert!(body.contains(part), "{part:?} missing from {body}");
     }
     assert!(
-        !body.contains("g1-old"),
-        "an older run is not counted: {body}"
-    );
-    assert!(
-        !body.contains("2 merged"),
-        "an older run is not counted: {body}"
+        !body.contains("href=\"/p/gamma/run\""),
+        "there is no run page: {body}"
     );
     assert!(mem.len() <= 5, "mem spawns: {mem:?}");
-    assert_eq!(
-        lines(&world.workflow_log),
-        [format!("{} status --json", world.checkout.display())],
-        "one status read, in the checkout"
+    assert!(
+        lines(&world.workflow_log).is_empty(),
+        "the hub never runs workflow: {:?}",
+        lines(&world.workflow_log)
     );
 }
 
 #[test]
 fn a_running_project_has_a_pause_button() {
-    let world = world("project-run-pause", RUNNING, "execution");
+    let world = world("project-run-pause", RUNNING);
     let (body, _) = page(&world);
 
     assert!(
@@ -233,8 +182,6 @@ fn a_running_project_has_a_pause_button() {
     );
     assert!(body.contains(PAUSE), "{body}");
     assert!(!body.contains(RESUME), "{body}");
-    assert!(!body.contains(PAUSE_SENT), "{body}");
-    assert!(!body.contains(RESUME_SENT), "{body}");
 }
 
 #[test]
@@ -243,7 +190,7 @@ fn a_dogfooding_project_has_a_pause_button() {
         dogfooding: true,
         ..RUNNING
     };
-    let world = world("project-run-dogfood", row, "dogfood");
+    let world = world("project-run-dogfood", row);
     let (body, _) = page(&world);
 
     assert!(body.contains("dogfooding"), "{body}");
@@ -257,63 +204,9 @@ fn a_paused_project_has_resume_in_place_of_pause() {
         paused: true,
         ..RUNNING
     };
-    let world = world("project-run-resume", row, "paused");
+    let world = world("project-run-resume", row);
     let (body, _) = page(&world);
 
     assert!(body.contains(RESUME), "{body}");
     assert!(!body.contains(PAUSE), "{body}");
-}
-
-#[test]
-fn pause_waits_until_the_engine_stage_is_paused() {
-    let row = Row {
-        paused: true,
-        ..RUNNING
-    };
-    let sent = world("project-run-pause-sent", row, "execution");
-    let (body, _) = page(&sent);
-    assert!(body.contains(PAUSE_SENT), "{body}");
-    assert!(body.contains(RESUME), "{body}");
-
-    let row = Row {
-        paused: true,
-        ..RUNNING
-    };
-    let agreed = world("project-run-paused", row, "paused");
-    let (body, _) = page(&agreed);
-    assert!(!body.contains(PAUSE_SENT), "the engine agrees: {body}");
-}
-
-#[test]
-fn resume_waits_until_the_engine_stage_leaves_paused() {
-    let sent = world("project-run-resume-sent", RUNNING, "paused");
-    let (body, _) = page(&sent);
-    assert!(body.contains(RESUME_SENT), "{body}");
-    assert!(body.contains(PAUSE), "{body}");
-
-    let agreed = world("project-run-resumed", RUNNING, "execution");
-    let (body, _) = page(&agreed);
-    assert!(!body.contains(RESUME_SENT), "the engine agrees: {body}");
-}
-
-#[test]
-fn with_no_checkout_here_the_line_names_the_runner() {
-    let row = Row {
-        paused: true,
-        checkout: false,
-        ..RUNNING
-    };
-    let world = world("project-run-elsewhere", row, "execution");
-    let (body, mem) = page(&world);
-
-    assert!(
-        body.contains("pause sent; laptop's engine reads the key within fifteen minutes"),
-        "{body}"
-    );
-    assert!(body.contains(RESUME), "{body}");
-    assert!(mem.len() <= 5, "mem spawns: {mem:?}");
-    assert!(
-        lines(&world.workflow_log).is_empty(),
-        "no checkout, no workflow"
-    );
 }

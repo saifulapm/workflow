@@ -13,13 +13,9 @@ use mem::item::Kind;
 const P: &str = "01K2AAAAAAAAAAAAAAAAAAAAAA";
 
 fn sources(w: &World, staleness: Option<String>) -> (Index, Sources) {
-    sources_with_skills(w, staleness, String::new())
-}
-
-fn sources_with_skills(w: &World, staleness: Option<String>, skills: String) -> (Index, Sources) {
     let index = Index::open(&w.index_path(), Purpose::Read).unwrap();
     index.reindex(&w.store(), false).unwrap();
-    let s = Sources::gather(&index, &w.store(), Some(P), staleness, skills).unwrap();
+    let s = Sources::gather(&index, &w.store(), Some(P), staleness).unwrap();
     (index, s)
 }
 
@@ -524,9 +520,7 @@ fn context_on_an_unregistered_checkout_serves_global_and_exits_zero() {
     );
 }
 
-/// A skill is text in a binary now, not a file a harness discovered, and the
-/// digest is where a session learns which ones exist. mem serves its own and
-/// appends workflow's, because a skill belongs to the binary it is about.
+/// mem serves the one skill it owns, whole, and says what it does not serve.
 #[test]
 fn mem_serves_its_own_skill_and_refuses_the_rest() {
     let w = World::new("skills-verb");
@@ -542,85 +536,30 @@ fn mem_serves_its_own_skill_and_refuses_the_rest() {
     assert!(stdout(&out).starts_with("---\nname: mem"), "the whole file");
     assert!(stdout(&out).len() > 1000, "not just the description");
 
-    // route is workflow's, and saying so beats reporting a skill that exists.
     let out = mem(&w, &dir, &["skill", "route"]);
     assert_eq!(code(&out), 1);
     assert!(
-        common::stderr(&out).contains("workflow skill route"),
+        common::stderr(&out).contains("no skill 'route' here"),
         "{}",
         common::stderr(&out)
     );
 }
 
+/// A harness lists the skill files it finds, so the digest names none.
 #[test]
-fn the_digest_names_every_skill_and_how_to_open_one() {
+fn the_digest_does_not_list_skills() {
     let w = World::new("skills-section");
     w.project(P, "thing");
     let repo = w.plain_dir("cwd");
 
-    // A stand-in for the workflow on this machine: mem appends what it prints
-    // without parsing a byte of it.
-    let fake = w.dir.join("fake-workflow");
-    std::fs::write(
-        &fake,
-        "#!/bin/sh\nprintf 'route — pick the lane\\nplan — cut the tasks\\n'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-
-    let out = common::mem_env(
-        &w,
-        &repo,
-        &["context", "thing", "--full"],
-        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
-    );
-    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
-    let text = stdout(&out);
-    // Ownership, not just both verbs: the listing carries no owner marker, so
-    // the line has to say mem's verb serves mem alone (friction #NBQN1S4V).
-    // And a session read the listing as Skill-tool skills, so the line says
-    // they are shell commands (friction #RTSY09BG).
-    let line = "skills -- shell commands, not Skill-tool skills: read one before doing \
-what it covers with `mem skill mem` for mem's, `workflow skill <name>` for every other";
-    assert!(text.lines().any(|l| l == line), "{text}");
-    assert!(text.contains("mem — "), "mem names its own: {text}");
-    assert!(text.contains("route — pick the lane"), "verbatim: {text}");
-    assert!(text.contains("plan — cut the tasks"), "verbatim: {text}");
-    // The small digest names them and how to open one.
-    let text = stdout(&common::mem_env(
-        &w,
-        &repo,
-        &["context", "thing"],
-        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
-    ));
-    let small = "skills: mem, route, plan · mem skill <name> or workflow skill <name>";
-    assert!(text.lines().any(|l| l == small), "{text}");
-
-    // A workflow that exits nonzero costs its seven and nothing else.
-    std::fs::write(&fake, "#!/bin/sh\nexit 3\n").unwrap();
-    let text = stdout(&common::mem_env(
-        &w,
-        &repo,
-        &["context", "thing", "--full"],
-        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
-    ));
-    assert!(text.contains("mem — "), "{text}");
-    assert!(!text.contains("route — "), "{text}");
-    let text = stdout(&common::mem_env(
-        &w,
-        &repo,
-        &["context", "thing"],
-        &[("WORKFLOW_BIN", fake.to_str().unwrap())],
-    ));
-    assert!(
-        text.lines()
-            .any(|l| l == "skills: mem · mem skill <name> or workflow skill <name>"),
-        "{text}"
-    );
-
-    // And outside a project mem knows, none of it is said at all.
-    let out = mem(&w, &w.plain_dir("stranger"), &["context"]);
-    assert!(stdout(&out).is_empty(), "{}", stdout(&out));
+    for args in [
+        &["context", "thing", "--full"][..],
+        &["context", "thing"][..],
+    ] {
+        let text = stdout(&mem(&w, &repo, args));
+        assert!(!text.contains("skill"), "{args:?}: {text}");
+        assert!(!text.contains("mem — "), "{args:?}: {text}");
+    }
 }
 
 /// An item written at a fixed second, so the newest-first and oldest-first
@@ -654,11 +593,6 @@ const SMALL_ROADMAP: &str = "# roadmap: v2
 - [ ] m2-sections mem retrieves by section  [after: m1-clean]
 - [ ] m3-hub The hub shows the run
 ";
-
-const SKILLS: &str = "skills -- shell commands, not Skill-tool skills: read one\n\
-mem — Use at the start of a session\n\
-implement — Use when working through a plan\n\
-plan — Use to cut a task list\n";
 
 /// A project with every source the small digest reads, and more facts and
 /// logs than it has room for.
@@ -726,11 +660,7 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     populate_small(&w);
     let store = w.store();
 
-    let (_i, s) = sources_with_skills(
-        &w,
-        Some("! memory last synced 90 min ago".into()),
-        SKILLS.to_string(),
-    );
+    let (_i, s) = sources(&w, Some("! memory last synced 90 min ago".into()));
     let d = build_small(&s, &store);
 
     let status_date = s.status_date.clone().unwrap();
@@ -755,7 +685,6 @@ handoff ({handoff_date}): stopped mid migration
 ruling #{}  ruling 4
 ruling #{}  ruling 3
 ruling #{}  ruling 2
-skills: mem, implement, plan · mem skill <name> or workflow skill <name>
 wiki: 8 pages
   p0: page 0 in one line
   p1: page 1 in one line
@@ -809,18 +738,14 @@ fn a_small_digest_of_long_lines_stays_under_its_ceiling() {
         index.push_str(&format!("- [{slug}]({slug}.md) — {}\n", long("line")));
     }
     page(&w, "index", &index);
-    let mut skills = String::from("skills -- the instruction line\n");
-    for n in 0..11 {
-        skills.push_str(&format!("skill-number-{n} — {}\n", long("description")));
-    }
     std::fs::write(store.version_path(), b"99\n").unwrap();
 
-    let (_i, s) = sources_with_skills(&w, Some(long("! memory last synced")), skills);
+    let (_i, s) = sources(&w, Some(long("! memory last synced")));
     let d = build_small(&s, &store);
     for line in d.text.lines() {
         assert!(line.len() <= 120, "{} bytes: {line}", line.len());
     }
-    assert_eq!(d.text.lines().count(), 21, "{}", d.text);
+    assert_eq!(d.text.lines().count(), 20, "{}", d.text);
     assert!(d.text.len() < SMALL_CEILING, "{} bytes", d.text.len());
 }
 

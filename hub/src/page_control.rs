@@ -83,8 +83,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
         }
         _ => {
             let run = if verb == "pause" {
-                // The words `workflow pause` writes: this machine and the UTC
-                // date.
+                // The words the paused key holds: this machine and the UTC date.
                 let words = format!(
                     "{} {}",
                     ctx.app.machine,

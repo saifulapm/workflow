@@ -243,20 +243,6 @@ pub fn is_known_project(mem: &MemCli, name: &str) -> bool {
     project_names(&mem.projects()).iter().any(|p| p == name)
 }
 
-/// This machine's checkout of `name`, for the live-run read: the
-/// first entry of its `checkouts` row from `mem projects --json`. `None`
-/// when mem does not know the project or this machine has no checkout of it.
-pub fn checkout_of(mem: &MemCli, name: &str) -> Option<String> {
-    let outcome = mem.projects();
-    let rows = outcome.rows("projects");
-    let row = rows.iter().find(|p| p["name"].as_str() == Some(name))?;
-    row["checkouts"]
-        .as_array()?
-        .first()?
-        .as_str()
-        .map(str::to_string)
-}
-
 /// A `/p/<project>` singleton read — a stored plan's text or one item —
 /// present, absent, or degraded when mem itself is broken. The two
 /// are never collapsed into one `None`: an absent slug or id is a 404, a

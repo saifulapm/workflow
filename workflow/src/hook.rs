@@ -1,4 +1,4 @@
-//! `workflow hook <name>` -- the body of a git hook stub (spec §7, §12b).
+//! `workflow hook <name>` -- the body of a git hook stub.
 //!
 //! Five steps in this order. Two properties are load-bearing and were found the
 //! hard way:
@@ -11,33 +11,29 @@
 //!   * the hook never touches its own environment. git sets `GIT_DIR` and
 //!     `GIT_INDEX_FILE` for hooks, and a partial commit's staged view lives in
 //!     that temporary index; unsetting them blinds the staged-diff checks and
-//!     breaks whatever we chain into. Only the child test suite is scrubbed,
-//!     inside verify.
+//!     breaks whatever we chain into.
+//!
+//! Nothing here runs a project's tests: pre-commit reads the staged diff for
+//! hygiene and commit-msg reads the message, for humans and agents alike.
 
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 
 use crate::gitcmd::{self, Git};
-use crate::{exit, hygiene, memcli, paths, verify, warn};
+use crate::{exit, hygiene, memcli, paths, warn};
 
-/// Step 2, the fire condition: a location-sane union (review-4 B-2). An
-/// orchestrator worktree, or an agent standing in a checkout mem knows.
-/// The env markers are inherited by everything an agent starts, so the env
-/// branch alone would gate every scratch repo a test suite creates.
-fn fires(git: &Git) -> bool {
-    if let Some(top) = git.toplevel()
-        && paths::under_worktrees_root(&top)
-    {
-        return true;
-    }
+/// Step 2, the fire condition: an agent standing in a checkout mem knows. The
+/// env markers are inherited by everything an agent starts, so the env branch
+/// alone would gate every scratch repo a test suite creates.
+fn fires() -> bool {
     agent_marked() && memcli::knows_this_checkout()
 }
 
 /// Is an agent driving this commit? `WORKFLOW_AGENT` is ours, set by the Claude
-/// Code settings file and by the run's dispatch. `PI_CODING_AGENT` is pi's own,
-/// which pi exports to every process it starts: pi has no `env` key in its
-/// settings, so it is the only marker a hand-started pi session carries.
+/// Code settings file. `PI_CODING_AGENT` is pi's own, which pi exports to every
+/// process it starts: pi has no `env` key in its settings, so it is the only
+/// marker a hand-started pi session carries.
 pub fn agent_marked() -> bool {
     ["WORKFLOW_AGENT", "PI_CODING_AGENT"]
         .iter()
@@ -47,11 +43,7 @@ pub fn agent_marked() -> bool {
 /// Step 4, the check itself.
 fn check(name: &str, args: &[String]) -> i32 {
     match name {
-        "pre-commit" => match verify::cmd_verify(verify::Mode::Hook) {
-            exit::OK => words(name, args),
-            rc => rc,
-        },
-        "commit-msg" => words(name, args),
+        "pre-commit" | "commit-msg" => words(name, args),
         "pre-push" => {
             if std::env::var("WORKFLOW_ALLOW_PUSH").unwrap_or_default() == "1" {
                 exit::OK
@@ -68,8 +60,8 @@ fn check(name: &str, args: &[String]) -> i32 {
     }
 }
 
-/// The hygiene half of the check: the staged diff before the commit, the
-/// message after it is written. A human's commit gets only this half.
+/// The hygiene check: the staged diff before the commit, the message after it
+/// is written.
 fn words(name: &str, args: &[String]) -> i32 {
     let message = match (name, args.first()) {
         ("pre-commit", _) => None,
@@ -129,7 +121,7 @@ pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
     //    suite that commits in the repo being committed still races the outer
     //    index.
     let mut seen: Option<String> = None;
-    if fires(&git) {
+    if fires() {
         seen = Some(hd_key.clone());
         if std::env::var("WORKFLOW_HOOK_SEEN").unwrap_or_default() != hd_key {
             // 4.
@@ -139,9 +131,9 @@ pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
             }
         }
     } else if !agent_marked() && memcli::knows_this_checkout() {
-        // A human commit in a checkout mem knows: hygiene, no suite. This is
-        // the only path WORKFLOW_HYGIENE=skip reaches; the firing path is
-        // an agent's or a run worktree's, and nothing clears it there.
+        // A human commit in a checkout mem knows: hygiene. This is the only
+        // path WORKFLOW_HYGIENE=skip reaches; the firing path is an agent's,
+        // and nothing clears it there.
         if std::env::var("WORKFLOW_HYGIENE").unwrap_or_default() == "skip" {
             warn(format!(
                 "hook: {name}: hygiene skipped by WORKFLOW_HYGIENE=skip"
