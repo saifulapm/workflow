@@ -14,7 +14,7 @@ const PROJECTS_DOC: &str = r#"{"projects":[
 {"name":"rho","has_brief":true,"has_research":true},
 {"name":"gamma","has_research":true,"has_research_summary":true},
 {"name":"sigma","has_research_summary":true,"has_spec":true},
-{"name":"beta","roadmap_status":"draft","runner":"laptop","paused":"laptop 2026-10-04",
+{"name":"beta","roadmap_status":"draft","runner":"laptop",
  "milestones_done":0,"milestones_total":2,"plan_ticked":1,"plan_total":3},
 {"name":"exec","roadmap_status":"running","milestone":"e2","plan_slug":"e2",
  "milestones_done":1,"milestones_total":3,"plan_ticked":1,"plan_total":4}
@@ -211,7 +211,7 @@ fn a_planning_project_shows_its_milestones_and_the_approval_forms() {
 }
 
 #[test]
-fn the_header_shows_stage_runner_progress_and_paused() {
+fn the_header_shows_stage_runner_and_progress() {
     let world = World::new("project-page-header");
     let body = world.page("beta");
 
@@ -220,10 +220,10 @@ fn the_header_shows_stage_runner_progress_and_paused() {
         "<a href=\"http://laptop:8088\">laptop</a>",
         "milestone 1 of 2",
         "tasks 1 of 3",
-        "paused",
     ] {
         assert!(body.contains(part), "{part}: {body}");
     }
+    assert!(!body.contains("paused"), "{body}");
 }
 
 #[test]

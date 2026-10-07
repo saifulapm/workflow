@@ -123,10 +123,6 @@ impl World {
             .clone()
     }
 
-    fn current(&self) -> serde_json::Value {
-        serde_json::from_str(&self.mem(&["project", "current", "--json"])).unwrap()
-    }
-
     fn hub(&self) -> Hub {
         Hub::spawn(
             &self.home,
@@ -333,51 +329,11 @@ fn approve_off_the_runner_writes_nothing_and_links_the_runners_hub() {
 }
 
 #[test]
-fn pause_sets_the_key_and_resume_clears_it() {
-    let world = World::new("control-pause");
-    let hub = world.hub();
-
-    let response = world.post(&hub, "do=pause");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(header_of(&response, "Location"), Some("/p/proj-alpha"));
-    let paused = world.current()["paused"].as_str().unwrap().to_string();
-    // The words the paused key holds: the machine, then the UTC date.
-    let (machine, date) = paused.split_once(' ').unwrap();
-    assert_eq!(machine, MACHINE);
-    assert_eq!(date, &jiff::Timestamp::now().to_string()[..10]);
-    assert_eq!(
-        world.writes(),
-        vec![argv(&[
-            "project",
-            "set",
-            "--project=proj-alpha",
-            "paused",
-            "--",
-            &paused
-        ])]
-    );
-
-    let response = world.post(&hub, "do=resume");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(header_of(&response, "Location"), Some("/p/proj-alpha"));
-    assert_eq!(
-        world.writes()[1..],
-        [argv(&[
-            "project",
-            "unset",
-            "--project=proj-alpha",
-            "paused"
-        ])]
-    );
-    assert!(world.current().get("paused").is_none());
-}
-
-#[test]
 fn an_unknown_verb_is_a_bad_request() {
     let world = World::new("control-unknown");
     let hub = world.hub();
 
-    for body in ["do=run-next", ""] {
+    for body in ["do=run-next", "do=pause", "do=resume", ""] {
         let response = world.post(&hub, body);
         assert_eq!(status_of(&response), 400, "{body:?}: {response}");
     }

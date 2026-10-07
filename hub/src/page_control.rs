@@ -35,7 +35,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
     let form = ctx.request.form();
     let verb = form.get("do").unwrap_or("");
     let text = form.get("text").unwrap_or("").trim();
-    if !matches!(verb, "approve" | "changes" | "pause" | "resume" | "go") {
+    if !matches!(verb, "approve" | "changes" | "go") {
         return Response::text(400, "unknown control");
     }
     let roadmap = format!("{}/roadmap", project_url(project));
@@ -90,24 +90,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             }
             Response::see_other(&roadmap)
         }
-        "go" => go(ctx, project),
-        _ => {
-            let run = if verb == "pause" {
-                // The words the paused key holds: this machine and the UTC date.
-                let words = format!(
-                    "{} {}",
-                    ctx.app.machine,
-                    &jiff::Timestamp::now().to_string()[..10]
-                );
-                mem.write_through(&["project", "set", &flag, "paused", "--", &words])
-            } else {
-                mem.write_through(&["project", "unset", &flag, "paused"])
-            };
-            if !run.ok() {
-                return failed(&run);
-            }
-            Response::see_other(&project_url(project))
-        }
+        _ => go(ctx, project),
     }
 }
 

@@ -32,7 +32,6 @@ pub struct ProjectSummary {
     pub stage: &'static str,
     pub roadmap_status: Option<String>,
     pub runner: Option<String>,
-    pub paused: Option<String>,
     /// The open milestone's slug, while a roadmap has one.
     pub milestone: Option<String>,
     /// Milestones ticked on the roadmap, and in all.
@@ -68,7 +67,6 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
         stage: lifecycle_stage(row),
         roadmap_status: text(row, "roadmap_status"),
         runner: text(row, "runner"),
-        paused: text(row, "paused"),
         milestone: text(row, "milestone"),
         plan_slug: text(row, "plan_slug"),
         milestones: (
@@ -237,9 +235,6 @@ fn project_card(
         stage_pill(project.stage),
         project.stage
     );
-    if project.paused.is_some() {
-        pills.push_str("<span class=\"pill wait\">paused</span>");
-    }
     if waiting > 0 {
         let s = if waiting == 1 { "" } else { "s" };
         pills.push_str(&format!(

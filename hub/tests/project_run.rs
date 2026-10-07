@@ -1,5 +1,5 @@
 //! `GET /p/<project>` while a run is going: the waiting questions and the
-//! links under the header, and the Pause and Resume forms. Over a fake `mem`,
+//! links under the header, and no Pause or Resume form. Over a fake `mem`,
 //! with a fake `workflow` on the path that must never be called.
 
 mod common;
@@ -29,13 +29,9 @@ fn questions_doc() -> Value {
 struct Row {
     /// The plan's tasks are all ticked, so the milestone waits on its walk.
     dogfooding: bool,
-    paused: bool,
 }
 
-const RUNNING: Row = Row {
-    dogfooding: false,
-    paused: false,
-};
+const RUNNING: Row = Row { dogfooding: false };
 
 struct World {
     dir: TempDir,
@@ -55,15 +51,12 @@ fn world(tag: &str, row: Row) -> World {
     let mem_log = dir.join("mem.log");
     let workflow_log = dir.join("workflow.log");
     let ticked = if row.dogfooding { 3 } else { 1 };
-    let mut project = json!({
+    let project = json!({
         "name": PROJECT, "roadmap_status": "running", "runner": "laptop",
         "milestone": "g2-nag", "plan_slug": "g2-nag",
         "milestones_done": 1, "milestones_total": 3,
         "plan_ticked": ticked, "plan_total": 3,
     });
-    if row.paused {
-        project["paused"] = json!("laptop 2026-10-05");
-    }
     fixture_bin(
         &bins,
         "mem",
@@ -174,41 +167,11 @@ fn a_running_project_shows_its_waiting_questions_and_links() {
 }
 
 #[test]
-fn a_running_project_has_a_pause_button() {
-    let world = world("project-run-pause", RUNNING);
-    let (body, _) = page(&world);
-
-    assert!(
-        body.contains("<form method=\"post\" action=\"/p/gamma/control\">"),
-        "{body}"
-    );
-    assert!(body.contains(PAUSE), "{body}");
-    assert!(!body.contains(RESUME), "{body}");
-}
-
-#[test]
-fn a_dogfooding_project_has_a_pause_button() {
-    let row = Row {
-        dogfooding: true,
-        ..RUNNING
-    };
-    let world = world("project-run-dogfood", row);
-    let (body, _) = page(&world);
-
-    assert!(body.contains("dogfooding"), "{body}");
-    assert!(body.contains(PAUSE), "{body}");
-    assert!(!body.contains(RESUME), "{body}");
-}
-
-#[test]
-fn a_paused_project_has_resume_in_place_of_pause() {
-    let row = Row {
-        paused: true,
-        ..RUNNING
-    };
-    let world = world("project-run-resume", row);
-    let (body, _) = page(&world);
-
-    assert!(body.contains(RESUME), "{body}");
-    assert!(!body.contains(PAUSE), "{body}");
+fn neither_a_running_nor_a_dogfooding_project_has_a_pause_button() {
+    for row in [RUNNING, Row { dogfooding: true }] {
+        let world = world("project-run-pause", row);
+        let (body, _) = page(&world);
+        assert!(!body.contains(PAUSE), "{body}");
+        assert!(!body.contains(RESUME), "{body}");
+    }
 }

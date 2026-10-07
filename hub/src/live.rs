@@ -115,7 +115,6 @@ pub fn idle(s: &ProjectSummary, run: &Run, machine: &str) -> bool {
     let (done, total) = s.milestones;
     s.roadmap_status.as_deref() == Some("approved")
         && done < total
-        && s.paused.is_none()
         && s.runner.as_deref().is_none_or(|runner| runner == machine)
         && matches!(run, Run::Dead(_))
 }
@@ -235,7 +234,6 @@ mod tests {
             stage: "execution",
             roadmap_status: Some("approved".to_string()),
             runner: Some("macbook-m2".to_string()),
-            paused: None,
             milestone: Some("h3-hub-live".to_string()),
             milestones: (done, total),
             plan_slug: None,
@@ -332,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn only_approved_unfinished_local_unpaused_work_without_an_agent_stalls() {
+    fn only_approved_unfinished_local_work_without_an_agent_stalls() {
         let dead = Run::Dead(None);
         let me = "macbook-m2";
         assert!(!stalled(&summary(3, 3), &dead, "", me), "finished");
@@ -344,9 +342,6 @@ mod tests {
         assert!(!stalled(&summary(2, 3), &unknown, "", me), "amx unreadable");
         let live = orchestrator(&parse(LS).unwrap(), "workflow", "h3-hub-live");
         assert!(!stalled(&summary(2, 3), &live, "", me), "running");
-        let mut paused = summary(2, 3);
-        paused.paused = Some("macbook-m2 2026-10-08".to_string());
-        assert!(!stalled(&paused, &dead, "", me), "paused");
         let mut draft = summary(2, 3);
         draft.roadmap_status = Some("draft".to_string());
         assert!(!stalled(&draft, &dead, "", me), "not approved");

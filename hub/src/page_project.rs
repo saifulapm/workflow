@@ -2,8 +2,7 @@
 //! routes.
 //!
 //! The front page follows the project's stage: a header with the stage, the
-//! runner and the progress, the Pause or Resume button, then what that stage
-//! is about. It costs at most five `mem` spawns: the projects list the route
+//! runner and the progress, then what that stage is about. It costs at most five `mem` spawns: the projects list the route
 //! already read, then at most four reads for the body.
 
 use serde_json::Value;
@@ -47,7 +46,6 @@ pub fn get(ctx: &PageCtx) -> Response {
     if summary.stage == "execution" {
         body.push_str(&run_summary(ctx, project));
     }
-    body.push_str(&controls(&summary, project, running));
     // While a milestone is live. A draft roadmap is the planning body itself,
     // and a shipped project's page is its backlog, which already costs the
     // budget's last reads.
@@ -68,17 +66,14 @@ pub fn get(ctx: &PageCtx) -> Response {
     Response::html(page_shell(summary.stage, ctx.project, &body))
 }
 
-/// The stage, then `paused`, the runner, the open milestone's place and the
+/// The stage, then the runner, the open milestone's place and the
 /// current plan's ticks, as the front page lists them.
 pub fn stage_header(s: &ProjectSummary, ctx: &PageCtx) -> String {
-    let mut pills = format!(
+    let pills = format!(
         "<span class=\"{}\">{}</span>",
         stage_pill(s.stage),
         esc(s.stage)
     );
-    if s.paused.is_some() {
-        pills.push_str("<span class=\"pill wait\">paused</span>");
-    }
     let mut parts = Vec::new();
     if let Some(runner) = &s.runner {
         // Linked only when another machine runs it and this hub knows that
@@ -264,27 +259,6 @@ pub fn run_summary(ctx: &PageCtx, project: &str) -> String {
          <a href=\"{base}/evidence\">evidence</a></p>\n"
     ));
     out
-}
-
-/// Pause on a running project, Resume on a paused one in any stage. Worked out
-/// from mem, so a reload or a second phone reads the same.
-pub fn controls(s: &ProjectSummary, project: &str, running: bool) -> String {
-    let paused = s.paused.is_some();
-    if !paused && !running {
-        return String::new();
-    }
-    let (verb, label) = if paused {
-        ("resume", "Resume")
-    } else {
-        ("pause", "Pause")
-    };
-    format!(
-        "<form method=\"post\" action=\"{}/control\">\n\
-         <input type=\"hidden\" name=\"do\" value=\"{verb}\">\n\
-         <button type=\"submit\">{label}</button>\n\
-         </form>\n",
-        esc(&project_url(project))
-    )
 }
 
 /// The brief and the button that asks the engine for research, or the way

@@ -22,7 +22,7 @@ fn row(name: &str, fields: Value) -> Value {
         "id": format!("id-{name}"), "name": name, "remote": null, "aliases": [],
         "created": "2026-01-01", "items": 3, "current": false,
         "checkouts": [format!("/src/{name}")],
-        "runner": "here", "paused": null, "roadmap_status": null, "milestone": null,
+        "runner": "here", "roadmap_status": null, "milestone": null,
         "milestones_done": 0, "milestones_total": 0,
         "plan_slug": null, "plan_ticked": 0, "plan_total": 0,
         "last_activity": "2026-10-05T10:00:00Z",
@@ -53,7 +53,6 @@ fn projects() -> Value {
         row("p-spec", json!({"has_research": true, "has_research_summary": true, "has_spec": true})),
         row("p-planning", json!({
             "roadmap_status": "draft", "milestone": "m1-auth", "milestones_total": 2,
-            "paused": "here 2026-10-04",
         })),
         // Execution and dogfooding differ in one tick and nothing else.
         row("p-execution", running(2)),
@@ -305,10 +304,7 @@ fn what_waits_on_saiful_shows_on_the_card_and_above_the_projects() {
         planning.contains("<span class=\"pill wait\">2 questions</span>"),
         "{planning}"
     );
-    assert!(
-        planning.contains("<span class=\"pill wait\">paused</span>"),
-        "{planning}"
-    );
+    assert!(!page.contains("paused"), "{page}");
     assert!(!card(&page, "p-execution").contains("question"), "{page}");
     assert!(
         page.contains("<h2>Projects <span class=\"pill wait\">1 waits on you</span></h2>"),
