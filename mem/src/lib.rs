@@ -5,7 +5,6 @@
 
 pub mod app;
 pub mod atomic;
-pub mod claim;
 pub mod cli;
 pub mod digest;
 pub mod exit;
@@ -132,9 +131,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::Model { model } => verbs::project_set(&app, "model", model),
                 cli::ProjectSetCommand::Effort { level } => {
                     verbs::project_set(&app, "effort", level.as_str())
-                }
-                cli::ProjectSetCommand::Runner { machine } => {
-                    verbs::project_set(&app, "runner", machine)
                 }
                 cli::ProjectSetCommand::Dev { cmd } => verbs::project_set(&app, "dev", cmd),
                 cli::ProjectSetCommand::Preview { url } => verbs::project_set(&app, "preview", url),
@@ -314,7 +310,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             stdin,
             sections,
             note,
-            force,
             session_id,
         } => verbs::wiki(
             &with_session(app, session_id),
@@ -322,7 +317,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             *stdin,
             *sections,
             note.as_deref(),
-            *force,
             *rebuild,
         ),
         cli::Command::Plan {
@@ -332,7 +326,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             clear,
             tick,
             list,
-            force,
             session_id,
         } => verbs::plan(
             &with_session(app, session_id),
@@ -343,7 +336,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 clear: *clear,
                 tick: tick.as_deref(),
                 list: *list,
-                force: *force,
             },
         ),
         cli::Command::Roadmap {
@@ -352,7 +344,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             clear,
             tick,
             status,
-            force,
             session_id,
         } => verbs::roadmap(
             &with_session(app, session_id),
@@ -362,7 +353,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 clear: *clear,
                 tick: tick.as_deref(),
                 status: status.as_ref().map(Option::as_deref),
-                force: *force,
             },
         ),
     }

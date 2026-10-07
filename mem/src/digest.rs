@@ -60,9 +60,6 @@ pub struct Sources {
     pub staleness: Option<String>,
     /// The project's name, for the small digest's first line.
     pub project: Option<String>,
-    /// The machine running the project, as the project key `runner`
-    /// declares it.
-    pub runner: Option<String>,
     pub handoff: Option<Row>,
     pub plan: Option<String>,
     /// The milestones above the current plan, when the project is planned
@@ -117,7 +114,6 @@ impl Sources {
             version: crate::maint::read_version_warning(store),
             staleness,
             project: declared("name"),
-            runner: declared("runner"),
             handoff: index.recent("handoff", project_id, 1)?.into_iter().next(),
             plan,
             roadmap,
@@ -405,11 +401,7 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
     lines.extend(sources.version.iter().cloned());
     lines.extend(sources.staleness.iter().cloned());
     if let Some(name) = &sources.project {
-        let mut line = format!("project: {name}");
-        if let Some(runner) = &sources.runner {
-            line.push_str(&format!(" · runner: {runner}"));
-        }
-        lines.push(line);
+        lines.push(format!("project: {name}"));
     }
     if let Some(first) = sources
         .status

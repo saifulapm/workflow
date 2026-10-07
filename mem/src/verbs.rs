@@ -66,7 +66,6 @@ pub fn context(
                 "plan_slug": null,
                 "plan_ticked": 0,
                 "plan_total": 0,
-                "runner": null,
                 "paused": false,
                 "questions_human": 0,
             });
@@ -392,7 +391,6 @@ fn project_summary(
     let pages = app.store.wiki_pages(id);
     let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
     vec![
-        ("runner", json!(declared("runner"))),
         ("paused", json!(declared("paused"))),
         ("roadmap_status", json!(declared(ROADMAP_STATUS))),
         (
@@ -468,8 +466,6 @@ pub fn project_current(app: &App) -> Result<i32> {
     let effort = crate::project::declared(&app.store, id, "effort");
     // The keys a run reads to place and pace itself, as (shown, stored, value).
     let run_keys: Vec<(&str, &str, String)> = [
-        ("runner", "runner"),
-        ("runner-since", "runner_since"),
         ("dev", "dev"),
         ("preview", "preview"),
         ("surface", "surface"),
@@ -639,15 +635,6 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let path = crate::project::set_key(&app.store, id, key, value)?;
-    if key == "runner" {
-        // A claim's age is what tells a live runner from a stale one.
-        crate::project::set_key(
-            &app.store,
-            id,
-            "runner_since",
-            &jiff::Timestamp::now().to_string(),
-        )?;
-    }
     let shown = key.replace('_', "-");
     if app.json {
         println!(
@@ -674,9 +661,6 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let (path, had) = crate::project::unset_key(&app.store, id, key)?;
-    if key == "runner" {
-        crate::project::unset_key(&app.store, id, "runner_since")?;
-    }
     let shown = key.replace('_', "-");
     if app.json {
         println!(
@@ -1013,7 +997,6 @@ pub struct PlanArgs<'a> {
     pub clear: bool,
     pub tick: Option<&'a str>,
     pub list: bool,
-    pub force: bool,
 }
 
 /// `mem plan` — the current plan and the milestone plans stored beside it.
@@ -1028,7 +1011,7 @@ pub fn plan(app: &App, args: PlanArgs<'_>) -> Result<i32> {
     }
     let Some(slug) = args.slug else {
         return match args.tick {
-            Some(task) => tick_singleton(app, PLAN, task, args.force),
+            Some(task) => tick_singleton(app, PLAN, task),
             None => singleton(app, PLAN, args.set_file, args.stdin, args.clear),
         };
     };
@@ -1049,16 +1032,15 @@ pub struct RoadmapArgs<'a> {
     pub tick: Option<&'a str>,
     /// `--status` alone prints it; with a value, sets it.
     pub status: Option<Option<&'a str>>,
-    pub force: bool,
 }
 
 /// `mem roadmap` — the same moves over roadmap.md, and its status.
 pub fn roadmap(app: &App, args: RoadmapArgs<'_>) -> Result<i32> {
     if let Some(status) = args.status {
-        return roadmap_status(app, status, args.force);
+        return roadmap_status(app, status);
     }
     match args.tick {
-        Some(slug) => tick_singleton(app, ROADMAP, slug, args.force),
+        Some(slug) => tick_singleton(app, ROADMAP, slug),
         None => singleton(app, ROADMAP, args.set_file, args.stdin, args.clear),
     }
 }
@@ -1068,7 +1050,7 @@ pub fn roadmap(app: &App, args: RoadmapArgs<'_>) -> Result<i32> {
 const STATUSES: [&str; 2] = ["draft", "approved"];
 
 /// `mem roadmap --status`: print the status, or set it in project.toml.
-fn roadmap_status(app: &App, status: Option<&str>, force: bool) -> Result<i32> {
+fn roadmap_status(app: &App, status: Option<&str>) -> Result<i32> {
     let Some(status) = status else {
         let identity = app.identity(Mode::Read)?;
         let Some(value) = identity
@@ -1097,7 +1079,6 @@ fn roadmap_status(app: &App, status: Option<&str>, force: bool) -> Result<i32> {
         )));
     }
     let id = writable_project(app, "roadmap")?;
-    crate::claim::runner_guard(app, &id, force)?;
     crate::project::set_key(&app.store, &id, ROADMAP_STATUS, status)?;
     self_record(app);
     Ok(exit::OK)
@@ -1253,7 +1234,7 @@ fn land(
 /// checkbox write. The project is resolved in read mode: a tick can only
 /// apply to a file that already exists, so there is never a project to
 /// invent here.
-fn tick_singleton(app: &App, which: Singleton, task: &str, force: bool) -> Result<i32> {
+fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
     let identity = app.identity(Mode::Read)?;
     let Some(id) = identity.id() else {
         return Err(exit::not_found(format!(
@@ -1261,7 +1242,6 @@ fn tick_singleton(app: &App, which: Singleton, task: &str, force: bool) -> Resul
             which.noun
         )));
     };
-    crate::claim::runner_guard(app, id, force)?;
     let path = (which.path)(&app.store, id);
     let outcome = crate::write::tick_task(&path, task, which.item)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
@@ -1301,7 +1281,6 @@ pub fn wiki(
     stdin: bool,
     sections: bool,
     note: Option<&str>,
-    force: bool,
     rebuild: bool,
 ) -> Result<i32> {
     // `<slug>#<hslug>` addresses one section; the slug alone, the whole page.
@@ -1336,7 +1315,7 @@ pub fn wiki(
                 "name the page to write, e.g. `mem wiki index --stdin --note \"why\"`",
             ));
         };
-        return wiki_write(app, slug, hslug, stdin, note, force);
+        return wiki_write(app, slug, hslug, stdin, note);
     }
     if sections && (slug.is_none() || hslug.is_some()) {
         return Err(exit::usage(
@@ -1561,7 +1540,6 @@ fn wiki_write(
     hslug: Option<&str>,
     stdin: bool,
     note: Option<&str>,
-    force: bool,
 ) -> Result<i32> {
     if !stdin {
         return Err(exit::usage(
@@ -1592,9 +1570,6 @@ fn wiki_write(
     // taken, so the section must exist before stdin is read.
     let target = match hslug {
         Some(hslug) => {
-            // A section write edits the page in place, which is the runner's
-            // to do; a whole-page write replaces it and is not gated.
-            crate::claim::runner_guard(app, id, force)?;
             let Ok(bytes) = std::fs::read(&path) else {
                 return Err(exit::not_found(format!(
                     "no page '{slug}' — `mem wiki` lists them"

@@ -23,7 +23,6 @@
           "items",
           "current",
           "checkouts",
-          "runner",
           "paused",
           "roadmap_status",
           "milestone",
@@ -71,12 +70,6 @@
             "items": {
               "type": "string"
             }
-          },
-          "runner": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "paused": {
             "type": [

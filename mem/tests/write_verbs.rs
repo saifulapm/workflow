@@ -723,7 +723,6 @@ fn project_set_records_each_run_key_and_project_current_reports_it() {
         ("surface", "surface", "web"),
         ("dogfood-machine", "dogfood_machine", "nuc"),
         ("slots", "slots", "3"),
-        ("runner", "runner", "mini"),
         ("paused", "paused", "mini 2026-10-03"),
     ];
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
@@ -768,46 +767,6 @@ fn project_current_names_this_machine_whatever_is_set() {
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
     let machine = v["machine"].as_str().unwrap_or_default();
     assert!(!machine.is_empty(), "{v}");
-}
-
-#[test]
-fn project_set_runner_stamps_the_claim_and_unset_clears_both() {
-    let w = World::new("write-runner");
-    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    let id = mem::project::Registry::load(&w.store()).projects[0]
-        .id
-        .clone();
-    let toml_of = || -> toml::Table {
-        toml::from_str(&std::fs::read_to_string(w.store().project_toml(&id)).unwrap()).unwrap()
-    };
-
-    let before = jiff::Timestamp::now();
-    let out = mem(&w, &repo, &["project", "set", "runner", "mini"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let doc = toml_of();
-    assert_eq!(doc["runner"].as_str(), Some("mini"), "{doc}");
-    let since: jiff::Timestamp = doc["runner_since"]
-        .as_str()
-        .expect("runner_since written beside runner")
-        .parse()
-        .expect("runner_since is RFC 3339");
-    assert!(since.as_second() >= before.as_second() - 1, "{since}");
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["runner"].as_str(), Some("mini"), "{v}");
-    assert_eq!(
-        v["runner_since"].as_str(),
-        doc["runner_since"].as_str(),
-        "{v}"
-    );
-
-    let out = mem(&w, &repo, &["project", "unset", "runner"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let doc = toml_of();
-    assert!(doc.get("runner").is_none(), "{doc}");
-    assert!(doc.get("runner_since").is_none(), "{doc}");
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("runner_since").is_none(), "{v}");
 }
 
 #[test]

@@ -297,9 +297,6 @@ pub enum Command {
         /// log line that is the page's history.
         #[arg(long)]
         note: Option<String>,
-        /// Write a section even while another machine holds the runner claim.
-        #[arg(long)]
-        force: bool,
         #[arg(long)]
         session_id: Option<String>,
     },
@@ -320,9 +317,6 @@ pub enum Command {
         /// List the stored plans: slug, bytes, date and title.
         #[arg(long, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick"])]
         list: bool,
-        /// Write even while another machine holds the runner claim.
-        #[arg(long)]
-        force: bool,
         #[arg(long)]
         session_id: Option<String>,
     },
@@ -340,9 +334,6 @@ pub enum Command {
         /// Print the roadmap's status, or set it: draft or approved.
         #[arg(long, value_name = "STATUS", num_args = 0..=1, conflicts_with_all = ["set_file", "stdin", "clear", "tick"])]
         status: Option<Option<String>>,
-        /// Write even while another machine holds the runner claim.
-        #[arg(long)]
-        force: bool,
         #[arg(long)]
         session_id: Option<String>,
     },
@@ -445,8 +436,7 @@ pub enum ProjectCommand {
     },
     /// Forget something `set` recorded, so the project is back on the
     /// default: the workflow's model, the detected verifier. `set` refuses an
-    /// empty value, so this is the way back to absent. Unsetting `runner`
-    /// drops the claim's start time with it.
+    /// empty value, so this is the way back to absent.
     Unset { key: ProjectKey },
 }
 
@@ -460,7 +450,6 @@ pub enum ProjectKey {
     HygieneExempt,
     Model,
     Effort,
-    Runner,
     Dev,
     Preview,
     Surface,
@@ -478,7 +467,6 @@ impl ProjectKey {
             ProjectKey::HygieneExempt => "hygiene_exempt",
             ProjectKey::Model => "model",
             ProjectKey::Effort => "effort",
-            ProjectKey::Runner => "runner",
             ProjectKey::Dev => "dev",
             ProjectKey::Preview => "preview",
             ProjectKey::Surface => "surface",
@@ -512,10 +500,6 @@ pub enum ProjectSetCommand {
     /// own default; WORKFLOW_EFFORT overrides per run, and set empty it
     /// means no dial for that run.
     Effort { level: Effort },
-    /// The machine that runs this project's workflow. Setting it also
-    /// records when, so another machine can tell a live claim from a stale
-    /// one.
-    Runner { machine: String },
     /// The command that starts this project's dev server.
     Dev { cmd: String },
     /// Where a running dev server is looked at, usually a URL.

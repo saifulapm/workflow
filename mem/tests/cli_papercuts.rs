@@ -113,17 +113,25 @@ fn the_engine_surface_is_gone() {
         &["plan", "--status"][..],
         &["plan", "--status", "approved"][..],
         &["roadmap", "--untick", "m1"][..],
+        &["plan", "--force"][..],
+        &["roadmap", "--force"][..],
+        &["wiki", "notes", "--force"][..],
+        &["project", "set", "runner", "mini"][..],
+        &["project", "unset", "runner"][..],
     ] {
         let out = mem(&w, &dir, args);
         assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
     }
     for (verb, gone) in [
-        ("plan", &["--task", "--add-task", "--from", "--status"][..]),
-        ("roadmap", &["--untick", "running", "maintenance"][..]),
+        (&["plan"][..], &["--task", "--add-task", "--from", "--status", "--force"][..]),
+        (&["roadmap"][..], &["--untick", "running", "maintenance", "--force"][..]),
+        (&["wiki"][..], &["--force", "runner"][..]),
+        (&["project", "set"][..], &["runner"][..]),
+        (&["project", "unset"][..], &["runner"][..]),
     ] {
-        let help = stdout(&mem(&w, &dir, &[verb, "--help"]));
+        let help = stdout(&mem(&w, &dir, &[verb, &["--help"]].concat()));
         for word in gone {
-            assert!(!help.contains(word), "{verb} --help names {word}: {help}");
+            assert!(!help.contains(word), "{verb:?} --help names {word}: {help}");
         }
     }
 }

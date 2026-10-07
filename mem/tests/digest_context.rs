@@ -674,7 +674,7 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     let r: Vec<&str> = s.rulings.iter().map(|r| r.short_id.as_str()).collect();
     let expected = format!(
         "! memory last synced 90 min ago
-project: thing · runner: macbook
+project: thing
 status ({status_date}): m2 under way
 roadmap: m2-sections (2 of 3) · tasks 2/4 merged
 questions: 4 for you
@@ -786,7 +786,7 @@ fn context_prints_the_small_digest_and_full_the_old_one() {
     let text = stdout(&out);
     assert!(text.len() < SMALL_TARGET, "{} bytes: {text}", text.len());
     assert!(
-        text.starts_with("project: thing · runner: macbook\n"),
+        text.starts_with("project: thing\n"),
         "{text}"
     );
     assert!(

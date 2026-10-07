@@ -187,7 +187,6 @@ fn every_verb_matches_its_committed_schema() {
     assert!(current["machine"].is_string(), "{current}");
     // The run keys are optional fields of the same contract.
     for (key, value) in [
-        ("runner", "mini"),
         ("dev", "just dev"),
         ("preview", "http://localhost:5173"),
         ("surface", "web"),
@@ -205,19 +204,13 @@ fn every_verb_matches_its_committed_schema() {
         "project-current.json",
         &mem(&w, &repo, &["project", "current", "--json"]),
     );
-    assert_eq!(current["runner"], serde_json::json!("mini"));
     assert_eq!(current["slots"], serde_json::json!(2));
     assert_eq!(current["paused"], serde_json::json!("mini 2026-10-03"));
     validate("status.json", &mem(&w, &repo, &["status", "--json"]));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
-    // The runner set above is another machine's claim; --force writes past it.
-    assert_eq!(
-        code(&mem(&w, &repo, &["roadmap", "--status", "approved", "--force"])),
-        0
-    );
     validate(
         "plan-tick.json",
-        &mem(&w, &repo, &["plan", "--tick", "t1", "--force", "--json"]),
+        &mem(&w, &repo, &["plan", "--tick", "t1", "--json"]),
     );
     validate("log.json", &mem(&w, &repo, &["log", "--json"]));
     validate("handoff.json", &mem(&w, &repo, &["handoff", "--json"]));
@@ -458,7 +451,7 @@ fn projects_carry_the_summary_a_project_page_reads() {
 
     // Nothing but the plan yet: every other field is null, zero or false.
     let p = row(&w);
-    assert!(p["runner"].is_null(), "{p}");
+    assert!(p.get("runner").is_none(), "{p}");
     assert!(p["paused"].is_null(), "{p}");
     assert!(p["roadmap_status"].is_null(), "{p}");
     assert!(p["milestone"].is_null(), "{p}");
@@ -483,7 +476,6 @@ fn projects_carry_the_summary_a_project_page_reads() {
     set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
     set(&["roadmap", "--status", "draft"]);
     set(&["brief", "--set", "a shop that sells one thing"]);
-    set(&["project", "set", "runner", "mini"]);
     set(&["project", "set", "paused", "mini 2026-10-05"]);
     let id = mem::project::Registry::load(&w.store()).projects[0]
         .id
@@ -494,7 +486,7 @@ fn projects_carry_the_summary_a_project_page_reads() {
     std::fs::write(wiki.join("spec.md"), "# Spec\n").unwrap();
 
     let p = row(&w);
-    assert_eq!(p["runner"], "mini");
+    assert!(p.get("runner").is_none(), "{p}");
     assert_eq!(p["paused"], "mini 2026-10-05");
     assert_eq!(p["roadmap_status"], "draft");
     assert_eq!(p["milestone"], "m1-auth");
@@ -505,7 +497,7 @@ fn projects_carry_the_summary_a_project_page_reads() {
     assert_eq!(p["has_research_summary"], false);
     assert_eq!(p["has_spec"], true);
 
-    set(&["roadmap", "--tick", "m1-auth", "--force"]);
+    set(&["roadmap", "--tick", "m1-auth"]);
     let p = row(&w);
     assert_eq!(p["milestone"], "m2-billing");
     assert_eq!(p["milestones_done"], 1);
@@ -533,17 +525,16 @@ fn the_brief_says_where_the_project_stands() {
     )
     .unwrap();
     set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
-    set(&["roadmap", "--status", "approved", "--force"]);
-    set(&["roadmap", "--tick", "m1-auth", "--force"]);
+    set(&["roadmap", "--status", "approved"]);
+    set(&["roadmap", "--tick", "m1-auth"]);
     let plan = w.dir.join("plan.md");
     std::fs::write(
         &plan,
         "# plan: billing\n- [ ] t1 one\n- [ ] t2 two\n- [ ] t3 three\n",
     )
     .unwrap();
-    set(&["plan", "--set-file", plan.to_str().unwrap(), "--force"]);
-    set(&["plan", "--tick", "t1", "--force"]);
-    set(&["project", "set", "runner", "mini"]);
+    set(&["plan", "--set-file", plan.to_str().unwrap()]);
+    set(&["plan", "--tick", "t1"]);
     set(&["project", "set", "paused", "mini 2026-10-05"]);
     ask(&["ask", "ship on friday?"]);
     // A question for the orchestrator is not one a person has to answer.
@@ -559,7 +550,7 @@ fn the_brief_says_where_the_project_stands() {
     assert_eq!(b["plan_slug"], "billing");
     assert_eq!(b["plan_ticked"], 1);
     assert_eq!(b["plan_total"], 3);
-    assert_eq!(b["runner"], "mini");
+    assert!(b.get("runner").is_none(), "{b}");
     assert_eq!(b["paused"], true);
     assert_eq!(b["questions_human"], 1);
 
@@ -572,7 +563,6 @@ fn the_brief_says_where_the_project_stands() {
             "roadmap_status",
             "milestone",
             "plan_slug",
-            "runner",
         ] {
             assert!(b[key].is_null(), "{key}: {b}");
         }

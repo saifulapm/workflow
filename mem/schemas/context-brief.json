@@ -13,7 +13,6 @@
     "plan_slug",
     "plan_ticked",
     "plan_total",
-    "runner",
     "paused",
     "questions_human"
   ],
@@ -56,12 +55,6 @@
     },
     "plan_total": {
       "type": "integer"
-    },
-    "runner": {
-      "type": [
-        "string",
-        "null"
-      ]
     },
     "paused": {
       "type": "boolean"
