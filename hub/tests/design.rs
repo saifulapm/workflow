@@ -104,3 +104,32 @@ fn every_page_opens_with_the_same_top_bar() {
         }
     }
 }
+
+/// The stylesheet as every page carries it.
+fn stylesheet() -> String {
+    let (_dir, hub) = hub("design-sheet");
+    let body = body_of(&hub.get("/wiki")).to_string();
+    let start = body.find("<style>").expect("a style block");
+    let end = body.find("</style>").expect("its end");
+    body[start..end].to_string()
+}
+
+#[test]
+fn a_docs_page_keeps_wide_content_inside_the_phone_width() {
+    // A grid column with no width grows to its widest line, so a long code
+    // line would push the whole page sideways below 960 px.
+    let sheet = stylesheet();
+    assert!(
+        sheet.contains(".docs{display:grid;grid-template-columns:minmax(0,1fr);"),
+        "{sheet}"
+    );
+}
+
+#[test]
+fn a_heading_reached_by_its_anchor_clears_the_sticky_bar() {
+    let sheet = stylesheet();
+    assert!(
+        sheet.contains("article.md :is(h1,h2,h3,h4){scroll-margin-top:64px}"),
+        "{sheet}"
+    );
+}

@@ -151,7 +151,7 @@ body>ul:not([class])>li:last-child{border-bottom:0}
 .lightbox a{color:#9fbcf7}
 .lightbox a.close{position:absolute;top:14px;right:16px}
 @media (max-width:959px){.docs>nav.contents{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px 16px}}
-.docs{display:grid;gap:16px}
+.docs{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 @media (min-width:960px){.docs{grid-template-columns:13rem minmax(0,1fr);gap:28px}.docs>nav.contents{position:sticky;top:72px;align-self:start;max-height:calc(100vh - 88px);overflow:auto}}
 nav.contents{font-size:13px}
 nav.contents a{display:block;padding:3px 0;color:var(--mut)}
@@ -176,6 +176,7 @@ article.md{padding:20px 22px;line-height:1.7}
 article.md h1{font-size:21px;line-height:1.3;margin:0 0 12px}
 article.md h2{font-size:16px;text-transform:none;letter-spacing:normal;color:var(--ink);margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
 article.md h3{font-size:14.5px}
+article.md :is(h1,h2,h3,h4){scroll-margin-top:64px}
 article.md ul,article.md ol{list-style:revert;padding-left:1.4rem;margin-block:0 10px}
 article.md li{padding:1px 0}
 article.md code{font-size:.92em;background:var(--track);padding:1px 5px;border-radius:5px}
