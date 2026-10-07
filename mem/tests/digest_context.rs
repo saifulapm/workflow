@@ -94,7 +94,11 @@ fn the_mandatory_sections_come_first_and_in_order() {
         "# Migrate sessions\n\n- [x] write the plan\n- [ ] run the migration\n- [ ] tell the team\n",
     )
     .unwrap();
-    std::fs::write(store.project_dir(P).join("status.md"), "blocked on review\n").unwrap();
+    std::fs::write(
+        store.project_dir(P).join("status.md"),
+        "blocked on review\n",
+    )
+    .unwrap();
     put(
         &store,
         Some(P),
@@ -126,12 +130,18 @@ fn the_mandatory_sections_come_first_and_in_order() {
         .position(|l| l.contains("run the migration"))
         .unwrap();
     let question_at = lines.iter().position(|l| l.starts_with("? #")).unwrap();
-    let ruling_at = lines.iter().position(|l| l.starts_with("ruling #")).unwrap();
+    let ruling_at = lines
+        .iter()
+        .position(|l| l.starts_with("ruling #"))
+        .unwrap();
     assert!(
         plan_at < task_at && task_at < question_at && question_at < ruling_at,
         "{text}"
     );
-    assert!(!text.contains("blocked on review"), "status.md is not read: {text}");
+    assert!(
+        !text.contains("blocked on review"),
+        "status.md is not read: {text}"
+    );
     assert!(
         !lines.iter().any(|l| l.contains("tell the team")),
         "only the first unchecked task"
@@ -237,7 +247,11 @@ fn a_project_with_pages_opens_with_the_wiki_line_and_the_index_head() {
         Some(P),
         &item(Kind::Question, "deploy on friday?", "body"),
     );
-    std::fs::write(store.project_dir(P).join("status.md"), "blocked on review\n").unwrap();
+    std::fs::write(
+        store.project_dir(P).join("status.md"),
+        "blocked on review\n",
+    )
+    .unwrap();
     page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
     page(
         &w,
@@ -263,7 +277,10 @@ fn a_project_with_pages_opens_with_the_wiki_line_and_the_index_head() {
         .position(|l| l.contains("[pricing](pricing.md)"))
         .unwrap_or_else(|| panic!("{text}"));
     let question_at = lines.iter().position(|l| l.starts_with("? #")).unwrap();
-    assert!(!text.contains("blocked on review"), "status.md is not read: {text}");
+    assert!(
+        !text.contains("blocked on review"),
+        "status.md is not read: {text}"
+    );
     assert!(
         question_at < wiki_at && wiki_at < head_at,
         "the wiki line closes the mandatory sections and the index head follows it: {text}"
@@ -679,7 +696,10 @@ wiki: 8 pages
     let full = build(&s, &store, 6000).text;
     assert!(full.contains("fact 29 the small digest drops"), "{full}");
     assert!(!full.contains("stage: running"), "{full}");
-    assert!(!full.contains("m2 under way"), "status.md is not read: {full}");
+    assert!(
+        !full.contains("m2 under way"),
+        "status.md is not read: {full}"
+    );
 }
 
 #[test]
@@ -760,10 +780,7 @@ fn context_prints_the_small_digest_and_full_the_old_one() {
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     let text = stdout(&out);
     assert!(text.len() < SMALL_TARGET, "{} bytes: {text}", text.len());
-    assert!(
-        text.starts_with("project: thing\n"),
-        "{text}"
-    );
+    assert!(text.starts_with("project: thing\n"), "{text}");
     assert!(
         text.contains("roadmap: m2-sections (2 of 3) · tasks 2/4 merged\n"),
         "{text}"

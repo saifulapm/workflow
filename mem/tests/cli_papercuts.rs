@@ -130,19 +130,34 @@ fn the_engine_surface_is_gone() {
         assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
     }
     for (verb, gone) in [
-        (&["plan"][..], &["--task", "--add-task", "--from", "--status", "--force"][..]),
-        (&["roadmap"][..], &["--untick", "running", "maintenance", "--force"][..]),
+        (
+            &["plan"][..],
+            &["--task", "--add-task", "--from", "--status", "--force"][..],
+        ),
+        (
+            &["roadmap"][..],
+            &["--untick", "running", "maintenance", "--force"][..],
+        ),
         (&["wiki"][..], &["--force", "runner"][..]),
         (
             &["project", "set"][..],
             &[
-                "runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review",
+                "runner",
+                "paused",
+                "slots",
+                "effort",
+                "surface",
+                "preview",
+                "dogfood",
+                "review",
                 "WORKFLOW_",
             ][..],
         ),
         (
             &["project", "unset"][..],
-            &["runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review"][..],
+            &[
+                "runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review",
+            ][..],
         ),
         (&["project", "current"][..], &["machine"][..]),
         (&[][..], &["status.md", "  status ", "  skill "][..]),

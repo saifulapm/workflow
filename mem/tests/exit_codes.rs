@@ -13,12 +13,7 @@ use mem::item::Kind;
 const P: &str = "01K2AAAAAAAAAAAAAAAAAAAAAA";
 
 fn run(args: &[&str], w: &World, cwd: &Path) -> std::process::Output {
-    mem_env(
-        w,
-        cwd,
-        args,
-        &[("MEM_SYNC_CMD", "true"), ("MEM_NOTIFY_CMD", "true")],
-    )
+    mem_env(w, cwd, args, &[("MEM_SYNC_CMD", "true")])
 }
 
 /// The same, with bytes on stdin — the only way at the `--stdin` paths.
@@ -292,8 +287,8 @@ fn seven_is_a_short_id_two_items_share() {
 
 /// A reader that closes early -- `mem show <id> | head -1` -- is the reader's
 /// business, not a failure of the program. Rust ignores SIGPIPE, so the write
-/// comes back EPIPE and `println!` turns that into a panic and exit 101
-/// (friction #ECTJYVXX). Neither belongs on a CLI.
+/// comes back EPIPE and `println!` turns that into a panic and exit 101.
+/// Neither belongs on a CLI.
 #[test]
 fn a_reader_that_closes_the_pipe_is_not_an_error() {
     let w = World::new("exit-epipe");

@@ -401,11 +401,7 @@ fn ticking_a_task_flips_one_checkbox_and_leaves_the_rest_alone() {
         "{}",
         stderr(&out)
     );
-    assert!(
-        !stderr(&out).contains("--from"),
-        "{}",
-        stderr(&out)
-    );
+    assert!(!stderr(&out).contains("--from"), "{}", stderr(&out));
 }
 
 #[test]

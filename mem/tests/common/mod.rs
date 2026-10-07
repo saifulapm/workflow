@@ -142,16 +142,16 @@ pub fn mem(w: &World, cwd: &Path, args: &[&str]) -> std::process::Output {
 }
 
 /// The same, with extra environment — the seams (`MEM_SYNC_CMD`,
-/// `MEM_NOTIFY_CMD`) that keep a test from shelling out to the real thing.
+/// `MEM_POLL_MS`) that keep a test from shelling out to the real thing.
 ///
 /// `PI_CODING_AGENT_DIR` points inside the World because pi's extension
 /// directory is the one path mem does not take from XDG: without it `mem
 /// doctor` reads, and `--fix` writes, the developer's own `~/.pi`. A caller
 /// that names it wins.
 ///
-/// `WORKFLOW_TASK` and `CARGO_TARGET_DIR` are stripped so a test run inside a
-/// task worktree — where both are already set for the outer cargo process —
-/// does not leak them into the mem it spawns. `PI_SESSION_ID` and
+/// `CARGO_TARGET_DIR` is stripped so a test run inside a worktree, where it
+/// is already set for the outer cargo process, does not leak it into the mem
+/// it spawns. `PI_SESSION_ID` and
 /// `CLAUDE_CODE_SESSION_ID` go for the same reason now that `session::id_from`
 /// reads them: a suite run from inside a live agent session would otherwise
 /// attribute every write in every test to whoever ran `cargo test`.

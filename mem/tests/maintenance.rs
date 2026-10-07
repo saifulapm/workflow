@@ -613,10 +613,7 @@ fn asking_a_question_does_not_wait_for_the_sync_round_it_asks_for() {
         &w,
         &repo,
         &["ask", "does the trigger wait?"],
-        &[
-            ("MEM_SYNC_CMD", stub.to_str().unwrap()),
-            ("MEM_NOTIFY_CMD", "true"),
-        ],
+        &[("MEM_SYNC_CMD", stub.to_str().unwrap())],
     );
     let elapsed = started.elapsed();
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));

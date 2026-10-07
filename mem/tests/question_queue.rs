@@ -6,26 +6,10 @@ use std::time::{Duration, Instant};
 
 use common::{World, code, stderr, stdout};
 
-/// The queue tests need the notification and sync seams stubbed and a poll
-/// interval short enough for a test.
-fn ask_env(
-    w: &World,
-    cwd: &std::path::Path,
-    args: &[&str],
-    notify_log: Option<&std::path::Path>,
-) -> std::process::Output {
-    let mut cmd = mem_cmd(w, cwd, args);
-    match notify_log {
-        // A stub standing in for notify-send: it appends the arguments it was
-        // called with to a file the test can read.
-        Some(path) => {
-            cmd.env("MEM_NOTIFY_CMD", path.display().to_string());
-        }
-        None => {
-            cmd.env("MEM_NOTIFY_CMD", "true");
-        }
-    }
-    cmd.output().expect("run mem")
+/// The queue tests need the sync seam stubbed and a poll interval short
+/// enough for a test.
+fn ask_env(w: &World, cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
+    mem_cmd(w, cwd, args).output().expect("run mem")
 }
 
 fn mem_cmd(w: &World, cwd: &std::path::Path, args: &[&str]) -> std::process::Command {
@@ -44,39 +28,16 @@ fn mem_cmd(w: &World, cwd: &std::path::Path, args: &[&str]) -> std::process::Com
     cmd
 }
 
-/// A stand-in for notify-send that records the arguments it was given.
-/// A stand-in that records any notification mem tries to send. Since hub's
-/// doorbell became the one bell, the record must stay empty.
-fn notify_stub(w: &World) -> std::path::PathBuf {
-    let script = w.dir.join("notify-stub.sh");
-    std::fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\n",
-            w.dir.join("notified.txt").display()
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    script
-}
-
 #[test]
-fn ask_returns_immediately_and_rings_no_bell_of_its_own() {
+fn ask_returns_immediately() {
     let w = World::new("q-ask");
     let repo = w.repo("thing", None);
-    let log = notify_stub(&w);
 
     let started = Instant::now();
     let out = ask_env(
         &w,
         &repo,
         &["ask", "deploy on friday?", "--options", "yes,no", "--json"],
-        Some(&log),
     );
     let elapsed = started.elapsed();
     assert_eq!(code(&out), 0, "{}", stderr(&out));
@@ -86,20 +47,10 @@ fn ask_returns_immediately_and_rings_no_bell_of_its_own() {
     );
 
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let short = v["short_id"].as_str().unwrap().to_string();
     assert_eq!(v["options"], serde_json::json!(["yes", "no"]));
 
-    // hub's doorbell is the one bell; mem ringing too was the double
-    // notification, and mem's carried the question text besides.
-    let notified = std::fs::read_to_string(w.dir.join("notified.txt")).unwrap_or_default();
-    assert!(
-        notified.is_empty(),
-        "ask must not send its own notification: {notified:?}"
-    );
-    let _ = &short;
-
     // The question is listed and still pending.
-    let out = ask_env(&w, &repo, &["questions", "--pending"], None);
+    let out = ask_env(&w, &repo, &["questions", "--pending"]);
     assert_eq!(code(&out), 0);
     assert!(stdout(&out).starts_with('?'), "{}", stdout(&out));
     assert!(stdout(&out).contains("deploy on friday?"));
@@ -109,19 +60,13 @@ fn ask_returns_immediately_and_rings_no_bell_of_its_own() {
 fn waiting_times_out_with_exit_four() {
     let w = World::new("q-timeout");
     let repo = w.repo("thing", None);
-    let v: serde_json::Value = serde_json::from_slice(
-        &ask_env(&w, &repo, &["ask", "still waiting?", "--json"], None).stdout,
-    )
-    .unwrap();
+    let v: serde_json::Value =
+        serde_json::from_slice(&ask_env(&w, &repo, &["ask", "still waiting?", "--json"]).stdout)
+            .unwrap();
     let id = v["short_id"].as_str().unwrap().to_string();
 
     let started = Instant::now();
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--wait", &id, "--timeout", "1s"],
-        None,
-    );
+    let out = ask_env(&w, &repo, &["questions", "--wait", &id, "--timeout", "1s"]);
     assert_eq!(code(&out), 4, "{}", stderr(&out));
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(
@@ -136,7 +81,7 @@ fn an_answer_arriving_during_a_wait_ends_it_with_the_text() {
     let w = World::new("q-answer");
     let repo = w.repo("thing", None);
     let v: serde_json::Value = serde_json::from_slice(
-        &ask_env(&w, &repo, &["ask", "redis or postgres?", "--json"], None).stdout,
+        &ask_env(&w, &repo, &["ask", "redis or postgres?", "--json"]).stdout,
     )
     .unwrap();
     let id = v["short_id"].as_str().unwrap().to_string();
@@ -161,12 +106,7 @@ fn an_answer_arriving_during_a_wait_ends_it_with_the_text() {
         })
     };
 
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--wait", &id, "--timeout", "30s"],
-        None,
-    );
+    let out = ask_env(&w, &repo, &["questions", "--wait", &id, "--timeout", "30s"]);
     let answered = answerer.join().unwrap();
     assert_eq!(
         answered.status.code(),
@@ -182,7 +122,7 @@ fn an_answer_arriving_during_a_wait_ends_it_with_the_text() {
     );
 
     // Once answered it drops out of the pending list.
-    let out = ask_env(&w, &repo, &["questions", "--pending"], None);
+    let out = ask_env(&w, &repo, &["questions", "--pending"]);
     assert_eq!(code(&out), 1, "no pending questions left");
 }
 
@@ -191,36 +131,32 @@ fn answering_an_unknown_or_wrong_kind_of_id_is_exit_one() {
     let w = World::new("q-unknown");
     let repo = w.repo("thing", None);
     assert_eq!(
-        code(&ask_env(&w, &repo, &["answer", "ZZZZZZZZ", "text"], None)),
+        code(&ask_env(&w, &repo, &["answer", "ZZZZZZZZ", "text"])),
         1
     );
     assert_eq!(
-        code(&ask_env(&w, &repo, &["answer", "not-an-id", "text"], None)),
+        code(&ask_env(&w, &repo, &["answer", "not-an-id", "text"])),
         1
     );
 
     let v: serde_json::Value =
-        serde_json::from_slice(&ask_env(&w, &repo, &["save", "a fact", "--json"], None).stdout)
-            .unwrap();
+        serde_json::from_slice(&ask_env(&w, &repo, &["save", "a fact", "--json"]).stdout).unwrap();
     let out = ask_env(
         &w,
         &repo,
         &["answer", v["short_id"].as_str().unwrap(), "text"],
-        None,
     );
     assert_eq!(code(&out), 1, "a fact is not a question");
     assert!(stderr(&out).contains("not a question"));
 
     // An answer needs something to say.
     let v: serde_json::Value =
-        serde_json::from_slice(&ask_env(&w, &repo, &["ask", "well?", "--json"], None).stdout)
-            .unwrap();
+        serde_json::from_slice(&ask_env(&w, &repo, &["ask", "well?", "--json"]).stdout).unwrap();
     assert_eq!(
         code(&ask_env(
             &w,
             &repo,
-            &["answer", v["short_id"].as_str().unwrap()],
-            None
+            &["answer", v["short_id"].as_str().unwrap()]
         )),
         2
     );
@@ -228,8 +164,7 @@ fn answering_an_unknown_or_wrong_kind_of_id_is_exit_one() {
         code(&ask_env(
             &w,
             &repo,
-            &["answer", v["short_id"].as_str().unwrap(), "--option", "yes"],
-            None
+            &["answer", v["short_id"].as_str().unwrap(), "--option", "yes"]
         )),
         0
     );
@@ -243,8 +178,7 @@ fn a_wait_on_an_unknown_id_or_an_over_long_timeout_is_rejected() {
         code(&ask_env(
             &w,
             &repo,
-            &["questions", "--wait", "ZZZZZZZZ", "--timeout", "1s"],
-            None
+            &["questions", "--wait", "ZZZZZZZZ", "--timeout", "1s"]
         )),
         1
     );
@@ -252,8 +186,7 @@ fn a_wait_on_an_unknown_id_or_an_over_long_timeout_is_rejected() {
         code(&ask_env(
             &w,
             &repo,
-            &["questions", "--wait", "ZZZZZZZZ", "--timeout", "later"],
-            None
+            &["questions", "--wait", "ZZZZZZZZ", "--timeout", "later"]
         )),
         2
     );
@@ -274,13 +207,7 @@ fn a_wait_watches_the_questions_own_project_not_the_working_directory() {
     let w = World::new("q-wait-elsewhere");
     let repo = w.repo("thing", None);
     let v: serde_json::Value = serde_json::from_slice(
-        &ask_env(
-            &w,
-            &repo,
-            &["ask", "which directory is watched?", "--json"],
-            None,
-        )
-        .stdout,
+        &ask_env(&w, &repo, &["ask", "which directory is watched?", "--json"]).stdout,
     )
     .unwrap();
     let id = v["short_id"].as_str().unwrap().to_string();
@@ -313,7 +240,6 @@ fn a_wait_watches_the_questions_own_project_not_the_working_directory() {
         &w,
         &loose,
         &["questions", "--wait", &id, "--timeout", "30s"],
-        None,
     );
     let answered = answerer.join().unwrap();
     assert_eq!(
@@ -335,19 +261,14 @@ fn a_question_and_its_answer_live_in_the_same_project_tree() {
     let w = World::new("q-colocated");
     let repo = w.repo("thing", None);
     let v: serde_json::Value = serde_json::from_slice(
-        &ask_env(&w, &repo, &["ask", "where do answers go?", "--json"], None).stdout,
+        &ask_env(&w, &repo, &["ask", "where do answers go?", "--json"]).stdout,
     )
     .unwrap();
     let short = v["short_id"].as_str().unwrap().to_string();
     // Answering from outside the checkout still files it with the question.
     let loose = w.plain_dir("loose");
     assert_eq!(
-        code(&ask_env(
-            &w,
-            &loose,
-            &["answer", &short, "next to it"],
-            None
-        )),
+        code(&ask_env(&w, &loose, &["answer", &short, "next to it"])),
         0
     );
 
@@ -373,17 +294,16 @@ fn the_listing_json_carries_the_answered_flag() {
     let w = World::new("q-answered-json");
     let repo = w.repo("thing", None);
 
-    let asked: serde_json::Value = serde_json::from_slice(
-        &ask_env(&w, &repo, &["ask", "is this answered?", "--json"], None).stdout,
-    )
-    .unwrap();
+    let asked: serde_json::Value =
+        serde_json::from_slice(&ask_env(&w, &repo, &["ask", "is this answered?", "--json"]).stdout)
+            .unwrap();
     let id = asked["short_id"].as_str().unwrap().to_string();
-    ask_env(&w, &repo, &["ask", "and this one?", "--json"], None);
+    ask_env(&w, &repo, &["ask", "and this one?", "--json"]);
 
-    let out = ask_env(&w, &repo, &["answer", &id, "yes it is"], None);
+    let out = ask_env(&w, &repo, &["answer", &id, "yes it is"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 
-    let out = ask_env(&w, &repo, &["questions", "--json"], None);
+    let out = ask_env(&w, &repo, &["questions", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let rows = v["questions"].as_array().unwrap();
     assert_eq!(rows.len(), 2, "{v}");
@@ -399,7 +319,7 @@ fn the_listing_json_carries_the_answered_flag() {
     // The pending queue never contains an answered question, so there the
     // field is always false — but it is still present, so one parser serves
     // both listings.
-    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
+    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let rows = v["questions"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "{v}");
@@ -413,7 +333,7 @@ fn the_listing_json_carries_the_answered_flag() {
 fn a_question_is_a_persons_unless_it_says_otherwise() {
     let w = World::new("q-audience");
     let repo = w.repo("thing", None);
-    assert_eq!(code(&ask_env(&w, &repo, &["log", "first write"], None)), 0);
+    assert_eq!(code(&ask_env(&w, &repo, &["log", "first write"])), 0);
 
     // Nothing about where it is asked from or what the environment holds
     // makes a question the orchestrator's: a directory where the retired
@@ -421,15 +341,19 @@ fn a_question_is_a_persons_unless_it_says_otherwise() {
     let old_worktree = w.dirs().state.join("workflow/worktrees/thing/cart-v2/t3");
     std::fs::create_dir_all(&old_worktree).unwrap();
     for cwd in [&repo, &old_worktree] {
-        let out = mem_cmd(&w, cwd, &["ask", "ship it?", "--project", "thing", "--json"])
-            .env("WORKFLOW_TASK", "cart-v2/t1")
-            .output()
-            .expect("run mem");
+        let out = mem_cmd(
+            &w,
+            cwd,
+            &["ask", "ship it?", "--project", "thing", "--json"],
+        )
+        .env("WORKFLOW_TASK", "cart-v2/t1")
+        .output()
+        .expect("run mem");
         assert_eq!(code(&out), 0, "{}", stderr(&out));
         let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
         assert!(v["audience"].is_null(), "{v}");
     }
-    let out = ask_env(&w, &repo, &["questions", "--for", "human", "--json"], None);
+    let out = ask_env(&w, &repo, &["questions", "--for", "human", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["questions"].as_array().unwrap().len(), 2, "{v}");
     for q in v["questions"].as_array().unwrap() {
@@ -451,7 +375,6 @@ fn an_orchestrators_question_is_listed_for_the_orchestrator_alone() {
             "orchestrator",
             "--json",
         ],
-        None,
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -470,7 +393,6 @@ fn an_orchestrators_question_is_listed_for_the_orchestrator_alone() {
             "human",
             "--json",
         ],
-        None,
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["questions"], serde_json::json!([]), "{v}");
@@ -480,7 +402,6 @@ fn an_orchestrators_question_is_listed_for_the_orchestrator_alone() {
         &w,
         &repo,
         &["questions", "--pending", "--for", "orchestrator", "--json"],
-        None,
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -490,18 +411,13 @@ fn an_orchestrators_question_is_listed_for_the_orchestrator_alone() {
     assert_eq!(q["body"], "may I widen Files by src/main.rs?");
     assert_eq!(q["answered"], false);
     assert!(q["answer"].is_null());
-    let text = stdout(&ask_env(&w, &repo, &["questions", "--pending"], None));
+    let text = stdout(&ask_env(&w, &repo, &["questions", "--pending"]));
     assert!(text.contains("[orchestrator] may I widen"), "{text}");
 
     // Answered, the same listing carries the answer.
-    let out = ask_env(&w, &repo, &["answer", &id, "yes, widen"], None);
+    let out = ask_env(&w, &repo, &["answer", &id, "yes, widen"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--for", "orchestrator", "--json"],
-        None,
-    );
+    let out = ask_env(&w, &repo, &["questions", "--for", "orchestrator", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["questions"][0]["answer"], "yes, widen", "{v}");
     assert_eq!(v["questions"][0]["answered"], true);
@@ -524,19 +440,18 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
             "yes, the gate is green",
             "--json",
         ],
-        None,
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let asked: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(asked["recommend"], "yes, the gate is green", "{asked}");
     let id = asked["short_id"].as_str().unwrap().to_string();
 
-    let out = ask_env(&w, &repo, &["ask", "and this one?", "--json"], None);
+    let out = ask_env(&w, &repo, &["ask", "and this one?", "--json"]);
     let bare: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(bare["recommend"].is_null(), "{bare}");
 
     let check = |w: &World| {
-        let out = ask_env(w, &repo, &["questions", "--json"], None);
+        let out = ask_env(w, &repo, &["questions", "--json"]);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
         let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
         let rows = v["questions"].as_array().unwrap();
@@ -553,7 +468,7 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
     };
     check(&w);
 
-    let out = ask_env(&w, &repo, &["questions"], None);
+    let out = ask_env(&w, &repo, &["questions"]);
     let text = stdout(&out);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 3, "{text}");
@@ -568,7 +483,7 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
     );
 
     // The field lives in the item file, so a rebuilt index loses nothing.
-    let out = ask_env(&w, &repo, &["reindex"], None);
+    let out = ask_env(&w, &repo, &["reindex"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     check(&w);
 }

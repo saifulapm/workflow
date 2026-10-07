@@ -332,7 +332,11 @@ fn a_roadmap_status_is_draft_or_approved() {
     let repo = w.repo("shop", None);
     let path = file(&w, "roadmap.md", ROADMAP);
     assert_eq!(code(&mem(&w, &repo, &["roadmap", "--set-file", &path])), 0);
-    assert!(json(&mem(&w, &repo, &["roadmap", "--json"])).get("status").is_none());
+    assert!(
+        json(&mem(&w, &repo, &["roadmap", "--json"]))
+            .get("status")
+            .is_none()
+    );
 
     for status in ["draft", "approved"] {
         let out = mem(&w, &repo, &["roadmap", "--status", status]);
@@ -341,9 +345,16 @@ fn a_roadmap_status_is_draft_or_approved() {
             stdout(&mem(&w, &repo, &["roadmap", "--status"])),
             format!("{status}\n")
         );
-        assert_eq!(json(&mem(&w, &repo, &["roadmap", "--json"]))["status"], status);
+        assert_eq!(
+            json(&mem(&w, &repo, &["roadmap", "--json"]))["status"],
+            status
+        );
     }
-    assert_eq!(stdout(&mem(&w, &repo, &["roadmap"])), ROADMAP, "the text is untouched");
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["roadmap"])),
+        ROADMAP,
+        "the text is untouched"
+    );
 
     for status in ["running", "done", "maintenance", "parked"] {
         let out = mem(&w, &repo, &["roadmap", "--status", status]);

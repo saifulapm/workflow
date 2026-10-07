@@ -202,7 +202,11 @@ fn a_store_an_older_mem_wrote_still_reads_cleanly() {
     );
     std::fs::write(&toml, &text).unwrap();
     std::fs::write(store.project_dir(P).join("status.md"), "m2 under way\n").unwrap();
-    std::fs::write(store.roadmap_path(P), "# roadmap: v2\n\n- [ ] m1-auth Sign-in\n").unwrap();
+    std::fs::write(
+        store.roadmap_path(P),
+        "# roadmap: v2\n\n- [ ] m1-auth Sign-in\n",
+    )
+    .unwrap();
     let mut q = item(Kind::Question, "retry t2?", "retry t2?");
     q.meta.id = "01K2YR1VC0AB3DE4FG5HJ6KM7N".to_string();
     q.meta.audience = Some("orchestrator".to_string());
@@ -216,16 +220,22 @@ fn a_store_an_older_mem_wrote_still_reads_cleanly() {
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
         stdout(&out)
     };
-    let json = |args: &[&str]| -> serde_json::Value {
-        serde_json::from_str(&read(args)).expect("json")
-    };
+    let json =
+        |args: &[&str]| -> serde_json::Value { serde_json::from_str(&read(args)).expect("json") };
 
     read(&["reindex", "--full"]);
     let row = &json(&["projects", "--json"])["projects"][0];
     assert_eq!(row["roadmap_status"], "maintenance", "{row}");
     let current = json(&["project", "current", "--json"]);
     assert_eq!(current["name"], "thing", "{current}");
-    for gone in ["runner", "paused", "slots", "model", "effort", "review_paths"] {
+    for gone in [
+        "runner",
+        "paused",
+        "slots",
+        "model",
+        "effort",
+        "review_paths",
+    ] {
         assert!(current.get(gone).is_none(), "{gone}: {current}");
     }
     assert_eq!(read(&["roadmap", "--status"]), "maintenance\n");
@@ -243,5 +253,9 @@ fn a_store_an_older_mem_wrote_still_reads_cleanly() {
     let doctor = read(&["doctor"]);
     assert!(!doctor.contains("status.md"), "{doctor}");
     assert!(!doctor.contains("project.toml"), "{doctor}");
-    assert_eq!(std::fs::read_to_string(&toml).unwrap(), text, "a read writes nothing");
+    assert_eq!(
+        std::fs::read_to_string(&toml).unwrap(),
+        text,
+        "a read writes nothing"
+    );
 }

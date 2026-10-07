@@ -160,7 +160,7 @@ fn populated(tag: &str) -> (World, PathBuf) {
 #[test]
 fn every_verb_matches_its_committed_schema() {
     let (w, repo) = populated("json-contract");
-    let quiet = [("MEM_SYNC_CMD", "true"), ("MEM_NOTIFY_CMD", "true")];
+    let quiet = [("MEM_SYNC_CMD", "true")];
 
     validate("context.json", &mem(&w, &repo, &["context", "--json"]));
     validate("projects.json", &mem(&w, &repo, &["projects", "--json"]));
