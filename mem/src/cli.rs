@@ -317,31 +317,16 @@ pub enum Command {
         /// Check off one task by its plan id, in place.
         #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["set_file", "stdin", "clear"])]
         tick: Option<String>,
-        /// Print one task's block alone, by its plan id.
-        #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["set_file", "stdin", "clear", "tick", "list", "from"])]
-        task: Option<String>,
         /// List the stored plans: slug, bytes, date and title.
         #[arg(long, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick"])]
         list: bool,
-        /// Make a stored plan the current plan. Refused while the current one
-        /// still holds an unchecked task.
-        #[arg(long, value_name = "SLUG", conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick", "list"])]
-        from: Option<String>,
-        /// Print the plan's status, or set it: draft, approved, running, done or
-        /// maintenance.
-        #[arg(long, value_name = "STATUS", num_args = 0..=1, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick", "task", "list", "from"])]
-        status: Option<Option<String>>,
-        /// Append the task block on stdin to the current plan. Its first line
-        /// is `- [ ] <id> <title>` with an id the plan does not have yet.
-        #[arg(long, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick", "task", "list", "from", "status"])]
-        add_task: bool,
         /// Write even while another machine holds the runner claim.
         #[arg(long)]
         force: bool,
         #[arg(long)]
         session_id: Option<String>,
     },
-    /// Print roadmap.md verbatim, or replace, clear, tick or untick it.
+    /// Print roadmap.md verbatim, or replace, clear or tick it.
     Roadmap {
         #[arg(long)]
         set_file: Option<std::path::PathBuf>,
@@ -352,13 +337,8 @@ pub enum Command {
         /// Check off one milestone by its slug, in place.
         #[arg(long, value_name = "SLUG", conflicts_with_all = ["set_file", "stdin", "clear"])]
         tick: Option<String>,
-        /// Take one milestone's tick back, in place: it is not done after all,
-        /// and the run has fixes to make before it is.
-        #[arg(long, value_name = "SLUG", conflicts_with_all = ["set_file", "stdin", "clear", "tick"])]
-        untick: Option<String>,
-        /// Print the roadmap's status, or set it: draft, approved, running, done
-        /// or maintenance.
-        #[arg(long, value_name = "STATUS", num_args = 0..=1, conflicts_with_all = ["set_file", "stdin", "clear", "tick", "untick"])]
+        /// Print the roadmap's status, or set it: draft or approved.
+        #[arg(long, value_name = "STATUS", num_args = 0..=1, conflicts_with_all = ["set_file", "stdin", "clear", "tick"])]
         status: Option<Option<String>>,
         /// Write even while another machine holds the runner claim.
         #[arg(long)]

@@ -209,18 +209,18 @@ pub fn write_singleton_since(
 /// What one plan line had to say about a task id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tick {
-    /// This line carries the id and wore the other box; here it is, flipped.
+    /// This line carries the id and was open; here it is, checked.
     Flipped(String),
-    /// This line carries the id and already wears the box asked for.
+    /// This line carries the id and is already checked.
     Already,
     NoMatch,
 }
 
-/// One task line of the plan grammar: `- [ ] <id> <title>`. `want` is the box
-/// asked for, checked or not. Everything after the checkbox is preserved byte
-/// for byte — the title, the `[after: …]` tail and any line ending — because a
-/// tick may only change the box.
-pub fn tick_line(line: &str, id: &str, want: bool) -> Tick {
+/// One task line of the plan grammar: `- [ ] <id> <title>`, checked.
+/// Everything after the checkbox is preserved byte for byte, the title, the
+/// `[after: …]` tail and any line ending, because a tick may only change the
+/// box.
+pub fn tick_line(line: &str, id: &str) -> Tick {
     let indent_len = line.len() - line.trim_start().len();
     let (indent, rest) = line.split_at(indent_len);
     let Some(rest) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* ")) else {
@@ -242,11 +242,10 @@ pub fn tick_line(line: &str, id: &str, want: bool) -> Tick {
     if tail.split_whitespace().next() != Some(id) {
         return Tick::NoMatch;
     }
-    if checked == want {
+    if checked {
         return Tick::Already;
     }
-    let checkbox = if want { "[x]" } else { "[ ]" };
-    Tick::Flipped(format!("{indent}{bullet}{checkbox} {tail}"))
+    Tick::Flipped(format!("{indent}{bullet}[x] {tail}"))
 }
 
 /// The id of a checked task line, `- [x] <id> …`, and nothing for any other
@@ -281,7 +280,7 @@ pub fn carry_ticks(current: &str, incoming: &str) -> (String, Vec<String>) {
         .split('\n')
         .map(|line| {
             for id in &ticked {
-                if let Tick::Flipped(new) = tick_line(line, id, true) {
+                if let Tick::Flipped(new) = tick_line(line, id) {
                     kept.push(id.to_string());
                     return new;
                 }
@@ -296,18 +295,17 @@ pub fn carry_ticks(current: &str, incoming: &str) -> (String, Vec<String>) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ticked {
     Flipped,
-    /// Already the box asked for: a tick is idempotent (spec §7), and so is
-    /// taking one back.
+    /// Already checked: a tick is idempotent.
     Already,
 }
 
-/// Ticks one line — a task in `plan.md`, a milestone in `roadmap.md` — found
-/// by an exact id, to the box `want` asks for. `noun` names what was not found
-/// ("task", "milestone") in the "no `<noun>` '`<id>`' in the `<document>`"
-/// error; the document word is the file's own name. The read-modify-write is
-/// internal, so the CAS is retried rather than surfaced: exit 5 is not a thing
-/// a caller can act on here (spec §7).
-pub fn tick_task(path: &Path, id: &str, noun: &str, want: bool) -> Result<Ticked> {
+/// Ticks one line, a task in `plan.md` or a milestone in `roadmap.md`, found
+/// by an exact id. `noun` names what was not found ("task", "milestone") in
+/// the "no `<noun>` '`<id>`' in the `<document>`" error; the document word is
+/// the file's own name. The read-modify-write is internal, so the CAS is
+/// retried rather than surfaced: exit 5 is not a thing a caller can act on
+/// here.
+pub fn tick_task(path: &Path, id: &str, noun: &str) -> Result<Ticked> {
     let document = path.file_stem().and_then(|s| s.to_str()).unwrap_or("plan");
     for _ in 0..3 {
         let seen = read_mtime(path);
@@ -317,7 +315,7 @@ pub fn tick_task(path: &Path, id: &str, noun: &str, want: bool) -> Result<Ticked
         let mut flipped = false;
         let mut found = false;
         for line in &mut lines {
-            match tick_line(line, id, want) {
+            match tick_line(line, id) {
                 Tick::Flipped(new) => {
                     *line = new;
                     found = true;
@@ -374,61 +372,48 @@ mod tests {
     #[test]
     fn a_tick_changes_the_box_and_nothing_else() {
         assert_eq!(
-            tick_line("- [ ] t1 Extract pricing  [after: t0]", "t1", true),
+            tick_line("- [ ] t1 Extract pricing  [after: t0]", "t1"),
             Tick::Flipped("- [x] t1 Extract pricing  [after: t0]".to_string())
         );
         // A CRLF line ending survives, because it lives in the tail.
         assert_eq!(
-            tick_line("- [ ] t1 Extract pricing\r", "t1", true),
+            tick_line("- [ ] t1 Extract pricing\r", "t1"),
             Tick::Flipped("- [x] t1 Extract pricing\r".to_string())
         );
         assert_eq!(
-            tick_line("  * [ ] t1 Indented and starred", "t1", true),
+            tick_line("  * [ ] t1 Indented and starred", "t1"),
             Tick::Flipped("  * [x] t1 Indented and starred".to_string())
-        );
-        // And back again, for a milestone a cold review sent back.
-        assert_eq!(
-            tick_line("- [x] m1 Sign-in  [after: m0]", "m1", false),
-            Tick::Flipped("- [ ] m1 Sign-in  [after: m0]".to_string())
-        );
-        assert_eq!(
-            tick_line("  * [X] m1 Shouted and starred", "m1", false),
-            Tick::Flipped("  * [ ] m1 Shouted and starred".to_string())
         );
     }
 
     #[test]
     fn only_the_named_task_matches() {
         assert_eq!(
-            tick_line("- [ ] t10 Delete the helper", "t1", true),
+            tick_line("- [ ] t10 Delete the helper", "t1"),
             Tick::NoMatch
         );
         assert_eq!(
-            tick_line("- [ ] t1 Extract pricing", "t10", true),
+            tick_line("- [ ] t1 Extract pricing", "t10"),
             Tick::NoMatch
         );
         assert_eq!(
-            tick_line("- [x] t1 Extract pricing", "t1", true),
+            tick_line("- [x] t1 Extract pricing", "t1"),
             Tick::Already
         );
         assert_eq!(
-            tick_line("- [X] t1 Extract pricing", "t1", true),
-            Tick::Already
-        );
-        assert_eq!(
-            tick_line("- [ ] t1 Extract pricing", "t1", false),
+            tick_line("- [X] t1 Extract pricing", "t1"),
             Tick::Already
         );
         // Not task lines at all.
         assert_eq!(
-            tick_line("# plan: cart-pricing-v2", "t1", true),
+            tick_line("# plan: cart-pricing-v2", "t1"),
             Tick::NoMatch
         );
         assert_eq!(
-            tick_line("      Verify: t1 runs", "t1", true),
+            tick_line("      Verify: t1 runs", "t1"),
             Tick::NoMatch
         );
-        assert_eq!(tick_line("- t1 no checkbox", "t1", true), Tick::NoMatch);
-        assert_eq!(tick_line("", "t1", true), Tick::NoMatch);
+        assert_eq!(tick_line("- t1 no checkbox", "t1"), Tick::NoMatch);
+        assert_eq!(tick_line("", "t1"), Tick::NoMatch);
     }
 }

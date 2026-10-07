@@ -212,11 +212,9 @@ fn every_verb_matches_its_committed_schema() {
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
     // The runner set above is another machine's claim; --force writes past it.
     assert_eq!(
-        code(&mem(&w, &repo, &["plan", "--status", "running", "--force"])),
+        code(&mem(&w, &repo, &["roadmap", "--status", "approved", "--force"])),
         0
     );
-    let plan = validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
-    assert_eq!(plan["status"], serde_json::json!("running"));
     validate(
         "plan-tick.json",
         &mem(&w, &repo, &["plan", "--tick", "t1", "--force", "--json"]),
@@ -535,7 +533,7 @@ fn the_brief_says_where_the_project_stands() {
     )
     .unwrap();
     set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
-    set(&["roadmap", "--status", "running", "--force"]);
+    set(&["roadmap", "--status", "approved", "--force"]);
     set(&["roadmap", "--tick", "m1-auth", "--force"]);
     let plan = w.dir.join("plan.md");
     std::fs::write(
@@ -554,7 +552,7 @@ fn the_brief_says_where_the_project_stands() {
     let b = brief(&repo);
     assert!(b["brief"].is_string(), "{b}");
     assert_eq!(b["project"], "thing");
-    assert_eq!(b["roadmap_status"], "running");
+    assert_eq!(b["roadmap_status"], "approved");
     assert_eq!(b["milestone"], "m2-billing");
     assert_eq!(b["milestones_done"], 1);
     assert_eq!(b["milestones_total"], 2);

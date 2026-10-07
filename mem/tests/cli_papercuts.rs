@@ -1,48 +1,14 @@
-//! Four papercuts ebdify m1's workers and orchestrator hit (m1-lessons
-//! ruling 12): a kind cannot be listed without inventing a query, one task's
-//! block cannot be read without the whole plan, `mem list` is nobody's verb
-//! and says nothing useful, and a `#`-prefixed id has always been taken.
+//! Papercuts of the CLI surface: a kind cannot be listed without inventing a
+//! query, `mem list` is nobody's verb and says nothing useful, a
+//! `#`-prefixed id has always been taken, and the verbs and flags the
+//! retired run engine used are gone.
 
 mod common;
-
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
 
 use common::{World, code, mem, stderr, stdout};
 
 fn repo(w: &World) -> std::path::PathBuf {
     w.repo("app", Some("git@github.com:me/app.git"))
-}
-
-/// `mem` with text on stdin, the environment `common::mem_env` sets.
-fn mem_stdin(w: &World, cwd: &Path, args: &[&str], input: &str) -> std::process::Output {
-    let dirs = w.dirs();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_mem"));
-    cmd.current_dir(cwd)
-        .args(args)
-        .env("XDG_DATA_HOME", &dirs.data)
-        .env("XDG_CACHE_HOME", &dirs.cache)
-        .env("XDG_STATE_HOME", &dirs.state)
-        .env("XDG_CONFIG_HOME", &dirs.config)
-        .env("PI_CODING_AGENT_DIR", w.pi_agent_dir())
-        .env_remove("MEM_SESSION_ID")
-        .env_remove("PI_SESSION_ID")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .env_remove("WORKFLOW_TASK")
-        .env_remove("MEM_PROJECT")
-        .env_remove("CARGO_TARGET_DIR")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd.spawn().expect("spawn mem");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.as_bytes())
-        .unwrap();
-    child.wait_with_output().expect("mem")
 }
 
 #[test]
@@ -91,25 +57,6 @@ fn a_kind_lists_without_a_query() {
 }
 
 #[test]
-fn one_task_block_is_read_alone() {
-    let w = World::new("papercuts-task");
-    let dir = repo(&w);
-    let plan = "# plan: p\n\n## Spec\n\nx\n\n- [ ] t1 First\n      Files: a.rs\n      Verify: true\n- [x] t2 Second  [after: t1]\n      Files: b.rs\n      Verify: true\n      Done: b is done\n";
-    let out = mem_stdin(&w, &dir, &["plan", "--stdin"], plan);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-
-    let out = mem(&w, &dir, &["plan", "--task", "t2"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(
-        stdout(&out),
-        "- [x] t2 Second  [after: t1]\n      Files: b.rs\n      Verify: true\n      Done: b is done\n"
-    );
-    let out = mem(&w, &dir, &["plan", "--task", "t9"]);
-    assert_eq!(code(&out), 1);
-    assert!(stderr(&out).contains("no task 't9'"), "{}", stderr(&out));
-}
-
-#[test]
 fn list_says_which_verbs_list() {
     let w = World::new("papercuts-list");
     let dir = w.plain_dir("anywhere");
@@ -151,4 +98,32 @@ fn a_hash_prefixed_id_resolves() {
         "{}",
         stdout(&out)
     );
+}
+
+/// What only the retired run engine called is refused the way clap refuses
+/// any unknown argument, and no help text names it.
+#[test]
+fn the_engine_surface_is_gone() {
+    let w = World::new("papercuts-retired");
+    let dir = repo(&w);
+    for args in [
+        &["plan", "--task", "t1"][..],
+        &["plan", "--add-task"][..],
+        &["plan", "--from", "m1"][..],
+        &["plan", "--status"][..],
+        &["plan", "--status", "approved"][..],
+        &["roadmap", "--untick", "m1"][..],
+    ] {
+        let out = mem(&w, &dir, args);
+        assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
+    }
+    for (verb, gone) in [
+        ("plan", &["--task", "--add-task", "--from", "--status"][..]),
+        ("roadmap", &["--untick", "running", "maintenance"][..]),
+    ] {
+        let help = stdout(&mem(&w, &dir, &[verb, "--help"]));
+        for word in gone {
+            assert!(!help.contains(word), "{verb} --help names {word}: {help}");
+        }
+    }
 }

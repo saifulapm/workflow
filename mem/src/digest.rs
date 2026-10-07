@@ -60,9 +60,8 @@ pub struct Sources {
     pub staleness: Option<String>,
     /// The project's name, for the small digest's first line.
     pub project: Option<String>,
-    /// The plan's stage and the machine running the project, as the project
-    /// keys `plan_status` and `runner` declare them.
-    pub stage: Option<String>,
+    /// The machine running the project, as the project key `runner`
+    /// declares it.
     pub runner: Option<String>,
     pub handoff: Option<Row>,
     pub plan: Option<String>,
@@ -118,7 +117,6 @@ impl Sources {
             version: crate::maint::read_version_warning(store),
             staleness,
             project: declared("name"),
-            stage: declared("plan_status"),
             runner: declared("runner"),
             handoff: index.recent("handoff", project_id, 1)?.into_iter().next(),
             plan,
@@ -184,8 +182,7 @@ pub fn plan_head(plan: &str) -> Vec<String> {
 }
 
 /// The first unchecked task line of a plan, trimmed. An open box is what says
-/// the plan still has work in it, whether the reader is the digest or the
-/// `--from` that would otherwise overwrite it.
+/// the plan still has work in it.
 ///
 /// A box inside a fenced block, or indented four spaces or more, is an example
 /// of a task rather than one: plans that quote their own grammar are full of
@@ -409,9 +406,6 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
     lines.extend(sources.staleness.iter().cloned());
     if let Some(name) = &sources.project {
         let mut line = format!("project: {name}");
-        if let Some(stage) = &sources.stage {
-            line.push_str(&format!(" · stage: {stage}"));
-        }
         if let Some(runner) = &sources.runner {
             line.push_str(&format!(" · runner: {runner}"));
         }

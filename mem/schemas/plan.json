@@ -15,13 +15,8 @@
       "type": "string"
     },
     "status": {
-      "description": "plan_status (or roadmap_status for `mem roadmap --json`) from project.toml; absent when unset.",
-      "enum": [
-        "draft",
-        "approved",
-        "running",
-        "done"
-      ]
+      "description": "`mem roadmap --json` only: roadmap_status from project.toml, which `mem roadmap --status` sets to draft or approved; a store written by an older mem can hold another word. Absent when unset.",
+      "type": "string"
     }
   },
   "additionalProperties": false

@@ -1,5 +1,5 @@
 //! The roadmap and the stored milestone plans: a plan of plans beside the plan
-//! of record, and the copy that makes one of them active.
+//! of record.
 
 mod common;
 
@@ -244,86 +244,6 @@ fn listing_the_stored_plans_names_slug_bytes_date_and_title() {
 }
 
 #[test]
-fn from_copies_a_stored_plan_over_the_plan_of_record() {
-    let w = World::new("roadmap-from");
-    let repo = w.repo("shop", None);
-
-    let first = "# plan: m1-auth\n\n- [ ] t1 Sign-in\n";
-    let path = file(&w, "m1-auth.md", first);
-    assert_eq!(
-        code(&mem(&w, &repo, &["plan", "m1-auth", "--set-file", &path])),
-        0
-    );
-    let second = "# plan: m2-billing\n\n- [ ] t1 Charge the card\n";
-    let path = file(&w, "m2-billing.md", second);
-    assert_eq!(
-        code(&mem(
-            &w,
-            &repo,
-            &["plan", "m2-billing", "--set-file", &path]
-        )),
-        0
-    );
-
-    // Nothing is active, so the first milestone becomes the plan of record.
-    let out = mem(&w, &repo, &["plan", "--from", "m1-auth"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(stdout(&mem(&w, &repo, &["plan"])), first);
-
-    // The next one has to wait: an unchecked task means the run is not done.
-    let out = mem(&w, &repo, &["plan", "--from", "m2-billing"]);
-    assert_eq!(code(&out), 2, "{}", stdout(&out));
-    assert!(
-        stderr(&out).contains("t1"),
-        "it names the task: {}",
-        stderr(&out)
-    );
-    assert_eq!(stdout(&mem(&w, &repo, &["plan"])), first);
-
-    assert_eq!(code(&mem(&w, &repo, &["plan", "--tick", "t1"])), 0);
-    let out = mem(&w, &repo, &["plan", "--from", "m2-billing"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(stdout(&mem(&w, &repo, &["plan"])), second);
-
-    // The stored plan stays where it is, and an unknown one is exit 1.
-    assert_eq!(stdout(&mem(&w, &repo, &["plan", "m1-auth"])), first);
-    assert_eq!(code(&mem(&w, &repo, &["plan", "--from", "m9-nope"])), 1);
-}
-
-#[test]
-fn from_reads_past_the_example_boxes_of_a_finished_plan() {
-    let w = World::new("roadmap-from-examples");
-    let repo = w.repo("shop", None);
-
-    let second = "# plan: m2-billing\n\n- [ ] t1 Charge the card\n";
-    let path = file(&w, "m2-billing.md", second);
-    assert_eq!(
-        code(&mem(
-            &w,
-            &repo,
-            &["plan", "m2-billing", "--set-file", &path]
-        )),
-        0
-    );
-
-    // Every task is ticked; the open boxes left are a fenced example and one
-    // indented under the task that explains it, so the plan is finished.
-    let finished = "# plan: m1-auth\n\n\
-        - [x] t1 Sign-in\n\
-        \x20     Spec: a task line reads\n\n\
-        \x20         - [ ] t9 an example task\n\n\
-        ```\n\
-        - [ ] t8 another example\n\
-        ```\n";
-    let path = file(&w, "record.md", finished);
-    assert_eq!(code(&mem(&w, &repo, &["plan", "--set-file", &path])), 0);
-
-    let out = mem(&w, &repo, &["plan", "--from", "m2-billing"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(stdout(&mem(&w, &repo, &["plan"])), second);
-}
-
-#[test]
 fn context_names_the_roadmap_and_its_next_milestone() {
     let w = World::new("roadmap-context");
     let repo = w.repo("shop", None);
@@ -355,55 +275,6 @@ fn context_names_the_roadmap_and_its_next_milestone() {
     assert!(text.contains("roadmap: m2-billing (2 of 2)\n"), "{text}");
     let text = stdout(&mem(&w, &repo, &["context", "--full"]));
     assert!(text.contains("roadmap: - [ ] m2-billing Billing"), "{text}");
-}
-
-#[test]
-fn a_milestone_the_review_sends_back_unticks() {
-    // The milestone passed every task of its plan and failed the cold review
-    // that ends it: it is not done, and a replacement cannot say so, because
-    // a write keeps the ticks the copy on disk has (friction #5ASS8BVK).
-    let w = World::new("roadmap-untick");
-    let repo = w.repo("shop", None);
-    let path = file(&w, "roadmap.md", ROADMAP);
-    assert_eq!(code(&mem(&w, &repo, &["roadmap", "--set-file", &path])), 0);
-    assert_eq!(code(&mem(&w, &repo, &["roadmap", "--tick", "m1-auth"])), 0);
-    let text = stdout(&mem(&w, &repo, &["context"]));
-    assert!(text.contains("roadmap: m2-billing (2 of 2)\n"), "{text}");
-    let text = stdout(&mem(&w, &repo, &["context", "--full"]));
-    assert!(text.contains("roadmap: - [ ] m2-billing Billing"), "{text}");
-
-    let out = mem(&w, &repo, &["roadmap", "--untick", "m1-auth"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(stdout(&out).contains("- [ ] m1-auth"), "{}", stdout(&out));
-    assert_eq!(
-        stdout(&mem(&w, &repo, &["roadmap"])),
-        ROADMAP,
-        "the page is back byte for byte"
-    );
-    let text = stdout(&mem(&w, &repo, &["context"]));
-    assert!(
-        text.contains("roadmap: m1-auth (1 of 2)\n"),
-        "the digest names m1-auth as next again: {text}"
-    );
-    let text = stdout(&mem(&w, &repo, &["context", "--full"]));
-    assert!(
-        text.contains("roadmap: - [ ] m1-auth Sign-in and sessions"),
-        "the digest names m1-auth as next again: {text}"
-    );
-
-    // Unticking it again is the no-op a second tick is, and an unknown
-    // milestone is exit 1 with nothing written.
-    let out = mem(&w, &repo, &["roadmap", "--untick", "m1-auth"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(stdout(&out).contains("(already)"), "{}", stdout(&out));
-    let out = mem(&w, &repo, &["roadmap", "--untick", "m9"]);
-    assert_eq!(code(&out), 1);
-    assert!(
-        stderr(&out).contains("no milestone 'm9' in the roadmap"),
-        "{}",
-        stderr(&out)
-    );
-    assert_eq!(stdout(&mem(&w, &repo, &["roadmap"])), ROADMAP);
 }
 
 #[test]
@@ -456,37 +327,49 @@ fn replacing_the_plan_of_record_keeps_the_ticks_a_run_has_made() {
 }
 
 #[test]
-fn maintenance_is_a_status_on_both_singletons() {
-    let w = World::new("roadmap-maintenance");
+fn a_roadmap_status_is_draft_or_approved() {
+    let w = World::new("roadmap-status");
     let repo = w.repo("shop", None);
-    for noun in ["plan", "roadmap"] {
-        let out = mem(&w, &repo, &[noun, "--status", "maintenance"]);
-        assert_eq!(code(&out), 0, "{noun}: {}", stderr(&out));
+    let path = file(&w, "roadmap.md", ROADMAP);
+    assert_eq!(code(&mem(&w, &repo, &["roadmap", "--set-file", &path])), 0);
+    assert!(json(&mem(&w, &repo, &["roadmap", "--json"])).get("status").is_none());
+
+    for status in ["draft", "approved"] {
+        let out = mem(&w, &repo, &["roadmap", "--status", status]);
+        assert_eq!(code(&out), 0, "{status}: {}", stderr(&out));
         assert_eq!(
-            stdout(&mem(&w, &repo, &[noun, "--status"])),
-            "maintenance\n",
-            "{noun}"
+            stdout(&mem(&w, &repo, &["roadmap", "--status"])),
+            format!("{status}\n")
         );
-        let out = mem(&w, &repo, &[noun, "--status", "parked"]);
-        assert_eq!(code(&out), 2, "{noun}: {}", stderr(&out));
-        let help = stdout(&mem(&w, &repo, &[noun, "--help"]));
+        assert_eq!(json(&mem(&w, &repo, &["roadmap", "--json"]))["status"], status);
+    }
+    assert_eq!(stdout(&mem(&w, &repo, &["roadmap"])), ROADMAP, "the text is untouched");
+
+    for status in ["running", "done", "maintenance", "parked"] {
+        let out = mem(&w, &repo, &["roadmap", "--status", status]);
+        assert_eq!(code(&out), 2, "{status}: {}", stderr(&out));
         assert!(
-            help.contains("draft, approved, running, done or maintenance"),
-            "{noun}: {help}"
+            stderr(&out).contains("a roadmap status is one of draft, approved, not"),
+            "{status}: {}",
+            stderr(&out)
         );
     }
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["roadmap", "--status"])),
+        "approved\n"
+    );
+    let help = stdout(&mem(&w, &repo, &["roadmap", "--help"]));
+    assert!(help.contains("draft or approved"), "{help}");
 }
 
 #[test]
-fn an_html_plan_page_is_stored_as_a_milestone_plan() {
-    let w = World::new("roadmap-html-plan");
+fn a_designed_plan_page_is_stored_as_a_milestone_plan() {
+    let w = World::new("roadmap-designed-plan");
     let repo = w.repo("shop", None);
 
-    // The plan skill writes each milestone as one html-plan page. Its first
-    // line is the doctype, so the page names itself by its <doc-plan> instead
-    // of by a `# plan:` header.
+    // A designed page names itself as a plan with data-plan on its root.
     let page = "<!doctype html>\n<html lang=\"en\">\n<title>Sign In</title>\n\
-                <main><doc-plan><doc-claim><p>The user can sign in.</p></doc-claim></doc-plan></main>\n";
+                <main data-plan=\"m1-auth\"><section data-claim=\"1\"><h2>The user can sign in.</h2></section></main>\n";
     let path = file(&w, "m1-auth.html", page);
     let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &path]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
@@ -496,28 +379,19 @@ fn an_html_plan_page_is_stored_as_a_milestone_plan() {
         "the page prints back byte for byte"
     );
 
-    // Any other HTML is not a plan.
-    let stray = file(&w, "stray.html", "<!doctype html>\n<p>notes</p>\n");
-    let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &stray]);
-    assert_eq!(code(&out), 2, "{}", stdout(&out));
-    assert_eq!(
-        stdout(&mem(&w, &repo, &["plan", "m1-auth"])),
-        page,
-        "a refused write leaves the stored page alone"
-    );
-}
-
-#[test]
-fn a_designed_plan_page_is_stored_as_a_milestone_plan() {
-    let w = World::new("roadmap-designed-plan");
-    let repo = w.repo("shop", None);
-
-    // A designed page names itself as a plan with data-plan on its root, in
-    // place of html-plan's <doc-plan>.
-    let page = "<!doctype html>\n<html lang=\"en\">\n<title>Sign In</title>\n\
-                <main data-plan=\"m1-auth\"><section data-claim=\"1\"><h2>The user can sign in.</h2></section></main>\n";
-    let path = file(&w, "m1-auth.html", page);
-    let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &path]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(stdout(&mem(&w, &repo, &["plan", "m1-auth"])), page);
+    // Any other HTML is not a plan, and neither is a page of the retired
+    // html-plan kind, which named itself with <doc-plan>.
+    for stray in [
+        "<!doctype html>\n<p>notes</p>\n",
+        "<!doctype html>\n<main><doc-plan><p>Sign in.</p></doc-plan></main>\n",
+    ] {
+        let stray = file(&w, "stray.html", stray);
+        let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &stray]);
+        assert_eq!(code(&out), 2, "{}", stdout(&out));
+        assert_eq!(
+            stdout(&mem(&w, &repo, &["plan", "m1-auth"])),
+            page,
+            "a refused write leaves the stored page alone"
+        );
+    }
 }
