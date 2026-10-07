@@ -2,9 +2,7 @@
 //! forms post to.
 //!
 //! A form writes mem and nothing else. An idea and a brief are text; a
-//! research request is a question for the engine, which syncs at once and
-//! pairs with its answer, naming the machine the research runs on. A finding
-//! is filed against a milestone's step, with a photo from the phone.
+//! finding is filed against a milestone's step, with a photo from the phone.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -18,11 +16,8 @@ use crate::page_evidence::image_kind;
 use crate::page_roadmap::{MilestoneRow, roadmap_rows};
 use crate::pages::{PageCtx, page_shell};
 
-/// The forms the page posts, in the order it shows them.
-pub const FORMS: [&str; 4] = ["idea", "brief", "research", "round"];
-
-/// How every research request starts, so a pending one is found by its words.
-pub const RESEARCH: &str = "research";
+/// The text forms the page posts, in the order it shows them.
+pub const FORMS: [&str; 2] = ["idea", "brief"];
 
 pub fn get(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
@@ -33,8 +28,6 @@ pub fn get(ctx: &PageCtx) -> Response {
     } else if query.get("empty").is_some() {
         body.push_str("<p class=\"banner warn\">Type something first.</p>\n");
     }
-    // Research runs on this hub's machine.
-    let machine = &ctx.app.machine;
     body.push_str(&text_form(
         project,
         "idea",
@@ -49,20 +42,9 @@ pub fn get(ctx: &PageCtx) -> Response {
         "what the project is for",
         "Write the brief",
     ));
-    body.push_str("<h2>Research</h2>\n");
-    if research_pending(ctx, project) {
-        body.push_str(&format!("<p class=\"banner ok\">{WAITING}</p>\n"));
-    } else {
-        body.push_str(&format!("<p class=\"meta\">on {}</p>\n", esc(machine)));
-        body.push_str(&button_form(project, "research", "Ask for research"));
-        body.push_str(&button_form(project, "round", "Ask for a research round"));
-    }
     body.push_str(&finding_form(project, &milestones(ctx, project)));
     Response::html(page_shell("new", ctx.project, &body))
 }
-
-/// What the page says once a research request waits for the engine.
-pub const WAITING: &str = "sent, waiting for the engine";
 
 pub fn new_post(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
@@ -76,32 +58,16 @@ pub fn new_post(ctx: &PageCtx) -> Response {
     let page = format!("{}/new", project_url(project));
     let fields = ctx.request.form();
     let text = fields.get("text").unwrap_or("").trim();
-    if matches!(form, "idea" | "brief") && text.is_empty() {
+    if text.is_empty() {
         return Response::see_other(&format!("{page}?empty=1"));
     }
 
-    let lock = ctx.app.lock_for(&format!("new:{project}"));
-    // Held from the pending read to the write, so two taps cannot both find
-    // no request and both ask.
-    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
     let flag = format!("--project={project}");
     let mem = &ctx.app.mem;
-    let run = match form {
-        "idea" => mem.write_through(&["idea", &flag, "--", text]),
-        "brief" => mem.write_through(&["brief", &flag, &format!("--set={text}")]),
-        _ => {
-            mem.invalidate();
-            if research_pending(ctx, project) {
-                return Response::see_other(&page);
-            }
-            let words = if form == "research" {
-                "research on"
-            } else {
-                "research round on"
-            };
-            let question = format!("{words} {}", ctx.app.machine);
-            mem.write_through(&["ask", &flag, "--for", "orchestrator", "--", &question])
-        }
+    let run = if form == "idea" {
+        mem.write_through(&["idea", &flag, "--", text])
+    } else {
+        mem.write_through(&["brief", &flag, &format!("--set={text}")])
     };
     if !run.ok() {
         eprintln!("hub: new {form}: mem exited {:?}: {}", run.code, run.stderr);
@@ -110,44 +76,12 @@ pub fn new_post(ctx: &PageCtx) -> Response {
     Response::see_other(&format!("{page}?sent={form}"))
 }
 
-/// Whether a research request of the project's still waits for the engine.
-/// Read from mem, so a reload or a second phone says the same.
-pub fn research_pending(ctx: &PageCtx, project: &str) -> bool {
-    let flag = format!("--project={project}");
-    ctx.app
-        .mem
-        .read(&[
-            "questions",
-            "--pending",
-            "--for",
-            "orchestrator",
-            &flag,
-            "--json",
-        ])
-        .rows("questions")
-        .iter()
-        .any(|row| {
-            row["body"]
-                .as_str()
-                .is_some_and(|body| body.trim_start().starts_with(RESEARCH))
-        })
-}
-
 pub fn text_form(project: &str, form: &str, heading: &str, hint: &str, label: &str) -> String {
     format!(
         "<h2>{heading}</h2>\n\
          <form method=\"post\" action=\"{action}\">\n\
          <textarea name=\"text\" rows=\"3\" placeholder=\"{hint}\" \
          aria-label=\"{hint}\"></textarea>\n\
-         <button type=\"submit\">{label}</button>\n\
-         </form>\n",
-        action = esc(&format!("{}/new/{form}", project_url(project))),
-    )
-}
-
-pub fn button_form(project: &str, form: &str, label: &str) -> String {
-    format!(
-        "<form method=\"post\" action=\"{action}\">\n\
          <button type=\"submit\">{label}</button>\n\
          </form>\n",
         action = esc(&format!("{}/new/{form}", project_url(project))),

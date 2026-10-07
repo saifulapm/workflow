@@ -137,14 +137,14 @@ impl World {
 }
 
 #[test]
-fn a_brief_project_shows_its_brief_and_a_start_research_button() {
+fn a_brief_project_shows_its_brief_and_no_research_button() {
     let world = World::new("project-page-brief");
     let body = world.page("alpha");
 
     assert!(body.contains("brief"), "{body}");
     assert!(body.contains("<strong>shopping list</strong>"), "{body}");
-    assert!(body.contains("action=\"/p/alpha/new/research\""), "{body}");
-    assert!(body.contains("Start research</button>"), "{body}");
+    assert!(!body.contains("/new/research"), "{body}");
+    assert!(!body.contains("Start research"), "{body}");
 }
 
 #[test]

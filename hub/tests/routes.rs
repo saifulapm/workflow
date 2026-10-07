@@ -73,7 +73,7 @@ fn a_wrong_method_is_405_naming_the_right_one() {
     assert_eq!(status_of(&response), 405, "{response}");
     assert_eq!(header_of(&response, "Allow"), Some("GET"), "{response}");
 
-    for path in ["control", "new/research"] {
+    for path in ["control", "new/idea"] {
         let response = hub.get(&format!("/p/{PROJECT}/{path}"));
         assert_eq!(status_of(&response), 405, "{path}: {response}");
         assert_eq!(header_of(&response, "Allow"), Some("POST"), "{response}");
@@ -83,7 +83,7 @@ fn a_wrong_method_is_405_naming_the_right_one() {
 #[test]
 fn a_cross_origin_post_is_refused() {
     let (_dir, hub) = hub("routes-origin");
-    for path in ["control", "new/research"] {
+    for path in ["control", "new/idea"] {
         let response = hub.post_form_with(
             &format!("/p/{PROJECT}/{path}"),
             "",

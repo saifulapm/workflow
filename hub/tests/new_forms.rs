@@ -23,7 +23,6 @@ const PROJECT: &str = "proj-alpha";
 /// Written to the machine file both hub and mem read, so the two agree on a
 /// name no real machine has.
 const MACHINE: &str = "here-box";
-const WAITING: &str = "sent, waiting for the engine";
 
 /// A store with one project, and a hub whose `mem` records every argv before
 /// running the real binary. The seeding runs the real binary directly, so the
@@ -102,7 +101,7 @@ impl World {
             .filter(|argv| {
                 matches!(
                     argv.first().map(String::as_str),
-                    Some("idea" | "brief" | "ask")
+                    Some("idea" | "brief")
                 )
             })
             .filter(|argv| !argv.iter().any(|a| a == "--json"))
@@ -113,17 +112,6 @@ impl World {
         writes
     }
 
-    /// The bodies of the project's questions for the orchestrator.
-    fn engine_questions(&self) -> Vec<String> {
-        self.read_back(&["questions", "--for", "orchestrator", "--json"], |doc| {
-            doc["questions"].as_array().is_some_and(|q| !q.is_empty())
-        })["questions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|q| q["body"].as_str().unwrap().trim().to_string())
-            .collect()
-    }
 }
 
 fn argv(args: &[&str]) -> Vec<String> {
@@ -167,31 +155,25 @@ fn render(world: &World, query: &str) -> (String, Vec<Vec<String>>) {
 }
 
 #[test]
-fn the_page_shows_four_forms_for_four_spawns() {
+fn the_page_shows_the_idea_and_brief_forms_for_two_spawns() {
     let world = World::new("new-page");
     let (body, spawns) = render(&world, "");
     assert_eq!(
         spawns,
         vec![
             argv(&["projects", "--json"]),
-            argv(&[
-                "questions",
-                "--pending",
-                "--for",
-                "orchestrator",
-                "--project=proj-alpha",
-                "--json"
-            ]),
             argv(&["roadmap", "--project=proj-alpha", "--json"]),
         ]
     );
-    for form in ["idea", "brief", "research", "round"] {
+    for form in ["idea", "brief"] {
         let action = format!("action=\"/p/{PROJECT}/new/{form}\"");
         assert!(body.contains(&action), "{action} not in {body}");
     }
+    for form in ["research", "round"] {
+        let action = format!("action=\"/p/{PROJECT}/new/{form}\"");
+        assert!(!body.contains(&action), "{action} in {body}");
+    }
     assert_eq!(body.matches("<textarea name=\"text\"").count(), 2, "{body}");
-    assert!(body.contains("on here-box"), "{body}");
-    assert!(!body.contains(WAITING), "{body}");
     assert!(!body.contains("filed"), "{body}");
 
     let (body, _) = render(&world, "sent=idea");
@@ -287,50 +269,9 @@ fn an_unknown_form_is_not_found() {
     let world = World::new("new-unknown");
     let hub = world.hub();
 
-    for form in ["plan", "idea/more", ""] {
+    for form in ["plan", "idea/more", "research", "round", ""] {
         let response = world.post(&hub, form, "text=x");
         assert_eq!(status_of(&response), 404, "{form:?}: {response}");
     }
     assert_eq!(world.writes(), Vec::<Vec<String>>::new());
-}
-
-#[test]
-fn research_asks_the_engine_on_this_hubs_machine_then_waits() {
-    let world = World::new("new-research");
-    let hub = world.hub();
-
-    let response = world.post(&hub, "research", "");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(
-        header_of(&response, "Location"),
-        Some(sent("research").as_str())
-    );
-    assert_eq!(
-        world.writes(),
-        vec![argv(&[
-            "ask",
-            "--project=proj-alpha",
-            "--for",
-            "orchestrator",
-            "--",
-            "research on here-box"
-        ])]
-    );
-    assert_eq!(world.engine_questions(), ["research on here-box"]);
-
-    // The question, not the redirect, is what the page reads: a reload or a
-    // second phone sees the same.
-    let body = hub.get(&format!("/p/{PROJECT}/new")).to_string();
-    assert!(body.contains(WAITING), "{body}");
-    for form in ["research", "round"] {
-        let action = format!("action=\"/p/{PROJECT}/new/{form}\"");
-        assert!(!body.contains(&action), "{action} still in {body}");
-    }
-
-    for form in ["research", "round"] {
-        let response = world.post(&hub, form, "");
-        assert_eq!(status_of(&response), 303, "{form}: {response}");
-    }
-    assert_eq!(world.writes().len(), 1);
-    assert_eq!(world.engine_questions(), ["research on here-box"]);
 }

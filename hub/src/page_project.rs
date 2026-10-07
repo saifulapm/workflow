@@ -249,8 +249,7 @@ pub fn run_summary(ctx: &PageCtx, project: &str) -> String {
     out
 }
 
-/// The brief and the button that asks the engine for research, or the way
-/// to write a brief when there is none.
+/// The brief, or the way to write one when there is none.
 fn brief_body(ctx: &PageCtx, project: &str) -> String {
     let outcome = ctx
         .app
@@ -268,12 +267,8 @@ fn brief_body(ctx: &PageCtx, project: &str) -> String {
         );
     }
     format!(
-        "<h2>Brief</h2>\n{}\
-         <form method=\"post\" action=\"{}/new/research\">\n\
-         <button type=\"submit\">Start research</button>\n\
-         </form>\n",
-        markdown_article(Some(brief), project, ""),
-        esc(&project_url(project)),
+        "<h2>Brief</h2>\n{}",
+        markdown_article(Some(brief), project, "")
     )
 }
 
