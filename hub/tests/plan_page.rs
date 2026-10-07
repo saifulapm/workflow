@@ -10,6 +10,8 @@ use common::{Hub, TempDir, body_of, header_of, real_mem, recording_mem, seed_pro
 
 const PROJECT: &str = "proj-plans";
 
+/// An html-plan page, the format h1-h3 were stored in. mem no longer takes
+/// one, so the tests plant it in the store the way those pages lie there.
 const PLAN_PAGE: &str = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n\
 <title>Demo Plan</title>\n<link rel=\"stylesheet\" href=\"htmlplan.css\">\n\
 <script src=\"htmlplan.js\" defer></script>\n<body>\n<main>\n<doc-plan>\n\
@@ -55,6 +57,17 @@ impl World {
         self.run(&["plan", slug, "--set-file", path.to_str().unwrap()]);
     }
 
+    fn plant_plan(&self, slug: &str, text: &str) {
+        let current: serde_json::Value =
+            serde_json::from_str(&self.run(&["project", "current", "--json"])).unwrap();
+        let id = current["id"].as_str().unwrap();
+        let dir = self
+            .home
+            .join(format!("data/mem/store/projects/{id}/plans"));
+        std::fs::create_dir_all(&dir).unwrap();
+        write(&dir, &format!("{slug}.md"), text);
+    }
+
     fn question(&self, title: &str) -> serde_json::Value {
         let doc: serde_json::Value =
             serde_json::from_str(&self.run(&["questions", "--json"])).unwrap();
@@ -81,7 +94,7 @@ fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
 #[test]
 fn an_html_plan_opens_in_a_sandboxed_frame() {
     let world = World::new("plan-frame");
-    world.store_plan("h1-demo", PLAN_PAGE);
+    world.plant_plan("h1-demo", PLAN_PAGE);
     let hub = world.hub();
 
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
@@ -240,7 +253,7 @@ fn an_old_html_plan_page_opens_as_text_with_the_retired_note() {
         "<p>The demo claim.</p>",
         "<p>The demo <code>claim</code> &amp; a < b.</p><script>alert(1)</script>",
     );
-    world.store_plan("h1-demo", &page);
+    world.plant_plan("h1-demo", &page);
     let hub = world.hub();
 
     let response = hub.get(&format!("/p/{PROJECT}/plan/h1-demo/page"));
@@ -270,7 +283,7 @@ fn an_old_page_keeps_a_lone_angle_and_never_a_tag_left_open() {
         "<p>The demo claim.</p></doc-claim>\n</doc-plan>\n</main>\n</body>\n</html>\n",
         "<p>runs in <5 min</p></doc-claim></doc-plan><img src=x onerror=alert(1)//",
     );
-    world.store_plan("h1-demo", &page);
+    world.plant_plan("h1-demo", &page);
     let hub = world.hub();
 
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo/page"))).to_string();
@@ -515,7 +528,7 @@ fn the_shell_sends_a_comment_only_on_a_live_tap() {
 #[test]
 fn the_shell_relays_send_and_keeps_drafts_per_revision() {
     let world = World::new("plan-shell");
-    world.store_plan("h1-demo", PLAN_PAGE);
+    world.store_plan("h1-demo", &DESIGNED.replace("h4-demo", "h1-demo"));
     let hub = world.hub();
 
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
@@ -526,7 +539,12 @@ fn the_shell_relays_send_and_keeps_drafts_per_revision() {
     assert!(body.contains(&key), "{body}");
 
     // A revised page starts from no draft rather than the old page's.
-    world.store_plan("h1-demo", &PLAN_PAGE.replace("demo claim", "revised claim"));
+    world.store_plan(
+        "h1-demo",
+        &DESIGNED
+            .replace("h4-demo", "h1-demo")
+            .replace("designed claim", "revised claim"),
+    );
     // A fresh hub, since the first one's cache still holds the old text.
     drop(hub);
     let hub = world.hub();
@@ -548,7 +566,7 @@ fn set_roadmap(world: &World, status: &str) {
 #[test]
 fn a_draft_roadmap_is_approved_from_its_plan_page() {
     let world = World::new("plan-approve");
-    world.store_plan("h1-demo", PLAN_PAGE);
+    world.store_plan("h1-demo", &DESIGNED.replace("h4-demo", "h1-demo"));
     set_roadmap(&world, "draft");
     let hub = world.hub();
 
@@ -570,7 +588,7 @@ fn a_draft_roadmap_is_approved_from_its_plan_page() {
 #[test]
 fn an_approved_roadmap_offers_no_approve() {
     let world = World::new("plan-approved");
-    world.store_plan("h1-demo", PLAN_PAGE);
+    world.store_plan("h1-demo", &DESIGNED.replace("h4-demo", "h1-demo"));
     set_roadmap(&world, "approved");
     let hub = world.hub();
 
@@ -584,7 +602,7 @@ fn the_frame_takes_the_height_the_shell_leaves() {
     // a banner or the approve block changes: the page then scrolls as well
     // as the frame, two scrollers on a phone.
     let world = World::new("plan-height");
-    world.store_plan("h1-demo", PLAN_PAGE);
+    world.store_plan("h1-demo", &DESIGNED.replace("h4-demo", "h1-demo"));
     let hub = world.hub();
 
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
