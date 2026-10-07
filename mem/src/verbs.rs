@@ -1278,11 +1278,13 @@ fn stored_plan(
     land(app, &path, &text, seen, &format!("{slug}.md"))
 }
 
-/// An html-plan page: a whole HTML document holding a `<doc-plan>`. The slug
-/// it is filed under is its only name, since the page has no header line.
+/// A plan page: a whole HTML document holding an html-plan `<doc-plan>` or a
+/// designed page's `data-plan` root. The slug it is filed under is its only
+/// name, since the page has no header line.
 fn is_plan_page(text: &str) -> bool {
     let first = text.trim_start().get(..15).unwrap_or_default();
-    first.eq_ignore_ascii_case("<!doctype html>") && text.contains("<doc-plan")
+    first.eq_ignore_ascii_case("<!doctype html>")
+        && (text.contains("<doc-plan") || text.contains("data-plan="))
 }
 
 /// The slug of a `# <noun>: <slug>` header line, read as the plan parser

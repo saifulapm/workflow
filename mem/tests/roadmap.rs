@@ -506,3 +506,18 @@ fn an_html_plan_page_is_stored_as_a_milestone_plan() {
         "a refused write leaves the stored page alone"
     );
 }
+
+#[test]
+fn a_designed_plan_page_is_stored_as_a_milestone_plan() {
+    let w = World::new("roadmap-designed-plan");
+    let repo = w.repo("shop", None);
+
+    // A designed page names itself as a plan with data-plan on its root, in
+    // place of html-plan's <doc-plan>.
+    let page = "<!doctype html>\n<html lang=\"en\">\n<title>Sign In</title>\n\
+                <main data-plan=\"m1-auth\"><section data-claim=\"1\"><h2>The user can sign in.</h2></section></main>\n";
+    let path = file(&w, "m1-auth.html", page);
+    let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &path]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&mem(&w, &repo, &["plan", "m1-auth"])), page);
+}
