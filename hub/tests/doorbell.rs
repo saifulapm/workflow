@@ -320,7 +320,7 @@ fn an_unreachable_ntfy_keeps_the_service_serving() {
     world.settle();
 
     assert_eq!(status_of(&hub.get("/")), 200);
-    assert_eq!(status_of(&hub.get("/api/questions")), 200);
+    assert_eq!(status_of(&hub.get("/wiki")), 200);
     // The id is still recorded, so the failure is not retried for ever.
     assert_eq!(world.seen().len(), 1);
 }

@@ -563,7 +563,7 @@ fn a_host_this_hub_does_not_answer_to_is_refused_everywhere() {
     let id = world.ask("Should we use Redis?");
     let hub = world.hub();
 
-    for path in ["/", "/api/questions", "/subscribe"] {
+    for path in ["/", "/api/presence", "/subscribe"] {
         let response = hub.raw(&format!(
             "GET {path} HTTP/1.1\r\nHost: evil.example.com\r\nConnection: close\r\n\r\n"
         ));

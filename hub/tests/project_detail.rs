@@ -1,4 +1,4 @@
-//! `GET /p/<project>/{log,roadmap,plan,plan/<slug>,items/<kind>,item/<id>}` —
+//! `GET /p/<project>/{roadmap,plan,plan/<slug>,item/<id>}` —
 //! the detail pages under a project's overview, read-only (m2-hub-pages).
 
 mod common;
@@ -6,7 +6,8 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{
-    Hub, TempDir, body_of, fixture_mem, real_mem, recording_mem, seed_project, status_of,
+    Hub, TempDir, body_of, fixture_mem, invocations, real_mem, recording_mem, seed_project,
+    status_of,
 };
 
 const PROJECT: &str = "proj-solo";
@@ -15,6 +16,7 @@ struct World {
     _dir: TempDir,
     home: PathBuf,
     bin: PathBuf,
+    log: PathBuf,
     mem: PathBuf,
 }
 
@@ -23,13 +25,14 @@ impl World {
         let dir = TempDir::new(tag);
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let (bin, _log) = recording_mem(dir.path(), &home);
+        let (bin, log) = recording_mem(dir.path(), &home);
         let mem = real_mem().unwrap();
         seed_project(&mem, &home, PROJECT, "solo did a thing");
         World {
             _dir: dir,
             home,
             bin,
+            log,
             mem,
         }
     }
@@ -59,25 +62,6 @@ fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, text).unwrap();
     path
-}
-
-/// Ruling 1: `/log` is the last 200 lines, wider than the overview's last 20.
-#[test]
-fn project_detail_log_page_reaches_further_back_than_the_overview() {
-    let world = World::new("detail-log");
-    for n in 1..=22 {
-        world.run(&["log", &format!("log line {n}")]);
-    }
-    let hub = world.hub();
-
-    let log_body = body_of(&hub.get(&format!("/p/{PROJECT}/log"))).to_string();
-    assert!(log_body.contains("log line 1<"), "{log_body}");
-
-    let overview_body = body_of(&hub.get(&format!("/p/{PROJECT}"))).to_string();
-    assert!(
-        !overview_body.contains("log line 1<"),
-        "the overview's last-20 window should not reach this far: {overview_body}"
-    );
 }
 
 /// Ruling 1 and 4: `/roadmap` renders every milestone, uncut, the first open
@@ -114,10 +98,18 @@ fn project_detail_plan_page_shows_a_ticked_box() {
     world.run(&["plan", "--set-file", plan.to_str().unwrap()]);
     let hub = world.hub();
 
+    // The route's projects check and the plan, nothing else.
+    let before = invocations(&world.log).len();
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan"))).to_string();
     assert!(body.contains("Done thing"), "{body}");
     assert!(body.contains("Open thing"), "{body}");
     assert!(body.contains("checked"), "a ticked box: {body}");
+    let reads: Vec<String> = invocations(&world.log)[before..]
+        .iter()
+        .map(|argv| argv.join(" "))
+        .filter(|argv| !argv.starts_with("questions") && !argv.starts_with("projects"))
+        .collect();
+    assert_eq!(reads, ["plan --project=proj-solo --json"]);
 }
 
 /// Ruling 1: `/plan/<slug>` is a stored plan, distinct from the plan of
@@ -135,23 +127,6 @@ fn project_detail_stored_plan_page_shows_its_own_text() {
 
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/sub-slug"))).to_string();
     assert!(body.contains("A stored task"), "{body}");
-}
-
-/// Ruling 1: `/items/<kind>` lists the last 100 items of one kind, each
-/// linked to its own item page.
-#[test]
-fn project_detail_items_page_lists_one_kind() {
-    let world = World::new("detail-items");
-    world.run(&["save", "--kind", "ruling", "a ruling worth listing"]);
-    let (id, title) = world.last_ruling();
-    let hub = world.hub();
-
-    let body = body_of(&hub.get(&format!("/p/{PROJECT}/items/ruling"))).to_string();
-    assert!(body.contains(&title), "{body}");
-    assert!(
-        body.contains(&format!("href=\"/p/{PROJECT}/item/{id}\"")),
-        "{body}"
-    );
 }
 
 /// Ruling 4: `/item/<id>` shows the item's whole body, not only its title.
@@ -188,8 +163,8 @@ fn project_detail_routes_404_for_a_bad_kind_slug_id_or_project() {
 
     let good = format!("/p/{PROJECT}");
     for path in [
-        format!("{good}/items/not-a-kind"),
-        format!("{good}/items/"),
+        format!("{good}/log"),
+        format!("{good}/items/ruling"),
         format!("{good}/item/1234567"), // seven characters: neither 8 nor 26
         format!("{good}/item/{}", "I".repeat(26)), // 26, but `I` is not in mem's alphabet
         format!("{good}/item/not-an-id!"),
@@ -201,7 +176,6 @@ fn project_detail_routes_404_for_a_bad_kind_slug_id_or_project() {
         "/p/no-such-project/roadmap".to_string(),
         "/p/no-such-project/plan".to_string(),
         format!("/p/no-such-project/plan/{id}"),
-        "/p/no-such-project/items/ruling".to_string(),
         format!("/p/no-such-project/item/{id}"),
     ] {
         assert_eq!(status_of(&hub.get(&path)), 404, "{path}");
@@ -212,10 +186,10 @@ fn project_detail_routes_404_for_a_bad_kind_slug_id_or_project() {
     assert_eq!(status_of(&hub.get(&format!("{good}/item/{id}"))), 200);
 }
 
-/// Ruling 2: mem being broken is a banner on a list-shaped detail page that
-/// still renders, not an empty page that reads as "nothing here".
+/// Ruling 2: mem being broken is a banner on the plan page, which still
+/// renders, not an empty page that reads as "nothing here".
 #[test]
-fn project_detail_a_broken_mem_leaves_a_list_page_degraded_rather_than_empty() {
+fn project_detail_a_broken_mem_leaves_the_plan_page_degraded_rather_than_empty() {
     let dir = TempDir::new("detail-degraded");
     let home = dir.join("home");
     let bin = dir.join("bin");
@@ -228,7 +202,7 @@ fn project_detail_a_broken_mem_leaves_a_list_page_degraded_rather_than_empty() {
     );
     let hub = Hub::spawn(&home, &[&bin], &["--port", "0"]);
 
-    let response = hub.get(&format!("/p/{PROJECT}/log"));
+    let response = hub.get(&format!("/p/{PROJECT}/plan"));
     assert_eq!(status_of(&response), 200);
     let body = body_of(&response);
     assert!(body.contains("not JSON"), "{body}");

@@ -43,7 +43,6 @@ fn every_page() -> Vec<String> {
         "/wiki",
         "/decisions",
         "/new",
-        "/log",
         "/plan",
     ] {
         paths.push(format!("/p/{PROJECT}{page}"));

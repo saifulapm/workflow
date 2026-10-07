@@ -9,7 +9,7 @@ mod common;
 use std::path::Path;
 use std::time::Duration;
 
-use common::{TempDir, fixture_mem, invocations, mem_in, real_mem, seed_project};
+use common::{TempDir, fixture_mem, invocations, mem_build, mem_in, real_mem, seed_project};
 use hub::memcli::{MemCli, Outcome};
 
 /// One script that answers every row of the table, chosen by verb.
@@ -18,7 +18,7 @@ case "$1" in
   questions) echo '{"questions":[]}'; exit 1 ;;
   log)       echo '{"items":[]}'; exit 1 ;;
   projects)  echo '{"projects":[]}'; exit 0 ;;
-  status)    echo "mem: nothing recorded" >&2; exit 1 ;;
+  handoff)   echo "mem: nothing recorded" >&2; exit 1 ;;
   answer)    echo "mem: no question DEADBEEF" >&2; exit 1 ;;
   garbage)   echo 'this is not json'; exit 1 ;;
   crash)     echo '{"half":' ; exit 0 ;;
@@ -47,7 +47,7 @@ fn exit_one_with_a_document_is_an_empty_result() {
         "an empty queue is not a fault"
     );
 
-    let log = mem.log("proj-alpha");
+    let log = mem.log_n("proj-alpha", 20);
     assert!(matches!(*log, Outcome::Json(_)));
     assert!(log.rows("items").is_empty());
     assert!(log.broken().is_none());
@@ -68,12 +68,12 @@ fn exit_one_with_empty_stdout_is_absent_and_never_parsed() {
     let dir = TempDir::new("mem-absent");
     let mem = matrix(&dir);
 
-    // The Projects section hits this row for every project without a
-    // status.md, which is most of them. It renders `—`, not an error.
-    let status = mem.status("proj-alpha");
-    assert!(matches!(*status, Outcome::Absent), "{status:?}");
-    assert!(status.broken().is_none(), "absent is not the degraded page");
-    assert!(status.rows("text").is_empty());
+    // A project with no handoff hits this row. It renders `—`, not an
+    // error.
+    let handoff = mem.handoff("proj-alpha");
+    assert!(matches!(*handoff, Outcome::Absent), "{handoff:?}");
+    assert!(handoff.broken().is_none(), "absent is not the degraded page");
+    assert!(handoff.rows("text").is_empty());
 }
 
 #[test]
@@ -143,9 +143,9 @@ fn the_cache_is_per_argv_so_one_project_does_not_shadow_another() {
     );
     let mem = MemCli::with_path(&bin);
 
-    mem.log("proj-alpha");
-    mem.log("proj-beta");
-    mem.log("proj-alpha");
+    mem.log_n("proj-alpha", 20);
+    mem.log_n("proj-beta", 20);
+    mem.log_n("proj-alpha", 20);
     assert_eq!(calls(&counter), 2, "two projects, two calls, then a hit");
 }
 
@@ -399,36 +399,35 @@ fn the_table_holds_against_the_real_binary() {
         .collect();
     assert_eq!(names, vec!["proj-alpha", "proj-beta"]);
 
-    // AC7: a project with no status.md is absent, not an error — and this is
+    // AC7: a project with no handoff is absent, not an error — and this is
     // the row a fixture is least able to prove.
-    let status = mem.status("proj-alpha");
-    assert!(matches!(*status, Outcome::Absent), "{status:?}");
-    assert!(status.broken().is_none());
+    let handoff = mem.handoff("proj-alpha");
+    assert!(matches!(*handoff, Outcome::Absent), "{handoff:?}");
+    assert!(handoff.broken().is_none());
 
     // An unknown project is the same shape: empty stdout, plain-text stderr.
-    let status = mem.status("no-such-project");
-    assert!(matches!(*status, Outcome::Absent), "{status:?}");
+    let handoff = mem.handoff("no-such-project");
+    assert!(matches!(*handoff, Outcome::Absent), "{handoff:?}");
 
-    // With a status.md it is a document.
+    // With a handoff it is a document.
     let out = mem_in(
         &real,
         &home,
         &home.join("proj-alpha"),
-        &["status", "--set", "Green. Everything builds."],
+        &["handoff", "--set", "Green. Everything builds."],
     );
     assert!(out.status.success());
     mem.invalidate();
-    let status = mem.status("proj-alpha");
-    match &*status {
-        Outcome::Json(value) => assert!(value["text"].as_str().unwrap().starts_with("Green.")),
+    match &*mem.handoff("proj-alpha") {
+        Outcome::Json(value) => assert!(value["body"].as_str().unwrap().trim().starts_with("Green.")),
         other => panic!("{other:?}"),
     }
 
-    // §4b's fan-out: per-project, because there is no --all-projects on log.
-    assert_eq!(mem.log("proj-alpha").rows("items").len(), 1);
-    assert_eq!(mem.log("proj-beta").rows("items").len(), 1);
+    // Per-project, because there is no --all-projects on log.
+    assert_eq!(mem.log_n("proj-alpha", 20).rows("items").len(), 1);
+    assert_eq!(mem.log_n("proj-beta", 20).rows("items").len(), 1);
     // And an unknown project's log is an empty result, not a fault.
-    let log = mem.log("no-such-project");
+    let log = mem.log_n("no-such-project", 20);
     assert!(log.broken().is_none());
     assert!(log.rows("items").is_empty());
 }
@@ -645,4 +644,19 @@ fn a_mem_binary_held_open_for_write_is_retried_not_broken() {
         matches!(*outcome, Outcome::Json(_)),
         "a held-open binary must be retried: {outcome:?}"
     );
+}
+
+#[test]
+fn mem_build_pins_cargo_target_dir_under_its_own_root() {
+    // Reads the `Command`'s own recorded overrides, never this process's
+    // environment: `std::env::set_var` in a test binary whose other tests
+    // spawn processes concurrently is undefined behaviour.
+    let root = Path::new("/checkout");
+    let command = mem_build(root);
+    let pin = command
+        .get_envs()
+        .find(|(key, _)| *key == std::ffi::OsStr::new("CARGO_TARGET_DIR"))
+        .and_then(|(_, value)| value)
+        .expect("CARGO_TARGET_DIR is set as an explicit override");
+    assert_eq!(pin, root.join("mem/target").as_os_str());
 }

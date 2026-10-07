@@ -268,7 +268,8 @@ fn the_roadmap_is_a_timeline_of_done_live_and_next_milestones() {
         "<li class=\"done\"><a href=\"/p/kappa/plan/k1-log\">k1-log</a> \
          <span class=\"pill ok\">landed</span><div class=\"meta\">Habits are logged</div></li>\n",
         "<li class=\"live\"><a href=\"/p/kappa/plan/k2-walk\">k2-walk</a> \
-         <span class=\"pill\">2 of 2 tasks</span><div class=\"meta\">Habits are walked</div></li>\n",
+         <a href=\"/p/kappa/plan\"><span class=\"pill\">2 of 2 tasks</span></a>\
+         <div class=\"meta\">Habits are walked</div></li>\n",
         "<li>k3-later <span class=\"pill mut\">next</span>\
          <div class=\"meta\">Later work</div></li>\n",
         "</ul>\n",
@@ -299,7 +300,9 @@ fn a_building_project_draws_its_timeline_within_five_reads() {
 
     assert!(body.contains("<h2>Roadmap</h2>"), "{body}");
     assert!(
-        body.contains("<li class=\"live\">o2-sync <span class=\"pill\">1 of 3 tasks</span>"),
+        body.contains(
+            "<li class=\"live\">o2-sync <a href=\"/p/omega/plan\"><span class=\"pill\">1 of 3 tasks</span></a>"
+        ),
         "{body}"
     );
     assert!(body.contains("<p>0 questions waiting on you</p>"), "{body}");

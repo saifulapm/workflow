@@ -1,17 +1,10 @@
-//! What the page and the API are made of (spec §3, §4b).
-//!
-//! Two things here are not obvious and both come out of the cold review.
+//! What the pages are made of (spec §3, §4b).
 //!
 //! **Time comes from the id, not from `created`.** Every list verb reports
 //! `"created":"2026-08-18"` — date only — so a question asked thirty seconds
 //! ago and one asked twenty hours ago are the same string (review M-1). The
 //! `id` is a ULID whose first ten characters are milliseconds since the epoch,
 //! so that is where the age and the ordering come from.
-//!
-//! **Recent activity is a fan-out.** `mem log` has no `--all-projects`, and
-//! `--scope all` means project ∪ global — which, from the `%h` a systemd user
-//! unit starts in, resolves to nothing (review B-3). So: list the projects,
-//! then one `mem log --project <name>` each, merged and sorted by id.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -21,38 +14,11 @@ use crate::memcli::{MemCli, Outcome};
 /// Crockford base32, the ULID alphabet.
 const BASE32: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-/// §3: "last ~20 log items across projects".
-pub const ACTIVITY_LIMIT: usize = 20;
-
 /// mem's own ceiling on a page slug (`mem/src/store.rs`).
 pub const SLUG_MAX: usize = 64;
 
-/// `/p/<project>/log`'s size.
-pub const PROJECT_LOG_LIMIT: usize = 200;
 /// How many log lines a building project's front page shows.
 pub const LAST_MOVES: usize = 5;
-
-/// `/p/<project>/items/<kind>`'s size.
-pub const PROJECT_ITEMS_LIMIT: usize = 100;
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Question {
-    pub id: String,
-    pub short_id: String,
-    /// mem's `title`, which for a batched ask is only the first line.
-    pub title: String,
-    /// The whole question, from `mem show`. Equal to `title` for a one-liner.
-    pub text: String,
-    pub project: Option<String>,
-    pub machine: String,
-    /// RFC 3339, derived from the ULID. `null` if the id is not a ULID.
-    pub asked_at: Option<String>,
-    pub age: String,
-    /// The choices the asker offered, empty for an open question.
-    pub options: Vec<String>,
-    /// The answer the asker would pick, if they named one.
-    pub recommend: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Activity {
@@ -64,18 +30,6 @@ pub struct Activity {
     pub machine: String,
     pub at: Option<String>,
     pub age: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Project {
-    pub name: String,
-    /// The newest log item's time, since `mem projects` has no such field
-    /// (review m-4) — `created` there is registration time.
-    pub last_activity: Option<String>,
-    pub last_activity_age: Option<String>,
-    /// The first line of `status.md`, or `None` where there is no status.md —
-    /// which the page renders as `—` (§4a, AC7).
-    pub status: Option<String>,
 }
 
 /// One page of a project's wiki, as `mem wiki --json` lists it.
@@ -97,32 +51,14 @@ pub struct WikiProject {
     pub pages: Vec<WikiPage>,
 }
 
-/// One section of the page, and one `/api/*` document: its rows, and the
-/// reason the section is degraded when it is.
+/// One section of a page: its rows, and the reason the section is degraded
+/// when it is.
 #[derive(Debug, Clone)]
 pub struct Section<T> {
     /// Set only when mem itself is broken (§4a's last row): a missing binary,
     /// or output that will not parse. An empty store is not degraded.
     pub degraded: Option<String>,
     pub rows: Vec<T>,
-}
-
-/// Pending questions, everywhere, newest first. This one call is
-/// cwd-independent — the review confirmed byte-identical output from inside a
-/// project and from a plain directory — so it is safe wherever systemd starts
-/// hub.
-pub fn questions(mem: &MemCli, now_ms: i64) -> Section<Question> {
-    let outcome = mem.questions();
-    let mut rows: Vec<Question> = outcome
-        .rows("questions")
-        .iter()
-        .map(|row| question(mem, row, now_ms))
-        .collect();
-    rows.sort_by(|a, b| b.id.cmp(&a.id));
-    Section {
-        degraded: list_fault(&outcome, "questions"),
-        rows,
-    }
 }
 
 /// Why a list verb's answer is not usable, or `None` if it is.
@@ -144,65 +80,8 @@ pub fn list_fault(outcome: &Outcome, verb: &str) -> Option<String> {
     }
 }
 
-/// §4b's fan-out: the project list, then one `mem log` per project, merged and
-/// sorted by id descending.
-pub fn activity(mem: &MemCli, now_ms: i64) -> Section<Activity> {
-    let outcome = mem.projects();
-    let mut fault = list_fault(&outcome, "projects");
-    let mut rows = Vec::new();
-    for name in project_names(&outcome) {
-        let log = mem.log(&name);
-        if let Some(why) = list_fault(&log, "log") {
-            // One project's log failing costs that project's rows, and says
-            // so, rather than quietly shortening the list.
-            fault.get_or_insert(format!("{name}: {why}"));
-        }
-        for row in log.rows("items") {
-            // v1 shows log items; handoffs are a second call and out of scope
-            // for this section (§4b).
-            if row["kind"].as_str() == Some("log") {
-                rows.push(activity_item(&row, now_ms));
-            }
-        }
-    }
-    // A ULID sorts lexicographically in time order; `created` is date-only and
-    // cannot separate two items from the same day.
-    rows.sort_by(|a, b| b.id.cmp(&a.id));
-    rows.truncate(ACTIVITY_LIMIT);
-    Section {
-        degraded: fault,
-        rows,
-    }
-}
-
-/// Name, last activity and the first line of status.md — `None` where there is
-/// no status.md, which the page renders as `—` (AC7).
-pub fn projects(mem: &MemCli, now_ms: i64) -> Section<Project> {
-    let outcome = mem.projects();
-    let rows = project_names(&outcome)
-        .into_iter()
-        .map(|name| {
-            // From this project's own log call — which the activity section
-            // has already made, so it is a cache hit — and not from the merged
-            // top twenty. With enough projects busy, a project's newest item
-            // falls off that list while the project is anything but idle.
-            let last = newest_log(mem, &name, now_ms);
-            Project {
-                last_activity: last.as_ref().and_then(|item| item.at.clone()),
-                last_activity_age: last.map(|item| item.age),
-                status: first_line(&mem.status(&name)),
-                name,
-            }
-        })
-        .collect();
-    Section {
-        degraded: list_fault(&outcome, "projects"),
-        rows,
-    }
-}
-
-/// Every project that has pages, with its pages — the same fan-out as
-/// `activity`, because `mem wiki` is a per-project verb too.
+/// Every project that has pages, with its pages: one read per project,
+/// because `mem wiki` is a per-project verb.
 pub fn wiki(mem: &MemCli) -> Section<WikiProject> {
     let outcome = mem.projects();
     let mut fault = list_fault(&outcome, "projects");
@@ -210,8 +89,8 @@ pub fn wiki(mem: &MemCli) -> Section<WikiProject> {
     for name in project_names(&outcome) {
         let listing = mem.wiki(&name);
         if let Some(why) = list_fault(&listing, "wiki") {
-            // As in `activity`: one project's failure costs that project's
-            // rows and says so, rather than quietly shortening the list.
+            // One project's failure costs that project's rows and says so,
+            // rather than quietly shortening the list.
             fault.get_or_insert(format!("{name}: {why}"));
             continue;
         }
@@ -255,26 +134,21 @@ pub struct Singleton<T> {
     pub value: Option<T>,
 }
 
-/// One stored plan's text, by slug — `/p/<project>/plan/<slug>`.
-pub fn plan_slug_text(mem: &MemCli, project: &str, slug: &str) -> Singleton<String> {
-    let outcome = mem.plan_slug(project, slug);
+/// The current plan's text — `/p/<project>/plan`.
+pub fn plan_text(mem: &MemCli, project: &str) -> Singleton<String> {
+    let outcome = mem.plan(project);
     Singleton {
         degraded: singleton_fault(&outcome),
         value: singleton_text(&outcome),
     }
 }
 
-/// `/p/<project>/log`: the last 200 log lines, whole.
-pub fn log_lines(mem: &MemCli, project: &str, now_ms: i64) -> Section<Activity> {
-    let outcome = mem.log_n(project, PROJECT_LOG_LIMIT);
-    let rows = outcome
-        .rows("items")
-        .iter()
-        .map(|row| activity_item(row, now_ms))
-        .collect();
-    Section {
-        degraded: list_fault(&outcome, "log"),
-        rows,
+/// One stored plan's text, by slug — `/p/<project>/plan/<slug>`.
+pub fn plan_slug_text(mem: &MemCli, project: &str, slug: &str) -> Singleton<String> {
+    let outcome = mem.plan_slug(project, slug);
+    Singleton {
+        degraded: singleton_fault(&outcome),
+        value: singleton_text(&outcome),
     }
 }
 
@@ -288,20 +162,6 @@ pub fn last_moves(mem: &MemCli, project: &str, now_ms: i64) -> Section<Activity>
         .collect();
     Section {
         degraded: list_fault(&outcome, "log"),
-        rows,
-    }
-}
-
-/// `/p/<project>/items/<kind>`: the last 100 items of one kind.
-pub fn kind_items(mem: &MemCli, project: &str, kind: &str, now_ms: i64) -> Section<Activity> {
-    let outcome = mem.items(project, kind, PROJECT_ITEMS_LIMIT);
-    let rows = outcome
-        .rows("items")
-        .iter()
-        .map(|row| activity_item(row, now_ms))
-        .collect();
-    Section {
-        degraded: list_fault(&outcome, kind),
         rows,
     }
 }
@@ -389,57 +249,6 @@ fn project_names(outcome: &Outcome) -> Vec<String> {
         .collect()
 }
 
-/// The newest log item one project has.
-fn newest_log(mem: &MemCli, project: &str, now_ms: i64) -> Option<Activity> {
-    mem.log(project)
-        .rows("items")
-        .iter()
-        .filter(|row| row["kind"].as_str() == Some("log"))
-        .map(|row| activity_item(row, now_ms))
-        .max_by(|a, b| a.id.cmp(&b.id))
-}
-
-fn question(mem: &MemCli, row: &Value, now_ms: i64) -> Question {
-    let id = string(row, "id");
-    let title = string(row, "title");
-    // A batched ask is multi-line and mem reports only its first line as the
-    // title, so the answer box would otherwise sit under a heading with the
-    // questions missing (review m-12). `mem show` carries the body.
-    let text = body_of(mem, &id).unwrap_or_else(|| title.clone());
-    let millis = ulid_millis(&id);
-    Question {
-        short_id: string(row, "short_id"),
-        project: optional(row, "project"),
-        machine: string(row, "machine"),
-        asked_at: millis.map(rfc3339),
-        age: age(millis, now_ms),
-        options: row["options"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        recommend: optional(row, "recommend"),
-        id,
-        title,
-        text,
-    }
-}
-
-fn body_of(mem: &MemCli, id: &str) -> Option<String> {
-    match &*mem.show(id) {
-        Outcome::Json(value) => {
-            let body = value.get("items")?.as_array()?.first()?.get("body")?;
-            let text = body.as_str()?.trim();
-            (!text.is_empty()).then(|| text.to_string())
-        }
-        _ => None,
-    }
-}
-
 fn activity_item(row: &Value, now_ms: i64) -> Activity {
     let id = string(row, "id");
     let millis = ulid_millis(&id);
@@ -453,17 +262,6 @@ fn activity_item(row: &Value, now_ms: i64) -> Activity {
         age: age(millis, now_ms),
         id,
     }
-}
-
-/// The first line of `status.md`, or `None` — including for the exit-1 +
-/// empty-stdout row, which is every project without a status.md.
-fn first_line(outcome: &Outcome) -> Option<String> {
-    let Outcome::Json(value) = outcome else {
-        return None;
-    };
-    let text = value.get("text")?.as_str()?;
-    let line = text.lines().find(|line| !line.trim().is_empty())?;
-    Some(line.trim().to_string())
 }
 
 fn string(row: &Value, key: &str) -> String {
@@ -528,111 +326,6 @@ pub fn age(millis: Option<i64>, now_ms: i64) -> String {
     }
 }
 
-/// `GET /p/<project>`: everything the wiki, the plan grammar and a run's own
-/// state hold for one project, on one page (m2-hub-pages).
-#[derive(Debug)]
-pub struct ProjectView {
-    pub name: String,
-    /// Set only when a `mem` read came back broken — never for a record that
-    /// is simply absent, which every section below renders as its own empty
-    /// line (§4a's singleton contract).
-    pub degraded: Option<String>,
-    pub status: Option<String>,
-    pub handoff: Option<String>,
-    pub roadmap: Option<String>,
-    pub plan: Option<PlanSummary>,
-    pub stored_plans: Vec<WikiPage>,
-    pub questions: Vec<ProjectQuestion>,
-    pub rulings: Vec<Activity>,
-    pub log: Vec<Activity>,
-    pub wiki: Vec<WikiPage>,
-}
-
-#[derive(Debug)]
-pub struct PlanSummary {
-    pub title: String,
-    pub ticked: usize,
-    pub total: usize,
-    /// The plan's whole text, for the plan pages under the overview (detail).
-    pub text: String,
-}
-
-#[derive(Debug)]
-pub struct ProjectQuestion {
-    pub id: String,
-    pub short_id: String,
-    pub text: String,
-    pub answered: bool,
-    pub answer: Option<String>,
-}
-
-/// Everything one project's page needs, assembled from `mem`. `None` for a
-/// name `mem projects` does not know, which the route answers with a 404.
-pub fn project_view(mem: &MemCli, name: &str, now_ms: i64) -> Option<ProjectView> {
-    if !is_known_project(mem, name) {
-        return None;
-    }
-
-    let status_outcome = mem.status(name);
-    let mut degraded = singleton_fault(&status_outcome);
-    let status = singleton_text(&status_outcome);
-
-    let handoff_outcome = mem.handoff(name);
-    degraded = degraded.or_else(|| singleton_fault(&handoff_outcome));
-    let handoff = handoff_body(&handoff_outcome);
-
-    let roadmap_outcome = mem.roadmap(name);
-    degraded = degraded.or_else(|| singleton_fault(&roadmap_outcome));
-    let roadmap = singleton_text(&roadmap_outcome);
-
-    let plan_outcome = mem.plan(name);
-    degraded = degraded.or_else(|| singleton_fault(&plan_outcome));
-    let plan = singleton_text(&plan_outcome).map(|text| plan_summary(&text));
-
-    let plan_list = mem.plan_list(name);
-    degraded = degraded.or_else(|| list_fault(&plan_list, "plan"));
-    let stored_plans: Vec<WikiPage> = plan_list.rows("plans").iter().map(wiki_row).collect();
-
-    let questions_outcome = mem.questions_all(name);
-    degraded = degraded.or_else(|| list_fault(&questions_outcome, "questions"));
-    let questions = project_questions(&questions_outcome);
-
-    let rulings_outcome = mem.items(name, "ruling", 10);
-    degraded = degraded.or_else(|| list_fault(&rulings_outcome, "ruling"));
-    let rulings: Vec<Activity> = rulings_outcome
-        .rows("items")
-        .iter()
-        .map(|row| activity_item(row, now_ms))
-        .collect();
-
-    let log_outcome = mem.log_n(name, 20);
-    degraded = degraded.or_else(|| list_fault(&log_outcome, "log"));
-    let log: Vec<Activity> = log_outcome
-        .rows("items")
-        .iter()
-        .map(|row| activity_item(row, now_ms))
-        .collect();
-
-    let wiki_outcome = mem.wiki(name);
-    degraded = degraded.or_else(|| list_fault(&wiki_outcome, "wiki"));
-    let mut wiki: Vec<WikiPage> = wiki_outcome.rows("pages").iter().map(wiki_row).collect();
-    wiki.sort_by(|a, b| page_order(a).cmp(&page_order(b)));
-
-    Some(ProjectView {
-        name: name.to_string(),
-        degraded,
-        status,
-        handoff,
-        roadmap,
-        plan,
-        stored_plans,
-        questions,
-        rulings,
-        log,
-        wiki,
-    })
-}
-
 /// Only a broken read is a fault for a singleton file: an absent one is a
 /// project that has simply not written it yet (memcli's own §4a table).
 fn singleton_fault(outcome: &Outcome) -> Option<String> {
@@ -650,66 +343,6 @@ fn singleton_text(outcome: &Outcome) -> Option<String> {
         .get("text")
         .and_then(Value::as_str)
         .map(str::to_string)
-}
-
-/// The handoff's own body, as `mem handoff --json` carries it — under
-/// `body`, unlike the other three singletons' `text`.
-fn handoff_body(outcome: &Outcome) -> Option<String> {
-    let Outcome::Json(value) = outcome else {
-        return None;
-    };
-    let body = value.get("body")?.as_str()?.trim();
-    (!body.is_empty()).then(|| body.to_string())
-}
-
-/// The plan's first line, and how many of its task boxes are ticked.
-fn plan_summary(text: &str) -> PlanSummary {
-    let title = text.lines().next().unwrap_or_default().trim().to_string();
-    let mut ticked = 0;
-    let mut total = 0;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let rest = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "));
-        let Some(rest) = rest else { continue };
-        if rest.starts_with("[x] ") {
-            ticked += 1;
-            total += 1;
-        } else if rest.starts_with("[ ] ") {
-            total += 1;
-        }
-    }
-    PlanSummary {
-        title,
-        ticked,
-        total,
-        text: text.to_string(),
-    }
-}
-
-fn project_question(row: &Value) -> ProjectQuestion {
-    ProjectQuestion {
-        id: string(row, "id"),
-        short_id: string(row, "short_id"),
-        text: optional(row, "body").unwrap_or_else(|| string(row, "title")),
-        answered: row["answered"].as_bool().unwrap_or(false),
-        answer: optional(row, "answer"),
-    }
-}
-
-/// Pending first, then the last 10 answered.
-fn project_questions(outcome: &Outcome) -> Vec<ProjectQuestion> {
-    let mut rows: Vec<ProjectQuestion> = outcome
-        .rows("questions")
-        .iter()
-        .map(project_question)
-        .collect();
-    rows.sort_by(|a, b| b.id.cmp(&a.id));
-    let (mut pending, mut answered): (Vec<_>, Vec<_>) = rows.into_iter().partition(|q| !q.answered);
-    answered.truncate(10);
-    pending.append(&mut answered);
-    pending
 }
 
 #[cfg(test)]
@@ -766,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_stdout_from_a_list_verb_is_a_fault_and_from_status_is_not() {
+    fn an_empty_stdout_from_a_list_verb_is_a_fault_and_from_a_singleton_is_not() {
         // mem's contract: a filtered read that matched nothing still prints its
         // document. Nothing at all is mem failing, and an empty section would
         // report it as "no questions", which is exactly backwards.
@@ -780,8 +413,8 @@ mod tests {
             .is_none(),
             "an empty array is an answer"
         );
-        // `status` is a singleton, and its empty stdout genuinely means absent.
-        assert_eq!(first_line(&Outcome::Absent), None);
+        // A singleton's empty stdout genuinely means absent.
+        assert_eq!(singleton_text(&Outcome::Absent), None);
     }
 
     #[test]
@@ -840,11 +473,4 @@ mod tests {
         assert_eq!(page.modified, None);
     }
 
-    #[test]
-    fn a_status_with_blank_first_lines_still_finds_its_line() {
-        let outcome = Outcome::Json(serde_json::json!({"text": "\n\n  Green.  \nmore\n"}));
-        assert_eq!(first_line(&outcome).as_deref(), Some("Green."));
-        assert_eq!(first_line(&Outcome::Absent), None);
-        assert_eq!(first_line(&Outcome::Json(serde_json::json!({}))), None);
-    }
 }

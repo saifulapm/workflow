@@ -15,8 +15,8 @@
 //! | `questions --pending --all-projects --for human --json`, none pending | 1 | `{"questions":[]}` |
 //! | `log --limit N --project X --json`, none | 1 | `{"items":[]}` |
 //! | `projects --json`, none | 0 | `{"projects":[]}` |
-//! | `status --project <no status.md> --json` | 1 | **empty** |
-//! | `status --project no-such-project --json` | 1 | empty; stderr is plain text |
+//! | `handoff --project <none recorded> --json` | 1 | **empty** |
+//! | `handoff --project no-such-project --json` | 1 | empty; stderr is plain text |
 //! | `answer <unknown id>` | 1 | empty; stderr is plain text |
 //!
 //! So exit 1 with a document is an *empty result*, exit 1 with nothing is
@@ -66,9 +66,6 @@ pub fn mem_timeout() -> Duration {
         .map(|t| t.max(Duration::from_millis(10)))
         .unwrap_or(DEFAULT_MEM_TIMEOUT)
 }
-
-/// How `mem log` is asked for a project's recent items.
-pub const LOG_LIMIT: usize = 20;
 
 /// What one `mem` call meant, once §4a's table has been applied to it.
 #[derive(Debug, Clone)]
@@ -331,17 +328,6 @@ impl MemCli {
         self.read(&["projects", "--json"])
     }
 
-    /// §4b: one call per project. There is no `--all-projects` on `log`, and
-    /// `--scope all` is project ∪ global — from `%h`, which is not a checkout,
-    /// it resolves to nothing at all.
-    pub fn log(&self, project: &str) -> Arc<Outcome> {
-        self.log_n(project, LOG_LIMIT)
-    }
-
-    pub fn status(&self, project: &str) -> Arc<Outcome> {
-        self.read(&["status", &format!("--project={project}"), "--json"])
-    }
-
     /// One project's pages: slug, title, bytes and date. A project with none
     /// still prints `{"pages":[]}`, so this reads like the other list verbs.
     pub fn wiki(&self, project: &str) -> Arc<Outcome> {
@@ -403,9 +389,8 @@ impl MemCli {
         self.read(&["handoff", &format!("--project={project}"), "--json"])
     }
 
-    /// Up to `limit` recent log lines — wider than `log`'s fixed
-    /// `LOG_LIMIT`, for the full log page's last 200 against the overview's
-    /// last 20.
+    /// Up to `limit` recent log lines. There is no `--all-projects` on `log`,
+    /// so it is one call per project.
     pub fn log_n(&self, project: &str, limit: usize) -> Arc<Outcome> {
         let limit = limit.to_string();
         self.read(&[
@@ -476,7 +461,7 @@ fn classify(run: &Run) -> Outcome {
     }
     if trimmed.is_empty() {
         // Never hand empty stdout to a JSON parser. On a zero exit this is a
-        // verb with no document (`status --set`); on a non-zero one it is
+        // verb with no document (`handoff --set`); on a non-zero one it is
         // §4a's absent/unknown row. Both render the same.
         return Outcome::Absent;
     }

@@ -4,8 +4,6 @@
 //! are not dead code.
 #![allow(dead_code)]
 
-pub mod schema;
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;

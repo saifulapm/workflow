@@ -14,16 +14,7 @@ use crate::{api, model, pages};
 /// Every path hub answers, and the one method it answers it with. Anything
 /// else on a known path is a 405 that says so; anything else at all is a 404.
 /// The pages are `pages::route_page`'s; these are the rest.
-const ROUTES: &[(&str, &str)] = &[
-    ("/api/questions", "GET"),
-    ("/api/activity", "GET"),
-    ("/api/projects", "GET"),
-    ("/api/presence", "GET"),
-    ("/subscribe", "GET"),
-];
-
-/// The five kinds `/p/<project>/items/<kind>` answers.
-const ITEM_KINDS: [&str; 5] = ["fact", "ruling", "handoff", "question", "log"];
+const ROUTES: &[(&str, &str)] = &[("/api/presence", "GET"), ("/subscribe", "GET")];
 
 pub struct App {
     pub config: Config,
@@ -97,15 +88,6 @@ impl App {
             return Response::method_not_allowed(allowed);
         }
         match request.path.as_str() {
-            "/api/questions" => {
-                Response::json(api::questions(&model::questions(&self.mem, self.now_ms())))
-            }
-            "/api/activity" => {
-                Response::json(api::activity(&model::activity(&self.mem, self.now_ms())))
-            }
-            "/api/projects" => {
-                Response::json(api::projects(&model::projects(&self.mem, self.now_ms())))
-            }
             "/api/presence" => {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
@@ -115,8 +97,8 @@ impl App {
     }
 
     /// The detail routes under `GET /p/<project>/`: everything after the
-    /// project is checked against one of the known shapes — `log`, `plan`,
-    /// `plan/<slug>`, `items/<kind>`, `item/<id>` — before it reaches an argv.
+    /// project is checked against one of the known shapes — `plan`,
+    /// `plan/<slug>`, `item/<id>` — before it reaches an argv.
     /// Anything else is a 404, as `/wiki/` already does.
     pub fn project_page(&self, rest: &str) -> Response {
         let Some((project, sub)) = rest.split_once('/') else {
@@ -126,13 +108,10 @@ impl App {
             return Response::not_found();
         }
         match sub {
-            "log" => self.project_log(project),
             "plan" => self.project_plan(project),
             sub => {
                 if let Some(slug) = sub.strip_prefix("plan/") {
                     self.project_plan_slug(project, slug)
-                } else if let Some(kind) = sub.strip_prefix("items/") {
-                    self.project_items(project, kind)
                 } else if let Some(id) = sub.strip_prefix("item/") {
                     self.project_item(project, id)
                 } else {
@@ -142,27 +121,16 @@ impl App {
         }
     }
 
-    /// `GET /p/<project>/log`.
-    fn project_log(&self, project: &str) -> Response {
-        let section = model::log_lines(&self.mem, project, self.now_ms());
-        Response::html(html::log_page(
-            project,
-            &section.rows,
-            section.degraded.as_deref(),
-        ))
-    }
-
-    /// `GET /p/<project>/plan` — the current plan's whole text.
+    /// `GET /p/<project>/plan` — the current plan's whole text, from one
+    /// read. A project with no current plan still gets the page, empty.
     fn project_plan(&self, project: &str) -> Response {
-        match model::project_view(&self.mem, project, self.now_ms()) {
-            Some(view) => Response::html(html::plan_page(
-                project,
-                None,
-                view.plan.as_ref().map(|plan| plan.text.as_str()),
-                view.degraded.as_deref(),
-            )),
-            None => Response::not_found(),
-        }
+        let plan = model::plan_text(&self.mem, project);
+        Response::html(html::plan_page(
+            project,
+            None,
+            plan.value.as_deref(),
+            plan.degraded.as_deref(),
+        ))
     }
 
     /// `GET /p/<project>/plan/<slug>` — one stored plan, whole. A broken mem
@@ -180,20 +148,6 @@ impl App {
             Some(slug),
             plan.value.as_deref(),
             plan.degraded.as_deref(),
-        ))
-    }
-
-    /// `GET /p/<project>/items/<kind>` — the last 100 items of one kind.
-    fn project_items(&self, project: &str, kind: &str) -> Response {
-        if !ITEM_KINDS.contains(&kind) {
-            return Response::not_found();
-        }
-        let section = model::kind_items(&self.mem, project, kind, self.now_ms());
-        Response::html(html::items_page(
-            project,
-            kind,
-            &section.rows,
-            section.degraded.as_deref(),
         ))
     }
 
@@ -215,10 +169,6 @@ impl App {
             }
             None => Response::not_found(),
         }
-    }
-
-    fn now_ms(&self) -> i64 {
-        jiff::Timestamp::now().as_millisecond()
     }
 
     /// §3 and §9. The order matters: nothing runs `mem answer` until the

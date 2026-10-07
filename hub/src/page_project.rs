@@ -129,7 +129,7 @@ fn timeline(ctx: &PageCtx, project: &str, s: &ProjectSummary) -> String {
         } else {
             open += 1;
             match open {
-                1 => (" class=\"live\"", live_pill(s, &row.slug)),
+                1 => (" class=\"live\"", live_pill(s, &row.slug, project)),
                 2 => ("", "<span class=\"pill mut\">next</span>".to_string()),
                 _ => ("", String::new()),
             }
@@ -148,11 +148,15 @@ fn timeline(ctx: &PageCtx, project: &str, s: &ProjectSummary) -> String {
     out
 }
 
-/// The live milestone's ticks, when the current plan is its own.
-fn live_pill(s: &ProjectSummary, slug: &str) -> String {
+/// The live milestone's ticks, linked to the current plan, when that plan is
+/// its own.
+fn live_pill(s: &ProjectSummary, slug: &str, project: &str) -> String {
     let (ticked, total) = s.tasks;
     if total > 0 && s.plan_slug.as_deref() == Some(slug) {
-        format!("<span class=\"pill\">{ticked} of {total} tasks</span>")
+        format!(
+            "<a href=\"{}/plan\"><span class=\"pill\">{ticked} of {total} tasks</span></a>",
+            esc(&project_url(project))
+        )
     } else {
         "<span class=\"pill\">live</span>".to_string()
     }

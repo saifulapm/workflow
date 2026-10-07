@@ -266,28 +266,6 @@ pub fn wiki_index(section: &Section<WikiProject>) -> String {
     out
 }
 
-/// `GET /p/<project>/log`: the last 200 log lines, whole.
-pub fn log_page(project: &str, rows: &[Activity], degraded: Option<&str>) -> String {
-    let mut out = detail_head(project, "log");
-    if let Some(why) = degraded {
-        out.push_str(&degraded_banner(why));
-    }
-    out.push_str(&item_list_section("Log", rows, project));
-    out.push_str("</body>\n</html>\n");
-    out
-}
-
-/// `GET /p/<project>/items/<kind>`: the last 100 items of one kind.
-pub fn items_page(project: &str, kind: &str, rows: &[Activity], degraded: Option<&str>) -> String {
-    let mut out = detail_head(project, kind);
-    if let Some(why) = degraded {
-        out.push_str(&degraded_banner(why));
-    }
-    out.push_str(&item_list_section(&capitalize(kind), rows, project));
-    out.push_str("</body>\n</html>\n");
-    out
-}
-
 /// `GET /p/<project>/plan` and `GET /p/<project>/plan/<slug>`: a plan's whole
 /// text, so its ticks show.
 pub fn plan_page(
@@ -369,16 +347,6 @@ pub fn markdown_article(text: Option<&str>, project: &str, empty: &str) -> Strin
             "<article class=\"md\">\n{}</article>\n",
             markdown(text, project)
         ),
-    }
-}
-
-/// `kind` is one of the five lowercase words `is_kind` accepts; the page
-/// heading reads better capitalized.
-fn capitalize(word: &str) -> String {
-    let mut chars = word.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
     }
 }
 
