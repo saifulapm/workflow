@@ -24,17 +24,29 @@ use crate::{embedded, exit, paths, warn};
 /// Skill directories older installs wrote that no skill is named after any
 /// more. `workflow` is the old Claude Code plugin. A name the binary ships
 /// again is not stale and stays.
-const STALE_SKILLS: [&str; 8] = [
-    "route", "lead", "fix", "garden", "research", "review", "work", "workflow",
+const STALE_SKILLS: [&str; 10] = [
+    "route",
+    "lead",
+    "fix",
+    "garden",
+    "research",
+    "review",
+    "work",
+    "workflow",
+    "implement",
+    "roadmap",
 ];
 
 /// The amx roles older installs wrote, in `~/.config/amx/agents`.
-const STALE_ROLES: [&str; 8] = [
+const STALE_ROLES: [&str; 11] = [
+    "advisor",
     "dogfood",
+    "fixer",
     "grill",
     "lead",
     "plan",
     "plan-refresh",
+    "reader",
     "research",
     "review",
     "worker",
