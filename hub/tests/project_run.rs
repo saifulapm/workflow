@@ -21,7 +21,7 @@ fn questions_doc() -> Value {
         q("01K0Q1", PROJECT, "Which hour does the nag go out?", false),
         q("01K0Q2", PROJECT, "Nag on weekends?", false),
         q("01K0Q3", PROJECT, "Store dates in UTC?", true),
-        q("01K0Q4", "beta", "Approve roadmap beta?", false),
+        q("01K0Q4", "beta", "Review the beta roadmap and its plan pages", false),
     ]})
 }
 

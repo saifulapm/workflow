@@ -82,7 +82,7 @@ fn questions() -> Value {
         })
     };
     json!({"questions": [
-        question("01K6SBE4R0AAAAAAAAAAAAAAAA", "Approve roadmap p-planning?", json!(["approve", "changes"])),
+        question("01K6SBE4R0AAAAAAAAAAAAAAAA", "Review the p-planning roadmap and its plan pages", json!(["approve", "changes"])),
         question("01K6SBE4R0BBBBBBBBBBBBBBBB", "Two things:\n1. Which store?\n2. Which port?", json!([])),
     ]})
 }

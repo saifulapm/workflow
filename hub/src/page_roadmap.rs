@@ -46,8 +46,8 @@ pub fn roadmap_rows(text: &str) -> Vec<MilestoneRow> {
             }
             continue;
         };
-        // The order a milestone runs in is the engine's business, not the
-        // reader's, so `[after: ...]` is dropped from the title.
+        // The order a milestone runs in is not the reader's business, so
+        // `[after: ...]` is dropped from the title.
         let rest = match rest.rfind("[after:") {
             Some(at) if rest.trim_end().ends_with(']') => &rest[..at],
             _ => rest,
@@ -128,7 +128,7 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
     match status {
         Some("draft") => out.push_str(&approval_forms(project)),
         Some("approved") => {
-            out.push_str("<p class=\"banner ok\">approved: sent, waiting for the engine</p>\n")
+            out.push_str("<p class=\"banner ok\">approved: sent</p>\n")
         }
         _ => {}
     }
@@ -136,7 +136,7 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
 }
 
 /// Approve and Request changes, both posting to the project's control route,
-/// which writes mem and leaves the rest to the engine's next tick.
+/// which writes mem and nothing else.
 pub fn approval_forms(project: &str) -> String {
     let action = esc(&format!("{}/control", project_url(project)));
     format!(

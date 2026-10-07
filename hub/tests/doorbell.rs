@@ -656,8 +656,8 @@ impl Drop for World {
 }
 
 /// A hub over a fake `mem` that prints whatever JSON the test last put in
-/// `data/`, so a test can stage a walk, a third strike or a finished roadmap
-/// without driving the engine that writes them.
+/// `data/`, so a test can stage a stall or a finished roadmap without
+/// driving an orchestrator.
 struct Fake {
     _dir: TempDir,
     home: PathBuf,

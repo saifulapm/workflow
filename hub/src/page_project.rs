@@ -454,9 +454,8 @@ fn walk_body(ctx: &PageCtx, project: &str) -> String {
     out
 }
 
-/// A Show line as its steps, in order; step `n` is index `n - 1`. Cut the
-/// way the engine cuts it, so a step number here is the one a finding names
-/// with `mem finding add --step`.
+/// A Show line as its steps, in order; step `n` is index `n - 1`, the
+/// number a finding names with `mem finding add --step`.
 pub fn show_steps(show: &str) -> Vec<String> {
     show.split(", ")
         .flat_map(|part| part.split("; "))

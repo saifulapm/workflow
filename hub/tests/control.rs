@@ -12,6 +12,8 @@ use common::{
 };
 
 const PROJECT: &str = "proj-alpha";
+/// The approval question, as the plan skill asks it.
+const REVIEW: &str = "Review the alpha roadmap and its plan pages";
 /// Written to the machine file both hub and mem read, so the two agree on a
 /// name no real machine has.
 const MACHINE: &str = "here-box";
@@ -93,17 +95,19 @@ impl World {
         self.mem(&["roadmap", "--status"])
     }
 
-    /// Asks what the engine asks once a roadmap is cut, and returns its id.
+    /// Asks what the plan skill asks once a roadmap is cut, and returns its
+    /// id.
     fn ask_approval(&self) -> String {
         self.mem(&[
             "ask",
-            "Approve roadmap alpha?",
             "--options",
             "approve,changes",
             "--recommend",
             "approve",
+            "--",
+            REVIEW,
         ]);
-        self.question("Approve roadmap alpha?")["id"]
+        self.question(REVIEW)["id"]
             .as_str()
             .unwrap()
             .to_string()
@@ -180,7 +184,7 @@ fn approve_sets_the_roadmap_approved_and_answers_its_question() {
     );
     assert_eq!(world.roadmap_status(), "approved");
     assert_eq!(
-        world.question("Approve roadmap alpha?")["answer"],
+        world.question(REVIEW)["answer"],
         "approve"
     );
 }
@@ -228,7 +232,7 @@ fn changes_answers_the_question_and_leaves_the_roadmap_draft() {
     );
     assert_eq!(world.roadmap_status(), "draft");
     assert_eq!(
-        world.question("Approve roadmap alpha?")["answer"],
+        world.question(REVIEW)["answer"],
         "changes: split m1 in two"
     );
 }
@@ -269,7 +273,7 @@ fn an_empty_changes_writes_nothing() {
         Some("/p/proj-alpha/roadmap?empty=1")
     );
     assert_eq!(world.writes(), Vec::<Vec<String>>::new());
-    let question = world.question("Approve roadmap alpha?");
+    let question = world.question(REVIEW);
     assert_eq!(question["id"], id.as_str());
     assert_eq!(question["answered"], false);
 }
@@ -287,7 +291,7 @@ fn approve_and_changes_refuse_a_roadmap_that_is_not_a_draft() {
     }
     assert_eq!(world.writes(), Vec::<Vec<String>>::new());
     assert_eq!(world.roadmap_status(), "approved");
-    let question = world.question("Approve roadmap alpha?");
+    let question = world.question(REVIEW);
     assert_eq!(question["id"], id.as_str());
     assert_eq!(question["answered"], false);
 }
@@ -302,27 +306,4 @@ fn an_unknown_verb_is_a_bad_request() {
         assert_eq!(status_of(&response), 400, "{body:?}: {response}");
     }
     assert_eq!(world.writes(), Vec::<Vec<String>>::new());
-}
-
-/// The plan skill asks "Review the <name> roadmap and its plan pages", not the
-/// engine's "Approve roadmap ...", and Approve answers that one too.
-#[test]
-fn approve_answers_the_plan_skills_review_question() {
-    let world = World::new("control-approve-review");
-    world.mem(&[
-        "ask",
-        "--options",
-        "approve,changes",
-        "--",
-        "Review the alpha roadmap and its plan pages",
-    ]);
-    let hub = world.hub();
-
-    let response = world.post(&hub, "do=approve");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(world.roadmap_status(), "approved");
-    assert_eq!(
-        world.question("Review the alpha roadmap and its plan pages")["answer"],
-        "approve"
-    );
 }

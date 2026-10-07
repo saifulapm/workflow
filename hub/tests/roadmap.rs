@@ -187,12 +187,12 @@ fn roadmap_a_draft_shows_each_milestone_its_plan_and_both_forms() {
 }
 
 #[test]
-fn roadmap_an_approved_one_says_it_waits_for_the_engine() {
+fn roadmap_an_approved_one_says_it_was_sent() {
     let world = World::new("roadmap-approved", Some(roadmap_doc(Some("approved"))));
     let body = roadmap_page(&world, 3);
 
     assert!(
-        body.contains("approved: sent, waiting for the engine"),
+        body.contains("<p class=\"banner ok\">approved: sent</p>"),
         "{body}"
     );
     assert!(!body.contains("<form"), "{body}");
@@ -209,7 +209,7 @@ fn roadmap_one_with_an_old_stored_status_shows_no_form() {
         "{body}"
     );
     assert!(!body.contains("<form"), "{body}");
-    assert!(!body.contains("waiting for the engine"), "{body}");
+    assert!(!body.contains("approved: sent"), "{body}");
 }
 
 #[test]

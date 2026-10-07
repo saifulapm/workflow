@@ -1,10 +1,10 @@
 //! The project's buttons, and `POST /p/<project>/control`, which they post
 //! to.
 //!
-//! A button writes mem and nothing else; the engine reads the write on its
-//! next tick. Every write names its project with `--project=<name>`, because
-//! the hub runs outside any checkout, and puts free text after `--`, so text
-//! starting with a dash is never read as a flag.
+//! Approve and Request changes write mem and nothing else; Start and Resume
+//! run `workflow go`. Every write names its project with `--project=<name>`,
+//! because the hub runs outside any checkout, and puts free text after `--`,
+//! so text starting with a dash is never read as a flag.
 
 use crate::html::{esc, project_url};
 use crate::http::Response;
@@ -13,11 +13,8 @@ use crate::memcli::{Outcome, Run};
 use crate::page_home::summary_of;
 use crate::pages::{PageCtx, page_shell};
 
-/// How a pending approval question starts, as the engine asks it.
-pub const APPROVAL_QUESTION: &str = "Approve roadmap";
-
-/// How the plan skill asks for the same approval: "Review the <name> roadmap
-/// and its plan pages", by its start and its end.
+/// How the plan skill asks for the roadmap's approval: "Review the <name>
+/// roadmap and its plan pages", by its start and its end.
 pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap and its plan pages");
 
 /// How long `workflow go` may take: an `amx new` and a few mem reads.
@@ -150,10 +147,9 @@ pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<String> {
         .and_then(|row| row["id"].as_str().map(str::to_string))
 }
 
-/// Whether a question asks for the roadmap's approval, in either wording.
+/// Whether a question asks for the roadmap's approval.
 fn is_approval(body: &str) -> bool {
-    body.starts_with(APPROVAL_QUESTION)
-        || body.starts_with(REVIEW_QUESTION.0) && body.trim_end().ends_with(REVIEW_QUESTION.1)
+    body.starts_with(REVIEW_QUESTION.0) && body.trim_end().ends_with(REVIEW_QUESTION.1)
 }
 
 pub fn conflict(ctx: &PageCtx, why: &str) -> Response {
@@ -184,8 +180,8 @@ mod tests {
 
     #[test]
     fn only_the_roadmap_review_is_an_approval() {
-        assert!(is_approval("Approve roadmap alpha?"));
         assert!(is_approval("Review the beta roadmap and its plan pages"));
+        assert!(!is_approval("Approve roadmap alpha?"));
         assert!(!is_approval(
             "Review the failing t3 test before the roadmap continues?"
         ));
