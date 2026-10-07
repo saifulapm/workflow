@@ -14,6 +14,10 @@ use crate::pages::{PageCtx, page_shell, sibling_hub};
 /// How a pending approval question starts, as the engine asks it.
 pub const APPROVAL_QUESTION: &str = "Approve roadmap";
 
+/// How the plan skill asks for the same approval: "Review the <name> roadmap
+/// and its plan pages".
+pub const REVIEW_QUESTION: &str = "Review the ";
+
 /// mem's exit when another machine's runner claim refuses an in-place write.
 pub const RUNNER_REFUSED: i32 = 5;
 
@@ -102,20 +106,21 @@ pub fn control_post(ctx: &PageCtx) -> Response {
 }
 
 /// The id of the project's pending approval question, found by its project
-/// and the first words of its body.
+/// and the first words of its body. A plan page's response answers it too.
 pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<String> {
     ctx.app
         .mem
         .questions_fresh()
         .rows("questions")
         .iter()
-        .find(|row| {
-            row["project"] == project
-                && row["body"]
-                    .as_str()
-                    .is_some_and(|body| body.starts_with(APPROVAL_QUESTION))
-        })
+        .find(|row| row["project"] == project && row["body"].as_str().is_some_and(is_approval))
         .and_then(|row| row["id"].as_str().map(str::to_string))
+}
+
+/// Whether a question asks for the roadmap's approval, in either wording.
+fn is_approval(body: &str) -> bool {
+    body.starts_with(APPROVAL_QUESTION)
+        || body.starts_with(REVIEW_QUESTION) && body.contains(" roadmap")
 }
 
 /// mem's refusal, and the runner's name linked to its hub when a sibling is

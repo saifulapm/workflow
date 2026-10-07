@@ -9,6 +9,7 @@
 use crate::html::{degraded_banner, detail_head, esc, project_url};
 use crate::http::Response;
 use crate::model;
+use crate::page_control::{failed, pending_approval};
 use crate::pages::PageCtx;
 
 /// The html-plan runtime, one copy, in the plan skill. The hub serves its own
@@ -116,6 +117,50 @@ pub fn page_get(ctx: &PageCtx) -> Response {
         None if plan.degraded.is_some() => Response::text(502, "mem is not answering"),
         _ => Response::not_found(),
     }
+}
+
+/// `POST /p/<project>/plan/<slug>/respond`: the response the frame built,
+/// as the answer to the roadmap's open review question. With none open, it
+/// is saved for the next planner to read.
+pub fn respond_post(ctx: &PageCtx) -> Response {
+    let project = ctx.project.unwrap_or_default();
+    let slug = ctx.rest;
+    if !model::is_slug(slug) {
+        return Response::not_found();
+    }
+    let form = ctx.request.form();
+    let md = form.get("md").unwrap_or("").trim();
+    let back = format!("{}/plan/{slug}", project_url(project));
+    if md.is_empty() {
+        return Response::see_other(&back);
+    }
+
+    // The same lock Approve holds, so a response and an approval cannot both
+    // see the question open and both answer it.
+    let lock = ctx.app.lock_for(&format!("control:{project}"));
+    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let flag = format!("--project={project}");
+    let mem = &ctx.app.mem;
+    let (run, to) = match pending_approval(ctx, project) {
+        Some(id) => {
+            let sent = id.get(18..).unwrap_or(&id).to_string();
+            (
+                mem.write_through(&["answer", &flag, "--", &id, md]),
+                format!("{back}?sent={sent}"),
+            )
+        }
+        None => {
+            let title = format!("plan response: {slug}");
+            (
+                mem.write_through(&["save", &flag, "--title", &title, "--", md]),
+                format!("{back}?saved=1"),
+            )
+        }
+    };
+    if !run.ok() {
+        return failed(&run);
+    }
+    Response::see_other(&to)
 }
 
 /// `GET /assets/htmlplan.js` and `/assets/htmlplan.css`.

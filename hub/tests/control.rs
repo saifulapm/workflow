@@ -383,3 +383,26 @@ fn an_unknown_verb_is_a_bad_request() {
     }
     assert_eq!(world.writes(), Vec::<Vec<String>>::new());
 }
+
+/// The plan skill asks "Review the <name> roadmap and its plan pages", not the
+/// engine's "Approve roadmap ...", and Approve answers that one too.
+#[test]
+fn approve_answers_the_plan_skills_review_question() {
+    let world = World::new("control-approve-review");
+    world.mem(&[
+        "ask",
+        "--options",
+        "approve,changes",
+        "--",
+        "Review the alpha roadmap and its plan pages",
+    ]);
+    let hub = world.hub();
+
+    let response = world.post(&hub, "do=approve");
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(world.roadmap_status(), "approved");
+    assert_eq!(
+        world.question("Review the alpha roadmap and its plan pages")["answer"],
+        "approve"
+    );
+}
