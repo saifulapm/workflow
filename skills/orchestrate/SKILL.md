@@ -213,8 +213,9 @@ word is how the hub tells a parked milestone from a stalled one, and a
 stalled one rings his phone. Then end your own session with `amx stop
 --force "$AMX_ID"`: a session that only stops talking idles at its prompt,
 which the hub and `workflow go` read as a live orchestrator, so nothing
-could resume the milestone. The hub shows the question. His answer and the
-hub's Resume button start a fresh orchestrator, which reads your handoff.
+could resume the milestone. The hub shows the question. Once he answers,
+he presses Resume on the hub of a machine with a checkout, which starts a
+fresh orchestrator that reads your handoff and his answer.
 
 ## Hygiene
 
