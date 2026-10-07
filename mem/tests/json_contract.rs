@@ -184,28 +184,20 @@ fn every_verb_matches_its_committed_schema() {
         &mem(&w, &repo, &["project", "current", "--json"]),
     );
     assert_eq!(current["verify"], serde_json::json!("just test"));
-    assert!(current["machine"].is_string(), "{current}");
-    // The run keys are optional fields of the same contract.
-    for (key, value) in [
-        ("dev", "just dev"),
-        ("preview", "http://localhost:5173"),
-        ("surface", "web"),
-        ("dogfood-machine", "nuc"),
-        ("slots", "2"),
-        ("paused", "mini 2026-10-03"),
-    ] {
-        assert_eq!(
-            code(&mem(&w, &repo, &["project", "set", key, value])),
-            0,
-            "{key}"
-        );
-    }
+    assert!(current.get("machine").is_none(), "{current}");
+    assert_eq!(
+        code(&mem(
+            &w,
+            &repo,
+            &["project", "set", "hygiene-exempt", "tests/**"]
+        )),
+        0
+    );
     let current = validate(
         "project-current.json",
         &mem(&w, &repo, &["project", "current", "--json"]),
     );
-    assert_eq!(current["slots"], serde_json::json!(2));
-    assert_eq!(current["paused"], serde_json::json!("mini 2026-10-03"));
+    assert_eq!(current["hygiene_exempt"], serde_json::json!("tests/**"));
     validate("status.json", &mem(&w, &repo, &["status", "--json"]));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
     validate(
@@ -451,8 +443,9 @@ fn projects_carry_the_summary_a_project_page_reads() {
 
     // Nothing but the plan yet: every other field is null, zero or false.
     let p = row(&w);
-    assert!(p.get("runner").is_none(), "{p}");
-    assert!(p["paused"].is_null(), "{p}");
+    for gone in ["runner", "paused", "has_brief"] {
+        assert!(p.get(gone).is_none(), "{gone}: {p}");
+    }
     assert!(p["roadmap_status"].is_null(), "{p}");
     assert!(p["milestone"].is_null(), "{p}");
     assert_eq!(p["milestones_done"], 0);
@@ -461,7 +454,6 @@ fn projects_carry_the_summary_a_project_page_reads() {
     assert_eq!(p["plan_ticked"], 0);
     assert_eq!(p["plan_total"], 1);
     assert!(p["last_activity"].as_str().unwrap().ends_with('Z'), "{p}");
-    assert_eq!(p["has_brief"], false);
     assert_eq!(p["has_research"], false);
     assert_eq!(p["has_research_summary"], false);
     assert_eq!(p["has_spec"], false);
@@ -476,7 +468,6 @@ fn projects_carry_the_summary_a_project_page_reads() {
     set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
     set(&["roadmap", "--status", "draft"]);
     set(&["brief", "--set", "a shop that sells one thing"]);
-    set(&["project", "set", "paused", "mini 2026-10-05"]);
     let id = mem::project::Registry::load(&w.store()).projects[0]
         .id
         .clone();
@@ -486,13 +477,13 @@ fn projects_carry_the_summary_a_project_page_reads() {
     std::fs::write(wiki.join("spec.md"), "# Spec\n").unwrap();
 
     let p = row(&w);
-    assert!(p.get("runner").is_none(), "{p}");
-    assert_eq!(p["paused"], "mini 2026-10-05");
+    for gone in ["runner", "paused", "has_brief"] {
+        assert!(p.get(gone).is_none(), "{gone}: {p}");
+    }
     assert_eq!(p["roadmap_status"], "draft");
     assert_eq!(p["milestone"], "m1-auth");
     assert_eq!(p["milestones_done"], 0);
     assert_eq!(p["milestones_total"], 2);
-    assert_eq!(p["has_brief"], true);
     assert_eq!(p["has_research"], true);
     assert_eq!(p["has_research_summary"], false);
     assert_eq!(p["has_spec"], true);
@@ -535,7 +526,6 @@ fn the_brief_says_where_the_project_stands() {
     .unwrap();
     set(&["plan", "--set-file", plan.to_str().unwrap()]);
     set(&["plan", "--tick", "t1"]);
-    set(&["project", "set", "paused", "mini 2026-10-05"]);
     ask(&["ask", "ship on friday?"]);
     // A question for the orchestrator is not one a person has to answer.
     ask(&["ask", "retry t2?", "--for", "orchestrator"]);
@@ -550,8 +540,9 @@ fn the_brief_says_where_the_project_stands() {
     assert_eq!(b["plan_slug"], "billing");
     assert_eq!(b["plan_ticked"], 1);
     assert_eq!(b["plan_total"], 3);
-    assert!(b.get("runner").is_none(), "{b}");
-    assert_eq!(b["paused"], true);
+    for gone in ["runner", "paused"] {
+        assert!(b.get(gone).is_none(), "{gone}: {b}");
+    }
     assert_eq!(b["questions_human"], 1);
 
     // Outside a project mem knows, the same keys say there is nothing to tell.
@@ -575,7 +566,6 @@ fn the_brief_says_where_the_project_stands() {
         ] {
             assert_eq!(b[key], 0, "{key}: {b}");
         }
-        assert_eq!(b["paused"], false, "{b}");
     }
 }
 

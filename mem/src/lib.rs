@@ -122,26 +122,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             }
             cli::ProjectCommand::Set { command } => match command {
                 cli::ProjectSetCommand::Verify { cmd } => verbs::project_set(&app, "verify", cmd),
-                cli::ProjectSetCommand::ReviewPaths { globs } => {
-                    verbs::project_set(&app, "review_paths", globs)
-                }
                 cli::ProjectSetCommand::HygieneExempt { globs } => {
                     verbs::project_set(&app, "hygiene_exempt", globs)
                 }
-                cli::ProjectSetCommand::Model { model } => verbs::project_set(&app, "model", model),
-                cli::ProjectSetCommand::Effort { level } => {
-                    verbs::project_set(&app, "effort", level.as_str())
-                }
-                cli::ProjectSetCommand::Dev { cmd } => verbs::project_set(&app, "dev", cmd),
-                cli::ProjectSetCommand::Preview { url } => verbs::project_set(&app, "preview", url),
-                cli::ProjectSetCommand::Surface { kind } => {
-                    verbs::project_set(&app, "surface", kind)
-                }
-                cli::ProjectSetCommand::DogfoodMachine { machine } => {
-                    verbs::project_set(&app, "dogfood_machine", machine)
-                }
-                cli::ProjectSetCommand::Slots { count } => verbs::project_set(&app, "slots", count),
-                cli::ProjectSetCommand::Paused { text } => verbs::project_set(&app, "paused", text),
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
             },
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),

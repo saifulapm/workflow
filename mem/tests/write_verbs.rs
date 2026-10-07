@@ -615,68 +615,6 @@ fn project_set_verify_keeps_keys_this_version_does_not_know_about() {
 }
 
 #[test]
-fn project_set_review_paths_records_the_globs_and_project_current_reports_them() {
-    let w = World::new("write-review-paths");
-    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-
-    // Nothing declared yet: the field is simply absent, and the global table
-    // is the whole answer.
-    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("review_paths").is_none(), "{v}");
-
-    let out = mem(
-        &w,
-        &repo,
-        &[
-            "project",
-            "set",
-            "review-paths",
-            "packages/shopify-core/** scripts/mutate.py",
-        ],
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(
-        v["review_paths"],
-        serde_json::json!("packages/shopify-core/** scripts/mutate.py")
-    );
-    assert!(
-        stdout(&mem(&w, &repo, &["project", "current"])).contains("scripts/mutate.py"),
-        "the plain rendering names the globs too"
-    );
-
-    // Setting them again replaces the list rather than appending to it.
-    assert_eq!(
-        code(&mem(
-            &w,
-            &repo,
-            &["project", "set", "review-paths", "app/**"]
-        )),
-        0
-    );
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["review_paths"], serde_json::json!("app/**"));
-
-    let id = mem::project::Registry::load(&w.store()).projects[0]
-        .id
-        .clone();
-    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
-    assert_eq!(
-        text.matches("review_paths = ").count(),
-        1,
-        "one review_paths key, not two: {text}"
-    );
-
-    // Nothing at all is a usage error, not a project that claims no paths.
-    let out = mem(&w, &repo, &["project", "set", "review-paths", "  "]);
-    assert_eq!(code(&out), 2, "{}", stdout(&out));
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["review_paths"], serde_json::json!("app/**"));
-}
-
-#[test]
 fn project_set_hygiene_exempt_records_the_globs_and_project_current_reports_them() {
     let w = World::new("write-hygiene-exempt");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
@@ -713,81 +651,25 @@ fn project_set_hygiene_exempt_records_the_globs_and_project_current_reports_them
 }
 
 #[test]
-fn project_set_records_each_run_key_and_project_current_reports_it() {
-    let w = World::new("write-run-keys");
-    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    let keys = [
-        ("dev", "dev", "just dev"),
-        ("preview", "preview", "http://localhost:5173"),
-        ("surface", "surface", "web"),
-        ("dogfood-machine", "dogfood_machine", "nuc"),
-        ("slots", "slots", "3"),
-        ("paused", "paused", "mini 2026-10-03"),
-    ];
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    for (_, stored, _) in keys {
-        assert!(v.get(stored).is_none(), "{stored}: {v}");
-    }
-
-    for (cmd, _, value) in keys {
-        let out = mem(&w, &repo, &["project", "set", cmd, value]);
-        assert_eq!(code(&out), 0, "{cmd}: {}", stderr(&out));
-    }
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    let plain = stdout(&mem(&w, &repo, &["project", "current"]));
-    for (cmd, stored, value) in keys {
-        if stored == "slots" {
-            assert_eq!(v[stored], serde_json::json!(3), "{v}");
-        } else {
-            assert_eq!(v[stored], serde_json::json!(value), "{v}");
-        }
-        assert!(plain.contains(&format!("{cmd}  {value}\n")), "{plain}");
-    }
-
-    let id = mem::project::Registry::load(&w.store()).projects[0]
-        .id
-        .clone();
-    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
-    assert!(text.contains("dogfood_machine = "), "{text}");
-
-    for (cmd, stored, _) in keys {
-        let out = mem(&w, &repo, &["project", "unset", cmd]);
-        assert_eq!(code(&out), 0, "{cmd}: {}", stderr(&out));
-        let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-        assert!(v.get(stored).is_none(), "unset is the way back: {v}");
-    }
-}
-
-#[test]
-fn project_current_names_this_machine_whatever_is_set() {
-    let w = World::new("write-machine");
-    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    let machine = v["machine"].as_str().unwrap_or_default();
-    assert!(!machine.is_empty(), "{v}");
-}
-
-#[test]
-fn project_set_slots_refuses_anything_but_a_positive_integer() {
-    let w = World::new("write-slots");
-    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    for bad in ["0", "-1", "two", "1.5", ""] {
-        let out = mem(&w, &repo, &["project", "set", "slots", bad]);
-        assert_eq!(code(&out), 2, "{bad}: {}", stdout(&out));
-    }
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("slots").is_none(), "a refusal changes nothing: {v}");
-}
-
-#[test]
-fn project_set_has_no_reader_keys() {
+fn project_set_refuses_the_keys_nothing_reads() {
     let w = World::new("write-no-reader");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    for key in ["review-model", "fix-model", "review-effort"] {
+    for key in [
+        "review-model",
+        "fix-model",
+        "review-effort",
+        "model",
+        "effort",
+        "review-paths",
+        "dev",
+        "preview",
+        "surface",
+        "dogfood-machine",
+        "slots",
+        "paused",
+        "runner",
+    ] {
         let out = mem(&w, &repo, &["project", "set", key, "high"]);
         assert_eq!(code(&out), 2, "{key}: {}", stdout(&out));
         assert!(
@@ -804,103 +686,49 @@ fn project_set_has_no_reader_keys() {
 }
 
 #[test]
-fn project_set_effort_records_a_level_and_refuses_a_sixth() {
-    let w = World::new("write-effort");
-    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
-    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("effort").is_none(), "{v}");
-
-    let out = mem(&w, &repo, &["project", "set", "effort", "max"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["effort"], serde_json::json!("max"));
-    let plain = stdout(&mem(&w, &repo, &["project", "current"]));
-    assert!(plain.contains("effort  max"), "{plain}");
-
-    // The level is the list amx takes; anything else is a typo
-    // that must not reach a worker's launch.
-    assert_eq!(
-        code(&mem(&w, &repo, &["project", "set", "effort", "maximum"])),
-        2
-    );
-    assert_eq!(code(&mem(&w, &repo, &["project", "set", "effort", ""])), 2);
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(
-        v["effort"],
-        serde_json::json!("max"),
-        "a refusal changes nothing"
-    );
-
-    let out = mem(&w, &repo, &["project", "unset", "effort"]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(
-        stdout(&out).contains("effort for thing: cleared"),
-        "{}",
-        stdout(&out)
-    );
-    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("effort").is_none(), "{v}");
-    let id = mem::project::Registry::load(&w.store()).projects[0]
-        .id
-        .clone();
-    let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
-    assert!(!text.contains("effort"), "no key left behind: {text}");
-}
-
-#[test]
 fn project_unset_takes_a_choice_off_and_leaves_the_others() {
     let w = World::new("write-unset");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     assert_eq!(
-        code(&mem(&w, &repo, &["project", "set", "model", "sonnet"])),
+        code(&mem(&w, &repo, &["project", "set", "verify", "just test"])),
         0
     );
     assert_eq!(
         code(&mem(
             &w,
             &repo,
-            &["project", "set", "dogfood-machine", "nuc"]
+            &["project", "set", "hygiene-exempt", "tests/**"]
         )),
         0
     );
 
-    let out = mem(&w, &repo, &["project", "unset", "dogfood-machine"]);
+    let out = mem(&w, &repo, &["project", "unset", "verify"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("dogfood-machine for thing: cleared"),
+        stdout(&out).contains("verify for thing: cleared"),
         "{}",
         stdout(&out)
     );
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert!(v.get("dogfood_machine").is_none(), "the key is gone: {v}");
+    assert!(v.get("verify").is_none(), "the key is gone: {v}");
     assert_eq!(
-        v["model"],
-        serde_json::json!("sonnet"),
+        v["hygiene_exempt"],
+        serde_json::json!("tests/**"),
         "the other key stays"
     );
     let id = mem::project::Registry::load(&w.store()).projects[0]
         .id
         .clone();
     let text = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
-    assert!(
-        !text.contains("dogfood_machine"),
-        "no key left behind: {text}"
-    );
+    assert!(!text.contains("verify"), "no key left behind: {text}");
 
     // Clearing what is not set is not an error, and says so.
-    let out = mem(
-        &w,
-        &repo,
-        &["project", "unset", "dogfood-machine", "--json"],
-    );
+    let out = mem(&w, &repo, &["project", "unset", "verify", "--json"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(json(&out)["was_set"], serde_json::json!(false));
 
     // The keys set records are the keys unset clears; remote is an identity.
-    assert_eq!(code(&mem(&w, &repo, &["project", "unset", "verify"])), 0);
     assert_ne!(code(&mem(&w, &repo, &["project", "unset", "remote"])), 0);
 }
 

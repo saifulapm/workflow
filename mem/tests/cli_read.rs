@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{World, code, item, mem, put, stdout};
+use common::{World, code, item, mem, put, stderr, stdout};
 use mem::item::Kind;
 
 const P: &str = "01K2AAAAAAAAAAAAAAAAAAAAAA";
@@ -180,4 +180,63 @@ fn a_read_verb_leaves_no_footprint_in_the_repository() {
     );
     assert!(!repo.join(".mem").exists());
     assert!(!repo.join(".focus").exists());
+}
+
+/// Older binaries on other machines share this store, so what they wrote has
+/// to keep reading cleanly here: project.toml keys this mem no longer sets or
+/// reads, a status.md, a roadmap status it no longer accepts, and a question
+/// that carries the task that asked it.
+#[test]
+fn a_store_an_older_mem_wrote_still_reads_cleanly() {
+    let w = World::new("cli-older-store");
+    w.project(P, "thing");
+    let store = w.store();
+    let toml = store.project_toml(P);
+    let mut text = std::fs::read_to_string(&toml).unwrap();
+    text.push_str(
+        "runner = \"mini\"\nrunner_since = \"2026-10-01T00:00:00Z\"\npaused = \"mini 2026-10-03\"\n\
+         slots = \"2\"\ndev = \"just dev\"\npreview = \"http://localhost:5173\"\n\
+         surface = \"web\"\ndogfood_machine = \"nuc\"\nreview_paths = \"app/**\"\n\
+         model = \"sonnet\"\neffort = \"max\"\nplan_status = \"running\"\n\
+         roadmap_status = \"maintenance\"\n",
+    );
+    std::fs::write(&toml, &text).unwrap();
+    std::fs::write(store.status_path(P), "m2 under way\n").unwrap();
+    std::fs::write(store.roadmap_path(P), "# roadmap: v2\n\n- [ ] m1-auth Sign-in\n").unwrap();
+    let mut q = item(Kind::Question, "retry t2?", "retry t2?");
+    q.meta.id = "01K2YR1VC0AB3DE4FG5HJ6KM7N".to_string();
+    q.meta.audience = Some("orchestrator".to_string());
+    q.meta.task = Some("m2/t2".to_string());
+    put(&store, Some(P), &q);
+    let dir = w.plain_dir("cwd");
+    let read = |args: &[&str]| {
+        let mut all = vec!["--project", "thing"];
+        all.extend(args);
+        let out = mem(&w, &dir, &all);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        stdout(&out)
+    };
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_str(&read(args)).expect("json")
+    };
+
+    read(&["reindex", "--full"]);
+    let row = &json(&["projects", "--json"])["projects"][0];
+    assert_eq!(row["roadmap_status"], "maintenance", "{row}");
+    let current = json(&["project", "current", "--json"]);
+    assert_eq!(current["name"], "thing", "{current}");
+    for gone in ["runner", "paused", "slots", "model", "effort", "review_paths"] {
+        assert!(current.get(gone).is_none(), "{gone}: {current}");
+    }
+    assert_eq!(read(&["roadmap", "--status"]), "maintenance\n");
+    let questions = json(&["questions", "--json"]);
+    assert_eq!(questions["questions"][0]["task"], "m2/t2", "{questions}");
+    assert_eq!(questions["questions"][0]["audience"], "orchestrator");
+    assert!(read(&["show", "5HJ6KM7N"]).contains("task = \"m2/t2\""));
+    let context = read(&["context"]);
+    assert!(context.starts_with("project: thing\n"), "{context}");
+    let doctor = read(&["doctor"]);
+    assert!(!doctor.contains("status.md"), "{doctor}");
+    assert!(!doctor.contains("project.toml"), "{doctor}");
+    assert_eq!(std::fs::read_to_string(&toml).unwrap(), text, "a read writes nothing");
 }

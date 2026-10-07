@@ -435,8 +435,8 @@ pub enum ProjectCommand {
         command: ProjectSetCommand,
     },
     /// Forget something `set` recorded, so the project is back on the
-    /// default: the workflow's model, the detected verifier. `set` refuses an
-    /// empty value, so this is the way back to absent.
+    /// default. `set` refuses an empty value, so this is the way back to
+    /// absent.
     Unset { key: ProjectKey },
 }
 
@@ -446,16 +446,7 @@ pub enum ProjectCommand {
 #[value(rename_all = "kebab-case")]
 pub enum ProjectKey {
     Verify,
-    ReviewPaths,
     HygieneExempt,
-    Model,
-    Effort,
-    Dev,
-    Preview,
-    Surface,
-    DogfoodMachine,
-    Slots,
-    Paused,
 }
 
 impl ProjectKey {
@@ -463,84 +454,24 @@ impl ProjectKey {
     pub fn stored(self) -> &'static str {
         match self {
             ProjectKey::Verify => "verify",
-            ProjectKey::ReviewPaths => "review_paths",
             ProjectKey::HygieneExempt => "hygiene_exempt",
-            ProjectKey::Model => "model",
-            ProjectKey::Effort => "effort",
-            ProjectKey::Dev => "dev",
-            ProjectKey::Preview => "preview",
-            ProjectKey::Surface => "surface",
-            ProjectKey::DogfoodMachine => "dogfood_machine",
-            ProjectKey::Slots => "slots",
-            ProjectKey::Paused => "paused",
         }
     }
 }
 
 #[derive(Subcommand, Debug)]
 pub enum ProjectSetCommand {
-    /// The command that verifies this project. It is tier one of the
-    /// verification ladder: whatever it says beats every detected verifier.
+    /// The command that verifies this project. Whatever it says beats any
+    /// verifier a caller would detect on its own.
     Verify { cmd: String },
-    /// Globs this project wants a cold review of, whitespace separated.
-    /// Merged with `workflow review-needed`'s global table, never replacing
-    /// it: these are the paths that are load-bearing in THIS repository.
-    #[command(name = "review-paths")]
-    ReviewPaths { globs: String },
-    /// Globs the hygiene check leaves alone, whitespace separated and
-    /// matched like a plan's Files patterns (`tests/**`): paths whose
-    /// fixtures have to carry the ids and words the check refuses elsewhere.
+    /// Globs the hygiene check leaves alone, whitespace separated
+    /// (`tests/**`): paths whose fixtures have to carry the ids and words
+    /// the check refuses elsewhere.
     #[command(name = "hygiene-exempt")]
     HygieneExempt { globs: String },
-    /// The model a run's workers are started on (`opus`, `sonnet`, ...).
-    /// Absent means the workflow's default; WORKFLOW_MODEL overrides per run.
-    Model { model: String },
-    /// How much reasoning a run's workers spend, on whatever model they run
-    /// (`max` buys a cheaper model more thinking). Absent means the CLI's
-    /// own default; WORKFLOW_EFFORT overrides per run, and set empty it
-    /// means no dial for that run.
-    Effort { level: Effort },
-    /// The command that starts this project's dev server.
-    Dev { cmd: String },
-    /// Where a running dev server is looked at, usually a URL.
-    Preview { url: String },
-    /// What the project shows a person: `web`, `tui`, `cli`, ...
-    Surface { kind: String },
-    /// The machine where this project is used day to day.
-    #[command(name = "dogfood-machine")]
-    DogfoodMachine { machine: String },
-    /// How many tasks a run works on at once, a positive integer.
-    Slots { count: String },
-    /// Hold this project's runs: no new milestone or task starts until
-    /// `unset paused`. The text says who paused it, usually machine and date.
-    Paused { text: String },
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },
-}
-
-/// The reasoning dial (`amx new --effort`). A closed list: a level the
-/// worker would refuse at launch must not be stored.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-#[value(rename_all = "lower")]
-pub enum Effort {
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max,
-}
-
-impl Effort {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Effort::Low => "low",
-            Effort::Medium => "medium",
-            Effort::High => "high",
-            Effort::Xhigh => "xhigh",
-            Effort::Max => "max",
-        }
-    }
 }
 
 /// Who a question is for. A worker's question is the orchestrator's to
@@ -570,30 +501,4 @@ pub enum Scope {
     Project,
     Global,
     All,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Cli;
-    use clap::CommandFactory;
-
-    fn long_help(path: &[&str]) -> String {
-        let mut cmd = Cli::command();
-        cmd.build();
-        let mut node = &mut cmd;
-        for name in path {
-            node = node
-                .find_subcommand_mut(name)
-                .unwrap_or_else(|| panic!("no such subcommand: {name}"));
-        }
-        node.render_long_help().to_string()
-    }
-
-    /// The effort dial names its run override, since that is where a
-    /// project reads how to turn it up for one run.
-    #[test]
-    fn effort_help_names_the_run_override() {
-        let help = long_help(&["project", "set", "effort"]);
-        assert!(help.contains("WORKFLOW_EFFORT"), "{help}");
-    }
 }

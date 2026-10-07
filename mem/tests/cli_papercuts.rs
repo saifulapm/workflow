@@ -118,6 +118,8 @@ fn the_engine_surface_is_gone() {
         &["wiki", "notes", "--force"][..],
         &["project", "set", "runner", "mini"][..],
         &["project", "unset", "runner"][..],
+        &["project", "set", "slots", "2"][..],
+        &["project", "unset", "paused"][..],
     ] {
         let out = mem(&w, &dir, args);
         assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
@@ -126,8 +128,18 @@ fn the_engine_surface_is_gone() {
         (&["plan"][..], &["--task", "--add-task", "--from", "--status", "--force"][..]),
         (&["roadmap"][..], &["--untick", "running", "maintenance", "--force"][..]),
         (&["wiki"][..], &["--force", "runner"][..]),
-        (&["project", "set"][..], &["runner"][..]),
-        (&["project", "unset"][..], &["runner"][..]),
+        (
+            &["project", "set"][..],
+            &[
+                "runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review",
+                "WORKFLOW_",
+            ][..],
+        ),
+        (
+            &["project", "unset"][..],
+            &["runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review"][..],
+        ),
+        (&["project", "current"][..], &["machine"][..]),
     ] {
         let help = stdout(&mem(&w, &dir, &[verb, &["--help"]].concat()));
         for word in gone {

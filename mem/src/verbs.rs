@@ -66,7 +66,6 @@ pub fn context(
                 "plan_slug": null,
                 "plan_ticked": 0,
                 "plan_total": 0,
-                "paused": false,
                 "questions_human": 0,
             });
             if let Some(id) = identity.id() {
@@ -75,7 +74,6 @@ pub fn context(
                         doc[key] = value;
                     }
                 }
-                doc["paused"] = json!(!doc["paused"].is_null());
                 let orchestrator = crate::cli::Audience::Orchestrator.stored();
                 doc["questions_human"] = json!(
                     index
@@ -385,13 +383,9 @@ fn project_summary(
         .and_then(|rows| rows.into_iter().next())
         .and_then(|row| jiff::Timestamp::from_second(row.modified_epoch).ok())
         .map(|ts| ts.to_string());
-    let has_brief = index
-        .recent("brief", Some(id), 1)
-        .is_ok_and(|rows| !rows.is_empty());
     let pages = app.store.wiki_pages(id);
     let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
     vec![
-        ("paused", json!(declared("paused"))),
         ("roadmap_status", json!(declared(ROADMAP_STATUS))),
         (
             "milestone",
@@ -409,7 +403,6 @@ fn project_summary(
         ),
         ("plan_total", json!(plan.len())),
         ("last_activity", json!(last_activity)),
-        ("has_brief", json!(has_brief)),
         (
             "has_research",
             json!(has_page(|s| s.starts_with("research"))),
@@ -456,39 +449,18 @@ pub fn project_current(app: &App) -> Result<i32> {
     // The root is this checkout, not a path recorded on some other machine.
     let root = crate::git::toplevel(&app.cwd);
     // Absent unless the project declared them: a caller that sees no `verify`
-    // field falls through to its own detection (workflow spec §7, tier 1), and
-    // one that sees no `review_paths` has only the global table.
+    // field falls through to its own detection.
     let declared = Registry::load(&app.store).by_id(id).cloned();
     let verify = declared.as_ref().and_then(|p| p.verify.clone());
-    let review_paths = declared.as_ref().and_then(|p| p.review_paths.clone());
     let hygiene_exempt = crate::project::declared(&app.store, id, "hygiene_exempt");
-    let model = crate::project::declared(&app.store, id, "model");
-    let effort = crate::project::declared(&app.store, id, "effort");
-    // The keys a run reads to place and pace itself, as (shown, stored, value).
-    let run_keys: Vec<(&str, &str, String)> = [
-        ("dev", "dev"),
-        ("preview", "preview"),
-        ("surface", "surface"),
-        ("dogfood-machine", "dogfood_machine"),
-        ("slots", "slots"),
-        ("paused", "paused"),
-    ]
-    .into_iter()
-    .filter_map(|(shown, stored)| {
-        crate::project::declared(&app.store, id, stored).map(|v| (shown, stored, v))
-    })
-    .collect();
-    // A child project keeps the checkout as its root — run dirs and worktrees
-    // key on the checkout — and says where inside it the child lives.
+    // A child project keeps the checkout as its root and says where inside
+    // it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
     if app.json {
         let mut doc = json!({
             "id": id,
             "name": name,
             "root": root.as_ref().map(|p| p.to_string_lossy()),
-            // The name mem compares a runner claim against, so a caller that
-            // claims a project writes the same spelling.
-            "machine": app.machine,
         });
         if let Some(subdir) = &subdir {
             doc["subdir"] = json!(subdir);
@@ -496,23 +468,8 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(verify) = &verify {
             doc["verify"] = json!(verify);
         }
-        if let Some(paths) = &review_paths {
-            doc["review_paths"] = json!(paths);
-        }
         if let Some(globs) = &hygiene_exempt {
             doc["hygiene_exempt"] = json!(globs);
-        }
-        if let Some(model) = &model {
-            doc["model"] = json!(model);
-        }
-        if let Some(level) = &effort {
-            doc["effort"] = json!(level);
-        }
-        for (_, stored, value) in &run_keys {
-            doc[*stored] = match (*stored, value.parse::<u64>()) {
-                ("slots", Ok(n)) => json!(n),
-                _ => json!(value),
-            };
         }
         println!("{}", serde_json::to_string(&doc)?);
     } else {
@@ -527,20 +484,8 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(verify) = &verify {
             println!("verify  {verify}");
         }
-        if let Some(paths) = &review_paths {
-            println!("review-paths  {paths}");
-        }
         if let Some(globs) = &hygiene_exempt {
             println!("hygiene-exempt  {globs}");
-        }
-        if let Some(model) = &model {
-            println!("model  {model}");
-        }
-        if let Some(level) = &effort {
-            println!("effort  {level}");
-        }
-        for (shown, _, value) in &run_keys {
-            println!("{shown}  {value}");
         }
     }
     Ok(exit::OK)
@@ -587,7 +532,7 @@ pub fn project_add(app: &App, subdir: &str, name: Option<&str>) -> Result<i32> {
 }
 
 /// `mem project set <key> "<value>"` — the per-project verification command,
-/// the per-project review paths, the models. Unlike other write
+/// the hygiene exemptions, the remote. Unlike other write
 /// verbs, `project set` and `project unset` configure a project rather than
 /// record against one, so they resolve in `Mode::Read` and refuse an
 /// unregistered checkout instead of registering it; `claim_note` only
@@ -614,19 +559,6 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     let value = if key == "remote" {
         normalized = crate::git::normalize_remote(value);
         normalized.as_str()
-    } else if key == "slots" {
-        // A run sizes its worker pool from this; zero or a typo would stall it.
-        match value.parse::<u32>() {
-            Ok(n) if n > 0 => {
-                normalized = n.to_string();
-                normalized.as_str()
-            }
-            _ => {
-                return Err(exit::usage(format!(
-                    "slots is a positive integer, e.g. `mem project set slots 2`, not `{value}`"
-                )));
-            }
-        }
     } else {
         value
     };
@@ -653,8 +585,8 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
 }
 
 /// `mem project unset <key>` -- the way back to absent. `set` refuses an
-/// empty value, and until this the only way to take a reader or a model off
-/// a project was to edit project.toml by hand.
+/// empty value, so without this the only way to take a key off a project
+/// was to edit project.toml by hand.
 pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     let identity = writable_project_identity(app)?;
     let Some(id) = identity.id() else {

@@ -13,7 +13,6 @@
     "plan_slug",
     "plan_ticked",
     "plan_total",
-    "paused",
     "questions_human"
   ],
   "properties": {
@@ -55,9 +54,6 @@
     },
     "plan_total": {
       "type": "integer"
-    },
-    "paused": {
-      "type": "boolean"
     },
     "questions_human": {
       "type": "integer"

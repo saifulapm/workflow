@@ -12,7 +12,7 @@
       "items": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "project",
-        "description": "One registered project, with the summary a project page reads: run keys from project.toml, counts from roadmap.md and plan.md, which wiki pages exist, and the newest item's time.",
+        "description": "One registered project, with the summary a project page reads: the roadmap status from project.toml, counts from roadmap.md and plan.md, which wiki pages exist, and the newest item's time.",
         "type": "object",
         "required": [
           "id",
@@ -23,7 +23,6 @@
           "items",
           "current",
           "checkouts",
-          "paused",
           "roadmap_status",
           "milestone",
           "milestones_done",
@@ -32,7 +31,6 @@
           "plan_ticked",
           "plan_total",
           "last_activity",
-          "has_brief",
           "has_research",
           "has_research_summary",
           "has_spec"
@@ -71,12 +69,6 @@
               "type": "string"
             }
           },
-          "paused": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "roadmap_status": {
             "type": [
               "string",
@@ -112,9 +104,6 @@
               "string",
               "null"
             ]
-          },
-          "has_brief": {
-            "type": "boolean"
           },
           "has_research": {
             "type": "boolean"

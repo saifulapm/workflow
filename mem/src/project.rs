@@ -34,12 +34,6 @@ pub struct Project {
     /// without the repository carrying a file about them (spec §7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<String>,
-    /// Globs this project wants a cold review of, set by
-    /// `mem project set review-paths`. Whitespace separated, merged with the
-    /// global table rather than replacing it: the shipped rows are what is
-    /// sensitive everywhere, and these are what is sensitive here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub review_paths: Option<String>,
     /// The root project this one lives inside, by id. Present only on a child
     /// project (`mem project add`): a monorepo's root project carries neither
     /// this nor `subdir`.
@@ -405,7 +399,6 @@ pub fn register(
         },
         created: Timestamp::now(),
         verify: None,
-        review_paths: None,
         parent: None,
         subdir: None,
     };
@@ -490,7 +483,6 @@ pub fn register_child(
         },
         created: Timestamp::now(),
         verify: None,
-        review_paths: None,
         parent: Some(root.id.clone()),
         subdir: Some(subdir),
     };
