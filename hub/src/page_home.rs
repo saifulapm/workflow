@@ -32,6 +32,8 @@ pub struct ProjectSummary {
     pub stage: &'static str,
     pub runner: Option<String>,
     pub paused: Option<String>,
+    /// The open milestone's slug, while a roadmap has one.
+    pub milestone: Option<String>,
     /// Milestones ticked on the roadmap, and in all.
     pub milestones: (u64, u64),
     /// Tasks ticked in the current plan, and in all.
@@ -57,6 +59,7 @@ pub fn project_summaries(mem: &MemCli) -> Vec<ProjectSummary> {
             stage: lifecycle_stage(row),
             runner: text(row, "runner"),
             paused: text(row, "paused"),
+            milestone: text(row, "milestone"),
             milestones: (
                 count(row, "milestones_done"),
                 count(row, "milestones_total"),
@@ -137,35 +140,45 @@ pub fn render(
         body.push_str(&html::degraded_banner(&why));
     }
 
-    body.push_str("<h2>Projects</h2>\n");
+    body.push_str("<h2>Waiting on you</h2>\n");
+    if questions_rows.is_empty() {
+        body.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
+    }
+    for question in &questions_rows {
+        body.push_str(&question_block(question, now_ms));
+    }
+
+    let waiting = |name: &str| {
+        questions_rows
+            .iter()
+            .filter(|q| q["project"].as_str() == Some(name))
+            .count()
+    };
+    let waits = projects.iter().filter(|p| waiting(&p.name) > 0).count();
+    body.push_str("<h2>Projects");
+    if waits > 0 {
+        body.push_str(&format!(
+            " <span class=\"pill wait\">{waits} {} on you</span>",
+            if waits == 1 { "waits" } else { "wait" }
+        ));
+    }
+    body.push_str("</h2>\n");
     if projects.is_empty() {
         body.push_str("<p class=\"empty\">No projects registered.</p>\n");
     } else {
-        body.push_str("<ul>\n");
+        body.push_str("<div class=\"cards\">\n");
         for project in &projects {
-            let waiting = questions_rows
-                .iter()
-                .filter(|q| q["project"].as_str() == Some(project.name.as_str()))
-                .count();
             let week = week_line(mem, &project.name);
-            body.push_str(&project_row(
+            body.push_str(&project_card(
                 project,
-                waiting,
+                waiting(&project.name),
                 week.as_deref(),
                 config,
                 machine,
                 now_ms,
             ));
         }
-        body.push_str("</ul>\n");
-    }
-
-    body.push_str("<h2>Pending questions</h2>\n");
-    if questions_rows.is_empty() {
-        body.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
-    }
-    for question in &questions_rows {
-        body.push_str(&question_block(question, now_ms));
+        body.push_str("</div>\n");
     }
 
     page_shell(machine, None, &body)
@@ -198,7 +211,10 @@ fn week_line(mem: &MemCli, project: &str) -> Option<String> {
     ))
 }
 
-fn project_row(
+/// One project as a card: its name, its stage and whatever waits on the
+/// owner as pills, the runner and the open milestone, then a bar filled by
+/// the plan's ticks, or the roadmap's when there is no plan.
+fn project_card(
     project: &ProjectSummary,
     waiting: usize,
     week: Option<&str>,
@@ -206,12 +222,26 @@ fn project_row(
     machine: &str,
     now_ms: i64,
 ) -> String {
-    let mut parts = vec![project.stage.to_string()];
+    let mut pills = format!(
+        "<span class=\"{}\">{}</span>",
+        stage_pill(project.stage),
+        project.stage
+    );
     if project.paused.is_some() {
-        parts.push("paused".to_string());
+        pills.push_str("<span class=\"pill wait\">paused</span>");
     }
+    if waiting > 0 {
+        let s = if waiting == 1 { "" } else { "s" };
+        pills.push_str(&format!(
+            "<span class=\"pill wait\">{waiting} question{s}</span>"
+        ));
+    }
+    let mut parts = Vec::new();
     if let Some(runner) = &project.runner {
         parts.push(runner_html(runner, config, machine));
+    }
+    if let Some(milestone) = &project.milestone {
+        parts.push(esc(milestone));
     }
     let (done, total) = project.milestones;
     if total > 0 {
@@ -219,30 +249,57 @@ fn project_row(
         // ticked.
         parts.push(format!("milestone {} of {total}", (done + 1).min(total)));
     }
-    let (ticked, total) = project.tasks;
-    if total > 0 {
-        parts.push(format!("tasks {ticked} of {total}"));
+    let (ticked, tasks) = project.tasks;
+    if tasks > 0 {
+        parts.push(format!("tasks {ticked} of {tasks}"));
     }
-    if waiting > 0 {
-        let s = if waiting == 1 { "" } else { "s" };
-        parts.push(format!("{waiting} question{s}"));
-    }
+    let meta = if parts.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"meta\">{}</div>\n", parts.join(" · "))
+    };
+    let bar = match (tasks, total) {
+        (0, 0) => String::new(),
+        (0, total) => bar(done, total),
+        (tasks, _) => bar(ticked, tasks),
+    };
     let age = project
         .last_activity
         .as_deref()
         .and_then(|at| at.parse::<jiff::Timestamp>().ok())
         .map(|at| model::age(Some(at.as_millisecond()), now_ms))
-        .map(|age| format!(" <span class=\"meta\">{}</span>", esc(&age)))
+        .map(|age| format!("<span class=\"meta\">{}</span>", esc(&age)))
         .unwrap_or_default();
-    // Its own line: the week is joined by the same dots as `parts`.
     let week = week
-        .map(|week| format!("\n<div class=\"meta\">{}</div>", esc(week)))
+        .map(|week| format!("<div class=\"meta\">{}</div>\n", esc(week)))
         .unwrap_or_default();
     format!(
-        "<li><strong><a href=\"{href}\">{name}</a></strong>{age}\n<div>{parts}</div>{week}</li>\n",
+        "<article class=\"card\">\n\
+         <div class=\"row\"><h3><a href=\"{href}\">{name}</a></h3>{pills}\
+         <span class=\"sp\"></span>{age}</div>\n\
+         {meta}{bar}{week}</article>\n",
         href = esc(&html::project_url(&project.name)),
         name = esc(&project.name),
-        parts = parts.join(" · "),
+    )
+}
+
+/// The pill's class for a stage: the accent while a milestone is being built
+/// or walked, amber while a roadmap waits on approval, green once shipped,
+/// grey before there is a roadmap.
+pub fn stage_pill(stage: &str) -> &'static str {
+    match stage {
+        "execution" | "dogfooding" => "pill",
+        "planning" => "pill wait",
+        "maintenance" => "pill ok",
+        _ => "pill mut",
+    }
+}
+
+/// A progress bar filled to `done` of `total`, which is never zero here.
+pub fn bar(done: u64, total: u64) -> String {
+    format!(
+        "<div class=\"bar\"><i style=\"width:{}%\"></i></div>\n",
+        done.min(total) * 100 / total
     )
 }
 

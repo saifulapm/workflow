@@ -204,38 +204,120 @@ fn the_page_reads_the_run_lines_once_per_project() {
 fn cost_of_the_week_shows_under_a_project_with_lines_and_nowhere_else() {
     let (_dir, page, _argv) = render("home-week");
     let line = "<div class=\"meta\">week: 3 sessions · 23 min · 1.6M in · 31.2k out</div>";
-    assert!(
-        page.contains(&format!(
-            "<div>execution · here · milestone 1 of 2 · tasks 2 of 3</div>\n{line}"
-        )),
-        "{page}"
-    );
+    let card = card(&page, "p-execution");
+    assert!(card.contains(line), "{card}");
     assert_eq!(page.matches("week:").count(), 1, "{page}");
 }
 
+/// The card of one project, from its opening tag to its closing one.
+fn card<'a>(page: &'a str, name: &str) -> &'a str {
+    let at = page
+        .find(&format!("<h3><a href=\"/p/{name}\">{name}</a></h3>"))
+        .unwrap_or_else(|| panic!("no card for {name}\n{page}"));
+    let start = page[..at]
+        .rfind("<article class=\"card\">")
+        .expect("a card");
+    let end = at + page[at..].find("</article>").expect("a closed card");
+    &page[start..end]
+}
+
 #[test]
-fn each_project_shows_its_stage_runner_and_progress() {
+fn each_project_is_a_card_with_its_stage_runner_and_progress() {
     let (_dir, page, _argv) = render("home-rows");
-    for line in [
-        "<div>brief · here</div>",
-        "<div>research · here</div>",
-        "<div>grilling · here</div>",
-        "<div>spec · here</div>",
-        "<div>planning · paused · here · milestone 1 of 2 · 2 questions</div>",
-        "<div>execution · here · milestone 1 of 2 · tasks 2 of 3</div>",
-        "<div>dogfooding · here · milestone 1 of 2 · tasks 3 of 3</div>",
-        "<div>maintenance · here · milestone 2 of 2 · tasks 4 of 4</div>",
-        "<div>execution · <a href=\"http://nuc:8088\">nuc</a> · milestone 2 of 2 · tasks 3 of 3</div>",
+    for (name, pill, meta) in [
+        ("p-brief", "<span class=\"pill mut\">brief</span>", "here"),
+        (
+            "p-research",
+            "<span class=\"pill mut\">research</span>",
+            "here",
+        ),
+        (
+            "p-grilling",
+            "<span class=\"pill mut\">grilling</span>",
+            "here",
+        ),
+        ("p-spec", "<span class=\"pill mut\">spec</span>", "here"),
+        (
+            "p-planning",
+            "<span class=\"pill wait\">planning</span>",
+            "here · m1-auth · milestone 1 of 2",
+        ),
+        (
+            "p-execution",
+            "<span class=\"pill\">execution</span>",
+            "here · m1-auth · milestone 1 of 2 · tasks 2 of 3",
+        ),
+        (
+            "p-dogfood",
+            "<span class=\"pill\">dogfooding</span>",
+            "here · m1-auth · milestone 1 of 2 · tasks 3 of 3",
+        ),
+        (
+            "p-maint",
+            "<span class=\"pill ok\">maintenance</span>",
+            "here · milestone 2 of 2 · tasks 4 of 4",
+        ),
+        (
+            "p-elsewhere",
+            "<span class=\"pill\">execution</span>",
+            "<a href=\"http://nuc:8088\">nuc</a> · m2-billing · milestone 2 of 2 · tasks 3 of 3",
+        ),
     ] {
-        assert!(page.contains(line), "{line}\n{page}");
+        let card = card(&page, name);
+        assert!(card.contains(pill), "{name}: {card}");
+        assert!(
+            card.contains(&format!("<div class=\"meta\">{meta}</div>")),
+            "{name}: {card}"
+        );
     }
     assert!(
-        page.contains(
-            "<li><strong><a href=\"/p/p-dogfood\">p-dogfood</a></strong> \
-             <span class=\"meta\">2h</span>"
-        ),
+        card(&page, "p-dogfood")
+            .contains("<span class=\"sp\"></span><span class=\"meta\">2h</span>"),
         "{page}"
     );
+}
+
+#[test]
+fn a_card_fills_its_bar_with_the_plans_ticks_else_the_milestones() {
+    let (_dir, page, _argv) = render("home-bars");
+    for (name, width) in [
+        ("p-execution", "66%"),
+        ("p-dogfood", "100%"),
+        ("p-planning", "0%"),
+        ("p-maint", "100%"),
+    ] {
+        let card = card(&page, name);
+        assert!(
+            card.contains(&format!(
+                "<div class=\"bar\"><i style=\"width:{width}\"></i></div>"
+            )),
+            "{name}: {card}"
+        );
+    }
+    assert!(!card(&page, "p-brief").contains("class=\"bar\""), "{page}");
+}
+
+#[test]
+fn what_waits_on_saiful_shows_on_the_card_and_above_the_projects() {
+    let (_dir, page, _argv) = render("home-waits");
+    let planning = card(&page, "p-planning");
+    assert!(
+        planning.contains("<span class=\"pill wait\">2 questions</span>"),
+        "{planning}"
+    );
+    assert!(
+        planning.contains("<span class=\"pill wait\">paused</span>"),
+        "{planning}"
+    );
+    assert!(!card(&page, "p-execution").contains("question"), "{page}");
+    assert!(
+        page.contains("<h2>Projects <span class=\"pill wait\">1 waits on you</span></h2>"),
+        "{page}"
+    );
+    let waiting = page.find("<h2>Waiting on you").expect("a waiting heading");
+    let projects = page.find("<h2>Projects").expect("a projects heading");
+    assert!(waiting < projects, "the questions come first");
+    assert!(page.contains("<div class=\"cards\">"), "{page}");
 }
 
 #[test]

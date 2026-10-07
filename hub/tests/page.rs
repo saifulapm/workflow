@@ -93,7 +93,7 @@ fn the_page_has_the_projects_the_questions_a_header_and_a_form() {
     assert_eq!(status_of(&response), 200);
     let body = body_of(&response);
 
-    assert!(body.contains("Pending questions"), "{body}");
+    assert!(body.contains("Waiting on you"), "{body}");
     assert!(body.contains("Projects"), "{body}");
     assert!(body.contains("Should we use Redis?"));
     assert!(
@@ -101,7 +101,10 @@ fn the_page_has_the_projects_the_questions_a_header_and_a_form() {
         "{body}"
     );
     // A project with neither a roadmap nor a research page is at its brief.
-    assert!(body.contains("<div>brief"), "{body}");
+    assert!(
+        body.contains("<span class=\"pill mut\">brief</span>"),
+        "{body}"
+    );
     // AC4: answering is a form POST, and there is no script on the page at all.
     assert!(
         body.contains("<form method=\"post\" action=\"/answer\">"),

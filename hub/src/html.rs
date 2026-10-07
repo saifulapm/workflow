@@ -111,6 +111,7 @@ nav.pages a:hover{text-decoration:none;border-color:var(--accent)}
 nav.pages a[aria-current=page]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
 h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin-block:28px 10px}
 h3{font-size:15px;margin-block:18px 8px}
+h2 .pill{text-transform:none;letter-spacing:0;margin-left:6px;vertical-align:1px}
 p{margin-block:0 10px}
 .meta{font-size:12.5px;color:var(--mut);overflow-wrap:anywhere}
 .empty{color:var(--mut)}
@@ -120,7 +121,8 @@ p{margin-block:0 10px}
 article,.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-block:0 10px}
 .cards{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));margin-block:0 10px}
 .cards>.card{margin:0}
-.card h3{margin:0 0 2px;font-size:15px}
+.card h3{margin:0;font-size:15px}
+.card>.meta{margin-top:4px}
 .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 ul{list-style:none;padding:0;margin:0}
 body>ul:not([class]){background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:0 16px;margin-block:0 10px}
