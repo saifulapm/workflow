@@ -138,7 +138,7 @@ t_init() {
 	# PI_CODING_AGENT is pi's own marker, exported to every child; the hooks
 	# read it beside WORKFLOW_AGENT (hook.rs agent_marked), so a suite run from
 	# inside pi would see every "human" commit as an agent's.
-	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_HOOK_SEEN WORKFLOW_ALLOW_PUSH
+	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_ALLOW_PUSH
 	unset WORKFLOW_TASK MEM_PROJECT
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
 

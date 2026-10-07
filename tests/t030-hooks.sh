@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The hook stubs: the fire condition, the depth guard, the chain, and the push
-# refusal. pre-commit and commit-msg run the hygiene check and nothing else --
-# no suite -- for humans and agents alike.
+# The hook stubs: the fire condition, the chain and the push refusal.
+# pre-commit and commit-msg run the hygiene check and nothing else -- no
+# suite -- for humans and agents alike.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 chmod +x "$HOOKS"/pre-commit "$HOOKS"/commit-msg "$HOOKS"/pre-push 2>/dev/null
@@ -112,36 +112,6 @@ ln -sf "$HOOKS/pre-commit" .git/hooks/pre-commit
 clean
 run env WORKFLOW_AGENT=1 timeout 60 git -c core.hooksPath="$HOOKS" commit -m 'Change the readme'
 is "$RC" 0 'self-chain: the stub does not exec itself and the commit terminates'
-
-## --------------------------------------------------------- the depth guard
-
-red_repo depth
-mem_register
-mkdir -p .git/hooks
-write_exec .git/hooks/pre-commit <<-'EOF'
-	#!/bin/sh
-	echo ran >>"$(git rev-parse --show-toplevel)/own-hook-ran"
-	printf '%s\n' "${WORKFLOW_HOOK_SEEN:-unset}" >"$(git rev-parse --show-toplevel)/seen"
-	exit 0
-EOF
-dirty
-seen=$(git rev-parse --path-format=absolute --git-common-dir)
-run env WORKFLOW_AGENT=1 WORKFLOW_HOOK_SEEN="$seen" git -c core.hooksPath="$HOOKS" commit -m 'Cache the lookup'
-is "$RC" 0 'depth guard: a second entry for the same repo skips the check'
-is "$(cat own-hook-ran 2>/dev/null)" 'ran' 'depth guard: skipping the check still chains'
-
-rm -f own-hook-ran seen
-git reset -q --hard HEAD
-dirty
-run env WORKFLOW_AGENT=1 WORKFLOW_HOOK_SEEN=/some/other/repo/.git git -c core.hooksPath="$HOOKS" commit -m 'Cache the lookup'
-isnt "$RC" 0 'depth guard: another repo in the variable does not excuse this one'
-
-rm -f own-hook-ran seen
-git reset -q --hard HEAD
-clean
-run env -u WORKFLOW_AGENT git -c core.hooksPath="$HOOKS" commit -m 'Change the readme'
-is "$RC" 0 'non-firing path: the commit goes through'
-is "$(cat seen 2>/dev/null)" 'unset' 'non-firing path: WORKFLOW_HOOK_SEEN is never exported'
 
 ## -------------------------------------------------------- the husky shadow
 

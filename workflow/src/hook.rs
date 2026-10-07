@@ -1,9 +1,9 @@
 //! `workflow hook <name>` -- the body of a git hook stub.
 //!
-//! Five steps in this order. Two properties are load-bearing and were found the
+//! Four steps in this order. Two properties are load-bearing and were found the
 //! hard way:
 //!
-//!   * the non-firing path never exits early. Every branch reaches step 5,
+//!   * the non-firing path never exits early. Every branch reaches step 4,
 //!     because a global `core.hooksPath` puts this between every human commit on
 //!     the machine and the repo's own hooks. Exiting early would silently
 //!     disable husky. The one exit is a refusal: a human commit in a checkout
@@ -40,7 +40,7 @@ pub fn agent_marked() -> bool {
         .any(|key| std::env::var(key).is_ok_and(|v| !v.is_empty()))
 }
 
-/// Step 4, the check itself.
+/// Step 3, the check itself.
 fn check(name: &str, args: &[String]) -> i32 {
     match name {
         "pre-commit" | "commit-msg" => words(name, args),
@@ -78,9 +78,9 @@ fn words(name: &str, args: &[String]) -> i32 {
     hygiene::cmd_hygiene(scope, None, false, false)
 }
 
-/// Step 5: chain to the repo's own hook. The stub's path decides whether that
+/// Step 4: chain to the repo's own hook. The stub's path decides whether that
 /// hook *is* this stub, which would exec in a circle.
-fn chain(name: &str, hd: &Path, stub: Option<&Path>, args: &[String], seen: Option<&str>) -> i32 {
+fn chain(name: &str, hd: &Path, stub: Option<&Path>, args: &[String]) -> i32 {
     let own = hd.join("hooks").join(name);
     if !gitcmd::exists_x(&own) {
         return exit::OK;
@@ -93,12 +93,7 @@ fn chain(name: &str, hd: &Path, stub: Option<&Path>, args: &[String], seen: Opti
         return exit::OK;
     }
 
-    let mut c = Command::new(&own);
-    c.args(args);
-    if let Some(hd) = seen {
-        c.env("WORKFLOW_HOOK_SEEN", hd);
-    }
-    let err = c.exec();
+    let err = Command::new(&own).args(args).exec();
     warn(format!("cannot run {}: {err}", own.display()));
     exit::FAILED
 }
@@ -114,21 +109,12 @@ pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
     let Some(hd) = git.common_dir() else {
         return exit::OK;
     };
-    let hd_key = hd.to_string_lossy().to_string();
 
-    // 2 and 3. The depth guard is per repo and only on the firing path: it
-    //    stops recursion; it does not make a nested same-repo commit safe -- a
-    //    suite that commits in the repo being committed still races the outer
-    //    index.
-    let mut seen: Option<String> = None;
+    // 2 and 3.
     if fires() {
-        seen = Some(hd_key.clone());
-        if std::env::var("WORKFLOW_HOOK_SEEN").unwrap_or_default() != hd_key {
-            // 4.
-            let rc = check(name, args);
-            if rc != exit::OK {
-                return rc;
-            }
+        let rc = check(name, args);
+        if rc != exit::OK {
+            return rc;
         }
     } else if !agent_marked() && memcli::knows_this_checkout() {
         // A human commit in a checkout mem knows: hygiene. This is the only
@@ -146,6 +132,6 @@ pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
         }
     }
 
-    // 5.
-    chain(name, &hd, stub, args, seen.as_deref())
+    // 4.
+    chain(name, &hd, stub, args)
 }
