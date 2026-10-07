@@ -86,6 +86,9 @@ fn a_note_about_a_page_is_read_back_with_its_text() {
         code(&mem(&w, &repo, &["save", "--", "a fact on its own"])),
         0
     );
+    // A queued comment is a question, read with `mem questions --about`.
+    let ask = ["ask", "--about", "plan:h4#claim-1", "--", "a question"];
+    assert_eq!(code(&mem(&w, &repo, &ask)), 0);
 
     let doc = json(&mem(&w, &repo, &["log", "--about", "plan:h4#", "--json"]));
     let rows = doc["items"].as_array().unwrap();

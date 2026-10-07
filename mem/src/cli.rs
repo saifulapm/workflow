@@ -140,7 +140,7 @@ pub enum Command {
         kind: Option<String>,
         #[arg(long = "type")]
         r#type: Option<String>,
-        /// Every item, of any kind, about a part starting with this, with
+        /// Every item but a question about a part starting with this, with
         /// its text.
         #[arg(long, value_name = "PREFIX", conflicts_with = "text")]
         about: Option<String>,

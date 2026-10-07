@@ -2065,7 +2065,7 @@ pub fn questions(
 }
 
 /// `mem questions --about <prefix>` and `mem log --about <prefix>`: every
-/// item about a part of a page, oldest first, the way a thread reads, each
+/// question, or every other item, about a part of a page, oldest first, the way a thread reads, each
 /// with its text, and a question with its answer. `about` lives only in the
 /// item's file, so every item of the kind is read.
 pub fn about(app: &App, kind: &str, prefix: &str) -> Result<i32> {
@@ -2073,6 +2073,8 @@ pub fn about(app: &App, kind: &str, prefix: &str) -> Result<i32> {
     let index = app.read_index()?;
     let kind = (kind == "question").then_some(kind);
     let mut rows = index.recent_filtered(kind, None, identity.id(), usize::MAX >> 1)?;
+    // A question is read with its answer through `questions --about`.
+    rows.retain(|row| kind.is_some() || row.kind != "question");
     rows.retain(|row| {
         read_item(row)
             .and_then(|i| i.meta.about)
