@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::gitcmd::Git;
-use crate::{exit, memcli, paths, plan, run, serve, warn};
+use crate::{dogfood, exit, memcli, paths, plan, request, run, serve, warn};
 
 struct TaskRow {
     id: String,
@@ -50,6 +50,17 @@ struct Serving {
     findings: usize,
     runner: Option<String>,
     paused: bool,
+    /// The leads, walk and research serve has going for the project.
+    sessions: Vec<Session>,
+}
+
+/// One session serve started and has not yet ended, named the way its cost
+/// line will name it.
+struct Session {
+    kind: String,
+    name: String,
+    /// Whole minutes since it started.
+    minutes: i64,
 }
 
 fn field(dir: &Path, task: &str, ext: &str) -> String {
@@ -188,6 +199,46 @@ fn parked(project_dir: &str) -> Vec<(String, String)> {
     found
 }
 
+/// The sessions recorded in a project's serve dir: each line of `leads`,
+/// the `walk` until serve has read what it came to, and the `research`.
+/// A project serve never touched has no dir and so lists none.
+fn sessions(dir: &Path, project: &str) -> Vec<Session> {
+    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+    let minutes = |started: i64| (crate::sys::now() - started).max(0) / 60;
+    // serve keeps its own parser private; the line is
+    // `<kind> <session> <started> <slug>`.
+    let mut found: Vec<Session> = read("leads")
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let kind = parts.next()?.to_string();
+            let started: i64 = parts.nth(1)?.parse().ok()?;
+            Some(Session {
+                kind,
+                name: parts.next().unwrap_or_default().to_string(),
+                minutes: minutes(started),
+            })
+        })
+        .collect();
+    if let Some(walk) = dogfood::WalkState::read(&read("walk"))
+        && walk.outcome.is_none()
+    {
+        found.push(Session {
+            kind: "walk".into(),
+            name: walk.slug,
+            minutes: minutes(walk.started),
+        });
+    }
+    if let Some(research) = request::AskedResearch::read(&read("research")) {
+        found.push(Session {
+            kind: "research".into(),
+            name: project.to_string(),
+            minutes: minutes(research.started),
+        });
+    }
+    found
+}
+
 fn serving(project: &memcli::Project, rows: &[RunRow]) -> Serving {
     let stage = serve::stage_of(&project.name).unwrap_or_else(|| {
         if rows.iter().any(|r| r.live) {
@@ -203,6 +254,7 @@ fn serving(project: &memcli::Project, rows: &[RunRow]) -> Serving {
         findings: serve::open_findings(&project.name),
         runner: memcli::project_choice("runner"),
         paused: memcli::project_choice("paused").is_some(),
+        sessions: sessions(&paths::serve_root().join(project.dir_name()), &project.name),
     }
 }
 
@@ -222,6 +274,11 @@ fn as_json(project: &str, serving: &Serving, rows: &[RunRow]) -> serde_json::Val
         "findings": serving.findings,
         "runner": serving.runner,
         "paused": serving.paused,
+        "sessions": serving.sessions.iter().map(|s| serde_json::json!({
+            "kind": s.kind,
+            "name": s.name,
+            "minutes": s.minutes,
+        })).collect::<Vec<_>>(),
         "runs": rows.iter().map(|r| serde_json::json!({
             "plan": r.plan,
             "live": r.live,
@@ -379,6 +436,7 @@ mod tests {
             findings: 0,
             runner: None,
             paused: false,
+            sessions: Vec::new(),
         };
         let doc = as_json("app", &serving, &rows);
         let run = &doc["runs"][0];
@@ -398,6 +456,7 @@ mod tests {
             findings: 4,
             runner: Some("here".into()),
             paused: true,
+            sessions: Vec::new(),
         };
         let doc = as_json("app", &serving, &[]);
         assert_eq!(doc["stage"], "waiting");
@@ -423,6 +482,7 @@ mod tests {
             findings: 0,
             runner: None,
             paused: false,
+            sessions: Vec::new(),
         };
         let doc = as_json("app", &idle, &[]);
         assert!(doc["milestone"].is_null() && doc["runner"].is_null());
@@ -459,6 +519,7 @@ mod tests {
                 findings: 0,
                 runner: None,
                 paused: false,
+                sessions: Vec::new(),
             },
             &[row],
         );
@@ -468,5 +529,44 @@ mod tests {
         assert_eq!(tasks[1]["model"], "run-model");
         assert_eq!(tasks[1]["minutes"], 3);
         assert_eq!(tasks[2]["minutes"], 0);
+    }
+
+    #[test]
+    fn status_json_lists_the_sessions_serve_has_going() {
+        let dir = std::env::temp_dir().join(format!("wf-status-sessions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let three_ago = crate::sys::now() - 180;
+        std::fs::write(
+            dir.join("leads"),
+            format!("pickup s1 {three_ago} m1\nquestion s2 {three_ago} m1\n"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("walk"), format!("m1 1 {three_ago} s3 1 2\n")).unwrap();
+        let sessions = sessions(&dir, "app");
+        let _ = std::fs::remove_dir_all(&dir);
+        let doc = as_json(
+            "app",
+            &Serving {
+                stage: "dogfood".into(),
+                milestone: None,
+                parked: Vec::new(),
+                findings: 0,
+                runner: None,
+                paused: false,
+                sessions,
+            },
+            &[],
+        );
+        assert_eq!(
+            doc["sessions"],
+            serde_json::json!([
+                {"kind": "pickup", "name": "m1", "minutes": 3},
+                {"kind": "question", "name": "m1", "minutes": 3},
+                {"kind": "walk", "name": "m1", "minutes": 3},
+            ])
+        );
+        let none = std::env::temp_dir().join(format!("wf-status-no-serve-{}", std::process::id()));
+        assert!(super::sessions(&none, "app").is_empty());
     }
 }
