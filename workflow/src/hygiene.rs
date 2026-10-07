@@ -39,21 +39,6 @@ const IGNORED_FILES: &[&str] = &[
     "skills-lock.json",
 ];
 
-/// Files an agent harness reads as its instructions, at any depth.
-const INSTRUCTION_FILES: &[&str] = &["CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".mcp.json"];
-
-/// Directories whose every file an agent harness reads as instructions.
-const INSTRUCTION_DIRS: &[&str] = &[".agents", ".cursor", ".scratch"];
-
-/// Directories tools write their own output to; a file named like an
-/// instruction file in there is the tool's, not the repository's.
-const TOOL_DIRS: &[&str] = &[
-    ".amx",
-    ".playwright-cli",
-    "agent-memory",
-    "agent-memory-local",
-];
-
 /// What the no-flag sweep reads of history.
 const SWEEP_COMMITS: usize = 200;
 
@@ -215,25 +200,6 @@ fn ignored_path(path: &str) -> bool {
     let mut parts: Vec<&str> = path.split('/').collect();
     let file = parts.pop().unwrap_or_default();
     IGNORED_FILES.contains(&file) || parts.iter().any(|d| IGNORED_DIRS.contains(d))
-}
-
-/// A path an agent harness reads as instructions, which belong in mem. Tool
-/// output directories and Claude Code's own worktrees are left alone whatever
-/// they hold: a worktree is judged from its own top.
-fn instruction_path(rel: &str) -> bool {
-    let parts: Vec<&str> = rel.split('/').collect();
-    let under = |dir: &str, subs: &[&str]| {
-        parts[..parts.len() - 1]
-            .windows(2)
-            .any(|w| w[0] == dir && subs.contains(&w[1]))
-    };
-    if parts.iter().any(|p| TOOL_DIRS.contains(p)) || under(".claude", &["worktrees"]) {
-        return false;
-    }
-    let file = parts[parts.len() - 1];
-    INSTRUCTION_FILES.contains(&file)
-        || parts.iter().any(|p| INSTRUCTION_DIRS.contains(p))
-        || under(".claude", &["skills", "agents", "commands", "rules"])
 }
 
 /// A `.gitignore` line naming something on the ignore list. The list is
@@ -596,45 +562,6 @@ pub struct Scope<'a> {
     pub string: Option<&'a str>,
 }
 
-/// A path about to be written, judged in the work tree of its nearest
-/// existing directory. Only a new file is refused: a repository not yet
-/// cleaned still has tracked instruction files its agents must edit.
-pub fn cmd_would_create(path: &Path, json: bool) -> i32 {
-    let mut report = Report::default();
-    if let Some(rel) = new_instruction_file(path) {
-        report.add(&rel, 0, "hard", "agent file", "this belongs in mem");
-    }
-    report.print(json);
-    if report.hard() {
-        exit::FAILED
-    } else {
-        exit::OK
-    }
-}
-
-/// The path relative to its work tree's top, when it is a new instruction
-/// file in a checkout mem knows.
-fn new_instruction_file(path: &Path) -> Option<String> {
-    if std::fs::symlink_metadata(path).is_ok() {
-        return None;
-    }
-    let path = std::path::absolute(path).ok()?;
-    let dir = path.ancestors().skip(1).find(|a| a.is_dir())?;
-    let git = Git::at(dir);
-    if !git.inside_worktree() {
-        return None;
-    }
-    let prefix = git.capture(&["rev-parse", "--show-prefix"]).text();
-    let rest = path.strip_prefix(dir).unwrap_or(&path).to_string_lossy();
-    let rel = format!("{prefix}{rest}");
-    // mem resolves a project from its working directory, so it is asked from
-    // the tree the path lands in; it goes last, being the slowest question.
-    let refused = instruction_path(&rel)
-        && std::env::set_current_dir(dir).is_ok()
-        && memcli::knows_this_checkout();
-    refused.then_some(rel)
-}
-
 pub fn cmd_hygiene(scope: Scope, path: Option<&Path>, json: bool, fix_it: bool) -> i32 {
     let mut report = Report::default();
     if let Some(file) = scope.message {
@@ -770,39 +697,6 @@ mod tests {
         }
         for l in ["node_modules", "# .claude", "", "target/"] {
             assert!(!agent_ignore_line(l), "{l}");
-        }
-    }
-
-    #[test]
-    fn instruction_paths_are_the_files_an_agent_reads() {
-        for p in [
-            "CLAUDE.md",
-            "app/CLAUDE.local.md",
-            "a/b/AGENTS.md",
-            ".mcp.json",
-            ".agents/x.md",
-            "app/.cursor/rules/x.mdc",
-            ".scratch/notes.txt",
-            ".claude/skills/x/SKILL.md",
-            ".claude/agents/x.md",
-            "app/.claude/commands/x.md",
-            ".claude/rules/x.md",
-        ] {
-            assert!(instruction_path(p), "{p}");
-        }
-        for p in [
-            "src/main.rs",
-            "README.md",
-            "docs/CLAUDE.md.txt",
-            ".claude/settings.json",
-            ".amx/x/CLAUDE.md",
-            ".playwright-cli/AGENTS.md",
-            "a/agent-memory/x/CLAUDE.md",
-            "agent-memory-local/.agents/x.md",
-            ".claude/worktrees/w/CLAUDE.md",
-            ".claude/worktrees/w/.claude/skills/x/SKILL.md",
-        ] {
-            assert!(!instruction_path(p), "{p}");
         }
     }
 

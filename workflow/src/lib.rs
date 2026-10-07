@@ -88,29 +88,21 @@ pub fn run(cli: Cli) -> i32 {
             history,
             message,
             string,
-            would_create,
-            known,
             path,
             json,
             fix,
-        } => match would_create {
-            Some(target) => hygiene::cmd_would_create(&target, json),
-            // A guard that runs in every checkout on the machine passes
-            // --known: only the repositories mem knows are held to the rule.
-            None if known && !memcli::knows_this_checkout() => exit::OK,
-            None => hygiene::cmd_hygiene(
-                hygiene::Scope {
-                    staged,
-                    tree,
-                    history,
-                    message: message.as_deref(),
-                    string: string.as_deref(),
-                },
-                path.as_deref(),
-                json,
-                fix,
-            ),
-        },
+        } => hygiene::cmd_hygiene(
+            hygiene::Scope {
+                staged,
+                tree,
+                history,
+                message: message.as_deref(),
+                string: string.as_deref(),
+            },
+            path.as_deref(),
+            json,
+            fix,
+        ),
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
         Command::Go {
