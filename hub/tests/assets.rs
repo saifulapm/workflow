@@ -54,3 +54,16 @@ fn an_asset_the_binary_does_not_carry_is_404() {
     assert_eq!(status_of(&hub.get("/assets/maple-mono-900.woff2")), 404);
     assert_eq!(status_of(&hub.get("/assets/../Cargo.toml")), 404);
 }
+
+#[test]
+fn the_fonts_answer_a_frame_with_no_origin() {
+    // A plan page runs in a sandboxed frame with an opaque origin, and a
+    // font is a CORS fetch: without this header the page falls back to the
+    // platform's monospace.
+    let (_dir, hub) = hub("assets-cors");
+    let response = hub.get("/assets/maple-mono-400.woff2");
+    assert_eq!(
+        header_of(&response, "access-control-allow-origin"),
+        Some("*")
+    );
+}

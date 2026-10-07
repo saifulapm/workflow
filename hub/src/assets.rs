@@ -1,7 +1,8 @@
 //! Maple Mono, the hub's one typeface, and its license, carried in the
 //! binary. A page read over the tailnet loads nothing from another host, and
 //! a release changes these bytes only with the binary, so they cache for a
-//! year.
+//! year. A plan page runs in a sandboxed frame with an opaque origin, and a
+//! font is a CORS fetch, so every asset answers any origin.
 
 use crate::http::Response;
 use crate::pages::PageCtx;
@@ -32,5 +33,7 @@ pub fn get(ctx: &PageCtx) -> Response {
         ),
         _ => return Response::not_found(),
     };
-    Response::new(200, content_type, body).header("Cache-Control", LONG_CACHE)
+    Response::new(200, content_type, body)
+        .header("Cache-Control", LONG_CACHE)
+        .header("Access-Control-Allow-Origin", "*")
 }
