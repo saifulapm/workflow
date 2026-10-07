@@ -1290,7 +1290,7 @@ impl Serve {
                 pidfile: dir.join("dogfood.pid"),
                 worktree: p.root.clone(),
             };
-            self.cost(p, &slug, "walk", &slug, &h, walk.started);
+            self.cost(&p.name, &slug, "walk", &slug, &h, walk.started);
         }
         let said = mem_on(&self.mem, &p.name, &["finding", "list", "--open", "--json"]);
         let open = dogfood::finding_steps(&said.out, &slug);
@@ -1498,7 +1498,7 @@ impl Serve {
             let status = p.dir().join(format!("{ASKED}.dogfood.status"));
             dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
         };
-        self.cost(p, &walk.slug, "walk", &walk.slug, &h, walk.started);
+        self.cost(&p.name, &walk.slug, "walk", &walk.slug, &h, walk.started);
         let open = dogfood::finding_steps(&self.open_listing(p), &walk.slug);
         let outcome = dogfood::held_to_findings(outcome, &open);
         self.answer(p, &asked.question, &walk.slug, &outcome, open.len());
@@ -1542,7 +1542,7 @@ impl Serve {
         if self.live(p, &h, going.started, "the research session") {
             return;
         }
-        self.cost(p, RESEARCH, RESEARCH, &p.name, &h, going.started);
+        self.cost(&p.name, RESEARCH, RESEARCH, &p.name, &h, going.started);
         self.answer_research(p, &going.question, "done");
         let _ = std::fs::remove_file(&file);
     }
@@ -2173,7 +2173,14 @@ impl Serve {
                 kept.push(lead.clone());
                 continue;
             }
-            self.cost(p, &lead.slug, &lead.kind, &lead.slug, &h, lead.started);
+            self.cost(
+                &p.name,
+                &lead.slug,
+                &lead.kind,
+                &lead.slug,
+                &h,
+                lead.started,
+            );
         }
         if kept != was {
             let _ = std::fs::write(dir.join("leads"), write_leads(&kept));
@@ -2194,8 +2201,25 @@ impl Serve {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
+            // The serve directory is named after the project, and the cost
+            // line goes to the project's log under that name.
+            let project = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             for lead in read_leads(&text) {
-                self.backend.stop(&self.lead_handle(&dir, &dir, &lead), 10);
+                let h = self.lead_handle(&dir, &dir, &lead);
+                self.backend.stop(&h, 10);
+                if !lead.slug.is_empty() {
+                    self.cost(
+                        &project,
+                        &lead.slug,
+                        &lead.kind,
+                        &lead.slug,
+                        &h,
+                        lead.started,
+                    );
+                }
             }
             let _ = std::fs::remove_file(file);
         }
@@ -2564,7 +2588,7 @@ impl Serve {
     /// it as ended. Serve starts a session by its role, and the role file
     /// picks the model, so the line names the role: `start_session` names
     /// the pid file after it.
-    fn cost(&self, p: &ServeProject, slug: &str, kind: &str, name: &str, h: &Handle, started: i64) {
+    fn cost(&self, project: &str, slug: &str, kind: &str, name: &str, h: &Handle, started: i64) {
         let usage = self.backend.usage(h);
         let line = CostLine {
             slug: slug.to_string(),
@@ -2581,14 +2605,18 @@ impl Serve {
                 .map(|r| r.to_string_lossy().to_string()),
             sessions: None,
         };
-        self.log(p, &line.line());
+        self.log_on(project, &line.line());
     }
 
     /// Logged as a run line in the project's own log, and said on stderr
     /// under the project's name, which the log line leaves implicit.
     fn log(&self, p: &ServeProject, line: &str) {
-        warn(format!("{}: {line}", p.name));
-        mem_on(&self.mem, &p.name, &["log", "--type", "run", "--", line]);
+        self.log_on(&p.name, line);
+    }
+
+    fn log_on(&self, project: &str, line: &str) {
+        warn(format!("{project}: {line}"));
+        mem_on(&self.mem, project, &["log", "--type", "run", "--", line]);
     }
 }
 

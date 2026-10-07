@@ -116,3 +116,39 @@ sessions=$(printf '%s\n' "$lines" | grep -v ' cost m1 milestone m1:')
 is "$(printf '%s\n' "$sessions" | grep -c ' cost m1 ')" 5 'as many as there are session lines'
 minutes=$(printf '%s\n' "$sessions" | sed -n 's/.* minutes=\([0-9]*\).*/\1/p' | awk '{ n += $1 } END { print n + 0 }')
 like "$(printf '%s\n' "$lines" | grep ' cost m1 milestone m1:')" " minutes=$minutes( |$)" 'with their minutes summed'
+
+# Serve run one tick at a time: a lead one `serve --once` starts is stopped
+# by the next one, which still writes its cost line.
+kill "$serve_pid" 2>/dev/null
+wait "$serve_pid" 2>/dev/null
+new_repo app2
+mem_register
+"$MEM_BIN" project set verify true >/dev/null
+mkdir -p app
+printf 'cart\n' >app/Cart.php
+git add app/Cart.php
+git -c core.hooksPath=/dev/null commit -qm 'Add the cart model'
+printf '# roadmap: app2-road\n\n- [ ] m2 The ask service\n      Show: run the ask service, it answers\n' |
+	"$MEM_BIN" roadmap --stdin >/dev/null
+"$MEM_BIN" roadmap --status approved >/dev/null
+"$MEM_BIN" plan m2 --stdin >/dev/null <<-EOF2
+# plan: m2
+
+- [ ] ask Add the ask service
+      Files: app/*.php
+      Verify: true
+EOF2
+
+cd "$T_TMP" || exit 1
+for _ in $(seq 120); do
+	WORKFLOW_DEADLINE_MIN=0.5 workflow serve --once >>"$T_TMP/once.out" 2>&1
+	"$MEM_BIN" --project app2 roadmap | grep -q '^- \[x\] m2 ' && break
+	sleep 1
+done
+
+like "$("$MEM_BIN" --project app2 roadmap)" '^- \[x\] m2 ' 'the milestone landed one tick at a time'
+lines=$("$MEM_BIN" --project app2 log --type run 2>/dev/null | grep ' cost m2 ')
+is "$(printf '%s\n' "$lines" | grep -c ' cost m2 pickup m2:')" 1 'one cost line for the pickup lead a later serve stopped'
+like "$(printf '%s\n' "$lines" | grep ' cost m2 pickup m2:')" ' role=lead$' 'and its role'
+sessions=$(printf '%s\n' "$lines" | grep -vc ' cost m2 milestone m2:')
+like "$(printf '%s\n' "$lines" | grep ' cost m2 milestone m2:')" " sessions=$sessions( |$)" 'the milestone line counts every session line'
