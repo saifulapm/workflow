@@ -231,6 +231,11 @@ fn finding_doc() -> Value {
 /// The hub over a fake `mem` that logs its argv: the body of `path`, and
 /// the spawns that request made besides the doorbell's question poll.
 fn page(path: &str) -> (String, Vec<String>) {
+    page_over(path, &evidence_doc(), &finding_doc())
+}
+
+/// `page` over the given evidence and finding documents.
+fn page_over(path: &str, evidence: &Value, findings: &Value) -> (String, Vec<String>) {
     let dir = TempDir::new("evidence-page");
     let home = dir.join("home");
     let bins = dir.join("bin");
@@ -253,8 +258,6 @@ fn page(path: &str) -> (String, Vec<String>) {
              *) exit 1 ;;\n\
              esac",
             log = log.display(),
-            evidence = evidence_doc(),
-            findings = finding_doc(),
         ),
     );
     let hub = Hub::spawn(&home, &[&bins], &["--port", "0"]);
@@ -305,10 +308,10 @@ fn the_first_page_holds_the_newest_24_rows_grouped_by_task() {
 
     assert!(
         body.contains(&format!(
-            "<a href=\"/p/{PROJECT}/file/{id}\"><img src=\"/p/{PROJECT}/file/{id}\" alt=\"evidence/g2-t3/shot-00.png\" loading=\"lazy\"></a>",
+            "<a href=\"#view-{id}\"><img src=\"/p/{PROJECT}/file/{id}\" alt=\"evidence/g2-t3/shot-00.png\" loading=\"lazy\"></a>",
             id = row_id(0)
         )),
-        "an image row: {body}"
+        "an image row's tile: {body}"
     );
     assert!(
         body.contains(&format!(
@@ -328,9 +331,9 @@ fn the_first_page_holds_the_newest_24_rows_grouped_by_task() {
     }
     assert!(
         body.contains(&format!(
-            "<img src=\"/p/{PROJECT}/file/01M45600000000000000000PEN\""
+            "<a href=\"#view-01M45600000000000000000PEN\"><img src=\"/p/{PROJECT}/file/01M45600000000000000000PEN\" alt=\"evidence/g2-nag/twice.png\" loading=\"lazy\"></a>"
         )),
-        "the open finding's image: {body}"
+        "the open finding's tile: {body}"
     );
     assert!(
         body.contains("evidence/g1-log/midnight.txt</a>"),
@@ -366,4 +369,65 @@ fn the_second_page_holds_the_last_six_rows() {
         body.contains("the nag fires twice at nine"),
         "findings on every page: {body}"
     );
+}
+
+/// One image row and one image finding, each carrying markup in its text.
+fn hostile_docs() -> (Value, Value) {
+    let evidence = json!({"items": [{
+        "id": "01M4560000000000000000EVID", "kind": "evidence", "task": "g3-t1",
+        "file": "evidence/g3-t1/shot.png", "note": "<script>alert(1)</script> seen",
+    }]});
+    let findings = json!({"items": [{
+        "id": "01M45600000000000000000FND", "kind": "finding", "status": "open",
+        "milestone": "g3-view", "step": "4", "fixed_by": null,
+        "file": "evidence/g3-view/bad.png", "body": "\n<script>alert(2)</script> shown\n",
+    }]});
+    (evidence, findings)
+}
+
+#[test]
+fn an_image_row_is_a_tile_that_opens_full_size_in_a_lightbox() {
+    let (evidence, findings) = hostile_docs();
+    let (body, _) = page_over(&format!("/p/{PROJECT}/evidence"), &evidence, &findings);
+    let id = "01M4560000000000000000EVID";
+    let src = format!("/p/{PROJECT}/file/{id}");
+
+    let task = position(&body, "<h3>g3-t1</h3>\n<ul class=\"gallery\">");
+    let tile = position(
+        &body,
+        &format!(
+            "<li><figure><a href=\"#view-{id}\"><img src=\"{src}\" alt=\"evidence/g3-t1/shot.png\" loading=\"lazy\"></a><figcaption>&lt;script&gt;alert(1)&lt;/script&gt; seen</figcaption></figure>"
+        ),
+    );
+    let lightbox = position(
+        &body,
+        &format!(
+            "<div class=\"lightbox\" id=\"view-{id}\"><a class=\"close\" href=\"#\">close</a><img src=\"{src}\" alt=\"evidence/g3-t1/shot.png\" loading=\"lazy\"><p>g3-t1 · &lt;script&gt;alert(1)&lt;/script&gt; seen</p><p><a href=\"{src}\">open the file</a></p></div></li>"
+        ),
+    );
+    assert!(task < tile && tile < lightbox, "{body}");
+}
+
+#[test]
+fn an_image_finding_is_a_tile_with_its_milestone_step_and_body() {
+    let (evidence, findings) = hostile_docs();
+    let (body, _) = page_over(&format!("/p/{PROJECT}/evidence"), &evidence, &findings);
+    let id = "01M45600000000000000000FND";
+    let src = format!("/p/{PROJECT}/file/{id}");
+
+    let article = position(&body, "<article>");
+    let tile = position(
+        &body,
+        &format!(
+            "<ul class=\"gallery\"><li><figure><a href=\"#view-{id}\"><img src=\"{src}\" alt=\"evidence/g3-view/bad.png\" loading=\"lazy\"></a><figcaption>evidence/g3-view/bad.png</figcaption></figure>"
+        ),
+    );
+    let lightbox = position(
+        &body,
+        &format!(
+            "<div class=\"lightbox\" id=\"view-{id}\"><a class=\"close\" href=\"#\">close</a><img src=\"{src}\" alt=\"evidence/g3-view/bad.png\" loading=\"lazy\"><p>g3-view · step 4</p><p>&lt;script&gt;alert(2)&lt;/script&gt; shown</p><p><a href=\"{src}\">open the file</a></p></div></li></ul>"
+        ),
+    );
+    assert!(article < tile && tile < lightbox, "{body}");
+    assert!(!body.contains("<script>"), "markup stays escaped: {body}");
 }

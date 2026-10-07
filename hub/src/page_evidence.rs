@@ -149,14 +149,23 @@ pub fn gallery(rows: &[EvidenceRow], page: usize, project: &str) -> String {
             if task.is_some() {
                 out.push_str("</ul>\n");
             }
-            out.push_str(&format!("<h3>{}</h3>\n<ul>\n", esc(&row.task)));
+            out.push_str(&format!(
+                "<h3>{}</h3>\n<ul class=\"gallery\">\n",
+                esc(&row.task)
+            ));
             task = Some(&row.task);
         }
-        out.push_str(&format!(
-            "<li>{file}<div class=\"meta\">{note}</div></li>\n",
-            file = file_view(project, &row.id, &row.file),
-            note = esc(&row.note),
-        ));
+        if is_image(&row.file) {
+            let text = format!("<p>{} · {}</p>", esc(&row.task), esc(&row.note));
+            out.push_str(&tile(project, &row.id, &row.file, &esc(&row.note), &text));
+            out.push('\n');
+        } else {
+            out.push_str(&format!(
+                "<li>{file}<div class=\"meta\">{note}</div></li>\n",
+                file = file_view(project, &row.id, &row.file),
+                note = esc(&row.note),
+            ));
+        }
     }
     if task.is_some() {
         out.push_str("</ul>\n");
@@ -203,33 +212,60 @@ pub fn findings_section(findings: &[FindingRow], project: &str) -> String {
             body = esc(&finding.body),
         ));
         if let Some(file) = &finding.file {
-            out.push_str(&format!(
-                "<p>{}</p>\n",
-                file_view(project, &finding.id, file)
-            ));
+            if is_image(file) {
+                let text = format!(
+                    "<p>{} · step {}</p><p>{}</p>",
+                    esc(&finding.milestone),
+                    esc(&finding.step),
+                    esc(finding.body.trim()),
+                );
+                out.push_str(&format!(
+                    "<ul class=\"gallery\">{}</ul>\n",
+                    tile(project, &finding.id, file, &esc(file), &text)
+                ));
+            } else {
+                out.push_str(&format!(
+                    "<p>{}</p>\n",
+                    file_view(project, &finding.id, file)
+                ));
+            }
         }
         out.push_str("</article>\n");
     }
     out
 }
 
-/// An image file as a lazy `img` inside a link to its file route, which the
-/// browser asks for only when it scrolls near; any other file as a link
-/// naming it.
+/// A file as a link naming it, for the files a browser cannot show.
 pub fn file_view(project: &str, id: &str, file: &str) -> String {
-    let href = esc(&file_url(project, id));
+    format!(
+        "<a href=\"{}\">{}</a>",
+        esc(&file_url(project, id)),
+        esc(file)
+    )
+}
+
+fn is_image(file: &str) -> bool {
     let lower = file.to_ascii_lowercase();
-    let image = [".png", ".jpg", ".jpeg", ".webp"]
+    [".png", ".jpg", ".jpeg", ".webp"]
         .iter()
-        .any(|ext| lower.ends_with(ext));
-    if image {
-        format!(
-            "<a href=\"{href}\"><img src=\"{href}\" alt=\"{file}\" loading=\"lazy\"></a>",
-            file = esc(file),
-        )
-    } else {
-        format!("<a href=\"{href}\">{}</a>", esc(file))
-    }
+        .any(|ext| lower.ends_with(ext))
+}
+
+/// An image as a thumbnail that links to `#view-<id>`, and the lightbox that
+/// `:target` shows over the page, so no script is needed. Both images are
+/// lazy, so the browser asks for the file only when it is near the screen or
+/// the lightbox is open. `caption` and `text` are escaped HTML.
+fn tile(project: &str, id: &str, file: &str, caption: &str, text: &str) -> String {
+    let src = esc(&file_url(project, id));
+    let anchor = esc(&format!("view-{id}"));
+    let file = esc(file);
+    format!(
+        "<li><figure><a href=\"#{anchor}\"><img src=\"{src}\" alt=\"{file}\" loading=\"lazy\"></a>\
+         <figcaption>{caption}</figcaption></figure>\
+         <div class=\"lightbox\" id=\"{anchor}\"><a class=\"close\" href=\"#\">close</a>\
+         <img src=\"{src}\" alt=\"{file}\" loading=\"lazy\">{text}\
+         <p><a href=\"{src}\">open the file</a></p></div></li>"
+    )
 }
 
 pub fn file_url(project: &str, id: &str) -> String {
