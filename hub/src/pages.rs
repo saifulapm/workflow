@@ -135,7 +135,7 @@ fn page_for<'a>(
             } else if let Some(form) = sub.strip_prefix("new/") {
                 ("POST", form, page_new::new_post)
             } else {
-                // The overview, and its log, plan and item routes.
+                // The overview, and its plan and item routes.
                 ("GET", sub, page_project::get)
             }
         }

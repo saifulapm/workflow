@@ -1,4 +1,4 @@
-//! `GET /p/<project>`: one project's front page, and its log, plan and item
+//! `GET /p/<project>`: one project's front page, and its plan and item
 //! routes.
 //!
 //! The front page follows the project's stage: a header with the stage and

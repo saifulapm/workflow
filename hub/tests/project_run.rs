@@ -66,7 +66,6 @@ fn world(tag: &str, row: Row) -> World {
              case \"$*\" in\n\
              projects*) p '{projects}' ;;\n\
              *--all-projects*) p '{questions}' ;;\n\
-             status*) p '{{\"text\":\"Two of six tasks merged.\"}}' ;;\n\
              handoff*) p '{{\"body\":\"Picking up at g2-t3.\"}}' ;;\n\
              log*) p '{{\"items\":[]}}' ;;\n\
              *) exit 1 ;;\n\

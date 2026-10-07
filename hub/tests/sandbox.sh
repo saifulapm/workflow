@@ -73,9 +73,8 @@ if [ "${1:-}" = shot ]; then
 	exit
 fi
 
-# A session started under the workflow carries these for its own task; the
-# seed would then write to that project, and its questions would be asked of
-# the orchestrator rather than the person the hub shows them to.
+# A shell inside a checkout or a worktree carries these for its own project;
+# the seed would then write to that project rather than the sandbox's.
 unset MEM_PROJECT GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 bin_of() {
