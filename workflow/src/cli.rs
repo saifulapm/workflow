@@ -147,68 +147,6 @@ agent on is refused here, before the first worker."
         #[arg(long, value_name = "LEVEL")]
         effort: Option<String>,
     },
-    /// Run every roadmap on this machine, milestone after milestone.
-    #[command(
-        long_about = "Run every roadmap on this machine, milestone after milestone.
-
-Every few seconds serve looks at each project with a checkout here that this
-machine runs and whose roadmap is approved, running or in maintenance. A
-paused project starts nothing. A project with no run going gets its open
-milestone made mem's current plan, checked, and run by a child `workflow run`
-in its checkout; when every task lands, serve ticks the milestone, writes the
-status and handoff lines and counts the hygiene findings, and the next tick
-starts the next milestone. A run that stops short leaves the project waiting
-until its plan, an answer or a run-dir request changes. Every milestone ticked
-puts the roadmap in maintenance."
-    )]
-    Serve {
-        /// One tick over every project, then exit.
-        #[arg(long)]
-        once: bool,
-        /// Seconds between ticks; WORKFLOW_TICK_S, else 5.
-        #[arg(long, value_name = "SECONDS")]
-        tick: Option<f64>,
-    },
-    /// Label a task of the live run as waiting on its owner.
-    #[command(long_about = "Label a task of the live run as waiting on its owner.
-
-This writes <task>.parked with the reason in the live run's directory and
-logs a run line. The run already holds the task open on its question; the
-label tells serve to start no second lead for it, and serve removes it when
-the question is answered. With no run live there is nothing to label.")]
-    Park {
-        task: String,
-        /// Why the task waits, in one line.
-        reason: String,
-    },
-    /// Hold a project's runs: serve stops the live one and starts nothing.
-    Pause {
-        /// The project, by mem's name; the checkout's when omitted.
-        project: Option<String>,
-    },
-    /// Let serve run a paused project again.
-    Resume {
-        /// The project, by mem's name; the checkout's when omitted.
-        project: Option<String>,
-    },
-    /// Ask the engine to walk a landed milestone's Show path again.
-    #[command(
-        long_about = "Ask the engine to walk a landed milestone's Show path again.
-
-This asks one question for the orchestrator, `dogfood <slug> at <commit> on
-<machine>`, and prints its id. The milestone is the one named, else the
-roadmap's last ticked one; the commit is the checkout's head; the machine is
-the project's dogfood-machine key, else this one. Serve on that machine walks
-the milestone and answers with the walk's result. The engine never pushes:
-a commit that is not on that machine is the owner's to push there."
-    )]
-    Dogfood {
-        /// The project, by mem's name; the checkout's when omitted.
-        project: Option<String>,
-        /// The milestone to walk; the roadmap's last ticked one when omitted.
-        #[arg(long, value_name = "SLUG")]
-        milestone: Option<String>,
-    },
     /// A library's current documentation, through the Context7 CLI.
     Docs {
         /// The library, by the name its users know it.
@@ -257,21 +195,6 @@ with no worker spent. With a run live it writes a marker the run honours
 on its next poll; with none it does the merge itself, off the last run's state."
     )]
     Regate { task: String },
-    /// Report this project's runs: task states, spend, lock liveness.
-    #[command(
-        long_about = "Report this project's runs: task states, spend, lock liveness.
-
-The run dir read out loud, and nothing touched: no dispatch, no cleanup, no
-state change. --json is the shape a session that owns a run polls."
-    )]
-    Status {
-        /// One line per task: id, state and age. No report, no reason.
-        #[arg(long)]
-        brief: bool,
-        /// Print the report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Block until the live run needs the orchestrator, and say what for.
     #[command(
         long_about = "Block until the live run needs the orchestrator, and say what for.
@@ -395,21 +318,6 @@ usage: workflow <command> [options]
       0 every task complete · 1 failed tasks · 2 config or plan error
   reap
       0 nothing to do · 1 reaped something
-  serve [--once] [--tick <seconds>]
-      run every roadmap on this machine, milestone after milestone, one
-      child run per project; --once ticks once and exits
-      0 --once ticked · 2 another serve is live here
-  park <task> <reason>
-      label a task of the live run as waiting on its owner
-      0 parked · 2 no live run holds the task
-  pause [<project>] · resume [<project>]
-      hold a project's runs, or let serve run it again
-      0 done · 1 mem refused · 2 no project named or here
-  dogfood [<project>] [--milestone <slug>]
-      ask the engine to walk a landed milestone, the last ticked one unless
-      named, at the checkout's head on the project's dogfood-machine
-      0 asked, its #<id> printed · 1 mem refused · 2 no project, or no
-      ticked milestone
   redispatch <task> [--model <name>]
       ask the live run to dispatch a failed task again
       0 the run was asked · 1 no live run holds that task failed, or its wave closed
@@ -419,9 +327,6 @@ usage: workflow <command> [options]
   regate <task>
       merge a task the gate failed again: the suite, no worker
       0 merged, or the live run was asked · 1 it did not merge · 2 nothing to merge
-  status [--json]
-      report this project's runs: task states, spend, lock liveness
-      0 reported · 2 outside a project
   doctor [--fix]
       --fix writes the hook stubs, roles and skills where they are missing,
       differ or are a symlink
@@ -436,28 +341,6 @@ usage: workflow <command> [options]
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn serve_takes_once_and_a_tick_in_seconds() {
-        let cli = Cli::try_parse_from(["workflow", "serve", "--once", "--tick", "0.5"]).unwrap();
-        let Command::Serve { once, tick } = cli.command else {
-            panic!("not serve");
-        };
-        assert!(once);
-        assert_eq!(tick, Some(0.5));
-        assert!(USAGE.contains("\n  serve [--once] [--tick <seconds>]\n"));
-    }
-
-    #[test]
-    fn dogfood_takes_a_project_and_a_milestone() {
-        let cli = Cli::try_parse_from(["workflow", "dogfood", "app", "--milestone", "m1"]).unwrap();
-        let Command::Dogfood { project, milestone } = cli.command else {
-            panic!("not dogfood");
-        };
-        assert_eq!(project.as_deref(), Some("app"));
-        assert_eq!(milestone.as_deref(), Some("m1"));
-        assert!(USAGE.contains("\n  dogfood [<project>] [--milestone <slug>]\n"));
-    }
 
     #[test]
     fn read_advise_and_settings_merge_are_unknown_commands() {

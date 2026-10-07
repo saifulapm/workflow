@@ -7,9 +7,6 @@
 //!   workflow plan-check      read a plan and report its tasks and waves
 //!   workflow run             run a plan's tasks in worktrees
 //!   workflow reap            collect finished or stalled workers
-//!   workflow serve           run every roadmap here, milestone after milestone
-//!   workflow dogfood         ask the engine to walk a landed milestone again
-//!   workflow status          report this project's runs, --json for machines
 //!   workflow doctor          check this machine's wiring
 //!   workflow hook            the body of a git hook stub
 //!   workflow skill           the skills this binary carries, or one whole
@@ -32,7 +29,6 @@ pub mod gitcmd;
 pub mod hook;
 pub mod hygiene;
 pub mod lint;
-pub mod maintain;
 pub mod memcli;
 pub mod ownership;
 pub mod paths;
@@ -40,12 +36,9 @@ pub mod plan;
 pub mod plancheck;
 pub mod repo;
 pub mod report;
-pub mod request;
 pub mod review;
 pub mod run;
-pub mod serve;
 pub mod skill;
-pub mod status;
 pub mod sys;
 pub mod testdecl;
 pub mod verify;
@@ -165,19 +158,11 @@ pub fn run(cli: Cli) -> i32 {
             model,
             effort,
         } => run::cmd_run(plan_file.as_deref(), model.as_deref(), effort.as_deref()),
-        Command::Serve { once, tick } => serve::cmd_serve(once, tick),
-        Command::Park { task, reason } => serve::cmd_park(&task, &reason),
-        Command::Pause { project } => serve::cmd_pause(project.as_deref(), true),
-        Command::Resume { project } => serve::cmd_pause(project.as_deref(), false),
-        Command::Dogfood { project, milestone } => {
-            request::cmd_dogfood(project.as_deref(), milestone.as_deref())
-        }
         Command::Docs { library, query } => docs::cmd_docs(&library, &query),
         Command::Reap => run::cmd_reap(),
         Command::Redispatch { task, model } => run::cmd_redispatch(&task, model.as_deref()),
         Command::Accept { task } => run::cmd_accept(&task, false),
         Command::Regate { task } => run::cmd_accept(&task, true),
-        Command::Status { brief, json } => status::cmd_status(json, brief),
         Command::Wait { timeout, merges } => wait::cmd_wait(Some(timeout), merges),
         Command::PlanCheck { file, json } => cmd_plan_check(&file, json),
         Command::Ownership {
