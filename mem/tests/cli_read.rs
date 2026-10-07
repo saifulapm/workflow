@@ -201,7 +201,7 @@ fn a_store_an_older_mem_wrote_still_reads_cleanly() {
          roadmap_status = \"maintenance\"\n",
     );
     std::fs::write(&toml, &text).unwrap();
-    std::fs::write(store.status_path(P), "m2 under way\n").unwrap();
+    std::fs::write(store.project_dir(P).join("status.md"), "m2 under way\n").unwrap();
     std::fs::write(store.roadmap_path(P), "# roadmap: v2\n\n- [ ] m1-auth Sign-in\n").unwrap();
     let mut q = item(Kind::Question, "retry t2?", "retry t2?");
     q.meta.id = "01K2YR1VC0AB3DE4FG5HJ6KM7N".to_string();
@@ -235,6 +235,7 @@ fn a_store_an_older_mem_wrote_still_reads_cleanly() {
     assert!(read(&["show", "5HJ6KM7N"]).contains("task = \"m2/t2\""));
     let context = read(&["context"]);
     assert!(context.starts_with("project: thing\n"), "{context}");
+    assert!(!context.contains("m2 under way"), "{context}");
     let doctor = read(&["doctor"]);
     assert!(!doctor.contains("status.md"), "{doctor}");
     assert!(!doctor.contains("project.toml"), "{doctor}");

@@ -155,7 +155,7 @@ pub fn rebuild_index(app: &App) -> Result<i32> {
     }
 
     if let crate::write::SingletonWrite::Conflict =
-        crate::write::write_singleton_since(&path, &text, false, seen)?
+        crate::write::write_singleton_since(&path, &text, seen)?
     {
         return Err(exit::coded(
             exit::CAS_CONFLICT,

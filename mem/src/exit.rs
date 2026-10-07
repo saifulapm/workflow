@@ -12,8 +12,6 @@ pub const USAGE: i32 = 2;
 pub const STORE: i32 = 3;
 pub const WAIT_TIMEOUT: i32 = 4;
 pub const CAS_CONFLICT: i32 = 5;
-/// Write accepted and on disk, but over budget.
-pub const OVER_BUDGET: i32 = 6;
 pub const AMBIGUOUS: i32 = 7;
 
 /// An error that knows which exit code it must produce.

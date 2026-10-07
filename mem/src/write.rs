@@ -17,10 +17,6 @@ use crate::project::{Identity, Mode};
 use crate::session;
 use crate::store::Store;
 
-/// `status.md` is capped at both a line count and a byte count (spec §4).
-pub const STATUS_MAX_LINES: usize = 30;
-pub const STATUS_MAX_BYTES: usize = 3_000;
-
 /// Where a write for this identity goes. A non-git directory with no
 /// `--project` writes to global scope — that is what global scope is for; a
 /// project write from outside a checkout is what `--project` is for.
@@ -165,27 +161,14 @@ pub enum SingletonWrite {
     Written,
     /// Someone changed the file since it was read: no clobber (exit 5).
     Conflict,
-    /// On disk, but over budget (exit 6).
-    OverBudget {
-        lines: usize,
-        bytes: usize,
-    },
 }
 
-/// Writes a singleton (`plan.md`, `status.md`) with CAS on its mtime, taking
-/// the baseline now. Callers that spend time collecting their text — `--stdin`,
-/// `--set-file` — read the baseline first and use `write_singleton_since`.
-pub fn write_singleton(path: &Path, text: &str, cap: bool) -> Result<SingletonWrite> {
-    write_singleton_since(path, text, cap, read_mtime(path))
-}
-
-/// The same write against a baseline the caller observed earlier. An over-cap
-/// status still lands: refusing it would lose the content the caller already has
-/// nowhere else to put.
+/// Writes a file edited in place (`plan.md`, a wiki page) with CAS on its
+/// mtime, against the baseline the caller observed before it collected its
+/// text: `--stdin` and `--set-file` can take as long as the writer likes.
 pub fn write_singleton_since(
     path: &Path,
     text: &str,
-    cap: bool,
     seen: Option<std::time::SystemTime>,
 ) -> Result<SingletonWrite> {
     let body = if text.ends_with('\n') {
@@ -195,13 +178,6 @@ pub fn write_singleton_since(
     };
     if !write_atomic_cas(path, body.as_bytes(), seen)? {
         return Ok(SingletonWrite::Conflict);
-    }
-    if cap {
-        let lines = body.lines().count();
-        let bytes = body.len();
-        if lines > STATUS_MAX_LINES || bytes > STATUS_MAX_BYTES {
-            return Ok(SingletonWrite::OverBudget { lines, bytes });
-        }
     }
     Ok(SingletonWrite::Written)
 }

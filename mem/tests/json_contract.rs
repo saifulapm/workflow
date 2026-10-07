@@ -144,7 +144,6 @@ fn populated(tag: &str) -> (World, PathBuf) {
         )),
         0
     );
-    assert_eq!(code(&mem(&w, &repo, &["status", "--set", "on review"])), 0);
     let plan = w.dir.join("plan.md");
     std::fs::write(&plan, "# plan: migrate\n- [ ] t1 run it\n").unwrap();
     assert_eq!(
@@ -198,7 +197,6 @@ fn every_verb_matches_its_committed_schema() {
         &mem(&w, &repo, &["project", "current", "--json"]),
     );
     assert_eq!(current["hygiene_exempt"], serde_json::json!("tests/**"));
-    validate("status.json", &mem(&w, &repo, &["status", "--json"]));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
     validate(
         "plan-tick.json",

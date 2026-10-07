@@ -79,10 +79,6 @@ impl Store {
             .collect()
     }
 
-    pub fn status_path(&self, project_id: &str) -> PathBuf {
-        self.project_dir(project_id).join("status.md")
-    }
-
     pub fn wiki_dir(&self, project_id: &str) -> PathBuf {
         self.project_dir(project_id).join("wiki")
     }
@@ -130,6 +126,8 @@ impl Store {
                 continue;
             }
             for entry in read_dir_sorted(&project) {
+                // status.md is no longer written or read, but older binaries
+                // on other machines still keep one, so it is not stray.
                 let singleton = entry.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
                     ["project.toml", "plan.md", "roadmap.md", "status.md"].contains(&n)
                 });

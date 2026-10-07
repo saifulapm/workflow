@@ -94,7 +94,7 @@ fn the_mandatory_sections_come_first_and_in_order() {
         "# Migrate sessions\n\n- [x] write the plan\n- [ ] run the migration\n- [ ] tell the team\n",
     )
     .unwrap();
-    std::fs::write(store.status_path(P), "blocked on review\n").unwrap();
+    std::fs::write(store.project_dir(P).join("status.md"), "blocked on review\n").unwrap();
     put(
         &store,
         Some(P),
@@ -126,11 +126,12 @@ fn the_mandatory_sections_come_first_and_in_order() {
         .position(|l| l.contains("run the migration"))
         .unwrap();
     let question_at = lines.iter().position(|l| l.starts_with("? #")).unwrap();
-    let status_at = lines.iter().position(|l| l.starts_with("status:")).unwrap();
+    let ruling_at = lines.iter().position(|l| l.starts_with("ruling #")).unwrap();
     assert!(
-        plan_at < task_at && task_at < question_at && question_at < status_at,
+        plan_at < task_at && task_at < question_at && question_at < ruling_at,
         "{text}"
     );
+    assert!(!text.contains("blocked on review"), "status.md is not read: {text}");
     assert!(
         !lines.iter().any(|l| l.contains("tell the team")),
         "only the first unchecked task"
@@ -236,7 +237,7 @@ fn a_project_with_pages_opens_with_the_wiki_line_and_the_index_head() {
         Some(P),
         &item(Kind::Question, "deploy on friday?", "body"),
     );
-    std::fs::write(store.status_path(P), "blocked on review\n").unwrap();
+    std::fs::write(store.project_dir(P).join("status.md"), "blocked on review\n").unwrap();
     page(&w, "pricing", "# Pricing\n\nThe cart totals in cents.\n");
     page(
         &w,
@@ -262,9 +263,9 @@ fn a_project_with_pages_opens_with_the_wiki_line_and_the_index_head() {
         .position(|l| l.contains("[pricing](pricing.md)"))
         .unwrap_or_else(|| panic!("{text}"));
     let question_at = lines.iter().position(|l| l.starts_with("? #")).unwrap();
-    let status_at = lines.iter().position(|l| l.starts_with("status:")).unwrap();
+    assert!(!text.contains("blocked on review"), "status.md is not read: {text}");
     assert!(
-        question_at < wiki_at && wiki_at < head_at && head_at < status_at,
+        question_at < wiki_at && wiki_at < head_at,
         "the wiki line closes the mandatory sections and the index head follows it: {text}"
     );
     assert!(lines[head_at].starts_with("  "), "{text}");
@@ -602,7 +603,7 @@ fn populate_small(w: &World) {
     mem::project::set_key(&store, P, "plan_status", "running").unwrap();
     mem::project::set_key(&store, P, "runner", "macbook").unwrap();
     std::fs::write(
-        store.status_path(P),
+        store.project_dir(P).join("status.md"),
         "m2 under way\nsecond line stays out\n",
     )
     .unwrap();
@@ -663,7 +664,6 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     let (_i, s) = sources(&w, Some("! memory last synced 90 min ago".into()));
     let d = build_small(&s, &store);
 
-    let status_date = s.status_date.clone().unwrap();
     let handoff_date = mem::timefmt::date(s.handoff.as_ref().unwrap().modified_epoch);
     let q: Vec<&str> = s
         .questions
@@ -675,7 +675,6 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     let expected = format!(
         "! memory last synced 90 min ago
 project: thing
-status ({status_date}): m2 under way
 roadmap: m2-sections (2 of 3) · tasks 2/4 merged
 questions: 4 for you
   ? #{}  question 0 for a person
@@ -705,6 +704,7 @@ wiki: 8 pages
     let full = build(&s, &store, 6000).text;
     assert!(full.contains("fact 29 the small digest drops"), "{full}");
     assert!(!full.contains("stage: running"), "{full}");
+    assert!(!full.contains("m2 under way"), "status.md is not read: {full}");
 }
 
 #[test]
@@ -715,7 +715,7 @@ fn a_small_digest_of_long_lines_stays_under_its_ceiling() {
     let store = w.store();
     mem::project::set_key(&store, P, "plan_status", &long("stage")).unwrap();
     mem::project::set_key(&store, P, "runner", &long("runner")).unwrap();
-    std::fs::write(store.status_path(P), long("status")).unwrap();
+    std::fs::write(store.project_dir(P).join("status.md"), long("status")).unwrap();
     std::fs::write(
         store.plan_path(P),
         format!("# plan: {}\n- [ ] {}\n", long("plan"), long("task")),
@@ -745,7 +745,7 @@ fn a_small_digest_of_long_lines_stays_under_its_ceiling() {
     for line in d.text.lines() {
         assert!(line.len() <= 120, "{} bytes: {line}", line.len());
     }
-    assert_eq!(d.text.lines().count(), 20, "{}", d.text);
+    assert_eq!(d.text.lines().count(), 19, "{}", d.text);
     assert!(d.text.len() < SMALL_CEILING, "{} bytes", d.text.len());
 }
 

@@ -205,46 +205,16 @@ fn handoff_sets_and_prints_the_latest() {
 }
 
 #[test]
-fn status_over_cap_lands_on_disk_and_exits_six() {
-    let w = World::new("write-status");
-    let repo = w.repo("thing", None);
-    assert_eq!(
-        code(&mem(&w, &repo, &["status"])),
-        1,
-        "nothing recorded yet"
-    );
-
-    assert_eq!(
-        code(&mem(&w, &repo, &["status", "--set", "blocked on review"])),
-        0
-    );
-    let out = mem(&w, &repo, &["status"]);
-    assert_eq!(code(&out), 0);
-    assert_eq!(
-        stdout(&out),
-        "blocked on review\n",
-        "status prints verbatim"
-    );
-
-    let long = "a status line that goes on\n".repeat(40);
-    let out = mem(&w, &repo, &["status", "--set", &long]);
-    assert_eq!(code(&out), 6, "accepted, but over budget");
-    assert!(stderr(&out).contains("over budget"), "{}", stderr(&out));
-    assert!(
-        stdout(&mem(&w, &repo, &["status"])).contains("a status line that goes on"),
-        "an over-cap status must still be on disk"
-    );
-}
-
-#[test]
 fn a_singleton_write_against_a_changed_file_is_a_conflict() {
     let w = World::new("write-cas");
     let repo = w.repo("thing", None);
-    mem(&w, &repo, &["status", "--set", "first"]);
+    let plan = w.dir.join("plan.md");
+    std::fs::write(&plan, "# plan: one\n").unwrap();
+    mem(&w, &repo, &["plan", "--set-file", plan.to_str().unwrap()]);
     let id = mem::project::Registry::load(&w.store()).projects[0]
         .id
         .clone();
-    let path = w.store().status_path(&id);
+    let path = w.store().plan_path(&id);
 
     // A write whose CAS baseline is the file as it is now succeeds; the test
     // for the conflict path lives at the seam, where the race is reproducible.
@@ -505,7 +475,7 @@ fn a_write_verb_leaves_no_footprint_in_the_repository() {
 
     mem(&w, &repo, &["save", "a fact"]);
     mem(&w, &repo, &["log", "an entry"]);
-    mem(&w, &repo, &["status", "--set", "fine"]);
+    mem(&w, &repo, &["handoff", "--set", "fine"]);
 
     let out = std::process::Command::new("git")
         .current_dir(&repo)

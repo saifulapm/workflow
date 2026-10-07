@@ -183,11 +183,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             *stdin,
             title.as_deref(),
         ),
-        cli::Command::Status {
-            set,
-            stdin,
-            session_id,
-        } => verbs::status(&with_session(app, session_id), set.as_deref(), *stdin),
         cli::Command::Reindex { full } => verbs::reindex(&app, *full),
         cli::Command::Snapshot => verbs::snapshot(&app),
         cli::Command::Prune { apply } => verbs::prune(&app, apply),

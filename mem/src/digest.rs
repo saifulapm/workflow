@@ -71,10 +71,6 @@ pub struct Sources {
     pub pages: Vec<Page>,
     /// The text of the index page, when the project keeps one.
     pub wiki_index: Option<String>,
-    pub status: Option<String>,
-    /// When status.md last changed, as a date: a status line without its age
-    /// reads as current whatever it says.
-    pub status_date: Option<String>,
     pub rulings: Vec<Row>,
     pub facts: Vec<Row>,
     pub logs: Vec<Row>,
@@ -93,14 +89,6 @@ impl Sources {
         let roadmap = project_id
             .map(|id| store.roadmap_path(id))
             .and_then(|p| std::fs::read_to_string(p).ok());
-        let status = project_id
-            .map(|id| store.status_path(id))
-            .and_then(|p| std::fs::read_to_string(p).ok());
-        let status_date = project_id
-            .and_then(|id| std::fs::metadata(store.status_path(id)).ok())
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| date(d.as_secs() as i64));
         let declared =
             |key: &str| project_id.and_then(|id| crate::project::declared(store, id, key));
         let pages = project_id
@@ -120,8 +108,6 @@ impl Sources {
             questions: index.pending_questions(project_id)?,
             pages,
             wiki_index,
-            status,
-            status_date,
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
             logs: recent_non_run_logs(index, project_id, 5)?,
@@ -134,7 +120,6 @@ impl Sources {
             && self.roadmap.is_none()
             && self.questions.is_empty()
             && self.pages.is_empty()
-            && self.status.is_none()
             && self.rulings.is_empty()
             && self.facts.is_empty()
             && self.logs.is_empty()
@@ -319,24 +304,14 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
     let mut lines = mandatory.clone();
     let mandatory_bytes: usize = lines.iter().map(|l| l.len() + 1).sum();
 
-    // Optional sections, in fill order, each dropped whole when there is no
-    // room: the index head under the wiki line it belongs to, then the status
-    // body bottom-up, then rulings, facts, logs.
+    // Optional sections, in fill order, each filled while there is room: the
+    // index head under the wiki line it belongs to, then rulings, facts, logs.
     let mut optional: Vec<Vec<String>> = Vec::new();
     if let Some(index) = &sources.wiki_index {
         optional.push(
             index_head(index)
                 .into_iter()
                 .map(|line| format!("  {line}"))
-                .collect(),
-        );
-    }
-    if let Some(status) = &sources.status {
-        optional.push(
-            status
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| format!("status: {}", l.trim()))
                 .collect(),
         );
     }
@@ -358,8 +333,6 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
 
     let mut used = mandatory_bytes;
     for section in optional {
-        // The status body is the one section dropped line by line from the
-        // bottom; the others are filled while there is room.
         for line in section {
             let cost = line.len() + 1;
             if used + cost > budget {
@@ -402,16 +375,6 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
     lines.extend(sources.staleness.iter().cloned());
     if let Some(name) = &sources.project {
         lines.push(format!("project: {name}"));
-    }
-    if let Some(first) = sources
-        .status
-        .as_deref()
-        .and_then(|s| s.lines().map(str::trim).find(|l| !l.is_empty()))
-    {
-        match &sources.status_date {
-            Some(d) => lines.push(format!("status ({d}): {first}")),
-            None => lines.push(format!("status: {first}")),
-        }
     }
     lines.extend(position(sources));
     // A worker's question goes to whoever runs the work; only the ones with no

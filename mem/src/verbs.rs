@@ -833,49 +833,6 @@ pub fn handoff(app: &App, set: Option<&str>, stdin: bool, title: Option<&str>) -
     report_written(app, &written, crate::item::Kind::Handoff)
 }
 
-/// `mem status` — prints status.md verbatim (a machine-readable contract), or
-/// replaces it. An over-cap write still lands and reports exit 6.
-pub fn status(app: &App, set: Option<&str>, stdin: bool) -> Result<i32> {
-    if set.is_none() && !stdin {
-        return print_singleton(app, "status", |store, id| store.status_path(id), None);
-    }
-    let identity = app.identity(Mode::Write)?;
-    let Some(id) = identity.id() else {
-        return Err(exit::usage(
-            "status belongs to a project — run this in a checkout or pass --project",
-        ));
-    };
-    let path = app.store.status_path(id);
-    // The CAS baseline is taken before the text is: `--stdin` blocks for as long
-    // as the writer takes, and that whole window is when another machine's copy
-    // can land (spec §4).
-    let seen = crate::atomic::read_mtime(&path);
-    let text = match set {
-        Some(t) => t.to_string(),
-        None => crate::write::read_stdin()?,
-    };
-    match crate::write::write_singleton_since(&path, &text, true, seen)? {
-        crate::write::SingletonWrite::Conflict => Err(exit::coded(
-            exit::CAS_CONFLICT,
-            "status.md changed since it was read — re-read it and try again",
-        )),
-        crate::write::SingletonWrite::OverBudget { lines, bytes } => {
-            self_record(app);
-            eprintln!(
-                "mem: status is on disk but over budget ({lines} lines, {bytes} bytes; \
-                 cap is {} lines and {} bytes) — consolidate it",
-                crate::write::STATUS_MAX_LINES,
-                crate::write::STATUS_MAX_BYTES
-            );
-            Ok(exit::OVER_BUDGET)
-        }
-        crate::write::SingletonWrite::Written => {
-            self_record(app);
-            Ok(exit::OK)
-        }
-    }
-}
-
 fn self_record(app: &App) {
     if let Some(session) = &app.session_id {
         crate::session::record_write(&app.dirs.sessions_dir(), session);
@@ -1032,8 +989,8 @@ fn singleton(
     if clear {
         return clear_file(app, &path, which.noun);
     }
-    // As in `status`: the baseline is what the file looked like before the
-    // caller's text arrived, however long that took.
+    // The baseline is what the file looked like before the caller's text
+    // arrived, however long that took.
     let seen = crate::atomic::read_mtime(&path);
     let text = set_text(set_file)?;
     let first = text
@@ -1150,7 +1107,7 @@ fn land(
     seen: Option<std::time::SystemTime>,
     file: &str,
 ) -> Result<i32> {
-    match crate::write::write_singleton_since(path, text, false, seen)? {
+    match crate::write::write_singleton_since(path, text, seen)? {
         crate::write::SingletonWrite::Conflict => Err(exit::coded(
             exit::CAS_CONFLICT,
             format!("{file} changed since it was read — re-read it and try again"),
@@ -1271,7 +1228,7 @@ fn wiki_list(app: &App) -> Result<i32> {
     )
 }
 
-/// A page prints byte for byte, like plan.md and status.md: hub renders it and
+/// A page prints byte for byte, like plan.md: hub renders it and
 /// a session reads it, and neither wants mem's opinion about markdown.
 fn wiki_print(app: &App, slug: &str) -> Result<i32> {
     print_slug_file(
@@ -1494,9 +1451,9 @@ fn wiki_write(
         ));
     };
     let path = app.store.wiki_page(id, slug);
-    // As in `status`: the CAS baseline is what the page looked like before the
-    // writer's text arrived, and `--stdin` holds that window open for as long
-    // as the writer takes.
+    // The CAS baseline is what the page looked like before the writer's text
+    // arrived, and `--stdin` holds that window open for as long as the writer
+    // takes.
     let seen = crate::atomic::read_mtime(&path);
     // A section write splices into the page as it was when the baseline was
     // taken, so the section must exist before stdin is read.
@@ -1542,7 +1499,7 @@ fn wiki_write(
         None => slug.to_string(),
     };
     if let crate::write::SingletonWrite::Conflict =
-        crate::write::write_singleton_since(&path, &text, false, seen)?
+        crate::write::write_singleton_since(&path, &text, seen)?
     {
         return Err(exit::coded(
             exit::CAS_CONFLICT,
@@ -1576,8 +1533,8 @@ fn wiki_write(
     Ok(exit::OK)
 }
 
-/// plan.md and status.md are printed byte for byte: the workflow orchestrator
-/// parses them, so this is a contract, not a display.
+/// plan.md and roadmap.md are printed byte for byte: the hub and the skills
+/// parse them, so this is a contract, not a display.
 fn print_singleton(
     app: &App,
     noun: &str,
@@ -1620,8 +1577,7 @@ fn print_singleton(
 }
 
 /// The next move when a singleton is missing, so an empty `mem plan` hands a
-/// caller the verb that fills it instead of a dead end. `status` writes no
-/// command for the caller to run, so it gets none.
+/// caller the verb that fills it instead of a dead end.
 fn remedy(noun: &str) -> &'static str {
     match noun {
         "plan" => " — write one with `mem plan --stdin`",
@@ -2452,16 +2408,6 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
                     ),
                 ));
             }
-        }
-        let status_path = app.store.status_path(&p.id);
-        if let Ok(text) = std::fs::read_to_string(&status_path)
-            && (text.lines().count() > crate::write::STATUS_MAX_LINES
-                || text.len() > crate::write::STATUS_MAX_BYTES)
-        {
-            findings.push(finding(
-                "budget",
-                format!("{}'s status.md is over cap — consolidate it", p.name),
-            ));
         }
         findings.extend(wiki_findings(app, p));
     }

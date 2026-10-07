@@ -88,7 +88,7 @@ fn one_is_nothing_found_on_any_verb() {
     );
     assert_eq!(code(&run(&["log"], &w, &repo)), 1);
     assert_eq!(code(&run(&["handoff"], &w, &repo)), 1);
-    assert_eq!(code(&run(&["status"], &w, &repo)), 1);
+    assert_eq!(code(&run(&["roadmap"], &w, &repo)), 1);
     assert_eq!(code(&run(&["plan"], &w, &repo)), 1);
     assert_eq!(code(&run(&["plan", "--tick", "t1"], &w, &repo)), 1);
     assert_eq!(code(&run(&["questions"], &w, &repo)), 1);
@@ -130,9 +130,9 @@ fn two_is_the_caller_holding_it_wrong() {
         2
     );
     assert_eq!(
-        code(&run(&["status", "--set", "x"], &w, &dir)),
+        code(&run(&["plan", "--stdin"], &w, &dir)),
         2,
-        "status outside a checkout needs --project"
+        "a plan outside a checkout needs --project"
     );
 
     // Bytes that are not text are the caller holding it wrong, not a store that
@@ -261,16 +261,6 @@ fn five_is_a_singleton_that_changed_under_the_writer() {
         "# plan: someone else got here first\n",
         "a conflict must not clobber"
     );
-}
-
-#[test]
-fn six_is_a_write_that_landed_and_is_still_too_big() {
-    let w = World::new("exit-six");
-    let repo = w.repo("thing", None);
-    let long = "a status line that goes on\n".repeat(40);
-    let out = run(&["status", "--set", &long], &w, &repo);
-    assert_eq!(code(&out), 6);
-    assert!(stdout(&run(&["status"], &w, &repo)).contains("a status line"));
 }
 
 #[test]

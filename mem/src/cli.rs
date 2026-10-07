@@ -158,15 +158,6 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
-    /// Print status.md verbatim, or replace it.
-    Status {
-        #[arg(long)]
-        set: Option<String>,
-        #[arg(long)]
-        stdin: bool,
-        #[arg(long)]
-        session_id: Option<String>,
-    },
     /// Rebuild the index from the store.
     Reindex {
         #[arg(long)]

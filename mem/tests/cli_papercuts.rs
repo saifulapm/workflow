@@ -120,6 +120,8 @@ fn the_engine_surface_is_gone() {
         &["project", "unset", "runner"][..],
         &["project", "set", "slots", "2"][..],
         &["project", "unset", "paused"][..],
+        &["status"][..],
+        &["status", "--set", "x"][..],
     ] {
         let out = mem(&w, &dir, args);
         assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
@@ -140,6 +142,7 @@ fn the_engine_surface_is_gone() {
             &["runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review"][..],
         ),
         (&["project", "current"][..], &["machine"][..]),
+        (&[][..], &["status.md", "  status "][..]),
     ] {
         let help = stdout(&mem(&w, &dir, &[verb, &["--help"]].concat()));
         for word in gone {

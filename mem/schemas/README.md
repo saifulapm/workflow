@@ -25,9 +25,8 @@ Rules that hold across the whole surface:
   no half-document to parse. The exception is a verb that has already changed
   something: `mem prune --apply` given a mix of known and unknown ids archives
   the known ones, prints its `{"archived":[…]}` document, names the unknown ones
-  on stderr and exits 1. That is the accept-then-report shape spec §4 already
-  uses for an over-cap `mem status` (on disk, exit 6) — withholding the document
-  would leave the caller unable to find out what landed.
+  on stderr and exits 1. Withholding the document would leave the caller
+  unable to find out what landed.
 - **Absent is `null`, never missing.** Optional item fields (`type`, `project`,
   `supersedes`, `superseded_by`, `answers`) are always present.
 - **Hook envelopes are the runtime's shape, not mem's.** `hook-post-tool-batch`
@@ -36,8 +35,7 @@ Rules that hold across the whole surface:
   because the runtime reads that hook's plain stdout as `newCustomInstructions`.
   `precompact.json` is the inspectable `--json` form of the same sentence, not
   the shape the runtime sees.
-- **Some writes have no document.** `mem status --set`, `mem plan --set-file`,
-  `mem plan --stdin` and `mem plan --clear` print nothing on success under
-  `--json`; the exit code is the whole answer (0, or 5 for a CAS conflict, or 6
-  for an over-cap status that still landed). They are the only verbs without a
-  file here.
+- **Some writes have no document.** `mem plan --set-file`, `mem plan --stdin`
+  and `mem plan --clear`, and the same moves on `mem roadmap`, print nothing on
+  success under `--json`; the exit code is the whole answer (0, or 5 for a CAS
+  conflict). They are the only verbs without a file here.
