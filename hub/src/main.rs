@@ -1,4 +1,5 @@
 //! The `hub` binary: parse four flags, load the config, bind loopback, serve.
+//! `hub pair` loads the same config and pairs a device instead.
 
 use std::io::Write;
 use std::net::TcpListener;
@@ -7,13 +8,19 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use hub::app::App;
+use hub::config::Config;
 use hub::doorbell::Doorbell;
-use hub::{config, http};
+use hub::{config, http, pair};
 
 const USAGE: &str = "\
 hub — mem's phone-facing view
 
 Usage: hub [OPTIONS]
+       hub pair [OPTIONS]
+
+Commands:
+  pair  Print a link that pairs a phone or laptop with this hub, and wait
+        for it to be opened
 
 Options:
       --config <PATH>  Config file (default $XDG_CONFIG_HOME/hub/config.toml)
@@ -24,18 +31,21 @@ Options:
 ";
 
 struct Args {
+    pair: bool,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
 
 fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
+        pair: false,
         config: None,
         port: None,
     };
     let mut argv = argv.skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
+            "pair" => args.pair = true,
             "--config" => {
                 let value = argv.next().context("--config needs a path")?;
                 args.config = Some(PathBuf::from(value));
@@ -75,6 +85,9 @@ fn run() -> Result<()> {
     };
     let config = config::load_or_create(&config_path)?;
     let port = args.port.unwrap_or(config.port);
+    if args.pair {
+        return pair_device(&config, port);
+    }
 
     // Spec §7: loopback only. Exposure is `tailscale serve`'s job, and a bind
     // to 0.0.0.0 would put this on every café network the laptop joins.
@@ -103,4 +116,26 @@ fn run() -> Result<()> {
     }
 
     http::serve(listener, move |request| app.handle(request))
+}
+
+/// `hub pair`: writes a code, prints its link, and waits for a device to
+/// spend it or for it to expire.
+fn pair_device(config: &Config, port: u16) -> Result<()> {
+    let code = pair::new_code()?;
+    let expires_ms = jiff::Timestamp::now().as_millisecond() + pair::CODE_TTL.as_millis() as i64;
+    pair::add_code(&pair::pair_path()?, &code, expires_ms)?;
+    let base = pair::base_url(config, port, &hub::machine_name());
+    println!("Open on the device, within 10 minutes:");
+    println!("  {}", pair::link(&base, &code));
+    std::io::stdout().flush()?;
+    match pair::wait(&code, expires_ms)? {
+        Some(device) => {
+            println!("✓ paired: {device} (cookie for 1 year)");
+            Ok(())
+        }
+        None => {
+            eprintln!("the code expired; run hub pair again");
+            std::process::exit(1);
+        }
+    }
 }

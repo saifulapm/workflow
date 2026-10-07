@@ -29,6 +29,7 @@ pub mod page_questions;
 pub mod page_roadmap;
 pub mod page_wiki;
 pub mod pages;
+pub mod pair;
 pub mod plan_page;
 pub mod presence;
 pub mod proc;

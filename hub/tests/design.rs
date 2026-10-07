@@ -6,6 +6,8 @@ mod common;
 use common::{Hub, TempDir, body_of, fixture_mem, status_of};
 
 const PROJECT: &str = "proj-look";
+/// A pairing code that stays pending long after the suite has finished.
+const PAIR_CODE: &str = "DESK42";
 
 /// A `mem` that knows one project and answers everything else with junk:
 /// the look is the shell's, so it holds on a page with nothing to show.
@@ -20,12 +22,19 @@ fn hub(tag: &str) -> (TempDir, Hub) {
              else echo 'not json at all'; fi"
         ),
     );
+    std::fs::create_dir_all(home.join("state/hub")).unwrap();
+    std::fs::write(
+        home.join("state/hub/pair"),
+        format!("{PAIR_CODE} 99999999999999\n"),
+    )
+    .unwrap();
     let hub = Hub::spawn(&home, &[&bin], &["--port", "0"]);
     (dir, hub)
 }
 
 fn every_page() -> Vec<String> {
     let mut paths: Vec<String> = ["/", "/wiki", "/subscribe"].map(str::to_string).to_vec();
+    paths.push(format!("/pair/{PAIR_CODE}"));
     for page in [
         "",
         "/roadmap",

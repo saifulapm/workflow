@@ -11,7 +11,7 @@ use crate::http::{Request, Response};
 use crate::model;
 use crate::{
     assets, page_control, page_decisions, page_evidence, page_home, page_new, page_project,
-    page_questions, page_roadmap, page_wiki, plan_page,
+    page_questions, page_roadmap, page_wiki, pair, plan_page,
 };
 
 /// What a page module is handed.
@@ -43,7 +43,7 @@ pub const PAGES: [&str; 6] = [
 /// in this order before any module: the method, then for a POST the origin,
 /// so a cross-origin write never runs `mem` at all, then the project.
 pub fn route_page(app: &App, request: &Request) -> Option<Response> {
-    let (method, project, rest, handler) = page_for(&request.path)?;
+    let (method, project, rest, handler) = page_for(&request.method, &request.path)?;
     if request.method != method {
         return Some(Response::method_not_allowed(method));
     }
@@ -63,8 +63,12 @@ pub fn route_page(app: &App, request: &Request) -> Option<Response> {
     }))
 }
 
-/// The method, project, rest and module for one path.
-fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
+/// The method, project, rest and module for one path. `method` only picks
+/// between the two handlers of a path that has both, as `/pair/<code>` does.
+fn page_for<'a>(
+    method: &str,
+    path: &'a str,
+) -> Option<(&'static str, Option<&'a str>, &'a str, Handler)> {
     match path {
         "/" => return Some(("GET", None, "", page_home::get)),
         "/answer" => return Some(("POST", None, "", page_questions::answer_post)),
@@ -76,6 +80,13 @@ fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
     }
     if path.starts_with("/assets/") {
         return Some(("GET", None, "", assets::get));
+    }
+    if let Some(code) = path.strip_prefix("/pair/") {
+        return Some(if method == "POST" {
+            ("POST", None, code, pair::post)
+        } else {
+            ("GET", None, code, pair::get)
+        });
     }
     if let Some(rest) = path.strip_prefix("/wiki/") {
         // No slash at all is left to the wiki handler, which 404s it.

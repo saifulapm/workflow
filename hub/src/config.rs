@@ -194,7 +194,7 @@ pub fn urandom<const N: usize>() -> Result<[u8; N]> {
 
 /// 16 bytes as 26 base32 characters, big-endian, exactly ULID's layout: the
 /// first character carries the top 3 bits, the other 25 carry 5 each.
-fn base32(bytes: &[u8; 16]) -> String {
+pub(crate) fn base32(bytes: &[u8; 16]) -> String {
     let value = u128::from_be_bytes(*bytes);
     let mut out = String::with_capacity(26);
     for i in 0..26 {
