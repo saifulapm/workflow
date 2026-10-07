@@ -137,7 +137,7 @@ body>ul:not([class])>li:last-child{border-bottom:0}
 .bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
 .tl{margin:0 0 16px 6px;padding-left:20px;border-left:2px solid var(--line)}
 .tl>li{position:relative;padding:2px 0 14px}
-.tl>li::before{content:"";position:absolute;left:-27px;top:7px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--bg)}
+.tl>li::before{content:"";position:absolute;left:-29px;top:7px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--bg)}
 .tl>li.done::before{background:var(--ok)}
 .tl>li.live::before{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
 .gallery{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(10rem,1fr));margin-block:0 16px}

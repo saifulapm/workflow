@@ -8,13 +8,14 @@
 
 use serde_json::Value;
 
+use crate::form::encode_component;
 use crate::html::{self, degraded_banner, esc, markdown_article, page_url, project_url};
 use crate::http::Response;
 use crate::memcli::Outcome;
 use crate::model;
 use crate::page_decisions::{ruling_block, ruling_rows};
 use crate::page_evidence::{FindingRow, finding_rows, findings_section};
-use crate::page_home::{ProjectSummary, project_summaries};
+use crate::page_home::{ProjectSummary, project_summaries, stage_pill};
 use crate::page_questions::question_rows;
 use crate::page_roadmap::{roadmap_body, roadmap_rows};
 use crate::pages::{PageCtx, page_shell, sibling_hub};
@@ -41,6 +42,10 @@ pub fn get(ctx: &PageCtx) -> Response {
         body.push_str(&run_summary(ctx, project));
     }
     body.push_str(&controls(&summary, project, running));
+    // A draft roadmap is the planning body itself.
+    if summary.milestones.1 > 0 && summary.stage != "planning" {
+        body.push_str(&timeline(ctx, project, &summary));
+    }
     body.push_str(&match summary.stage {
         "brief" => brief_body(ctx, project),
         "research" => research_body(ctx, project),
@@ -57,10 +62,15 @@ pub fn get(ctx: &PageCtx) -> Response {
 /// The stage, then `paused`, the runner, the open milestone's place and the
 /// current plan's ticks, as the front page lists them.
 pub fn stage_header(s: &ProjectSummary, ctx: &PageCtx) -> String {
-    let mut parts = vec![esc(s.stage)];
+    let mut pills = format!(
+        "<span class=\"{}\">{}</span>",
+        stage_pill(s.stage),
+        esc(s.stage)
+    );
     if s.paused.is_some() {
-        parts.push("paused".to_string());
+        pills.push_str("<span class=\"pill wait\">paused</span>");
     }
+    let mut parts = Vec::new();
     if let Some(runner) = &s.runner {
         // Linked only when another machine runs it and this hub knows that
         // machine's hub.
@@ -81,7 +91,78 @@ pub fn stage_header(s: &ProjectSummary, ctx: &PageCtx) -> String {
     if total > 0 {
         parts.push(format!("tasks {ticked} of {total}"));
     }
-    format!("<p class=\"meta\">{}</p>\n", parts.join(" · "))
+    format!(
+        "<div class=\"row\">{pills}<span class=\"meta\">{}</span></div>\n",
+        parts.join(" · ")
+    )
+}
+
+/// The roadmap as a timeline: the landed milestones, the live one with its
+/// plan's ticks, then the one after it. A milestone with a stored plan links
+/// to it. Two spawns, and the walk body finds the roadmap cached.
+fn timeline(ctx: &PageCtx, project: &str, s: &ProjectSummary) -> String {
+    let roadmap = ctx.app.mem.roadmap(project);
+    let text = match &*roadmap {
+        Outcome::Broken(why) => return degraded_banner(why),
+        Outcome::Json(doc) => doc["text"].as_str().unwrap_or_default(),
+        Outcome::Absent => return String::new(),
+    };
+    let plans: Vec<String> = ctx
+        .app
+        .mem
+        .plan_list(project)
+        .rows("plans")
+        .iter()
+        .filter_map(|row| row["slug"].as_str().map(str::to_string))
+        .collect();
+    let mut out = String::from("<h2>Roadmap</h2>\n<ul class=\"tl\">\n");
+    let mut open = 0;
+    for row in roadmap_rows(text) {
+        let name = if plans.contains(&row.slug) {
+            format!(
+                "<a href=\"{}/plan/{}\">{}</a>",
+                esc(&project_url(project)),
+                esc(&encode_component(&row.slug)),
+                esc(&row.slug)
+            )
+        } else {
+            esc(&row.slug)
+        };
+        let (class, pill) = if row.ticked {
+            (
+                " class=\"done\"",
+                "<span class=\"pill ok\">landed</span>".to_string(),
+            )
+        } else {
+            open += 1;
+            match open {
+                1 => (" class=\"live\"", live_pill(s, &row.slug)),
+                2 => ("", "<span class=\"pill mut\">next</span>".to_string()),
+                _ => ("", String::new()),
+            }
+        };
+        let pill = if pill.is_empty() {
+            pill
+        } else {
+            format!(" {pill}")
+        };
+        out.push_str(&format!(
+            "<li{class}>{name}{pill}<div class=\"meta\">{}</div></li>\n",
+            esc(&row.title)
+        ));
+    }
+    out.push_str("</ul>\n");
+    out
+}
+
+/// The live milestone's ticks, when the current plan is its own.
+fn live_pill(s: &ProjectSummary, slug: &str) -> String {
+    let (ticked, total) = s.tasks;
+    if total > 0 && s.plan_slug.as_deref() == Some(slug) {
+        format!("<span class=\"pill\">{ticked} of {total} tasks</span>")
+    } else {
+        "<span class=\"pill\">live</span>".to_string()
+    }
 }
 
 /// Under the header of a running project: the questions waiting on the owner,

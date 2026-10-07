@@ -86,6 +86,7 @@ fn world(tag: &str, roadmap: Value, findings: Value, runs: Value) -> World {
              projects*) p '{projects}' ;;\n\
              *--all-projects*) p '{{\"questions\":[]}}' ;;\n\
              roadmap*--project=kappa*) p '{roadmap}' ;;\n\
+             plan\\ --list*--project=kappa*) p '{{\"plans\":[{{\"slug\":\"k1-log\"}},{{\"slug\":\"k2-walk\"}}]}}' ;;\n\
              finding\\ list\\ --open*--project=kappa*) p '{findings}' ;;\n\
              finding\\ list\\ --open*--project=delta*) p '{delta_findings}' ;;\n\
              log\\ --type\\ run*--project=kappa*) p '{runs}' ;;\n\
@@ -280,5 +281,30 @@ fn a_maintenance_project_shows_status_handoff_findings_and_ideas() {
     ] {
         assert!(body.contains(part), "{part:?} missing from {body}");
     }
+    assert!(mem.len() <= 5, "mem spawns: {mem:?}");
+}
+
+#[test]
+fn the_roadmap_is_a_timeline_of_done_live_and_next_milestones() {
+    let world = world(
+        "project-after-timeline",
+        roadmap(Some(SHOW)),
+        no_findings(),
+        runs(&[]),
+    );
+    let (body, mem) = page(&world, "kappa");
+
+    let timeline = [
+        "<h2>Roadmap</h2>\n<ul class=\"tl\">\n",
+        "<li class=\"done\"><a href=\"/p/kappa/plan/k1-log\">k1-log</a> \
+         <span class=\"pill ok\">landed</span><div class=\"meta\">Habits are logged</div></li>\n",
+        "<li class=\"live\"><a href=\"/p/kappa/plan/k2-walk\">k2-walk</a> \
+         <span class=\"pill\">2 of 2 tasks</span><div class=\"meta\">Habits are walked</div></li>\n",
+        "<li>k3-later <span class=\"pill mut\">next</span>\
+         <div class=\"meta\">Later work</div></li>\n",
+        "</ul>\n",
+    ]
+    .concat();
+    assert!(body.contains(&timeline), "{body}");
     assert!(mem.len() <= 5, "mem spawns: {mem:?}");
 }

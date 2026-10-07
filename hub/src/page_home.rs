@@ -36,6 +36,8 @@ pub struct ProjectSummary {
     pub milestone: Option<String>,
     /// Milestones ticked on the roadmap, and in all.
     pub milestones: (u64, u64),
+    /// The current plan's slug, which can be an earlier milestone's.
+    pub plan_slug: Option<String>,
     /// Tasks ticked in the current plan, and in all.
     pub tasks: (u64, u64),
     /// RFC 3339, the newest item's time.
@@ -60,6 +62,7 @@ pub fn project_summaries(mem: &MemCli) -> Vec<ProjectSummary> {
             runner: text(row, "runner"),
             paused: text(row, "paused"),
             milestone: text(row, "milestone"),
+            plan_slug: text(row, "plan_slug"),
             milestones: (
                 count(row, "milestones_done"),
                 count(row, "milestones_total"),
