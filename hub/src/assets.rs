@@ -10,6 +10,16 @@ use crate::pages::PageCtx;
 const LONG_CACHE: &str = "public, max-age=31536000, immutable";
 
 pub fn get(ctx: &PageCtx) -> Response {
+    if ctx.request.path == "/assets/annotate.js" {
+        // Its URL carries no version, so a phone asks again each time rather
+        // than keep a copy the shell no longer speaks to.
+        return Response::new(
+            200,
+            "text/javascript; charset=utf-8",
+            include_bytes!("../assets/annotate.js").as_slice(),
+        )
+        .header("Cache-Control", "no-cache");
+    }
     let (content_type, body): (&str, &[u8]) = match ctx.request.path.as_str() {
         "/assets/maple-mono-400.woff2" => (
             "font/woff2",
@@ -26,10 +36,6 @@ pub fn get(ctx: &PageCtx) -> Response {
         "/assets/maple-mono-400-italic.woff2" => (
             "font/woff2",
             include_bytes!("../assets/maple-mono-400-italic.woff2"),
-        ),
-        "/assets/annotate.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../assets/annotate.js"),
         ),
         "/assets/maple-mono-OFL.txt" => (
             "text/plain; charset=utf-8",

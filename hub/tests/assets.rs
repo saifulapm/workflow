@@ -80,4 +80,7 @@ fn the_comment_layer_is_served_as_javascript() {
             .starts_with("text/javascript")
     );
     assert!(body_of(&response).contains("plan-comment"));
+    // Its URL carries no version, and the shell that talks to it is always
+    // fresh, so a phone must not keep an old copy for a year.
+    assert_eq!(header_of(&response, "cache-control"), Some("no-cache"));
 }

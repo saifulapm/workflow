@@ -63,6 +63,9 @@ else is free design.
       <label class="opt"><input type="radio" name="<name>" value="<v>" checked>
         <span class="ol">Label <em>suggested</em></span><span class="od">why</span></label>
 
+- A claim number, a decision's `name` and each option's `value` use only
+  letters, digits and `-._`: the hub files a comment under them, and
+  refuses any other character.
 - `<section data-shared>` for a record several claims use.
 - `<section data-scope>` for what this milestone does not change.
 
