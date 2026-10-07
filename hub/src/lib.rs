@@ -14,6 +14,7 @@ pub mod doorbell;
 pub mod form;
 pub mod html;
 pub mod http;
+pub mod live;
 pub mod memcli;
 pub mod model;
 pub mod multipart;

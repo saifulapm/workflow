@@ -30,6 +30,7 @@ const RELOAD: &str = "<script>setInterval(function(){\
 pub struct ProjectSummary {
     pub name: String,
     pub stage: &'static str,
+    pub roadmap_status: Option<String>,
     pub runner: Option<String>,
     pub paused: Option<String>,
     /// The open milestone's slug, while a roadmap has one.
@@ -59,6 +60,7 @@ pub fn project_summaries(mem: &MemCli) -> Vec<ProjectSummary> {
         .map(|row| ProjectSummary {
             name: text(row, "name").unwrap_or_default(),
             stage: lifecycle_stage(row),
+            roadmap_status: text(row, "roadmap_status"),
             runner: text(row, "runner"),
             paused: text(row, "paused"),
             milestone: text(row, "milestone"),

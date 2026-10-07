@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use crate::config::Config;
 use crate::html::{self, Banner};
 use crate::http::{Request, Response};
+use crate::live::Amx;
 use crate::memcli::MemCli;
 use crate::origin::Guard;
 use crate::{api, model, pages};
@@ -34,6 +35,8 @@ pub struct App {
     /// Shared with the doorbell thread, so its fifteen-second poll warms the
     /// same cache the page reads from.
     pub mem: Arc<MemCli>,
+    /// The orchestrators, shared with the doorbell like `mem`.
+    pub amx: Arc<Amx>,
     pub guard: Guard,
     /// One answer at a time, per question id (review B-1).
     ///
@@ -68,6 +71,7 @@ impl App {
             port,
             machine,
             mem: Arc::new(MemCli::new()),
+            amx: Arc::new(Amx::new()),
             guard,
             answering: Mutex::new(HashMap::new()),
         }
