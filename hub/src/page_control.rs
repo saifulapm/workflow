@@ -15,8 +15,8 @@ use crate::pages::{PageCtx, page_shell, sibling_hub};
 pub const APPROVAL_QUESTION: &str = "Approve roadmap";
 
 /// How the plan skill asks for the same approval: "Review the <name> roadmap
-/// and its plan pages".
-pub const REVIEW_QUESTION: &str = "Review the ";
+/// and its plan pages", by its start and its end.
+pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap and its plan pages");
 
 /// mem's exit when another machine's runner claim refuses an in-place write.
 pub const RUNNER_REFUSED: i32 = 5;
@@ -120,7 +120,7 @@ pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<String> {
 /// Whether a question asks for the roadmap's approval, in either wording.
 fn is_approval(body: &str) -> bool {
     body.starts_with(APPROVAL_QUESTION)
-        || body.starts_with(REVIEW_QUESTION) && body.contains(" roadmap")
+        || body.starts_with(REVIEW_QUESTION.0) && body.trim_end().ends_with(REVIEW_QUESTION.1)
 }
 
 /// mem's refusal, and the runner's name linked to its hub when a sibling is
@@ -170,4 +170,18 @@ pub fn failed(run: &Run) -> Response {
 
 pub fn or_unset(status: &str) -> &str {
     if status.is_empty() { "not set" } else { status }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_roadmap_review_is_an_approval() {
+        assert!(is_approval("Approve roadmap alpha?"));
+        assert!(is_approval("Review the beta roadmap and its plan pages"));
+        assert!(!is_approval(
+            "Review the failing t3 test before the roadmap continues?"
+        ));
+    }
 }
