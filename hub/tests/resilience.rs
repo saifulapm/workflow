@@ -275,3 +275,23 @@ fn a_mem_that_overruns_is_killed_rather_than_left_running() {
         "the child ran on after hub stopped waiting for it"
     );
 }
+
+/// No `mem` on PATH at all: every page says mem could not be run, and the
+/// service keeps answering rather than exiting.
+#[test]
+fn a_missing_mem_degrades_the_pages_and_the_service_keeps_serving() {
+    let dir = TempDir::new("resilience-no-mem");
+    let home = dir.join("home");
+    let empty = dir.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let hub = Hub::spawn(&home, &[&empty], &["--port", "0"]);
+
+    let home_page = hub.get("/");
+    assert_eq!(status_of(&home_page), 200, "{home_page}");
+    assert!(
+        body_of(&home_page).contains("could not run mem"),
+        "{home_page}"
+    );
+    assert_eq!(status_of(&hub.get("/wiki")), 200);
+    assert_eq!(status_of(&hub.get("/")), 200);
+}
