@@ -163,9 +163,9 @@ pub fn parse_amx(text: &str) -> Result<Vec<AmxRow>, String> {
     serde_json::from_str(text).map_err(|err| format!("amx ls --json is not a list: {err}"))
 }
 
-/// Settle what to do. `current` is what mem says of the working directory
-/// (read only when no project is named), `roadmap` reads a project's roadmap
-/// and `agents` lists amx's agents; each runs only if the answer needs it.
+/// Settle what to do. `current` is what mem says of the working directory,
+/// `roadmap` reads a project's roadmap and `agents` lists amx's agents; the
+/// last two run only if the answer needs them.
 pub fn decide(
     opts: &Options,
     projects: &[ProjectRow],
@@ -176,16 +176,24 @@ pub fn decide(
 ) -> Decision {
     // The project, its roadmap's status and the checkout to work in.
     let (project, dir) = match (opts.project, current) {
-        (Some(name), _) => {
+        (Some(name), current) => {
             let Some(row) = projects.iter().find(|row| row.name == name) else {
                 return Decision::Refuse(format!(
                     "no project named {name}; `mem projects` lists them"
                 ));
             };
-            let Some(dir) = row.checkouts.iter().find(|dir| Path::new(dir).is_dir()) else {
+            // The caller's own checkout first: an orchestrator naming its
+            // project is standing in the clone it works in.
+            let here = current.filter(|c| c.name == name).and_then(|c| c.root);
+            let listed = row
+                .checkouts
+                .iter()
+                .find(|dir| Path::new(dir).is_dir())
+                .cloned();
+            let Some(dir) = here.or(listed) else {
                 return Decision::Refuse(format!("{name} has no checkout on this machine"));
             };
-            (name.to_string(), dir.clone())
+            (name.to_string(), dir)
         }
         (None, Some(here)) => {
             // The checkout the caller stands in; mem leaves it out only when
@@ -344,10 +352,7 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
         warn("go: mem cannot list its projects");
         return exit::FAILED;
     };
-    let current = match opts.project {
-        Some(_) => None,
-        None => memcli::project_current(),
-    };
+    let current = memcli::project_current();
     let me = std::env::var("AMX_ID").ok().filter(|id| !id.is_empty());
 
     match decide(
@@ -747,6 +752,62 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
         assert_eq!(
             args[args.iter().position(|a| a == "--dir").unwrap() + 1],
             real.display().to_string()
+        );
+    }
+
+    #[test]
+    fn a_named_project_runs_in_the_checkout_the_caller_stands_in() {
+        // An orchestrator starts its successor with `workflow go <project>`
+        // from its own checkout; mem lists checkouts sorted by path, so the
+        // first listed one can be another clone entirely.
+        let work = Scratch::new("go-named-here");
+        let first = work.mkdir("a-first");
+        let here = work.mkdir("b-here");
+        let projects = [row("alpha", Some("approved"), &[&first, &here])];
+        let current = Project {
+            id: "01X".into(),
+            name: "alpha".into(),
+            root: Some(here.display().to_string()),
+        };
+
+        let decision = decide(
+            &opts(Some("alpha"), None),
+            &projects,
+            Some(current),
+            |_| Some(ROADMAP.to_string()),
+            || Ok(Vec::new()),
+            None,
+        );
+        let Decision::Start(start) = decision else {
+            panic!("not a start");
+        };
+        let args = start.args(&start.name);
+        assert_eq!(
+            args[args.iter().position(|a| a == "--dir").unwrap() + 1],
+            here.display().to_string()
+        );
+
+        // Standing in another project's checkout changes nothing.
+        let elsewhere = Project {
+            id: "01Y".into(),
+            name: "beta".into(),
+            root: Some(here.display().to_string()),
+        };
+        let decision = decide(
+            &opts(Some("alpha"), None),
+            &projects,
+            Some(elsewhere),
+            |_| Some(ROADMAP.to_string()),
+            || Ok(Vec::new()),
+            None,
+        );
+        let Decision::Start(start) = decision else {
+            panic!("not a start");
+        };
+        let args = start.args(&start.name);
+        assert_eq!(
+            args[args.iter().position(|a| a == "--dir").unwrap() + 1],
+            first.display().to_string()
         );
     }
 
