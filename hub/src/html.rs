@@ -75,45 +75,100 @@ impl Banner {
     }
 }
 
-const STYLE: &str = "\
-:root{color-scheme:dark light}
+/// The one stylesheet. Colours, type and spacing are tokens on `:root`, so
+/// the dark scheme is a second set of values rather than a second sheet, and
+/// every page, form control and code block inherits Maple Mono from the hub's
+/// own `/assets`.
+const STYLE: &str = r#"
+@font-face{font-family:"Maple Mono";src:url(/assets/maple-mono-400.woff2) format("woff2");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Maple Mono";src:url(/assets/maple-mono-600.woff2) format("woff2");font-weight:600;font-style:normal;font-display:swap}
+@font-face{font-family:"Maple Mono";src:url(/assets/maple-mono-700.woff2) format("woff2");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Maple Mono";src:url(/assets/maple-mono-400-italic.woff2) format("woff2");font-weight:400;font-style:italic;font-display:swap}
+:root{color-scheme:light dark;--bg:#f7f7f5;--surface:#fff;--line:#e9e9e5;--track:#ececea;--ink:#17181c;--mut:#6b6d75;
+--accent:#2b59c3;--accent-soft:#e8eefb;--on-accent:#fff;--ok:#1f7a52;--ok-soft:#e3f4ec;--wait:#9a5b00;--wait-soft:#fdf1dc;--bad:#b42318;--bad-soft:#fdeceb;
+--radius:12px;--space:12px;--font:"Maple Mono",ui-monospace,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1115;--surface:#171a21;--line:#262a33;--track:#262a33;--ink:#e7e9ee;--mut:#9aa0ab;
+--accent:#7ea2f2;--accent-soft:#1c2742;--on-accent:#0f1115;--ok:#5cc996;--ok-soft:#15291f;--wait:#e7ad52;--wait-soft:#2e2413;--bad:#f2837a;--bad-soft:#341b1a}}
 *{box-sizing:border-box}
-body{margin:0;padding:1rem;font:16px/1.5 system-ui,sans-serif;max-width:44rem}
-header{display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:baseline;\
-border-bottom:1px solid #8884;padding-bottom:.5rem;margin-bottom:1rem}
-h1{font-size:1.3rem;margin:0}
-h2{font-size:1rem;text-transform:uppercase;letter-spacing:.05em;opacity:.7;\
-margin:1.5rem 0 .5rem}
-nav{margin-left:auto;font-size:.9rem}
-nav a{margin-left:.75rem}
-nav.pages{display:flex;flex-wrap:wrap;gap:.25rem .75rem;margin:0 0 1rem}
-nav.pages a{margin-left:0}
-.meta{font-size:.8rem;opacity:.65;overflow-wrap:anywhere}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;padding:0 16px 48px;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6}
+body,button,input,textarea,select,code,pre,kbd{font-family:var(--font)}
+body>*{max-width:60rem;margin-inline:auto}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 img{max-width:100%;height:auto}
-.q{white-space:pre-wrap;word-break:break-word;margin:.25rem 0 .5rem;font:inherit}
-article{border:1px solid #8884;border-radius:.5rem;padding:.75rem;margin-bottom:.75rem}
-textarea{width:100%;font:inherit;padding:.5rem;border-radius:.4rem;\
-border:1px solid #8886;background:transparent;color:inherit}
-button{margin-top:.5rem;font:inherit;padding:.45rem 1rem;border-radius:.4rem;\
-border:1px solid #8886;background:#8882;color:inherit}
+header.top{max-width:none;display:flex;align-items:center;gap:10px;margin:0 -16px 14px;padding:12px max(16px,calc((100% - 60rem)/2 + 16px));
+background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}
+header.top .brand{display:inline-flex;align-items:center;gap:7px;font-weight:700;color:var(--ink)}
+header.top .brand::before{content:"";width:14px;height:14px;border-radius:4px;background:var(--accent)}
+header.top h1{margin:0;font-size:14px;font-weight:600;min-width:0;overflow-wrap:anywhere}
+header.top h1::before{content:"/";margin-right:10px;color:var(--mut);font-weight:400}
+header.top h1 a{color:inherit}
+nav.pages{display:flex;flex-wrap:wrap;gap:6px;margin-block:0 18px}
+nav.pages a{padding:4px 11px;border:1px solid var(--line);border-radius:99px;background:var(--surface);color:var(--ink);font-size:13px;white-space:nowrap}
+nav.pages a:hover{text-decoration:none;border-color:var(--accent)}
+nav.pages a[aria-current=page]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin-block:28px 10px}
+h3{font-size:15px;margin-block:18px 8px}
+p{margin-block:0 10px}
+.meta{font-size:12.5px;color:var(--mut);overflow-wrap:anywhere}
+.empty{color:var(--mut)}
+.q{white-space:pre-wrap;word-break:break-word;margin-block:4px 8px;font:inherit}
+.rec{font-size:12.5px;color:var(--mut)}
+.sp{flex:1}
+article,.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-block:0 10px}
+.cards{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));margin-block:0 10px}
+.cards>.card{margin:0}
+.card h3{margin:0 0 2px;font-size:15px}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 ul{list-style:none;padding:0;margin:0}
-li{padding:.35rem 0;border-bottom:1px solid #8882}
-.banner{padding:.6rem .8rem;border-radius:.4rem;margin:0 0 1rem}
-.banner.ok{background:#2a5}
-.banner.warn{background:#a52}
-.banner.degraded{background:#a33}
-.empty{opacity:.6}
-article.md{border:0;padding:0}
-article.md h1{font-size:1.3rem}
-article.md h2{font-size:1.1rem;text-transform:none;letter-spacing:normal;opacity:1}
-article.md ul,article.md ol{list-style:revert;padding-left:1.4rem}
-article.md li{border:0;padding:0}
-article.md pre{overflow-x:auto;background:#8881;padding:.6rem;border-radius:.4rem}
-article.md code{font-family:ui-monospace,monospace;font-size:.9em}
-article.md table{border-collapse:collapse}
-article.md th,article.md td{border:1px solid #8884;padding:.3rem .5rem}
-article.md blockquote{margin:0;padding-left:.8rem;border-left:3px solid #8884}
-";
+body>ul:not([class]){background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:0 16px;margin-block:0 10px}
+body>ul:not([class])>li{padding:10px 0;border-bottom:1px solid var(--line)}
+body>ul:not([class])>li:last-child{border-bottom:0}
+.pill{display:inline-block;font-size:11.5px;font-weight:600;line-height:1.7;padding:0 9px;border-radius:99px;background:var(--accent-soft);color:var(--accent);white-space:nowrap}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.pill.wait{background:var(--wait-soft);color:var(--wait)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.mut{background:var(--track);color:var(--mut)}
+.bar{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin-block:8px 4px}
+.bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.tl{margin:0 0 16px 6px;padding-left:20px;border-left:2px solid var(--line)}
+.tl>li{position:relative;padding:2px 0 14px}
+.tl>li::before{content:"";position:absolute;left:-27px;top:7px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--bg)}
+.tl>li.done::before{background:var(--ok)}
+.tl>li.live::before{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+.gallery{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(10rem,1fr));margin-block:0 16px}
+.gallery figure{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.gallery img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--track)}
+.gallery figcaption{padding:8px 10px;font-size:12px;color:var(--mut);overflow-wrap:anywhere}
+.docs{display:grid;gap:16px}
+@media (min-width:960px){.docs{grid-template-columns:13rem minmax(0,1fr);gap:28px}.docs>nav.contents{position:sticky;top:72px;align-self:start;max-height:calc(100vh - 88px);overflow:auto}}
+nav.contents{font-size:13px}
+nav.contents a{display:block;padding:3px 0;color:var(--mut)}
+nav.contents a:hover{color:var(--accent);text-decoration:none}
+textarea,input[type=text],input[type=search],select{width:100%;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+button{margin-top:8px;font-size:14px;font-weight:600;padding:8px 16px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer}
+form.search{display:flex;gap:8px;align-items:center;margin-block:0 16px}
+form.search button{margin:0}
+.banner{padding:10px 14px;border-radius:10px;margin-block:0 16px;background:var(--accent-soft);color:var(--accent)}
+.banner.ok{background:var(--ok-soft);color:var(--ok)}
+.banner.warn{background:var(--wait-soft);color:var(--wait)}
+.banner.degraded{background:var(--bad-soft);color:var(--bad)}
+article.md{padding:20px 22px;line-height:1.7}
+article.md h1{font-size:21px;line-height:1.3;margin:0 0 12px}
+article.md h2{font-size:16px;text-transform:none;letter-spacing:normal;color:var(--ink);margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+article.md h3{font-size:14.5px}
+article.md ul,article.md ol{list-style:revert;padding-left:1.4rem;margin-block:0 10px}
+article.md li{padding:1px 0}
+article.md code{font-size:.92em;background:var(--track);padding:1px 5px;border-radius:5px}
+article.md pre{overflow-x:auto;background:var(--bg);border:1px solid var(--line);padding:10px 12px;border-radius:8px}
+article.md pre code{background:none;padding:0}
+article.md table{display:block;overflow-x:auto;border-collapse:collapse;margin-block:0 12px}
+article.md th,article.md td{border:1px solid var(--line);padding:5px 9px;text-align:left}
+article.md th{background:var(--bg)}
+article.md blockquote{margin:0 0 10px;padding:2px 0 2px 12px;border-left:3px solid var(--accent);color:var(--mut)}
+"#;
 
 /// `GET /subscribe` (spec §3): the topic, both links, and the sentence that
 /// says accurately what subscribing exposes. No QR, and therefore no image
@@ -127,7 +182,7 @@ pub fn subscribe_page(config: &Config, machine: &str) -> String {
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>hub — subscribe</title>\n\
          <style>{STYLE}</style>\n</head>\n<body>\n\
-         <header><h1>subscribe</h1><nav><a href=\"/\">back</a></nav></header>\n\
+         {top}\
          <p>Topic, to type into the ntfy app:</p>\n\
          <p class=\"q\"><strong>{topic}</strong></p>\n\
          <ul>\n\
@@ -144,6 +199,7 @@ pub fn subscribe_page(config: &Config, machine: &str) -> String {
          only from {machine} and the tailnet.</p>\n\
          </body>\n</html>\n",
         machine = esc(machine),
+        top = top_bar("subscribe"),
     )
 }
 
@@ -153,7 +209,7 @@ pub fn subscribe_page(config: &Config, machine: &str) -> String {
 /// the index already answers what a project's wiki holds.
 pub fn wiki_index(section: &Section<WikiProject>) -> String {
     let mut out = head("wiki");
-    out.push_str("<header><h1>wiki</h1><nav><a href=\"/\">home</a></nav></header>\n");
+    out.push_str(&top_bar("wiki"));
     if let Some(why) = &section.degraded {
         out.push_str(&format!(
             "<p class=\"banner degraded\">mem is not answering, so this list is \
@@ -251,14 +307,30 @@ pub fn item_page(project: &str, item: Option<&ItemDetail>, degraded: Option<&str
 /// naming the project and the page, and a nav back to the project and home.
 pub fn detail_head(project: &str, label: &str) -> String {
     let mut out = head(&format!("{project} / {label}"));
-    out.push_str(&format!(
-        "<header><h1>{proj} / {label_esc}</h1>\
-         <nav><a href=\"{proj_href}\">{proj}</a><a href=\"/\">home</a></nav></header>\n",
-        proj = esc(project),
-        label_esc = esc(label),
-        proj_href = esc(&project_url(project)),
-    ));
+    out.push_str(&top_bar(&format!(
+        "{} / {}",
+        project_link(project),
+        esc(label)
+    )));
     out
+}
+
+/// The bar across the top of every page: the hub's mark, which is the way
+/// home, then the page's heading. `heading` is markup, escaped by the caller.
+pub fn top_bar(heading: &str) -> String {
+    format!(
+        "<header class=\"top\"><a class=\"brand\" href=\"/\">hub</a>\
+         <h1>{heading}</h1></header>\n"
+    )
+}
+
+/// The project's name, linked to its overview.
+pub fn project_link(project: &str) -> String {
+    format!(
+        "<a href=\"{}\">{}</a>",
+        esc(&project_url(project)),
+        esc(project)
+    )
 }
 
 pub fn degraded_banner(why: &str) -> String {

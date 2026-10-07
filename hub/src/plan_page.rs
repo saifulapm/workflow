@@ -313,10 +313,9 @@ fn served_runtime() -> String {
 }
 
 const SHELL_STYLE: &str = "<style>\
-body{max-width:none}\
-details.approve{margin:.5rem 0}details.approve summary{font-weight:600;cursor:pointer}\
-iframe.plan{display:block;width:100%;height:calc(100vh - 6rem);border:0;\
-border-top:1px solid #e3e3df}\
+details.approve{margin-block:.5rem}details.approve summary{font-weight:600;cursor:pointer}\
+iframe.plan{display:block;max-width:none;width:100%;height:calc(100vh - 6rem);border:0;\
+border-top:1px solid var(--line)}\
 </style>\n";
 
 #[cfg(test)]

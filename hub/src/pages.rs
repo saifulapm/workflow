@@ -128,33 +128,46 @@ pub fn page_shell(title: &str, project: Option<&str>, body: &str) -> String {
         Some(project) => html::head(&format!("{project} / {title}")),
         None => html::head(title),
     };
-    out.push_str(&format!(
-        "<header><h1>{}</h1></header>\n",
-        html::esc(project.unwrap_or(title))
-    ));
-    out.push_str(&nav(project));
+    out.push_str(&html::top_bar(&match project {
+        Some(project) => html::project_link(project),
+        None => html::esc(title),
+    }));
+    out.push_str(&nav(project, title));
     out.push_str(body);
     out.push_str("</body>\n</html>\n");
     out
 }
 
-/// Home, and with a project the project and its six pages. One link per
-/// line, so the row wraps at 390 px rather than running off the side.
-fn nav(project: Option<&str>) -> String {
-    let mut out = String::from("<nav class=\"pages\">\n<a href=\"/\">home</a>\n");
-    if let Some(project) = project {
-        let base = html::project_url(project);
-        out.push_str(&format!(
-            "<a href=\"{}\">{}</a>\n",
-            html::esc(&base),
-            html::esc(project)
-        ));
-        for page in PAGES {
-            out.push_str(&format!(
-                "<a href=\"{}/{page}\">{page}</a>\n",
-                html::esc(&base)
-            ));
+/// With a project, the project and its six pages, the one being read
+/// marked. Home is the bar's mark. One link per line, so the row wraps at
+/// 390 px rather than running off the side.
+fn nav(project: Option<&str>, title: &str) -> String {
+    let Some(project) = project else {
+        return String::new();
+    };
+    let base = html::project_url(project);
+    let current = |page: &str| {
+        if page == title {
+            " aria-current=\"page\""
+        } else {
+            ""
         }
+    };
+    let mut out = format!(
+        "<nav class=\"pages\">\n<a href=\"{}\"{}>overview</a>\n",
+        html::esc(&base),
+        if PAGES.contains(&title) {
+            ""
+        } else {
+            " aria-current=\"page\""
+        },
+    );
+    for page in PAGES {
+        out.push_str(&format!(
+            "<a href=\"{}/{page}\"{}>{page}</a>\n",
+            html::esc(&base),
+            current(page)
+        ));
     }
     out.push_str("</nav>\n");
     out
