@@ -6,7 +6,7 @@
 //! `allow-same-origin`: the page gets an opaque origin, and its script can
 //! reach the hub only through the messages the shell chooses to act on.
 
-use crate::html::{degraded_banner, detail_head, esc, project_url};
+use crate::html::{detail_head, esc, project_url};
 use crate::http::Response;
 use crate::model;
 use crate::page_control::{failed, pending_approval};
@@ -77,17 +77,80 @@ pub fn is_plan_page(text: &str) -> bool {
         || text.contains("<doc-plan ")
 }
 
-/// The page around the frame: the hub's header, then the plan, as tall as the
-/// screen allows.
-pub fn plan_shell(project: &str, slug: &str, degraded: Option<&str>) -> String {
-    let mut out = detail_head(project, slug);
-    if let Some(why) = degraded {
-        out.push_str(&degraded_banner(why));
+/// `GET /p/<project>/plan/<slug>`: an html-plan page in its shell. A
+/// markdown plan, or none, is the project's detail page as before.
+pub fn get(ctx: &PageCtx) -> Response {
+    let project = ctx.project.unwrap_or_default();
+    let slug = ctx.rest;
+    let plan = model::is_slug(slug).then(|| model::plan_slug_text(&ctx.app.mem, project, slug));
+    match plan {
+        Some(plan) if plan.value.as_deref().is_some_and(is_plan_page) => {
+            let text = plan.value.as_deref().unwrap_or_default();
+            let mut banner = String::new();
+            if let Some(id) = ctx.request.query.get("sent").filter(|id| is_short_id(id)) {
+                banner = format!("<p class=\"banner ok\">Sent. Answer #{id} is in mem.</p>\n");
+            } else if ctx.request.query.get("saved").is_some() {
+                banner = "<p class=\"banner ok\">Saved for the next planner.</p>\n".to_string();
+            }
+            Response::html(plan_shell(project, slug, text, &banner))
+        }
+        _ => {
+            let path = ctx.request.path.strip_prefix("/p/").unwrap_or_default();
+            ctx.app.project_page(path)
+        }
     }
+}
+
+/// The page around the frame: the hub's header, the form a response is
+/// sent with, the script that relays between the frame and the hub, then the
+/// plan, as tall as the screen allows.
+fn plan_shell(project: &str, slug: &str, text: &str, banner: &str) -> String {
+    let mut out = detail_head(project, slug);
+    out.push_str(banner);
     out.push_str(SHELL_STYLE);
+    out.push_str(&format!(
+        "<form id=\"plan-respond\" method=\"post\" action=\"{}\" hidden>\
+         <input type=\"hidden\" name=\"md\"></form>\n",
+        esc(&format!("{}/plan/{slug}/respond", project_url(project))),
+    ));
+    // The draft is kept per revision of the page: answers to a page since
+    // rewritten would be answers to questions no longer asked.
+    let key = format!("plan:{project}:{slug}:{:016x}", fnv1a(text));
+    out.push_str(&SHELL_SCRIPT.replace("KEY", &esc(&key)));
     out.push_str(&plan_frame(project, slug));
     out.push_str("\n</body>\n</html>\n");
     out
+}
+
+/// Acts only on what comes from its own frame. A response or the end of a
+/// draft clears the draft, since the page it was for has been answered.
+const SHELL_SCRIPT: &str = "<script>(function () {\
+var key = 'KEY', store = {};\
+try { store = localStorage; } catch (e) {}\
+function get() { try { return store.getItem(key); } catch (e) { return null; } }\
+function put(v) { try { v == null ? store.removeItem(key) : store.setItem(key, v); } catch (e) {} }\
+if (/[?&](sent|saved)=/.test(location.search)) put(null);\
+addEventListener('message', function (e) {\
+var frame = document.querySelector('iframe.plan'), d = e.data;\
+if (!frame || e.source !== frame.contentWindow || !d) return;\
+if (d.type === 'plan-ready') frame.contentWindow.postMessage({ type: 'plan-restore', state: get() }, '*');\
+else if (d.type === 'plan-draft') put(d.state);\
+else if (d.type === 'plan-respond' && typeof d.md === 'string') {\
+var form = document.getElementById('plan-respond'); form.md.value = d.md; form.submit();\
+}\
+});\
+})();</script>\n";
+
+/// mem's short id, as `respond_post` puts it in the query.
+fn is_short_id(id: &str) -> bool {
+    id.len() == 8 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// A stable hash of the page's text, so a draft key outlives a hub upgrade.
+fn fnv1a(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// The frame. `allow-scripts` without `allow-same-origin`, so the page's own
@@ -129,7 +192,8 @@ pub fn respond_post(ctx: &PageCtx) -> Response {
         return Response::not_found();
     }
     let form = ctx.request.form();
-    let md = form.get("md").unwrap_or("").trim();
+    let md = form.get("md").unwrap_or("").replace("\r\n", "\n");
+    let md = md.trim();
     let back = format!("{}/plan/{slug}", project_url(project));
     if md.is_empty() {
         return Response::see_other(&back);

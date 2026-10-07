@@ -241,3 +241,64 @@ fn a_response_from_another_origin_is_refused() {
     assert_eq!(status_of(&response), 403, "{response}");
     assert!(world.question(REVIEW)["answer"].is_null(), "{id}");
 }
+
+#[test]
+fn the_shell_relays_send_and_keeps_drafts_per_revision() {
+    let world = World::new("plan-shell");
+    world.store_plan("h1-demo", PLAN_PAGE);
+    let hub = world.hub();
+
+    let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
+    assert!(
+        body.contains(&format!(
+            "<form id=\"plan-respond\" method=\"post\" action=\"/p/{PROJECT}/plan/h1-demo/respond\""
+        )),
+        "{body}"
+    );
+    for message in ["plan-ready", "plan-restore", "plan-draft", "plan-respond"] {
+        assert!(body.contains(message), "{message}: {body}");
+    }
+    let key = format!("plan:{PROJECT}:h1-demo:");
+    assert!(body.contains(&key), "{body}");
+
+    // A revised page starts from no draft rather than the old page's.
+    world.store_plan("h1-demo", &PLAN_PAGE.replace("demo claim", "revised claim"));
+    // A fresh hub, since the first one's cache still holds the old text.
+    drop(hub);
+    let hub = world.hub();
+    let revised = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
+    let rev = |b: &str| b.split(&key).nth(1).unwrap()[..16].to_string();
+    assert_ne!(rev(&body), rev(&revised));
+}
+
+#[test]
+fn the_shell_says_where_the_response_went() {
+    let world = World::new("plan-shell-banner");
+    world.store_plan("h1-demo", PLAN_PAGE);
+    let hub = world.hub();
+    let at = format!("/p/{PROJECT}/plan/h1-demo");
+
+    let sent = body_of(&hub.get(&format!("{at}?sent=7ZFVKFVX"))).to_string();
+    assert!(sent.contains("Sent. Answer #7ZFVKFVX is in mem."), "{sent}");
+    let saved = body_of(&hub.get(&format!("{at}?saved=1"))).to_string();
+    assert!(saved.contains("Saved for the next planner."), "{saved}");
+    let odd = body_of(&hub.get(&format!("{at}?sent=%3Cb%3E"))).to_string();
+    assert!(!odd.contains("<b>") && !odd.contains("Sent."), "{odd}");
+}
+
+/// A browser sends a form's line breaks as CRLF; mem keeps the response as
+/// the page wrote it.
+#[test]
+fn a_response_keeps_plain_line_breaks() {
+    let world = World::new("plan-respond-crlf");
+    world.store_plan("h1-demo", PLAN_PAGE);
+    world.ask_review();
+    let hub = world.hub();
+
+    let response = hub.post_form(
+        &format!("/p/{PROJECT}/plan/h1-demo/respond"),
+        "md=%23+Re%0D%0A%0D%0A-+one%0D%0A",
+    );
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(world.question(REVIEW)["answer"], "# Re\n\n- one");
+}

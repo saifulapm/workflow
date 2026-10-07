@@ -102,6 +102,10 @@ fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
                 .and_then(|s| s.strip_suffix("/respond"))
             {
                 ("POST", slug, plan_page::respond_post)
+            } else if let Some(slug) = sub.strip_prefix("plan/")
+                && !slug.contains('/')
+            {
+                ("GET", slug, plan_page::get)
             } else if let Some(id) = sub.strip_prefix("file/") {
                 ("GET", id, page_evidence::file_get)
             } else if let Some(form) = sub.strip_prefix("new/") {

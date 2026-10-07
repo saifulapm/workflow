@@ -8,7 +8,7 @@ use crate::html::{self, Banner};
 use crate::http::{Request, Response};
 use crate::memcli::MemCli;
 use crate::origin::Guard;
-use crate::{api, model, pages, plan_page};
+use crate::{api, model, pages};
 
 /// Every path hub answers, and the one method it answers it with. Anything
 /// else on a known path is a 405 that says so; anything else at all is a 404.
@@ -170,13 +170,6 @@ impl App {
         let plan = model::plan_slug_text(&self.mem, project, slug);
         if plan.value.is_none() && plan.degraded.is_none() {
             return Response::not_found();
-        }
-        if plan.value.as_deref().is_some_and(plan_page::is_plan_page) {
-            return Response::html(plan_page::plan_shell(
-                project,
-                slug,
-                plan.degraded.as_deref(),
-            ));
         }
         Response::html(html::plan_page(
             project,
