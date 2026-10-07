@@ -1,7 +1,7 @@
 //! `GET /p/<project>` once a milestone is built: in dogfooding the open
-//! milestone's Show path cut into steps, each marked by its findings and the
-//! newest walk, then the open findings; in maintenance the status, the
-//! handoff, the open findings and the ideas. Over a fake `mem`.
+//! milestone's Show path cut into steps, each marked by its findings, then
+//! the open findings; once the roadmap is done the handoff, the open
+//! findings and the ideas. Over a fake `mem`.
 
 mod common;
 
@@ -23,7 +23,7 @@ fn roadmap(show: Option<&str>) -> Value {
         .map(|s| format!("      Show: {s}\n"))
         .unwrap_or_default();
     json!({
-        "status": "running",
+        "status": "approved",
         "text": format!(
             "# roadmap: kappa\n\n\
              - [x] k1-log Habits are logged\n      Surface: web\n      Show: a habit is logged\n\
@@ -38,16 +38,6 @@ fn finding(id: &str, milestone: &str, step: &str, body: &str) -> Value {
            "status": "open", "body": body})
 }
 
-/// `mem log --type run` rows, newest first, as mem lists them.
-fn runs(titles: &[&str]) -> Value {
-    let rows: Vec<Value> = titles
-        .iter()
-        .enumerate()
-        .map(|(i, title)| json!({"id": format!("01K0RUN{i}"), "kind": "run", "title": title, "body": ""}))
-        .collect();
-    json!({ "items": rows })
-}
-
 struct World {
     dir: TempDir,
     home: PathBuf,
@@ -55,27 +45,27 @@ struct World {
     log: PathBuf,
 }
 
-/// A fake `mem` with kappa dogfooding the milestone `k2-walk` and delta in
-/// maintenance. Neither has a checkout here, so the page runs no
+/// A fake `mem` with kappa dogfooding the milestone `k2-walk` and delta's
+/// roadmap done. Neither has a checkout here, so the page runs no
 /// `workflow`.
-fn world(tag: &str, roadmap: Value, findings: Value, runs: Value) -> World {
+fn world(tag: &str, roadmap: Value, findings: Value) -> World {
     let dir = TempDir::new(tag);
     let home = dir.join("home");
     let bin = dir.join("bin");
     let log = dir.join("mem.log");
     let projects = json!({"projects": [
-        {"name": "kappa", "roadmap_status": "running",
+        {"name": "kappa", "roadmap_status": "approved",
          "milestone": "k2-walk", "plan_slug": "k2-walk",
          "milestones_done": 1, "milestones_total": 3, "plan_ticked": 2, "plan_total": 2},
-        {"name": "delta", "roadmap_status": "maintenance",
+        {"name": "delta", "roadmap_status": "approved",
          "milestones_done": 1, "milestones_total": 1},
-        {"name": "omega", "roadmap_status": "running",
+        {"name": "omega", "roadmap_status": "approved",
          "milestone": "o2-sync", "plan_slug": "o2-sync",
          "milestones_done": 1, "milestones_total": 2, "plan_ticked": 1, "plan_total": 3},
     ]});
-    let omega_roadmap = json!({"status": "running", "text":
+    let omega_roadmap = json!({"status": "approved", "text":
         "# roadmap: omega\n\n- [x] o1-store Notes are stored\n- [ ] o2-sync Notes sync\n"});
-    let delta_roadmap = json!({"status": "maintenance", "text":
+    let delta_roadmap = json!({"status": "approved", "text":
         "# roadmap: delta\n\n- [x] d1-rename Photos are renamed\n"});
     let ideas = json!({"items": [
         {"id": "01K0IDEA1", "kind": "idea", "title": "Read the date from a video file too",
@@ -102,10 +92,7 @@ fn world(tag: &str, roadmap: Value, findings: Value, runs: Value) -> World {
              plan\\ --list*--project=kappa*) p '{{\"plans\":[{{\"slug\":\"k1-log\"}},{{\"slug\":\"k2-walk\"}}]}}' ;;\n\
              finding\\ list\\ --open*--project=kappa*) p '{findings}' ;;\n\
              finding\\ list\\ --open*--project=delta*) p '{delta_findings}' ;;\n\
-             log\\ --type\\ run*--project=kappa*) p '{runs}' ;;\n\
-             log\\ --type\\ run*) p '{{\"items\":[]}}' ;;\n\
              search\\ --kind\\ idea\\ --limit\\ 20\\ --project=delta\\ --json) p '{ideas}' ;;\n\
-             status*--project=delta*) p '{{\"text\":\"Shipped; only fixes from here.\"}}' ;;\n\
              handoff*--project=delta*) p '{{\"body\":\"Nothing in flight; the last fix landed.\"}}' ;;\n\
              *) exit 1 ;;\n\
              esac",
@@ -173,7 +160,6 @@ fn a_three_clause_show_line_is_three_numbered_steps() {
         "project-after-cut",
         roadmap(Some(SHOW)),
         no_findings(),
-        runs(&[]),
     );
     let (body, mem) = page(&world, "kappa");
 
@@ -198,7 +184,7 @@ fn a_three_clause_show_line_is_three_numbered_steps() {
 }
 
 #[test]
-fn an_open_finding_crosses_its_step_and_a_passed_walk_ticks_the_rest() {
+fn an_open_finding_crosses_its_step() {
     let findings = json!({"items": [
         finding("01K0F1", "k2-walk", "2", "the laptop lists the habit twice"),
         finding("01K0F2", "k1-log", "3", "a finding of an old milestone"),
@@ -207,18 +193,13 @@ fn an_open_finding_crosses_its_step_and_a_passed_walk_ticks_the_rest() {
         "project-after-marks",
         roadmap(Some(SHOW)),
         findings,
-        runs(&[
-            "dogfood k2-walk: pass",
-            "dogfood k2-walk: findings 1",
-            "merged k2-t2",
-        ]),
     );
     let (body, mem) = page(&world, "kappa");
 
     for step in [
-        "<li>✓ 1. a habit is added on the phone</li>",
+        "<li>- 1. a habit is added on the phone</li>",
         "<li>✗ 2. the laptop lists it</li>",
-        "<li>✓ 3. the week view ticks it</li>",
+        "<li>- 3. the week view ticks it</li>",
     ] {
         assert!(body.contains(step), "{step:?} missing from {body}");
     }
@@ -236,33 +217,11 @@ fn an_open_finding_crosses_its_step_and_a_passed_walk_ticks_the_rest() {
 }
 
 #[test]
-fn only_the_newest_walk_of_the_milestone_ticks() {
-    let world = world(
-        "project-after-newest",
-        roadmap(Some(SHOW)),
-        no_findings(),
-        runs(&[
-            "dogfood k1-log: pass",
-            "dogfood k2-walk: findings 1",
-            "dogfood k2-walk: pass",
-        ]),
-    );
-    let (body, _) = page(&world, "kappa");
-
-    assert!(
-        body.contains("<li>- 1. a habit is added on the phone</li>"),
-        "{body}"
-    );
-    assert!(!body.contains("<li>✓"), "{body}");
-}
-
-#[test]
 fn a_milestone_with_no_show_line_has_no_steps() {
     let world = world(
         "project-after-no-show",
         roadmap(None),
         no_findings(),
-        runs(&[]),
     );
     let (body, _) = page(&world, "kappa");
 
@@ -272,25 +231,25 @@ fn a_milestone_with_no_show_line_has_no_steps() {
 }
 
 #[test]
-fn a_maintenance_project_shows_status_handoff_findings_and_ideas() {
+fn a_done_project_shows_handoff_findings_and_ideas() {
     let world = world(
         "project-after-backlog",
         roadmap(Some(SHOW)),
         no_findings(),
-        runs(&[]),
     );
     let (body, mem) = page(&world, "delta");
 
     for part in [
-        "maintenance",
-        "Shipped; only fixes from here.",
+        "<span class=\"pill ok\">done</span>",
         "Nothing in flight; the last fix landed.",
         "a photo with no date is renamed to 1970",
         "Read the date from a video file too",
-        "href=\"/p/delta/new\">New round</a>",
         "href=\"/p/delta/new\">File an idea</a>",
     ] {
         assert!(body.contains(part), "{part:?} missing from {body}");
+    }
+    for gone in ["maintenance", "New round", "<h2>Status</h2>", "<h2>Run</h2>"] {
+        assert!(!body.contains(gone), "{gone:?} in {body}");
     }
     assert!(mem.len() <= 5, "mem spawns: {mem:?}");
 }
@@ -301,7 +260,6 @@ fn the_roadmap_is_a_timeline_of_done_live_and_next_milestones() {
         "project-after-timeline",
         roadmap(Some(SHOW)),
         no_findings(),
-        runs(&[]),
     );
     let (body, mem) = page(&world, "kappa");
 
@@ -336,7 +294,6 @@ fn a_building_project_draws_its_timeline_within_five_reads() {
         "project-after-omega",
         roadmap(None),
         no_findings(),
-        runs(&[]),
     );
     let (body, mem) = page(&world, "omega");
 
@@ -365,7 +322,6 @@ fn a_shipped_project_reads_no_roadmap_for_its_page() {
         "project-after-delta",
         roadmap(None),
         no_findings(),
-        runs(&[]),
     );
     let (body, mem) = page(&world, "delta");
 

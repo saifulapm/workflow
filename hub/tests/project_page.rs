@@ -16,7 +16,7 @@ const PROJECTS_DOC: &str = r#"{"projects":[
 {"name":"sigma","has_research_summary":true,"has_spec":true},
 {"name":"beta","roadmap_status":"draft",
  "milestones_done":0,"milestones_total":2,"plan_ticked":1,"plan_total":3},
-{"name":"exec","roadmap_status":"running","milestone":"e2","plan_slug":"e2",
+{"name":"exec","roadmap_status":"approved","milestone":"e2","plan_slug":"e2",
  "milestones_done":1,"milestones_total":3,"plan_ticked":1,"plan_total":4}
 ]}"#;
 

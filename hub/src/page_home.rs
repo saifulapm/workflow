@@ -81,11 +81,17 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
 }
 
 /// The lifecycle stage of one `projects --json` row. mem stores no stage, so
-/// the hub works it out from what the summary holds.
+/// the hub works it out from what the summary holds. A roadmap with every
+/// milestone ticked is done whatever status it stores, so a finished one
+/// never reads as a milestone still being built.
 pub fn lifecycle_stage(row: &Value) -> &'static str {
+    let total = count(row, "milestones_total");
+    if total > 0 && count(row, "milestones_done") == total {
+        return "done";
+    }
     match row["roadmap_status"].as_str() {
         Some("draft") => "planning",
-        Some("approved" | "running") => {
+        Some("approved") => {
             // The current plan is the open milestone's and every task in it
             // is ticked: the milestone is built and waiting on its walk.
             let open = row["milestone"].as_str();
@@ -100,7 +106,8 @@ pub fn lifecycle_stage(row: &Value) -> &'static str {
                 "execution"
             }
         }
-        Some("maintenance" | "done") => "maintenance",
+        // Statuses an older roadmap may still store.
+        Some("maintenance" | "done") => "done",
         _ => {
             let has = |key: &str| row[key].as_bool().unwrap_or(false);
             if has("has_spec") {
@@ -252,7 +259,7 @@ pub fn stage_pill(stage: &str) -> &'static str {
     match stage {
         "execution" | "dogfooding" => "pill",
         "planning" => "pill wait",
-        "maintenance" => "pill ok",
+        "done" => "pill ok",
         _ => "pill mut",
     }
 }

@@ -9,8 +9,9 @@
 # stderr. HUB_SANDBOX_PORT picks the port; 0, the default, picks a free one.
 #
 # Four projects cover the hub's stages: alpha has a brief only, beta a draft
-# roadmap waiting on approval, gamma a running milestone with a run, evidence,
-# findings, a wiki and rulings, and delta is in maintenance.
+# roadmap waiting on approval, gamma an approved milestone being built, with
+# evidence, findings, a wiki and rulings, and delta a roadmap with every
+# milestone ticked.
 
 set -euo pipefail
 
@@ -188,7 +189,7 @@ mem roadmap --stdin >/dev/null <<'ROAD'
       Surface: web
       Show: a habit missed by nine is nagged at nine and never again that day
 ROAD
-mem roadmap --status running >/dev/null
+mem roadmap --status approved >/dev/null
 mem plan --stdin >/dev/null <<'PLAN'
 # plan: g2-nag
 
@@ -221,8 +222,6 @@ mem finding add --milestone g1-log --step 1 --evidence "$sb/midnight.txt" 'a hab
 mem finding add --milestone g2-nag --step 2 --evidence "$sb/twice.txt" 'the nag fires twice at nine' >/dev/null
 fixed=$(mem finding list | sed -n 's/^#\([^ ]*\) .*wrong day.*/\1/p')
 mem finding close --by "$(git rev-parse --short HEAD)" "$fixed" >/dev/null
-mem log --type run 'dogfood g1-log: findings 1' >/dev/null
-mem log --type run 'dogfood g1-log: pass' >/dev/null
 mem decide --by saiful 'Nag by notification, not by email' >/dev/null
 mem decide --by saiful --replaces 'Nag by notification, not by email' 'Nag by notification, once a day at most' >/dev/null
 
@@ -235,9 +234,8 @@ mem roadmap --stdin >/dev/null <<'ROAD'
       Surface: cli
       Show: a folder of camera names becomes a folder of dates
 ROAD
-mem roadmap --status maintenance >/dev/null
+mem roadmap --status approved >/dev/null
 mem idea 'Read the date from a video file too' >/dev/null
-mem status --set 'Shipped; only fixes from here.' >/dev/null
 mem handoff --set 'Nothing in flight; the last fix landed.' >/dev/null
 
 cd "$sb"

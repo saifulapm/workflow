@@ -40,7 +40,7 @@ fn row(name: &str, fields: Value) -> Value {
 fn projects() -> Value {
     let running = |plan_ticked: u64| {
         json!({
-            "roadmap_status": "running", "milestone": "m1-auth",
+            "roadmap_status": "approved", "milestone": "m1-auth",
             "milestones_done": 0, "milestones_total": 2,
             "plan_slug": "m1-auth", "plan_ticked": plan_ticked, "plan_total": 3,
             "has_research": true, "has_research_summary": true, "has_spec": true,
@@ -150,12 +150,23 @@ fn each_stage_follows_from_the_project_summary() {
             ("p-planning", "planning"),
             ("p-execution", "execution"),
             ("p-dogfood", "dogfooding"),
-            ("p-maint", "maintenance"),
+            ("p-maint", "done"),
             ("p-elsewhere", "execution"),
         ]
     );
-    let done = row("p-done", json!({"roadmap_status": "done"}));
-    assert_eq!(lifecycle_stage(&done), "maintenance");
+    // A roadmap reads done once every milestone is ticked, whatever status
+    // it stores, and a stored done or maintenance reads done too.
+    for fields in [
+        json!({"roadmap_status": "approved", "milestone": null,
+               "milestones_done": 3, "milestones_total": 3,
+               "plan_slug": "m3-last", "plan_ticked": 2, "plan_total": 2}),
+        json!({"roadmap_status": "draft", "milestones_done": 1, "milestones_total": 1}),
+        json!({"roadmap_status": "done"}),
+        json!({"roadmap_status": "maintenance"}),
+    ] {
+        let finished = row("p-done", fields.clone());
+        assert_eq!(lifecycle_stage(&finished), "done", "{fields}");
+    }
 }
 
 #[test]
@@ -213,7 +224,7 @@ fn each_project_is_a_card_with_its_stage_and_progress() {
         ),
         (
             "p-maint",
-            "<span class=\"pill ok\">maintenance</span>",
+            "<span class=\"pill ok\">done</span>",
             Some("milestone 2 of 2 · tasks 4 of 4"),
         ),
         (

@@ -21,15 +21,17 @@ struct World {
 /// called laptop. `amx` prints `agents` when given, and is missing from PATH
 /// when not.
 fn world(tag: &str, handoff: &str, agents: Option<&str>) -> World {
-    world_with(tag, handoff, agents, json!(["/src/omega"]))
+    world_with(tag, handoff, agents, json!(["/src/omega"]), false)
 }
 
-/// `world`, with omega's checkouts on this machine as `checkouts`.
+/// `world`, with omega's checkouts on this machine as `checkouts`, and with
+/// both its milestones ticked when `finished`.
 fn world_with(
     tag: &str,
     handoff: &str,
     agents: Option<&str>,
     checkouts: serde_json::Value,
+    finished: bool,
 ) -> World {
     let dir = TempDir::new(tag);
     let home = dir.join("home");
@@ -37,10 +39,15 @@ fn world_with(
     let log = dir.join("mem.log");
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::write(home.join("config/qshell/machine"), "laptop\n").unwrap();
+    let (done, ticked, open) = if finished {
+        (2, 3, json!(null))
+    } else {
+        (1, 1, json!("o2-sync"))
+    };
     let projects = json!({"projects": [
         {"name": "omega", "roadmap_status": "approved", "checkouts": checkouts,
-         "milestone": "o2-sync", "plan_slug": "o2-sync",
-         "milestones_done": 1, "milestones_total": 2, "plan_ticked": 1, "plan_total": 3},
+         "milestone": open, "plan_slug": "o2-sync",
+         "milestones_done": done, "milestones_total": 2, "plan_ticked": ticked, "plan_total": 3},
     ]});
     let roadmap = json!({"status": "approved", "text":
         "# roadmap: omega\n\n- [x] o1-store Notes are stored\n- [ ] o2-sync Notes sync\n"});
@@ -63,8 +70,9 @@ fn world_with(
              roadmap*--project=omega*) p '{roadmap}' ;;\n\
              plan\\ --list*--project=omega*) p '{{\"plans\":[{{\"slug\":\"o1-store\"}}]}}' ;;\n\
              log\\ --limit\\ 5\\ --project=omega*) p '{moves}' ;;\n\
-             log\\ --type\\ run*) p '{{\"items\":[]}}' ;;\n\
              handoff*--project=omega*) p '{handoff}' ;;\n\
+             finding\\ list*--project=omega*) p '{{\"items\":[]}}' ;;\n\
+             search*--project=omega*) p '{{\"items\":[]}}' ;;\n\
              *) exit 1 ;;\n\
              esac",
             log = log.display(),
@@ -191,7 +199,7 @@ fn a_parked_milestone_is_not_stalled() {
 #[test]
 fn a_project_with_no_checkout_here_offers_no_start_and_is_not_stalled() {
     for handoff in ["", "o2-t1 landed at 1a2b3c."] {
-        let world = world_with("live-elsewhere", handoff, Some(DEAD), json!([]));
+        let world = world_with("live-elsewhere", handoff, Some(DEAD), json!([]), false);
         let (body, _) = page(&world);
 
         assert!(!body.contains("stalled"), "{body}");
@@ -199,6 +207,30 @@ fn a_project_with_no_checkout_here_offers_no_start_and_is_not_stalled() {
         assert!(!body.contains(">Start</button>"), "{body}");
         assert!(!body.contains(">Resume</button>"), "{body}");
         assert!(body.contains("<h2>Last moves</h2>"), "{body}");
+    }
+}
+
+#[test]
+fn a_roadmap_with_every_milestone_ticked_reads_done_with_no_run() {
+    for handoff in ["", "o2 landed at 1a2b3c."] {
+        let world = world_with("live-finished", handoff, Some(DEAD), json!(["/src/omega"]), true);
+        let (body, _) = page(&world);
+
+        assert!(body.contains("<span class=\"pill ok\">done</span>"), "{body}");
+        for run in [
+            "execution",
+            "stalled",
+            "parked",
+            "pill\">running",
+            "value=\"go\"",
+            ">Start</button>",
+            ">Resume</button>",
+            "<h2>Run</h2>",
+            "<h2>Roadmap</h2>",
+            "<h2>Last moves</h2>",
+        ] {
+            assert!(!body.contains(run), "{run}: {body}");
+        }
     }
 }
 

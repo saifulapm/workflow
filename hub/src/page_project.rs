@@ -60,9 +60,9 @@ pub fn get(ctx: &PageCtx) -> Response {
         "spec" => spec_body(ctx, project),
         "planning" => roadmap_body(ctx),
         "dogfooding" => walk_body(ctx, project),
-        "maintenance" => backlog_body(ctx, project),
         "execution" => building_body(ctx, project),
-        _ => status_body(ctx, project),
+        // done
+        _ => backlog_body(ctx, project),
     });
     Response::html(page_shell(summary.stage, ctx.project, &body))
 }
@@ -373,33 +373,19 @@ fn spec_body(ctx: &PageCtx, project: &str) -> String {
     out
 }
 
-/// The status and the last handoff, for every stage past the approval.
-fn status_body(ctx: &PageCtx, project: &str) -> String {
-    let mut out = String::new();
-    for (heading, outcome, key, empty) in [
-        (
-            "Status",
-            ctx.app.mem.status(project),
-            "text",
-            "No status recorded.",
-        ),
-        (
-            "Handoff",
-            ctx.app.mem.handoff(project),
-            "body",
-            "No handoff recorded.",
-        ),
-    ] {
-        out.push_str(&format!("<h2>{heading}</h2>\n"));
-        let text = match &*outcome {
-            Outcome::Broken(why) => {
-                out.push_str(&degraded_banner(why));
-                continue;
-            }
-            Outcome::Json(doc) => doc[key].as_str().map(str::trim).filter(|t| !t.is_empty()),
-            Outcome::Absent => None,
-        };
-        out.push_str(&markdown_article(text, project, empty));
+/// The last handoff, under its heading.
+fn handoff_section(ctx: &PageCtx, project: &str) -> String {
+    let mut out = String::from("<h2>Handoff</h2>\n");
+    match &*ctx.app.mem.handoff(project) {
+        Outcome::Broken(why) => out.push_str(&degraded_banner(why)),
+        Outcome::Json(doc) => {
+            let text = doc["body"]
+                .as_str()
+                .map(str::trim)
+                .filter(|t| !t.is_empty());
+            out.push_str(&markdown_article(text, project, "No handoff recorded."));
+        }
+        Outcome::Absent => out.push_str(&markdown_article(None, project, "No handoff recorded.")),
     }
     out
 }
@@ -416,24 +402,12 @@ fn building_body(ctx: &PageCtx, project: &str) -> String {
         out.push_str(&degraded_banner(why));
     }
     out.push_str(&item_list_section("Last moves", &moves.rows, project));
-    out.push_str("<h2>Handoff</h2>\n");
-    match &*ctx.app.mem.handoff(project) {
-        Outcome::Broken(why) => out.push_str(&degraded_banner(why)),
-        Outcome::Json(doc) => {
-            let text = doc["body"]
-                .as_str()
-                .map(str::trim)
-                .filter(|t| !t.is_empty());
-            out.push_str(&markdown_article(text, project, "No handoff recorded."));
-        }
-        Outcome::Absent => out.push_str(&markdown_article(None, project, "No handoff recorded.")),
-    }
+    out.push_str(&handoff_section(ctx, project));
     out
 }
 
 /// The open milestone's Show path as numbered steps, each marked by the
-/// milestone's open findings and its newest walk, then those findings and
-/// the way to file one.
+/// milestone's open findings, then those findings and the way to file one.
 fn walk_body(ctx: &PageCtx, project: &str) -> String {
     let roadmap = ctx.app.mem.roadmap(project);
     let text = match &*roadmap {
@@ -461,27 +435,12 @@ fn walk_body(ctx: &PageCtx, project: &str) -> String {
             esc(slug)
         ));
     } else {
-        // The doorbell reads run lines with these same arguments, so the
-        // page often finds them cached.
-        let runs = ctx.app.mem.read(&[
-            "log",
-            "--type",
-            "run",
-            "--limit",
-            "20",
-            &format!("--project={project}"),
-            "--json",
-        ]);
-        if let Some(why) = model::list_fault(&runs, "log") {
-            out.push_str(&degraded_banner(&why));
-        }
-        let passed = walk_passed(&runs.rows("items"), slug);
         out.push_str("<ul>\n");
         for (i, step) in steps.iter().enumerate() {
             let n = i + 1;
             out.push_str(&format!(
                 "<li>{} {n}. {}</li>\n",
-                step_mark(n, &findings, passed),
+                step_mark(n, &findings),
                 esc(step)
             ));
         }
@@ -512,26 +471,13 @@ pub fn show_steps(show: &str) -> Vec<String> {
         .collect()
 }
 
-/// A cross where an open finding names step `n`, a tick once the newest
-/// walk passed, a dash otherwise. A finding outweighs the pass, since a
-/// finding filed after the walk still stands.
-pub fn step_mark(n: usize, findings: &[FindingRow], passed: bool) -> &'static str {
+/// A cross where an open finding names step `n`, a dash otherwise.
+pub fn step_mark(n: usize, findings: &[FindingRow]) -> &'static str {
     if findings.iter().any(|f| f.step.trim() == n.to_string()) {
         "✗"
-    } else if passed {
-        "✓"
     } else {
         "-"
     }
-}
-
-/// Whether the milestone's newest `dogfood <slug>:` run line reads `pass`.
-/// mem lists run lines newest first.
-pub fn walk_passed(rows: &[Value], slug: &str) -> bool {
-    let prefix = format!("dogfood {slug}: ");
-    rows.iter()
-        .find_map(|row| row["title"].as_str()?.strip_prefix(&prefix))
-        == Some("pass")
 }
 
 /// The project's open findings in mem's order; a fault leaves a banner in
@@ -553,10 +499,10 @@ fn open_findings(ctx: &PageCtx, project: &str, out: &mut String) -> Vec<FindingR
         .collect()
 }
 
-/// The status, the last handoff, the open findings and the ideas, with the
-/// way to start a new round or file an idea.
+/// The last handoff, the open findings and the ideas, with the way to file
+/// an idea, for a project whose roadmap is done.
 fn backlog_body(ctx: &PageCtx, project: &str) -> String {
-    let mut out = status_body(ctx, project);
+    let mut out = handoff_section(ctx, project);
     let findings = open_findings(ctx, project, &mut out);
     out.push_str(&findings_section(&findings, project));
 
@@ -596,9 +542,9 @@ fn backlog_body(ctx: &PageCtx, project: &str) -> String {
         out.push_str("</ul>\n");
     }
 
-    let base = esc(&project_url(project));
     out.push_str(&format!(
-        "<p><a href=\"{base}/new\">New round</a> · <a href=\"{base}/new\">File an idea</a></p>\n"
+        "<p><a href=\"{}/new\">File an idea</a></p>\n",
+        esc(&project_url(project))
     ));
     out
 }

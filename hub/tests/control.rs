@@ -276,8 +276,8 @@ fn an_empty_changes_writes_nothing() {
 
 #[test]
 fn approve_and_changes_refuse_a_roadmap_that_is_not_a_draft() {
-    let world = World::new("control-running");
-    world.mem(&["roadmap", "--status", "running"]);
+    let world = World::new("control-approved");
+    world.mem(&["roadmap", "--status", "approved"]);
     let id = world.ask_approval();
     let hub = world.hub();
 
@@ -286,7 +286,7 @@ fn approve_and_changes_refuse_a_roadmap_that_is_not_a_draft() {
         assert_eq!(status_of(&response), 409, "{body}: {response}");
     }
     assert_eq!(world.writes(), Vec::<Vec<String>>::new());
-    assert_eq!(world.roadmap_status(), "running");
+    assert_eq!(world.roadmap_status(), "approved");
     let question = world.question("Approve roadmap alpha?");
     assert_eq!(question["id"], id.as_str());
     assert_eq!(question["answered"], false);

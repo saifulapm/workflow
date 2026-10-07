@@ -199,11 +199,11 @@ fn roadmap_an_approved_one_says_it_waits_for_the_engine() {
 }
 
 #[test]
-fn roadmap_a_running_one_shows_no_form() {
-    let world = World::new("roadmap-running", Some(roadmap_doc(Some("running"))));
+fn roadmap_one_with_an_old_stored_status_shows_no_form() {
+    let world = World::new("roadmap-old-status", Some(roadmap_doc(Some("done"))));
     let body = roadmap_page(&world, 3);
 
-    assert!(body.contains("running"), "{body}");
+    assert!(body.contains("status: done"), "{body}");
     assert!(
         body.contains("A recipe scales to any number of people<"),
         "{body}"
