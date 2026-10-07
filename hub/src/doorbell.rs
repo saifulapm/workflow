@@ -131,6 +131,10 @@ impl Doorbell {
             eprintln!("hub: doorbell: {why}");
             return false;
         }
+        // A seen file without the marker predates this ring, whose old rule
+        // nothing met, so the round that first applies it records every
+        // roadmap already finished and rings for none of them.
+        let quiet_finishes = !state.seen.contains(FINISHES_SEEDED);
         // Asked once a round, and only when some project could have stalled.
         let mut agents = None;
         for project in projects.rows("projects") {
@@ -145,6 +149,7 @@ impl Doorbell {
                 // The total is in the key so a roadmap that grows and
                 // finishes again rings again.
                 && self.record(state, &format!("finished {name} {total}"))
+                && !quiet_finishes
             {
                 self.deliver(&self.event_body("roadmap finished", name));
             }
@@ -177,6 +182,9 @@ impl Doorbell {
                     state.unstarted.remove(name);
                 }
             }
+        }
+        if quiet_finishes {
+            self.record(state, FINISHES_SEEDED);
         }
         true
     }
@@ -310,6 +318,9 @@ impl Doorbell {
         )
     }
 }
+
+/// Recorded once a round has keyed every roadmap already finished.
+const FINISHES_SEEDED: &str = "finished roadmaps seeded";
 
 /// How many polls a milestone no orchestrator has run waits before it rings:
 /// two minutes at the 15 s poll.

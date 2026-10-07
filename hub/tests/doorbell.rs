@@ -108,10 +108,13 @@ impl World {
         invocations(&self.curl_log)
     }
 
+    /// The question ids the doorbell recorded. Its other keys, a stall, a
+    /// finished roadmap and the marker beside them, have a space in them.
     fn seen(&self) -> Vec<String> {
         std::fs::read_to_string(self.home.join("state/hub/seen"))
             .unwrap_or_default()
             .lines()
+            .filter(|key| !key.contains(' '))
             .map(str::to_string)
             .collect()
     }
@@ -446,10 +449,12 @@ fn a_first_poll_that_prints_nothing_does_not_spend_the_seeding_round() {
         &["--config", config.to_str().unwrap(), "--port", "0"],
         &[("HUB_POLL_MS", "120")],
     );
+    // The question ids recorded, as `World::seen` counts them.
     let seen = || {
         std::fs::read_to_string(home.join("state/hub/seen"))
             .unwrap_or_default()
             .lines()
+            .filter(|key| !key.contains(' '))
             .count()
     };
     let polled = || {
@@ -846,7 +851,48 @@ fn a_first_start_records_a_finished_roadmap_and_rings_none() {
     fake.settle();
 
     assert!(fake.rings().is_empty(), "{:?}", fake.rings());
-    assert_eq!(fake.seen(), ["finished proj-beta 3"]);
+    assert_eq!(
+        fake.seen(),
+        ["finished proj-beta 3", "finished roadmaps seeded"]
+    );
+}
+
+#[test]
+fn an_upgrade_records_roadmaps_already_finished_and_rings_none() {
+    let fake = Fake::new("bell-finished-upgrade");
+    // The seen file an older hub left: a question, and no finished roadmap,
+    // since its finished ring keyed on a status nothing sets any more.
+    let seen = fake.home.join("state/hub/seen");
+    std::fs::create_dir_all(seen.parent().unwrap()).unwrap();
+    std::fs::write(&seen, "01M0BJ42PYJV0NA7CE464V826E\n").unwrap();
+    fake.projects("2026-10-05T10:00:00Z", "approved", 3);
+    let _hub = fake.hub();
+    fake.settle();
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+    assert!(
+        fake.seen().contains(&"finished proj-beta 3".to_string()),
+        "{:?}",
+        fake.seen()
+    );
+
+    // A roadmap that finishes after that round still rings.
+    fake.put(
+        "projects.json",
+        "{\"projects\":[\
+         {\"name\":\"proj-alpha\",\"roadmap_status\":\"approved\",\"milestones_done\":3,\
+           \"milestones_total\":3,\"checkouts\":[\"/src/proj-alpha\"]},\
+         {\"name\":\"proj-beta\",\"roadmap_status\":\"approved\",\"milestones_done\":3,\
+           \"milestones_total\":3,\"checkouts\":[\"/src/proj-beta\"]}]}",
+    );
+    wait_for("the finished ring", Duration::from_secs(15), || {
+        !fake.rings().is_empty()
+    });
+    fake.settle();
+    assert_eq!(
+        fake.rings(),
+        ["roadmap finished on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha"]
+    );
 }
 
 /// proj-alpha building m2 from a checkout on this machine, whose
