@@ -22,9 +22,9 @@ outside the project repos.
    him in rounds until no decision is open, and writes the spec as wiki
    pages in mem.
 2. **plan.** The roadmap is a list of milestones, each a vertical slice
-   with a Show path. Each milestone is one html-plan page (behaviours,
-   mockups, decisions with defaults, scope). He reads and annotates the
-   pages in the hub and approves once.
+   with a Show path. Each milestone is one designed page (behaviours,
+   pictures, decisions with defaults, scope). He reads the pages in the hub,
+   pins comments on them and approves once.
 3. **go.** `workflow go <project>` starts an Opus orchestrator in an amx
    pane with `/goal`, so Claude Code keeps it working until the milestone
    is landed. It builds test-first, alone or with worktree subagents, runs
@@ -92,8 +92,3 @@ The global ignore list comes from the dotfiles through `core.excludesFile`:
 `.cursor/`, `.scratch/`, `.e2e/`, `.amx/`, `.mcp.json`, `opencode.json`,
 `opencode.jsonc`, `skills-lock.json`, `.playwright-cli/` and any
 `agent-memory` directory.
-
-## Credits
-
-The plan skill ships html-plan's runtime by Thariq Shihipar, from
-anthropics/claude-plugins-community; see `skills/plan/html-plan/NOTICE`.

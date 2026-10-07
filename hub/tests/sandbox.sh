@@ -149,9 +149,14 @@ mem roadmap --stdin >/dev/null <<'ROAD'
       Show: a recipe for four, set to six, lists half again of every amount
 ROAD
 mem roadmap --status draft >/dev/null
-# b1-box's plan is an html-plan page, which the hub opens in a frame; b2-scale's
-# is markdown, which it renders as it always has.
-mem plan b1-box --set-file "$root/skills/plan/html-plan/example.html" >/dev/null
+# b1-box's plan is a designed page, which the hub opens in a frame with its
+# comment layer and one answered comment pinned on its first claim's heading;
+# b2-scale's is markdown, which it renders as it always has.
+mem plan b1-box --set-file "$root/skills/plan/example.html" >/dev/null
+mem ask --for orchestrator --about 'plan:b1-box#claim-1/1@20,50' \
+	'Does the list show the newest recipe first?' >/dev/null
+mem answer "$(mem questions --about 'plan:b1-box#' | awk '{print substr($1, 2)}')" \
+	'Yes: newest first, and the plan now says so.' >/dev/null
 mem plan b2-scale --stdin >/dev/null <<'PLAN'
 # plan: b2-scale
 

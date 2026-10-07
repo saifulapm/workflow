@@ -1,6 +1,6 @@
-//! An html-plan page in the hub (h1-plan-pages): the shell and its frame,
-//! the page and the runtime the frame loads, the response it sends, and the
-//! approval it offers.
+//! A plan page in the hub (h1-plan-pages, h4-designed-plans): the shell and
+//! its frame, the designed page with its pins, the comments and decisions it
+//! sends, an old html-plan page as text, and the approval it offers.
 
 mod common;
 
@@ -189,9 +189,13 @@ fn a_markdown_plan_still_renders_inline() {
 }
 
 #[test]
-fn the_frames_page_loads_the_hubs_runtime_and_stays_sandboxed() {
+fn an_old_html_plan_page_opens_as_text_with_the_retired_note() {
     let world = World::new("plan-page");
-    world.store_plan("h1-demo", PLAN_PAGE);
+    let page = PLAN_PAGE.replace(
+        "<p>The demo claim.</p>",
+        "<p>The demo <code>claim</code> &amp; a < b.</p><script>alert(1)</script>",
+    );
+    world.store_plan("h1-demo", &page);
     let hub = world.hub();
 
     let response = hub.get(&format!("/p/{PROJECT}/plan/h1-demo/page"));
@@ -203,10 +207,29 @@ fn the_frames_page_loads_the_hubs_runtime_and_stays_sandboxed() {
         "{response}"
     );
     let body = body_of(&response);
-    assert!(body.contains("The demo claim."), "{body}");
-    assert!(body.contains("href=\"/assets/htmlplan.css\""), "{body}");
-    assert!(body.contains("/assets/htmlplan.js"), "{body}");
-    assert!(!body.contains("src=\"htmlplan.js\""), "{body}");
+    assert!(
+        body.contains("This plan uses html-plan, a retired format, so it shows as plain text."),
+        "{body}"
+    );
+    assert!(body.contains("The demo claim &amp; a &lt; b."), "{body}");
+    for gone in ["<script", "htmlplan", "<doc-claim", "alert(1)"] {
+        assert!(!body.contains(gone), "{gone}: {body}");
+    }
+}
+
+#[test]
+fn no_file_in_the_hub_carries_html_plan_any_more() {
+    let world = World::new("plan-assets");
+    let hub = world.hub();
+    for asset in ["/assets/htmlplan.js", "/assets/htmlplan.css"] {
+        assert_eq!(status_of(&hub.get(asset)), 404, "{asset}");
+    }
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for entry in std::fs::read_dir(&src).unwrap() {
+        let path = entry.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("htmlplan.js"), "{}", path.display());
+    }
 }
 
 #[test]
@@ -225,34 +248,11 @@ fn a_markdown_plan_has_no_frame_page() {
     );
 }
 
-#[test]
-fn the_served_runtime_sends_through_the_shell() {
-    let world = World::new("plan-assets");
-    let hub = world.hub();
-
-    let js = hub.get("/assets/htmlplan.js");
-    assert_eq!(status_of(&js), 200, "{js}");
-    assert!(
-        header_of(&js, "content-type")
-            .unwrap()
-            .starts_with("text/javascript")
-    );
-    let js = body_of(&js);
-    assert!(js.contains("plan-respond"), "Send posts to the shell");
-    assert!(js.contains("hubStore"), "drafts go through the shell");
-    assert!(!js.contains("localStorage"), "an opaque origin has none");
-
-    let css = hub.get("/assets/htmlplan.css");
-    assert_eq!(status_of(&css), 200, "{css}");
-    assert!(
-        header_of(&css, "content-type")
-            .unwrap()
-            .starts_with("text/css")
-    );
-}
-
 /// The JSON of `mem questions --about` or `mem log --about` for the demo page.
+/// A read never waits on another process's reindex and may serve the index
+/// from before the hub's write, so the index is brought up to date first.
 fn about(world: &World, verb: &str) -> Vec<serde_json::Value> {
+    world.run(&["reindex"]);
     let out = common::mem_in(
         &world.mem,
         &world.home,

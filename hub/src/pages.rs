@@ -82,9 +82,6 @@ fn page_for<'a>(
         "/" => return Some(("GET", None, "", page_home::get)),
         "/answer" => return Some(("POST", None, "", page_questions::answer_post)),
         "/wiki" => return Some(("GET", None, "", page_wiki::get)),
-        "/assets/htmlplan.js" | "/assets/htmlplan.css" => {
-            return Some(("GET", None, "", plan_page::asset_get));
-        }
         _ => {}
     }
     if path.starts_with("/assets/") {

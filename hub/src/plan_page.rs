@@ -1,5 +1,6 @@
-//! A stored html-plan page in the hub (h1-plan-pages): the shell the hub
-//! draws around it, and the frame the page itself runs in.
+//! A stored plan page in the hub (h1-plan-pages, h4-designed-plans): the
+//! shell the hub draws around it, the frame the page itself runs in, and the
+//! comments and decisions sent from it.
 //!
 //! The page is whatever the planner wrote, script included, so it never runs
 //! on the hub's own origin. The frame is sandboxed without
@@ -14,62 +15,12 @@ use crate::page_control::failed;
 use crate::page_roadmap::roadmap_rows;
 use crate::pages::PageCtx;
 
-/// The html-plan runtime, one copy, in the plan skill. The hub serves its own
-/// patched version of it (see `served_runtime`), and never edits the file.
-const RUNTIME_JS: &str = include_str!("../../skills/plan/html-plan/htmlplan.js");
-const RUNTIME_CSS: &str = include_str!("../../skills/plan/html-plan/htmlplan.css");
-
 /// The page's own header: it may run only in a sandbox, even opened on its
 /// own, and only the hub may frame it, so its messages reach no one else.
 const PAGE_CSP: &str = "sandbox allow-scripts allow-popups; frame-ancestors 'self'";
 
-/// The three places the hub's copy of the runtime differs from the skill's.
-/// Each must match exactly once; `the_runtime_still_has_what_the_hub_patches`
-/// fails when an upgrade of the runtime moves one.
-const PATCHES: [(&str, &str); 3] = [
-    // The frame's origin is opaque, so it has no storage of its own. Drafts
-    // go to the shell instead, through the bridge's store.
-    ("localStorage", "hubStore"),
-    // The empty Send slot, filled.
-    (
-        "const liveOn = false, send = null;",
-        "const liveOn = parent !== window, send = liveOn ? h('button', { class: 'nw-btn primary', \
-onclick: () => { parent.postMessage({ type: 'plan-respond', md: r.md }, '*'); state.textContent = 'Sending…'; } }, \
-'Send to mem') : null;",
-    ),
-    // The response so far, for the shell's Approve to count what was never
-    // opened.
-    (
-        "  const r = buildResponse(); const n = r.nChanged + r.nComments + r.nDrafts;",
-        "  const r = buildResponse(); const n = r.nChanged + r.nComments + r.nDrafts;\n\
-  if (parent !== window) parent.postMessage({ type: 'plan-state', md: r.md }, '*');",
-    ),
-];
-
-/// Runs in the frame before the runtime: asks the shell for the saved draft,
-/// and only then loads the runtime, which reads it at once from `hubStore`.
-/// Every write of the draft goes back to the shell.
-const BRIDGE: &str = "<script>(function () {\
-var saved = null, live = parent !== window, started = false;\
-window.hubStore = {\
-getItem: function () { return saved; },\
-setItem: function (k, v) { saved = String(v); if (live) parent.postMessage({ type: 'plan-draft', state: saved }, '*'); },\
-removeItem: function () { saved = null; if (live) parent.postMessage({ type: 'plan-draft', state: null }, '*'); }\
-};\
-function start(state) {\
-if (started) return; started = true; saved = state || null;\
-var s = document.createElement('script'); s.src = '/assets/htmlplan.js'; document.head.appendChild(s);\
-}\
-if (!live) return start(null);\
-addEventListener('message', function (e) {\
-if (e.source === parent && e.data && e.data.type === 'plan-restore') start(e.data.state);\
-});\
-parent.postMessage({ type: 'plan-ready' }, '*');\
-setTimeout(function () { start(null); }, 1500);\
-})();</script>";
-
-/// Whether a stored plan is an html-plan page rather than markdown: a whole
-/// document, or a fragment holding the plan element.
+/// Whether a stored plan is a page rather than markdown: a whole document,
+/// or a fragment holding html-plan's retired plan element.
 pub fn is_plan_page(text: &str) -> bool {
     let start = text.trim_start();
     start
@@ -79,7 +30,7 @@ pub fn is_plan_page(text: &str) -> bool {
         || text.contains("<doc-plan ")
 }
 
-/// `GET /p/<project>/plan/<slug>`: an html-plan page in its shell. A
+/// `GET /p/<project>/plan/<slug>`: a plan page in its shell. A
 /// markdown plan, or none, is the project's detail page as before.
 pub fn get(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
@@ -214,8 +165,8 @@ pub fn plan_frame(project: &str, slug: &str) -> String {
     )
 }
 
-/// `GET /p/<project>/plan/<slug>/page`: the stored page, with its runtime
-/// links pointed at the hub's copy. A markdown plan has no such page.
+/// `GET /p/<project>/plan/<slug>/page`: the stored page, with the comment
+/// layer; an html-plan page as text. A markdown plan has no such page.
 pub fn page_get(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
     let slug = ctx.rest;
@@ -229,7 +180,7 @@ pub fn page_get(ctx: &PageCtx) -> Response {
             Response::html(designed_page(text, &pins)).header("Content-Security-Policy", PAGE_CSP)
         }
         Some(text) if is_plan_page(text) => {
-            Response::html(served_page(text)).header("Content-Security-Policy", PAGE_CSP)
+            Response::html(retired_page(text)).header("Content-Security-Policy", PAGE_CSP)
         }
         None if plan.degraded.is_some() => Response::text(502, "mem is not answering"),
         _ => Response::not_found(),
@@ -398,48 +349,70 @@ fn written(run: &crate::memcli::Run) -> Response {
     Response::json(serde_json::json!({ "id": doc["short_id"] }).to_string())
 }
 
-/// `GET /assets/htmlplan.js` and `/assets/htmlplan.css`.
-pub fn asset_get(ctx: &PageCtx) -> Response {
-    match ctx.request.path.as_str() {
-        "/assets/htmlplan.js" => {
-            Response::new(200, "text/javascript; charset=utf-8", served_runtime())
+/// An html-plan page (h1 to h3) as plain text under a note: its runtime is
+/// gone, so the hub keeps only the words. Scripts and styles go whole, an
+/// inline tag goes, and any other tag ends a line.
+fn retired_page(text: &str) -> String {
+    const INLINE: &[&str] = &[
+        "a", "b", "i", "em", "strong", "code", "span", "kbd", "small", "mark", "abbr", "s", "u",
+        "sub", "sup",
+    ];
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let tag = &rest[at + 1..];
+        let name: String = tag
+            .trim_start_matches('/')
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if name.is_empty() && !tag.starts_with(['/', '!']) {
+            // A `<` that opens no tag is text.
+            out.push_str("&lt;");
+            rest = tag;
+            continue;
         }
-        "/assets/htmlplan.css" => {
-            Response::new(200, "text/css; charset=utf-8", served_runtime_css())
+        let Some(end) = tag.find('>') else {
+            break;
+        };
+        rest = &tag[end + 1..];
+        if !tag.starts_with('/') && ["script", "style", "head"].contains(&name.as_str()) {
+            let close = format!("</{name}");
+            let lower = rest.to_ascii_lowercase();
+            rest = match lower.find(&close) {
+                Some(n) => rest[n..].split_once('>').map_or("", |(_, r)| r),
+                None => "",
+            };
+        } else if !INLINE.contains(&name.as_str()) {
+            out.push('\n');
         }
-        _ => Response::not_found(),
     }
-}
-
-/// The runtime's stylesheet with one rule of the hub's after it: iOS zooms
-/// the page into any field under 16 px, and html-plan sets its comment boxes
-/// and decision fields at 14 px.
-fn served_runtime_css() -> String {
+    out.push_str(rest);
+    let mut lines: Vec<&str> = Vec::new();
+    for line in out.lines().map(str::trim) {
+        if !(line.is_empty() && lines.last().is_none_or(|l| l.is_empty())) {
+            lines.push(line);
+        }
+    }
+    let text = lines.join("\n").replace('>', "&gt;");
     format!(
-        "{RUNTIME_CSS}\ntextarea, doc-ask input[type=text], doc-ask select {{ font-size: 16px; }}\n"
+        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <style>{RETIRED_STYLE}</style></head>\n<body>\n\
+         <p class=\"retired\">This plan uses html-plan, a retired format, so it shows as plain text.</p>\n\
+         <pre>{}</pre>\n</body>\n</html>\n",
+        text.trim()
     )
 }
 
-/// The stored page with its stylesheet taken from the hub and its runtime
-/// script replaced by the bridge, which loads the runtime itself.
-fn served_page(text: &str) -> String {
-    let text = text.replace("\"htmlplan.css\"", "\"/assets/htmlplan.css\"");
-    let Some(at) = text.find("<script src=\"htmlplan.js\"") else {
-        return text;
-    };
-    let end = text[at..]
-        .find("</script>")
-        .map_or(text.len(), |n| at + n + "</script>".len());
-    format!("{}{BRIDGE}{}", &text[..at], &text[end..])
-}
-
-fn served_runtime() -> String {
-    PATCHES
-        .iter()
-        .fold(RUNTIME_JS.to_string(), |js, (from, to)| {
-            js.replace(from, to)
-        })
-}
+const RETIRED_STYLE: &str = "@font-face{font-family:'Maple Mono';src:url(/assets/maple-mono-400.woff2) format('woff2')}\
+:root{--bg:#f7f7f5;--ink:#17181c;--mut:#62646c;--line:#d9d9d4;color-scheme:light dark}\
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--ink:#e7e9ee;--mut:#a3a8b3;--line:#323744}}\
+body{margin:0;padding:20px 16px 48px;background:var(--bg);color:var(--ink);font:15px/1.6 'Maple Mono',ui-monospace,monospace}\
+.retired{margin:0 0 16px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;color:var(--mut)}\
+pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}";
 
 const SHELL_STYLE: &str = "<style>\
 body{display:flex;flex-direction:column;height:100vh;height:100dvh;padding-bottom:0}\
@@ -451,19 +424,6 @@ border-top:1px solid var(--line)}\
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_served_runtime_css_keeps_fields_at_sixteen_pixels() {
-        // iOS zooms into any field set below 16 px, and html-plan sets its
-        // comment boxes and decision fields at 14 px.
-        let css = served_runtime_css();
-        let fix = "textarea, doc-ask input[type=text], doc-ask select { font-size: 16px; }";
-        assert!(
-            css.starts_with(RUNTIME_CSS),
-            "the runtime's own rules come first"
-        );
-        assert!(css.trim_end().ends_with(fix), "{}", &css[css.len() - 200..]);
-    }
 
     #[test]
     fn markdown_is_not_a_plan_page() {
@@ -479,26 +439,5 @@ mod tests {
         assert!(html.contains("sandbox=\"allow-scripts allow-popups\""));
         assert!(!html.contains("allow-same-origin"));
         assert!(html.contains("src=\"/p/workflow/plan/h1-plan-pages/page\""));
-    }
-
-    #[test]
-    fn the_runtime_still_has_what_the_hub_patches() {
-        for (from, _) in &PATCHES[1..] {
-            assert_eq!(RUNTIME_JS.matches(from).count(), 1, "{from}");
-        }
-        assert!(RUNTIME_JS.contains("localStorage"));
-        assert!(!served_runtime().contains("localStorage"));
-    }
-
-    #[test]
-    fn the_page_loads_the_bridge_in_place_of_the_runtime() {
-        let page = served_page(
-            "<link rel=\"stylesheet\" href=\"htmlplan.css\">\n\
-             <script src=\"htmlplan.js\" defer></script>\n<doc-plan></doc-plan>",
-        );
-        assert!(page.contains("href=\"/assets/htmlplan.css\""), "{page}");
-        assert!(page.contains("window.hubStore"), "{page}");
-        assert!(!page.contains("src=\"htmlplan.js\""), "{page}");
-        assert!(page.ends_with("</script>\n<doc-plan></doc-plan>"), "{page}");
     }
 }
