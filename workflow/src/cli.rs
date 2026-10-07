@@ -95,6 +95,36 @@ older installs wrote that nothing ships now are removed; every other name in
 those directories is left alone. One line is printed per change."
     )]
     Install,
+    /// Start the orchestrator for a project's next milestone as an amx agent.
+    #[command(
+        long_about = "Start the orchestrator for a project's next milestone as an amx agent.
+
+The project is the argument, else the one the current directory belongs to.
+The milestone is --milestone, else the first unticked line of the project's
+roadmap; with none left it says the roadmap is done and exits 0. Without
+--milestone the roadmap's status must be approved. It refuses, exit 2, while
+another live amx agent of the project is running an orchestrator; the caller
+itself ($AMX_ID) does not count, so an orchestrator can start its successor.
+The agent is `amx new --name <project>-<milestone>` in the project's checkout,
+on the goal that milestone's landing is the proof of; a name amx has taken by
+an agent that ended gets a -2, -3, ... suffix. Prints the agent's name."
+    )]
+    Go {
+        /// The project, by mem's name; the current directory's when omitted.
+        project: Option<String>,
+        /// The milestone to run, by slug; the roadmap's next open one when omitted.
+        #[arg(long, value_name = "SLUG")]
+        milestone: Option<String>,
+        /// The model the orchestrator runs on.
+        #[arg(long, value_name = "NAME")]
+        model: Option<String>,
+        /// How much reasoning effort it spends.
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
+        /// Print the amx command line instead of running it.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
@@ -125,4 +155,9 @@ usage: workflow <command> [options]
       write the embedded skills, agents and hook stubs where they are read,
       replacing symlinks with files and removing what older installs left
       0 installed · 1 something could not be written or removed
+  go [<project>] [--milestone <slug>] [--model <m>] [--effort <l>] [--dry-run]
+      start the orchestrator for the project's next milestone as an amx agent
+      and print its name; --dry-run prints the amx command line instead
+      0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
+      the roadmap is not approved, or the project already has an orchestrator
 ";

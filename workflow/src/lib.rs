@@ -4,6 +4,7 @@
 //!   workflow lint-msg        check a commit message, branch name or PR body
 //!   workflow hook            the body of a git hook stub
 //!   workflow install         write the embedded skills, agents and hook stubs
+//!   workflow go              start the orchestrator for a project's next milestone
 //!
 //! Exit codes are a contract; `workflow help` prints them.
 //!
@@ -14,12 +15,15 @@ pub mod cli;
 pub mod embedded;
 pub mod exit;
 pub mod gitcmd;
+pub mod go;
 pub mod hook;
 pub mod hygiene;
 pub mod install;
 pub mod lint;
 pub mod memcli;
 pub mod paths;
+#[cfg(test)]
+mod scratch;
 
 use clap::Parser;
 
@@ -109,5 +113,20 @@ pub fn run(cli: Cli) -> i32 {
         },
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
+        Command::Go {
+            project,
+            milestone,
+            model,
+            effort,
+            dry_run,
+        } => go::cmd_go(
+            &go::Options {
+                project: project.as_deref(),
+                milestone: milestone.as_deref(),
+                model: model.as_deref().unwrap_or(go::DEFAULT_MODEL),
+                effort: effort.as_deref().unwrap_or(go::DEFAULT_EFFORT),
+            },
+            dry_run,
+        ),
     }
 }

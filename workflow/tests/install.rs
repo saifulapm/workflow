@@ -1,35 +1,23 @@
 //! `workflow install` through the real binary, with `$HOME` pointed at a
 //! scratch directory.
 
+#[path = "../src/scratch.rs"]
+mod scratch;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// A scratch `$HOME`, removed when it goes out of scope.
-struct Home(PathBuf);
+use scratch::Scratch;
 
-impl Home {
-    fn new(tag: &str) -> Home {
-        let dir =
-            std::env::temp_dir().join(format!("workflow-install-bin-{tag}-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        Home(dir)
-    }
-
-    fn install(&self) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_workflow"))
-            .arg("install")
-            .env("HOME", &self.0)
-            .output()
-            .unwrap()
-    }
-}
-
-impl Drop for Home {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
+/// `workflow install` with `$HOME` set to the scratch directory.
+fn install(home: &Scratch) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_workflow"))
+        .arg("install")
+        .env("HOME", home.path())
+        .output()
+        .unwrap()
 }
 
 fn repo() -> PathBuf {
@@ -41,9 +29,9 @@ fn repo() -> PathBuf {
 
 #[test]
 fn the_repo_files_land_in_home_and_a_second_run_has_nothing_to_do() {
-    let home = Home::new("lands");
+    let home = Scratch::new("install-lands");
 
-    let first = home.install();
+    let first = install(&home);
     assert!(first.status.success(), "{first:?}");
     let said = String::from_utf8_lossy(&first.stdout);
     assert!(
@@ -69,14 +57,14 @@ fn the_repo_files_land_in_home_and_a_second_run_has_nothing_to_do() {
     ] {
         assert_eq!(
             fs::read(repo().join(from)).unwrap(),
-            fs::read(home.0.join(to)).unwrap(),
+            fs::read(home.at(to)).unwrap(),
             "{to}"
         );
     }
-    let hook = fs::metadata(home.0.join(".config/git/hooks/pre-commit")).unwrap();
+    let hook = fs::metadata(home.at(".config/git/hooks/pre-commit")).unwrap();
     assert_eq!(hook.permissions().mode() & 0o777, 0o755);
 
-    let second = home.install();
+    let second = install(&home);
     assert!(second.status.success(), "{second:?}");
     let said = String::from_utf8_lossy(&second.stdout);
     assert!(

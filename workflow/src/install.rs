@@ -302,49 +302,9 @@ pub fn cmd_install() -> i32 {
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::symlink;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-
-    /// A scratch `$HOME`, removed when it goes out of scope.
-    struct Home(PathBuf);
-
-    impl Home {
-        fn new(tag: &str) -> Home {
-            static NEXT: AtomicUsize = AtomicUsize::new(0);
-            let dir = std::env::temp_dir().join(format!(
-                "workflow-install-{tag}-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir_all(&dir).unwrap();
-            Home(dir)
-        }
-
-        fn at(&self, rel: &str) -> PathBuf {
-            self.0.join(rel)
-        }
-
-        fn put(&self, rel: &str, text: &str) {
-            let path = self.at(rel);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, text).unwrap();
-        }
-
-        fn read(&self, rel: &str) -> String {
-            fs::read_to_string(self.at(rel)).unwrap()
-        }
-
-        fn has(&self, rel: &str) -> bool {
-            fs::symlink_metadata(self.at(rel)).is_ok()
-        }
-    }
-
-    impl Drop for Home {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::scratch::Scratch;
 
     /// A small table: one skill with a nested file, an agent, a hook.
     const FILES: &[(&str, &[u8])] = &[
@@ -356,8 +316,8 @@ mod tests {
 
     #[test]
     fn every_file_lands_where_its_tool_reads_it() {
-        let home = Home::new("lands");
-        let report = install(&home.0, FILES);
+        let home = Scratch::new("lands");
+        let report = install(home.path(), FILES);
 
         assert_eq!(home.read(".claude/skills/alpha/SKILL.md"), "alpha\n");
         assert_eq!(home.read(".agents/skills/alpha/SKILL.md"), "alpha\n");
@@ -393,9 +353,9 @@ mod tests {
 
     #[test]
     fn a_second_install_changes_nothing() {
-        let home = Home::new("twice");
-        install(&home.0, FILES);
-        let report = install(&home.0, FILES);
+        let home = Scratch::new("twice");
+        install(home.path(), FILES);
+        let report = install(home.path(), FILES);
         assert!(report.lines.is_empty(), "{:?}", report.lines);
         assert_eq!(report.unchanged, 6);
         assert_eq!(
@@ -406,8 +366,8 @@ mod tests {
 
     #[test]
     fn a_changed_file_is_updated_and_a_hook_regains_its_mode() {
-        let home = Home::new("update");
-        install(&home.0, FILES);
+        let home = Scratch::new("update");
+        install(home.path(), FILES);
         home.put(".claude/skills/alpha/SKILL.md", "edited by hand\n");
         fs::set_permissions(
             home.at(".config/git/hooks/pre-commit"),
@@ -415,7 +375,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = install(&home.0, FILES);
+        let report = install(home.path(), FILES);
         assert_eq!(home.read(".claude/skills/alpha/SKILL.md"), "alpha\n");
         let mode = fs::metadata(home.at(".config/git/hooks/pre-commit"))
             .unwrap()
@@ -433,7 +393,7 @@ mod tests {
 
     #[test]
     fn a_symlinked_file_becomes_a_file_and_its_target_is_left_alone() {
-        let home = Home::new("link-file");
+        let home = Scratch::new("link-file");
         home.put("dotfiles/helper.md", "the dotfiles copy\n");
         fs::create_dir_all(home.at(".claude/agents")).unwrap();
         symlink(
@@ -442,7 +402,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = install(&home.0, FILES);
+        let report = install(home.path(), FILES);
 
         let meta = fs::symlink_metadata(home.at(".claude/agents/helper.md")).unwrap();
         assert!(meta.is_file() && !meta.file_type().is_symlink());
@@ -459,13 +419,13 @@ mod tests {
 
     #[test]
     fn a_symlinked_directory_is_replaced_and_never_written_through() {
-        let home = Home::new("link-dir");
+        let home = Scratch::new("link-dir");
         home.put("dotfiles/alpha/SKILL.md", "the dotfiles copy\n");
         home.put("dotfiles/alpha/extra.md", "kept in the dotfiles\n");
         fs::create_dir_all(home.at(".claude/skills")).unwrap();
         symlink(home.at("dotfiles/alpha"), home.at(".claude/skills/alpha")).unwrap();
 
-        let report = install(&home.0, FILES);
+        let report = install(home.path(), FILES);
 
         let meta = fs::symlink_metadata(home.at(".claude/skills/alpha")).unwrap();
         assert!(meta.is_dir() && !meta.file_type().is_symlink());
@@ -487,7 +447,7 @@ mod tests {
 
     #[test]
     fn the_stale_names_are_removed_and_only_those() {
-        let home = Home::new("stale");
+        let home = Scratch::new("stale");
         for name in STALE_SKILLS {
             home.put(&format!(".claude/skills/{name}/SKILL.md"), "old\n");
         }
@@ -507,7 +467,7 @@ mod tests {
         home.put(".config/amx/agents/mine.md", "theirs\n");
         home.put(".config/git/hooks/post-merge", "theirs\n");
 
-        let report = install(&home.0, FILES);
+        let report = install(home.path(), FILES);
 
         for name in STALE_SKILLS {
             assert!(!home.has(&format!(".claude/skills/{name}")), "{name}");
@@ -545,12 +505,12 @@ mod tests {
 
     #[test]
     fn a_stale_name_is_removed_even_as_a_symlink_and_its_target_stays() {
-        let home = Home::new("stale-link");
+        let home = Scratch::new("stale-link");
         home.put("dotfiles/route/SKILL.md", "dotfiles\n");
         fs::create_dir_all(home.at(".claude/skills")).unwrap();
         symlink(home.at("dotfiles/route"), home.at(".claude/skills/route")).unwrap();
 
-        install(&home.0, FILES);
+        install(home.path(), FILES);
 
         assert!(!home.has(".claude/skills/route"));
         assert_eq!(home.read("dotfiles/route/SKILL.md"), "dotfiles\n");
@@ -558,11 +518,11 @@ mod tests {
 
     #[test]
     fn a_name_the_binary_ships_is_not_stale() {
-        let home = Home::new("shipped");
+        let home = Scratch::new("shipped");
         home.put(".claude/skills/route/SKILL.md", "old\n");
         let files: &[(&str, &[u8])] = &[("skills/route/SKILL.md", b"new\n")];
 
-        let report = install(&home.0, files);
+        let report = install(home.path(), files);
 
         assert_eq!(home.read(".claude/skills/route/SKILL.md"), "new\n");
         assert_eq!(report.removed, 0);
@@ -570,8 +530,8 @@ mod tests {
 
     #[test]
     fn a_file_the_binary_no_longer_ships_is_deleted_from_a_shipped_skill() {
-        let home = Home::new("sweep");
-        install(&home.0, FILES);
+        let home = Scratch::new("sweep");
+        install(home.path(), FILES);
         home.put(".claude/skills/alpha/old.md", "gone\n");
         home.put(".claude/skills/alpha/refs/gone.md", "gone\n");
         home.put(".agents/skills/alpha/old/deep/notes.md", "gone\n");
@@ -581,7 +541,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = install(&home.0, FILES);
+        let report = install(home.path(), FILES);
 
         for gone in [
             ".claude/skills/alpha/old.md",
@@ -606,22 +566,22 @@ mod tests {
 
     #[test]
     fn other_skills_files_are_left_in_a_dir_the_binary_does_not_ship() {
-        let home = Home::new("others");
+        let home = Scratch::new("others");
         home.put(".claude/skills/theirs/SKILL.md", "theirs\n");
         home.put(".claude/skills/theirs/extra.md", "theirs\n");
 
-        install(&home.0, FILES);
+        install(home.path(), FILES);
 
         assert_eq!(home.read(".claude/skills/theirs/extra.md"), "theirs\n");
     }
 
     #[test]
     fn what_cannot_be_written_is_reported_and_the_rest_still_installs() {
-        let home = Home::new("failed");
+        let home = Scratch::new("failed");
         // A file where the agents directory belongs.
         home.put(".claude/agents", "not a directory\n");
 
-        let report = install(&home.0, FILES);
+        let report = install(home.path(), FILES);
 
         assert_eq!(report.failed, 1, "{:?}", report.lines);
         assert!(
@@ -638,7 +598,7 @@ mod tests {
 
     #[test]
     fn files_outside_the_three_directories_go_nowhere() {
-        let home = Home::new("nowhere");
+        let home = Scratch::new("nowhere");
         let files: &[(&str, &[u8])] = &[
             ("README.md", b"x"),
             (
@@ -647,7 +607,7 @@ mod tests {
             ),
             ("elsewhere/file", b"x"),
         ];
-        let report = install(&home.0, files);
+        let report = install(home.path(), files);
         assert!(report.lines.is_empty() && report.unchanged == 0);
         assert!(!home.has(".claude"));
     }
