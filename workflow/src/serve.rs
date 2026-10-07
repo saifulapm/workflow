@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use crate::backend::{Dispatch, Handle, WorkerBackend, backend_for};
 use crate::brief::{self, LeadCtx};
+use crate::cost::CostLine;
 use crate::dogfood::{self, NO_SHOW_PATH, OwnerFinding, WalkBrief, WalkOutcome, WalkState};
 use crate::gitcmd::{self, Git};
 use crate::maintain::{self, FixPhase, FixState};
@@ -456,12 +457,15 @@ fn markers(run_dir: &Path) -> Vec<String> {
 }
 
 /// A lead session serve started for a project: one line of `<serve
-/// dir>/leads`, `<kind> <session> <started>`.
+/// dir>/leads`, `<kind> <session> <started> <slug>`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lead {
     pub kind: String,
     pub session: String,
     pub started: i64,
+    /// The milestone or fix the lead works on, which its cost line names.
+    /// A line an older serve wrote has none, and is only ever stopped.
+    pub slug: String,
 }
 
 fn read_leads(text: &str) -> Vec<Lead> {
@@ -472,6 +476,7 @@ fn read_leads(text: &str) -> Vec<Lead> {
                 kind: parts.next()?.to_string(),
                 session: parts.next()?.to_string(),
                 started: parts.next()?.parse().ok()?,
+                slug: parts.next().unwrap_or_default().to_string(),
             })
         })
         .collect()
@@ -480,7 +485,7 @@ fn read_leads(text: &str) -> Vec<Lead> {
 fn write_leads(leads: &[Lead]) -> String {
     leads
         .iter()
-        .map(|l| format!("{} {} {}\n", l.kind, l.session, l.started))
+        .map(|l| format!("{} {} {} {}\n", l.kind, l.session, l.started, l.slug))
         .collect()
 }
 
@@ -1264,6 +1269,15 @@ impl Serve {
             }
             return false;
         };
+        // A far walk's session is on the other machine, which counts it.
+        if walk.far.is_none() {
+            let h = Handle {
+                session: walk.session.clone(),
+                pidfile: dir.join("dogfood.pid"),
+                worktree: p.root.clone(),
+            };
+            self.cost(p, &slug, "walk", &slug, &h, walk.started);
+        }
         let said = mem_on(&self.mem, &p.name, &["finding", "list", "--open", "--json"]);
         let open = dogfood::finding_steps(&said.out, &slug);
         let outcome = dogfood::held_to_findings(outcome, &open);
@@ -1470,6 +1484,7 @@ impl Serve {
             let status = p.dir().join(format!("{ASKED}.dogfood.status"));
             dogfood::read_outcome(&std::fs::read_to_string(status).unwrap_or_default())
         };
+        self.cost(p, &walk.slug, "walk", &walk.slug, &h, walk.started);
         let open = dogfood::finding_steps(&self.open_listing(p), &walk.slug);
         let outcome = dogfood::held_to_findings(outcome, &open);
         self.answer(p, &asked.question, &walk.slug, &outcome, open.len());
@@ -1513,6 +1528,7 @@ impl Serve {
         if self.live(p, &h, going.started, "the research session") {
             return;
         }
+        self.cost(p, RESEARCH, RESEARCH, &p.name, &h, going.started);
         self.answer_research(p, &going.question, "done");
         let _ = std::fs::remove_file(&file);
     }
@@ -2130,11 +2146,11 @@ impl Serve {
                     p,
                     "serve: the pickup lead ran twenty minutes and was stopped; plan-check goes on without it",
                 );
+            } else if live {
+                kept.push(lead.clone());
                 continue;
             }
-            if live {
-                kept.push(lead.clone());
-            }
+            self.cost(p, &lead.slug, &lead.kind, &lead.slug, &h, lead.started);
         }
         if kept != was {
             let _ = std::fs::write(dir.join("leads"), write_leads(&kept));
@@ -2235,6 +2251,7 @@ impl Serve {
             kind: kind.to_string(),
             session,
             started: sys::now(),
+            slug: slug.to_string(),
         });
         let _ = std::fs::write(dir.join("leads"), write_leads(&leads));
         warn(format!(
@@ -2520,6 +2537,30 @@ impl Serve {
         warn(format!("serve {}: {word}", p.name));
     }
 
+    /// The cost line of a session that ended, written once by whoever reads
+    /// it as ended. Serve starts a session by its role, and the role file
+    /// picks the model, so the line names the role: `start_session` names
+    /// the pid file after it.
+    fn cost(&self, p: &ServeProject, slug: &str, kind: &str, name: &str, h: &Handle, started: i64) {
+        let usage = self.backend.usage(h);
+        let line = CostLine {
+            slug: slug.to_string(),
+            kind: kind.to_string(),
+            name: name.to_string(),
+            minutes: Some(((sys::now() - started).max(0) / 60) as u64),
+            context: self.backend.context_tokens(h),
+            input: usage.map(|u| u.0),
+            output: usage.map(|u| u.1),
+            model: None,
+            role: h
+                .pidfile
+                .file_stem()
+                .map(|r| r.to_string_lossy().to_string()),
+            sessions: None,
+        };
+        self.log(p, &line.line());
+    }
+
     /// Logged as a run line in the project's own log, and said on stderr
     /// under the project's name, which the log line leaves implicit.
     fn log(&self, p: &ServeProject, line: &str) {
@@ -2780,10 +2821,15 @@ mod tests {
             kind: "pickup".into(),
             session: "wf-lead-pickup-a3k9".into(),
             started: 1_791_000_000,
+            slug: "m1".into(),
         }];
         let text = write_leads(&leads);
-        assert_eq!(text, "pickup wf-lead-pickup-a3k9 1791000000\n");
+        assert_eq!(text, "pickup wf-lead-pickup-a3k9 1791000000 m1\n");
         assert_eq!(read_leads(&text), leads);
+        assert_eq!(
+            read_leads("pickup wf-lead-pickup-a3k9 1791000000\n")[0].slug,
+            ""
+        );
         assert!(read_leads("pickup half-written\n").is_empty());
     }
 
