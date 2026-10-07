@@ -33,6 +33,13 @@ case "$goal" in
 	exit 0
 	;;
 *'Walk the Show path'*)
+	# What status --json lists while this walk is going, read once serve
+	# has recorded the walk.
+	for _ in $(seq 20); do
+		workflow status --json | jq -c '.sessions' >"$WF_TMP/sessions.json"
+		grep -q '"walk"' "$WF_TMP/sessions.json" && break
+		sleep 0.5
+	done
 	workflow report ready pass
 	done_json
 	exit 0
@@ -96,6 +103,8 @@ done
 is "$(printf '%s\n' "$lines" | grep -c ' cost m1 walk m1:')" 1 'one cost line for the walk'
 like "$(printf '%s\n' "$lines" | grep ' cost m1 walk m1:')" ' minutes=[0-9]+( |$)' 'with its minutes'
 like "$(printf '%s\n' "$lines" | grep ' cost m1 walk m1:')" ' role=dogfood$' 'and its role'
+is "$(jq -c '[.[] | select(.kind == "walk") | {name, minutes: (.minutes | type)}]' "$WF_TMP/sessions.json")" \
+	'[{"name":"m1","minutes":"number"}]' 'status --json lists the walk going, with its minutes'
 unlike "$lines" ' in=0 ' 'a session with no transcript leaves its tokens out'
 
 # Landing sums the five sessions into one milestone line: the pickup lead,
