@@ -91,6 +91,10 @@ commit-msg checks the message. Neither runs the test suite.
 warning. Nothing clears the hard tier for an agent. A project exempts test
 fixtures with `mem project set hygiene-exempt "tests/**"`.
 
+The hooks check only checkouts mem knows. pre-push refuses an agent's push
+(`WORKFLOW_AGENT`, or pi's `PI_CODING_AGENT`) unless `WORKFLOW_ALLOW_PUSH=1`
+is set, which a person sets when they say yes.
+
 The global ignore list comes from the dotfiles through `core.excludesFile`:
 `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.agents/`,
 `.cursor/`, `.scratch/`, `.e2e/`, `.amx/`, `.mcp.json`, `opencode.json`,
