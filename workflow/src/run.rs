@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::backend::{self, Dispatch, Handle, WorkerBackend};
+use crate::cost::CostLine;
 use crate::gitcmd::Git;
 use crate::plan::{Plan, PlanKind, Task};
 use crate::{
@@ -1366,6 +1367,37 @@ impl Run {
         }
     }
 
+    /// One run log line for the session that just ended, so what a
+    /// milestone spent can be summed later. `costed` keeps the session last
+    /// written: a continuation goes back into the same session, and its end
+    /// is read over again.
+    fn record_cost(&self, task: &str) {
+        let h = self.handle(task);
+        if h.session.is_empty() || self.field(task, "costed") == h.session {
+            return;
+        }
+        let started: i64 = self.field(task, "dispatched_at").parse().unwrap_or(0);
+        let usage = self.backend.usage(&h);
+        let model = match self.field(task, "model").as_str() {
+            "" => recorded(&self.dir, "model").filter(|m| !m.is_empty()),
+            m => Some(m.to_string()),
+        };
+        let cost = CostLine {
+            slug: self.plan.plan_id.clone(),
+            kind: "worker".to_string(),
+            name: task.to_string(),
+            minutes: (started > 0).then(|| ((sys::now() - started).max(0) / 60) as u64),
+            context: self.backend.context_tokens(&h),
+            input: usage.map(|(input, _)| input),
+            output: usage.map(|(_, output)| output),
+            model,
+            role: None,
+            sessions: None,
+        };
+        memcli::log_run(&cost.line());
+        write_field(&self.dir, task, "costed", &h.session);
+    }
+
     // ------------------------------------------------------------ merge gate
 
     /// Whether mem holds an evidence item for `task` that was not there when
@@ -2014,6 +2046,7 @@ impl Run {
 
     fn finish(&self, task: &str) {
         self.record_context(task);
+        self.record_cost(task);
         let outcome = self
             .backend
             .result(&self.handle(task), &self.dir.join(format!("{task}.json")));
@@ -2267,6 +2300,7 @@ impl Run {
                 ));
                 self.stop(&task);
                 self.record_context(&task); // how full it was when it went quiet
+                self.record_cost(&task);
                 did = true;
                 let tries: u64 = self.field(&task, "dispatches").parse().unwrap_or(0);
                 if self.commits(&task) == 0 && tries < 2 {
