@@ -11,7 +11,7 @@ use crate::http::{Request, Response};
 use crate::model;
 use crate::{
     page_control, page_decisions, page_evidence, page_home, page_new, page_project, page_questions,
-    page_roadmap, page_wiki,
+    page_roadmap, page_wiki, plan_page,
 };
 
 /// What a page module is handed.
@@ -69,6 +69,9 @@ fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
         "/" => return Some(("GET", None, "", page_home::get)),
         "/answer" => return Some(("POST", None, "", page_questions::answer_post)),
         "/wiki" => return Some(("GET", None, "", page_wiki::get)),
+        "/assets/htmlplan.js" | "/assets/htmlplan.css" => {
+            return Some(("GET", None, "", plan_page::asset_get));
+        }
         _ => {}
     }
     if let Some(rest) = path.strip_prefix("/wiki/") {
@@ -89,7 +92,12 @@ fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
         "new" => ("GET", "", page_new::get),
         "control" => ("POST", "", page_control::control_post),
         _ => {
-            if let Some(id) = sub.strip_prefix("file/") {
+            if let Some(slug) = sub
+                .strip_prefix("plan/")
+                .and_then(|s| s.strip_suffix("/page"))
+            {
+                ("GET", slug, plan_page::page_get)
+            } else if let Some(id) = sub.strip_prefix("file/") {
                 ("GET", id, page_evidence::file_get)
             } else if let Some(form) = sub.strip_prefix("new/") {
                 ("POST", form, page_new::new_post)

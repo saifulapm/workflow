@@ -6,7 +6,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Hub, TempDir, body_of, real_mem, recording_mem, seed_project};
+use common::{Hub, TempDir, body_of, header_of, real_mem, recording_mem, seed_project, status_of};
 
 const PROJECT: &str = "proj-plans";
 
@@ -89,4 +89,67 @@ fn a_markdown_plan_still_renders_inline() {
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/m1"))).to_string();
     assert!(body.contains("Build it"), "{body}");
     assert!(!body.contains("<iframe"), "{body}");
+}
+
+#[test]
+fn the_frames_page_loads_the_hubs_runtime_and_stays_sandboxed() {
+    let world = World::new("plan-page");
+    world.store_plan("h1-demo", PLAN_PAGE);
+    let hub = world.hub();
+
+    let response = hub.get(&format!("/p/{PROJECT}/plan/h1-demo/page"));
+    assert_eq!(status_of(&response), 200, "{response}");
+    // Opened on its own, outside the frame, the page still gets no origin.
+    assert_eq!(
+        header_of(&response, "content-security-policy"),
+        Some("sandbox allow-scripts allow-popups; frame-ancestors 'self'"),
+        "{response}"
+    );
+    let body = body_of(&response);
+    assert!(body.contains("The demo claim."), "{body}");
+    assert!(body.contains("href=\"/assets/htmlplan.css\""), "{body}");
+    assert!(body.contains("/assets/htmlplan.js"), "{body}");
+    assert!(!body.contains("src=\"htmlplan.js\""), "{body}");
+}
+
+#[test]
+fn a_markdown_plan_has_no_frame_page() {
+    let world = World::new("plan-page-md");
+    world.store_plan("m1", "# plan: m1\n\n- [ ] t1 Build it\n");
+    let hub = world.hub();
+
+    assert_eq!(
+        status_of(&hub.get(&format!("/p/{PROJECT}/plan/m1/page"))),
+        404
+    );
+    assert_eq!(
+        status_of(&hub.get(&format!("/p/{PROJECT}/plan/nope/page"))),
+        404
+    );
+}
+
+#[test]
+fn the_served_runtime_sends_through_the_shell() {
+    let world = World::new("plan-assets");
+    let hub = world.hub();
+
+    let js = hub.get("/assets/htmlplan.js");
+    assert_eq!(status_of(&js), 200, "{js}");
+    assert!(
+        header_of(&js, "content-type")
+            .unwrap()
+            .starts_with("text/javascript")
+    );
+    let js = body_of(&js);
+    assert!(js.contains("plan-respond"), "Send posts to the shell");
+    assert!(js.contains("hubStore"), "drafts go through the shell");
+    assert!(!js.contains("localStorage"), "an opaque origin has none");
+
+    let css = hub.get("/assets/htmlplan.css");
+    assert_eq!(status_of(&css), 200, "{css}");
+    assert!(
+        header_of(&css, "content-type")
+            .unwrap()
+            .starts_with("text/css")
+    );
 }
