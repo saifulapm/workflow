@@ -1,6 +1,6 @@
 # `mem --json` schemas
 
-The committed contract for every verb's `--json` output (spec §14.15). One file
+The committed contract for every verb's `--json` output. One file
 per output shape, named for the command line that produces it;
 `tests/json_contract.rs` runs each of those command lines and validates what
 comes back against the file next to it. If an output shape changes, the test
@@ -17,7 +17,7 @@ Rules that hold across the whole surface:
 - **Envelopes are closed.** Every top-level document lists all its keys and sets
   `additionalProperties: false`. A new key is a contract change.
 - **A filtered read that matches nothing prints its document with an empty array
-  and exits 1** (spec §7). Callers for whom empty is a fine answer test the
+  and exits 1**. Callers for whom empty is a fine answer test the
   array, not the exit code: `mem log --kind ruling --type no-verifier --json`
   answering `{"items":[]}` means "no such ruling", not "the call failed".
 - **Resolution failures print nothing on stdout.** An unknown id is exit 1, an

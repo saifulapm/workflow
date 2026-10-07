@@ -1,5 +1,5 @@
 //! The only thing mem asks git: where am I, and what is this checkout called
-//! (spec §5). Nothing is ever written to the repository.
+//!. Nothing is ever written to the repository.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -29,7 +29,7 @@ pub mod verbs;
 pub mod write;
 
 /// Runs one invocation and returns its exit code. Errors are printed once, on
-/// stderr, and turned into the exit code they carry (spec §7).
+/// stderr, and turned into the exit code they carry.
 pub fn run(cli: cli::Cli) -> i32 {
     match dispatch(&cli) {
         Ok(code) => code,

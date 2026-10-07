@@ -1,4 +1,4 @@
-//! The store tree: layout, scanning, and item read/write (spec §3).
+//! The store tree: layout, scanning, and item read/write.
 
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use crate::ids::is_item_filename;
 use crate::item::Item;
 
 /// Store format version. A binary older than the store refuses writes and
-/// degrades reads (spec §3).
+/// degrades reads.
 pub const STORE_VERSION: u32 = 1;
 
 #[derive(Debug, Clone)]

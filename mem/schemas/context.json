@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mem context --json",
-  "description": "The assembled digest (spec §8). Always exit 0, the empty state included.",
+  "description": "The assembled digest. Always exit 0, the empty state included.",
   "type": "object",
   "required": [
     "context",

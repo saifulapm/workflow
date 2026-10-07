@@ -1,4 +1,4 @@
-//! `mem context` — the two-layer disclosure digest (spec §8).
+//! `mem context` — the two-layer disclosure digest.
 //!
 //! The assembly order is fixed so two implementations produce the same digest:
 //! mandatory sections first and never truncated, optional sections filled while
@@ -53,7 +53,7 @@ pub struct Digest {
 
 /// Everything the digest draws on, gathered once.
 pub struct Sources {
-    /// The store is a format this binary does not know (spec §3). Writes refuse;
+    /// The store is a format this binary does not know. Writes refuse;
     /// reads serve and say so, because a synced VERSION bump must never take
     /// another machine's sessions down and must never be silent either.
     pub version: Option<String>,
@@ -375,7 +375,7 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
         lines.push(format!("project: {name}"));
     }
     lines.extend(position(sources));
-    // A worker's question goes to whoever runs the work; only the ones with no
+    // An orchestrator's question is not the reader's; only the ones with no
     // audience are waiting on the person reading this.
     let for_you: Vec<&Row> = sources
         .questions
@@ -507,7 +507,7 @@ fn index_entries(index: &str) -> Vec<String> {
         .collect()
 }
 
-/// `--brief`: the smallest useful thing a hook can inject (spec §9), counted on
+/// `--brief`: the smallest useful thing a hook can inject, counted on
 /// the content string alone.
 pub fn brief(sources: &Sources, now: Timestamp) -> String {
     let _ = now;

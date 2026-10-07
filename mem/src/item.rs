@@ -1,4 +1,4 @@
-//! Item format: TOML frontmatter between `+++` fences, opaque body (spec §4).
+//! Item format: TOML frontmatter between `+++` fences, opaque body.
 //!
 //! Frontmatter is emitted only through `toml::to_string` — never string
 //! formatting — and every emission is checked so that no frontmatter line is a
@@ -137,9 +137,9 @@ pub struct Meta {
     /// the options so whoever answers can accept it in one step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommend: Option<String>,
-    /// `kind = "question"` only: who is meant to answer. `orchestrator` is a
-    /// worker's question, internals the session driving the run settles;
-    /// absent means a person, which is what the hub and the phone show.
+    /// `kind = "question"` only: who is meant to answer. `orchestrator` is
+    /// for the session driving the work; absent means a person, which is what
+    /// the hub and the phone show.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
     /// The task an evidence item proves, and on a question an older mem
@@ -204,7 +204,7 @@ impl Meta {
         self.archived.unwrap_or(false)
     }
 
-    /// Last 8 characters of the ULID — the entropy half (spec §4).
+    /// Last 8 characters of the ULID — the entropy half.
     pub fn short_id(&self) -> String {
         crate::ids::short_id(&self.id)
     }
@@ -322,7 +322,7 @@ fn collapse_value(v: toml::Value) -> toml::Value {
     }
 }
 
-/// The serializer-output assertion of spec §4: no emitted frontmatter line may
+/// The serializer-output assertion: no emitted frontmatter line may
 /// be a bare fence, or the file would parse back as a different item.
 pub fn guard_no_fence(frontmatter: &str) -> Result<()> {
     for line in frontmatter.split('\n') {

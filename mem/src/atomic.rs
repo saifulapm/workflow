@@ -1,5 +1,5 @@
 //! Atomic file replacement: same-directory dot-temp → fsync(file) → rename →
-//! fsync(dir) (spec §7). A reader either sees the previous file or the new one,
+//! fsync(dir). A reader either sees the previous file or the new one,
 //! never a partial write, and the rename is durable across a crash.
 
 use std::fs::{self, File};
@@ -10,8 +10,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use anyhow::{Context, Result, anyhow};
 use ulid::Ulid;
 
-/// Steps a write took, recorded only while a `TraceGuard` is alive. This is the
-/// test seam AC4 asks for: the durability sequence is observable rather than
+/// Steps a write took, recorded only while a `TraceGuard` is alive. This is
+/// the test seam that makes the durability sequence observable rather than
 /// merely claimed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
@@ -125,9 +125,9 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
-/// Replaces a file only if it has not changed since it was read (spec §4
-/// singleton CAS). `expected` is the mtime observed at read time, or None if
-/// the file was absent.
+/// Replaces a file only if it has not changed since it was read, the
+/// compare-and-swap every in-place file uses. `expected` is the mtime
+/// observed at read time, or None if the file was absent.
 pub fn write_atomic_cas(
     path: &Path,
     bytes: &[u8],

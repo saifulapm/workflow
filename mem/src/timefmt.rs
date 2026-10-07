@@ -11,7 +11,7 @@ pub fn date(epoch_seconds: i64) -> String {
     }
 }
 
-/// `--since` accepts RFC3339 or `<N>[mhd]` (spec §7): `90m`, `4h`, `2d`.
+/// `--since` accepts RFC3339 or `<N>[mhd]`: `90m`, `4h`, `2d`.
 pub fn parse_since(text: &str, now: Timestamp) -> Option<Timestamp> {
     let text = text.trim();
     if let Ok(ts) = text.parse::<Timestamp>() {

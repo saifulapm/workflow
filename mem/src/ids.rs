@@ -1,4 +1,4 @@
-//! ULIDs, short IDs, and pre-write collision re-minting (spec §4).
+//! ULIDs, short IDs, and pre-write collision re-minting.
 //!
 //! The short ID is the LAST 8 characters of the ULID — the entropy half; the
 //! first 10 characters are a timestamp and carry no entropy at all. Lookup

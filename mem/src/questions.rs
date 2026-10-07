@@ -1,4 +1,4 @@
-//! The question queue (spec §7b): asking is non-blocking, waiting is a separate
+//! The question queue: asking is non-blocking, waiting is a separate
 //! verb with a ceiling, and answering can happen on any machine.
 
 use std::path::Path;
@@ -9,9 +9,8 @@ use anyhow::Result;
 use crate::index::{Index, Purpose, Row};
 
 /// The documented maximum wait. Runtime Bash tools cap at 600 s, so a longer
-/// wait belongs to the orchestrator loop rather than to one tool call.
+/// wait belongs to a loop around the call rather than to one tool call.
 pub const MAX_WAIT: Duration = Duration::from_secs(5 * 60);
-pub const DEFAULT_WAIT: Duration = Duration::from_secs(5 * 60);
 
 /// How often the wait loop stats the items directory. Short in tests.
 pub fn poll_interval() -> Duration {

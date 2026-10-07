@@ -1,4 +1,4 @@
-//! Where everything lives (spec §3). XDG variables are honoured so a test — or
+//! Where everything lives. XDG variables are honoured so a test — or
 //! a second store on the same machine — can redirect the whole layout without
 //! any mem-specific configuration.
 
@@ -62,10 +62,6 @@ impl Dirs {
         self.mem_state().join("snapshots")
     }
 
-    pub fn config_file(&self) -> PathBuf {
-        self.config.join("mem/config.toml")
-    }
-
     /// Claude Code's own settings file -- `$CLAUDE_CONFIG_DIR/settings.json`,
     /// else `$HOME/.claude/settings.json`. Not under `self.config`: Claude
     /// Code does not honour XDG here.
@@ -100,7 +96,7 @@ impl Dirs {
     }
 }
 
-/// `~/.config/qshell/machine` else `uname -n` (spec §7).
+/// `~/.config/qshell/machine` else `uname -n`.
 pub fn machine_name(dirs: &Dirs) -> String {
     if let Ok(text) = std::fs::read_to_string(dirs.qshell_machine()) {
         let name = text.trim();

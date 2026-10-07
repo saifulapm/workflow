@@ -1,4 +1,4 @@
-//! The verbs themselves. Each returns the process exit code (spec §7), and
+//! The verbs themselves. Each returns the process exit code, and
 //! nothing here panics on an empty store: a fresh machine gets a helpful line,
 //! not a stack trace.
 
@@ -15,7 +15,7 @@ use crate::project::{Identity, Mode, PathMap, Registry};
 use crate::search::{Hit, Query, search};
 use crate::timefmt::date;
 
-/// `mem context` — the small digest, or with `--full` the whole one (spec §8).
+/// `mem context` — the small digest, or with `--full` the whole one.
 /// Always exit 0 when anything is
 /// emitted, the empty state included: a hook that gets a non-zero exit here
 /// would drop the whole thing.
@@ -406,7 +406,7 @@ fn checkboxes(text: &str) -> Vec<(&str, bool)> {
 }
 
 /// `mem project current` — the sanctioned identity source for external tooling
-/// (spec §7). It is a read verb, so an unregistered checkout is exit 1 and
+///. It is a read verb, so an unregistered checkout is exit 1 and
 /// nothing is created: whether a directory is a project mem knows is exactly
 /// the question the workflow hooks ask.
 pub fn project_current(app: &App) -> Result<i32> {
@@ -590,7 +590,7 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
 }
 
 /// The one-line empty state a read verb prints when the working directory is
-/// not a project mem knows (spec §5: reads never register).
+/// not a project mem knows: reads never register.
 pub fn unknown_project_note(identity: &Identity) -> Option<String> {
     match identity {
         Identity::UnknownRepo { name_hint } => Some(format!(
@@ -704,7 +704,7 @@ fn report_written(
     Ok(exit::OK)
 }
 
-/// `mem log` — dual mode: positional text writes, no text reads (spec §7).
+/// `mem log` — dual mode: positional text writes, no text reads.
 /// `bodies` puts each row's text on its JSON, for `mem search --kind`.
 pub fn log(
     app: &App,
@@ -729,7 +729,7 @@ pub fn log(
     };
     // `log` is the default kind only while nothing else narrows the read: a
     // `--type` on its own means that type in every kind, because a follow-up
-    // is a fact and `mem log --type followup` is the hint a run prints.
+    // is a fact and `mem log --type followup` should find every one.
     let kind = kind.or_else(|| r#type.is_none().then_some("log"));
     let mut rows = index.recent_filtered(kind, r#type, identity.id(), limit.max(1))?;
     if let Some(floor) = floor {
@@ -971,8 +971,8 @@ fn singleton(
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or_default();
-    // Either header is accepted here: a roadmap filed as the current plan
-    // is a mistake `workflow run` diagnoses on its own, not one mem refuses.
+    // Either header is accepted here: a roadmap filed as the current plan is
+    // a mistake for its reader to point out, not one mem refuses.
     if header_slug(first, "plan").is_none() && header_slug(first, "roadmap").is_none() {
         return Err(exit::usage(
             "a plan starts with `# plan: <slug>` or `# roadmap: <slug>`; to empty it use --clear",
@@ -2162,7 +2162,7 @@ fn write_pi_extension(path: &std::path::Path) -> Result<()> {
     crate::atomic::write_atomic(path, crate::maint::PI_EXTENSION.as_bytes())
 }
 
-/// `mem doctor [--fix]` — every check in spec §7. Findings are exit 0: they are
+/// `mem doctor [--fix]` — every health check. Findings are exit 0: they are
 /// for a human to read, not a failure of the command.
 pub fn doctor(app: &App, fix: bool) -> Result<i32> {
     use crate::maint::{finding, looks_like_a_secret};

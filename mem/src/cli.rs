@@ -1,4 +1,4 @@
-//! Command-line surface (spec §7).
+//! Command-line surface.
 
 use clap::{Parser, Subcommand};
 
@@ -37,7 +37,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// The session digest for this project (spec §8).
+    /// The session digest for this project.
     Context {
         /// Which project, when it is not the working directory's.
         project: Option<String>,
@@ -57,7 +57,7 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
-    /// Nudge a session that recorded nothing (the Stop hook, spec §9).
+    /// Nudge a session that recorded nothing (the Stop hook).
     SessionCheck {
         #[arg(long)]
         session_id: Option<String>,
@@ -68,7 +68,7 @@ pub enum Command {
     /// The instruction a compaction summarizer must follow (the PreCompact hook).
     Precompact {
         /// Accepted for symmetry: PreCompact's channel is plain stdout, so the
-        /// output is the same either way (spec §9).
+        /// output is the same either way.
         #[arg(long)]
         hook_json: bool,
     },
@@ -451,8 +451,8 @@ pub enum ProjectSetCommand {
     Remote { url: String },
 }
 
-/// Who a question is for. A worker's question is the orchestrator's to
-/// settle and never reaches the hub; a person's is what the hub shows.
+/// Who a question is for. An orchestrator's question never reaches the hub;
+/// a person's is what the hub shows.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lower")]
 pub enum Audience {

@@ -1,4 +1,4 @@
-//! Machine-local session activity (spec §3, §9). Session ids have no meaning on
+//! Machine-local session activity. Session ids have no meaning on
 //! another machine, so none of this is ever synced. It exists to answer two
 //! questions a hook cannot answer for itself: did this session record anything,
 //! and how many tool batches has it run.

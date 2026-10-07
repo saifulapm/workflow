@@ -1,5 +1,5 @@
 //! Maintenance: version gate, outbox spool, prune, snapshot and doctor
-//! (spec §3, §7, §10).
+//!.
 
 use std::path::{Path, PathBuf};
 
@@ -12,10 +12,10 @@ use crate::index::Index;
 use crate::item::Item;
 use crate::store::{STORE_VERSION, Store};
 
-/// Snapshots kept, newest first (spec §3).
+/// Snapshots kept, newest first.
 pub const SNAPSHOT_KEEP: usize = 14;
 
-/// Prune candidate rules (spec §7).
+/// Prune candidate rules.
 pub const SUPERSEDED_DAYS: i64 = 30;
 pub const LOG_DAYS: i64 = 90;
 pub const FACT_DAYS: i64 = 180;
@@ -61,7 +61,7 @@ pub fn ensure_version(store: &Store) -> Result<()> {
     Ok(())
 }
 
-/// A write that could not land goes here and is replayed later (spec §10).
+/// A write that could not land goes here and is replayed later.
 pub fn spool(outbox: &Path, item: &Item) -> Result<PathBuf> {
     let path = outbox.join(format!("{}.md", item.meta.id));
     write_atomic(&path, &item.to_bytes()?)?;
@@ -152,7 +152,7 @@ pub struct Candidate {
     pub path: PathBuf,
 }
 
-/// Stale items, by the rules in spec §7. Nothing is deleted here or anywhere:
+/// Stale items, by the rules below. Nothing is deleted here or anywhere:
 /// `--apply` sets a flag in the file.
 pub fn prune_candidates(index: &Index, now: Timestamp) -> Result<Vec<Candidate>> {
     let day = 86_400;
@@ -268,7 +268,7 @@ impl Run {
 /// The four hooks the mem skill's wiring depends on, and the command substring
 /// that makes each one count as wired.
 ///
-/// Stop was specified in spec §9 from the start and never wired anywhere, and
+/// Stop was part of the design from the start and never wired anywhere, and
 /// this list checking only the other three is why nobody noticed: pi's
 /// extension has fired the nudge on `agent_settled` since it shipped, and no
 /// Claude Code session ever has.

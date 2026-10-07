@@ -104,14 +104,14 @@
       ]
     },
     "audience": {
-      "description": "Question rows: who answers. `orchestrator` is a worker's question, settled by the session driving the run; null is a person's, which is what the hub shows.",
+      "description": "Question rows: who answers. `orchestrator` is for the session driving the work; null is a person's, which is what the hub shows.",
       "type": [
         "string",
         "null"
       ]
     },
     "task": {
-      "description": "Question rows asked by an orchestrated worker: `<plan>/<task>`, so the answer can be carried into the task's next attempt.",
+      "description": "The task an evidence row proves, or on a question an older mem wrote, the `<plan>/<task>` that asked it.",
       "type": [
         "string",
         "null"

@@ -1,4 +1,4 @@
-//! The SQLite index (spec §6). Disposable: everything in it is derived from
+//! The SQLite index. Disposable: everything in it is derived from
 //! the files in the store, so any doubt about its contents is resolved by
 //! deleting it and reindexing.
 //!
@@ -28,7 +28,7 @@ use crate::store::{Store, is_valid_slug, page_title, read_dir_sorted};
 /// 3 added the wiki pages, which get their own tables: a page is a document,
 /// not an item, and nothing that counts or lists items should start seeing it.
 /// 4 added a question's audience and task, so the hub can list what is a
-/// person's to answer and a run can find what its worker asked.
+/// person's to answer.
 /// 5 indexes a page by section rather than whole, so a search can hand back
 /// the part of a page that matched instead of all of it.
 const SCHEMA_VERSION: &str = "5";
@@ -472,7 +472,7 @@ fn sqlite_version(conn: &Connection) -> rusqlite::Result<(u32, u32, u32)> {
     ))
 }
 
-/// Startup assertions from spec §6. `contentless_delete=1` is what makes the
+/// Startup assertions. `contentless_delete=1` is what makes the
 /// FTS side deletable at all, and it needs SQLite 3.43.
 fn assert_capabilities(conn: &Connection) -> Result<()> {
     if !has_fts5(conn)? {

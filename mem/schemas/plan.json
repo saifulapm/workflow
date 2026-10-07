@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mem plan --json and mem roadmap --json (read mode)",
-  "description": "plan.md, verbatim — the orchestrator parses it. Exit 1 when there is no plan.",
+  "description": "plan.md or roadmap.md, verbatim: the hub and the skills parse it. Exit 1 when there is no plan.",
   "type": "object",
   "required": [
     "text",

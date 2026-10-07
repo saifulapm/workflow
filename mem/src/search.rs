@@ -1,4 +1,4 @@
-//! Search and ranking (spec §6).
+//! Search and ranking.
 //!
 //! `bm25()` returns a negative number and more negative is better, so the
 //! displayed score is `bm25_i / bm25_best`, which lands in (0, 1] with the best
@@ -18,7 +18,7 @@ const W_TITLE: f64 = 10.0;
 const W_BODY: f64 = 1.0;
 const W_TAGS: f64 = 5.0;
 
-/// Half the weight every 90 days (spec §6).
+/// Half the weight every 90 days.
 const DECAY_HALF_LIFE_DAYS: f64 = 90.0;
 
 /// Global items are served alongside project items but never outrank them:

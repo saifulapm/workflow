@@ -31,7 +31,7 @@
       ]
     },
     "audience": {
-      "description": "Who the question went to: `orchestrator` for a worker's, null for a person's.",
+      "description": "Who the question went to: `orchestrator` when --for said so, null for a person's.",
       "type": [
         "string",
         "null"

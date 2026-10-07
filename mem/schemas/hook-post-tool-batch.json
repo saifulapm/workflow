@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mem context --brief --hook-json --session-id <id>",
-  "description": "Emitted on every fifth batch and nothing on the others (spec §9). The runtime validates this envelope: an unknown key is dropped and a wrong hookEventName fails the whole output.",
+  "description": "Emitted on every fifth batch and nothing on the others. The runtime validates this envelope: an unknown key is dropped and a wrong hookEventName fails the whole output.",
   "type": "object",
   "required": [
     "hookSpecificOutput"

@@ -1,6 +1,5 @@
-//! Exit codes (spec §7). Every one of them is part of the contract with the
-//! adapters and the orchestrator, so they live in one place and are exercised
-//! by tests.
+//! Exit codes. Every one of them is part of the contract with the hooks, the
+//! hub and the skills, so they live in one place and are exercised by tests.
 
 use std::fmt;
 
@@ -58,7 +57,7 @@ pub fn code_of(err: &anyhow::Error) -> i32 {
 ///
 /// Rust's runtime ignores SIGPIPE so a write to a closed pipe comes back as
 /// EPIPE, and `println!` turns that into a panic: `mem log | head -4` ended in
-/// a stack trace and exit 101 (friction #ECTJYVXX). A reader that stops
+/// a stack trace and exit 101. A reader that stops
 /// reading is the reader's business. End where it did, the way every other
 /// command in a pipeline does.
 ///

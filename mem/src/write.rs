@@ -1,4 +1,4 @@
-//! The write verbs (spec §7). Every one of them lands on disk atomically, and
+//! The write verbs. Every one of them lands on disk atomically, and
 //! the singletons use compare-and-swap on mtime so two machines cannot silently
 //! overwrite each other.
 
@@ -325,12 +325,6 @@ pub fn tick_task(path: &Path, id: &str, noun: &str) -> Result<Ticked> {
     ))
 }
 
-/// The project a write verb acts on, created if this is a git checkout mem has
-/// not seen before (spec §5: only writes register).
-pub fn writable_identity(app: &App) -> Result<Identity> {
-    app.identity(Mode::Write)
-}
-
 /// `mem log` in read mode wants a lower bound; `--since` takes RFC3339 or
 /// `<N>[mhd]`.
 pub fn parse_since(text: &str) -> Result<Timestamp> {
@@ -368,27 +362,12 @@ mod tests {
             tick_line("- [ ] t10 Delete the helper", "t1"),
             Tick::NoMatch
         );
-        assert_eq!(
-            tick_line("- [ ] t1 Extract pricing", "t10"),
-            Tick::NoMatch
-        );
-        assert_eq!(
-            tick_line("- [x] t1 Extract pricing", "t1"),
-            Tick::Already
-        );
-        assert_eq!(
-            tick_line("- [X] t1 Extract pricing", "t1"),
-            Tick::Already
-        );
+        assert_eq!(tick_line("- [ ] t1 Extract pricing", "t10"), Tick::NoMatch);
+        assert_eq!(tick_line("- [x] t1 Extract pricing", "t1"), Tick::Already);
+        assert_eq!(tick_line("- [X] t1 Extract pricing", "t1"), Tick::Already);
         // Not task lines at all.
-        assert_eq!(
-            tick_line("# plan: cart-pricing-v2", "t1"),
-            Tick::NoMatch
-        );
-        assert_eq!(
-            tick_line("      Verify: t1 runs", "t1"),
-            Tick::NoMatch
-        );
+        assert_eq!(tick_line("# plan: cart-pricing-v2", "t1"), Tick::NoMatch);
+        assert_eq!(tick_line("      Verify: t1 runs", "t1"), Tick::NoMatch);
         assert_eq!(tick_line("- t1 no checkbox", "t1"), Tick::NoMatch);
         assert_eq!(tick_line("", "t1"), Tick::NoMatch);
     }

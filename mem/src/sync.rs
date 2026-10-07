@@ -1,4 +1,4 @@
-//! The qshell-sync seam (spec §11). mem never bisyncs anything itself: it asks
+//! The qshell-sync seam. mem never bisyncs anything itself: it asks
 //! qshell-sync to run the `memory` unit and reads the status file the sync
 //! script and the shell panel already share.
 
@@ -11,7 +11,7 @@ use serde::Deserialize;
 /// The unit in qshell-sync that carries the mem store.
 pub const UNIT: &str = "memory";
 
-/// Older than this and `mem context` says so (spec §7).
+/// Older than this and `mem context` says so.
 pub const STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -107,10 +107,10 @@ pub fn sync_command() -> String {
     std::env::var("MEM_SYNC_CMD").unwrap_or_else(|_| "qshell-sync".to_string())
 }
 
-/// Asks for a sync round and returns without waiting for it (spec §7, sync
-/// semantics ruling). Handoff, ask, answer and the park path all want the other
-/// machine to see them soon, and none of them can afford to sit through a
-/// Dropbox round inside a runtime tool call that dies at 600 s: the CLI's
+/// Asks for a sync round and returns without waiting for it. Handoff, ask
+/// and answer all want the other machine to see them soon, and none of them
+/// can afford to sit through a Dropbox round inside a runtime tool call that
+/// dies at 600 s: the CLI's
 /// latency contract wins, and the 15-minute timer is the backstop. Verification
 /// — comparing `lastRun` before and after — belongs to `mem sync` alone.
 ///
@@ -159,7 +159,7 @@ fn run_once() -> std::io::Result<std::process::Output> {
         .output()
 }
 
-/// The verified sync of spec §7: compare `lastRun`/`running` before and after,
+/// The verified sync: compare `lastRun`/`running` before and after,
 /// retry once after a pause, and say plainly when the round did not happen.
 pub fn verified(status_path: &Path, pause: std::time::Duration) -> anyhow::Result<Outcome> {
     for attempt in 0..2 {

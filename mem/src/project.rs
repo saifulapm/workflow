@@ -1,4 +1,4 @@
-//! Project identity (spec §5): which project is this working directory, and
+//! Project identity: which project is this working directory, and
 //! what happens when the answer is "none yet".
 //!
 //! The ladder is: git common dir → machine-local `paths.toml` → normalized
@@ -31,7 +31,7 @@ pub struct Project {
     pub created: Timestamp,
     /// The command that verifies this project, set by `mem project set verify`.
     /// It lives here rather than in the checkout so the project owns its checks
-    /// without the repository carrying a file about them (spec §7).
+    /// without the repository carrying a file about them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<String>,
     /// The root project this one lives inside, by id. Present only on a child
@@ -536,12 +536,11 @@ pub fn unset_key(store: &Store, project_id: &str, key: &str) -> Result<(PathBuf,
     Ok((path, had))
 }
 
-/// A choice this project declared with `mem project set <key>` -- the worker
-/// model, the reader.
+/// A choice this project declared with `mem project set <key>`, or a key an
+/// older mem wrote.
 ///
-/// Read straight out of the document, which is also how `set_key` writes it:
-/// mem stores the choice and hands it to whoever dispatches the work, so there
-/// is nothing here for `Project` to model. Anything unreadable reads as no
+/// Read straight out of the document, which is also how `set_key` writes it,
+/// so there is nothing here for `Project` to model. Anything unreadable reads as no
 /// choice, and the caller falls back to its default.
 pub fn declared(store: &Store, project_id: &str, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(store.project_toml(project_id)).ok()?;

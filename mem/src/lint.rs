@@ -14,8 +14,7 @@ use crate::verbs::{WIKI_INDEX, markdown_links, page_link_target, wiki_findings};
 /// The slug `mem wiki lint` takes, which no page may have.
 pub const LINT: &str = "lint";
 
-/// A section past this is more than a brief can carry in one piece: a task
-/// block is held to the same 2,000 bytes.
+/// A section past this is more than a reader takes in one piece.
 const SECTION_MAX_BYTES: usize = 2_000;
 
 /// A page past this is worth splitting into pages that link to each other.

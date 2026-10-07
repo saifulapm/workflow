@@ -1,4 +1,4 @@
-//! Runtime hook modes (spec §9).
+//! Runtime hook modes.
 //!
 //! Three channels, and they are not interchangeable — each was checked against
 //! the Claude Code 2.1.233 binary:
@@ -22,7 +22,7 @@ use serde_json::json;
 use crate::app::App;
 use crate::exit;
 
-/// Batches between two injections of the brief (spec §9).
+/// Batches between two injections of the brief.
 pub const BATCH_EVERY: u64 = 5;
 
 /// The Stop nudge: ~30 tokens, and both halves are actionable.
