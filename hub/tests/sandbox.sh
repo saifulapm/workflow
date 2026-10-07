@@ -149,16 +149,18 @@ mem roadmap --stdin >/dev/null <<'ROAD'
       Show: a recipe for four, set to six, lists half again of every amount
 ROAD
 mem roadmap --status draft >/dev/null
-for slug in b1-box b2-scale; do
-	mem plan "$slug" --stdin >/dev/null <<PLAN
-# plan: $slug
+# b1-box's plan is an html-plan page, which the hub opens in a frame; b2-scale's
+# is markdown, which it renders as it always has.
+mem plan b1-box --set-file "$root/skills/plan/html-plan/example.html" >/dev/null
+mem plan b2-scale --stdin >/dev/null <<'PLAN'
+# plan: b2-scale
 
-- [ ] ${slug%%-*}-t1 The first change
-      Files: src/$slug.rs
+- [ ] b2-t1 The first change
+      Files: src/b2-scale.rs
       Verify: cargo test
 PLAN
-done
-mem ask --for human --options approve,changes --recommend approve 'Approve roadmap beta?' >/dev/null
+# Asked the way the plan skill asks it.
+mem ask --for human --options approve,changes --recommend approve 'Review the beta roadmap and its plan pages' >/dev/null
 
 project gamma
 mem brief --set 'A habit tracker that nags once and then lets go.' >/dev/null
