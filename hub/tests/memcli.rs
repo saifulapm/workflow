@@ -72,7 +72,10 @@ fn exit_one_with_empty_stdout_is_absent_and_never_parsed() {
     // error.
     let handoff = mem.handoff("proj-alpha");
     assert!(matches!(*handoff, Outcome::Absent), "{handoff:?}");
-    assert!(handoff.broken().is_none(), "absent is not the degraded page");
+    assert!(
+        handoff.broken().is_none(),
+        "absent is not the degraded page"
+    );
     assert!(handoff.rows("text").is_empty());
 }
 
@@ -419,7 +422,9 @@ fn the_table_holds_against_the_real_binary() {
     assert!(out.status.success());
     mem.invalidate();
     match &*mem.handoff("proj-alpha") {
-        Outcome::Json(value) => assert!(value["body"].as_str().unwrap().trim().starts_with("Green.")),
+        Outcome::Json(value) => {
+            assert!(value["body"].as_str().unwrap().trim().starts_with("Green."))
+        }
         other => panic!("{other:?}"),
     }
 

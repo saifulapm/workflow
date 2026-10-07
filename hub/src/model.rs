@@ -472,5 +472,4 @@ mod tests {
         assert_eq!(page.bytes, 12);
         assert_eq!(page.modified, None);
     }
-
 }

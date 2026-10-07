@@ -215,11 +215,7 @@ fn the_header_shows_stage_and_progress() {
     let world = World::new("project-page-header");
     let body = world.page("beta");
 
-    for part in [
-        "planning",
-        "milestone 1 of 2",
-        "tasks 1 of 3",
-    ] {
+    for part in ["planning", "milestone 1 of 2", "tasks 1 of 3"] {
         assert!(body.contains(part), "{part}: {body}");
     }
     assert!(!body.contains("paused"), "{body}");

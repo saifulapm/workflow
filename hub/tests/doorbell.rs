@@ -806,7 +806,8 @@ impl Fake {
     }
 }
 
-const FINISHED: &str = "roadmap finished on here-hub (proj-beta) — http://hub.test:8787/p/proj-beta";
+const FINISHED: &str =
+    "roadmap finished on here-hub (proj-beta) — http://hub.test:8787/p/proj-beta";
 
 #[test]
 fn a_finished_roadmap_rings_once_and_a_restart_rings_none() {

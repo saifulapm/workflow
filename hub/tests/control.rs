@@ -7,8 +7,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{
-    Hub, TempDir, header_of, invocations, mem_in, real_mem, recording_mem, seed_project,
-    status_of,
+    Hub, TempDir, header_of, invocations, mem_in, real_mem, recording_mem, seed_project, status_of,
 };
 
 const PROJECT: &str = "proj-alpha";
@@ -42,10 +41,8 @@ impl World {
         let config = dir.join("hub.toml");
         std::fs::write(
             &config,
-            format!(
-                "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
-                 ntfy_base = \"http://127.0.0.1:9\"\n"
-            ),
+            "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
+             ntfy_base = \"http://127.0.0.1:9\"\n",
         )
         .unwrap();
         let roadmap = dir.join("roadmap.md");
@@ -107,10 +104,7 @@ impl World {
             "--",
             REVIEW,
         ]);
-        self.question(REVIEW)["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
+        self.question(REVIEW)["id"].as_str().unwrap().to_string()
     }
 
     fn question(&self, title: &str) -> serde_json::Value {
@@ -183,10 +177,7 @@ fn approve_sets_the_roadmap_approved_and_answers_its_question() {
         ]
     );
     assert_eq!(world.roadmap_status(), "approved");
-    assert_eq!(
-        world.question(REVIEW)["answer"],
-        "approve"
-    );
+    assert_eq!(world.question(REVIEW)["answer"], "approve");
 }
 
 #[test]
@@ -231,10 +222,7 @@ fn changes_answers_the_question_and_leaves_the_roadmap_draft() {
         ])]
     );
     assert_eq!(world.roadmap_status(), "draft");
-    assert_eq!(
-        world.question(REVIEW)["answer"],
-        "changes: split m1 in two"
-    );
+    assert_eq!(world.question(REVIEW)["answer"], "changes: split m1 in two");
 }
 
 #[test]

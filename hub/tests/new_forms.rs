@@ -98,12 +98,7 @@ impl World {
     fn writes(&self) -> Vec<Vec<String>> {
         let writes: Vec<Vec<String>> = invocations(&self.log)
             .into_iter()
-            .filter(|argv| {
-                matches!(
-                    argv.first().map(String::as_str),
-                    Some("idea" | "brief")
-                )
-            })
+            .filter(|argv| matches!(argv.first().map(String::as_str), Some("idea" | "brief")))
             .filter(|argv| !argv.iter().any(|a| a == "--json"))
             .collect();
         for argv in &writes {
@@ -111,7 +106,6 @@ impl World {
         }
         writes
     }
-
 }
 
 fn argv(args: &[&str]) -> Vec<String> {

@@ -195,11 +195,7 @@ pub fn render(
 /// One project as a card: its name, its stage and whatever waits on the
 /// owner as pills, the open milestone, then a bar filled by
 /// the plan's ticks, or the roadmap's when there is no plan.
-fn project_card(
-    project: &ProjectSummary,
-    waiting: usize,
-    now_ms: i64,
-) -> String {
+fn project_card(project: &ProjectSummary, waiting: usize, now_ms: i64) -> String {
     let mut pills = format!(
         "<span class=\"{}\">{}</span>",
         stage_pill(project.stage),
