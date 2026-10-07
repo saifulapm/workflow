@@ -171,10 +171,18 @@ fn roadmap_a_draft_shows_each_milestone_its_plan_and_both_forms() {
         "b3-share has no stored plan: {body}"
     );
     // The first open milestone is the current one; the one after it is open.
-    let current = body.find("current").expect("a current milestone");
+    let current = body
+        .find("<span class=\"pill\">current</span>")
+        .expect("a current milestone");
     assert!(current < body.find("A recipe scales").unwrap(), "{body}");
-    assert!(body.contains("open"), "{body}");
-    assert!(body.contains('✓'), "the ticked milestone: {body}");
+    assert!(
+        body.contains("<span class=\"pill mut\">open</span>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("<span class=\"pill ok\">landed</span>"),
+        "the ticked milestone: {body}"
+    );
 
     assert_eq!(
         body.matches("action=\"/p/beta/control\"").count(),
@@ -242,8 +250,8 @@ fn roadmap_cost_shows_under_a_ticked_milestone_from_its_milestone_line() {
     );
     let body = roadmap_page(&world, 4);
 
-    let b1 = body.find("· b1-box<").expect("b1-box");
-    let b2 = body.find("· b2-scale<").expect("b2-scale");
+    let b1 = body.find(">b1-box</span>").expect("b1-box");
+    let b2 = body.find(">b2-scale</span>").expect("b2-scale");
     let line = "<p class=\"meta\">cost: 4 sessions · 31 min · 2.4M in · 38.7k out</p>";
     let at = body.find(line).unwrap_or_else(|| panic!("{line}\n{body}"));
     assert!(b1 < at && at < b2, "under b1-box: {body}");

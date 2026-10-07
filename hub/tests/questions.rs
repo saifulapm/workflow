@@ -101,16 +101,17 @@ fn article<'a>(body: &'a str, text: &str) -> &'a str {
     &body[start..end]
 }
 
+/// An option's own form, which sits in a row with its siblings.
 fn option_form(id: &str, option: &str, label: &str) -> String {
     format!(
-        "<form method=\"post\" action=\"/answer\">\n\
+        "<form class=\"opt\" method=\"post\" action=\"/answer\">\n\
          <input type=\"hidden\" name=\"id\" value=\"{id}\">\n\
          <input type=\"hidden\" name=\"project\" value=\"gamma\">\n\
          {label_line}\
          </form>\n",
         label_line = match label {
             "" => format!(
-                "<button type=\"submit\" name=\"text\" value=\"{option}\">{option}</button>\n"
+                "<button type=\"submit\" name=\"text\" value=\"{option}\" class=\"alt\">{option}</button>\n"
             ),
             _ => format!(
                 "<button type=\"submit\" name=\"text\" value=\"{option}\" class=\"recommended\">{label}</button>\n"

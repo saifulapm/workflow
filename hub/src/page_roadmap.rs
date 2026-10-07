@@ -106,15 +106,16 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
     let mut seen_open = false;
     for row in roadmap_rows(text) {
         let mark = if row.ticked {
-            "✓"
+            "<span class=\"pill ok\">landed</span>"
         } else if seen_open {
-            "open"
+            "<span class=\"pill mut\">open</span>"
         } else {
             seen_open = true;
-            "current"
+            "<span class=\"pill\">current</span>"
         };
         out.push_str(&format!(
-            "<article>\n<div class=\"meta\">{mark} · {slug}</div>\n<p><strong>{title}</strong></p>\n",
+            "<article>\n<div class=\"row\"><span class=\"meta\">{slug}</span>{mark}</div>\n\
+             <p><strong>{title}</strong></p>\n",
             slug = esc(&row.slug),
             title = esc(&row.title),
         ));

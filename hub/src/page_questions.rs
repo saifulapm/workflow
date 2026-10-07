@@ -127,12 +127,12 @@ pub fn pending_block(question: &QuestionRow, project: &str) -> String {
             )
         } else {
             format!(
-                "<button type=\"submit\" name=\"text\" value=\"{value}\">{value}</button>\n",
+                "<button type=\"submit\" name=\"text\" value=\"{value}\" class=\"alt\">{value}</button>\n",
                 value = esc(option),
             )
         };
         out.push_str(&format!(
-            "<form method=\"post\" action=\"/answer\">\n{hidden}{button}</form>\n"
+            "<form class=\"opt\" method=\"post\" action=\"/answer\">\n{hidden}{button}</form>\n"
         ));
     }
     out.push_str(&format!(

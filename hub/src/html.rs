@@ -159,6 +159,14 @@ nav.contents a:hover{color:var(--accent);text-decoration:none}
 textarea,input[type=text],input[type=search],select{width:100%;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
 button{margin-top:8px;font-size:14px;font-weight:600;padding:8px 16px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer}
 form.search{display:flex;gap:8px;align-items:center;margin-block:0 16px}
+button.alt{background:var(--surface);color:var(--accent);border-color:var(--line)}
+button.alt:hover{border-color:var(--accent)}
+form.opt{display:inline-block;margin:0 6px 8px 0}
+input[type=number]{width:6rem;font-size:14px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+input[type=file]{font-size:13px;color:var(--mut)}
+input[type=file]::file-selector-button{font:inherit;font-weight:600;margin-right:10px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--accent);cursor:pointer}
+form>*+*{margin-top:8px}
+form>input[type=hidden]+*{margin-top:0}
 form.search button{margin:0}
 .banner{padding:10px 14px;border-radius:10px;margin-block:0 16px;background:var(--accent-soft);color:var(--accent)}
 .banner.ok{background:var(--ok-soft);color:var(--ok)}
