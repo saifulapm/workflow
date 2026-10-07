@@ -189,6 +189,20 @@ fn roadmap_an_approved_one_says_it_was_sent() {
 }
 
 #[test]
+fn roadmap_with_every_milestone_ticked_reads_done() {
+    let doc = serde_json::json!({
+        "text": "# roadmap: beta\n\n- [x] b1-box A box\n- [x] b2-scale It scales\n",
+        "path": "/x/roadmap.md",
+        "status": "approved",
+    });
+    let world = World::new("roadmap-finished", Some(doc));
+    let body = roadmap_page(&world, 3);
+
+    assert!(body.contains("status: done"), "{body}");
+    assert!(!body.contains("approved: sent"), "{body}");
+}
+
+#[test]
 fn roadmap_one_with_an_old_stored_status_shows_no_form() {
     let world = World::new("roadmap-old-status", Some(roadmap_doc(Some("done"))));
     let body = roadmap_page(&world, 3);

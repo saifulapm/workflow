@@ -82,12 +82,20 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
         .filter_map(|row| row["slug"].as_str().map(str::to_string))
         .collect();
 
+    let rows = roadmap_rows(text);
+    // Every milestone ticked is done, whatever status is stored, as the
+    // project page reads it.
+    let status = if !rows.is_empty() && rows.iter().all(|row| row.ticked) {
+        Some("done")
+    } else {
+        status
+    };
     let mut out = format!(
         "<p class=\"meta\">status: {}</p>\n",
         esc(status.unwrap_or("not set"))
     );
     let mut seen_open = false;
-    for row in roadmap_rows(text) {
+    for row in rows {
         let mark = if row.ticked {
             "<span class=\"pill ok\">landed</span>"
         } else if seen_open {
