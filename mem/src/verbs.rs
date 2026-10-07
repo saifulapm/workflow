@@ -1275,13 +1275,20 @@ fn stored_plan(
     // The header is the file name. A plan filed under a slug that is not its
     // own is what would later send a run at the wrong milestone.
     let first = text.lines().next().unwrap_or_default();
-    if header_slug(first, "plan") != Some(slug) {
+    if header_slug(first, "plan") != Some(slug) && !is_plan_page(&text) {
         return Err(exit::usage(format!(
             "a stored plan's first line must be `# plan: {slug}`, and this one is `{}`",
             crate::search::truncate_bytes(first.trim(), 60)
         )));
     }
     land(app, &path, &text, seen, &format!("{slug}.md"))
+}
+
+/// An html-plan page: a whole HTML document holding a `<doc-plan>`. The slug
+/// it is filed under is its only name, since the page has no header line.
+fn is_plan_page(text: &str) -> bool {
+    let first = text.trim_start().get(..15).unwrap_or_default();
+    first.eq_ignore_ascii_case("<!doctype html>") && text.contains("<doc-plan")
 }
 
 /// The slug of a `# <noun>: <slug>` header line, read as the plan parser

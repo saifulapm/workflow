@@ -476,3 +476,33 @@ fn maintenance_is_a_status_on_both_singletons() {
         );
     }
 }
+
+#[test]
+fn an_html_plan_page_is_stored_as_a_milestone_plan() {
+    let w = World::new("roadmap-html-plan");
+    let repo = w.repo("shop", None);
+
+    // The plan skill writes each milestone as one html-plan page. Its first
+    // line is the doctype, so the page names itself by its <doc-plan> instead
+    // of by a `# plan:` header.
+    let page = "<!doctype html>\n<html lang=\"en\">\n<title>Sign In</title>\n\
+                <main><doc-plan><doc-claim><p>The user can sign in.</p></doc-claim></doc-plan></main>\n";
+    let path = file(&w, "m1-auth.html", page);
+    let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &path]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["plan", "m1-auth"])),
+        page,
+        "the page prints back byte for byte"
+    );
+
+    // Any other HTML is not a plan.
+    let stray = file(&w, "stray.html", "<!doctype html>\n<p>notes</p>\n");
+    let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &stray]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["plan", "m1-auth"])),
+        page,
+        "a refused write leaves the stored page alone"
+    );
+}
