@@ -6,7 +6,7 @@ use crate::form::encode_component;
 use crate::html::{self, degraded_banner, esc, item_url, page_url};
 use crate::http::Response;
 use crate::model;
-use crate::pages::{PageCtx, page_shell};
+use crate::pages::{PageCtx, page_shell, page_shell_in};
 
 /// The longest query passed to `mem search`. A phone types a few words; this
 /// keeps a pasted page out of the argv.
@@ -56,11 +56,13 @@ pub fn page_get(ctx: &PageCtx) -> Response {
         .iter()
         .map(|row| (text_of(row, "heading"), text_of(row, "hslug")))
         .collect::<Vec<_>>();
-    let mut body = contents(&sections);
+    let mut body = search_form(project, "");
+    body.push_str("<div class=\"docs\">\n");
+    body.push_str(&contents(&sections));
     body.push_str("<article class=\"md\">\n");
     body.push_str(&html::markdown_ids(&text, project, &sections));
-    body.push_str("</article>\n");
-    Response::html(page_shell(slug, Some(project), &body))
+    body.push_str("</article>\n</div>\n");
+    Response::html(page_shell_in("wiki", slug, Some(project), &body))
 }
 
 /// Every heading, linked to its id on the page. Nothing for a page with none.
@@ -88,19 +90,26 @@ pub fn contents(sections: &[(String, String)]) -> String {
 pub fn wiki_body(ctx: &PageCtx) -> String {
     let project = ctx.project.unwrap_or_default();
     let q = query(ctx.request.query.get("q").unwrap_or_default());
-    let mut out = format!(
-        "<form method=\"get\" action=\"{}/wiki\">\n\
-         <input type=\"search\" name=\"q\" value=\"{}\" aria-label=\"search\">\n\
-         <button type=\"submit\">Search</button>\n\
-         </form>\n",
-        esc(&html::project_url(project)),
-        esc(q),
-    );
+    let mut out = search_form(project, q);
     if !q.is_empty() {
         out.push_str(&hits(ctx, project, q));
     }
     out.push_str(&pages(ctx, project));
     out
+}
+
+/// The box that searches the project's wiki, on its list and on each page.
+fn search_form(project: &str, q: &str) -> String {
+    format!(
+        "<form class=\"search\" method=\"get\" action=\"{}/wiki\">\n\
+         <input type=\"search\" name=\"q\" value=\"{}\" placeholder=\"search {}\" \
+         aria-label=\"search\">\n\
+         <button type=\"submit\">Search</button>\n\
+         </form>\n",
+        esc(&html::project_url(project)),
+        esc(q),
+        esc(project),
+    )
 }
 
 /// The query as it is searched for: trimmed, and cut to `QUERY_BYTES` on a

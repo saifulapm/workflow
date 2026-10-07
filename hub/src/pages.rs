@@ -124,6 +124,12 @@ fn page_for(path: &str) -> Option<(&'static str, Option<&str>, &str, Handler)> {
 
 /// The head, the project's name and the nav, around `body`.
 pub fn page_shell(title: &str, project: Option<&str>, body: &str) -> String {
+    page_shell_in(title, title, project, body)
+}
+
+/// `page_shell` for a page titled `title` that belongs to the nav's `page`,
+/// as a wiki page belongs to the wiki.
+pub fn page_shell_in(page: &str, title: &str, project: Option<&str>, body: &str) -> String {
     let mut out = match project {
         Some(project) => html::head(&format!("{project} / {title}")),
         None => html::head(title),
@@ -132,7 +138,7 @@ pub fn page_shell(title: &str, project: Option<&str>, body: &str) -> String {
         Some(project) => html::project_link(project),
         None => html::esc(title),
     }));
-    out.push_str(&nav(project, title));
+    out.push_str(&nav(project, page));
     out.push_str(body);
     out.push_str("</body>\n</html>\n");
     out

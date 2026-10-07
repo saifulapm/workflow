@@ -135,7 +135,10 @@ fn the_page_has_a_search_form_and_lists_pages_index_first() {
 
     let (body, spawns) = world.get(&format!("/p/{PROJECT}/wiki"));
 
-    assert!(body.contains("<form method=\"get\""), "{body}");
+    assert!(
+        body.contains("<form class=\"search\" method=\"get\""),
+        "{body}"
+    );
     assert!(body.contains("name=\"q\""), "{body}");
     let index = body.find("href=\"/wiki/gamma/index\"").expect(&body);
     let storage = body.find("href=\"/wiki/gamma/storage\"").expect(&body);
@@ -265,4 +268,58 @@ fn the_contents_list_links_every_heading_to_its_anchor() {
     // The preamble is no heading, so it is no row.
     assert!(!body.contains("href=\"#top\""), "{body}");
     assert!(spawns.len() <= 3, "a page costs three spawns: {spawns:?}");
+}
+
+#[test]
+fn a_page_sits_beside_its_contents_with_a_search_box_above() {
+    let world = World::new("wiki-search-docs");
+
+    let (body, spawns) = world.get("/wiki/gamma/storage");
+
+    let search = body
+        .find(
+            "<form class=\"search\" method=\"get\" action=\"/p/gamma/wiki\">\n\
+             <input type=\"search\" name=\"q\" value=\"\" placeholder=\"search gamma\" \
+             aria-label=\"search\">",
+        )
+        .expect(&body);
+    let docs = body
+        .find("<div class=\"docs\">\n<nav class=\"contents\">")
+        .expect(&body);
+    let article = body.find("<article class=\"md\">").expect(&body);
+    assert!(search < docs && docs < article, "{body}");
+    assert!(body.contains("</article>\n</div>\n"), "{body}");
+    assert!(spawns.len() <= 3, "the box costs no spawn: {spawns:?}");
+}
+
+#[test]
+fn the_wiki_list_uses_the_same_search_box_and_keeps_the_query() {
+    let world = World::new("wiki-search-box");
+
+    let (body, _) = world.get(&search_path("flush"));
+
+    assert!(
+        body.contains(
+            "<form class=\"search\" method=\"get\" action=\"/p/gamma/wiki\">\n\
+             <input type=\"search\" name=\"q\" value=\"flush\" placeholder=\"search gamma\" \
+             aria-label=\"search\">"
+        ),
+        "{body}"
+    );
+}
+
+#[test]
+fn a_page_marks_wiki_as_the_section_being_read() {
+    let world = World::new("wiki-search-current");
+
+    let (body, _) = world.get("/wiki/gamma/storage");
+
+    assert!(
+        body.contains("<a href=\"/p/gamma/wiki\" aria-current=\"page\">wiki</a>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("<title>hub — gamma / storage</title>"),
+        "{body}"
+    );
 }
