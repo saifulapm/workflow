@@ -1,6 +1,6 @@
 #!/bin/sh
 # The workflow gate, pre-commit half. Copied into ~/.config/git/hooks/ by
-# `workflow doctor --fix`; a global core.hooksPath points every repo on this
+# `workflow install`; a global core.hooksPath points every repo on this
 # machine here.
 #
 # The five steps of spec §7 live in `workflow hook` (spec §12b). Two lines are
@@ -15,7 +15,7 @@
 # The stub never touches its own environment. git sets GIT_DIR and
 # GIT_INDEX_FILE for hooks, and a partial commit's staged view lives in that
 # temporary index; unsetting them blinds the staged-diff checks and breaks
-# whatever we chain into. Only the child test suite is scrubbed, inside verify.
+# whatever we chain into.
 
 [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] || exit 0
 
