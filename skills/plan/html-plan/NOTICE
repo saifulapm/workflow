@@ -1,0 +1,4 @@
+html-plan runtime, block reference and example by Thariq Shihipar, from
+github.com/anthropics/claude-plugins-community (html-plan/, commit f60f045,
+2026-10-05). The repository is Apache-2.0 (LICENSE here); the plugin manifest
+says MIT. Unchanged except that example.html links the runtime by bare name.
