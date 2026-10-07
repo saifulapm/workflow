@@ -149,9 +149,7 @@ fn page(world: &World, project: &str) -> (String, Vec<String>) {
         || {
             lines(&world.log)
                 .iter()
-                .filter(|argv| argv.starts_with("log --type run --limit 20 "))
-                .count()
-                >= 2
+                .any(|argv| argv == "projects --json")
         },
     );
     let before = lines(&world.log).len();

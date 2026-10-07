@@ -116,7 +116,7 @@ fn page(world: &World) -> (String, Vec<String>) {
         || {
             lines(&world.mem_log)
                 .iter()
-                .any(|argv| argv.starts_with("log --type run --limit 20 "))
+                .any(|argv| argv == "projects --json")
         },
     );
     let before = lines(&world.mem_log).len();

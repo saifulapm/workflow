@@ -1,9 +1,9 @@
 //! The doorbell (spec §5).
 //!
 //! A background thread polls the pending queue every 15 s and rings once for
-//! every question id it has not seen. In the same round it rings for a walk
-//! that ended, from serve's `dogfood <slug>:` run lines, and for a roadmap
-//! that finished on this machine. What it publishes is deliberately thin:
+//! every question id it has not seen. In the same round it rings for a
+//! project checked out here whose orchestrator stalled, and for one whose
+//! roadmap has every milestone ticked. What it publishes is deliberately thin:
 //! the machine, the project, and a link back here — **never the question
 //! text**, nor any other item's.
 //!
@@ -74,7 +74,6 @@ impl Doorbell {
         let mut state = State {
             seeding: loaded.is_none(),
             seen: loaded.unwrap_or_default(),
-            activity: BTreeMap::new(),
             record_failed: false,
             unstarted: BTreeMap::new(),
         };
@@ -115,42 +114,32 @@ impl Doorbell {
                 continue;
             }
             let project = row["project"].as_str().unwrap_or("");
-            // The engine pauses a milestone by asking this question, so the
-            // phone hears why it stopped rather than that something waits.
-            if row["body"]
-                .as_str()
-                .is_some_and(|body| body.contains(THIRD_STRIKE))
-            {
-                self.deliver(&self.event_body("paused by the engine", project));
-            } else {
-                self.deliver(&self.body(project));
-            }
+            self.deliver(&self.body(project));
         }
         // A fault anywhere keeps the next round seeding too, so a first start
         // never rings for a backlog it could not read whole.
-        if self.walks_and_roadmaps(mem, state) {
+        if self.stalls_and_finishes(mem, state) {
             state.seeding = false;
         }
     }
 
-    /// The walk results and finished roadmaps, read from what serve and mem
-    /// already write. False when a read failed this round.
-    fn walks_and_roadmaps(&self, mem: &MemCli, state: &mut State) -> bool {
+    /// The stalls and the finished roadmaps, read off `projects --json` and
+    /// amx. False when the projects read failed this round.
+    fn stalls_and_finishes(&self, mem: &MemCli, state: &mut State) -> bool {
         let projects = mem.refresh(&["projects", "--json"]);
         if let Some(why) = crate::model::list_fault(&projects, "projects") {
             eprintln!("hub: doorbell: {why}");
             return false;
         }
-        let mut settled = true;
         // Asked once a round, and only when some project could have stalled.
         let mut agents = None;
         for project in projects.rows("projects") {
             let Some(name) = project["name"].as_str() else {
                 continue;
             };
+            // Every milestone ticked, on a machine that could have run them.
             let total = project["milestones_total"].as_u64().unwrap_or(0);
-            if project["roadmap_status"].as_str() == Some("maintenance")
-                && total > 0
+            if total > 0
                 && project["milestones_done"].as_u64() == Some(total)
                 && summary_of(&project).checked_out
                 // The total is in the key so a roadmap that grows and
@@ -188,42 +177,8 @@ impl Doorbell {
                     state.unstarted.remove(name);
                 }
             }
-
-            // A project that wrote nothing since the last round has no new
-            // run line, so it costs no `mem log`.
-            let activity = project["last_activity"].to_string();
-            if state.activity.get(name) == Some(&activity) {
-                continue;
-            }
-            let log = mem.refresh(&[
-                "log",
-                "--type",
-                "run",
-                "--limit",
-                "20",
-                &format!("--project={name}"),
-                "--json",
-            ]);
-            if let Some(why) = crate::model::list_fault(&log, "log") {
-                // Left unrecorded, so the next round reads it again.
-                eprintln!("hub: doorbell: {name}: {why}");
-                settled = false;
-                continue;
-            }
-            state.activity.insert(name.to_string(), activity);
-            for row in log.rows("items") {
-                let Some(event) = row["title"].as_str().and_then(walk_event) else {
-                    continue;
-                };
-                let Some(id) = row["id"].as_str() else {
-                    continue;
-                };
-                if self.record(state, id) && !self.foreign(&row) {
-                    self.deliver(&self.event_body(event, name));
-                }
-            }
         }
-        settled
+        true
     }
 
     /// Whether this project has stalled, and the seen key to ring it under.
@@ -356,22 +311,6 @@ impl Doorbell {
     }
 }
 
-/// What the third-strike question says, and the only words of it read here.
-pub const THIRD_STRIKE: &str = "failed its Show path three times";
-
-/// The ring for one of serve's `dogfood <slug>: <result>` run lines, if it
-/// gets one: a pass and open findings do, `no Show path` and `skipped` do not.
-pub fn walk_event(title: &str) -> Option<&'static str> {
-    let (_slug, result) = title.strip_prefix("dogfood ")?.split_once(": ")?;
-    if result == "pass" {
-        Some("walk passed")
-    } else if result.starts_with("findings ") {
-        Some("walk found defects")
-    } else {
-        None
-    }
-}
-
 /// How many polls a milestone no orchestrator has run waits before it rings:
 /// two minutes at the 15 s poll.
 const UNSTARTED_GRACE_POLLS: u32 = 8;
@@ -390,9 +329,6 @@ struct State {
     /// True until one round has completed without a fault: the backlog is
     /// recorded, and rung for zero times.
     seeding: bool,
-    /// Each project's `last_activity` as last read, so a project that has
-    /// not moved is not asked for its run log again.
-    activity: BTreeMap<String, String>,
     /// Whether the last attempt to record an id failed, so the log says so once
     /// rather than every fifteen seconds (review m-5).
     record_failed: bool,

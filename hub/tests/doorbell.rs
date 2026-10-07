@@ -700,10 +700,6 @@ impl Fake {
                  \x20 questions) cat '{data}/questions.json'; exit 0 ;;\n\
                  \x20 projects) cat '{data}/projects.json'; exit 0 ;;\n\
                  \x20 handoff) cat '{data}/handoff.json' 2>/dev/null || echo '{{\"body\":\"\"}}'; exit 0 ;;\n\
-                 \x20 log)\n\
-                 \x20   for a in \"$@\"; do case \"$a\" in --project=*) p=\"${{a#--project=}}\" ;; esac; done\n\
-                 \x20   cat \"{data}/log-$p.json\" 2>/dev/null || echo '{{\"items\":[]}}'\n\
-                 \x20   exit 0 ;;\n\
                  esac\n\
                  exit 1",
                 log = mem_log.display(),
@@ -778,35 +774,6 @@ impl Fake {
         );
     }
 
-    /// proj-alpha's run log: one row per `(id, machine, title)`.
-    fn runs(&self, rows: &[(&str, &str, &str)]) {
-        let rows: Vec<String> = rows
-            .iter()
-            .map(|(id, machine, title)| {
-                format!(
-                    "{{\"id\":\"{id}\",\"kind\":\"log\",\"type\":\"run\",\
-                      \"title\":\"{title}\",\"project\":\"proj-alpha\",\
-                      \"machine\":\"{machine}\"}}"
-                )
-            })
-            .collect();
-        self.put(
-            "log-proj-alpha.json",
-            &format!("{{\"items\":[{}]}}", rows.join(",")),
-        );
-    }
-
-    /// The third strike's question, as `mem questions --json` prints it.
-    fn third_strike(&self) {
-        self.put(
-            "questions.json",
-            "{\"questions\":[{\"id\":\"01M0BF1F8BY8FXGZS428J1TS90\",\
-              \"short_id\":\"28J1TS90\",\"title\":\"m3 needs you\",\
-              \"project\":\"proj-alpha\",\"machine\":\"here-hub\",\
-              \"body\":\"m3 failed its Show path three times; answer walk again\"}]}",
-        );
-    }
-
     /// Every ring's body, in the order curl was run.
     fn rings(&self) -> Vec<String> {
         invocations(&self.curl_log)
@@ -837,163 +804,48 @@ impl Fake {
             self.spawns("questions") >= before + 2
         });
     }
-
-    /// The walk passed, the walk found defects, the engine paused proj-alpha
-    /// and proj-beta's roadmap finished, all at once.
-    fn all_four(&self) {
-        self.runs(&[
-            ("01M0BF1F8BY8FXGZS428J1RN01", "here-hub", "dogfood m2: pass"),
-            (
-                "01M0BF1F8BY8FXGZS428J1RN02",
-                "here-hub",
-                "dogfood m3: findings 2",
-            ),
-            (
-                "01M0BF1F8BY8FXGZS428J1RN03",
-                "here-hub",
-                "dogfood m3: no Show path",
-            ),
-            (
-                "01M0BF1F8BY8FXGZS428J1RN04",
-                "here-hub",
-                "dogfood m3: skipped the forty-five minutes",
-            ),
-        ]);
-        self.third_strike();
-        self.projects("2026-10-05T10:00:00Z", "maintenance", 3);
-    }
 }
 
-const FOUR_RINGS: [&str; 4] = [
-    "paused by the engine on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha",
-    "walk passed on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha",
-    "walk found defects on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha",
-    "roadmap finished on here-hub (proj-beta) — http://hub.test:8787/p/proj-beta",
-];
+const FINISHED: &str = "roadmap finished on here-hub (proj-beta) — http://hub.test:8787/p/proj-beta";
 
 #[test]
-fn a_walk_a_pause_and_a_finished_roadmap_each_ring_once_and_a_restart_rings_none() {
-    let fake = Fake::new("bell-four");
+fn a_finished_roadmap_rings_once_and_a_restart_rings_none() {
+    let fake = Fake::new("bell-finished");
     let hub = fake.hub();
     fake.settle();
     assert!(fake.rings().is_empty(), "{:?}", fake.rings());
 
-    fake.all_four();
-    wait_for("four rings", Duration::from_secs(15), || {
-        fake.rings().len() >= 4
+    // proj-beta's last milestone is ticked; its stored status never moves.
+    fake.projects("2026-10-05T10:00:00Z", "approved", 3);
+    wait_for("the finished ring", Duration::from_secs(15), || {
+        !fake.rings().is_empty()
     });
     fake.settle();
     fake.settle();
-
-    let mut rings = fake.rings();
-    for body in &rings {
-        eprintln!("rang: {body}");
-    }
-    rings.sort();
-    let mut expected = FOUR_RINGS.map(str::to_string).to_vec();
-    expected.sort();
-    assert_eq!(
-        rings, expected,
-        "no ring carries a title or a question body"
-    );
+    assert_eq!(fake.rings(), [FINISHED], "one ring, and no title in it");
 
     drop(hub);
     let _hub = fake.hub();
     fake.settle();
     fake.settle();
-    assert_eq!(
-        fake.rings().len(),
-        4,
-        "a restart rang again: {:?}",
-        fake.rings()
-    );
+    assert_eq!(fake.rings(), [FINISHED], "a restart rang again");
 }
 
 #[test]
-fn a_run_row_another_machine_wrote_is_not_rung() {
-    let fake = Fake::new("bell-foreign-run");
-    let _hub = fake.hub();
-    fake.settle();
-
-    fake.runs(&[
-        ("01M0BF1F8BY8FXGZS428J1RN05", "far-nuc", "dogfood m2: pass"),
-        (
-            "01M0BF1F8BY8FXGZS428J1RN06",
-            "here-hub",
-            "dogfood m3: findings 1",
-        ),
-    ]);
-    fake.projects("2026-10-05T10:00:00Z", "approved", 1);
-    wait_for("the local walk to ring", Duration::from_secs(15), || {
-        !fake.rings().is_empty()
-    });
-    fake.settle();
-    fake.settle();
-    assert_eq!(
-        fake.rings(),
-        ["walk found defects on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha"],
-        "the sibling's walk is the sibling's doorbell"
-    );
-}
-
-#[test]
-fn a_first_start_records_every_ring_of_the_backlog_and_rings_none() {
-    let fake = Fake::new("bell-four-seed");
-    fake.all_four();
+fn a_first_start_records_a_finished_roadmap_and_rings_none() {
+    let fake = Fake::new("bell-finished-seed");
+    fake.projects("2026-10-05T10:00:00Z", "approved", 3);
     let _hub = fake.hub();
     wait_for(
         "the backlog to be recorded",
         Duration::from_secs(15),
-        || fake.seen().len() == 4,
+        || !fake.seen().is_empty(),
     );
     fake.settle();
     fake.settle();
 
     assert!(fake.rings().is_empty(), "{:?}", fake.rings());
-    let mut seen = fake.seen();
-    seen.sort();
-    assert_eq!(
-        seen,
-        [
-            "01M0BF1F8BY8FXGZS428J1RN01",
-            "01M0BF1F8BY8FXGZS428J1RN02",
-            "01M0BF1F8BY8FXGZS428J1TS90",
-            "finished proj-beta 3",
-        ]
-    );
-}
-
-#[test]
-fn a_project_whose_activity_has_not_moved_costs_no_log_spawn() {
-    let fake = Fake::new("bell-still");
-    let _hub = fake.hub();
-    fake.settle();
-    let before = fake.spawns("log");
-    fake.settle();
-    fake.settle();
-    assert_eq!(fake.spawns("log"), before, "a still project was read again");
-
-    // Its activity moves, and its run log is read once more.
-    fake.projects("2026-10-05T10:00:00Z", "approved", 1);
-    wait_for("the moved project's log", Duration::from_secs(15), || {
-        fake.spawns("log") == before + 1
-    });
-    let argv = invocations(&fake.mem_log)
-        .into_iter()
-        .rfind(|argv| argv.first().is_some_and(|a| a == "log"))
-        .unwrap();
-    assert_eq!(
-        argv,
-        [
-            "log",
-            "--type",
-            "run",
-            "--limit",
-            "20",
-            "--project=proj-alpha",
-            "--json"
-        ]
-    );
+    assert_eq!(fake.seen(), ["finished proj-beta 3"]);
 }
 
 /// proj-alpha building m2 from a checkout on this machine, whose
