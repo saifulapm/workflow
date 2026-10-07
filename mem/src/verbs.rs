@@ -53,38 +53,12 @@ pub fn context(
             return crate::hooks::post_tool_batch(app, &text);
         }
         if app.json {
-            // A status line reads where the project stands from this one call
-            // rather than a second one to `mem projects`, so the keys are that
-            // row's, and `project` tells a project's brief from the global one.
-            let mut doc = json!({
-                "brief": text,
-                "project": identity.name(),
-                "roadmap_status": null,
-                "milestone": null,
-                "milestones_done": 0,
-                "milestones_total": 0,
-                "plan_slug": null,
-                "plan_ticked": 0,
-                "plan_total": 0,
-                "questions_human": 0,
-            });
-            if let Some(id) = identity.id() {
-                for (key, value) in project_summary(app, &index, id) {
-                    if doc.get(key).is_some() {
-                        doc[key] = value;
-                    }
-                }
-                let orchestrator = crate::cli::Audience::Orchestrator.stored();
-                doc["questions_human"] = json!(
-                    index
-                        .pending_questions(Some(id))?
-                        .iter()
-                        .filter(|q| q.audience.as_deref() != orchestrator)
-                        .count()
-                );
-            }
-            println!("{}", serde_json::to_string(&doc)?);
-        } else if !text.is_empty() {
+            return Err(exit::usage(
+                "--brief prints a hook's text and has no --json form; \
+                 `mem context --json` is the digest as JSON",
+            ));
+        }
+        if !text.is_empty() {
             println!("{text}");
         }
         return Ok(exit::OK);

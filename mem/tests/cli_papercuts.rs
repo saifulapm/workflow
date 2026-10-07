@@ -123,6 +123,8 @@ fn the_engine_surface_is_gone() {
         &["status"][..],
         &["status", "--set", "x"][..],
         &["questions", "--asked-by", "s1"][..],
+        &["skill"][..],
+        &["skill", "mem"][..],
     ] {
         let out = mem(&w, &dir, args);
         assert_eq!(code(&out), 2, "{args:?}: {}", stderr(&out));
@@ -143,7 +145,7 @@ fn the_engine_surface_is_gone() {
             &["runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review"][..],
         ),
         (&["project", "current"][..], &["machine"][..]),
-        (&[][..], &["status.md", "  status "][..]),
+        (&[][..], &["status.md", "  status ", "  skill "][..]),
         (&["questions"][..], &["--asked-by"][..]),
         (&["ask"][..], &["WORKFLOW_TASK", "worktree"][..]),
     ] {
@@ -152,4 +154,19 @@ fn the_engine_surface_is_gone() {
             assert!(!help.contains(word), "{verb:?} --help names {word}: {help}");
         }
     }
+}
+
+/// The brief is a hook's text, and it has no JSON form: asking for one is a
+/// usage error rather than text under a flag that promised a document.
+#[test]
+fn the_brief_has_no_json_form() {
+    let w = World::new("papercuts-brief-json");
+    let dir = repo(&w);
+    assert_eq!(code(&mem(&w, &dir, &["log", "first write"])), 0);
+    let out = mem(&w, &dir, &["context", "--brief", "--json"]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert!(out.stdout.is_empty(), "{}", stdout(&out));
+    assert!(stderr(&out).contains("--brief"), "{}", stderr(&out));
+    let out = mem(&w, &dir, &["context", "--brief"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
 }

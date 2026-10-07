@@ -163,10 +163,6 @@ fn every_verb_matches_its_committed_schema() {
     let quiet = [("MEM_SYNC_CMD", "true"), ("MEM_NOTIFY_CMD", "true")];
 
     validate("context.json", &mem(&w, &repo, &["context", "--json"]));
-    validate(
-        "context-brief.json",
-        &mem(&w, &repo, &["context", "--brief", "--json"]),
-    );
     validate("projects.json", &mem(&w, &repo, &["projects", "--json"]));
     validate(
         "project-current.json",
@@ -490,81 +486,6 @@ fn projects_carry_the_summary_a_project_page_reads() {
     let p = row(&w);
     assert_eq!(p["milestone"], "m2-billing");
     assert_eq!(p["milestones_done"], 1);
-}
-
-#[test]
-fn the_brief_says_where_the_project_stands() {
-    let (w, repo) = populated("json-contract-brief");
-    let brief = |cwd: &Path| {
-        validate(
-            "context-brief.json",
-            &mem(&w, cwd, &["context", "--brief", "--json"]),
-        )
-    };
-    let set = |args: &[&str]| assert_eq!(code(&mem(&w, &repo, args)), 0, "{args:?}");
-    let ask = |args: &[&str]| {
-        let out = mem_env(&w, &repo, args, &[("MEM_NOTIFY_CMD", "true")]);
-        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
-    };
-
-    let roadmap = w.dir.join("roadmap.md");
-    std::fs::write(
-        &roadmap,
-        "# roadmap: thing\n\n- [ ] m1-auth Sign-in\n- [ ] m2-billing Billing\n",
-    )
-    .unwrap();
-    set(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
-    set(&["roadmap", "--status", "approved"]);
-    set(&["roadmap", "--tick", "m1-auth"]);
-    let plan = w.dir.join("plan.md");
-    std::fs::write(
-        &plan,
-        "# plan: billing\n- [ ] t1 one\n- [ ] t2 two\n- [ ] t3 three\n",
-    )
-    .unwrap();
-    set(&["plan", "--set-file", plan.to_str().unwrap()]);
-    set(&["plan", "--tick", "t1"]);
-    ask(&["ask", "ship on friday?"]);
-    // A question for the orchestrator is not one a person has to answer.
-    ask(&["ask", "retry t2?", "--for", "orchestrator"]);
-
-    let b = brief(&repo);
-    assert!(b["brief"].is_string(), "{b}");
-    assert_eq!(b["project"], "thing");
-    assert_eq!(b["roadmap_status"], "approved");
-    assert_eq!(b["milestone"], "m2-billing");
-    assert_eq!(b["milestones_done"], 1);
-    assert_eq!(b["milestones_total"], 2);
-    assert_eq!(b["plan_slug"], "billing");
-    assert_eq!(b["plan_ticked"], 1);
-    assert_eq!(b["plan_total"], 3);
-    for gone in ["runner", "paused"] {
-        assert!(b.get(gone).is_none(), "{gone}: {b}");
-    }
-    assert_eq!(b["questions_human"], 1);
-
-    // Outside a project mem knows, the same keys say there is nothing to tell.
-    for cwd in [w.plain_dir("loose"), w.repo("stranger", None)] {
-        let b = brief(&cwd);
-        assert!(b["brief"].is_string(), "{b}");
-        for key in [
-            "project",
-            "roadmap_status",
-            "milestone",
-            "plan_slug",
-        ] {
-            assert!(b[key].is_null(), "{key}: {b}");
-        }
-        for key in [
-            "milestones_done",
-            "milestones_total",
-            "plan_ticked",
-            "plan_total",
-            "questions_human",
-        ] {
-            assert_eq!(b[key], 0, "{key}: {b}");
-        }
-    }
 }
 
 #[test]

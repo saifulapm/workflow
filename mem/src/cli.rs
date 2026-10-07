@@ -47,7 +47,8 @@ pub enum Command {
         /// Override the full digest's assembly target in bytes.
         #[arg(long)]
         budget: Option<usize>,
-        /// A hook-sized summary instead of the digest.
+        /// A hook-sized summary instead of the digest. Text only: it has no
+        /// --json form.
         #[arg(long)]
         brief: bool,
         /// Wrap the output in the runtime's hook envelope.
@@ -65,14 +66,6 @@ pub enum Command {
         hook_json: bool,
     },
     /// The instruction a compaction summarizer must follow (the PreCompact hook).
-    /// Print the skills this binary carries, or one of them whole.
-    ///
-    /// With no name, one `<name> — <description>` line per skill mem owns;
-    /// with a name, that SKILL.md whole.
-    Skill {
-        /// The skill to print whole. Omit to list them.
-        name: Option<String>,
-    },
     Precompact {
         /// Accepted for symmetry: PreCompact's channel is plain stdout, so the
         /// output is the same either way (spec §9).

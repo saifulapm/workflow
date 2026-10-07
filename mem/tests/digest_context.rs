@@ -521,31 +521,6 @@ fn context_on_an_unregistered_checkout_serves_global_and_exits_zero() {
     );
 }
 
-/// mem serves the one skill it owns, whole, and says what it does not serve.
-#[test]
-fn mem_serves_its_own_skill_and_refuses_the_rest() {
-    let w = World::new("skills-verb");
-    let dir = w.plain_dir("anywhere");
-
-    let out = mem(&w, &dir, &["skill"]);
-    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
-    assert_eq!(stdout(&out).lines().count(), 1, "{}", stdout(&out));
-    assert!(stdout(&out).starts_with("mem — "), "{}", stdout(&out));
-
-    let out = mem(&w, &dir, &["skill", "mem"]);
-    assert_eq!(code(&out), 0, "{}", common::stderr(&out));
-    assert!(stdout(&out).starts_with("---\nname: mem"), "the whole file");
-    assert!(stdout(&out).len() > 1000, "not just the description");
-
-    let out = mem(&w, &dir, &["skill", "route"]);
-    assert_eq!(code(&out), 1);
-    assert!(
-        common::stderr(&out).contains("no skill 'route' here"),
-        "{}",
-        common::stderr(&out)
-    );
-}
-
 /// A harness lists the skill files it finds, so the digest names none.
 #[test]
 fn the_digest_does_not_list_skills() {
