@@ -192,9 +192,11 @@ Done when the goal's conditions all show in this conversation.
 
 When nothing is left that does not wait on Saiful, park the milestone. File
 the open question with `mem ask --for human`, write `mem handoff --set
-"<where you stopped, the question id, how to resume>"` and `mem log
-"parked: <why>"`, and say so. The hub shows the question. His answer and
-the hub's Resume button start a fresh orchestrator, which reads your handoff.
+"parked: <where you stopped, the question id, how to resume>"` and `mem log
+"parked: <why>"`, and say so. The handoff must start with `parked:`: that
+word is how the hub tells a parked milestone from a stalled one, and a
+stalled one rings his phone. The hub shows the question. His answer and the
+hub's Resume button start a fresh orchestrator, which reads your handoff.
 
 ## Hygiene
 
