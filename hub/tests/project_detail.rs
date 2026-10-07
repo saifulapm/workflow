@@ -96,7 +96,10 @@ fn project_detail_roadmap_page_is_not_cut_where_the_overview_is() {
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/roadmap"))).to_string();
     assert!(body.contains("Milestone 1<"), "{body}");
     assert!(body.contains("Milestone 45<"), "{body}");
-    assert!(body.contains("current · m1<"), "{body}");
+    assert!(
+        body.contains("<span class=\"meta\">m1</span><span class=\"pill\">current</span>"),
+        "{body}"
+    );
 }
 
 /// Ruling 4: the plan of record's own page shows a ticked box.
