@@ -320,8 +320,9 @@ pub fn recording_mem(dir: &Path, home: &Path) -> (PathBuf, PathBuf) {
         &bin,
         "mem",
         &format!(
-            "printf '\\1' >> '{log}'\n\
-             for a in \"$@\"; do printf '%s\\0' \"$a\" >> '{log}'; done\n\
+            "rec=$(mktemp)\n\
+             {{ printf '\\1'; printf '%s\\0' \"$@\"; }} > \"$rec\"\n\
+             cat \"$rec\" >> '{log}'; rm -f \"$rec\"\n\
              export XDG_DATA_HOME='{home}/data' XDG_CACHE_HOME='{home}/cache'\n\
              export XDG_STATE_HOME='{home}/state' XDG_CONFIG_HOME='{home}/config'\n\
              export MEM_SYNC_CMD=true MEM_NOTIFY_CMD=true\n\
