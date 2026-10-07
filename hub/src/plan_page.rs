@@ -227,12 +227,73 @@ pub fn page_get(ctx: &PageCtx) -> Response {
     }
     let plan = model::plan_slug_text(&ctx.app.mem, project, slug);
     match plan.value.as_deref() {
+        Some(text) if is_designed(text) => {
+            let pins = pins(&ctx.app.mem, project, slug);
+            Response::html(designed_page(text, &pins)).header("Content-Security-Policy", PAGE_CSP)
+        }
         Some(text) if is_plan_page(text) => {
             Response::html(served_page(text)).header("Content-Security-Policy", PAGE_CSP)
         }
         None if plan.degraded.is_some() => Response::text(502, "mem is not answering"),
         _ => Response::not_found(),
     }
+}
+
+/// A designed page (h4 on) rather than an html-plan one: its root names the
+/// plan with `data-plan`.
+fn is_designed(text: &str) -> bool {
+    text.contains("data-plan=")
+}
+
+/// The page as the planner wrote it, then the comment layer: the pins it
+/// draws, and its script. Last, so the page's own markup is all there when
+/// the script runs.
+fn designed_page(text: &str, pins: &str) -> String {
+    let layer = format!(
+        "<script type=\"application/json\" id=\"hub-pins\">{pins}</script>\
+         <script src=\"/assets/annotate.js\"></script>\n"
+    );
+    match text.to_ascii_lowercase().rfind("</body>") {
+        Some(at) => format!("{}{layer}{}", &text[..at], &text[at..]),
+        None => format!("{text}{layer}"),
+    }
+}
+
+/// What a sent comment carries after Saiful's own text: where it was left.
+const QUOTE_MARK: &str = "\n\n— on “";
+
+/// Every comment on the page, oldest first, as the JSON the comment layer
+/// reads: queued ones are questions, with their answer as the reply, and
+/// the rest notes. `<` is escaped, so no comment can end the script block.
+fn pins(mem: &crate::memcli::MemCli, project: &str, slug: &str) -> String {
+    let prefix = format!("plan:{slug}#");
+    let pin = |row: &serde_json::Value, queued: bool| {
+        let about = row["about"].as_str().unwrap_or_default();
+        let body = row["body"].as_str().unwrap_or_default();
+        let text = body.rfind(QUOTE_MARK).map_or(body, |at| &body[..at]);
+        serde_json::json!({
+            "id": row["short_id"],
+            "anchor": about.strip_prefix(&prefix).unwrap_or(about),
+            "text": text,
+            "queued": queued,
+            "reply": if queued { row["answer"].clone() } else { serde_json::Value::Null },
+            "at": row["created"],
+        })
+    };
+    let questions = mem.about(project, "questions", &prefix);
+    let notes = mem.about(project, "log", &prefix);
+    let mut rows: Vec<(String, serde_json::Value)> = questions
+        .rows("questions")
+        .iter()
+        .map(|row| (row, true))
+        .chain(notes.rows("items").iter().map(|row| (row, false)))
+        .map(|(row, queued)| (row["id"].to_string(), pin(row, queued)))
+        .collect();
+    // A ULID sorts by the time it was made.
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    serde_json::Value::Array(rows.into_iter().map(|(_, pin)| pin).collect())
+        .to_string()
+        .replace('<', "\\u003c")
 }
 
 /// `POST /p/<project>/plan/<slug>/respond`: the response the frame built,

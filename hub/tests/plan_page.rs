@@ -17,6 +17,12 @@ const PLAN_PAGE: &str = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"ut
 <script src=\"htmlplan.js\" defer></script>\n<body>\n<main>\n<doc-plan>\n\
 <doc-claim><p>The demo claim.</p></doc-claim>\n</doc-plan>\n</main>\n</body>\n</html>\n";
 
+/// A designed plan page (h4): its own look, no script, a `data-plan` root.
+const DESIGNED: &str = "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">\
+<title>Demo</title><style>body{background:#fff}</style></head>\n<body>\n\
+<main data-plan=\"h4-demo\">\n<section data-claim=\"1\" id=\"claim-1\">\
+<h2>The designed claim.</h2><p>A paragraph.</p></section>\n</main>\n</body>\n</html>\n";
+
 const REVIEW: &str = "Review the proj-plans roadmap and its plan pages";
 
 struct World {
@@ -109,6 +115,85 @@ fn an_html_plan_opens_in_a_sandboxed_frame() {
         !body.contains("doc-plan"),
         "the page is the frame's, not the shell's: {body}"
     );
+}
+
+#[test]
+fn a_designed_page_opens_in_the_locked_frame() {
+    let world = World::new("plan-designed");
+    world.store_plan("h4-demo", DESIGNED);
+    let hub = world.hub();
+
+    let shell = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h4-demo"))).to_string();
+    assert!(
+        shell.contains(&format!(
+            "<iframe class=\"plan\" sandbox=\"allow-scripts allow-popups\" src=\"/p/{PROJECT}/plan/h4-demo/page\""
+        )),
+        "{shell}"
+    );
+    let response = hub.get(&format!("/p/{PROJECT}/plan/h4-demo/page"));
+    assert_eq!(status_of(&response), 200, "{response}");
+    assert_eq!(
+        header_of(&response, "content-security-policy"),
+        Some("sandbox allow-scripts allow-popups; frame-ancestors 'self'"),
+    );
+    let body = body_of(&response);
+    assert!(body.contains("<h2>The designed claim.</h2>"), "{body}");
+    assert!(
+        body.contains(
+            "<script type=\"application/json\" id=\"hub-pins\">[]</script>\
+             <script src=\"/assets/annotate.js\"></script>\n</body>"
+        ),
+        "the comment layer comes last, after the page: {body}"
+    );
+}
+
+#[test]
+fn every_comment_on_the_page_is_a_pin_in_its_frame() {
+    let world = World::new("plan-pins");
+    world.store_plan("h4-demo", DESIGNED);
+    let ask = |about: &str, text: &str| {
+        let about = format!("--about={about}");
+        world.run(&["ask", "--for", "orchestrator", &about, "--", text]);
+    };
+    ask(
+        "plan:h4-demo#claim-1/2@40,60",
+        "show the cost </script><b>\n\n— on “A paragraph.”",
+    );
+    ask("plan:h3-other#claim-1", "on another plan");
+    let asked = world.question("show the cost </script><b>");
+    world.run(&["answer", asked["id"].as_str().unwrap(), "added a cost row"]);
+    world.run(&[
+        "save",
+        "--type",
+        "comment",
+        "--about=plan:h4-demo#page/0@5,5",
+        "--",
+        "nice picture",
+    ]);
+    let hub = world.hub();
+
+    let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h4-demo/page"))).to_string();
+    let json = body
+        .split("id=\"hub-pins\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</script>").next())
+        .unwrap_or_else(|| panic!("{body}"));
+    assert!(
+        !json.contains('<'),
+        "a comment cannot end the block: {json}"
+    );
+    let pins: serde_json::Value = serde_json::from_str(json).unwrap();
+    let pins = pins.as_array().unwrap();
+    assert_eq!(pins.len(), 2, "{pins:#?}");
+    assert_eq!(pins[0]["anchor"], "claim-1/2@40,60");
+    assert_eq!(pins[0]["text"], "show the cost </script><b>");
+    assert_eq!(pins[0]["queued"], true);
+    assert_eq!(pins[0]["reply"], "added a cost row");
+    assert_eq!(pins[0]["id"], asked["short_id"]);
+    assert_eq!(pins[1]["anchor"], "page/0@5,5");
+    assert_eq!(pins[1]["text"], "nice picture");
+    assert_eq!(pins[1]["queued"], false);
+    assert!(pins[1]["reply"].is_null());
 }
 
 #[test]
