@@ -38,7 +38,6 @@ pub struct ProjectSummary {
     pub tasks: (u64, u64),
     /// RFC 3339, the newest item's time.
     pub last_activity: Option<String>,
-    pub checkout: Option<String>,
 }
 
 pub fn get(ctx: &PageCtx) -> Response {
@@ -64,7 +63,6 @@ pub fn project_summaries(mem: &MemCli) -> Vec<ProjectSummary> {
             ),
             tasks: (count(row, "plan_ticked"), count(row, "plan_total")),
             last_activity: text(row, "last_activity"),
-            checkout: row["checkouts"][0].as_str().map(str::to_string),
         })
         .collect()
 }
@@ -217,8 +215,8 @@ fn project_row(
     }
     let (done, total) = project.milestones;
     if total > 0 {
-        // The open milestone's place, as `workflow status` counts it; the
-        // last one once every milestone is ticked.
+        // The open milestone's place; the last one once every milestone is
+        // ticked.
         parts.push(format!("milestone {} of {total}", (done + 1).min(total)));
     }
     let (ticked, total) = project.tasks;

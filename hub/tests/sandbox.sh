@@ -83,7 +83,6 @@ bin_of() {
 	printf '%s/release/%s\n' "$target" "$crate"
 }
 mem_bin=$(bin_of mem)
-workflow_bin=$(bin_of workflow)
 hub_bin=$(bin_of hub)
 
 sb=$(mktemp -d "${TMPDIR:-/tmp}/hub-sandbox.XXXXXX")
@@ -99,12 +98,11 @@ trap stop EXIT
 
 mkdir -p "$sb/bin"
 ln -s "$mem_bin" "$sb/bin/mem"
-ln -s "$workflow_bin" "$sb/bin/workflow"
 ln -s "$hub_bin" "$sb/bin/hub"
 export PATH="$sb/bin:$PATH"
 
-# Toolchains keep their real homes; everything mem, workflow and hub write
-# lands under the sandbox.
+# Toolchains keep their real homes; everything mem and hub write lands under
+# the sandbox.
 export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 export HOME="$sb/home"
 export XDG_DATA_HOME="$HOME/.local/share" XDG_CONFIG_HOME="$HOME/.config"
@@ -192,20 +190,6 @@ mem plan --stdin >/dev/null <<'PLAN'
       Files: src/nag.rs
       Verify: cargo test
 PLAN
-# A run directory the way the engine leaves one mid-milestone.
-run="$XDG_STATE_HOME/workflow/runs/gamma/g2-nag"
-mkdir -p "$run"
-mem plan >"$run/plan.md"
-git rev-parse HEAD >"$run/base_sha"
-printf 'merged\n' >"$run/g2-t1.state"
-git rev-parse HEAD >"$run/g2-t1.merged"
-printf 'dispatched\n' >"$run/g2-t2.state"
-printf '%s\n' "$(($(date +%s) - 300))" >"$run/g2-t2.dispatched_at"
-printf '%s started: reading the due store\n' "$(date -u +%FT%TZ)" >"$run/g2-t2.status"
-printf 'sonnet\n' >"$run/g2-t2.model"
-printf 'wf-g2-t2-k7qm\n' >"$run/g2-t2.session"
-printf 'pending\n' >"$run/g2-t3.state"
-printf 'waiting on g2-t2\n' >"$run/g2-t3.held"
 mem ask --for human --options 'nine,eight,ten' --recommend nine 'Which hour does the nag go out?' >/dev/null
 # An answer of one word longer than a phone's line, so the questions page
 # shows how an unbroken answer fits.
