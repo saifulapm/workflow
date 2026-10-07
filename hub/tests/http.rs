@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use common::{Hub, TempDir, fixture_mem, header_of, status_of, wait_for};
+use common::{DEVICE_COOKIE, Hub, TempDir, fixture_mem, header_of, status_of, wait_for};
 use hub::http::{MAX_BODY, MAX_CONNECTIONS, MAX_HEADERS};
 
 const PROJECT: &str = "proj-upload";
@@ -35,7 +35,8 @@ fn hub_with_project(dir: &TempDir) -> Hub {
 fn upload_head(hub: &Hub, path: &str, length: usize, extra: &str) -> String {
     format!(
         "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\
-         Origin: http://127.0.0.1:{port}\r\nContent-Type: application/octet-stream\r\n\
+         Origin: http://127.0.0.1:{port}\r\nCookie: {DEVICE_COOKIE}\r\n\
+         Content-Type: application/octet-stream\r\n\
          Content-Length: {length}\r\n{extra}\r\n",
         port = hub.port
     )

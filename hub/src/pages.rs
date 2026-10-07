@@ -40,8 +40,9 @@ pub const PAGES: [&str; 6] = [
 ];
 
 /// Answers a page route, or `None` for a path no page owns. The checks run
-/// in this order before any module: the method, then for a POST the origin,
-/// so a cross-origin write never runs `mem` at all, then the project.
+/// in this order before any module: the method, then for a POST the origin
+/// and the paired device, so a refused write never runs `mem` at all, then
+/// the project.
 pub fn route_page(app: &App, request: &Request) -> Option<Response> {
     let (method, project, rest, handler) = page_for(&request.method, &request.path)?;
     if request.method != method {
@@ -49,6 +50,14 @@ pub fn route_page(app: &App, request: &Request) -> Option<Response> {
     }
     if method == "POST" && !app.guard.may_write(request) {
         return Some(Response::text(403, "cross-origin writes are refused"));
+    }
+    // A second check behind the origin's: only a device that paired may
+    // press a button. Pairing itself is the one write it cannot ask that of.
+    if method == "POST" && !request.path.starts_with("/pair/") && !pair::paired(request) {
+        return Some(Response::text(
+            403,
+            "this device is not paired; run hub pair on the hub's machine",
+        ));
     }
     if let Some(project) = project
         && (project.is_empty() || !model::is_known_project(&app.mem, project))

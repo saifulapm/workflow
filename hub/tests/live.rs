@@ -271,3 +271,32 @@ fn a_refused_go_says_why() {
         "{response}"
     );
 }
+
+#[test]
+fn a_device_that_never_paired_cannot_press_a_button() {
+    let world = world("live-unpaired", "o2-t1 landed at 1a2b3c.", Some(DEAD));
+    let (hub, argv) = hub_with_systemd_run(&world, 0, "");
+
+    for cookie in ["theme=dark", "hub_device=NOTADEVICENOTADEVICENOTADE"] {
+        let response = hub.post_form_with(
+            "/p/omega/control",
+            "do=go",
+            &[("Origin", &hub.origin()), ("Cookie", cookie)],
+        );
+        assert_eq!(status_of(&response), 403, "{cookie}: {response}");
+        assert!(body_of(&response).contains("hub pair"), "{response}");
+    }
+    let before = lines(&world.log).len();
+    let response = hub.post_form_unpaired("/answer", "id=01K0Q&text=yes");
+    assert_eq!(status_of(&response), 403, "{response}");
+    assert!(
+        !lines(&world.log)[before..]
+            .iter()
+            .any(|argv| argv.starts_with("answer")),
+        "an unpaired answer reached mem"
+    );
+    assert!(lines(&argv).is_empty(), "{:?}", lines(&argv));
+
+    // The paired device still can.
+    assert_eq!(status_of(&hub.post_form("/p/omega/control", "do=go")), 303);
+}

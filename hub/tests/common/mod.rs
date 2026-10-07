@@ -111,6 +111,11 @@ pub fn real_mem() -> Option<PathBuf> {
     (ok && built.is_file()).then_some(built)
 }
 
+/// The token of the device every test home has paired.
+pub const DEVICE: &str = "TESTDEVICETESTDEVICETESTDE";
+/// That device's cookie, as a raw request carries it.
+pub const DEVICE_COOKIE: &str = "hub_device=TESTDEVICETESTDEVICETESTDE";
+
 /// A running `hub`, killed on drop, with its bound port read off stdout.
 pub struct Hub {
     child: Child,
@@ -148,6 +153,17 @@ impl Hub {
             // 0600, the mode hub itself writes, so a test can assert hub never
             // loosens it.
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        // Every POST needs a paired device. Unless the test brought its own
+        // devices file, this home has paired one, and `post_form` sends its
+        // cookie. Best effort: a test that blocks the state directory on
+        // purpose gets no device.
+        let devices = home.join("state/hub/devices");
+        if !devices.exists()
+            && std::fs::create_dir_all(devices.parent().unwrap()).is_ok()
+            && std::fs::write(&devices, format!("{DEVICE} 2026-10-08T00:00:00Z test\n")).is_ok()
+        {
+            std::fs::set_permissions(&devices, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
         let mut path = String::new();
         for dir in path_dirs {
@@ -220,11 +236,23 @@ impl Hub {
         ))
     }
 
-    /// A same-origin form POST, the shape a browser on this hub sends.
+    /// A same-origin form POST from a paired device, the shape a browser on
+    /// this hub sends.
     pub fn post_form(&self, path: &str, body: &str) -> String {
         self.post_form_with(path, body, &[("Origin", &self.origin())])
     }
 
+    /// The same POST from a device that never paired.
+    pub fn post_form_unpaired(&self, path: &str, body: &str) -> String {
+        self.post_form_with(
+            path,
+            body,
+            &[("Origin", &self.origin()), ("Cookie", "theme=dark")],
+        )
+    }
+
+    /// The paired device's cookie goes along unless `headers` names a
+    /// cookie of its own.
     pub fn post_form_with(&self, path: &str, body: &str, headers: &[(&str, &str)]) -> String {
         let mut request = format!(
             "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\
@@ -232,6 +260,12 @@ impl Hub {
             self.port,
             body.len()
         );
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        {
+            request.push_str(&format!("Cookie: {DEVICE_COOKIE}\r\n"));
+        }
         for (name, value) in headers {
             request.push_str(&format!("{name}: {value}\r\n"));
         }

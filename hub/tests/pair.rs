@@ -161,7 +161,11 @@ fn the_printed_link_pairs_the_device_that_presses_pair() {
     let response = hub.post_form_with(
         &path,
         "",
-        &[("Origin", &hub.origin()), ("User-Agent", IPHONE)],
+        &[
+            ("Origin", &hub.origin()),
+            ("User-Agent", IPHONE),
+            ("Cookie", "theme=dark"),
+        ],
     );
     assert_eq!(status_of(&response), 303, "{response}");
     assert_eq!(header_of(&response, "location"), Some("/"));
@@ -189,9 +193,9 @@ fn a_code_pairs_once_and_not_after_it_expires() {
     let path = pairing.path();
     let hub = world.hub();
 
-    let first = hub.post_form(&path, "");
+    let first = hub.post_form_unpaired(&path, "");
     assert_eq!(status_of(&first), 303, "{first}");
-    let again = hub.post_form(&path, "");
+    let again = hub.post_form_unpaired(&path, "");
     assert_eq!(status_of(&again), 404, "{again}");
     assert_eq!(header_of(&again, "set-cookie"), None, "{again}");
     assert_eq!(status_of(&hub.get(&path)), 404);
@@ -203,7 +207,7 @@ fn a_code_pairs_once_and_not_after_it_expires() {
     let get = hub.get("/pair/XPRD42");
     assert_eq!(status_of(&get), 404, "{get}");
     assert!(body_of(&get).contains("hub pair"), "{get}");
-    let post = hub.post_form("/pair/XPRD42", "");
+    let post = hub.post_form_unpaired("/pair/XPRD42", "");
     assert_eq!(status_of(&post), 404, "{post}");
     assert_eq!(header_of(&post, "set-cookie"), None, "{post}");
 }
@@ -214,7 +218,7 @@ fn the_pair_and_devices_files_are_private() {
     let pairing = world.pair();
     assert_eq!(mode(&world.state("pair")), 0o600);
     let hub = world.hub();
-    let response = hub.post_form(&pairing.path(), "");
+    let response = hub.post_form_unpaired(&pairing.path(), "");
     assert_eq!(status_of(&response), 303, "{response}");
     assert_eq!(mode(&world.state("pair")), 0o600);
     assert_eq!(mode(&world.state("devices")), 0o600);
@@ -226,7 +230,11 @@ fn a_cross_origin_post_leaves_the_code_pending() {
     let pairing = world.pair();
     let path = pairing.path();
     let hub = world.hub();
-    let response = hub.post_form_with(&path, "", &[("Origin", "https://evil.example")]);
+    let response = hub.post_form_with(
+        &path,
+        "",
+        &[("Origin", "https://evil.example"), ("Cookie", "theme=dark")],
+    );
     assert_eq!(status_of(&response), 403, "{response}");
     assert_eq!(header_of(&response, "set-cookie"), None, "{response}");
     assert_eq!(status_of(&hub.get(&path)), 200);

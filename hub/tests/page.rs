@@ -14,8 +14,8 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
 use common::{
-    Hub, TempDir, body_of, header_of, invocations, mem_in, real_mem, recording_mem, seed_project,
-    status_of,
+    DEVICE_COOKIE, Hub, TempDir, body_of, header_of, invocations, mem_in, real_mem, recording_mem,
+    seed_project, status_of,
 };
 
 /// A store with one project and one pending question, and a `mem` on PATH that
@@ -355,6 +355,7 @@ fn concurrent_answers_to_one_question_write_exactly_once() {
                 let request = format!(
                     "POST /answer HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
                      Origin: http://127.0.0.1:{port}\r\nConnection: close\r\n\
+                     Cookie: {DEVICE_COOKIE}\r\n\
                      Content-Type: application/x-www-form-urlencoded\r\n\
                      Content-Length: {}\r\n\r\n{body}",
                     body.len()
@@ -430,6 +431,7 @@ fn answering_two_questions_at_once_is_not_serialised_into_one() {
                 let request = format!(
                     "POST /answer HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
                      Origin: http://127.0.0.1:{port}\r\nConnection: close\r\n\
+                     Cookie: {DEVICE_COOKIE}\r\n\
                      Content-Type: application/x-www-form-urlencoded\r\n\
                      Content-Length: {}\r\n\r\n{body}",
                     body.len()

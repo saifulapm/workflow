@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{
-    Hub, TempDir, body_of, header_of, invocations, mem_in, real_mem, recording_mem, seed_project,
-    status_of,
+    DEVICE_COOKIE, Hub, TempDir, body_of, header_of, invocations, mem_in, real_mem, recording_mem,
+    seed_project, status_of,
 };
 use serde_json::Value;
 
@@ -96,7 +96,7 @@ impl World {
         body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
         let mut request = format!(
             "POST /p/{PROJECT}/new/finding HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
-             Connection: close\r\nOrigin: {origin}\r\n\
+             Connection: close\r\nOrigin: {origin}\r\nCookie: {DEVICE_COOKIE}\r\n\
              Content-Type: multipart/form-data; boundary={BOUNDARY}\r\n\
              Content-Length: {length}\r\n\r\n",
             port = self.hub.port,
