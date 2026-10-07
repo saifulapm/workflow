@@ -122,9 +122,14 @@ fn page_for<'a>(
                 ("GET", slug, plan_page::page_get)
             } else if let Some(slug) = sub
                 .strip_prefix("plan/")
-                .and_then(|s| s.strip_suffix("/respond"))
+                .and_then(|s| s.strip_suffix("/comment"))
             {
-                ("POST", slug, plan_page::respond_post)
+                ("POST", slug, plan_page::comment_post)
+            } else if let Some(slug) = sub
+                .strip_prefix("plan/")
+                .and_then(|s| s.strip_suffix("/decision"))
+            {
+                ("POST", slug, plan_page::decision_post)
             } else if let Some(slug) = sub.strip_prefix("plan/")
                 && !slug.contains('/')
             {

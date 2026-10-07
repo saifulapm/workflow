@@ -6,8 +6,6 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use hub::form::encode_component;
-
 use common::{Hub, TempDir, body_of, header_of, real_mem, recording_mem, seed_project, status_of};
 
 const PROJECT: &str = "proj-plans";
@@ -22,8 +20,6 @@ const DESIGNED: &str = "<!doctype html>\n<html lang=\"en\">\n<head><meta charset
 <title>Demo</title><style>body{background:#fff}</style></head>\n<body>\n\
 <main data-plan=\"h4-demo\">\n<section data-claim=\"1\" id=\"claim-1\">\
 <h2>The designed claim.</h2><p>A paragraph.</p></section>\n</main>\n</body>\n</html>\n";
-
-const REVIEW: &str = "Review the proj-plans roadmap and its plan pages";
 
 struct World {
     _dir: TempDir,
@@ -57,21 +53,6 @@ impl World {
     fn store_plan(&self, slug: &str, text: &str) {
         let path = write(&self.home, &format!("{slug}.plan"), text);
         self.run(&["plan", slug, "--set-file", path.to_str().unwrap()]);
-    }
-
-    /// Asks what the plan skill asks once a roadmap and its pages are cut,
-    /// and returns the question's id.
-    fn ask_review(&self) -> String {
-        self.run(&[
-            "ask",
-            "--for",
-            "human",
-            "--options",
-            "approve,changes",
-            "--",
-            REVIEW,
-        ]);
-        self.question(REVIEW)["id"].as_str().unwrap().to_string()
     }
 
     fn question(&self, title: &str) -> serde_json::Value {
@@ -270,61 +251,160 @@ fn the_served_runtime_sends_through_the_shell() {
     );
 }
 
+/// The JSON of `mem questions --about` or `mem log --about` for the demo page.
+fn about(world: &World, verb: &str) -> Vec<serde_json::Value> {
+    let out = common::mem_in(
+        &world.mem,
+        &world.home,
+        &world.home.join(PROJECT),
+        &[verb, "--about=plan:h4-demo#", "--json"],
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let key = if verb == "questions" {
+        "questions"
+    } else {
+        "items"
+    };
+    doc[key].as_array().unwrap().clone()
+}
+
+const COMMENT: &str =
+    "anchor=claim-1%2F2%4040%2C60&text=bigger+type%0D%0Aplease&quote=A+paragraph.";
+
 #[test]
-fn a_response_answers_the_open_review_question() {
-    let world = World::new("plan-respond");
-    world.store_plan("h1-demo", PLAN_PAGE);
-    let id = world.ask_review();
+fn a_queued_comment_is_a_question_for_the_orchestrator() {
+    let world = World::new("plan-comment-queued");
+    world.store_plan("h4-demo", DESIGNED);
     let hub = world.hub();
 
-    let md = "# Re: Demo Plan\n## Comments\n- > bigger type\n";
     let response = hub.post_form(
-        &format!("/p/{PROJECT}/plan/h1-demo/respond"),
-        &format!("md={}", encode_component(md)),
+        &format!("/p/{PROJECT}/plan/h4-demo/comment"),
+        &format!("{COMMENT}&queue=1"),
     );
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(
-        header_of(&response, "location"),
-        Some(format!("/p/{PROJECT}/plan/h1-demo?sent={}", &id[18..]).as_str())
+    assert_eq!(status_of(&response), 200, "{response}");
+    let asked = about(&world, "questions");
+    assert_eq!(asked.len(), 1, "{asked:#?}");
+    let sent: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
+    assert_eq!(sent["id"], asked[0]["short_id"], "{response}");
+    assert_eq!(asked[0]["audience"], "orchestrator");
+    assert_eq!(asked[0]["about"], "plan:h4-demo#claim-1/2@40,60");
+    let body = asked[0]["body"].as_str().unwrap();
+    assert!(
+        body.starts_with("bigger type\nplease\n\n— on “A paragraph.”"),
+        "{body}"
     );
-    assert_eq!(world.question(REVIEW)["answer"], md.trim());
+    assert!(about(&world, "log").is_empty());
 }
 
 #[test]
-fn a_response_with_no_question_is_saved() {
-    let world = World::new("plan-respond-save");
-    world.store_plan("h1-demo", PLAN_PAGE);
+fn a_comment_not_queued_is_a_note() {
+    let world = World::new("plan-comment-note");
+    world.store_plan("h4-demo", DESIGNED);
     let hub = world.hub();
 
-    let response = hub.post_form(
-        &format!("/p/{PROJECT}/plan/h1-demo/respond"),
-        "md=%23%23+Comments%0A-+%3E+bigger+type",
-    );
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(
-        header_of(&response, "location"),
-        Some(format!("/p/{PROJECT}/plan/h1-demo?saved=1").as_str())
-    );
-    let found: serde_json::Value =
-        serde_json::from_str(&world.run(&["search", "bigger type", "--json"])).unwrap();
-    let hit = found.to_string();
-    assert!(hit.contains("plan response: h1-demo"), "{found:#}");
+    let response = hub.post_form(&format!("/p/{PROJECT}/plan/h4-demo/comment"), COMMENT);
+    assert_eq!(status_of(&response), 200, "{response}");
+    let notes = about(&world, "log");
+    assert_eq!(notes.len(), 1, "{notes:#?}");
+    assert_eq!(notes[0]["type"], "comment");
+    assert_eq!(notes[0]["about"], "plan:h4-demo#claim-1/2@40,60");
+    assert!(about(&world, "questions").is_empty());
 }
 
 #[test]
-fn a_response_from_another_origin_is_refused() {
-    let world = World::new("plan-respond-origin");
-    world.store_plan("h1-demo", PLAN_PAGE);
-    let id = world.ask_review();
+fn a_changed_decision_is_recorded_and_queued() {
+    let world = World::new("plan-decision");
+    world.store_plan("h4-demo", DESIGNED);
+    let hub = world.hub();
+
+    let response = hub.post_form(
+        &format!("/p/{PROJECT}/plan/h4-demo/decision"),
+        "name=gesture&value=hold&label=Press+and+hold&was=Tap+the+part\
+         &question=How+do+you+start+a+comment%3F",
+    );
+    assert_eq!(status_of(&response), 200, "{response}");
+    let asked = about(&world, "questions");
+    assert_eq!(asked.len(), 1, "{asked:#?}");
+    assert_eq!(asked[0]["about"], "plan:h4-demo#decision-gesture@hold");
+    assert_eq!(
+        asked[0]["body"],
+        "How do you start a comment?\n→ Press and hold (was: Tap the part)"
+    );
+    let rulings: serde_json::Value =
+        serde_json::from_str(&world.run(&["log", "--kind", "ruling", "--json"])).unwrap();
+    let ruling = &rulings["items"][0];
+    assert_eq!(ruling["by"], "saiful", "{rulings:#}");
+    assert_eq!(ruling["replaces"], "Tap the part");
+    assert!(
+        ruling["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("How do you start a comment? Press and hold"),
+        "{rulings:#}"
+    );
+}
+
+#[test]
+fn a_comment_that_names_no_place_or_says_nothing_is_refused() {
+    let world = World::new("plan-comment-bad");
+    world.store_plan("h4-demo", DESIGNED);
+    let hub = world.hub();
+    let at = format!("/p/{PROJECT}/plan/h4-demo/comment");
+
+    for body in [
+        "anchor=claim-1&text=+",
+        "anchor=claim+1%0A--for+human&text=hi",
+        "text=hi",
+    ] {
+        assert_eq!(status_of(&hub.post_form(&at, body)), 400, "{body}");
+    }
+    let decision = format!("/p/{PROJECT}/plan/h4-demo/decision");
+    assert_eq!(
+        status_of(&hub.post_form(&decision, "name=a+b&value=x&label=X&was=Y&question=Q")),
+        400
+    );
+    assert!(about(&world, "questions").is_empty());
+    assert!(about(&world, "log").is_empty());
+}
+
+#[test]
+fn a_comment_from_another_origin_is_refused() {
+    let world = World::new("plan-comment-origin");
+    world.store_plan("h4-demo", DESIGNED);
     let hub = world.hub();
 
     let response = hub.post_form_with(
-        &format!("/p/{PROJECT}/plan/h1-demo/respond"),
-        "md=hello",
+        &format!("/p/{PROJECT}/plan/h4-demo/comment"),
+        &format!("{COMMENT}&queue=1"),
         &[("Origin", "null")],
     );
     assert_eq!(status_of(&response), 403, "{response}");
-    assert!(world.question(REVIEW)["answer"].is_null(), "{id}");
+    assert!(about(&world, "questions").is_empty());
+}
+
+#[test]
+fn the_shell_sends_a_comment_only_on_a_live_tap() {
+    let world = World::new("plan-shell-send");
+    world.store_plan("h4-demo", DESIGNED);
+    let hub = world.hub();
+
+    let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h4-demo"))).to_string();
+    for message in ["plan-comment", "plan-decision", "plan-sent", "plan-state"] {
+        assert!(body.contains(message), "{message}: {body}");
+    }
+    assert!(
+        body.contains("navigator.userActivation && navigator.userActivation.isActive"),
+        "{body}"
+    );
+    assert!(
+        body.contains(&format!("base = '/p/{PROJECT}/plan/h4-demo/'")),
+        "{body}"
+    );
+    assert!(!body.contains("plan-respond"), "{body}");
 }
 
 #[test]
@@ -334,13 +414,7 @@ fn the_shell_relays_send_and_keeps_drafts_per_revision() {
     let hub = world.hub();
 
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
-    assert!(
-        body.contains(&format!(
-            "<form id=\"plan-respond\" method=\"post\" action=\"/p/{PROJECT}/plan/h1-demo/respond\""
-        )),
-        "{body}"
-    );
-    for message in ["plan-ready", "plan-restore", "plan-draft", "plan-respond"] {
+    for message in ["plan-ready", "plan-restore", "plan-draft", "plan-comment"] {
         assert!(body.contains(message), "{message}: {body}");
     }
     let key = format!("plan:{PROJECT}:h1-demo:");
@@ -354,38 +428,6 @@ fn the_shell_relays_send_and_keeps_drafts_per_revision() {
     let revised = body_of(&hub.get(&format!("/p/{PROJECT}/plan/h1-demo"))).to_string();
     let rev = |b: &str| b.split(&key).nth(1).unwrap()[..16].to_string();
     assert_ne!(rev(&body), rev(&revised));
-}
-
-#[test]
-fn the_shell_says_where_the_response_went() {
-    let world = World::new("plan-shell-banner");
-    world.store_plan("h1-demo", PLAN_PAGE);
-    let hub = world.hub();
-    let at = format!("/p/{PROJECT}/plan/h1-demo");
-
-    let sent = body_of(&hub.get(&format!("{at}?sent=7ZFVKFVX"))).to_string();
-    assert!(sent.contains("Sent. Answer #7ZFVKFVX is in mem."), "{sent}");
-    let saved = body_of(&hub.get(&format!("{at}?saved=1"))).to_string();
-    assert!(saved.contains("Saved for the next planner."), "{saved}");
-    let odd = body_of(&hub.get(&format!("{at}?sent=%3Cb%3E"))).to_string();
-    assert!(!odd.contains("<b>") && !odd.contains("Sent."), "{odd}");
-}
-
-/// A browser sends a form's line breaks as CRLF; mem keeps the response as
-/// the page wrote it.
-#[test]
-fn a_response_keeps_plain_line_breaks() {
-    let world = World::new("plan-respond-crlf");
-    world.store_plan("h1-demo", PLAN_PAGE);
-    world.ask_review();
-    let hub = world.hub();
-
-    let response = hub.post_form(
-        &format!("/p/{PROJECT}/plan/h1-demo/respond"),
-        "md=%23+Re%0D%0A%0D%0A-+one%0D%0A",
-    );
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(world.question(REVIEW)["answer"], "# Re\n\n- one");
 }
 
 fn set_roadmap(world: &World, status: &str) {
@@ -415,9 +457,9 @@ fn a_draft_roadmap_is_approved_from_its_plan_page() {
         "{body}"
     );
     assert!(body.contains("2 milestones · 1 plan page"), "{body}");
-    // Counted from the response the frame reports, so Approve says how many
-    // decisions were never opened before it is pressed.
-    assert!(body.contains("not opened; default kept"), "{body}");
+    // Counted by the frame, so Approve says how many decisions were never
+    // opened before it is pressed.
+    assert!(body.contains("typeof d.unopened === 'number'"), "{body}");
 }
 
 #[test]

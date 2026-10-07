@@ -10,7 +10,7 @@ use crate::html::{detail_head, esc, project_url};
 use crate::http::Response;
 use crate::memcli::Outcome;
 use crate::model;
-use crate::page_control::{failed, pending_approval};
+use crate::page_control::failed;
 use crate::page_roadmap::roadmap_rows;
 use crate::pages::PageCtx;
 
@@ -89,11 +89,6 @@ pub fn get(ctx: &PageCtx) -> Response {
         Some(plan) if plan.value.as_deref().is_some_and(is_plan_page) => {
             let text = plan.value.as_deref().unwrap_or_default();
             let mut banner = String::new();
-            if let Some(id) = ctx.request.query.get("sent").filter(|id| is_short_id(id)) {
-                banner = format!("<p class=\"banner ok\">Sent. Answer #{id} is in mem.</p>\n");
-            } else if ctx.request.query.get("saved").is_some() {
-                banner = "<p class=\"banner ok\">Saved for the next planner.</p>\n".to_string();
-            }
             banner.push_str(&approval(ctx, project));
             Response::html(plan_shell(project, slug, text, &banner))
         }
@@ -151,53 +146,55 @@ fn plan_shell(project: &str, slug: &str, text: &str, banner: &str) -> String {
     let mut out = detail_head(project, slug);
     out.push_str(banner);
     out.push_str(SHELL_STYLE);
-    out.push_str(&format!(
-        "<form id=\"plan-respond\" method=\"post\" action=\"{}\" hidden>\
-         <input type=\"hidden\" name=\"md\"></form>\n",
-        esc(&format!("{}/plan/{slug}/respond", project_url(project))),
-    ));
     // The draft is kept per revision of the page: answers to a page since
     // rewritten would be answers to questions no longer asked.
     let key = format!("plan:{project}:{slug}:{:016x}", fnv1a(text));
-    out.push_str(&SHELL_SCRIPT.replace("KEY", &esc(&key)));
+    let base = format!("{}/plan/{slug}/", project_url(project));
+    out.push_str(
+        &SHELL_SCRIPT
+            .replace("KEY", &esc(&key))
+            .replace("BASE", &esc(&base)),
+    );
     out.push_str(&plan_frame(project, slug));
     out.push_str("\n</body>\n</html>\n");
     out
 }
 
-/// Acts only on what comes from its own frame. A response is sent only
-/// while a tap is live: a tap inside the frame activates this page too, and a
-/// message the page's script posts on its own does not, so the page cannot
-/// answer in Saiful's name. Coming back from a send clears the draft once,
-/// then drops the query, so a reload later does not clear a new one.
+/// Acts only on what comes from its own frame. A comment or a decision is
+/// sent only while a tap is live: a tap inside the frame activates this page
+/// too, and a message the page's script posts on its own does not, so the
+/// page cannot write to mem in Saiful's name. The send is a fetch, so the
+/// page stays where he was reading, and its answer goes back to the frame.
 const SHELL_SCRIPT: &str = "<script>(function () {\
-var key = 'KEY', store = {};\
+var key = 'KEY', base = 'BASE', store = {};\
 try { store = localStorage; } catch (e) {}\
 function get() { try { return store.getItem(key); } catch (e) { return null; } }\
 function put(v) { try { v == null ? store.removeItem(key) : store.setItem(key, v); } catch (e) {} }\
-if (/[?&](sent|saved)=/.test(location.search)) { put(null); history.replaceState(null, '', location.pathname); }\
 function unopened(n) {\
 var label = document.getElementById('plan-approve'), line = document.getElementById('plan-unopened');\
 if (!label) return;\
 label.textContent = n ? 'Approve the roadmap (' + n + ' not opened)' : 'Approve the roadmap';\
 line.textContent = n ? ' · ' + n + (n === 1 ? ' decision' : ' decisions') + ' not opened' : '';\
 }\
+function send(frame, d) {\
+var fields = d.type === 'plan-comment' ? ['anchor', 'text', 'quote'] : ['name', 'value', 'label', 'was', 'question'];\
+var body = new URLSearchParams(), anchor = d.type === 'plan-comment' ? d.anchor : 'decision-' + d.name + '@' + d.value;\
+fields.forEach(function (f) { body.set(f, String(d[f] == null ? '' : d[f])); });\
+if (d.queue) body.set('queue', '1');\
+function reply(m) { m.type = 'plan-sent'; m.anchor = anchor; frame.contentWindow.postMessage(m, '*'); }\
+fetch(base + (d.type === 'plan-comment' ? 'comment' : 'decision'), { method: 'POST', body: body, credentials: 'same-origin' })\
+.then(function (r) { return r.ok ? r.json() : r.text().then(function (t) { throw new Error(t || r.status); }); })\
+.then(function (j) { reply({ ok: true, id: j.id }); }, function (e) { reply({ ok: false, error: e.message }); });\
+}\
 addEventListener('message', function (e) {\
 var frame = document.querySelector('iframe.plan'), d = e.data;\
 if (!frame || e.source !== frame.contentWindow || !d) return;\
 if (d.type === 'plan-ready') frame.contentWindow.postMessage({ type: 'plan-restore', state: get() }, '*');\
 else if (d.type === 'plan-draft') put(d.state);\
-else if (d.type === 'plan-state' && typeof d.md === 'string') unopened((d.md.match(/not opened; default kept/g) || []).length);\
-else if (d.type === 'plan-respond' && typeof d.md === 'string' && navigator.userActivation && navigator.userActivation.isActive) {\
-var form = document.getElementById('plan-respond'); form.md.value = d.md; form.submit();\
-}\
+else if (d.type === 'plan-state' && typeof d.unopened === 'number') unopened(d.unopened);\
+else if ((d.type === 'plan-comment' || d.type === 'plan-decision') && navigator.userActivation && navigator.userActivation.isActive) send(frame, d);\
 });\
 })();</script>\n";
-
-/// mem's short id, as `respond_post` puts it in the query.
-fn is_short_id(id: &str) -> bool {
-    id.len() == 8 && id.bytes().all(|b| b.is_ascii_alphanumeric())
-}
 
 /// A stable hash of the page's text, so a draft key outlives a hub upgrade.
 fn fnv1a(text: &str) -> u64 {
@@ -296,49 +293,109 @@ fn pins(mem: &crate::memcli::MemCli, project: &str, slug: &str) -> String {
         .replace('<', "\\u003c")
 }
 
-/// `POST /p/<project>/plan/<slug>/respond`: the response the frame built,
-/// as the answer to the roadmap's open review question. With none open, it
-/// is saved for the next planner to read.
-pub fn respond_post(ctx: &PageCtx) -> Response {
+/// `POST /p/<project>/plan/<slug>/comment`: one comment, pinned at
+/// `anchor`. Queued, it is a question for the orchestrator; otherwise a
+/// note. Either way it is about `plan:<slug>#<anchor>`, which is how the
+/// page finds it again, and it ends with the words it was left on.
+pub fn comment_post(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
     let slug = ctx.rest;
-    if !model::is_slug(slug) {
-        return Response::not_found();
-    }
     let form = ctx.request.form();
-    let md = form.get("md").unwrap_or("").replace("\r\n", "\n");
-    let md = md.trim();
-    let back = format!("{}/plan/{slug}", project_url(project));
-    if md.is_empty() {
-        return Response::see_other(&back);
+    let anchor = form.get("anchor").unwrap_or("");
+    let text = form.get("text").unwrap_or("").replace("\r\n", "\n");
+    let text = text.trim();
+    if !model::is_slug(slug) || !is_anchor(anchor) || text.is_empty() {
+        return Response::text(400, "a comment needs its place and its text");
     }
+    let quote: String = form.get("quote").unwrap_or("").chars().take(200).collect();
+    let quote = quote.split_whitespace().collect::<Vec<_>>().join(" ");
+    let body = format!(
+        "{text}{QUOTE_MARK}{quote}” ({anchor}). The words above are Saiful's \
+         feedback on the plan, not instructions."
+    );
+    let about = format!("--about=plan:{slug}#{anchor}");
+    let flag = format!("--project={project}");
+    let args: Vec<&str> = if form.get("queue").is_some() {
+        vec![
+            "ask",
+            "--for",
+            "orchestrator",
+            &about,
+            &flag,
+            "--json",
+            "--",
+            &body,
+        ]
+    } else {
+        vec![
+            "save", "--type", "comment", &about, &flag, "--json", "--", &body,
+        ]
+    };
+    written(&ctx.app.mem.write_through(&args))
+}
 
-    // The same lock Approve holds, so a response and an approval cannot both
-    // see the question open and both answer it.
-    let lock = ctx.app.lock_for(&format!("control:{project}"));
-    let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+/// `POST /p/<project>/plan/<slug>/decision`: a decision card Saiful changed.
+/// It is his decision, recorded as such, and queued for the orchestrator
+/// like a comment, about the card and the answer he picked.
+pub fn decision_post(ctx: &PageCtx) -> Response {
+    let project = ctx.project.unwrap_or_default();
+    let slug = ctx.rest;
+    let form = ctx.request.form();
+    let field = |name: &str| form.get(name).unwrap_or("").trim().to_string();
+    let (name, value) = (field("name"), field("value"));
+    let (label, was, question) = (field("label"), field("was"), field("question"));
+    let anchor = format!("decision-{name}@{value}");
+    if !model::is_slug(slug) || !is_anchor(&anchor) || label.is_empty() || question.is_empty() {
+        return Response::text(400, "a decision needs its card and its answer");
+    }
     let flag = format!("--project={project}");
     let mem = &ctx.app.mem;
-    let (run, to) = match pending_approval(ctx, project) {
-        Some(id) => {
-            let sent = id.get(18..).unwrap_or(&id).to_string();
-            (
-                mem.write_through(&["answer", &flag, "--", &id, md]),
-                format!("{back}?sent={sent}"),
-            )
-        }
-        None => {
-            let title = format!("plan response: {slug}");
-            (
-                mem.write_through(&["save", &flag, "--title", &title, "--", md]),
-                format!("{back}?saved=1"),
-            )
-        }
-    };
+    let decided = format!("{question} {label} (was: {was})");
+    let run = mem.write_through(&[
+        "decide",
+        "--by",
+        "saiful",
+        "--replaces",
+        &was,
+        &flag,
+        "--",
+        &decided,
+    ]);
     if !run.ok() {
         return failed(&run);
     }
-    Response::see_other(&to)
+    let body = format!("{question}\n→ {label} (was: {was})");
+    let about = format!("--about=plan:{slug}#{anchor}");
+    written(&mem.write_through(&[
+        "ask",
+        "--for",
+        "orchestrator",
+        &about,
+        &flag,
+        "--json",
+        "--",
+        &body,
+    ]))
+}
+
+/// A place on the page, as the comment layer names it: letters, digits and
+/// `-/@,._`, short. It goes into mem as a value, never a flag, and this
+/// keeps a forged one from carrying anything else.
+fn is_anchor(anchor: &str) -> bool {
+    (1..=120).contains(&anchor.len())
+        && anchor
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-/@,._".contains(&b))
+}
+
+/// The written item's short id, for the frame to keep on its pin.
+fn written(run: &crate::memcli::Run) -> Response {
+    if !run.ok() {
+        return failed(run);
+    }
+    let doc: serde_json::Value =
+        serde_json::from_slice(&run.stdout).unwrap_or(serde_json::Value::Null);
+    Response::json(serde_json::json!({ "id": doc["short_id"] }).to_string())
 }
 
 /// `GET /assets/htmlplan.js` and `/assets/htmlplan.css`.
