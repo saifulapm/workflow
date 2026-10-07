@@ -2,8 +2,8 @@
 # The hub over hub/tests/sandbox.sh's seeded store, in a browser at phone
 # width: every seeded page answers 200; the Show path walks in one browser,
 # approving beta's draft roadmap, answering gamma's question, opening its
-# screenshot and following a wiki section hit; no page is wider than the
-# phone; and `shot` leaves a phone-width PNG behind and nothing running.
+# screenshot, following a wiki section hit and reading gamma's week and
+# milestone cost; no page is wider than the phone; and `shot` leaves a phone-width PNG behind and nothing running.
 # With no playwright-cli the walk runs over curl and the rest is skipped.
 source "$(dirname -- "$0")/lib.sh"
 # The browser lives under the caller's HOME, which t_init replaces.
@@ -145,12 +145,37 @@ else
 fi
 is "$hit" '#quiet-hours Quiet hours' 'the search hit leads to its section heading'
 
+# 5. Read what gamma spent: the week on its home row, the sum under g1-log.
+# The seed's three sessions add up to 29 min, 3,140,000 in and 45,300 out.
+if [ -n "$browser" ]; then
+	pw goto "$base/" >/dev/null
+	row=$(js '[...document.querySelectorAll("li")].find(l => l.querySelector("a[href$=\"/p/gamma\"]"))?.innerText ?? ""')
+	home_w=$(js 'document.documentElement.scrollWidth')
+	pw screenshot --filename "$shots/step-5-home.png" >/dev/null
+	pw goto "$base/p/gamma/roadmap" >/dev/null
+	milestone=$(js '[...document.querySelectorAll("article")].find(a => a.querySelector(".meta")?.textContent.endsWith("g1-log"))?.innerText ?? ""')
+	roadmap_w=$(js 'document.documentElement.scrollWidth')
+	pw screenshot --filename "$shots/step-5-roadmap.png" >/dev/null
+else
+	row=$(get / | tr -d '\n' | sed -n 's/.*\(<a href="[^"]*\/p\/gamma">.*\)/\1/p' | sed 's/<\/li>.*//')
+	milestone=$(get /p/gamma/roadmap | tr -d '\n' | sed -n 's/.*\(✓ · g1-log<.*\)/\1/p' | sed 's/<\/article>.*//')
+fi
+like "$row" 'week: 3 sessions · 29 min · 3\.1M in · 45\.3k out' "gamma's home row shows its week"
+like "$milestone" 'cost: 3 sessions · 29 min · 3\.1M in · 45\.3k out' 'the roadmap shows the cost under ticked g1-log'
+if [ -n "$browser" ]; then
+	fit=fits
+	for w in "$home_w" "$roadmap_w"; do
+		[ -n "$w" ] && [ "$w" -le 390 ] || fit="home ${home_w:-none}, roadmap ${roadmap_w:-none}"
+	done
+	is "$fit" fits 'the home and the roadmap fit 390 px with the cost lines on them'
+fi
+
 if [ -n "$browser" ]; then
 	shot_widths=""
-	for n in 1 2 3 4; do
+	for n in 1 2 3 4 5-home 5-roadmap; do
 		shot_widths+="$(file -b "$shots/step-$n.png" 2>/dev/null | sed -n 's/^PNG image data, \([0-9]*\) x .*/\1/p') "
 	done
-	is "$shot_widths" '390 390 390 390 ' 'each step leaves a 390 px screenshot'
+	is "$shot_widths" '390 390 390 390 390 390 ' 'each step leaves a 390 px screenshot'
 
 	# The phone's width: no page scrolls sideways.
 	wide=""
