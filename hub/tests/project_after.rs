@@ -69,7 +69,14 @@ fn world(tag: &str, roadmap: Value, findings: Value, runs: Value) -> World {
          "milestones_done": 1, "milestones_total": 3, "plan_ticked": 2, "plan_total": 2},
         {"name": "delta", "roadmap_status": "maintenance", "runner": "laptop",
          "milestones_done": 1, "milestones_total": 1},
+        {"name": "omega", "roadmap_status": "running", "runner": "laptop",
+         "milestone": "o2-sync", "plan_slug": "o2-sync",
+         "milestones_done": 1, "milestones_total": 2, "plan_ticked": 1, "plan_total": 3},
     ]});
+    let omega_roadmap = json!({"status": "running", "text":
+        "# roadmap: omega\n\n- [x] o1-store Notes are stored\n- [ ] o2-sync Notes sync\n"});
+    let delta_roadmap = json!({"status": "maintenance", "text":
+        "# roadmap: delta\n\n- [x] d1-rename Photos are renamed\n"});
     let ideas = json!({"items": [
         {"id": "01K0IDEA1", "kind": "idea", "title": "Read the date from a video file too",
          "body": "\nRead the date from a video file too\n"},
@@ -86,6 +93,12 @@ fn world(tag: &str, roadmap: Value, findings: Value, runs: Value) -> World {
              projects*) p '{projects}' ;;\n\
              *--all-projects*) p '{{\"questions\":[]}}' ;;\n\
              roadmap*--project=kappa*) p '{roadmap}' ;;\n\
+             roadmap*--project=omega*) p '{omega_roadmap}' ;;\n\
+             roadmap*--project=delta*) p '{delta_roadmap}' ;;\n\
+             plan\\ --list*--project=omega*) p '{{\"plans\":[{{\"slug\":\"o1-store\"}}]}}' ;;\n\
+             plan\\ --list*--project=delta*) p '{{\"plans\":[{{\"slug\":\"d1-rename\"}}]}}' ;;\n\
+             status*--project=omega*) p '{{\"text\":\"One of three tasks merged.\"}}' ;;\n\
+             handoff*--project=omega*) p '{{\"body\":\"Picking up at o2-t2.\"}}' ;;\n\
              plan\\ --list*--project=kappa*) p '{{\"plans\":[{{\"slug\":\"k1-log\"}},{{\"slug\":\"k2-walk\"}}]}}' ;;\n\
              finding\\ list\\ --open*--project=kappa*) p '{findings}' ;;\n\
              finding\\ list\\ --open*--project=delta*) p '{delta_findings}' ;;\n\
@@ -307,4 +320,62 @@ fn the_roadmap_is_a_timeline_of_done_live_and_next_milestones() {
     .concat();
     assert!(body.contains(&timeline), "{body}");
     assert!(mem.len() <= 5, "mem spawns: {mem:?}");
+}
+
+/// The body's own reads, after the route's projects read: the doorbell keeps
+/// the questions of every project warm, so a page reads those for free.
+fn body_reads(spawns: &[String]) -> Vec<String> {
+    spawns
+        .iter()
+        .filter(|argv| !argv.starts_with("projects"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_building_project_draws_its_timeline_within_five_reads() {
+    let world = world(
+        "project-after-omega",
+        roadmap(None),
+        no_findings(),
+        runs(&[]),
+    );
+    let (body, mem) = page(&world, "omega");
+
+    assert!(body.contains("<h2>Roadmap</h2>"), "{body}");
+    assert!(
+        body.contains("<li class=\"live\">o2-sync <span class=\"pill\">1 of 3 tasks</span>"),
+        "{body}"
+    );
+    assert!(body.contains("<p>0 questions waiting on you</p>"), "{body}");
+    assert!(!body.contains("not answering"), "{body}");
+    assert_eq!(
+        body_reads(&mem),
+        [
+            "roadmap --project=omega --json",
+            "plan --list --project=omega --json",
+            "status --project=omega --json",
+            "handoff --project=omega --json",
+        ],
+        "four reads and the route's projects read"
+    );
+}
+
+#[test]
+fn a_shipped_project_reads_no_roadmap_for_its_page() {
+    let world = world(
+        "project-after-delta",
+        roadmap(None),
+        no_findings(),
+        runs(&[]),
+    );
+    let (body, mem) = page(&world, "delta");
+
+    assert!(!body.contains("not answering"), "{body}");
+    let reads = body_reads(&mem);
+    assert!(reads.len() <= 4, "{reads:?}");
+    assert!(
+        !reads.iter().any(|argv| argv.starts_with("roadmap")),
+        "{reads:?}"
+    );
 }

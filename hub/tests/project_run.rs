@@ -13,12 +13,15 @@ use serde_json::{Value, json};
 const PROJECT: &str = "gamma";
 
 /// Two questions waiting on the owner and one already answered.
+/// Every project's pending questions, as the doorbell polls them: two of
+/// gamma's waiting and one answered, and one of another project's.
 fn questions_doc() -> Value {
-    let q = |id: &str, body: &str, answered: bool| json!({"id": id, "title": body, "body": body, "answered": answered, "options": []});
+    let q = |id: &str, project: &str, body: &str, answered: bool| json!({"id": id, "project": project, "title": body, "body": body, "answered": answered, "options": []});
     json!({"questions": [
-        q("01K0Q1", "Which hour does the nag go out?", false),
-        q("01K0Q2", "Nag on weekends?", false),
-        q("01K0Q3", "Store dates in UTC?", true),
+        q("01K0Q1", PROJECT, "Which hour does the nag go out?", false),
+        q("01K0Q2", PROJECT, "Nag on weekends?", false),
+        q("01K0Q3", PROJECT, "Store dates in UTC?", true),
+        q("01K0Q4", "beta", "Approve roadmap beta?", false),
     ]})
 }
 
@@ -69,8 +72,7 @@ fn world(tag: &str, row: Row) -> World {
              p() {{ printf '%s\\n' \"$1\"; }}\n\
              case \"$*\" in\n\
              projects*) p '{projects}' ;;\n\
-             *--all-projects*) p '{{\"questions\":[]}}' ;;\n\
-             questions*--pending*--project={PROJECT}*) p '{questions}' ;;\n\
+             *--all-projects*) p '{questions}' ;;\n\
              status*) p '{{\"text\":\"Two of six tasks merged.\"}}' ;;\n\
              handoff*) p '{{\"body\":\"Picking up at g2-t3.\"}}' ;;\n\
              log*) p '{{\"items\":[]}}' ;;\n\

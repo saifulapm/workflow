@@ -42,8 +42,10 @@ pub fn get(ctx: &PageCtx) -> Response {
         body.push_str(&run_summary(ctx, project));
     }
     body.push_str(&controls(&summary, project, running));
-    // A draft roadmap is the planning body itself.
-    if summary.milestones.1 > 0 && summary.stage != "planning" {
+    // While a milestone is live. A draft roadmap is the planning body itself,
+    // and a shipped project's page is its backlog, which already costs the
+    // budget's last reads.
+    if running {
         body.push_str(&timeline(ctx, project, &summary));
     }
     body.push_str(&match summary.stage {
@@ -170,21 +172,18 @@ fn live_pill(s: &ProjectSummary, slug: &str) -> String {
 pub fn run_summary(ctx: &PageCtx, project: &str) -> String {
     let mut out = String::from("<h2>Run</h2>\n");
 
-    let questions = ctx.app.mem.read(&[
-        "questions",
-        "--pending",
-        "--for",
-        "human",
-        &format!("--project={project}"),
-        "--json",
-    ]);
+    // Every project's pending questions, which the doorbell's poll keeps
+    // cached, rather than a read of this project's own.
+    let questions = ctx.app.mem.questions();
     match questions.broken() {
         Some(why) => out.push_str(&degraded_banner(why)),
         None => {
-            let waiting = question_rows(&questions.rows("questions"))
-                .iter()
-                .filter(|q| !q.answered)
-                .count();
+            let rows: Vec<Value> = questions
+                .rows("questions")
+                .into_iter()
+                .filter(|q| q["project"].as_str() == Some(project))
+                .collect();
+            let waiting = question_rows(&rows).iter().filter(|q| !q.answered).count();
             let noun = if waiting == 1 {
                 "question"
             } else {
