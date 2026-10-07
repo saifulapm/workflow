@@ -302,6 +302,20 @@ fn logged_lately(mem: &Path, project: &str) -> bool {
     serde_json::from_str::<Items>(&said.out).is_ok_and(|i| !i.items.is_empty())
 }
 
+/// A milestone's cost: the session lines in a `mem log --json` listing summed,
+/// none when it has none. A milestone line from an earlier landing is a sum
+/// already, so it is left out rather than counted again.
+fn milestone_cost(json: &str, slug: &str) -> Option<CostLine> {
+    let items = serde_json::from_str::<Items>(json).ok()?.items;
+    let lines: Vec<CostLine> = items
+        .iter()
+        .filter_map(|i| i.get("title")?.as_str())
+        .filter_map(CostLine::parse)
+        .filter(|c| c.slug == slug && c.kind != "milestone")
+        .collect();
+    (!lines.is_empty()).then(|| CostLine::sum(slug, &lines))
+}
+
 /// The directory a project's sessions start in: the checkout named by the
 /// newest `checkout` file its runs wrote, when mem lists it and it is a
 /// directory here, else the first listed checkout that is one. mem lists
@@ -1673,7 +1687,8 @@ impl Serve {
 
     /// A milestone walked, or with nothing to walk: the roadmap tick, which
     /// the run leaves to serve, the plan marked done, the status and handoff
-    /// lines, the hygiene count and the landed commit, in that order.
+    /// lines with the milestone's cost between them, the hygiene count and the
+    /// landed commit, in that order.
     fn land_milestone(&mut self, p: &ServeProject, slug: &str) {
         let mut road = milestones(&roadmap(&self.mem, &p.name).text);
         if !road.iter().any(|(s, ticked)| s == slug && *ticked) {
@@ -1700,6 +1715,14 @@ impl Serve {
                 &format!("{slug} landed at {short} on {date}"),
             ],
         );
+        let runs = mem_on(
+            &self.mem,
+            &p.name,
+            &["log", "--type", "run", "--limit", "500", "--json"],
+        );
+        if let Some(sum) = milestone_cost(&runs.out, slug) {
+            self.log(p, &sum.line());
+        }
         let handoff = match road.iter().find(|(s, ticked)| !ticked && s != slug) {
             Some((next, _)) => format!("{slug} landed at {short}; next is {next}"),
             None => format!(
@@ -2890,5 +2913,24 @@ mod tests {
         assert!(!p(Some("draft"), one()).worth_a_tick());
         assert!(!p(None, one()).worth_a_tick());
         assert!(!p(Some("running"), Vec::new()).worth_a_tick());
+    }
+
+    #[test]
+    fn serve_sums_a_milestones_session_lines_and_nothing_else() {
+        let json = r#"{"items":[
+            {"title":"cost m1 pickup m1: minutes=2 in=100 role=lead"},
+            {"title":"cost m1 worker ask: minutes=3 context=40 model=fable"},
+            {"title":"cost m1 walk m1: minutes=5 in=20 role=dogfood"},
+            {"title":"cost m2 pickup m2: minutes=7 role=lead"},
+            {"title":"cost m1 milestone m1: sessions=9 minutes=99"},
+            {"title":"walk m1: pass"}
+        ]}"#;
+        let sum = milestone_cost(json, "m1").expect("a sum");
+        assert_eq!(
+            sum.line(),
+            "cost m1 milestone m1: minutes=10 context=40 in=120 sessions=3"
+        );
+        assert_eq!(milestone_cost(json, "m3"), None, "no session line");
+        assert_eq!(milestone_cost("", "m1"), None, "mem said nothing");
     }
 }

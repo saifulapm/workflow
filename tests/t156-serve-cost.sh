@@ -2,7 +2,8 @@
 # Every session serve starts leaves one cost line in the run log once it has
 # ended: `cost <slug> <kind> <name>: key=value ...` with its minutes and the
 # role it ran as. One milestone driven through its pickup lead, a worker's
-# question and its walk lands with a line for each of the three.
+# question and its walk lands with a line for each lead, each worker run and
+# the walk, and serve sums every session line into one milestone line.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -96,3 +97,13 @@ is "$(printf '%s\n' "$lines" | grep -c ' cost m1 walk m1:')" 1 'one cost line fo
 like "$(printf '%s\n' "$lines" | grep ' cost m1 walk m1:')" ' minutes=[0-9]+( |$)' 'with its minutes'
 like "$(printf '%s\n' "$lines" | grep ' cost m1 walk m1:')" ' role=dogfood$' 'and its role'
 unlike "$lines" ' in=0 ' 'a session with no transcript leaves its tokens out'
+
+# Landing sums the five sessions into one milestone line: the pickup lead,
+# the worker that asked, the question lead, the worker that committed and
+# the walk.
+is "$(printf '%s\n' "$lines" | grep -c ' cost m1 milestone m1:')" 1 'one milestone line when it lands'
+like "$(printf '%s\n' "$lines" | grep ' cost m1 milestone m1:')" ' sessions=5( |$)' 'counting its five sessions'
+sessions=$(printf '%s\n' "$lines" | grep -v ' cost m1 milestone m1:')
+is "$(printf '%s\n' "$sessions" | grep -c ' cost m1 ')" 5 'as many as there are session lines'
+minutes=$(printf '%s\n' "$sessions" | sed -n 's/.* minutes=\([0-9]*\).*/\1/p' | awk '{ n += $1 } END { print n + 0 }')
+like "$(printf '%s\n' "$lines" | grep ' cost m1 milestone m1:')" " minutes=$minutes( |$)" 'with their minutes summed'
