@@ -229,30 +229,34 @@ fn a_roadmap_that_is_not_approved_is_refused_unless_a_milestone_is_named() {
 }
 
 #[test]
-fn a_live_orchestrator_refuses_and_the_caller_itself_does_not_count() {
+fn a_live_orchestrator_of_the_milestone_refuses_and_an_earlier_one_does_not() {
     let world = World::new("go-live", "approved");
     world.work.put(
         "ls.json",
-        r#"[{"id":"alpha-skeleton","state":"working"},
-            {"id":"alpha-mobile-engage","state":"working"},
-            {"id":"beta-winners","state":"working"},
-            {"id":"alpha-old","state":"done"}]"#,
+        r#"[{"id":"alpha-winners-2","state":"working","ended":0},
+            {"id":"alpha-mobile-winners","state":"working"},
+            {"id":"beta-winners","state":"working"}]"#,
     );
-
     let out = world.go(&["alpha"]);
     assert_eq!(out.status.code(), Some(2), "{}", complained(&out));
     assert!(
-        complained(&out).contains("alpha already has an orchestrator running: alpha-skeleton"),
+        complained(&out).contains("alpha already has an orchestrator running: alpha-winners-2"),
         "{}",
         complained(&out)
     );
     assert!(world.new_calls().is_empty());
 
-    // The orchestrator of the milestone before starts the next: it is the
-    // agent that is running, and it is the one asking.
-    let out = world.go_as(&["alpha"], Some("alpha-skeleton"));
+    // The orchestrator of the milestone before idles at its prompt once it
+    // has started this one, and a dead successor has lost its pane: neither
+    // is in the way of starting it again.
+    world.work.put(
+        "ls.json",
+        r#"[{"id":"alpha-skeleton","state":"idle","ended":0},
+            {"id":"alpha-winners","state":"stopped","ended":0}]"#,
+    );
+    let out = world.go(&["alpha"]);
     assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
-    assert_eq!(said(&out), "alpha-winners\n");
+    assert_eq!(world.new_calls().len(), 1);
 }
 
 #[test]

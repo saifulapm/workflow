@@ -38,6 +38,8 @@ pub struct AmxRow {
     pub id: String,
     #[serde(default)]
     pub state: Option<String>,
+    #[serde(default)]
+    pub ended: Option<i64>,
 }
 
 /// What `go` has settled on.
@@ -123,35 +125,37 @@ fn amx_name(text: &str) -> String {
     mapped.trim_matches('-').to_string()
 }
 
-/// Does agent `id` run an orchestrator of `project`? Its name starts with the
-/// project's, unless a longer project name it also starts with claims it:
-/// `alpha-mobile-skeleton` is `alpha-mobile`'s, not `alpha`'s.
-fn belongs_to(id: &str, project: &str, projects: &[ProjectRow]) -> bool {
-    let owner = std::iter::once(project)
-        .chain(projects.iter().map(|row| row.name.as_str()))
-        .map(amx_name)
-        .filter(|name| id.starts_with(&format!("{name}-")))
-        .max_by_key(String::len);
-    owner.is_some_and(|name| name == amx_name(project))
+/// Is agent `id` the orchestrator of this milestone? `launch` names it
+/// `<project>-<milestone>`, then `-2`, `-3` while the name is taken. Only this
+/// milestone's agent is in the way: the last milestone's orchestrator idles at
+/// its prompt after starting its successor, and counting it refused every
+/// restart of a successor that had died.
+fn named_for(id: &str, project: &str, slug: &str) -> bool {
+    let base = amx_name(&format!("{project}-{slug}"));
+    match id.strip_prefix(&base) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix('-')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
 }
 
-/// An agent that has not ended. `idle` is between turns, which is alive.
+/// An agent that is still there. A killed pane reads `stopped` with `ended`
+/// still 0, and `done` with `ended` 0 was seen on an orchestrator that was
+/// alive and thinking, so it takes both fields. The hub reads them the same
+/// way, so it never offers a Resume this refuses.
 fn live(row: &AmxRow) -> bool {
-    !matches!(row.state.as_deref(), Some("done" | "stopped" | "failed"))
+    row.ended.unwrap_or(0) == 0 && !matches!(row.state.as_deref(), Some("stopped" | "failed"))
 }
 
-/// The id of another live agent running an orchestrator of `project`. `me` is
+/// The id of another live agent running the orchestrator of `slug`. `me` is
 /// the caller's own `$AMX_ID`: an orchestrator starting its successor is not
 /// in its own way.
-fn running(
-    rows: &[AmxRow],
-    project: &str,
-    projects: &[ProjectRow],
-    me: Option<&str>,
-) -> Option<String> {
+fn running(rows: &[AmxRow], project: &str, slug: &str, me: Option<&str>) -> Option<String> {
     rows.iter()
         .filter(|row| me != Some(row.id.as_str()))
-        .filter(|row| live(row) && belongs_to(&row.id, project, projects))
+        .filter(|row| live(row) && named_for(&row.id, project, slug))
         .map(|row| row.id.clone())
         .next()
 }
@@ -240,7 +244,7 @@ pub fn decide(
     match agents() {
         Err(why) => return Decision::Fail(why),
         Ok(rows) => {
-            if let Some(id) = running(&rows, &project, projects, me) {
+            if let Some(id) = running(&rows, &project, &slug, me) {
                 return Decision::Refuse(format!(
                     "{project} already has an orchestrator running: {id}"
                 ));
@@ -428,6 +432,7 @@ The first stretch of a shop.
         AmxRow {
             id: id.to_string(),
             state: Some(state.to_string()),
+            ended: Some(0),
         }
     }
 
@@ -490,42 +495,35 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
     }
 
     #[test]
-    fn an_agent_belongs_to_the_longest_project_name_it_starts_with() {
-        let projects = [
-            row("alpha", None, &[]),
-            row("alpha-mobile", None, &[]),
-            row("alpha.dev", None, &[]),
-            row("shopify_apps", None, &[]),
-        ];
-        assert!(belongs_to("alpha-winners", "alpha", &projects));
-        assert!(!belongs_to("alpha-winners", "alpha-mobile", &projects));
-        assert!(belongs_to("alpha-mobile-engage", "alpha-mobile", &projects));
-        assert!(!belongs_to("alpha-mobile-engage", "alpha", &projects));
-        assert!(belongs_to("alpha-dev-launch", "alpha.dev", &projects));
-        assert!(!belongs_to("alpha-dev-launch", "alpha", &projects));
-        assert!(belongs_to(
-            "shopify-apps-catalog",
-            "shopify_apps",
-            &projects
-        ));
-        assert!(!belongs_to("beta-winners", "alpha", &projects));
-        assert!(
-            !belongs_to("alpha", "alpha", &projects),
-            "a name needs a slug"
-        );
+    fn an_agent_is_the_milestones_by_its_whole_name_or_a_retry_suffix() {
+        assert!(named_for("alpha-winners", "alpha", "winners"));
+        assert!(named_for("alpha-winners-2", "alpha", "winners"));
+        assert!(named_for("shopify-apps-catalog", "shopify_apps", "catalog"));
+        assert!(!named_for("alpha-winners-x", "alpha", "winners"));
+        assert!(!named_for("alpha-winners-", "alpha", "winners"));
+        assert!(!named_for("alpha-winnerstwo", "alpha", "winners"));
+        assert!(!named_for("alpha-skeleton", "alpha", "winners"));
+        assert!(!named_for("alpha-mobile-winners", "alpha", "winners"));
     }
 
     #[test]
-    fn only_an_ended_agent_is_not_running() {
-        for state in ["starting", "working", "waiting", "idle", "unknown"] {
+    fn an_agent_is_running_until_it_ended_or_lost_its_pane() {
+        for state in ["starting", "working", "waiting", "idle", "done", "unknown"] {
             assert!(live(&agent("a-b", state)), "{state}");
         }
-        for state in ["done", "stopped", "failed"] {
+        // A killed pane: amx says stopped and never sets ended.
+        for state in ["stopped", "failed"] {
             assert!(!live(&agent("a-b", state)), "{state}");
         }
+        assert!(!live(&AmxRow {
+            id: "a-b".into(),
+            state: Some("done".into()),
+            ended: Some(1791397552),
+        }));
         assert!(live(&AmxRow {
             id: "a-b".into(),
-            state: None
+            state: None,
+            ended: None,
         }));
     }
 
@@ -673,21 +671,23 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
             )
         };
 
-        for state in ["working", "waiting", "idle"] {
-            let Decision::Refuse(why) = ask(vec![agent("alpha-winners", state)], None) else {
+        for state in ["working", "waiting", "idle", "done"] {
+            let Decision::Refuse(why) = ask(vec![agent("alpha-catalog", state)], None) else {
                 panic!("{state} did not refuse");
             };
             assert_eq!(
                 why,
-                "alpha already has an orchestrator running: alpha-winners"
+                "alpha already has an orchestrator running: alpha-catalog"
             );
         }
-        // Ended, someone else's, or the caller itself: none of them is in the way.
+        // Ended, an earlier milestone's idling after it started this one,
+        // someone else's, or the caller itself: none of them is in the way.
         for rows in [
-            vec![agent("alpha-winners", "done")],
+            vec![agent("alpha-catalog", "stopped")],
+            vec![agent("alpha-winners", "idle")],
             vec![
-                agent("alpha-winners", "stopped"),
-                agent("alpha-skeleton", "failed"),
+                agent("alpha-catalog", "stopped"),
+                agent("alpha-catalog-2", "failed"),
             ],
             vec![agent("alpha-mobile-engage", "working")],
             vec![agent("beta-winners", "working")],
@@ -698,17 +698,17 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
                 "{rows:?}"
             );
         }
-        let me = Some("alpha-winners");
+        let me = Some("alpha-catalog");
         assert!(matches!(
-            ask(vec![agent("alpha-winners", "working")], me),
+            ask(vec![agent("alpha-catalog", "working")], me),
             Decision::Start(_)
         ));
         // Only the caller is excused: a second one still refuses.
         assert!(matches!(
             ask(
                 vec![
-                    agent("alpha-winners", "working"),
-                    agent("alpha-catalog", "working")
+                    agent("alpha-catalog", "working"),
+                    agent("alpha-catalog-2", "working")
                 ],
                 me
             ),
