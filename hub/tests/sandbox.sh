@@ -116,6 +116,11 @@ git config --global init.defaultBranch main
 git config --global commit.gpgsign false
 # Port 9 is discard: a doorbell that rings goes nowhere.
 printf 'ntfy_base = "http://127.0.0.1:9"\n' >"$XDG_CONFIG_HOME/hub/config.toml"
+# One paired device, so a walk can POST: the browser sets the cookie with
+# `playwright-cli cookie-set hub_device SANDBOXDEVICESANDBOXDEVICE`.
+mkdir -p "$XDG_STATE_HOME/hub"
+printf 'SANDBOXDEVICESANDBOXDEVICE 2026-01-01T00:00:00Z sandbox\n' >"$XDG_STATE_HOME/hub/devices"
+chmod 600 "$XDG_STATE_HOME/hub/devices"
 
 # project <name>: a checkout with one commit, cd'd into. mem registers it on
 # its first write.
