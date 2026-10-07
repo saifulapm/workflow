@@ -28,7 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -76,6 +76,7 @@ impl Doorbell {
             seen: loaded.unwrap_or_default(),
             activity: BTreeMap::new(),
             record_failed: false,
+            unstarted: BTreeMap::new(),
         };
         loop {
             self.round(&mem, &mut state);
@@ -159,11 +160,32 @@ impl Doorbell {
                 self.deliver(&self.event_body("roadmap finished", name));
             }
 
-            if let Some(id) = self.stall(mem, &project, &mut agents) {
-                // Keyed by the dead agent, so the resumed orchestrator's own
-                // death rings again.
-                if self.record(state, &format!("stalled {id}")) {
-                    self.deliver(&self.event_body("stalled", name));
+            match self.stall(mem, &project, &mut agents) {
+                // Keyed by the dead agent and when amx made it, so the resumed
+                // orchestrator's own death rings again, and so does a name amx
+                // forgot and `workflow go` took again.
+                Some(Stall::Died(key)) => {
+                    state.unstarted.remove(name);
+                    if self.record(state, &key) {
+                        self.deliver(&self.event_body("stalled", name));
+                    }
+                }
+                // Nothing ever ran this milestone. Right after an approval, or
+                // a landing, that is the moment before `workflow go` starts
+                // one, so it rings only once it has lasted the grace.
+                Some(Stall::Unstarted(key)) => {
+                    let since = *state
+                        .unstarted
+                        .entry(name.to_string())
+                        .or_insert_with(Instant::now);
+                    if since.elapsed() >= self.poll * UNSTARTED_GRACE_POLLS
+                        && self.record(state, &key)
+                    {
+                        self.deliver(&self.event_body("stalled", name));
+                    }
+                }
+                None => {
+                    state.unstarted.remove(name);
                 }
             }
 
@@ -204,23 +226,22 @@ impl Doorbell {
         settled
     }
 
-    /// The agent whose death left this project stalled, if it has. A
-    /// milestone no orchestrator ever ran is not rung for: that is the moment
-    /// after an approval, before the planner's `workflow go` lands.
+    /// Whether this project has stalled, and the seen key to ring it under.
     fn stall(
         &self,
         mem: &MemCli,
         project: &serde_json::Value,
         agents: &mut Option<Result<Vec<live::Agent>, String>>,
-    ) -> Option<String> {
+    ) -> Option<Stall> {
         let s = summary_of(project);
         let milestone = s.milestone.as_deref()?;
         if !live::idle(&s, &Run::Dead(None), &self.machine) {
             return None;
         }
         let agents = agents.get_or_insert_with(|| self.amx.agents_fresh());
-        let run = live::orchestrator(agents.as_ref().ok()?, &s.name, milestone);
-        let Run::Dead(Some(id)) = &run else {
+        let agents = agents.as_ref().ok()?;
+        let run = live::orchestrator(agents, &s.name, milestone);
+        let Run::Dead(dead) = &run else {
             return None;
         };
         let handoff = mem.refresh(&["handoff", &format!("--project={}", s.name), "--json"]);
@@ -228,7 +249,20 @@ impl Doorbell {
             Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default(),
             _ => return None,
         };
-        live::stalled(&s, &run, handoff, &self.machine).then(|| id.clone())
+        if !live::stalled(&s, &run, handoff, &self.machine) {
+            return None;
+        }
+        Some(match dead {
+            Some(id) => {
+                let created = agents
+                    .iter()
+                    .find(|agent| agent.id == *id)
+                    .and_then(|agent| agent.created)
+                    .unwrap_or(0);
+                Stall::Died(format!("stalled {id} {created}"))
+            }
+            None => Stall::Unstarted(format!("stalled {} {milestone}", s.name)),
+        })
     }
 
     /// Records `key` in the seen file and says whether to ring for it: not
@@ -338,6 +372,18 @@ pub fn walk_event(title: &str) -> Option<&'static str> {
     }
 }
 
+/// How many polls a milestone no orchestrator has run waits before it rings:
+/// two minutes at the 15 s poll.
+const UNSTARTED_GRACE_POLLS: u32 = 8;
+
+/// A stalled project, by its seen key.
+enum Stall {
+    /// Its orchestrator died.
+    Died(String),
+    /// No orchestrator has run its milestone.
+    Unstarted(String),
+}
+
 /// What one run of the doorbell carries between rounds.
 struct State {
     seen: BTreeSet<String>,
@@ -350,6 +396,9 @@ struct State {
     /// Whether the last attempt to record an id failed, so the log says so once
     /// rather than every fifteen seconds (review m-5).
     record_failed: bool,
+    /// When each project was first seen stalled with no orchestrator ever
+    /// run, so it rings only once that has lasted.
+    unstarted: BTreeMap<String, Instant>,
 }
 
 /// Where the buzz sends the phone: whatever the config names, else this

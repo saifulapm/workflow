@@ -144,7 +144,11 @@ fn go(ctx: &PageCtx, project: &str) -> Response {
     let argv = live::go_argv(project);
     let mut command = std::process::Command::new(&argv[0]);
     command.args(&argv[1..]);
-    match crate::proc::output_within(&mut command, GO_TIMEOUT) {
+    let ended = crate::proc::output_within(&mut command, GO_TIMEOUT);
+    // Whatever `workflow go` did, the listing from before it is stale, and the
+    // page the redirect lands on must not offer Resume again.
+    ctx.app.amx.forget();
+    match ended {
         crate::proc::Ended::Exited(done) if done.code == Some(0) => {
             Response::see_other(&project_url(project))
         }

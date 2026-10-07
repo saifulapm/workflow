@@ -1050,7 +1050,7 @@ fn a_dead_orchestrator_rings_once_and_its_successors_death_rings_again() {
 }
 
 #[test]
-fn a_parked_or_never_started_milestone_does_not_ring() {
+fn a_parked_milestone_does_not_ring() {
     let fake = Fake::new("bell-parked");
     building(&fake, &[]);
     fake.put(
@@ -1061,7 +1061,66 @@ fn a_parked_or_never_started_milestone_does_not_ring() {
     fake.settle();
 
     building(&fake, &[("proj-alpha-m2", "stopped")]);
-    fake.settle();
+    // Past the grace a milestone with no orchestrator waits for.
+    std::thread::sleep(Duration::from_secs(2));
     fake.settle();
     assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+}
+
+#[test]
+fn a_milestone_no_orchestrator_ever_ran_rings_once_after_a_grace() {
+    let fake = Fake::new("bell-unstarted");
+    building(&fake, &[("proj-alpha-m2", "working")]);
+    let _hub = fake.hub();
+    fake.settle();
+
+    // The orchestrator before ticked its milestone and died before its
+    // `workflow go` started this one: nothing named for m3 has ever run.
+    fake.put(
+        "projects.json",
+        "{\"projects\":[{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
+          \"roadmap_status\":\"approved\",\"milestone\":\"m3\",\"milestones_done\":2,\
+          \"milestones_total\":3,\"runner\":\"here-hub\"}]}",
+    );
+    fake.settle();
+    assert!(
+        fake.rings().is_empty(),
+        "rang inside the grace: {:?}",
+        fake.rings()
+    );
+    wait_for(
+        "the unstarted stall to ring",
+        Duration::from_secs(15),
+        || !fake.rings().is_empty(),
+    );
+    fake.settle();
+    fake.settle();
+    assert_eq!(fake.rings(), [STALLED]);
+}
+
+#[test]
+fn an_agent_name_used_again_after_amx_forgot_it_rings_again() {
+    let fake = Fake::new("bell-reused");
+    let agents = |state: &str, created: u32| {
+        format!(
+            "[{{\"id\":\"proj-alpha-m2\",\"state\":\"{state}\",\"ended\":0,\"created\":{created}}}]"
+        )
+    };
+    building(&fake, &[]);
+    fake.put("amx.json", &agents("working", 1));
+    let _hub = fake.hub();
+    fake.settle();
+    fake.put("amx.json", &agents("stopped", 1));
+    wait_for("the first stall to ring", Duration::from_secs(15), || {
+        !fake.rings().is_empty()
+    });
+
+    // `amx clear` forgot it, and `workflow go` took the plain name again.
+    fake.put("amx.json", &agents("working", 7));
+    fake.settle();
+    fake.put("amx.json", &agents("stopped", 7));
+    wait_for("the second stall to ring", Duration::from_secs(15), || {
+        fake.rings().len() >= 2
+    });
+    assert_eq!(fake.rings(), [STALLED, STALLED]);
 }

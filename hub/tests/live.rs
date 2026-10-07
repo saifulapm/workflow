@@ -169,6 +169,12 @@ fn a_parked_milestone_is_not_stalled() {
         "{body}"
     );
     assert!(!body.contains("stalled"), "{body}");
+    // The orchestrator that parked ended its own session, and his answer is
+    // followed by this button.
+    assert!(
+        body.contains("<button type=\"submit\">Resume</button>"),
+        "{body}"
+    );
 }
 
 #[test]
@@ -299,4 +305,33 @@ fn a_device_that_never_paired_cannot_press_a_button() {
 
     // The paired device still can.
     assert_eq!(status_of(&hub.post_form("/p/omega/control", "do=go")), 303);
+}
+
+#[test]
+fn the_page_after_resume_shows_the_new_orchestrator() {
+    let world = world("live-after-resume", "o2-t1 landed at 1a2b3c.", Some(DEAD));
+    // `workflow go` started the -2 agent: from now on amx lists it.
+    let live = r#"[{"id":"omega-o2-sync","state":"stopped","ended":0,"created":2},
+      {"id":"omega-o2-sync-2","state":"starting","ended":0,"created":3}]"#;
+    let (hub, _) = hub_with_systemd_run(&world, 0, "omega-o2-sync-2");
+    fixture_bin(
+        &world.bin,
+        "amx-after",
+        &format!("printf '%s\\n' '{}'", live.replace('\n', " ")),
+    );
+    let bin = world.bin.display();
+    fixture_bin(
+        &world.bin,
+        "systemd-run",
+        &format!("cp '{bin}/amx-after' '{bin}/amx.new' && mv '{bin}/amx.new' '{bin}/amx'"),
+    );
+    assert!(body_of(&hub.get("/p/omega")).contains("stalled"));
+
+    let response = hub.post_form("/p/omega/control", "do=go");
+    assert_eq!(status_of(&response), 303, "{response}");
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(
+        body.contains("<span class=\"pill\">running</span> <span class=\"meta\">omega-o2-sync-2 · starting</span>"),
+        "{body}"
+    );
 }

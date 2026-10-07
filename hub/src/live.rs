@@ -182,6 +182,11 @@ impl Amx {
         agents
     }
 
+    /// Drops the cached listing, once something has started an agent.
+    pub fn forget(&self) {
+        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
     /// What amx says of the project's current milestone.
     pub fn run(&self, project: &str, milestone: Option<&str>) -> Run {
         let Some(milestone) = milestone else {
