@@ -167,3 +167,19 @@ fn a_select_draws_its_own_arrow_in_the_theme_colours() {
         "the select's own rule must come after the shared one"
     );
 }
+
+#[test]
+fn form_fields_are_sixteen_pixels_so_ios_does_not_zoom() {
+    // iOS Safari zooms the page into any field whose text is under 16 px.
+    let sheet = stylesheet();
+    assert!(
+        sheet.contains(
+            "textarea,input[type=text],input[type=search],select{width:100%;font-size:16px;"
+        ),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains("input[type=number]{width:6rem;font-size:16px;"),
+        "{sheet}"
+    );
+}

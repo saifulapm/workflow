@@ -286,9 +286,20 @@ pub fn asset_get(ctx: &PageCtx) -> Response {
         "/assets/htmlplan.js" => {
             Response::new(200, "text/javascript; charset=utf-8", served_runtime())
         }
-        "/assets/htmlplan.css" => Response::new(200, "text/css; charset=utf-8", RUNTIME_CSS),
+        "/assets/htmlplan.css" => {
+            Response::new(200, "text/css; charset=utf-8", served_runtime_css())
+        }
         _ => Response::not_found(),
     }
+}
+
+/// The runtime's stylesheet with one rule of the hub's after it: iOS zooms
+/// the page into any field under 16 px, and html-plan sets its comment boxes
+/// and decision fields at 14 px.
+fn served_runtime_css() -> String {
+    format!(
+        "{RUNTIME_CSS}\ntextarea, doc-ask input[type=text], doc-ask select {{ font-size: 16px; }}\n"
+    )
 }
 
 /// The stored page with its stylesheet taken from the hub and its runtime
@@ -322,6 +333,19 @@ border-top:1px solid var(--line)}\
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_served_runtime_css_keeps_fields_at_sixteen_pixels() {
+        // iOS zooms into any field set below 16 px, and html-plan sets its
+        // comment boxes and decision fields at 14 px.
+        let css = served_runtime_css();
+        let fix = "textarea, doc-ask input[type=text], doc-ask select { font-size: 16px; }";
+        assert!(
+            css.starts_with(RUNTIME_CSS),
+            "the runtime's own rules come first"
+        );
+        assert!(css.trim_end().ends_with(fix), "{}", &css[css.len() - 200..]);
+    }
 
     #[test]
     fn markdown_is_not_a_plan_page() {
