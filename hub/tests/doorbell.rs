@@ -699,6 +699,7 @@ impl Fake {
                  case \"$1\" in\n\
                  \x20 questions) cat '{data}/questions.json'; exit 0 ;;\n\
                  \x20 projects) cat '{data}/projects.json'; exit 0 ;;\n\
+                 \x20 handoff) cat '{data}/handoff.json' 2>/dev/null || echo '{{\"body\":\"\"}}'; exit 0 ;;\n\
                  \x20 log)\n\
                  \x20   for a in \"$@\"; do case \"$a\" in --project=*) p=\"${{a#--project=}}\" ;; esac; done\n\
                  \x20   cat \"{data}/log-$p.json\" 2>/dev/null || echo '{{\"items\":[]}}'\n\
@@ -707,6 +708,15 @@ impl Fake {
                  exit 1",
                 log = mem_log.display(),
                 data = data.display(),
+            ),
+        );
+
+        fixture_bin(
+            &bin,
+            "amx",
+            &format!(
+                "cat '{data}/amx.json' 2>/dev/null || echo '[]'",
+                data = data.display()
             ),
         );
 
@@ -983,4 +993,75 @@ fn a_project_whose_activity_has_not_moved_costs_no_log_spawn() {
             "--json"
         ]
     );
+}
+
+/// proj-alpha building m2 on this machine, whose orchestrators amx lists as
+/// `(id, state)`.
+fn building(fake: &Fake, agents: &[(&str, &str)]) {
+    fake.put(
+        "projects.json",
+        "{\"projects\":[{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
+          \"roadmap_status\":\"approved\",\"milestone\":\"m2\",\"milestones_done\":1,\
+          \"milestones_total\":3,\"runner\":\"here-hub\"}]}",
+    );
+    let rows: Vec<String> = agents
+        .iter()
+        .enumerate()
+        .map(|(i, (id, state))| {
+            format!("{{\"id\":\"{id}\",\"state\":\"{state}\",\"ended\":0,\"created\":{i}}}")
+        })
+        .collect();
+    fake.put("amx.json", &format!("[{}]", rows.join(",")));
+}
+
+const STALLED: &str = "stalled on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha";
+
+#[test]
+fn a_dead_orchestrator_rings_once_and_its_successors_death_rings_again() {
+    let fake = Fake::new("bell-stall");
+    building(&fake, &[("proj-alpha-m2", "working")]);
+    let _hub = fake.hub();
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+
+    building(&fake, &[("proj-alpha-m2", "stopped")]);
+    wait_for("the stall to ring", Duration::from_secs(15), || {
+        !fake.rings().is_empty()
+    });
+    fake.settle();
+    fake.settle();
+    assert_eq!(fake.rings(), [STALLED], "one ring per stall, not per poll");
+
+    // Resumed as -2, which then dies too: a second stall.
+    building(
+        &fake,
+        &[("proj-alpha-m2", "stopped"), ("proj-alpha-m2-2", "working")],
+    );
+    fake.settle();
+    building(
+        &fake,
+        &[("proj-alpha-m2", "stopped"), ("proj-alpha-m2-2", "stopped")],
+    );
+    wait_for("the second stall to ring", Duration::from_secs(15), || {
+        fake.rings().len() >= 2
+    });
+    fake.settle();
+    assert_eq!(fake.rings(), [STALLED, STALLED]);
+}
+
+#[test]
+fn a_parked_or_never_started_milestone_does_not_ring() {
+    let fake = Fake::new("bell-parked");
+    building(&fake, &[]);
+    fake.put(
+        "handoff.json",
+        "{\"body\":\"\\nparked: waiting on a question\"}",
+    );
+    let _hub = fake.hub();
+    fake.settle();
+
+    building(&fake, &[("proj-alpha-m2", "stopped")]);
+    fake.settle();
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
 }

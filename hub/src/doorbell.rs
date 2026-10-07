@@ -33,7 +33,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use crate::app::App;
-use crate::memcli::MemCli;
+use crate::live::{self, Amx, Run};
+use crate::memcli::{MemCli, Outcome};
+use crate::page_home::summary_of;
 
 pub const DEFAULT_POLL: Duration = Duration::from_secs(15);
 /// §5's own command line: `curl -fsS -m 10 -d <body> <ntfy_base>/<topic>`.
@@ -46,6 +48,7 @@ pub struct Doorbell {
     /// Where the buzz sends the phone.
     pub hub_url: String,
     pub poll: Duration,
+    pub amx: Arc<Amx>,
 }
 
 impl Doorbell {
@@ -56,6 +59,7 @@ impl Doorbell {
             machine: app.machine.clone(),
             hub_url: hub_url(app),
             poll: poll_interval(),
+            amx: Arc::clone(&app.amx),
         })
     }
 
@@ -137,6 +141,8 @@ impl Doorbell {
             return false;
         }
         let mut settled = true;
+        // Asked once a round, and only when some project could have stalled.
+        let mut agents = None;
         for project in projects.rows("projects") {
             let Some(name) = project["name"].as_str() else {
                 continue;
@@ -151,6 +157,14 @@ impl Doorbell {
                 && self.record(state, &format!("finished {name} {total}"))
             {
                 self.deliver(&self.event_body("roadmap finished", name));
+            }
+
+            if let Some(id) = self.stall(mem, &project, &mut agents) {
+                // Keyed by the dead agent, so the resumed orchestrator's own
+                // death rings again.
+                if self.record(state, &format!("stalled {id}")) {
+                    self.deliver(&self.event_body("stalled", name));
+                }
             }
 
             // A project that wrote nothing since the last round has no new
@@ -188,6 +202,33 @@ impl Doorbell {
             }
         }
         settled
+    }
+
+    /// The agent whose death left this project stalled, if it has. A
+    /// milestone no orchestrator ever ran is not rung for: that is the moment
+    /// after an approval, before the planner's `workflow go` lands.
+    fn stall(
+        &self,
+        mem: &MemCli,
+        project: &serde_json::Value,
+        agents: &mut Option<Result<Vec<live::Agent>, String>>,
+    ) -> Option<String> {
+        let s = summary_of(project);
+        let milestone = s.milestone.as_deref()?;
+        if !live::idle(&s, &Run::Dead(None), &self.machine) {
+            return None;
+        }
+        let agents = agents.get_or_insert_with(|| self.amx.agents_fresh());
+        let run = live::orchestrator(agents.as_ref().ok()?, &s.name, milestone);
+        let Run::Dead(Some(id)) = &run else {
+            return None;
+        };
+        let handoff = mem.refresh(&["handoff", &format!("--project={}", s.name), "--json"]);
+        let handoff = match &*handoff {
+            Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default(),
+            _ => return None,
+        };
+        live::stalled(&s, &run, handoff, &self.machine).then(|| id.clone())
     }
 
     /// Records `key` in the seen file and says whether to ring for it: not
@@ -387,6 +428,7 @@ mod tests {
             machine: "macbook".to_string(),
             hub_url: "http://macbook:8787/".to_string(),
             poll: DEFAULT_POLL,
+            amx: Arc::new(Amx::new()),
         };
         assert_eq!(
             doorbell.body("proj-alpha"),

@@ -57,22 +57,27 @@ pub fn project_summaries(mem: &MemCli) -> Vec<ProjectSummary> {
     mem.projects()
         .rows("projects")
         .iter()
-        .map(|row| ProjectSummary {
-            name: text(row, "name").unwrap_or_default(),
-            stage: lifecycle_stage(row),
-            roadmap_status: text(row, "roadmap_status"),
-            runner: text(row, "runner"),
-            paused: text(row, "paused"),
-            milestone: text(row, "milestone"),
-            plan_slug: text(row, "plan_slug"),
-            milestones: (
-                count(row, "milestones_done"),
-                count(row, "milestones_total"),
-            ),
-            tasks: (count(row, "plan_ticked"), count(row, "plan_total")),
-            last_activity: text(row, "last_activity"),
-        })
+        .map(summary_of)
         .collect()
+}
+
+/// One `projects --json` row.
+pub fn summary_of(row: &Value) -> ProjectSummary {
+    ProjectSummary {
+        name: text(row, "name").unwrap_or_default(),
+        stage: lifecycle_stage(row),
+        roadmap_status: text(row, "roadmap_status"),
+        runner: text(row, "runner"),
+        paused: text(row, "paused"),
+        milestone: text(row, "milestone"),
+        plan_slug: text(row, "plan_slug"),
+        milestones: (
+            count(row, "milestones_done"),
+            count(row, "milestones_total"),
+        ),
+        tasks: (count(row, "plan_ticked"), count(row, "plan_total")),
+        last_activity: text(row, "last_activity"),
+    }
 }
 
 /// The lifecycle stage of one `projects --json` row. mem stores no stage and
