@@ -38,7 +38,9 @@ region screenshots, OCR before reading an image). Load it before the walk.
 ## 2. Launch
 
 Launch the product the way `mem wiki verify#launch` (or the orchestrator's
-brief) says, then run one read-only check that it is worth driving: a page
+brief) says; the recipe for its kind of surface (web, mobile, cli, emacs,
+lib) is in `mem --project workflow wiki dogfood-playbooks`. Then run one
+read-only check that it is worth driving: a page
 that loads, a `--help` that prints, a health URL. Build or start what is at
 `HEAD`, and check that the binary or bundle is newer than the last commit.
 
