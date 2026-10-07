@@ -165,14 +165,17 @@ fn plan_shell(project: &str, slug: &str, text: &str, banner: &str) -> String {
     out
 }
 
-/// Acts only on what comes from its own frame. A response or the end of a
-/// draft clears the draft, since the page it was for has been answered.
+/// Acts only on what comes from its own frame. A response is sent only
+/// while a tap is live: a tap inside the frame activates this page too, and a
+/// message the page's script posts on its own does not, so the page cannot
+/// answer in Saiful's name. Coming back from a send clears the draft once,
+/// then drops the query, so a reload later does not clear a new one.
 const SHELL_SCRIPT: &str = "<script>(function () {\
 var key = 'KEY', store = {};\
 try { store = localStorage; } catch (e) {}\
 function get() { try { return store.getItem(key); } catch (e) { return null; } }\
 function put(v) { try { v == null ? store.removeItem(key) : store.setItem(key, v); } catch (e) {} }\
-if (/[?&](sent|saved)=/.test(location.search)) put(null);\
+if (/[?&](sent|saved)=/.test(location.search)) { put(null); history.replaceState(null, '', location.pathname); }\
 function unopened(n) {\
 var label = document.getElementById('plan-approve'), line = document.getElementById('plan-unopened');\
 if (!label) return;\
@@ -185,7 +188,7 @@ if (!frame || e.source !== frame.contentWindow || !d) return;\
 if (d.type === 'plan-ready') frame.contentWindow.postMessage({ type: 'plan-restore', state: get() }, '*');\
 else if (d.type === 'plan-draft') put(d.state);\
 else if (d.type === 'plan-state' && typeof d.md === 'string') unopened((d.md.match(/not opened; default kept/g) || []).length);\
-else if (d.type === 'plan-respond' && typeof d.md === 'string') {\
+else if (d.type === 'plan-respond' && typeof d.md === 'string' && navigator.userActivation && navigator.userActivation.isActive) {\
 var form = document.getElementById('plan-respond'); form.md.value = d.md; form.submit();\
 }\
 });\
