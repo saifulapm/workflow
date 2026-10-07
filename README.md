@@ -51,14 +51,18 @@ the subagents to `~/.claude/agents`, and the hook stubs to
 `~/.config/git/hooks`, and removes what older versions installed. Run it
 after every build.
 
-Install each binary into both places the machines run it from:
+Install the binaries into `~/.local/bin`, where every machine and
+hub.service run them, then restart the hub. A plain `cargo install` would
+put a second copy in `~/.cargo/bin`, which comes first on PATH.
 
     cargo install --force --path workflow --root ~/.local
     cargo install --force --path mem --root ~/.local
     cargo install --force --path hub --root ~/.local
     workflow install
+    systemctl --user restart hub
 
-Tests are `cargo test` in each crate.
+Tests are `cargo test` in each crate and `bash tests/run.sh` for the hooks
+and the hygiene check. The project's `verify` key runs all of them.
 
 ## Starting a project
 
