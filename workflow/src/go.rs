@@ -104,7 +104,7 @@ Done means this conversation shows: every task in `mem plan` ticked; \
 the project's test command passing on main after the last merge; \
 the milestone review and the dogfood walk finished with their findings fixed or filed; \
 `mem roadmap --tick {slug}` run; a `mem handoff` written; \
-and `workflow go {project}` run for the next milestone, or its output saying the roadmap is done. \
+and `workflow go {project}` run for the next milestone, or its output saying the roadmap is done or not approved. \
 If the milestone cannot continue without Saiful, done instead means a `mem ask` question filed, \
 the handoff naming it, and the work parked. Stop after 6 hours."
     )
@@ -475,7 +475,7 @@ Done means this conversation shows: every task in `mem plan` ticked; \
 the project's test command passing on main after the last merge; \
 the milestone review and the dogfood walk finished with their findings fixed or filed; \
 `mem roadmap --tick winners` run; a `mem handoff` written; \
-and `workflow go alpha` run for the next milestone, or its output saying the roadmap is done. \
+and `workflow go alpha` run for the next milestone, or its output saying the roadmap is done or not approved. \
 If the milestone cannot continue without Saiful, done instead means a `mem ask` question filed, \
 the handoff naming it, and the work parked. Stop after 6 hours.";
         assert_eq!(task("alpha", "winners"), want);

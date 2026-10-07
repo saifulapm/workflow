@@ -90,7 +90,7 @@ interrupt.
 main...worktree-<name>`) and check it stayed in scope and its test asserts
 the behaviour, not the implementation. Rerun its targeted test. Then:
 
-    git rebase main worktree-<name>    # when main moved; retest after
+    git -C .claude/worktrees/<name> rebase main   # when main moved; retest there
     git merge --ff-only worktree-<name>
     git worktree remove .claude/worktrees/<name>
     git branch -d worktree-<name>
@@ -182,7 +182,9 @@ the failed steps alone. Two failed walks of the same step go to Saiful.
 4. `mem handoff --set "<slug> landed at <sha>. <the numbers>. Next: <next
    milestone>."`
 5. `workflow go <project>`. It starts the next milestone's orchestrator in
-   its own amx pane, or says the roadmap is done. Show its output.
+   its own amx pane, or says the roadmap is done, or refuses because the
+   roadmap is not approved yet. Show its output. A refusal is a normal end.
+   Saiful approves the rest from the hub, and `workflow go` starts it then.
 
 Done when the goal's conditions all show in this conversation.
 
