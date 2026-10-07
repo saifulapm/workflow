@@ -142,6 +142,13 @@ body>ul:not([class])>li:last-child{border-bottom:0}
 .gallery figure{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .gallery img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--track)}
 .gallery figcaption{padding:8px 10px;font-size:12px;color:var(--mut);overflow-wrap:anywhere}
+.lightbox{display:none;position:fixed;inset:0;z-index:10;max-width:none;margin:0;padding:48px 16px 16px;overflow:auto;background:rgba(10,12,16,.94);color:#e7e9ee}
+.lightbox:target{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+.lightbox img{max-width:100%;max-height:78vh;object-fit:contain;border-radius:8px;background:#fff}
+.lightbox p{margin:0;max-width:40rem;text-align:center}
+.lightbox a{color:#9fbcf7}
+.lightbox a.close{position:absolute;top:14px;right:16px}
+@media (max-width:959px){.docs>nav.contents{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:10px 16px}}
 .docs{display:grid;gap:16px}
 @media (min-width:960px){.docs{grid-template-columns:13rem minmax(0,1fr);gap:28px}.docs>nav.contents{position:sticky;top:72px;align-self:start;max-height:calc(100vh - 88px);overflow:auto}}
 nav.contents{font-size:13px}
