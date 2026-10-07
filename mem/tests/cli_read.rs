@@ -232,6 +232,10 @@ fn a_store_an_older_mem_wrote_still_reads_cleanly() {
     let questions = json(&["questions", "--json"]);
     assert_eq!(questions["questions"][0]["task"], "m2/t2", "{questions}");
     assert_eq!(questions["questions"][0]["audience"], "orchestrator");
+    let listing = read(&["questions"]);
+    assert!(listing.contains("[orchestrator] retry t2?"), "{listing}");
+    let full = read(&["context", "--full"]);
+    assert!(full.contains("[orchestrator] retry t2?"), "{full}");
     assert!(read(&["show", "5HJ6KM7N"]).contains("task = \"m2/t2\""));
     let context = read(&["context"]);
     assert!(context.starts_with("project: thing\n"), "{context}");

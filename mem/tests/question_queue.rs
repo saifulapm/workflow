@@ -39,7 +39,6 @@ fn mem_cmd(w: &World, cwd: &std::path::Path, args: &[&str]) -> std::process::Com
         .env("XDG_CONFIG_HOME", dirs.config)
         .env("MEM_SYNC_CMD", "true")
         .env("MEM_POLL_MS", "50")
-        .env_remove("WORKFLOW_TASK")
         .env_remove("MEM_PROJECT")
         .env_remove("CARGO_TARGET_DIR");
     cmd
@@ -411,42 +410,47 @@ fn the_listing_json_carries_the_answered_flag() {
 /// orchestrator's: tagged with the task, kept off the hub's listing, and
 /// carried with its answer in the JSON a run reads.
 #[test]
-fn a_workers_question_is_the_orchestrators_and_names_its_task() {
-    let w = World::new("q-worker");
+fn a_question_is_a_persons_unless_it_says_otherwise() {
+    let w = World::new("q-audience");
     let repo = w.repo("thing", None);
-    common::run_git(
-        &repo,
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.invalid",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "base",
-        ],
-    );
-    // Where `workflow run` puts a task's worktree, under the mem state root.
-    let wt = w.dirs().workflow_worktrees().join("thing/cart-v2/t3");
-    std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
-    common::run_git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            wt.to_str().unwrap(),
-            "-b",
-            "cart-v2/t3",
-        ],
-    );
+    assert_eq!(code(&ask_env(&w, &repo, &["log", "first write"], None)), 0);
 
+    // Nothing about where it is asked from or what the environment holds
+    // makes a question the orchestrator's: a directory where the retired
+    // engine kept its worktrees, and the variable it exported, do not.
+    let old_worktree = w.dirs().state.join("workflow/worktrees/thing/cart-v2/t3");
+    std::fs::create_dir_all(&old_worktree).unwrap();
+    for cwd in [&repo, &old_worktree] {
+        let out = mem_cmd(&w, cwd, &["ask", "ship it?", "--project", "thing", "--json"])
+            .env("WORKFLOW_TASK", "cart-v2/t1")
+            .output()
+            .expect("run mem");
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(v["audience"].is_null(), "{v}");
+    }
+    let out = ask_env(&w, &repo, &["questions", "--for", "human", "--json"], None);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["questions"].as_array().unwrap().len(), 2, "{v}");
+    for q in v["questions"].as_array().unwrap() {
+        assert!(q["task"].is_null(), "{q}");
+    }
+}
+
+#[test]
+fn an_orchestrators_question_is_listed_for_the_orchestrator_alone() {
+    let w = World::new("q-orchestrator");
+    let repo = w.repo("thing", None);
     let out = ask_env(
         &w,
-        &wt,
-        &["ask", "may I widen Files by src/main.rs?", "--json"],
+        &repo,
+        &[
+            "ask",
+            "may I widen Files by src/main.rs?",
+            "--for",
+            "orchestrator",
+            "--json",
+        ],
         None,
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
@@ -471,7 +475,7 @@ fn a_workers_question_is_the_orchestrators_and_names_its_task() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["questions"], serde_json::json!([]), "{v}");
 
-    // The orchestrator's view: the question, the task that asked it, the body.
+    // The orchestrator's view: the question and its body.
     let out = ask_env(
         &w,
         &repo,
@@ -481,15 +485,15 @@ fn a_workers_question_is_the_orchestrators_and_names_its_task() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let q = &v["questions"][0];
-    assert_eq!(q["task"], "cart-v2/t3", "{q}");
+    assert!(q["task"].is_null(), "{q}");
     assert_eq!(q["audience"], "orchestrator");
     assert_eq!(q["body"], "may I widen Files by src/main.rs?");
     assert_eq!(q["answered"], false);
     assert!(q["answer"].is_null());
     let text = stdout(&ask_env(&w, &repo, &["questions", "--pending"], None));
-    assert!(text.contains("[cart-v2/t3] may I widen"), "{text}");
+    assert!(text.contains("[orchestrator] may I widen"), "{text}");
 
-    // Answered, the same listing carries the answer for the next attempt.
+    // Answered, the same listing carries the answer.
     let out = ask_env(&w, &repo, &["answer", &id, "yes, widen"], None);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let out = ask_env(
@@ -501,155 +505,8 @@ fn a_workers_question_is_the_orchestrators_and_names_its_task() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["questions"][0]["answer"], "yes, widen", "{v}");
     assert_eq!(v["questions"][0]["answered"], true);
-
-    // `--for human` from a worktree is a worker escalating on purpose.
-    let out = ask_env(
-        &w,
-        &wt,
-        &["ask", "delete the prod table?", "--for", "human", "--json"],
-        None,
-    );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v["audience"].is_null(), "{v}");
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--pending", "--for", "human", "--json"],
-        None,
-    );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"].as_array().unwrap().len(), 1, "{v}");
-    assert_eq!(v["questions"][0]["title"], "delete the prod table?");
 }
 
-/// The environment says so too, for a backend whose worker does not stand in
-/// a worktree under the state root.
-#[test]
-fn workflow_task_in_the_environment_addresses_the_orchestrator() {
-    let w = World::new("q-env");
-    let repo = w.repo("thing", None);
-    let out = common::mem_env(
-        &w,
-        &repo,
-        &["ask", "which base?", "--json"],
-        &[("MEM_SYNC_CMD", "true"), ("WORKFLOW_TASK", "cart-v2/t1")],
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["audience"], "orchestrator", "{v}");
-    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"][0]["task"], "cart-v2/t1", "{v}");
-    // And a plain checkout with nothing set is a person's question.
-    let out = ask_env(&w, &repo, &["ask", "ship it?", "--json"], None);
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v["audience"].is_null(), "{v}");
-}
-
-/// A task worktree's own path outranks `WORKFLOW_TASK`: the environment
-/// cannot spoof another task's question just because it names one.
-#[test]
-fn the_worktree_path_outranks_workflow_task_in_the_environment() {
-    let w = World::new("q-worktree-wins");
-    let repo = w.repo("thing", None);
-    common::run_git(
-        &repo,
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.invalid",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "base",
-        ],
-    );
-    let wt = w.dirs().workflow_worktrees().join("thing/cart-v2/t7");
-    std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
-    common::run_git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            wt.to_str().unwrap(),
-            "-b",
-            "cart-v2/t7",
-        ],
-    );
-
-    let out = common::mem_env(
-        &w,
-        &wt,
-        &["ask", "which base?", "--json"],
-        &[("MEM_SYNC_CMD", "true"), ("WORKFLOW_TASK", "other/t1")],
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["audience"], "orchestrator", "{v}");
-
-    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"][0]["task"], "cart-v2/t7", "{v}");
-}
-
-/// The `_integration` worktree speaks for no single task, so it defers to
-/// `WORKFLOW_TASK` like a process outside the worktree root would.
-#[test]
-fn an_integration_worktree_defers_to_workflow_task_in_the_environment() {
-    let w = World::new("q-integration");
-    let repo = w.repo("thing", None);
-    common::run_git(
-        &repo,
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.invalid",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "base",
-        ],
-    );
-    let wt = w
-        .dirs()
-        .workflow_worktrees()
-        .join("thing/cart-v2/_integration");
-    std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
-    common::run_git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            wt.to_str().unwrap(),
-            "-b",
-            "cart-v2/_integration",
-        ],
-    );
-
-    let out = common::mem_env(
-        &w,
-        &wt,
-        &["ask", "which base?", "--json"],
-        &[("MEM_SYNC_CMD", "true"), ("WORKFLOW_TASK", "cart-v2/t9")],
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["audience"], "orchestrator", "{v}");
-
-    let out = ask_env(&w, &repo, &["questions", "--pending", "--json"], None);
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"][0]["task"], "cart-v2/t9", "{v}");
-}
-
-/// A recommendation is one field on the question item: ask records it, and
-/// both listings carry it with the options, so the hub can show them under
-/// the question without reading the file itself.
 #[test]
 fn a_recommendation_rides_with_the_options_in_both_listings() {
     let w = World::new("q-recommend");
@@ -716,147 +573,25 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
     check(&w);
 }
 
-/// mem run by a session: `MEM_SESSION_ID` outranks whatever id the test
-/// process itself inherited.
-fn as_session(
-    w: &World,
-    cwd: &std::path::Path,
-    session: &str,
-    args: &[&str],
-) -> std::process::Output {
-    let mut cmd = mem_cmd(w, cwd, args);
-    cmd.env("MEM_NOTIFY_CMD", "true")
-        .env("MEM_SESSION_ID", session);
-    cmd.output().expect("run mem")
-}
-
-fn asked_short(out: &std::process::Output) -> String {
-    assert_eq!(code(out), 0, "{}", stderr(out));
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    v["short_id"].as_str().unwrap().to_string()
-}
-
-/// The session that asked is kept in mem's machine-local session file, so a
-/// session can list its own questions with their answers, across projects.
+/// A session file that still lists the questions it asked, as mem once kept
+/// them, reads and counts on.
 #[test]
-fn a_session_lists_the_questions_it_asked() {
-    let w = World::new("q-asked-by");
-    let repo = w.repo("thing", None);
-    let other = w.repo("other", None);
-
-    let first = asked_short(&as_session(
-        &w,
-        &repo,
-        "s1",
-        &["ask", "first from s1?", "--json"],
-    ));
-    let second = asked_short(&as_session(
-        &w,
-        &other,
-        "s1",
-        &["ask", "second from s1?", "--json"],
-    ));
-    let theirs = asked_short(&as_session(&w, &repo, "s2", &["ask", "from s2?", "--json"]));
-    // A question for the orchestrator reaches the session another way.
-    let routed = asked_short(&as_session(
-        &w,
-        &repo,
-        "s1",
-        &["ask", "for the run?", "--for", "orchestrator", "--json"],
-    ));
-
-    let out = ask_env(&w, &repo, &["answer", &first, "yes, go"], None);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--asked-by", "s1", "--json"],
-        None,
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let rows = v["questions"].as_array().unwrap();
-    let shorts: Vec<&str> = rows
-        .iter()
-        .map(|r| r["short_id"].as_str().unwrap())
-        .collect();
-    assert_eq!(shorts, [first.as_str(), second.as_str()], "{v}");
-    assert!(!shorts.contains(&theirs.as_str()) && !shorts.contains(&routed.as_str()));
-    assert_eq!(rows[0]["title"], "first from s1?", "{v}");
-    assert_eq!(rows[0]["answered"], true, "{v}");
-    assert_eq!(rows[0]["answer"], "yes, go", "{v}");
-    assert_eq!(rows[1]["answered"], false, "{v}");
-    assert!(rows[1]["answer"].is_null(), "{v}");
-
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--asked-by", "s1", "--pending", "--json"],
-        None,
-    );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"][0]["short_id"], second.as_str(), "{v}");
-    assert_eq!(v["questions"].as_array().unwrap().len(), 1, "{v}");
-
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--asked-by", "s2", "--json"],
-        None,
-    );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"].as_array().unwrap().len(), 1, "{v}");
-
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--asked-by", "nobody", "--json"],
-        None,
-    );
-    assert_eq!(code(&out), 1, "{}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"], serde_json::json!([]), "{v}");
-
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--asked-by", "s1", "--wait", &second],
-        None,
-    );
-    assert_eq!(code(&out), 2, "{}", stderr(&out));
-}
-
-/// A session file written before mem kept the asked list still reads, and
-/// the first question adds the list to it.
-#[test]
-fn a_session_file_from_before_the_asked_list_still_reads() {
+fn a_session_file_with_an_asked_list_still_reads() {
     let w = World::new("q-asked-old");
     let repo = w.repo("thing", None);
     let sessions = w.dirs().sessions_dir();
     std::fs::create_dir_all(&sessions).unwrap();
     std::fs::write(
         sessions.join("s3"),
-        r#"{"writes":4,"batches":2,"nudged":true,"last":"2026-10-01T00:00:00Z"}"#,
+        r#"{"writes":4,"batches":2,"nudged":true,"last":"2026-10-01T00:00:00Z","asked":["ABCDEFGH"]}"#,
     )
     .unwrap();
 
-    let short = asked_short(&as_session(
-        &w,
-        &repo,
-        "s3",
-        &["ask", "still read?", "--json"],
-    ));
-    let out = ask_env(
-        &w,
-        &repo,
-        &["questions", "--asked-by", "s3", "--json"],
-        None,
-    );
+    let out = mem_cmd(&w, &repo, &["ask", "still read?"])
+        .env("MEM_SESSION_ID", "s3")
+        .output()
+        .expect("run mem");
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["questions"][0]["short_id"], short.as_str(), "{v}");
-
     let kept: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(sessions.join("s3")).unwrap()).unwrap();
     assert_eq!(kept["writes"], 5, "{kept}");

@@ -1586,48 +1586,12 @@ fn remedy(noun: &str) -> &'static str {
     }
 }
 
-/// The orchestrated task this process speaks for, as `<plan>/<task>`, or
-/// nothing. A working directory under the workflow's worktree root
-/// (`.../workflow/worktrees/<project>/<plan>/<task>`) names its own task, and
-/// a worker cannot forget to say who it is or spoof another task by exporting
-/// `WORKFLOW_TASK`. The `_integration` worktree speaks for no single task, and
-/// a process outside the root has no path to read, so both fall back to
-/// `WORKFLOW_TASK`.
-fn asking_task(app: &App) -> Option<String> {
-    let root = app.dirs.workflow_worktrees();
-    let cwd = crate::git::canonical(&app.cwd);
-    let root = std::fs::canonicalize(&root).unwrap_or(root);
-    let from_cwd = cwd.strip_prefix(&root).ok().and_then(|rel| {
-        let parts: Vec<String> = rel
-            .iter()
-            .take(3)
-            .map(|c| c.to_string_lossy().to_string())
-            .collect();
-        match parts.as_slice() {
-            [_project, plan, task] if task != "_integration" => Some(format!("{plan}/{task}")),
-            _ => None,
-        }
-    });
-    if from_cwd.is_some() {
-        return from_cwd;
-    }
-    let v = std::env::var("WORKFLOW_TASK").ok()?;
-    let v = v.trim();
-    if v.is_empty() {
-        None
-    } else {
-        Some(v.to_string())
-    }
-}
-
 /// `mem ask` — writes the question, asks for a sync, fires a notification and
 /// returns. It never waits: a tool call that blocks for hours dies at the
 /// runtime's ceiling, so waiting is `mem questions --wait`.
 ///
-/// Who answers is decided here, once: a worker's question is the
-/// orchestrator's and carries the task that asked it, so the run can hand the
-/// answer to the task's next attempt; anything else is a person's, and the
-/// hub shows exactly those.
+/// A question is a person's, which is what the hub shows, unless `--for`
+/// gives it to the orchestrator.
 pub fn ask(
     app: &App,
     question: &str,
@@ -1648,24 +1612,9 @@ pub fn ask(
     }
     meta.recommend = recommend.map(str::to_string);
     meta.about = about.map(str::to_string);
-    let task = asking_task(app);
-    let audience = match audience {
-        Some(a) => a.stored(),
-        None if task.is_some() => Some("orchestrator"),
-        None => None,
-    };
-    if audience.is_some() {
-        meta.audience = audience.map(str::to_string);
-        meta.task = task;
-    }
+    let audience = audience.and_then(crate::cli::Audience::stored);
+    meta.audience = audience.map(str::to_string);
     let written = crate::write::write_item(app, &identity, meta, question.to_string())?;
-    // The run hands the orchestrator's answers back itself; the session list
-    // is for answers a person gives.
-    if audience != Some("orchestrator")
-        && let Some(session) = &app.session_id
-    {
-        crate::session::record_asked(&app.dirs.sessions_dir(), session, &written.short_id);
-    }
     // No bell here: hub's doorbell owns delivery, and it knows whether anyone
     // is watching. When mem rang its own notify-send too, every question
     // arrived twice — and this one carried the question text, which the
@@ -1691,26 +1640,16 @@ pub fn ask(
 /// `mem questions` and `mem questions --wait <id>`.
 ///
 /// `--for` narrows the listing to one audience's questions: the hub asks for
-/// a person's, the session driving a run asks for the orchestrator's. The
-/// JSON carries the body and the answer, so a run can hand a worker's
-/// answered question to its next attempt without a second verb.
-///
-/// `--asked-by` lists what one session asked, from its session file, in any
-/// project and answered or not.
+/// a person's, an orchestrator for its own. The JSON carries the body and the
+/// answer, so a reader needs no second verb.
 pub fn questions(
     app: &App,
     pending: bool,
     all_projects: bool,
     audience: Option<crate::cli::Audience>,
-    asked_by: Option<&str>,
     wait: Option<&str>,
     timeout: &str,
 ) -> Result<i32> {
-    if asked_by.is_some() && wait.is_some() {
-        return Err(exit::usage(
-            "--asked-by lists questions; --wait waits on one",
-        ));
-    }
     // A wait resolves its own scope from the question, so this checkout's
     // identity — and the git call behind it — is only the listing's business.
     if let Some(id) = wait {
@@ -1718,23 +1657,17 @@ pub fn questions(
     }
 
     let index = app.read_index()?;
-    // A session's own list spans projects, so it needs no checkout.
-    let mut rows = match asked_by {
-        Some(session) => asked_questions(app, &index, session, pending)?,
-        None => {
-            let identity = app.identity(Mode::Read)?;
-            if all_projects {
-                let mut all = index.pending_questions(None)?;
-                for project in crate::project::Registry::load(&app.store).projects {
-                    all.extend(index.pending_questions(Some(&project.id))?);
-                }
-                all
-            } else if pending {
-                index.pending_questions(identity.id())?
-            } else {
-                index.recent("question", identity.id(), 50)?
-            }
+    let identity = app.identity(Mode::Read)?;
+    let mut rows = if all_projects {
+        let mut all = index.pending_questions(None)?;
+        for project in crate::project::Registry::load(&app.store).projects {
+            all.extend(index.pending_questions(Some(&project.id))?);
         }
+        all
+    } else if pending {
+        index.pending_questions(identity.id())?
+    } else {
+        index.recent("question", identity.id(), 50)?
     };
     if let Some(audience) = audience {
         rows.retain(|row| row.audience.as_deref() == audience.stored());
@@ -1762,12 +1695,11 @@ pub fn questions(
     } else {
         for row in &rows {
             let answered = index.answer_to(&row.id)?.is_some();
-            // A worker's question names the task that asked it, so a reader
-            // can tell it from one a person owes an answer to.
-            let who = match (&row.audience, &row.task) {
-                (Some(_), Some(task)) => format!("[{task}] "),
-                (Some(a), None) => format!("[{a}] "),
-                _ => String::new(),
+            // An orchestrator's question says so, so a reader can tell it
+            // from one a person owes an answer to.
+            let who = match &row.audience {
+                Some(a) => format!("[{a}] "),
+                None => String::new(),
             };
             println!(
                 "{} #{}  {who}{}",
@@ -1830,28 +1762,6 @@ pub fn about(app: &App, kind: &str, prefix: &str) -> Result<i32> {
     } else {
         exit::OK
     })
-}
-
-/// The questions a session's file names, in the order it asked them. A short
-/// id that no longer resolves to a question (pruned, say) is skipped.
-fn asked_questions(
-    app: &App,
-    index: &crate::index::Index,
-    session: &str,
-    pending: bool,
-) -> Result<Vec<crate::index::Row>> {
-    let mut rows = Vec::new();
-    for short in crate::session::read(&app.dirs.sessions_dir(), session).asked {
-        let Some(id_ref) = crate::ids::IdRef::parse(&short) else {
-            continue;
-        };
-        for row in index.resolve_ref(&id_ref)? {
-            if row.kind == "question" && !(pending && index.answer_to(&row.id)?.is_some()) {
-                rows.push(row);
-            }
-        }
-    }
-    Ok(rows)
 }
 
 fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {

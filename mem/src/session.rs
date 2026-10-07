@@ -29,11 +29,6 @@ pub struct Activity {
     pub nudged: bool,
     #[serde(default)]
     pub last: String,
-    /// Short ids of the questions this session asked, in the order asked. The
-    /// asker lives here rather than on the question, because a session id
-    /// means nothing on another machine.
-    #[serde(default)]
-    pub asked: Vec<String>,
 }
 
 /// The variables that name the session mem is running inside, nearest first:
@@ -101,15 +96,6 @@ fn write(sessions_dir: &Path, id: &str, activity: &Activity) -> Result<()> {
 pub fn record_write(sessions_dir: &Path, id: &str) {
     let mut activity = read(sessions_dir, id);
     activity.writes += 1;
-    activity.last = Timestamp::now().to_string();
-    let _ = write(sessions_dir, id, &activity);
-}
-
-/// Records that this session asked a question. Best effort for the same reason
-/// as `record_write`: the question is already written.
-pub fn record_asked(sessions_dir: &Path, id: &str, short_id: &str) {
-    let mut activity = read(sessions_dir, id);
-    activity.asked.push(short_id.to_string());
     activity.last = Timestamp::now().to_string();
     let _ = write(sessions_dir, id, &activity);
 }

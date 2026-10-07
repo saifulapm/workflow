@@ -142,8 +142,8 @@ pub struct Meta {
     /// absent means a person, which is what the hub and the phone show.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
-    /// `kind = "question"` only: the orchestrated task that asked, as
-    /// `<plan>/<task>`, so the answer can be carried into its next attempt.
+    /// The task an evidence item proves, and on a question an older mem
+    /// wrote, the orchestrated task that asked it. Kept so both still read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

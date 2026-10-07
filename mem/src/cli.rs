@@ -187,9 +187,8 @@ pub enum Command {
         /// The answer the asker would pick.
         #[arg(long, value_name = "TEXT")]
         recommend: Option<String>,
-        /// Who answers. Asked from an orchestrated task's worktree (or with
-        /// WORKFLOW_TASK set) the default is the orchestrator; anywhere else
-        /// it is a person, which is what the hub and the phone show.
+        /// Who answers. A person unless this says otherwise, and a person's
+        /// questions are what the hub and the phone show.
         #[arg(long = "for", value_name = "AUDIENCE")]
         audience: Option<Audience>,
         /// The part of a page this is about, as `plan:<slug>#<anchor>`.
@@ -208,11 +207,8 @@ pub enum Command {
         #[arg(long = "for", value_name = "AUDIENCE")]
         audience: Option<Audience>,
         /// Every question, answered or not, about a part starting with this.
-        #[arg(long, value_name = "PREFIX", conflicts_with_all = ["wait", "asked_by"])]
+        #[arg(long, value_name = "PREFIX", conflicts_with = "wait")]
         about: Option<String>,
-        /// Only the questions this session asked, from any project.
-        #[arg(long, value_name = "SESSION")]
-        asked_by: Option<String>,
         /// Wait for this question to be answered.
         #[arg(long, value_name = "ID")]
         wait: Option<String>,

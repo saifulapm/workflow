@@ -259,12 +259,10 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
         }
     }
     for q in &sources.questions {
-        // A worker's question is the orchestrator's to answer, and the task
-        // it names is how a session picking the run up finds it.
-        let who = match (&q.audience, &q.task) {
-            (Some(_), Some(task)) => format!("[{task}] "),
-            (Some(a), None) => format!("[{a}] "),
-            _ => String::new(),
+        // An orchestrator's question says whose it is.
+        let who = match &q.audience {
+            Some(a) => format!("[{a}] "),
+            None => String::new(),
         };
         mandatory.push(format!(
             "? #{}  {who}{}",
