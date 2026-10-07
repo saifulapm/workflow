@@ -157,6 +157,9 @@ nav.contents{font-size:13px}
 nav.contents a{display:block;padding:3px 0;color:var(--mut)}
 nav.contents a:hover{color:var(--accent);text-decoration:none}
 textarea,input[type=text],input[type=search],select{width:100%;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+select{-webkit-appearance:none;appearance:none;padding-right:36px;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);background-position:calc(100% - 19px) 52%,calc(100% - 14px) 52%;background-size:5px 5px;background-repeat:no-repeat}
+select:hover{border-color:var(--accent)}
+select option{background:var(--surface);color:var(--ink)}
 button{margin-top:8px;font-size:14px;font-weight:600;padding:8px 16px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);cursor:pointer}
 form.search{display:flex;gap:8px;align-items:center;margin-block:0 16px}
 button.alt{background:var(--surface);color:var(--accent);border-color:var(--line)}

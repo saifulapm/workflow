@@ -142,3 +142,28 @@ fn a_heading_reached_by_its_anchor_clears_the_sticky_bar() {
         "{sheet}"
     );
 }
+
+#[test]
+fn a_select_draws_its_own_arrow_in_the_theme_colours() {
+    // A native select keeps the platform's grey control and font on a phone,
+    // so the hub draws the control itself, its arrow from the muted token.
+    let sheet = stylesheet();
+    assert!(
+        sheet.contains("select{-webkit-appearance:none;appearance:none;"),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains("linear-gradient(45deg,transparent 50%,var(--mut) 50%)"),
+        "{sheet}"
+    );
+    let shared = sheet
+        .find("textarea,input[type=text],input[type=search],select{")
+        .expect("the shared field rule");
+    let own = sheet
+        .find("select{-webkit-appearance")
+        .expect("the select rule");
+    assert!(
+        own > shared,
+        "the select's own rule must come after the shared one"
+    );
+}
