@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 
 use crate::backend::{
     AtPrompt, Dispatch, Handle, Outcome, WorkerBackend, last_context_tokens, last_words_in,
-    limit_notice_in,
+    limit_notice_in, usage_totals,
 };
 use crate::{gitcmd, paths, sys};
 
@@ -527,6 +527,17 @@ impl WorkerBackend for AmxBackend {
         }
         let path = paths::transcript_path(&h.worktree, &s.session);
         last_context_tokens(&std::fs::read_to_string(path).ok()?)
+    }
+
+    /// Read off the transcript of the conversation amx names, since
+    /// `status --json` carries no token counts.
+    fn usage(&self, h: &Handle) -> Option<(u64, u64)> {
+        let s = status(&h.session)?;
+        if s.session.is_empty() {
+            return None;
+        }
+        let path = paths::transcript_path(&h.worktree, &s.session);
+        usage_totals(&std::fs::read_to_string(path).ok()?)
     }
 
     /// The grace is amx's own: `amx stop` asks the pane's process group to

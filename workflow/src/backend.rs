@@ -100,6 +100,12 @@ pub trait WorkerBackend {
     /// the plan is flat-rate, so the managed resource is the window, and a task
     /// that ends near a full one was cut too big.
     fn context_tokens(&self, h: &Handle) -> Option<u64>;
+    /// The input and output tokens the session spent over all its turns,
+    /// when the backend can read its transcript. A custom template never
+    /// writes one.
+    fn usage(&self, _h: &Handle) -> Option<(u64, u64)> {
+        None
+    }
     /// Stop the worker and everything it started.
     fn stop(&self, h: &Handle, grace_s: i64);
     /// Forget every finished agent whose work is under `root`. A run stops
@@ -315,6 +321,35 @@ pub(crate) fn last_context_tokens(transcript: &str) -> Option<u64> {
     last
 }
 
+/// The input and output tokens a session spent, summed over every assistant
+/// turn of its transcript. Input counts the cache writes and reads too, since
+/// the subscription's window counts them. None when no assistant turn carries
+/// a usage: zero would claim the session spent nothing.
+pub(crate) fn usage_totals(transcript: &str) -> Option<(u64, u64)> {
+    let mut totals = None;
+    for line in transcript.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(usage) = v.get("message").and_then(|m| m.get("usage")) else {
+            continue;
+        };
+        let field = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        let (input, output) = totals.unwrap_or((0, 0));
+        totals = Some((
+            input
+                + field("input_tokens")
+                + field("cache_creation_input_tokens")
+                + field("cache_read_input_tokens"),
+            output + field("output_tokens"),
+        ));
+    }
+    totals
+}
+
 /// The joined text of a transcript's last turn that said anything -- a tool
 /// call carries no text and leaves the turn before it standing, the way a
 /// worker that ended mid-thought does not overwrite what it last actually
@@ -442,6 +477,11 @@ impl WorkerBackend for ProcessBackend {
     fn context_tokens(&self, h: &Handle) -> Option<u64> {
         let path = paths::transcript_path(&h.worktree, &h.session);
         last_context_tokens(&std::fs::read_to_string(path).ok()?)
+    }
+
+    fn usage(&self, h: &Handle) -> Option<(u64, u64)> {
+        let path = paths::transcript_path(&h.worktree, &h.session);
+        usage_totals(&std::fs::read_to_string(path).ok()?)
     }
 
     fn stop(&self, h: &Handle, grace_s: i64) {
@@ -591,6 +631,32 @@ not json at all
         // context, and the honest answer is that the backend cannot see.
         assert_eq!(last_context_tokens(""), None);
         assert_eq!(last_context_tokens("{\"type\":\"user\"}\n"), None);
+    }
+
+    /// Two assistant turns with a user turn between them that carries a usage
+    /// of its own. Only the assistant turns count, every one of them.
+    const USAGE_TRANSCRIPT: &str = r#"{"type":"assistant","message":{"usage":{"input_tokens":4,"cache_creation_input_tokens":900,"cache_read_input_tokens":12000,"output_tokens":50}}}
+{"type":"user","message":{"role":"user","usage":{"input_tokens":1000,"output_tokens":1000}}}
+{"type":"assistant","message":{"usage":{"input_tokens":2,"cache_creation_input_tokens":1500,"cache_read_input_tokens":157000,"output_tokens":80}}}
+"#;
+
+    #[test]
+    fn a_sessions_usage_is_every_assistant_turns_tokens_summed() {
+        assert_eq!(
+            usage_totals(USAGE_TRANSCRIPT),
+            Some((4 + 900 + 12000 + 2 + 1500 + 157000, 50 + 80))
+        );
+        // No usage to read is not zero: zero would claim the session spent
+        // nothing.
+        assert_eq!(usage_totals(""), None);
+        assert_eq!(
+            usage_totals(r#"{"type":"user","message":{"usage":{"input_tokens":7}}}"#),
+            None
+        );
+        assert_eq!(
+            usage_totals(r#"{"type":"assistant","message":{"role":"assistant"}}"#),
+            None
+        );
     }
 
     /// A user turn, an assistant turn with a tool call and no text, and a
