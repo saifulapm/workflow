@@ -361,11 +361,7 @@ struct State {
 /// opened a dead link. `Guard::host_allowed` already admits anything under
 /// `.ts.net`, so the tailnet name passes hub's own Host check unchanged.
 fn hub_url(app: &App) -> String {
-    if let Some(url) = &app.config.hub_url {
-        return url.clone();
-    }
-    let host = crate::tailnet_name().unwrap_or_else(|| app.machine.clone());
-    format!("http://{host}:{}/", app.port)
+    crate::pair::base_url(&app.config, app.port, &app.machine)
 }
 
 /// 15 s, or `HUB_POLL_MS` — the same kind of seam as mem's `MEM_POLL_MS`, so a
