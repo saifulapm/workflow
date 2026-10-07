@@ -23,6 +23,7 @@ pub mod backend;
 pub mod backend_amx;
 pub mod brief;
 pub mod cli;
+pub mod cost;
 pub mod docs;
 pub mod doctor;
 pub mod dogfood;
