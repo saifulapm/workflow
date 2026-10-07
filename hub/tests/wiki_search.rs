@@ -100,9 +100,12 @@ impl World {
             || {
                 invocations(&log)
                     .iter()
-                    .any(|argv| argv.first().map(String::as_str) == Some("log"))
+                    .any(|argv| argv.first().map(String::as_str) == Some("projects"))
             },
         );
+        // One page through mem's gate, so the round's projects read has finished
+        // and filled the cache before the counted request.
+        hub.get("/");
         World {
             _dir: dir,
             hub,

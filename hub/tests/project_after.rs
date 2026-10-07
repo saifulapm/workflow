@@ -139,6 +139,9 @@ fn page(world: &World, project: &str) -> (String, Vec<String>) {
                 .any(|argv| argv == "projects --json")
         },
     );
+    // One page through mem's gate, so the round's projects read has finished
+    // and filled the cache before the counted request.
+    hub.get("/");
     let before = lines(&world.log).len();
     let response = hub.get(&format!("/p/{project}"));
     assert_eq!(status_of(&response), 200, "{response}");
@@ -156,11 +159,7 @@ fn no_findings() -> Value {
 
 #[test]
 fn a_three_clause_show_line_is_three_numbered_steps() {
-    let world = world(
-        "project-after-cut",
-        roadmap(Some(SHOW)),
-        no_findings(),
-    );
+    let world = world("project-after-cut", roadmap(Some(SHOW)), no_findings());
     let (body, mem) = page(&world, "kappa");
 
     assert!(body.contains("dogfooding"), "{body}");
@@ -189,11 +188,7 @@ fn an_open_finding_crosses_its_step() {
         finding("01K0F1", "k2-walk", "2", "the laptop lists the habit twice"),
         finding("01K0F2", "k1-log", "3", "a finding of an old milestone"),
     ]});
-    let world = world(
-        "project-after-marks",
-        roadmap(Some(SHOW)),
-        findings,
-    );
+    let world = world("project-after-marks", roadmap(Some(SHOW)), findings);
     let (body, mem) = page(&world, "kappa");
 
     for step in [
@@ -218,11 +213,7 @@ fn an_open_finding_crosses_its_step() {
 
 #[test]
 fn a_milestone_with_no_show_line_has_no_steps() {
-    let world = world(
-        "project-after-no-show",
-        roadmap(None),
-        no_findings(),
-    );
+    let world = world("project-after-no-show", roadmap(None), no_findings());
     let (body, _) = page(&world, "kappa");
 
     assert!(body.contains("k2-walk has no Show path"), "{body}");
@@ -232,11 +223,7 @@ fn a_milestone_with_no_show_line_has_no_steps() {
 
 #[test]
 fn a_done_project_shows_handoff_findings_and_ideas() {
-    let world = world(
-        "project-after-backlog",
-        roadmap(Some(SHOW)),
-        no_findings(),
-    );
+    let world = world("project-after-backlog", roadmap(Some(SHOW)), no_findings());
     let (body, mem) = page(&world, "delta");
 
     for part in [
@@ -248,7 +235,12 @@ fn a_done_project_shows_handoff_findings_and_ideas() {
     ] {
         assert!(body.contains(part), "{part:?} missing from {body}");
     }
-    for gone in ["maintenance", "New round", "<h2>Status</h2>", "<h2>Run</h2>"] {
+    for gone in [
+        "maintenance",
+        "New round",
+        "<h2>Status</h2>",
+        "<h2>Run</h2>",
+    ] {
         assert!(!body.contains(gone), "{gone:?} in {body}");
     }
     assert!(mem.len() <= 5, "mem spawns: {mem:?}");
@@ -256,11 +248,7 @@ fn a_done_project_shows_handoff_findings_and_ideas() {
 
 #[test]
 fn the_roadmap_is_a_timeline_of_done_live_and_next_milestones() {
-    let world = world(
-        "project-after-timeline",
-        roadmap(Some(SHOW)),
-        no_findings(),
-    );
+    let world = world("project-after-timeline", roadmap(Some(SHOW)), no_findings());
     let (body, mem) = page(&world, "kappa");
 
     let timeline = [
@@ -291,11 +279,7 @@ fn body_reads(spawns: &[String]) -> Vec<String> {
 
 #[test]
 fn a_building_project_draws_its_timeline_within_five_reads() {
-    let world = world(
-        "project-after-omega",
-        roadmap(None),
-        no_findings(),
-    );
+    let world = world("project-after-omega", roadmap(None), no_findings());
     let (body, mem) = page(&world, "omega");
 
     assert!(body.contains("<h2>Roadmap</h2>"), "{body}");
@@ -321,11 +305,7 @@ fn a_building_project_draws_its_timeline_within_five_reads() {
 
 #[test]
 fn a_shipped_project_reads_no_roadmap_for_its_page() {
-    let world = world(
-        "project-after-delta",
-        roadmap(None),
-        no_findings(),
-    );
+    let world = world("project-after-delta", roadmap(None), no_findings());
     let (body, mem) = page(&world, "delta");
 
     assert!(!body.contains("not answering"), "{body}");

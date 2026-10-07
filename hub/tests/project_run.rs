@@ -119,6 +119,9 @@ fn page(world: &World) -> (String, Vec<String>) {
                 .any(|argv| argv == "projects --json")
         },
     );
+    // One page through mem's gate, so the round's projects read has finished
+    // and filled the cache before the counted request.
+    hub.get("/");
     let before = lines(&world.mem_log).len();
     let response = hub.get(&format!("/p/{PROJECT}"));
     assert_eq!(status_of(&response), 200, "{response}");

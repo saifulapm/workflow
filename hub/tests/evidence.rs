@@ -264,8 +264,11 @@ fn page_over(path: &str, evidence: &Value, findings: &Value) -> (String, Vec<Str
     wait_for(
         "the doorbell's first round",
         Duration::from_secs(10),
-        || lines(&log).iter().any(|argv| argv.starts_with("log ")),
+        || lines(&log).iter().any(|argv| argv.starts_with("projects ")),
     );
+    // One page through mem's gate, so the round's projects read has finished
+    // and filled the cache before the counted request.
+    hub.get("/");
     let before = lines(&log).len();
     let response = hub.get(path);
     assert_eq!(status_of(&response), 200, "{response}");

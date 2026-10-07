@@ -121,6 +121,9 @@ fn page(world: &World) -> (String, Vec<String>) {
                 .any(|argv| argv == "projects --json")
         },
     );
+    // One page through mem's gate, so the round's projects read has finished
+    // and filled the cache before the counted request.
+    hub.get("/");
     let before = lines(&world.log).len();
     let response = hub.get("/p/omega");
     assert_eq!(status_of(&response), 200, "{response}");
@@ -213,10 +216,19 @@ fn a_project_with_no_checkout_here_offers_no_start_and_is_not_stalled() {
 #[test]
 fn a_roadmap_with_every_milestone_ticked_reads_done_with_no_run() {
     for handoff in ["", "o2 landed at 1a2b3c."] {
-        let world = world_with("live-finished", handoff, Some(DEAD), json!(["/src/omega"]), true);
+        let world = world_with(
+            "live-finished",
+            handoff,
+            Some(DEAD),
+            json!(["/src/omega"]),
+            true,
+        );
         let (body, _) = page(&world);
 
-        assert!(body.contains("<span class=\"pill ok\">done</span>"), "{body}");
+        assert!(
+            body.contains("<span class=\"pill ok\">done</span>"),
+            "{body}"
+        );
         for run in [
             "execution",
             "stalled",
