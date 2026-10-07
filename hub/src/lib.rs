@@ -9,7 +9,6 @@ pub mod api;
 pub mod app;
 pub mod assets;
 pub mod config;
-pub mod cost;
 pub mod doorbell;
 pub mod form;
 pub mod html;

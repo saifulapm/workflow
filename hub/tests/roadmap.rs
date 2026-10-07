@@ -21,9 +21,8 @@ const ROADMAP: &str = "# roadmap: beta
 ";
 
 /// A fake `mem` that knows one project, `beta`, whose roadmap read prints
-/// `roadmap` (nothing at all for a project with none), whose stored plans
-/// are b1-box and b2-scale and whose run lines are `runs` (mem's empty
-/// listing when there are none). Every call is appended to `calls`.
+/// `roadmap` (nothing at all for a project with none) and whose stored plans
+/// are b1-box and b2-scale. Every call is appended to `calls`.
 struct World {
     _dir: TempDir,
     home: PathBuf,
@@ -33,10 +32,6 @@ struct World {
 
 impl World {
     fn new(tag: &str, roadmap: Option<serde_json::Value>) -> World {
-        World::with_runs(tag, roadmap, &[])
-    }
-
-    fn with_runs(tag: &str, roadmap: Option<serde_json::Value>, runs: &[&str]) -> World {
         let dir = TempDir::new(tag);
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
@@ -46,15 +41,6 @@ impl World {
             Some(doc) => format!("printf '%s\\n' '{doc}'"),
             None => "exit 1".to_string(),
         };
-        let items: Vec<serde_json::Value> = runs
-            .iter()
-            .map(|title| serde_json::json!({ "kind": "log", "type": "run", "title": title }))
-            .collect();
-        let runs = if items.is_empty() {
-            "echo '{\"items\":[]}'; exit 1".to_string()
-        } else {
-            format!("printf '%s\\n' '{}'", serde_json::json!({ "items": items }))
-        };
         fixture_mem(
             &bin,
             &format!(
@@ -63,7 +49,6 @@ impl World {
                  projects) echo '{{\"projects\":[{{\"name\":\"beta\"}}]}}' ;;\n\
                  roadmap) {roadmap} ;;\n\
                  plan) echo '{{\"plans\":[{{\"slug\":\"b1-box\"}},{{\"slug\":\"b2-scale\"}}]}}' ;;\n\
-                 log) {runs} ;;\n\
                  *) exit 1 ;;\n\
                  esac",
                 calls = calls.display(),
@@ -151,7 +136,7 @@ fn roadmap_rows_reads_each_milestone_and_its_indented_lines() {
 #[test]
 fn roadmap_a_draft_shows_each_milestone_its_plan_and_both_forms() {
     let world = World::new("roadmap-draft", Some(roadmap_doc(Some("draft"))));
-    let body = roadmap_page(&world, 4);
+    let body = roadmap_page(&world, 3);
 
     assert!(body.contains("draft"), "{body}");
     for text in [
@@ -204,7 +189,7 @@ fn roadmap_a_draft_shows_each_milestone_its_plan_and_both_forms() {
 #[test]
 fn roadmap_an_approved_one_says_it_waits_for_the_engine() {
     let world = World::new("roadmap-approved", Some(roadmap_doc(Some("approved"))));
-    let body = roadmap_page(&world, 4);
+    let body = roadmap_page(&world, 3);
 
     assert!(
         body.contains("approved: sent, waiting for the engine"),
@@ -216,7 +201,7 @@ fn roadmap_an_approved_one_says_it_waits_for_the_engine() {
 #[test]
 fn roadmap_a_running_one_shows_no_form() {
     let world = World::new("roadmap-running", Some(roadmap_doc(Some("running"))));
-    let body = roadmap_page(&world, 4);
+    let body = roadmap_page(&world, 3);
 
     assert!(body.contains("running"), "{body}");
     assert!(
@@ -237,39 +222,8 @@ fn roadmap_a_project_with_none_says_so() {
 }
 
 #[test]
-fn roadmap_cost_shows_under_a_ticked_milestone_from_its_milestone_line() {
-    let world = World::with_runs(
-        "roadmap-cost",
-        Some(roadmap_doc(Some("running"))),
-        &[
-            "cost b1-box worker b1-t1: minutes=11 context=52000 in=640000 out=9100 model=sonnet",
-            "cost b1-box milestone b1-box: sessions=4 minutes=31 context=120000 in=2400000 out=38700",
-            "cost b2-scale milestone b2-scale: sessions=1 minutes=2 in=900 out=40",
-            "dogfood b1-box: pass",
-        ],
-    );
-    let body = roadmap_page(&world, 4);
-
-    let b1 = body.find(">b1-box</span>").expect("b1-box");
-    let b2 = body.find(">b2-scale</span>").expect("b2-scale");
-    let line = "<p class=\"meta\">cost: 4 sessions · 31 min · 2.4M in · 38.7k out</p>";
-    let at = body.find(line).unwrap_or_else(|| panic!("{line}\n{body}"));
-    assert!(b1 < at && at < b2, "under b1-box: {body}");
-    // b2-scale is not ticked, so its line is not shown yet.
-    assert_eq!(body.matches("cost:").count(), 1, "{body}");
-}
-
-#[test]
-fn roadmap_cost_is_left_out_without_a_milestone_line() {
-    let world = World::with_runs(
-        "roadmap-no-cost",
-        Some(roadmap_doc(Some("running"))),
-        &["cost b1-box worker b1-t1: minutes=11 in=640000 out=9100 model=sonnet"],
-    );
-    let body = roadmap_page(&world, 4);
-    assert!(!body.contains("cost:"), "{body}");
-
-    let world = World::new("roadmap-no-runs", Some(roadmap_doc(Some("running"))));
-    let body = roadmap_page(&world, 4);
+fn roadmap_shows_no_cost_line() {
+    let world = World::new("roadmap-no-cost", Some(roadmap_doc(Some("approved"))));
+    let body = roadmap_page(&world, 3);
     assert!(!body.contains("cost:"), "{body}");
 }

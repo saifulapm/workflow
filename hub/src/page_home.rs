@@ -1,15 +1,13 @@
-//! `GET /`: every project with its stage, progress and week, then
-//! the questions waiting on the owner.
+//! `GET /`: every project with its stage and progress, then the questions
+//! waiting on the owner.
 //!
 //! The hub runs one `mem` at a time, so this page reads nothing per question
-//! and one thing per project: `projects --json` carries each project's
-//! summary, `questions --json` each question's whole body, and the week is
-//! the project's run lines, which the cache answers for its TTL.
+//! and nothing per project: `projects --json` carries each project's summary
+//! and `questions --json` each question's whole body.
 
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::cost::{parse_cost, summary};
 use crate::html::{self, Banner, esc};
 use crate::http::Response;
 use crate::memcli::MemCli;
@@ -179,45 +177,12 @@ pub fn render(
     } else {
         body.push_str("<div class=\"cards\">\n");
         for project in &projects {
-            let week = week_line(mem, &project.name);
-            body.push_str(&project_card(
-                project,
-                waiting(&project.name),
-                week.as_deref(),
-                now_ms,
-            ));
+            body.push_str(&project_card(project, waiting(&project.name), now_ms));
         }
         body.push_str("</div>\n");
     }
 
     page_shell(machine, None, &body)
-}
-
-/// What the project's sessions of the last seven days spent, or `None` when
-/// it has no cost line in them. A `milestone` line sums sessions already
-/// counted, so the week leaves it out.
-fn week_line(mem: &MemCli, project: &str) -> Option<String> {
-    let rows: Vec<_> = mem
-        .run_lines_since(project, "7d")
-        .rows("items")
-        .iter()
-        .filter_map(|item| item["title"].as_str().and_then(parse_cost))
-        .map(|(_, row)| row)
-        .filter(|row| row.kind != "milestone")
-        .collect();
-    if rows.is_empty() {
-        return None;
-    }
-    let total = |field: fn(&crate::cost::CostRow) -> u64| rows.iter().map(field).sum();
-    Some(format!(
-        "week: {}",
-        summary(
-            rows.len() as u64,
-            total(|r| r.minutes),
-            total(|r| r.input),
-            total(|r| r.output),
-        )
-    ))
 }
 
 /// One project as a card: its name, its stage and whatever waits on the
@@ -226,7 +191,6 @@ fn week_line(mem: &MemCli, project: &str) -> Option<String> {
 fn project_card(
     project: &ProjectSummary,
     waiting: usize,
-    week: Option<&str>,
     now_ms: i64,
 ) -> String {
     let mut pills = format!(
@@ -271,14 +235,11 @@ fn project_card(
         .map(|at| model::age(Some(at.as_millisecond()), now_ms))
         .map(|age| format!("<span class=\"meta\">{}</span>", esc(&age)))
         .unwrap_or_default();
-    let week = week
-        .map(|week| format!("<div class=\"meta\">{}</div>\n", esc(week)))
-        .unwrap_or_default();
     format!(
         "<article class=\"card\">\n\
          <div class=\"row\"><h3><a href=\"{href}\">{name}</a></h3>{pills}\
          <span class=\"sp\"></span>{age}</div>\n\
-         {meta}{bar}{week}</article>\n",
+         {meta}{bar}</article>\n",
         href = esc(&html::project_url(&project.name)),
         name = esc(&project.name),
     )

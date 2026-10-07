@@ -2,9 +2,6 @@
 //! and its plan, and while the roadmap is a draft the two forms that answer
 //! it.
 
-use std::collections::HashMap;
-
-use crate::cost::{CostRow, parse_cost, summary};
 use crate::form::encode_component;
 use crate::html::{degraded_banner, esc, project_url};
 use crate::http::Response;
@@ -71,13 +68,8 @@ pub fn roadmap_rows(text: &str) -> Vec<MilestoneRow> {
     rows
 }
 
-/// A milestone's cost line is written once, when it lands, and a roadmap
-/// spans months, so the page reads every run line rather than the week's.
-const SINCE_EVER: &str = "1970-01-01T00:00:00Z";
-
-/// The page under the shell. Four spawns: the route's project check, the
-/// roadmap, then the stored plans and the run lines, which only a roadmap
-/// needs.
+/// The page under the shell. Three spawns: the route's project check, the
+/// roadmap, then the stored plans, which only a roadmap needs.
 pub fn roadmap_body(ctx: &PageCtx) -> String {
     let project = ctx.project.unwrap_or_default();
     let roadmap = ctx.app.mem.roadmap(project);
@@ -97,7 +89,6 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
         .iter()
         .filter_map(|row| row["slug"].as_str().map(str::to_string))
         .collect();
-    let costs = milestone_costs(&ctx.app.mem.run_lines_since(project, SINCE_EVER));
 
     let mut out = format!(
         "<p class=\"meta\">status: {}</p>\n",
@@ -124,17 +115,6 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
                 out.push_str(&format!("<p class=\"q\">{label}: {}</p>\n", esc(value)));
             }
         }
-        if let Some(cost) = costs.get(&row.slug).filter(|_| row.ticked) {
-            out.push_str(&format!(
-                "<p class=\"meta\">cost: {}</p>\n",
-                esc(&summary(
-                    cost.sessions,
-                    cost.minutes,
-                    cost.input,
-                    cost.output
-                ))
-            ));
-        }
         if plans.contains(&row.slug) {
             out.push_str(&format!(
                 "<p><a href=\"{}/plan/{}\">plan</a></p>\n",
@@ -153,20 +133,6 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
         _ => {}
     }
     out
-}
-
-/// Each milestone's `milestone` line by its slug. mem lists the newest
-/// first, so a milestone landed twice shows its last landing.
-fn milestone_costs(runs: &Outcome) -> HashMap<String, CostRow> {
-    let mut costs = HashMap::new();
-    for item in runs.rows("items") {
-        if let Some((slug, row)) = item["title"].as_str().and_then(parse_cost)
-            && row.kind == "milestone"
-        {
-            costs.entry(slug).or_insert(row);
-        }
-    }
-    costs
 }
 
 /// Approve and Request changes, both posting to the project's control route,

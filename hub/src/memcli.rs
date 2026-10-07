@@ -417,22 +417,6 @@ impl MemCli {
         ])
     }
 
-    /// The run lines of `since` (mem's `7d` or an RFC 3339 time), up to 500:
-    /// enough for a week of every session the engine starts on one project.
-    pub fn run_lines_since(&self, project: &str, since: &str) -> Arc<Outcome> {
-        self.read(&[
-            "log",
-            "--type",
-            "run",
-            "--since",
-            since,
-            "--limit",
-            "500",
-            &format!("--project={project}"),
-            "--json",
-        ])
-    }
-
     /// Up to `limit` items of one kind — fact, ruling, handoff, question or
     /// log. `--kind=`, merged like `--project=`, so a kind is a value and
     /// never a flag.
