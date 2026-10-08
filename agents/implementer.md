@@ -2,7 +2,7 @@
 name: implementer
 description: Builds one task of a milestone test-first in its own git worktree and commits it on its branch. Sent by the orchestrator with a full brief; never merges, pushes or spawns.
 model: sonnet
-effort: high
+effort: medium
 isolation: worktree
 disallowedTools: Agent
 color: green

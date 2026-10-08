@@ -116,9 +116,10 @@ the behaviour, not the implementation. Rerun its targeted test. Then:
     mem plan --tick <id>
     mem log "<what landed, in one line>"
 
-A subagent that fails, or returns something you would not merge, gets one
-fresh attempt with a better brief, on a stronger model. After that, do the
-task yourself.
+Implementers run at medium effort, which suits a precise slice. A subagent
+that fails, or returns something you would not merge, gets one fresh
+attempt with a better brief at `effort: high`. After that, do the task
+yourself.
 
 Done when every task is ticked and landed on `main`.
 
