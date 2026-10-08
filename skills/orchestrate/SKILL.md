@@ -34,7 +34,8 @@ Then read the tree. `git status` must be clean and on `main`, and `git log
 current --json` (the `verify` key) or the repo's own scripts, and run it once.
 A red trunk is yours to fix first, with a failing test that names the cause.
 Read code the way the tdd skill does: an outline or a search first, then
-only the region.
+only the region. For a wide read, such as every use of a name or what a
+module does, send a `scout` subagent and read the lines it cites.
 
 When the handoff or a ticked checklist says this milestone is half done,
 continue from the first open task. Never redo landed work. A `worktree-*`
