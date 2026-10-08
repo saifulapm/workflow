@@ -815,3 +815,26 @@ fn context_prints_the_small_digest_and_full_the_old_one() {
         format!("{}\n", mem::digest::brief(&s, jiff::Timestamp::now()))
     );
 }
+
+/// A standing rule is a ruling saved outside any project. Every project's
+/// session opens on it, ahead of the project's own rulings.
+#[test]
+fn a_global_ruling_opens_every_projects_digest() {
+    let w = World::new("digest-global-rule");
+    w.project(P, "thing");
+    let store = w.store();
+    let rule = item(Kind::Ruling, "push saifulapm repos over ssh", "body");
+    put(&store, None, &rule);
+    put_at(&w, Kind::Ruling, "a ruling of this project", 30, None);
+
+    let (_i, s) = sources(&w, None);
+    let line = format!(
+        "rule #{}  push saifulapm repos over ssh",
+        rule.meta.short_id()
+    );
+    let small = build_small(&s, &store).text;
+    let at = small.find(&line).unwrap_or_else(|| panic!("{small}"));
+    assert!(at < small.find("ruling #").unwrap(), "{small}");
+    let full = build(&s, &store, 6000).text;
+    assert!(full.contains(&line), "{full}");
+}

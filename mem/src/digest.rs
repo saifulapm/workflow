@@ -71,6 +71,9 @@ pub struct Sources {
     pub pages: Vec<Page>,
     /// The text of the index page, when the project keeps one.
     pub wiki_index: Option<String>,
+    /// Saiful's standing rules: rulings saved outside any project, which
+    /// hold in every project.
+    pub rules: Vec<Row>,
     pub rulings: Vec<Row>,
     pub facts: Vec<Row>,
     pub logs: Vec<Row>,
@@ -108,6 +111,11 @@ impl Sources {
             questions: index.pending_questions(project_id)?,
             pages,
             wiki_index,
+            // Outside a project the global rulings are the rulings already.
+            rules: match project_id {
+                Some(_) => index.recent("ruling", None, 5)?,
+                None => Vec::new(),
+            },
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
             logs: recent_non_run_logs(index, project_id, 5)?,
@@ -120,6 +128,7 @@ impl Sources {
             && self.roadmap.is_none()
             && self.questions.is_empty()
             && self.pages.is_empty()
+            && self.rules.is_empty()
             && self.rulings.is_empty()
             && self.facts.is_empty()
             && self.logs.is_empty()
@@ -313,11 +322,11 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
                 .collect(),
         );
     }
+    let ruling_line =
+        |word: &str, r: &Row| format!("{word} #{}  {}", r.short_id, truncate_bytes(&r.title, 66));
     optional.push(
-        sources
-            .rulings
-            .iter()
-            .map(|r| format!("ruling #{}  {}", r.short_id, truncate_bytes(&r.title, 66)))
+        (sources.rules.iter().map(|r| ruling_line("rule", r)))
+            .chain(sources.rulings.iter().map(|r| ruling_line("ruling", r)))
             .collect(),
     );
     optional.push(sources.facts.iter().map(|f| item_line(f, store)).collect());
@@ -394,6 +403,9 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
             date(handoff.modified_epoch),
             handoff.title
         ));
+    }
+    for r in &sources.rules {
+        lines.push(format!("rule #{}  {}", r.short_id, r.title));
     }
     for r in sources.rulings.iter().take(SMALL_RULINGS) {
         lines.push(format!("ruling #{}  {}", r.short_id, r.title));
