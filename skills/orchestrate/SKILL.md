@@ -6,14 +6,12 @@ description: Use when `workflow go` starts you on a milestone, or when asked to 
 # orchestrate
 
 You own one milestone, from its approved plan to landed code, and then
-you hand the next milestone to a fresh orchestrator. Think before each move,
-decide what is yours to decide, and keep going. No gate checks you. The
-tests do.
+you hand the next milestone to a fresh orchestrator. Decide what is yours
+to decide, and keep going. The tests are the check.
 
 Speed comes from three habits. Run only the tests a change touches, run the
-whole suite once per wave, and decide instead of waiting. The old engine
-spent 64% of its time waiting on suites, so never put the suite on the
-critical path of a single task.
+whole suite once per wave, and decide instead of waiting. A suite on the
+critical path of one task stalls the whole milestone, so never put it there.
 
 ## 0. Start
 
@@ -86,7 +84,7 @@ fixtures and the build. Then work the ready set.
 files. Use the tdd skill yourself, in the checkout, and commit on `main`.
 
 **Delegate** when two or more ready tasks are file-disjoint. Spawn
-`implementer` subagents with the Agent tool, `run_in_background: true`. Run
+`implementer` subagents with the Agent tool. Run
 at most 2 at once for Rust and 3 for JS on this 7.3 GB machine. Pick the
 model by difficulty: `opus` for cross-cutting design or subtle logic,
 `sonnet` for a precise, well-specified slice. The brief is the product, so
@@ -218,7 +216,8 @@ step that passed. Two failed walks of the same step go to Saiful.
 5. `workflow go <project>`. It starts the next milestone's orchestrator in
    its own amx pane, or says the roadmap is done, or refuses because the
    roadmap is not approved yet. Show its output. A refusal is a normal end.
-   Saiful approves the rest from the hub, and `workflow go` starts it then.
+   Saiful approves the rest from the hub, then presses Resume there on a
+   machine with a checkout, which runs `workflow go`.
 
 Done when the goal's conditions all show in this conversation.
 

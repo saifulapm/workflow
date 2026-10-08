@@ -16,7 +16,8 @@ to see something, he makes a claude.ai artifact, and the plan links it.
 ## 1. Read
 
 Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
-spec#<section>`), `verify`, the decisions (`mem search decision`), the
+spec#<section>`), `verify`, the decisions
+(`mem search --kind ruling --limit 100`), the
 artifacts Saiful made for this work (`mem search artifact`, and the links in
 the spec), the lessons past runs left (`mem wiki lessons` and `mem --project
 workflow wiki lessons`), which the acceptance lines and the review focus

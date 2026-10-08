@@ -56,10 +56,10 @@ message's voice, not a diff summary.
 saving: you would want it in three weeks and it is not in the code or the
 git log.
 
-**Deciding instead of asking** → `mem save "<text>" --kind ruling`. When an
-answer is not yours to invent but stopping costs more than being wrong:
-decide, record it, carry on. A ruling promises it was written down, not that it
-was right: it is how Saiful overturns you cheaply.
+**Deciding instead of asking** → `mem decide "<what and why>" --by agent`.
+When an answer is not yours to invent but stopping costs more than being
+wrong: decide, record it, carry on. A ruling promises it was written down, not
+that it was right: it is how Saiful overturns you cheaply.
 
 **Session end with work unfinished** → `mem handoff --set "Next: <the next
 action, as a runnable command>. <the state>"`. The digest shows only the

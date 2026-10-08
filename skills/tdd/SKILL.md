@@ -69,10 +69,12 @@ broke on purpose, and everything you ran is green.
 ## 4. Commit
 
 Stage the files this task touched, each by name, never `git add -A`. The
-pre-commit hook runs `workflow hygiene --staged`. It refuses agent files and
-any reference to a plan, task, ruling, mem id, agent, model or session. Fix
-what it names. Commit each atomic change in the voice below. Leave nothing
-of yours unstaged.
+pre-commit hook runs `workflow hygiene --staged`, and commit-msg checks the
+message. They refuse agent files, mem ids, numbered rulings, milestones,
+tickets, issues and ADRs, and co-author and generated-with lines. A message
+also fails on a subject over 72 characters or a bare task or milestone id,
+and warns on process words. Fix what they name. Commit each atomic change
+in the voice below. Leave nothing of yours unstaged.
 
 ## 5. Report
 
@@ -111,5 +113,6 @@ reader.
   Use straight quotes.
 - State what the change does. Leave out puffery ("robust", "seamless", "key")
   and any closing summary.
-- The reason stands on its own. Nothing mentions plans, tasks, decisions,
-  agents, models, memory or sessions, and there are no trailers.
+- The reason stands on its own. Nothing refers to the workflow that produced
+  the change (its plans, tasks, decisions, agents, models, memory or
+  sessions), and there are no trailers.
