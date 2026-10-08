@@ -12,7 +12,7 @@ use common::{
 
 const PROJECT: &str = "proj-alpha";
 /// The approval question, as the plan skill asks it.
-const REVIEW: &str = "Review the alpha roadmap and its plan pages";
+const REVIEW: &str = "Review the alpha roadmap";
 /// Written to the machine file both hub and mem read, so the two agree on a
 /// name no real machine has.
 const MACHINE: &str = "here-box";

@@ -14,8 +14,8 @@ use crate::page_home::summary_of;
 use crate::pages::{PageCtx, page_shell};
 
 /// How the plan skill asks for the roadmap's approval: "Review the <name>
-/// roadmap and its plan pages", by its start and its end.
-pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap and its plan pages");
+/// roadmap", by its start and its end.
+pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap");
 
 /// How long `workflow go` may take: an `amx new` and a few mem reads.
 const GO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -132,7 +132,7 @@ fn go(ctx: &PageCtx, project: &str) -> Response {
 }
 
 /// The id of the project's pending approval question, found by its project
-/// and the first words of its body. A plan page's response answers it too.
+/// and the first words of its body.
 pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<String> {
     ctx.app
         .mem
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn only_the_roadmap_review_is_an_approval() {
-        assert!(is_approval("Review the beta roadmap and its plan pages"));
+        assert!(is_approval("Review the beta roadmap"));
         assert!(!is_approval("Approve roadmap alpha?"));
         assert!(!is_approval(
             "Review the failing t3 test before the roadmap continues?"

@@ -107,7 +107,7 @@ Store each page as written:
 
     mem roadmap --stdin < "$d/roadmap.md"
     mem roadmap --status draft
-    mem ask --for human "Review the <name> roadmap and its plan pages" --options approve,changes --recommend approve
+    mem ask --for human "Review the <name> roadmap" --options approve,changes --recommend approve
 
 The hub shows the roadmap and serves each plan page with its decisions and a
 chat button. He turns it on, taps to pin a comment and sends each one on its

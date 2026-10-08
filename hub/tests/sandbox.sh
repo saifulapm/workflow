@@ -171,7 +171,7 @@ mem plan b2-scale --stdin >/dev/null <<'PLAN'
 - [ ] b2-t1 The first change
 PLAN
 # Asked the way the plan skill asks it.
-mem ask --for human --options approve,changes --recommend approve 'Review the beta roadmap and its plan pages' >/dev/null
+mem ask --for human --options approve,changes --recommend approve 'Review the beta roadmap' >/dev/null
 
 project gamma
 mem brief --set 'A habit tracker that nags once and then lets go.' >/dev/null
