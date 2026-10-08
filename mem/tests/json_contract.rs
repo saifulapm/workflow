@@ -366,11 +366,14 @@ fn the_hook_envelopes_match_the_shapes_the_runtime_validates() {
         "--session-id",
         "s1",
     ];
-    let mut last = None;
-    for _ in 1..=5 {
-        last = Some(mem(&w, &cwd, &hook));
-    }
-    validate("hook-post-tool-batch.json", &last.unwrap());
+    // The first batch only records the brief; a changed one is emitted.
+    mem(&w, &cwd, &hook);
+    put(
+        &w.store(),
+        Some(P),
+        &item(Kind::Handoff, "migration landed", "next: tag it"),
+    );
+    validate("hook-post-tool-batch.json", &mem(&w, &cwd, &hook));
     // Named the same way the brief above is: the nudge exists only for a
     // project mem knows, and this cwd is a bare directory.
     validate(

@@ -19,8 +19,11 @@ fn json(out: &std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&out.stdout).expect("json output")
 }
 
+/// The brief repeats what the session already knows unless something changed:
+/// on a five-batch timer it re-sent the same handoff 2,843 times in two weeks
+/// of sessions, each copy re-read on every later call.
 #[test]
-fn the_batch_brief_is_emitted_on_every_fifth_batch_and_not_before() {
+fn the_batch_brief_speaks_only_when_the_brief_changed() {
     let w = World::new("hook-batch");
     w.project(P, "thing");
     put(
@@ -38,7 +41,8 @@ fn the_batch_brief_is_emitted_on_every_fifth_batch_and_not_before() {
         "--session-id",
         "hook-s1",
     ];
-    for batch in 1..=4 {
+    // The session start's digest already carried this brief.
+    for batch in 1..=6 {
         let out = mem(&w, &repo, &hook);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
         assert!(
@@ -48,6 +52,11 @@ fn the_batch_brief_is_emitted_on_every_fifth_batch_and_not_before() {
         );
     }
 
+    put(
+        &w.store(),
+        Some(P),
+        &item(Kind::Handoff, "migration landed", "next: tag it"),
+    );
     let out = mem(&w, &repo, &hook);
     assert_eq!(code(&out), 0);
     let v = json(&out);
@@ -58,7 +67,7 @@ fn the_batch_brief_is_emitted_on_every_fifth_batch_and_not_before() {
     let context = v["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .expect("additionalContext");
-    assert!(context.contains("stopped mid-migration"), "{context}");
+    assert!(context.contains("migration landed"), "{context}");
     assert!(
         context.len() <= 480,
         "the brief budget is counted on the content string"
@@ -69,20 +78,16 @@ fn the_batch_brief_is_emitted_on_every_fifth_batch_and_not_before() {
         "no key outside the envelope the binary validates"
     );
 
-    // The counter lives in the session file, so the next four are quiet again.
-    assert_eq!(
-        mem::session::read(&w.dirs().sessions_dir(), "hook-s1").batches,
-        5
-    );
-    for _ in 6..=9 {
+    // Said once, it is known: the batches after are quiet again.
+    for _ in 8..=12 {
         assert!(stdout(&mem(&w, &repo, &hook)).is_empty());
     }
-    assert!(
-        !stdout(&mem(&w, &repo, &hook)).is_empty(),
-        "the tenth batch"
+    assert_eq!(
+        mem::session::read(&w.dirs().sessions_dir(), "hook-s1").batches,
+        12
     );
 
-    // A second session counts on its own.
+    // A second session starts from what its own session start showed.
     let other = [
         "context",
         "thing",

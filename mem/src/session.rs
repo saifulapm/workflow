@@ -27,6 +27,9 @@ pub struct Activity {
     /// pair loops until something else stops it.
     #[serde(default)]
     pub nudged: bool,
+    /// The brief this session last saw; `None` until its first tool batch.
+    #[serde(default)]
+    pub brief: Option<String>,
     #[serde(default)]
     pub last: String,
 }
@@ -110,15 +113,16 @@ pub fn record_nudge(sessions_dir: &Path, id: &str) {
     let _ = write(sessions_dir, id, &activity);
 }
 
-/// Counts a tool batch and returns the new count — the PostToolBatch hook fires
-/// on every batch and needs to know which one this is.
-pub fn record_batch(sessions_dir: &Path, id: &str) -> u64 {
+/// Counts a tool batch and keeps the brief it computed, returning the brief
+/// this session saw before, or `None` on its first batch. The PostToolBatch
+/// hook fires on every batch and speaks only when the two differ.
+pub fn record_batch(sessions_dir: &Path, id: &str, brief: &str) -> Option<String> {
     let mut activity = read(sessions_dir, id);
     activity.batches += 1;
     activity.last = Timestamp::now().to_string();
-    let n = activity.batches;
+    let seen = activity.brief.replace(brief.to_string());
     let _ = write(sessions_dir, id, &activity);
-    n
+    seen
 }
 
 /// Removes session files older than a week. Called from doctor and from the

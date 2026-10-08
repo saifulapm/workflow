@@ -22,9 +22,6 @@ use serde_json::json;
 use crate::app::App;
 use crate::exit;
 
-/// Batches between two injections of the brief.
-pub const BATCH_EVERY: u64 = 5;
-
 /// The Stop nudge: ~30 tokens, and both halves are actionable.
 pub const NUDGE: &str = "nothing recorded this session — call `mem log`/`mem save` if anything \
      is worth keeping; write `mem handoff` now if the work is unfinished";
@@ -43,16 +40,18 @@ pub fn envelope(event: &str, context: &str) -> serde_json::Value {
     })
 }
 
-/// The PostToolBatch half of `mem context --brief`: count this batch, and emit
-/// the brief on every fifth one. The counter lives in the machine-local session
-/// file because the hook input carries no batch index.
+/// The PostToolBatch half of `mem context --brief`: emit the brief only when it
+/// differs from the one this session last saw. The session start's digest
+/// already carried the first, so the first batch only records it. The last
+/// brief lives in the machine-local session file because the hook input
+/// carries none.
 ///
-/// Without a session id there is nowhere to count, so every batch emits — the
-/// hook wiring always passes one.
+/// Without a session id there is nothing to compare with, so every batch
+/// emits — the hook wiring always passes one.
 pub fn post_tool_batch(app: &App, brief: &str) -> Result<i32> {
     if let Some(session) = &app.session_id {
-        let n = crate::session::record_batch(&app.dirs.sessions_dir(), session);
-        if !n.is_multiple_of(BATCH_EVERY) {
+        let seen = crate::session::record_batch(&app.dirs.sessions_dir(), session, brief);
+        if seen.is_none_or(|seen| seen == brief) {
             return Ok(exit::OK);
         }
     }

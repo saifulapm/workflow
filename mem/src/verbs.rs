@@ -49,7 +49,7 @@ pub fn context(
     if brief {
         let text = crate::digest::brief(&sources, jiff::Timestamp::now());
         if hook_json {
-            // The PostToolBatch hook: the envelope, on every fifth batch.
+            // The PostToolBatch hook: the envelope, when the brief changed.
             return crate::hooks::post_tool_batch(app, &text);
         }
         if app.json {
