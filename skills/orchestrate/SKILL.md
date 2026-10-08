@@ -156,6 +156,14 @@ permissions, secrets); and a taste call the plan and spec leave open, with
 no default to take. Ask, then keep working on everything that does not
 depend on the answer. Check `mem questions` between tasks.
 
+A message with no tool call ends your turn, and an unattended run stops
+there. None of these is a reason to stop: a summary that announces your
+next step, an offer to carry on, a list of decisions that blocks nothing,
+or a sense that this is a good place to report. Put such text in the same
+message as your next tool call, and carry on with whatever does not depend
+on Saiful's answer. You stop when the milestone has landed (§7) or parked
+(§8).
+
 Never weaken, skip or delete a test to make it pass. Never push.
 
 ## 5. Review once

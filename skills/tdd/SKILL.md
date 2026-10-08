@@ -64,7 +64,8 @@ The same error twice: stop guessing. Follow the diagnose skill from its
 tight loop, and ask the advisor tool when Claude Code offers it.
 
 Done when your test was red before your code, red again on the code you
-broke on purpose, and everything you ran is green.
+broke on purpose, and everything you ran is green. A command that failed to
+start, or a check of syntax alone, is not green.
 
 ## 4. Commit
 
