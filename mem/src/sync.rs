@@ -14,6 +14,9 @@ pub const UNIT: &str = "memory";
 /// Older than this and `mem context` says so.
 pub const STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 
+/// How the staleness warning starts. The age after it goes up every minute.
+pub const LAST_SYNCED: &str = "! memory last synced";
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct UnitStatus {
     pub id: String,
@@ -88,7 +91,7 @@ impl Status {
         if age > STALE_AFTER.as_secs() as i64 {
             let minutes = age / 60;
             return Some(format!(
-                "! memory last synced {minutes} min ago — another machine may be ahead"
+                "{LAST_SYNCED} {minutes} min ago — another machine may be ahead"
             ));
         }
         None

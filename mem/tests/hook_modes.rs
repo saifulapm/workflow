@@ -99,6 +99,62 @@ fn the_batch_brief_speaks_only_when_the_brief_changed() {
     assert!(stdout(&mem(&w, &repo, &other)).is_empty());
 }
 
+/// While the sync unit is behind, the warning's age goes up every minute. A
+/// number ticking up is not news, or a stale machine would hear the brief on
+/// nearly every batch.
+#[test]
+fn a_ticking_sync_age_is_not_a_change() {
+    let w = World::new("hook-batch-stale");
+    w.project(P, "thing");
+    let repo = w.plain_dir("cwd");
+    let synced_ago = |minutes: i64| {
+        let at = jiff::Timestamp::from_second(jiff::Timestamp::now().as_second() - minutes * 60)
+            .unwrap();
+        let path = w.dirs().qshell_status_json();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"version":2,"lastRun":"{at}","running":false,"currentUnit":"memory",
+                    "units":[{{"id":"memory","ok":true,"lastRun":"{at}","lastOk":"{at}"}}]}}"#
+            ),
+        )
+        .unwrap();
+    };
+    let hook = [
+        "context",
+        "thing",
+        "--brief",
+        "--hook-json",
+        "--session-id",
+        "hook-stale",
+    ];
+
+    synced_ago(90);
+    assert!(stdout(&mem(&w, &repo, &hook)).is_empty());
+    synced_ago(95);
+    let out = mem(&w, &repo, &hook);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(
+        stdout(&out).is_empty(),
+        "an older age alone must emit nothing: {}",
+        stdout(&out)
+    );
+
+    // A real change still speaks, with the warning as it reads now.
+    put(
+        &w.store(),
+        Some(P),
+        &item(Kind::Handoff, "migration landed", "next: tag it"),
+    );
+    let v = json(&mem(&w, &repo, &hook));
+    let context = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("additionalContext");
+    assert!(context.contains("migration landed"), "{context}");
+    assert!(context.contains("last synced 95 min ago"), "{context}");
+}
+
 #[test]
 fn a_batch_with_nothing_to_say_emits_nothing() {
     let w = World::new("hook-batch-empty");

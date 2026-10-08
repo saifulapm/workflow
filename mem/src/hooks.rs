@@ -50,8 +50,9 @@ pub fn envelope(event: &str, context: &str) -> serde_json::Value {
 /// emits — the hook wiring always passes one.
 pub fn post_tool_batch(app: &App, brief: &str) -> Result<i32> {
     if let Some(session) = &app.session_id {
-        let seen = crate::session::record_batch(&app.dirs.sessions_dir(), session, brief);
-        if seen.is_none_or(|seen| seen == brief) {
+        let settled = settled(brief);
+        let seen = crate::session::record_batch(&app.dirs.sessions_dir(), session, &settled);
+        if seen.is_none_or(|seen| seen == settled) {
             return Ok(exit::OK);
         }
     }
@@ -63,6 +64,22 @@ pub fn post_tool_batch(app: &App, brief: &str) -> Result<i32> {
         );
     }
     Ok(exit::OK)
+}
+
+/// The brief as two batches compare it. While the sync unit is behind, the
+/// warning's age goes up every minute, and a number ticking up is not news.
+fn settled(brief: &str) -> String {
+    brief
+        .lines()
+        .map(|line| {
+            if line.starts_with(crate::sync::LAST_SYNCED) {
+                crate::sync::LAST_SYNCED
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `mem session-check` — the Stop hook. A session that recorded nothing gets one
