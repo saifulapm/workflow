@@ -66,8 +66,8 @@ Tag every probe line `[DEBUG-<4 hex>]` so one search removes them all. Revert
 it before the next test. When all three die, go back to step 3 with what the
 checks showed. For slowness, measure a baseline first and bisect against it.
 
-A fix that fails kills its hypothesis. After three failed fixes, the design
-is the suspect: stop and take what the three showed to Saiful.
+A fix that fails kills its hypothesis. After two failed fixes, the design
+is the suspect: stop and take what both showed to Saiful.
 
 Done when one hypothesis explains the red, and changing that one thing alone
 turns the tight loop green.

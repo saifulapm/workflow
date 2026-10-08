@@ -37,7 +37,9 @@ current --json` (the `verify` key) or the repo's own scripts, and run it once.
 A red trunk is yours to fix first, with a failing test that names the cause.
 
 When the handoff or a ticked checklist says this milestone is half done,
-continue from the first open task. Never redo landed work.
+continue from the first open task. Never redo landed work. A `worktree-*`
+branch with commits and no tick is a dispatched task (`mem log` names it):
+read it and land it as §2 says.
 
 Done when you can say what the milestone delivers, the trunk is green, and
 you know the exact command for a targeted test and for the whole suite.
@@ -58,7 +60,12 @@ refuses a checklist without it, and the hub reads progress from it):
 
 `$d` is a scratch directory from `mktemp -d`, never the repo. Mark what can run at
 once. Two tasks run in parallel only when they share no file, lockfile,
-schema, migration, generated file or port. When the plan is wrong (a
+schema, migration, generated file, port or contract: a type, record, route,
+config key or binary that one task changes and the other reads. Run such a
+pair in order, or pin the shared names in both briefs. Groundwork a slice
+needs (a rename, a moved module, a new seam) is its own first task, and a
+change that breaks many callers lands as expand, migrate in batches, then
+contract. When the plan is wrong (a
 behaviour is already there, a decision contradicts the code), correct it
 and record the correction: `mem decide "<what and why>" --by agent`.
 
@@ -87,8 +94,10 @@ write it whole:
     VERIFY      the exact targeted test command and typecheck
     STOP        what sends it back to you instead of improvising
 
-Give pointers, not pasted files. While subagents work, do the next solo task
-or write the next brief. A finished subagent is a queue event, not an
+Give pointers, not pasted files. Log each dispatch, so a fresh
+orchestrator can find it: `mem log "dispatched <task> on worktree-<name>
+from <sha>"`. While subagents work, do the next solo task or write the next
+brief. A finished subagent is a queue event, not an
 interrupt.
 
 **Land each result yourself.** A worktree subagent commits on its own branch,
@@ -114,8 +123,12 @@ Done when every task is ticked and landed on `main`.
 - **Per task.** The test file the task touched, plus the typecheck. Seconds,
   not minutes.
 - **Per wave.** After a batch of merges, run the full suite once in the
-  background (`run_in_background: true`) and keep working. A red suite
-  stops new work: find the commit, then follow the diagnose skill.
+  background (`run_in_background: true`), with the runner's flag that
+  reports every failure (`cargo test --no-fail-fast`), and keep working.
+  After merging parallel slices, nothing else lands until that run is
+  green: slices that pass alone can fail together. A red suite stops new
+  work: find the commit, then follow the diagnose skill. A red that two
+  fixes did not turn green parks the milestone (§8).
 - **Never in a hook.** The git hooks run only the hygiene check.
 
 A suite slower than about two minutes is a lesson to record, and splitting
