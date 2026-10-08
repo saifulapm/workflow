@@ -44,8 +44,8 @@ Seconds, not minutes. The full suite is the orchestrator's to run once per
 wave. A red test is answered in the code it tests, never by weakening,
 skipping or deleting the test.
 
-The same error twice: stop guessing. Write down three ranked hypotheses,
-test the cheapest one, and ask the advisor tool when Claude Code offers it.
+The same error twice: stop guessing. Follow the diagnose skill from its
+tight loop, and ask the advisor tool when Claude Code offers it.
 
 Done when your test was red before your code and everything you ran is green.
 

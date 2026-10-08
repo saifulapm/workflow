@@ -115,7 +115,7 @@ Done when every task is ticked and landed on `main`.
   not minutes.
 - **Per wave.** After a batch of merges, run the full suite once in the
   background (`run_in_background: true`) and keep working. A red suite
-  stops new work: find the commit, write the failing test, fix it.
+  stops new work: find the commit, then follow the diagnose skill.
 - **Never in a hook.** The git hooks run only the hygiene check.
 
 A suite slower than about two minutes is a lesson to record, and splitting
@@ -161,10 +161,10 @@ files each defect with `mem finding add`. A UI-free milestone, such as a
 library or an internal refactor, has its walk replaced by running its
 examples or CLI once yourself.
 
-For each finding (`mem finding list --open`), write a failing test that
-reproduces it, fix it, and close it with `mem finding close <id> --by
-<commit>`. A finding you cannot turn into a red test is a false positive.
-Close it with the reason. A taste call or an undriveable surface goes to
+Fix each finding (`mem finding list --open`) with the diagnose skill. Its
+tight loop starts from the finding's evidence, and the fix closes it with
+`mem finding close <id> --by <commit>`. A finding no tight loop reproduces
+closes with `--by "not reproduced: <what you ran>"`. A taste call or an undriveable surface goes to
 Saiful with `mem ask --for human`. Then spawn the dogfooder once more on
 the failed steps alone. Two failed walks of the same step go to Saiful.
 
