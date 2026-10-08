@@ -5,7 +5,7 @@ An agent runs each milestone end to end, and everything it knows lives
 outside the project repos.
 
 - `mem/` is the system of record: facts, decisions, logs, handoffs,
-  questions, findings, evidence, roadmaps, plan pages and a wiki of spec
+  questions, findings, evidence, roadmaps, plans and a wiki of spec
   pages. It keeps markdown files outside every repo and syncs them between
   machines.
 - `hub/` is a small web server over mem, served on the tailnet, so a phone
@@ -22,9 +22,10 @@ outside the project repos.
    him in rounds until no decision is open, and writes the spec as wiki
    pages in mem.
 2. **plan.** The roadmap is a list of milestones, each a vertical slice
-   with a Show path. Each milestone is one designed page (behaviours,
-   pictures, decisions with defaults, scope). He reads the pages in the hub,
-   pins comments on them and approves once.
+   with a Show path. Each milestone has a markdown plan written for the
+   agents (behaviours with their acceptance, the decisions taken, scope),
+   which links any claude.ai artifact he made for it. He approves the
+   roadmap once, in the chat or on the hub.
 3. **go.** `workflow go <project>` starts an Opus orchestrator in an amx
    pane with `/goal`, so Claude Code keeps it working until the milestone
    is landed. It builds test-first, alone or with worktree subagents, runs

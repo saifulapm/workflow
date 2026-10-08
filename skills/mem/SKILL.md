@@ -15,7 +15,7 @@ in a project repo or CLAUDE.md.
                            # wiki:<slug>#<section> row with two lines of text
     mem show <id>          # the item behind a search line
     mem roadmap            # the milestones, ticked as they land
-    mem plan <slug>        # a milestone's plan page (a designed page)
+    mem plan <slug>        # a milestone's plan
 
 A hook runs `mem context` at session start; a staleness line at the top
 means the sync unit is behind, so say so before trusting it.
@@ -69,9 +69,7 @@ session asks in the conversation. A subagent reports the stop to the
 orchestrator that sent it. An orchestrator asks Saiful with `mem ask --for
 human "<question>" --options "<a>,<b>" --recommend "<a>"`, which reaches the
 hub and the phone without waiting, and keeps working on what does not depend
-on the answer. Never resolve your own stop condition. `mem ask` and `mem save`
-take `--about <ref>` to tie the item to a page part, such as
-`plan:<slug>#claim-2`.
+on the answer. Never resolve your own stop condition.
 
 **The workflow itself got in the way** → a lesson on the workflow
 project's `lessons` page (`mem --project workflow wiki lessons`): what

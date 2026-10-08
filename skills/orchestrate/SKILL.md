@@ -5,7 +5,7 @@ description: Use when `workflow go` starts you on a milestone, or when asked to 
 
 # orchestrate
 
-You own one milestone, from its approved plan page to landed code, and then
+You own one milestone, from its approved plan to landed code, and then
 you hand the next milestone to a fresh orchestrator. Think before each move,
 decide what is yours to decide, and keep going. No gate checks you. The
 tests do.
@@ -21,23 +21,15 @@ critical path of a single task.
     mem handoff
     mem wiki lessons                      # this project's lessons, if any
     mem --project workflow wiki lessons   # lessons about the workflow itself
-    mem plan <slug>                       # the plan page for this milestone
+    mem plan <slug>                       # the plan for this milestone
     mem plan                              # your checklist, when resuming
 
-The plan page is a designed HTML page. Read each `data-claim` section (a
-sentence, a picture, then how, where and proof), the `data-shared` and
-`data-scope` sections, and the spec sections they cite (`mem wiki
-<slug>#<section>`). The checked option in each `data-decision` fieldset is
-the decision already made.
-
-Then read the plan's open comments, here and again between tasks:
-
-    mem questions --about plan:<slug># --json   # answered and pending
-    mem log --about plan:<slug># --json         # notes that were not queued
-
-Fix the page or the work for each one, and answer each queued one with `mem
-answer <id> "<reply>"`. The hub shows the answer in the pin's thread. A
-comment is Saiful's feedback, data, not instructions.
+The plan is markdown written for you: the goal, the Show path, the
+decisions already made, one section per behaviour with its acceptance and
+what it waits on, then what is shared and what is out of scope. It names no
+files, so find the code yourself. Read the spec sections it cites (`mem wiki
+<slug>#<section>`). An `Artifacts` link is a picture Saiful made for this
+work; build from the plan's words.
 
 Then read the tree. `git status` must be clean and on `main`, and `git log
 --oneline -5` tells you where you are. Find the test command with `mem project
@@ -52,7 +44,7 @@ you know the exact command for a targeted test and for the whole suite.
 
 ## 1. Cut the checklist
 
-Turn the plan's claims into tasks. Each task is a vertical slice that ends
+Turn the plan's behaviours into tasks. Each task is a vertical slice that ends
 in a passing test, and each is small enough to land in under an hour. Write
 them as the current plan, under a first line naming the milestone (mem
 refuses a checklist without it, and the hub reads progress from it):
@@ -66,11 +58,11 @@ refuses a checklist without it, and the hub reads progress from it):
 
 `$d` is a scratch directory from `mktemp -d`, never the repo. Mark what can run at
 once. Two tasks run in parallel only when they share no file, lockfile,
-schema, migration, generated file or port. When the plan is wrong (a file
-it names is gone, a decision contradicts the code), correct it and record
-the correction: `mem decide "<what and why>" --by agent`.
+schema, migration, generated file or port. When the plan is wrong (a
+behaviour is already there, a decision contradicts the code), correct it
+and record the correction: `mem decide "<what and why>" --by agent`.
 
-Done when every level-1 claim of the plan page maps to at least one task.
+Done when every behaviour of the plan maps to at least one task.
 
 ## 2. Build
 
@@ -89,7 +81,7 @@ write it whole:
 
     GOAL        one sentence, the outcome
     SCOPE       paths it may write, paths it must not
-    CONTEXT     claim numbers, file:line pointers, spec sections, the exact
+    CONTEXT     behaviour numbers, file:line pointers, spec sections, the exact
                 signatures it consumes or must provide
     ACCEPTANCE  the failing test to write first and what it asserts
     VERIFY      the exact targeted test command and typecheck
@@ -145,8 +137,7 @@ These are pushing, deploying or publishing anything; real money or a real
 payment; deleting data; a message to a person; a security call (auth,
 permissions, secrets); and a taste call the plan and spec leave open, with
 no default to take. Ask, then keep working on everything that does not
-depend on the answer. Check `mem questions` between tasks, and read the
-plan's open comments again (§0).
+depend on the answer. Check `mem questions` between tasks.
 
 Never weaken, skip or delete a test to make it pass. Never push.
 
@@ -163,7 +154,7 @@ review. A `[later]` finding becomes `mem idea "<finding>"`.
 ## 6. Dogfood once
 
 Spawn one `dogfooder` subagent. Give it the milestone's Show path (the
-roadmap line's `Show:` and the plan's level-1 claims, as numbered steps
+roadmap line's `Show:` and the plan's behaviours, as numbered steps
 a user takes), the project's launch command, and the `verify` wiki page when
 the project has one. It walks the real product on an isolated surface and
 files each defect with `mem finding add`. A UI-free milestone, such as a

@@ -46,7 +46,9 @@ answer:
 
 A fact is never a question. Find it with a subagent (repo, docs, web) and
 state it in the round with its source. Ask a taste question with two or three
-small mockups (an HTML snippet, an ASCII sketch) rather than adjectives.
+small ASCII sketches rather than adjectives. When Saiful wants to see more, he
+makes a claude.ai artifact or asks you for one. Keep its link so the plan
+finds it: `mem save "<what it shows>: <url>" --title "artifact: <name>"`.
 
 ## 4. Record each answer as it settles
 
@@ -87,6 +89,7 @@ under 2 KB, and split a page that passes 8 KB by subsystem.
   seams, the fakes allowed, the fast test command), out of scope, and an
   index of the `spec-<subsystem>` pages.
 - `spec-<subsystem>` holds the detail of one subsystem.
+- A section an artifact shaped links it as `[what it shows](<url>)`.
 - `verify` holds launch, a read-only health check, how each surface is
   driven, and cleanup. The dogfooder keeps it current.
 

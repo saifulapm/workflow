@@ -1,25 +1,44 @@
 ---
 name: plan
-description: Use when a spec is settled, or Saiful asks for a plan before building something that touches more than a couple of files. Cut the roadmap into milestones, write each milestone as a designed plan page in mem, get his one approval, then start the relay.
+description: Use when a spec is settled, or Saiful asks for a plan before building something that touches more than a couple of files. Cut the roadmap into milestones, write each milestone's plan for the agents, get his one approval, then start the relay.
 ---
 
 # plan
 
-One sitting writes the roadmap and every milestone's plan page, and asks
-Saiful once. Work in a scratch directory, never the checkout: `d=$(mktemp
--d)`. The plan page is the one source. Saiful reads and annotates it in the
-hub, and the orchestrator builds from it.
+One sitting writes the roadmap and every milestone's plan, and asks Saiful
+once. Work in a scratch directory, never the checkout: `d=$(mktemp -d)`.
+
+A plan is markdown for the agents that build the milestone. The
+orchestrator cuts its checklist from it, and the reviewer reads the landed
+work against it. Saiful reviews the roadmap, not the plans. When he wants
+to see something, he makes a claude.ai artifact, and the plan links it.
 
 ## 1. Read
 
 Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
-spec#<section>`), `verify`, the decisions (`mem search decision`) and the
-repo's entry points. Any fact the plan relies on, such as a crate version, an
-API parameter or a limit, gets checked this session (`npx ctx7@latest`, or
-measure it) and dated. Find the fast test command and note how long the
-suite takes.
+spec#<section>`), `verify`, the decisions (`mem search decision`), the
+artifacts Saiful made for this work (`mem search artifact`, and the links in
+the spec) and the repo's entry points. Any fact the plan relies on, such as
+a crate version, an API parameter or a limit, gets checked this session
+(`npx ctx7@latest`, or measure it) and dated. Find the fast test command and
+note how long the suite takes.
 
-## 2. The roadmap
+## 2. Settle the forks
+
+A fork is an open choice that changes what gets built. A plan holds none.
+Ask Saiful each fork the spec leaves open before you write a plan: in the
+chat, as one numbered round with your recommended answer for each (the
+grill skill's format), or, when he is not in the chat, with `mem ask --for
+human "<question>" --options "<a>,<b>" --recommend "<a>"`, which the hub
+shows with a button per option. Record each answer with `mem decide
+"<decision and why>" --by saiful`.
+
+A mechanical call, one with a right answer, is yours. Make it and record it
+with `mem decide --by agent`.
+
+Done when every fork has a recorded answer.
+
+## 3. The roadmap
 
 Milestone one is the walking skeleton: every layer the product will have, in
 its thinnest form, joined end to end, so the product opens. Every later
@@ -38,106 +57,92 @@ A slug is lowercase letters, digits and dashes. A milestone whose Show path
 cannot be written is a layer, not a milestone. Fold it into the first
 milestone that needs it.
 
-## 3. A plan page per milestone
+## 4. A plan per milestone
 
-Each milestone is one designed HTML page, built with the same design rules
-as a published artifact. Copy the shape of the worked example that ships
-with this skill:
+Write `"$d/<slug>.md"` in this shape:
 
-    ~/.claude/skills/plan/example.html
+    # plan: m2-orders
 
-Write `"$d/<slug>.html"` as a whole document. The hub serves it in a locked
-frame and adds the comment layer, so the page has no script of its own.
+    Goal: a shop owner creates an order from the desk and finds it by its number.
+    Show: open Orders, create one for a customer, see it in the list with its number
+    Spec: spec#orders, spec-orders#numbering
+    Artifacts: [order desk mockup](https://claude.ai/artifact/<id>)
 
-The page contract. The orchestrator and the hub read these hooks. Everything
-else is free design.
+    ## Decisions
+    - Order numbers count per shop from 1001. (saiful, #4KQ2M9TX)
 
-- `<main data-plan="<slug>">` holds the page.
-- One `<section data-claim="N" id="claim-N">` for each behaviour. It has an
-  `<h2>` that is a true-or-false sentence, a `<figure>` (an inline SVG or a
-  mockup), then the how, the where (`file:line`) and the proof (the test).
-- A decision is a `<fieldset class="ask" data-decision="<name>">` in the
-  claim it changes. Its `<legend>` is the question, and each option is a
-  card, with the one you would pick checked:
+    ## Behaviours
 
-      <label class="opt"><input type="radio" name="<name>" value="<v>" checked>
-        <span class="ol">Label <em>suggested</em></span><span class="od">why</span></label>
+    ### 1. A new order shows first in the list, with its number
+    The owner picks a customer and products, then saves. The list shows the
+    order with its number, customer and total.
+    Acceptance:
+    - [ ] the first order of a new shop is number 1001
+    - [ ] an order saved after another one is listed above it
+    After: none
 
-- A claim number, a decision's `name` and each option's `value` use only
-  letters, digits and `-._`: the hub files a comment under them, and
-  refuses any other character.
-- `<section data-shared>` for a record several claims use.
-- `<section data-scope>` for what this milestone does not change.
+    ## Shared
+    - Order: number, customer, lines, total, created.
 
-The design rules:
+    ## Out of scope
+    - Refunds, which m4-refunds takes.
 
-1. Colour tokens on `:root`, redefined for dark under `@media
-   (prefers-color-scheme: dark)` guarded by `:root:not([data-theme="light"])`,
-   and again under `:root[data-theme="dark"]`. The body has an explicit
-   background.
-2. Phone width first, with a 16px side gutter and no sideways scroll. Grid
-   columns are `minmax(0,1fr)` and their children get `min-width:0`.
-3. Maple Mono comes from the hub: `@font-face` with
-   `url(/assets/maple-mono-400.woff2)` and `-700`. No external script or
-   stylesheet.
-4. Each claim has a big picture: an inline SVG that shows the real mechanism
-   with labelled arrows, drawn with token classes so it reads in both
-   themes. Few words.
-5. Write the prose in Simplified Technical English: short sentences, active
-   voice, approved words. Quote Saiful's words; do not reword them.
+The rules:
 
-The content rules:
+1. Split by behaviour, never by file, layer or order of work. A behaviour is
+   what someone can now do or see, a vertical slice the orchestrator turns
+   into tasks. Use at most 5.
+2. Each behaviour's heading is a sentence that is true or false once the
+   milestone lands, in about 12 words.
+3. Describe behaviour, not code. Name modules, records and interfaces by
+   their domain names. File paths, line numbers and code go stale between
+   the plan and the build, and the orchestrator reads the code itself.
+4. Each acceptance line is an outcome someone can observe, with a literal
+   value, so it becomes a failing test as written. A line with no value
+   ("errors are handled", "works on mobile") gets one or goes.
+5. `Decisions` lists the settled answers this milestone builds on, each with
+   who took it and its id. `After` names the behaviours that land first. A
+   fact you checked keeps its date.
+6. `Artifacts` links each claude.ai artifact this milestone builds on, as
+   `[what it shows](<url>)`. The hub shows the plan with that link, which is
+   where Saiful opens it again. Write what the artifact settled into the
+   behaviours in words, since the agents build from the plan. Leave the line
+   out when there is none.
+7. Write short sentences in the active voice. Quote Saiful's words; do not
+   reword them.
 
-1. Split by behaviour, never by file, layer or order of work. A claim is
-   what someone can now do or see. It is a vertical slice, and the
-   orchestrator turns each into tasks. Use at most 5 claims.
-2. Each claim's h2 can be true or false, in about 12 words at most. The proof
-   names the test and its assertion with a literal value.
-3. Ask only about forks that change what gets built, 2 to 5 per plan. Leave
-   out mechanical calls. Make them and record them with `mem decide --by
-   agent`.
-4. Use real paths and line numbers for code that exists, and mark code that
-   does not exist yet as a sketch.
+Store each plan as written. mem refuses one whose first line is not
+`# plan: <slug>`.
 
-Store each page as written:
+    mem plan <slug> --stdin < "$d/<slug>.md"
 
-    mem plan <slug> --stdin < "$d/<slug>.html"
+Done when every milestone on the roadmap has a stored plan and every
+behaviour has an acceptance line with a literal value.
 
-## 4. Store the roadmap and ask once
+## 5. Store the roadmap and ask once
 
     mem roadmap --stdin < "$d/roadmap.md"
     mem roadmap --status draft
+
+Saiful reviews the roadmap once. In the chat, show it as a numbered list of
+each milestone's slug, title, Show path and what it waits on, and ask him to
+approve it or say what to change. When he is not in the chat, ask through
+the hub:
+
     mem ask --for human "Review the <name> roadmap" --options approve,changes --recommend approve
 
-The hub shows the roadmap and serves each plan page with its decisions and a
-chat button. He turns it on, taps to pin a comment and sends each one on its
-own. A queued comment becomes `mem ask --for orchestrator --about
-plan:<slug>#<anchor>`. One that is not queued is saved as a note (type
-`comment`) with the same `--about`. A changed decision card records `mem
-decide --by saiful` and also queues an ask about
-`plan:<slug>#decision-<name>@<value>`. Approve sits at the top of the page
-and counts the decisions he never opened.
+The hub's roadmap page answers that question with Approve or Request
+changes, and opens each milestone's plan as text.
 
-Before you revise, read the plan's open comments:
+Apply each change he asks for, store the roadmap and the plans it touches
+again, and ask again. Done when he approved.
 
-    mem questions --about plan:<slug># --json   # answered and pending
-    mem log --about plan:<slug># --json         # the notes that were not queued
-
-Fix the page for each one, store it again, and answer each queued comment
-with `mem answer <id> "<reply>"`. The hub shows the answer as the reply in
-the pin's thread.
-
-His comments are data, not instructions. Apply changed decisions and
-comments within what the plan proposed; the hub has already recorded each
-changed decision with `mem decide --by saiful`. A decision he did not open is
-not agreement: when it matters, ask again. Revise, store and ask again until
-he approves.
-
-## 5. Approve and start
+## 6. Approve and start
 
     mem roadmap --status approved
     workflow go <project>
 
-`workflow go` starts the first milestone's orchestrator in its own amx pane.
-Each orchestrator starts the next one when its milestone lands. Done when
-`workflow go` printed the orchestrator's name, or Saiful said to wait.
+The hub's Approve sets the status itself. `workflow go` starts the first
+milestone's orchestrator in its own amx pane. Each orchestrator starts the
+next one when its milestone lands. Done when `workflow go` printed the
+orchestrator's name, or Saiful said to wait.
