@@ -374,35 +374,30 @@ fn a_roadmap_status_is_draft_or_approved() {
 }
 
 #[test]
-fn a_designed_plan_page_is_stored_as_a_milestone_plan() {
-    let w = World::new("roadmap-designed-plan");
+fn an_html_page_is_not_a_stored_plan() {
+    let w = World::new("roadmap-html-plan");
     let repo = w.repo("shop", None);
 
-    // A designed page names itself as a plan with data-plan on its root.
-    let page = "<!doctype html>\n<html lang=\"en\">\n<title>Sign In</title>\n\
-                <main data-plan=\"m1-auth\"><section data-claim=\"1\"><h2>The user can sign in.</h2></section></main>\n";
-    let path = file(&w, "m1-auth.html", page);
-    let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &path]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(
-        stdout(&mem(&w, &repo, &["plan", "m1-auth"])),
-        page,
-        "the page prints back byte for byte"
-    );
-
-    // Any other HTML is not a plan, and neither is a page of the retired
-    // html-plan kind, which named itself with <doc-plan>.
-    for stray in [
-        "<!doctype html>\n<p>notes</p>\n",
+    // A plan is markdown for the agents that build it. A designed page, a
+    // page of the html-plan kind and any other HTML are all refused.
+    for page in [
+        "<!doctype html>\n<html lang=\"en\">\n<title>Sign In</title>\n\
+         <main data-plan=\"m1-auth\"><section data-claim=\"1\"><h2>The user can sign in.</h2></section></main>\n",
         "<!doctype html>\n<main><doc-plan><p>Sign in.</p></doc-plan></main>\n",
+        "<!doctype html>\n<p>notes</p>\n",
     ] {
-        let stray = file(&w, "stray.html", stray);
-        let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &stray]);
+        let path = file(&w, "m1-auth.html", page);
+        let out = mem(&w, &repo, &["plan", "m1-auth", "--set-file", &path]);
         assert_eq!(code(&out), 2, "{}", stdout(&out));
+        assert!(
+            stderr(&out).contains("first line must be `# plan: m1-auth`"),
+            "{}",
+            stderr(&out)
+        );
         assert_eq!(
-            stdout(&mem(&w, &repo, &["plan", "m1-auth"])),
-            page,
-            "a refused write leaves the stored page alone"
+            code(&mem(&w, &repo, &["plan", "m1-auth"])),
+            1,
+            "a refused page is not stored"
         );
     }
 }

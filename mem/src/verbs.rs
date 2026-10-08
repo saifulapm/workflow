@@ -198,7 +198,6 @@ pub fn row_json(row: &Row) -> serde_json::Value {
         "task": row.task,
         "by": meta.and_then(|m| m.by.as_deref()),
         "replaces": meta.and_then(|m| m.replaces.as_deref()),
-        "about": meta.and_then(|m| m.about.as_deref()),
         "path": row.path.to_string_lossy(),
     })
 }
@@ -663,13 +662,12 @@ pub struct SaveMeta<'a> {
     pub r#type: Option<&'a str>,
     pub tags: &'a [String],
     pub supersedes: Option<&'a str>,
-    pub about: Option<&'a str>,
 }
 
 /// `mem save "<text>"`.
 pub fn save(app: &App, kind: &str, text: &str, with: SaveMeta) -> Result<i32> {
     let kind: crate::item::Kind = kind.parse().map_err(|e| exit::usage(format!("{e}")))?;
-    let (identity, mut meta) = crate::write::new_meta(
+    let (identity, meta) = crate::write::new_meta(
         app,
         kind,
         text,
@@ -678,7 +676,6 @@ pub fn save(app: &App, kind: &str, text: &str, with: SaveMeta) -> Result<i32> {
         with.tags,
         with.supersedes,
     )?;
-    meta.about = with.about.map(str::to_string);
     let written = crate::write::write_item(app, &identity, meta, text.to_string())?;
     report_written(app, &written, kind)
 }
@@ -1016,21 +1013,13 @@ fn stored_plan(
     // The header is the file name. A plan filed under a slug that is not its
     // own is what would later send a run at the wrong milestone.
     let first = text.lines().next().unwrap_or_default();
-    if header_slug(first, "plan") != Some(slug) && !is_plan_page(&text) {
+    if header_slug(first, "plan") != Some(slug) {
         return Err(exit::usage(format!(
             "a stored plan's first line must be `# plan: {slug}`, and this one is `{}`",
             crate::search::truncate_bytes(first.trim(), 60)
         )));
     }
     land(app, &path, &text, seen, &format!("{slug}.md"))
-}
-
-/// A plan page: a whole HTML document with a designed page's `data-plan`
-/// root. The slug it is filed under is its only name, since the page has no
-/// header line.
-fn is_plan_page(text: &str) -> bool {
-    let first = text.trim_start().get(..15).unwrap_or_default();
-    first.eq_ignore_ascii_case("<!doctype html>") && text.contains("data-plan=")
 }
 
 /// The slug of a `# <noun>: <slug>` header line, read as the plan parser
@@ -1572,7 +1561,6 @@ pub fn ask(
     options: &[String],
     recommend: Option<&str>,
     audience: Option<crate::cli::Audience>,
-    about: Option<&str>,
 ) -> Result<i32> {
     let identity = app.identity(Mode::Write)?;
     let mut meta = crate::item::Meta::new(
@@ -1585,7 +1573,6 @@ pub fn ask(
         meta.options = Some(options.to_vec());
     }
     meta.recommend = recommend.map(str::to_string);
-    meta.about = about.map(str::to_string);
     let audience = audience.and_then(crate::cli::Audience::stored);
     meta.audience = audience.map(str::to_string);
     let written = crate::write::write_item(app, &identity, meta, question.to_string())?;
@@ -1693,49 +1680,6 @@ pub fn questions(
         return Ok(exit::NOT_FOUND);
     }
     Ok(exit::OK)
-}
-
-/// `mem questions --about <prefix>` and `mem log --about <prefix>`: every
-/// question, or every other item, about a part of a page, oldest first, the way a thread reads, each
-/// with its text, and a question with its answer. `about` lives only in the
-/// item's file, so every item of the kind is read.
-pub fn about(app: &App, kind: &str, prefix: &str) -> Result<i32> {
-    let identity = app.identity(Mode::Read)?;
-    let index = app.read_index()?;
-    let kind = (kind == "question").then_some(kind);
-    let mut rows = index.recent_filtered(kind, None, identity.id(), usize::MAX >> 1)?;
-    // A question is read with its answer through `questions --about`.
-    rows.retain(|row| kind.is_some() || row.kind != "question");
-    rows.retain(|row| {
-        read_item(row)
-            .and_then(|i| i.meta.about)
-            .is_some_and(|about| about.starts_with(prefix))
-    });
-    rows.reverse();
-    let mut items = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let mut v = row_json(row);
-        v["body"] = json!(read_body(row).trim());
-        if kind.is_some() {
-            let answer = index.answer_to(&row.id)?;
-            v["answered"] = json!(answer.is_some());
-            v["answer"] = json!(answer.as_ref().map(|a| read_body(a).trim().to_string()));
-        }
-        items.push(v);
-    }
-    let key = if kind.is_some() { "questions" } else { "items" };
-    if app.json {
-        println!("{}", serde_json::to_string(&json!({ key: items }))?);
-    } else {
-        for row in &rows {
-            println!("#{}  {}", row.short_id, row.title);
-        }
-    }
-    Ok(if rows.is_empty() {
-        exit::NOT_FOUND
-    } else {
-        exit::OK
-    })
 }
 
 fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
