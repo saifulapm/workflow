@@ -1,6 +1,6 @@
 ---
 name: diagnose
-description: Use when a bug, a failing or flaky test, or a finding needs its cause found. Build a tight loop that goes red on the symptom, rank hypotheses, then fix with a regression test.
+description: Use when a bug, a failing or flaky test, or a dogfood finding needs its cause found before it is fixed.
 ---
 
 # diagnose

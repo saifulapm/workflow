@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Use when a spec is settled, or Saiful asks for a plan before building something that touches more than a couple of files. Cut the roadmap into milestones, write each milestone's plan for the agents, get his one approval, then start the relay.
+description: Use when a spec is settled, or Saiful asks for a plan before building something that touches more than a couple of files: cut milestones, write their plans, get one approval.
 ---
 
 # plan

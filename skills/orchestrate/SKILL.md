@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Use when `workflow go` starts you on a milestone, or when asked to build an approved milestone end to end. Plan the order, build test-first alone or with worktree subagents, land on main, review once, dogfood once, keep the lessons, then start the next milestone's orchestrator.
+description: Use when `workflow go` starts you on a milestone, or when asked to build an approved milestone end to end, from its plan to landed, reviewed and walked code.
 ---
 
 # orchestrate

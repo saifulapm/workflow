@@ -1,6 +1,6 @@
 ---
 name: dogfood
-description: Use as the dogfooder subagent, or when asked to dogfood a milestone. Use the real product along its Show path the way a person would, judge every step on screen, and file each defect in mem with evidence and the assertion a test should make.
+description: Use as the dogfooder subagent, or when asked to dogfood a milestone: walk the real product along its Show path the way a person would, and file each defect in mem with evidence.
 ---
 
 # dogfood

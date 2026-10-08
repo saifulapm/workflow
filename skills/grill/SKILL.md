@@ -1,6 +1,6 @@
 ---
 name: grill
-description: Use when Saiful brings a new product, feature or big change. Research what it needs, interview him in rounds until no decision is open, record each answer in mem as it settles, then write the spec pages that the plan skill cuts milestones from.
+description: Use when Saiful brings a new product, feature or big change: interview him in rounds until no decision is open, then write the spec the plan skill cuts milestones from.
 ---
 
 # grill
