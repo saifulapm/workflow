@@ -32,22 +32,39 @@ or the plan, never one recomputed the way the code computes it. Run it and
 watch it fail for the reason the task gives. A test that passes before the
 change tests nothing.
 
+Then ask whether it would still pass if every function it calls returned
+nothing (null, empty, zero). If so, it observes no behaviour. Five shapes do
+that: no assertion or a weak one (defined, truthy, did not throw); only that
+a mock was called or that something is absent; an expected value taken from
+the code under test; a restated constant or config default; an assertion on
+data the test built while the subject never runs. Rewrite such a test to call
+the subject with one concrete input and assert the literal output, or the
+effect a user sees.
+
 ## 3. Green
 
 Write the smallest code that turns the test green. No speculative options,
 layers or handling for cases that cannot happen. Then run, and only run:
 
 - the test file you touched, and any test file for code you changed
+- every test file that names what you changed (a function, a route, a
+  record, a page's markup, a message), found with `rg -l '<name>'` over the
+  tests
 - the typecheck or the compiler
 
 Seconds, not minutes. The full suite is the orchestrator's to run once per
 wave. A red test is answered in the code it tests, never by weakening,
 skipping or deleting the test.
 
+Then break the code once: change the line behind the expected value (flip
+the condition, return the old value), watch your test fail, and revert. A
+test that stays green on broken code tests nothing.
+
 The same error twice: stop guessing. Follow the diagnose skill from its
 tight loop, and ask the advisor tool when Claude Code offers it.
 
-Done when your test was red before your code and everything you ran is green.
+Done when your test was red before your code, red again on the code you
+broke on purpose, and everything you ran is green.
 
 ## 4. Commit
 
@@ -62,8 +79,8 @@ of yours unstaged.
 Your last message, to whoever sent you:
 
 - the commits, as `sha subject`
-- the test command, with its red output before and green output after, in
-  short
+- the test command, with its red output before, its green output after and
+  its red output on the code you broke on purpose, in short
 - every decision you made that the brief did not, and why
 - anything out of scope you noticed, as a follow-up, not a change
 
