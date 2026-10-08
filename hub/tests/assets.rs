@@ -54,33 +54,3 @@ fn an_asset_the_binary_does_not_carry_is_404() {
     assert_eq!(status_of(&hub.get("/assets/maple-mono-900.woff2")), 404);
     assert_eq!(status_of(&hub.get("/assets/../Cargo.toml")), 404);
 }
-
-#[test]
-fn the_fonts_answer_a_frame_with_no_origin() {
-    // A plan page runs in a sandboxed frame with an opaque origin, and a
-    // font is a CORS fetch: without this header the page falls back to the
-    // platform's monospace.
-    let (_dir, hub) = hub("assets-cors");
-    let response = hub.get("/assets/maple-mono-400.woff2");
-    assert_eq!(
-        header_of(&response, "access-control-allow-origin"),
-        Some("*")
-    );
-}
-
-#[test]
-fn the_comment_layer_is_served_as_javascript() {
-    // A designed plan page loads it from its sandboxed frame.
-    let (_dir, hub) = hub("assets-annotate");
-    let response = hub.get("/assets/annotate.js");
-    assert_eq!(status_of(&response), 200, "{response}");
-    assert!(
-        header_of(&response, "content-type")
-            .unwrap()
-            .starts_with("text/javascript")
-    );
-    assert!(body_of(&response).contains("plan-comment"));
-    // Its URL carries no version, and the shell that talks to it is always
-    // fresh, so a phone must not keep an old copy for a year.
-    assert_eq!(header_of(&response, "cache-control"), Some("no-cache"));
-}

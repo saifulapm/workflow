@@ -129,6 +129,26 @@ fn project_detail_stored_plan_page_shows_its_own_text() {
     assert!(body.contains("A stored task"), "{body}");
 }
 
+/// A plan names the claude.ai artifact Saiful made for it at its top, and
+/// the plan's page is where he opens it again.
+#[test]
+fn project_detail_stored_plan_links_its_artifact() {
+    let world = World::new("detail-plan-artifact");
+    let stored = write(
+        &world.home,
+        "stored.md",
+        "# plan: sub-slug\n\nArtifacts: [order desk mockup](https://claude.ai/artifact/0f3c2b9e)\n\n## Behaviours\n",
+    );
+    world.run(&["plan", "sub-slug", "--set-file", stored.to_str().unwrap()]);
+    let hub = world.hub();
+
+    let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/sub-slug"))).to_string();
+    assert!(
+        body.contains("<a href=\"https://claude.ai/artifact/0f3c2b9e\">order desk mockup</a>"),
+        "{body}"
+    );
+}
+
 /// `/item/<id>` shows the item's whole body, not only its title.
 #[test]
 fn project_detail_item_page_shows_the_whole_body() {

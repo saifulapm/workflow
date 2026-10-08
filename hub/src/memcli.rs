@@ -419,18 +419,6 @@ impl MemCli {
         self.read(&["questions", &format!("--project={project}"), "--json"])
     }
 
-    /// Every question (`verb` "questions") or every other item ("log")
-    /// about a part starting with `prefix`, oldest first, with its text.
-    /// `--about=`, so a prefix is a value and never a flag.
-    pub fn about(&self, project: &str, verb: &str, prefix: &str) -> Arc<Outcome> {
-        self.read(&[
-            verb,
-            &format!("--about={prefix}"),
-            &format!("--project={project}"),
-            "--json",
-        ])
-    }
-
     /// A write a page makes: run it, then drop every cached read, so the page
     /// the phone lands on next shows what was just written.
     pub fn write_through(&self, args: &[&str]) -> Run {

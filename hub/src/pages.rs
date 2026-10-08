@@ -10,7 +10,7 @@ use crate::http::{Request, Response};
 use crate::model;
 use crate::{
     assets, page_control, page_decisions, page_evidence, page_home, page_new, page_project,
-    page_questions, page_roadmap, page_wiki, pair, plan_page,
+    page_questions, page_roadmap, page_wiki, pair,
 };
 
 /// What a page module is handed.
@@ -111,26 +111,7 @@ fn page_for<'a>(
         "new" => ("GET", "", page_new::get),
         "control" => ("POST", "", page_control::control_post),
         _ => {
-            if let Some(slug) = sub
-                .strip_prefix("plan/")
-                .and_then(|s| s.strip_suffix("/page"))
-            {
-                ("GET", slug, plan_page::page_get)
-            } else if let Some(slug) = sub
-                .strip_prefix("plan/")
-                .and_then(|s| s.strip_suffix("/comment"))
-            {
-                ("POST", slug, plan_page::comment_post)
-            } else if let Some(slug) = sub
-                .strip_prefix("plan/")
-                .and_then(|s| s.strip_suffix("/decision"))
-            {
-                ("POST", slug, plan_page::decision_post)
-            } else if let Some(slug) = sub.strip_prefix("plan/")
-                && !slug.contains('/')
-            {
-                ("GET", slug, plan_page::get)
-            } else if let Some(id) = sub.strip_prefix("file/") {
+            if let Some(id) = sub.strip_prefix("file/") {
                 ("GET", id, page_evidence::file_get)
             } else if let Some(form) = sub.strip_prefix("new/") {
                 ("POST", form, page_new::new_post)

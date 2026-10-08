@@ -152,14 +152,19 @@ mem roadmap --stdin >/dev/null <<'ROAD'
       Show: a recipe for four, set to six, lists half again of every amount
 ROAD
 mem roadmap --status draft >/dev/null
-# b1-box's plan is a designed page, which the hub opens in a frame with its
-# comment layer and one answered comment pinned on its first claim's heading;
-# b2-scale's is markdown, which it renders as it always has.
-mem plan b1-box --set-file "$root/skills/plan/example.html" >/dev/null
-mem ask --for orchestrator --about 'plan:b1-box#claim-1/1@20,50' \
-	'Does the list show the newest recipe first?' >/dev/null
-mem answer "$(mem questions --about 'plan:b1-box#' | awk '{print substr($1, 2)}')" \
-	'Yes: newest first, and the plan now says so.' >/dev/null
+# b1-box's plan links the artifact it was drawn from, which its page opens.
+mem plan b1-box --stdin >/dev/null <<'PLAN'
+# plan: b1-box
+
+Goal: a recipe saved on the phone shows in the list on the laptop.
+Artifacts: [recipe box mockup](https://claude.ai/artifact/0f3c2b9e)
+
+## Behaviours
+
+### 1. A saved recipe shows in the list with its title
+
+Acceptance: save "Dal" and the list's first row reads "Dal".
+PLAN
 mem plan b2-scale --stdin >/dev/null <<'PLAN'
 # plan: b2-scale
 
