@@ -87,6 +87,9 @@ Write `"$d/<slug>.md"` in this shape:
     ## Out of scope
     - Refunds, which m4-refunds takes.
 
+    ## Review focus
+    - Saving twice while the first save is in flight makes one order, not two.
+
 The rules:
 
 1. Split by behaviour, never by file, layer or order of work. A behaviour is
@@ -108,7 +111,11 @@ The rules:
    where Saiful opens it again. Write what the artifact settled into the
    behaviours in words, since the agents build from the plan. Leave the line
    out when there is none.
-7. Write short sentences in the active voice. Quote Saiful's words; do not
+7. `Review focus` lists up to five inputs or states the spec implies and a
+   person will meet, most likely first, each with what they would expect.
+   Pin each with an acceptance line on the behaviour it belongs to. The
+   orchestrator hands this list to the reviewer.
+8. Write short sentences in the active voice. Quote Saiful's words; do not
    reword them.
 
 Store each plan as written. mem refuses one whose first line is not
@@ -116,8 +123,8 @@ Store each plan as written. mem refuses one whose first line is not
 
     mem plan <slug> --stdin < "$d/<slug>.md"
 
-Done when every milestone on the roadmap has a stored plan and every
-behaviour has an acceptance line with a literal value.
+Done when every milestone on the roadmap has a stored plan with a review
+focus, and every behaviour has an acceptance line with a literal value.
 
 ## 5. Store the roadmap and ask once
 

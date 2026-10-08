@@ -157,10 +157,13 @@ Never weaken, skip or delete a test to make it pass. Never push.
 ## 5. Review once
 
 When every task has landed and the suite is green, spawn one `reviewer`
-subagent. Give it the commit range of this milestone, the plan slug and the
-spec sections. It returns findings marked `[blocks]` or `[later]`.
+subagent. Give it the commit range of this milestone, the plan slug, the
+spec sections and the plan's review focus, word for word. It returns
+findings marked `[blocks]` or `[later]`.
 
 Check every finding yourself in the code and drop false or cosmetic ones.
+Log each drop with the line that refutes it: `mem log "review finding
+dropped: <finding>; <file:line> shows <why>"`.
 Fix each real `[blocks]` finding test-first, in one pass with no second
 review. A `[later]` finding becomes `mem idea "<finding>"`.
 
