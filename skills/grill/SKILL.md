@@ -95,7 +95,7 @@ question so he can answer from his phone, then end the session with a
 handoff:
 
     mem ask --for human "<question>" --options "<a>,<b>" --recommend "<a>"
-    mem handoff --set "grilling <topic>: round <n> posted as <ids>; resume with the grill skill"
+    mem handoff --set "Next: resume with the grill skill. Grilling <topic>: round <n> posted as <ids>."
 
 When the frontier is empty, sweep for what the tree never held: failure and
 empty states, limits as numbers, who may do what, data as it grows and

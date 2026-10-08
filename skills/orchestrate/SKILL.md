@@ -213,8 +213,8 @@ step that passed. Two failed walks of the same step go to Saiful.
    to a note: the next orchestrator turns each unenforced check into its
    first task. Delete a lesson whose mistake can no longer happen, and keep
    the page under 8 KB.
-4. `mem handoff --set "<slug> landed at <sha>. <the numbers>. Next: <next
-   milestone>."`
+4. `mem handoff --set "Next: <next milestone>. <slug> landed at <sha>. <the
+   numbers>."`
 5. `workflow go <project>`. It starts the next milestone's orchestrator in
    its own amx pane, or says the roadmap is done, or refuses because the
    roadmap is not approved yet. Show its output. A refusal is a normal end.

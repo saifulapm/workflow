@@ -61,8 +61,9 @@ answer is not yours to invent but stopping costs more than being wrong:
 decide, record it, carry on. A ruling promises it was written down, not that it
 was right: it is how Saiful overturns you cheaply.
 
-**Session end with work unfinished** → `mem handoff --set "<state and the next
-action>"`, the action as a runnable command.
+**Session end with work unfinished** → `mem handoff --set "Next: <the next
+action, as a runnable command>. <the state>"`. The digest shows only the
+handoff's first hundred characters, so the next action leads.
 
 **A stop condition** → a question, on the right channel. An interactive
 session asks in the conversation. A subagent reports the stop to the
@@ -77,6 +78,17 @@ happened, the rule, how to apply it. Every orchestrator reads that page.
 
 **Who decided what** → `mem decide "<what and why>" --by saiful|agent`,
 with `--replaces "<the old decision>"` when it overturns one.
+
+**Saiful states a rule for all his work, or corrects how you work** → `mem
+decide "<the rule in one line>" --by saiful`, with the why and how to apply
+it after a blank line, run outside any checkout (`cd "$(mktemp -d)"` first).
+Every session's digest opens with these rules. A rule for one project is
+written in its checkout instead.
+
+**A change Saiful adopts** (from a review, a ruling or the chat) → a task on
+the current plan (`mem plan`), or a roadmap milestone when it is a slice of
+its own, ticked by the commit that lands it. The decision keeps the why; the
+task makes sure the change ships.
 
 **Proof a task did what it says** → `mem evidence add --task <task> <file>
 --note "<what it shows>"`; the file is copied into the store.
