@@ -51,11 +51,13 @@ Done when removing any remaining piece makes the red go away.
 
 ## 3. Rank three hypotheses
 
-Write three candidate causes, each with its prediction: "if X is the cause,
-changing Y turns the loop green". Rank them by likelihood, then by how cheap
-the check is, and record them: `mem log "diagnosing <symptom>: 1) ... 2) ...
-3) ..."`. In the chat, show them to Saiful before you test, since he may know
-which one it is, and carry on with your ranking.
+Read the code around the symptom by outline or search, then the region, as
+the tdd skill does. Write three candidate causes, each with its prediction:
+"if X is the cause, changing Y turns the loop green". Rank them by
+likelihood, then by how cheap the check is, and record them: `mem log
+"diagnosing <symptom>: 1) ... 2) ... 3) ..."`. In the chat, show them to
+Saiful before you test, since he may know which one it is, and carry on with
+your ranking.
 
 Done when each hypothesis has a check that tells it apart from the other two.
 

@@ -33,6 +33,8 @@ Then read the tree. `git status` must be clean and on `main`, and `git log
 --oneline -5` tells you where you are. Find the test command with `mem project
 current --json` (the `verify` key) or the repo's own scripts, and run it once.
 A red trunk is yours to fix first, with a failing test that names the cause.
+Read code the way the tdd skill does: an outline or a search first, then
+only the region.
 
 When the handoff or a ticked checklist says this milestone is half done,
 continue from the first open task. Never redo landed work. A `worktree-*`

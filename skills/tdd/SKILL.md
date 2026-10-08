@@ -12,7 +12,12 @@ method.
 ## 1. Read
 
 Read the brief whole, then only the files and wiki sections it names, in the
-ranges you need. For a library API you are not sure of, read its current
+ranges you need. Find code before you read it: `ast-grep outline <file>`
+lists a file's functions and types with their lines, and `rg -n '<name>'`
+finds where a name is used. Then read only that region, with an offset and
+a limit. Read a whole file only when it is short.
+
+For a library API you are not sure of, read its current
 docs with `npx ctx7@latest library <name> "<query>"` and then `npx
 ctx7@latest docs <id> "<query>"`. Do not guess, and do not read a package's
 built `dist`.
