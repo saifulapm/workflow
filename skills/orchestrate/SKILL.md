@@ -172,8 +172,9 @@ review. A `[later]` finding becomes `mem idea "<finding>"`.
 Spawn one `dogfooder` subagent. Give it the milestone's Show path (the
 roadmap line's `Show:` and the plan's behaviours, as numbered steps
 a user takes), the project's launch command, and the `verify` wiki page when
-the project has one. It walks the real product on an isolated surface and
-files each defect with `mem finding add`. A UI-free milestone, such as a
+the project has one, and the writes the plan lets one party cause (a form,
+a webhook, a message), for its forged-write check. It walks the real product
+on an isolated surface and files each defect with `mem finding add`. A UI-free milestone, such as a
 library or an internal refactor, has its walk replaced by running its
 examples or CLI once yourself.
 
@@ -182,7 +183,8 @@ tight loop starts from the finding's evidence, and the fix closes it with
 `mem finding close <id> --by <commit>`. A finding no tight loop reproduces
 closes with `--by "not reproduced: <what you ran>"`. A taste call or an undriveable surface goes to
 Saiful with `mem ask --for human`. Then spawn the dogfooder once more on
-the failed steps alone. Two failed walks of the same step go to Saiful.
+the failed steps and the steps your fixes touched, since a fix can break a
+step that passed. Two failed walks of the same step go to Saiful.
 
 ## 7. Land and hand over
 

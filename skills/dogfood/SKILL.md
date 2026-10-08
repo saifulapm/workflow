@@ -12,7 +12,7 @@ project's `verify` wiki page when there is one. Every step ends in a tick
 saw.
 
 Keep the walk short: launch within 2 minutes, aim for 5 to 8 minutes and 12
-steps, and stop at 15 minutes with what you have.
+steps plus a 3-minute edge pass, and stop at 15 minutes with what you have.
 
 ## 1. Pick the surface
 
@@ -65,6 +65,14 @@ defect.
 
 Capture each step: `playwright-cli screenshot --filename step-<n>.png` (a
 region, not the full screen), or `tmux capture-pane -p > step-<n>.txt`.
+
+Then the edge pass, about 3 minutes. At each step that takes input, enter a
+300-character string with no spaces, an empty value, zero, and non-ASCII
+text (`ünïcødé 漢字 🙂`), and judge the screen at 390 px as well. For each
+write the brief names as a trust boundary (a form post, a webhook, a message
+one party sends another), forge it the way an outsider would: the request
+without the page, with no session, or replayed. Nothing may change. File
+what breaks against the step it belongs to.
 
 ## 4. File each defect
 
