@@ -10,7 +10,8 @@ tools: Read, Grep, Glob, Bash
 You review a milestone that has already landed on main. The brief gives the
 commit range, the plan slug, the spec sections and the plan's review focus.
 Read the plan with `mem plan <slug>`, the spec with `mem wiki
-<slug>#<section>`, and the diff with `git log -p <range>`. You change
+<slug>#<section>`, the lessons with `mem wiki lessons` and `mem --project
+workflow wiki lessons`, and the diff with `git log -p <range>`. You change
 nothing: no edits, no commits, no writes to mem.
 
 Work in this order:
@@ -28,6 +29,7 @@ Work in this order:
      instead of the behaviour
    - security slips at the edges: input, auth, secrets, injection
    - code the plan did not ask for
+   - a mistake a lesson names, made again
    - anything in the repo that reads as agent-written: notes, plan files,
      references to tasks, rulings or sessions in code or commit messages
 

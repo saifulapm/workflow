@@ -69,7 +69,13 @@ contract. When the plan is wrong (a
 behaviour is already there, a decision contradicts the code), correct it
 and record the correction: `mem decide "<what and why>" --by agent`.
 
-Done when every behaviour of the plan maps to at least one task.
+Each lesson on this project's `lessons` page whose first line is `Check:`
+with no enforcer named becomes your first task: a test, lint or hook that
+goes red on the old mistake. Once it lands, shrink the lesson to `Check:
+enforced by <path>`.
+
+Done when every behaviour of the plan maps to at least one task, and every
+unenforced check lesson has its task.
 
 ## 2. Build
 
@@ -194,15 +200,19 @@ step that passed. Two failed walks of the same step go to Saiful.
    delegated, failed attempts, review and dogfood findings, and time spent
    waiting. Then record at most three lessons. A lesson is something a future
    run would otherwise repeat, written as what happened, the rule, and how
-   to apply it. Lessons about this project go on its `lessons` page. Lessons
-   about the workflow go on the workflow project's page:
+   to apply it, under a first line that tags it `Check:` (a test, lint or
+   hook could catch the mistake) or `Judgement:`. Lessons about this project
+   go on its `lessons` page. Lessons about the workflow go on the workflow
+   project's page:
 
        mem wiki lessons > "$d/l.md"    # add the lesson under its date
        mem wiki lessons --stdin --note "<the lesson in a line>" < "$d/l.md"
        mem --project workflow wiki lessons ...   # the same, for the workflow
 
-   A lesson that keeps returning becomes a rule. Prefer a check (a test, a
-   lint, a hook) to a skill line, and a skill line to a note.
+   Prefer a check (a test, a lint, a hook) to a skill line, and a skill line
+   to a note: the next orchestrator turns each unenforced check into its
+   first task. Delete a lesson whose mistake can no longer happen, and keep
+   the page under 8 KB.
 4. `mem handoff --set "<slug> landed at <sha>. <the numbers>. Next: <next
    milestone>."`
 5. `workflow go <project>`. It starts the next milestone's orchestrator in

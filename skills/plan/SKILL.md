@@ -18,10 +18,12 @@ to see something, he makes a claude.ai artifact, and the plan links it.
 Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
 spec#<section>`), `verify`, the decisions (`mem search decision`), the
 artifacts Saiful made for this work (`mem search artifact`, and the links in
-the spec) and the repo's entry points. Any fact the plan relies on, such as
-a crate version, an API parameter or a limit, gets checked this session
-(`npx ctx7@latest`, or measure it) and dated. Find the fast test command and
-note how long the suite takes.
+the spec), the lessons past runs left (`mem wiki lessons` and `mem --project
+workflow wiki lessons`), which the acceptance lines and the review focus
+answer, and the repo's entry points. Any fact the plan relies on, such as a
+crate version, an API parameter or a limit, gets checked this session (`npx
+ctx7@latest`, or measure it) and dated. Find the fast test command and note
+how long the suite takes.
 
 ## 2. Settle the forks
 
