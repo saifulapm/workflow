@@ -106,8 +106,6 @@ pub enum Command {
         tags: Vec<String>,
         #[arg(long)]
         supersedes: Option<String>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// With text, append a log entry; without, list recent entries.
     Log {
@@ -122,8 +120,6 @@ pub enum Command {
         kind: Option<String>,
         #[arg(long = "type")]
         r#type: Option<String>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// The session handoff: print the latest, or set a new one.
     Handoff {
@@ -133,8 +129,6 @@ pub enum Command {
         stdin: bool,
         #[arg(long)]
         title: Option<String>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// Rebuild the index from the store.
     Reindex {
@@ -169,8 +163,6 @@ pub enum Command {
         /// questions are what the hub and the phone show.
         #[arg(long = "for", value_name = "AUDIENCE")]
         audience: Option<Audience>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// List questions, or wait for one to be answered.
     Questions {
@@ -194,8 +186,6 @@ pub enum Command {
         text: Option<String>,
         #[arg(long)]
         option: Option<String>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// Record a decision: who made it, and what it replaces.
     Decide {
@@ -205,8 +195,6 @@ pub enum Command {
         /// The decision this one replaces, in words.
         #[arg(long)]
         replaces: Option<String>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// File a task's evidence, or list what is filed.
     Evidence {
@@ -227,15 +215,9 @@ pub enum Command {
     Brief {
         #[arg(long)]
         set: Option<String>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// Record an idea for later.
-    Idea {
-        text: String,
-        #[arg(long)]
-        session_id: Option<String>,
-    },
+    Idea { text: String },
     /// The project's wiki: list pages, print one, or replace one. `mem wiki
     /// lint` checks the wiki and exits 1 on findings.
     Wiki {
@@ -256,8 +238,6 @@ pub enum Command {
         /// log line that is the page's history.
         #[arg(long)]
         note: Option<String>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// Print plan.md verbatim, or replace or clear it. With a slug, the stored
     /// plan of that milestone instead.
@@ -276,8 +256,6 @@ pub enum Command {
         /// List the stored plans: slug, bytes, date and title.
         #[arg(long, conflicts_with_all = ["slug", "set_file", "stdin", "clear", "tick"])]
         list: bool,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// Print roadmap.md verbatim, or replace, clear or tick it.
     Roadmap {
@@ -293,8 +271,6 @@ pub enum Command {
         /// Print the roadmap's status, or set it: draft or approved.
         #[arg(long, value_name = "STATUS", num_args = 0..=1, conflicts_with_all = ["set_file", "stdin", "clear", "tick"])]
         status: Option<Option<String>>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
 }
 
@@ -324,8 +300,6 @@ pub enum EvidenceCommand {
         file: std::path::PathBuf,
         #[arg(long)]
         note: String,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// One `#<id>  <task>  <file>  <note>` line per item, newest first.
     List,
@@ -345,8 +319,6 @@ pub enum FindingCommand {
         /// A file that shows it, copied into the project's evidence.
         #[arg(long)]
         evidence: Option<std::path::PathBuf>,
-        #[arg(long)]
-        session_id: Option<String>,
     },
     /// One `#<id>  <status>  <milestone>  <step>  <title>` line per finding.
     List {

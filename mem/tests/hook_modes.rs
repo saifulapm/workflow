@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{World, code, item, mem, mem_env, put, stderr, stdout};
+use common::{World, code, item, mem, put, stderr, stdout};
 use mem::item::Kind;
 
 const P: &str = "01K2AAAAAAAAAAAAAAAAAAAAAA";
@@ -228,52 +228,6 @@ fn precompact_speaks_plain_text_because_it_has_no_json_channel() {
 
     // Same text with no flag: the flag says how it is being run, not what to say.
     assert_eq!(stdout(&mem(&w, &dir, &["precompact"])), text);
-}
-
-/// The rungs are ordered so the nearer answer wins: mem's own variable over the
-/// harness's, pi's over Claude's for a pi session started from a Claude one.
-#[test]
-fn the_nearest_session_id_wins() {
-    let w = World::new("hook-fallback-order");
-    w.project(P, "thing");
-    let cwd = w.plain_dir("cwd");
-    let batch = |extra: &[&str], env: &[(&str, &str)]| {
-        let mut args = vec!["context", "thing", "--brief", "--hook-json"];
-        args.extend_from_slice(extra);
-        mem_env(&w, &cwd, &args, env)
-    };
-    let all = [
-        ("MEM_SESSION_ID", "mem-id"),
-        ("PI_SESSION_ID", "pi-id"),
-        ("CLAUDE_CODE_SESSION_ID", "claude-id"),
-    ];
-
-    // The flag beats every variable.
-    let out = batch(&["--session-id", "flag-id"], &all);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(w.dirs().sessions_dir().join("flag-id").exists());
-
-    // Then MEM_SESSION_ID, then PI_SESSION_ID, then Claude's.
-    for (skip, winner) in [(0, "mem-id"), (1, "pi-id"), (2, "claude-id")] {
-        let env: Vec<(&str, &str)> = all[skip..].to_vec();
-        let out = batch(&[], &env);
-        assert_eq!(code(&out), 0, "{}", stderr(&out));
-        assert!(
-            w.dirs().sessions_dir().join(winner).exists(),
-            "{winner} should have won {env:?}"
-        );
-    }
-
-    // An empty rung is skipped, not fatal.
-    let out = batch(
-        &[],
-        &[
-            ("PI_SESSION_ID", "  "),
-            ("CLAUDE_CODE_SESSION_ID", "last-id"),
-        ],
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(w.dirs().sessions_dir().join("last-id").exists());
 }
 
 #[test]

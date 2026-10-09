@@ -24,7 +24,7 @@ pub struct App {
     pub include_archived: bool,
     pub json: bool,
     pub quiet: bool,
-    /// From `--session-id` or `MEM_SESSION_ID`; machine-local activity tracking.
+    /// From `context --session-id`; machine-local batch tracking.
     pub session_id: Option<String>,
 }
 
@@ -43,7 +43,7 @@ impl App {
             include_archived: cli.include_archived,
             json: cli.json,
             quiet: cli.quiet,
-            session_id: crate::session::id_from(None),
+            session_id: None,
         })
     }
 

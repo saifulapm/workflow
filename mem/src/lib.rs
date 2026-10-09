@@ -40,9 +40,9 @@ pub fn run(cli: cli::Cli) -> i32 {
     }
 }
 
-/// `--session-id` overrides `MEM_SESSION_ID`.
+/// The id `context --brief` counts batches under; an empty flag is none.
 fn with_session(app: app::App, flag: &Option<String>) -> app::App {
-    match session::id_from(flag.as_deref()) {
+    match flag.as_deref().and_then(session::nonempty) {
         Some(id) => app::App {
             session_id: Some(id),
             ..app
@@ -130,9 +130,8 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             title,
             tags,
             supersedes,
-            session_id,
         } => verbs::save(
-            &with_session(app, session_id),
+            &app,
             kind,
             text,
             verbs::SaveMeta {
@@ -148,9 +147,8 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             since,
             kind,
             r#type,
-            session_id,
         } => verbs::log(
-            &with_session(app, session_id),
+            &app,
             text.as_deref(),
             *limit,
             since.as_deref(),
@@ -158,17 +156,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             r#type.as_deref(),
             false,
         ),
-        cli::Command::Handoff {
-            set,
-            stdin,
-            title,
-            session_id,
-        } => verbs::handoff(
-            &with_session(app, session_id),
-            set.as_deref(),
-            *stdin,
-            title.as_deref(),
-        ),
+        cli::Command::Handoff { set, stdin, title } => {
+            verbs::handoff(&app, set.as_deref(), *stdin, title.as_deref())
+        }
         cli::Command::Reindex { full } => verbs::reindex(&app, *full),
         cli::Command::Snapshot => verbs::snapshot(&app),
         cli::Command::Prune { apply } => verbs::prune(&app, apply),
@@ -179,14 +169,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             options,
             recommend,
             audience,
-            session_id,
-        } => verbs::ask(
-            &with_session(app, session_id),
-            question,
-            options,
-            recommend.as_deref(),
-            *audience,
-        ),
+        } => verbs::ask(&app, question, options, recommend.as_deref(), *audience),
         cli::Command::Questions {
             pending,
             all_projects,
@@ -201,35 +184,16 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             wait.as_deref(),
             timeout,
         ),
-        cli::Command::Answer {
-            id,
-            text,
-            option,
-            session_id,
-        } => verbs::answer(
-            &with_session(app, session_id),
-            id,
-            text.as_deref(),
-            option.as_deref(),
-        ),
-        cli::Command::Decide {
-            text,
-            by,
-            replaces,
-            session_id,
-        } => records::decide(
-            &with_session(app, session_id),
-            text,
-            by.as_str(),
-            replaces.as_deref(),
-        ),
+        cli::Command::Answer { id, text, option } => {
+            verbs::answer(&app, id, text.as_deref(), option.as_deref())
+        }
+        cli::Command::Decide { text, by, replaces } => {
+            records::decide(&app, text, by.as_str(), replaces.as_deref())
+        }
         cli::Command::Evidence { command } => match command {
-            cli::EvidenceCommand::Add {
-                task,
-                file,
-                note,
-                session_id,
-            } => records::evidence_add(&with_session(app, session_id), task, file, note),
+            cli::EvidenceCommand::Add { task, file, note } => {
+                records::evidence_add(&app, task, file, note)
+            }
             cli::EvidenceCommand::List => records::evidence_list(&app),
             cli::EvidenceCommand::Cat { id } => records::evidence_cat(&app, id),
         },
@@ -239,35 +203,23 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 step,
                 text,
                 evidence,
-                session_id,
-            } => records::finding_add(
-                &with_session(app, session_id),
-                milestone,
-                step,
-                text,
-                evidence.as_deref(),
-            ),
+            } => records::finding_add(&app, milestone, step, text, evidence.as_deref()),
             cli::FindingCommand::List { open } => records::finding_list(&app, *open),
             cli::FindingCommand::Close { id, by } => records::finding_close(&app, id, by),
         },
         cli::Command::Raw { command } => match command {
             cli::RawCommand::Add { source } => records::raw_add(&app, source),
         },
-        cli::Command::Brief { set, session_id } => {
-            records::brief(&with_session(app, session_id), set.as_deref())
-        }
-        cli::Command::Idea { text, session_id } => {
-            records::idea(&with_session(app, session_id), text)
-        }
+        cli::Command::Brief { set } => records::brief(&app, set.as_deref()),
+        cli::Command::Idea { text } => records::idea(&app, text),
         cli::Command::Wiki {
             slug,
             rebuild,
             stdin,
             sections,
             note,
-            session_id,
         } => verbs::wiki(
-            &with_session(app, session_id),
+            &app,
             slug.as_deref(),
             *stdin,
             *sections,
@@ -281,9 +233,8 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             clear,
             tick,
             list,
-            session_id,
         } => verbs::plan(
-            &with_session(app, session_id),
+            &app,
             verbs::PlanArgs {
                 slug: slug.as_deref(),
                 set_file: set_file.as_deref(),
@@ -299,9 +250,8 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             clear,
             tick,
             status,
-            session_id,
         } => verbs::roadmap(
-            &with_session(app, session_id),
+            &app,
             verbs::RoadmapArgs {
                 set_file: set_file.as_deref(),
                 stdin: *stdin,
