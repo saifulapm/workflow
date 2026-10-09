@@ -3,7 +3,7 @@
 //! here.
 //!
 //! Two shapes are load-bearing and were checked against the 2.1.233 binary:
-//! PostToolBatch and Stop read `hookSpecificOutput.additionalContext` (and the
+//! PostToolBatch reads `hookSpecificOutput.additionalContext` (and the
 //! event name must match the hook that ran, or the binary throws), while
 //! PreCompact has no `hookSpecificOutput` variant at all — its channel is the
 //! hook's plain stdout, which becomes `newCustomInstructions`.
@@ -193,7 +193,6 @@ fn the_adapter_is_silent_outside_a_registered_project() {
             vec!["context"],
             vec!["context", "--brief"],
             vec!["context", "--brief", "--hook-json", "--session-id", "s"],
-            vec!["session-check", "--session-id", "s", "--hook-json"],
         ] {
             let out = mem(&w, cwd, &args);
             assert_eq!(code(&out), 0, "{what} {args:?}: {}", stderr(&out));
@@ -208,160 +207,6 @@ fn the_adapter_is_silent_outside_a_registered_project() {
         assert!(
             !stderr(&mem(&w, cwd, &["context"])).trim().is_empty(),
             "{what}: the note belongs on stderr, where a hook drops it"
-        );
-    }
-
-    // And the nudge was never spent, so the session that registers gets it.
-    let v = json(&mem(
-        &w,
-        &plain,
-        &["session-check", "--session-id", "s", "--json"],
-    ));
-    assert_eq!(v["nudged"], serde_json::json!(false));
-}
-
-#[test]
-fn the_stop_nudge_appears_only_in_a_session_that_wrote_nothing() {
-    let w = World::new("hook-stop");
-    let repo = w.repo("thing", None);
-    // A write registers the checkout, and this one is another session's: the
-    // nudge is about what *this* session recorded.
-    assert_eq!(
-        code(&mem(
-            &w,
-            &repo,
-            &["log", "registering", "--session-id", "earlier"]
-        )),
-        0
-    );
-
-    let out = mem(
-        &w,
-        &repo,
-        &["session-check", "--session-id", "quiet", "--hook-json"],
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let v = json(&out);
-    assert_eq!(
-        v["hookSpecificOutput"]["hookEventName"],
-        serde_json::json!("Stop")
-    );
-    let nudge = v["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .expect("additionalContext");
-    assert!(nudge.contains("mem handoff"), "{nudge}");
-    assert!(
-        nudge.len() <= 240,
-        "the nudge is ~30 tokens, not a lecture: {} bytes",
-        nudge.len()
-    );
-
-    // One write is enough to make the session worth nothing further.
-    assert_eq!(
-        code(&mem(
-            &w,
-            &repo,
-            &["log", "did the thing", "--session-id", "busy"]
-        )),
-        0
-    );
-    let out = mem(
-        &w,
-        &repo,
-        &["session-check", "--session-id", "busy", "--hook-json"],
-    );
-    assert_eq!(code(&out), 0);
-    assert!(
-        stdout(&out).is_empty(),
-        "a session that recorded something needs no nudge: {}",
-        stdout(&out)
-    );
-
-    // Without the hook envelope it is still readable, and --json reports both.
-    let out = mem(
-        &w,
-        &repo,
-        &["session-check", "--session-id", "busy", "--json"],
-    );
-    assert_eq!(code(&out), 0);
-    let v = json(&out);
-    assert_eq!(v["writes"], serde_json::json!(1));
-    assert_eq!(v["nudge"], serde_json::json!(null));
-    let v = json(&mem(
-        &w,
-        &repo,
-        &["session-check", "--session-id", "quiet", "--json"],
-    ));
-    assert_eq!(v["writes"], serde_json::json!(0));
-    assert!(v["nudge"].is_string());
-}
-
-#[test]
-fn the_stop_nudge_fires_at_most_once_in_a_session() {
-    // The runtime treats a Stop hook's additionalContext as feedback to act on:
-    // it wakes the model, which answers the nudge and stops again, which fires
-    // the hook again. Answering a nudge is not a mem write, so a nudge that
-    // repeats never stops repeating. One session, one nudge.
-    let w = World::new("hook-stop-once");
-    let repo = w.repo("thing", None);
-    assert_eq!(
-        code(&mem(
-            &w,
-            &repo,
-            &["log", "registering", "--session-id", "earlier"]
-        )),
-        0
-    );
-    let args = ["session-check", "--session-id", "loop", "--hook-json"];
-
-    let first = mem(&w, &repo, &args);
-    assert_eq!(code(&first), 0, "{}", stderr(&first));
-    assert!(
-        !stdout(&first).is_empty(),
-        "the first stop in a silent session is worth a nudge"
-    );
-
-    for round in 2..=4 {
-        let out = mem(&w, &repo, &args);
-        assert_eq!(code(&out), 0, "{}", stderr(&out));
-        assert!(
-            stdout(&out).is_empty(),
-            "stop {round} nudged again — this is the loop: {}",
-            stdout(&out)
-        );
-    }
-
-    // The diagnostic view still reports the session as having written nothing,
-    // and now also says the one nudge has been spent.
-    let v = json(&mem(
-        &w,
-        &repo,
-        &["session-check", "--session-id", "loop", "--json"],
-    ));
-    assert_eq!(v["writes"], serde_json::json!(0));
-    assert!(v["nudge"].is_string());
-    assert_eq!(v["nudged"], serde_json::json!(true));
-}
-
-#[test]
-fn a_session_with_no_id_is_never_nudged() {
-    // Without a session id there is no record of what this session did, so
-    // `writes == 0` is absence of evidence rather than evidence of silence —
-    // and there is nowhere to record that the nudge was spent, so a nudge here
-    // would fire on every stop forever.
-    let w = World::new("hook-stop-noid");
-    let repo = w.repo("thing", None);
-
-    for args in [
-        vec!["session-check", "--hook-json"],
-        vec!["session-check", "--session-id", "", "--hook-json"],
-    ] {
-        let out = mem(&w, &repo, &args);
-        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
-        assert!(
-            stdout(&out).is_empty(),
-            "{args:?} nudged a session it cannot track: {}",
-            stdout(&out)
         );
     }
 }
@@ -385,33 +230,18 @@ fn precompact_speaks_plain_text_because_it_has_no_json_channel() {
     assert_eq!(stdout(&mem(&w, &dir, &["precompact"])), text);
 }
 
-/// A model that runs `mem log` inside a session passes no flag and mem's own
-/// variable is not set for it, so until the harness's own id was read the write
-/// was attributed to nobody: 401 session files on this machine, `writes` zero in
-/// every one, and 11 nudges spent on sessions that had recorded something.
-#[test]
-fn a_write_with_no_flag_is_attributed_to_the_harness_session() {
-    for (var, id) in [
-        ("PI_SESSION_ID", "pi-abc"),
-        ("CLAUDE_CODE_SESSION_ID", "claude-abc"),
-    ] {
-        let w = World::new(&format!("hook-fallback-{id}"));
-        let repo = w.repo("thing", None);
-        let out = mem_env(&w, &repo, &["log", "an entry"], &[(var, id)]);
-        assert_eq!(code(&out), 0, "{}", stderr(&out));
-
-        let activity = std::fs::read_to_string(w.dirs().sessions_dir().join(id))
-            .unwrap_or_else(|e| panic!("{var} should name the session file: {e}"));
-        assert!(activity.contains("\"writes\":1"), "{var}: {activity}");
-    }
-}
-
 /// The rungs are ordered so the nearer answer wins: mem's own variable over the
 /// harness's, pi's over Claude's for a pi session started from a Claude one.
 #[test]
 fn the_nearest_session_id_wins() {
     let w = World::new("hook-fallback-order");
-    let repo = w.repo("thing", None);
+    w.project(P, "thing");
+    let cwd = w.plain_dir("cwd");
+    let batch = |extra: &[&str], env: &[(&str, &str)]| {
+        let mut args = vec!["context", "thing", "--brief", "--hook-json"];
+        args.extend_from_slice(extra);
+        mem_env(&w, &cwd, &args, env)
+    };
     let all = [
         ("MEM_SESSION_ID", "mem-id"),
         ("PI_SESSION_ID", "pi-id"),
@@ -419,14 +249,14 @@ fn the_nearest_session_id_wins() {
     ];
 
     // The flag beats every variable.
-    let out = mem_env(&w, &repo, &["log", "one", "--session-id", "flag-id"], &all);
+    let out = batch(&["--session-id", "flag-id"], &all);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(w.dirs().sessions_dir().join("flag-id").exists());
 
     // Then MEM_SESSION_ID, then PI_SESSION_ID, then Claude's.
     for (skip, winner) in [(0, "mem-id"), (1, "pi-id"), (2, "claude-id")] {
         let env: Vec<(&str, &str)> = all[skip..].to_vec();
-        let out = mem_env(&w, &repo, &["log", "two"], &env);
+        let out = batch(&[], &env);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
         assert!(
             w.dirs().sessions_dir().join(winner).exists(),
@@ -435,10 +265,8 @@ fn the_nearest_session_id_wins() {
     }
 
     // An empty rung is skipped, not fatal.
-    let out = mem_env(
-        &w,
-        &repo,
-        &["log", "three"],
+    let out = batch(
+        &[],
         &[
             ("PI_SESSION_ID", "  "),
             ("CLAUDE_CODE_SESSION_ID", "last-id"),
@@ -452,25 +280,28 @@ fn the_nearest_session_id_wins() {
 fn an_empty_session_id_is_no_session_id() {
     // The wiring passes `--session-id "$CLAUDE_CODE_SESSION_ID"`. If the
     // runtime ever leaves that unset, mem must not keep a session file named "".
+    // The batch counter simply emits, having nothing to count with.
     let w = World::new("hook-empty-session");
-    let repo = w.repo("thing", None);
-    assert_eq!(
-        code(&mem(&w, &repo, &["log", "an entry", "--session-id", ""])),
-        0
+    w.project(P, "thing");
+    let cwd = w.plain_dir("cwd");
+    let out = mem(
+        &w,
+        &cwd,
+        &[
+            "context",
+            "thing",
+            "--brief",
+            "--hook-json",
+            "--session-id",
+            "",
+        ],
     );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
     let sessions = w.dirs().sessions_dir();
     let kept: Vec<_> = std::fs::read_dir(&sessions)
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     assert!(kept.is_empty(), "{kept:?}");
-
-    // And the batch counter simply emits, having nothing to count with.
-    let out = mem(
-        &w,
-        &repo,
-        &["context", "--brief", "--hook-json", "--session-id", ""],
-    );
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
 }
 
 #[test]
@@ -479,7 +310,6 @@ fn the_hook_verbs_never_fail_on_a_fresh_machine() {
     let dir = w.plain_dir("nowhere");
     for args in [
         vec!["context", "--brief", "--hook-json", "--session-id", "s"],
-        vec!["session-check", "--session-id", "s", "--hook-json"],
         vec!["precompact", "--hook-json"],
     ] {
         let out = mem(&w, &dir, &args);

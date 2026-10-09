@@ -265,17 +265,11 @@ impl Run {
     }
 }
 
-/// The four hooks the mem skill's wiring depends on, and the command substring
+/// The three hooks the mem skill's wiring depends on, and the command substring
 /// that makes each one count as wired.
-///
-/// Stop was part of the design from the start and never wired anywhere, and
-/// this list checking only the other three is why nobody noticed: pi's
-/// extension has fired the nudge on `agent_settled` since it shipped, and no
-/// Claude Code session ever has.
-const REQUIRED_HOOKS: [(&str, &str); 4] = [
+const REQUIRED_HOOKS: [(&str, &str); 3] = [
     ("SessionStart", "mem context"),
     ("PostToolBatch", "mem context --brief --hook-json"),
-    ("Stop", "mem session-check --session-id"),
     ("PreCompact", "mem precompact --hook-json"),
 ];
 

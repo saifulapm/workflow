@@ -487,28 +487,3 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     check(&w);
 }
-
-/// A session file that still lists the questions it asked, as mem once kept
-/// them, reads and counts on.
-#[test]
-fn a_session_file_with_an_asked_list_still_reads() {
-    let w = World::new("q-asked-old");
-    let repo = w.repo("thing", None);
-    let sessions = w.dirs().sessions_dir();
-    std::fs::create_dir_all(&sessions).unwrap();
-    std::fs::write(
-        sessions.join("s3"),
-        r#"{"writes":4,"batches":2,"nudged":true,"last":"2026-10-01T00:00:00Z","asked":["ABCDEFGH"]}"#,
-    )
-    .unwrap();
-
-    let out = mem_cmd(&w, &repo, &["ask", "still read?"])
-        .env("MEM_SESSION_ID", "s3")
-        .output()
-        .expect("run mem");
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let kept: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(sessions.join("s3")).unwrap()).unwrap();
-    assert_eq!(kept["writes"], 5, "{kept}");
-    assert_eq!(kept["nudged"], true, "{kept}");
-}

@@ -1,7 +1,7 @@
 //! Machine-local session activity. Session ids have no meaning on
-//! another machine, so none of this is ever synced. It exists to answer two
-//! questions a hook cannot answer for itself: did this session record anything,
-//! and how many tool batches has it run.
+//! another machine, so none of this is ever synced. It exists to answer what a
+//! hook cannot answer for itself: how many tool batches this session has run,
+//! and which brief it last saw.
 
 use std::path::{Path, PathBuf};
 
@@ -17,16 +17,7 @@ const KEEP_DAYS: i64 = 7;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Activity {
     #[serde(default)]
-    pub writes: u64,
-    #[serde(default)]
     pub batches: u64,
-    /// Whether the Stop nudge has already been spent on this session. The
-    /// runtime hands a Stop hook's additionalContext back to the model, which
-    /// answers it and stops again — and answering is not a write, so without
-    /// this flag the condition that produced the nudge is still true and the
-    /// pair loops until something else stops it.
-    #[serde(default)]
-    pub nudged: bool,
     /// The brief this session last saw; `None` until its first tool batch.
     #[serde(default)]
     pub brief: Option<String>,
@@ -94,25 +85,6 @@ fn write(sessions_dir: &Path, id: &str, activity: &Activity) -> Result<()> {
     write_atomic(&path(sessions_dir, id), text.as_bytes())
 }
 
-/// Records that this session wrote something. Best effort: a session file that
-/// cannot be written must never fail the write that prompted it.
-pub fn record_write(sessions_dir: &Path, id: &str) {
-    let mut activity = read(sessions_dir, id);
-    activity.writes += 1;
-    activity.last = Timestamp::now().to_string();
-    let _ = write(sessions_dir, id, &activity);
-}
-
-/// Records that this session has had its one Stop nudge. Best effort for the
-/// same reason as `record_write`: the nudge is advice, and advice must not fail
-/// a hook.
-pub fn record_nudge(sessions_dir: &Path, id: &str) {
-    let mut activity = read(sessions_dir, id);
-    activity.nudged = true;
-    activity.last = Timestamp::now().to_string();
-    let _ = write(sessions_dir, id, &activity);
-}
-
 /// Counts a tool batch and keeps the brief it computed, returning the brief
 /// this session saw before, or `None` on its first batch. The PostToolBatch
 /// hook fires on every batch and speaks only when the two differ.
@@ -125,8 +97,7 @@ pub fn record_batch(sessions_dir: &Path, id: &str, brief: &str) -> Option<String
     seen
 }
 
-/// Removes session files older than a week. Called from doctor and from the
-/// write path, where it costs one directory listing.
+/// Removes session files older than a week. Called from doctor.
 pub fn cleanup(sessions_dir: &Path) -> usize {
     let cutoff = Timestamp::now().as_second() - KEEP_DAYS * 86_400;
     let mut removed = 0;

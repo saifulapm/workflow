@@ -77,10 +77,6 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             };
             verbs::context(&app, *full, *budget, *brief, *hook_json)
         }
-        cli::Command::SessionCheck {
-            session_id,
-            hook_json,
-        } => hooks::session_check(&with_session(app, session_id), *hook_json),
         cli::Command::Precompact { hook_json: _ } => hooks::precompact(&app),
         cli::Command::Search {
             query,

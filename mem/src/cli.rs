@@ -57,14 +57,6 @@ pub enum Command {
         #[arg(long)]
         session_id: Option<String>,
     },
-    /// Nudge a session that recorded nothing (the Stop hook).
-    SessionCheck {
-        #[arg(long)]
-        session_id: Option<String>,
-        /// Wrap the nudge in the runtime's hook envelope.
-        #[arg(long)]
-        hook_json: bool,
-    },
     /// The instruction a compaction summarizer must follow (the PreCompact hook).
     Precompact {
         /// Accepted for symmetry: PreCompact's channel is plain stdout, so the

@@ -2,11 +2,10 @@
 //
 // mem writes this file and `mem doctor --fix` puts it back the way it ships, so
 // an edit here is an edit that goes. It does for pi what mem's Claude hooks do
-// for Claude Code: brief the first prompt of a session, steer every fifth tool
-// result with mem's context, and nudge a session that settled without writing
-// anything down.
+// for Claude Code: brief the first prompt of a session and steer every fifth
+// tool result with mem's context.
 //
-// The fourth Claude hook, PreCompact, has no counterpart here: in pi 0.85.1 a
+// The third Claude hook, PreCompact, has no counterpart here: in pi 0.85.1 a
 // session_before_compact handler can only cancel the compaction or hand back a
 // whole summary of its own, and ctx.compact aborts the turn it was called
 // from, so there is no way to give the summarizer mem's one instruction
@@ -104,13 +103,5 @@ export default function (pi: ExtensionAPI) {
     const id = sessionId(ctx);
     if (!id) return;
     steer(pi, await run(["context", "--brief", "--session-id", id]));
-  });
-
-  // Without an id there is nothing to check: a bare `session-check` would read
-  // MEM_SESSION_ID out of the environment and spend some other session's nudge.
-  pi.on("agent_settled", async (_event, ctx) => {
-    const id = sessionId(ctx);
-    if (!id) return;
-    steer(pi, await run(["session-check", "--session-id", id]));
   });
 }

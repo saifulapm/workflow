@@ -826,14 +826,13 @@ fn doctor_reports_the_missing_adapter_hooks() {
     w.project(P, "thing");
     let cwd = w.plain_dir("cwd");
 
-    // All four commands present: no finding.
+    // All three commands present: no finding.
     let wired = w.dir.join("claude-wired");
     claude_settings(
         &wired,
         r#"{"hooks": {
             "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context || true"}]}],
             "PostToolBatch": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem context --brief --hook-json || true"}]}],
-            "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem session-check --session-id \"$CLAUDE_CODE_SESSION_ID\" --hook-json || true"}]}],
             "PreCompact": [{"matcher": "*", "hooks": [{"type": "command", "command": "mem precompact --hook-json || true"}]}]
         }}"#,
     );
@@ -846,7 +845,7 @@ fn doctor_reports_the_missing_adapter_hooks() {
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     assert!(details(&out, "hooks").is_empty(), "{}", stdout(&out));
 
-    // PreCompact and Stop missing: one finding each, naming them.
+    // PreCompact missing: one finding, naming it.
     let half_wired = w.dir.join("claude-half-wired");
     claude_settings(
         &half_wired,
@@ -862,16 +861,8 @@ fn doctor_reports_the_missing_adapter_hooks() {
         &[("CLAUDE_CONFIG_DIR", half_wired.to_str().unwrap())],
     );
     let hooks = details(&out, "hooks");
-    assert_eq!(hooks.len(), 2, "{hooks:?}");
-    assert!(hooks.iter().any(|h| h.contains("PreCompact")), "{hooks:?}");
-
-    // The Stop row is the one that was never wired: every session
-    // on this machine ran without it from the day the hooks landed.
-    let stop = hooks
-        .iter()
-        .find(|h| h.contains("Stop"))
-        .unwrap_or_else(|| panic!("no Stop finding: {hooks:?}"));
-    assert!(stop.contains("mem session-check --session-id"), "{stop}");
+    assert_eq!(hooks.len(), 1, "{hooks:?}");
+    assert!(hooks[0].contains("PreCompact"), "{hooks:?}");
 
     // No settings file at all: one finding naming the path.
     let missing = w.dir.join("claude-missing");
@@ -907,13 +898,13 @@ fn doctor_reports_the_pi_extension_missing_stale_and_written() {
     assert!(missing[0].contains("missing"), "{missing:?}");
 
     // --fix writes it, matching what this binary ships byte for byte, and the
-    // shipped extension wires the three events the ruling names.
+    // shipped extension wires the two events it hooks.
     let out = mem(&w, &cwd, &["doctor", "--fix", "--json"]);
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     assert!(extension_path.exists());
     let written = std::fs::read_to_string(&extension_path).unwrap();
     assert_eq!(written, maint::PI_EXTENSION);
-    for event in ["before_agent_start", "tool_result", "agent_settled"] {
+    for event in ["before_agent_start", "tool_result"] {
         assert!(written.contains(&format!("pi.on(\"{event}\"")), "{written}");
     }
     // The compaction seam stays open: pi 0.85.1 has no way to hand mem's

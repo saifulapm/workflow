@@ -1,9 +1,9 @@
 //! Runtime hook modes.
 //!
-//! Three channels, and they are not interchangeable — each was checked against
+//! Two channels, and they are not interchangeable — each was checked against
 //! the Claude Code 2.1.233 binary:
 //!
-//! - **PostToolBatch** and **Stop** read `hookSpecificOutput.additionalContext`.
+//! - **PostToolBatch** reads `hookSpecificOutput.additionalContext`.
 //!   The event name in the envelope must be the event that ran; the binary
 //!   errors on a mismatch and validates the envelope against a schema, so an
 //!   unknown key is dropped and an unknown `hookEventName` fails the whole
@@ -21,10 +21,6 @@ use serde_json::json;
 
 use crate::app::App;
 use crate::exit;
-
-/// The Stop nudge: ~30 tokens, and both halves are actionable.
-pub const NUDGE: &str = "nothing recorded this session — call `mem log`/`mem save` if anything \
-     is worth keeping; write `mem handoff` now if the work is unfinished";
 
 /// What `mem precompact` hands the summarizer.
 pub const PRECOMPACT: &str =
@@ -80,67 +76,6 @@ fn settled(brief: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// `mem session-check` — the Stop hook. A session that recorded nothing gets one
-/// nudge; a session that wrote gets silence.
-pub fn session_check(app: &App, hook_json: bool) -> Result<i32> {
-    let activity = match &app.session_id {
-        Some(session) => crate::session::read(&app.dirs.sessions_dir(), session),
-        None => crate::session::Activity::default(),
-    };
-    let nudge = if activity.writes == 0 {
-        Some(NUDGE)
-    } else {
-        None
-    };
-
-    if app.json {
-        println!(
-            "{}",
-            serde_json::to_string(&json!({
-                "writes": activity.writes,
-                "batches": activity.batches,
-                "nudge": nudge,
-                "nudged": activity.nudged,
-            }))?
-        );
-        return Ok(exit::OK);
-    }
-
-    // The diagnostic view above answers "did this session record anything".
-    // What gets *emitted* is a narrower question, because the runtime replies
-    // to a Stop hook's additionalContext by waking the model, which answers and
-    // stops again: the nudge fires once per session, and only for a session
-    // whose id makes "once" a thing mem can count.
-    let Some(session) = app.session_id.as_deref() else {
-        return Ok(exit::OK);
-    };
-
-    // And a project mem does not know is a project there is nothing to record
-    // for: the nudge names `mem log` and `mem handoff`, which would register a
-    // checkout nobody asked mem to keep. Resolution costs one git call, which
-    // the comment this replaced was avoiding — measured at 4ms, against a woken
-    // turn every time this fires where it should not.
-    if !matches!(
-        app.identity(crate::project::Mode::Read),
-        Ok(crate::project::Identity::Known { .. })
-    ) {
-        return Ok(exit::OK);
-    }
-
-    if let Some(nudge) = nudge {
-        if activity.nudged {
-            return Ok(exit::OK);
-        }
-        crate::session::record_nudge(&app.dirs.sessions_dir(), session);
-        if hook_json {
-            println!("{}", serde_json::to_string(&envelope("Stop", nudge))?);
-        } else {
-            println!("{nudge}");
-        }
-    }
-    Ok(exit::OK)
 }
 
 /// `mem precompact` — plain text, on purpose (see the module note).

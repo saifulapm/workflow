@@ -14,7 +14,6 @@ use crate::exit;
 use crate::ids::ShortIds;
 use crate::item::{Item, Kind, Meta};
 use crate::project::{Identity, Mode};
-use crate::session;
 use crate::store::Store;
 
 /// Where a write for this identity goes. A non-git directory with no
@@ -44,7 +43,7 @@ pub struct Written {
     pub path: PathBuf,
 }
 
-/// Mints an id, writes the item, and records the write against the session.
+/// Mints an id and writes the item.
 pub fn write_item(app: &App, identity: &Identity, mut meta: Meta, body: String) -> Result<Written> {
     // A store written by a newer mem is read-only here: a synced VERSION bump
     // must not let an older binary write a file the newer one cannot parse.
@@ -75,9 +74,6 @@ pub fn write_item(app: &App, identity: &Identity, mut meta: Meta, body: String) 
             spooled
         }
     };
-    if let Some(session) = &app.session_id {
-        session::record_write(&app.dirs.sessions_dir(), session);
-    }
     Ok(Written {
         short_id: item.meta.short_id(),
         id: item.meta.id,

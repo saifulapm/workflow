@@ -404,32 +404,9 @@ fn ticking_a_task_flips_one_checkbox_and_leaves_the_rest_alone() {
 }
 
 #[test]
-fn writes_are_recorded_against_the_session() {
+fn a_session_id_may_not_escape_the_sessions_directory() {
     let w = World::new("write-session");
-    let repo = w.repo("thing", None);
     let sessions = w.dirs().sessions_dir();
-
-    assert_eq!(mem::session::read(&sessions, "s1").writes, 0);
-    assert_eq!(
-        code(&mem(&w, &repo, &["save", "a fact", "--session-id", "s1"])),
-        0
-    );
-    assert_eq!(
-        code(&mem(
-            &w,
-            &repo,
-            &["log", "did a thing", "--session-id", "s1"]
-        )),
-        0
-    );
-    assert_eq!(mem::session::read(&sessions, "s1").writes, 2);
-    assert_eq!(mem::session::read(&sessions, "s2").writes, 0);
-
-    // A read verb records nothing.
-    mem(&w, &repo, &["search", "fact", "--session-id", "s1"]);
-    assert_eq!(mem::session::read(&sessions, "s1").writes, 2);
-
-    // A session id may not escape the sessions directory.
     assert_eq!(
         mem::session::path(&sessions, "../../escape")
             .file_name()

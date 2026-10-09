@@ -804,12 +804,6 @@ pub fn handoff(app: &App, set: Option<&str>, stdin: bool, title: Option<&str>) -
     report_written(app, &written, crate::item::Kind::Handoff)
 }
 
-fn self_record(app: &App) {
-    if let Some(session) = &app.session_id {
-        crate::session::record_write(&app.dirs.sessions_dir(), session);
-    }
-}
-
 /// The plan singletons: the current plan, and the roadmap of milestones
 /// above it. One grammar and one set of verbs over two files, so the handling
 /// is written once and told which file it is acting on.
@@ -940,7 +934,6 @@ fn roadmap_status(app: &App, status: Option<&str>) -> Result<i32> {
     }
     let id = writable_project(app, "roadmap")?;
     crate::project::set_key(&app.store, &id, ROADMAP_STATUS, status)?;
-    self_record(app);
     Ok(exit::OK)
 }
 
@@ -958,7 +951,7 @@ fn singleton(
     let id = writable_project(app, which.noun)?;
     let path = (which.path)(&app.store, &id);
     if clear {
-        return clear_file(app, &path, which.noun);
+        return clear_file(&path, which.noun);
     }
     // The baseline is what the file looked like before the caller's text
     // arrived, however long that took.
@@ -984,7 +977,7 @@ fn singleton(
             which.noun
         );
     }
-    land(app, &path, &text, seen, which.file)
+    land(&path, &text, seen, which.file)
 }
 
 /// `mem plan <slug>` — one milestone's plan, filed under `plans/<slug>.md`.
@@ -1006,7 +999,7 @@ fn stored_plan(
     let id = writable_project(app, "plan")?;
     let path = app.store.plan_slot(&id, slug);
     if clear {
-        return clear_file(app, &path, "stored plan");
+        return clear_file(&path, "stored plan");
     }
     let seen = crate::atomic::read_mtime(&path);
     let text = set_text(set_file)?;
@@ -1019,7 +1012,7 @@ fn stored_plan(
             crate::search::truncate_bytes(first.trim(), 60)
         )));
     }
-    land(app, &path, &text, seen, &format!("{slug}.md"))
+    land(&path, &text, seen, &format!("{slug}.md"))
 }
 
 /// The slug of a `# <noun>: <slug>` header line, read as the plan parser
@@ -1042,12 +1035,9 @@ fn writable_project(app: &App, noun: &str) -> Result<String> {
 
 /// Clearing what is not there is not an error: `--clear` states the end it
 /// wants, not a transition it expects to make.
-fn clear_file(app: &App, path: &std::path::Path, noun: &str) -> Result<i32> {
+fn clear_file(path: &std::path::Path, noun: &str) -> Result<i32> {
     match std::fs::remove_file(path) {
-        Ok(()) => {
-            self_record(app);
-            Ok(exit::OK)
-        }
+        Ok(()) => Ok(exit::OK),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(exit::OK),
         Err(e) => Err(exit::store_error(format!("clearing the {noun}: {e}"))),
     }
@@ -1064,7 +1054,6 @@ fn set_text(set_file: Option<&std::path::Path>) -> Result<String> {
 /// The CAS write every plan file lands through, named so the conflict says
 /// which file changed under the caller.
 fn land(
-    app: &App,
     path: &std::path::Path,
     text: &str,
     seen: Option<std::time::SystemTime>,
@@ -1075,10 +1064,7 @@ fn land(
             exit::CAS_CONFLICT,
             format!("{file} changed since it was read — re-read it and try again"),
         )),
-        _ => {
-            self_record(app);
-            Ok(exit::OK)
-        }
+        _ => Ok(exit::OK),
     }
 }
 
@@ -1097,9 +1083,6 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
     let path = (which.path)(&app.store, id);
     let outcome = crate::write::tick_task(&path, task, which.item)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
-    if flipped {
-        self_record(app);
-    }
     if app.json {
         println!(
             "{}",

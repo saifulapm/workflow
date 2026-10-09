@@ -213,10 +213,6 @@ fn every_verb_matches_its_committed_schema() {
         &mem(&w, &repo, &["search", "redis", "--json"]),
     );
     validate(
-        "session-check.json",
-        &mem(&w, &repo, &["session-check", "--session-id", "s", "--json"]),
-    );
-    validate(
         "precompact.json",
         &mem(&w, &repo, &["precompact", "--json"]),
     );
@@ -374,23 +370,6 @@ fn the_hook_envelopes_match_the_shapes_the_runtime_validates() {
         &item(Kind::Handoff, "migration landed", "next: tag it"),
     );
     validate("hook-post-tool-batch.json", &mem(&w, &cwd, &hook));
-    // Named the same way the brief above is: the nudge exists only for a
-    // project mem knows, and this cwd is a bare directory.
-    validate(
-        "hook-stop.json",
-        &mem(
-            &w,
-            &cwd,
-            &[
-                "--project",
-                "thing",
-                "session-check",
-                "--session-id",
-                "s1",
-                "--hook-json",
-            ],
-        ),
-    );
 }
 
 #[test]

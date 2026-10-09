@@ -30,7 +30,7 @@ Rules that hold across the whole surface:
 - **Absent is `null`, never missing.** Optional item fields (`type`, `project`,
   `supersedes`, `superseded_by`, `answers`) are always present.
 - **Hook envelopes are the runtime's shape, not mem's.** `hook-post-tool-batch`
-  and `hook-stop` match what the Claude Code binary validates. PreCompact has no
+  matches what the Claude Code binary validates. PreCompact has no
   envelope at all: the hook is wired without `--hook-json`'s effect on output,
   because the runtime reads that hook's plain stdout as `newCustomInstructions`.
   `precompact.json` is the inspectable `--json` form of the same sentence, not

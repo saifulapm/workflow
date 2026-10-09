@@ -57,7 +57,6 @@ fn zero_is_anything_that_worked_including_every_empty_state() {
         vec!["doctor"],
         vec!["reindex"],
         vec!["precompact"],
-        vec!["session-check", "--session-id", "s"],
     ] {
         let out = run(&args, &w, &dir);
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
