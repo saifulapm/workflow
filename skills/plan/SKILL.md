@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Use when a spec is settled, or Saiful asks for a plan before building something that touches more than a couple of files: cut milestones, write their plans, get one approval.
+description: "Use when a spec is settled, or Saiful asks for a plan before building something that touches more than a couple of files: cut milestones, write their plans, get one approval."
 ---
 
 # plan

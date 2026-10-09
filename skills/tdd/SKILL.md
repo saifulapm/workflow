@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Use to build one task test-first, as an implementer subagent or an orchestrator working solo: a failing test, the smallest code that passes it, then a commit in a human voice.
+description: "Use to build one task test-first, as an implementer subagent or an orchestrator working solo: a failing test, the smallest code that passes it, then a commit in a human voice."
 ---
 
 # tdd
