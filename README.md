@@ -101,3 +101,46 @@ The global ignore list comes from the dotfiles through `core.excludesFile`:
 `.cursor/`, `.scratch/`, `.e2e/`, `.amx/`, `.mcp.json`, `opencode.json`,
 `opencode.jsonc`, `skills-lock.json`, `.playwright-cli/` and any
 `agent-memory` directory.
+
+## Two apps of one monorepo at once
+
+Each app whose milestones run at the same time works in a checkout of its
+own, on its own trunk branch, and `main` is checked out nowhere. `workflow
+go` refuses a second project's orchestrator in a checkout that already has
+one, and a checkout off `main` unless it is the worktree recorded for the
+project.
+
+    cd ~/Sites/github/shopify_apps
+    git worktree add -b app/lareys ../shopify_apps-lareys main
+    cd ../shopify_apps-lareys/apps/lareys
+    mem project worktree .        # Start and Resume on the hub run here now
+
+Moving an app that already runs in the main folder onto its own trunk is a
+one-time step by hand. Do it between milestones, when `amx ls` shows no
+orchestrator of that app running. For ShortCart:
+
+    cd ~/Sites/github/shopify_apps
+    git switch -c app/shortcart   # main is now checked out nowhere
+    cd apps/shortcart && mem project worktree ~/Sites/github/shopify_apps
+
+### Landing an app trunk on main
+
+Land between milestones, in the app's checkout, on its trunk. Rebase onto
+`main`, and when the rebase stops on `pnpm-lock.yaml`, regenerate it rather
+than merging it by hand:
+
+    git rebase main
+    git checkout --ours pnpm-lock.yaml   # main's, mid-rebase
+    pnpm install --lockfile-only
+    git add pnpm-lock.yaml && git rebase --continue
+
+Run the project's `verify`, then fast-forward `main` to the trunk. The
+fetch refuses anything but a fast-forward, and refuses while `main` is
+checked out in any folder:
+
+    git fetch . app/lareys:main
+
+The other apps rebase onto the new `main` when they next land. A change to
+`packages/*` or to the workspace's version catalogs lands on `main` first,
+on its own branch, before any app builds on it. Branch names carry the
+app, as in `integration/<app>/<milestone>`. Releases tag from `main`.
