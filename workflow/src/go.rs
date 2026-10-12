@@ -40,6 +40,12 @@ pub struct AmxRow {
     pub state: Option<String>,
     #[serde(default)]
     pub ended: Option<i64>,
+    /// The folder it runs in.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// What it was started on; an orchestrator's is the goal [`task`] writes.
+    #[serde(default)]
+    pub task: Option<String>,
 }
 
 /// What `go` has settled on.
@@ -171,6 +177,44 @@ fn folder(project: Project) -> Option<String> {
     })
 }
 
+/// The project an agent's goal orchestrates: `task` starts it on "Milestone
+/// <slug> of <project> is landed."
+fn orchestrates(goal: &str) -> Option<&str> {
+    let rest = goal.strip_prefix("/goal Milestone ")?;
+    let (_, rest) = rest.split_once(" of ")?;
+    rest.split_once(" is landed.").map(|(project, _)| project)
+}
+
+/// The git checkout a folder is in: the nearest folder holding a `.git`,
+/// which a linked worktree has as a file. A folder in none is its own.
+fn checkout(dir: &Path) -> &Path {
+    dir.ancestors()
+        .find(|up| up.join(".git").exists())
+        .unwrap_or(dir)
+}
+
+/// A live orchestrator of another project in the checkout of `dir`, and that
+/// checkout. Two in one checkout commit on one branch and break each other's
+/// clean tree and fast-forward merges. This project's own agents are left to
+/// [`running`]: the last milestone's idles there after starting this one.
+fn crowding<'a>(rows: &'a [AmxRow], project: &str, dir: &str) -> Option<(&'a AmxRow, String)> {
+    let here = checkout(Path::new(dir));
+    rows.iter()
+        .filter(|row| live(row))
+        .filter(|row| {
+            row.task
+                .as_deref()
+                .and_then(orchestrates)
+                .is_some_and(|other| other != project)
+        })
+        .find(|row| {
+            row.dir
+                .as_deref()
+                .is_some_and(|there| checkout(Path::new(there)) == here)
+        })
+        .map(|row| (row, here.display().to_string()))
+}
+
 pub fn parse_amx(text: &str) -> Result<Vec<AmxRow>, String> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
@@ -259,6 +303,14 @@ pub fn decide(
             if let Some(id) = running(&rows, &project, &slug, me) {
                 return Decision::Refuse(format!(
                     "{project} already has an orchestrator running: {id}"
+                ));
+            }
+            if let Some((row, there)) = crowding(&rows, &project, &dir) {
+                let other = row.task.as_deref().and_then(orchestrates).unwrap_or("");
+                return Decision::Refuse(format!(
+                    "{}, the orchestrator of {other}, already works in {there}; \
+one orchestrator per folder, so give {project} a worktree of its own (mem project worktree)",
+                    row.id
                 ));
             }
         }
@@ -445,6 +497,17 @@ The first stretch of a shop.
             id: id.to_string(),
             state: Some(state.to_string()),
             ended: Some(0),
+            dir: None,
+            task: None,
+        }
+    }
+
+    /// The orchestrator `workflow go` starts for `slug` of `project`, in `dir`.
+    fn orchestrator(project: &str, slug: &str, state: &str, dir: &Path) -> AmxRow {
+        AmxRow {
+            dir: Some(dir.display().to_string()),
+            task: Some(task(project, slug)),
+            ..agent(&amx_name(&format!("{project}-{slug}")), state)
         }
     }
 
@@ -531,11 +594,15 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
             id: "a-b".into(),
             state: Some("done".into()),
             ended: Some(1791397552),
+            dir: None,
+            task: None,
         }));
         assert!(live(&AmxRow {
             id: "a-b".into(),
             state: None,
             ended: None,
+            dir: None,
+            task: None,
         }));
     }
 
@@ -550,6 +617,9 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "alpha-winners");
         assert_eq!(rows[0].state.as_deref(), Some("working"));
+        assert_eq!(rows[0].dir.as_deref(), Some("/x"));
+        assert_eq!(rows[0].task.as_deref(), Some("/goal ..."));
+        assert_eq!(rows[1].dir, None);
         assert_eq!(rows[1].id, "old-run");
         assert_eq!(parse_amx("  \n").unwrap().len(), 0);
         assert!(parse_amx("not json").is_err());
@@ -726,6 +796,80 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
             ),
             Decision::Refuse(_)
         ));
+    }
+
+    #[test]
+    fn a_goal_names_the_project_it_orchestrates() {
+        assert_eq!(orchestrates(&task("alpha", "winners")), Some("alpha"));
+        assert_eq!(
+            orchestrates(&task("shopify_apps", "m1-a")),
+            Some("shopify_apps")
+        );
+        assert_eq!(orchestrates("fix the build of alpha"), None);
+        assert_eq!(orchestrates("/goal Milestone winners is landed."), None);
+    }
+
+    #[test]
+    fn another_projects_orchestrator_in_the_same_checkout_is_refused() {
+        // One monorepo with two child projects, a linked worktree of it, and
+        // a clone whose name starts with the monorepo's.
+        let work = Scratch::new("go-folder");
+        let repo = work.mkdir("repo");
+        work.mkdir("repo/.git");
+        let alpha = work.mkdir("repo/apps/alpha");
+        let beta = work.mkdir("repo/apps/beta");
+        let linked = work.mkdir("repo-linked/apps/beta");
+        work.put(
+            "repo-linked/.git",
+            "gitdir: ../repo/.git/worktrees/linked\n",
+        );
+        let lookalike = work.mkdir("repo-b");
+        work.mkdir("repo-b/.git");
+        let projects = [
+            row("alpha", Some("approved"), &[&alpha]),
+            row("beta", Some("approved"), &[&beta]),
+        ];
+        let ask = |rows: Vec<AmxRow>| {
+            decide(
+                &opts(Some("alpha"), None),
+                &projects,
+                None,
+                |_| Some(ROADMAP.to_string()),
+                || Ok(rows),
+                None,
+            )
+        };
+
+        for dir in [&beta, &repo, &alpha] {
+            let Decision::Refuse(why) = ask(vec![orchestrator("beta", "orders", "working", dir)])
+            else {
+                panic!("beta in {} did not refuse", dir.display());
+            };
+            assert_eq!(
+                why,
+                format!(
+                    "beta-orders, the orchestrator of beta, already works in {}; \
+one orchestrator per folder, so give alpha a worktree of its own (mem project worktree)",
+                    repo.display()
+                )
+            );
+        }
+        // Another checkout, an ended run, this project's own earlier
+        // milestone idling after it started this one, or an agent that is no
+        // orchestrator: none of them is in the way.
+        for rows in [
+            vec![orchestrator("beta", "orders", "working", &linked)],
+            vec![orchestrator("beta", "orders", "working", &lookalike)],
+            vec![orchestrator("beta", "orders", "stopped", &repo)],
+            vec![orchestrator("alpha", "winners", "idle", &repo)],
+            vec![AmxRow {
+                dir: Some(repo.display().to_string()),
+                task: Some("look around beta".into()),
+                ..agent("plan-beta", "idle")
+            }],
+        ] {
+            assert!(matches!(ask(rows.clone()), Decision::Start(_)), "{rows:?}");
+        }
     }
 
     #[test]

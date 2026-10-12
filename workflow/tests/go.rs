@@ -260,6 +260,43 @@ fn a_live_orchestrator_of_the_milestone_refuses_and_an_earlier_one_does_not() {
 }
 
 #[test]
+fn another_projects_orchestrator_in_the_checkout_refuses() {
+    // alpha-mobile lives in the same monorepo checkout as alpha, and its
+    // orchestrator works there in its own subdir.
+    let world = World::new("go-folder", "approved");
+    world.work.mkdir("alpha-checkout/.git");
+    let mobile = world.work.mkdir("alpha-checkout/apps/mobile");
+    let ls = |dir: &std::path::Path| {
+        format!(
+            r#"[{{"id":"alpha-mobile-engage","state":"working","ended":0,
+                 "dir":"{}","task":"{}"}}]"#,
+            dir.display(),
+            task_of("alpha-mobile", "engage"),
+        )
+    };
+    world.work.put("ls.json", &ls(&mobile));
+
+    let out = world.go(&["alpha", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(2), "{}", said(&out));
+    assert!(
+        complained(&out).contains(&format!(
+            "alpha-mobile-engage, the orchestrator of alpha-mobile, already works in {}",
+            world.checkout.display()
+        )),
+        "{}",
+        complained(&out)
+    );
+
+    // In a worktree of its own it is out of the way.
+    let own = world.work.mkdir("alpha-mobile-worktree/apps/mobile");
+    world.work.put("alpha-mobile-worktree/.git", "gitdir: x\n");
+    world.work.put("ls.json", &ls(&own));
+    let out = world.go(&["alpha"]);
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(world.new_calls(), [world.new_line("alpha-winners")]);
+}
+
+#[test]
 fn a_taken_name_gets_a_suffix() {
     let world = World::new("go-taken", "approved");
     world.work.put("taken", "alpha-winners\nalpha-winners-2\n");
