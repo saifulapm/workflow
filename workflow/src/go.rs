@@ -69,6 +69,9 @@ pub struct Start {
     effort: String,
     dir: String,
     task: String,
+    /// The project's recorded worktree, the one folder that may work on a
+    /// branch other than main.
+    pub worktree: Option<String>,
 }
 
 impl Start {
@@ -320,9 +323,30 @@ one orchestrator per folder, so give {project} a worktree of its own (mem projec
         name: amx_name(&format!("{project}-{slug}")),
         model: opts.model.to_string(),
         effort: opts.effort.to_string(),
-        dir,
         task: task(&project, &slug),
+        worktree: projects
+            .iter()
+            .find(|row| row.name == project)
+            .and_then(|row| row.worktree.clone()),
+        dir,
     })
+}
+
+/// Why `dir` cannot hold a milestone's trunk, if it cannot. A plain checkout
+/// stays on main, so an orchestrator started on a stray feature branch stops
+/// instead of building there; only the worktree recorded for the project
+/// (`mem project worktree`) works on an app's own branch.
+pub fn trunk_refusal(dir: &str, branch: Option<&str>, worktree: Option<&str>) -> Option<String> {
+    let recorded = worktree.is_some_and(|w| checkout(Path::new(dir)) == Path::new(w));
+    match branch {
+        Some("main") => None,
+        Some(_) if recorded => None,
+        Some(other) => Some(format!(
+            "{dir} is on {other}, not main; only the worktree recorded with \
+`mem project worktree` works on a branch of its own"
+        )),
+        None => Some(format!("{dir} has no branch checked out")),
+    }
 }
 
 /// A command line a shell would read back as the same words.
@@ -402,6 +426,18 @@ fn amx_agents() -> Result<Vec<AmxRow>, String> {
     parse_amx(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// The branch checked out in `dir`; none when HEAD is detached or `dir` is
+/// no checkout.
+fn branch_of(dir: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C", dir, "branch", "--show-current"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !name.is_empty()).then_some(name)
+}
+
 fn amx_new(args: &[String]) -> Spawned {
     match Command::new(amx_bin()).args(args).output() {
         Ok(out) => Spawned {
@@ -443,20 +479,34 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
             warn(format!("go: {why}"));
             exit::FAILED
         }
-        Decision::Start(start) if dry_run => {
-            println!("{}", shell_line(&amx_bin(), &start.args(&start.name)));
+        Decision::Start(start) => {
+            let branch = branch_of(&start.dir);
+            if let Some(why) =
+                trunk_refusal(&start.dir, branch.as_deref(), start.worktree.as_deref())
+            {
+                warn(format!("go: {why}"));
+                return exit::USAGE;
+            }
+            started(&start, dry_run)
+        }
+    }
+}
+
+/// Print or start the orchestrator `go` settled on.
+fn started(start: &Start, dry_run: bool) -> i32 {
+    if dry_run {
+        println!("{}", shell_line(&amx_bin(), &start.args(&start.name)));
+        return exit::OK;
+    }
+    match launch(start, amx_new) {
+        Ok(name) => {
+            println!("{name}");
             exit::OK
         }
-        Decision::Start(start) => match launch(&start, amx_new) {
-            Ok(name) => {
-                println!("{name}");
-                exit::OK
-            }
-            Err(why) => {
-                warn(format!("go: {why}"));
-                exit::FAILED
-            }
-        },
+        Err(why) => {
+            warn(format!("go: {why}"));
+            exit::FAILED
+        }
     }
 }
 
@@ -489,6 +539,7 @@ The first stretch of a shop.
                 .map(|dir| dir.display().to_string())
                 .collect(),
             roadmap_status: status.map(str::to_string),
+            worktree: None,
         }
     }
 
@@ -799,6 +850,41 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
     }
 
     #[test]
+    fn a_trunk_is_main_or_the_branch_of_the_recorded_worktree() {
+        let work = Scratch::new("go-trunk");
+        let plain = work.mkdir("plain");
+        work.mkdir("plain/.git");
+        let linked = work.mkdir("linked/apps/alpha");
+        work.put("linked/.git", "gitdir: x\n");
+        let worktree = work.at("linked").display().to_string();
+        let at = |dir: &Path| dir.display().to_string();
+
+        assert_eq!(trunk_refusal(&at(&plain), Some("main"), None), None);
+        assert_eq!(
+            trunk_refusal(&at(&linked), Some("app/alpha"), Some(&worktree)),
+            None
+        );
+        assert_eq!(
+            trunk_refusal(&at(&linked), Some("main"), Some(&worktree)),
+            None
+        );
+        assert_eq!(
+            trunk_refusal(&at(&plain), Some("feature"), None),
+            Some(format!(
+                "{} is on feature, not main; only the worktree recorded with \
+`mem project worktree` works on a branch of its own",
+                at(&plain)
+            ))
+        );
+        // Recorded for this project, but the folder is another checkout.
+        assert!(trunk_refusal(&at(&plain), Some("feature"), Some(&worktree)).is_some());
+        assert_eq!(
+            trunk_refusal(&at(&linked), None, Some(&worktree)),
+            Some(format!("{} has no branch checked out", at(&linked)))
+        );
+    }
+
+    #[test]
     fn a_goal_names_the_project_it_orchestrates() {
         assert_eq!(orchestrates(&task("alpha", "winners")), Some("alpha"));
         assert_eq!(
@@ -1075,6 +1161,7 @@ one orchestrator per folder, so give alpha a worktree of its own (mem project wo
             effort: "high".into(),
             dir: "/work".into(),
             task: "/goal x".into(),
+            worktree: None,
         }
     }
 

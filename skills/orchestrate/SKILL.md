@@ -29,11 +29,13 @@ files, so find the code yourself. Read the spec sections it cites (`mem wiki
 <slug>#<section>`). An `Artifacts` link is a picture Saiful made for this
 work; build from the plan's words.
 
-Then read the tree. `git status` must be clean. The trunk is the branch
-this checkout is on (`git branch --show-current`): `main` in a plain clone,
-an app's own branch in a worktree of a monorepo. Read it once and use it
-wherever this skill says trunk. A detached HEAD has no trunk, so stop and
-ask. `git log --oneline -5` tells you where you are. Find the test command
+Then read the tree. `git status` must be clean, and the checkout on
+`main`, which is then the trunk. The one exception is the worktree recorded
+for this project: when `mem project current --json` shows a `worktree`
+equal to its `root`, the branch it is on (`git branch --show-current`) is
+the trunk. On any other branch, or a detached HEAD, build nothing: ask
+with `mem ask` and park (§8). Read the trunk once and use it wherever
+this skill says trunk. `git log --oneline -5` tells you where you are. Find the test command
 with `mem project current --json` (the `verify` key) or the repo's own
 scripts, and run it once.
 A red trunk is yours to fix first, with a failing test that names the cause.

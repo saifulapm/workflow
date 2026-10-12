@@ -32,6 +32,9 @@ pub struct ProjectRow {
     pub checkouts: Vec<String>,
     #[serde(default)]
     pub roadmap_status: Option<String>,
+    /// The linked worktree recorded for it on this machine.
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

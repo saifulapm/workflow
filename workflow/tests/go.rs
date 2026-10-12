@@ -28,6 +28,7 @@ impl World {
     fn new(tag: &str, status: &str) -> World {
         let work = Scratch::new(tag);
         let checkout = work.mkdir("alpha-checkout");
+        git(&checkout, &["init", "-q", "-b", "main"]);
         work.put(
             "projects.json",
             &format!(
@@ -125,6 +126,20 @@ esac
             task_of("alpha", "winners"),
         )
     }
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn task_of(project: &str, slug: &str) -> String {
@@ -297,6 +312,40 @@ fn another_projects_orchestrator_in_the_checkout_refuses() {
 }
 
 #[test]
+fn a_checkout_off_main_refuses_unless_it_is_the_recorded_worktree() {
+    let world = World::new("go-trunk", "approved");
+    git(
+        &world.checkout,
+        &["symbolic-ref", "HEAD", "refs/heads/feature"],
+    );
+
+    let out = world.go(&["alpha", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(2), "{}", said(&out));
+    assert!(
+        complained(&out).contains(&format!(
+            "{} is on feature, not main",
+            world.checkout.display()
+        )),
+        "{}",
+        complained(&out)
+    );
+
+    // Recorded as alpha's worktree, its branch is the trunk.
+    let projects = world.work.read("projects.json").replacen(
+        r#""roadmap_status":"approved"}"#,
+        &format!(
+            r#""roadmap_status":"approved","worktree":"{}"}}"#,
+            world.checkout.display()
+        ),
+        1,
+    );
+    world.work.put("projects.json", &projects);
+    let out = world.go(&["alpha"]);
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(world.new_calls(), [world.new_line("alpha-winners")]);
+}
+
+#[test]
 fn a_taken_name_gets_a_suffix() {
     let world = World::new("go-taken", "approved");
     world.work.put("taken", "alpha-winners\nalpha-winners-2\n");
@@ -345,6 +394,7 @@ fn amx_refusing_fails_with_its_words() {
 fn with_no_project_named_the_current_directory_decides() {
     let world = World::new("go-here", "approved");
     let here = world.work.mkdir("somewhere-else");
+    git(&here, &["init", "-q", "-b", "main"]);
     world.work.put(
         "current.json",
         &format!(
