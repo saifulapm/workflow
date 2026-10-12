@@ -29,9 +29,13 @@ files, so find the code yourself. Read the spec sections it cites (`mem wiki
 <slug>#<section>`). An `Artifacts` link is a picture Saiful made for this
 work; build from the plan's words.
 
-Then read the tree. `git status` must be clean and on `main`, and `git log
---oneline -5` tells you where you are. Find the test command with `mem project
-current --json` (the `verify` key) or the repo's own scripts, and run it once.
+Then read the tree. `git status` must be clean. The trunk is the branch
+this checkout is on (`git branch --show-current`): `main` in a plain clone,
+an app's own branch in a worktree of a monorepo. Read it once and use it
+wherever this skill says trunk. A detached HEAD has no trunk, so stop and
+ask. `git log --oneline -5` tells you where you are. Find the test command
+with `mem project current --json` (the `verify` key) or the repo's own
+scripts, and run it once.
 A red trunk is yours to fix first, with a failing test that names the cause.
 Read code the way the tdd skill does: an outline or a search first, then
 only the region. For a wide read, such as every use of a name or what a
@@ -39,8 +43,11 @@ module does, send a `scout` subagent and read the lines it cites.
 
 When the handoff or a ticked checklist says this milestone is half done,
 continue from the first open task. Never redo landed work. A `worktree-*`
-branch with commits and no tick is a dispatched task (`mem log` names it):
-read it and land it as §2 says.
+branch with commits and no tick is a dispatched task only when this
+project's `mem log` names it in a `dispatched ... on worktree-<name>` line:
+read it and land it as §2 says. Leave every other `worktree-*` branch
+alone. The branches belong to the whole repo, and another orchestrator
+working on another app in another worktree owns it.
 
 Done when you can say what the milestone delivers, the trunk is green, and
 you know the exact command for a targeted test and for the whole suite.
@@ -84,7 +91,7 @@ Run the first task alone. It proves the recipe: the test command, the
 fixtures and the build. Then work the ready set.
 
 **Solo** when the task is small, depends on the last one, or touches shared
-files. Use the tdd skill yourself, in the checkout, and commit on `main`.
+files. Use the tdd skill yourself, in the checkout, and commit on the trunk.
 
 **Delegate** when two or more ready tasks are file-disjoint. Spawn
 `implementer` subagents with the Agent tool. Run
@@ -101,20 +108,26 @@ write it whole:
     VERIFY      the exact targeted test command and typecheck
     STOP        what sends it back to you instead of improvising
 
-Give pointers, not pasted files. Log each dispatch, so a fresh
-orchestrator can find it: `mem log "dispatched <task> on worktree-<name>
-from <sha>"`. While subagents work, do the next solo task or write the next
-brief. A finished subagent is a queue event, not an
-interrupt.
+Give pointers, not pasted files. Log each dispatch with its branch, so a
+fresh orchestrator can find it: `mem log "dispatched <task> on
+worktree-<name> from <sha>"`. The branch is `worktree-agent-<id>`, from the
+agent id the launch returns; if the launch does not name it, log the line
+when the subagent returns, before landing it. While subagents work, do the
+next solo task or write the next brief. A finished subagent is a queue
+event, not an interrupt.
 
 **Land each result yourself.** A worktree subagent commits on its own branch,
-`worktree-<name>`, under `.claude/worktrees/<name>`. Read its diff (`git diff
-main...worktree-<name>`) and check it stayed in scope and its test asserts
-the behaviour, not the implementation. Rerun its targeted test. Then:
+`worktree-<name>`, cut from the trunk. Its folder is
+`.claude/worktrees/<name>` under the repo's main checkout, which is not
+your folder when you work in a linked worktree, so find it from the git
+common dir. Read its diff (`git diff <trunk>...worktree-<name>`) and check
+it stayed in scope and its test asserts the behaviour, not the
+implementation. Rerun its targeted test. Then:
 
-    git -C .claude/worktrees/<name> rebase main   # when main moved; retest there
+    w="$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/worktrees/<name>"
+    git -C "$w" rebase <trunk>    # when the trunk moved; retest there
     git merge --ff-only worktree-<name>
-    git worktree remove .claude/worktrees/<name>
+    git worktree remove "$w"
     git branch -d worktree-<name>
     mem plan --tick <id>
     mem log "<what landed, in one line>"
@@ -124,7 +137,7 @@ that fails, or returns something you would not merge, gets one fresh
 attempt with a better brief at `effort: high`. After that, do the task
 yourself.
 
-Done when every task is ticked and landed on `main`.
+Done when every task is ticked and landed on the trunk.
 
 ## 3. Test cadence
 
@@ -204,7 +217,7 @@ step that passed. Two failed walks of the same step go to Saiful.
 
 ## 7. Land and hand over
 
-1. Run the full suite on `main` and show it green.
+1. Run the full suite on the trunk and show it green.
 2. `mem roadmap --tick <slug>`, then `mem plan --clear`.
 3. Keep the lessons. Write down the numbers: wall clock, tasks, solo versus
    delegated, failed attempts, review and dogfood findings, and time spent

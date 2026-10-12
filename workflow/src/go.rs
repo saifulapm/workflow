@@ -103,7 +103,7 @@ pub fn task(project: &str, slug: &str) -> String {
     format!(
         "/goal Milestone {slug} of {project} is landed. Follow the orchestrate skill. \
 Done means this conversation shows: every task in `mem plan` ticked; \
-the project's test command passing on main after the last merge; \
+the project's test command passing on the trunk (the branch this checkout is on) after the last merge; \
 the milestone review and the dogfood walk finished with their findings fixed or filed; \
 `mem roadmap --tick {slug}` run; a `mem handoff` written; \
 and `workflow go {project}` run for the next milestone, or its output saying the roadmap is done or not approved. \
@@ -477,7 +477,7 @@ The first stretch of a shop.
     fn the_goal_is_the_exact_text_a_milestone_is_held_to() {
         let want = "/goal Milestone winners of alpha is landed. Follow the orchestrate skill. \
 Done means this conversation shows: every task in `mem plan` ticked; \
-the project's test command passing on main after the last merge; \
+the project's test command passing on the trunk (the branch this checkout is on) after the last merge; \
 the milestone review and the dogfood walk finished with their findings fixed or filed; \
 `mem roadmap --tick winners` run; a `mem handoff` written; \
 and `workflow go alpha` run for the next milestone, or its output saying the roadmap is done or not approved. \

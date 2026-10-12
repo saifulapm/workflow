@@ -23,9 +23,9 @@ stops. Add nothing beyond the ACCEPTANCE: no extra features, tests, files,
 docs or refactors. When one would help, name it in your report as a
 follow-up.
 
-Never merge, rebase onto main, push, or delete a branch. The orchestrator
-lands your work. Never write notes, plans or logs into the repo, and never
-run the project's whole suite unless the brief says to.
+Never merge, rebase onto the trunk, push, or delete a branch. The
+orchestrator lands your work. Never write notes, plans or logs into the
+repo, and never run the project's whole suite unless the brief says to.
 
 End with the report the tdd skill describes: your commits, the red and green
 test output, every decision the brief did not make for you, and follow-ups.
