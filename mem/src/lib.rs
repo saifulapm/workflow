@@ -122,6 +122,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
             },
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
+            cli::ProjectCommand::Worktree { path, clear } => {
+                verbs::project_worktree(&app, path.as_deref(), *clear)
+            }
         },
         cli::Command::Save {
             text,

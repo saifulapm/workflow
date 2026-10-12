@@ -162,6 +162,11 @@ impl Registry {
 pub struct PathMap {
     #[serde(default)]
     pub projects: BTreeMap<String, Vec<String>>,
+    /// Project id → the linked worktree it works in here, by its toplevel
+    /// (`mem project worktree`). Keyed by the child, not the root: two apps
+    /// of one monorepo each have their own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub worktrees: BTreeMap<String, String>,
 }
 
 impl PathMap {
@@ -202,6 +207,12 @@ impl PathMap {
                 }
             })
             .collect()
+    }
+
+    /// The worktree recorded for a project, while it is still on disk.
+    pub fn worktree(&self, id: &str) -> Option<PathBuf> {
+        let path = PathBuf::from(self.worktrees.get(id)?);
+        path.is_dir().then_some(path)
     }
 
     pub fn record(&mut self, id: &str, common_dir: &Path) -> bool {

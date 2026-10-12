@@ -451,6 +451,99 @@ fn project_identity_json_names_a_childs_checkout_through_its_parents_root() {
 }
 
 #[test]
+fn a_recorded_worktree_is_the_first_checkout_of_its_project() {
+    // Two apps of one monorepo run at once, each in its own worktree. A
+    // worktree shares the main checkout's common dir, so only `project
+    // worktree` tells mem which folder an app works in on this machine.
+    let w = common::World::new("ident-worktree-record");
+    let store = w.store();
+    let dirs = w.dirs();
+    let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
+    run_git(&repo, &["config", "user.email", "t@example.com"]);
+    run_git(&repo, &["config", "user.name", "T"]);
+    run_git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    let root_id = resolve(&repo, &store, &dirs, None, Mode::Write)
+        .unwrap()
+        .id()
+        .unwrap()
+        .to_string();
+    add_child(
+        &store,
+        &root_id,
+        "01K2FFFFFFFFFFFFFFFFFFFFFF",
+        "lareys",
+        "apps/lareys",
+    );
+    let wt = w.dir.join("mono-lareys");
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "app/lareys",
+            wt.to_str().unwrap(),
+        ],
+    );
+    let checkouts = || {
+        let out = common::mem(&w, &repo, &["projects", "--json"]);
+        assert!(out.status.success(), "{}", common::stderr(&out));
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        json["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "lareys")
+            .unwrap()["checkouts"]
+            .clone()
+    };
+    let main = mem::git::canonical(&repo).join("apps/lareys");
+    let linked = mem::git::canonical(&wt).join("apps/lareys");
+
+    let out = common::mem(
+        &w,
+        &repo,
+        &[
+            "--project",
+            "lareys",
+            "project",
+            "worktree",
+            wt.to_str().unwrap(),
+        ],
+    );
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    assert_eq!(checkouts(), serde_json::json!([linked, main]));
+    // Machine-local: the path never reaches project.toml, which syncs.
+    let toml = std::fs::read_to_string(store.project_toml("01K2FFFFFFFFFFFFFFFFFFFFFF")).unwrap();
+    assert!(!toml.contains("mono-lareys"), "{toml}");
+
+    // A folder of another repository is no worktree of this project.
+    let other = w.repo("other", Some("git@github.com:me/other.git"));
+    let out = common::mem(
+        &w,
+        &repo,
+        &[
+            "--project",
+            "lareys",
+            "project",
+            "worktree",
+            other.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+    assert_eq!(checkouts(), serde_json::json!([linked, main]));
+
+    let out = common::mem(
+        &w,
+        &repo,
+        &["--project", "lareys", "project", "worktree", "--clear"],
+    );
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    assert_eq!(checkouts(), serde_json::json!([main]));
+}
+
+#[test]
 fn a_corrupt_path_map_is_a_cache_miss_not_an_error() {
     let w = World::new("ident-corrupt");
     let path = w.dir.join("paths.toml");

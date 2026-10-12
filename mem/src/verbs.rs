@@ -283,9 +283,11 @@ pub fn projects(app: &App) -> Result<i32> {
             .iter()
             .map(|p| {
                 let root_id = p.parent.as_deref().unwrap_or(&p.id);
+                // A recorded worktree first: it is where this project works.
                 let checkouts: Vec<String> = path_map
-                    .roots(root_id)
+                    .worktree(&p.id)
                     .into_iter()
+                    .chain(path_map.roots(root_id))
                     .map(|root| match &p.subdir {
                         Some(subdir) => root.join(subdir).to_string_lossy().to_string(),
                         None => root.to_string_lossy().to_string(),
@@ -584,6 +586,58 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
             identity.name().unwrap_or(id),
             if had { "cleared" } else { "was not set" }
         );
+    }
+    Ok(exit::OK)
+}
+
+/// `mem project worktree <path>` or `--clear` -- the linked worktree this
+/// project works in on this machine, listed first among its checkouts so a
+/// `workflow go` from outside any checkout starts there. Kept in paths.toml,
+/// never in project.toml: a path means nothing on another machine.
+pub fn project_worktree(app: &App, path: Option<&str>, clear: bool) -> Result<i32> {
+    let identity = writable_project_identity(app)?;
+    let (Some(id), Some(name)) = (identity.id(), identity.name()) else {
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
+    };
+    let root_id = Registry::load(&app.store)
+        .by_id(id)
+        .and_then(|p| p.parent.clone())
+        .unwrap_or_else(|| id.to_string());
+    let map_path = app.dirs.paths_toml();
+    let toplevel = match path {
+        Some(raw) if !clear => {
+            let checkout = crate::git::Checkout::detect(&app.cwd.join(raw))
+                .ok_or_else(|| exit::usage(format!("{raw} is not a git checkout")))?;
+            if PathMap::load(&map_path).lookup(&checkout.common_dir) != Some(root_id.as_str()) {
+                return Err(exit::usage(format!("{raw} is not a checkout of {name}")));
+            }
+            Some(checkout.toplevel.to_string_lossy().to_string())
+        }
+        _ => None,
+    };
+    let wrote = crate::project::update_path_map(&map_path, |m| match &toplevel {
+        Some(dir) => {
+            m.worktrees.insert(id.to_string(), dir.clone());
+        }
+        None => {
+            m.worktrees.remove(id);
+        }
+    })?;
+    if !wrote {
+        return Err(exit::store_error(
+            "paths.toml kept changing under the write; run it again".to_string(),
+        ));
+    }
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({ "id": id, "name": name, "worktree": toplevel }))?
+        );
+    } else if !app.quiet {
+        match &toplevel {
+            Some(dir) => println!("{name} works in {dir} on this machine"),
+            None => println!("{name} has no worktree recorded on this machine"),
+        }
     }
     Ok(exit::OK)
 }

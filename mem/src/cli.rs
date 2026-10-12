@@ -362,6 +362,16 @@ pub enum ProjectCommand {
         #[command(subcommand)]
         command: ProjectSetCommand,
     },
+    /// Record the linked worktree this project works in on this machine, so
+    /// it comes first among its checkouts. Machine-local, never synced.
+    Worktree {
+        /// The worktree, or any folder inside it.
+        #[arg(required_unless_present = "clear")]
+        path: Option<String>,
+        /// Forget the recorded worktree.
+        #[arg(long, conflicts_with = "path")]
+        clear: bool,
+    },
     /// Forget something `set` recorded, so the project is back on the
     /// default. `set` refuses an empty value, so this is the way back to
     /// absent.
