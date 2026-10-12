@@ -18,6 +18,9 @@ pub struct Project {
     /// The checkout the answer was read in; null when mem was told the project
     /// by name from outside one.
     pub root: Option<String>,
+    /// Where a child project lives under `root`; absent on a root project.
+    #[serde(default)]
+    pub subdir: Option<String>,
 }
 
 /// One project of `mem projects --json`: only what `go` reads of it.

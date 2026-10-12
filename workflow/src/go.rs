@@ -160,6 +160,17 @@ fn running(rows: &[AmxRow], project: &str, slug: &str, me: Option<&str>) -> Opti
         .next()
 }
 
+/// The folder a project's orchestrator works in: the checkout mem read the
+/// answer in, and the child's subdir under it. In the toplevel itself mem
+/// would resolve the parent project instead.
+fn folder(project: Project) -> Option<String> {
+    let root = project.root?;
+    Some(match project.subdir {
+        Some(subdir) => Path::new(&root).join(subdir).display().to_string(),
+        None => root,
+    })
+}
+
 pub fn parse_amx(text: &str) -> Result<Vec<AmxRow>, String> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
@@ -188,7 +199,7 @@ pub fn decide(
             };
             // The caller's own checkout first: an orchestrator naming its
             // project is standing in the clone it works in.
-            let here = current.filter(|c| c.name == name).and_then(|c| c.root);
+            let here = current.filter(|c| c.name == name).and_then(folder);
             let listed = row
                 .checkouts
                 .iter()
@@ -206,10 +217,11 @@ pub fn decide(
                 .iter()
                 .find(|row| row.name == here.name)
                 .and_then(|row| row.checkouts.first());
-            let Some(dir) = here.root.or_else(|| listed.cloned()) else {
-                return Decision::Refuse(format!("{} has no checkout on this machine", here.name));
+            let name = here.name.clone();
+            let Some(dir) = folder(here).or_else(|| listed.cloned()) else {
+                return Decision::Refuse(format!("{name} has no checkout on this machine"));
             };
-            (here.name, dir)
+            (name, dir)
         }
         (None, None) => {
             return Decision::Refuse(
@@ -768,6 +780,7 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
             id: "01X".into(),
             name: "alpha".into(),
             root: Some(here.display().to_string()),
+            subdir: None,
         };
 
         let decision = decide(
@@ -792,6 +805,7 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
             id: "01Y".into(),
             name: "beta".into(),
             root: Some(here.display().to_string()),
+            subdir: None,
         };
         let decision = decide(
             &opts(Some("alpha"), None),
@@ -812,6 +826,41 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
     }
 
     #[test]
+    fn a_child_project_runs_in_its_own_subdir_of_the_checkout() {
+        // mem names the checkout's toplevel as the root; in the toplevel mem
+        // resolves the parent project, so the child's orchestrator runs in
+        // its subdir, the folder mem lists for it.
+        let work = Scratch::new("go-child");
+        let here = work.mkdir("here");
+        let projects = [row("alpha", Some("approved"), &[&work.mkdir("listed")])];
+        for named in [Some("alpha"), None] {
+            let current = Project {
+                id: "01X".into(),
+                name: "alpha".into(),
+                root: Some(here.display().to_string()),
+                subdir: Some("apps/alpha".into()),
+            };
+            let decision = decide(
+                &opts(named, None),
+                &projects,
+                Some(current),
+                |_| Some(ROADMAP.to_string()),
+                || Ok(Vec::new()),
+                None,
+            );
+            let Decision::Start(start) = decision else {
+                panic!("not a start");
+            };
+            let args = start.args(&start.name);
+            assert_eq!(
+                args[args.iter().position(|a| a == "--dir").unwrap() + 1],
+                here.join("apps/alpha").display().to_string(),
+                "{named:?}"
+            );
+        }
+    }
+
+    #[test]
     fn with_no_project_named_the_current_directory_decides() {
         let work = Scratch::new("go-here");
         let listed = work.mkdir("listed");
@@ -821,6 +870,7 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
             id: "01X".into(),
             name: "alpha".into(),
             root: Some(here.display().to_string()),
+            subdir: None,
         };
 
         let decision = decide(
