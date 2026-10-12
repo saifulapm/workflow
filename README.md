@@ -108,7 +108,12 @@ Each app whose milestones run at the same time works in a checkout of its
 own, on its own trunk branch, and `main` is checked out nowhere. `workflow
 go` refuses a second project's orchestrator in a checkout that already has
 one, and a checkout off `main` unless it is the worktree recorded for the
-project.
+project. Once `main` is checked out nowhere, that holds for every app that
+runs milestones, not only the ones running at the same time: each needs a
+recorded worktree, the main folder included.
+
+The app has to be a child project first (`mem project add apps/lareys`),
+or `mem project worktree` records the folder for the root project:
 
     cd ~/Sites/github/shopify_apps
     git worktree add -b app/lareys ../shopify_apps-lareys main

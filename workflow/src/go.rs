@@ -153,7 +153,8 @@ fn named_for(id: &str, project: &str, slug: &str) -> bool {
 /// An agent that is still there. A killed pane reads `stopped` with `ended`
 /// still 0, and `done` with `ended` 0 was seen on an orchestrator that was
 /// alive and thinking, so it takes both fields. The hub reads them the same
-/// way, so it never offers a Resume this refuses.
+/// way, so it never offers a Resume for a milestone that is still running;
+/// the folder and trunk refusals it shows as its banner.
 fn live(row: &AmxRow) -> bool {
     row.ended.unwrap_or(0) == 0 && !matches!(row.state.as_deref(), Some("stopped" | "failed"))
 }
