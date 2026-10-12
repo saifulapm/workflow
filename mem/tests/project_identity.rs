@@ -514,6 +514,16 @@ fn a_recorded_worktree_is_the_first_checkout_of_its_project() {
     );
     assert!(out.status.success(), "{}", common::stderr(&out));
     assert_eq!(checkouts(), serde_json::json!([linked, main]));
+    // An orchestrator in the worktree sees that it stands in the recorded one.
+    std::fs::create_dir_all(&linked).unwrap();
+    let out = common::mem(&w, &linked, &["project", "current", "--json"]);
+    let current: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(current["name"], "lareys");
+    assert_eq!(current["worktree"], current["root"]);
+    assert_eq!(
+        current["worktree"],
+        serde_json::json!(mem::git::canonical(&wt))
+    );
     // Machine-local: the path never reaches project.toml, which syncs.
     let toml = std::fs::read_to_string(store.project_toml("01K2FFFFFFFFFFFFFFFFFFFFFF")).unwrap();
     assert!(!toml.contains("mono-lareys"), "{toml}");
@@ -541,6 +551,9 @@ fn a_recorded_worktree_is_the_first_checkout_of_its_project() {
     );
     assert!(out.status.success(), "{}", common::stderr(&out));
     assert_eq!(checkouts(), serde_json::json!([main]));
+    let out = common::mem(&w, &linked, &["project", "current", "--json"]);
+    let current: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(current.get("worktree"), None, "{current}");
 }
 
 #[test]

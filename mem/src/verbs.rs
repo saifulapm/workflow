@@ -302,6 +302,7 @@ pub fn projects(app: &App) -> Result<i32> {
                     "items": index.count_for_project(&p.id).unwrap_or(0),
                     "current": current == Some(p.id.as_str()),
                     "checkouts": checkouts,
+                    "worktree": path_map.worktree(&p.id).map(|w| w.to_string_lossy().to_string()),
                 });
                 for (key, value) in project_summary(app, &index, &p.id) {
                     row[key] = value;
@@ -431,6 +432,9 @@ pub fn project_current(app: &App) -> Result<i32> {
     // A child project keeps the checkout as its root and says where inside
     // it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
+    // The worktree `project worktree` recorded on this machine: an
+    // orchestrator standing in it may work on its own branch, not main.
+    let worktree = PathMap::load(&app.dirs.paths_toml()).worktree(id);
     if app.json {
         let mut doc = json!({
             "id": id,
@@ -439,6 +443,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         });
         if let Some(subdir) = &subdir {
             doc["subdir"] = json!(subdir);
+        }
+        if let Some(worktree) = &worktree {
+            doc["worktree"] = json!(worktree.to_string_lossy());
         }
         if let Some(verify) = &verify {
             doc["verify"] = json!(verify);
@@ -455,6 +462,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(subdir) = &subdir {
             println!("subdir  {subdir}");
+        }
+        if let Some(worktree) = &worktree {
+            println!("worktree  {}", worktree.display());
         }
         if let Some(verify) = &verify {
             println!("verify  {verify}");

@@ -27,6 +27,10 @@
     "subdir": {
       "type": "string"
     },
+    "worktree": {
+      "description": "Present only when `mem project worktree` recorded one on this machine; an orchestrator whose `root` equals it may work on the worktree's own branch.",
+      "type": "string"
+    },
     "hygiene_exempt": {
       "description": "Present only when the project declared globs with `mem project set hygiene-exempt`.",
       "type": "string"

@@ -23,6 +23,7 @@
           "items",
           "current",
           "checkouts",
+          "worktree",
           "roadmap_status",
           "milestone",
           "milestones_done",
@@ -68,6 +69,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "worktree": {
+            "description": "The linked worktree recorded with `mem project worktree` on this machine, while it is on disk; also the first of `checkouts`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "roadmap_status": {
             "type": [
