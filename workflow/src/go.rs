@@ -219,6 +219,30 @@ fn crowding<'a>(rows: &'a [AmxRow], project: &str, dir: &str) -> Option<(&'a Amx
         .map(|row| (row, here.display().to_string()))
 }
 
+/// Another project whose recorded worktree is the checkout of `dir`, when
+/// this project's is not, and that checkout. Its branch is that project's
+/// trunk, so building there, or switching it to main to get past
+/// [`trunk_refusal`], takes the folder from under it, whether or not its
+/// orchestrator is running.
+fn claimed<'a>(projects: &'a [ProjectRow], project: &str, dir: &str) -> Option<(&'a str, String)> {
+    let here = checkout(Path::new(dir));
+    let recorded = |row: &ProjectRow| {
+        row.worktree
+            .as_deref()
+            .is_some_and(|w| Path::new(w) == here)
+    };
+    if projects
+        .iter()
+        .any(|row| row.name == project && recorded(row))
+    {
+        return None;
+    }
+    projects
+        .iter()
+        .find(|row| row.name != project && recorded(row))
+        .map(|row| (row.name.as_str(), here.display().to_string()))
+}
+
 pub fn parse_amx(text: &str) -> Result<Vec<AmxRow>, String> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
@@ -301,6 +325,14 @@ pub fn decide(
         }
     };
 
+    if let Some((other, there)) = claimed(projects, &project, &dir) {
+        return Decision::Refuse(format!(
+            "{there} is the worktree recorded for {other}; give {project} a folder of its own \
+(`git worktree add -b <branch> <folder> main`, then `mem project worktree .` there), \
+and never switch this folder's branch to get past this"
+        ));
+    }
+
     match agents() {
         Err(why) => return Decision::Fail(why),
         Ok(rows) => {
@@ -344,7 +376,9 @@ pub fn trunk_refusal(dir: &str, branch: Option<&str>, worktree: Option<&str>) ->
         Some(_) if recorded => None,
         Some(other) => Some(format!(
             "{dir} is on {other}, not main; only the worktree recorded with \
-`mem project worktree` works on a branch of its own"
+`mem project worktree` works on a branch of its own. Record this folder if it \
+is the project's, or give the project a worktree of its own; never switch a \
+folder's branch to get past this"
         )),
         None => Some(format!("{dir} has no branch checked out")),
     }
@@ -873,7 +907,9 @@ the handoff naming it, and the work parked. Stop after 6 hours.";
             trunk_refusal(&at(&plain), Some("feature"), None),
             Some(format!(
                 "{} is on feature, not main; only the worktree recorded with \
-`mem project worktree` works on a branch of its own",
+`mem project worktree` works on a branch of its own. Record this folder if it \
+is the project's, or give the project a worktree of its own; never switch a \
+folder's branch to get past this",
                 at(&plain)
             ))
         );
@@ -956,6 +992,68 @@ one orchestrator per folder, so give alpha a worktree of its own (mem project wo
             }],
         ] {
             assert!(matches!(ask(rows.clone()), Decision::Start(_)), "{rows:?}");
+        }
+    }
+
+    #[test]
+    fn a_folder_recorded_for_another_project_is_refused() {
+        // beta works in the main checkout of the monorepo; alpha has no
+        // folder of its own yet, so it would land there too.
+        let work = Scratch::new("go-claimed");
+        let repo = work.mkdir("repo");
+        work.mkdir("repo/.git");
+        let alpha = work.mkdir("repo/apps/alpha");
+        let beta = work.mkdir("repo/apps/beta");
+        let linked = work.mkdir("repo-alpha/apps/alpha");
+        work.put("repo-alpha/.git", "gitdir: ../repo/.git/worktrees/alpha\n");
+        let at = |dir: &Path| dir.display().to_string();
+        let recorded = |mut row: ProjectRow, dir: &Path| {
+            row.worktree = Some(at(dir));
+            row
+        };
+
+        let projects = [
+            row("shop", Some("approved"), &[&repo]),
+            row("alpha", Some("approved"), &[&alpha]),
+            recorded(row("beta", Some("approved"), &[&beta]), &repo),
+        ];
+        for name in ["alpha", "shop"] {
+            let Decision::Refuse(why) = decide_quietly(&opts(Some(name), None), &projects) else {
+                panic!("{name} was not refused");
+            };
+            assert_eq!(
+                why,
+                format!(
+                    "{} is the worktree recorded for beta; give {name} a folder of its own \
+(`git worktree add -b <branch> <folder> main`, then `mem project worktree .` there), \
+and never switch this folder's branch to get past this",
+                    at(&repo)
+                )
+            );
+        }
+        assert!(matches!(
+            decide_quietly(&opts(Some("beta"), None), &projects),
+            Decision::Start(_)
+        ));
+
+        // alpha in its own worktree, or recorded in the same folder as beta
+        // on purpose: neither is in beta's way.
+        let own = [
+            recorded(
+                row("alpha", Some("approved"), &[&linked]),
+                &work.at("repo-alpha"),
+            ),
+            recorded(row("beta", Some("approved"), &[&beta]), &repo),
+        ];
+        let shared = [
+            recorded(row("alpha", Some("approved"), &[&alpha]), &repo),
+            recorded(row("beta", Some("approved"), &[&beta]), &repo),
+        ];
+        for projects in [&own, &shared] {
+            assert!(matches!(
+                decide_quietly(&opts(Some("alpha"), None), projects),
+                Decision::Start(_)
+            ));
         }
     }
 

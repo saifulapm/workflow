@@ -73,7 +73,8 @@ and the hygiene check. The project's `verify` key runs all of them.
 
 Then run the grill skill for something new, or the plan skill when the
 spec is settled. A monorepo holds one project per app beside the root
-project: `mem project add apps/thing`.
+project: `mem project add apps/thing`. A new app gets that project and a
+worktree of its own before it is grilled, as the next section says.
 
 ## The clean-repo rule
 
@@ -107,10 +108,13 @@ The global ignore list comes from the dotfiles through `core.excludesFile`:
 Each app whose milestones run at the same time works in a checkout of its
 own, on its own trunk branch, and `main` is checked out nowhere. `workflow
 go` refuses a second project's orchestrator in a checkout that already has
-one, and a checkout off `main` unless it is the worktree recorded for the
-project. Once `main` is checked out nowhere, that holds for every app that
-runs milestones, not only the ones running at the same time: each needs a
-recorded worktree, the main folder included.
+one, a checkout recorded for another project whether or not its
+orchestrator runs, and a checkout off `main` unless it is the worktree
+recorded for the project. None of these is a reason to switch a
+checkout's branch: the branch is another app's trunk. Once `main` is
+checked out nowhere, that holds for every app that runs milestones, not
+only the ones running at the same time: each needs a recorded worktree,
+the main folder included.
 
 The app has to be a child project first (`mem project add apps/lareys`),
 or `mem project worktree` records the folder for the root project:
