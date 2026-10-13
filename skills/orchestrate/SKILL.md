@@ -34,7 +34,9 @@ Then read the tree. `git status` must be clean, and the checkout on
 for this project: when `mem project current --json` shows a `worktree`
 equal to its `root`, the branch it is on (`git branch --show-current`) is
 the trunk. On any other branch, or a detached HEAD, build nothing: ask
-with `mem ask` and park (§8). Read the trunk once and use it wherever
+with `mem ask` and park (§8). Never switch the checkout's branch, or check
+out `main`, to get past this or a `workflow go` refusal; the branch may be
+another project's trunk. Read the trunk once and use it wherever
 this skill says trunk. `git log --oneline -5` tells you where you are. Find the test command
 with `mem project current --json` (the `verify` key) or the repo's own
 scripts, and run it once.
@@ -242,7 +244,9 @@ step that passed. Two failed walks of the same step go to Saiful.
    numbers>."`
 5. `workflow go <project>`. It starts the next milestone's orchestrator in
    its own amx pane, or says the roadmap is done, or refuses because the
-   roadmap is not approved yet. Show its output. A refusal is a normal end.
+   roadmap is not approved yet, or because the folder is another
+   project's. Show its output. A refusal is a normal end, and never a
+   reason to switch a branch.
    Saiful approves the rest from the hub, then presses Resume there on a
    machine with a checkout, which runs `workflow go`.
 

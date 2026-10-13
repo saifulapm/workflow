@@ -13,6 +13,13 @@ with no second approval.
 
 Everything goes in mem. Nothing goes in the repo.
 
+In a monorepo, a new app or theme is a project of its own before anything
+is written for it: `mem project add <dir>`, a worktree on a branch of its
+own recorded with `mem project worktree`, and every command run from the
+app's folder in that worktree, so its spec, decisions and roadmap land in
+its project (README, "Two apps of one monorepo at once"). The root project
+holds only work on the repo as a whole.
+
 ## 1. Research, when the product is new
 
 For a new product or a feature with prior art, send up to three subagents in

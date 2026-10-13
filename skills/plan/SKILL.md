@@ -13,6 +13,13 @@ orchestrator cuts its checklist from it, and the reviewer reads the landed
 work against it. Saiful reviews the roadmap, not the plans. When he wants
 to see something, he makes a claude.ai artifact, and the plan links it.
 
+In a monorepo, a new app or theme is a project of its own before anything
+is written for it: `mem project add <dir>`, a worktree on a branch of its
+own recorded with `mem project worktree`, and every command run from the
+app's folder in that worktree, so its spec, decisions and roadmap land in
+its project (README, "Two apps of one monorepo at once"). The root project
+holds only work on the repo as a whole.
+
 ## 1. Read
 
 Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
@@ -156,3 +163,8 @@ The hub's Approve sets the status itself. `workflow go` starts the first
 milestone's orchestrator in its own amx pane. Each orchestrator starts the
 next one when its milestone lands. Done when `workflow go` printed the
 orchestrator's name, or Saiful said to wait.
+
+When it refuses the folder or its branch, do what the refusal says: record
+the folder, or give the project a worktree of its own. Never switch a
+checkout's branch or check out `main` to get past it, and never offer
+Saiful that as a choice: the branch is another project's trunk.
