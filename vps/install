@@ -30,10 +30,15 @@ systemctl start mem-hub-ping.timer mem-backup.timer
 systemctl restart mem-hub.service
 
 for _ in $(seq 20); do
-  curl -fsS -o /dev/null http://127.0.0.1:8787/api/presence && break
+  curl -fsS -o /dev/null http://127.0.0.1:8787/api/presence 2>/dev/null && break
   sleep 0.5
 done
-tailscale serve --bg --https=443 http://127.0.0.1:8787 >/dev/null
+# On a tailnet where Serve was never enabled this waits on an admin page
+# for ever, so it gets 20 s and says why when it gives up.
+if ! out=$(timeout 20 tailscale serve --bg --https=443 http://127.0.0.1:8787 2>&1); then
+  echo "install: tailscale serve failed: $out" >&2
+  exit 1
+fi
 version=$(/usr/local/bin/hub --version)
 [[ $version == *" $short" ]] || { echo "install: hub --version says '$version', not $short" >&2; exit 1; }
 echo "install: $version serving on 443"
