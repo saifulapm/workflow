@@ -299,6 +299,15 @@ impl App {
             eprintln!("hub: {project} has no runner to resume {session} on");
             return;
         };
+        // An older orchestrator of the project would come back beside the
+        // run, so only the runner's own session is resumed.
+        if runner.id != session {
+            eprintln!(
+                "hub: {session} is not {project}'s runner ({}); not resumed",
+                runner.id
+            );
+            return;
+        }
         // A second tap on the same last question finds the first resume still
         // waiting, and adds nothing.
         let queued = self.agents.pending(&runner.machine).iter().any(|c| {

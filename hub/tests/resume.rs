@@ -171,6 +171,20 @@ fn a_question_for_the_orchestrator_does_not_hold_back_the_resume() {
     );
 }
 
+/// Only the runner's own session comes back: answering a question an older
+/// orchestrator of the project asked must not revive it beside the run.
+#[test]
+fn a_session_that_is_not_the_runner_is_not_resumed() {
+    let world = World::new("resume-not-runner", mini());
+    let hub = world.hub(&[]);
+    poll(&hub);
+
+    let q1 = |a| question(Q1, "Ship it?", Some("gamma-m3"), a);
+    world.questions(&[q1(None)], &[q1(Some("yes"))]);
+    answer(&hub, Q1, "yes");
+    assert_eq!(poll(&hub), json!([{"kind": "sync"}]));
+}
+
 #[test]
 fn answering_the_last_question_twice_queues_one_resume() {
     let world = World::new("resume-twice", mini());
