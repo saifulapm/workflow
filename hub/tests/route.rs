@@ -310,3 +310,25 @@ fn a_machine_name_longer_than_a_label_is_refused() {
     );
     assert_eq!(status_of(&response), 200, "{response}");
 }
+
+/// A machine name may be one 63-character word, so the route line breaks
+/// inside words rather than run off a phone's screen.
+#[test]
+fn a_long_machine_name_wraps_in_the_header() {
+    let world = world("route-wrap", 0);
+    let hub = spawn(&world);
+    let name = "m".repeat(63);
+    let response = api(
+        &hub,
+        "POST",
+        &format!(r#"{{"route":"device","machine":"{name}"}}"#),
+        true,
+    );
+    assert_eq!(status_of(&response), 200, "{response}");
+    let page = body_of(&hub.get("/")).to_string();
+    assert!(
+        page.contains(&format!("<p class=\"route\">Route: Device ({name})</p>")),
+        "{page}"
+    );
+    assert!(page.contains(".route{overflow-wrap:anywhere}"), "{page}");
+}

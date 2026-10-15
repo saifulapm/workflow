@@ -173,6 +173,7 @@ article,.card{background:var(--surface);border:1px solid var(--line);border-radi
 .card h3{margin:0;font-size:15px}
 .card>.meta{margin-top:4px}
 .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.route{overflow-wrap:anywhere}
 ul{list-style:none;padding:0;margin-block:0}
 body>ul:not([class]){background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:0 16px;margin-block:0 10px}
 body>ul:not([class])>li{padding:10px 0;border-bottom:1px solid var(--line)}

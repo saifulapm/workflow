@@ -302,7 +302,7 @@ fn route_header(saved: &crate::route::Saved, pair_notice: Option<&str>) -> Strin
             button("device", "Device", saved.device),
         ),
     };
-    format!("<p class=\"row\">Route: {name}</p>\n{controls}")
+    format!("<p class=\"route\">Route: {name}</p>\n{controls}")
 }
 
 /// `POST /route`, home's two buttons. Device keeps the machine that last
