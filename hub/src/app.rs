@@ -14,7 +14,11 @@ use crate::{api, model, pages};
 /// Every path hub answers, and the one method it answers it with. Anything
 /// else on a known path is a 405 that says so; anything else at all is a 404.
 /// The pages are `pages::route_page`'s; these are the rest.
-const ROUTES: &[(&str, &str)] = &[("/api/presence", "GET"), ("/subscribe", "GET")];
+const ROUTES: &[(&str, &str)] = &[
+    ("/api/presence", "GET"),
+    ("/api/stamp", "GET"),
+    ("/subscribe", "GET"),
+];
 
 pub struct App {
     pub config: Config,
@@ -91,6 +95,9 @@ impl App {
             "/api/presence" => {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
+            "/api/stamp" => Response::json(
+                serde_json::json!({"stamp": crate::page_home::stamp(&self.mem)}).to_string(),
+            ),
             "/subscribe" => self.subscribe(),
             _ => Response::not_found(),
         }

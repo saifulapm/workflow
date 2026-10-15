@@ -10,19 +10,44 @@ use serde_json::Value;
 use crate::config::Config;
 use crate::html::{self, Banner, esc};
 use crate::http::Response;
-use crate::memcli::MemCli;
+use crate::memcli::{MemCli, Outcome};
 use crate::model::{self, list_fault};
 use crate::page_questions::{pending_block, question_row};
 use crate::pages::{PageCtx, page_shell};
 
-/// The reload that keeps the page live. It fires only when nothing is
-/// focused and nothing is typed, so it never costs an answer being written.
-const RELOAD: &str = "<script>setInterval(function(){\
-     var a=document.activeElement;\
-     if(a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT'))return;\
-     var f=document.querySelectorAll('textarea,input');\
-     for(var i=0;i<f.length;i++){if(f[i].value)return;}\
-     location.reload();},15000);</script>\n";
+/// What keeps the page live: every 15 s it asks `/api/stamp` whether what
+/// home shows has changed, and reloads only then, and only while no field
+/// has focus or text, and no text is selected, so a reload never moves the
+/// page from under an answer being written or a word being picked. `{stamp}`
+/// is the stamp this page was drawn from.
+fn reload_script(stamp: &str) -> String {
+    format!(
+        "<script>(function(){{var s=\"{stamp}\";setInterval(function(){{\
+         fetch('/api/stamp').then(function(r){{return r.json();}}).then(function(d){{\
+         if(d.stamp===s)return;\
+         var a=document.activeElement;\
+         if(a&&/^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName))return;\
+         if(String(window.getSelection())!=='')return;\
+         var f=document.querySelectorAll('textarea,input:not([type=hidden])');\
+         for(var i=0;i<f.length;i++){{if(f[i].value)return;}}\
+         location.reload();}}).catch(function(){{}});}},15000);}})();</script>\n"
+    )
+}
+
+/// A stamp of what home draws: its two reads, hashed. The ages on the page
+/// move with the clock, not with the reads, so they leave it alone.
+pub fn stamp(mem: &MemCli) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for read in [mem.projects(), mem.questions()] {
+        match &*read {
+            Outcome::Json(doc) => doc.to_string().hash(&mut hasher),
+            Outcome::Absent => "absent".hash(&mut hasher),
+            Outcome::Broken(why) => why.hash(&mut hasher),
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
 
 /// One project's row on the front page.
 #[derive(Debug, Clone, PartialEq)]
@@ -148,7 +173,7 @@ pub fn render(
     let mut questions_rows = questions.rows("questions");
     questions_rows.sort_by(|a, b| b["id"].as_str().cmp(&a["id"].as_str()));
 
-    let mut body = String::from(RELOAD);
+    let mut body = reload_script(&stamp(mem));
     body.push_str("<nav class=\"pages\">\n");
     for sibling in &config.siblings {
         if html::safe_link(sibling).is_some() {
