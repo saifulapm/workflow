@@ -65,9 +65,110 @@ printf 'Branch main is 3 commits ahead of origin/main (as last fetched)\r\n'
 "#
             ),
         );
+        work.script(
+            "amx",
+            r#"
+dir=$(dirname "$0")
+echo "$*" >>"$dir/amx.log"
+case "$1" in
+ls) echo '[]' ;;
+new) echo "started $3" ;;
+esac
+"#,
+        );
         World { work }
     }
 
+    /// A local `workflow go`, with amx faked.
+    fn go_local(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_workflow"))
+            .arg("go")
+            .args(args)
+            .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_AMX", self.work.at("amx"))
+            .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("WORKFLOW_MACHINE", "mini")
+            .env_remove("AMX_ID")
+            .current_dir(self.work.path())
+            .output()
+            .unwrap()
+    }
+
+    fn amx_started(&self) -> bool {
+        self.work.has("amx.log")
+            && self
+                .work
+                .read("amx.log")
+                .lines()
+                .any(|l| l.starts_with("new "))
+    }
+
+    /// An origin for gamma's checkout holding main, and a cloud run's branch
+    /// `cloud/gamma-m1-first` one commit ahead of it. Returns that tip.
+    fn origin_with_cloud_branch(&self) -> String {
+        let origin = self.work.at("origin.git");
+        git(
+            self.work.path(),
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        let checkout = self.checkout("gamma");
+        git(
+            &checkout,
+            &["remote", "add", "origin", origin.to_str().unwrap()],
+        );
+        commit(&checkout, "start");
+        git(&checkout, &["push", "-q", "origin", "main"]);
+        let cloud = self.work.at("cloud-clone");
+        git(
+            self.work.path(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                cloud.to_str().unwrap(),
+            ],
+        );
+        git(&cloud, &["checkout", "-q", "-b", "cloud/gamma-m1-first"]);
+        commit(&cloud, "Land t1 in the cloud");
+        git(&cloud, &["push", "-q", "origin", "cloud/gamma-m1-first"]);
+        head(&cloud)
+    }
+}
+
+fn commit(dir: &std::path::Path, message: &str) {
+    git(
+        dir,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            message,
+        ],
+    );
+}
+
+fn head(dir: &std::path::Path) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+impl World {
     fn go(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_workflow"))
             .arg("go")
@@ -320,4 +421,75 @@ fn claude_printing_no_session_fails_and_records_nothing() {
     assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
     assert!(stderr(&out).contains("not logged in"), "{}", stderr(&out));
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
+
+#[test]
+fn the_next_local_go_fast_forwards_the_trunk_to_a_landed_cloud_runs_branch() {
+    let w = World::new("cloud-ff");
+    let tip = w.origin_with_cloud_branch();
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Before","since":"{}","milestone":"m1-first"}}"#,
+            now_minus(3)
+        ),
+    );
+    let out = w.go_local(&["gamma"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        head(&w.checkout("gamma")),
+        tip,
+        "the trunk's tip is the cloud branch's"
+    );
+    assert!(
+        w.mem_calls()
+            .iter()
+            .any(|c| c == "project unset runner --project gamma"),
+        "{:?}",
+        w.mem_calls()
+    );
+    assert!(w.amx_started());
+}
+
+#[test]
+fn a_trunk_that_moved_while_the_cloud_ran_refuses_and_starts_nothing() {
+    let w = World::new("cloud-diverged");
+    w.origin_with_cloud_branch();
+    let checkout = w.checkout("gamma");
+    commit(&checkout, "A local commit the cloud never saw");
+    let before = head(&checkout);
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Before","since":"{}","milestone":"m1-first"}}"#,
+            now_minus(3)
+        ),
+    );
+    let out = w.go_local(&["gamma"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("cannot fast-forward"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(head(&checkout), before);
+    assert!(!w.amx_started());
+    assert!(!w.mem_calls().iter().any(|c| c.contains("unset runner")));
+}
+
+#[test]
+fn a_live_or_parked_cloud_run_keeps_the_mini_out_of_its_project() {
+    let w = World::new("cloud-local-live");
+    w.origin_with_cloud_branch();
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Now","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(1)
+        ),
+    );
+    let out = w.go_local(&["gamma"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(stderr(&out).contains("session_01Now"), "{}", stderr(&out));
+    assert!(!w.amx_started());
 }

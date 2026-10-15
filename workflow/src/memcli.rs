@@ -178,6 +178,10 @@ pub fn set_cloud_runner(project: &str, session: &str, slug: &str) -> bool {
     ])
 }
 
+pub fn unset_runner(project: &str) -> bool {
+    silent(&["project", "unset", "runner", "--project", project])
+}
+
 pub fn unset_paused(project: &str) -> bool {
     silent(&["project", "unset", "paused", "--project", project])
 }

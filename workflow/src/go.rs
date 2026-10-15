@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
+use crate::cloud;
 use crate::memcli::{self, Project, ProjectRow};
 use crate::{exit, machine, warn};
 
@@ -483,6 +484,38 @@ fn amx_agents() -> Result<Vec<AmxRow>, String> {
     parse_amx(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// Fast-forward `dir`'s trunk to origin's `branch`, the work a cloud run
+/// pushed. A branch origin lacks has nothing to bring; a trunk with commits
+/// the branch lacks is refused, never merged.
+fn fast_forward(dir: &str, branch: &str) -> Result<(), String> {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(["-C", dir])
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|err| format!("cannot run git: {err}"))
+    };
+    let listed = git(&["ls-remote", "--exit-code", "--heads", "origin", branch])?;
+    if listed.status.code() == Some(2) {
+        return Ok(());
+    }
+    let reason =
+        |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !listed.status.success() {
+        return Err(reason(&listed));
+    }
+    let fetched = git(&["fetch", "-q", "origin", branch])?;
+    if !fetched.status.success() {
+        return Err(reason(&fetched));
+    }
+    let merged = git(&["merge", "-q", "--ff-only", "FETCH_HEAD"])?;
+    if !merged.status.success() {
+        return Err(reason(&merged));
+    }
+    Ok(())
+}
+
 /// The branch checked out in `dir`; none when HEAD is detached or `dir` is
 /// no checkout.
 fn branch_of(dir: &str) -> Option<String> {
@@ -543,10 +576,28 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
         }
         Decision::Start(start) => {
             let machine = machine::name();
-            let runner = projects
-                .iter()
-                .find(|row| row.name == start.project)
-                .and_then(|row| row.runner.as_ref());
+            let row = projects.iter().find(|row| row.name == start.project);
+            let mut runner = row.and_then(|row| row.runner.as_ref());
+            // A cloud run that still holds its milestone keeps the mini out;
+            // one that is over left its work on its branch.
+            let cloud = row.and_then(|row| {
+                let state =
+                    cloud::state(row, || memcli::handoff(&row.name), jiff::Timestamp::now());
+                Some((state?, row.runner.as_ref()?))
+            });
+            if let Some((cloud::State::Live | cloud::State::Parked, run)) = cloud {
+                warn(format!(
+                    "go: {} runs in the cloud ({}, session {}); answer it on the hub, or wait for it to land",
+                    start.project,
+                    run.milestone.as_deref().unwrap_or("?"),
+                    run.id
+                ));
+                return exit::USAGE;
+            }
+            let landed_from = cloud.and_then(|(_, run)| run.milestone.clone());
+            if landed_from.is_some() {
+                runner = None;
+            }
             if let Some(why) = runner_refusal(&start.project, runner, machine.as_deref(), dry_run) {
                 warn(format!("go: {why}"));
                 return exit::USAGE;
@@ -557,6 +608,22 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
             {
                 warn(format!("go: {why}"));
                 return exit::USAGE;
+            }
+            if let Some(slug) = landed_from.filter(|_| !dry_run) {
+                let from = cloud::branch(&start.project, &slug);
+                if let Err(why) = fast_forward(&start.dir, &from) {
+                    warn(format!(
+                        "go: cannot fast-forward {} to {from}: {why}",
+                        branch.as_deref().unwrap_or("the trunk")
+                    ));
+                    return exit::USAGE;
+                }
+                if !memcli::unset_runner(&start.project) {
+                    warn(format!(
+                        "go: mem would not clear {}'s cloud runner",
+                        start.project
+                    ));
+                }
             }
             started(&start, dry_run, machine.as_deref())
         }
