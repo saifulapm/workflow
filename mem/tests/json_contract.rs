@@ -479,6 +479,36 @@ fn projects_carry_the_summary_a_project_page_reads() {
 }
 
 #[test]
+fn an_indented_checkbox_is_no_milestone_but_still_a_plan_task() {
+    let (w, repo) = populated("json-contract-indented");
+    let row = |w: &World| {
+        let out = validate("projects.json", &mem(w, &repo, &["projects", "--json"]));
+        out["projects"][0].clone()
+    };
+    let file = |name: &str, text: &str| {
+        let path = w.dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path.to_str().unwrap().to_string()
+    };
+    let set = |args: &[&str]| assert_eq!(code(&mem(&w, &repo, args)), 0, "{args:?}");
+    let roadmap = file(
+        "roadmap.md",
+        "# roadmap: r\n\n- [x] a\n  - [ ] x\n- [ ] b\n",
+    );
+    set(&["roadmap", "--set-file", &roadmap]);
+    let plan = file("plan.md", "# plan: b\n\n- [ ] t1 One\n  - [ ] t2 Two\n");
+    set(&["plan", "--set-file", &plan]);
+    set(&["plan", "--tick", "t2"]);
+
+    let p = row(&w);
+    assert_eq!(p["milestone"], "b");
+    assert_eq!(p["milestones_done"], 1);
+    assert_eq!(p["milestones_total"], 2);
+    assert_eq!(p["plan_total"], 2);
+    assert_eq!(p["plan_ticked"], 1);
+}
+
+#[test]
 fn every_schema_is_covered_by_this_test() {
     // A schema nobody validates is a document, not a contract.
     let mut files: BTreeSet<String> = std::fs::read_dir(schema_dir())

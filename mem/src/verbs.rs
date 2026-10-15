@@ -346,9 +346,9 @@ fn project_summary(
     let declared = |key| crate::project::declared(&app.store, id, key);
     let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap_or_default();
     let roadmap_text = read(app.store.roadmap_path(id));
-    let roadmap = checkboxes(&roadmap_text);
+    let roadmap = checkboxes(&roadmap_text, false);
     let plan_text = read(app.store.plan_path(id));
-    let plan = checkboxes(&plan_text);
+    let plan = checkboxes(&plan_text, true);
     let plan_slug = plan_text
         .lines()
         .next()
@@ -392,11 +392,13 @@ fn project_summary(
 }
 
 /// The `- [ ] <id>` and `- [x] <id>` lines of a plan or a roadmap, as the id
-/// and whether it is ticked, in order.
-fn checkboxes(text: &str) -> Vec<(&str, bool)> {
+/// and whether it is ticked, in order. A plan's tasks may sit indented; a
+/// roadmap's milestones start at the margin, as `workflow go` reads them, so
+/// a checkbox indented under a milestone is part of its text.
+fn checkboxes(text: &str, indented: bool) -> Vec<(&str, bool)> {
     text.lines()
         .filter_map(|l| {
-            let l = l.trim_start();
+            let l = if indented { l.trim_start() } else { l };
             let (rest, done) = if let Some(rest) = l.strip_prefix("- [ ] ") {
                 (rest, false)
             } else {
