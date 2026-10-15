@@ -115,6 +115,13 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         /// Print the amx command line instead of running it.
         #[arg(long)]
         dry_run: bool,
+        /// Start the milestone in a claude.ai cloud session on the branch
+        /// cloud/<project>-<milestone>, and record it as the cloud runner.
+        #[arg(long)]
+        cloud: bool,
+        /// With --cloud: print the session's prompt and start nothing.
+        #[arg(long, requires = "cloud")]
+        print: bool,
     },
     /// Print the setup script of the claude.ai cloud environment `workflow`.
     #[command(

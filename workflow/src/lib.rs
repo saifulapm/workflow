@@ -117,15 +117,20 @@ pub fn run(cli: Cli) -> i32 {
             model,
             effort,
             dry_run,
-        } => go::cmd_go(
-            &go::Options {
+            cloud,
+            print,
+        } => {
+            let opts = go::Options {
                 project: project.as_deref(),
                 milestone: milestone.as_deref(),
                 model: model.as_deref().unwrap_or(go::DEFAULT_MODEL),
                 effort: effort.as_deref().unwrap_or(go::DEFAULT_EFFORT),
-            },
-            dry_run,
-        ),
+            };
+            if cloud {
+                return cloud::cmd_go_cloud(&opts, print);
+            }
+            go::cmd_go(&opts, dry_run)
+        }
         Command::Pause { project, by } => pause::cmd_pause(&project, by.as_deref()),
         Command::Unpause { project } => pause::cmd_unpause(&project),
         Command::Route { to } => route::cmd_route(to.as_deref()),

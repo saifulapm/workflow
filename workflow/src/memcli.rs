@@ -41,12 +41,23 @@ pub struct ProjectRow {
     /// The machine and amx session running it, while one does.
     #[serde(default)]
     pub runner: Option<Runner>,
+    /// The roadmap's first open milestone.
+    #[serde(default)]
+    pub milestone: Option<String>,
+    /// When the latest handoff was written, RFC 3339.
+    #[serde(default)]
+    pub handoff_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Runner {
     pub machine: String,
     pub id: String,
+    #[serde(default)]
+    pub since: Option<String>,
+    /// A cloud run's milestone.
+    #[serde(default)]
+    pub milestone: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +158,21 @@ pub fn set_runner(project: &str, machine: &str, id: &str) -> bool {
         "runner",
         machine,
         id,
+        "--project",
+        project,
+    ])
+}
+
+/// `mem project set runner cloud <session> --milestone <slug>`.
+pub fn set_cloud_runner(project: &str, session: &str, slug: &str) -> bool {
+    silent(&[
+        "project",
+        "set",
+        "runner",
+        "cloud",
+        session,
+        "--milestone",
+        slug,
         "--project",
         project,
     ])

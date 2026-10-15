@@ -1,0 +1,323 @@
+//! `workflow go <project> --cloud` through the real binary, with scripts in
+//! the place of mem (`$WORKFLOW_MEM`) and claude (`$WORKFLOW_CLAUDE`).
+
+#[path = "../src/scratch.rs"]
+mod scratch;
+
+use std::path::PathBuf;
+use std::process::{Command, Output};
+
+use scratch::Scratch;
+
+/// `gamma`, `shopify_apps` and `delta`, each with a checkout and an approved
+/// roadmap. The fake mem logs every call to `mem.log` and answers from the
+/// scratch files; the fake claude logs its argv and its folder to
+/// `claude.log` and prints what `claude --cloud` prints.
+struct World {
+    work: Scratch,
+}
+
+const SESSION: &str = "session_01TestCloudRun";
+
+impl World {
+    fn new(tag: &str) -> World {
+        let work = Scratch::new(tag);
+        let mut rows = Vec::new();
+        for name in ["gamma", "shopify_apps", "delta"] {
+            let checkout = work.mkdir(&format!("{name}-checkout"));
+            git(&checkout, &["init", "-q", "-b", "main"]);
+            rows.push(format!(
+                r#"{{"name":"{name}","checkouts":["{}"],"roadmap_status":"approved","milestone":"m2-next"}}"#,
+                checkout.display()
+            ));
+            work.put(
+                &format!("roadmap-{name}.md"),
+                &format!("# roadmap: {name}\n\n- [x] m1-first One\n- [ ] m2-next Two\n- [ ] m3-last Three\n"),
+            );
+        }
+        work.put(
+            "projects.json",
+            &format!(r#"{{"projects":[{}]}}"#, rows.join(",")),
+        );
+        work.script(
+            "mem",
+            r#"
+dir=$(dirname "$0")
+echo "$*" >>"$dir/mem.log"
+case "$1" in
+projects) cat "$dir/projects.json" ;;
+project) [ "$2" = current ] && exit 1 ;;
+roadmap) cat "$dir/roadmap-$3.md" ;;
+handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
+esac
+"#,
+        );
+        work.script(
+            "claude",
+            &format!(
+                r#"
+dir=$(dirname "$0")
+printf '%s\n' "$PWD" "$@" >"$dir/claude.log"
+[ -t 1 ] || {{ echo "Error: --cloud requires an interactive terminal." >&2; exit 1; }}
+printf '\033[>4mCreated cloud session: Run m2-next\r\n'
+printf 'View: https://claude.ai/code/{SESSION}?from=cli&m=0\r\n'
+printf 'Branch main is 3 commits ahead of origin/main (as last fetched)\r\n'
+"#
+            ),
+        );
+        World { work }
+    }
+
+    fn go(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_workflow"))
+            .arg("go")
+            .args(args)
+            .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_CLAUDE", self.work.at("claude"))
+            .env("WORKFLOW_AMX", self.work.at("no-amx"))
+            .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("WORKFLOW_MACHINE", "mini")
+            .env_remove("AMX_ID")
+            .current_dir(self.work.path())
+            .output()
+            .unwrap()
+    }
+
+    /// Give `project` a runner record, spliced into its row.
+    fn runner(&self, project: &str, runner: &str) {
+        let projects = self.work.read("projects.json").replacen(
+            &format!(r#""name":"{project}","#),
+            &format!(r#""name":"{project}","runner":{runner},"#),
+            1,
+        );
+        self.work.put("projects.json", &projects);
+    }
+
+    fn set(&self, project: &str, key_value: &str) {
+        let projects = self.work.read("projects.json").replacen(
+            &format!(r#""name":"{project}","#),
+            &format!(r#""name":"{project}",{key_value},"#),
+            1,
+        );
+        self.work.put("projects.json", &projects);
+    }
+
+    fn mem_calls(&self) -> Vec<String> {
+        if !self.work.has("mem.log") {
+            return Vec::new();
+        }
+        self.work
+            .read("mem.log")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn claude_ran(&self) -> bool {
+        self.work.has("claude.log")
+    }
+
+    fn checkout(&self, project: &str) -> PathBuf {
+        self.work.at(&format!("{project}-checkout"))
+    }
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).to_string()
+}
+
+fn now_minus(hours: i64) -> String {
+    let out = Command::new("date")
+        .args([
+            "-u",
+            "-d",
+            &format!("{hours} hours ago"),
+            "+%Y-%m-%dT%H:%M:%SZ",
+        ])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
+    let w = World::new("cloud-print");
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let prompt = stdout(&out);
+    assert!(prompt.contains("cloud/gamma-m2-next"), "{prompt}");
+    assert!(prompt.contains("origin/main"), "cut from main: {prompt}");
+    assert!(prompt.contains("orchestrate skill"), "{prompt}");
+    assert!(prompt.contains("mem project set runner cloud"), "{prompt}");
+    assert!(prompt.contains("mem roadmap --tick m2-next"), "{prompt}");
+    assert!(prompt.contains("parked:"), "{prompt}");
+    assert!(!prompt.contains("/goal"), "no slash command: {prompt}");
+    assert!(!w.claude_ran());
+    assert!(
+        !w.mem_calls().iter().any(|c| c.contains("set runner")),
+        "{:?}",
+        w.mem_calls()
+    );
+}
+
+#[test]
+fn an_underscore_project_keeps_its_name_in_the_branch() {
+    let w = World::new("cloud-underscore");
+    let out = w.go(&["shopify_apps", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("cloud/shopify_apps-m2-next"),
+        "{}",
+        stdout(&out)
+    );
+    let check = Command::new("git")
+        .args(["check-ref-format", "--branch", "cloud/shopify_apps-m2-next"])
+        .output()
+        .unwrap();
+    assert!(check.status.success(), "{check:?}");
+}
+
+#[test]
+fn a_start_runs_claude_cloud_in_the_checkout_records_the_runner_and_prints_the_url() {
+    let w = World::new("cloud-start");
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        format!("https://claude.ai/code/{SESSION}")
+    );
+    assert!(
+        stderr(&out).contains("3 commits ahead"),
+        "claude's notice passes on: {}",
+        stderr(&out)
+    );
+
+    let log = w.work.read("claude.log");
+    let mut lines = log.lines();
+    assert_eq!(lines.next(), Some(w.checkout("gamma").to_str().unwrap()));
+    assert_eq!(lines.next(), Some("--cloud"));
+    let printed = stdout(&w.go(&["gamma", "--cloud", "--print"]));
+    assert_eq!(
+        lines.collect::<Vec<_>>().join("\n"),
+        printed.trim_end(),
+        "the prompt is the one --print shows"
+    );
+    assert!(
+        w.mem_calls().iter().any(|c| c
+            == &format!("project set runner cloud {SESSION} --milestone m2-next --project gamma")),
+        "{:?}",
+        w.mem_calls()
+    );
+}
+
+#[test]
+fn a_live_cloud_run_anywhere_refuses_a_second_naming_its_project() {
+    let w = World::new("cloud-one-live");
+    w.runner(
+        "delta",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(1)
+        ),
+    );
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(stderr(&out).contains("delta"), "{}", stderr(&out));
+    assert!(!w.claude_ran());
+}
+
+#[test]
+fn a_parked_cloud_run_still_holds_the_one_cloud_slot() {
+    let w = World::new("cloud-parked");
+    w.runner(
+        "delta",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(2)
+        ),
+    );
+    w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put(
+        "handoff-delta.md",
+        "parked: t2 is local-only, question #ABCD1234\n",
+    );
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(stderr(&out).contains("delta"), "{}", stderr(&out));
+}
+
+#[test]
+fn a_run_that_landed_wrote_a_handoff_or_lapsed_frees_the_slot() {
+    // Landed: its milestone is ticked, so the row's next one differs.
+    let w = World::new("cloud-landed");
+    w.runner(
+        "delta",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m1-first"}}"#,
+            now_minus(1)
+        ),
+    );
+    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
+
+    // Lapsed: no handoff and no tick for 7 hours.
+    let w = World::new("cloud-lapsed");
+    w.runner(
+        "delta",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(8)
+        ),
+    );
+    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
+}
+
+#[test]
+fn a_next_run_after_a_landed_cloud_run_is_cut_from_its_branch() {
+    let w = World::new("cloud-base");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Before","since":"{}","milestone":"m1-first"}}"#,
+            now_minus(3)
+        ),
+    );
+    let prompt = stdout(&w.go(&["gamma", "--cloud", "--print"]));
+    assert!(prompt.contains("origin/cloud/gamma-m1-first"), "{prompt}");
+    assert!(prompt.contains("cloud/gamma-m2-next"), "{prompt}");
+}
+
+#[test]
+fn a_paused_project_refuses_even_with_a_parked_handoff() {
+    let w = World::new("cloud-paused");
+    w.set("gamma", r#""paused":"2026-10-15T09:00:00Z by saiful""#);
+    w.work
+        .put("handoff-gamma.md", "parked: waiting on #ABCD1234\n");
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(stdout(&out).trim(), "gamma: paused");
+    assert!(!w.claude_ran());
+}
+
+#[test]
+fn claude_printing_no_session_fails_and_records_nothing() {
+    let w = World::new("cloud-no-session");
+    w.work
+        .script("claude", "echo 'Error: not logged in' >&2; exit 1");
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stderr(&out).contains("not logged in"), "{}", stderr(&out));
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}

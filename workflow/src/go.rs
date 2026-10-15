@@ -68,9 +68,11 @@ pub struct Start {
     /// The agent's name, before any suffix a taken name needs.
     pub name: String,
     pub project: String,
+    /// The milestone it runs.
+    pub slug: String,
     model: String,
     effort: String,
-    dir: String,
+    pub dir: String,
     task: String,
     /// The project's recorded worktree, the one folder that may work on a
     /// branch other than main.
@@ -373,6 +375,7 @@ one orchestrator per folder, so give {project} a worktree of its own (mem projec
     Decision::Start(Start {
         name: amx_name(&format!("{project}-{slug}")),
         project: project.clone(),
+        slug: slug.clone(),
         model: opts.model.to_string(),
         effort: opts.effort.to_string(),
         task: task(&project, &slug),
@@ -641,6 +644,8 @@ The first stretch of a shop.
             worktree: None,
             paused: None,
             runner: None,
+            milestone: None,
+            handoff_at: None,
         }
     }
 
@@ -1357,6 +1362,7 @@ and never switch this folder's branch to get past this",
         Start {
             name: "alpha-winners".into(),
             project: "alpha".into(),
+            slug: "m1".to_string(),
             model: "opus".into(),
             effort: "high".into(),
             dir: "/work".into(),
