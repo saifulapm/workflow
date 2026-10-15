@@ -167,9 +167,9 @@ library the plan left open, a test's shape, a correction to the plan, and a
 step order. Saiful overturns a recorded decision cheaply. Lost hours cost
 more.
 
-Saiful's, asked without waiting:
+Saiful's, asked without waiting, and only his to answer:
 
-    mem ask --for human "<question>" --options "<a>,<b>" --recommend "<a>"
+    mem ask --for saiful "<question>" --options "<a>,<b>" --recommend "<a>"
 
 These are pushing, deploying or publishing anything; real money or a real
 payment; deleting data; a message to a person; a security call (auth,
@@ -214,8 +214,9 @@ examples or CLI once yourself.
 Fix each finding (`mem finding list --open`) with the diagnose skill. Its
 tight loop starts from the finding's evidence, and the fix closes it with
 `mem finding close <id> --by <commit>`. A finding no tight loop reproduces
-closes with `--by "not reproduced: <what you ran>"`. A taste call or an undriveable surface goes to
-Saiful with `mem ask --for human`. Then spawn the dogfooder once more on
+closes with `--by "not reproduced: <what you ran>"`. A taste call goes to
+Saiful with `mem ask --for saiful`, an undriveable surface with `mem ask
+--for human`. Then spawn the dogfooder once more on
 the failed steps and the steps your fixes touched, since a fix can break a
 step that passed. Two failed walks of the same step go to Saiful.
 
