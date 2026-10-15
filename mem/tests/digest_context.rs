@@ -660,7 +660,7 @@ fn the_small_digest_follows_the_spec_order_under_its_target() {
     let q: Vec<&str> = s
         .questions
         .iter()
-        .filter(|q| q.audience.is_none())
+        .filter(|q| mem::cli::is_a_persons(q.audience.as_deref()))
         .map(|q| q.short_id.as_str())
         .collect();
     let r: Vec<&str> = s.rulings.iter().map(|r| r.short_id.as_str()).collect();

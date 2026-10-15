@@ -592,7 +592,7 @@ fn an_explicit_hub_url_still_wins_over_the_tailnet_name() {
 }
 
 /// On Phone every ring is a push, even while someone sits at a machine: the
-/// quiet desk is what Device is for (decision, m5).
+/// quiet desk is what Device is for.
 #[test]
 fn on_phone_a_watched_machine_still_rings_the_phone() {
     let world = World::new("bell-watched", "http://127.0.0.1:9");

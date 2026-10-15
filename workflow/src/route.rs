@@ -30,7 +30,9 @@ pub fn write_file(hub: &str, name: Option<&str>, route: &Value) {
     if let Some(name) = name {
         map.insert("self".into(), json!(name));
     }
-    let tmp = path.with_extension("json.tmp");
+    // Its own temp name: the agent's poll and a panel's `workflow route` can
+    // write at the same moment.
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     if let Err(err) = fs::write(&tmp, doc.to_string()).and_then(|()| fs::rename(&tmp, &path)) {
         say(format!("cannot write {}: {err}", path.display()));
     }

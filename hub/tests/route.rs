@@ -233,3 +233,28 @@ fn the_route_needs_a_paired_token() {
         json!({"route": "phone", "machine": null, "waiting": 0})
     );
 }
+
+/// Home's buttons write like every other form: an unpaired browser and a
+/// page from another origin are refused, and the route stays as it was.
+#[test]
+fn home_buttons_need_a_paired_device_on_this_origin() {
+    let world = world("route-guard", 0);
+    let hub = spawn(&world);
+    let response = api(
+        &hub,
+        "POST",
+        r#"{"route":"device","machine":"mac-mini-m2"}"#,
+        true,
+    );
+    assert_eq!(status_of(&response), 200, "{response}");
+
+    let unpaired = hub.post_form_unpaired("/route", "route=phone");
+    assert_eq!(status_of(&unpaired), 403, "{unpaired}");
+    let elsewhere = hub.post_form_with(
+        "/route",
+        "route=phone",
+        &[("Origin", "https://evil.example")],
+    );
+    assert_eq!(status_of(&elsewhere), 403, "{elsewhere}");
+    assert_eq!(route(&hub)["route"], "device");
+}
