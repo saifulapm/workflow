@@ -493,3 +493,29 @@ fn a_live_or_parked_cloud_run_keeps_the_mini_out_of_its_project() {
     assert!(stderr(&out).contains("session_01Now"), "{}", stderr(&out));
     assert!(!w.amx_started());
 }
+
+#[test]
+fn an_untrusted_folder_is_refused_at_once_with_how_to_trust_it() {
+    let w = World::new("cloud-untrusted");
+    // claude's trust prompt, drawn word by word as the TUI does, then a wait
+    // for a key that never comes.
+    w.work.script(
+        "claude",
+        "printf 'Quick safety check:\\033[1CIs\\033[1Cthis\\033[1Ca\\033[1Cproject\\r\\n\\033[1CYes,\\033[1CI\\033[1Ctrust\\033[1Cthis\\033[1Cfolder\\r\\n'; sleep 30",
+    );
+    let started = std::time::Instant::now();
+    let out = w.go(&["gamma", "--cloud"]);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    let said = stderr(&out);
+    assert!(said.contains("trust"), "{said}");
+    assert!(
+        said.contains(w.checkout("gamma").to_str().unwrap()),
+        "{said}"
+    );
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}

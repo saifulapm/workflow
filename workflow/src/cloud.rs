@@ -153,7 +153,24 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
         println!("{text}");
         return exit::OK;
     }
-    let (ok, said) = launch(&start.dir, &text);
+    let (ok, said) = match launch(&start.dir, &text) {
+        Launch::Ran(ok, said) => (ok, said),
+        Launch::Untrusted => {
+            warn(format!(
+                "go: claude asks whether to trust {dir} and starts nothing until it is; \
+run `claude` in {dir} once, answer Yes, I trust this folder, then go again",
+                dir = start.dir
+            ));
+            return exit::FAILED;
+        }
+        Launch::Hung(said) => {
+            warn(format!(
+                "go: claude --cloud started no session within 2 minutes:\n{}",
+                said.trim()
+            ));
+            return exit::FAILED;
+        }
+    };
     let Some(session) = session_of(&said) else {
         warn(format!(
             "go: claude --cloud started no session{}:\n{}",
@@ -179,34 +196,77 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     exit::OK
 }
 
+/// Runs argv[1:] under a pty and copies what it prints. It stops the child
+/// and exits 3 on claude's folder-trust prompt, which waits for a key nobody
+/// will press, and exits 124 after two minutes of anything else.
+const PTY: &str = r#"
+import os, pty, re, select, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out, code, deadline = b"", None, time.time() + 120
+while code is None:
+    if time.time() > deadline:
+        code = 124
+        break
+    ready, _, _ = select.select([fd], [], [], 0.5)
+    if not ready:
+        continue
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        data = b""
+    if not data:
+        break
+    out += data
+    if b"trustthisfolder" in re.sub(rb"\x1b\[[0-9;?<>]*[a-zA-Z]|\s", b"", out):
+        code = 3
+sys.stdout.buffer.write(out)
+sys.stdout.flush()
+if code is not None:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+    sys.exit(code)
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+"#;
+
+/// Why `claude --cloud` started nothing, when it said why.
+enum Launch {
+    /// Its exit status was 0, and what it printed, escapes stripped.
+    Ran(bool, String),
+    /// It asked whether to trust the folder.
+    Untrusted,
+    /// It neither finished nor asked within two minutes.
+    Hung(String),
+}
+
 /// `claude --cloud <prompt>` in `dir`, under a pty: claude refuses `--cloud`
-/// without a terminal. What it printed, its escapes stripped.
-fn launch(dir: &str, prompt: &str) -> (bool, String) {
+/// without a terminal.
+fn launch(dir: &str, prompt: &str) -> Launch {
     let claude = match std::env::var("WORKFLOW_CLAUDE") {
         Ok(v) if !v.is_empty() => v,
         _ => "claude".to_string(),
     };
     let out = Command::new("python3")
-        .args([
-            "-c",
-            "import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)",
-            &claude,
-            "--cloud",
-            prompt,
-        ])
+        .args(["-c", PTY, &claude, "--cloud", prompt])
         .current_dir(dir)
         .stdin(std::process::Stdio::null())
         .output();
     match out {
-        Ok(out) => (
-            out.status.success(),
-            plain(&format!(
+        Ok(out) => {
+            let said = plain(&format!(
                 "{}{}",
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr)
-            )),
-        ),
-        Err(err) => (false, format!("cannot run python3 for a pty: {err}")),
+            ));
+            match out.status.code() {
+                Some(3) => Launch::Untrusted,
+                Some(124) => Launch::Hung(said),
+                _ => Launch::Ran(out.status.success(), said),
+            }
+        }
+        Err(err) => Launch::Ran(false, format!("cannot run python3 for a pty: {err}")),
     }
 }
 
