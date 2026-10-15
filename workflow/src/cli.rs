@@ -115,6 +115,19 @@ an agent that ended gets a -2, -3, ... suffix. Prints the agent's name."
         #[arg(long)]
         dry_run: bool,
     },
+    /// Pause a project: `go` refuses it unless its handoff starts `parked:`.
+    Pause {
+        /// The project, by mem's name.
+        project: String,
+        /// Who paused it; this machine's name when omitted.
+        #[arg(long, value_name = "WHO")]
+        by: Option<String>,
+    },
+    /// Clear a project's pause. Starts nothing.
+    Unpause {
+        /// The project, by mem's name.
+        project: String,
+    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.

@@ -48,7 +48,6 @@ fn every_verb_the_engine_had_is_an_unknown_command() {
         "status",
         "reap",
         "park",
-        "pause",
         "resume",
         "dogfood",
         "redispatch",

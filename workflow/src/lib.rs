@@ -22,6 +22,7 @@ pub mod install;
 pub mod lint;
 pub mod memcli;
 pub mod paths;
+pub mod pause;
 #[cfg(test)]
 mod scratch;
 
@@ -120,5 +121,7 @@ pub fn run(cli: Cli) -> i32 {
             },
             dry_run,
         ),
+        Command::Pause { project, by } => pause::cmd_pause(&project, by.as_deref()),
+        Command::Unpause { project } => pause::cmd_unpause(&project),
     }
 }

@@ -35,6 +35,9 @@ pub struct ProjectRow {
     /// The linked worktree recorded for it on this machine.
     #[serde(default)]
     pub worktree: Option<String>,
+    /// "<when> by <who>" while the project is paused.
+    #[serde(default)]
+    pub paused: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,6 +116,22 @@ pub fn parse_projects(text: &str) -> Option<Vec<ProjectRow>> {
 pub fn roadmap(project: &str) -> Option<String> {
     let (ok, out) = capture(&["roadmap", "--project", project])?;
     ok.then_some(out)
+}
+
+/// A project's latest handoff, verbatim. `None` when there is none or mem
+/// cannot say.
+pub fn handoff(project: &str) -> Option<String> {
+    let (ok, out) = capture(&["handoff", "--project", project])?;
+    ok.then_some(out)
+}
+
+/// `mem project set paused <who>`: mem stamps the time.
+pub fn set_paused(project: &str, who: &str) -> bool {
+    silent(&["project", "set", "paused", who, "--project", project])
+}
+
+pub fn unset_paused(project: &str) -> bool {
+    silent(&["project", "unset", "paused", "--project", project])
 }
 
 /// A choice this project declared with `mem project set <key>`.

@@ -53,6 +53,8 @@ pub struct AmxRow {
 pub enum Decision {
     /// Every milestone is ticked.
     Done(String),
+    /// The project is paused and its handoff is not parked: exit 2.
+    Paused(String),
     /// Not allowed, and why: exit 2.
     Refuse(String),
     /// Mem or amx could not answer: exit 1.
@@ -115,7 +117,7 @@ Done means this conversation shows: every task in `mem plan` ticked; \
 the project's test command passing on the trunk (the branch this checkout is on) after the last merge; \
 the milestone review and the dogfood walk finished with their findings fixed or filed; \
 `mem roadmap --tick {slug}` run; a `mem handoff` written; \
-and `workflow go {project}` run for the next milestone, or its output saying the roadmap is done or not approved. \
+and `workflow go {project}` run for the next milestone, or its output saying the roadmap is done, not approved, or paused. \
 If the milestone cannot continue without Saiful, done instead means a `mem ask` question filed, \
 the handoff naming it, and the work parked. Stop after 6 hours: at that stop, \
 write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the session with `amx stop --force $AMX_ID`."
@@ -252,13 +254,14 @@ pub fn parse_amx(text: &str) -> Result<Vec<AmxRow>, String> {
 }
 
 /// Settle what to do. `current` is what mem says of the working directory,
-/// `roadmap` reads a project's roadmap and `agents` lists amx's agents; the
-/// last two run only if the answer needs them.
+/// `roadmap` reads a project's roadmap, `handoff` its handoff and `agents`
+/// lists amx's agents; the last three run only if the answer needs them.
 pub fn decide(
     opts: &Options,
     projects: &[ProjectRow],
     current: Option<Project>,
     roadmap: impl FnOnce(&str) -> Option<String>,
+    handoff: impl FnOnce(&str) -> Option<String>,
     agents: impl FnOnce() -> Result<Vec<AmxRow>, String>,
     me: Option<&str>,
 ) -> Decision {
@@ -302,6 +305,15 @@ pub fn decide(
             );
         }
     };
+
+    // While paused nothing new starts; a milestone parked before the pause
+    // may carry on, with or without --milestone.
+    let paused = projects
+        .iter()
+        .any(|row| row.name == project && row.paused.is_some());
+    if paused && !handoff(&project).is_some_and(|text| text.trim_start().starts_with("parked:")) {
+        return Decision::Paused(project);
+    }
 
     let slug = match opts.milestone {
         Some(slug) => slug.to_string(),
@@ -500,12 +512,17 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
         &projects,
         current,
         memcli::roadmap,
+        memcli::handoff,
         amx_agents,
         me.as_deref(),
     ) {
         Decision::Done(project) => {
             println!("{project}: the roadmap is done");
             exit::OK
+        }
+        Decision::Paused(project) => {
+            println!("{project}: paused");
+            exit::USAGE
         }
         Decision::Refuse(why) => {
             warn(format!("go: {why}"));
@@ -576,6 +593,7 @@ The first stretch of a shop.
                 .collect(),
             roadmap_status: status.map(str::to_string),
             worktree: None,
+            paused: None,
         }
     }
 
@@ -614,6 +632,7 @@ The first stretch of a shop.
             projects,
             None,
             |_| Some(ROADMAP.to_string()),
+            |_| panic!("the handoff is not read"),
             || Ok(Vec::new()),
             None,
         )
@@ -642,7 +661,7 @@ Done means this conversation shows: every task in `mem plan` ticked; \
 the project's test command passing on the trunk (the branch this checkout is on) after the last merge; \
 the milestone review and the dogfood walk finished with their findings fixed or filed; \
 `mem roadmap --tick winners` run; a `mem handoff` written; \
-and `workflow go alpha` run for the next milestone, or its output saying the roadmap is done or not approved. \
+and `workflow go alpha` run for the next milestone, or its output saying the roadmap is done, not approved, or paused. \
 If the milestone cannot continue without Saiful, done instead means a `mem ask` question filed, \
 the handoff naming it, and the work parked. Stop after 6 hours: at that stop, \
 write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the session with `amx stop --force $AMX_ID`.";
@@ -779,6 +798,7 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
                 &projects,
                 None,
                 |_| panic!("the roadmap is not read"),
+                |_| panic!("the handoff is not read"),
                 || panic!("amx is not asked"),
                 None,
             );
@@ -799,6 +819,7 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
             &projects,
             None,
             |_| panic!("the roadmap is not read"),
+            |_| panic!("the handoff is not read"),
             || Ok(Vec::new()),
             None,
         );
@@ -817,6 +838,7 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
             &projects,
             None,
             |_| Some("- [x] skeleton One\n- [x] winners Two\n".to_string()),
+            |_| panic!("the handoff is not read"),
             || panic!("nothing is started, so amx is not asked"),
             None,
         );
@@ -836,6 +858,7 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
                 &projects,
                 None,
                 |_| Some(ROADMAP.to_string()),
+                |_| panic!("the handoff is not read"),
                 || Ok(rows),
                 me,
             )
@@ -960,6 +983,7 @@ folder's branch to get past this",
                 &projects,
                 None,
                 |_| Some(ROADMAP.to_string()),
+                |_| panic!("the handoff is not read"),
                 || Ok(rows),
                 None,
             )
@@ -1119,6 +1143,7 @@ and never switch this folder's branch to get past this",
             &projects,
             Some(current),
             |_| Some(ROADMAP.to_string()),
+            |_| panic!("the handoff is not read"),
             || Ok(Vec::new()),
             None,
         );
@@ -1143,6 +1168,7 @@ and never switch this folder's branch to get past this",
             &projects,
             Some(elsewhere),
             |_| Some(ROADMAP.to_string()),
+            |_| panic!("the handoff is not read"),
             || Ok(Vec::new()),
             None,
         );
@@ -1176,6 +1202,7 @@ and never switch this folder's branch to get past this",
                 &projects,
                 Some(current),
                 |_| Some(ROADMAP.to_string()),
+                |_| panic!("the handoff is not read"),
                 || Ok(Vec::new()),
                 None,
             );
@@ -1209,6 +1236,7 @@ and never switch this folder's branch to get past this",
             &projects,
             Some(current),
             |_| Some(ROADMAP.to_string()),
+            |_| panic!("the handoff is not read"),
             || Ok(Vec::new()),
             None,
         );
@@ -1237,6 +1265,7 @@ and never switch this folder's branch to get past this",
             &projects,
             None,
             |_| None,
+            |_| panic!("the handoff is not read"),
             || Ok(Vec::new()),
             None,
         );
@@ -1246,6 +1275,7 @@ and never switch this folder's branch to get past this",
             &projects,
             None,
             |_| Some(ROADMAP.to_string()),
+            |_| panic!("the handoff is not read"),
             || Err("amx ls failed: no server".to_string()),
             None,
         );

@@ -17,8 +17,9 @@ const ROADMAP: &str = "\
 - [ ] orders An order reaches the supplier
 ";
 
-/// A project `alpha` with a checkout, a fake mem and a fake amx that records
-/// every call in `amx.log`.
+/// A project `alpha` with a checkout, a fake mem and a fake amx that record
+/// every call in `mem.log` and `amx.log`. The fake mem keeps a pause as a
+/// `paused-<project>` file and splices it into its `projects` row.
 struct World {
     work: Scratch,
     checkout: PathBuf,
@@ -51,10 +52,26 @@ impl World {
             "mem",
             r#"
 dir=$(dirname "$0")
+echo "$*" >>"$dir/mem.log"
 case "$1" in
-projects) cat "$dir/projects.json" ;;
-project) [ -f "$dir/current.json" ] && cat "$dir/current.json" || exit 1 ;;
+projects)
+	out=$(cat "$dir/projects.json")
+	for f in "$dir"/paused-*; do
+		[ -f "$f" ] || continue
+		p=${f##*/paused-}
+		out=$(printf '%s' "$out" | sed "s|\"name\":\"$p\",|&\"paused\":\"$(cat "$f")\",|")
+	done
+	printf '%s\n' "$out"
+	;;
+project)
+	case "$2" in
+	set) printf '2026-10-15T09:00:00Z by %s' "$4" >"$dir/paused-$6" ;;
+	unset) rm -f "$dir/paused-$5" ;;
+	*) [ -f "$dir/current.json" ] && cat "$dir/current.json" || exit 1 ;;
+	esac
+	;;
 roadmap) cat "$dir/roadmap-$3.md" ;;
+handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
 esac
 "#,
         );
@@ -84,18 +101,55 @@ esac
     }
 
     fn go_as(&self, args: &[&str], amx_id: Option<&str>) -> Output {
+        self.run(&[&["go"], args].concat(), amx_id)
+    }
+
+    /// Any workflow command, against the fakes. `qshell/machine` under the
+    /// scratch config dir names the machine.
+    fn run(&self, args: &[&str], amx_id: Option<&str>) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_workflow"));
         command
-            .arg("go")
             .args(args)
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_AMX", self.work.at("amx"))
+            .env("XDG_CONFIG_HOME", self.work.at("config"))
             .env_remove("AMX_ID")
             .current_dir(self.work.path());
         if let Some(id) = amx_id {
             command.env("AMX_ID", id);
         }
         command.output().unwrap()
+    }
+
+    /// A second project, `gamma`, with an approved roadmap and a checkout of
+    /// its own.
+    fn add_gamma(&self) {
+        let checkout = self.work.mkdir("gamma-checkout");
+        git(&checkout, &["init", "-q", "-b", "main"]);
+        let projects = self.work.read("projects.json").replacen(
+            "\n                ]}",
+            &format!(
+                r#",
+                  {{"name":"gamma","checkouts":["{}"],"roadmap_status":"approved"}}
+                ]}}"#,
+                checkout.display()
+            ),
+            1,
+        );
+        self.work.put("projects.json", &projects);
+        self.work
+            .put("roadmap-gamma.md", "# roadmap: gamma\n\n- [ ] first One\n");
+    }
+
+    fn mem_calls(&self) -> Vec<String> {
+        if !self.work.has("mem.log") {
+            return Vec::new();
+        }
+        self.work
+            .read("mem.log")
+            .lines()
+            .map(str::to_string)
+            .collect()
     }
 
     /// Every amx call so far, one line each.
@@ -421,4 +475,107 @@ fn with_no_project_named_the_current_directory_decides() {
         "{}",
         complained(&out)
     );
+}
+
+#[test]
+fn a_paused_project_is_refused_and_starts_nothing() {
+    let world = World::new("go-paused", "approved");
+    world.add_gamma();
+    world.work.put("config/qshell/machine", "laptop\n");
+
+    let out = world.run(&["pause", "gamma"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(said(&out), "gamma: paused\n");
+    assert!(
+        world
+            .mem_calls()
+            .contains(&"project set paused laptop --project gamma".to_string()),
+        "{:?}",
+        world.mem_calls()
+    );
+    assert_eq!(
+        world.work.read("paused-gamma"),
+        "2026-10-15T09:00:00Z by laptop"
+    );
+
+    for args in [&["gamma"][..], &["gamma", "--milestone", "first"][..]] {
+        let out = world.go(args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {}", complained(&out));
+        assert_eq!(said(&out), "gamma: paused\n", "{args:?}");
+    }
+    assert!(world.new_calls().is_empty(), "{:?}", world.amx_calls());
+
+    // A handoff that is not parked is no way past the pause either.
+    world
+        .work
+        .put("handoff-gamma.md", "working on the first task\n");
+    assert_eq!(world.go(&["gamma"]).status.code(), Some(2));
+    assert!(world.new_calls().is_empty(), "{:?}", world.amx_calls());
+
+    // A name mem does not know is refused the way go refuses it.
+    let out = world.run(&["pause", "nosuch", "--by", "saiful"], None);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        complained(&out).contains("no project named nosuch"),
+        "{}",
+        complained(&out)
+    );
+}
+
+#[test]
+fn a_parked_handoff_lets_a_paused_project_carry_on() {
+    let world = World::new("go-parked", "approved");
+    world.add_gamma();
+    let out = world.run(&["pause", "gamma", "--by", "saiful"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(
+        world.work.read("paused-gamma"),
+        "2026-10-15T09:00:00Z by saiful"
+    );
+    world.work.put(
+        "handoff-gamma.md",
+        "parked: waiting on #X\nthe rest of it\n",
+    );
+
+    let out = world.go(&["gamma"]);
+
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(said(&out), "gamma-first\n");
+    assert_eq!(world.new_calls().len(), 1, "{:?}", world.amx_calls());
+}
+
+#[test]
+fn unpause_clears_the_pause_and_starts_nothing() {
+    let world = World::new("go-unpause", "approved");
+    world.add_gamma();
+    let out = world.run(&["pause", "gamma", "--by", "saiful"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    let amx_before = world.amx_calls().len();
+
+    let out = world.run(&["unpause", "gamma"], None);
+
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(said(&out), "gamma: unpaused\n");
+    assert!(
+        world
+            .mem_calls()
+            .contains(&"project unset paused --project gamma".to_string()),
+        "{:?}",
+        world.mem_calls()
+    );
+    assert!(!world.work.has("paused-gamma"));
+    assert_eq!(
+        world.amx_calls().len(),
+        amx_before,
+        "{:?}",
+        world.amx_calls()
+    );
+
+    world
+        .work
+        .put("handoff-gamma.md", "working on the first task\n");
+    let out = world.go(&["gamma"]);
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(said(&out), "gamma-first\n");
+    assert_eq!(world.new_calls().len(), 1, "{:?}", world.amx_calls());
 }
