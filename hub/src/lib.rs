@@ -11,6 +11,7 @@ pub mod app;
 pub mod assets;
 pub mod config;
 pub mod doorbell;
+pub mod dulali;
 pub mod form;
 pub mod html;
 pub mod http;

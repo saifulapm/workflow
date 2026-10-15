@@ -41,6 +41,14 @@ pub enum Command {
         title: String,
         body: String,
     },
+    /// A message for a session that may still be running: `amx send` while
+    /// it runs, `amx resume` with it once it has stopped.
+    #[serde(rename = "follow_up")]
+    FollowUp {
+        project: String,
+        id: String,
+        message: String,
+    },
 }
 
 /// What a machine said in its last poll.

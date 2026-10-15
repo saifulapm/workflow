@@ -11,6 +11,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -230,12 +231,28 @@ pub fn serve<H>(listener: TcpListener, handler: H) -> !
 where
     H: Fn(&Request) -> Response + Send + Sync + 'static,
 {
+    serve_on(|| listener.accept().map(|(stream, _)| stream), handler)
+}
+
+/// The same server on a unix socket, for the one client that holds it.
+pub fn serve_unix<H>(listener: UnixListener, handler: H) -> !
+where
+    H: Fn(&Request) -> Response + Send + Sync + 'static,
+{
+    serve_on(|| listener.accept().map(|(stream, _)| stream), handler)
+}
+
+fn serve_on<S, H>(mut accept: impl FnMut() -> std::io::Result<S>, handler: H) -> !
+where
+    S: Conn + Send + 'static,
+    H: Fn(&Request) -> Response + Send + Sync + 'static,
+{
     let handler = Arc::new(handler);
     let live = Arc::new(AtomicUsize::new(0));
 
     loop {
-        let stream = match listener.accept() {
-            Ok((stream, _)) => stream,
+        let stream = match accept() {
+            Ok(stream) => stream,
             Err(e) => {
                 // A failed accept is one client's problem, never the service's.
                 eprintln!("hub: accept: {e}");
@@ -247,7 +264,7 @@ where
             // Answered on the accept thread, in one write: this path exists to
             // shed load, so it must not cost a thread of its own.
             let mut stream = stream;
-            let _ = stream.set_write_timeout(Some(io_timeout()));
+            let _ = stream.write_timeout(Some(io_timeout()));
             let _ = write_response(&mut stream, &Response::text(503, "busy"));
             continue;
         }
@@ -270,6 +287,54 @@ where
     }
 }
 
+/// What the server needs of a connection, TCP or unix.
+pub trait Conn: Read + Write + Sized {
+    fn read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn clone_conn(&self) -> std::io::Result<Self>;
+    /// The peer as the journal names it; a unix peer has no address.
+    fn peer(&self) -> String;
+    fn close(&self);
+}
+
+impl Conn for TcpStream {
+    fn read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.set_read_timeout(timeout)
+    }
+    fn write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.set_write_timeout(timeout)
+    }
+    fn clone_conn(&self) -> std::io::Result<Self> {
+        self.try_clone()
+    }
+    fn peer(&self) -> String {
+        self.peer_addr()
+            .map(|addr| addr.to_string())
+            .unwrap_or_default()
+    }
+    fn close(&self) {
+        let _ = self.shutdown(std::net::Shutdown::Both);
+    }
+}
+
+impl Conn for UnixStream {
+    fn read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.set_read_timeout(timeout)
+    }
+    fn write_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.set_write_timeout(timeout)
+    }
+    fn clone_conn(&self) -> std::io::Result<Self> {
+        self.try_clone()
+    }
+    fn peer(&self) -> String {
+        "unix".to_string()
+    }
+    fn close(&self) {
+        let _ = self.shutdown(std::net::Shutdown::Both);
+    }
+}
+
 struct Permit(Arc<AtomicUsize>);
 
 impl Drop for Permit {
@@ -278,20 +343,18 @@ impl Drop for Permit {
     }
 }
 
-fn handle<H>(stream: TcpStream, handler: &H)
+fn handle<S, H>(stream: S, handler: &H)
 where
+    S: Conn,
     H: Fn(&Request) -> Response,
 {
-    if stream.set_read_timeout(Some(io_timeout())).is_err()
-        || stream.set_write_timeout(Some(io_timeout())).is_err()
+    if stream.read_timeout(Some(io_timeout())).is_err()
+        || stream.write_timeout(Some(io_timeout())).is_err()
     {
         return;
     }
-    let peer = stream
-        .peer_addr()
-        .map(|addr| addr.to_string())
-        .unwrap_or_default();
-    let mut writer = match stream.try_clone() {
+    let peer = stream.peer();
+    let mut writer = match stream.clone_conn() {
         Ok(writer) => writer,
         Err(_) => return,
     };
@@ -310,7 +373,7 @@ where
     };
     let _ = write_response(&mut writer, &response);
     let _ = writer.flush();
-    let _ = writer.shutdown(std::net::Shutdown::Both);
+    writer.close();
 }
 
 /// The clock one whole request runs against.
@@ -336,11 +399,11 @@ impl Deadline {
     /// Arms the socket for one read. Re-armed before *every* read, which is the
     /// point: a single `set_read_timeout` at the top of the connection is what
     /// a dribbling client resets for ever.
-    fn arm(&self, reader: &BufReader<TcpStream>) -> Result<(), Refusal> {
+    fn arm<S: Conn>(&self, reader: &BufReader<S>) -> Result<(), Refusal> {
         let Some(budget) = self.budget() else {
             return Err(Refusal::new(408, "timed out reading the request"));
         };
-        let _ = reader.get_ref().set_read_timeout(Some(budget));
+        let _ = reader.get_ref().read_timeout(Some(budget));
         Ok(())
     }
 }
@@ -348,9 +411,9 @@ impl Deadline {
 /// Reads one request. `Ok(None)` is a connection that closed without sending
 /// anything — a port scan, or a browser opening a spare socket it never uses.
 /// A body over `MAX_BODY` comes with the upload permit it was read under.
-fn read_request(
-    reader: &mut BufReader<TcpStream>,
-    writer: &mut TcpStream,
+fn read_request<S: Conn>(
+    reader: &mut BufReader<S>,
+    writer: &mut S,
     deadline: &Deadline,
 ) -> Result<Option<(Request, Option<UploadPermit>)>, Refusal> {
     let Some(line) = read_line(reader, MAX_REQUEST_LINE, deadline)? else {
@@ -473,8 +536,8 @@ fn read_request(
 /// `read_exact` would not do: it loops on `read` internally, and each of those
 /// reads gets the socket timeout afresh — so a client dribbling its body resets
 /// the clock just as a client dribbling its headers does.
-fn read_body(
-    reader: &mut BufReader<TcpStream>,
+fn read_body<S: Conn>(
+    reader: &mut BufReader<S>,
     length: usize,
     deadline: &Deadline,
 ) -> Result<Vec<u8>, Refusal> {
@@ -502,8 +565,8 @@ fn read_body(
 
 /// One CRLF-terminated line, capped. A line that reaches the cap without a
 /// newline is the refusal, not a truncated line handed on as if it were whole.
-fn read_line(
-    reader: &mut BufReader<TcpStream>,
+fn read_line<S: Conn>(
+    reader: &mut BufReader<S>,
     limit: usize,
     deadline: &Deadline,
 ) -> Result<Option<String>, Refusal> {
@@ -556,7 +619,7 @@ fn read_line(
     })
 }
 
-fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Result<()> {
+fn write_response(stream: &mut impl Write, response: &Response) -> std::io::Result<()> {
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
         response.status,

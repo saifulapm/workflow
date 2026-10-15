@@ -264,7 +264,10 @@ fn an_answer_that_is_a_shell_command_leaves_no_file() {
     // And it reached mem verbatim, as one argument.
     let answers = world.answers();
     assert_eq!(answers.len(), 1, "{answers:?}");
-    assert_eq!(answers[0], vec!["answer", "--", &id, &hostile]);
+    assert_eq!(
+        answers[0],
+        vec!["answer", "--json", "--by", "saiful", "--", &id, &hostile]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +287,7 @@ fn ac10_the_decoded_answer_reaches_mem_byte_for_byte() {
 
     let answers = world.answers();
     assert_eq!(answers.len(), 1, "{answers:?}");
-    assert_eq!(answers[0][3], "a b&c=d+🙂");
+    assert_eq!(answers[0][6], "a b&c=d+🙂");
 }
 
 #[test]
@@ -414,7 +417,7 @@ fn concurrent_answers_to_one_question_write_exactly_once() {
     // The one that wrote is the one whose text is now the answer, and the
     // question has left the queue.
     assert!(
-        answers[0][3].starts_with('r'),
+        answers[0][6].starts_with('r'),
         "the text mem was given: {:?}",
         answers[0]
     );
@@ -492,7 +495,7 @@ fn the_hash_mem_prints_in_front_of_an_id_is_not_part_of_the_id() {
 
     let answers = world.answers();
     assert_eq!(answers.len(), 1, "{answers:?}");
-    assert_eq!(answers[0][2], short, "mem is given the id without the hash");
+    assert_eq!(answers[0][5], short, "mem is given the id without the hash");
 }
 
 #[test]

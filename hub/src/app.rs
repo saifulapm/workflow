@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::agents::{Agents, Command};
 use crate::config::Config;
+use crate::dulali::{self, Dulali, Held};
 use crate::html::{self, Banner};
 use crate::http::{Request, Response};
 use crate::memcli::{MemCli, Run};
@@ -42,6 +43,8 @@ pub struct App {
     pub agents: Arc<Agents>,
     /// Where questions and rings reach the owner.
     pub route: Arc<Route>,
+    /// Dulali's answers and passes, and its webhook.
+    pub dulali: Arc<Dulali>,
     /// One answer at a time, per question id.
     ///
     /// `MemCli`'s gate serialises the child *processes*; it cannot serialise
@@ -76,6 +79,7 @@ impl App {
         // memory.
         let state = crate::config::state_home().unwrap_or_default();
         let path = state.join("hub/agents.json");
+        let dulali = Dulali::open(state.join("hub/dulali.json"), config.dulali_webhook.clone());
         App {
             config,
             port,
@@ -84,6 +88,7 @@ impl App {
             guard,
             agents: Arc::new(Agents::open(path, crate::agents::window())),
             route: Arc::new(Route::open(state.join("hub/route.json"))),
+            dulali: Arc::new(dulali),
             answering: Mutex::new(HashMap::new()),
         }
     }
@@ -235,16 +240,28 @@ impl App {
             // first one won.
             self.mem.invalidate();
             match self.is_pending(id) {
-                Pending::No => self.back(Banner::Unknown),
+                Pending::No => match self.dulali.find(id) {
+                    Some((full, held)) if held.written.is_some() && !held.replaced => {
+                        self.replace_dulali(&full, &held, text)
+                    }
+                    _ => self.back(Banner::Unknown),
+                },
                 Pending::Unreadable(why) => {
                     eprintln!("hub: answer: could not read the queue: {why}");
                     self.back(Banner::Failed)
                 }
                 Pending::Yes(row) => {
-                    let run = self.mem.answer(id, text);
+                    let run = self.mem.answer(id, text, "saiful", None);
                     self.mem.invalidate();
                     match run.code {
                         Some(0) => {
+                            // Inside Dulali's window, Saiful's answer is the
+                            // one that stands; the held one never reaches mem.
+                            if let Some(full) = row["id"].as_str()
+                                && self.dulali.held(full).is_some()
+                            {
+                                self.dulali.replaced(full);
+                            }
                             self.agents.queue_sync_all();
                             self.after_answer(
                                 row["project"].as_str().unwrap_or(""),
@@ -338,19 +355,30 @@ impl App {
         }
         // mem lists newest first; a ULID sorts in the order it was made.
         asked.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        let by_dulali = |row: &Value| row["answer_by"] == "dulali";
         let answers: Vec<String> = asked
             .iter()
             .map(|row| {
                 format!(
-                    "#{} {}\nAnswer: {}",
+                    "#{} {}\n{}: {}",
                     row["short_id"].as_str().unwrap_or(""),
                     row["body"].as_str().unwrap_or(""),
+                    if by_dulali(row) {
+                        "Dulali's answer, which Saiful let stand"
+                    } else {
+                        "Answer"
+                    },
                     row["answer"].as_str().unwrap_or(""),
                 )
             })
             .collect();
+        let who = if asked.iter().any(by_dulali) {
+            "Your questions were answered on the hub, by Saiful or by Dulali as each says"
+        } else {
+            "Saiful answered your questions on the hub"
+        };
         let message = format!(
-            "Saiful answered your questions on the hub. Each answer is below; \
+            "{who}. Each answer is below; \
              `mem questions` shows them once this machine's sync round lands.\n\n{}",
             answers.join("\n\n")
         );
@@ -367,6 +395,211 @@ impl App {
             },
             &ids,
         );
+    }
+
+    /// Saiful's answer to a question Dulali's answer already closed: it
+    /// supersedes Dulali's in mem, and reaches the running session as a new
+    /// message.
+    fn replace_dulali(&self, id: &str, held: &Held, text: &str) -> Response {
+        let earlier = held.written.as_deref();
+        let run = self.mem.answer(id, text, "saiful", earlier);
+        self.mem.invalidate();
+        if !run.ok() {
+            if !run.stderr.is_empty() {
+                eprintln!("hub: mem answer: {}", run.stderr);
+            }
+            return self.back(Banner::Failed);
+        }
+        self.dulali.replaced(id);
+        self.agents.queue_sync_all();
+        let short_id = short(id);
+        let message = format!(
+            "Saiful replaced Dulali's answer to #{short_id} ({}). Dulali had answered: {}\n\n\
+             Saiful's answer, which stands: {text}",
+            held.title,
+            dulali::ring_answer(&held.answer),
+        );
+        self.follow_up(&held.project, held.session.as_deref(), message);
+        self.back(Banner::Answered(short_id))
+    }
+
+    /// A message for a session that may still be running: the runner's
+    /// agent sends it in, or resumes the session with it.
+    fn follow_up(&self, project: &str, session: Option<&str>, message: String) {
+        let Some(session) = session else {
+            return;
+        };
+        let runner = self
+            .mem
+            .projects()
+            .rows("projects")
+            .iter()
+            .map(crate::page_home::summary_of)
+            .find(|s| s.name == project)
+            .and_then(|s| s.runner);
+        match runner {
+            Some(runner) if runner.id == session => self.agents.queue(
+                &runner.machine,
+                Command::FollowUp {
+                    project: project.to_string(),
+                    id: session.to_string(),
+                    message,
+                },
+            ),
+            _ => eprintln!("hub: {session} is not {project}'s runner; no follow-up sent"),
+        }
+    }
+
+    /// Dulali's socket, `POST /api/dulali`: its answer, held for the
+    /// override window, or its pass, which rings the phone. Nothing else is
+    /// served there, and nothing but Dulali's token is taken.
+    pub fn dulali_post(&self, request: &Request) -> Response {
+        if request.path != "/api/dulali" {
+            return Response::not_found();
+        }
+        if request.method != "POST" {
+            return Response::method_not_allowed("POST");
+        }
+        let authorized = dulali::token_path()
+            .map(|path| dulali::authorized(request, &path))
+            .unwrap_or(false);
+        if !authorized {
+            return crate::agents::unauthorized();
+        }
+        #[derive(serde::Deserialize)]
+        struct Said {
+            id: String,
+            answer: Option<String>,
+            #[serde(default)]
+            pass: bool,
+            checked: String,
+        }
+        let refuse =
+            |status, error: &str| crate::agents::json(status, serde_json::json!({"error": error}));
+        let said: Said = match serde_json::from_slice(&request.body) {
+            Ok(said) => said,
+            Err(e) => return refuse(400, &e.to_string()),
+        };
+        let checked = said.checked.trim();
+        let answer = said.answer.as_deref().map(str::trim).unwrap_or("");
+        if checked.is_empty() {
+            return refuse(400, "say what you checked");
+        }
+        if !said.pass && answer.is_empty() {
+            return refuse(400, "an answer or a pass");
+        }
+        let id = said.id.trim();
+        let response = {
+            let lock = self.lock_for(id);
+            let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+            self.mem.invalidate();
+            match self.is_pending(id) {
+                Pending::No => refuse(409, "that question is not waiting"),
+                Pending::Unreadable(why) => {
+                    eprintln!("hub: dulali: could not read the queue: {why}");
+                    refuse(503, "the queue could not be read; try again")
+                }
+                Pending::Yes(row) => self.dulali_says(&row, said.pass, answer, checked),
+            }
+        };
+        self.forget_lock();
+        response
+    }
+
+    /// Under the question's lock, with its row.
+    fn dulali_says(&self, row: &Value, pass: bool, answer: &str, checked: &str) -> Response {
+        let full = row["id"].as_str().unwrap_or("");
+        let sent = crate::config::state_home()
+            .ok()
+            .and_then(|state| crate::doorbell::load(&state.join("hub/seen")))
+            .is_some_and(|seen| seen.contains(&format!("dulali {full}")));
+        if !sent {
+            return crate::agents::json(
+                409,
+                serde_json::json!({"error": "that question was not sent to Dulali"}),
+            );
+        }
+        if self.dulali.has_spoken(full) {
+            return crate::agents::json(
+                409,
+                serde_json::json!({"error": "Dulali already answered or passed it"}),
+            );
+        }
+        let project = row["project"].as_str().unwrap_or("");
+        let machine = row["machine"].as_str().unwrap_or(&self.machine);
+        let link = crate::pair::base_url(&self.config, self.port, &self.machine);
+        let now = dulali::now_ms();
+        if pass {
+            self.dulali.pass(full, now);
+            crate::doorbell::push(
+                &self.config.ntfy_url(),
+                &format!("Dulali passed a question on {machine} ({project}) — {link}"),
+            );
+            return Response::json(serde_json::json!({"passed": true}).to_string());
+        }
+        let until = now + self.dulali.window.as_millis() as i64;
+        self.dulali.hold(
+            full,
+            Held {
+                answer: answer.to_string(),
+                checked: checked.to_string(),
+                project: project.to_string(),
+                session: row["session"].as_str().map(str::to_string),
+                machine: machine.to_string(),
+                title: row["title"].as_str().unwrap_or("").to_string(),
+                at_ms: now,
+                until_ms: until,
+                written: None,
+                replaced: false,
+            },
+        );
+        crate::doorbell::push(
+            &self.config.ntfy_url(),
+            &format!(
+                "Dulali answered a question on {machine} ({project}): {} — override within 2 min: {link}",
+                dulali::ring_answer(answer)
+            ),
+        );
+        let until = jiff::Timestamp::from_millisecond(until)
+            .map(|t| t.to_string())
+            .unwrap_or_default();
+        Response::json(serde_json::json!({"held_until": until}).to_string())
+    }
+
+    /// Each Dulali answer whose window has closed goes to mem as Dulali's,
+    /// and the run resumes on it, unless Saiful answered first.
+    pub fn dulali_expire(&self) {
+        for (id, held) in self.dulali.due(dulali::now_ms()) {
+            let lock = self.lock_for(&id);
+            {
+                let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+                self.mem.invalidate();
+                match self.is_pending(&id) {
+                    Pending::No => self.dulali.replaced(&id),
+                    Pending::Unreadable(why) => {
+                        eprintln!("hub: dulali: could not read the queue: {why}");
+                    }
+                    Pending::Yes(_) => {
+                        let text = format!("{}\n\nDulali checked: {}", held.answer, held.checked);
+                        let run = self.mem.answer(&id, &text, "dulali", None);
+                        self.mem.invalidate();
+                        let written = serde_json::from_slice::<Value>(&run.stdout)
+                            .ok()
+                            .and_then(|v| v["id"].as_str().map(str::to_string));
+                        match (run.ok(), written) {
+                            (true, Some(answer_id)) => {
+                                self.dulali.written(&id, &answer_id);
+                                self.agents.queue_sync_all();
+                                self.after_answer(&held.project, held.session.as_deref());
+                            }
+                            _ => eprintln!("hub: dulali: mem answer: {}", run.stderr),
+                        }
+                    }
+                }
+            }
+            drop(lock);
+            self.forget_lock();
+        }
     }
 
     /// The lock for one key, created on first use: a question id here, and

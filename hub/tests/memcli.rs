@@ -85,7 +85,7 @@ fn stderr_is_never_treated_as_json() {
     let dir = TempDir::new("mem-stderr");
     let mem = matrix(&dir);
 
-    let run = mem.answer("DEADBEEF", "whatever");
+    let run = mem.answer("DEADBEEF", "whatever", "saiful", None);
     assert!(!run.ok());
     assert_eq!(run.code, Some(1));
     assert!(run.stdout.is_empty());
@@ -192,11 +192,14 @@ fn nothing_reaches_a_shell() {
     let mem = MemCli::with_path(&bin);
 
     let hostile = "\"; touch /tmp/hub-test-pwned; #";
-    mem.answer("01ABC", hostile);
+    mem.answer("01ABC", hostile, "saiful", None);
 
     let recorded = std::fs::read_to_string(&seen).unwrap();
     let lines: Vec<&str> = recorded.lines().collect();
-    assert_eq!(lines, vec!["answer", "--", "01ABC", hostile]);
+    assert_eq!(
+        lines,
+        vec!["answer", "--json", "--by", "saiful", "--", "01ABC", hostile]
+    );
     assert!(
         !Path::new("/tmp/hub-test-pwned").exists(),
         "the answer field reached a shell"
@@ -467,7 +470,7 @@ fn a_real_answer_round_trips_and_an_unknown_id_is_a_clean_exit_one() {
 
     // An answer that begins with a dash: without the `--`, clap reads it as a
     // flag and mem exits 2 before writing anything.
-    let run = mem.answer(&id, "-x use sqlite");
+    let run = mem.answer(&id, "-x use sqlite", "saiful", None);
     assert!(run.ok(), "{run:?}");
 
     mem.invalidate();
@@ -478,7 +481,7 @@ fn a_real_answer_round_trips_and_an_unknown_id_is_a_clean_exit_one() {
 
     // The failure mode: exit 1 and plain text, which the page turns into a
     // banner rather than a 500.
-    let run = mem.answer("DEADBEEF", "no such question");
+    let run = mem.answer("DEADBEEF", "no such question", "saiful", None);
     assert_eq!(run.code, Some(1));
     assert!(run.stdout.is_empty());
     assert!(run.stderr.contains("DEADBEEF"), "{run:?}");

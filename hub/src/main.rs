@@ -3,6 +3,7 @@
 
 use std::io::Write;
 use std::net::TcpListener;
+use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,17 +11,20 @@ use anyhow::{Context, Result};
 use hub::app::App;
 use hub::config::Config;
 use hub::doorbell::Doorbell;
-use hub::{config, http, pair};
+use hub::{config, dulali, http, pair};
 
 const USAGE: &str = "\
 hub — mem's phone-facing view
 
 Usage: hub [OPTIONS]
        hub pair [OPTIONS]
+       hub dulali-token
 
 Commands:
-  pair  Print a link that pairs a phone or laptop with this hub, and wait
-        for it to be opened
+  pair          Print a link that pairs a phone or laptop with this hub, and
+                wait for it to be opened
+  dulali-token  Print Dulali's token for the dulali socket, making it the
+                first time
 
 Options:
       --config <PATH>  Config file (default $XDG_CONFIG_HOME/hub/config.toml)
@@ -32,6 +36,7 @@ Options:
 
 struct Args {
     pair: bool,
+    dulali_token: bool,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
@@ -39,6 +44,7 @@ struct Args {
 fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
         pair: false,
+        dulali_token: false,
         config: None,
         port: None,
     };
@@ -46,6 +52,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "pair" => args.pair = true,
+            "dulali-token" => args.dulali_token = true,
             "--config" => {
                 let value = argv.next().context("--config needs a path")?;
                 args.config = Some(PathBuf::from(value));
@@ -79,6 +86,10 @@ fn run() -> Result<()> {
     let Some(args) = parse(std::env::args())? else {
         return Ok(());
     };
+    if args.dulali_token {
+        println!("{}", dulali::token(&dulali::token_path()?)?);
+        return Ok(());
+    }
     let config_path = match args.config {
         Some(path) => path,
         None => config::default_path()?,
@@ -100,7 +111,20 @@ fn run() -> Result<()> {
     println!("hub listening on {bound}");
     std::io::stdout().flush()?;
 
+    let socket = config.dulali_socket.clone();
     let app = Arc::new(App::new(config, bound.port(), hub::machine_name()));
+
+    // Dulali's own door: its token is made now, so the socket never opens
+    // with nothing that could pass it.
+    if let Some(path) = socket {
+        dulali::token(&dulali::token_path()?)?;
+        let listener = bind_socket(&path)?;
+        let app = Arc::clone(&app);
+        std::thread::Builder::new()
+            .name("hub-dulali".to_string())
+            .spawn(move || http::serve_unix(listener, move |request| app.dulali_post(request)))
+            .context("starting the dulali socket")?;
+    }
 
     // A doorbell that cannot start is a doorbell that does not ring; it is
     // not a reason to refuse to serve the page.
@@ -116,6 +140,23 @@ fn run() -> Result<()> {
     }
 
     http::serve(listener, move |request| app.handle(request))
+}
+
+/// A socket left by the last run is removed first; the new one is 0660, so
+/// the group the directory names is who may connect.
+fn bind_socket(path: &std::path::Path) -> Result<UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
+
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("removing {}", path.display())),
+    }
+    let listener =
+        UnixListener::bind(path).with_context(|| format!("binding {}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660))
+        .with_context(|| format!("opening {} to its group", path.display()))?;
+    Ok(listener)
 }
 
 /// `hub pair`: writes a code, prints its link, and waits for a device to

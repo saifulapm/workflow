@@ -429,8 +429,13 @@ impl MemCli {
 
     /// The one write hub makes. `--` first, so an answer beginning with a dash
     /// is text rather than a flag mem rejects with exit 2.
-    pub fn answer(&self, id: &str, text: &str) -> Run {
-        self.exec(&["answer", "--", id, text])
+    pub fn answer(&self, id: &str, text: &str, by: &str, supersedes: Option<&str>) -> Run {
+        let mut args = vec!["answer", "--json", "--by", by];
+        if let Some(earlier) = supersedes {
+            args.extend(["--supersedes", earlier]);
+        }
+        args.extend(["--", id, text]);
+        self.exec(&args)
     }
 }
 
