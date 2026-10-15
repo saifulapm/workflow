@@ -1,6 +1,7 @@
 //! `workflow hygiene` -- what a product repository must never carry: files an
 //! agent harness writes, references a reader of the repository cannot follow,
-//! and the tells of generated text in commit messages.
+//! and the tells of generated text in commit messages. At commit time it also
+//! refuses a pnpm store that an install in an agent worktree moved.
 //!
 //! Two tiers. A hard finding exits 1 and nothing clears it. Soft findings are
 //! read in messages only, lint-msg's vocabulary and style tables plus a few
@@ -475,6 +476,31 @@ fn scan_staged(git: &Git, spec: &[String], globs: &[String], report: &mut Report
     }
 }
 
+/// The checkout's pnpm store, read through an agent worktree's `node_modules`
+/// link too: an install inside the worktree writes through that link and
+/// leaves main's `.modules.yaml` pointing at the worktree's store.
+fn scan_pnpm_store(top: &Path, report: &mut Report) {
+    let path = "node_modules/.modules.yaml";
+    let Ok(text) = std::fs::read_to_string(top.join(path)) else {
+        return;
+    };
+    let Ok(modules) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return;
+    };
+    if let Some(dir) = modules["virtualStoreDir"]
+        .as_str()
+        .filter(|d| *d != ".pnpm")
+    {
+        report.add(
+            path,
+            0,
+            "hard",
+            "pnpm store moved",
+            &format!("virtualStoreDir is {dir}; CI=true pnpm install --offline --frozen-lockfile"),
+        );
+    }
+}
+
 /// Paths are the index's, read off the working tree; a file that will not
 /// read as text is binary or gone and has no lines to check.
 fn scan_tree(git: &Git, top: &Path, spec: &[String], globs: &[String], report: &mut Report) {
@@ -589,6 +615,7 @@ pub fn cmd_hygiene(scope: Scope, path: Option<&Path>, json: bool, fix_it: bool) 
         let sweep = !scope.staged && !scope.tree && scope.history.is_none();
         if scope.staged {
             scan_staged(&git, &spec, &globs, &mut report);
+            scan_pnpm_store(&top, &mut report);
         }
         if scope.tree || sweep {
             scan_tree(&git, &top, &spec, &globs, &mut report);

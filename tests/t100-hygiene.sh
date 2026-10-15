@@ -91,6 +91,18 @@ is "$RC" 0 'exempt: the key clears the paths it names'
 unlike "$OUT" 'tests/fixture' 'exempt: and says nothing about them'
 git reset -q
 
+## ------------------------------------------------------------ pnpm store
+
+mkdir -p node_modules
+printf '{\n  "virtualStoreDir": ".pnpm"\n}\n' >node_modules/.modules.yaml
+run workflow hygiene --staged
+is "$RC" 0 'pnpm: a store at .pnpm passes'
+printf '{\n  "virtualStoreDir": "../.claude/worktrees/agent-1/node_modules/.pnpm"\n}\n' >node_modules/.modules.yaml
+run workflow hygiene --staged
+is "$RC" 1 'pnpm: a store a worktree install moved is hard'
+hit 'pnpm store moved' 'node_modules/\.modules\.yaml:0'
+rm -rf node_modules
+
 ## ---------------------------------------------------------------- message
 
 msg() { printf '%s\n' "$@" >"$T_TMP/msg"; run workflow hygiene --message "$T_TMP/msg"; }
