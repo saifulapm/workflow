@@ -43,9 +43,19 @@ pub fn linked(text: &str) -> String {
     {
         out.push_str(&esc(&rest[..at]));
         let url = &rest[at..];
-        let end = url
+        let mut end = url
             .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>'))
             .unwrap_or(url.len());
+        // Punctuation that ends the sentence is not part of the URL, nor is
+        // a `)` that closes a bracket opened before it.
+        while let Some(last) = url[..end].chars().last() {
+            let unopened =
+                last == ')' && url[..end].matches('(').count() < url[..end].matches(')').count();
+            if !(matches!(last, '.' | ',' | ';' | ':' | '!' | '?') || unopened) {
+                break;
+            }
+            end -= 1;
+        }
         out.push_str(&outside_link(&url[..end], &esc(&url[..end])));
         rest = &url[end..];
     }
@@ -591,6 +601,24 @@ pub fn label(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_link_leaves_the_sentence_punctuation_after_it_as_text() {
+        let link =
+            |url: &str| format!("<a href=\"{url}\" target=\"_blank\" rel=\"noopener\">{url}</a>");
+        assert_eq!(
+            linked("see https://e.com/a. Then (https://e.com/b), ok?"),
+            format!(
+                "see {}. Then ({}), ok?",
+                link("https://e.com/a"),
+                link("https://e.com/b")
+            )
+        );
+        assert_eq!(
+            linked("https://en.wikipedia.org/wiki/Rust_(language)"),
+            link("https://en.wikipedia.org/wiki/Rust_(language)")
+        );
+    }
 
     #[test]
     fn escaping_covers_every_character_that_ends_a_context() {
