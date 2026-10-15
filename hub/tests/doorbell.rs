@@ -301,6 +301,9 @@ fn a_question_from_another_machine_rings_on_this_hub() {
         "{:?}",
         world.rings()
     );
+    // The push names the machine that asked, not the hub's own.
+    let body = &world.rings()[0][4];
+    assert!(body.starts_with("question waiting on far-nuc "), "{body}");
 }
 
 #[test]

@@ -109,7 +109,8 @@ impl Doorbell {
                 continue;
             }
             let project = row["project"].as_str().unwrap_or("");
-            self.deliver(&self.body(project));
+            let machine = row["machine"].as_str().unwrap_or(&self.machine);
+            self.deliver(&self.body(machine, project));
         }
         // A fault anywhere keeps the next round seeding too, so a first start
         // never rings for a backlog it could not read whole.
@@ -279,15 +280,15 @@ impl Doorbell {
         }
     }
 
-    /// The whole message. A project name and a URL, and no question text — the
-    /// text is what the tailnet is for.
-    pub fn body(&self, project: &str) -> String {
+    /// The whole message. The machine that asked, a project name and a URL,
+    /// and no question text — the text is what the tailnet is for.
+    pub fn body(&self, machine: &str, project: &str) -> String {
         if project.is_empty() {
-            format!("question waiting on {} — {}", self.machine, self.hub_url)
+            format!("question waiting on {machine} — {}", self.hub_url)
         } else {
             format!(
-                "question waiting on {} ({}) — {}",
-                self.machine, project, self.hub_url
+                "question waiting on {machine} ({project}) — {}",
+                self.hub_url
             )
         }
     }
@@ -410,12 +411,12 @@ mod tests {
             )),
         };
         assert_eq!(
-            doorbell.body("proj-alpha"),
+            doorbell.body("macbook", "proj-alpha"),
             "question waiting on macbook (proj-alpha) — http://macbook:8787/"
         );
         // A global question has no project, and the sentence still reads.
         assert_eq!(
-            doorbell.body(""),
+            doorbell.body("macbook", ""),
             "question waiting on macbook — http://macbook:8787/"
         );
     }
