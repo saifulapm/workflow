@@ -242,3 +242,28 @@ fn a_cross_origin_post_leaves_the_code_pending() {
     let pending = std::fs::read_to_string(world.state("pair")).unwrap();
     assert!(pending.starts_with(&format!("{code} ")), "{pending}");
 }
+
+#[test]
+fn an_agent_pairs_with_an_origin_and_no_cookie() {
+    let world = World::new("pair-agent");
+    let pairing = world.pair();
+    let hub = world.hub();
+    // What a device agent sends to pair: the link's own origin, and no
+    // cookie, browser or form.
+    let response = hub.raw(&format!(
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: {}\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n",
+        pairing.path(),
+        hub.port,
+        hub.origin()
+    ));
+    assert_eq!(status_of(&response), 303, "{response}");
+    let cookie = header_of(&response, "set-cookie").expect("a Set-Cookie");
+    let token = cookie
+        .strip_prefix("hub_device=")
+        .and_then(|rest| rest.split(';').next())
+        .unwrap_or_else(|| panic!("{cookie}"));
+    let devices = std::fs::read_to_string(world.state("devices")).unwrap();
+    let newest = devices.lines().last().unwrap();
+    assert!(newest.starts_with(&format!("{token} ")), "{devices}");
+}
