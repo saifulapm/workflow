@@ -20,6 +20,7 @@ pub mod hook;
 pub mod hygiene;
 pub mod install;
 pub mod lint;
+pub mod machine;
 pub mod memcli;
 pub mod paths;
 pub mod pause;
