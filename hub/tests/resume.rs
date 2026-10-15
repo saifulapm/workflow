@@ -171,6 +171,41 @@ fn a_question_for_the_orchestrator_does_not_hold_back_the_resume() {
     );
 }
 
+/// A `--for saiful` question is a person's like any other: the session waits
+/// for its answer and is resumed with it.
+#[test]
+fn a_question_for_saiful_is_answered_into_the_resume() {
+    let world = World::new("resume-saiful", mini());
+    let hub = world.hub(&[]);
+    poll(&hub);
+
+    let q1 = |a| question(Q1, "Ship it?", Some("gamma-m4"), a);
+    let saifuls = |a| {
+        let mut q = question(Q2, "Approve the roadmap?", Some("gamma-m4"), a);
+        q["audience"] = json!("saiful");
+        q
+    };
+    world.questions(
+        &[q1(None), saifuls(None)],
+        &[saifuls(None), q1(Some("yes"))],
+    );
+    answer(&hub, Q1, "yes");
+    assert_eq!(poll(&hub), json!([{"kind": "sync"}]), "Saiful's still open");
+
+    world.questions(
+        &[saifuls(None)],
+        &[saifuls(Some("approve")), q1(Some("yes"))],
+    );
+    answer(&hub, Q2, "approve");
+    assert_eq!(
+        poll(&hub),
+        resume(&format!(
+            "{HEAD}#Q1AAAAAA Ship it?\nAnswer: yes\n\n\
+             #Q2BBBBBB Approve the roadmap?\nAnswer: approve"
+        ))
+    );
+}
+
 /// Only the runner's own session comes back: answering a question an older
 /// orchestrator of the project asked must not revive it beside the run.
 #[test]

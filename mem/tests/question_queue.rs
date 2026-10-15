@@ -455,6 +455,60 @@ fn an_orchestrators_question_is_listed_for_the_orchestrator_alone() {
     assert_eq!(v["questions"][0]["answered"], true);
 }
 
+/// A question only Saiful may answer carries its own audience, and still
+/// counts as a person's wherever a person's questions are read.
+#[test]
+fn a_saiful_question_is_saifuls_and_still_a_persons() {
+    let w = World::new("q-saiful");
+    let repo = w.repo("thing", None);
+    let out = ask_env(
+        &w,
+        &repo,
+        &["ask", "approve the roadmap?", "--for", "saiful", "--json"],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["audience"], "saiful", "{v}");
+    let out = ask_env(&w, &repo, &["ask", "which colour?", "--for", "human"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = ask_env(&w, &repo, &["ask", "widen?", "--for", "orchestrator"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let bodies = |audience: &str| -> Vec<String> {
+        let out = ask_env(
+            &w,
+            &repo,
+            &["questions", "--pending", "--for", audience, "--json"],
+        );
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let mut bodies: Vec<String> = v["questions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["body"].as_str().unwrap().to_string())
+            .collect();
+        bodies.sort();
+        bodies
+    };
+    assert_eq!(bodies("saiful"), ["approve the roadmap?"]);
+    assert_eq!(bodies("human"), ["approve the roadmap?", "which colour?"]);
+    assert_eq!(bodies("orchestrator"), ["widen?"]);
+
+    let out = ask_env(&w, &repo, &["questions", "--for", "human", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let colour = v["questions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| q["body"] == "which colour?")
+        .unwrap();
+    assert!(colour["audience"].is_null(), "{colour}");
+
+    let digest = stdout(&ask_env(&w, &repo, &["context"]));
+    assert!(digest.contains("questions: 2 for you"), "{digest}");
+}
+
 #[test]
 fn a_recommendation_rides_with_the_options_in_both_listings() {
     let w = World::new("q-recommend");

@@ -103,7 +103,7 @@
       ]
     },
     "audience": {
-      "description": "Question rows: who answers. `orchestrator` is for the session driving the work; null is a person's, which is what the hub shows.",
+      "description": "Question rows: who answers. `orchestrator` is for the session driving the work; `saiful` is a person's only Saiful may answer; null is any person's. A person's, Saiful's included, is what the hub shows.",
       "type": [
         "string",
         "null"

@@ -384,12 +384,12 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
         lines.push(format!("project: {name}"));
     }
     lines.extend(position(sources));
-    // An orchestrator's question is not the reader's; only the ones with no
-    // audience are waiting on the person reading this.
+    // An orchestrator's question is not the reader's; a person's, Saiful's
+    // included, is waiting on the person reading this.
     let for_you: Vec<&Row> = sources
         .questions
         .iter()
-        .filter(|q| q.audience.is_none())
+        .filter(|q| crate::cli::is_a_persons(q.audience.as_deref()))
         .collect();
     if !for_you.is_empty() {
         lines.push(format!("questions: {} for you", for_you.len()));

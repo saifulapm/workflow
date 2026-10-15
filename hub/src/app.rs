@@ -281,8 +281,9 @@ impl App {
             .rows("questions")
             .into_iter()
             // An orchestrator's own question from its implementers carries
-            // the same amx id, but nobody answers it here.
-            .filter(|row| row["session"] == session && row["audience"].is_null())
+            // the same amx id, but nobody answers it here. A person's,
+            // Saiful's included, is answered here.
+            .filter(|row| row["session"] == session && row["audience"] != "orchestrator")
             .collect();
         if asked.is_empty() || asked.iter().any(|row| row["answered"] != true) {
             return;

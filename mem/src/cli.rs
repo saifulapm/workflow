@@ -423,22 +423,39 @@ pub enum ProjectSetCommand {
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;
-/// a person's is what the hub shows.
+/// a person's is what the hub shows, and Saiful's is a person's only he may
+/// answer.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lower")]
 pub enum Audience {
     Orchestrator,
     Human,
+    Saiful,
 }
 
 impl Audience {
-    /// The frontmatter value; a person is the absence of one.
+    /// The frontmatter value; any person is the absence of one.
     pub fn stored(self) -> Option<&'static str> {
         match self {
             Audience::Orchestrator => Some("orchestrator"),
             Audience::Human => None,
+            Audience::Saiful => Some("saiful"),
         }
     }
+
+    /// Whether a question stored with `audience` is this audience's to
+    /// answer. Saiful is a person, so his questions are a person's too.
+    pub fn answers(self, audience: Option<&str>) -> bool {
+        match self {
+            Audience::Human => is_a_persons(audience),
+            _ => audience == self.stored(),
+        }
+    }
+}
+
+/// Whether a question stored with `audience` waits on a person.
+pub fn is_a_persons(audience: Option<&str>) -> bool {
+    audience != Audience::Orchestrator.stored()
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]

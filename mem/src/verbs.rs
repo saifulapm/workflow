@@ -1751,7 +1751,7 @@ pub fn questions(
         index.recent("question", identity.id(), 50)?
     };
     if let Some(audience) = audience {
-        rows.retain(|row| row.audience.as_deref() == audience.stored());
+        rows.retain(|row| audience.answers(row.audience.as_deref()));
     }
 
     if app.json {
