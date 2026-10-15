@@ -420,6 +420,8 @@ fn a_silent_dulali_rings_the_phone_after_the_silence() {
     let asked = hub::dulali::ulid_ms(&id).unwrap();
     let rang = jiff::Timestamp::now().as_millisecond();
     assert!(rang - asked >= 2000, "rang after {} ms", rang - asked);
+    // A doorbell round is 120 ms here; the wait loop polls every few ms.
+    assert!(rang - asked < 2000 + 1500, "rang after {} ms", rang - asked);
     world.settle();
     let rings = world.rings();
     assert_eq!(rings.len(), 1, "{rings:?}");
@@ -531,6 +533,10 @@ fn saifuls_answer_after_the_window_supersedes_dulalis_and_follows_up() {
     wait_for("Dulali's answer in mem", Duration::from_secs(10), || {
         world.question(&id)["answer_by"] == "dulali"
     });
+    let dulalis = world.question(&id)["answer_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let home = hub.get("/");
     assert!(home.contains("Dulali answered"), "{home}");
@@ -542,6 +548,23 @@ fn saifuls_answer_after_the_window_supersedes_dulalis_and_follows_up() {
     let row = world.question(&id);
     assert_eq!(row["answer"], "nine", "{row}");
     assert_eq!(row["answer_by"], "saiful", "{row}");
+    // Recorded as replacing Dulali's, not merely newer than it.
+    let shown = mem_in(
+        &world.mem,
+        &world.home,
+        &project,
+        &["show", &dulalis, "--json"],
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let shown = if shown.is_array() {
+        shown[0].clone()
+    } else {
+        shown
+    };
+    let superseded_by = shown["superseded_by"]
+        .as_str()
+        .or_else(|| shown["items"][0]["superseded_by"].as_str());
+    assert_eq!(superseded_by, row["answer_id"].as_str(), "{shown}");
     let commands = hub.poll_agent("{\"machine\":\"mini\",\"agents\":[],\"checkouts\":[]}");
     let commands: Value = serde_json::from_str(&commands).unwrap();
     let follow_up = commands["commands"]

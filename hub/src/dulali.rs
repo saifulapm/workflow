@@ -233,8 +233,9 @@ impl Dulali {
         let mut book = self.lock();
         f(&mut book);
         let cutoff = now_ms() - KEEP.as_millis() as i64;
+        // A pass is kept for good: a question Dulali passed can wait longer
+        // than a day, and losing its pass would ring it as silence.
         book.answers.retain(|_, h| h.at_ms >= cutoff);
-        book.passed.retain(|_, at| *at >= cutoff);
         let result = serde_json::to_string(&*book)
             .map_err(anyhow::Error::from)
             .and_then(|text| pair::rewrite_private(&self.path, &text));
@@ -346,6 +347,28 @@ mod tests {
             sign("s3cret", "1760000000", "{\"id\":\"x\"}"),
             "489b39c9ebcdf2b4888267ee14eb3fd4f4e24655be67175273f684b5e674e20c"
         );
+    }
+
+    /// The plan's numbers: a two-minute window and ten minutes of silence.
+    #[test]
+    fn the_window_is_two_minutes_and_the_silence_ten() {
+        assert_eq!(DEFAULT_WINDOW, Duration::from_secs(120));
+        assert_eq!(DEFAULT_SILENCE, Duration::from_secs(600));
+        assert_eq!(
+            duration_env("HUB_TEST_UNSET_SEAM", DEFAULT_WINDOW),
+            DEFAULT_WINDOW
+        );
+    }
+
+    #[test]
+    fn a_pass_outlives_the_day_answers_are_kept() {
+        let dir = std::env::temp_dir().join(format!("hub-dulali-pass-{}", std::process::id()));
+        let dulali = Dulali::open(dir.join("dulali.json"), None);
+        let old = now_ms() - 2 * KEEP.as_millis() as i64;
+        dulali.pass("01OLDPASS0000000000000000A", old);
+        dulali.pass("01NEWPASS0000000000000000B", now_ms());
+        assert!(dulali.has_spoken("01OLDPASS0000000000000000A"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

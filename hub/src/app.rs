@@ -492,7 +492,13 @@ impl App {
         if !said.pass && answer.is_empty() {
             return refuse(400, "an answer or a pass");
         }
-        let id = said.id.trim();
+        // Locked on the full id, as Saiful's own answer is, whether Dulali
+        // sent that or the short one.
+        let id = match self.is_pending(said.id.trim()) {
+            Pending::Yes(row) => row["id"].as_str().unwrap_or("").to_string(),
+            _ => said.id.trim().to_string(),
+        };
+        let id = id.as_str();
         let response = {
             let lock = self.lock_for(id);
             let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
