@@ -71,8 +71,8 @@ const CLOUD_LAPSE: jiff::SignedDuration = jiff::SignedDuration::from_hours(7);
 /// The project's cloud run, or None when its runner is not one. Landed once
 /// its milestone is no longer the open one. Else a handoff written after it
 /// began parks it, when the handoff says `parked:`, or ends it; `handoff`
-/// reads that text and runs only then. Else it is live for seven hours from
-/// its start. A run with no readable start is not shown as live.
+/// reads that text and runs only then. Live or parked, it lasts seven hours
+/// from its start. A run with no readable start is neither.
 pub fn cloud_run(
     summary: &ProjectSummary,
     handoff: impl FnOnce() -> Option<String>,
@@ -88,16 +88,19 @@ pub fn cloud_run(
         .handoff_at
         .as_deref()
         .and_then(|at| at.parse::<jiff::Timestamp>().ok());
+    let fresh = since.is_some_and(|since| now.duration_since(since) < CLOUD_LAPSE);
     let state = if summary.milestone.as_deref() != Some(milestone.as_str()) {
         CloudState::Landed
     } else if handoff_at.is_some_and(|at| since.is_none_or(|since| at > since)) {
+        // The 6-hour stop parks with no question, so a park lapses too, or
+        // it would hold the one cloud slot for ever.
         let text = handoff().unwrap_or_default();
-        if text.trim_start().starts_with("parked:") {
+        if text.trim_start().starts_with("parked:") && fresh {
             CloudState::Parked
         } else {
             CloudState::Ended
         }
-    } else if since.is_some_and(|since| now.duration_since(since) < CLOUD_LAPSE) {
+    } else if fresh {
         CloudState::Live
     } else {
         CloudState::Ended
@@ -320,6 +323,19 @@ mod tests {
             at("2026-10-15T09:40:00Z"),
         );
         assert_eq!(state(ended), CloudState::Ended);
+    }
+
+    #[test]
+    fn a_parked_cloud_run_ends_seven_hours_after_it_began() {
+        let parked = |now| {
+            cloud_run(
+                &cloud("m2", Some("2026-10-15T15:00:00Z")),
+                || Some("parked: 6-hour stop, m2-t4 half done".to_string()),
+                at(now),
+            )
+        };
+        assert_eq!(state(parked("2026-10-15T15:59:00Z")), CloudState::Parked);
+        assert_eq!(state(parked("2026-10-15T16:00:00Z")), CloudState::Ended);
     }
 
     #[test]

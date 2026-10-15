@@ -268,3 +268,28 @@ fn answers_waiting_for_an_off_mini_bring_the_notice_on_a_live_run() {
     let body = page(&hub);
     assert!(body.contains(MINI_OFF), "{body}");
 }
+
+/// A park lapses seven hours after the run began, but its runner record is
+/// still there, so an answer still reaches the session.
+#[test]
+fn an_answer_to_a_park_older_than_seven_hours_still_reaches_the_session() {
+    let world = World::new("cloud-answer-lapsed");
+    let path = world.data.join("projects.json");
+    let mut doc: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["projects"][0]["runner"]["since"] = json!(ago(8 * 60));
+    doc["projects"][0]["handoff_at"] = json!(ago(7 * 60));
+    world.put("projects.json", doc);
+    let hub = world.hub();
+    cloud_polled(&hub);
+    let body = page(&hub);
+    assert!(body.contains("cloud · m2 · ended"), "{body}");
+
+    let q1 = id_ago(7 * 60, "Q1AAAAAAAAAAAAAA");
+    let q = |a| question(&q1, "Which port?", a);
+    world.questions(&[q(None)], &[q(Some("8787"))]);
+    answer(&hub, &q1, "8787");
+    assert_eq!(
+        cloud_polled(&hub),
+        cloud(&format!("{HEAD}#AAAAAAAA Which port?\nAnswer: 8787"))
+    );
+}
