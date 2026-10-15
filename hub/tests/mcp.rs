@@ -151,6 +151,10 @@ struct World {
 
 impl World {
     fn new(tag: &str) -> World {
+        World::with_mcp_port(tag, 0)
+    }
+
+    fn with_mcp_port(tag: &str, port: u16) -> World {
         let dir = TempDir::new(tag);
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
@@ -191,7 +195,7 @@ impl World {
             format!(
                 "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
                  ntfy_base = \"http://127.0.0.1:9\"\n\
-                 mcp_port = 0\naccess_aud = \"{AUD}\"\naccess_team = \"{TEAM}\"\n"
+                 mcp_port = {port}\naccess_aud = \"{AUD}\"\naccess_team = \"{TEAM}\"\n"
             ),
         )
         .unwrap();
@@ -572,10 +576,7 @@ fn a_value_that_looks_like_a_flag_is_written_as_text() {
 
     let asked = wrote("ask", json!({"question": "--why", "recommend": "--yes"}));
     let id = asked.trim().trim_start_matches('#').to_string();
-    wrote(
-        "answer",
-        json!({"id": id, "text": "--because", "by": "--me"}),
-    );
+    wrote("answer", json!({"id": id, "text": "--because"}));
     let shown = world.printed(&["--project=proj-alpha", "show", "--", &id]);
     assert!(shown.contains("--why"), "{shown}");
     let pending = world.printed(&["--project=proj-alpha", "questions", "--pending"]);
@@ -767,4 +768,103 @@ fn write_wiki_replaces_a_page_and_wiki_reads_it_back() {
     );
     assert_eq!(refused["isError"], json!(true), "{refused}");
     assert_eq!(world.tool_runs(), runs, "a refused slug runs no mem");
+}
+
+#[test]
+fn a_roadmap_review_cannot_be_answered_through_the_connector() {
+    let world = World::new("mcp-review");
+    let out = mem_in(
+        &world.mem,
+        &world.home,
+        &world.home,
+        &[
+            "--project=proj-alpha",
+            "ask",
+            "--for=saiful",
+            "--options=approve,changes",
+            "--recommend=approve",
+            "--",
+            "Review the alpha roadmap",
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let id = String::from_utf8(out.stdout)
+        .unwrap()
+        .trim()
+        .trim_start_matches('#')
+        .to_string();
+
+    for arguments in [
+        json!({"project": "proj-alpha", "id": id, "option": "approve"}),
+        json!({"project": "proj-alpha", "id": id, "text": "approve"}),
+        // Named under another project, it is still the review.
+        json!({"project": "proj-beta", "id": id, "option": "approve"}),
+    ] {
+        let refused = world.tool("answer", arguments);
+        assert_eq!(refused["isError"], json!(true), "{refused}");
+    }
+    assert!(
+        !invocations(&world.mem_log)
+            .iter()
+            .any(|argv| argv.iter().any(|a| a == "answer")),
+        "mem answer never ran"
+    );
+    let pending = world.printed(&["--project=proj-alpha", "questions", "--pending"]);
+    assert!(pending.contains("Review the alpha roadmap"), "{pending}");
+}
+
+#[test]
+fn an_answer_through_the_connector_is_signed_by_the_connector() {
+    let world = World::new("mcp-answer-by");
+    let asked = world.tool(
+        "ask",
+        json!({"project": "proj-alpha", "question": "Merge it?", "options": "yes,no"}),
+    );
+    let id = text_of(&asked).trim().trim_start_matches('#').to_string();
+    let answered = world.tool(
+        "answer",
+        json!({"project": "proj-alpha", "id": id, "option": "yes", "by": "saiful"}),
+    );
+    assert_eq!(answered["isError"], json!(false), "{answered}");
+    let rows: Value =
+        serde_json::from_str(&world.printed(&["--project=proj-alpha", "questions", "--json"]))
+            .unwrap();
+    let row = rows["questions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["body"]
+                .as_str()
+                .is_some_and(|b| b.contains("Merge it?"))
+        })
+        .unwrap_or_else(|| panic!("{rows}"));
+    assert_eq!(row["answer_by"], json!("connector"), "{row}");
+}
+
+#[test]
+fn the_hub_serves_its_pages_when_the_mcp_port_is_taken() {
+    let taken = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let dir = TempDir::new("mcp-taken");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let config = dir.join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
+             ntfy_base = \"http://127.0.0.1:9\"\n\
+             mcp_port = {port}\naccess_aud = \"{AUD}\"\naccess_team = \"{TEAM}\"\n"
+        ),
+    )
+    .unwrap();
+    let hub = Hub::spawn(
+        &home,
+        &[],
+        &["--config", config.to_str().unwrap(), "--port", "0"],
+    );
+    let page = hub.get("/");
+    assert_eq!(status_of(&page), 200, "{page}");
+    drop(taken);
 }

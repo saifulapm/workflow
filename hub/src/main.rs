@@ -166,8 +166,15 @@ fn mcp_listener(config: &Config) -> Result<Option<(TcpListener, Access)>> {
         eprintln!("hub: mcp disabled: mcp_port needs access_aud and access_team");
         return Ok(None);
     };
-    let listener = TcpListener::bind(("127.0.0.1", port))
-        .with_context(|| format!("binding 127.0.0.1:{port}"))?;
+    // The connector is optional and the tailnet pages are not: a port
+    // someone else holds shuts the connector, never the hub.
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!("hub: mcp disabled: binding 127.0.0.1:{port}: {e}");
+            return Ok(None);
+        }
+    };
     println!("mcp listening on {}", listener.local_addr()?);
     std::io::stdout().flush()?;
     Ok(Some((listener, Access::new(aud, team))))

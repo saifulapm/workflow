@@ -190,7 +190,7 @@ pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<Value> {
 }
 
 /// Whether a question asks for the roadmap's approval.
-fn is_approval(body: &str) -> bool {
+pub(crate) fn is_approval(body: &str) -> bool {
     body.starts_with(REVIEW_QUESTION.0) && body.trim_end().ends_with(REVIEW_QUESTION.1)
 }
 

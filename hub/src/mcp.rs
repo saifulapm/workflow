@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::access::Access;
 use crate::http::{Request, Response};
 use crate::memcli::MemCli;
+use crate::page_control::is_approval;
 
 /// The revisions whose `initialize` handshake this endpoint speaks, newest
 /// first. A client asking for any other gets the newest.
@@ -323,7 +324,6 @@ fn answer_schema() -> Value {
             "id": {"type": "string", "description": "The question's id."},
             "text": {"type": "string"},
             "option": {"type": "string", "description": "One of the question's options."},
-            "by": {"type": "string", "description": "Who answered."},
         }),
         &["id"],
     )
@@ -549,16 +549,45 @@ fn ask(mem: &MemCli, arguments: &Value) -> Value {
     })
 }
 
+/// Signed `connector`, whatever the caller says: an answer with no author
+/// reads as Saiful's own tap, and one the model wrote is not.
 fn answer(mem: &MemCli, arguments: &Value) -> Value {
     run(mem, arguments, true, |a| {
         let id = checked(required(a, "id")?, "id", ID)?;
+        not_a_review(mem, project_arg(a)?, id)?;
         let mut argv = vec!["answer".to_string()];
         argv.extend(valued(a, "option")?);
-        argv.extend(valued(a, "by")?);
-        argv.extend(["--".into(), id.into()]);
+        argv.extend(["--by=connector".into(), "--".into(), id.into()]);
         argv.extend(optional(a, "text")?.map(String::from));
         Ok(argv)
     })
+}
+
+/// Answering a roadmap's review approves it, which only Saiful does, on the
+/// hub. The question has to be one of this project's, so naming another
+/// project cannot step around the check, and a question mem cannot list is
+/// refused rather than answered blind.
+fn not_a_review(mem: &MemCli, project: &str, id: &str) -> Result<(), String> {
+    let run = mem.exec(&[&format!("--project={project}"), "questions", "--json"]);
+    if !run.ok() {
+        return Err(format!("could not read the question: {}", run.stderr));
+    }
+    let listed: Value = serde_json::from_slice(&run.stdout)
+        .map_err(|e| format!("could not read the question: {e}"))?;
+    let question = listed["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["id"] == id || row["short_id"] == id)
+        .ok_or_else(|| format!("{id} is not a question of {project}"))?;
+    let body = question["body"].as_str().unwrap_or("").trim();
+    let offers_approval = question["options"]
+        .as_array()
+        .is_some_and(|options| options.iter().any(|o| o == "approve"));
+    if is_approval(body) || (offers_approval && body.to_lowercase().contains("roadmap")) {
+        return Err("a roadmap review is Saiful's to answer, on the hub".into());
+    }
+    Ok(())
 }
 
 fn set_handoff(mem: &MemCli, arguments: &Value) -> Value {
