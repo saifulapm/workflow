@@ -28,6 +28,28 @@ const AUD: &str = "4714c1358e65fe4b408ad6d432a5f878f08194bdb4752441fd56faefa9b2b
 const OTHER_AUD: &str = "0d5f7e5c1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d";
 const KID: &str = "test-kid-1";
 const HANDOFF: &str = "Next: wire the connector to claude.ai.";
+/// Every tool the connector lists: the reads, then an orchestrator's writes.
+const TOOL_NAMES: [&str; 19] = [
+    "context",
+    "search",
+    "show",
+    "wiki",
+    "questions",
+    "plan",
+    "roadmap",
+    "log",
+    "handoff",
+    "ask",
+    "answer",
+    "set_handoff",
+    "add_log",
+    "decide",
+    "tick_task",
+    "tick_milestone",
+    "add_evidence",
+    "add_finding",
+    "close_finding",
+];
 
 /// `/dev/urandom` as the keygen's RNG, so the tests need no RNG crate.
 struct Urandom(std::fs::File);
@@ -341,7 +363,7 @@ fn a_valid_token_initializes_lists_handoff_and_quotes_it() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["handoff"]);
+    assert_eq!(names, TOOL_NAMES);
 
     let called = result_of(&world.handoff_call(Some(&token)));
     let printed = mem_in(
@@ -371,4 +393,349 @@ fn the_hub_pages_stay_on_their_port_and_off_the_mcp_one() {
     ));
     assert_eq!(status_of(&response), 405, "{response}");
     assert_eq!(header_of(&response, "allow"), Some("POST"));
+}
+
+impl World {
+    /// A `tools/call` of `name` with a valid token, its result.
+    fn tool(&self, name: &str, arguments: Value) -> Value {
+        result_of(&self.call(
+            Some(&token()),
+            "tools/call",
+            json!({"name": name, "arguments": arguments}),
+        ))
+    }
+
+    /// mem runs other than the hub's own background reads, which all ask
+    /// for `--json` while no connector tool ever does.
+    fn tool_runs(&self) -> usize {
+        invocations(&self.mem_log)
+            .iter()
+            .filter(|argv| !argv.iter().any(|a| a == "--json"))
+            .count()
+    }
+
+    /// What the real mem prints for `args`, run straight against the store.
+    fn printed(&self, args: &[&str]) -> String {
+        let out = mem_in(&self.mem, &self.home, &self.home, args);
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// A plan with two tasks, a roadmap with two milestones and a wiki page,
+    /// written the way an orchestrator writes them, outside the connector.
+    fn seed_plan_roadmap_wiki(&self) {
+        let plan = self.home.join("plan.md");
+        std::fs::write(
+            &plan,
+            "# plan: m1-auth\n\n- [ ] t1 Sign in\n- [ ] t2 Sign out\n",
+        )
+        .unwrap();
+        let roadmap = self.home.join("roadmap.md");
+        std::fs::write(
+            &roadmap,
+            "# roadmap: alpha\n\n- [ ] m1-auth Sign-in\n- [ ] m2-billing Billing\n",
+        )
+        .unwrap();
+        for args in [
+            vec![
+                "--project=proj-alpha",
+                "plan",
+                "--set-file",
+                plan.to_str().unwrap(),
+            ],
+            vec![
+                "--project=proj-alpha",
+                "roadmap",
+                "--set-file",
+                roadmap.to_str().unwrap(),
+            ],
+            vec!["--project=proj-alpha", "roadmap", "--status", "draft"],
+            vec![
+                "--project=proj-alpha",
+                "ask",
+                "--for=human",
+                "--",
+                "Ship it?",
+            ],
+        ] {
+            let out = mem_in(&self.mem, &self.home, &self.home, &args);
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        }
+        let mut child = std::process::Command::new(&self.mem)
+            .args([
+                "--project=proj-alpha",
+                "wiki",
+                "--stdin",
+                "--note=seed",
+                "--",
+                "auth",
+            ])
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("XDG_CONFIG_HOME", self.home.join("config"))
+            .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("XDG_CACHE_HOME", self.home.join("cache"))
+            .env("MEM_SYNC_CMD", "true")
+            .env("MEM_NOTIFY_CMD", "true")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"# Auth\n\nSign in with a PIN.\n\n## Tokens\n\nOne per app.\n")
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+}
+
+fn text_of(result: &Value) -> &str {
+    result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{result}"))
+}
+
+#[test]
+fn the_tool_list_offers_nothing_that_deletes_prunes_clears_replaces_or_approves() {
+    let world = World::new("mcp-list");
+    let listed = result_of(&world.call(Some(&token()), "tools/list", json!({})));
+    let tools = listed["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, TOOL_NAMES);
+    for tool in tools {
+        let said = format!("{} {}", tool["name"], tool["description"]).to_lowercase();
+        for word in ["delete", "prune", "clear", "replace", "approve"] {
+            assert!(!said.contains(word), "{word} in {said}");
+        }
+        assert!(
+            tool["description"].as_str().is_some_and(|d| !d.is_empty()),
+            "{tool}"
+        );
+    }
+
+    let before = world.tool_runs();
+    let response = world.call(
+        Some(&token()),
+        "tools/call",
+        json!({"name": "approve_roadmap", "arguments": {"project": "proj-alpha"}}),
+    );
+    let doc: Value = serde_json::from_str(body_of(&response)).unwrap();
+    assert_eq!(doc["error"]["message"], "unknown tool", "{doc}");
+    assert_eq!(world.tool_runs(), before);
+}
+
+#[test]
+fn an_ask_through_the_connector_shows_on_the_hub_as_a_pending_question() {
+    let world = World::new("mcp-ask");
+    let question = "Which hour does the nag go out?";
+    // The home page is read first, so a stale cached read would hide the ask.
+    assert!(!body_of(&world.hub.get("/")).contains(question));
+
+    let asked = world.tool(
+        "ask",
+        json!({"project": "proj-alpha", "question": question, "options": "seven,eight", "for": "human"}),
+    );
+    assert_eq!(asked["isError"], json!(false), "{asked}");
+
+    let page = world.hub.get("/");
+    assert_eq!(status_of(&page), 200, "{page}");
+    assert!(body_of(&page).contains(question), "{page}");
+    let pending = world.printed(&["--project=proj-alpha", "questions", "--pending"]);
+    assert!(pending.contains(question), "{pending}");
+}
+
+#[test]
+fn a_value_that_looks_like_a_flag_is_written_as_text() {
+    let world = World::new("mcp-dashes");
+    let wrote = |name: &str, mut arguments: Value| {
+        arguments["project"] = json!("proj-alpha");
+        let result = world.tool(name, arguments);
+        assert_eq!(result["isError"], json!(false), "{name}: {result}");
+        text_of(&result).to_string()
+    };
+
+    wrote("add_log", json!({"text": "--clear"}));
+    let logged = world.printed(&["--project=proj-alpha", "log", "--limit=5"]);
+    assert!(logged.contains("  --clear\n"), "{logged}");
+
+    wrote("set_handoff", json!({"text": "--stdin"}));
+    let handoff = world.printed(&["--project=proj-alpha", "handoff"]);
+    assert!(handoff.contains("--stdin"), "{handoff}");
+
+    wrote("decide", json!({"text": "--force", "by": "agent"}));
+    let decided = world.printed(&["--project=proj-alpha", "log", "--kind=ruling"]);
+    assert!(decided.contains("--force"), "{decided}");
+
+    let asked = wrote("ask", json!({"question": "--why", "recommend": "--yes"}));
+    let id = asked.trim().trim_start_matches('#').to_string();
+    wrote(
+        "answer",
+        json!({"id": id, "text": "--because", "by": "--me"}),
+    );
+    let shown = world.printed(&["--project=proj-alpha", "show", "--", &id]);
+    assert!(shown.contains("--why"), "{shown}");
+    let pending = world.printed(&["--project=proj-alpha", "questions", "--pending"]);
+    assert!(!pending.contains("--why"), "answered: {pending}");
+
+    let filed = wrote(
+        "add_finding",
+        json!({"milestone": "m1-auth", "step": "--s", "text": "--broken"}),
+    );
+    let finding = filed
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .trim_start_matches('#')
+        .to_string();
+    wrote("close_finding", json!({"id": finding, "by": "--abc123"}));
+    let findings = world.printed(&["--project=proj-alpha", "finding", "list"]);
+    assert!(findings.contains("--broken"), "{findings}");
+    assert!(!findings.contains(" open "), "closed: {findings}");
+
+    wrote(
+        "add_evidence",
+        json!({"task": "t1", "note": "--note", "content": "--content\n"}),
+    );
+    let evidence = world.printed(&["--project=proj-alpha", "evidence", "list"]);
+    assert!(
+        evidence.contains("t1") && evidence.contains("--note"),
+        "{evidence}"
+    );
+
+    // Each text went in after `--`, so mem never read one as a flag.
+    let runs = invocations(&world.mem_log);
+    let add_log = runs
+        .iter()
+        .find(|argv| argv.iter().any(|a| a == "--clear"))
+        .unwrap();
+    assert_eq!(add_log, &["--project=proj-alpha", "log", "--", "--clear"]);
+}
+
+#[test]
+fn a_bad_audience_or_name_is_refused_before_mem_runs() {
+    let world = World::new("mcp-refuse");
+    let before = world.tool_runs();
+    for (name, arguments) in [
+        (
+            "ask",
+            json!({"project": "proj-alpha", "question": "q", "for": "root"}),
+        ),
+        (
+            "decide",
+            json!({"project": "proj-alpha", "text": "t", "by": "root"}),
+        ),
+        ("show", json!({"project": "proj-alpha", "ids": ["--json"]})),
+        ("wiki", json!({"project": "proj-alpha", "slug": "--stdin"})),
+        (
+            "tick_task",
+            json!({"project": "proj-alpha", "task": "t1 --clear"}),
+        ),
+        (
+            "tick_milestone",
+            json!({"project": "proj-alpha", "milestone": "--clear"}),
+        ),
+        ("add_log", json!({"project": "--scope=all", "text": "t"})),
+    ] {
+        let result = world.tool(name, arguments);
+        assert_eq!(result["isError"], json!(true), "{name}: {result}");
+    }
+    assert_eq!(world.tool_runs(), before);
+}
+
+#[test]
+fn each_read_returns_what_mem_prints() {
+    let world = World::new("mcp-reads");
+    world.seed_plan_roadmap_wiki();
+    let logged = world.printed(&["--project=proj-alpha", "log", "--", "alpha read this"]);
+    let id = logged.trim_start_matches('#')[..8].to_string();
+
+    let reads: [(&str, Value, Vec<&str>); 14] = [
+        ("context", json!({}), vec!["context"]),
+        ("context", json!({"full": true}), vec!["context", "--full"]),
+        (
+            "search",
+            json!({"query": "alpha"}),
+            vec!["search", "--", "alpha"],
+        ),
+        (
+            "search",
+            json!({"query": "alpha", "limit": 1}),
+            vec!["search", "--limit=1", "--", "alpha"],
+        ),
+        ("show", json!({"ids": [id]}), vec!["show", "--", &id]),
+        ("wiki", json!({}), vec!["wiki"]),
+        (
+            "wiki",
+            json!({"slug": "auth#tokens"}),
+            vec!["wiki", "--", "auth#tokens"],
+        ),
+        ("questions", json!({}), vec!["questions"]),
+        (
+            "questions",
+            json!({"pending": true}),
+            vec!["questions", "--pending"],
+        ),
+        ("plan", json!({}), vec!["plan"]),
+        ("roadmap", json!({}), vec!["roadmap"]),
+        (
+            "roadmap",
+            json!({"status": true}),
+            vec!["roadmap", "--status"],
+        ),
+        ("log", json!({"limit": 2}), vec!["log", "--limit=2"]),
+        ("handoff", json!({}), vec!["handoff"]),
+    ];
+    for (name, mut arguments, argv) in reads {
+        arguments["project"] = json!("proj-alpha");
+        let mut args = vec!["--project=proj-alpha"];
+        args.extend(argv);
+        // A context read racing the hub's background questions poll has come
+        // back once without the seeded question, so a mismatch reads again.
+        for attempt in 1..=3 {
+            let printed = world.printed(&args);
+            assert!(!printed.is_empty(), "{args:?} printed nothing");
+            let result = world.tool(name, arguments.clone());
+            assert_eq!(result["isError"], json!(false), "{name}: {result}");
+            if attempt == 3 || text_of(&result) == printed {
+                assert_eq!(text_of(&result), printed, "{name} {args:?}");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    let tokens = world.printed(&["--project=proj-alpha", "wiki", "--", "auth#tokens"]);
+    assert!(tokens.contains("One per app."), "{tokens}");
+    let status = world.printed(&["--project=proj-alpha", "roadmap", "--status"]);
+    assert!(status.contains("draft"), "{status}");
+}
+
+#[test]
+fn a_tick_checks_off_a_task_or_a_milestone_in_place() {
+    let world = World::new("mcp-tick");
+    world.seed_plan_roadmap_wiki();
+
+    let ticked = world.tool("tick_task", json!({"project": "proj-alpha", "task": "t1"}));
+    assert_eq!(ticked["isError"], json!(false), "{ticked}");
+    let plan = world.printed(&["--project=proj-alpha", "plan"]);
+    assert_eq!(
+        plan,
+        "# plan: m1-auth\n\n- [x] t1 Sign in\n- [ ] t2 Sign out\n"
+    );
+
+    let ticked = world.tool(
+        "tick_milestone",
+        json!({"project": "proj-alpha", "milestone": "m1-auth"}),
+    );
+    assert_eq!(ticked["isError"], json!(false), "{ticked}");
+    let roadmap = world.printed(&["--project=proj-alpha", "roadmap"]);
+    assert_eq!(
+        roadmap,
+        "# roadmap: alpha\n\n- [x] m1-auth Sign-in\n- [ ] m2-billing Billing\n"
+    );
+    // A tick is not an approval.
+    let status = world.printed(&["--project=proj-alpha", "roadmap", "--status"]);
+    assert!(status.contains("draft"), "{status}");
 }
