@@ -6,14 +6,21 @@
 mod scratch;
 
 use std::process::Output;
+use std::sync::RwLock;
 
 use scratch::Scratch;
 use serde_json::json;
 
 const HUB: &str = "https://dulali.taila27604.ts.net";
 
+/// A child forked while another test's fixture is still open for writing
+/// holds that file open, and its exec then fails with "Text file busy". So
+/// a fixture is written under the write lock and every spawn waits for it.
+static FORKS: RwLock<()> = RwLock::new(());
+
 fn world(tag: &str, status: &str, reply: &str) -> Scratch {
     let work = Scratch::new(tag);
+    let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
     work.script(
         "curl",
         r#"
@@ -36,6 +43,7 @@ fn paired(work: &Scratch) {
 }
 
 fn route(work: &Scratch, args: &[&str]) -> Output {
+    let _forking = FORKS.read().unwrap_or_else(|e| e.into_inner());
     std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .arg("route")
         .args(args)
