@@ -8,7 +8,7 @@
 
 use serde_json::Value;
 
-use crate::agents::{CLOUD_MACHINE, Command};
+use crate::agents::{Agents, CLOUD_MACHINE, Command};
 use crate::form::encode_component;
 use crate::html::{
     degraded_banner, esc, item_list_section, markdown_article, outside_link, page_url, project_url,
@@ -338,9 +338,11 @@ pub fn cloud_slot(mem: &MemCli, summaries: &[ProjectSummary]) -> Option<(String,
 }
 
 /// Why `s` may not start a cloud run, or `None` when it may: `workflow go
-/// --cloud` wants an approved milestone, no pause, and the slot free.
+/// --cloud` wants an approved milestone, no pause, no device orchestrator on
+/// it, and the slot free.
 pub fn cloud_refusal(
     mem: &MemCli,
+    agents: &Agents,
     summaries: &[ProjectSummary],
     s: &ProjectSummary,
 ) -> Option<String> {
@@ -350,6 +352,10 @@ pub fn cloud_refusal(
     }
     if s.paused.is_some() {
         return Some(format!("{} is paused.", s.name));
+    }
+    if let Run::Live(agent) = live::run(s.runner.as_ref(), &s.name, s.milestone.as_deref(), agents)
+    {
+        return Some(format!("{} is already running.", agent.id));
     }
     cloud_slot(mem, summaries).map(|(project, run)| {
         format!(
@@ -400,7 +406,7 @@ fn cloud_prompt(project: &str, slug: &str, base: &str) -> String {
 /// the Claude app.
 fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let summaries = project_summaries(&ctx.app.mem);
-    if cloud_refusal(&ctx.app.mem, &summaries, s).is_some() {
+    if cloud_refusal(&ctx.app.mem, &ctx.app.agents, &summaries, s).is_some() {
         return String::new();
     }
     let slug = s.milestone.as_deref().unwrap_or_default();

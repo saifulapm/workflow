@@ -212,6 +212,31 @@ fn a_parked_cloud_run_still_holds_the_slot() {
     assert_eq!(status_of(&response), 409, "{response}");
 }
 
+#[test]
+fn run_in_cloud_is_refused_while_a_device_orchestrator_runs_the_project() {
+    let world = World::new("cloud-run-device-live");
+    world.set(
+        "gamma",
+        "runner",
+        json!({"machine": "mini", "id": "gamma-m2-next"}),
+    );
+    let hub = world.hub();
+    let report = json!({"machine": "mini", "checkouts": ["gamma"],
+        "agents": [{"id": "gamma-m2-next", "state": "working", "ended": 0}]});
+    hub.poll_agent(&report.to_string());
+    let body = page(&hub);
+    assert!(body.contains("gamma-m2-next · working"), "{body}");
+    assert_eq!(card(&body), None, "{body}");
+    assert!(!body.contains(RUN_IN_CLOUD), "{body}");
+    let response = hub.post_form("/p/gamma/control", "do=cloud");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(
+        body_of(&response).contains("gamma-m2-next is already running"),
+        "{response}"
+    );
+    assert_eq!(poll(&hub), json!([]));
+}
+
 /// The Start in cloud card's section of the page, or `None` without one.
 fn card(body: &str) -> Option<String> {
     let at = body.find("<h2>Cloud run</h2>")?;

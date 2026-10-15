@@ -200,10 +200,10 @@ fn cloud(ctx: &PageCtx, project: &str) -> Response {
     let Some(summary) = summaries.iter().find(|s| s.name == project) else {
         return Response::not_found();
     };
-    if let Some(why) = page_project::cloud_refusal(mem, &summaries, summary) {
+    let agents = &ctx.app.agents;
+    if let Some(why) = page_project::cloud_refusal(mem, agents, &summaries, summary) {
         return conflict(ctx, &why);
     }
-    let agents = &ctx.app.agents;
     if !agents.online(CLOUD_MACHINE) {
         return conflict(ctx, &format!("{CLOUD_MACHINE} is offline."));
     }
