@@ -1765,6 +1765,8 @@ pub fn questions(
             v["answered"] = json!(answer.is_some());
             v["body"] = json!(read_body(row).trim());
             v["answer"] = json!(answer.as_ref().map(|a| read_body(a).trim().to_string()));
+            v["answer_id"] = json!(answer.as_ref().map(|a| a.id.clone()));
+            v["answer_by"] = json!(answer.as_ref().and_then(read_item).and_then(|i| i.meta.by));
             // The index keeps neither field, so they come from the item file.
             let meta = read_item(row).map(|i| i.meta);
             let options = meta.as_ref().and_then(|m| m.options.clone());
@@ -1866,7 +1868,14 @@ fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
 }
 
 /// `mem answer <id> "<text>"`.
-pub fn answer(app: &App, id: &str, text: Option<&str>, option: Option<&str>) -> Result<i32> {
+pub fn answer(
+    app: &App,
+    id: &str,
+    text: Option<&str>,
+    option: Option<&str>,
+    by: Option<&str>,
+    supersedes: Option<&str>,
+) -> Result<i32> {
     let Some(id_ref) = crate::ids::IdRef::parse(id) else {
         return Err(exit::not_found(format!("'{id}' is not an id")));
     };
@@ -1888,6 +1897,35 @@ pub fn answer(app: &App, id: &str, text: Option<&str>, option: Option<&str>) -> 
             question.short_id, question.kind
         )));
     }
+    // Only an answer to this same question can be replaced, or the edge
+    // would hide some other question's answer.
+    let replaced = match supersedes {
+        None => None,
+        Some(sup) => {
+            let Some(sup_ref) = crate::ids::IdRef::parse(sup) else {
+                return Err(exit::not_found(format!("'{sup}' is not an id")));
+            };
+            let found = index.resolve_ref(&sup_ref)?;
+            match found.as_slice() {
+                [row] if row.kind == "answer" && row.answers.as_deref() == Some(&question.id) => {
+                    Some(row.id.clone())
+                }
+                [_] => {
+                    return Err(exit::not_found(format!(
+                        "#{sup} is not an answer to #{}",
+                        question.short_id
+                    )));
+                }
+                [] => return Err(exit::not_found(format!("no answer {sup} to supersede"))),
+                _ => {
+                    return Err(exit::coded(
+                        exit::AMBIGUOUS,
+                        format!("'{sup}' is ambiguous — use the full ULID"),
+                    ));
+                }
+            }
+        }
+    };
     drop(index);
 
     let body = match (text, option) {
@@ -1914,6 +1952,8 @@ pub fn answer(app: &App, id: &str, text: Option<&str>, option: Option<&str>) -> 
         app.machine.clone(),
     );
     meta.answers = Some(question.id.clone());
+    meta.by = by.map(str::to_string);
+    meta.supersedes = replaced;
     let written = crate::write::write_item(app, &identity, meta, body)?;
     crate::sync::trigger(&app.dirs.qshell_status_json());
     report_written(app, &written, crate::item::Kind::Answer)

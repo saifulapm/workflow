@@ -214,7 +214,21 @@
       ]
     },
     "answer": {
-      "description": "Question rows in `questions --json` only: the answer's body, or null while the question waits.",
+      "description": "Question rows in `questions --json` only: the answer's body, or null while the question waits. A later answer that supersedes it replaces it here.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "answer_id": {
+      "description": "Question rows in `questions --json` only: the full id of the answer shown in `answer`, or null.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "answer_by": {
+      "description": "Question rows in `questions --json` only: who gave that answer (`mem answer --by`, such as saiful or dulali), or null.",
       "type": [
         "string",
         "null"

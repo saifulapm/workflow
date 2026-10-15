@@ -191,9 +191,20 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             wait.as_deref(),
             timeout,
         ),
-        cli::Command::Answer { id, text, option } => {
-            verbs::answer(&app, id, text.as_deref(), option.as_deref())
-        }
+        cli::Command::Answer {
+            id,
+            text,
+            option,
+            by,
+            supersedes,
+        } => verbs::answer(
+            &app,
+            id,
+            text.as_deref(),
+            option.as_deref(),
+            by.as_deref(),
+            supersedes.as_deref(),
+        ),
         cli::Command::Decide { text, by, replaces } => {
             records::decide(&app, text, by.as_str(), replaces.as_deref())
         }

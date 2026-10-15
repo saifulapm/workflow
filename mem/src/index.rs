@@ -399,7 +399,12 @@ impl Index {
 
     /// The answer to a question, if one exists.
     pub fn answer_to(&self, question_id: &str) -> Result<Option<Row>> {
-        let sql = format!("SELECT {ROW_COLUMNS} FROM items WHERE items.answers = ?1 LIMIT 1");
+        // A replaced answer is no longer the answer; among the rest the
+        // newest wins, and a ULID sorts in the order it was made.
+        let sql = format!(
+            "SELECT {ROW_COLUMNS} FROM items WHERE items.answers = ?1 \
+             ORDER BY items.active DESC, items.id DESC LIMIT 1"
+        );
         Ok(self
             .conn
             .query_row(&sql, params![question_id], Row::from_sql)

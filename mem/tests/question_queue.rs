@@ -573,3 +573,85 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     check(&w);
 }
+
+/// Dulali answers first and Saiful replaces it later: the listing shows the
+/// newer answer, who gave it, and the replaced answer stays on record.
+#[test]
+fn a_later_answer_that_supersedes_the_first_is_the_one_listed() {
+    let w = World::new("q-supersede");
+    let repo = w.repo("thing", None);
+    let asked: serde_json::Value = serde_json::from_slice(
+        &ask_env(
+            &w,
+            &repo,
+            &["ask", "nag at eight?", "--options", "eight,nine", "--json"],
+        )
+        .stdout,
+    )
+    .unwrap();
+    let q = asked["short_id"].as_str().unwrap().to_string();
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &["answer", &q, "eight", "--by", "dulali", "--json"],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let first_id = first["id"].as_str().unwrap().to_string();
+
+    let listed = |w: &World| -> serde_json::Value {
+        let out = ask_env(w, &repo, &["questions", "--json"]);
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["questions"][0].clone()
+    };
+    let row = listed(&w);
+    assert_eq!(row["answer"], "eight", "{row}");
+    assert_eq!(row["answer_by"], "dulali", "{row}");
+    assert_eq!(row["answer_id"], first_id.as_str(), "{row}");
+
+    let out = ask_env(
+        &w,
+        &repo,
+        &[
+            "answer",
+            &q,
+            "nine",
+            "--by",
+            "saiful",
+            "--supersedes",
+            &first_id,
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let row = listed(&w);
+    assert_eq!(row["answer"], "nine", "{row}");
+    assert_eq!(row["answer_by"], "saiful", "{row}");
+
+    let out = ask_env(&w, &repo, &["show", &first_id, "--json"]);
+    let shown = stdout(&out);
+    assert!(shown.contains("superseded_by"), "{shown}");
+    assert!(!shown.contains("\"superseded_by\":null"), "{shown}");
+}
+
+/// An answer replaces only another answer to the same question.
+#[test]
+fn an_answer_cannot_supersede_an_item_that_is_not_its_questions_answer() {
+    let w = World::new("q-supersede-wrong");
+    let repo = w.repo("thing", None);
+    let ask = |text: &str| -> String {
+        let v: serde_json::Value =
+            serde_json::from_slice(&ask_env(&w, &repo, &["ask", text, "--json"]).stdout).unwrap();
+        v["short_id"].as_str().unwrap().to_string()
+    };
+    let a = ask("first?");
+    let b = ask("second?");
+    let out = ask_env(&w, &repo, &["answer", &a, "yes", "--json"]);
+    let answer_a: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let answer_a = answer_a["id"].as_str().unwrap();
+
+    let out = ask_env(&w, &repo, &["answer", &b, "no", "--supersedes", answer_a]);
+    assert_ne!(code(&out), 0, "answering #{b} replaced #{a}'s answer");
+    let out = ask_env(&w, &repo, &["answer", &b, "no", "--supersedes", &a]);
+    assert_ne!(code(&out), 0, "an answer replaced a question");
+}

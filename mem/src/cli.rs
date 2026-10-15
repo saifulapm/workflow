@@ -186,6 +186,12 @@ pub enum Command {
         text: Option<String>,
         #[arg(long)]
         option: Option<String>,
+        /// Who answered, such as saiful or dulali.
+        #[arg(long)]
+        by: Option<String>,
+        /// An earlier answer to the same question that this one replaces.
+        #[arg(long)]
+        supersedes: Option<String>,
     },
     /// Record a decision: who made it, and what it replaces.
     Decide {
