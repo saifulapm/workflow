@@ -287,9 +287,11 @@ fn route_header(saved: &crate::route::Saved, pair_notice: Option<&str>) -> Strin
         (true, Some(machine)) => format!("Device ({})", esc(machine)),
         _ => "Phone".to_string(),
     };
+    // The current route's button is the filled one, the other the alternative.
     let button = |value: &str, label: &str, on: bool| {
+        let alt = if on { "" } else { " class=\"alt\"" };
         format!(
-            "<button type=\"submit\" name=\"route\" value=\"{value}\" aria-pressed=\"{on}\">{label}</button>\n"
+            "<button type=\"submit\" name=\"route\" value=\"{value}\" aria-pressed=\"{on}\"{alt}>{label}</button>\n"
         )
     };
     let controls = match pair_notice {

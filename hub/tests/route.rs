@@ -258,3 +258,30 @@ fn home_buttons_need_a_paired_device_on_this_origin() {
     assert_eq!(status_of(&elsewhere), 403, "{elsewhere}");
     assert_eq!(route(&hub)["route"], "device");
 }
+
+/// The current route's button is the filled one; the other is drawn as the
+/// alternative, so the buttons themselves say which is on.
+#[test]
+fn the_current_routes_button_is_the_filled_one() {
+    let world = world("route-pressed", 0);
+    let hub = spawn(&world);
+    let home = body_of(&hub.get("/")).to_string();
+    assert!(
+        home.contains("value=\"phone\" aria-pressed=\"true\">")
+            && home.contains("value=\"device\" aria-pressed=\"false\" class=\"alt\">"),
+        "{home}"
+    );
+    let response = api(
+        &hub,
+        "POST",
+        r#"{"route":"device","machine":"mac-mini-m2"}"#,
+        true,
+    );
+    assert_eq!(status_of(&response), 200, "{response}");
+    let home = body_of(&hub.get("/")).to_string();
+    assert!(
+        home.contains("value=\"phone\" aria-pressed=\"false\" class=\"alt\">")
+            && home.contains("value=\"device\" aria-pressed=\"true\">"),
+        "{home}"
+    );
+}
