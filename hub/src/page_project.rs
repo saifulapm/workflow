@@ -415,7 +415,7 @@ fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
         .unwrap_or_default();
     let prompt = cloud_prompt(&s.name, slug, &cloud_base(s));
     let mut out = format!(
-        "<h2>Start in cloud</h2>\n<div class=\"card\">\n\
+        "<h2>Cloud run</h2>\n<div class=\"card\">\n\
          <p class=\"meta\">{} · {} · Environment: workflow</p>\n\
          <textarea id=\"cloud-prompt\" rows=\"8\" readonly>{}</textarea>\n\
          <p><button type=\"button\" onclick=\"navigator.clipboard.writeText(\

@@ -214,7 +214,7 @@ fn a_parked_cloud_run_still_holds_the_slot() {
 
 /// The Start in cloud card's section of the page, or `None` without one.
 fn card(body: &str) -> Option<String> {
-    let at = body.find("<h2>Start in cloud</h2>")?;
+    let at = body.find("<h2>Cloud run</h2>")?;
     let rest = &body[at..];
     let end = rest[4..].find("<h2>").map_or(rest.len(), |e| e + 4);
     Some(rest[..end].to_string())
