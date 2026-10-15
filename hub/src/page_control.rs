@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::agents::{CLOUD_MACHINE, Command};
 use crate::html::{esc, project_url};
 use crate::http::Response;
-use crate::live;
+use crate::live::{self, CloudState};
 use crate::memcli::{Outcome, Run};
 use crate::page_home::summary_of;
 use crate::page_project;
@@ -143,9 +143,15 @@ fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
         .iter()
         .map(summary_of)
         .find(|s| s.name == project);
-    let Some(summary) = summary else {
+    let Some(mut summary) = summary else {
         return Response::not_found();
     };
+    // A landed or ended cloud run holds the project no more, as on the page.
+    if page_project::cloud_run(ctx, &summary)
+        .is_some_and(|run| matches!(run.state, CloudState::Landed | CloudState::Ended))
+    {
+        summary.runner = None;
+    }
     let agents = &ctx.app.agents;
     let run = live::run(
         summary.runner.as_ref(),

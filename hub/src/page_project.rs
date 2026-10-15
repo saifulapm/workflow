@@ -172,7 +172,6 @@ fn live_pill(s: &ProjectSummary, slug: &str, project: &str) -> String {
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
     let agents = &ctx.app.agents;
-    let run = live::run(s.runner.as_ref(), &s.name, s.milestone.as_deref(), agents);
     let paused = s.paused.is_some();
     let paused_pill = if paused {
         "<span class=\"pill wait\">paused</span> "
@@ -205,14 +204,48 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                 esc(&project_url(project))
             ));
         }
-        forms.push_str(&pause_form(project, paused));
-        return format!(
-            "<p class=\"row\">{paused_pill}{pill} <span class=\"meta\">{}</span> {}</p>\n{}",
+        let line = format!(
+            "{pill} <span class=\"meta\">{}</span> {}",
             esc(&format!("cloud · {} · {state}", cloud.milestone)),
             outside_link(&format!("{CODE_PAGE}/{}", cloud.id), "session"),
+        );
+        // A landed or ended run holds the project no more: `workflow go` on
+        // a device takes it on from the cloud branch, as with no runner.
+        if matches!(cloud.state, CloudState::Landed | CloudState::Ended) {
+            let free = ProjectSummary {
+                runner: None,
+                ..s.clone()
+            };
+            let device = device_line(ctx, &free);
+            if !device.is_empty() {
+                let banner = if forms.is_empty() {
+                    String::new()
+                } else {
+                    controls(ctx, forms)
+                };
+                return format!("<p class=\"row\">{line}</p>\n{banner}{device}");
+            }
+        }
+        forms.push_str(&pause_form(project, paused));
+        return format!(
+            "<p class=\"row\">{paused_pill}{line}</p>\n{}",
             controls(ctx, forms)
         );
     }
+    device_line(ctx, s)
+}
+
+/// A device runner's line, or with no runner the Start buttons.
+fn device_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
+    let project = s.name.as_str();
+    let agents = &ctx.app.agents;
+    let run = live::run(s.runner.as_ref(), &s.name, s.milestone.as_deref(), agents);
+    let paused = s.paused.is_some();
+    let paused_pill = if paused {
+        "<span class=\"pill wait\">paused</span> "
+    } else {
+        ""
+    };
     let (pill, meta) = match &run {
         Run::Live(agent) => (
             if paused {
@@ -313,7 +346,7 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
 
 /// `s`'s cloud run, its handoff read only when one was written since it
 /// began.
-fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
+pub fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
     let handoff = || match &*ctx.app.mem.handoff(&s.name) {
         Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
         _ => None,

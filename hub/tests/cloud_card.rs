@@ -270,6 +270,78 @@ fn run_in_cloud_is_refused_without_a_remote_or_on_a_worktree() {
     }
 }
 
+const GO: &str = "<input type=\"hidden\" name=\"do\" value=\"go\">";
+
+/// The mini's poll with a checkout of gamma, and the commands it was handed.
+fn poll_with_gamma(hub: &Hub) -> Value {
+    let report = json!({"machine": "mini", "agents": [], "checkouts": ["gamma"]});
+    serde_json::from_str::<Value>(&hub.poll_agent(&report.to_string())).unwrap()["commands"].clone()
+}
+
+/// Once a cloud run has landed or ended, `workflow go` on a device takes
+/// the project on from its branch, so the page offers a device start as it
+/// does with no runner, beside the cloud line.
+#[test]
+fn a_landed_or_ended_cloud_run_offers_a_device_start() {
+    for (tag, runner, handoff, state, button) in [
+        (
+            "cloud-device-landed",
+            cloud("m1-first", &ago(180)),
+            None,
+            "cloud · m1-first · landed",
+            ">Start on mini</button>",
+        ),
+        (
+            "cloud-device-ended",
+            cloud("m2-next", &ago(30)),
+            Some("m2-t3 done, picking up t4\n"),
+            "cloud · m2-next · ended",
+            ">Resume on mini</button>",
+        ),
+    ] {
+        let world = World::new(tag);
+        world.set("gamma", "runner", runner);
+        if let Some(body) = handoff {
+            world.set("gamma", "handoff_at", json!(ago(5)));
+            world.handoff("gamma", body);
+        }
+        let hub = world.hub();
+        poll_with_gamma(&hub);
+        let body = page(&hub);
+        assert!(body.contains(state), "{body}");
+        assert!(body.contains(GO), "{body}");
+        assert!(body.contains(button), "{body}");
+        let response = hub.post_form("/p/gamma/control", "do=go&machine=mini");
+        assert_eq!(status_of(&response), 303, "{response}");
+        assert_eq!(
+            poll_with_gamma(&hub),
+            json!([{"kind": "start", "project": "gamma"}])
+        );
+    }
+}
+
+#[test]
+fn a_live_or_parked_cloud_run_offers_no_device_start() {
+    let world = World::new("cloud-device-live");
+    world.set("gamma", "runner", cloud("m2-next", &ago(30)));
+    let hub = world.hub();
+    poll_with_gamma(&hub);
+    let body = page(&hub);
+    assert!(body.contains("cloud · m2-next · live"), "{body}");
+    assert!(!body.contains(GO), "{body}");
+    drop(hub);
+
+    world.set("gamma", "handoff_at", json!(ago(5)));
+    world.handoff("gamma", "parked: t2 is local-only\n");
+    let hub = world.hub();
+    poll_with_gamma(&hub);
+    let body = page(&hub);
+    assert!(body.contains("cloud · m2-next · parked"), "{body}");
+    assert!(!body.contains(GO), "{body}");
+    let response = hub.post_form("/p/gamma/control", "do=go&machine=mini");
+    assert_eq!(status_of(&response), 409, "{response}");
+}
+
 /// The Start in cloud card's section of the page, or `None` without one.
 fn card(body: &str) -> Option<String> {
     let at = body.find("<h2>Cloud run</h2>")?;
