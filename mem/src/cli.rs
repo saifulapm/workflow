@@ -385,6 +385,7 @@ pub enum ProjectCommand {
 pub enum ProjectKey {
     Verify,
     HygieneExempt,
+    Paused,
 }
 
 impl ProjectKey {
@@ -393,6 +394,7 @@ impl ProjectKey {
         match self {
             ProjectKey::Verify => "verify",
             ProjectKey::HygieneExempt => "hygiene_exempt",
+            ProjectKey::Paused => "paused",
         }
     }
 }
@@ -410,6 +412,9 @@ pub enum ProjectSetCommand {
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },
+    /// Pause this project: `workflow go` refuses it until `unset paused`.
+    /// mem records "<now, UTC> by <who>".
+    Paused { who: String },
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;

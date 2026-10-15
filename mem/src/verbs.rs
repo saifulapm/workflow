@@ -363,6 +363,7 @@ fn project_summary(
     let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
     vec![
         ("roadmap_status", json!(declared(ROADMAP_STATUS))),
+        ("paused", json!(declared("paused"))),
         (
             "milestone",
             json!(roadmap.iter().find(|(_, done)| !done).map(|(slug, _)| slug)),
@@ -571,6 +572,20 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     Ok(exit::OK)
 }
 
+/// `mem project set paused <who>`: mem stamps the time, so every pause reads
+/// "<rfc3339 UTC> by <who>", and a sync round carries it to the other machines.
+pub fn project_pause(app: &App, who: &str) -> Result<i32> {
+    if who.trim().is_empty() {
+        return Err(exit::usage(
+            "say who is pausing, e.g. `mem project set paused saiful`".to_string(),
+        ));
+    }
+    let now = jiff::Timestamp::now().round(jiff::Unit::Second)?;
+    let code = project_set(app, "paused", &format!("{now} by {}", who.trim()))?;
+    crate::sync::trigger(&app.dirs.qshell_status_json());
+    Ok(code)
+}
+
 /// `mem project unset <key>` -- the way back to absent. `set` refuses an
 /// empty value, so without this the only way to take a key off a project
 /// was to edit project.toml by hand.
@@ -580,6 +595,10 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let (path, had) = crate::project::unset_key(&app.store, id, key)?;
+    // An unpause has to reach the other machines as a pause does.
+    if key == "paused" {
+        crate::sync::trigger(&app.dirs.qshell_status_json());
+    }
     let shown = key.replace('_', "-");
     if app.json {
         println!(

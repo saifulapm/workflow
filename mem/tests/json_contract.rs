@@ -427,9 +427,10 @@ fn projects_carry_the_summary_a_project_page_reads() {
 
     // Nothing but the plan yet: every other field is null, zero or false.
     let p = row(&w);
-    for gone in ["runner", "paused", "has_brief"] {
+    for gone in ["runner", "has_brief"] {
         assert!(p.get(gone).is_none(), "{gone}: {p}");
     }
+    assert_eq!(p.get("paused"), Some(&serde_json::Value::Null), "{p}");
     assert!(p["roadmap_status"].is_null(), "{p}");
     assert!(p["milestone"].is_null(), "{p}");
     assert_eq!(p["milestones_done"], 0);
@@ -461,7 +462,7 @@ fn projects_carry_the_summary_a_project_page_reads() {
     std::fs::write(wiki.join("spec.md"), "# Spec\n").unwrap();
 
     let p = row(&w);
-    for gone in ["runner", "paused", "has_brief"] {
+    for gone in ["runner", "has_brief"] {
         assert!(p.get(gone).is_none(), "{gone}: {p}");
     }
     assert_eq!(p["roadmap_status"], "draft");
@@ -476,6 +477,32 @@ fn projects_carry_the_summary_a_project_page_reads() {
     let p = row(&w);
     assert_eq!(p["milestone"], "m2-billing");
     assert_eq!(p["milestones_done"], 1);
+
+    // A pause is "<rfc3339 UTC> by <who>", stamped by mem, and unset clears it.
+    let quiet = |args: &[&str]| {
+        let out = mem_env(&w, &repo, args, &[("MEM_SYNC_CMD", "true")]);
+        assert_eq!(code(&out), 0, "{args:?}");
+    };
+    quiet(&["project", "set", "paused", "saiful"]);
+    let p = row(&w);
+    let paused = p["paused"].as_str().unwrap_or_else(|| panic!("{p}"));
+    let (stamp, who) = paused.split_once(" by ").unwrap_or_else(|| panic!("{p}"));
+    assert_eq!(who, "saiful", "{p}");
+    let b = stamp.as_bytes();
+    assert!(
+        b.len() > 11
+            && b[..4].iter().all(u8::is_ascii_digit)
+            && b[4] == b'-'
+            && b[5..7].iter().all(u8::is_ascii_digit)
+            && b[7] == b'-'
+            && b[8..10].iter().all(u8::is_ascii_digit)
+            && b[10] == b'T'
+            && stamp.ends_with('Z'),
+        "{p}"
+    );
+    quiet(&["project", "unset", "paused"]);
+    let p = row(&w);
+    assert_eq!(p.get("paused"), Some(&serde_json::Value::Null), "{p}");
 }
 
 #[test]

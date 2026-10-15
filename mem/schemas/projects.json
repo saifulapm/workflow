@@ -25,6 +25,7 @@
           "checkouts",
           "worktree",
           "roadmap_status",
+          "paused",
           "milestone",
           "milestones_done",
           "milestones_total",
@@ -78,6 +79,13 @@
             ]
           },
           "roadmap_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paused": {
+            "description": "\"<rfc3339 UTC> by <who>\" while the project is paused with `mem project set paused <who>`.",
             "type": [
               "string",
               "null"

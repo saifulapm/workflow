@@ -609,7 +609,6 @@ fn project_set_refuses_the_keys_nothing_reads() {
         "surface",
         "dogfood-machine",
         "slots",
-        "paused",
         "runner",
     ] {
         let out = mem(&w, &repo, &["project", "set", key, "high"]);

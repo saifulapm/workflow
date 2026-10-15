@@ -119,7 +119,6 @@ fn the_engine_surface_is_gone() {
         &["project", "set", "runner", "mini"][..],
         &["project", "unset", "runner"][..],
         &["project", "set", "slots", "2"][..],
-        &["project", "unset", "paused"][..],
         &["status"][..],
         &["status", "--set", "x"][..],
         &["questions", "--asked-by", "s1"][..],
@@ -143,7 +142,6 @@ fn the_engine_surface_is_gone() {
             &["project", "set"][..],
             &[
                 "runner",
-                "paused",
                 "slots",
                 "effort",
                 "surface",
@@ -156,7 +154,7 @@ fn the_engine_surface_is_gone() {
         (
             &["project", "unset"][..],
             &[
-                "runner", "paused", "slots", "effort", "surface", "preview", "dogfood", "review",
+                "runner", "slots", "effort", "surface", "preview", "dogfood", "review",
             ][..],
         ),
         (&["project", "current"][..], &["machine"][..]),

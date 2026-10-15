@@ -120,6 +120,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     verbs::project_set(&app, "hygiene_exempt", globs)
                 }
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
+                cli::ProjectSetCommand::Paused { who } => verbs::project_pause(&app, who),
             },
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
             cli::ProjectCommand::Worktree { path, clear } => {
