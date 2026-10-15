@@ -204,6 +204,10 @@ run `claude` in {dir} once, answer Yes, I trust this folder, then go again",
             "go: started {session}, but mem would not record it as the runner of {}",
             start.project
         ));
+    } else if !memcli::sync() {
+        // The session records itself too, on the hub's store, within the
+        // minute; a record still only here then forks into a conflict copy.
+        warn("go: no sync round carried the runner record to the hub; run `mem sync`");
     }
     println!("{CODE_PAGE}/{session}");
     exit::OK

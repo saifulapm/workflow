@@ -46,7 +46,7 @@ dir=$(dirname "$0")
 echo "$*" >>"$dir/mem.log"
 case "$1" in
 projects) cat "$dir/projects.json" ;;
-project) [ "$2" = current ] && exit 1 ;;
+project) [ "$2" = current ] && exit 1; exit 0 ;;
 roadmap) cat "$dir/roadmap-$3.md" ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
 esac
@@ -633,4 +633,16 @@ fn a_landed_run_whose_branch_is_missing_refuses_and_keeps_its_record() {
     );
     assert!(!w.mem_calls().iter().any(|c| c.contains("unset runner")));
     assert!(!w.amx_started());
+}
+
+#[test]
+fn the_runner_record_reaches_the_hub_before_the_session_writes_its_own() {
+    let w = World::new("cloud-sync-after-record");
+    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
+    let calls = w.mem_calls();
+    let set = calls
+        .iter()
+        .position(|c| c.starts_with("project set runner cloud"));
+    let sync = calls.iter().rposition(|c| c.starts_with("sync"));
+    assert!(set.is_some() && sync > set, "{calls:?}");
 }

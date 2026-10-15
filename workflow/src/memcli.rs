@@ -181,6 +181,14 @@ pub fn set_cloud_runner(project: &str, session: &str, slug: &str) -> bool {
     ])
 }
 
+/// `mem sync`: one round with the hub's store, done when it says performed.
+pub fn sync() -> bool {
+    capture(&["sync", "--json"]).is_some_and(|(ok, out)| {
+        ok && serde_json::from_str::<serde_json::Value>(&out)
+            .is_ok_and(|doc| doc["sync"] == "performed")
+    })
+}
+
 pub fn unset_runner(project: &str) -> bool {
     silent(&["project", "unset", "runner", "--project", project])
 }
