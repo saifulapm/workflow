@@ -7,7 +7,7 @@
 
 use serde::Deserialize;
 
-use crate::agents::Agents;
+use crate::agents::{Agents, Command};
 use crate::page_home::ProjectSummary;
 
 /// One agent of `amx ls --json`, as a device agent reports it. amx keys a
@@ -107,13 +107,18 @@ fn named_for(id: &str, project: &str, milestone: &str) -> bool {
     }
 }
 
-/// What an away run reads: `waiting for <machine>` while a command waits for
-/// it, else `<machine> offline`.
-pub fn away(machine: &str, agents: &Agents) -> String {
-    if agents.pending(machine).is_empty() {
-        format!("{machine} offline")
-    } else {
+/// What an away run reads: `waiting for <machine>` while a start or resume
+/// of `project` waits for it, else `<machine> offline`. The sync every hub
+/// write queues is no command of the project's.
+pub fn away(machine: &str, project: &str, agents: &Agents) -> String {
+    let waiting = agents.pending(machine).iter().any(|command| match command {
+        Command::Start { project: p } | Command::Resume { project: p, .. } => p == project,
+        Command::Sync => false,
+    });
+    if waiting {
         format!("waiting for {machine}")
+    } else {
+        format!("{machine} offline")
     }
 }
 

@@ -159,7 +159,7 @@ fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
     if !machines.iter().any(|m| m == machine) {
         let why = match &run {
             live::Run::Live(agent) => format!("{} is already running.", agent.id),
-            live::Run::Away(m) => format!("{project} reads {}.", live::away(m, agents)),
+            live::Run::Away(m) => format!("{project} reads {}.", live::away(m, project, agents)),
             _ if !live::idle(&summary, &run) => {
                 "There is no approved milestone to start.".to_string()
             }

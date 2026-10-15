@@ -120,14 +120,15 @@ fn a_runner_whose_machine_went_quiet_reads_offline_then_waiting() {
     assert!(!body.contains("stalled"), "{body}");
     assert!(page(&hub, "/").contains("mini offline"));
 
-    // A pause writes mem, which queues a sync for every machine.
+    // A pause writes mem, which queues a sync for every machine; a sync is
+    // no command of gamma's, so gamma still reads offline, not waiting.
     let response = hub.post_form("/p/gamma/control", "do=pause");
     assert_eq!(status_of(&response), 303, "{response}");
     let body = page(&hub, "/p/gamma");
-    assert!(body.contains("waiting for mini"), "{body}");
-    assert!(!body.contains("mini offline"), "{body}");
+    assert!(body.contains("mini offline"), "{body}");
+    assert!(!body.contains("waiting for mini"), "{body}");
     assert!(!body.contains("value=\"go\""), "{body}");
-    assert!(page(&hub, "/").contains("waiting for mini"));
+    assert!(!page(&hub, "/").contains("waiting for mini"));
 }
 
 #[test]

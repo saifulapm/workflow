@@ -254,7 +254,7 @@ pub fn render(
         body.push_str("<div class=\"cards\">\n");
         for (project, run) in &projects {
             let away = match run {
-                Run::Away(machine) => Some(live::away(machine, agents)),
+                Run::Away(machine) => Some(live::away(machine, &project.name, agents)),
                 _ => None,
             };
             body.push_str(&project_card(

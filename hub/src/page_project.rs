@@ -193,7 +193,7 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
         // Its machine may still be running it, so nothing is offered.
         Run::Away(machine) => (
             "<span class=\"pill wait\">away</span>",
-            live::away(machine, agents),
+            live::away(machine, project, agents),
         ),
         _ if live::idle(s, &run) => {
             let handoff = match &*ctx.app.mem.handoff(project) {
