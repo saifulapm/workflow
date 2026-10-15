@@ -231,3 +231,11 @@ fn roadmap_shows_no_cost_line() {
     let body = roadmap_page(&world, 3);
     assert!(!body.contains("cost:"), "{body}");
 }
+
+#[test]
+fn an_indented_checkbox_is_part_of_its_milestone_not_one_of_its_own() {
+    let rows = roadmap_rows("- [x] a One\n  - [ ] x A note\n      Show: see it\n- [ ] b Two\n");
+    let slugs: Vec<(&str, bool)> = rows.iter().map(|r| (r.slug.as_str(), r.ticked)).collect();
+    assert_eq!(slugs, [("a", true), ("b", false)]);
+    assert_eq!(rows[0].show.as_deref(), Some("see it"));
+}

@@ -22,15 +22,17 @@ pub fn get(ctx: &PageCtx) -> Response {
     Response::html(page_shell("roadmap", ctx.project, &roadmap_body(ctx)))
 }
 
-/// The milestones in order. The box is read the way mem reads it, so the
-/// page and `mem roadmap --tick` agree on which milestone is done.
+/// The milestones in order. The box is read the way mem reads it, at the
+/// margin, so the page, `mem roadmap --tick` and `workflow go` agree on which
+/// milestone is done and which is next; a checkbox indented under a
+/// milestone is part of its text.
 pub fn roadmap_rows(text: &str) -> Vec<MilestoneRow> {
     let mut rows: Vec<MilestoneRow> = Vec::new();
-    for line in text.lines() {
-        let line = line.trim_start();
-        let (rest, ticked) = if let Some(rest) = line.strip_prefix("- [ ] ") {
+    for raw in text.lines() {
+        let line = raw.trim_start();
+        let (rest, ticked) = if let Some(rest) = raw.strip_prefix("- [ ] ") {
             (rest, false)
-        } else if let Some(rest) = line.strip_prefix("- [x] ").or(line.strip_prefix("- [X] ")) {
+        } else if let Some(rest) = raw.strip_prefix("- [x] ").or(raw.strip_prefix("- [X] ")) {
             (rest, true)
         } else {
             if let Some(row) = rows.last_mut()
