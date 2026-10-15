@@ -12,6 +12,13 @@ cargo=/root/.cargo/bin/cargo
 if [[ ! -x $cargo ]]; then
   curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain stable
 fi
+if [[ ! -x /usr/bin/cloudflared ]]; then
+  install -d -m 0755 /usr/share/keyrings
+  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
+    >/etc/apt/sources.list.d/cloudflared.list
+  apt-get update -q && apt-get install -y -q cloudflared
+fi
 for crate in mem workflow hub; do
   (cd "$src/$crate" && HUB_COMMIT=$short CARGO_TARGET_DIR=$build/target "$cargo" build --release -j2 -q)
   install -m755 "$build/target/release/$crate" "/usr/local/bin/$crate"
@@ -35,14 +42,22 @@ if [[ -f $config ]]; then
   # a dotted name outside .ts.net unless it is listed here.
   grep -q '^origins' "$config" ||
     echo 'origins = ["https://hub.on-rexa.com"]' >>"$config"
+  # mem's connector: the port the tunnel sends mem.on-rexa.com to, and the
+  # Access app whose tokens it takes.
+  grep -q '^mcp_port' "$config" ||
+    echo 'mcp_port = 8788' >>"$config"
+  grep -q '^access_team' "$config" ||
+    echo 'access_team = "https://saifulapm.cloudflareaccess.com"' >>"$config"
+  grep -q '^access_aud' "$config" ||
+    echo 'access_aud = "4156a52d77bb948a63b9b6d4dad534cc230280e9cf4235f464a8761b35a9c998"' >>"$config"
 fi
 
 install -m644 "$src"/vps/units/* /etc/systemd/system/
 install -m755 "$src/vps/mem-backup" /usr/local/sbin/mem-backup
 systemctl daemon-reload
-systemctl enable -q mem-hub.service mem-hub-ping.timer mem-backup.timer
+systemctl enable -q mem-hub.service mem-hub-ping.timer mem-backup.timer mem-tunnel.service
 systemctl start mem-hub-ping.timer mem-backup.timer
-systemctl restart mem-hub.service
+systemctl restart mem-hub.service mem-tunnel.service
 
 for _ in $(seq 20); do
   curl -fsS -o /dev/null http://127.0.0.1:8787/api/presence 2>/dev/null && break

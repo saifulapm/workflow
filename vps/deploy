@@ -16,10 +16,14 @@ src=/var/lib/workflow-build/src
 # Read before the VPS changes, so a missing secret stops the deploy whole.
 secret=$(pass show dulali/hub-webhook-secret)
 [[ -n $secret ]] || { echo "deploy: pass dulali/hub-webhook-secret is empty" >&2; exit 1; }
+tunnel=$(pass show dulali/cloudflared-token)
+[[ -n $tunnel ]] || { echo "deploy: pass dulali/cloudflared-token is empty" >&2; exit 1; }
 
 # Over stdin, never argv: the hub signs Hermes webhooks with it.
 printf 'HUB_DULALI_SECRET=%s\n' "$secret" |
   ssh "$host" "umask 077 && install -d -m 0750 /etc/mem && cat > /etc/mem/dulali.env.new && mv -f /etc/mem/dulali.env.new /etc/mem/dulali.env"
+printf '%s\n' "$tunnel" |
+  ssh "$host" "umask 077 && cat > /etc/mem/cloudflared-token.new && mv -f /etc/mem/cloudflared-token.new /etc/mem/cloudflared-token"
 git archive --format=tar "$commit" |
   ssh "$host" "rm -rf $src && mkdir -p $src && tar x -C $src"
 ssh "$host" "bash $src/vps/install $short"
