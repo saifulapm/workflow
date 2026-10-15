@@ -524,3 +524,14 @@ fn a_paused_project_parked_on_a_question_can_still_resume() {
     );
     assert!(body.contains(UNPAUSE), "{body}");
 }
+
+#[test]
+fn a_go_refused_for_a_pause_says_so() {
+    let world = world("live-go-paused", "", Some(DEAD));
+    let (hub, _) = hub_with_systemd_run(&world, 2, "");
+    // `workflow go` says a pause on stdout, with nothing on stderr.
+    fixture_bin(&world.bin, "systemd-run", "echo 'omega: paused'\nexit 2");
+    let response = hub.post_form("/p/omega/control", "do=go");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(body_of(&response).contains("omega: paused"), "{response}");
+}

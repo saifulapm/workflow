@@ -245,8 +245,8 @@ step that passed. Two failed walks of the same step go to Saiful.
 5. `workflow go <project>`. It starts the next milestone's orchestrator in
    its own amx pane, or says the roadmap is done, or refuses because the
    roadmap is not approved yet, or because the folder is another
-   project's, or because the project is paused. Show its output. A refusal is a normal end, and never a
-   reason to switch a branch.
+   project's, or because the project is paused. Show its output. A
+   refusal is a normal end, and never a reason to switch a branch.
    Saiful approves the rest from the hub, then presses Resume there on a
    machine with a checkout, which runs `workflow go`.
 

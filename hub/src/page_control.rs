@@ -150,8 +150,15 @@ fn go(ctx: &PageCtx, project: &str) -> Response {
         crate::proc::Ended::Exited(done) if done.code == Some(0) => {
             Response::see_other(&project_url(project))
         }
+        // A refusal says why on stderr, except a pause, which `workflow go`
+        // prints on stdout as its answer.
         crate::proc::Ended::Exited(done) => {
             let said = String::from_utf8_lossy(&done.stderr);
+            let said = if said.trim().is_empty() {
+                String::from_utf8_lossy(&done.stdout)
+            } else {
+                said
+            };
             conflict(ctx, said.trim())
         }
         crate::proc::Ended::TimedOut => conflict(ctx, "workflow go did not finish in time."),
