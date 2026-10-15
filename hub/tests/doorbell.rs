@@ -146,11 +146,13 @@ impl World {
             .collect()
     }
 
-    /// How many times the doorbell has asked mem for the queue.
+    /// How many rounds the doorbell has begun, by its `projects` reads, which
+    /// only it makes: an agent's poll reads the questions too, for the
+    /// route's waiting count.
     fn polls(&self) -> usize {
         invocations(&self.mem_log)
             .iter()
-            .filter(|argv| argv.first().is_some_and(|a| a == "questions"))
+            .filter(|argv| argv.first().is_some_and(|a| a == "projects"))
             .count()
     }
 
@@ -921,10 +923,12 @@ impl Fake {
     }
 
     /// The round in flight and one whole round after it, as `World::settle`.
+    /// Counted by its `projects` reads, which only the doorbell makes: an
+    /// agent's poll reads the questions too, for the route's waiting count.
     fn settle(&self) {
-        let before = self.spawns("questions");
+        let before = self.spawns("projects");
         wait_for("the doorbell to go round", Duration::from_secs(15), || {
-            self.spawns("questions") >= before + 2
+            self.spawns("projects") >= before + 2
         });
     }
 }
@@ -1151,12 +1155,10 @@ fn a_paused_project_does_not_ring_its_stall() {
     );
     fake.settle();
 
-    building(
-        &fake,
-        &hub,
-        "proj-alpha-m2",
-        &[("proj-alpha-m2", "stopped")],
-    );
+    // Paused first, and seen by a whole round, then the orchestrator stops: a
+    // round reads the projects once and the agents' reports later, so a pause
+    // and a stop landing inside one round read as an unpaused stall, and
+    // rang for it, rightly.
     let projects = std::fs::read_to_string(fake.data.join("projects.json")).unwrap();
     fake.put(
         "projects.json",
@@ -1164,6 +1166,10 @@ fn a_paused_project_does_not_ring_its_stall() {
             "\"milestone\":",
             "\"paused\":\"2026-10-15T09:00:00Z by saiful\",\"milestone\":",
         ),
+    );
+    fake.settle();
+    hub.poll_agent(
+        r#"{"machine":"mini","agents":[{"id":"proj-alpha-m2","state":"stopped","ended":0,"created":0}],"checkouts":["proj-alpha"]}"#,
     );
     // Past the grace, then four rounds of the doorbell.
     std::thread::sleep(Duration::from_secs(2));
