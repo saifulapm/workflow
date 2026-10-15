@@ -38,7 +38,7 @@ pub fn write_file(hub: &str, name: Option<&str>, route: &Value) {
     }
 }
 
-/// `workflow route [phone|device]`.
+/// `workflow route [phone|device|dulali]`.
 pub fn cmd_route(to: Option<&str>) -> i32 {
     let Some((token, hub)) = pairing() else {
         say("not paired; run `workflow agent pair <link>`");
@@ -46,7 +46,7 @@ pub fn cmd_route(to: Option<&str>) -> i32 {
     };
     let body = match to {
         None => None,
-        Some("phone") => Some(json!({"route": "phone"}).to_string()),
+        Some(kind @ ("phone" | "dulali")) => Some(json!({"route": kind}).to_string()),
         Some("device") => {
             let Some(name) = machine::name() else {
                 say("cannot tell this machine's name; set WORKFLOW_MACHINE");
@@ -55,7 +55,7 @@ pub fn cmd_route(to: Option<&str>) -> i32 {
             Some(json!({"route": "device", "machine": name}).to_string())
         }
         Some(other) => {
-            say(format!("route to phone or device, not {other}"));
+            say(format!("route to phone, device or dulali, not {other}"));
             return exit::USAGE;
         }
     };

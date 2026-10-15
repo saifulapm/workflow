@@ -16,7 +16,7 @@ use crate::memcli::{MemCli, Outcome};
 use crate::model::{self, list_fault};
 use crate::page_questions::{pending_block, question_row};
 use crate::pages::{PageCtx, page_shell};
-use crate::route::{NoMachine, Route};
+use crate::route::{Kind, NoMachine, Route};
 
 /// What keeps the page live: every 5 s it asks `/api/stamp` whether what
 /// home shows has changed, and reloads only then, and only while no field
@@ -279,12 +279,13 @@ pub fn render(
     page_shell(machine, None, &body)
 }
 
-/// `Route: Phone` or `Route: Device (<machine>)`, then the two buttons
+/// `Route: Phone`, `Route: Device (<machine>)` or `Route: Dulali`, then the three buttons
 /// posting to `/route`, the current one pressed. An unpaired browser gets the
 /// pairing line in place of the buttons.
 fn route_header(saved: &crate::route::Saved, pair_notice: Option<&str>) -> String {
-    let name = match (saved.device, &saved.machine) {
-        (true, Some(machine)) => format!("Device ({})", esc(machine)),
+    let name = match (saved.route, &saved.machine) {
+        (Kind::Device, Some(machine)) => format!("Device ({})", esc(machine)),
+        (Kind::Dulali, _) => "Dulali".to_string(),
         _ => "Phone".to_string(),
     };
     // The current route's button is the filled one, the other the alternative.
@@ -297,25 +298,27 @@ fn route_header(saved: &crate::route::Saved, pair_notice: Option<&str>) -> Strin
     let controls = match pair_notice {
         Some(notice) => notice.to_string(),
         None => format!(
-            "<form class=\"opt\" method=\"post\" action=\"/route\">\n{}{}</form>\n",
-            button("phone", "Phone", !saved.device),
-            button("device", "Device", saved.device),
+            "<form class=\"opt\" method=\"post\" action=\"/route\">\n{}{}{}</form>\n",
+            button("phone", "Phone", saved.route == Kind::Phone),
+            button("device", "Device", saved.route == Kind::Device),
+            button("dulali", "Dulali", saved.route == Kind::Dulali),
         ),
     };
     format!("<p class=\"route\">Route: {name}</p>\n{controls}")
 }
 
-/// `POST /route`, home's two buttons. Device keeps the machine that last
+/// `POST /route`, home's three buttons. Device keeps the machine that last
 /// took it; with none ever taken the route stays as it is and the banner
 /// says where to take Device first.
 pub fn route_post(ctx: &PageCtx) -> Response {
     let form = ctx.request.form();
-    let device = match form.get("route").unwrap_or("") {
-        "phone" => false,
-        "device" => true,
+    let kind = match form.get("route").unwrap_or("") {
+        "phone" => Kind::Phone,
+        "device" => Kind::Device,
+        "dulali" => Kind::Dulali,
         _ => return Response::text(400, "unknown route"),
     };
-    match ctx.app.route.set(device, None) {
+    match ctx.app.route.set(kind, None) {
         Ok(()) => Response::see_other("/"),
         Err(NoMachine) => Response::see_other(&format!("/{}", Banner::NoMachine.query())),
     }

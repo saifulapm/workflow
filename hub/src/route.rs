@@ -1,5 +1,5 @@
-//! The one global route: where questions and rings reach the owner, Phone or
-//! Device with its machine.
+//! The one global route: where questions and rings reach the owner, Phone,
+//! Device with its machine, or Dulali.
 //!
 //! It lives in `route.json` beside `agents.json`, written whole and renamed.
 //! The file keeps the machine that last took Device even while the route is
@@ -16,12 +16,47 @@ use crate::http::{Request, Response};
 use crate::memcli::MemCli;
 use crate::pair;
 
+/// Where questions and rings go.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Phone,
+    Device,
+    Dulali,
+}
+
 /// What `route.json` holds. A missing file is Phone with no machine.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "Disk")]
 pub struct Saved {
-    pub device: bool,
+    pub route: Kind,
     /// The machine that last took Device.
     pub machine: Option<String>,
+}
+
+/// The file as it may be read: new files carry `route`, files written before
+/// Dulali carry only the `device` bool.
+#[derive(Deserialize)]
+struct Disk {
+    route: Option<Kind>,
+    #[serde(default)]
+    device: bool,
+    machine: Option<String>,
+}
+
+impl From<Disk> for Saved {
+    fn from(disk: Disk) -> Saved {
+        let route = disk.route.unwrap_or(if disk.device {
+            Kind::Device
+        } else {
+            Kind::Phone
+        });
+        Saved {
+            route,
+            machine: disk.machine,
+        }
+    }
 }
 
 /// Device was asked for with no machine named and none ever taken.
@@ -53,16 +88,16 @@ impl Route {
         self.lock().clone()
     }
 
-    /// Phone, or Device on `machine`, or with `None` on the machine that last
-    /// took it. Changes run one at a time, and the last one wins.
-    pub fn set(&self, device: bool, machine: Option<&str>) -> Result<(), NoMachine> {
+    /// Phone, Dulali, or Device on `machine`, or with `None` on the machine
+    /// that last took it. Changes run one at a time, and the last one wins.
+    pub fn set(&self, kind: Kind, machine: Option<&str>) -> Result<(), NoMachine> {
         let mut saved = self.lock();
         let mut next = saved.clone();
-        next.device = device;
+        next.route = kind;
         if let Some(machine) = machine {
             next.machine = Some(machine.to_string());
         }
-        if device && next.machine.is_none() {
+        if kind == Kind::Device && next.machine.is_none() {
             return Err(NoMachine);
         }
         *saved = next;
@@ -81,11 +116,8 @@ impl Route {
     pub fn object(&self, mem: &MemCli) -> Value {
         let saved = self.get();
         let waiting = mem.questions().rows("questions").len();
-        if saved.device {
-            json!({"route": "device", "machine": saved.machine, "waiting": waiting})
-        } else {
-            json!({"route": "phone", "machine": null, "waiting": waiting})
-        }
+        let machine = saved.machine.filter(|_| saved.route == Kind::Device);
+        json!({"route": saved.route, "machine": machine, "waiting": waiting})
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Saved> {
@@ -118,10 +150,13 @@ pub fn post(route: &Route, mem: &MemCli, request: &Request) -> Response {
         Ok(choice) => choice,
         Err(e) => return agents::json(400, json!({"error": e.to_string()})),
     };
-    let device = match choice.route.as_str() {
-        "phone" => false,
-        "device" => true,
-        _ => return agents::json(400, json!({"error": "route is phone or device"})),
+    let kind = match choice.route.as_str() {
+        "phone" => Kind::Phone,
+        "device" => Kind::Device,
+        "dulali" => Kind::Dulali,
+        _ => {
+            return agents::json(400, json!({"error": "route is phone, device or dulali"}));
+        }
     };
     if choice
         .machine
@@ -138,7 +173,7 @@ pub fn post(route: &Route, mem: &MemCli, request: &Request) -> Response {
             json!({"error": "machine is longer than 63 characters"}),
         );
     }
-    match route.set(device, choice.machine.as_deref()) {
+    match route.set(kind, choice.machine.as_deref()) {
         Ok(()) => agents::json(200, route.object(mem)),
         Err(NoMachine) => agents::json(
             409,

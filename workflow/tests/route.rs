@@ -140,3 +140,30 @@ fn route_before_pairing_exits_2() {
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     assert!(!w.has("curl.argv"));
 }
+
+#[test]
+fn route_dulali_posts_only_the_route_and_writes_the_file() {
+    let w = world(
+        "route-dulali",
+        "200",
+        r#"{"route":"dulali","machine":null,"waiting":0}"#,
+    );
+    paired(&w);
+    let out = route(&w, &["dulali"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(stdout(&out), "route: dulali\n");
+    let sent: serde_json::Value = serde_json::from_str(&w.read("curl.stdin")).unwrap();
+    assert_eq!(sent, json!({"route":"dulali"}));
+    let file: serde_json::Value = serde_json::from_str(&w.read("run/workflow-route.json")).unwrap();
+    assert_eq!(file["route"], "dulali");
+}
+
+#[test]
+fn an_unknown_route_names_all_three_choices() {
+    let w = world("route-bogus", "200", "");
+    paired(&w);
+    let out = route(&w, &["bogus"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("phone, device, dulali"), "{err}");
+}

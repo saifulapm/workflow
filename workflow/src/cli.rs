@@ -159,8 +159,8 @@ qshell reads it. Exit 1 when the hub refuses or does not answer, 2 when this
 machine is not paired."
     )]
     Route {
-        /// phone or device; leave out to read the current route.
-        #[arg(value_parser = ["phone", "device"])]
+        /// phone, device or dulali; leave out to read the current route.
+        #[arg(value_parser = ["phone", "device", "dulali"])]
         to: Option<String>,
     },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.

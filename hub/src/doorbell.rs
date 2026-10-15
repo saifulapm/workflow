@@ -37,7 +37,7 @@ use crate::app::App;
 use crate::live::{self, Run};
 use crate::memcli::{MemCli, Outcome};
 use crate::page_home::summary_of;
-use crate::route::Route;
+use crate::route::{Kind, Route};
 
 pub const DEFAULT_POLL: Duration = Duration::from_secs(15);
 /// How long the route's machine may sit locked or idle before its rings go
@@ -260,7 +260,9 @@ impl Doorbell {
     fn deliver(&self, body: &str) {
         let route = self.route.get();
         match route.machine {
-            Some(machine) if route.device && !self.agents.away(&machine, self.away) => {
+            Some(machine)
+                if route.route == Kind::Device && !self.agents.away(&machine, self.away) =>
+            {
                 self.agents.queue(
                     &machine,
                     AgentCommand::Notify {

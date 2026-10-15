@@ -191,7 +191,7 @@ fn device_with_no_machine_ever_is_refused() {
         json!({"route": "phone", "machine": null, "waiting": 0})
     );
 
-    for bad in ["{\"route\":\"dulali\"}", "{\"route\":", "[]"] {
+    for bad in ["{\"route\":\"mars\"}", "{\"route\":", "[]"] {
         let response = set(&hub, bad);
         assert_eq!(status_of(&response), 400, "{bad}: {response}");
     }
@@ -331,4 +331,80 @@ fn a_long_machine_name_wraps_in_the_header() {
         "{page}"
     );
     assert!(page.contains(".route{overflow-wrap:anywhere}"), "{page}");
+}
+
+#[test]
+fn dulali_is_stored_served_and_polled_with_no_machine() {
+    let world = world("route-dulali", 0);
+    let hub = spawn(&world);
+    let before = stamp(&hub);
+
+    let response = set(&hub, r#"{"route":"dulali"}"#);
+    assert_eq!(status_of(&response), 200, "{response}");
+    let dulali = json!({"route": "dulali", "machine": null, "waiting": 0});
+    assert_eq!(
+        serde_json::from_str::<Value>(body_of(&response)).unwrap(),
+        dulali
+    );
+    assert_eq!(route(&hub), dulali);
+    let poll: Value = serde_json::from_str(&hub.poll_agent(REPORT)).unwrap();
+    assert_eq!(poll, json!({"commands": [], "route": dulali}));
+    assert_ne!(stamp(&hub), before, "the stamp moves with the route");
+}
+
+#[test]
+fn an_old_route_file_with_only_the_device_bool_still_reads() {
+    for (old, want) in [
+        (
+            r#"{"device":true,"machine":"mini"}"#,
+            json!({"route": "device", "machine": "mini", "waiting": 0}),
+        ),
+        (
+            r#"{"device":false,"machine":"mini"}"#,
+            json!({"route": "phone", "machine": null, "waiting": 0}),
+        ),
+    ] {
+        let world = world("route-old-file", 0);
+        let file = world.home.join("state/hub/route.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, old).unwrap();
+        let hub = spawn(&world);
+        assert_eq!(route(&hub), want, "{old}");
+    }
+}
+
+#[test]
+fn dulali_keeps_the_machine_that_last_took_device() {
+    let world = world("route-dulali-machine", 0);
+    let file = world.home.join("state/hub/route.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, r#"{"device":false,"machine":"mini"}"#).unwrap();
+    let hub = spawn(&world);
+    assert_eq!(press(&hub, "dulali"), "/");
+    assert_eq!(route(&hub)["route"], "dulali");
+    assert_eq!(press(&hub, "device"), "/");
+    assert_eq!(
+        route(&hub),
+        json!({"route": "device", "machine": "mini", "waiting": 0})
+    );
+}
+
+#[test]
+fn home_shows_dulali_with_three_buttons() {
+    let world = world("route-dulali-home", 0);
+    let hub = spawn(&world);
+    assert_eq!(press(&hub, "dulali"), "/");
+    let page = home(&hub);
+    assert!(page.contains("Route: Dulali"), "{page}");
+    assert_eq!(page.matches("name=\"route\" value=").count(), 3, "{page}");
+    assert!(
+        page.contains(
+            "<button type=\"submit\" name=\"route\" value=\"dulali\" aria-pressed=\"true\">Dulali</button>"
+        ),
+        "{page}"
+    );
+    assert!(
+        page.contains("value=\"phone\" aria-pressed=\"false\" class=\"alt\">Phone"),
+        "{page}"
+    );
 }
