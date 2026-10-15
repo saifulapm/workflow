@@ -12,6 +12,7 @@ use crate::html::{self, Banner, esc};
 use crate::http::Response;
 use crate::memcli::MemCli;
 use crate::model::{self, list_fault};
+use crate::page_questions::{pending_block, question_row};
 use crate::pages::{PageCtx, page_shell};
 
 /// The reload that keeps the page live. It fires only when nothing is
@@ -271,8 +272,8 @@ pub fn bar(done: u64, total: u64) -> String {
     )
 }
 
-/// One waiting question and its answer form. The text is the row's whole
-/// body: the title is only a batched question's first line.
+/// One waiting question, under its project, age and short id, with the
+/// questions page's own option buttons and text box.
 fn question_block(row: &Value, now_ms: i64) -> String {
     let id = text(row, "id").unwrap_or_default();
     let mut meta = Vec::new();
@@ -284,48 +285,12 @@ fn question_block(row: &Value, now_ms: i64) -> String {
         "#{}",
         esc(&text(row, "short_id").unwrap_or_default())
     ));
-    let question = text(row, "body")
-        .filter(|body| !body.trim().is_empty())
-        .or_else(|| text(row, "title"))
-        .unwrap_or_default();
-    format!(
-        "<article>\n\
-         <div class=\"meta\">{meta}</div>\n\
-         <p class=\"q\">{question}</p>\n\
-         {rec}\
-         <form method=\"post\" action=\"/answer\">\n\
-         <input type=\"hidden\" name=\"id\" value=\"{id}\">\n\
-         <textarea name=\"text\" rows=\"3\" placeholder=\"answer\" \
-         aria-label=\"answer\"></textarea>\n\
-         <button type=\"submit\">Answer</button>\n\
-         </form>\n\
-         </article>\n",
-        meta = meta.join(" · "),
-        question = esc(question.trim()),
-        rec = rec_line(row),
-        id = esc(&id),
+    // No project in the form, so the answer lands back on `/`.
+    pending_block(
+        &question_row(row),
+        None,
+        &format!("<div class=\"meta\">{}</div>\n", meta.join(" · ")),
     )
-}
-
-/// The options and the asker's pick on one line, so the answer can be typed
-/// from what is already on the page. Nothing when the question has neither.
-fn rec_line(row: &Value) -> String {
-    let mut parts: Vec<String> = row["options"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    if let Some(pick) = text(row, "recommend") {
-        parts.push(format!("recommended: {pick}"));
-    }
-    if parts.is_empty() {
-        return String::new();
-    }
-    format!("<p class=\"rec\">{}</p>\n", esc(&parts.join(" · ")))
 }
 
 /// What the last `POST /answer` did. The text is chosen here from the code

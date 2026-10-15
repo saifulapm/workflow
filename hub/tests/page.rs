@@ -210,25 +210,35 @@ fn a_question_that_is_script_renders_as_text() {
 }
 
 #[test]
-fn a_recommendation_is_one_line_on_the_page_and_absent_elsewhere() {
+fn a_recommendation_marks_its_button_and_is_absent_elsewhere() {
     let world = World::new("page-rec");
     world.ask_with(
         "Which store?",
-        &["--options", "redis,sqlite", "--recommend", "sqlite & WAL"],
+        &[
+            "--options",
+            "redis,sqlite & WAL",
+            "--recommend",
+            "sqlite & WAL",
+        ],
     );
     world.ask("Should we cache the index?");
     let hub = world.hub();
 
     let body = body_of(&hub.get("/")).to_string();
-    let line = "<p class=\"rec\">redis · sqlite · recommended: sqlite &amp; WAL</p>";
-    assert!(body.contains(line), "{body}");
-    // Between the question text and the form, so it reads before answering.
+    let pick = "<button type=\"submit\" name=\"text\" value=\"sqlite &amp; WAL\" \
+                class=\"recommended\">sqlite &amp; WAL · recommended</button>";
+    assert!(body.contains(pick), "{body}");
+    assert!(
+        body.contains(
+            "<button type=\"submit\" name=\"text\" value=\"redis\" class=\"alt\">redis</button>"
+        ),
+        "{body}"
+    );
+    // After the question text, so it reads before answering.
     let question = body.find("Which store?").unwrap();
-    let rec = body.find(line).unwrap();
-    let form = question + body[question..].find("<form").unwrap();
-    assert!(question < rec && rec < form, "{body}");
-    // The plain question gets no rec element at all.
-    assert_eq!(body.matches("class=\"rec\"").count(), 1, "{body}");
+    assert!(question < body.find(pick).unwrap(), "{body}");
+    // The plain question gets no recommended button at all.
+    assert_eq!(body.matches("class=\"recommended\"").count(), 1, "{body}");
 }
 
 #[test]

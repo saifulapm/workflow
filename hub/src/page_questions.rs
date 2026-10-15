@@ -49,29 +49,35 @@ pub fn answer_post(ctx: &PageCtx) -> Response {
 
 /// Newest first, the pending ahead of the answered.
 pub fn question_rows(rows: &[Value]) -> Vec<QuestionRow> {
-    let mut out: Vec<QuestionRow> = rows
-        .iter()
-        .map(|row| QuestionRow {
-            id: text_of(row, "id").unwrap_or_default(),
-            text: text_of(row, "body")
-                .or_else(|| text_of(row, "title"))
-                .unwrap_or_default(),
-            options: row["options"]
-                .as_array()
-                .map(|options| {
-                    options
-                        .iter()
-                        .filter_map(|o| o.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            recommend: text_of(row, "recommend"),
-            answered: row["answered"].as_bool().unwrap_or(false),
-            answer: text_of(row, "answer"),
-        })
-        .collect();
+    let mut out: Vec<QuestionRow> = rows.iter().map(question_row).collect();
     out.sort_by(|a, b| a.answered.cmp(&b.answered).then(b.id.cmp(&a.id)));
     out
+}
+
+/// One row. The text is the whole body, trimmed, and the title only when
+/// the body is blank: the title is a batched question's first line.
+pub fn question_row(row: &Value) -> QuestionRow {
+    QuestionRow {
+        id: text_of(row, "id").unwrap_or_default(),
+        text: text_of(row, "body")
+            .filter(|body| !body.trim().is_empty())
+            .or_else(|| text_of(row, "title"))
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        options: row["options"]
+            .as_array()
+            .map(|options| {
+                options
+                    .iter()
+                    .filter_map(|o| o.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        recommend: text_of(row, "recommend"),
+        answered: row["answered"].as_bool().unwrap_or(false),
+        answer: text_of(row, "answer"),
+    }
 }
 
 /// The page under the shell. Two spawns: the route's project check and the
@@ -92,7 +98,7 @@ pub fn questions_body(ctx: &PageCtx) -> String {
         out.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
     }
     for question in pending {
-        out.push_str(&pending_block(question, project));
+        out.push_str(&pending_block(question, Some(project), ""));
     }
     out.push_str("<h2>Answered</h2>\n");
     if answered.is_empty() {
@@ -110,15 +116,26 @@ pub fn questions_body(ctx: &PageCtx) -> String {
 
 /// A form per option, its button carrying the option as `text`, then the
 /// text box for anything else. The word on the pick's button is what marks
-/// it: the shared stylesheet has no rule for the class.
-pub fn pending_block(question: &QuestionRow, project: &str) -> String {
-    let hidden = format!(
-        "<input type=\"hidden\" name=\"id\" value=\"{id}\">\n\
-         <input type=\"hidden\" name=\"project\" value=\"{project}\">\n",
-        id = esc(&question.id),
-        project = esc(project),
+/// it: the shared stylesheet has no rule for the class. Home and the
+/// questions page both render a pending question with this. A form that
+/// names its project lands back on that project's questions page; home
+/// passes `None`, so its answers land on `/`. `lead` is markup, escaped by
+/// the caller, put above the question.
+pub fn pending_block(question: &QuestionRow, project: Option<&str>, lead: &str) -> String {
+    let mut hidden = format!(
+        "<input type=\"hidden\" name=\"id\" value=\"{}\">\n",
+        esc(&question.id)
     );
-    let mut out = format!("<article>\n<p class=\"q\">{}</p>\n", esc(&question.text));
+    if let Some(project) = project {
+        hidden.push_str(&format!(
+            "<input type=\"hidden\" name=\"project\" value=\"{}\">\n",
+            esc(project)
+        ));
+    }
+    let mut out = format!(
+        "<article>\n{lead}<p class=\"q\">{}</p>\n",
+        esc(&question.text)
+    );
     for option in &question.options {
         let button = if question.recommend.as_deref() == Some(option.as_str()) {
             format!(

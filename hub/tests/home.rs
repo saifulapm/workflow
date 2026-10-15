@@ -297,10 +297,14 @@ fn a_waiting_question_shows_its_whole_body_and_the_answer_form() {
         page.contains("Two things:\n1. Which store?\n2. Which port?"),
         "{page}"
     );
-    assert!(
-        page.contains("<p class=\"rec\">approve · changes</p>"),
-        "{page}"
-    );
+    for option in ["approve", "changes"] {
+        assert!(
+            page.contains(&format!(
+                "<button type=\"submit\" name=\"text\" value=\"{option}\" class=\"alt\">{option}</button>"
+            )),
+            "{page}"
+        );
+    }
     assert_eq!(
         page.matches("<form method=\"post\" action=\"/answer\">")
             .count(),
