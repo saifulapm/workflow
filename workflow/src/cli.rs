@@ -116,6 +116,16 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         #[arg(long)]
         dry_run: bool,
     },
+    /// Print the setup script of the claude.ai cloud environment `workflow`.
+    #[command(
+        name = "cloud-setup",
+        long_about = "Print the setup script of the claude.ai cloud environment `workflow`.
+
+It writes this repository's skills and agents under ~/.claude, and a mem in
+/usr/local/bin that fetches the x86_64 mem from $MEM_REMOTE/dl/mem the first
+time it runs, inside the session, where the proxy adds the Access token."
+    )]
+    CloudSetup,
     /// Pause a project: `go` refuses it unless its handoff starts `parked:`.
     Pause {
         /// The project, by mem's name.

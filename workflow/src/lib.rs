@@ -13,6 +13,7 @@
 
 pub mod agent;
 pub mod cli;
+pub mod cloud;
 pub mod embedded;
 pub mod exit;
 pub mod gitcmd;
@@ -109,6 +110,7 @@ pub fn run(cli: Cli) -> i32 {
         ),
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
+        Command::CloudSetup => cloud::cmd_cloud_setup(),
         Command::Go {
             project,
             milestone,
