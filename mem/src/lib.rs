@@ -121,9 +121,11 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 }
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
                 cli::ProjectSetCommand::Paused { who } => verbs::project_pause(&app, who),
-                cli::ProjectSetCommand::Runner { machine, id } => {
-                    verbs::project_runner(&app, machine, id)
-                }
+                cli::ProjectSetCommand::Runner {
+                    machine,
+                    id,
+                    milestone,
+                } => verbs::project_runner(&app, machine, id, milestone.as_deref()),
             },
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
             cli::ProjectCommand::Worktree { path, clear } => {

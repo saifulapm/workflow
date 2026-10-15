@@ -626,6 +626,61 @@ fn project_set_refuses_the_keys_nothing_reads() {
 }
 
 #[test]
+fn a_cloud_runner_carries_its_milestone_and_the_list_says_when_the_handoff_was_written() {
+    let w = World::new("write-cloud-runner");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    let ok = |args: &[&str]| {
+        let out = mem(&w, &repo, args);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+    };
+    let row = |w: &World| json(&mem(w, &repo, &["projects", "--json"]))["projects"][0].clone();
+    ok(&["log", "first write"]);
+    assert!(row(&w)["handoff_at"].is_null(), "{}", row(&w));
+
+    ok(&[
+        "project",
+        "set",
+        "runner",
+        "cloud",
+        "session_01Abc",
+        "--milestone",
+        "m8-cloud",
+    ]);
+    let r = row(&w)["runner"].clone();
+    assert_eq!(r["machine"], "cloud", "{r}");
+    assert_eq!(r["id"], "session_01Abc", "{r}");
+    assert_eq!(r["milestone"], "m8-cloud", "{r}");
+
+    ok(&["handoff", "--set", "parked: t2 is local-only"]);
+    let at = row(&w)["handoff_at"].clone();
+    let at = at.as_str().expect("the handoff's time is listed");
+    assert!(at.parse::<jiff::Timestamp>().is_ok(), "{at}");
+
+    // A local runner names no milestone, and does not inherit the cloud's.
+    ok(&["project", "set", "runner", "mini", "thing-m9"]);
+    assert!(row(&w)["runner"]["milestone"].is_null(), "{}", row(&w));
+    ok(&[
+        "project",
+        "set",
+        "runner",
+        "cloud",
+        "session_02",
+        "--milestone",
+        "m9",
+    ]);
+    ok(&["project", "unset", "runner"]);
+    let toml = std::fs::read_to_string(
+        w.store()
+            .project_toml(&mem::project::Registry::load(&w.store()).projects[0].id),
+    )
+    .unwrap();
+    assert!(
+        !toml.contains("runner"),
+        "unset takes the milestone too: {toml}"
+    );
+}
+
+#[test]
 fn the_runner_is_a_machine_and_an_id_and_the_last_milestone_clears_it() {
     let w = World::new("write-runner");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));

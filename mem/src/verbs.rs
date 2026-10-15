@@ -359,6 +359,14 @@ fn project_summary(
         .and_then(|rows| rows.into_iter().next())
         .and_then(|row| jiff::Timestamp::from_second(row.modified_epoch).ok())
         .map(|ts| ts.to_string());
+    // When the latest handoff was written: the hub tells a cloud run that
+    // wrote one after it started from one that is still going.
+    let handoff_at = index
+        .recent("handoff", Some(id), 1)
+        .ok()
+        .and_then(|rows| rows.into_iter().next())
+        .and_then(|row| jiff::Timestamp::from_second(row.modified_epoch).ok())
+        .map(|ts| ts.to_string());
     let pages = app.store.wiki_pages(id);
     let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
     vec![
@@ -381,6 +389,7 @@ fn project_summary(
         ),
         ("plan_total", json!(plan.len())),
         ("last_activity", json!(last_activity)),
+        ("handoff_at", json!(handoff_at)),
         (
             "has_research",
             json!(has_page(|s| s.starts_with("research"))),
@@ -588,8 +597,9 @@ pub fn project_pause(app: &App, who: &str) -> Result<i32> {
 }
 
 /// `mem project set runner <machine> <id>`: one word each, so the stored
-/// "<machine> <id>" splits back apart, and mem stamps `runner_since`.
-pub fn project_runner(app: &App, machine: &str, id: &str) -> Result<i32> {
+/// "<machine> <id>" splits back apart, and mem stamps `runner_since`. The
+/// milestone, a cloud run's, is replaced or cleared with the rest.
+pub fn project_runner(app: &App, machine: &str, id: &str, milestone: Option<&str>) -> Result<i32> {
     let (machine, id) = (machine.trim(), id.trim());
     if machine.is_empty() || id.is_empty() || machine.contains(' ') || id.contains(' ') {
         return Err(exit::usage(
@@ -602,6 +612,14 @@ pub fn project_runner(app: &App, machine: &str, id: &str) -> Result<i32> {
     };
     let now = jiff::Timestamp::now().round(jiff::Unit::Second)?;
     crate::project::set_key(&app.store, project, "runner_since", &now.to_string())?;
+    match milestone.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(milestone) => {
+            crate::project::set_key(&app.store, project, "runner_milestone", milestone)?;
+        }
+        None => {
+            crate::project::unset_key(&app.store, project, "runner_milestone")?;
+        }
+    }
     let code = project_set(app, "runner", &format!("{machine} {id}"))?;
     // The one hub decides who may start or resume a project from this, so it
     // has to reach the hub's store now, as a pause does.
@@ -620,6 +638,7 @@ fn runner_json(store: &crate::store::Store, id: &str) -> serde_json::Value {
             "machine": machine,
             "id": run,
             "since": declared("runner_since"),
+            "milestone": declared("runner_milestone"),
         }),
         None => serde_json::Value::Null,
     }
@@ -636,6 +655,7 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     let (path, had) = crate::project::unset_key(&app.store, id, key)?;
     if key == "runner" {
         crate::project::unset_key(&app.store, id, "runner_since")?;
+        crate::project::unset_key(&app.store, id, "runner_milestone")?;
     }
     // An unpause, or a cleared runner, has to reach the other machines as a
     // pause does.
@@ -1217,6 +1237,7 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
         if checkboxes(&text, false).iter().all(|(_, done)| *done) {
             crate::project::unset_key(&app.store, id, "runner")?;
             crate::project::unset_key(&app.store, id, "runner_since")?;
+            crate::project::unset_key(&app.store, id, "runner_milestone")?;
         }
     }
     if app.json {

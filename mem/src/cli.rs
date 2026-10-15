@@ -424,8 +424,14 @@ pub enum ProjectSetCommand {
     /// mem records "<now, UTC> by <who>".
     Paused { who: String },
     /// The machine and the amx id of this project's orchestrator, written by
-    /// `workflow go`. mem stamps when it was set.
-    Runner { machine: String, id: String },
+    /// `workflow go`. mem stamps when it was set. A cloud run is machine
+    /// `cloud`, its session id and the milestone it runs.
+    Runner {
+        machine: String,
+        id: String,
+        #[arg(long)]
+        milestone: Option<String>,
+    },
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;

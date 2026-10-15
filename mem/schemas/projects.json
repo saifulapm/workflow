@@ -34,6 +34,7 @@
           "plan_ticked",
           "plan_total",
           "last_activity",
+          "handoff_at",
           "has_research",
           "has_research_summary",
           "has_spec"
@@ -101,7 +102,8 @@
             "required": [
               "machine",
               "id",
-              "since"
+              "since",
+              "milestone"
             ],
             "additionalProperties": false,
             "properties": {
@@ -112,6 +114,13 @@
                 "type": "string"
               },
               "since": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "milestone": {
+                "description": "The milestone a cloud run (machine `cloud`, its session id) works on; null for a device's runner.",
                 "type": [
                   "string",
                   "null"
@@ -144,6 +153,13 @@
             "type": "integer"
           },
           "last_activity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "handoff_at": {
+            "description": "When the latest handoff was written, RFC 3339; null when there is none.",
             "type": [
               "string",
               "null"
