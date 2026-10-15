@@ -167,6 +167,13 @@ fn refusal(argv: &[String], words: &[&str]) -> Option<String> {
         }
         _ => {}
     }
+    // A wait holds the hub's one mem child past its 5 s limit, and the
+    // kill that ends it takes mem from every page for the cool-off.
+    if flag(&["--wait"]) {
+        return Some(format!(
+            "{verb} --wait is refused over the remote; ask again later"
+        ));
+    }
     // A path names a file on this machine, not the client's: refused, so a
     // client can neither read the server's files nor file the wrong one.
     if flag(&["--set-file", "--evidence"]) || (verb == "evidence" && words.get(1) == Some(&"add")) {
@@ -311,6 +318,7 @@ mod tests {
             &["roadmap", "--status", "approved"],
             &["plan", "--set-file", "/root/.ssh/id_ed25519"],
             &["evidence", "add", "t1", "/etc/hosts"],
+            &["questions", "--wait", "01ABC"],
         ] {
             assert!(refused(no), "{no:?}");
         }
