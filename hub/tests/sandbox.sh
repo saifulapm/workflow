@@ -87,6 +87,8 @@ bin_of() {
 }
 mem_bin=$(bin_of mem)
 hub_bin=$(bin_of hub)
+# The hub's Pause and Unpause run workflow, which must reach the sandbox's mem.
+workflow_bin=$(bin_of workflow)
 
 sb=$(mktemp -d "${TMPDIR:-/tmp}/hub-sandbox.XXXXXX")
 hub_pid=""
@@ -102,6 +104,7 @@ trap stop EXIT
 mkdir -p "$sb/bin"
 ln -s "$mem_bin" "$sb/bin/mem"
 ln -s "$hub_bin" "$sb/bin/hub"
+ln -s "$workflow_bin" "$sb/bin/workflow"
 export PATH="$sb/bin:$PATH"
 
 # Toolchains keep their real homes; everything mem and hub write lands under
