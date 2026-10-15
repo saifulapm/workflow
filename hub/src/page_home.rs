@@ -79,6 +79,8 @@ pub struct ProjectSummary {
     pub paused: Option<String>,
     /// The machine and amx id `workflow go` last started it with.
     pub runner: Option<Runner>,
+    /// RFC 3339, when the latest handoff was written.
+    pub handoff_at: Option<String>,
 }
 
 pub fn get(ctx: &PageCtx) -> Response {
@@ -126,6 +128,7 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
         last_activity: text(row, "last_activity"),
         paused: text(row, "paused"),
         runner: serde_json::from_value(row["runner"].clone()).ok(),
+        handoff_at: text(row, "handoff_at"),
     }
 }
 

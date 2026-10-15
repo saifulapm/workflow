@@ -40,6 +40,74 @@ pub struct Runner {
     pub id: String,
     #[serde(default)]
     pub since: Option<String>,
+    /// The milestone a cloud run was started on; a device runner names none.
+    #[serde(default)]
+    pub milestone: Option<String>,
+}
+
+/// Where a cloud run stands. No agent reports a cloud session, so the hub
+/// reads it off the roadmap and the handoff alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudState {
+    Live,
+    Parked,
+    Landed,
+    Ended,
+}
+
+/// A project's cloud run: its claude.ai session id, the milestone it runs,
+/// when it began, and where it stands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CloudRun {
+    pub id: String,
+    pub milestone: String,
+    pub since: Option<String>,
+    pub state: CloudState,
+}
+
+/// How long a cloud run that writes no handoff counts as live.
+const CLOUD_LAPSE: jiff::SignedDuration = jiff::SignedDuration::from_hours(7);
+
+/// The project's cloud run, or None when its runner is not one. Landed once
+/// its milestone is no longer the open one. Else a handoff written after it
+/// began parks it, when the handoff says `parked:`, or ends it; `handoff`
+/// reads that text and runs only then. Else it is live for seven hours from
+/// its start. A run with no readable start is not shown as live.
+pub fn cloud_run(
+    summary: &ProjectSummary,
+    handoff: impl FnOnce() -> Option<String>,
+    now: jiff::Timestamp,
+) -> Option<CloudRun> {
+    let runner = summary.runner.as_ref().filter(|r| r.machine == "cloud")?;
+    let milestone = runner.milestone.clone()?;
+    let since = runner
+        .since
+        .as_deref()
+        .and_then(|since| since.parse::<jiff::Timestamp>().ok());
+    let handoff_at = summary
+        .handoff_at
+        .as_deref()
+        .and_then(|at| at.parse::<jiff::Timestamp>().ok());
+    let state = if summary.milestone.as_deref() != Some(milestone.as_str()) {
+        CloudState::Landed
+    } else if handoff_at.is_some_and(|at| since.is_none_or(|since| at > since)) {
+        let text = handoff().unwrap_or_default();
+        if text.trim_start().starts_with("parked:") {
+            CloudState::Parked
+        } else {
+            CloudState::Ended
+        }
+    } else if since.is_some_and(|since| now.duration_since(since) < CLOUD_LAPSE) {
+        CloudState::Live
+    } else {
+        CloudState::Ended
+    };
+    Some(CloudRun {
+        id: runner.id.clone(),
+        milestone,
+        since: runner.since.clone(),
+        state,
+    })
 }
 
 /// What runs a project.
@@ -186,7 +254,98 @@ mod tests {
             last_activity: None,
             paused: None,
             runner: None,
+            handoff_at: None,
         }
+    }
+
+    /// gamma building m2, run in the cloud for `milestone` since 09:00.
+    fn cloud(milestone: &str, handoff_at: Option<&str>) -> ProjectSummary {
+        ProjectSummary {
+            name: "gamma".to_string(),
+            milestone: Some("m2".to_string()),
+            runner: Some(Runner {
+                machine: "cloud".to_string(),
+                id: "session_01Abc".to_string(),
+                since: Some("2026-10-15T09:00:00Z".to_string()),
+                milestone: Some(milestone.to_string()),
+            }),
+            handoff_at: handoff_at.map(str::to_string),
+            ..summary(1, 3)
+        }
+    }
+
+    fn at(time: &str) -> jiff::Timestamp {
+        time.parse().unwrap()
+    }
+
+    fn unread() -> Option<String> {
+        panic!("read the handoff though none was written since the run began")
+    }
+
+    fn state(run: Option<CloudRun>) -> CloudState {
+        run.expect("a cloud run").state
+    }
+
+    #[test]
+    fn a_cloud_run_with_no_handoff_since_is_live_for_seven_hours() {
+        let run = cloud_run(
+            &cloud("m2", Some("2026-10-15T08:00:00Z")),
+            unread,
+            at("2026-10-15T15:59:00Z"),
+        );
+        assert_eq!(
+            run,
+            Some(CloudRun {
+                id: "session_01Abc".to_string(),
+                milestone: "m2".to_string(),
+                since: Some("2026-10-15T09:00:00Z".to_string()),
+                state: CloudState::Live,
+            })
+        );
+        let lapsed = cloud_run(&cloud("m2", None), unread, at("2026-10-15T16:00:00Z"));
+        assert_eq!(state(lapsed), CloudState::Ended);
+    }
+
+    #[test]
+    fn a_handoff_after_the_run_began_parks_or_ends_it() {
+        let parked = cloud_run(
+            &cloud("m2", Some("2026-10-15T09:30:00Z")),
+            || Some("\nparked: t2 is local-only".to_string()),
+            at("2026-10-15T09:40:00Z"),
+        );
+        assert_eq!(state(parked), CloudState::Parked);
+        let ended = cloud_run(
+            &cloud("m2", Some("2026-10-15T09:30:00Z")),
+            || Some("m2-t3 done, picking up t4".to_string()),
+            at("2026-10-15T09:40:00Z"),
+        );
+        assert_eq!(state(ended), CloudState::Ended);
+    }
+
+    #[test]
+    fn a_cloud_run_whose_milestone_was_ticked_landed() {
+        let run = cloud_run(
+            &cloud("m1", Some("2026-10-15T09:30:00Z")),
+            unread,
+            at("2026-10-15T09:40:00Z"),
+        );
+        assert_eq!(state(run), CloudState::Landed);
+    }
+
+    #[test]
+    fn a_device_runner_is_no_cloud_run() {
+        let mut device = cloud("m2", None);
+        device.runner = Some(Runner {
+            machine: "mini".to_string(),
+            id: "gamma-m2".to_string(),
+            since: None,
+            milestone: None,
+        });
+        assert_eq!(cloud_run(&device, unread, at("2026-10-15T09:40:00Z")), None);
+        assert_eq!(
+            cloud_run(&summary(1, 3), unread, at("2026-10-15T09:40:00Z")),
+            None
+        );
     }
 
     #[test]
