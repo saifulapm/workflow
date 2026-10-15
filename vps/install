@@ -19,6 +19,11 @@ if [[ ! -x /usr/bin/cloudflared ]]; then
     >/etc/apt/sources.list.d/cloudflared.list
   apt-get update -q && apt-get install -y -q cloudflared
 fi
+# The cloud's mem, built and sent by vps/deploy; the hub serves it.
+if [[ -f $build/mem-x86_64.new ]]; then
+  install -m 0755 "$build/mem-x86_64.new" /var/lib/mem/mem-x86_64
+  rm -f "$build/mem-x86_64.new"
+fi
 for crate in mem workflow hub; do
   (cd "$src/$crate" && HUB_COMMIT=$short CARGO_TARGET_DIR=$build/target "$cargo" build --release -j2 -q)
   install -m755 "$build/target/release/$crate" "/usr/local/bin/$crate"
@@ -48,6 +53,8 @@ if [[ -f $config ]]; then
     echo 'mcp_port = 8788' >>"$config"
   grep -q '^access_team' "$config" ||
     echo 'access_team = "https://saifulapm.cloudflareaccess.com"' >>"$config"
+  grep -q '^mem_binary' "$config" ||
+    echo 'mem_binary = "/var/lib/mem/mem-x86_64"' >>"$config"
   grep -q '^access_aud' "$config" ||
     echo 'access_aud = "4156a52d77bb948a63b9b6d4dad534cc230280e9cf4235f464a8761b35a9c998"' >>"$config"
 fi

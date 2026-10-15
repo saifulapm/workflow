@@ -26,4 +26,14 @@ printf '%s\n' "$tunnel" |
   ssh "$host" "umask 077 && cat > /etc/mem/cloudflared-token.new && mv -f /etc/mem/cloudflared-token.new /etc/mem/cloudflared-token"
 git archive --format=tar "$commit" |
   ssh "$host" "rm -rf $src && mkdir -p $src && tar x -C $src"
+# The mem a cloud session runs, served at mem.on-rexa.com/dl/mem: x86_64 and
+# static, so it is built here (cargo zigbuild, zig on PATH), not on the VPS.
+x86=$(mktemp -d)
+trap 'rm -rf "$x86"' EXIT
+git archive --format=tar "$commit" mem | tar x -C "$x86"
+cargo zigbuild -q --release --target x86_64-unknown-linux-musl \
+  --manifest-path "$x86/mem/Cargo.toml" \
+  --target-dir "${XDG_CACHE_HOME:-$HOME/.cache}/workflow/x86-target"
+ssh "$host" "install -d -m 0755 /var/lib/workflow-build && cat > /var/lib/workflow-build/mem-x86_64.new" \
+  <"${XDG_CACHE_HOME:-$HOME/.cache}/workflow/x86-target/x86_64-unknown-linux-musl/release/mem"
 ssh "$host" "bash $src/vps/install $short"
