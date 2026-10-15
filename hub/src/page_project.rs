@@ -179,6 +179,21 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     } else {
         ""
     };
+    // No agent reports a cloud session, so its runner and handoff tell it.
+    if let Some(cloud) = cloud_run(ctx, s) {
+        let (pill, state) = match cloud.state {
+            CloudState::Live => ("<span class=\"pill\">running</span>", "live"),
+            CloudState::Parked => ("<span class=\"pill wait\">parked</span>", "parked"),
+            CloudState::Landed => ("<span class=\"pill ok\">landed</span>", "landed"),
+            CloudState::Ended => ("<span class=\"pill mut\">ended</span>", "ended"),
+        };
+        return format!(
+            "<p class=\"row\">{paused_pill}{pill} <span class=\"meta\">{}</span> {}</p>\n{}",
+            esc(&format!("cloud · {} · {state}", cloud.milestone)),
+            outside_link(&format!("{CODE_PAGE}/{}", cloud.id), "session"),
+            controls(ctx, pause_form(project, paused))
+        );
+    }
     let (pill, meta) = match &run {
         Run::Live(agent) => (
             if paused {
@@ -275,6 +290,16 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
         esc(&meta),
         controls(ctx, pause_form(project, paused))
     )
+}
+
+/// `s`'s cloud run, its handoff read only when one was written since it
+/// began.
+fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
+    let handoff = || match &*ctx.app.mem.handoff(&s.name) {
+        Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
+        _ => None,
+    };
+    live::cloud_run(s, handoff, jiff::Timestamp::now())
 }
 
 /// The project's cloud run that holds the one cloud slot, live or parked,

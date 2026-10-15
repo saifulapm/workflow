@@ -316,3 +316,30 @@ fn no_card_while_any_cloud_run_is_live_or_parked() {
     let body = page(&hub);
     assert_eq!(card(&body), None, "parked: {body}");
 }
+
+#[test]
+fn the_run_line_shows_a_cloud_runner_by_its_state_and_session() {
+    let world = World::new("cloud-run-line");
+    world.set("gamma", "runner", cloud("m2-next", &ago(10)));
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(
+        body.contains("<span class=\"meta\">cloud · m2-next · live</span>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("href=\"https://claude.ai/code/session_01Other\""),
+        "{body}"
+    );
+    assert!(!body.contains("cloud offline"), "{body}");
+    drop(hub);
+
+    world.set("gamma", "handoff_at", json!(ago(5)));
+    world.handoff("gamma", "parked: t2 is local-only\n");
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(
+        body.contains("<span class=\"meta\">cloud · m2-next · parked</span>"),
+        "{body}"
+    );
+}
