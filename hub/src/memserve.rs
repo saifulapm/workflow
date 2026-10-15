@@ -200,3 +200,61 @@ fn owner_repo(url: &str) -> Option<String> {
     let owner = parts.next()?;
     Some(format!("{owner}/{repo}").to_ascii_lowercase())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(args: &[&str]) -> bool {
+        let argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        refusal(&argv, &positionals(&argv)).is_some()
+    }
+
+    #[test]
+    fn a_cloud_proxy_remote_names_the_same_repo_as_github() {
+        for url in [
+            "git@github.com:Me/Gamma.git",
+            "https://github.com/me/gamma",
+            "http://local_proxy@127.0.0.1:41893/git/me/gamma",
+            "github.com/me/gamma/",
+        ] {
+            assert_eq!(owner_repo(url).as_deref(), Some("me/gamma"), "{url}");
+        }
+        assert_eq!(owner_repo("gamma"), None);
+    }
+
+    #[test]
+    fn only_an_orchestrators_verbs_run_over_the_remote() {
+        for ok in [
+            &["log", "landed t1"][..],
+            &[
+                "--project",
+                "gamma",
+                "project",
+                "set",
+                "runner",
+                "cloud",
+                "s",
+                "--milestone",
+                "m1",
+            ],
+            &["--scope", "all", "search", "x"],
+            &["roadmap", "--tick", "m1"],
+            &["plan", "--stdin"],
+        ] {
+            assert!(!refused(ok), "{ok:?}");
+        }
+        for no in [
+            &["prune"][..],
+            &["answer", "ABCD", "yes"],
+            &["project", "unset", "runner"],
+            &["project", "set", "paused", "x"],
+            &["roadmap", "--set-file", "/etc/passwd"],
+            &["roadmap", "--status", "approved"],
+            &["plan", "--set-file", "/root/.ssh/id_ed25519"],
+            &["evidence", "add", "t1", "/etc/hosts"],
+        ] {
+            assert!(refused(no), "{no:?}");
+        }
+    }
+}
