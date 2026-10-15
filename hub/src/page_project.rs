@@ -338,8 +338,8 @@ pub fn cloud_slot(mem: &MemCli, summaries: &[ProjectSummary]) -> Option<(String,
 }
 
 /// Why `s` may not start a cloud run, or `None` when it may: `workflow go
-/// --cloud` wants an approved milestone, no pause, no device orchestrator on
-/// it, and the slot free.
+/// --cloud` wants an approved milestone, no pause, a git remote, the trunk
+/// on main, no device orchestrator on it, and the slot free.
 pub fn cloud_refusal(
     mem: &MemCli,
     agents: &Agents,
@@ -352,6 +352,23 @@ pub fn cloud_refusal(
     }
     if s.paused.is_some() {
         return Some(format!("{} is paused.", s.name));
+    }
+    let row = mem
+        .projects()
+        .rows("projects")
+        .into_iter()
+        .find(|row| row["name"] == s.name.as_str())
+        .unwrap_or_default();
+    // The cloud session clones the remote and cuts from main.
+    if row["remote"].as_str().is_none_or(str::is_empty) {
+        return Some(format!("{} has no git remote", s.name));
+    }
+    // Its trunk is a branch the cloud cannot see yet.
+    if row["worktree"].is_string() {
+        return Some(format!(
+            "{} works on a branch of its own; cloud runs take main",
+            s.name
+        ));
     }
     if let Run::Live(agent) = live::run(s.runner.as_ref(), &s.name, s.milestone.as_deref(), agents)
     {

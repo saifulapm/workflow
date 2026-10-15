@@ -237,6 +237,39 @@ fn run_in_cloud_is_refused_while_a_device_orchestrator_runs_the_project() {
     assert_eq!(poll(&hub), json!([]));
 }
 
+/// A cloud run clones the project from its remote and cuts from main, so a
+/// project with no remote, or one whose trunk is a worktree branch, gets no
+/// card and no cloud start.
+#[test]
+fn run_in_cloud_is_refused_without_a_remote_or_on_a_worktree() {
+    for (tag, key, value, why) in [
+        (
+            "cloud-run-no-remote",
+            "remote",
+            Value::Null,
+            "gamma has no git remote",
+        ),
+        (
+            "cloud-run-worktree",
+            "worktree",
+            json!("/home/saiful/Sites/gamma-wt"),
+            "gamma works on a branch of its own; cloud runs take main",
+        ),
+    ] {
+        let world = World::new(tag);
+        world.set("gamma", key, value);
+        let hub = world.hub();
+        poll(&hub);
+        let body = page(&hub);
+        assert_eq!(card(&body), None, "{key}: {body}");
+        assert!(!body.contains(RUN_IN_CLOUD), "{key}: {body}");
+        let response = hub.post_form("/p/gamma/control", "do=cloud");
+        assert_eq!(status_of(&response), 409, "{response}");
+        assert!(body_of(&response).contains(why), "{response}");
+        assert_eq!(poll(&hub), json!([]));
+    }
+}
+
 /// The Start in cloud card's section of the page, or `None` without one.
 fn card(body: &str) -> Option<String> {
     let at = body.find("<h2>Cloud run</h2>")?;
