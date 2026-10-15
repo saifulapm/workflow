@@ -5,8 +5,7 @@
 mod common;
 
 use common::{
-    DEVICE_COOKIE, Hub, TempDir, body_of, fixture_bin, mem_in, real_mem, recording_mem,
-    seed_project, status_of,
+    DEVICE_COOKIE, Hub, TempDir, body_of, mem_in, real_mem, recording_mem, seed_project, status_of,
 };
 
 const PAIR: &str = "Pair this device first: run hub pair on here-box";
@@ -30,14 +29,13 @@ struct World {
 }
 
 /// gamma has a draft roadmap and a question waiting; omega an approved
-/// milestone that amx is running nothing for.
+/// milestone that nothing runs.
 fn world(tag: &str) -> World {
     let dir = TempDir::new(tag);
     let home = dir.join("home");
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::write(home.join("config/qshell/machine"), "here-box\n").unwrap();
     let (bin, _log) = recording_mem(dir.path(), &home);
-    fixture_bin(&bin, "amx", "echo '[]'");
     let mem = real_mem().unwrap();
     for (name, status) in [("gamma", "draft"), ("omega", "approved")] {
         seed_project(&mem, &home, name, "seeded");
@@ -92,6 +90,8 @@ fn get(hub: &Hub, path: &str, cookie: Option<&str>) -> String {
 fn an_unpaired_browser_sees_how_to_pair_in_place_of_every_control() {
     let world = world("unpaired-pages");
     let hub = Hub::spawn(&world.home, &[&world.bin], &["--port", "0"]);
+    // A machine online with omega checked out, so omega offers Start on it.
+    hub.poll_agent(r#"{"machine":"nuc","agents":[],"checkouts":["omega"]}"#);
     for page in PAGES {
         let paired = get(&hub, page, Some(DEVICE_COOKIE));
         assert!(paired.contains("method=\"post\""), "{page}: {paired}");

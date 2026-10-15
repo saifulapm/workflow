@@ -7,6 +7,7 @@ mod common;
 use std::process::Command;
 
 use common::TempDir;
+use hub::agents::{Agents, DEFAULT_WINDOW};
 use hub::config::Config;
 use hub::html::Banner;
 use hub::memcli::MemCli;
@@ -15,7 +16,16 @@ use hub::page_home;
 /// The script home draws, taken from the page.
 fn script(dir: &TempDir) -> String {
     let mem = MemCli::with_path(dir.join("no-mem-here"));
-    let page = page_home::render(&mem, &Config::default(), "here", 0, &Banner::None, None);
+    let agents = Agents::open(dir.join("agents.json"), DEFAULT_WINDOW);
+    let page = page_home::render(
+        &mem,
+        &agents,
+        &Config::default(),
+        "here",
+        0,
+        &Banner::None,
+        None,
+    );
     let at = page.find("/api/stamp").expect("home polls the stamp");
     let start = page[..at].rfind("<script>").unwrap() + "<script>".len();
     let end = at + page[at..].find("</script>").unwrap();

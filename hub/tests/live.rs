@@ -1,6 +1,6 @@
-//! A building project's page shows the orchestrator amx is running for its
-//! current milestone and the project's last moves, or says it has stalled.
-//! Over a fake `mem` and a fake `amx`.
+//! A building project's page shows the orchestrator its runner's machine
+//! reports for its current milestone and the project's last moves, or says
+//! it has stalled. Over a fake `mem` and a device agent's polls.
 
 mod common;
 
@@ -8,45 +8,48 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::{Hub, TempDir, body_of, fixture_bin, fixture_mem, status_of, wait_for};
-use serde_json::json;
+use serde_json::{Value, json};
 
 struct World {
     dir: TempDir,
     home: PathBuf,
     bin: PathBuf,
     log: PathBuf,
+    /// The laptop agent's report, or none when it never polls.
+    report: Option<String>,
 }
 
-/// omega is building o2-sync from a checkout on this machine, which is
-/// called laptop. `amx` prints `agents` when given, and is missing from PATH
-/// when not.
+/// omega is building o2-sync, run on the laptop as omega-o2-sync. The
+/// laptop's agent reports `agents` and a checkout of omega when given, and
+/// never polls when not.
 fn world(tag: &str, handoff: &str, agents: Option<&str>) -> World {
-    world_with(tag, handoff, agents, json!(["/src/omega"]), false)
+    let runner = json!({"machine": "laptop", "id": "omega-o2-sync",
+                        "since": "2026-10-15T07:00:00Z"});
+    world_with(tag, handoff, agents, runner, json!(["omega"]), false)
 }
 
-/// `world`, with omega's checkouts on this machine as `checkouts`, and with
-/// both its milestones ticked when `finished`.
+/// `world`, with omega's runner as `runner`, the laptop's checkouts as
+/// `checkouts`, and with both its milestones ticked when `finished`.
 fn world_with(
     tag: &str,
     handoff: &str,
     agents: Option<&str>,
-    checkouts: serde_json::Value,
+    runner: Value,
+    checkouts: Value,
     finished: bool,
 ) -> World {
     let dir = TempDir::new(tag);
     let home = dir.join("home");
     let bin = dir.join("bin");
     let log = dir.join("mem.log");
-    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
-    std::fs::write(home.join("config/qshell/machine"), "laptop\n").unwrap();
     let (done, ticked, open) = if finished {
         (2, 3, json!(null))
     } else {
         (1, 1, json!("o2-sync"))
     };
     let projects = json!({"projects": [
-        {"name": "omega", "roadmap_status": "approved", "checkouts": checkouts,
-         "milestone": open, "plan_slug": "o2-sync",
+        {"name": "omega", "roadmap_status": "approved", "checkouts": [],
+         "milestone": open, "plan_slug": "o2-sync", "runner": runner,
          "milestones_done": done, "milestones_total": 2, "plan_ticked": ticked, "plan_total": 3},
     ]});
     let roadmap = json!({"status": "approved", "text":
@@ -81,14 +84,15 @@ fn world_with(
             projects = dir.join("projects.json").display(),
         ),
     );
-    if let Some(agents) = agents {
-        fixture_bin(&bin, "amx", &format!("printf '%s\\n' '{agents}'"));
-    }
+    let report = agents.map(|agents| {
+        format!("{{\"machine\":\"laptop\",\"agents\":{agents},\"checkouts\":{checkouts}}}")
+    });
     World {
         dir,
         home,
         bin,
         log,
+        report,
     }
 }
 
@@ -100,9 +104,8 @@ fn lines(path: &Path) -> Vec<String> {
         .collect()
 }
 
-/// omega's page and the page's own `mem` spawns, after the doorbell's first
-/// round.
-fn page(world: &World) -> (String, Vec<String>) {
+/// A hub over `world`, after the laptop's first poll when it polls.
+fn hub(world: &World) -> Hub {
     let config = world.dir.join("config.toml");
     std::fs::write(
         &config,
@@ -115,6 +118,34 @@ fn page(world: &World) -> (String, Vec<String>) {
         &[&world.bin],
         &["--port", "0", "--config", config.to_str().unwrap()],
     );
+    if let Some(report) = &world.report {
+        hub.poll_agent(report);
+    }
+    hub
+}
+
+/// The commands the laptop's next poll is handed.
+fn queued(world: &World, hub: &Hub) -> Value {
+    let report = world
+        .report
+        .as_deref()
+        .unwrap_or("{\"machine\":\"laptop\",\"agents\":[],\"checkouts\":[\"omega\"]}");
+    serde_json::from_str::<Value>(&hub.poll_agent(report)).unwrap()["commands"].clone()
+}
+
+fn starts(commands: &Value) -> usize {
+    commands
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "start")
+        .count()
+}
+
+/// omega's page and the page's own `mem` spawns, after the doorbell's first
+/// round.
+fn page(world: &World) -> (String, Vec<String>) {
+    let hub = hub(world);
     wait_for(
         "the doorbell's first round",
         Duration::from_secs(10),
@@ -203,15 +234,22 @@ fn a_parked_milestone_is_not_stalled() {
 }
 
 #[test]
-fn a_project_with_no_checkout_here_offers_no_start_and_is_not_stalled() {
+fn a_project_no_online_machine_has_checked_out_offers_no_start_and_is_not_stalled() {
     for handoff in ["", "o2-t1 landed at 1a2b3c."] {
-        let world = world_with("live-elsewhere", handoff, Some(DEAD), json!([]), false);
+        let world = world_with(
+            "live-elsewhere",
+            handoff,
+            Some(DEAD),
+            Value::Null,
+            json!([]),
+            false,
+        );
         let (body, _) = page(&world);
 
         assert!(!body.contains("stalled"), "{body}");
         assert!(!body.contains("value=\"go\""), "{body}");
-        assert!(!body.contains(">Start</button>"), "{body}");
-        assert!(!body.contains(">Resume</button>"), "{body}");
+        assert!(!body.contains(">Start"), "{body}");
+        assert!(!body.contains(">Resume"), "{body}");
         assert!(body.contains("<h2>Last moves</h2>"), "{body}");
     }
 }
@@ -219,11 +257,13 @@ fn a_project_with_no_checkout_here_offers_no_start_and_is_not_stalled() {
 #[test]
 fn a_roadmap_with_every_milestone_ticked_reads_done_with_no_run() {
     for handoff in ["", "o2 landed at 1a2b3c."] {
+        let runner = json!({"machine": "laptop", "id": "omega-o2-sync"});
         let world = world_with(
             "live-finished",
             handoff,
             Some(DEAD),
-            json!(["/src/omega"]),
+            runner,
+            json!(["omega"]),
             true,
         );
         let (body, _) = page(&world);
@@ -250,58 +290,34 @@ fn a_roadmap_with_every_milestone_ticked_reads_done_with_no_run() {
 }
 
 #[test]
-fn without_amx_nothing_is_flagged() {
-    let world = world("live-no-amx", "o2-t1 landed at 1a2b3c.", None);
+fn a_runner_whose_machine_never_polled_is_not_flagged() {
+    let world = world("live-away", "o2-t1 landed at 1a2b3c.", None);
     let (body, _) = page(&world);
 
     assert!(!body.contains("stalled"), "{body}");
     assert!(!body.contains("pill\">running"), "{body}");
+    assert!(!body.contains("value=\"go\""), "{body}");
+    assert!(body.contains("laptop offline"), "{body}");
     assert!(body.contains("<h2>Last moves</h2>"), "{body}");
 }
 
-/// A hub over `world`, after the doorbell's first round, with a fake
-/// `systemd-run` that records its argv and exits `code`, saying `said`.
-fn hub_with_systemd_run(world: &World, code: i32, said: &str) -> (Hub, PathBuf) {
-    let argv = world.dir.join("systemd-run.log");
-    fixture_bin(
-        &world.bin,
-        "systemd-run",
-        &format!(
-            "printf '%s\\n' \"$*\" >> '{argv}'\nprintf '%s\\n' '{said}' >&2\nexit {code}",
-            argv = argv.display()
-        ),
-    );
-    let config = world.dir.join("config.toml");
-    std::fs::write(
-        &config,
-        "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
-         ntfy_base = \"http://127.0.0.1:9\"\n",
-    )
-    .unwrap();
-    let hub = Hub::spawn(
-        &world.home,
-        &[&world.bin],
-        &["--port", "0", "--config", config.to_str().unwrap()],
-    );
-    (hub, argv)
-}
-
 #[test]
-fn resume_runs_workflow_go_outside_the_hubs_cgroup() {
+fn resume_queues_a_start_for_the_runners_machine() {
     let world = world("live-resume", "o2-t1 landed at 1a2b3c.", Some(DEAD));
-    let (hub, argv) = hub_with_systemd_run(&world, 0, "omega-o2-sync-2");
+    let hub = hub(&world);
 
     let body = body_of(&hub.get("/p/omega")).to_string();
     assert!(
         body.contains(
             "<form method=\"post\" action=\"/p/omega/control\">\n\
              <input type=\"hidden\" name=\"do\" value=\"go\">\n\
+             <input type=\"hidden\" name=\"machine\" value=\"laptop\">\n\
              <button type=\"submit\">Resume</button>"
         ),
         "{body}"
     );
 
-    let response = hub.post_form("/p/omega/control", "do=go");
+    let response = hub.post_form("/p/omega/control", "do=go&machine=laptop");
     assert_eq!(status_of(&response), 303, "{response}");
     assert_eq!(
         common::header_of(&response, "location"),
@@ -309,16 +325,16 @@ fn resume_runs_workflow_go_outside_the_hubs_cgroup() {
         "{response}"
     );
     assert_eq!(
-        lines(&argv),
-        ["--user --scope --quiet workflow go omega"],
-        "one workflow go, in a scope of its own"
+        queued(&world, &hub),
+        json!([{"kind": "start", "project": "omega"}]),
+        "one start, for the laptop"
     );
 }
 
 #[test]
 fn a_project_with_no_handoff_offers_start() {
     let world = world("live-start", "", Some(DEAD));
-    let (hub, _) = hub_with_systemd_run(&world, 0, "");
+    let hub = hub(&world);
     let body = body_of(&hub.get("/p/omega")).to_string();
     assert!(
         body.contains("<button type=\"submit\">Start</button>"),
@@ -329,36 +345,41 @@ fn a_project_with_no_handoff_offers_start() {
 #[test]
 fn a_live_orchestrator_is_not_started_twice() {
     let world = world("live-twice", "", Some(LIVE));
-    let (hub, argv) = hub_with_systemd_run(&world, 0, "");
+    let hub = hub(&world);
 
     let body = body_of(&hub.get("/p/omega")).to_string();
     assert!(!body.contains("value=\"go\""), "{body}");
-    let response = hub.post_form("/p/omega/control", "do=go");
+    let response = hub.post_form("/p/omega/control", "do=go&machine=laptop");
     assert_eq!(status_of(&response), 409, "{response}");
-    assert!(lines(&argv).is_empty(), "{:?}", lines(&argv));
+    assert!(
+        body_of(&response).contains("omega-o2-sync is already running."),
+        "{response}"
+    );
+    assert_eq!(queued(&world, &hub), json!([]));
 }
 
 #[test]
-fn a_refused_go_says_why() {
-    let world = world("live-refused", "", Some(DEAD));
-    let (hub, _) = hub_with_systemd_run(&world, 2, "go: omega: the roadmap is not approved");
-    let response = hub.post_form("/p/omega/control", "do=go");
+fn a_go_while_the_runners_machine_is_away_says_why() {
+    let world = world("live-refused", "", None);
+    let hub = hub(&world);
+    let response = hub.post_form("/p/omega/control", "do=go&machine=laptop");
     assert_eq!(status_of(&response), 409, "{response}");
     assert!(
-        body_of(&response).contains("go: omega: the roadmap is not approved"),
+        body_of(&response).contains("omega reads laptop offline."),
         "{response}"
     );
+    assert_eq!(queued(&world, &hub), json!([]));
 }
 
 #[test]
 fn a_device_that_never_paired_cannot_press_a_button() {
     let world = world("live-unpaired", "o2-t1 landed at 1a2b3c.", Some(DEAD));
-    let (hub, argv) = hub_with_systemd_run(&world, 0, "");
+    let hub = hub(&world);
 
     for cookie in ["theme=dark", "hub_device=NOTADEVICENOTADEVICENOTADE"] {
         let response = hub.post_form_with(
             "/p/omega/control",
-            "do=go",
+            "do=go&machine=laptop",
             &[("Origin", &hub.origin()), ("Cookie", cookie)],
         );
         assert_eq!(status_of(&response), 403, "{cookie}: {response}");
@@ -373,39 +394,40 @@ fn a_device_that_never_paired_cannot_press_a_button() {
             .any(|argv| argv.starts_with("answer")),
         "an unpaired answer reached mem"
     );
-    assert!(lines(&argv).is_empty(), "{:?}", lines(&argv));
+    assert_eq!(queued(&world, &hub), json!([]));
 
     // The paired device still can.
-    assert_eq!(status_of(&hub.post_form("/p/omega/control", "do=go")), 303);
+    assert_eq!(
+        status_of(&hub.post_form("/p/omega/control", "do=go&machine=laptop")),
+        303
+    );
 }
 
 #[test]
 fn the_page_after_resume_shows_the_new_orchestrator() {
     let world = world("live-after-resume", "o2-t1 landed at 1a2b3c.", Some(DEAD));
-    // `workflow go` started the -2 agent: from now on amx lists it.
-    let live = r#"[{"id":"omega-o2-sync","state":"stopped","ended":0,"created":2},
-      {"id":"omega-o2-sync-2","state":"starting","ended":0,"created":3}]"#;
-    let (hub, _) = hub_with_systemd_run(&world, 0, "omega-o2-sync-2");
-    fixture_bin(
-        &world.bin,
-        "amx-after",
-        &format!("printf '%s\\n' '{}'", live.replace('\n', " ")),
-    );
-    let bin = world.bin.display();
-    fixture_bin(
-        &world.bin,
-        "systemd-run",
-        &format!("cp '{bin}/amx-after' '{bin}/amx.new' && mv '{bin}/amx.new' '{bin}/amx'"),
-    );
+    let hub = hub(&world);
     assert!(body_of(&hub.get("/p/omega")).contains("stalled"));
 
-    let response = hub.post_form("/p/omega/control", "do=go");
+    let response = hub.post_form("/p/omega/control", "do=go&machine=laptop");
     assert_eq!(status_of(&response), 303, "{response}");
-    let body = body_of(&hub.get("/p/omega")).to_string();
-    assert!(
-        body.contains("<span class=\"pill\">running</span> <span class=\"meta\">omega-o2-sync-2 · starting</span>"),
-        "{body}"
+    assert_eq!(starts(&queued(&world, &hub)), 1);
+
+    // The laptop's `workflow go` started the -2 agent and recorded it as the
+    // runner, and its next poll lists it.
+    let path = world.dir.join("projects.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("omega-o2-sync\"", "omega-o2-sync-2\"")).unwrap();
+    hub.poll_agent(
+        r#"{"machine":"laptop","checkouts":["omega"],"agents":[
+          {"id":"omega-o2-sync","state":"stopped","ended":0,"created":2},
+          {"id":"omega-o2-sync-2","state":"starting","ended":0,"created":3}]}"#,
     );
+    wait_for("the new orchestrator", Duration::from_secs(10), || {
+        body_of(&hub.get("/p/omega")).contains(
+            "<span class=\"pill\">running</span> <span class=\"meta\">omega-o2-sync-2 · starting</span>",
+        )
+    });
 }
 
 /// omega's row says it is paused, as mem would after `workflow pause`.
@@ -445,7 +467,7 @@ const UNPAUSE: &str = "<input type=\"hidden\" name=\"do\" value=\"unpause\">";
 fn a_running_project_can_be_paused_and_then_reads_pausing() {
     let world = world("live-pause", "", Some(LIVE));
     let workflow = fake_workflow(&world);
-    let (hub, go) = hub_with_systemd_run(&world, 0, "");
+    let hub = hub(&world);
 
     let body = body_of(&hub.get("/p/omega")).to_string();
     assert!(body.contains(PAUSE), "{body}");
@@ -463,7 +485,7 @@ fn a_running_project_can_be_paused_and_then_reads_pausing() {
     );
     assert!(body.contains(UNPAUSE), "{body}");
     assert!(!body.contains(PAUSE), "{body}");
-    assert!(lines(&go).is_empty(), "{:?}", lines(&go));
+    assert_eq!(starts(&queued(&world, &hub)), 0);
 }
 
 #[test]
@@ -471,7 +493,7 @@ fn a_paused_project_with_no_run_offers_unpause_not_start() {
     let world = world("live-paused", "o2-t1 landed at 1a2b3c.", Some(DEAD));
     set_paused(&world);
     let workflow = fake_workflow(&world);
-    let (hub, go) = hub_with_systemd_run(&world, 0, "");
+    let hub = hub(&world);
 
     let body = body_of(&hub.get("/p/omega")).to_string();
     assert!(
@@ -488,11 +510,7 @@ fn a_paused_project_with_no_run_offers_unpause_not_start() {
     let response = hub.post_form("/p/omega/control", "do=unpause");
     assert_eq!(status_of(&response), 303, "{response}");
     assert_eq!(lines(&workflow), ["unpause omega"]);
-    assert!(
-        lines(&go).is_empty(),
-        "unpause starts nothing: {:?}",
-        lines(&go)
-    );
+    assert_eq!(starts(&queued(&world, &hub)), 0, "unpause starts nothing");
 
     let body = body_of(&hub.get("/p/omega")).to_string();
     assert!(!body.contains(">paused<"), "{body}");
@@ -511,7 +529,7 @@ fn a_paused_project_parked_on_a_question_can_still_resume() {
         Some(DEAD),
     );
     set_paused(&world);
-    let (hub, _) = hub_with_systemd_run(&world, 0, "");
+    let hub = hub(&world);
 
     let body = body_of(&hub.get("/p/omega")).to_string();
     assert!(
@@ -527,11 +545,14 @@ fn a_paused_project_parked_on_a_question_can_still_resume() {
 
 #[test]
 fn a_go_refused_for_a_pause_says_so() {
-    let world = world("live-go-paused", "", Some(DEAD));
-    let (hub, _) = hub_with_systemd_run(&world, 2, "");
-    // `workflow go` says a pause on stdout, with nothing on stderr.
-    fixture_bin(&world.bin, "systemd-run", "echo 'omega: paused'\nexit 2");
-    let response = hub.post_form("/p/omega/control", "do=go");
+    let world = world("live-go-paused", "o2-t1 landed at 1a2b3c.", Some(DEAD));
+    set_paused(&world);
+    let hub = hub(&world);
+    let response = hub.post_form("/p/omega/control", "do=go&machine=laptop");
     assert_eq!(status_of(&response), 409, "{response}");
-    assert!(body_of(&response).contains("omega: paused"), "{response}");
+    assert!(
+        body_of(&response).contains("omega is paused."),
+        "{response}"
+    );
+    assert_eq!(queued(&world, &hub), json!([]));
 }

@@ -293,11 +293,12 @@ fn a_building_project_draws_its_timeline_within_five_reads() {
     assert!(!body.contains("not answering"), "{body}");
     assert_eq!(
         body_reads(&mem),
+        // Nothing runs omega, so its run line reads the handoff first.
         [
+            "handoff --project=omega --json",
             "roadmap --project=omega --json",
             "plan --list --project=omega --json",
             "log --limit 5 --project=omega --json",
-            "handoff --project=omega --json",
         ],
         "four reads and the route's projects read"
     );

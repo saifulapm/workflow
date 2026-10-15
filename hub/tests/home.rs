@@ -6,6 +6,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{Hub, TempDir, body_of, fixture_bin, status_of};
+use hub::agents::{Agents, DEFAULT_WINDOW};
 use hub::config::Config;
 use hub::html::Banner;
 use hub::memcli::{MemCli, QUESTIONS_ARGV};
@@ -122,7 +123,16 @@ fn render(tag: &str) -> (TempDir, String, Vec<String>) {
     let dir = TempDir::new(tag);
     let (bin, log) = fake_mem(dir.path());
     let mem = MemCli::with_path(bin);
-    let page = page_home::render(&mem, &siblings(), "here", NOW_MS, &Banner::None, None);
+    let agents = Agents::open(dir.join("agents.json"), DEFAULT_WINDOW);
+    let page = page_home::render(
+        &mem,
+        &agents,
+        &siblings(),
+        "here",
+        NOW_MS,
+        &Banner::None,
+        None,
+    );
     let argv = std::fs::read_to_string(&log)
         .unwrap()
         .lines()

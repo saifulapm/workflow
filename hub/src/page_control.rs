@@ -2,10 +2,12 @@
 //! to.
 //!
 //! Approve and Request changes write mem and nothing else; Start and Resume
-//! run `workflow go`, Pause and Unpause `workflow pause|unpause`. Every write names its project with `--project=<name>`,
+//! queue a `start` for a device agent, Pause and Unpause run `workflow
+//! pause|unpause` here. Every write names its project with `--project=<name>`,
 //! because the hub runs outside any checkout, and puts free text after `--`,
 //! so text starting with a dash is never read as a flag.
 
+use crate::agents::Command;
 use crate::html::{esc, project_url};
 use crate::http::Response;
 use crate::live;
@@ -17,8 +19,8 @@ use crate::pages::{PageCtx, page_shell};
 /// roadmap", by its start and its end.
 pub const REVIEW_QUESTION: (&str, &str) = ("Review the ", " roadmap");
 
-/// How long `workflow go` may take: an `amx new` and a few mem reads.
-const GO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// How long `workflow pause|unpause` may take: a few mem reads and a write.
+const PAUSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub fn control_post(ctx: &PageCtx) -> Response {
     let project = ctx.project.unwrap_or_default();
@@ -80,7 +82,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             Response::see_other(&roadmap)
         }
         "pause" | "unpause" => pause(ctx, project, verb),
-        _ => go(ctx, project),
+        _ => go(ctx, project, form.get("machine").unwrap_or("")),
     }
 }
 
@@ -92,7 +94,7 @@ fn pause(ctx: &PageCtx, project: &str, verb: &str) -> Response {
     if verb == "pause" {
         command.args(["--by", "hub"]);
     }
-    let ended = crate::proc::output_within(&mut command, GO_TIMEOUT);
+    let ended = crate::proc::output_within(&mut command, PAUSE_TIMEOUT);
     ctx.app.mem.invalidate();
     match ended {
         crate::proc::Ended::Exited(done) if done.code == Some(0) => {
@@ -112,10 +114,12 @@ fn pause(ctx: &PageCtx, project: &str, verb: &str) -> Response {
     }
 }
 
-/// Start or Resume: `workflow go`, once the project is read again as it is
-/// now, so a second tap or a second phone cannot start a second orchestrator.
-/// Called with the control lock held.
-fn go(ctx: &PageCtx, project: &str) -> Response {
+/// Start or Resume: one `start` queued for `machine`, whose agent runs
+/// `workflow go` there, once the project and the reports are read again as
+/// they are now. The machine comes off the form, so it must be one the page's
+/// own rule names: a form never moves a run to another machine. Called with
+/// the control lock held.
+fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
     let mem = &ctx.app.mem;
     mem.invalidate();
     let summary = mem
@@ -127,47 +131,37 @@ fn go(ctx: &PageCtx, project: &str) -> Response {
     let Some(summary) = summary else {
         return Response::not_found();
     };
-    let run = match ctx.app.amx.agents_fresh() {
-        Ok(agents) => match summary.milestone.as_deref() {
-            Some(milestone) => live::orchestrator(&agents, project, milestone),
-            None => live::Run::Dead(None),
-        },
-        Err(why) => live::Run::Unknown(why),
-    };
-    if !live::idle(&summary, &run) {
+    let agents = &ctx.app.agents;
+    let run = live::run(summary.runner.as_ref(), agents);
+    // Only a paused project needs the handoff, to tell whether it parked.
+    let parked = summary.paused.is_some()
+        && match &*mem.handoff(project) {
+            Outcome::Json(doc) => doc["body"]
+                .as_str()
+                .is_some_and(|body| body.trim_start().starts_with("parked")),
+            _ => false,
+        };
+    let machines = live::start_machines(&summary, &run, parked, agents);
+    if !machines.iter().any(|m| m == machine) {
         let why = match &run {
             live::Run::Live(agent) => format!("{} is already running.", agent.id),
-            live::Run::Unknown(why) => format!("amx cannot be asked: {why}."),
-            live::Run::Dead(_) => "There is no approved milestone here to start.".to_string(),
+            live::Run::Away(m) => format!("{project} reads {}.", live::away(m, agents)),
+            _ if !live::idle(&summary, &run) => {
+                "There is no approved milestone to start.".to_string()
+            }
+            _ if summary.paused.is_some() && !parked => format!("{project} is paused."),
+            _ => format!("{project} cannot start on {machine}."),
         };
         return conflict(ctx, &why);
     }
-    let argv = live::go_argv(project);
-    let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    let ended = crate::proc::output_within(&mut command, GO_TIMEOUT);
-    // Whatever `workflow go` did, the listing from before it is stale, and the
-    // page the redirect lands on must not offer Resume again.
-    ctx.app.amx.forget();
-    match ended {
-        crate::proc::Ended::Exited(done) if done.code == Some(0) => {
-            ctx.app.agents.queue_sync_all();
-            Response::see_other(&project_url(project))
-        }
-        // A refusal says why on stderr, except a pause, which `workflow go`
-        // prints on stdout as its answer.
-        crate::proc::Ended::Exited(done) => {
-            let said = String::from_utf8_lossy(&done.stderr);
-            let said = if said.trim().is_empty() {
-                String::from_utf8_lossy(&done.stdout)
-            } else {
-                said
-            };
-            conflict(ctx, said.trim())
-        }
-        crate::proc::Ended::TimedOut => conflict(ctx, "workflow go did not finish in time."),
-        crate::proc::Ended::Failed(why) => conflict(ctx, &format!("cannot run workflow go: {why}")),
+    // A second tap before the agent's next poll adds nothing.
+    let start = Command::Start {
+        project: project.to_string(),
+    };
+    if !agents.pending(machine).contains(&start) {
+        agents.queue(machine, start);
     }
+    Response::see_other(&project_url(project))
 }
 
 /// The id of the project's pending approval question, found by its project

@@ -297,6 +297,20 @@ impl Hub {
         request.push_str(body);
         self.raw(&request)
     }
+
+    /// A device agent's poll for the paired device, `body` being its report,
+    /// and the commands it was handed as the JSON text of the response.
+    pub fn poll_agent(&self, body: &str) -> String {
+        let response = self.raw(&format!(
+            "POST /api/agent HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Authorization: Bearer {DEVICE}\r\n\r\n{body}",
+            self.port,
+            body.len()
+        ));
+        assert_eq!(status_of(&response), 200, "{response}");
+        body_of(&response).to_string()
+    }
 }
 
 impl Drop for Hub {

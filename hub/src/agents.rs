@@ -43,6 +43,8 @@ pub enum Command {
 pub struct Report {
     pub agents: Vec<Agent>,
     pub checkouts: Vec<String>,
+    /// Whether someone is at the machine, by its qshell presence marker.
+    pub watched: bool,
     pub last_poll: SystemTime,
 }
 
@@ -52,6 +54,8 @@ struct Poll {
     machine: String,
     agents: Vec<Agent>,
     checkouts: Vec<String>,
+    #[serde(default)]
+    watched: bool,
 }
 
 /// What `agents.json` holds.
@@ -110,6 +114,13 @@ impl Agents {
         self.lock().reports.get(machine).cloned()
     }
 
+    /// Whether any online machine says someone is at it.
+    pub fn watched(&self) -> bool {
+        self.machines().iter().any(|machine| {
+            self.online(machine) && self.report(machine).is_some_and(|report| report.watched)
+        })
+    }
+
     /// Every machine that has ever polled.
     pub fn machines(&self) -> Vec<String> {
         self.lock().saved.known.clone()
@@ -151,6 +162,7 @@ impl Agents {
             Report {
                 agents: poll.agents,
                 checkouts: poll.checkouts,
+                watched: poll.watched,
                 last_poll: SystemTime::now(),
             },
         );

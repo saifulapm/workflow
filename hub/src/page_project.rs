@@ -162,13 +162,15 @@ fn live_pill(s: &ProjectSummary, slug: &str, project: &str) -> String {
     }
 }
 
-/// The orchestrator amx runs for the current milestone, or why there is
-/// none, stalled or parked on a question, with the button that starts one. Nothing when amx cannot be asked,
-/// and the handoff is read only when no orchestrator is live, so a running
-/// project's page costs no extra read for it.
+/// What runs the current milestone, from the runner and its machine's last
+/// report: running, away, or why nothing does, stalled or parked on a
+/// question, with a button for each machine that may start it. The handoff
+/// is read only when nothing runs it, so a running project's page costs no
+/// extra read for it.
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
-    let run = ctx.app.amx.run(project, s.milestone.as_deref());
+    let agents = &ctx.app.agents;
+    let run = live::run(s.runner.as_ref(), agents);
     let paused = s.paused.is_some();
     let paused_pill = if paused {
         "<span class=\"pill wait\">paused</span> "
@@ -188,7 +190,12 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                 agent.state.as_deref().unwrap_or("unknown")
             ),
         ),
-        Run::Dead(_) if live::idle(s, &run) => {
+        // Its machine may still be running it, so nothing is offered.
+        Run::Away(machine) => (
+            "<span class=\"pill wait\">away</span>",
+            live::away(machine, agents),
+        ),
+        _ if live::idle(s, &run) => {
             let handoff = match &*ctx.app.mem.handoff(project) {
                 Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default().to_string(),
                 _ => String::new(),
@@ -204,15 +211,25 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                     controls(ctx, pause_form(project, paused))
                 );
             }
+            let machines = live::start_machines(s, &run, parked, agents);
+            // No runner and no machine that could take it: nothing to say.
+            if run == Run::Unrun && machines.is_empty() {
+                return String::new();
+            }
             let (pill, meta) = if live::stalled(s, &run, &handoff) {
                 (
                     "<span class=\"pill bad\">stalled</span>",
                     format!("no live orchestrator for {milestone}"),
                 )
-            } else {
+            } else if parked {
                 (
                     "<span class=\"pill wait\">parked</span>",
                     format!("{milestone} is waiting on you"),
+                )
+            } else {
+                (
+                    "<span class=\"pill mut\">idle</span>",
+                    format!("nothing runs {milestone}"),
                 )
             };
             // A project nothing has handed off yet has never run.
@@ -221,14 +238,28 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
             } else {
                 "Resume"
             };
-            let forms = format!(
-                "<form method=\"post\" action=\"{}/control\">\n\
-                 <input type=\"hidden\" name=\"do\" value=\"go\">\n\
-                 <button type=\"submit\">{label}</button>\n\
-                 </form>\n{}",
-                esc(&project_url(project)),
-                pause_form(project, paused)
-            );
+            let mut forms: String = machines
+                .iter()
+                .map(|machine| {
+                    // Without a runner the button names the machine it picks.
+                    let label = if s.runner.is_some() {
+                        label.to_string()
+                    } else {
+                        format!("{label} on {machine}")
+                    };
+                    format!(
+                        "<form method=\"post\" action=\"{}/control\">\n\
+                         <input type=\"hidden\" name=\"do\" value=\"go\">\n\
+                         <input type=\"hidden\" name=\"machine\" value=\"{}\">\n\
+                         <button type=\"submit\">{}</button>\n\
+                         </form>\n",
+                        esc(&project_url(project)),
+                        esc(machine),
+                        esc(&label)
+                    )
+                })
+                .collect();
+            forms.push_str(&pause_form(project, paused));
             return format!(
                 "<p class=\"row\">{paused_pill}{pill} <span class=\"meta\">{}</span></p>\n{}",
                 esc(&meta),

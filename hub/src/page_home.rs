@@ -7,9 +7,11 @@
 
 use serde_json::Value;
 
+use crate::agents::Agents;
 use crate::config::Config;
 use crate::html::{self, Banner, esc};
 use crate::http::Response;
+use crate::live::{self, Run, Runner};
 use crate::memcli::{MemCli, Outcome};
 use crate::model::{self, list_fault};
 use crate::page_questions::{pending_block, question_row};
@@ -70,6 +72,8 @@ pub struct ProjectSummary {
     pub last_activity: Option<String>,
     /// When and by whom the project was paused, while it is.
     pub paused: Option<String>,
+    /// The machine and amx id `workflow go` last started it with.
+    pub runner: Option<Runner>,
 }
 
 pub fn get(ctx: &PageCtx) -> Response {
@@ -78,6 +82,7 @@ pub fn get(ctx: &PageCtx) -> Response {
     let now_ms = jiff::Timestamp::now().as_millisecond();
     Response::html(render(
         &app.mem,
+        &app.agents,
         &app.config,
         &app.machine,
         now_ms,
@@ -113,6 +118,7 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
         tasks: (count(row, "plan_ticked"), count(row, "plan_total")),
         last_activity: text(row, "last_activity"),
         paused: text(row, "paused"),
+        runner: serde_json::from_value(row["runner"].clone()).ok(),
     }
 }
 
@@ -162,6 +168,7 @@ pub fn lifecycle_stage(row: &Value) -> &'static str {
 /// The whole page.
 pub fn render(
     mem: &MemCli,
+    agents: &Agents,
     config: &Config,
     machine: &str,
     now_ms: i64,
@@ -191,6 +198,24 @@ pub fn render(
         body.push_str(&html::degraded_banner(&why));
     }
 
+    // Each project's run, from its runner and that machine's report.
+    let runs: Vec<Run> = projects
+        .iter()
+        .map(|p| live::run(p.runner.as_ref(), agents))
+        .collect();
+    body.push_str("<h2>Running</h2>\n");
+    let running: Vec<String> = projects
+        .iter()
+        .zip(&runs)
+        .filter(|(_, run)| matches!(run, Run::Live(_)))
+        .map(|(project, _)| running_line(project))
+        .collect();
+    if running.is_empty() {
+        body.push_str("<p class=\"empty\">Nothing running.</p>\n");
+    } else {
+        body.push_str(&format!("<ul>\n{}</ul>\n", running.concat()));
+    }
+
     body.push_str("<h2>Waiting on you</h2>\n");
     if questions_rows.is_empty() {
         body.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
@@ -205,7 +230,16 @@ pub fn render(
             .filter(|q| q["project"].as_str() == Some(name))
             .count()
     };
-    let waits = projects.iter().filter(|p| waiting(&p.name) > 0).count();
+    // A live project is listed under Running only.
+    let projects: Vec<(&ProjectSummary, &Run)> = projects
+        .iter()
+        .zip(&runs)
+        .filter(|(_, run)| !matches!(run, Run::Live(_)))
+        .collect();
+    let waits = projects
+        .iter()
+        .filter(|(p, _)| waiting(&p.name) > 0)
+        .count();
     body.push_str("<h2>Projects");
     if waits > 0 {
         body.push_str(&format!(
@@ -218,8 +252,17 @@ pub fn render(
         body.push_str("<p class=\"empty\">No projects registered.</p>\n");
     } else {
         body.push_str("<div class=\"cards\">\n");
-        for project in &projects {
-            body.push_str(&project_card(project, waiting(&project.name), now_ms));
+        for (project, run) in &projects {
+            let away = match run {
+                Run::Away(machine) => Some(live::away(machine, agents)),
+                _ => None,
+            };
+            body.push_str(&project_card(
+                project,
+                waiting(&project.name),
+                away.as_deref(),
+                now_ms,
+            ));
         }
         body.push_str("</div>\n");
     }
@@ -227,10 +270,41 @@ pub fn render(
     page_shell(machine, None, &body)
 }
 
-/// One project as a card: its name, its stage and whatever waits on the
-/// owner as pills, the open milestone, then a bar filled by
+/// One live project under Running: `<project> · <machine> · <milestone> ·
+/// since <HH:MM>`, the time in the hub's own zone, linking to its page.
+fn running_line(project: &ProjectSummary) -> String {
+    let mut parts = vec![project.name.clone()];
+    if let Some(runner) = &project.runner {
+        parts.push(runner.machine.clone());
+    }
+    if let Some(milestone) = &project.milestone {
+        parts.push(milestone.clone());
+    }
+    let since = project
+        .runner
+        .as_ref()
+        .and_then(|runner| runner.since.as_deref())
+        .and_then(|since| since.parse::<jiff::Timestamp>().ok());
+    if let Some(since) = since {
+        let zoned = since.to_zoned(jiff::tz::TimeZone::system());
+        parts.push(format!("since {}", zoned.strftime("%H:%M")));
+    }
+    format!(
+        "<li><a href=\"{}\">{}</a></li>\n",
+        esc(&html::project_url(&project.name)),
+        esc(&parts.join(" · "))
+    )
+}
+
+/// One project as a card: its name, its stage, whatever waits on the owner
+/// and an away runner as pills, the open milestone, then a bar filled by
 /// the plan's ticks, or the roadmap's when there is no plan.
-fn project_card(project: &ProjectSummary, waiting: usize, now_ms: i64) -> String {
+fn project_card(
+    project: &ProjectSummary,
+    waiting: usize,
+    away: Option<&str>,
+    now_ms: i64,
+) -> String {
     let mut pills = format!(
         "<span class=\"{}\">{}</span>",
         stage_pill(project.stage),
@@ -241,6 +315,9 @@ fn project_card(project: &ProjectSummary, waiting: usize, now_ms: i64) -> String
         pills.push_str(&format!(
             "<span class=\"pill wait\">{waiting} question{s}</span>"
         ));
+    }
+    if let Some(away) = away {
+        pills.push_str(&format!("<span class=\"pill wait\">{}</span>", esc(away)));
     }
     let mut parts = Vec::new();
     if let Some(milestone) = &project.milestone {

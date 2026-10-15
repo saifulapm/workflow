@@ -1,9 +1,9 @@
 //! The doorbell.
 //!
 //! A background thread polls the pending queue every 15 s and rings once for
-//! every question id it has not seen. In the same round it rings for a
-//! project checked out here whose orchestrator stalled, and for one whose
-//! roadmap has every milestone ticked. What it publishes is deliberately thin:
+//! every question id it has not seen, whatever machine asked it. In the same
+//! round it rings for a project whose runner's orchestrator stalled, and for
+//! one whose roadmap has every milestone ticked. What it publishes is deliberately thin:
 //! the machine, the project, and a link back here — **never the question
 //! text**, nor any other item's.
 //!
@@ -32,8 +32,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::agents::Agents;
 use crate::app::App;
-use crate::live::{self, Amx, Run};
+use crate::live::{self, Run};
 use crate::memcli::{MemCli, Outcome};
 use crate::page_home::summary_of;
 
@@ -48,7 +49,8 @@ pub struct Doorbell {
     /// Where the buzz sends the phone.
     pub hub_url: String,
     pub poll: Duration,
-    pub amx: Arc<Amx>,
+    /// The device agents' reports: the runs, and whether anyone is watching.
+    pub agents: Arc<Agents>,
 }
 
 impl Doorbell {
@@ -59,7 +61,7 @@ impl Doorbell {
             machine: app.machine.clone(),
             hub_url: hub_url(app),
             poll: poll_interval(),
-            amx: Arc::clone(&app.amx),
+            agents: Arc::clone(&app.agents),
         })
     }
 
@@ -106,13 +108,6 @@ impl Doorbell {
             if !self.record(state, id) {
                 continue;
             }
-            // A question born on another machine arrives here by sync, already
-            // rung for where it was asked; this hub lists and answers it but
-            // does not buzz again. A row with no machine field still rings —
-            // a mem too old to say is a doorbell, not a silence.
-            if self.foreign(&row) {
-                continue;
-            }
             let project = row["project"].as_str().unwrap_or("");
             self.deliver(&self.body(project));
         }
@@ -124,7 +119,7 @@ impl Doorbell {
     }
 
     /// The stalls and the finished roadmaps, read off `projects --json` and
-    /// amx. False when the projects read failed this round.
+    /// the agents' reports. False when the projects read failed this round.
     fn stalls_and_finishes(&self, mem: &MemCli, state: &mut State) -> bool {
         let projects = mem.refresh(&["projects", "--json"]);
         if let Some(why) = crate::model::list_fault(&projects, "projects") {
@@ -135,8 +130,6 @@ impl Doorbell {
         // nothing met, so the round that first applies it records every
         // roadmap already finished and rings for none of them.
         let quiet_finishes = !state.seen.contains(FINISHES_SEEDED);
-        // Asked once a round, and only when some project could have stalled.
-        let mut agents = None;
         for project in projects.rows("projects") {
             let Some(name) = project["name"].as_str() else {
                 continue;
@@ -151,23 +144,24 @@ impl Doorbell {
                 && self.record(state, &format!("finished {name} {total}"))
                 && !quiet_finishes
             {
-                self.deliver(&self.event_body("roadmap finished", name));
+                self.deliver(&self.event_body("roadmap finished", &self.machine, name));
             }
 
-            match self.stall(mem, &project, &mut agents) {
+            match self.stall(mem, &project) {
                 // Keyed by the dead agent and when amx made it, so the resumed
                 // orchestrator's own death rings again, and so does a name amx
                 // forgot and `workflow go` took again.
-                Some(Stall::Died(key)) => {
+                Some((Stall::Died(key), machine)) => {
                     state.unstarted.remove(name);
                     if self.record(state, &key) {
-                        self.deliver(&self.event_body("stalled", name));
+                        self.deliver(&self.event_body("stalled", &machine, name));
                     }
                 }
-                // Nothing ever ran this milestone. Right after an approval, or
-                // a landing, that is the moment before `workflow go` starts
-                // one, so it rings only once it has lasted the grace.
-                Some(Stall::Unstarted(key)) => {
+                // The runner's machine does not list its id. Right after
+                // `workflow go` records a runner, that is the moment before the
+                // agent's next report lists it, so it rings only once it has
+                // lasted the grace.
+                Some((Stall::Unstarted(key), machine)) => {
                     let since = *state
                         .unstarted
                         .entry(name.to_string())
@@ -175,7 +169,7 @@ impl Doorbell {
                     if since.elapsed() >= self.poll * UNSTARTED_GRACE_POLLS
                         && self.record(state, &key)
                     {
-                        self.deliver(&self.event_body("stalled", name));
+                        self.deliver(&self.event_body("stalled", &machine, name));
                     }
                 }
                 None => {
@@ -189,24 +183,21 @@ impl Doorbell {
         true
     }
 
-    /// Whether this project has stalled, and the seen key to ring it under.
-    fn stall(
-        &self,
-        mem: &MemCli,
-        project: &serde_json::Value,
-        agents: &mut Option<Result<Vec<live::Agent>, String>>,
-    ) -> Option<Stall> {
+    /// Whether this project has stalled, the seen key to ring it under, and
+    /// its runner's machine. Only a runner whose machine is online and lists
+    /// its id dead, or not at all, stalls: an away machine may still be
+    /// running it.
+    fn stall(&self, mem: &MemCli, project: &serde_json::Value) -> Option<(Stall, String)> {
         let s = summary_of(project);
-        let milestone = s.milestone.as_deref()?;
-        if !live::idle(&s, &Run::Dead(None)) {
-            return None;
-        }
-        let agents = agents.get_or_insert_with(|| self.amx.agents_fresh());
-        let agents = agents.as_ref().ok()?;
-        let run = live::orchestrator(agents, &s.name, milestone);
+        s.milestone.as_deref()?;
+        let runner = s.runner.as_ref()?;
+        let run = live::run(Some(runner), &self.agents);
         let Run::Dead(dead) = &run else {
             return None;
         };
+        if !live::idle(&s, &run) {
+            return None;
+        }
         let handoff = mem.refresh(&["handoff", &format!("--project={}", s.name), "--json"]);
         let handoff = match &*handoff {
             Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default(),
@@ -215,17 +206,15 @@ impl Doorbell {
         if !live::stalled(&s, &run, handoff) {
             return None;
         }
-        Some(match dead {
-            Some(id) => {
-                let created = agents
-                    .iter()
-                    .find(|agent| agent.id == *id)
-                    .and_then(|agent| agent.created)
-                    .unwrap_or(0);
-                Stall::Died(format!("stalled {id} {created}"))
-            }
-            None => Stall::Unstarted(format!("stalled {} {milestone}", s.name)),
-        })
+        let stall = match dead {
+            Some(agent) => Stall::Died(format!(
+                "stalled {} {}",
+                agent.id,
+                agent.created.unwrap_or(0)
+            )),
+            None => Stall::Unstarted(format!("stalled {} {}", s.name, runner.id)),
+        };
+        Some((stall, runner.machine.clone()))
     }
 
     /// Records `key` in the seen file and says whether to ring for it: not
@@ -253,18 +242,14 @@ impl Doorbell {
         !state.seeding
     }
 
-    /// Written on another machine, which rang for it there.
-    fn foreign(&self, row: &serde_json::Value) -> bool {
-        row["machine"].as_str().is_some_and(|m| m != self.machine)
-    }
-
-    /// Where the bell rings: the phone, and only for an empty house. A watched
-    /// machine gets nothing — whoever is at it sees questions in the session
-    /// itself (a background agent asks through its own question tool when the
-    /// machine is watched; `mem ask` is the locked-screen channel), so any
-    /// bell here would be a duplicate on a screen already showing the thing.
+    /// Where the bell rings: the phone, and only for an empty house. While
+    /// any online machine's agent reports someone at it, nothing rings:
+    /// whoever is there sees questions in the session itself (a background
+    /// agent asks through its own question tool when the machine is watched;
+    /// `mem ask` is the locked-screen channel), so any bell here would be a
+    /// duplicate on a screen already showing the thing.
     fn deliver(&self, body: &str) {
-        if crate::presence::sample().watching() {
+        if self.agents.watched() {
             return;
         }
         self.ring(body);
@@ -307,12 +292,11 @@ impl Doorbell {
         }
     }
 
-    /// A ring for something that happened to a project, linking to its page.
-    /// Like `body`, it carries no item's text.
-    pub fn event_body(&self, event: &str, project: &str) -> String {
+    /// A ring for something that happened to a project on `machine`, linking
+    /// to its page. Like `body`, it carries no item's text.
+    pub fn event_body(&self, event: &str, machine: &str, project: &str) -> String {
         format!(
-            "{event} on {} ({project}) — {}p/{}",
-            self.machine,
+            "{event} on {machine} ({project}) — {}p/{}",
             self.hub_url,
             crate::form::encode_component(project)
         )
@@ -328,9 +312,9 @@ const UNSTARTED_GRACE_POLLS: u32 = 8;
 
 /// A stalled project, by its seen key.
 enum Stall {
-    /// Its orchestrator died.
+    /// Its runner's machine lists the orchestrator dead.
     Died(String),
-    /// No orchestrator has run its milestone.
+    /// Its runner's machine does not list the orchestrator at all.
     Unstarted(String),
 }
 
@@ -420,7 +404,10 @@ mod tests {
             machine: "macbook".to_string(),
             hub_url: "http://macbook:8787/".to_string(),
             poll: DEFAULT_POLL,
-            amx: Arc::new(Amx::new()),
+            agents: Arc::new(Agents::open(
+                PathBuf::from("/nonexistent/agents.json"),
+                crate::agents::DEFAULT_WINDOW,
+            )),
         };
         assert_eq!(
             doorbell.body("proj-alpha"),

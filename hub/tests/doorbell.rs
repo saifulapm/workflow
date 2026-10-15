@@ -274,12 +274,10 @@ fn the_first_start_records_the_backlog_and_rings_for_none_of_it() {
     assert_eq!(status_of(&hub.get("/")), 200);
 }
 
-/// A question that arrives by sync — born on another machine — is recorded but
-/// not rung: the machine that asked already rang the phone, up to a sync round
-/// earlier. Ringing again here is the same buzz twice, minutes apart, with a
-/// link to the wrong hub.
+/// A question that arrives by sync, born on another machine, rings here: this
+/// hub is the only one, so no other machine rang for it.
 #[test]
-fn a_question_from_another_machine_is_recorded_and_not_rung() {
+fn a_question_from_another_machine_rings_on_this_hub() {
     let world = World::new("bell-foreign", "http://127.0.0.1:9");
     let machine_file = world.home.join("config/qshell/machine");
     std::fs::create_dir_all(machine_file.parent().unwrap()).unwrap();
@@ -295,20 +293,14 @@ fn a_question_from_another_machine_is_recorded_and_not_rung() {
     wait_for("the id to be recorded", Duration::from_secs(15), || {
         world.seen().len() == 1
     });
+    world.wait_for_ring();
     world.settle();
+    assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
     assert!(
-        world.rings().is_empty(),
-        "a synced-in question is the sibling's doorbell, not ours: {:?}",
+        world.rings()[0].iter().any(|a| a.contains("proj-alpha")),
+        "{:?}",
         world.rings()
     );
-
-    // A question asked on this machine still rings.
-    std::fs::write(&machine_file, "here-hub").unwrap();
-    world.ask("And Postgres over MySQL?");
-    wait_for("the local question to ring", Duration::from_secs(5), || {
-        world.rings().len() == 1
-    });
-    assert_eq!(world.seen().len(), 2, "both recorded, one rung");
 }
 
 #[test]
@@ -567,14 +559,13 @@ fn an_explicit_hub_url_still_wins_over_the_tailnet_name() {
     assert!(body.contains("http://chosen.example:8787/"), "{body}");
 }
 
-/// Presence routing: a watched machine rings NOTHING. Whoever is at it sees
-/// questions in the session itself; both a desktop popup and a phone buzz
-/// proved to be duplicates on a screen already showing the thing.
+/// Presence routing: while an online machine's agent reports someone at it,
+/// nothing rings. Whoever is there sees questions in the session itself; both
+/// a desktop popup and a phone buzz proved to be duplicates on a screen
+/// already showing the thing.
 #[test]
 fn a_watched_machine_rings_nothing_at_all() {
     let world = World::new("bell-watched", "http://127.0.0.1:9");
-    std::fs::create_dir_all(world.home.join("state/qshell")).unwrap();
-    fixture_bin(&world.bin, "pgrep", "exit 0");
     // A tripwire: any notify-send would be a regression to the desktop bell.
     let notify_log = world.dir.join("notify.log");
     fixture_bin(
@@ -582,7 +573,8 @@ fn a_watched_machine_rings_nothing_at_all() {
         "notify-send",
         &format!("printf '\\1' >> '{}'\nexit 0", notify_log.display()),
     );
-    let _hub = world.hub();
+    let hub = world.hub();
+    hub.poll_agent(r#"{"machine":"mini","agents":[],"checkouts":[],"watched":true}"#);
     world.settle();
 
     world.ask("Should we use Redis?");
@@ -596,6 +588,12 @@ fn a_watched_machine_rings_nothing_at_all() {
         "the phone rang for a watched machine: {:?}",
         world.rings()
     );
+
+    // Unwatched again: the next question rings.
+    hub.poll_agent(r#"{"machine":"mini","agents":[],"checkouts":[]}"#);
+    world.ask("And Postgres over MySQL?");
+    world.wait_for_ring();
+    assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
     assert!(
         invocations(&notify_log).is_empty(),
         "a desktop bell rang for a watched machine"
@@ -709,15 +707,6 @@ impl Fake {
                  exit 1",
                 log = mem_log.display(),
                 data = data.display(),
-            ),
-        );
-
-        fixture_bin(
-            &bin,
-            "amx",
-            &format!(
-                "cat '{data}/amx.json' 2>/dev/null || echo '[]'",
-                data = data.display()
             ),
         );
 
@@ -895,22 +884,9 @@ fn an_upgrade_records_roadmaps_already_finished_and_rings_none() {
     );
 }
 
-/// proj-alpha building m2 from a checkout on this machine, whose
-/// orchestrators amx lists as `(id, state)`.
-fn building(fake: &Fake, agents: &[(&str, &str)]) {
-    building_at(fake, agents, "[\"/src/proj-alpha\"]");
-}
-
-/// `building`, with proj-alpha's checkouts on this machine as `checkouts`.
-fn building_at(fake: &Fake, agents: &[(&str, &str)], checkouts: &str) {
-    fake.put(
-        "projects.json",
-        &format!(
-            "{{\"projects\":[{{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
-              \"roadmap_status\":\"approved\",\"milestone\":\"m2\",\"milestones_done\":1,\
-              \"milestones_total\":3,\"checkouts\":{checkouts}}}]}}"
-        ),
-    );
+/// proj-alpha building m2, run on the mini as `runner`, and the mini's report
+/// listing its orchestrators as `(id, state)`.
+fn building(fake: &Fake, hub: &Hub, runner: &str, agents: &[(&str, &str)]) {
     let rows: Vec<String> = agents
         .iter()
         .enumerate()
@@ -918,20 +894,46 @@ fn building_at(fake: &Fake, agents: &[(&str, &str)], checkouts: &str) {
             format!("{{\"id\":\"{id}\",\"state\":\"{state}\",\"ended\":0,\"created\":{i}}}")
         })
         .collect();
-    fake.put("amx.json", &format!("[{}]", rows.join(",")));
+    building_with(fake, hub, runner, &format!("[{}]", rows.join(",")));
 }
 
-const STALLED: &str = "stalled on here-hub (proj-alpha) — http://hub.test:8787/p/proj-alpha";
+/// `building`, with the mini's agents as the JSON list `agents`.
+fn building_with(fake: &Fake, hub: &Hub, runner: &str, agents: &str) {
+    fake.put(
+        "projects.json",
+        &format!(
+            "{{\"projects\":[{{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
+              \"roadmap_status\":\"approved\",\"milestone\":\"m2\",\"milestones_done\":1,\
+              \"milestones_total\":3,\"checkouts\":[],\
+              \"runner\":{{\"machine\":\"mini\",\"id\":\"{runner}\",\"since\":\"2026-10-05T08:00:00Z\"}}}}]}}"
+        ),
+    );
+    hub.poll_agent(&format!(
+        "{{\"machine\":\"mini\",\"agents\":{agents},\"checkouts\":[\"proj-alpha\"]}}"
+    ));
+}
+
+const STALLED: &str = "stalled on mini (proj-alpha) — http://hub.test:8787/p/proj-alpha";
 
 #[test]
 fn a_dead_orchestrator_rings_once_and_its_successors_death_rings_again() {
     let fake = Fake::new("bell-stall");
-    building(&fake, &[("proj-alpha-m2", "working")]);
-    let _hub = fake.hub();
+    let hub = fake.hub();
+    building(
+        &fake,
+        &hub,
+        "proj-alpha-m2",
+        &[("proj-alpha-m2", "working")],
+    );
     fake.settle();
     assert!(fake.rings().is_empty(), "{:?}", fake.rings());
 
-    building(&fake, &[("proj-alpha-m2", "stopped")]);
+    building(
+        &fake,
+        &hub,
+        "proj-alpha-m2",
+        &[("proj-alpha-m2", "stopped")],
+    );
     wait_for("the stall to ring", Duration::from_secs(15), || {
         !fake.rings().is_empty()
     });
@@ -942,11 +944,15 @@ fn a_dead_orchestrator_rings_once_and_its_successors_death_rings_again() {
     // Resumed as -2, which then dies too: a second stall.
     building(
         &fake,
+        &hub,
+        "proj-alpha-m2-2",
         &[("proj-alpha-m2", "stopped"), ("proj-alpha-m2-2", "working")],
     );
     fake.settle();
     building(
         &fake,
+        &hub,
+        "proj-alpha-m2-2",
         &[("proj-alpha-m2", "stopped"), ("proj-alpha-m2-2", "stopped")],
     );
     wait_for("the second stall to ring", Duration::from_secs(15), || {
@@ -957,14 +963,25 @@ fn a_dead_orchestrator_rings_once_and_its_successors_death_rings_again() {
 }
 
 #[test]
-fn a_project_with_no_checkout_here_does_not_ring_its_stall() {
-    let fake = Fake::new("bell-elsewhere");
-    building_at(&fake, &[("proj-alpha-m2", "working")], "[]");
-    let _hub = fake.hub();
-    fake.settle();
-
-    building_at(&fake, &[("proj-alpha-m2", "stopped")], "[]");
-    // Past the grace a milestone with no orchestrator waits for.
+fn a_runner_whose_machine_is_away_never_rings_its_stall() {
+    let fake = Fake::new("bell-away");
+    // The mini never polls this hub, so its runner reads away however long
+    // the milestone sits.
+    fake.put(
+        "projects.json",
+        "{\"projects\":[{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
+          \"roadmap_status\":\"approved\",\"milestone\":\"m2\",\"milestones_done\":1,\
+          \"milestones_total\":3,\"checkouts\":[],\
+          \"runner\":{\"machine\":\"mini\",\"id\":\"proj-alpha-m2\"}}]}",
+    );
+    let hub = fake.hub();
+    // Another machine is online and lists the id dead: only the runner's
+    // machine counts.
+    hub.poll_agent(
+        "{\"machine\":\"nuc\",\"agents\":[{\"id\":\"proj-alpha-m2\",\"state\":\"stopped\",\
+         \"ended\":0,\"created\":1}],\"checkouts\":[\"proj-alpha\"]}",
+    );
+    // Past the grace a runner its machine does not list waits for.
     std::thread::sleep(Duration::from_secs(2));
     fake.settle();
     assert!(fake.rings().is_empty(), "{:?}", fake.rings());
@@ -973,16 +990,21 @@ fn a_project_with_no_checkout_here_does_not_ring_its_stall() {
 #[test]
 fn a_parked_milestone_does_not_ring() {
     let fake = Fake::new("bell-parked");
-    building(&fake, &[]);
     fake.put(
         "handoff.json",
         "{\"body\":\"\\nparked: waiting on a question\"}",
     );
-    let _hub = fake.hub();
+    let hub = fake.hub();
+    building(&fake, &hub, "proj-alpha-m2", &[]);
     fake.settle();
 
-    building(&fake, &[("proj-alpha-m2", "stopped")]);
-    // Past the grace a milestone with no orchestrator waits for.
+    building(
+        &fake,
+        &hub,
+        "proj-alpha-m2",
+        &[("proj-alpha-m2", "stopped")],
+    );
+    // Past the grace a runner its machine does not list waits for.
     std::thread::sleep(Duration::from_secs(2));
     fake.settle();
     assert!(fake.rings().is_empty(), "{:?}", fake.rings());
@@ -991,11 +1013,21 @@ fn a_parked_milestone_does_not_ring() {
 #[test]
 fn a_paused_project_does_not_ring_its_stall() {
     let fake = Fake::new("bell-paused");
-    building(&fake, &[("proj-alpha-m2", "working")]);
-    let _hub = fake.hub();
+    let hub = fake.hub();
+    building(
+        &fake,
+        &hub,
+        "proj-alpha-m2",
+        &[("proj-alpha-m2", "working")],
+    );
     fake.settle();
 
-    building(&fake, &[("proj-alpha-m2", "stopped")]);
+    building(
+        &fake,
+        &hub,
+        "proj-alpha-m2",
+        &[("proj-alpha-m2", "stopped")],
+    );
     let projects = std::fs::read_to_string(fake.data.join("projects.json")).unwrap();
     fake.put(
         "projects.json",
@@ -1012,20 +1044,20 @@ fn a_paused_project_does_not_ring_its_stall() {
 }
 
 #[test]
-fn a_milestone_no_orchestrator_ever_ran_rings_once_after_a_grace() {
+fn a_runner_its_machine_never_listed_rings_once_after_a_grace() {
     let fake = Fake::new("bell-unstarted");
-    building(&fake, &[("proj-alpha-m2", "working")]);
-    let _hub = fake.hub();
+    let hub = fake.hub();
+    building(
+        &fake,
+        &hub,
+        "proj-alpha-m2",
+        &[("proj-alpha-m2", "working")],
+    );
     fake.settle();
 
-    // The orchestrator before ticked its milestone and died before its
-    // `workflow go` started this one: nothing named for m3 has ever run.
-    fake.put(
-        "projects.json",
-        "{\"projects\":[{\"name\":\"proj-alpha\",\"last_activity\":\"2026-10-05T09:00:00Z\",\
-          \"roadmap_status\":\"approved\",\"milestone\":\"m3\",\"milestones_done\":2,\
-          \"milestones_total\":3,\"checkouts\":[\"/src/proj-alpha\"]}]}",
-    );
+    // `workflow go` recorded a runner whose orchestrator the mini has never
+    // listed: it died before amx made it, or amx never did.
+    building(&fake, &hub, "proj-alpha-m2-2", &[]);
     fake.settle();
     assert!(
         fake.rings().is_empty(),
@@ -1050,19 +1082,18 @@ fn an_agent_name_used_again_after_amx_forgot_it_rings_again() {
             "[{{\"id\":\"proj-alpha-m2\",\"state\":\"{state}\",\"ended\":0,\"created\":{created}}}]"
         )
     };
-    building(&fake, &[]);
-    fake.put("amx.json", &agents("working", 1));
-    let _hub = fake.hub();
+    let hub = fake.hub();
+    building_with(&fake, &hub, "proj-alpha-m2", &agents("working", 1));
     fake.settle();
-    fake.put("amx.json", &agents("stopped", 1));
+    building_with(&fake, &hub, "proj-alpha-m2", &agents("stopped", 1));
     wait_for("the first stall to ring", Duration::from_secs(15), || {
         !fake.rings().is_empty()
     });
 
     // `amx clear` forgot it, and `workflow go` took the plain name again.
-    fake.put("amx.json", &agents("working", 7));
+    building_with(&fake, &hub, "proj-alpha-m2", &agents("working", 7));
     fake.settle();
-    fake.put("amx.json", &agents("stopped", 7));
+    building_with(&fake, &hub, "proj-alpha-m2", &agents("stopped", 7));
     wait_for("the second stall to ring", Duration::from_secs(15), || {
         fake.rings().len() >= 2
     });
