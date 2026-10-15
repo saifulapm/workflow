@@ -5,6 +5,7 @@
 //!   hygiene        0 clean or warned · 1 hard finding · 2 usage
 //!   install        0 installed · 1 something could not be written or removed
 //!   go             0 started or the roadmap is done · 1 mem or amx failed · 2 refused
+//!   pause, unpause 0 done · 1 mem failed · 2 no such project
 
 pub const OK: i32 = 0;
 pub const FAILED: i32 = 1;

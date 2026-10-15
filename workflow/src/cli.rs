@@ -161,5 +161,11 @@ usage: workflow <command> [options]
       start the orchestrator for the project's next milestone as an amx agent
       and print its name; --dry-run prints the amx command line instead
       0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
-      the roadmap is not approved, or the milestone already has an orchestrator
+      the roadmap is not approved, the milestone already has an orchestrator,
+      or the project is paused and its handoff does not start parked:
+  pause <project> [--by <who>]
+      hold the project once its current milestone lands; starts nothing
+  unpause <project>
+      let go start its next milestone again; starts nothing
+      0 done · 1 mem failed · 2 no such project
 ";
