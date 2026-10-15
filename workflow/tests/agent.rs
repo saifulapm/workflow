@@ -57,7 +57,9 @@ case " $* " in
 esac
 "#,
         );
-        // mem: `sync` fails while sync-fails says always, or once.
+        // mem: `sync` fails while sync-fails says always, or once, and finds
+        // a round already running, as mem says with exit 0, while
+        // sync-busy says once.
         work.script(
             "mem",
             r#"
@@ -70,6 +72,12 @@ sync)
 	always) exit 1 ;;
 	once) rm "$dir/sync-fails"; exit 1 ;;
 	esac
+	if [ -e "$dir/sync-busy" ]; then
+		rm "$dir/sync-busy"
+		echo '{"sync":"not performed","detail":"another round is in progress; not performed"}'
+	else
+		echo '{"sync":"performed","detail":""}'
+	fi
 	;;
 esac
 "#,
@@ -286,7 +294,7 @@ fn start_and_sync_run_in_the_order_the_hub_gave_them() {
         w.command_calls(),
         [
             "systemd-run --user --scope --quiet workflow go gamma",
-            "mem sync",
+            "mem sync --json",
             "systemd-run --user --scope --quiet workflow go workflow",
         ]
     );
@@ -310,7 +318,7 @@ fn a_resume_hands_amx_the_message_byte_for_byte() {
     assert_eq!(w.work.read("last-arg"), message);
     assert!(!w.work.has("pwned"));
     let calls = w.command_calls();
-    assert_eq!(calls[0], "mem sync");
+    assert_eq!(calls[0], "mem sync --json");
     assert_eq!(calls[1], "amx ls --json");
     assert!(
         calls[2].starts_with(&format!(
@@ -335,7 +343,32 @@ fn a_resume_waits_for_its_sync() {
     ]));
     let out = w.agent(&["--once"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(w.command_calls(), ["mem sync"]);
+    assert_eq!(w.command_calls(), ["mem sync --json"]);
+}
+
+/// mem sync exits 0 when a round is already running and it did nothing, and
+/// the hub's write may have landed after that round started, so the sync is
+/// kept for after the next poll until a round is performed.
+#[test]
+fn a_sync_no_round_performed_runs_again_after_the_next_poll() {
+    let w = World::new("agent-sync-busy");
+    w.paired();
+    w.work.put("sync-busy", "");
+    w.hub_says(json!([{"kind": "sync"}]));
+    let mut child = w.command(&[]).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let syncs = |w: &World| {
+        w.calls()
+            .iter()
+            .filter(|c| c.starts_with("mem sync --json"))
+            .count()
+    };
+    while syncs(&w) < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(syncs(&w), 2, "{:?}", w.calls());
 }
 
 #[test]
@@ -370,13 +403,13 @@ fn a_resume_whose_sync_failed_runs_after_the_next_poll() {
     let ran: Vec<String> = w
         .calls()
         .into_iter()
-        .filter(|c| c == "mem sync" || c.contains(" resume "))
+        .filter(|c| c == "mem sync --json" || c.contains(" resume "))
         .collect();
     assert_eq!(
         ran,
         [
-            "mem sync",
-            "mem sync",
+            "mem sync --json",
+            "mem sync --json",
             &format!(
                 "systemd-run --user --scope --quiet {} resume gamma-m1 yes",
                 w.work.at("amx").display()
@@ -398,7 +431,7 @@ fn a_resume_for_a_gone_session_starts_the_project() {
     assert_eq!(
         w.command_calls(),
         [
-            "mem sync",
+            "mem sync --json",
             "amx ls --json",
             "systemd-run --user --scope --quiet workflow go gamma",
         ]
@@ -418,5 +451,5 @@ fn a_resume_for_a_live_session_runs_nothing() {
     ]));
     let out = w.agent(&["--once"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(w.command_calls(), ["mem sync", "amx ls --json"]);
+    assert_eq!(w.command_calls(), ["mem sync --json", "amx ls --json"]);
 }

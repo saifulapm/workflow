@@ -263,6 +263,20 @@ fn succeeds(program: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// One memory sync round, performed. `mem sync` exits 0 when a round was
+/// already running and it did nothing, and that round may have started
+/// before the hub's write, so only "performed" counts.
+fn synced() -> bool {
+    Command::new(memcli::bin())
+        .args(["sync", "--json"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<Value>(&out.stdout).ok())
+        .is_some_and(|doc| doc["sync"] == "performed")
+}
+
 /// `workflow go` in a scope of its own, so stopping the agent's unit never
 /// stops the orchestrator it started.
 fn start(project: &str) -> bool {
@@ -277,8 +291,11 @@ fn start(project: &str) -> bool {
 fn run(job: &Job) -> bool {
     match job {
         Job::Sync => {
-            let ok = succeeds(&memcli::bin(), &["sync"]);
-            println!("sync: {}", if ok { "done" } else { "failed" });
+            if !synced() {
+                println!("sync: no round performed, trying again after the next poll");
+                return false;
+            }
+            println!("sync: done");
         }
         Job::Start { project } => {
             let ok = start(project);
@@ -291,7 +308,7 @@ fn run(job: &Job) -> bool {
         } => {
             // The answer has to reach this machine's store before the session
             // reads it.
-            if !succeeds(&memcli::bin(), &["sync"]) {
+            if !synced() {
                 println!("resume {id}: mem sync failed, trying again after the next poll");
                 return false;
             }
