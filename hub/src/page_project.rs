@@ -411,12 +411,26 @@ pub fn cloud_refusal(
     {
         return Some(format!("{} is already running.", agent.id));
     }
-    cloud_slot(mem, summaries).map(|(project, run)| {
-        format!(
-            "a cloud run is live: {project} ({}, {}); one runs at a time.",
-            run.milestone, run.id
-        )
-    })
+    cloud_slot(mem, summaries)
+        .map(|(project, run)| {
+            format!(
+                "a cloud run is live: {project} ({}, {}); one runs at a time.",
+                run.milestone, run.id
+            )
+        })
+        .or_else(|| unpushed(agents, &s.name))
+}
+
+/// Why a cloud run of `project` must wait for Saiful to push main: the
+/// mini's main holds commits origin/main lacks, and the run clones origin.
+fn unpushed(agents: &Agents, project: &str) -> Option<String> {
+    let report = agents.report(CLOUD_MACHINE)?;
+    let n = *report.unpushed.get(project).filter(|n| **n > 0)?;
+    let commits = if n == 1 { "commit" } else { "commits" };
+    Some(format!(
+        "{project}'s main is {n} {commits} ahead of origin/main on {CLOUD_MACHINE}; \
+push main first: a cloud run starts from origin"
+    ))
 }
 
 /// The prompt a cloud run starts on, the file `workflow go --cloud` renders,
@@ -460,7 +474,14 @@ fn cloud_prompt(project: &str, slug: &str, base: &str) -> String {
 /// the Claude app.
 fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let summaries = project_summaries(&ctx.app.mem);
-    if cloud_refusal(&ctx.app.mem, &ctx.app.agents, &summaries, s).is_some() {
+    if let Some(why) = cloud_refusal(&ctx.app.mem, &ctx.app.agents, &summaries, s) {
+        // Only a missing push gets a card: it is the one Saiful can clear.
+        if unpushed(&ctx.app.agents, &s.name).is_some_and(|wait| wait == why) {
+            return format!(
+                "<h2>Cloud run</h2>\n<div class=\"card\">\n<p>{}</p>\n</div>\n",
+                esc(&why)
+            );
+        }
         return String::new();
     }
     let slug = s.milestone.as_deref().unwrap_or_default();

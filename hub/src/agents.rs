@@ -75,6 +75,9 @@ pub struct Report {
     /// The projects with a worktree of their own there: mem keeps those per
     /// machine, so this report is the hub's only word on them.
     pub worktrees: Vec<String>,
+    /// The projects whose main there holds commits origin/main lacks, and
+    /// how many: a cloud run clones origin, so it waits for a push.
+    pub unpushed: BTreeMap<String, u64>,
     /// Whether someone is at the machine, by its qshell presence marker.
     pub watched: bool,
     /// Since when its polls have said nobody is at it, unbroken. Kept in
@@ -91,6 +94,8 @@ struct Poll {
     checkouts: Vec<String>,
     #[serde(default)]
     worktrees: Vec<String>,
+    #[serde(default)]
+    unpushed: BTreeMap<String, u64>,
     #[serde(default)]
     watched: bool,
 }
@@ -263,6 +268,7 @@ impl Agents {
                 agents: poll.agents,
                 checkouts: poll.checkouts,
                 worktrees: poll.worktrees,
+                unpushed: poll.unpushed,
                 watched: poll.watched,
                 unwatched_since,
                 last_poll: now,

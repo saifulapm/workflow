@@ -290,9 +290,54 @@ fn a_poll_reports_the_machine_its_agents_and_its_checkouts() {
             ],
             "checkouts": ["gamma", "workflow"],
             "worktrees": ["workflow"],
+            "unpushed": {},
             "watched": false
         })
     );
+}
+
+/// A cloud run clones origin, so the hub must know which trunks hold work
+/// origin/main lacks: it shows "push main first" in place of their prompt.
+#[test]
+fn a_poll_counts_the_commits_a_checkouts_main_has_not_pushed() {
+    let w = World::new("agent-unpushed");
+    w.paired();
+    let origin = w.work.at("origin.git");
+    let checkout = w.work.mkdir("gamma");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(&checkout)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&[
+        "init",
+        "-q",
+        "--bare",
+        "-b",
+        "main",
+        origin.to_str().unwrap(),
+    ]);
+    git(&["init", "-q", "-b", "main"]);
+    git(&["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(&["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(&["push", "-q", "origin", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "Land t1 on the mini"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "Land t2 on the mini"]);
+    w.work.put(
+        "projects.json",
+        &format!(
+            r#"{{"projects":[{{"name":"gamma","checkouts":["{}"]}},{{"name":"beta","checkouts":["/src/beta"]}}]}}"#,
+            checkout.display()
+        ),
+    );
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let body: serde_json::Value = serde_json::from_str(&w.work.read("curl.stdin")).unwrap();
+    assert_eq!(body["unpushed"], json!({"gamma": 2}), "{body}");
 }
 
 /// qshell keeps its presence marker while the screen is unlocked and in

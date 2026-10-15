@@ -8,7 +8,7 @@
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -18,7 +18,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{exit, go, machine, memcli, paths, route};
+use crate::{cloud, exit, go, machine, memcli, paths, route};
 
 /// What the hub hands back for this machine to run.
 #[derive(Debug, Clone, Deserialize)]
@@ -209,12 +209,22 @@ fn report(name: &str) -> Value {
         .filter(|p| p.worktree.is_some())
         .map(|p| p.name.as_str())
         .collect();
+    // The projects whose main here holds commits origin/main lacks. A cloud
+    // run starts from origin, so the hub asks for a push before one.
+    let unpushed: serde_json::Map<String, Value> = projects
+        .iter()
+        .filter_map(|p| {
+            let dir = p.checkouts.iter().find(|dir| Path::new(dir).is_dir())?;
+            let n = cloud::unpushed(dir).filter(|n| *n > 0)?;
+            Some((p.name.clone(), json!(n)))
+        })
+        .collect();
     // qshell's presence marker: someone is at this machine, unlocked and not
     // idle. While the route is Device here, the hub shows rings on this
     // desktop until the marker has been gone five minutes.
     let watched = std::env::var_os("XDG_RUNTIME_DIR")
         .is_some_and(|dir| PathBuf::from(dir).join("qshell-present").exists());
-    json!({"machine": name, "agents": agents, "checkouts": checkouts, "worktrees": worktrees, "watched": watched})
+    json!({"machine": name, "agents": agents, "checkouts": checkouts, "worktrees": worktrees, "unpushed": unpushed, "watched": watched})
 }
 
 /// What curl got back from the hub.

@@ -504,3 +504,24 @@ fn a_worktree_the_mini_reports_keeps_the_project_off_the_cloud() {
         "{response}"
     );
 }
+
+/// A cloud run clones origin, so work the mini's main holds and origin/main
+/// lacks would be missing from it. Pushing main is Saiful's: the card says
+/// so in place of the prompt, and Run in cloud waits for it.
+#[test]
+fn a_trunk_the_mini_has_not_pushed_asks_for_a_push_in_place_of_the_prompt() {
+    let world = World::new("cloud-run-unpushed");
+    let hub = world.hub();
+    let report = json!({"machine": "mini", "agents": [], "checkouts": ["gamma"],
+        "unpushed": {"gamma": 3}});
+    hub.poll_agent(&report.to_string());
+    let body = page(&hub);
+    let card = card(&body).expect(&body);
+    let why = "gamma&#39;s main is 3 commits ahead of origin/main on mini; push main first";
+    assert!(card.contains(why), "{card}");
+    assert!(!card.contains("<textarea"), "{card}");
+    assert!(!body.contains(RUN_IN_CLOUD), "{body}");
+    let response = hub.post_form("/p/gamma/control", "do=cloud");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(body_of(&response).contains(why), "{response}");
+}

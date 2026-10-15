@@ -646,3 +646,27 @@ fn the_runner_record_reaches_the_hub_before_the_session_writes_its_own() {
     let sync = calls.iter().rposition(|c| c.starts_with("sync"));
     assert!(set.is_some() && sync > set, "{calls:?}");
 }
+
+/// A cloud run clones origin, so work the trunk holds and origin/main lacks,
+/// a fast-forwarded cloud branch or a milestone the mini landed, would be
+/// missing from it. Pushing main is Saiful's, so the run waits for that.
+#[test]
+fn a_trunk_ahead_of_origin_main_refuses_until_main_is_pushed() {
+    let w = World::new("cloud-unpushed");
+    w.origin_with_cloud_branch();
+    let checkout = w.checkout("gamma");
+    commit(&checkout, "Land t1 on the mini");
+    commit(&checkout, "Land t2 on the mini");
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("gamma's main is 2 commits ahead of origin/main; push main first"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!w.claude_ran());
+
+    git(&checkout, &["push", "-q", "origin", "main"]);
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}

@@ -4,6 +4,7 @@
 
 use std::process::Command;
 
+use crate::gitcmd::Git;
 use crate::go::{self, Decision, Options};
 use crate::memcli::{self, ProjectRow};
 use crate::{embedded, exit, warn};
@@ -47,6 +48,14 @@ pub fn base(row: &ProjectRow) -> String {
         },
         _ => "main".to_string(),
     }
+}
+
+/// How many commits `dir`'s main holds that origin/main, as last fetched,
+/// lacks: a cloud run clones origin, so it would start without them. `None`
+/// when git cannot tell, as with no origin or no main.
+pub fn unpushed(dir: &str) -> Option<u64> {
+    let out = Git::at(dir).capture(&["rev-list", "--count", "origin/main..main"]);
+    out.ok.then(|| out.text().trim().parse().ok()).flatten()
 }
 
 /// Where a cloud run stands, as the hub tells it too.
@@ -137,7 +146,7 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
         println!("{}: paused", start.project);
         return exit::USAGE;
     }
-    if let Some(why) = refusal(row, &start.slug) {
+    if let Some(why) = refusal(row, &start.slug, &start.dir) {
         warn(format!("go: {why}"));
         return exit::USAGE;
     }
@@ -261,9 +270,10 @@ enum Launch {
 /// Why `row`'s milestone `slug` cannot run in the cloud, if it cannot. The
 /// session clones the repo's main and finds its project by the remote, so a
 /// project working on a branch of its own, or with no remote, stays local;
-/// only the next milestone runs, since a later one would read as landed; and
-/// a device orchestrator keeps the project as a local go would.
-fn refusal(row: &ProjectRow, slug: &str) -> Option<String> {
+/// work in `dir` that origin/main lacks waits for Saiful to push main; only
+/// the next milestone runs, since a later one would read as landed; and a
+/// device orchestrator keeps the project as a local go would.
+fn refusal(row: &ProjectRow, slug: &str, dir: &str) -> Option<String> {
     let name = &row.name;
     if row.worktree.is_some() {
         return Some(format!(
@@ -272,6 +282,13 @@ fn refusal(row: &ProjectRow, slug: &str) -> Option<String> {
     }
     if row.remote.as_deref().is_none_or(str::is_empty) {
         return Some(format!("{name} has no git remote"));
+    }
+    if let Some(n) = unpushed(dir).filter(|n| *n > 0) {
+        let commits = if n == 1 { "commit" } else { "commits" };
+        return Some(format!(
+            "{name}'s main is {n} {commits} ahead of origin/main; push main first: \
+a cloud run starts from origin"
+        ));
     }
     if row.milestone.as_deref() != Some(slug) {
         return Some(format!(
