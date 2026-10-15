@@ -268,6 +268,32 @@ the last question this session asked, the hub has this machine `amx
 resume` this very session with his answers as its first message; if amx
 no longer has it, a fresh orchestrator starts from your handoff.
 
+## Cloud run
+
+A cloud run is this skill in a claude.ai cloud session
+(`CLAUDE_CODE_REMOTE_SESSION_ID` is set), started from its prompt. The
+prompt names the milestone, its branch `cloud/<project>-<milestone>` and the
+branch to cut it from. Everything above holds, with these changes:
+
+- First, record the run: `mem project set runner cloud <id> --milestone
+  <slug>`, where `<id>` is `$CLAUDE_CODE_REMOTE_SESSION_ID` with `cse_`
+  swapped for `session_`. mem here is the mem server's store, the same one
+  the devices read.
+- The trunk is the cloud branch. Check it out as the prompt says, never
+  `main`. Land each task on it as §2 says, then `git push origin
+  cloud/<project>-<milestone>` right after its tick, so the branch gains one
+  commit, or one fast-forward, per landed task.
+- A task that needs a device, Saiful's desktop, or a login the cloud cannot
+  reach is local-only: commit nothing for it, ask with `mem ask --for
+  saiful` naming it, push the branch, and write a handoff starting
+  `parked:` that names the task and the question. Then stop: the answer
+  comes back as a message in this session.
+- Land as §7 says, except that nothing runs `workflow go` and nothing
+  pushes `main`: the run ends with the branch pushed, the milestone ticked
+  and the handoff written. The mini fast-forwards its trunk from the branch.
+- Stop after 6 hours with a handoff starting `parked: 6-hour stop`. There
+  is no amx here, so end by saying so.
+
 ## Hygiene
 
 Nothing you write outside the product's code goes in the repo: no plan,
