@@ -34,7 +34,7 @@ use anyhow::{Context, Result};
 
 use crate::agents::{Agents, Command as AgentCommand};
 use crate::app::App;
-use crate::live::{self, Run};
+use crate::live::{self, CloudState, Run};
 use crate::memcli::{MemCli, Outcome};
 use crate::page_home::summary_of;
 use crate::route::{Kind, Route};
@@ -186,6 +186,23 @@ impl Doorbell {
                 && !quiet_finishes
             {
                 self.deliver(&self.event_body("roadmap finished", &self.machine, name));
+            }
+
+            // A cloud run whose milestone was ticked. With nothing left to
+            // build, the finished ring above says so instead.
+            let s = summary_of(&project);
+            if let (Some(run), Some(next)) = (
+                live::cloud_run(&s, || handoff_body(mem, name), jiff::Timestamp::now()),
+                s.milestone.as_deref(),
+            ) && run.state == CloudState::Landed
+                && self.record(state, &format!("landed cloud {name} {}", run.milestone))
+            {
+                self.deliver(&format!(
+                    "{name}: {} landed in cloud, next: {next} — {}p/{}",
+                    run.milestone,
+                    self.hub_url,
+                    crate::form::encode_component(name)
+                ));
             }
 
             match self.stall(mem, &project) {
@@ -348,6 +365,14 @@ pub fn push(ntfy_url: &str, body: &str) {
             String::from_utf8_lossy(&out.stderr).trim()
         ),
         Err(e) => eprintln!("hub: doorbell: could not run curl: {e}"),
+    }
+}
+
+/// The text of `project`'s latest handoff, read fresh, when mem gave it.
+fn handoff_body(mem: &MemCli, project: &str) -> Option<String> {
+    match &*mem.refresh(&["handoff", &format!("--project={project}"), "--json"]) {
+        Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
+        _ => None,
     }
 }
 

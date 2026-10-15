@@ -1234,3 +1234,76 @@ fn an_agent_name_used_again_after_amx_forgot_it_rings_again() {
     });
     assert_eq!(fake.rings(), [STALLED, STALLED]);
 }
+
+/// gamma with `milestone` open, run in the cloud on `ran` since `since`, its
+/// latest handoff written at `handoff_at`, a JSON string or null.
+fn in_cloud(fake: &Fake, milestone: &str, ran: &str, since: &str, handoff_at: &str) {
+    fake.put(
+        "projects.json",
+        &format!(
+            "{{\"projects\":[{{\"name\":\"gamma\",\"roadmap_status\":\"approved\",\
+              \"milestone\":\"{milestone}\",\"milestones_done\":1,\"milestones_total\":3,\
+              \"checkouts\":[],\"handoff_at\":{handoff_at},\
+              \"runner\":{{\"machine\":\"cloud\",\"id\":\"session_01Abc\",\
+                \"since\":\"{since}\",\"milestone\":\"{ran}\"}}}}]}}"
+        ),
+    );
+}
+
+#[test]
+fn a_cloud_run_that_lands_rings_once_with_the_next_milestone() {
+    let fake = Fake::new("bell-cloud-landed");
+    let since = jiff::Timestamp::now().to_string();
+    in_cloud(&fake, "m1", "m1", &since, "null");
+    let _hub = fake.hub();
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+
+    // m1 is ticked, so m2 is the open milestone.
+    in_cloud(&fake, "m2", "m1", &since, "null");
+    wait_for("the landed ring", Duration::from_secs(15), || {
+        !fake.rings().is_empty()
+    });
+    fake.settle();
+    fake.settle();
+    assert_eq!(
+        fake.rings(),
+        ["gamma: m1 landed in cloud, next: m2 — http://hub.test:8787/p/gamma"]
+    );
+}
+
+#[test]
+fn a_cloud_runner_never_rings_stalled() {
+    let fake = Fake::new("bell-cloud-stall");
+    let hub = fake.hub();
+    fake.settle();
+    // Another machine is online and lists nothing, as a device runner's
+    // machine would before its stall rings.
+    hub.poll_agent("{\"machine\":\"mini\",\"agents\":[],\"checkouts\":[\"gamma\"]}");
+
+    // Live: begun just now, no handoff since.
+    let now = jiff::Timestamp::now().to_string();
+    in_cloud(&fake, "m2", "m2", &now, "null");
+    std::thread::sleep(Duration::from_secs(2));
+    fake.settle();
+    // Lapsed: begun eight hours ago and never handed over.
+    let lapsed = (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(8)).to_string();
+    in_cloud(&fake, "m2", "m2", &lapsed, "null");
+    std::thread::sleep(Duration::from_secs(2));
+    fake.settle();
+    // Parked, then ended, by a handoff written after it began.
+    fake.put("handoff.json", "{\"body\":\"parked: t2 is local-only\"}");
+    in_cloud(
+        &fake,
+        "m2",
+        "m2",
+        &now,
+        &format!("\"{}\"", jiff::Timestamp::now()),
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    fake.settle();
+    fake.put("handoff.json", "{\"body\":\"m2-t3 done, picking up t4\"}");
+    std::thread::sleep(Duration::from_secs(2));
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+}
