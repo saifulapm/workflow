@@ -646,8 +646,10 @@ fn reason(status: u16) -> &'static str {
     match status {
         100 => "Continue",
         200 => "OK",
+        202 => "Accepted",
         303 => "See Other",
         400 => "Bad Request",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
@@ -672,7 +674,9 @@ mod tests {
 
     #[test]
     fn every_status_hub_emits_has_a_reason_phrase() {
-        for status in [200, 303, 400, 403, 404, 405, 409, 411, 413, 431, 503] {
+        for status in [
+            200, 202, 303, 400, 401, 403, 404, 405, 409, 411, 413, 431, 503,
+        ] {
             assert_ne!(reason(status), "Error", "{status} has no reason phrase");
         }
     }

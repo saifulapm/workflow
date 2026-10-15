@@ -8,9 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use hub::access::Access;
 use hub::app::App;
 use hub::config::Config;
 use hub::doorbell::Doorbell;
+use hub::mcp::Mcp;
 use hub::{config, dulali, http, pair};
 
 const USAGE: &str = "\
@@ -111,8 +113,19 @@ fn run() -> Result<()> {
     println!("hub listening on {bound}");
     std::io::stdout().flush()?;
 
+    let mcp = mcp_listener(&config)?;
     let socket = config.dulali_socket.clone();
     let app = Arc::new(App::new(config, bound.port(), hub::machine_name()));
+
+    // mem's MCP endpoint, for the tunnel. Its own handler: the Access token
+    // is its guard, so the pages' pairing and origin checks never see it.
+    if let Some((listener, access)) = mcp {
+        let mcp = Mcp::new(access, Arc::clone(&app.mem));
+        std::thread::Builder::new()
+            .name("hub-mcp".to_string())
+            .spawn(move || http::serve(listener, move |request| mcp.handle(request)))
+            .context("starting the mcp listener")?;
+    }
 
     // Dulali's own door: its token is made now, so the socket never opens
     // with nothing that could pass it.
@@ -140,6 +153,24 @@ fn run() -> Result<()> {
     }
 
     http::serve(listener, move |request| app.handle(request))
+}
+
+/// Binds `mcp_port` on loopback and prints the second start line, the one
+/// the tests read the port off. Without both Access keys there is nothing to
+/// check a token against, so the endpoint stays shut rather than open.
+fn mcp_listener(config: &Config) -> Result<Option<(TcpListener, Access)>> {
+    let Some(port) = config.mcp_port else {
+        return Ok(None);
+    };
+    let (Some(aud), Some(team)) = (&config.access_aud, &config.access_team) else {
+        eprintln!("hub: mcp disabled: mcp_port needs access_aud and access_team");
+        return Ok(None);
+    };
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .with_context(|| format!("binding 127.0.0.1:{port}"))?;
+    println!("mcp listening on {}", listener.local_addr()?);
+    std::io::stdout().flush()?;
+    Ok(Some((listener, Access::new(aud, team))))
 }
 
 /// A socket left by the last run is removed first; the new one is 0660, so

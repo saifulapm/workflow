@@ -51,6 +51,17 @@ pub struct Config {
     /// no socket.
     #[serde(default)]
     pub dulali_socket: Option<PathBuf>,
+    /// The loopback port mem's MCP endpoint listens on; with none, no
+    /// endpoint. It answers only a request carrying a Cloudflare Access
+    /// token for `access_aud`, signed by `access_team`.
+    #[serde(default)]
+    pub mcp_port: Option<u16>,
+    /// The Access application's AUD tag.
+    #[serde(default)]
+    pub access_aud: Option<String>,
+    /// The Access team domain, e.g. `https://<team>.cloudflareaccess.com`.
+    #[serde(default)]
+    pub access_team: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -72,6 +83,9 @@ impl Default for Config {
             hub_url: None,
             dulali_webhook: None,
             dulali_socket: None,
+            mcp_port: None,
+            access_aud: None,
+            access_team: None,
         }
     }
 }

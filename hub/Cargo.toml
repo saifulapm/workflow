@@ -16,6 +16,10 @@ anyhow = "1.0.104"
 hmac = "0.13.0"
 jiff = "0.2.35"
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+# Checks the RS256 signature on Cloudflare Access's token. The 0.10 line is
+# the one built on digest 0.11, so it shares the sha2 below rather than adding
+# a second major. No `encoding`: the key comes from a JWK's n and e.
+rsa = { version = "=0.10.0-rc.19", default-features = false, features = ["std", "sha2"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.1"
