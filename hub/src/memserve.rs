@@ -61,6 +61,7 @@ pub fn cli(mem: &MemCli, body: &[u8]) -> Response {
     };
     let stdin = request.get("stdin").and_then(Value::as_str);
     let remote = request.get("remote").and_then(Value::as_str);
+    let branch = request.get("branch").and_then(Value::as_str);
 
     let words = positionals(&argv);
     if let Some(why) = refusal(&argv, &words) {
@@ -69,15 +70,13 @@ pub fn cli(mem: &MemCli, body: &[u8]) -> Response {
     let mut args: Vec<&str> = Vec::with_capacity(argv.len() + 1);
     let project;
     if !names_project(&argv) {
-        let Some(name) = remote.and_then(|r| project_for(mem, r)) else {
-            return reply(
-                USAGE,
-                "",
-                &format!(
-                    "mem: no project for {}\n",
-                    remote.unwrap_or("this checkout")
-                ),
-            );
+        let picked = match remote {
+            Some(remote) => pick(&mem.projects().rows("projects"), remote, branch),
+            None => Err("no project for this checkout".to_string()),
+        };
+        let name = match picked {
+            Ok(name) => name,
+            Err(why) => return reply(USAGE, "", &format!("mem: {why}\n")),
         };
         project = format!("--project={name}");
         args.push(&project);
@@ -178,15 +177,36 @@ fn refusal(argv: &[String], words: &[&str]) -> Option<String> {
     None
 }
 
-/// The project whose remote ends in the same owner/repo as `remote`.
-fn project_for(mem: &MemCli, remote: &str) -> Option<String> {
-    let wanted = owner_repo(remote)?;
-    mem.projects().rows("projects").iter().find_map(|row| {
-        let theirs = row.get("remote").and_then(Value::as_str)?;
-        (owner_repo(theirs)? == wanted)
-            .then(|| row.get("name").and_then(Value::as_str).map(str::to_string))
-            .flatten()
-    })
+/// The project whose remote ends in the same owner/repo as `remote`. A
+/// monorepo's projects share one remote; a cloud run tells them apart by its
+/// branch, `cloud/<project>-<milestone>`, the longest name that fits winning
+/// (`shopify_apps` over `shop`).
+fn pick(rows: &[Value], remote: &str, branch: Option<&str>) -> Result<String, String> {
+    let wanted = owner_repo(remote);
+    let names: Vec<&str> = rows
+        .iter()
+        .filter(|row| {
+            let theirs = row.get("remote").and_then(Value::as_str);
+            wanted.is_some() && theirs.and_then(owner_repo) == wanted
+        })
+        .filter_map(|row| row.get("name").and_then(Value::as_str))
+        .collect();
+    let fits = |name: &&&str| branch.is_some_and(|b| b.starts_with(&format!("cloud/{name}-")));
+    match names.as_slice() {
+        [] => Err(format!("no project for {remote}")),
+        [one] => Ok(one.to_string()),
+        several => several
+            .iter()
+            .filter(fits)
+            .max_by_key(|name| name.len())
+            .map(|name| name.to_string())
+            .ok_or_else(|| {
+                format!(
+                    "{} share {remote}; check out the run's cloud/<project>-<milestone> branch, or name one with --project",
+                    several.join(", ")
+                )
+            }),
+    }
 }
 
 /// The last two segments of a remote URL, lowercased, without `.git`:
@@ -208,6 +228,44 @@ mod tests {
     fn refused(args: &[&str]) -> bool {
         let argv: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         refusal(&argv, &positionals(&argv)).is_some()
+    }
+
+    fn rows() -> Vec<Value> {
+        serde_json::from_str(
+            r#"[{"name":"palmshop","remote":"github.com/lareysbd/shopify_apps"},
+                {"name":"shopify_apps","remote":"github.com/lareysbd/shopify_apps"},
+                {"name":"shop","remote":"github.com/lareysbd/shopify_apps"},
+                {"name":"gamma","remote":"github.com/me/gamma"}]"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_remote_of_one_project_names_it_whatever_the_branch() {
+        let remote = "http://local_proxy@127.0.0.1:1/git/me/gamma";
+        assert_eq!(pick(&rows(), remote, None).as_deref(), Ok("gamma"));
+        assert_eq!(pick(&rows(), remote, Some("main")).as_deref(), Ok("gamma"));
+    }
+
+    #[test]
+    fn projects_sharing_a_remote_are_told_apart_by_the_cloud_branch() {
+        let remote = "git@github.com:lareysbd/shopify_apps.git";
+        for (branch, name) in [
+            ("cloud/shopify_apps-m9-boards", "shopify_apps"),
+            ("cloud/palmshop-m4-commerce", "palmshop"),
+            ("cloud/shop-m1", "shop"),
+        ] {
+            assert_eq!(
+                pick(&rows(), remote, Some(branch)).as_deref(),
+                Ok(name),
+                "{branch}"
+            );
+        }
+        for branch in [None, Some("main"), Some("cloud/other-m1")] {
+            let why = pick(&rows(), remote, branch).unwrap_err();
+            assert!(why.contains("--project"), "{why}");
+        }
+        assert!(pick(&rows(), "git@github.com:me/none.git", None).is_err());
     }
 
     #[test]

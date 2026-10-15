@@ -19,6 +19,7 @@ fn mem_project_goes_first_when_the_argv_names_no_project() {
         Some("gamma"),
         unread,
         Some("git@github.com:me/gamma.git".to_string()),
+        Some("cloud/gamma-m1".to_string()),
     );
     assert_eq!(
         body,
@@ -26,6 +27,7 @@ fn mem_project_goes_first_when_the_argv_names_no_project() {
             "argv": ["--project=gamma", "log", "x"],
             "stdin": null,
             "remote": "git@github.com:me/gamma.git",
+            "branch": "cloud/gamma-m1",
         })
     );
 }
@@ -36,8 +38,11 @@ fn a_project_in_the_argv_wins_over_mem_project() {
         &["log", "--project", "beta", "x"][..],
         &["--project=beta", "log", "x"][..],
     ] {
-        let body = request(&argv(args), Some("gamma"), unread, None);
-        assert_eq!(body, json!({"argv": args, "stdin": null, "remote": null}));
+        let body = request(&argv(args), Some("gamma"), unread, None, None);
+        assert_eq!(
+            body,
+            json!({"argv": args, "stdin": null, "remote": null, "branch": null})
+        );
     }
 }
 
@@ -48,9 +53,10 @@ fn stdin_is_sent_only_with_dash_dash_stdin() {
         None,
         || "# plan: m8\n".to_string(),
         None,
+        None,
     );
     assert_eq!(
         body,
-        json!({"argv": ["plan", "--stdin"], "stdin": "# plan: m8\n", "remote": null})
+        json!({"argv": ["plan", "--stdin"], "stdin": "# plan: m8\n", "remote": null, "branch": null})
     );
 }

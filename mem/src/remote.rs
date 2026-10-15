@@ -32,6 +32,7 @@ pub fn request(
     env_project: Option<&str>,
     stdin: impl FnOnce() -> String,
     remote: Option<String>,
+    branch: Option<String>,
 ) -> Value {
     let named = argv
         .iter()
@@ -43,7 +44,7 @@ pub fn request(
     }
     sent.extend(argv.iter().cloned());
     let input = argv.iter().any(|a| a == "--stdin").then(stdin);
-    json!({"argv": sent, "stdin": input, "remote": remote})
+    json!({"argv": sent, "stdin": input, "remote": remote, "branch": branch})
 }
 
 /// Runs this invocation on the server at `url` and returns the exit code.
@@ -53,7 +54,13 @@ pub fn run(url: &str) -> i32 {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    let body = request(&argv, env_project.as_deref(), read_stdin, origin());
+    let body = request(
+        &argv,
+        env_project.as_deref(),
+        read_stdin,
+        origin(),
+        git(&["branch", "--show-current"]),
+    );
     match post(url, &body.to_string()) {
         Ok(reply) => {
             let field = |key: &str| reply.get(key).and_then(Value::as_str).unwrap_or("");
@@ -79,13 +86,20 @@ fn read_stdin() -> String {
 
 /// `git remote get-url origin` of the working directory's repo.
 fn origin() -> Option<String> {
+    git(&["remote", "get-url", "origin"])
+}
+
+/// What `git <args>` prints in the working directory, trimmed; none when it
+/// fails or prints nothing. The branch tells the server which of the
+/// projects sharing a remote a cloud run is.
+fn git(args: &[&str]) -> Option<String> {
     let out = Command::new("git")
-        .args(["remote", "get-url", "origin"])
+        .args(args)
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !url.is_empty()).then_some(url)
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !text.is_empty()).then_some(text)
 }
 
 /// POSTs `body` to `<url>/cli` and returns the server's reply, or the rest of
