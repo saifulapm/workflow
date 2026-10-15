@@ -112,6 +112,7 @@ esac
             .args(args)
             .env("HOME", self.work.at("home"))
             .env("XDG_STATE_HOME", self.work.at("state"))
+            .env("XDG_RUNTIME_DIR", self.work.at("run"))
             .env("WORKFLOW_CURL", self.work.at("curl"))
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_AMX", self.work.at("amx"))
@@ -251,9 +252,23 @@ fn a_poll_reports_the_machine_its_agents_and_its_checkouts() {
                 {"id": "gamma-m1", "state": "working", "ended": 0, "created": 1791400000},
                 {"id": "old", "state": "stopped", "ended": 1791400500, "created": null}
             ],
-            "checkouts": ["gamma", "workflow"]
+            "checkouts": ["gamma", "workflow"],
+            "watched": false
         })
     );
+}
+
+/// qshell keeps its presence marker while the screen is unlocked and in
+/// use, and the hub stays quiet while any machine is watched.
+#[test]
+fn a_poll_says_whether_someone_is_at_the_machine() {
+    let w = World::new("agent-watched");
+    w.paired();
+    w.work.put("run/qshell-present", "");
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let body: serde_json::Value = serde_json::from_str(&w.work.read("curl.stdin")).unwrap();
+    assert_eq!(body["watched"], json!(true), "{body}");
 }
 
 #[test]

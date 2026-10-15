@@ -196,4 +196,9 @@ usage: workflow <command> [options]
   unpause <project>
       let go start its next milestone again; starts nothing
       0 done · 1 mem failed · 2 no such project
+  agent [--once] | agent pair <link>
+      the device daemon: every 5 s tell the hub this machine's amx agents and
+      checkouts, then run the sync, start and resume it hands back; pair
+      once with a link from `hub pair`
+      0 done · 1 the hub or a tool failed · 2 not paired
 ";

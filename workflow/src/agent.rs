@@ -179,7 +179,11 @@ fn report(name: &str) -> Value {
         .filter(|p| !p.checkouts.is_empty())
         .map(|p| p.name)
         .collect();
-    json!({"machine": name, "agents": agents, "checkouts": checkouts})
+    // qshell's presence marker: someone is at this machine, unlocked and not
+    // idle, so the hub keeps the phone quiet.
+    let watched = std::env::var_os("XDG_RUNTIME_DIR")
+        .is_some_and(|dir| PathBuf::from(dir).join("qshell-present").exists());
+    json!({"machine": name, "agents": agents, "checkouts": checkouts, "watched": watched})
 }
 
 /// One poll: the report out, the commands back. `None` when the hub did not
