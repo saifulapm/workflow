@@ -41,7 +41,7 @@ pub struct App {
     /// The device agents' reports and command queues.
     pub agents: Arc<Agents>,
     /// Where questions and rings reach the owner.
-    pub route: Route,
+    pub route: Arc<Route>,
     /// One answer at a time, per question id.
     ///
     /// `MemCli`'s gate serialises the child *processes*; it cannot serialise
@@ -83,7 +83,7 @@ impl App {
             mem: Arc::new(MemCli::new()),
             guard,
             agents: Arc::new(Agents::open(path, crate::agents::window())),
-            route: Route::open(state.join("hub/route.json")),
+            route: Arc::new(Route::open(state.join("hub/route.json"))),
             answering: Mutex::new(HashMap::new()),
         }
     }

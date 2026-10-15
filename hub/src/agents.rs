@@ -36,6 +36,11 @@ pub enum Command {
         id: String,
         message: String,
     },
+    /// A desktop notification on the machine the route names.
+    Notify {
+        title: String,
+        body: String,
+    },
 }
 
 /// What a machine said in its last poll.
@@ -45,6 +50,9 @@ pub struct Report {
     pub checkouts: Vec<String>,
     /// Whether someone is at the machine, by its qshell presence marker.
     pub watched: bool,
+    /// Since when its polls have said nobody is at it, unbroken. Kept in
+    /// memory like the rest, so a hub restart starts the count again.
+    pub unwatched_since: Option<SystemTime>,
     pub last_poll: SystemTime,
 }
 
@@ -104,6 +112,17 @@ impl Agents {
         }
     }
 
+    /// Whether nobody is at `machine`: its agent has stopped polling, or has
+    /// said nobody is at it for `after` straight.
+    pub fn away(&self, machine: &str, after: Duration) -> bool {
+        if !self.online(machine) {
+            return true;
+        }
+        self.report(machine)
+            .and_then(|report| report.unwatched_since)
+            .is_some_and(|since| since.elapsed().is_ok_and(|idle| idle >= after))
+    }
+
     /// Whether `machine` polled within the window.
     pub fn online(&self, machine: &str) -> bool {
         self.report(machine).is_some_and(|report| {
@@ -116,13 +135,6 @@ impl Agents {
 
     pub fn report(&self, machine: &str) -> Option<Report> {
         self.lock().reports.get(machine).cloned()
-    }
-
-    /// Whether any online machine says someone is at it.
-    pub fn watched(&self) -> bool {
-        self.machines().iter().any(|machine| {
-            self.online(machine) && self.report(machine).is_some_and(|report| report.watched)
-        })
     }
 
     /// Every machine that has ever polled.
@@ -187,13 +199,20 @@ impl Agents {
     /// Records a poll and hands back the machine's queue, emptied.
     fn poll(&self, poll: Poll) -> Vec<Command> {
         let mut state = self.lock();
+        let now = SystemTime::now();
+        let unwatched_since = match state.reports.get(&poll.machine) {
+            _ if poll.watched => None,
+            Some(last) if !last.watched => last.unwatched_since,
+            _ => Some(now),
+        };
         state.reports.insert(
             poll.machine.clone(),
             Report {
                 agents: poll.agents,
                 checkouts: poll.checkouts,
                 watched: poll.watched,
-                last_poll: SystemTime::now(),
+                unwatched_since,
+                last_poll: now,
             },
         );
         let new = !state.saved.known.contains(&poll.machine);

@@ -32,13 +32,17 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::agents::Agents;
+use crate::agents::{Agents, Command as AgentCommand};
 use crate::app::App;
 use crate::live::{self, Run};
 use crate::memcli::{MemCli, Outcome};
 use crate::page_home::summary_of;
+use crate::route::Route;
 
 pub const DEFAULT_POLL: Duration = Duration::from_secs(15);
+/// How long the route's machine may sit locked or idle before its rings go
+/// to the phone.
+pub const DEFAULT_AWAY: Duration = Duration::from_secs(5 * 60);
 /// The command line is `curl -fsS -m 10 -d <body> <ntfy_base>/<topic>`.
 pub const CURL_TIMEOUT_SECONDS: &str = "10";
 
@@ -51,6 +55,9 @@ pub struct Doorbell {
     pub poll: Duration,
     /// The device agents' reports: the runs, and whether anyone is watching.
     pub agents: Arc<Agents>,
+    /// Where a ring goes: the phone, or a machine's desktop.
+    pub route: Arc<Route>,
+    pub away: Duration,
 }
 
 impl Doorbell {
@@ -62,6 +69,8 @@ impl Doorbell {
             hub_url: hub_url(app),
             poll: poll_interval(),
             agents: Arc::clone(&app.agents),
+            route: Arc::clone(&app.route),
+            away: away_after(),
         })
     }
 
@@ -243,17 +252,25 @@ impl Doorbell {
         !state.seeding
     }
 
-    /// Where the bell rings: the phone, and only for an empty house. While
-    /// any online machine's agent reports someone at it, nothing rings:
-    /// whoever is there sees questions in the session itself (a background
-    /// agent asks through its own question tool when the machine is watched;
-    /// `mem ask` is the locked-screen channel), so any bell here would be a
-    /// duplicate on a screen already showing the thing.
+    /// Where the bell rings, by the route: on Phone, a push. On Device, a
+    /// desktop notification through that machine's agent, until the machine
+    /// is away (its agent offline, or nobody at it for the away time); then
+    /// the push. Every ring comes through here, so questions, stalls and
+    /// finished roadmaps all follow the same route.
     fn deliver(&self, body: &str) {
-        if self.agents.watched() {
-            return;
+        let route = self.route.get();
+        match route.machine {
+            Some(machine) if route.device && !self.agents.away(&machine, self.away) => {
+                self.agents.queue(
+                    &machine,
+                    AgentCommand::Notify {
+                        title: "workflow".to_string(),
+                        body: body.to_string(),
+                    },
+                );
+            }
+            _ => self.ring(body),
         }
-        self.ring(body);
     }
 
     /// One POST, by argv. Never retried: a failure is logged and
@@ -347,6 +364,16 @@ fn hub_url(app: &App) -> String {
 
 /// 15 s, or `HUB_POLL_MS` — the same kind of seam as mem's `MEM_POLL_MS`, so a
 /// test does not have to wait a quarter of a minute per round.
+/// Five minutes, or `HUB_AWAY_MS`, so a test can see a machine go away
+/// without waiting for it.
+pub fn away_after() -> Duration {
+    std::env::var("HUB_AWAY_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_AWAY)
+}
+
 pub fn poll_interval() -> Duration {
     std::env::var("HUB_POLL_MS")
         .ok()
@@ -409,6 +436,8 @@ mod tests {
                 PathBuf::from("/nonexistent/agents.json"),
                 crate::agents::DEFAULT_WINDOW,
             )),
+            route: Arc::new(Route::open(PathBuf::from("/nonexistent/route.json"))),
+            away: DEFAULT_AWAY,
         };
         assert_eq!(
             doorbell.body("macbook", "proj-alpha"),

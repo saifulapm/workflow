@@ -185,7 +185,8 @@ fn report(name: &str) -> Value {
         .map(|p| p.name)
         .collect();
     // qshell's presence marker: someone is at this machine, unlocked and not
-    // idle, so the hub keeps the phone quiet.
+    // idle. While the route is Device here, the hub shows rings on this
+    // desktop until the marker has been gone five minutes.
     let watched = std::env::var_os("XDG_RUNTIME_DIR")
         .is_some_and(|dir| PathBuf::from(dir).join("qshell-present").exists());
     json!({"machine": name, "agents": agents, "checkouts": checkouts, "watched": watched})

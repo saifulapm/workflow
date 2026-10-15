@@ -85,13 +85,40 @@ impl World {
     }
 
     fn hub(&self) -> Hub {
+        self.hub_with(&[])
+    }
+
+    fn hub_with(&self, env: &[(&str, &str)]) -> Hub {
+        // A 15 s poll would make every test here take a minute.
+        let mut env = env.to_vec();
+        env.push(("HUB_POLL_MS", "120"));
         Hub::spawn_env(
             &self.home,
             &[&self.bin],
             &["--config", self.config.to_str().unwrap(), "--port", "0"],
-            // A 15 s poll would make every test here take a minute.
-            &[("HUB_POLL_MS", "120")],
+            &env,
         )
+    }
+
+    /// The route the hub starts with, as its own file holds it.
+    fn route_device(&self, machine: &str) {
+        let path = self.home.join("state/hub/route.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!("{{\"device\":true,\"machine\":\"{machine}\"}}"),
+        )
+        .unwrap();
+    }
+
+    fn ask_for(&self, question: &str, audience: &str) {
+        let out = mem_in(
+            &self.mem,
+            &self.home,
+            &self.home.join("proj-alpha"),
+            &["ask", question, "--for", audience],
+        );
+        assert!(out.status.success(), "{out:?}");
     }
 
     fn ask(&self, question: &str) {
@@ -562,22 +589,90 @@ fn an_explicit_hub_url_still_wins_over_the_tailnet_name() {
     assert!(body.contains("http://chosen.example:8787/"), "{body}");
 }
 
-/// Presence routing: while an online machine's agent reports someone at it,
-/// nothing rings. Whoever is there sees questions in the session itself; both
-/// a desktop popup and a phone buzz proved to be duplicates on a screen
-/// already showing the thing.
+/// On Phone every ring is a push, even while someone sits at a machine: the
+/// quiet desk is what Device is for (decision, m5).
 #[test]
-fn a_watched_machine_rings_nothing_at_all() {
+fn on_phone_a_watched_machine_still_rings_the_phone() {
     let world = World::new("bell-watched", "http://127.0.0.1:9");
-    // A tripwire: any notify-send would be a regression to the desktop bell.
-    let notify_log = world.dir.join("notify.log");
-    fixture_bin(
-        &world.bin,
-        "notify-send",
-        &format!("printf '\\1' >> '{}'\nexit 0", notify_log.display()),
-    );
     let hub = world.hub();
     hub.poll_agent(r#"{"machine":"mini","agents":[],"checkouts":[],"watched":true}"#);
+    world.settle();
+
+    world.ask("Should we use Redis?");
+    world.wait_for_ring();
+    world.settle();
+    assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
+    let commands =
+        hub.poll_agent(r#"{"machine":"mini","agents":[],"checkouts":[],"watched":true}"#);
+    assert!(!commands.contains("notify"), "{commands}");
+}
+
+/// An orchestrator's question is answered by the orchestrator, so it never
+/// rings; Saiful's own rings like any person's.
+#[test]
+fn only_a_persons_question_rings() {
+    let world = World::new("bell-audience", "http://127.0.0.1:9");
+    let _hub = world.hub();
+    world.settle();
+
+    world.ask_for("Widen the files?", "orchestrator");
+    world.settle();
+    assert!(world.rings().is_empty(), "{:?}", world.rings());
+
+    world.ask_for("Approve the roadmap?", "saiful");
+    world.wait_for_ring();
+    world.settle();
+    assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
+}
+
+/// The notify commands a machine's next poll hands it.
+fn notifies(hub: &Hub, report: &str) -> Vec<serde_json::Value> {
+    let answer: serde_json::Value = serde_json::from_str(&hub.poll_agent(report)).unwrap();
+    answer["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "notify")
+        .cloned()
+        .collect()
+}
+
+const MINI_AT_DESK: &str = r#"{"machine":"mini","agents":[],"checkouts":[],"watched":true}"#;
+const MINI_AWAY: &str = r#"{"machine":"mini","agents":[],"checkouts":[],"watched":false}"#;
+
+/// On Device, the ring is one desktop notification on that machine, carrying
+/// what the push would and no question text, and nothing goes to ntfy.
+#[test]
+fn on_device_a_question_shows_on_that_machine_and_pushes_nothing() {
+    let world = World::new("bell-device", "http://127.0.0.1:9");
+    world.route_device("mini");
+    let hub = world.hub();
+    hub.poll_agent(MINI_AT_DESK);
+    world.settle();
+
+    world.ask("Should we deploy the thing that must not be named?");
+    wait_for("the id to be recorded", Duration::from_secs(15), || {
+        world.seen().len() == 1
+    });
+    let shown = notifies(&hub, MINI_AT_DESK);
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    let body = shown[0]["body"].as_str().unwrap();
+    assert!(body.starts_with("question waiting on "), "{body}");
+    assert!(body.contains("(proj-alpha)"), "{body}");
+    assert!(!body.contains("must not be named"), "{body}");
+    world.settle();
+    assert!(world.rings().is_empty(), "{:?}", world.rings());
+    assert!(notifies(&hub, MINI_AT_DESK).is_empty(), "shown once");
+}
+
+/// A machine whose screen went idle or locked a moment ago still holds the
+/// route: it falls to the phone only after the away time.
+#[test]
+fn on_device_a_machine_idle_a_moment_still_shows_it() {
+    let world = World::new("bell-device-idle", "http://127.0.0.1:9");
+    world.route_device("mini");
+    let hub = world.hub();
+    hub.poll_agent(MINI_AWAY);
     world.settle();
 
     world.ask("Should we use Redis?");
@@ -585,22 +680,53 @@ fn a_watched_machine_rings_nothing_at_all() {
         world.seen().len() == 1
     });
     world.settle();
+    assert_eq!(notifies(&hub, MINI_AWAY).len(), 1);
+    assert!(world.rings().is_empty(), "{:?}", world.rings());
+}
 
-    assert!(
-        world.rings().is_empty(),
-        "the phone rang for a watched machine: {:?}",
-        world.rings()
-    );
+/// Locked or idle for the away time, the route's machine is away, and the
+/// ring goes to the phone instead.
+#[test]
+fn on_device_a_machine_away_long_enough_rings_the_phone() {
+    let world = World::new("bell-device-away", "http://127.0.0.1:9");
+    world.route_device("mini");
+    let hub = world.hub_with(&[("HUB_AWAY_MS", "300")]);
+    hub.poll_agent(MINI_AWAY);
+    world.settle();
+    std::thread::sleep(Duration::from_millis(400));
+    hub.poll_agent(MINI_AWAY);
 
-    // Unwatched again: the next question rings.
-    hub.poll_agent(r#"{"machine":"mini","agents":[],"checkouts":[]}"#);
-    world.ask("And Postgres over MySQL?");
+    world.ask("Should we use Redis?");
     world.wait_for_ring();
+    world.settle();
     assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
-    assert!(
-        invocations(&notify_log).is_empty(),
-        "a desktop bell rang for a watched machine"
-    );
+    assert!(notifies(&hub, MINI_AWAY).is_empty());
+
+    // Back at the desk, the next ring shows on the machine again.
+    hub.poll_agent(MINI_AT_DESK);
+    world.ask("And Postgres over MySQL?");
+    wait_for("the id to be recorded", Duration::from_secs(15), || {
+        world.seen().len() == 2
+    });
+    world.settle();
+    assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
+    assert_eq!(notifies(&hub, MINI_AT_DESK).len(), 1);
+}
+
+/// A machine whose agent stopped polling is away however it was last seen.
+#[test]
+fn on_device_an_offline_machine_rings_the_phone() {
+    let world = World::new("bell-device-offline", "http://127.0.0.1:9");
+    world.route_device("mini");
+    let hub = world.hub_with(&[("HUB_AGENT_WINDOW_MS", "200")]);
+    hub.poll_agent(MINI_AT_DESK);
+    world.settle();
+    std::thread::sleep(Duration::from_millis(300));
+
+    world.ask("Should we use Redis?");
+    world.wait_for_ring();
+    world.settle();
+    assert_eq!(world.rings().len(), 1, "{:?}", world.rings());
 }
 
 /// An unwatched machine rings the phone directly — sibling hubs are links on
