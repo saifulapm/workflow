@@ -31,6 +31,10 @@ if [[ -f $config ]]; then
     echo 'dulali_webhook = "http://127.0.0.1:8644/webhooks/question"' >>"$config"
   grep -q '^dulali_socket' "$config" ||
     echo 'dulali_socket = "/var/lib/mem/dulali/hub.sock"' >>"$config"
+  # cloudflared forwards Access's hostname as Host; the guard refuses
+  # a dotted name outside .ts.net unless it is listed here.
+  grep -q '^origins' "$config" ||
+    echo 'origins = ["https://hub.on-rexa.com"]' >>"$config"
 fi
 
 install -m644 "$src"/vps/units/* /etc/systemd/system/
