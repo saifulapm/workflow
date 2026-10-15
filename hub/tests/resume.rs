@@ -12,8 +12,8 @@ use std::time::Duration;
 use common::{Hub, TempDir, body_of, fixture_bin, status_of, wait_for};
 use serde_json::{Value, json};
 
-const HEAD: &str = "Saiful answered your questions on the hub. Each answer is below, \
-                    and `mem questions` has them too.\n\n";
+const HEAD: &str = "Saiful answered your questions on the hub. Each answer is below; \
+                    `mem questions` shows them once this machine's sync round lands.\n\n";
 
 const Q1: &str = "01M0BF1F8BY8FXGZS4Q1AAAAAA";
 const Q2: &str = "01M0BF1F8BY8FXGZS5Q2BBBBBB";

@@ -330,8 +330,8 @@ impl App {
             })
             .collect();
         let message = format!(
-            "Saiful answered your questions on the hub. Each answer is below, \
-             and `mem questions` has them too.\n\n{}",
+            "Saiful answered your questions on the hub. Each answer is below; \
+             `mem questions` shows them once this machine's sync round lands.\n\n{}",
             answers.join("\n\n")
         );
         self.agents.queue(
