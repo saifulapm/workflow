@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use serde::Deserialize;
 
 use crate::memcli::{self, Project, ProjectRow};
-use crate::{exit, warn};
+use crate::{exit, machine, warn};
 
 pub const DEFAULT_MODEL: &str = "opus";
 pub const DEFAULT_EFFORT: &str = "high";
@@ -67,6 +67,7 @@ pub enum Decision {
 pub struct Start {
     /// The agent's name, before any suffix a taken name needs.
     pub name: String,
+    pub project: String,
     model: String,
     effort: String,
     dir: String,
@@ -371,6 +372,7 @@ one orchestrator per folder, so give {project} a worktree of its own (mem projec
 
     Decision::Start(Start {
         name: amx_name(&format!("{project}-{slug}")),
+        project: project.clone(),
         model: opts.model.to_string(),
         effort: opts.effort.to_string(),
         task: task(&project, &slug),
@@ -537,6 +539,15 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
             exit::FAILED
         }
         Decision::Start(start) => {
+            let machine = machine::name();
+            let runner = projects
+                .iter()
+                .find(|row| row.name == start.project)
+                .and_then(|row| row.runner.as_ref());
+            if let Some(why) = runner_refusal(&start.project, runner, machine.as_deref(), dry_run) {
+                warn(format!("go: {why}"));
+                return exit::USAGE;
+            }
             let branch = branch_of(&start.dir);
             if let Some(why) =
                 trunk_refusal(&start.dir, branch.as_deref(), start.worktree.as_deref())
@@ -544,19 +555,50 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
                 warn(format!("go: {why}"));
                 return exit::USAGE;
             }
-            started(&start, dry_run)
+            started(&start, dry_run, machine.as_deref())
         }
     }
 }
 
-/// Print or start the orchestrator `go` settled on.
-fn started(start: &Start, dry_run: bool) -> i32 {
+/// Why this machine may not start `project`, if it may not: another machine
+/// runs it, live or not, or this machine's name cannot be told. A dry run
+/// starts nothing, so it only needs the name when a runner is to be compared.
+fn runner_refusal(
+    project: &str,
+    runner: Option<&memcli::Runner>,
+    machine: Option<&str>,
+    dry_run: bool,
+) -> Option<String> {
+    let unknown = "cannot tell this machine's tailnet name; set WORKFLOW_MACHINE";
+    match (runner, machine) {
+        (Some(runner), Some(here)) if runner.machine != here => Some(format!(
+            "{project} runs on {} ({}); start it there, or move it with \
+`mem --project {project} project unset runner`",
+            runner.machine, runner.id
+        )),
+        (Some(_), None) => Some(unknown.to_string()),
+        (None, None) if !dry_run => Some(unknown.to_string()),
+        _ => None,
+    }
+}
+
+/// Print or start the orchestrator `go` settled on, and record it as the
+/// project's runner.
+fn started(start: &Start, dry_run: bool, machine: Option<&str>) -> i32 {
     if dry_run {
         println!("{}", shell_line(&amx_bin(), &start.args(&start.name)));
         return exit::OK;
     }
     match launch(start, amx_new) {
         Ok(name) => {
+            if let Some(machine) = machine
+                && !memcli::set_runner(&start.project, machine, &name)
+            {
+                warn(format!(
+                    "go: started {name}, but mem would not record {machine} as the runner of {}",
+                    start.project
+                ));
+            }
             println!("{name}");
             exit::OK
         }
@@ -598,6 +640,7 @@ The first stretch of a shop.
             roadmap_status: status.map(str::to_string),
             worktree: None,
             paused: None,
+            runner: None,
         }
     }
 
@@ -1313,6 +1356,7 @@ and never switch this folder's branch to get past this",
     fn start_for_launch() -> Start {
         Start {
             name: "alpha-winners".into(),
+            project: "alpha".into(),
             model: "opus".into(),
             effort: "high".into(),
             dir: "/work".into(),

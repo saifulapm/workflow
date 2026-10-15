@@ -23,6 +23,8 @@ const ROADMAP: &str = "\
 struct World {
     work: Scratch,
     checkout: PathBuf,
+    /// The machine `go` runs on, by `WORKFLOW_MACHINE`.
+    machine: &'static str,
 }
 
 impl World {
@@ -65,7 +67,11 @@ projects)
 	;;
 project)
 	case "$2" in
-	set) printf '2026-10-15T09:00:00Z by %s' "$4" >"$dir/paused-$6" ;;
+	set)
+		case "$3" in
+		paused) printf '2026-10-15T09:00:00Z by %s' "$4" >"$dir/paused-$6" ;;
+		esac
+		;;
 	unset) rm -f "$dir/paused-$5" ;;
 	*) [ -f "$dir/current.json" ] && cat "$dir/current.json" || exit 1 ;;
 	esac
@@ -93,7 +99,11 @@ new)
 esac
 "#,
         );
-        World { work, checkout }
+        World {
+            work,
+            checkout,
+            machine: "mini",
+        }
     }
 
     fn go(&self, args: &[&str]) -> Output {
@@ -113,6 +123,7 @@ esac
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_AMX", self.work.at("amx"))
             .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("WORKFLOW_MACHINE", self.machine)
             .env_remove("AMX_ID")
             .current_dir(self.work.path());
         if let Some(id) = amx_id {
@@ -139,6 +150,18 @@ esac
         self.work.put("projects.json", &projects);
         self.work
             .put("roadmap-gamma.md", "# roadmap: gamma\n\n- [ ] first One\n");
+    }
+
+    /// Make the fake mem report `gamma` as run by `id` on `machine`.
+    fn run_gamma_on(&self, machine: &str, id: &str) {
+        let projects = self.work.read("projects.json").replacen(
+            r#""name":"gamma","#,
+            &format!(
+                r#""name":"gamma","runner":{{"machine":"{machine}","id":"{id}","since":"2026-10-15T07:00:00Z"}},"#
+            ),
+            1,
+        );
+        self.work.put("projects.json", &projects);
     }
 
     fn mem_calls(&self) -> Vec<String> {
@@ -578,4 +601,64 @@ fn unpause_clears_the_pause_and_starts_nothing() {
     assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
     assert_eq!(said(&out), "gamma-first\n");
     assert_eq!(world.new_calls().len(), 1, "{:?}", world.amx_calls());
+}
+
+#[test]
+fn a_started_orchestrator_is_recorded_as_the_runner() {
+    let world = World::new("go-runner", "approved");
+    world.add_gamma();
+
+    let out = world.go(&["gamma"]);
+
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(said(&out), "gamma-first\n");
+    assert!(
+        world
+            .mem_calls()
+            .contains(&"project set runner mini gamma-first --project gamma".to_string()),
+        "{:?}",
+        world.mem_calls()
+    );
+}
+
+#[test]
+fn another_machines_runner_refuses_and_starts_nothing() {
+    let mut world = World::new("go-runner-away", "approved");
+    world.add_gamma();
+    world.run_gamma_on("mini", "gamma-m4");
+    world.machine = "nuc";
+
+    let out = world.go(&["gamma"]);
+
+    assert_eq!(out.status.code(), Some(2));
+    let err = complained(&out);
+    assert!(err.contains("gamma runs on mini (gamma-m4)"), "{err}");
+    assert!(world.new_calls().is_empty(), "{:?}", world.amx_calls());
+}
+
+#[test]
+fn this_machines_own_runner_does_not_stop_go() {
+    let world = World::new("go-runner-home", "approved");
+    world.add_gamma();
+    world.run_gamma_on("mini", "gamma-m4");
+
+    let out = world.go(&["gamma"]);
+
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert_eq!(world.new_calls().len(), 1);
+}
+
+#[test]
+fn a_dry_run_records_no_runner() {
+    let world = World::new("go-runner-dry", "approved");
+    world.add_gamma();
+
+    let out = world.go(&["gamma", "--dry-run"]);
+
+    assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
+    assert!(
+        !world.mem_calls().iter().any(|c| c.contains("runner")),
+        "{:?}",
+        world.mem_calls()
+    );
 }

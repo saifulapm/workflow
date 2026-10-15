@@ -38,6 +38,15 @@ pub struct ProjectRow {
     /// "<when> by <who>" while the project is paused.
     #[serde(default)]
     pub paused: Option<String>,
+    /// The machine and amx session running it, while one does.
+    #[serde(default)]
+    pub runner: Option<Runner>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Runner {
+    pub machine: String,
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +137,19 @@ pub fn handoff(project: &str) -> Option<String> {
 /// `mem project set paused <who>`: mem stamps the time.
 pub fn set_paused(project: &str, who: &str) -> bool {
     silent(&["project", "set", "paused", who, "--project", project])
+}
+
+/// `mem project set runner <machine> <id>`: mem stamps the time.
+pub fn set_runner(project: &str, machine: &str, id: &str) -> bool {
+    silent(&[
+        "project",
+        "set",
+        "runner",
+        machine,
+        id,
+        "--project",
+        project,
+    ])
 }
 
 pub fn unset_paused(project: &str) -> bool {
