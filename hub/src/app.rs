@@ -316,6 +316,13 @@ impl App {
         if queued {
             return;
         }
+        // A session that parks again was resumed with the answers before;
+        // they are in its context already.
+        let told = self.agents.delivered(session);
+        asked.retain(|row| !told.iter().any(|id| row["id"] == id.as_str()));
+        if asked.is_empty() {
+            return;
+        }
         // mem lists newest first; a ULID sorts in the order it was made.
         asked.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
         let answers: Vec<String> = asked
@@ -334,13 +341,18 @@ impl App {
              `mem questions` shows them once this machine's sync round lands.\n\n{}",
             answers.join("\n\n")
         );
-        self.agents.queue(
+        let ids: Vec<String> = asked
+            .iter()
+            .filter_map(|row| row["id"].as_str().map(str::to_string))
+            .collect();
+        self.agents.queue_resume(
             &runner.machine,
             Command::Resume {
                 project: project.to_string(),
                 id: session.to_string(),
                 message,
             },
+            &ids,
         );
     }
 

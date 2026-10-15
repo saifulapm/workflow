@@ -185,6 +185,31 @@ fn a_session_that_is_not_the_runner_is_not_resumed() {
     assert_eq!(poll(&hub), json!([{"kind": "sync"}]));
 }
 
+/// A session that parks again gets only what it has not been told: the
+/// answers it came back with are already in its context.
+#[test]
+fn a_second_park_of_the_session_carries_only_the_new_answers() {
+    let world = World::new("resume-second", mini());
+    let hub = world.hub(&[]);
+    poll(&hub);
+
+    let q1 = |a| question(Q1, "Which port?", Some("gamma-m4"), a);
+    world.questions(&[q1(None)], &[q1(Some("8787"))]);
+    answer(&hub, Q1, "8787");
+    assert_eq!(
+        poll(&hub),
+        resume(&format!("{HEAD}#Q1AAAAAA Which port?\nAnswer: 8787"))
+    );
+
+    let q2 = |a| question(Q2, "Keep the old route?", Some("gamma-m4"), a);
+    world.questions(&[q2(None)], &[q2(Some("no")), q1(Some("8787"))]);
+    answer(&hub, Q2, "no");
+    assert_eq!(
+        poll(&hub),
+        resume(&format!("{HEAD}#Q2BBBBBB Keep the old route?\nAnswer: no"))
+    );
+}
+
 #[test]
 fn answering_the_last_question_twice_queues_one_resume() {
     let world = World::new("resume-twice", mini());

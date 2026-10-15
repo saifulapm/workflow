@@ -64,6 +64,10 @@ struct Saved {
     /// Every machine that has polled, in the order they first did.
     known: Vec<String>,
     queues: BTreeMap<String, Vec<Command>>,
+    /// The question ids each amx session has been resumed with, so a session
+    /// that parks again is told only what it has not heard.
+    #[serde(default)]
+    delivered: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Default)]
@@ -145,6 +149,32 @@ impl Agents {
             .get(machine)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// The question ids `session` has already been resumed with.
+    pub fn delivered(&self, session: &str) -> Vec<String> {
+        self.lock()
+            .saved
+            .delivered
+            .get(session)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Queues `resume` for `machine` and records `ids` as told to its session.
+    pub fn queue_resume(&self, machine: &str, resume: Command, ids: &[String]) {
+        if let Command::Resume { id: session, .. } = &resume {
+            let mut state = self.lock();
+            let told = state.saved.delivered.entry(session.clone()).or_default();
+            told.extend(ids.iter().cloned());
+            state
+                .saved
+                .queues
+                .entry(machine.to_string())
+                .or_default()
+                .push(resume);
+            self.save(&state.saved);
+        }
     }
 
     /// One `sync` for every machine that has polled, after a hub write.
