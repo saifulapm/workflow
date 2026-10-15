@@ -169,9 +169,19 @@ fn live_pill(s: &ProjectSummary, slug: &str, project: &str) -> String {
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
     let run = ctx.app.amx.run(project, s.milestone.as_deref());
+    let paused = s.paused.is_some();
+    let paused_pill = if paused {
+        "<span class=\"pill wait\">paused</span> "
+    } else {
+        ""
+    };
     let (pill, meta) = match &run {
         Run::Live(agent) => (
-            "<span class=\"pill\">running</span>",
+            if paused {
+                "<span class=\"pill wait\">pausing</span>"
+            } else {
+                "<span class=\"pill\">running</span>"
+            },
             format!(
                 "{} · {}",
                 agent.id,
@@ -184,6 +194,16 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                 _ => String::new(),
             };
             let milestone = s.milestone.as_deref().unwrap_or_default();
+            let parked = handoff.trim_start().starts_with("parked");
+            // `workflow go` refuses a paused project unless its run parked,
+            // so only a parked one keeps its Resume.
+            if paused && !parked {
+                return format!(
+                    "<p class=\"row\">{paused_pill}<span class=\"meta\">{}</span></p>\n{}",
+                    esc(s.paused.as_deref().unwrap_or_default()),
+                    pause_form(project, paused)
+                );
+            }
             let (pill, meta) = if live::stalled(s, &run, &handoff) {
                 (
                     "<span class=\"pill bad\">stalled</span>",
@@ -202,20 +222,39 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                 "Resume"
             };
             return format!(
-                "<p class=\"row\">{pill} <span class=\"meta\">{}</span></p>\n\
+                "<p class=\"row\">{paused_pill}{pill} <span class=\"meta\">{}</span></p>\n\
                  <form method=\"post\" action=\"{}/control\">\n\
                  <input type=\"hidden\" name=\"do\" value=\"go\">\n\
                  <button type=\"submit\">{label}</button>\n\
-                 </form>\n",
+                 </form>\n{}",
                 esc(&meta),
-                esc(&project_url(project))
+                esc(&project_url(project)),
+                pause_form(project, paused)
             );
         }
         _ => return String::new(),
     };
     format!(
-        "<p class=\"row\">{pill} <span class=\"meta\">{}</span></p>\n",
-        esc(&meta)
+        "<p class=\"row\">{pill} <span class=\"meta\">{}</span></p>\n{}",
+        esc(&meta),
+        pause_form(project, paused)
+    )
+}
+
+/// Pause holds the project once its current milestone lands; Unpause lets
+/// the next one start again. Neither starts or stops a run.
+fn pause_form(project: &str, paused: bool) -> String {
+    let (verb, label) = if paused {
+        ("unpause", "Unpause")
+    } else {
+        ("pause", "Pause")
+    };
+    format!(
+        "<form method=\"post\" action=\"{}/control\">\n\
+         <input type=\"hidden\" name=\"do\" value=\"{verb}\">\n\
+         <button type=\"submit\">{label}</button>\n\
+         </form>\n",
+        esc(&project_url(project))
     )
 }
 

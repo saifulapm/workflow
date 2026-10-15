@@ -2,7 +2,7 @@
 //! to.
 //!
 //! Approve and Request changes write mem and nothing else; Start and Resume
-//! run `workflow go`. Every write names its project with `--project=<name>`,
+//! run `workflow go`, Pause and Unpause `workflow pause|unpause`. Every write names its project with `--project=<name>`,
 //! because the hub runs outside any checkout, and puts free text after `--`,
 //! so text starting with a dash is never read as a flag.
 
@@ -25,7 +25,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
     let form = ctx.request.form();
     let verb = form.get("do").unwrap_or("");
     let text = form.get("text").unwrap_or("").trim();
-    if !matches!(verb, "approve" | "changes" | "go") {
+    if !matches!(verb, "approve" | "changes" | "go" | "pause" | "unpause") {
         return Response::text(400, "unknown control");
     }
     let roadmap = format!("{}/roadmap", project_url(project));
@@ -77,7 +77,35 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             }
             Response::see_other(&roadmap)
         }
+        "pause" | "unpause" => pause(ctx, project, verb),
         _ => go(ctx, project),
+    }
+}
+
+/// Pause or Unpause: `workflow pause|unpause`, which write mem and start
+/// nothing. Called with the control lock held.
+fn pause(ctx: &PageCtx, project: &str, verb: &str) -> Response {
+    let mut command = std::process::Command::new("workflow");
+    command.args([verb, project]);
+    if verb == "pause" {
+        command.args(["--by", "hub"]);
+    }
+    let ended = crate::proc::output_within(&mut command, GO_TIMEOUT);
+    ctx.app.mem.invalidate();
+    match ended {
+        crate::proc::Ended::Exited(done) if done.code == Some(0) => {
+            Response::see_other(&project_url(project))
+        }
+        crate::proc::Ended::Exited(done) => {
+            let said = String::from_utf8_lossy(&done.stderr);
+            conflict(ctx, said.trim())
+        }
+        crate::proc::Ended::TimedOut => {
+            conflict(ctx, &format!("workflow {verb} did not finish in time."))
+        }
+        crate::proc::Ended::Failed(why) => {
+            conflict(ctx, &format!("cannot run workflow {verb}: {why}"))
+        }
     }
 }
 

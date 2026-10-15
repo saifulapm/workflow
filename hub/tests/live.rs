@@ -59,13 +59,15 @@ fn world_with(
         .collect();
     let moves = json!({ "items": moves });
     let handoff = json!({ "body": handoff });
+    // A file, so a test can pause the project under a running hub.
+    std::fs::write(dir.join("projects.json"), projects.to_string()).unwrap();
     fixture_mem(
         &bin,
         &format!(
             "printf '%s\\n' \"$*\" >> '{log}'\n\
              p() {{ printf '%s\\n' \"$1\"; }}\n\
              case \"$*\" in\n\
-             projects*) p '{projects}' ;;\n\
+             projects*) cat '{projects}' ;;\n\
              *--all-projects*) p '{{\"questions\":[]}}' ;;\n\
              roadmap*--project=omega*) p '{roadmap}' ;;\n\
              plan\\ --list*--project=omega*) p '{{\"plans\":[{{\"slug\":\"o1-store\"}}]}}' ;;\n\
@@ -76,6 +78,7 @@ fn world_with(
              *) exit 1 ;;\n\
              esac",
             log = log.display(),
+            projects = dir.join("projects.json").display(),
         ),
     );
     if let Some(agents) = agents {
@@ -403,4 +406,121 @@ fn the_page_after_resume_shows_the_new_orchestrator() {
         body.contains("<span class=\"pill\">running</span> <span class=\"meta\">omega-o2-sync-2 · starting</span>"),
         "{body}"
     );
+}
+
+/// omega's row says it is paused, as mem would after `workflow pause`.
+fn set_paused(world: &World) {
+    let path = world.dir.join("projects.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    doc["projects"][0]["paused"] = json!("2026-10-15T09:00:00Z by saiful");
+    std::fs::write(&path, doc.to_string()).unwrap();
+}
+
+/// A fake `workflow` that logs its argv and, like the real one, pauses or
+/// unpauses omega's row.
+fn fake_workflow(world: &World) -> PathBuf {
+    let log = world.dir.join("workflow.log");
+    let projects = world.dir.join("projects.json");
+    fixture_bin(
+        &world.bin,
+        "workflow",
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{log}'\n\
+             case \"$1\" in\n\
+             pause) sed -i 's/\"name\":\"omega\"/\"name\":\"omega\",\"paused\":\"2026-10-15T09:00:00Z by hub\"/' '{projects}' ;;\n\
+             unpause) sed -i 's/,\\{{0,1\\}}\"paused\":\"[^\"]*\"//' '{projects}' ;;\n\
+             esac",
+            log = log.display(),
+            projects = projects.display(),
+        ),
+    );
+    log
+}
+
+const PAUSE: &str = "<input type=\"hidden\" name=\"do\" value=\"pause\">";
+const UNPAUSE: &str = "<input type=\"hidden\" name=\"do\" value=\"unpause\">";
+
+#[test]
+fn a_running_project_can_be_paused_and_then_reads_pausing() {
+    let world = world("live-pause", "", Some(LIVE));
+    let workflow = fake_workflow(&world);
+    let (hub, go) = hub_with_systemd_run(&world, 0, "");
+
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(body.contains(PAUSE), "{body}");
+    assert!(!body.contains(UNPAUSE), "{body}");
+
+    let response = hub.post_form("/p/omega/control", "do=pause");
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(common::header_of(&response, "location"), Some("/p/omega"));
+    assert_eq!(lines(&workflow), ["pause omega --by hub"]);
+
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(
+        body.contains("<span class=\"pill wait\">pausing</span>"),
+        "{body}"
+    );
+    assert!(body.contains(UNPAUSE), "{body}");
+    assert!(!body.contains(PAUSE), "{body}");
+    assert!(lines(&go).is_empty(), "{:?}", lines(&go));
+}
+
+#[test]
+fn a_paused_project_with_no_run_offers_unpause_not_start() {
+    let world = world("live-paused", "o2-t1 landed at 1a2b3c.", Some(DEAD));
+    set_paused(&world);
+    let workflow = fake_workflow(&world);
+    let (hub, go) = hub_with_systemd_run(&world, 0, "");
+
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(
+        body.contains("<span class=\"pill wait\">paused</span>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("<button type=\"submit\">Unpause</button>"),
+        "{body}"
+    );
+    assert!(!body.contains("value=\"go\""), "{body}");
+    assert!(!body.contains("stalled"), "{body}");
+
+    let response = hub.post_form("/p/omega/control", "do=unpause");
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(lines(&workflow), ["unpause omega"]);
+    assert!(
+        lines(&go).is_empty(),
+        "unpause starts nothing: {:?}",
+        lines(&go)
+    );
+
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(!body.contains(">paused<"), "{body}");
+    assert!(
+        body.contains("<button type=\"submit\">Resume</button>"),
+        "{body}"
+    );
+    assert!(body.contains(PAUSE), "{body}");
+}
+
+#[test]
+fn a_paused_project_parked_on_a_question_can_still_resume() {
+    let world = world(
+        "live-paused-parked",
+        "parked: waiting on a question",
+        Some(DEAD),
+    );
+    set_paused(&world);
+    let (hub, _) = hub_with_systemd_run(&world, 0, "");
+
+    let body = body_of(&hub.get("/p/omega")).to_string();
+    assert!(
+        body.contains("<span class=\"pill wait\">paused</span>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("<button type=\"submit\">Resume</button>"),
+        "{body}"
+    );
+    assert!(body.contains(UNPAUSE), "{body}");
 }

@@ -289,7 +289,7 @@ fn an_unknown_verb_is_a_bad_request() {
     let world = World::new("control-unknown");
     let hub = world.hub();
 
-    for body in ["do=run-next", "do=pause", "do=resume", ""] {
+    for body in ["do=run-next", "do=resume", ""] {
         let response = world.post(&hub, body);
         assert_eq!(status_of(&response), 400, "{body:?}: {response}");
     }

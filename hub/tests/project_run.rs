@@ -169,7 +169,7 @@ fn a_running_project_shows_its_waiting_questions_and_links() {
 }
 
 #[test]
-fn neither_a_running_nor_a_dogfooding_project_has_a_pause_button() {
+fn with_no_answer_from_amx_neither_a_running_nor_a_dogfooding_project_has_buttons() {
     for row in [RUNNING, Row { dogfooding: true }] {
         let world = world("project-run-pause", row);
         let (body, _) = page(&world);
