@@ -130,6 +130,14 @@ pub fn post(route: &Route, mem: &MemCli, request: &Request) -> Response {
     {
         return agents::json(400, json!({"error": "machine is empty"}));
     }
+    // A machine is its tailnet label, which DNS caps at 63 characters, and
+    // home draws it in the header.
+    if choice.machine.as_deref().is_some_and(|m| m.len() > 63) {
+        return agents::json(
+            400,
+            json!({"error": "machine is longer than 63 characters"}),
+        );
+    }
     match route.set(device, choice.machine.as_deref()) {
         Ok(()) => agents::json(200, route.object(mem)),
         Err(NoMachine) => agents::json(

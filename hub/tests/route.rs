@@ -285,3 +285,28 @@ fn the_current_routes_button_is_the_filled_one() {
         "{home}"
     );
 }
+
+/// A machine is named by its tailnet label, at most 63 characters; a longer
+/// one is refused rather than drawn across home's header.
+#[test]
+fn a_machine_name_longer_than_a_label_is_refused() {
+    let world = world("route-long", 0);
+    let hub = spawn(&world);
+    let long = "m".repeat(64);
+    let response = api(
+        &hub,
+        "POST",
+        &format!(r#"{{"route":"device","machine":"{long}"}}"#),
+        true,
+    );
+    assert_eq!(status_of(&response), 400, "{response}");
+    assert_eq!(route(&hub)["route"], "phone");
+    let fits = "m".repeat(63);
+    let response = api(
+        &hub,
+        "POST",
+        &format!(r#"{{"route":"device","machine":"{fits}"}}"#),
+        true,
+    );
+    assert_eq!(status_of(&response), 200, "{response}");
+}
