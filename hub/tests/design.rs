@@ -182,3 +182,39 @@ fn form_fields_are_sixteen_pixels_so_ios_does_not_zoom() {
         "{sheet}"
     );
 }
+
+/// The rule for `selector`, as the sheet writes it at the top level.
+fn rule(sheet: &str, selector: &str) -> String {
+    let at = sheet
+        .find(&format!("\n{selector}{{"))
+        .unwrap_or_else(|| panic!("no {selector} rule"));
+    let rest = &sheet[at + 1..];
+    rest[..rest.find('}').unwrap() + 1].to_string()
+}
+
+#[test]
+fn lists_keep_the_columns_centring_and_home_cards_pair_up_on_a_desk() {
+    // `body>*` centres every block in the 60rem column; a list rule that
+    // sets an inline margin wins over it and pins the list to the left edge,
+    // which put the ideas, the timeline and the gallery outside the column.
+    let sheet = stylesheet();
+    for selector in ["ul", ".gallery", "body>ul:not([class])"] {
+        let rule = rule(&sheet, selector);
+        assert!(!rule.contains("margin:"), "{rule}");
+        assert!(!rule.contains("margin-left"), "{rule}");
+    }
+    assert!(
+        rule(&sheet, ".cards").contains("grid-template-columns:minmax(0,1fr)"),
+        "one card a row on a phone and a tablet"
+    );
+    assert!(
+        sheet.contains(
+            "@media (min-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}"
+        ),
+        "two a row from 1100 px"
+    );
+    assert!(
+        rule(&sheet, ".q").contains("max-width:72ch"),
+        "question text is capped"
+    );
+}

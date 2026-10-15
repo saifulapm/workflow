@@ -147,16 +147,17 @@ h2 .pill{text-transform:none;letter-spacing:0;margin-left:6px;vertical-align:1px
 p{margin-block:0 10px}
 .meta{font-size:12.5px;color:var(--mut);overflow-wrap:anywhere}
 .empty{color:var(--mut)}
-.q{white-space:pre-wrap;word-break:break-word;margin-block:4px 8px;font:inherit}
+.q{white-space:pre-wrap;word-break:break-word;margin-block:4px 8px;font:inherit;max-width:72ch}
 .rec{font-size:12.5px;color:var(--mut)}
 .sp{flex:1}
 article,.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;margin-block:0 10px}
-.cards{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));margin-block:0 10px}
+.cards{display:grid;gap:10px;grid-template-columns:minmax(0,1fr);margin-block:0 10px}
+@media (min-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .cards>.card{margin:0}
 .card h3{margin:0;font-size:15px}
 .card>.meta{margin-top:4px}
 .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-ul{list-style:none;padding:0;margin:0}
+ul{list-style:none;padding:0;margin-block:0}
 body>ul:not([class]){background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:0 16px;margin-block:0 10px}
 body>ul:not([class])>li{padding:10px 0;border-bottom:1px solid var(--line)}
 body>ul:not([class])>li:last-child{border-bottom:0}
@@ -167,7 +168,7 @@ body>ul:not([class])>li:last-child{border-bottom:0}
 .pill.mut{background:var(--track);color:var(--mut)}
 .bar{height:6px;background:var(--track);border-radius:3px;overflow:hidden;margin-block:8px 4px}
 .bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
-.tl{margin:0 0 16px 6px;padding-left:20px;border-left:2px solid var(--line)}
+.tl{margin:0 0 16px max(6px,calc((100% - 60rem)/2 + 6px));max-width:calc(60rem - 6px);padding-left:20px;border-left:2px solid var(--line)}
 .tl>li{position:relative;padding:2px 0 14px}
 .tl>li::before{content:"";position:absolute;left:-29px;top:7px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--bg)}
 .tl>li.done::before{background:var(--ok)}
