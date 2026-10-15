@@ -66,8 +66,9 @@ enum Pending {
 impl App {
     pub fn new(config: Config, port: u16, machine: String) -> App {
         let guard = Guard::new(&config, port, &machine);
-        // With no state directory the queue lives in memory, and each save
-        // that fails says so in the journal.
+        // With no HOME the path is relative to the working directory; a save
+        // that fails there says so in the journal, and the queue lives on in
+        // memory.
         let path = crate::config::state_home()
             .unwrap_or_default()
             .join("hub/agents.json");

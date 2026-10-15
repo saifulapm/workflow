@@ -154,12 +154,16 @@ impl Agents {
                 last_poll: SystemTime::now(),
             },
         );
-        if !state.saved.known.contains(&poll.machine) {
+        let new = !state.saved.known.contains(&poll.machine);
+        if new {
             state.saved.known.push(poll.machine.clone());
         }
-        let commands = state.saved.queues.remove(&poll.machine).unwrap_or_default();
-        self.save(&state.saved);
-        commands
+        let commands = state.saved.queues.remove(&poll.machine);
+        // Most polls find nothing queued; only a change is worth a write.
+        if new || commands.is_some() {
+            self.save(&state.saved);
+        }
+        commands.unwrap_or_default()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
