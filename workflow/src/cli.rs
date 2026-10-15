@@ -154,7 +154,8 @@ Every 5 s it posts this machine's name, its amx agents and the mem projects
 checked out here to the paired hub, and runs the commands the hub hands back,
 one at a time and in order: sync (mem sync), start (workflow go <project> in a
 systemd scope of its own) and resume (mem sync, then amx resume, or a start
-when the session is gone). It refuses, exit 2, until `workflow agent pair
+when the session is gone). A start can ask for a cloud run (workflow go
+<project> --cloud), and a cloud answer is forwarded with claude --cloud. It refuses, exit 2, until `workflow agent pair
 <link>` has saved a token."
     )]
     Agent {

@@ -121,6 +121,21 @@ echo run >>"$dir/notify.count"
 for a in "$@"; do printf '%s\n' "$a"; done >"$dir/notify.argv"
 "#,
         );
+        // claude: one argv element per line in claude.argv, and the reply
+        // in claude-reply, `ok` by default.
+        work.script(
+            "claude",
+            r#"
+dir=$(dirname "$0")
+echo "claude $#" >>"$dir/calls.log"
+for a in "$@"; do printf '%s\n' "$a"; done >"$dir/claude.argv"
+if [ -f "$dir/claude-reply" ]; then
+	cat "$dir/claude-reply"
+else
+	echo '{"ok":true,"session_id":"session_01X","url":"https://claude.ai/code/session_01X"}'
+fi
+"#,
+        );
         World { work }
     }
 
@@ -136,6 +151,7 @@ for a in "$@"; do printf '%s\n' "$a"; done >"$dir/notify.argv"
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_AMX", self.work.at("amx"))
             .env("WORKFLOW_SYSTEMD_RUN", self.work.at("systemd-run"))
+            .env("WORKFLOW_CLAUDE", self.work.at("claude"))
             .env("WORKFLOW_NOTIFY_SEND", self.work.at("notify-send"))
             .env("WORKFLOW_MACHINE", "mini")
             .env("WORKFLOW_AGENT_INTERVAL_MS", "50")
@@ -642,5 +658,92 @@ fn a_follow_up_for_a_stopped_session_resumes_it() {
     assert!(
         !calls.iter().any(|c| c.starts_with("amx send")),
         "{calls:?}"
+    );
+}
+
+#[test]
+fn a_cloud_start_runs_workflow_go_with_cloud() {
+    let w = World::new("agent-cloud-start");
+    w.paired();
+    w.hub_says(json!([
+        {"kind": "start", "project": "gamma", "cloud": true},
+        {"kind": "start", "project": "beta"}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let starts: Vec<String> = w
+        .command_calls()
+        .into_iter()
+        .filter(|c| c.starts_with("systemd-run"))
+        .collect();
+    assert_eq!(
+        starts,
+        [
+            "systemd-run --user --scope --quiet workflow go gamma --cloud",
+            "systemd-run --user --scope --quiet workflow go beta",
+        ]
+    );
+}
+
+#[test]
+fn a_cloud_answer_is_forwarded_with_claude() {
+    let w = World::new("agent-cloud-answer");
+    w.paired();
+    w.hub_says(json!([{
+        "kind": "cloud", "project": "gamma", "id": "session_01X",
+        "message": "#ABCD q\nAnswer: yes"
+    }]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        w.work.read("claude.argv"),
+        "-p\n#ABCD q\nAnswer: yes\n--cloud\nsession_01X\n--output-format\njson\n"
+    );
+    let calls = w.command_calls();
+    assert_eq!(calls.iter().filter(|c| c.starts_with("claude ")).count(), 1);
+    assert!(
+        !calls.iter().any(|c| c.starts_with("mem sync")),
+        "{calls:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "cloud session_01X: sent\n"
+    );
+}
+
+#[test]
+fn a_cloud_answer_the_session_refused_is_not_run_again() {
+    let w = World::new("agent-cloud-refused");
+    w.paired();
+    w.work.put(
+        "claude-reply",
+        r#"{"ok":false,"session_id":"session_01X","error":"session not found"}"#,
+    );
+    w.hub_says(json!([{
+        "kind": "cloud", "project": "gamma", "id": "session_01X", "message": "hi"
+    }]));
+    let mut child = w
+        .command(&[])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let ran = |w: &World| w.calls().iter().any(|c| c.starts_with("claude "));
+    while !ran(&w) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Several polls (50 ms apart) go by.
+    std::thread::sleep(Duration::from_millis(500));
+    child.kill().unwrap();
+    let out = child.wait_with_output().unwrap();
+    let claudes = w
+        .calls()
+        .iter()
+        .filter(|c| c.starts_with("claude "))
+        .count();
+    assert_eq!(claudes, 1, "{:?}", w.calls());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "cloud session_01X: failed: session not found\n"
     );
 }

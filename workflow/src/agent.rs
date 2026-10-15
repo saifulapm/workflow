@@ -27,6 +27,15 @@ pub enum Job {
     Sync,
     Start {
         project: String,
+        /// Run the project's milestone in the cloud (`workflow go --cloud`).
+        #[serde(default)]
+        cloud: bool,
+    },
+    /// An answer for a cloud session, forwarded with `claude --cloud`.
+    Cloud {
+        project: String,
+        id: String,
+        message: String,
     },
     Resume {
         project: String,
@@ -332,11 +341,36 @@ fn synced() -> bool {
 
 /// `workflow go` in a scope of its own, so stopping the agent's unit never
 /// stops the orchestrator it started.
-fn start(project: &str) -> bool {
-    succeeds(
-        &bin("WORKFLOW_SYSTEMD_RUN", "systemd-run"),
-        &["--user", "--scope", "--quiet", "workflow", "go", project],
-    )
+fn start(project: &str, cloud: bool) -> bool {
+    let mut args = vec!["--user", "--scope", "--quiet", "workflow", "go", project];
+    if cloud {
+        args.push("--cloud");
+    }
+    succeeds(&bin("WORKFLOW_SYSTEMD_RUN", "systemd-run"), &args)
+}
+
+/// Queue an answer on a cloud session. `None` when claude gave no answer at
+/// all (it did not run, or failed with no JSON), the one case worth running
+/// again: a reply that says `ok:false` was the session's own, and running
+/// again would forward the message twice.
+fn forward_to_cloud(id: &str, message: &str) -> Option<String> {
+    let out = Command::new(bin("WORKFLOW_CLAUDE", "claude"))
+        .arg("-p")
+        .arg(message)
+        .args(["--cloud", id, "--output-format", "json"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    match serde_json::from_slice::<Value>(&out.stdout) {
+        Ok(doc) if doc["ok"] == true => Some("sent".to_string()),
+        Ok(doc) => {
+            let error = doc["error"].as_str().unwrap_or("no reason given");
+            Some(format!("failed: {error}"))
+        }
+        Err(_) if out.status.success() => Some("failed: claude printed no JSON".to_string()),
+        Err(_) => None,
+    }
 }
 
 /// Run one command and print one line for it. `false` when it must be tried
@@ -347,7 +381,14 @@ fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
         Job::Sync => {
             let _ = sync.send(());
         }
-        Job::Start { project } => {
+        Job::Cloud { id, message, .. } => match forward_to_cloud(id, message) {
+            Some(result) => println!("cloud {id}: {result}"),
+            None => {
+                println!("cloud {id}: claude did not run, trying again after the next poll");
+                return false;
+            }
+        },
+        Job::Start { project, cloud } => {
             // Start often follows an approval the hub just wrote, and
             // workflow go reads this machine's store.
             if !synced() {
@@ -356,7 +397,7 @@ fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
                 );
                 return false;
             }
-            let ok = start(project);
+            let ok = start(project, *cloud);
             println!("start {project}: {}", if ok { "started" } else { "failed" });
         }
         Job::Notify { title, body } => {
@@ -458,7 +499,7 @@ fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
                 );
                 return false;
             }
-            let ok = start(project);
+            let ok = start(project, false);
             println!(
                 "resume {id}: session gone, start {project}: {}",
                 if ok { "started" } else { "failed" }
