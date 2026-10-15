@@ -192,21 +192,29 @@ fn report(name: &str) -> Value {
             json!({"id": key("id"), "state": key("state"), "ended": key("ended"), "created": key("created")})
         })
         .collect();
-    let checkouts: Vec<String> = memcli::projects()
-        .unwrap_or_else(|| {
-            say("mem cannot list its projects");
-            Vec::new()
-        })
-        .into_iter()
+    let projects = memcli::projects().unwrap_or_else(|| {
+        say("mem cannot list its projects");
+        Vec::new()
+    });
+    let checkouts: Vec<&str> = projects
+        .iter()
         .filter(|p| !p.checkouts.is_empty())
-        .map(|p| p.name)
+        .map(|p| p.name.as_str())
+        .collect();
+    // The projects working on a branch of their own here. mem keeps that
+    // per machine, so the hub learns it from the agent: such a project
+    // gets no cloud run.
+    let worktrees: Vec<&str> = projects
+        .iter()
+        .filter(|p| p.worktree.is_some())
+        .map(|p| p.name.as_str())
         .collect();
     // qshell's presence marker: someone is at this machine, unlocked and not
     // idle. While the route is Device here, the hub shows rings on this
     // desktop until the marker has been gone five minutes.
     let watched = std::env::var_os("XDG_RUNTIME_DIR")
         .is_some_and(|dir| PathBuf::from(dir).join("qshell-present").exists());
-    json!({"machine": name, "agents": agents, "checkouts": checkouts, "watched": watched})
+    json!({"machine": name, "agents": agents, "checkouts": checkouts, "worktrees": worktrees, "watched": watched})
 }
 
 /// What curl got back from the hub.

@@ -27,7 +27,7 @@ impl World {
             r#"{"projects":[
               {"name":"gamma","checkouts":["/src/gamma"]},
               {"name":"beta","checkouts":[]},
-              {"name":"workflow","checkouts":["/src/workflow","/wt/workflow"]}
+              {"name":"workflow","checkouts":["/src/workflow","/wt/workflow"],"worktree":"/wt/workflow"}
             ]}"#,
         );
         work.put("ls.json", "[]");
@@ -289,6 +289,7 @@ fn a_poll_reports_the_machine_its_agents_and_its_checkouts() {
                 {"id": "old", "state": "stopped", "ended": 1791400500, "created": null}
             ],
             "checkouts": ["gamma", "workflow"],
+            "worktrees": ["workflow"],
             "watched": false
         })
     );

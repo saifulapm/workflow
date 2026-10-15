@@ -72,6 +72,9 @@ fn is_false(value: &bool) -> bool {
 pub struct Report {
     pub agents: Vec<Agent>,
     pub checkouts: Vec<String>,
+    /// The projects with a worktree of their own there: mem keeps those per
+    /// machine, so this report is the hub's only word on them.
+    pub worktrees: Vec<String>,
     /// Whether someone is at the machine, by its qshell presence marker.
     pub watched: bool,
     /// Since when its polls have said nobody is at it, unbroken. Kept in
@@ -86,6 +89,8 @@ struct Poll {
     machine: String,
     agents: Vec<Agent>,
     checkouts: Vec<String>,
+    #[serde(default)]
+    worktrees: Vec<String>,
     #[serde(default)]
     watched: bool,
 }
@@ -257,6 +262,7 @@ impl Agents {
             Report {
                 agents: poll.agents,
                 checkouts: poll.checkouts,
+                worktrees: poll.worktrees,
                 watched: poll.watched,
                 unwatched_since,
                 last_poll: now,

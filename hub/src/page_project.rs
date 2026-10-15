@@ -396,8 +396,12 @@ pub fn cloud_refusal(
     if row["remote"].as_str().is_none_or(str::is_empty) {
         return Some(format!("{} has no git remote", s.name));
     }
-    // Its trunk is a branch the cloud cannot see yet.
-    if row["worktree"].is_string() {
+    // Its trunk is a branch the cloud cannot see yet. The mini knows, since
+    // mem keeps a worktree per machine; this store knows only its own.
+    let reported = agents
+        .report(CLOUD_MACHINE)
+        .is_some_and(|report| report.worktrees.contains(&s.name));
+    if reported || row["worktree"].is_string() {
         return Some(format!(
             "{} works on a branch of its own; cloud runs take main",
             s.name

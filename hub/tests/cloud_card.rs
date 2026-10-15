@@ -484,3 +484,23 @@ fn the_run_line_shows_a_cloud_runner_by_its_state_and_session() {
         "{body}"
     );
 }
+
+/// mem keeps a worktree per machine, so the one hub's store never holds
+/// palmshop's: the mini's agent reports it, and that is what hides the card.
+#[test]
+fn a_worktree_the_mini_reports_keeps_the_project_off_the_cloud() {
+    let world = World::new("cloud-run-reported-worktree");
+    let hub = world.hub();
+    let report = json!({"machine": "mini", "agents": [], "checkouts": ["gamma"],
+        "worktrees": ["gamma"]});
+    hub.poll_agent(&report.to_string());
+    let body = page(&hub);
+    assert_eq!(card(&body), None, "{body}");
+    assert!(!body.contains(RUN_IN_CLOUD), "{body}");
+    let response = hub.post_form("/p/gamma/control", "do=cloud");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(
+        body_of(&response).contains("gamma works on a branch of its own; cloud runs take main"),
+        "{response}"
+    );
+}
