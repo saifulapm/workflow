@@ -12,6 +12,9 @@ Environment=HOME=/var/lib/mem XDG_DATA_HOME=/srv XDG_CONFIG_HOME=/var/lib/mem/.c
 # The store is the sync point itself: a write here has nothing to push.
 Environment=MEM_SYNC_CMD=true
 Environment=TZ=Asia/Dhaka
+# HUB_DULALI_SECRET, which signs each question the hub posts to Hermes;
+# vps/deploy writes it from pass.
+EnvironmentFile=-/etc/mem/dulali.env
 ExecStart=/usr/local/bin/hub
 Restart=always
 RestartSec=2

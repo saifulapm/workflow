@@ -21,6 +21,17 @@ done
 id mem >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/mem --shell /bin/bash mem
 install -d -o mem -g mem -m 0750 /srv/mem /srv/mem/store
 install -d -m 0750 /etc/mem
+# Dulali's socket lives here, mounted into its workbench; a directory that
+# outlives hub restarts, since each start makes the socket file anew.
+install -d -o mem -g mem -m 0750 /var/lib/mem/dulali
+# The hub never rewrites its config, so the Dulali keys are added once.
+config=/var/lib/mem/.config/hub/config.toml
+if [[ -f $config ]]; then
+  grep -q '^dulali_webhook' "$config" ||
+    echo 'dulali_webhook = "http://127.0.0.1:8644/webhooks/question"' >>"$config"
+  grep -q '^dulali_socket' "$config" ||
+    echo 'dulali_socket = "/var/lib/mem/dulali/hub.sock"' >>"$config"
+fi
 
 install -m644 "$src"/vps/units/* /etc/systemd/system/
 install -m755 "$src/vps/mem-backup" /usr/local/sbin/mem-backup
