@@ -109,6 +109,13 @@
         "null"
       ]
     },
+    "session": {
+      "description": "`questions --json` rows: the amx id of the session that asked ($AMX_ID), or null.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "task": {
       "description": "The task an evidence row proves, or on a question an older mem wrote, the `<plan>/<task>` that asked it.",
       "type": [

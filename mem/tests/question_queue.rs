@@ -326,6 +326,38 @@ fn the_listing_json_carries_the_answered_flag() {
     assert_eq!(rows[0]["answered"], serde_json::json!(false), "{v}");
 }
 
+/// An orchestrator's question carries its amx session, so the hub can
+/// resume that very session once its questions are answered.
+#[test]
+fn a_question_records_the_amx_session_that_asked_it() {
+    let w = World::new("q-session");
+    let repo = w.repo("thing", None);
+    let asked = mem_cmd(&w, &repo, &["ask", "from a run?"])
+        .env("AMX_ID", "thing-m1-auth")
+        .output()
+        .unwrap();
+    assert_eq!(code(&asked), 0, "{}", stderr(&asked));
+    let typed = mem_cmd(&w, &repo, &["ask", "typed at a prompt?"])
+        .env_remove("AMX_ID")
+        .output()
+        .unwrap();
+    assert_eq!(code(&typed), 0, "{}", stderr(&typed));
+
+    let out = ask_env(&w, &repo, &["questions", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let session = |body: &str| {
+        v["questions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["body"] == body)
+            .unwrap_or_else(|| panic!("{body}: {v}"))["session"]
+            .clone()
+    };
+    assert_eq!(session("from a run?"), "thing-m1-auth", "{v}");
+    assert!(session("typed at a prompt?").is_null(), "{v}");
+}
+
 /// A worker asks from its task worktree, and the question is the
 /// orchestrator's: tagged with the task, kept off the hub's listing, and
 /// carried with its answer in the JSON a run reads.

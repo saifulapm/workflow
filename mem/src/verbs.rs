@@ -1689,6 +1689,7 @@ pub fn ask(
     meta.recommend = recommend.map(str::to_string);
     let audience = audience.and_then(crate::cli::Audience::stored);
     meta.audience = audience.map(str::to_string);
+    meta.session = std::env::var("AMX_ID").ok().filter(|id| !id.is_empty());
     let written = crate::write::write_item(app, &identity, meta, question.to_string())?;
     // No bell here: hub's doorbell owns delivery, and it knows whether anyone
     // is watching. When mem rang its own notify-send too, every question
@@ -1763,6 +1764,7 @@ pub fn questions(
             let meta = read_item(row).map(|i| i.meta);
             let options = meta.as_ref().and_then(|m| m.options.clone());
             v["options"] = json!(options.unwrap_or_default());
+            v["session"] = json!(meta.as_ref().and_then(|m| m.session.clone()));
             v["recommend"] = json!(meta.and_then(|m| m.recommend));
             items.push(v);
         }

@@ -141,6 +141,10 @@ pub struct Meta {
     /// the hub and the phone show.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
+    /// `kind = "question"` only: the amx id of the session that asked, from
+    /// `$AMX_ID`, so the hub can resume that session once it is answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     /// The task an evidence item proves, and on a question an older mem
     /// wrote, the orchestrated task that asked it. Kept so both still read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -183,6 +187,7 @@ impl Meta {
             options: None,
             recommend: None,
             audience: None,
+            session: None,
             task: None,
             by: None,
             replaces: None,
