@@ -7,6 +7,8 @@
 # The first line on stdout is `sandbox http://127.0.0.1:<port>/`, the second
 # `store <dir>`, the directory standing in for HOME. Everything else goes to
 # stderr. HUB_SANDBOX_PORT picks the port; 0, the default, picks a free one.
+# HUB_SANDBOX_NTFY_BASE=http://127.0.0.1:<port> sends the doorbell's pushes
+# to a sink the walk listens on; by default they go nowhere.
 #
 # Four projects cover the hub's stages: alpha has a brief only, beta a draft
 # roadmap waiting on approval, gamma an approved milestone being built, with
@@ -120,8 +122,9 @@ git config --global user.email sandbox@example.invalid
 git config --global user.name 'Hub Sandbox'
 git config --global init.defaultBranch main
 git config --global commit.gpgsign false
-# Port 9 is discard: a doorbell that rings goes nowhere.
-printf 'ntfy_base = "http://127.0.0.1:9"\n' >"$XDG_CONFIG_HOME/hub/config.toml"
+# Port 9 is discard: a doorbell that rings goes nowhere, unless the walk
+# names a sink of its own to count the pushes in.
+printf 'ntfy_base = "%s"\n' "${HUB_SANDBOX_NTFY_BASE:-http://127.0.0.1:9}" >"$XDG_CONFIG_HOME/hub/config.toml"
 # One paired device, so a walk can POST: the browser sets the cookie with
 # `playwright-cli cookie-set hub_device SANDBOXDEVICESANDBOXDEVICE`.
 mkdir -p "$XDG_STATE_HOME/hub"
