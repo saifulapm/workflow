@@ -298,6 +298,14 @@ fn run(job: &Job) -> bool {
             println!("sync: done");
         }
         Job::Start { project } => {
+            // Start often follows an approval the hub just wrote, and
+            // workflow go reads this machine's store.
+            if !synced() {
+                println!(
+                    "start {project}: no sync round performed, trying again after the next poll"
+                );
+                return false;
+            }
             let ok = start(project);
             println!("start {project}: {}", if ok { "started" } else { "failed" });
         }

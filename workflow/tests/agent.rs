@@ -293,12 +293,46 @@ fn start_and_sync_run_in_the_order_the_hub_gave_them() {
     assert_eq!(
         w.command_calls(),
         [
+            "mem sync --json",
             "systemd-run --user --scope --quiet workflow go gamma",
+            "mem sync --json",
             "mem sync --json",
             "systemd-run --user --scope --quiet workflow go workflow",
         ]
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 3);
+}
+
+/// Start on the hub often follows an approval the hub just wrote, and
+/// workflow go reads this machine's store, so a start waits for a performed
+/// round as a resume does.
+#[test]
+fn a_start_waits_for_a_performed_sync_round() {
+    let w = World::new("agent-start-busy");
+    w.paired();
+    w.work.put("sync-busy", "");
+    w.hub_says(json!([{"kind": "start", "project": "gamma"}]));
+    let mut child = w.command(&[]).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let started = |w: &World| w.calls().iter().any(|c| c.starts_with("systemd-run"));
+    while !started(&w) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let ran: Vec<String> = w
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("mem sync") || c.starts_with("systemd-run"))
+        .collect();
+    assert_eq!(
+        ran,
+        [
+            "mem sync --json",
+            "mem sync --json",
+            "systemd-run --user --scope --quiet workflow go gamma"
+        ]
+    );
 }
 
 #[test]
