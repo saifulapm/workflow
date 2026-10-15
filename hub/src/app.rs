@@ -529,6 +529,21 @@ impl App {
                 serde_json::json!({"error": "that question was not sent to Dulali"}),
             );
         }
+        // The run reads the answer as the option it picked; Dulali's
+        // reasons go in what it checked.
+        let options: Vec<&str> = row["options"]
+            .as_array()
+            .map(|o| o.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if !pass && !options.is_empty() && !options.contains(&answer) {
+            return crate::agents::json(
+                400,
+                serde_json::json!({"error": format!(
+                    "answer with one of the options, word for word: {}",
+                    options.join(", ")
+                )}),
+            );
+        }
         if self.dulali.has_spoken(full) {
             return crate::agents::json(
                 409,

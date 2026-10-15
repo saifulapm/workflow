@@ -580,3 +580,37 @@ fn saifuls_answer_after_the_window_supersedes_dulalis_and_follows_up() {
     // Replaced once, it leaves home's list.
     assert!(!hub.get("/").contains("Dulali answered"));
 }
+
+/// A question with options takes one of them, word for word: Dulali's
+/// reasons belong in what it checked, not in the answer the run reads.
+#[test]
+fn an_answer_outside_the_options_is_refused_and_nothing_held() {
+    let world = World::new("dulali-options");
+    let _hub = world.hub(&[]);
+    world.settle();
+    let id = world.ask(&[
+        "nag at eight?",
+        "--options",
+        "eight,nine",
+        "--recommend",
+        "eight",
+    ]);
+    world.sent_to_dulali(&id);
+    let token = world.token();
+    let (status, reply) = world.dulali(
+        &token,
+        &json!({"id": id, "answer": "nine — per ruling #ABC", "checked": "#ABC"}),
+    );
+    assert_eq!(status, 400, "{reply}");
+    assert!(
+        reply["error"].as_str().unwrap().contains("eight, nine"),
+        "{reply}"
+    );
+    assert!(world.rings().is_empty(), "{:?}", world.rings());
+    // The same answer as the option itself is taken.
+    let (status, reply) = world.dulali(
+        &token,
+        &json!({"id": id, "answer": "nine", "checked": "#ABC"}),
+    );
+    assert_eq!(status, 200, "{reply}");
+}
