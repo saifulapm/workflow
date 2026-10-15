@@ -925,3 +925,109 @@ fn a_checkout_reports_its_default_name_and_normalized_remote() {
     assert_eq!(checkout.remote.as_deref(), Some("github.com/Me/My-Repo"));
     assert!(Checkout::detect(&w.plain_dir("nope")).is_none());
 }
+
+/// A project registered under a name it later outgrew takes its new name
+/// everywhere: project.toml, every item's label and the index. The old name
+/// stays an alias, so `--project rexa` and anything else holding it still
+/// reach the project.
+#[test]
+fn project_rename_relabels_every_item_and_keeps_the_old_name_as_an_alias() {
+    let w = common::World::new("ident-rename");
+    let store = w.store();
+    let rexa = w.project("01J00000000000000000000RXA", "rexa");
+    let other = w.project("01J00000000000000000000OTH", "other");
+    let mut paths = Vec::new();
+    for title in ["first rexa fact", "second rexa fact"] {
+        let mut item = common::item(mem::item::Kind::Fact, title, "\nbody kept as is\n");
+        item.meta.project = Some("rexa".to_string());
+        paths.push((common::put(&store, Some(&rexa), &item), item));
+    }
+    let mut theirs = common::item(mem::item::Kind::Fact, "other fact", "\nx\n");
+    theirs.meta.project = Some("other".to_string());
+    let their_path = common::put(&store, Some(&other), &theirs);
+    let their_bytes = std::fs::read(&their_path).unwrap();
+    let cwd = w.plain_dir("anywhere");
+
+    let out = common::mem(
+        &w,
+        &cwd,
+        &["project", "rename", "lathe", "--project", "rexa"],
+    );
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+
+    let registry = Registry::load(&store);
+    let project = registry.by_id(&rexa).unwrap();
+    assert_eq!(project.name, "lathe");
+    assert_eq!(project.aliases, ["rexa"]);
+    for (path, before) in &paths {
+        let after = mem::item::Item::parse(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(after.meta.project.as_deref(), Some("lathe"));
+        assert_eq!(
+            after.meta.modified, before.meta.modified,
+            "a rename edits nothing"
+        );
+        assert_eq!(after.body, before.body);
+    }
+    assert_eq!(std::fs::read(&their_path).unwrap(), their_bytes);
+
+    // The index reads the new label, and the old name still resolves.
+    for name in ["lathe", "rexa"] {
+        let out = common::mem(
+            &w,
+            &cwd,
+            &["search", "--kind", "fact", "--json", "--project", name],
+        );
+        assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+        let text = common::stdout(&out);
+        assert!(text.contains("first rexa fact"), "{text}");
+        assert!(text.contains("\"project\":\"lathe\""), "{text}");
+        assert!(!text.contains("\"project\":\"rexa\""), "{text}");
+    }
+
+    // An item a sync brings back under the old label is relabelled by
+    // running the rename again.
+    let mut late = common::item(mem::item::Kind::Fact, "late rexa fact", "\ny\n");
+    late.meta.project = Some("rexa".to_string());
+    let late_path = common::put(&store, Some(&rexa), &late);
+    let out = common::mem(
+        &w,
+        &cwd,
+        &["project", "rename", "lathe", "--project", "lathe"],
+    );
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert!(
+        common::stdout(&out).contains("1 items relabelled"),
+        "{}",
+        common::stdout(&out)
+    );
+    let after = mem::item::Item::parse(&std::fs::read(&late_path).unwrap()).unwrap();
+    assert_eq!(after.meta.project.as_deref(), Some("lathe"));
+    assert_eq!(
+        Registry::load(&store).by_id(&rexa).unwrap().aliases,
+        ["rexa"]
+    );
+}
+
+#[test]
+fn project_rename_refuses_a_name_another_project_holds() {
+    let w = common::World::new("ident-rename-taken");
+    w.project("01J00000000000000000000RXA", "rexa");
+    w.project("01J00000000000000000000OTH", "other");
+    let cwd = w.plain_dir("anywhere");
+    for taken in ["other", "two words"] {
+        let out = common::mem(&w, &cwd, &["project", "rename", taken, "--project", "rexa"]);
+        assert_eq!(
+            common::code(&out),
+            mem::exit::USAGE,
+            "{}",
+            common::stderr(&out)
+        );
+    }
+    assert_eq!(
+        Registry::load(&w.store())
+            .by_id("01J00000000000000000000RXA")
+            .unwrap()
+            .name,
+        "rexa"
+    );
+}

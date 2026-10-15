@@ -529,6 +529,62 @@ pub fn set_key(store: &Store, project_id: &str, key: &str, value: &str) -> Resul
     Ok(path)
 }
 
+/// Name `project_id` `new`, its old names kept as aliases. Through the
+/// parsed document, as `set_key` writes, so a key this mem does not know
+/// survives.
+pub fn rename(store: &Store, project_id: &str, new: &str) -> Result<PathBuf> {
+    let path = store.project_toml(project_id);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))
+        .map_err(|e| exit::store_error(format!("{e:#}")))?;
+    let mut doc: toml::Table = toml::from_str(&text)
+        .map_err(|e| exit::store_error(format!("{} is not valid toml: {e}", path.display())))?;
+    let old = doc.get("name").and_then(|v| v.as_str()).map(str::to_string);
+    let mut aliases: Vec<String> = doc
+        .get("aliases")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(old) = old.filter(|old| !aliases.contains(old)) {
+        aliases.push(old);
+    }
+    aliases.retain(|a| a != new);
+    doc.insert("name".to_string(), toml::Value::String(new.to_string()));
+    doc.insert(
+        "aliases".to_string(),
+        toml::Value::Array(aliases.into_iter().map(toml::Value::String).collect()),
+    );
+    let out = toml::to_string(&doc).context("serializing project.toml")?;
+    write_atomic(&path, out.as_bytes())?;
+    Ok(path)
+}
+
+/// Label every item of `project_id` that names it otherwise with `name`,
+/// and answer how many were rewritten. Nothing else in an item changes, not
+/// even `modified`: the item says what it said.
+pub fn relabel_items(store: &Store, project_id: &str, name: &str) -> Result<usize> {
+    let mut rewritten = 0;
+    for path in crate::store::item_files_in(&store.project_items(project_id)) {
+        let mut item = crate::store::read_item(&path)?;
+        if item
+            .meta
+            .project
+            .as_deref()
+            .is_none_or(|label| label == name)
+        {
+            continue;
+        }
+        item.meta.project = Some(name.to_string());
+        write_atomic(&path, &item.to_bytes()?)?;
+        rewritten += 1;
+    }
+    Ok(rewritten)
+}
+
 /// Drop a key `set_key` wrote. Answers with the path and whether the key was
 /// there to drop: clearing what was never set is not an error, and the caller
 /// says which it was.

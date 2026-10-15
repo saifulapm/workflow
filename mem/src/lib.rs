@@ -128,6 +128,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     milestone,
                 } => verbs::project_runner(&app, machine, id, milestone.as_deref()),
             },
+            cli::ProjectCommand::Rename { name } => verbs::project_rename(&app, name),
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
             cli::ProjectCommand::Worktree { path, clear } => {
                 verbs::project_worktree(&app, path.as_deref(), *clear)

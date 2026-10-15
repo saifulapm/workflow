@@ -254,19 +254,23 @@ pub fn items_dirs(root: &Path) -> Vec<PathBuf> {
 /// `<root>/**/items/<ulid>.md`. A missing root yields nothing — a fresh
 /// machine whose hub has not materialised yet is not an error.
 pub fn item_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for dir in items_dirs(root) {
-        for entry in read_dir_sorted(&dir) {
-            if entry
+    items_dirs(root)
+        .iter()
+        .flat_map(|dir| item_files_in(dir))
+        .collect()
+}
+
+/// The `<ulid>.md` files of one items directory.
+pub fn item_files_in(dir: &Path) -> Vec<PathBuf> {
+    read_dir_sorted(dir)
+        .into_iter()
+        .filter(|entry| {
+            entry
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(is_item_filename)
-            {
-                out.push(entry);
-            }
-        }
-    }
-    out
+        })
+        .collect()
 }
 
 /// A name sync gives the loser of a conflict: bisync's `.path1`/`.path2` and

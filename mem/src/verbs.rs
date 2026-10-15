@@ -582,6 +582,52 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
     Ok(exit::OK)
 }
 
+/// `mem project rename <name>`: the new name in project.toml with the old one
+/// kept as an alias, then every item relabelled. The items come second, so
+/// a rename cut short is finished by running it again, and a sync round
+/// carries the lot to the other machines.
+pub fn project_rename(app: &App, name: &str) -> Result<i32> {
+    let name = name.trim();
+    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('/') {
+        return Err(exit::usage(
+            "give a name with no spaces or slashes, e.g. `mem project rename lathe`".to_string(),
+        ));
+    }
+    let identity = writable_project_identity(app)?;
+    let Some(id) = identity.id() else {
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
+    };
+    let registry = Registry::load(&app.store);
+    if let Some(holder) = registry
+        .projects
+        .iter()
+        .find(|p| p.id != id && (p.matches_name(name) || p.matches_alias(name)))
+    {
+        return Err(exit::usage(format!(
+            "the project '{}' already answers to {name}",
+            holder.name
+        )));
+    }
+    let old = identity.name().unwrap_or(id).to_string();
+    crate::project::rename(&app.store, id, name)?;
+    let relabelled = crate::project::relabel_items(&app.store, id, name)?;
+    crate::sync::trigger(&app.dirs.qshell_status_json());
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "id": id,
+                "name": name,
+                "was": old,
+                "relabelled": relabelled,
+            }))?
+        );
+    } else if !app.quiet {
+        println!("{old} is now {name}: {relabelled} items relabelled; {old} stays an alias");
+    }
+    Ok(exit::OK)
+}
+
 /// `mem project set paused <who>`: mem stamps the time, so every pause reads
 /// "<rfc3339 UTC> by <who>", and a sync round carries it to the other machines.
 pub fn project_pause(app: &App, who: &str) -> Result<i32> {

@@ -378,6 +378,11 @@ pub enum ProjectCommand {
         #[arg(long, conflicts_with = "path")]
         clear: bool,
     },
+    /// Give this project a new name: project.toml, every item's label, the
+    /// index. The old name stays an alias, so `--project <old>` still
+    /// resolves. Run again with the same name to relabel items a sync
+    /// brought back under an old one.
+    Rename { name: String },
     /// Forget something `set` recorded, so the project is back on the
     /// default. `set` refuses an empty value, so this is the way back to
     /// absent.
