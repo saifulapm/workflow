@@ -59,7 +59,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
                 return Ok(None);
             }
             "-V" | "--version" => {
-                println!("hub {}", env!("CARGO_PKG_VERSION"));
+                println!("hub {} {}", env!("CARGO_PKG_VERSION"), env!("HUB_COMMIT"));
                 return Ok(None);
             }
             other => anyhow::bail!("unexpected argument '{other}'\n\n{USAGE}"),
