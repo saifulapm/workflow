@@ -141,7 +141,12 @@ fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
         return Response::not_found();
     };
     let agents = &ctx.app.agents;
-    let run = live::run(summary.runner.as_ref(), agents);
+    let run = live::run(
+        summary.runner.as_ref(),
+        &summary.name,
+        summary.milestone.as_deref(),
+        agents,
+    );
     // Only a paused project needs the handoff, to tell whether it parked.
     let parked = summary.paused.is_some()
         && match &*mem.handoff(project) {

@@ -201,7 +201,7 @@ pub fn render(
     // Each project's run, from its runner and that machine's report.
     let runs: Vec<Run> = projects
         .iter()
-        .map(|p| live::run(p.runner.as_ref(), agents))
+        .map(|p| live::run(p.runner.as_ref(), &p.name, p.milestone.as_deref(), agents))
         .collect();
     body.push_str("<h2>Running</h2>\n");
     let running: Vec<String> = projects

@@ -170,7 +170,7 @@ fn live_pill(s: &ProjectSummary, slug: &str, project: &str) -> String {
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
     let agents = &ctx.app.agents;
-    let run = live::run(s.runner.as_ref(), agents);
+    let run = live::run(s.runner.as_ref(), &s.name, s.milestone.as_deref(), agents);
     let paused = s.paused.is_some();
     let paused_pill = if paused {
         "<span class=\"pill wait\">paused</span> "

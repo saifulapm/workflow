@@ -55,8 +55,16 @@ pub enum Run {
     Dead(Option<Agent>),
 }
 
-/// The run of a project with `runner`, from that machine's last report.
-pub fn run(runner: Option<&Runner>, agents: &Agents) -> Run {
+/// The run of `project`'s `milestone` with `runner`, from that machine's
+/// last report. A runner named for an earlier milestone is that one's
+/// orchestrator, which sits idle at its prompt once it hands over, so it
+/// never runs this milestone, live or not.
+pub fn run(
+    runner: Option<&Runner>,
+    project: &str,
+    milestone: Option<&str>,
+    agents: &Agents,
+) -> Run {
     let Some(runner) = runner else {
         return Run::Unrun;
     };
@@ -66,9 +74,36 @@ pub fn run(runner: Option<&Runner>, agents: &Agents) -> Run {
     let listed = agents
         .report(&runner.machine)
         .and_then(|report| report.agents.into_iter().find(|a| a.id == runner.id));
+    let current = milestone.is_none_or(|milestone| named_for(&runner.id, project, milestone));
     match listed {
-        Some(agent) if agent.live() => Run::Live(agent),
+        Some(agent) if agent.live() && current => Run::Live(agent),
         listed => Run::Dead(listed),
+    }
+}
+
+/// A name amx accepts, as `workflow go` makes it: lowercase letters, digits
+/// and `-`.
+fn amx_name(text: &str) -> String {
+    let mapped: String = text
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c if c.is_ascii_lowercase() || c.is_ascii_digit() => c,
+            _ => '-',
+        })
+        .collect();
+    mapped.trim_matches('-').to_string()
+}
+
+/// Whether `id` is the name `workflow go` gives the orchestrator of this
+/// milestone, with or without the suffix a taken name gets.
+fn named_for(id: &str, project: &str, milestone: &str) -> bool {
+    let base = amx_name(&format!("{project}-{milestone}"));
+    match id.strip_prefix(&base) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix('-')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
     }
 }
 

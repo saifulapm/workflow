@@ -69,14 +69,14 @@ fn hub(world: &World, env: &[(&str, &str)]) -> Hub {
 }
 
 fn mini() -> Value {
-    json!({"machine": "mini", "id": "gamma-m4", "since": "2026-10-15T07:00:00Z"})
+    json!({"machine": "mini", "id": "gamma-m4-x", "since": "2026-10-15T07:00:00Z"})
 }
 
-/// One poll from `machine`, listing gamma-m4 in `state` and `checkouts`, and
+/// One poll from `machine`, listing gamma-m4-x in `state` and `checkouts`, and
 /// the commands it was handed.
 fn poll(hub: &Hub, machine: &str, state: &str, checkouts: &[&str]) -> Value {
     let report = json!({"machine": machine,
-        "agents": [{"id": "gamma-m4", "state": state, "ended": 0, "created": 1791400000}],
+        "agents": [{"id": "gamma-m4-x", "state": state, "ended": 0, "created": 1791400000}],
         "checkouts": checkouts});
     serde_json::from_str(&hub.poll_agent(&report.to_string())).unwrap()
 }
@@ -191,4 +191,26 @@ fn with_no_runner_only_an_online_machine_with_a_checkout_is_offered() {
         poll(&hub, "nuc", "stopped", &["gamma"]),
         json!({"commands": [{"kind": "start", "project": "gamma"}]})
     );
+}
+
+/// The orchestrator that landed m3 sits idle at its prompt once its own
+/// `workflow go` was refused (a roadmap not yet approved, say), and the
+/// runner still names it. It is not m4-x's run: the page offers Start, and
+/// home does not list it under Running.
+#[test]
+fn a_runner_left_idle_by_an_earlier_milestone_does_not_hold_the_next_one() {
+    let runner = json!({"machine": "mini", "id": "gamma-m3-y", "since": "2026-10-15T07:00:00Z"});
+    let world = world("running-stale", runner, "Picking up at m4-t2.");
+    let hub = hub(&world, &[]);
+    let report = json!({"machine": "mini",
+        "agents": [{"id": "gamma-m3-y", "state": "idle", "ended": 0, "created": 1791400000}],
+        "checkouts": ["gamma"]});
+    hub.poll_agent(&report.to_string());
+
+    let body = page(&hub, "/p/gamma");
+    assert!(body.contains("value=\"go\""), "{body}");
+    let home = page(&hub, "/");
+    let running = home.find("<h2>Running</h2>").expect(&home);
+    let waiting = home.find("<h2>Waiting on you</h2>").expect(&home);
+    assert!(!home[running..waiting].contains("gamma"), "{home}");
 }
