@@ -5,6 +5,7 @@
 //! `memcli` runs `mem`, `http` is the hand-rolled server, the page modules and
 //! `answer` render and accept answers, and `doorbell` rings the phone.
 
+pub mod agents;
 pub mod api;
 pub mod app;
 pub mod assets;

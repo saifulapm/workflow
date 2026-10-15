@@ -53,7 +53,9 @@ pub fn control_post(ctx: &PageCtx) -> Response {
                 );
             }
             if verb == "approve" {
-                let run = mem.write_through(&["roadmap", &flag, "--status", "approved"]);
+                let run = ctx
+                    .app
+                    .write_through(&["roadmap", &flag, "--status", "approved"]);
                 if !run.ok() {
                     return failed(&run);
                 }
@@ -65,10 +67,10 @@ pub fn control_post(ctx: &PageCtx) -> Response {
                 &answer
             };
             let run = match pending_approval(ctx, project) {
-                Some(id) => mem.write_through(&["answer", &flag, "--", &id, answer]),
+                Some(id) => ctx.app.write_through(&["answer", &flag, "--", &id, answer]),
                 None if verb == "changes" => {
                     let line = format!("roadmap changes requested: {text}");
-                    mem.write_through(&["log", &flag, "--", &line])
+                    ctx.app.write_through(&["log", &flag, "--", &line])
                 }
                 None => return Response::see_other(&roadmap),
             };
@@ -94,6 +96,7 @@ fn pause(ctx: &PageCtx, project: &str, verb: &str) -> Response {
     ctx.app.mem.invalidate();
     match ended {
         crate::proc::Ended::Exited(done) if done.code == Some(0) => {
+            ctx.app.agents.queue_sync_all();
             Response::see_other(&project_url(project))
         }
         crate::proc::Ended::Exited(done) => {
@@ -148,6 +151,7 @@ fn go(ctx: &PageCtx, project: &str) -> Response {
     ctx.app.amx.forget();
     match ended {
         crate::proc::Ended::Exited(done) if done.code == Some(0) => {
+            ctx.app.agents.queue_sync_all();
             Response::see_other(&project_url(project))
         }
         // A refusal says why on stderr, except a pause, which `workflow go`

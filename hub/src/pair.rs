@@ -237,22 +237,32 @@ pub fn paired(request: &Request) -> bool {
     cookie_matches(request.header("cookie"), &devices)
 }
 
+/// Whether `token` is a paired device's, as a device agent's bearer token is.
+pub fn token_known(token: &str) -> bool {
+    let devices = devices_path()
+        .and_then(|path| Ok(std::fs::read_to_string(path)?))
+        .unwrap_or_default();
+    is_known(token, &devices)
+}
+
 fn cookie_matches(cookie: Option<&str>, devices: &str) -> bool {
     let Some(cookie) = cookie else {
         return false;
     };
-    let known: Vec<&str> = devices
-        .lines()
-        .filter_map(|line| line.split(' ').next())
-        .filter(|token| !token.is_empty())
-        .collect();
     cookie
         .split(';')
         .filter_map(|pair| pair.trim().split_once('='))
         .filter(|(name, _)| *name == COOKIE)
-        .map(|(_, token)| token.trim())
-        .filter(|token| !token.is_empty())
-        .any(|token| known.iter().any(|k| same(token.as_bytes(), k.as_bytes())))
+        .any(|(_, token)| is_known(token.trim(), devices))
+}
+
+fn is_known(token: &str, devices: &str) -> bool {
+    !token.is_empty()
+        && devices
+            .lines()
+            .filter_map(|line| line.split(' ').next())
+            .filter(|known| !known.is_empty())
+            .any(|known| same(token.as_bytes(), known.as_bytes()))
 }
 
 /// Byte equality that looks at every byte, so how long a guess takes to fail
@@ -284,7 +294,7 @@ fn append_private(path: &Path, text: &str) -> Result<()> {
 
 /// Replaces the file through a 0600 temp file and a rename, so `hub pair`'s
 /// poll never reads it half written.
-fn rewrite_private(path: &Path, text: &str) -> Result<()> {
+pub(crate) fn rewrite_private(path: &Path, text: &str) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
 
     create_parent(path)?;

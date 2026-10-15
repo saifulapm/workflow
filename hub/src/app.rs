@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::agents::Agents;
 use crate::config::Config;
 use crate::html::{self, Banner};
 use crate::http::{Request, Response};
 use crate::live::Amx;
-use crate::memcli::MemCli;
+use crate::memcli::{MemCli, Run};
 use crate::origin::Guard;
 use crate::{api, model, pages};
 
@@ -15,6 +16,8 @@ use crate::{api, model, pages};
 /// else on a known path is a 405 that says so; anything else at all is a 404.
 /// The pages are `pages::route_page`'s; these are the rest.
 const ROUTES: &[(&str, &str)] = &[
+    ("/api/agent", "POST"),
+    ("/api/agents", "GET"),
     ("/api/presence", "GET"),
     ("/api/stamp", "GET"),
     ("/subscribe", "GET"),
@@ -33,6 +36,8 @@ pub struct App {
     /// The orchestrators, shared with the doorbell like `mem`.
     pub amx: Arc<Amx>,
     pub guard: Guard,
+    /// The device agents' reports and command queues.
+    pub agents: Arc<Agents>,
     /// One answer at a time, per question id.
     ///
     /// `MemCli`'s gate serialises the child *processes*; it cannot serialise
@@ -61,6 +66,11 @@ enum Pending {
 impl App {
     pub fn new(config: Config, port: u16, machine: String) -> App {
         let guard = Guard::new(&config, port, &machine);
+        // With no state directory the queue lives in memory, and each save
+        // that fails says so in the journal.
+        let path = crate::config::state_home()
+            .unwrap_or_default()
+            .join("hub/agents.json");
         App {
             config,
             port,
@@ -68,6 +78,7 @@ impl App {
             mem: Arc::new(MemCli::new()),
             amx: Arc::new(Amx::new()),
             guard,
+            agents: Arc::new(Agents::open(path, crate::agents::window())),
             answering: Mutex::new(HashMap::new()),
         }
     }
@@ -92,6 +103,8 @@ impl App {
             return Response::method_not_allowed(allowed);
         }
         match request.path.as_str() {
+            "/api/agent" => crate::agents::poll_post(&self.agents, request),
+            "/api/agents" => crate::agents::list_get(&self.agents, request),
             "/api/presence" => {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
@@ -219,7 +232,10 @@ impl App {
                     let run = self.mem.answer(id, text);
                     self.mem.invalidate();
                     match run.code {
-                        Some(0) => self.back(Banner::Answered(short(id))),
+                        Some(0) => {
+                            self.agents.queue_sync_all();
+                            self.back(Banner::Answered(short(id)))
+                        }
                         // Exit 1 with a plain-text stderr is "no such
                         // question", which is a banner, not a 500.
                         Some(1) => self.back(Banner::Unknown),
@@ -235,6 +251,16 @@ impl App {
         };
         self.forget_lock();
         response
+    }
+
+    /// A write a page makes through mem. One that took queues a sync for
+    /// every machine, so each one's mem store sees it within one poll.
+    pub fn write_through(&self, args: &[&str]) -> Run {
+        let run = self.mem.write_through(args);
+        if run.ok() {
+            self.agents.queue_sync_all();
+        }
+        run
     }
 
     /// The lock for one key, created on first use: a question id here, and

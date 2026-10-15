@@ -67,11 +67,11 @@ pub fn new_post(ctx: &PageCtx) -> Response {
     }
 
     let flag = format!("--project={project}");
-    let mem = &ctx.app.mem;
     let run = if form == "idea" {
-        mem.write_through(&["idea", &flag, "--", text])
+        ctx.app.write_through(&["idea", &flag, "--", text])
     } else {
-        mem.write_through(&["brief", &flag, &format!("--set={text}")])
+        ctx.app
+            .write_through(&["brief", &flag, &format!("--set={text}")])
     };
     if !run.ok() {
         eprintln!("hub: new {form}: mem exited {:?}: {}", run.code, run.stderr);
@@ -201,7 +201,7 @@ pub fn finding_post(ctx: &PageCtx, project: &str) -> Response {
         args.extend(["--evidence", file]);
     }
     args.extend(["--", text]);
-    let run = ctx.app.mem.write_through(&args);
+    let run = ctx.app.write_through(&args);
     drop(upload);
     if !run.ok() {
         eprintln!(
