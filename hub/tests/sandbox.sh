@@ -49,7 +49,10 @@ shot() {
 	head -n 1 "$shot_tmp/out"
 	exec 9>"$lock"
 	flock 9
-	pw open "${url%/}$path"
+	# As the seeded paired device, so the page shows its controls.
+	pw open "$url"
+	pw cookie-set hub_device SANDBOXDEVICESANDBOXDEVICE --domain 127.0.0.1 --path /
+	pw goto "${url%/}$path"
 	pw resize 390 844
 	pw screenshot --filename "$out"
 	echo "shot $out"

@@ -122,7 +122,7 @@ fn render(tag: &str) -> (TempDir, String, Vec<String>) {
     let dir = TempDir::new(tag);
     let (bin, log) = fake_mem(dir.path());
     let mem = MemCli::with_path(bin);
-    let page = page_home::render(&mem, &siblings(), "here", NOW_MS, &Banner::None);
+    let page = page_home::render(&mem, &siblings(), "here", NOW_MS, &Banner::None, None);
     let argv = std::fs::read_to_string(&log)
         .unwrap()
         .lines()

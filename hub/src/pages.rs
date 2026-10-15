@@ -25,6 +25,14 @@ pub struct PageCtx<'a> {
     pub rest: &'a str,
 }
 
+impl PageCtx<'_> {
+    /// The line an unpaired browser sees in place of each control that
+    /// posts, or `None` for a paired one, which gets the controls.
+    pub fn pair_notice(&self) -> Option<String> {
+        (!pair::paired(self.request)).then(|| pair::pair_first(&self.app.machine))
+    }
+}
+
 pub type Handler = fn(&PageCtx) -> Response;
 
 /// The six pages under `/p/<project>/` the nav links to, after home and the
@@ -53,9 +61,18 @@ pub fn route_page(app: &App, request: &Request) -> Option<Response> {
     // A second check behind the origin's: only a device that paired may
     // press a button. Pairing itself is the one write it cannot ask that of.
     if method == "POST" && !request.path.starts_with("/pair/") && !pair::paired(request) {
-        return Some(Response::text(
+        eprintln!(
+            "hub: refused POST {} from {}: device not paired",
+            request.path, request.peer
+        );
+        let body = format!(
+            "<p class=\"banner warn\">This device is not paired, so this was not sent.</p>\n{}",
+            pair::pair_first(&app.machine)
+        );
+        return Some(Response::new(
             403,
-            "this device is not paired; run hub pair on the hub's machine",
+            "text/html; charset=utf-8",
+            page_shell("not paired", None, &body),
         ));
     }
     if let Some(project) = project

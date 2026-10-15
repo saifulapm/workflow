@@ -28,6 +28,10 @@ pub fn get(ctx: &PageCtx) -> Response {
     } else if query.get("empty").is_some() {
         body.push_str("<p class=\"banner warn\">Type something first.</p>\n");
     }
+    if let Some(notice) = ctx.pair_notice() {
+        body.push_str(&notice);
+        return Response::html(page_shell("new", ctx.project, &body));
+    }
     body.push_str(&text_form(
         project,
         "idea",

@@ -98,7 +98,12 @@ pub fn questions_body(ctx: &PageCtx) -> String {
         out.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
     }
     for question in pending {
-        out.push_str(&pending_block(question, Some(project), ""));
+        out.push_str(&pending_block(
+            question,
+            Some(project),
+            "",
+            ctx.pair_notice().as_deref(),
+        ));
     }
     out.push_str("<h2>Answered</h2>\n");
     if answered.is_empty() {
@@ -120,8 +125,20 @@ pub fn questions_body(ctx: &PageCtx) -> String {
 /// questions page both render a pending question with this. A form that
 /// names its project lands back on that project's questions page; home
 /// passes `None`, so its answers land on `/`. `lead` is markup, escaped by
-/// the caller, put above the question.
-pub fn pending_block(question: &QuestionRow, project: Option<&str>, lead: &str) -> String {
+/// the caller, put above the question. With a pair notice the question shows
+/// with the notice in place of its forms.
+pub fn pending_block(
+    question: &QuestionRow,
+    project: Option<&str>,
+    lead: &str,
+    pair_notice: Option<&str>,
+) -> String {
+    if let Some(notice) = pair_notice {
+        return format!(
+            "<article>\n{lead}<p class=\"q\">{}</p>\n{notice}</article>\n",
+            linked(&question.text)
+        );
+    }
     let mut hidden = format!(
         "<input type=\"hidden\" name=\"id\" value=\"{}\">\n",
         esc(&question.id)

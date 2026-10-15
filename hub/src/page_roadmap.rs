@@ -124,7 +124,10 @@ pub fn roadmap_body(ctx: &PageCtx) -> String {
     }
 
     match status {
-        Some("draft") => out.push_str(&approval_forms(project)),
+        Some("draft") => match ctx.pair_notice() {
+            Some(notice) => out.push_str(&format!("<h2>Approval</h2>\n{notice}")),
+            None => out.push_str(&approval_forms(project)),
+        },
         Some("approved") => out.push_str("<p class=\"banner ok\">approved: sent</p>\n"),
         _ => {}
     }

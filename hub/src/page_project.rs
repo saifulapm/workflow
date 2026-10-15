@@ -201,7 +201,7 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
                 return format!(
                     "<p class=\"row\">{paused_pill}<span class=\"meta\">{}</span></p>\n{}",
                     esc(s.paused.as_deref().unwrap_or_default()),
-                    pause_form(project, paused)
+                    controls(ctx, pause_form(project, paused))
                 );
             }
             let (pill, meta) = if live::stalled(s, &run, &handoff) {
@@ -221,15 +221,18 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
             } else {
                 "Resume"
             };
-            return format!(
-                "<p class=\"row\">{paused_pill}{pill} <span class=\"meta\">{}</span></p>\n\
-                 <form method=\"post\" action=\"{}/control\">\n\
+            let forms = format!(
+                "<form method=\"post\" action=\"{}/control\">\n\
                  <input type=\"hidden\" name=\"do\" value=\"go\">\n\
                  <button type=\"submit\">{label}</button>\n\
                  </form>\n{}",
-                esc(&meta),
                 esc(&project_url(project)),
                 pause_form(project, paused)
+            );
+            return format!(
+                "<p class=\"row\">{paused_pill}{pill} <span class=\"meta\">{}</span></p>\n{}",
+                esc(&meta),
+                controls(ctx, forms)
             );
         }
         _ => return String::new(),
@@ -237,8 +240,13 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     format!(
         "<p class=\"row\">{pill} <span class=\"meta\">{}</span></p>\n{}",
         esc(&meta),
-        pause_form(project, paused)
+        controls(ctx, pause_form(project, paused))
     )
+}
+
+/// The forms, or for a browser that never paired the line saying how.
+fn controls(ctx: &PageCtx, forms: String) -> String {
+    ctx.pair_notice().unwrap_or(forms)
 }
 
 /// Pause holds the project once its current milestone lands; Unpause lets

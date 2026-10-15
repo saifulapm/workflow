@@ -116,6 +116,28 @@ fn sent(form: &str) -> String {
     format!("/p/{PROJECT}/new?sent={form}")
 }
 
+/// The test device's cookie, with this process's state directory pointed at
+/// a devices file that holds it, so an in-process page sees a paired device.
+/// Set once, to one value, for every test in this binary; the hubs it spawns
+/// clear their environment and bring their own.
+fn paired_cookie() -> String {
+    static STATE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    STATE.get_or_init(|| {
+        let state = std::env::temp_dir().join(format!("hub-new-forms-{}", std::process::id()));
+        std::fs::create_dir_all(state.join("hub")).unwrap();
+        std::fs::write(
+            state.join("hub/devices"),
+            format!("{} 2026-10-08T00:00:00Z test\n", common::DEVICE),
+        )
+        .unwrap();
+        // SAFETY: set before any in-process read of it, to the same value
+        // whichever test gets here first.
+        unsafe { std::env::set_var("XDG_STATE_HOME", &state) };
+        state
+    });
+    common::DEVICE_COOKIE.to_string()
+}
+
 /// The page routed in-process over the recording `mem`, so no doorbell round
 /// lands among its spawns, with the argv of every spawn it made.
 fn render(world: &World, query: &str) -> (String, Vec<Vec<String>>) {
@@ -137,8 +159,9 @@ fn render(world: &World, query: &str) -> (String, Vec<Vec<String>>) {
         method: "GET".to_string(),
         path: format!("/p/{PROJECT}/new"),
         query: Form::parse(query),
-        headers: Vec::new(),
+        headers: vec![("cookie".to_string(), paired_cookie())],
         body: Vec::new(),
+        peer: String::new(),
     };
     let before = world.calls().len();
     let response = route_page(&app, &request).unwrap();

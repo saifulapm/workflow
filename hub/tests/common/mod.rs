@@ -132,6 +132,22 @@ impl Hub {
     /// `env` is applied last, so a test can set a seam like `HUB_IO_TIMEOUT_MS`
     /// without the `env_clear` below wiping it again.
     pub fn spawn_env(home: &Path, path_dirs: &[&Path], args: &[&str], env: &[(&str, &str)]) -> Hub {
+        Hub::spawn_with(home, path_dirs, args, env, Stdio::inherit())
+    }
+
+    /// `spawn`, with hub's stderr, what the journal would hold, in `log`.
+    pub fn spawn_logged(home: &Path, path_dirs: &[&Path], args: &[&str], log: &Path) -> Hub {
+        let file = std::fs::File::create(log).unwrap();
+        Hub::spawn_with(home, path_dirs, args, &[], Stdio::from(file))
+    }
+
+    fn spawn_with(
+        home: &Path,
+        path_dirs: &[&Path],
+        args: &[&str],
+        env: &[(&str, &str)],
+        stderr: Stdio,
+    ) -> Hub {
         let mut command = Command::new(hub_bin());
         command.args(args);
         std::fs::create_dir_all(home).unwrap();
@@ -186,7 +202,7 @@ impl Hub {
             .env("HUB_TAILNET_NAME", "")
             .current_dir(home)
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(stderr);
         for (name, value) in env {
             command.env(name, value);
         }
@@ -227,7 +243,17 @@ impl Hub {
         String::from_utf8_lossy(&out).into_owned()
     }
 
+    /// A GET from the paired device, which sees every control.
     pub fn get(&self, path: &str) -> String {
+        self.raw(&format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nCookie: {DEVICE_COOKIE}\r\n\
+             Connection: close\r\n\r\n",
+            self.port
+        ))
+    }
+
+    /// The same GET from a browser that never paired.
+    pub fn get_unpaired(&self, path: &str) -> String {
         self.raw(&format!(
             "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
             self.port

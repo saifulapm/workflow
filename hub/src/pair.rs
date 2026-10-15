@@ -221,6 +221,15 @@ fn gone() -> Response {
 }
 
 /// Whether the request carries the cookie of a paired device.
+/// What a browser that never paired sees in place of every control that
+/// posts, since the hub would refuse the post.
+pub fn pair_first(machine: &str) -> String {
+    format!(
+        "<p class=\"banner warn\">Pair this device first: run hub pair on {}</p>\n",
+        esc(machine)
+    )
+}
+
 pub fn paired(request: &Request) -> bool {
     let devices = devices_path()
         .and_then(|path| Ok(std::fs::read_to_string(path)?))

@@ -133,6 +133,8 @@ pub struct Request {
     /// Header names are lowercased; values are trimmed.
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// The address the connection came from, for the journal.
+    pub peer: String,
 }
 
 impl Request {
@@ -285,6 +287,10 @@ where
     {
         return;
     }
+    let peer = stream
+        .peer_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_default();
     let mut writer = match stream.try_clone() {
         Ok(writer) => writer,
         Err(_) => return,
@@ -296,7 +302,10 @@ where
     // it bounds is gone before another upload can start one.
     let response = match read_request(&mut reader, &mut writer, &deadline) {
         Ok(None) => return,
-        Ok(Some((request, _permit))) => handler(&request),
+        Ok(Some((mut request, _permit))) => {
+            request.peer = peer;
+            handler(&request)
+        }
         Err(refusal) => Response::text(refusal.status, refusal.message),
     };
     let _ = write_response(&mut writer, &response);
@@ -454,6 +463,7 @@ fn read_request(
         query: Form::parse(raw_query),
         headers,
         body,
+        peer: String::new(),
     };
     Ok(Some((request, permit)))
 }

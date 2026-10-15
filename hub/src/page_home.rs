@@ -51,7 +51,14 @@ pub fn get(ctx: &PageCtx) -> Response {
     let app = ctx.app;
     let banner = Banner::from_query(&ctx.request.query);
     let now_ms = jiff::Timestamp::now().as_millisecond();
-    Response::html(render(&app.mem, &app.config, &app.machine, now_ms, &banner))
+    Response::html(render(
+        &app.mem,
+        &app.config,
+        &app.machine,
+        now_ms,
+        &banner,
+        ctx.pair_notice().as_deref(),
+    ))
 }
 
 /// Every project, from the one `projects --json` read.
@@ -134,6 +141,7 @@ pub fn render(
     machine: &str,
     now_ms: i64,
     banner: &Banner,
+    pair_notice: Option<&str>,
 ) -> String {
     let projects = project_summaries(mem);
     let questions = mem.questions();
@@ -163,7 +171,7 @@ pub fn render(
         body.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
     }
     for question in &questions_rows {
-        body.push_str(&question_block(question, now_ms));
+        body.push_str(&question_block(question, now_ms, pair_notice));
     }
 
     let waiting = |name: &str| {
@@ -272,7 +280,7 @@ pub fn bar(done: u64, total: u64) -> String {
 
 /// One waiting question, under its project, age and short id, with the
 /// questions page's own option buttons and text box.
-fn question_block(row: &Value, now_ms: i64) -> String {
+fn question_block(row: &Value, now_ms: i64, pair_notice: Option<&str>) -> String {
     let id = text(row, "id").unwrap_or_default();
     let mut meta = Vec::new();
     if let Some(project) = text(row, "project") {
@@ -288,6 +296,7 @@ fn question_block(row: &Value, now_ms: i64) -> String {
         &question_row(row),
         None,
         &format!("<div class=\"meta\">{}</div>\n", meta.join(" · ")),
+        pair_notice,
     )
 }
 
