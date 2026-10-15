@@ -117,7 +117,8 @@ the milestone review and the dogfood walk finished with their findings fixed or 
 `mem roadmap --tick {slug}` run; a `mem handoff` written; \
 and `workflow go {project}` run for the next milestone, or its output saying the roadmap is done or not approved. \
 If the milestone cannot continue without Saiful, done instead means a `mem ask` question filed, \
-the handoff naming it, and the work parked. Stop after 6 hours."
+the handoff naming it, and the work parked. Stop after 6 hours: at that stop, \
+write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the session with `amx stop --force $AMX_ID`."
     )
 }
 
@@ -643,7 +644,8 @@ the milestone review and the dogfood walk finished with their findings fixed or 
 `mem roadmap --tick winners` run; a `mem handoff` written; \
 and `workflow go alpha` run for the next milestone, or its output saying the roadmap is done or not approved. \
 If the milestone cannot continue without Saiful, done instead means a `mem ask` question filed, \
-the handoff naming it, and the work parked. Stop after 6 hours.";
+the handoff naming it, and the work parked. Stop after 6 hours: at that stop, \
+write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the session with `amx stop --force $AMX_ID`.";
         assert_eq!(task("alpha", "winners"), want);
     }
 
