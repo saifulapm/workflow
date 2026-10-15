@@ -989,6 +989,29 @@ fn a_parked_milestone_does_not_ring() {
 }
 
 #[test]
+fn a_paused_project_does_not_ring_its_stall() {
+    let fake = Fake::new("bell-paused");
+    building(&fake, &[("proj-alpha-m2", "working")]);
+    let _hub = fake.hub();
+    fake.settle();
+
+    building(&fake, &[("proj-alpha-m2", "stopped")]);
+    let projects = std::fs::read_to_string(fake.data.join("projects.json")).unwrap();
+    fake.put(
+        "projects.json",
+        &projects.replace(
+            "\"milestone\":",
+            "\"paused\":\"2026-10-15T09:00:00Z by saiful\",\"milestone\":",
+        ),
+    );
+    // Past the grace, then four rounds of the doorbell.
+    std::thread::sleep(Duration::from_secs(2));
+    fake.settle();
+    fake.settle();
+    assert!(fake.rings().is_empty(), "{:?}", fake.rings());
+}
+
+#[test]
 fn a_milestone_no_orchestrator_ever_ran_rings_once_after_a_grace() {
     let fake = Fake::new("bell-unstarted");
     building(&fake, &[("proj-alpha-m2", "working")]);

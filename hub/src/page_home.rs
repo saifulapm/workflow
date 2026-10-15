@@ -42,6 +42,8 @@ pub struct ProjectSummary {
     pub tasks: (u64, u64),
     /// RFC 3339, the newest item's time.
     pub last_activity: Option<String>,
+    /// When and by whom the project was paused, while it is.
+    pub paused: Option<String>,
 }
 
 pub fn get(ctx: &PageCtx) -> Response {
@@ -77,6 +79,7 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
         ),
         tasks: (count(row, "plan_ticked"), count(row, "plan_total")),
         last_activity: text(row, "last_activity"),
+        paused: text(row, "paused"),
     }
 }
 

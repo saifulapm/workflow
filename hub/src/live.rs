@@ -102,11 +102,11 @@ pub fn orchestrator(agents: &[Agent], project: &str, milestone: &str) -> Run {
     }
 }
 
-/// Approved work left on this machine, nothing running it, and no
-/// orchestrator that parked on purpose. A parked milestone has a question
-/// waiting, which has rung already.
+/// Approved work left on this machine, nothing running it, no orchestrator
+/// that parked on purpose, and no pause. A parked milestone has a question
+/// waiting, which has rung already, and a paused project is meant to rest.
 pub fn stalled(s: &ProjectSummary, run: &Run, handoff: &str) -> bool {
-    idle(s, run) && !handoff.trim_start().starts_with("parked")
+    idle(s, run) && s.paused.is_none() && !handoff.trim_start().starts_with("parked")
 }
 
 /// Approved work left on this machine and nothing running it, parked or not:
@@ -241,6 +241,7 @@ mod tests {
             plan_slug: None,
             tasks: (0, 0),
             last_activity: None,
+            paused: None,
         }
     }
 
