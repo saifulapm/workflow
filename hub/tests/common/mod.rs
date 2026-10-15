@@ -476,3 +476,15 @@ pub fn unescape(text: &str) -> String {
         .replace("&#39;", "'")
         .replace("&amp;", "&")
 }
+
+/// A ULID made at `millis` since the epoch, its last sixteen characters
+/// `tail`, so a test can say when a question was asked.
+pub fn ulid_at(millis: i64, tail: &str) -> String {
+    const BASE32: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    assert_eq!(tail.len(), 16, "{tail}");
+    let time: String = (0..10)
+        .rev()
+        .map(|i| BASE32[((millis >> (5 * i)) & 31) as usize] as char)
+        .collect();
+    format!("{time}{tail}")
+}

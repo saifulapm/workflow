@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use crate::agents::{Agents, Command};
+use crate::agents::{Agents, CLOUD_MACHINE, Command};
 use crate::config::Config;
 use crate::dulali::{self, Dulali, Held};
 use crate::html::{self, Banner};
 use crate::http::{Request, Response};
+use crate::live::Runner;
 use crate::memcli::{MemCli, Run};
 use crate::origin::Guard;
 use crate::route::Route;
@@ -303,12 +304,18 @@ impl App {
     /// After an answer took, and after its sync was queued: when it was the
     /// last open question `session` asked, one `resume` of that session for
     /// the project's runner machine, carrying every answer it got. The sync
-    /// sits ahead of it, so the agent's mem holds the answers first.
+    /// sits ahead of it, so the agent's mem holds the answers first. A cloud
+    /// runner's questions carry no session, so they go [`Self::after_cloud_answer`].
     pub fn after_answer(&self, project: &str, session: Option<&str>) {
+        let runner = self.runner_of(project);
+        if let Some(runner) = runner.as_ref().filter(|r| r.machine == "cloud") {
+            self.after_cloud_answer(project, runner);
+            return;
+        }
         let Some(session) = session else {
             return;
         };
-        let mut asked: Vec<Value> = self
+        let asked: Vec<Value> = self
             .mem
             .questions_all(project)
             .rows("questions")
@@ -321,14 +328,6 @@ impl App {
         if asked.is_empty() || asked.iter().any(|row| row["answered"] != true) {
             return;
         }
-        let runner = self
-            .mem
-            .projects()
-            .rows("projects")
-            .iter()
-            .map(crate::page_home::summary_of)
-            .find(|s| s.name == project)
-            .and_then(|s| s.runner);
         let Some(runner) = runner else {
             eprintln!("hub: {project} has no runner to resume {session} on");
             return;
@@ -342,16 +341,92 @@ impl App {
             );
             return;
         }
-        // A second tap on the same last question finds the first resume still
-        // waiting, and adds nothing.
-        let queued = self.agents.pending(&runner.machine).iter().any(|c| {
-            matches!(c, Command::Resume { project: p, id, .. } if p == project && id == session)
+        self.deliver(&runner.machine, project, session, asked, |message| {
+            Command::Resume {
+                project: project.to_string(),
+                id: session.to_string(),
+                message,
+            }
+        });
+    }
+
+    /// A cloud run's answers: the questions a person owes it are the
+    /// project's with no session asked since the run began, as the VM has no
+    /// amx id to stamp on them. Once all are answered, one `cloud` command
+    /// for the mini, whose agent hands them to the session. No sync goes
+    /// ahead of it: the cloud reads mem's server, not the mini's store. It
+    /// is queued while the mini is off too, and goes out on its next poll.
+    fn after_cloud_answer(&self, project: &str, runner: &Runner) {
+        let asked = self.cloud_questions(project, runner);
+        if asked.is_empty() || asked.iter().any(|row| row["answered"] != true) {
+            return;
+        }
+        self.deliver(CLOUD_MACHINE, project, &runner.id, asked, |message| {
+            Command::Cloud {
+                project: project.to_string(),
+                id: runner.id.clone(),
+                message,
+            }
+        });
+    }
+
+    /// The person questions of `runner`'s cloud run.
+    fn cloud_questions(&self, project: &str, runner: &Runner) -> Vec<Value> {
+        let since = runner
+            .since
+            .as_deref()
+            .and_then(|since| since.parse::<jiff::Timestamp>().ok())
+            .map(|since| since.as_millisecond());
+        self.mem
+            .questions_all(project)
+            .rows("questions")
+            .into_iter()
+            .filter(|row| {
+                row["audience"] != "orchestrator"
+                    && row["session"].as_str().is_none_or(str::is_empty)
+                    && row["id"]
+                        .as_str()
+                        .and_then(model::ulid_millis)
+                        .zip(since)
+                        .is_some_and(|(asked, since)| asked > since)
+            })
+            .collect()
+    }
+
+    /// The runner record of `project`, if it has one.
+    fn runner_of(&self, project: &str) -> Option<Runner> {
+        self.mem
+            .projects()
+            .rows("projects")
+            .iter()
+            .map(crate::page_home::summary_of)
+            .find(|s| s.name == project)
+            .and_then(|s| s.runner)
+    }
+
+    /// Queues for `machine` the command `make` builds from the answers of
+    /// `asked` that `session` has not been told, and records them as told.
+    fn deliver(
+        &self,
+        machine: &str,
+        project: &str,
+        session: &str,
+        mut asked: Vec<Value>,
+        make: impl FnOnce(String) -> Command,
+    ) {
+        // A second tap on the same last question finds the first command
+        // still waiting, and adds nothing.
+        let queued = self.agents.pending(machine).iter().any(|c| match c {
+            Command::Resume { project: p, id, .. } | Command::Cloud { project: p, id, .. } => {
+                p == project && id == session
+            }
+            _ => false,
         });
         if queued {
             return;
         }
-        // A session that parks again was resumed with the answers before;
-        // they are in its context already.
+        // A session that parks again was told the answers before; they are
+        // in its context already.
         let told = self.agents.delivered(session);
         asked.retain(|row| !told.iter().any(|id| row["id"] == id.as_str()));
         if asked.is_empty() {
@@ -390,15 +465,7 @@ impl App {
             .iter()
             .filter_map(|row| row["id"].as_str().map(str::to_string))
             .collect();
-        self.agents.queue_resume(
-            &runner.machine,
-            Command::Resume {
-                project: project.to_string(),
-                id: session.to_string(),
-                message,
-            },
-            &ids,
-        );
+        self.agents.queue_resume(machine, make(message), &ids);
     }
 
     /// Saiful's answer to a question Dulali's answer already closed: it

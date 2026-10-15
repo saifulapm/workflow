@@ -197,9 +197,10 @@ impl Agents {
             .unwrap_or_default()
     }
 
-    /// Queues `resume` for `machine` and records `ids` as told to its session.
+    /// Queues `resume`, or a `cloud` command, for `machine` and records
+    /// `ids` as told to its session.
     pub fn queue_resume(&self, machine: &str, resume: Command, ids: &[String]) {
-        if let Command::Resume { id: session, .. } = &resume {
+        if let Command::Resume { id: session, .. } | Command::Cloud { id: session, .. } = &resume {
             let mut state = self.lock();
             let told = state.saved.delivered.entry(session.clone()).or_default();
             told.extend(ids.iter().cloned());
