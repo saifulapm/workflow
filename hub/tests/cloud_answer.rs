@@ -247,3 +247,24 @@ fn answers_before_the_tap_never_reach_the_session_again() {
         cloud(&format!("{HEAD}#BBBBBBBB Keep the old route?\nAnswer: no"))
     );
 }
+
+/// A live run's answers waiting in the mini's queue bring the notice too.
+#[test]
+fn answers_waiting_for_an_off_mini_bring_the_notice_on_a_live_run() {
+    let world = World::new("cloud-answer-live-waiting");
+    let path = world.data.join("projects.json");
+    let mut doc: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["projects"][0]["handoff_at"] = Value::Null;
+    world.put("projects.json", doc);
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(body.contains("cloud · m2 · live"), "{body}");
+    assert!(!body.contains(MINI_OFF), "nothing waits yet: {body}");
+
+    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
+    let q = |a| question(&q1, "Which port?", a);
+    world.questions(&[q(None)], &[q(Some("8787"))]);
+    answer(&hub, &q1, "8787");
+    let body = page(&hub);
+    assert!(body.contains(MINI_OFF), "{body}");
+}
