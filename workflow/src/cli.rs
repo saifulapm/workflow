@@ -147,6 +147,22 @@ when the session is gone). It refuses, exit 2, until `workflow agent pair
         #[command(subcommand)]
         action: Option<AgentAction>,
     },
+    /// Send the hub's questions to the phone or to this machine.
+    #[command(
+        long_about = "Send the hub's questions to the phone or to this machine.
+
+`route phone` makes the hub push questions to the phone. `route device` makes
+it send them to this machine's agent as desktop notifications. With no
+argument it asks the hub where questions go now. Each form prints one line,
+`route: phone` or `route: device (<machine>)`, and saves the answer where
+qshell reads it. Exit 1 when the hub refuses or does not answer, 2 when this
+machine is not paired."
+    )]
+    Route {
+        /// phone or device; leave out to read the current route.
+        #[arg(value_parser = ["phone", "device"])]
+        to: Option<String>,
+    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
@@ -201,4 +217,8 @@ usage: workflow <command> [options]
       checkouts, then run the sync, start and resume it hands back; pair
       once with a link from `hub pair`
       0 done · 1 the hub or a tool failed · 2 not paired
+  route [phone|device]
+      send the hub's questions to the phone or to this machine; no argument
+      shows where they go now
+      0 done · 1 the hub refused or failed · 2 not paired
 ";

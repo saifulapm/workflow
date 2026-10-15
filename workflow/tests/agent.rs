@@ -111,6 +111,16 @@ case "$1" in
 esac
 "#,
         );
+        // notify-send: one argv element per line in notify.argv, and a line
+        // in notify.count per run.
+        work.script(
+            "notify-send",
+            r#"
+dir=$(dirname "$0")
+echo run >>"$dir/notify.count"
+for a in "$@"; do printf '%s\n' "$a"; done >"$dir/notify.argv"
+"#,
+        );
         World { work }
     }
 
@@ -126,6 +136,7 @@ esac
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_AMX", self.work.at("amx"))
             .env("WORKFLOW_SYSTEMD_RUN", self.work.at("systemd-run"))
+            .env("WORKFLOW_NOTIFY_SEND", self.work.at("notify-send"))
             .env("WORKFLOW_MACHINE", "mini")
             .env("WORKFLOW_AGENT_INTERVAL_MS", "50")
             .current_dir(self.work.path());
@@ -515,4 +526,67 @@ fn a_resume_for_a_live_session_runs_nothing() {
     let out = w.agent(&["--once"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(w.command_calls(), ["amx ls --json", "mem sync --json"]);
+}
+
+#[test]
+fn a_notify_command_runs_notify_send_once() {
+    let w = World::new("agent-notify");
+    w.paired();
+    w.hub_says(json!([{"kind":"notify","title":"Question","body":"Ship it?"}]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.work.read("notify.count"), "run\n");
+    assert_eq!(
+        w.work.read("notify.argv"),
+        "-a\nworkflow\nQuestion\nShip it?\n"
+    );
+}
+
+#[test]
+fn a_failing_notify_send_still_counts_done() {
+    let w = World::new("agent-notify-fails");
+    w.paired();
+    w.work.script(
+        "notify-send",
+        r#"echo run >>"$(dirname "$0")/notify.count"; exit 1"#,
+    );
+    w.hub_says(json!([{"kind":"notify","title":"t","body":"b"}]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.work.read("notify.count"), "run\n");
+}
+
+#[test]
+fn a_route_in_the_answer_is_written_for_qshell() {
+    let w = World::new("agent-route-file");
+    w.paired();
+    w.work.mkdir("run");
+    w.work.put(
+        "reply",
+        r#"{"commands":[],"route":{"route":"device","machine":"mac-mini-m2","waiting":2}}"#,
+    );
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let file: serde_json::Value =
+        serde_json::from_str(&w.work.read("run/workflow-route.json")).unwrap();
+    assert_eq!(
+        file,
+        json!({"route":"device","machine":"mac-mini-m2","waiting":2,"hub":HUB})
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(w.work.at("run"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(leftovers, ["workflow-route.json"]);
+}
+
+#[test]
+fn an_answer_without_a_route_leaves_the_file_alone() {
+    let w = World::new("agent-route-absent");
+    w.paired();
+    w.work.put("run/workflow-route.json", "old");
+    w.hub_says(json!([]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.work.read("run/workflow-route.json"), "old");
 }

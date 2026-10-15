@@ -18,7 +18,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{exit, go, machine, memcli, paths};
+use crate::{exit, go, machine, memcli, paths, route};
 
 /// What the hub hands back for this machine to run.
 #[derive(Debug, Clone, Deserialize)]
@@ -33,13 +33,18 @@ pub enum Job {
         id: String,
         message: String,
     },
+    /// A desktop notification. Never retried.
+    Notify {
+        title: String,
+        body: String,
+    },
 }
 
-fn say(msg: impl AsRef<str>) {
+pub(crate) fn say(msg: impl AsRef<str>) {
     eprintln!("workflow agent: {}", msg.as_ref());
 }
 
-fn bin(var: &str, default: &str) -> String {
+pub(crate) fn bin(var: &str, default: &str) -> String {
     match std::env::var(var) {
         Ok(v) if !v.is_empty() => v,
         _ => default.to_string(),
@@ -47,7 +52,7 @@ fn bin(var: &str, default: &str) -> String {
 }
 
 /// `$XDG_STATE_HOME/workflow`, else `~/.local/state/workflow`.
-fn state_dir() -> Option<PathBuf> {
+pub(crate) fn state_dir() -> Option<PathBuf> {
     let base = match std::env::var("XDG_STATE_HOME") {
         Ok(v) if !v.is_empty() => PathBuf::from(v),
         _ => paths::home()?.join(".local/state"),
@@ -186,57 +191,91 @@ fn report(name: &str) -> Value {
     json!({"machine": name, "agents": agents, "checkouts": checkouts, "watched": watched})
 }
 
+/// What curl got back from the hub.
+pub(crate) struct Reply {
+    pub status: String,
+    pub answer: String,
+    pub stderr: String,
+}
+
+/// One call to `<hub>/api/<path>`: a GET, or a JSON POST when there is a
+/// body. `Err` when curl cannot run.
+pub(crate) fn request(
+    hub: &str,
+    token: &str,
+    path: &str,
+    body: Option<&str>,
+) -> Result<Reply, String> {
+    let mut cmd = Command::new(bin("WORKFLOW_CURL", "curl"));
+    cmd.args(["-sS", "-m", "10"]);
+    if body.is_some() {
+        cmd.args(["-X", "POST"]);
+    }
+    cmd.args(["-w", "\n%{http_code}"])
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {token}"));
+    if body.is_some() {
+        cmd.args(["-H", "Content-Type: application/json"])
+            .args(["--data-binary", "@-"]);
+    }
+    let mut child = cmd
+        .arg(format!("{hub}/api/{path}"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("cannot run curl: {err}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(body.unwrap_or("").as_bytes());
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|err| format!("curl failed: {err}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (answer, status) = text.rsplit_once('\n').unwrap_or(("", &text));
+    Ok(Reply {
+        status: status.trim().to_string(),
+        answer: answer.to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+    })
+}
+
 /// One poll: the report out, the commands back. `None` when the hub did not
 /// answer 200; the reason is logged.
 fn poll(hub: &str, token: &str, name: &str) -> Option<Vec<Job>> {
     let body = report(name).to_string();
-    let child = Command::new(bin("WORKFLOW_CURL", "curl"))
-        .args(["-sS", "-m", "10", "-X", "POST", "-w", "\n%{http_code}"])
-        .arg("-H")
-        .arg(format!("Authorization: Bearer {token}"))
-        .args(["-H", "Content-Type: application/json"])
-        .args(["--data-binary", "@-"])
-        .arg(format!("{hub}/api/agent"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-    let mut child = match child {
-        Ok(c) => c,
+    let reply = match request(hub, token, "agent", Some(&body)) {
+        Ok(r) => r,
         Err(err) => {
-            say(format!("cannot run curl: {err}"));
+            say(err);
             return None;
         }
     };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(body.as_bytes());
-    }
-    let out = child.wait_with_output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let (answer, status) = text.rsplit_once('\n').unwrap_or(("", &text));
-    match status.trim() {
+    match reply.status.as_str() {
         "200" => {}
         "401" => {
             say("the hub does not know this token; run `workflow agent pair <link>`");
             return None;
         }
-        _ => {
-            let err = String::from_utf8_lossy(&out.stderr);
+        status => {
             say(format!(
-                "the hub did not answer: HTTP {} {}",
-                status.trim(),
-                err.trim()
+                "the hub did not answer: HTTP {status} {}",
+                reply.stderr.trim()
             ));
             return None;
         }
     }
-    let doc: Value = match serde_json::from_str(answer) {
+    let doc: Value = match serde_json::from_str(&reply.answer) {
         Ok(v) => v,
         Err(err) => {
             say(format!("the hub's answer is not JSON: {err}"));
             return None;
         }
     };
+    // An older hub sends no route; the file then stays as it is.
+    if let Some(route) = doc.get("route") {
+        route::write_file(hub, route);
+    }
     let commands = doc.get("commands").and_then(Value::as_array).cloned();
     // A kind this agent does not know is skipped, not a reason to drop the rest.
     Some(
@@ -311,6 +350,18 @@ fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
             let ok = start(project);
             println!("start {project}: {}", if ok { "started" } else { "failed" });
         }
+        Job::Notify { title, body } => {
+            let sent = Command::new(bin("WORKFLOW_NOTIFY_SEND", "notify-send"))
+                .args(["-a", "workflow"])
+                .arg(title)
+                .arg(body)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !sent {
+                say(format!("notify-send could not show {title:?}"));
+            }
+        }
         Job::Resume {
             project,
             id,
@@ -369,14 +420,19 @@ fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
     true
 }
 
+/// The saved token and hub base URL, or `None` before pairing.
+pub(crate) fn pairing() -> Option<(String, String)> {
+    let dir = state_dir()?;
+    let token = fs::read_to_string(dir.join("agent-token")).ok()?;
+    let hub = fs::read_to_string(dir.join("agent-hub")).ok()?;
+    Some((token.trim().to_string(), hub.trim().to_string()))
+}
+
 pub fn cmd_run(once: bool) -> i32 {
-    let token = state_dir().and_then(|d| fs::read_to_string(d.join("agent-token")).ok());
-    let hub = state_dir().and_then(|d| fs::read_to_string(d.join("agent-hub")).ok());
-    let (Some(token), Some(hub)) = (token, hub) else {
+    let Some((token, hub)) = pairing() else {
         say("not paired; run `workflow agent pair <link>`");
         return exit::USAGE;
     };
-    let (token, hub) = (token.trim().to_string(), hub.trim().to_string());
     let Some(name) = machine::name() else {
         say("cannot tell this machine's name; set WORKFLOW_MACHINE");
         return exit::FAILED;

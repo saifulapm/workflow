@@ -25,6 +25,7 @@ pub mod machine;
 pub mod memcli;
 pub mod paths;
 pub mod pause;
+pub mod route;
 #[cfg(test)]
 mod scratch;
 
@@ -125,6 +126,7 @@ pub fn run(cli: Cli) -> i32 {
         ),
         Command::Pause { project, by } => pause::cmd_pause(&project, by.as_deref()),
         Command::Unpause { project } => pause::cmd_unpause(&project),
+        Command::Route { to } => route::cmd_route(to.as_deref()),
         Command::Agent { once, action } => match action {
             Some(cli::AgentAction::Pair { link }) => agent::cmd_pair(&link),
             None => agent::cmd_run(once),
