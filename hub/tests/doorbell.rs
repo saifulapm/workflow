@@ -899,11 +899,12 @@ impl Fake {
         );
     }
 
-    /// Every ring's body, in the order curl was run.
+    /// Every ring's body, in the order curl was run. A record the fixture
+    /// curl is still writing has no body yet, and is not a ring until it has.
     fn rings(&self) -> Vec<String> {
         invocations(&self.curl_log)
             .into_iter()
-            .map(|argv| argv[4].clone())
+            .filter_map(|argv| argv.get(4).cloned())
             .collect()
     }
 
