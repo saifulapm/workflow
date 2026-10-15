@@ -8,7 +8,7 @@ use common::{
     DEVICE_COOKIE, Hub, TempDir, body_of, mem_in, real_mem, recording_mem, seed_project, status_of,
 };
 
-const PAIR: &str = "Pair this device first: run hub pair on here-box";
+const PAIR: &str = "Pair this device first: from a workflow checkout run vps/pair, which runs hub pair on here-box";
 
 /// The pages that carry a control for a paired device: home and the
 /// questions page answer, the draft roadmap approves, new files, and an

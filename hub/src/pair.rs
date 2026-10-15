@@ -225,7 +225,7 @@ fn gone() -> Response {
 /// posts, since the hub would refuse the post.
 pub fn pair_first(machine: &str) -> String {
     format!(
-        "<p class=\"banner warn\">Pair this device first: run hub pair on {}</p>\n",
+        "<p class=\"banner warn\">Pair this device first: from a workflow checkout run vps/pair, which runs hub pair on {}</p>\n",
         esc(machine)
     )
 }
