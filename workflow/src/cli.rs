@@ -129,6 +129,24 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         /// The project, by mem's name.
         project: String,
     },
+    /// The device daemon: report this machine to the hub and run what it says.
+    #[command(
+        long_about = "The device daemon: report this machine to the hub and run what it says.
+
+Every 5 s it posts this machine's name, its amx agents and the mem projects
+checked out here to the paired hub, and runs the commands the hub hands back,
+one at a time and in order: sync (mem sync), start (workflow go <project> in a
+systemd scope of its own) and resume (mem sync, then amx resume, or a start
+when the session is gone). It refuses, exit 2, until `workflow agent pair
+<link>` has saved a token."
+    )]
+    Agent {
+        /// Poll once, run what came back, and exit.
+        #[arg(long)]
+        once: bool,
+        #[command(subcommand)]
+        action: Option<AgentAction>,
+    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
@@ -139,6 +157,15 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         /// Whatever git handed the stub.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentAction {
+    /// Pair with the hub by a `hub pair` link and keep its token.
+    Pair {
+        /// The link `hub pair` printed.
+        link: String,
     },
 }
 

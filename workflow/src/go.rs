@@ -458,7 +458,7 @@ pub fn launch(
     })
 }
 
-fn amx_bin() -> String {
+pub fn amx_bin() -> String {
     match std::env::var("WORKFLOW_AMX") {
         Ok(v) if !v.is_empty() => v,
         _ => "amx".to_string(),

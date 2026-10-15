@@ -1,0 +1,407 @@
+//! `workflow agent` through the real binary, with scripts in the place of
+//! curl (`$WORKFLOW_CURL`), mem, amx and systemd-run
+//! (`$WORKFLOW_SYSTEMD_RUN`). Every fake appends `<name> <argv>` to one
+//! `calls.log`, so the order of calls across them can be read back.
+
+#[path = "../src/scratch.rs"]
+mod scratch;
+
+use std::os::unix::fs::PermissionsExt;
+use std::process::{Command, Output};
+use std::time::{Duration, Instant};
+
+use scratch::Scratch;
+use serde_json::json;
+
+const HUB: &str = "https://dulali.taila27604.ts.net";
+
+struct World {
+    work: Scratch,
+}
+
+impl World {
+    fn new(tag: &str) -> World {
+        let work = Scratch::new(tag);
+        work.put(
+            "projects.json",
+            r#"{"projects":[
+              {"name":"gamma","checkouts":["/src/gamma"]},
+              {"name":"beta","checkouts":[]},
+              {"name":"workflow","checkouts":["/src/workflow","/wt/workflow"]}
+            ]}"#,
+        );
+        work.put("ls.json", "[]");
+        // curl: one argv element per line in curl.argv, the body it was
+        // handed in curl.stdin. A pairing call (-D -) prints pair-reply; a poll
+        // prints reply once, then an empty command list, and the status code
+        // last, as `-w '\n%{http_code}'` would.
+        work.script(
+            "curl",
+            r#"
+dir=$(dirname "$0")
+echo "curl $*" | tr '\n' ' ' >>"$dir/calls.log"
+echo >>"$dir/calls.log"
+for a in "$@"; do printf '%s\n' "$a"; done >"$dir/curl.argv"
+cat >"$dir/curl.stdin"
+case " $* " in
+*" -D "*) cat "$dir/pair-reply" ;;
+*)
+	if [ -f "$dir/reply" ]; then
+		cat "$dir/reply"
+		mv "$dir/reply" "$dir/served"
+	else
+		printf '{"commands":[]}'
+	fi
+	printf '\n%s' "$(cat "$dir/status" 2>/dev/null || echo 200)"
+	;;
+esac
+"#,
+        );
+        // mem: `sync` fails while sync-fails says always, or once.
+        work.script(
+            "mem",
+            r#"
+dir=$(dirname "$0")
+echo "mem $*" >>"$dir/calls.log"
+case "$1" in
+projects) cat "$dir/projects.json" ;;
+sync)
+	case "$(cat "$dir/sync-fails" 2>/dev/null)" in
+	always) exit 1 ;;
+	once) rm "$dir/sync-fails"; exit 1 ;;
+	esac
+	;;
+esac
+"#,
+        );
+        // amx: `resume` writes its last argv element, byte for byte.
+        work.script(
+            "amx",
+            r#"
+dir=$(dirname "$0")
+echo "amx $*" >>"$dir/calls.log"
+case "$1" in
+ls) cat "$dir/ls.json" ;;
+resume)
+	for a in "$@"; do last=$a; done
+	printf '%s' "$last" >"$dir/last-arg"
+	;;
+esac
+"#,
+        );
+        // systemd-run: logs, and runs the fake amx it is handed; `workflow go`
+        // is only logged.
+        work.script(
+            "systemd-run",
+            r#"
+dir=$(dirname "$0")
+echo "systemd-run $*" >>"$dir/calls.log"
+shift 3
+case "$1" in
+*/amx) exec "$@" ;;
+esac
+"#,
+        );
+        World { work }
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_workflow"));
+        command
+            .arg("agent")
+            .args(args)
+            .env("HOME", self.work.at("home"))
+            .env("XDG_STATE_HOME", self.work.at("state"))
+            .env("WORKFLOW_CURL", self.work.at("curl"))
+            .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_AMX", self.work.at("amx"))
+            .env("WORKFLOW_SYSTEMD_RUN", self.work.at("systemd-run"))
+            .env("WORKFLOW_MACHINE", "mini")
+            .env("WORKFLOW_AGENT_INTERVAL_MS", "50")
+            .current_dir(self.work.path());
+        command
+    }
+
+    fn agent(&self, args: &[&str]) -> Output {
+        self.command(args).output().unwrap()
+    }
+
+    fn paired(&self) {
+        self.work.put("state/workflow/agent-token", "tok123");
+        self.work.put("state/workflow/agent-hub", HUB);
+    }
+
+    /// The hub hands out these commands on the next poll.
+    fn hub_says(&self, commands: serde_json::Value) {
+        self.work
+            .put("reply", &json!({ "commands": commands }).to_string());
+    }
+
+    fn calls(&self) -> Vec<String> {
+        if !self.work.has("calls.log") {
+            return Vec::new();
+        }
+        self.work
+            .read("calls.log")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The calls the commands of a `--once` run made: everything after its
+    /// one poll.
+    fn command_calls(&self) -> Vec<String> {
+        self.calls()
+            .into_iter()
+            .skip_while(|c| !c.starts_with("curl "))
+            .skip(1)
+            .collect()
+    }
+
+    fn curl_argv(&self) -> Vec<String> {
+        self.work
+            .read("curl.argv")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+#[test]
+fn pairing_saves_the_token_and_the_hub() {
+    let w = World::new("agent-pair");
+    w.work.put(
+        "pair-reply",
+        "HTTP/2 200\r\nSet-Cookie: hub_device=tok123; Path=/; HttpOnly; Secure\r\ncontent-length: 0\r\n\r\n",
+    );
+    let link = format!("{HUB}/pair/AB12CD");
+    let out = w.agent(&["pair", &link]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("paired with {HUB}\n")
+    );
+    let argv = w.curl_argv();
+    assert!(argv.contains(&format!("Origin: {HUB}")), "{argv:?}");
+    assert_eq!(argv.last(), Some(&link));
+    assert_eq!(w.work.read("state/workflow/agent-token"), "tok123");
+    assert_eq!(w.work.read("state/workflow/agent-hub"), HUB);
+    let mode = std::fs::metadata(w.work.at("state/workflow/agent-token"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn pairing_without_a_cookie_fails_and_saves_nothing() {
+    let w = World::new("agent-pair-refused");
+    w.work
+        .put("pair-reply", "HTTP/2 403\r\ncontent-length: 0\r\n\r\n");
+    let out = w.agent(&["pair", &format!("{HUB}/pair/AB12CD")]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no hub_device cookie"),
+        "{out:?}"
+    );
+    assert!(!w.work.has("state/workflow/agent-token"));
+}
+
+#[test]
+fn an_unpaired_agent_refuses_to_run() {
+    let w = World::new("agent-unpaired");
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "workflow agent: not paired; run `workflow agent pair <link>`\n"
+    );
+    assert!(w.calls().is_empty());
+}
+
+#[test]
+fn a_poll_reports_the_machine_its_agents_and_its_checkouts() {
+    let w = World::new("agent-poll");
+    w.paired();
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"working","ended":0,"created":1791400000,"dir":"/src/gamma","task":"go"},
+            {"id":"old","state":"stopped","ended":1791400500}]"#,
+    );
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+
+    let argv = w.curl_argv();
+    assert!(
+        argv.contains(&"Authorization: Bearer tok123".to_string()),
+        "{argv:?}"
+    );
+    assert!(argv.contains(&"Content-Type: application/json".to_string()));
+    assert_eq!(
+        argv.last().map(String::as_str),
+        Some(&*format!("{HUB}/api/agent"))
+    );
+
+    let body: serde_json::Value = serde_json::from_str(&w.work.read("curl.stdin")).unwrap();
+    assert_eq!(
+        body,
+        json!({
+            "machine": "mini",
+            "agents": [
+                {"id": "gamma-m1", "state": "working", "ended": 0, "created": 1791400000},
+                {"id": "old", "state": "stopped", "ended": 1791400500, "created": null}
+            ],
+            "checkouts": ["gamma", "workflow"]
+        })
+    );
+}
+
+#[test]
+fn start_and_sync_run_in_the_order_the_hub_gave_them() {
+    let w = World::new("agent-order");
+    w.paired();
+    w.hub_says(json!([
+        {"kind": "start", "project": "gamma"},
+        {"kind": "sync"},
+        {"kind": "start", "project": "workflow"}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        w.command_calls(),
+        [
+            "systemd-run --user --scope --quiet workflow go gamma",
+            "mem sync",
+            "systemd-run --user --scope --quiet workflow go workflow",
+        ]
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 3);
+}
+
+#[test]
+fn a_resume_hands_amx_the_message_byte_for_byte() {
+    let w = World::new("agent-resume-bytes");
+    w.paired();
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"stopped","ended":1791400500,"created":1791400000}]"#,
+    );
+    let message = "use \"both\" C:\\path\nsecond line $(touch pwned) `touch pwned`";
+    w.hub_says(json!([
+        {"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": message}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.work.read("last-arg"), message);
+    assert!(!w.work.has("pwned"));
+    let calls = w.command_calls();
+    assert_eq!(calls[0], "mem sync");
+    assert_eq!(calls[1], "amx ls --json");
+    assert!(
+        calls[2].starts_with(&format!(
+            "systemd-run --user --scope --quiet {} resume gamma-m1 use",
+            w.work.at("amx").display()
+        )),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn a_resume_waits_for_its_sync() {
+    let w = World::new("agent-resume-nosync");
+    w.paired();
+    w.work.put("sync-fails", "always");
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"stopped","ended":1791400500}]"#,
+    );
+    w.hub_says(json!([
+        {"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": "yes"}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.command_calls(), ["mem sync"]);
+}
+
+#[test]
+fn a_resume_whose_sync_failed_runs_after_the_next_poll() {
+    let w = World::new("agent-resume-retry");
+    w.paired();
+    w.work.put("sync-fails", "once");
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"stopped","ended":1791400500}]"#,
+    );
+    w.hub_says(json!([
+        {"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": "yes"}
+    ]));
+    let mut child = w.command(&[]).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !w.work.has("last-arg") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let polls_before_resume = w
+        .calls()
+        .iter()
+        .take_while(|c| !c.starts_with("systemd-run"))
+        .filter(|c| c.starts_with("curl "))
+        .count();
+    assert!(polls_before_resume >= 2, "{:?}", w.calls());
+    // A daemon's polls interleave with its commands, so only the syncs and
+    // the resume are read.
+    let ran: Vec<String> = w
+        .calls()
+        .into_iter()
+        .filter(|c| c == "mem sync" || c.contains(" resume "))
+        .collect();
+    assert_eq!(
+        ran,
+        [
+            "mem sync",
+            "mem sync",
+            &format!(
+                "systemd-run --user --scope --quiet {} resume gamma-m1 yes",
+                w.work.at("amx").display()
+            ),
+            "amx resume gamma-m1 yes",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_for_a_gone_session_starts_the_project() {
+    let w = World::new("agent-resume-gone");
+    w.paired();
+    w.hub_says(json!([
+        {"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": "yes"}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        w.command_calls(),
+        [
+            "mem sync",
+            "amx ls --json",
+            "systemd-run --user --scope --quiet workflow go gamma",
+        ]
+    );
+}
+
+#[test]
+fn a_resume_for_a_live_session_runs_nothing() {
+    let w = World::new("agent-resume-live");
+    w.paired();
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"waiting","ended":0,"created":1791400000}]"#,
+    );
+    w.hub_says(json!([
+        {"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": "yes"}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.command_calls(), ["mem sync", "amx ls --json"]);
+}
