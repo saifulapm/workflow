@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Builds mem, workflow and hub on the VPS from one commit of this repository,
+# then restarts the hub there. Run it from a checkout on a device:
+#
+#   vps/deploy [<commit>]        HEAD when no commit is given
+#
+# The VPS has no git, so the commit travels as a git archive over Tailscale
+# SSH, and HUB_COMMIT carries its name into `hub --version`.
+set -euo pipefail
+
+host=${VPS_HOST:-root@dulali}
+commit=$(git rev-parse --verify "${1:-HEAD}^{commit}")
+short=$(git rev-parse --short=7 "$commit")
+src=/var/lib/workflow-build/src
+
+git archive --format=tar "$commit" |
+  ssh "$host" "rm -rf $src && mkdir -p $src && tar x -C $src"
+ssh "$host" "bash $src/vps/install $short"

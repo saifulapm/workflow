@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up the mem store to R2 with restic
+After=network-online.target dulali-backup.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/dulali/ops.env
+EnvironmentFile=-/etc/mem/hub.env
+Environment=RESTIC_CACHE_DIR=/var/cache/mem-backup
+CacheDirectory=mem-backup
+ExecStart=/usr/local/sbin/mem-backup
+TimeoutStartSec=3h
+SyslogIdentifier=mem-backup

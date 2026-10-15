@@ -1,0 +1,9 @@
+[Unit]
+Description=Ping healthchecks.io for the hub every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

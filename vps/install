@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Runs on the VPS as root, from the source vps/deploy unpacked: builds the
+# three binaries with 2 jobs, installs them and the units, and restarts the
+# hub. Safe to run again: every step leaves what is already right alone.
+set -euo pipefail
+
+short=${1:?usage: install <short commit>}
+build=/var/lib/workflow-build
+src=$build/src
+cargo=/root/.cargo/bin/cargo
+
+if [[ ! -x $cargo ]]; then
+  curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain stable
+fi
+for crate in mem workflow hub; do
+  (cd "$src/$crate" && HUB_COMMIT=$short CARGO_TARGET_DIR=$build/target "$cargo" build --release -j2 -q)
+  install -m755 "$build/target/release/$crate" "/usr/local/bin/$crate"
+done
+
+# The hub runs as mem and owns the store devices sync with as mem@dulali.
+id mem >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/mem --shell /bin/bash mem
+install -d -o mem -g mem -m 0750 /srv/mem /srv/mem/store
+install -d -m 0750 /etc/mem
+
+install -m644 "$src"/vps/units/* /etc/systemd/system/
+install -m755 "$src/vps/mem-backup" /usr/local/sbin/mem-backup
+systemctl daemon-reload
+systemctl enable -q mem-hub.service mem-hub-ping.timer mem-backup.timer
+systemctl start mem-hub-ping.timer mem-backup.timer
+systemctl restart mem-hub.service
+
+for _ in $(seq 20); do
+  curl -fsS -o /dev/null http://127.0.0.1:8787/api/presence && break
+  sleep 0.5
+done
+tailscale serve --bg --https=443 http://127.0.0.1:8787 >/dev/null
+version=$(/usr/local/bin/hub --version)
+[[ $version == *" $short" ]] || { echo "install: hub --version says '$version', not $short" >&2; exit 1; }
+echo "install: $version serving on 443"

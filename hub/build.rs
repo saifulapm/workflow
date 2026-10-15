@@ -23,6 +23,13 @@ fn main() {
             println!("cargo::rerun-if-changed={path}");
         }
     }
-    let commit = git(&["rev-parse", "--short=7", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
+    // vps/deploy builds from a git archive, which has no .git to ask, so it
+    // names the commit itself.
+    println!("cargo::rerun-if-env-changed=HUB_COMMIT");
+    let commit = std::env::var("HUB_COMMIT")
+        .ok()
+        .filter(|c| !c.is_empty())
+        .or_else(|| git(&["rev-parse", "--short=7", "HEAD"]))
+        .unwrap_or_else(|| "unknown".to_string());
     println!("cargo::rustc-env=HUB_COMMIT={commit}");
 }
