@@ -602,7 +602,11 @@ pub fn project_runner(app: &App, machine: &str, id: &str) -> Result<i32> {
     };
     let now = jiff::Timestamp::now().round(jiff::Unit::Second)?;
     crate::project::set_key(&app.store, project, "runner_since", &now.to_string())?;
-    project_set(app, "runner", &format!("{machine} {id}"))
+    let code = project_set(app, "runner", &format!("{machine} {id}"))?;
+    // The one hub decides who may start or resume a project from this, so it
+    // has to reach the hub's store now, as a pause does.
+    crate::sync::trigger(&app.dirs.qshell_status_json());
+    Ok(code)
 }
 
 /// The runner as `projects --json` shows it, or null when none is recorded.
@@ -633,8 +637,9 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     if key == "runner" {
         crate::project::unset_key(&app.store, id, "runner_since")?;
     }
-    // An unpause has to reach the other machines as a pause does.
-    if key == "paused" {
+    // An unpause, or a cleared runner, has to reach the other machines as a
+    // pause does.
+    if key == "paused" || key == "runner" {
         crate::sync::trigger(&app.dirs.qshell_status_json());
     }
     let shown = key.replace('_', "-");

@@ -627,6 +627,39 @@ fn asking_a_question_does_not_wait_for_the_sync_round_it_asks_for() {
     );
 }
 
+/// The one hub reads who runs a project from the store, so setting or
+/// clearing the runner asks for a round, as a pause does.
+#[test]
+fn setting_and_clearing_the_runner_each_ask_for_a_sync_round() {
+    let w = World::new("sync-runner");
+    let repo = w.repo("thing", None);
+    assert_eq!(
+        code(&mem_env(
+            &w,
+            &repo,
+            &["log", "first"],
+            &[("MEM_SYNC_CMD", "true")]
+        )),
+        0
+    );
+    for (args, marker) in [
+        (
+            &["project", "set", "runner", "mini", "thing-m1"][..],
+            "set-ran",
+        ),
+        (&["project", "unset", "runner"][..], "unset-ran"),
+    ] {
+        let marker = w.dir.join(marker);
+        let stub = slow_sync_stub(&w, &marker);
+        let out = mem_env(&w, &repo, args, &[("MEM_SYNC_CMD", stub.to_str().unwrap())]);
+        assert_eq!(code(&out), 0, "{args:?}: {}", common::stderr(&out));
+        assert!(
+            appeared(&marker, Duration::from_secs(5)),
+            "{args:?} never ran the sync command"
+        );
+    }
+}
+
 #[test]
 fn a_trigger_stands_down_while_a_round_is_already_in_progress() {
     let w = World::new("sync-running");
