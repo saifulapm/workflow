@@ -28,6 +28,7 @@ fn script(dir: &TempDir) -> String {
         0,
         &Banner::None,
         None,
+        &[],
     );
     let at = page.find("/api/stamp").expect("home polls the stamp");
     let start = page[..at].rfind("<script>").unwrap() + "<script>".len();

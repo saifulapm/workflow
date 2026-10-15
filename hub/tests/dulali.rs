@@ -478,3 +478,82 @@ fn dulalis_token_opens_nothing_but_its_socket() {
     let (status, _) = world.dulali(DEVICE, &json!({"id": "x", "pass": true, "checked": "-"}));
     assert_eq!(status, 401);
 }
+
+/// Past the window the run has Dulali's answer. Home still lists it, and
+/// Saiful's answer then supersedes it in mem and goes to the runner's
+/// machine as a follow-up for the running session.
+#[test]
+fn saifuls_answer_after_the_window_supersedes_dulalis_and_follows_up() {
+    let world = World::new("dulali-late");
+    let hub = world.hub(&[("HUB_DULALI_WINDOW_MS", "800")]);
+    world.settle();
+    let project = world.home.join("proj-alpha");
+    let asked = std::process::Command::new(&world.mem)
+        .args([
+            "ask",
+            "nag at eight?",
+            "--options",
+            "eight,nine",
+            "--recommend",
+            "eight",
+            "--json",
+        ])
+        .current_dir(&project)
+        .env_clear()
+        .env("HOME", &world.home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("XDG_CONFIG_HOME", world.home.join("config"))
+        .env("XDG_STATE_HOME", world.home.join("state"))
+        .env("XDG_DATA_HOME", world.home.join("data"))
+        .env("XDG_CACHE_HOME", world.home.join("cache"))
+        .env("MEM_SYNC_CMD", "true")
+        .env("AMX_ID", "proj-alpha-m1")
+        .output()
+        .unwrap();
+    assert!(asked.status.success(), "{asked:?}");
+    let id = serde_json::from_slice::<Value>(&asked.stdout).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let runner = mem_in(
+        &world.mem,
+        &world.home,
+        &project,
+        &["project", "set", "runner", "mini", "proj-alpha-m1"],
+    );
+    assert!(runner.status.success(), "{runner:?}");
+    world.sent_to_dulali(&id);
+    let (status, _) = world.dulali(
+        &world.token(),
+        &json!({"id": id, "answer": "eight", "checked": "recommend"}),
+    );
+    assert_eq!(status, 200);
+    wait_for("Dulali's answer in mem", Duration::from_secs(10), || {
+        world.question(&id)["answer_by"] == "dulali"
+    });
+
+    let home = hub.get("/");
+    assert!(home.contains("Dulali answered"), "{home}");
+    assert!(home.contains("<strong>eight</strong>"), "{home}");
+    let response = hub.post_form("/answer", &format!("id={id}&text=nine"));
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert!(response.contains("answered="), "{response}");
+
+    let row = world.question(&id);
+    assert_eq!(row["answer"], "nine", "{row}");
+    assert_eq!(row["answer_by"], "saiful", "{row}");
+    let commands = hub.poll_agent("{\"machine\":\"mini\",\"agents\":[],\"checkouts\":[]}");
+    let commands: Value = serde_json::from_str(&commands).unwrap();
+    let follow_up = commands["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "follow_up")
+        .unwrap_or_else(|| panic!("no follow-up: {commands}"));
+    assert_eq!(follow_up["id"], "proj-alpha-m1");
+    let message = follow_up["message"].as_str().unwrap();
+    assert!(message.contains("nine"), "{message}");
+    assert!(message.contains("Dulali had answered: eight"), "{message}");
+    // Replaced once, it leaves home's list.
+    assert!(!hub.get("/").contains("Dulali answered"));
+}

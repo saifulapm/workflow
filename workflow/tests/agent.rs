@@ -91,7 +91,7 @@ dir=$(dirname "$0")
 echo "amx $*" >>"$dir/calls.log"
 case "$1" in
 ls) cat "$dir/ls.json" ;;
-resume)
+resume|send)
 	for a in "$@"; do last=$a; done
 	printf '%s' "$last" >"$dir/last-arg"
 	;;
@@ -589,4 +589,58 @@ fn an_answer_without_a_route_leaves_the_file_alone() {
     let out = w.agent(&["--once"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(w.work.read("run/workflow-route.json"), "old");
+}
+
+/// Saiful's answer after Dulali's window reaches a session that is still
+/// running as a new message, byte for byte.
+#[test]
+fn a_follow_up_is_sent_into_a_live_session() {
+    let w = World::new("agent-follow-up-live");
+    w.paired();
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"working","ended":0,"created":1791400000}]"#,
+    );
+    let message = "Saiful replaced Dulali's answer: \"nine\" $(touch pwned)";
+    w.hub_says(json!([
+        {"kind": "follow_up", "project": "gamma", "id": "gamma-m1", "message": message}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.work.read("last-arg"), message);
+    assert!(!w.work.has("pwned"));
+    let calls = w.command_calls();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("amx send gamma-m1 Saiful")),
+        "{calls:?}"
+    );
+    assert!(!calls.iter().any(|c| c.contains(" resume ")), "{calls:?}");
+}
+
+/// A session that stopped since is resumed with the follow-up instead.
+#[test]
+fn a_follow_up_for_a_stopped_session_resumes_it() {
+    let w = World::new("agent-follow-up-stopped");
+    w.paired();
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"stopped","ended":1791400500,"created":1791400000}]"#,
+    );
+    w.hub_says(json!([
+        {"kind": "follow_up", "project": "gamma", "id": "gamma-m1", "message": "nine"}
+    ]));
+    let out = w.agent(&["--once"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(w.work.read("last-arg"), "nine");
+    let calls = w.command_calls();
+    assert!(
+        calls.iter().any(|c| c.contains(" resume gamma-m1 nine")),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("amx send")),
+        "{calls:?}"
+    );
 }

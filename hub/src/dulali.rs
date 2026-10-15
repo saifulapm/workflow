@@ -38,7 +38,7 @@ pub const KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 pub const RING_ANSWER_CHARS: usize = 80;
 
 /// One answer Dulali gave, from the moment it arrived.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Held {
     pub answer: String,
     pub checked: String,

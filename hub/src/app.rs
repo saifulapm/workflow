@@ -125,8 +125,12 @@ impl App {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
             "/api/stamp" => Response::json(
-                serde_json::json!({"stamp": crate::page_home::stamp(&self.mem, &self.route)})
-                    .to_string(),
+                serde_json::json!({"stamp": crate::page_home::stamp(
+                    &self.mem,
+                    &self.route,
+                    &self.dulali.replaceable(dulali::now_ms()),
+                )})
+                .to_string(),
             ),
             "/subscribe" => self.subscribe(),
             _ => Response::not_found(),

@@ -38,6 +38,14 @@ pub enum Job {
         title: String,
         body: String,
     },
+    /// A message for a session that may still be running: `amx send` while
+    /// it runs, a resume with it once it has stopped.
+    #[serde(rename = "follow_up")]
+    FollowUp {
+        project: String,
+        id: String,
+        message: String,
+    },
 }
 
 pub(crate) fn say(msg: impl AsRef<str>) {
@@ -362,6 +370,45 @@ fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
             if !sent {
                 say(format!("notify-send could not show {title:?}"));
             }
+        }
+        Job::FollowUp {
+            project,
+            id,
+            message,
+        } => {
+            let agents = match amx_ls() {
+                Ok(a) => a,
+                Err(err) => {
+                    println!("follow-up {id}: {err}, trying again after the next poll");
+                    return false;
+                }
+            };
+            let live = agents.iter().any(|a| {
+                a.get("id").and_then(Value::as_str) == Some(id)
+                    && a.get("ended").and_then(Value::as_i64).unwrap_or(0) == 0
+                    && !matches!(
+                        a.get("state").and_then(Value::as_str),
+                        Some("stopped" | "failed")
+                    )
+            });
+            if !live {
+                let resume = Job::Resume {
+                    project: project.clone(),
+                    id: id.clone(),
+                    message: message.clone(),
+                };
+                return run(&resume, sync);
+            }
+            let sent = Command::new(go::amx_bin())
+                .args(["send", id])
+                .arg(message)
+                .stdout(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            println!("follow-up {id}: {}", if sent { "sent" } else { "failed" });
+            let _ = sync.send(());
+            return sent;
         }
         Job::Resume {
             project,

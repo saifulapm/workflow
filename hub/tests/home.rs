@@ -135,6 +135,7 @@ fn render(tag: &str) -> (TempDir, String, Vec<String>) {
         NOW_MS,
         &Banner::None,
         None,
+        &[],
     );
     let argv = std::fs::read_to_string(&log)
         .unwrap()

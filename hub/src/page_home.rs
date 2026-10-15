@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::agents::Agents;
 use crate::config::Config;
+use crate::dulali::Held;
 use crate::html::{self, Banner, esc};
 use crate::http::Response;
 use crate::live::{self, Run, Runner};
@@ -40,10 +41,11 @@ fn reload_script(stamp: &str) -> String {
 /// A stamp of what home draws: its two reads and the route, hashed. The
 /// ages on the page move with the clock, not with the reads, so they leave it
 /// alone.
-pub fn stamp(mem: &MemCli, route: &Route) -> String {
+pub fn stamp(mem: &MemCli, route: &Route, dulali: &[(String, Held)]) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     route.get().hash(&mut hasher);
+    dulali.hash(&mut hasher);
     for read in [mem.projects(), mem.questions()] {
         match &*read {
             Outcome::Json(doc) => doc.to_string().hash(&mut hasher),
@@ -92,6 +94,7 @@ pub fn get(ctx: &PageCtx) -> Response {
         now_ms,
         &banner,
         ctx.pair_notice().as_deref(),
+        &app.dulali.replaceable(now_ms),
     ))
 }
 
@@ -182,13 +185,14 @@ pub fn render(
     now_ms: i64,
     banner: &Banner,
     pair_notice: Option<&str>,
+    dulali: &[(String, Held)],
 ) -> String {
     let projects = project_summaries(mem);
     let questions = mem.questions();
     let mut questions_rows = questions.rows("questions");
     questions_rows.sort_by(|a, b| b["id"].as_str().cmp(&a["id"].as_str()));
 
-    let mut body = reload_script(&stamp(mem, route));
+    let mut body = reload_script(&stamp(mem, route, dulali));
     body.push_str("<nav class=\"pages\">\n");
     for sibling in &config.siblings {
         if html::safe_link(sibling).is_some() {
@@ -231,6 +235,9 @@ pub fn render(
     }
     for question in &questions_rows {
         body.push_str(&question_block(question, now_ms, pair_notice));
+    }
+    if !dulali.is_empty() {
+        body.push_str(&dulali_block(dulali, now_ms, pair_notice));
     }
 
     let waiting = |name: &str| {
@@ -322,6 +329,45 @@ pub fn route_post(ctx: &PageCtx) -> Response {
         Ok(()) => Response::see_other("/"),
         Err(NoMachine) => Response::see_other(&format!("/{}", Banner::NoMachine.query())),
     }
+}
+
+/// Dulali's answers Saiful can still replace: each with what Dulali
+/// checked, whether its override window is still open, and a form whose
+/// answer takes its place.
+fn dulali_block(rows: &[(String, Held)], now_ms: i64, pair_notice: Option<&str>) -> String {
+    let mut out = String::from("<h2>Dulali answered</h2>\n");
+    for (id, held) in rows {
+        let state = if held.written.is_none() && held.until_ms > now_ms {
+            format!(
+                "override within {} s",
+                (held.until_ms - now_ms + 999) / 1000
+            )
+        } else {
+            "the run has it; your answer goes in as a new message".to_string()
+        };
+        out.push_str(&format!(
+            "<article>\n<p class=\"meta\">{} · #{} · {}</p>\n<p class=\"q\">{}</p>\n\
+             <p>Dulali: <strong>{}</strong></p>\n<p class=\"meta\">Checked: {}</p>\n",
+            esc(&held.project),
+            esc(&id[id.len().saturating_sub(8)..]),
+            esc(&state),
+            esc(&held.title),
+            esc(&held.answer),
+            esc(&held.checked),
+        ));
+        match pair_notice {
+            Some(notice) => out.push_str(notice),
+            None => out.push_str(&format!(
+                "<form method=\"post\" action=\"/answer\">\n\
+                 <input type=\"hidden\" name=\"id\" value=\"{}\">\n\
+                 <textarea name=\"text\" rows=\"2\" placeholder=\"your answer\" aria-label=\"your answer\"></textarea>\n\
+                 <button type=\"submit\">Replace</button>\n</form>\n",
+                esc(id)
+            )),
+        }
+        out.push_str("</article>\n");
+    }
+    out
 }
 
 /// One live project under Running: `<project> · <machine> · <milestone> ·
