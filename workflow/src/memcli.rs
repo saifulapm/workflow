@@ -41,6 +41,9 @@ pub struct ProjectRow {
     /// The machine and amx session running it, while one does.
     #[serde(default)]
     pub runner: Option<Runner>,
+    /// Its origin remote, normalized; none for a project without one.
+    #[serde(default)]
+    pub remote: Option<String>,
     /// The roadmap's first open milestone.
     #[serde(default)]
     pub milestone: Option<String>,

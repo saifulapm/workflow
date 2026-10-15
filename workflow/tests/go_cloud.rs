@@ -27,7 +27,7 @@ impl World {
             let checkout = work.mkdir(&format!("{name}-checkout"));
             git(&checkout, &["init", "-q", "-b", "main"]);
             rows.push(format!(
-                r#"{{"name":"{name}","checkouts":["{}"],"roadmap_status":"approved","milestone":"m2-next"}}"#,
+                r#"{{"name":"{name}","remote":"github.com/me/{name}","checkouts":["{}"],"roadmap_status":"approved","milestone":"m2-next"}}"#,
                 checkout.display()
             ));
             work.put(
@@ -518,4 +518,66 @@ fn an_untrusted_folder_is_refused_at_once_with_how_to_trust_it() {
         "{said}"
     );
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
+
+#[test]
+fn a_parked_run_frees_the_slot_after_seven_hours() {
+    let w = World::new("cloud-parked-lapsed");
+    w.runner(
+        "delta",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(8)
+        ),
+    );
+    w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(2)));
+    w.work
+        .put("handoff-delta.md", "parked: 6-hour stop, t3 half done\n");
+    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
+}
+
+#[test]
+fn a_project_on_a_branch_of_its_own_or_with_no_remote_stays_off_the_cloud() {
+    let w = World::new("cloud-worktree");
+    let dir = w.checkout("gamma");
+    w.set("gamma", &format!(r#""worktree":"{}""#, dir.display()));
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("branch of its own"),
+        "{}",
+        stderr(&out)
+    );
+
+    let w = World::new("cloud-no-remote");
+    let projects =
+        w.work
+            .read("projects.json")
+            .replacen(r#","remote":"github.com/me/gamma""#, "", 1);
+    w.work.put("projects.json", &projects);
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(stderr(&out).contains("no git remote"), "{}", stderr(&out));
+}
+
+#[test]
+fn a_device_orchestrator_on_another_machine_keeps_the_cloud_out() {
+    let w = World::new("cloud-device-runner");
+    w.runner(
+        "gamma",
+        r#"{"machine":"nuc","id":"gamma-m2-next","since":"2026-10-15T07:00:00Z"}"#,
+    );
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(stderr(&out).contains("nuc"), "{}", stderr(&out));
+    assert!(!w.claude_ran());
+}
+
+#[test]
+fn a_cloud_run_takes_the_next_milestone_only() {
+    let w = World::new("cloud-later-milestone");
+    let out = w.go(&["gamma", "--cloud", "--milestone", "m3-last"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(stderr(&out).contains("m2-next"), "{}", stderr(&out));
+    assert!(!w.claude_ran());
 }

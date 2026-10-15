@@ -76,16 +76,22 @@ pub fn state(
     }
     let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
     let since = time(&runner.since);
+    // Seven hours from the start end it whatever it said: a 6-hour stop
+    // parks with no question, and must not hold the one slot for ever.
+    let within = since.is_some_and(|since| {
+        now.duration_since(since) < jiff::SignedDuration::from_hours(LIVE_HOURS)
+    });
     if let (Some(since), Some(at)) = (since, time(&row.handoff_at))
         && at > since
     {
         let parked = handoff().is_some_and(|text| text.trim_start().starts_with("parked:"));
-        return Some(if parked { State::Parked } else { State::Ended });
+        return Some(if parked && within {
+            State::Parked
+        } else {
+            State::Ended
+        });
     }
-    let live = since.is_some_and(|since| {
-        now.duration_since(since) < jiff::SignedDuration::from_hours(LIVE_HOURS)
-    });
-    Some(if live { State::Live } else { State::Ended })
+    Some(if within { State::Live } else { State::Ended })
 }
 
 /// `workflow go <project> --cloud`, or with `print` only its prompt.
@@ -121,11 +127,18 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
             return exit::FAILED;
         }
     };
-    let row = projects.iter().find(|row| row.name == start.project);
+    let Some(row) = projects.iter().find(|row| row.name == start.project) else {
+        warn(format!("go: mem lists no {}", start.project));
+        return exit::FAILED;
+    };
     // A parked milestone may carry on locally while paused; a cloud run
     // never starts on a paused project.
-    if row.is_some_and(|row| row.paused.is_some()) {
+    if row.paused.is_some() {
         println!("{}: paused", start.project);
+        return exit::USAGE;
+    }
+    if let Some(why) = refusal(row, &start.slug) {
+        warn(format!("go: {why}"));
         return exit::USAGE;
     }
     // One cloud run at a time, across every project; a parked one still
@@ -147,7 +160,7 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
         ));
         return exit::USAGE;
     }
-    let base = row.map(base).unwrap_or_else(|| "main".to_string());
+    let base = base(row);
     let text = prompt(&start.project, &start.slug, &base);
     if print {
         println!("{text}");
@@ -239,6 +252,42 @@ enum Launch {
     Untrusted,
     /// It neither finished nor asked within two minutes.
     Hung(String),
+}
+
+/// Why `row`'s milestone `slug` cannot run in the cloud, if it cannot. The
+/// session clones the repo's main and finds its project by the remote, so a
+/// project working on a branch of its own, or with no remote, stays local;
+/// only the next milestone runs, since a later one would read as landed; and
+/// a device orchestrator keeps the project as a local go would.
+fn refusal(row: &ProjectRow, slug: &str) -> Option<String> {
+    let name = &row.name;
+    if row.worktree.is_some() {
+        return Some(format!(
+            "{name} works on a branch of its own; cloud runs take main"
+        ));
+    }
+    if row.remote.as_deref().is_none_or(str::is_empty) {
+        return Some(format!("{name} has no git remote"));
+    }
+    if row.milestone.as_deref() != Some(slug) {
+        return Some(format!(
+            "a cloud run takes {name}'s next milestone, {}, not {slug}",
+            row.milestone.as_deref().unwrap_or("none")
+        ));
+    }
+    let runner = row.runner.as_ref().filter(|r| r.machine != "cloud")?;
+    if crate::machine::name().as_deref() != Some(runner.machine.as_str()) {
+        return Some(format!(
+            "{name} runs on {} ({}); start it there, or move it with \
+`mem --project {name} project unset runner`",
+            runner.machine, runner.id
+        ));
+    }
+    match go::amx_agents() {
+        Ok(rows) => go::running(&rows, name, slug, None)
+            .map(|id| format!("{name} already has an orchestrator running: {id}")),
+        Err(why) => Some(why),
+    }
 }
 
 /// `claude --cloud <prompt>` in `dir`, under a pty: claude refuses `--cloud`

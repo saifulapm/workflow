@@ -173,7 +173,7 @@ fn live(row: &AmxRow) -> bool {
 /// The id of another live agent running the orchestrator of `slug`. `me` is
 /// the caller's own `$AMX_ID`: an orchestrator starting its successor is not
 /// in its own way.
-fn running(rows: &[AmxRow], project: &str, slug: &str, me: Option<&str>) -> Option<String> {
+pub fn running(rows: &[AmxRow], project: &str, slug: &str, me: Option<&str>) -> Option<String> {
     rows.iter()
         .filter(|row| me != Some(row.id.as_str()))
         .filter(|row| live(row) && named_for(&row.id, project, slug))
@@ -469,7 +469,7 @@ pub fn amx_bin() -> String {
     }
 }
 
-fn amx_agents() -> Result<Vec<AmxRow>, String> {
+pub fn amx_agents() -> Result<Vec<AmxRow>, String> {
     let out = Command::new(amx_bin())
         .args(["ls", "--json"])
         .stderr(Stdio::piped())
@@ -711,6 +711,7 @@ The first stretch of a shop.
             worktree: None,
             paused: None,
             runner: None,
+            remote: None,
             milestone: None,
             handoff_at: None,
         }
