@@ -211,3 +211,108 @@ fn a_parked_cloud_run_still_holds_the_slot() {
     let response = hub.post_form("/p/gamma/control", "do=cloud");
     assert_eq!(status_of(&response), 409, "{response}");
 }
+
+/// The Start in cloud card's section of the page, or `None` without one.
+fn card(body: &str) -> Option<String> {
+    let at = body.find("<h2>Start in cloud</h2>")?;
+    let rest = &body[at..];
+    let end = rest[4..].find("<h2>").map_or(rest.len(), |e| e + 4);
+    Some(rest[..end].to_string())
+}
+
+/// The card's prompt, as the textarea holds it once unescaped.
+fn prompt(card: &str) -> String {
+    let open = card.find("<textarea").expect(card);
+    let start = open + card[open..].find('>').unwrap() + 1;
+    let end = card.find("</textarea>").expect(card);
+    common::unescape(&card[start..end])
+}
+
+/// What `workflow go gamma --cloud --print` prints over the same fake mem.
+fn printed(world: &World) -> String {
+    let out = std::process::Command::new(common::workflow_bin())
+        .args(["go", "gamma", "--cloud", "--print"])
+        .env("WORKFLOW_MEM", world.bin.join("mem"))
+        .env("WORKFLOW_CLAUDE", world.dir.join("no-claude"))
+        .env("WORKFLOW_AMX", world.dir.join("no-amx"))
+        .env("XDG_CONFIG_HOME", world.dir.join("config"))
+        .env("WORKFLOW_MACHINE", "mini")
+        .env_remove("AMX_ID")
+        .current_dir(world.dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn the_card_shows_the_milestone_the_repo_and_the_prompt_to_copy() {
+    let world = World::new("cloud-card");
+    let hub = world.hub();
+    let body = page(&hub);
+    let card = card(&body).expect(&body);
+    for part in [
+        "m2-next",
+        "git@github.com:saiful/gamma.git",
+        "Environment: workflow",
+        ">Copy prompt</button>",
+        "<a href=\"https://claude.ai/code\" target=\"_blank\" rel=\"noopener\">Open Claude</a>",
+    ] {
+        assert!(card.contains(part), "{part:?} missing from {card}");
+    }
+    assert!(card.contains("<textarea"), "{card}");
+    assert!(
+        card[card.find("<textarea").unwrap()..].contains(" readonly"),
+        "{card}"
+    );
+    assert!(
+        prompt(&card).starts_with("Land milestone m2-next of gamma in this cloud session."),
+        "{card}"
+    );
+}
+
+#[test]
+fn the_cards_prompt_is_the_one_workflow_prints_byte_for_byte() {
+    let world = World::new("cloud-card-bytes");
+    let hub = world.hub();
+    let card = card(&page(&hub)).expect("a card");
+    let printed = printed(&world);
+    assert!(printed.contains("origin/main"), "{printed}");
+    assert_eq!(prompt(&card), printed.strip_suffix('\n').unwrap());
+}
+
+#[test]
+fn after_a_landed_cloud_run_the_card_cuts_from_its_branch_as_workflow_does() {
+    let world = World::new("cloud-card-landed");
+    world.set("gamma", "runner", cloud("m1-first", &ago(180)));
+    let hub = world.hub();
+    let card = card(&page(&hub)).expect("a card");
+    let printed = printed(&world);
+    assert!(printed.contains("origin/cloud/gamma-m1-first"), "{printed}");
+    assert_eq!(prompt(&card), printed.strip_suffix('\n').unwrap());
+}
+
+#[test]
+fn no_card_while_paused() {
+    let world = World::new("cloud-card-paused");
+    world.set("gamma", "paused", json!("2026-10-15T09:00:00Z by saiful"));
+    let hub = world.hub();
+    let body = page(&hub);
+    assert_eq!(card(&body), None, "{body}");
+}
+
+#[test]
+fn no_card_while_any_cloud_run_is_live_or_parked() {
+    let world = World::new("cloud-card-live");
+    world.set("delta", "runner", cloud("m2-next", &ago(60)));
+    let hub = world.hub();
+    let body = page(&hub);
+    assert_eq!(card(&body), None, "live: {body}");
+    drop(hub);
+
+    world.set("delta", "handoff_at", json!(ago(30)));
+    world.handoff("delta", "parked: t2 is local-only\n");
+    let hub = world.hub();
+    let body = page(&hub);
+    assert_eq!(card(&body), None, "parked: {body}");
+}

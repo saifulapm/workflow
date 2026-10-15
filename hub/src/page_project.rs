@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::agents::CLOUD_MACHINE;
 use crate::form::encode_component;
 use crate::html::{
-    degraded_banner, esc, item_list_section, markdown_article, page_url, project_url,
+    degraded_banner, esc, item_list_section, markdown_article, outside_link, page_url, project_url,
 };
 use crate::http::Response;
 use crate::live::{self, CloudRun, CloudState, Run};
@@ -315,14 +315,73 @@ pub fn cloud_refusal(
     })
 }
 
+/// The prompt a cloud run starts on, the file `workflow go --cloud` renders,
+/// so the card and the command stay one text.
+const CLOUD_PROMPT: &str = include_str!("../../workflow/src/cloud-prompt.txt");
+
+/// claude.ai's Code page, where a cloud session lives. Built with `concat!`,
+/// as workflow builds it, so the hygiene rule still catches a pasted link.
+pub const CODE_PAGE: &str = concat!("https://claude.ai", "/code");
+
+/// The branch a cloud run of `slug` works on.
+fn cloud_branch(project: &str, slug: &str) -> String {
+    format!("cloud/{project}-{slug}")
+}
+
+/// What the next cloud run is cut from: the branch of the cloud run that
+/// landed last, which main may not hold yet, or main.
+fn cloud_base(s: &ProjectSummary) -> String {
+    match &s.runner {
+        Some(runner) if runner.machine == "cloud" => match &runner.milestone {
+            Some(done) if s.milestone.as_ref() != Some(done) => cloud_branch(&s.name, done),
+            _ => "main".to_string(),
+        },
+        _ => "main".to_string(),
+    }
+}
+
+/// The prompt for `slug` of `project`, its branch cut from `base`, filled in
+/// as workflow fills it.
+fn cloud_prompt(project: &str, slug: &str, base: &str) -> String {
+    CLOUD_PROMPT
+        .trim_end()
+        .replace("{branch}", &cloud_branch(project, slug))
+        .replace("{project}", project)
+        .replace("{slug}", slug)
+        .replace("{base}", base)
+}
+
 /// The way into a cloud run: Run in cloud, which the mini starts, while the
-/// mini is online.
+/// mini is online, and the Start in cloud card for starting one by hand in
+/// the Claude app.
 fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let summaries = project_summaries(&ctx.app.mem);
     if cloud_refusal(&ctx.app.mem, &summaries, s).is_some() {
         return String::new();
     }
-    let mut out = String::new();
+    let slug = s.milestone.as_deref().unwrap_or_default();
+    let remote = ctx
+        .app
+        .mem
+        .projects()
+        .rows("projects")
+        .into_iter()
+        .find(|row| row["name"] == s.name.as_str())
+        .and_then(|row| row["remote"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    let prompt = cloud_prompt(&s.name, slug, &cloud_base(s));
+    let mut out = format!(
+        "<h2>Start in cloud</h2>\n<div class=\"card\">\n\
+         <p class=\"meta\">{} · {} · Environment: workflow</p>\n\
+         <textarea id=\"cloud-prompt\" rows=\"8\" readonly>{}</textarea>\n\
+         <p><button type=\"button\" onclick=\"navigator.clipboard.writeText(\
+         document.getElementById('cloud-prompt').value)\">Copy prompt</button> {}</p>\n\
+         </div>\n",
+        esc(slug),
+        esc(&remote),
+        esc(&prompt),
+        outside_link(CODE_PAGE, "Open Claude"),
+    );
     if ctx.app.agents.online(CLOUD_MACHINE) {
         out.push_str(&controls(
             ctx,

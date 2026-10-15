@@ -452,3 +452,27 @@ fn git(cwd: &Path, args: &[&str]) {
         .expect("run git");
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
+
+/// The repo's own `workflow`, built here, with `CARGO_TARGET_DIR` pinned to
+/// `<root>/workflow/target` for the reason `mem_build` pins mem's.
+pub fn workflow_bin() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let dir = root.join("workflow");
+    let status = Command::new(env!("CARGO"))
+        .args(["build", "--quiet"])
+        .current_dir(&dir)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        .status()
+        .expect("run cargo build for workflow");
+    assert!(status.success(), "building workflow failed");
+    dir.join("target/debug/workflow")
+}
+
+/// `text` with `esc`'s five entities turned back into their characters.
+pub fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
