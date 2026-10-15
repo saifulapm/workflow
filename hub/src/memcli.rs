@@ -206,6 +206,11 @@ impl MemCli {
     /// never at the same time as another one (see `gate`), and never for longer
     /// than `timeout` (see `unavailable_until`).
     pub fn exec(&self, args: &[&str]) -> Run {
+        self.exec_fed(args, None)
+    }
+
+    /// `exec`, with `input` on mem's stdin.
+    fn exec_fed(&self, args: &[&str], input: Option<&[u8]>) -> Run {
         // Checked *before* the gate, so the calls behind a killed one do not
         // each queue for a timeout of their own.
         if self.cooling_off() {
@@ -227,7 +232,7 @@ impl MemCli {
         if let Some(path) = &self.path {
             command.env("PATH", path);
         }
-        match proc::output_within(&mut command, self.timeout) {
+        match proc::output_fed(&mut command, input, self.timeout) {
             Ended::Exited(done) => Run {
                 code: done.code,
                 stdout: done.stdout,
@@ -423,6 +428,14 @@ impl MemCli {
     /// the phone lands on next shows what was just written.
     pub fn write_through(&self, args: &[&str]) -> Run {
         let run = self.exec(args);
+        self.invalidate();
+        run
+    }
+
+    /// `write_through` for a write that reads its text from stdin, such as
+    /// a wiki page.
+    pub fn write_through_fed(&self, args: &[&str], input: &[u8]) -> Run {
+        let run = self.exec_fed(args, Some(input));
         self.invalidate();
         run
     }

@@ -29,7 +29,7 @@ const OTHER_AUD: &str = "0d5f7e5c1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8
 const KID: &str = "test-kid-1";
 const HANDOFF: &str = "Next: wire the connector to claude.ai.";
 /// Every tool the connector lists: the reads, then an orchestrator's writes.
-const TOOL_NAMES: [&str; 19] = [
+const TOOL_NAMES: [&str; 20] = [
     "context",
     "search",
     "show",
@@ -46,6 +46,7 @@ const TOOL_NAMES: [&str; 19] = [
     "decide",
     "tick_task",
     "tick_milestone",
+    "write_wiki",
     "add_evidence",
     "add_finding",
     "close_finding",
@@ -738,4 +739,32 @@ fn a_tick_checks_off_a_task_or_a_milestone_in_place() {
     // A tick is not an approval.
     let status = world.printed(&["--project=proj-alpha", "roadmap", "--status"]);
     assert!(status.contains("draft"), "{status}");
+}
+
+#[test]
+fn write_wiki_replaces_a_page_and_wiki_reads_it_back() {
+    let world = World::new("mcp-wiki");
+    world.seed_plan_roadmap_wiki();
+
+    let page = "--clear\n\n# Auth\n\nSign in through Access.\n";
+    let written = world.tool(
+        "write_wiki",
+        json!({"project": "proj-alpha", "slug": "auth", "note": "Access, not a PIN", "page": page}),
+    );
+    assert_eq!(written["isError"], json!(false), "{written}");
+    let read = world.tool("wiki", json!({"project": "proj-alpha", "slug": "auth"}));
+    assert_eq!(
+        text_of(&read),
+        world.printed(&["--project=proj-alpha", "wiki", "auth"])
+    );
+    assert!(text_of(&read).contains("Sign in through Access."), "{read}");
+    assert!(text_of(&read).starts_with("--clear"), "{read}");
+
+    let runs = world.tool_runs();
+    let refused = world.tool(
+        "write_wiki",
+        json!({"project": "proj-alpha", "slug": "--stdin", "note": "x", "page": "y"}),
+    );
+    assert_eq!(refused["isError"], json!(true), "{refused}");
+    assert_eq!(world.tool_runs(), runs, "a refused slug runs no mem");
 }

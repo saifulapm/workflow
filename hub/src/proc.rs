@@ -15,7 +15,7 @@
 //! process to finish dying is the unbounded wait this module exists to remove,
 //! and the caller is holding a lock while it waits.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -65,14 +65,32 @@ fn spawn_retrying_busy(command: &mut Command) -> std::io::Result<std::process::C
 
 /// Runs `command` to completion, or kills it once `timeout` has passed.
 pub fn output_within(command: &mut Command, timeout: Duration) -> Ended {
+    output_fed(command, None, timeout)
+}
+
+/// `output_within`, with `input` on the child's stdin when there is one.
+pub fn output_fed(command: &mut Command, input: Option<&[u8]>, timeout: Duration) -> Ended {
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = match spawn_retrying_busy(command) {
         Ok(child) => child,
         Err(e) => return Ended::Failed(e.to_string()),
     };
+    // Written on a thread of its own, for the reason the pipes below are
+    // drained on theirs; dropping the handle closes stdin, so the child
+    // sees the end of its input.
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        let input = input.to_vec();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
 
     // Drained on their own threads, not after the wait. A child that fills a
     // pipe buffer blocks on the write and never exits, so a reader that runs

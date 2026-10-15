@@ -129,6 +129,12 @@ const TOOLS: &[Tool] = &[
         call: tick_milestone,
     },
     Tool {
+        name: "write_wiki",
+        description: "Writes a wiki page, or one #section of it, in place of what was there, with a note of what changed.",
+        schema: write_wiki_schema,
+        call: write_wiki,
+    },
+    Tool {
         name: "add_evidence",
         description: "Writes text as a file of evidence for a task, with a note.",
         schema: evidence_schema,
@@ -351,6 +357,17 @@ fn tick_milestone_schema() -> Value {
     )
 }
 
+fn write_wiki_schema() -> Value {
+    schema(
+        json!({
+            "slug": {"type": "string", "description": "The page slug, with #section for one section."},
+            "note": {"type": "string", "description": "What changed and why."},
+            "page": {"type": "string", "description": "The page's markdown."},
+        }),
+        &["slug", "note", "page"],
+    )
+}
+
 fn evidence_schema() -> Value {
     schema(
         json!({
@@ -393,6 +410,17 @@ type Argv = Result<Vec<String>, String>;
 /// argument is checked before mem runs, so refused input runs nothing. A
 /// write drops hub's cached reads, so its pages show the write at once.
 fn run(mem: &MemCli, arguments: &Value, write: bool, argv: impl FnOnce(&Value) -> Argv) -> Value {
+    run_fed(mem, arguments, write, None, argv)
+}
+
+/// `run`, with `input` on mem's stdin: always a write, such as a wiki page.
+fn run_fed(
+    mem: &MemCli,
+    arguments: &Value,
+    write: bool,
+    input: Option<&str>,
+    argv: impl FnOnce(&Value) -> Argv,
+) -> Value {
     let project = match project_arg(arguments) {
         Ok(project) => project,
         Err(why) => return tool_text(why, true),
@@ -404,10 +432,10 @@ fn run(mem: &MemCli, arguments: &Value, write: bool, argv: impl FnOnce(&Value) -
     let project = format!("--project={project}");
     let mut args = vec![project.as_str()];
     args.extend(rest.iter().map(String::as_str));
-    let run = if write {
-        mem.write_through(&args)
-    } else {
-        mem.exec(&args)
+    let run = match (input, write) {
+        (Some(input), _) => mem.write_through_fed(&args, input.as_bytes()),
+        (None, true) => mem.write_through(&args),
+        (None, false) => mem.exec(&args),
     };
     if run.ok() {
         tool_text(&String::from_utf8_lossy(&run.stdout), false)
@@ -571,6 +599,25 @@ fn tick_milestone(mem: &MemCli, arguments: &Value) -> Value {
     run(mem, arguments, true, |a| {
         let milestone = checked(required(a, "milestone")?, "milestone", SLUG)?;
         Ok(vec!["roadmap".into(), format!("--tick={milestone}")])
+    })
+}
+
+/// The page goes on stdin, the one way mem takes a wiki page.
+fn write_wiki(mem: &MemCli, arguments: &Value) -> Value {
+    let page = match required(arguments, "page") {
+        Ok(page) => page,
+        Err(why) => return tool_text(&why, true),
+    };
+    run_fed(mem, arguments, true, Some(page), |a| {
+        let slug = checked(required(a, "slug")?, "slug", WIKI_SLUG)?;
+        let note = required(a, "note")?;
+        Ok(vec![
+            "wiki".into(),
+            "--stdin".into(),
+            format!("--note={note}"),
+            "--".into(),
+            slug.into(),
+        ])
     })
 }
 
