@@ -144,7 +144,10 @@ fn project_detail_stored_plan_links_its_artifact() {
 
     let body = body_of(&hub.get(&format!("/p/{PROJECT}/plan/sub-slug"))).to_string();
     assert!(
-        body.contains("<a href=\"https://claude.ai/artifact/0f3c2b9e\">order desk mockup</a>"),
+        body.contains(
+            "<a href=\"https://claude.ai/artifact/0f3c2b9e\" target=\"_blank\" \
+             rel=\"noopener\">order desk mockup</a>"
+        ),
         "{body}"
     );
 }

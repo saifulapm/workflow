@@ -30,6 +30,38 @@ pub fn esc(text: &str) -> String {
     out
 }
 
+/// A question's text, escaped, with each `http://` or `https://` run as a
+/// link that opens in a new tab. A URL ends at whitespace or at a character
+/// that could close the attribute or the tag, so the rest stays text.
+pub fn linked(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut rest = text;
+    while let Some(at) = ["http://", "https://"]
+        .iter()
+        .filter_map(|scheme| rest.find(scheme))
+        .min()
+    {
+        out.push_str(&esc(&rest[..at]));
+        let url = &rest[at..];
+        let end = url
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>'))
+            .unwrap_or(url.len());
+        out.push_str(&outside_link(&url[..end], &esc(&url[..end])));
+        rest = &url[end..];
+    }
+    out.push_str(&esc(rest));
+    out
+}
+
+/// A link that leaves the hub: it opens in a new tab, and the page it opens
+/// gets no handle on this one. `label` is markup, escaped by the caller.
+pub fn outside_link(href: &str, label: &str) -> String {
+    format!(
+        "<a href=\"{}\" target=\"_blank\" rel=\"noopener\">{label}</a>",
+        esc(href)
+    )
+}
+
 /// What the last `POST /answer` did. A code, not the text itself: the banner is
 /// chosen here rather than reflected out of the query string, so there is
 /// nothing on this path to reflect.
@@ -196,7 +228,8 @@ article.md blockquote{margin:0 0 10px;padding:2px 0 2px 12px;border-left:3px sol
 /// crate.
 pub fn subscribe_page(config: &Config, machine: &str) -> String {
     let topic = esc(&config.topic);
-    let subscribe = esc(&config.subscribe_url());
+    let url = config.subscribe_url();
+    let subscribe = outside_link(&url, &esc(&url));
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n\
          <meta charset=\"utf-8\">\n\
@@ -207,8 +240,8 @@ pub fn subscribe_page(config: &Config, machine: &str) -> String {
          <p>Topic, to type into the ntfy app:</p>\n\
          <p class=\"q\"><strong>{topic}</strong></p>\n\
          <ul>\n\
-         <li><a href=\"ntfy://{topic}\">ntfy://{topic}</a></li>\n\
-         <li><a href=\"{subscribe}\">{subscribe}</a></li>\n\
+         <li><a href=\"ntfy://{topic}\" target=\"_blank\" rel=\"noopener\">ntfy://{topic}</a></li>\n\
+         <li>{subscribe}</li>\n\
          </ul>\n\
          <h2>What this publishes</h2>\n\
          <p>The question text never leaves the tailnet. The doorbell publishes \
@@ -419,12 +452,30 @@ pub fn markdown_ids(text: &str, project: &str, ids: &[(String, String)]) -> Stri
                 id,
             }) => {
                 link_open = destination(&dest_url, project).is_some_and(|dest| {
-                    events.push(Event::Start(Tag::Link {
-                        link_type,
-                        dest_url: dest.into(),
-                        title,
-                        id,
-                    }));
+                    // `push_html` writes no target, so a link that leaves the
+                    // hub opens as raw markup; `push_html` still closes it.
+                    let lower = dest.to_ascii_lowercase();
+                    if lower.starts_with("http://") || lower.starts_with("https://") {
+                        let title = if title.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" title=\"{}\"", esc(&title))
+                        };
+                        events.push(Event::Html(
+                            format!(
+                                "<a href=\"{}\"{title} target=\"_blank\" rel=\"noopener\">",
+                                esc(&dest)
+                            )
+                            .into(),
+                        ));
+                    } else {
+                        events.push(Event::Start(Tag::Link {
+                            link_type,
+                            dest_url: dest.into(),
+                            title,
+                            id,
+                        }));
+                    }
                     true
                 });
             }
@@ -450,7 +501,7 @@ pub fn markdown_ids(text: &str, project: &str, ids: &[(String, String)]) -> Stri
 /// and handoff both render this way.
 fn body_block(text: Option<&str>, empty: &str) -> String {
     match text {
-        Some(text) => format!("<p class=\"q\">{}</p>\n", esc(text)),
+        Some(text) => format!("<p class=\"q\">{}</p>\n", linked(text)),
         None => format!("<p class=\"empty\">{empty}</p>\n"),
     }
 }
@@ -598,7 +649,10 @@ mod tests {
         assert!(!out.contains("javascript:"), "{out}");
         assert!(!out.contains("</a> and"), "no tag was closed twice: {out}");
         assert!(out.contains("tap and"), "{out}");
-        assert!(out.contains("<a href=\"https://x.test/\">go</a>"), "{out}");
+        assert!(
+            out.contains("<a href=\"https://x.test/\" target=\"_blank\" rel=\"noopener\">go</a>"),
+            "{out}"
+        );
         // An empty link is the case a flag gets wrong: nothing between the
         // start and the end to notice the start was dropped.
         assert_eq!(markdown("[](javascript:alert(1))", "p").trim(), "<p></p>");

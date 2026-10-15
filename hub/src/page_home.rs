@@ -143,11 +143,9 @@ pub fn render(
     let mut body = String::from(RELOAD);
     body.push_str("<nav class=\"pages\">\n");
     for sibling in &config.siblings {
-        if let Some(link) = html::safe_link(sibling) {
-            body.push_str(&format!(
-                "<a href=\"{link}\">{}</a>\n",
-                esc(&html::label(sibling))
-            ));
+        if html::safe_link(sibling).is_some() {
+            body.push_str(&html::outside_link(sibling, &esc(&html::label(sibling))));
+            body.push('\n');
         }
     }
     body.push_str("<a href=\"/wiki\">wiki</a>\n<a href=\"/subscribe\">subscribe</a>\n</nav>\n");

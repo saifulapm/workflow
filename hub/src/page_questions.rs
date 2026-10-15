@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::html::{Banner, degraded_banner, esc, project_url};
+use crate::html::{Banner, degraded_banner, esc, linked, project_url};
 use crate::http::Response;
 use crate::model;
 use crate::pages::{PageCtx, page_shell};
@@ -107,7 +107,7 @@ pub fn questions_body(ctx: &PageCtx) -> String {
     for question in answered {
         out.push_str(&format!(
             "<article>\n<p class=\"q\">{text}</p>\n<p class=\"meta\">answer: {answer}</p>\n</article>\n",
-            text = esc(&question.text),
+            text = linked(&question.text),
             answer = esc(question.answer.as_deref().unwrap_or("")),
         ));
     }
@@ -134,7 +134,7 @@ pub fn pending_block(question: &QuestionRow, project: Option<&str>, lead: &str) 
     }
     let mut out = format!(
         "<article>\n{lead}<p class=\"q\">{}</p>\n",
-        esc(&question.text)
+        linked(&question.text)
     );
     for option in &question.options {
         let button = if question.recommend.as_deref() == Some(option.as_str()) {

@@ -150,7 +150,9 @@ fn the_header_carries_the_machine_name_and_the_sibling_links() {
     assert!(body.contains(&format!("<h1>{machine}</h1>")), "{body}");
 
     assert!(
-        body.contains("<a href=\"http://macbook:8787\">macbook:8787</a>"),
+        body.contains(
+            "<a href=\"http://macbook:8787\" target=\"_blank\" rel=\"noopener\">macbook:8787</a>"
+        ),
         "{body}"
     );
     assert!(body.contains("<a href=\"/subscribe\">"), "{body}");
