@@ -77,7 +77,8 @@ pub struct Start {
 }
 
 impl Start {
-    /// The `amx` arguments that start it under `name`.
+    /// The `amx` arguments that start it under `name`. Claude runs it under
+    /// Remote Control by the same name, so the Code tab lists it as amx does.
     pub fn args(&self, name: &str) -> Vec<String> {
         [
             "new",
@@ -93,6 +94,9 @@ impl Start {
             "--dir",
             &self.dir,
             &self.task,
+            "--",
+            "--remote-control",
+            name,
         ]
         .map(str::to_string)
         .to_vec()
@@ -759,8 +763,29 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
                 "--dir",
                 &dir.display().to_string(),
                 &task("alpha", "catalog"),
+                "--",
+                "--remote-control",
+                "alpha-catalog",
             ]
         );
+    }
+
+    #[test]
+    fn the_code_tab_lists_an_orchestrator_under_the_name_amx_gave_it() {
+        let work = Scratch::new("go-rc");
+        let projects = [row("shopify_apps", Some("approved"), &[&work.mkdir("c")])];
+        let Decision::Start(start) =
+            decide_quietly(&opts(Some("shopify_apps"), Some("m5-checkout")), &projects)
+        else {
+            panic!("not a start");
+        };
+
+        assert!(start.args(&start.name).ends_with(
+            &["--", "--remote-control", "shopify-apps-m5-checkout"].map(str::to_string)
+        ));
+        assert!(start.args("shopify-apps-m5-checkout-2").ends_with(
+            &["--", "--remote-control", "shopify-apps-m5-checkout-2"].map(str::to_string)
+        ));
     }
 
     #[test]

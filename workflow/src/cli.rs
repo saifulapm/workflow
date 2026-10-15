@@ -97,7 +97,8 @@ another live amx agent is running that milestone's orchestrator; the caller
 itself ($AMX_ID) does not count, so an orchestrator can start its successor.
 The agent is `amx new --name <project>-<milestone>` in the project's checkout,
 on the goal that milestone's landing is the proof of; a name amx has taken by
-an agent that ended gets a -2, -3, ... suffix. Prints the agent's name."
+an agent that ended gets a -2, -3, ... suffix. Claude runs under Remote Control
+by the same name, so the Claude app's Code tab lists it. Prints the agent's name."
     )]
     Go {
         /// The project, by mem's name; the current directory's when omitted.
