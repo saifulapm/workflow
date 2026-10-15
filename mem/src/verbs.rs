@@ -364,6 +364,7 @@ fn project_summary(
     vec![
         ("roadmap_status", json!(declared(ROADMAP_STATUS))),
         ("paused", json!(declared("paused"))),
+        ("runner", runner_json(&app.store, id)),
         (
             "milestone",
             json!(roadmap.iter().find(|(_, done)| !done).map(|(slug, _)| slug)),
@@ -586,6 +587,40 @@ pub fn project_pause(app: &App, who: &str) -> Result<i32> {
     Ok(code)
 }
 
+/// `mem project set runner <machine> <id>`: one word each, so the stored
+/// "<machine> <id>" splits back apart, and mem stamps `runner_since`.
+pub fn project_runner(app: &App, machine: &str, id: &str) -> Result<i32> {
+    let (machine, id) = (machine.trim(), id.trim());
+    if machine.is_empty() || id.is_empty() || machine.contains(' ') || id.contains(' ') {
+        return Err(exit::usage(
+            "give a machine and an amx id, e.g. `mem project set runner mini thing-m1`".to_string(),
+        ));
+    }
+    let identity = writable_project_identity(app)?;
+    let Some(project) = identity.id() else {
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
+    };
+    let now = jiff::Timestamp::now().round(jiff::Unit::Second)?;
+    crate::project::set_key(&app.store, project, "runner_since", &now.to_string())?;
+    project_set(app, "runner", &format!("{machine} {id}"))
+}
+
+/// The runner as `projects --json` shows it, or null when none is recorded.
+fn runner_json(store: &crate::store::Store, id: &str) -> serde_json::Value {
+    let declared = |key| crate::project::declared(store, id, key);
+    match declared("runner")
+        .as_deref()
+        .and_then(|r| r.split_once(' '))
+    {
+        Some((machine, run)) => json!({
+            "machine": machine,
+            "id": run,
+            "since": declared("runner_since"),
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
 /// `mem project unset <key>` -- the way back to absent. `set` refuses an
 /// empty value, so without this the only way to take a key off a project
 /// was to edit project.toml by hand.
@@ -595,6 +630,9 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let (path, had) = crate::project::unset_key(&app.store, id, key)?;
+    if key == "runner" {
+        crate::project::unset_key(&app.store, id, "runner_since")?;
+    }
     // An unpause has to reach the other machines as a pause does.
     if key == "paused" {
         crate::sync::trigger(&app.dirs.qshell_status_json());
@@ -1168,6 +1206,14 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
     let path = (which.path)(&app.store, id);
     let outcome = crate::write::tick_task(&path, task, which.item)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
+    // The roadmap is done, so no orchestrator runs this project any more.
+    if which.status_key.is_some() {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        if checkboxes(&text, false).iter().all(|(_, done)| *done) {
+            crate::project::unset_key(&app.store, id, "runner")?;
+            crate::project::unset_key(&app.store, id, "runner_since")?;
+        }
+    }
     if app.json {
         println!(
             "{}",

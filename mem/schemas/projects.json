@@ -26,6 +26,7 @@
           "worktree",
           "roadmap_status",
           "paused",
+          "runner",
           "milestone",
           "milestones_done",
           "milestones_total",
@@ -90,6 +91,33 @@
               "string",
               "null"
             ]
+          },
+          "runner": {
+            "description": "The machine and amx id of this project's orchestrator, from `mem project set runner`; null when none is recorded or the roadmap is done.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "machine",
+              "id",
+              "since"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "machine": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "since": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
           },
           "milestone": {
             "type": [

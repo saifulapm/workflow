@@ -386,6 +386,7 @@ pub enum ProjectKey {
     Verify,
     HygieneExempt,
     Paused,
+    Runner,
 }
 
 impl ProjectKey {
@@ -395,6 +396,7 @@ impl ProjectKey {
             ProjectKey::Verify => "verify",
             ProjectKey::HygieneExempt => "hygiene_exempt",
             ProjectKey::Paused => "paused",
+            ProjectKey::Runner => "runner",
         }
     }
 }
@@ -415,6 +417,9 @@ pub enum ProjectSetCommand {
     /// Pause this project: `workflow go` refuses it until `unset paused`.
     /// mem records "<now, UTC> by <who>".
     Paused { who: String },
+    /// The machine and the amx id of this project's orchestrator, written by
+    /// `workflow go`. mem stamps when it was set.
+    Runner { machine: String, id: String },
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;

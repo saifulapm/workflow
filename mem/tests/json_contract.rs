@@ -59,7 +59,11 @@ fn check(schema: &Value, value: &Value, at: &str, problems: &mut Vec<String>) {
     {
         problems.push(format!("{at}: {value} is not one of {allowed:?}"));
     }
-    if let Some(Value::Array(required)) = schema.get("required") {
+    // As in JSON Schema, `required` speaks only to an object, so a nullable
+    // object's null passes it.
+    if let Some(Value::Array(required)) = schema.get("required")
+        && value.is_object()
+    {
         for key in required.iter().filter_map(|k| k.as_str()) {
             if value.get(key).is_none() {
                 problems.push(format!("{at}: missing required key '{key}'"));
@@ -427,9 +431,8 @@ fn projects_carry_the_summary_a_project_page_reads() {
 
     // Nothing but the plan yet: every other field is null, zero or false.
     let p = row(&w);
-    for gone in ["runner", "has_brief"] {
-        assert!(p.get(gone).is_none(), "{gone}: {p}");
-    }
+    assert!(p.get("has_brief").is_none(), "{p}");
+    assert_eq!(p.get("runner"), Some(&serde_json::Value::Null), "{p}");
     assert_eq!(p.get("paused"), Some(&serde_json::Value::Null), "{p}");
     assert!(p["roadmap_status"].is_null(), "{p}");
     assert!(p["milestone"].is_null(), "{p}");
@@ -462,9 +465,7 @@ fn projects_carry_the_summary_a_project_page_reads() {
     std::fs::write(wiki.join("spec.md"), "# Spec\n").unwrap();
 
     let p = row(&w);
-    for gone in ["runner", "has_brief"] {
-        assert!(p.get(gone).is_none(), "{gone}: {p}");
-    }
+    assert!(p.get("has_brief").is_none(), "{p}");
     assert_eq!(p["roadmap_status"], "draft");
     assert_eq!(p["milestone"], "m1-auth");
     assert_eq!(p["milestones_done"], 0);

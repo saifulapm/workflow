@@ -116,8 +116,6 @@ fn the_engine_surface_is_gone() {
         &["plan", "--force"][..],
         &["roadmap", "--force"][..],
         &["wiki", "notes", "--force"][..],
-        &["project", "set", "runner", "mini"][..],
-        &["project", "unset", "runner"][..],
         &["project", "set", "slots", "2"][..],
         &["status"][..],
         &["status", "--set", "x"][..],
@@ -141,7 +139,6 @@ fn the_engine_surface_is_gone() {
         (
             &["project", "set"][..],
             &[
-                "runner",
                 "slots",
                 "effort",
                 "surface",
@@ -153,9 +150,7 @@ fn the_engine_surface_is_gone() {
         ),
         (
             &["project", "unset"][..],
-            &[
-                "runner", "slots", "effort", "surface", "preview", "dogfood", "review",
-            ][..],
+            &["slots", "effort", "surface", "preview", "dogfood", "review"][..],
         ),
         (&["project", "current"][..], &["machine"][..]),
         (&[][..], &["status.md", "  status ", "  skill "][..]),

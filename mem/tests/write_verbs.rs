@@ -609,7 +609,6 @@ fn project_set_refuses_the_keys_nothing_reads() {
         "surface",
         "dogfood-machine",
         "slots",
-        "runner",
     ] {
         let out = mem(&w, &repo, &["project", "set", key, "high"]);
         assert_eq!(code(&out), 2, "{key}: {}", stdout(&out));
@@ -624,6 +623,58 @@ fn project_set_refuses_the_keys_nothing_reads() {
             "{key}"
         );
     }
+}
+
+#[test]
+fn the_runner_is_a_machine_and_an_id_and_the_last_milestone_clears_it() {
+    let w = World::new("write-runner");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let runner =
+        |w: &World| json(&mem(w, &repo, &["projects", "--json"]))["projects"][0]["runner"].clone();
+    assert!(runner(&w).is_null(), "{}", runner(&w));
+
+    let out = mem(
+        &w,
+        &repo,
+        &["project", "set", "runner", "mini", "thing-m1-auth"],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let r = runner(&w);
+    assert_eq!(r["machine"], "mini", "{r}");
+    assert_eq!(r["id"], "thing-m1-auth", "{r}");
+    let since = r["since"].as_str().expect("since is stamped");
+    assert!(since.parse::<jiff::Timestamp>().is_ok(), "{since}");
+
+    let roadmap = w.dir.join("roadmap.md");
+    std::fs::write(
+        &roadmap,
+        "# roadmap: thing\n\n- [ ] m1-auth Sign-in\n- [ ] m2-billing Billing\n",
+    )
+    .unwrap();
+    let ok = |args: &[&str]| assert_eq!(code(&mem(&w, &repo, args)), 0, "{args:?}");
+    ok(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
+    ok(&["roadmap", "--tick", "m1-auth"]);
+    assert_eq!(
+        runner(&w)["machine"],
+        "mini",
+        "a milestone left keeps the runner"
+    );
+    ok(&["roadmap", "--tick", "m2-billing"]);
+    assert!(runner(&w).is_null(), "the roadmap is done: {}", runner(&w));
+
+    ok(&["project", "set", "runner", "nuc", "thing-m3"]);
+    ok(&["project", "unset", "runner"]);
+    assert!(runner(&w).is_null(), "{}", runner(&w));
+    let toml = std::fs::read_to_string(
+        w.store()
+            .project_toml(&mem::project::Registry::load(&w.store()).projects[0].id),
+    )
+    .unwrap();
+    assert!(
+        !toml.contains("runner"),
+        "unset takes the stamp too: {toml}"
+    );
 }
 
 #[test]
