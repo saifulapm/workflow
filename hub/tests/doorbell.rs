@@ -750,9 +750,9 @@ impl Fake {
         std::fs::rename(&staged, self.data.join(name)).unwrap();
     }
 
-    /// proj-alpha, last active at `alpha_at`, and proj-beta, both checked out
-    /// here, with `beta_done` of beta's three milestones done under
-    /// `beta_status`.
+    /// proj-alpha, last active at `alpha_at`, and proj-beta, neither checked
+    /// out here, as on the one hub, with `beta_done` of beta's three
+    /// milestones done under `beta_status`.
     fn projects(&self, alpha_at: &str, beta_status: &str, beta_done: u32) {
         self.put(
             "projects.json",
@@ -760,10 +760,10 @@ impl Fake {
                 "{{\"projects\":[\
                  {{\"name\":\"proj-alpha\",\"last_activity\":\"{alpha_at}\",\
                    \"roadmap_status\":\"approved\",\"milestones_done\":1,\
-                   \"milestones_total\":3,\"checkouts\":[\"/src/proj-alpha\"]}},\
+                   \"milestones_total\":3,\"checkouts\":[]}},\
                  {{\"name\":\"proj-beta\",\"last_activity\":\"2026-10-05T08:00:00Z\",\
                    \"roadmap_status\":\"{beta_status}\",\"milestones_done\":{beta_done},\
-                   \"milestones_total\":3,\"checkouts\":[\"/src/proj-beta\"]}}]}}"
+                   \"milestones_total\":3,\"checkouts\":[]}}]}}"
             ),
         );
     }
@@ -870,9 +870,9 @@ fn an_upgrade_records_roadmaps_already_finished_and_rings_none() {
         "projects.json",
         "{\"projects\":[\
          {\"name\":\"proj-alpha\",\"roadmap_status\":\"approved\",\"milestones_done\":3,\
-           \"milestones_total\":3,\"checkouts\":[\"/src/proj-alpha\"]},\
+           \"milestones_total\":3,\"checkouts\":[]},\
          {\"name\":\"proj-beta\",\"roadmap_status\":\"approved\",\"milestones_done\":3,\
-           \"milestones_total\":3,\"checkouts\":[\"/src/proj-beta\"]}]}",
+           \"milestones_total\":3,\"checkouts\":[]}]}",
     );
     wait_for("the finished ring", Duration::from_secs(15), || {
         !fake.rings().is_empty()

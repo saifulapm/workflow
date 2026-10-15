@@ -134,11 +134,11 @@ impl Doorbell {
             let Some(name) = project["name"].as_str() else {
                 continue;
             };
-            // Every milestone ticked, on a machine that could have run them.
+            // Every milestone ticked. The one hub has no checkout of any
+            // project, so it rings whichever machine ran them.
             let total = project["milestones_total"].as_u64().unwrap_or(0);
             if total > 0
                 && project["milestones_done"].as_u64() == Some(total)
-                && summary_of(&project).checked_out
                 // The total is in the key so a roadmap that grows and
                 // finishes again rings again.
                 && self.record(state, &format!("finished {name} {total}"))
