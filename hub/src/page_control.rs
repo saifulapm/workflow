@@ -9,12 +9,13 @@
 
 use serde_json::Value;
 
-use crate::agents::Command;
+use crate::agents::{CLOUD_MACHINE, Command};
 use crate::html::{esc, project_url};
 use crate::http::Response;
 use crate::live;
 use crate::memcli::{Outcome, Run};
 use crate::page_home::summary_of;
+use crate::page_project;
 use crate::pages::{PageCtx, page_shell};
 
 /// How the plan skill asks for the roadmap's approval: "Review the <name>
@@ -29,7 +30,10 @@ pub fn control_post(ctx: &PageCtx) -> Response {
     let form = ctx.request.form();
     let verb = form.get("do").unwrap_or("");
     let text = form.get("text").unwrap_or("").trim();
-    if !matches!(verb, "approve" | "changes" | "go" | "pause" | "unpause") {
+    if !matches!(
+        verb,
+        "approve" | "changes" | "go" | "cloud" | "pause" | "unpause"
+    ) {
         return Response::text(400, "unknown control");
     }
     let roadmap = format!("{}/roadmap", project_url(project));
@@ -91,6 +95,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             Response::see_other(&roadmap)
         }
         "pause" | "unpause" => pause(ctx, project, verb),
+        "cloud" => cloud(ctx, project),
         _ => go(ctx, project, form.get("machine").unwrap_or("")),
     }
 }
@@ -171,9 +176,42 @@ fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
     // A second tap before the agent's next poll adds nothing.
     let start = Command::Start {
         project: project.to_string(),
+        cloud: false,
     };
     if !agents.pending(machine).contains(&start) {
         agents.queue(machine, start);
+    }
+    Response::see_other(&project_url(project))
+}
+
+/// Run in cloud: one cloud `start` queued for the mini, whose agent runs
+/// `workflow go <project> --cloud` there, once the projects are read again
+/// as they are now. Called with the control lock held.
+fn cloud(ctx: &PageCtx, project: &str) -> Response {
+    let mem = &ctx.app.mem;
+    mem.invalidate();
+    let summaries: Vec<_> = mem
+        .refresh(&["projects", "--json"])
+        .rows("projects")
+        .iter()
+        .map(summary_of)
+        .collect();
+    let Some(summary) = summaries.iter().find(|s| s.name == project) else {
+        return Response::not_found();
+    };
+    if let Some(why) = page_project::cloud_refusal(mem, &summaries, summary) {
+        return conflict(ctx, &why);
+    }
+    let agents = &ctx.app.agents;
+    if !agents.online(CLOUD_MACHINE) {
+        return conflict(ctx, &format!("{CLOUD_MACHINE} is offline."));
+    }
+    let start = Command::Start {
+        project: project.to_string(),
+        cloud: true,
+    };
+    if !agents.pending(CLOUD_MACHINE).contains(&start) {
+        agents.queue(CLOUD_MACHINE, start);
     }
     Response::see_other(&project_url(project))
 }

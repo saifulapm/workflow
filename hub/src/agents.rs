@@ -19,6 +19,9 @@ use crate::http::{Request, Response};
 use crate::live::Agent;
 use crate::pair;
 
+/// The machine whose agent starts cloud runs and carries answers to them.
+pub const CLOUD_MACHINE: &str = "mini";
+
 /// A machine with no poll for this long reads offline.
 pub const DEFAULT_WINDOW: Duration = Duration::from_secs(30);
 
@@ -28,8 +31,11 @@ pub const DEFAULT_WINDOW: Duration = Duration::from_secs(30);
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Command {
     Sync,
+    /// `workflow go <project>`, or with `cloud` its `--cloud` form.
     Start {
         project: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        cloud: bool,
     },
     Resume {
         project: String,
@@ -49,6 +55,16 @@ pub enum Command {
         id: String,
         message: String,
     },
+    /// Answers for a cloud session: `claude -p <message> --cloud <id>`.
+    Cloud {
+        project: String,
+        id: String,
+        message: String,
+    },
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// What a machine said in its last poll.

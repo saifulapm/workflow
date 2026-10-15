@@ -180,10 +180,10 @@ fn named_for(id: &str, project: &str, milestone: &str) -> bool {
 /// write queues, and a notification, are no command of the project's.
 pub fn away(machine: &str, project: &str, agents: &Agents) -> String {
     let waiting = agents.pending(machine).iter().any(|command| match command {
-        Command::Start { project: p }
+        Command::Start { project: p, .. }
         | Command::Resume { project: p, .. }
         | Command::FollowUp { project: p, .. } => p == project,
-        Command::Sync | Command::Notify { .. } => false,
+        Command::Cloud { .. } | Command::Sync | Command::Notify { .. } => false,
     });
     if waiting {
         format!("waiting for {machine}")

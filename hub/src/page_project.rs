@@ -8,13 +8,14 @@
 
 use serde_json::Value;
 
+use crate::agents::CLOUD_MACHINE;
 use crate::form::encode_component;
 use crate::html::{
     degraded_banner, esc, item_list_section, markdown_article, page_url, project_url,
 };
 use crate::http::Response;
-use crate::live::{self, Run};
-use crate::memcli::Outcome;
+use crate::live::{self, CloudRun, CloudState, Run};
+use crate::memcli::{MemCli, Outcome};
 use crate::model;
 use crate::page_decisions::{ruling_block, ruling_rows};
 use crate::page_evidence::{FindingRow, finding_rows, findings_section};
@@ -43,6 +44,7 @@ pub fn get(ctx: &PageCtx) -> Response {
     let running = matches!(summary.stage, "execution" | "dogfooding");
     if running {
         body.push_str(&orchestrator_line(ctx, &summary));
+        body.push_str(&cloud_section(ctx, &summary));
     }
     if summary.stage == "execution" {
         body.push_str(&run_summary(ctx, project));
@@ -273,6 +275,67 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
         esc(&meta),
         controls(ctx, pause_form(project, paused))
     )
+}
+
+/// The project's cloud run that holds the one cloud slot, live or parked,
+/// with its project's name. A handoff is read only for a cloud runner that
+/// wrote one since it began.
+pub fn cloud_slot(mem: &MemCli, summaries: &[ProjectSummary]) -> Option<(String, CloudRun)> {
+    let now = jiff::Timestamp::now();
+    summaries.iter().find_map(|s| {
+        let handoff = || match &*mem.handoff(&s.name) {
+            Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
+            _ => None,
+        };
+        live::cloud_run(s, handoff, now)
+            .filter(|run| matches!(run.state, CloudState::Live | CloudState::Parked))
+            .map(|run| (s.name.clone(), run))
+    })
+}
+
+/// Why `s` may not start a cloud run, or `None` when it may: `workflow go
+/// --cloud` wants an approved milestone, no pause, and the slot free.
+pub fn cloud_refusal(
+    mem: &MemCli,
+    summaries: &[ProjectSummary],
+    s: &ProjectSummary,
+) -> Option<String> {
+    let (done, total) = s.milestones;
+    if s.roadmap_status.as_deref() != Some("approved") || done >= total || s.milestone.is_none() {
+        return Some("There is no approved milestone to start.".to_string());
+    }
+    if s.paused.is_some() {
+        return Some(format!("{} is paused.", s.name));
+    }
+    cloud_slot(mem, summaries).map(|(project, run)| {
+        format!(
+            "a cloud run is live: {project} ({}, {}); one runs at a time.",
+            run.milestone, run.id
+        )
+    })
+}
+
+/// The way into a cloud run: Run in cloud, which the mini starts, while the
+/// mini is online.
+fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
+    let summaries = project_summaries(&ctx.app.mem);
+    if cloud_refusal(&ctx.app.mem, &summaries, s).is_some() {
+        return String::new();
+    }
+    let mut out = String::new();
+    if ctx.app.agents.online(CLOUD_MACHINE) {
+        out.push_str(&controls(
+            ctx,
+            format!(
+                "<form method=\"post\" action=\"{}/control\">\n\
+                 <input type=\"hidden\" name=\"do\" value=\"cloud\">\n\
+                 <button type=\"submit\">Run in cloud</button>\n\
+                 </form>\n",
+                esc(&project_url(&s.name))
+            ),
+        ));
+    }
+    out
 }
 
 /// The forms, or for a browser that never paired the line saying how.
