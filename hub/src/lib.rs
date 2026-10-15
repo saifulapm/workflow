@@ -19,6 +19,7 @@ pub mod http;
 pub mod live;
 pub mod mcp;
 pub mod memcli;
+pub mod memserve;
 pub mod model;
 pub mod multipart;
 pub mod origin;

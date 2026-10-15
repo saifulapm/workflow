@@ -3,6 +3,7 @@
 //! `App::handle`: the tunnel's Access token is its one guard, and the hub's
 //! pairing and origin checks belong to the hub's pages.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -10,6 +11,7 @@ use serde_json::{Value, json};
 use crate::access::Access;
 use crate::http::{Request, Response};
 use crate::memcli::MemCli;
+use crate::memserve;
 use crate::page_control::is_approval;
 
 /// The revisions whose `initialize` handshake this endpoint speaks, newest
@@ -19,6 +21,8 @@ const PROTOCOL_VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 pub struct Mcp {
     access: Access,
     mem: Arc<MemCli>,
+    /// What `/dl/mem` serves.
+    mem_binary: Option<PathBuf>,
 }
 
 /// One tool: its listing, and the call that runs it.
@@ -156,8 +160,12 @@ const TOOLS: &[Tool] = &[
 ];
 
 impl Mcp {
-    pub fn new(access: Access, mem: Arc<MemCli>) -> Mcp {
-        Mcp { access, mem }
+    pub fn new(access: Access, mem: Arc<MemCli>, mem_binary: Option<PathBuf>) -> Mcp {
+        Mcp {
+            access,
+            mem,
+            mem_binary,
+        }
     }
 
     pub fn handle(&self, request: &Request) -> Response {
@@ -168,6 +176,14 @@ impl Mcp {
         {
             eprintln!("hub: mcp: refused {}: {why}", request.peer);
             return Response::new(401, "application/json", r#"{"error":"unauthorized"}"#);
+        }
+        // mem's remote mode and its download, behind the same token.
+        match (request.method.as_str(), request.path.as_str()) {
+            ("POST", "/cli") => return memserve::cli(&self.mem, &request.body),
+            (_, "/cli") => return Response::method_not_allowed("POST"),
+            ("GET", "/dl/mem") => return memserve::download(self.mem_binary.as_deref()),
+            (_, "/dl/mem") => return Response::method_not_allowed("GET"),
+            _ => {}
         }
         if request.path != "/" && request.path != "/mcp" {
             return Response::not_found();

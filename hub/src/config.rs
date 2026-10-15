@@ -62,6 +62,10 @@ pub struct Config {
     /// The Access team domain, e.g. `https://<team>.cloudflareaccess.com`.
     #[serde(default)]
     pub access_team: Option<String>,
+    /// The mem binary the MCP listener serves at `/dl/mem`, for a cloud VM's
+    /// mem to fetch on first use; with none, that path is a 404.
+    #[serde(default)]
+    pub mem_binary: Option<PathBuf>,
 }
 
 fn default_port() -> u16 {
@@ -86,6 +90,7 @@ impl Default for Config {
             mcp_port: None,
             access_aud: None,
             access_team: None,
+            mem_binary: None,
         }
     }
 }
