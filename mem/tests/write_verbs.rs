@@ -688,7 +688,15 @@ fn a_cloud_runner_outlives_the_last_milestone_so_its_branch_can_still_land() {
     let roadmap = w.dir.join("roadmap.md");
     std::fs::write(&roadmap, "# roadmap: thing\n\n- [ ] m1-auth Sign-in\n").unwrap();
     ok(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
-    ok(&["project", "set", "runner", "cloud", "session_01Z", "--milestone", "m1-auth"]);
+    ok(&[
+        "project",
+        "set",
+        "runner",
+        "cloud",
+        "session_01Z",
+        "--milestone",
+        "m1-auth",
+    ]);
     ok(&["roadmap", "--tick", "m1-auth"]);
     let runner = json(&mem(&w, &repo, &["projects", "--json"]))["projects"][0]["runner"].clone();
     assert_eq!(runner["machine"], "cloud", "{runner}");
