@@ -370,6 +370,20 @@ impl App {
         });
     }
 
+    /// Saiful replies in the Claude app while the mini is off: the cloud
+    /// commands waiting for it are dropped, and the run's answers so far
+    /// count as told.
+    pub fn replied_in_app(&self, project: &str, runner: &Runner) {
+        let ids: Vec<String> = self
+            .cloud_questions(project, runner)
+            .iter()
+            .filter(|row| row["answered"] == true)
+            .filter_map(|row| row["id"].as_str().map(str::to_string))
+            .collect();
+        self.agents
+            .withdraw_cloud(CLOUD_MACHINE, project, &runner.id, &ids);
+    }
+
     /// The person questions of `runner`'s cloud run.
     fn cloud_questions(&self, project: &str, runner: &Runner) -> Vec<Value> {
         let since = runner

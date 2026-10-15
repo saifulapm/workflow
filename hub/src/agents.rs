@@ -214,6 +214,28 @@ impl Agents {
         }
     }
 
+    /// Takes `project`'s `cloud` commands off `machine`'s queue and records
+    /// `ids` as told to `session`: Saiful gave the answers in the Claude
+    /// app, so they must never reach the session again.
+    pub fn withdraw_cloud(&self, machine: &str, project: &str, session: &str, ids: &[String]) {
+        let mut state = self.lock();
+        if let Some(queue) = state.saved.queues.get_mut(machine) {
+            queue.retain(|c| !matches!(c, Command::Cloud { project: p, .. } if p == project));
+        }
+        let told = state
+            .saved
+            .delivered
+            .entry(session.to_string())
+            .or_default();
+        told.extend(
+            ids.iter()
+                .filter(|id| !told.contains(id))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        self.save(&state.saved);
+    }
+
     /// One `sync` for every machine that has polled, after a hub write.
     pub fn queue_sync_all(&self) {
         for machine in self.machines() {

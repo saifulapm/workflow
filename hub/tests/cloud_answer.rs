@@ -8,7 +8,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{Hub, TempDir, fixture_bin, status_of, ulid_at};
+use common::{Hub, TempDir, body_of, fixture_bin, header_of, status_of, ulid_at};
 use serde_json::{Value, json};
 
 const SESSION: &str = "session_01CloudRun";
@@ -177,4 +177,73 @@ fn an_answer_while_the_mini_is_off_reaches_it_once_it_polls() {
         cloud(&format!("{HEAD}#AAAAAAAA Which port?\nAnswer: 8787"))
     );
     assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
+}
+
+const MINI_OFF: &str = "mini is off: reply in the Claude app to resume now";
+const REPLY_IN_APP: &str = "<input type=\"hidden\" name=\"do\" value=\"reply-in-app\">";
+
+fn page(hub: &Hub) -> String {
+    let response = hub.get("/p/gamma");
+    assert_eq!(status_of(&response), 200, "{response}");
+    body_of(&response).to_string()
+}
+
+#[test]
+fn with_the_mini_off_the_page_offers_the_claude_app_and_that_withdraws_the_answers() {
+    let world = World::new("cloud-answer-in-app");
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(body.contains(MINI_OFF), "parked: {body}");
+
+    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
+    let q = |a| question(&q1, "Which port?", a);
+    world.questions(&[q(None)], &[q(Some("8787"))]);
+    answer(&hub, &q1, "8787");
+    let body = page(&hub);
+    assert!(body.contains(MINI_OFF), "{body}");
+    assert!(body.contains(REPLY_IN_APP), "{body}");
+
+    let response = hub.post_form("/p/gamma/control", "do=reply-in-app");
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(
+        header_of(&response, "location"),
+        Some(format!("https://claude.ai/code/{SESSION}").as_str())
+    );
+    // A second tap on the answer finds it handled, and queues nothing.
+    answer(&hub, &q1, "8787");
+    assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
+}
+
+#[test]
+fn with_the_mini_online_there_is_no_notice() {
+    let world = World::new("cloud-answer-no-notice");
+    let hub = world.hub();
+    cloud_polled(&hub);
+    let body = page(&hub);
+    assert!(!body.contains(MINI_OFF), "{body}");
+    assert!(!body.contains(REPLY_IN_APP), "{body}");
+}
+
+/// An answer given before tapping counts as handled in the app, even when
+/// the run still had a question open, so only later answers reach the mini.
+#[test]
+fn answers_before_the_tap_never_reach_the_session_again() {
+    let world = World::new("cloud-answer-in-app-partial");
+    let hub = world.hub();
+    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
+    let q2 = id_ago(15, "Q2BBBBBBBBBBBBBB");
+    let q = |a| question(&q1, "Which port?", a);
+    let r = |a| question(&q2, "Keep the old route?", a);
+    world.questions(&[q(None), r(None)], &[r(None), q(Some("8787"))]);
+    answer(&hub, &q1, "8787");
+
+    let response = hub.post_form("/p/gamma/control", "do=reply-in-app");
+    assert_eq!(status_of(&response), 303, "{response}");
+
+    world.questions(&[r(None)], &[r(Some("no")), q(Some("8787"))]);
+    answer(&hub, &q2, "no");
+    assert_eq!(
+        cloud_polled(&hub),
+        cloud(&format!("{HEAD}#BBBBBBBB Keep the old route?\nAnswer: no"))
+    );
 }

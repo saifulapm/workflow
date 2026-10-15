@@ -8,7 +8,7 @@
 
 use serde_json::Value;
 
-use crate::agents::CLOUD_MACHINE;
+use crate::agents::{CLOUD_MACHINE, Command};
 use crate::form::encode_component;
 use crate::html::{
     degraded_banner, esc, item_list_section, markdown_article, outside_link, page_url, project_url,
@@ -187,11 +187,30 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
             CloudState::Landed => ("<span class=\"pill ok\">landed</span>", "landed"),
             CloudState::Ended => ("<span class=\"pill mut\">ended</span>", "ended"),
         };
+        let mut forms = String::new();
+        // Answers for the session wait in the mini's queue, or will, and
+        // only the mini can hand them over.
+        let waiting = cloud.state == CloudState::Parked
+            || agents
+                .pending(CLOUD_MACHINE)
+                .iter()
+                .any(|c| matches!(c, Command::Cloud { project: p, .. } if p == project));
+        if waiting && !agents.online(CLOUD_MACHINE) {
+            forms.push_str(&format!(
+                "<p class=\"banner\">{CLOUD_MACHINE} is off: reply in the Claude app to resume now</p>\n\
+                 <form method=\"post\" action=\"{}/control\">\n\
+                 <input type=\"hidden\" name=\"do\" value=\"reply-in-app\">\n\
+                 <button type=\"submit\">Reply in the Claude app</button>\n\
+                 </form>\n",
+                esc(&project_url(project))
+            ));
+        }
+        forms.push_str(&pause_form(project, paused));
         return format!(
             "<p class=\"row\">{paused_pill}{pill} <span class=\"meta\">{}</span> {}</p>\n{}",
             esc(&format!("cloud · {} · {state}", cloud.milestone)),
             outside_link(&format!("{CODE_PAGE}/{}", cloud.id), "session"),
-            controls(ctx, pause_form(project, paused))
+            controls(ctx, forms)
         );
     }
     let (pill, meta) = match &run {
