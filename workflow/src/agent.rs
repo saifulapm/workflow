@@ -263,10 +263,15 @@ fn succeeds(program: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// One memory sync round at a time from this agent: a start waiting for its
+/// round queues behind a round the sync thread is running.
+static SYNC_ROUND: Mutex<()> = Mutex::new(());
+
 /// One memory sync round, performed. `mem sync` exits 0 when a round was
 /// already running and it did nothing, and that round may have started
 /// before the hub's write, so only "performed" counts.
 fn synced() -> bool {
+    let _round = SYNC_ROUND.lock().unwrap_or_else(|e| e.into_inner());
     Command::new(memcli::bin())
         .args(["sync", "--json"])
         .stderr(Stdio::null())
@@ -286,16 +291,13 @@ fn start(project: &str) -> bool {
     )
 }
 
-/// Run one job and print one line for it. `false` when the job must be tried
-/// again after the next poll.
-fn run(job: &Job) -> bool {
+/// Run one command and print one line for it. `false` when it must be tried
+/// again after the next poll. Syncs are not commands: they run on the sync
+/// thread, and a resume asks it for a round through `sync`.
+fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
     match job {
         Job::Sync => {
-            if !synced() {
-                println!("sync: no round performed, trying again after the next poll");
-                return false;
-            }
-            println!("sync: done");
+            let _ = sync.send(());
         }
         Job::Start { project } => {
             // Start often follows an approval the hub just wrote, and
@@ -314,12 +316,8 @@ fn run(job: &Job) -> bool {
             id,
             message,
         } => {
-            // The answer has to reach this machine's store before the session
-            // reads it.
-            if !synced() {
-                println!("resume {id}: mem sync failed, trying again after the next poll");
-                return false;
-            }
+            // The message carries the answer, so the session needs no sync
+            // first; the round after it catches the store up.
             let agents = match amx_ls() {
                 Ok(a) => a,
                 Err(err) => {
@@ -335,6 +333,7 @@ fn run(job: &Job) -> bool {
                 let state = row.get("state").and_then(Value::as_str).unwrap_or("");
                 if ended == 0 && state != "stopped" && state != "failed" {
                     println!("resume {id}: live, it reads its answers itself");
+                    let _ = sync.send(());
                     return true;
                 }
                 let resumed = Command::new(bin("WORKFLOW_SYSTEMD_RUN", "systemd-run"))
@@ -348,8 +347,17 @@ fn run(job: &Job) -> bool {
                     .unwrap_or(false);
                 if resumed {
                     println!("resume {id}: resumed");
+                    let _ = sync.send(());
                     return true;
                 }
+            }
+            // A fresh start reads the store, so it waits for a round as a
+            // start command does.
+            if !synced() {
+                println!(
+                    "resume {id}: session gone, start {project}: no sync round performed, trying again after the next poll"
+                );
+                return false;
             }
             let ok = start(project);
             println!(
@@ -378,16 +386,38 @@ pub fn cmd_run(once: bool) -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(5000);
 
-    // Jobs run on a worker so a slow one never holds up the polls that keep
-    // this machine online on the hub. A resume whose sync failed comes back
-    // through `held` and goes out again after the next poll.
+    // Commands run on a worker so a slow one never holds up the polls that
+    // keep this machine online on the hub. Sync rounds run on a thread of
+    // their own so a 60 s round never delays a resume. A command or a round
+    // that did not finish comes back through `held` and goes out again after
+    // the next poll.
     let held: Arc<Mutex<Vec<Job>>> = Arc::default();
+    let (sync_tx, sync_rx) = mpsc::channel::<()>();
+    let syncer = {
+        let held = Arc::clone(&held);
+        thread::spawn(move || {
+            for () in &sync_rx {
+                // Requests that piled up behind a round share the next one.
+                while sync_rx.try_recv().is_ok() {}
+                if synced() {
+                    println!("sync: done");
+                    continue;
+                }
+                println!("sync: no round performed, trying again after the next poll");
+                let mut held = held.lock().unwrap();
+                if !held.iter().any(|j| matches!(j, Job::Sync)) {
+                    held.push(Job::Sync);
+                }
+            }
+        })
+    };
     let (tx, rx) = mpsc::channel::<Job>();
     let worker = {
         let held = Arc::clone(&held);
+        let sync_tx = sync_tx.clone();
         thread::spawn(move || {
             for job in rx {
-                if !run(&job) {
+                if !run(&job, &sync_tx) {
                     held.lock().unwrap().push(job);
                 }
             }
@@ -399,11 +429,20 @@ pub fn cmd_run(once: bool) -> i32 {
         let polled = jobs.is_some();
         let retries = std::mem::take(&mut *held.lock().unwrap());
         for job in retries.into_iter().chain(jobs.unwrap_or_default()) {
-            let _ = tx.send(job);
+            match job {
+                Job::Sync => {
+                    let _ = sync_tx.send(());
+                }
+                job => {
+                    let _ = tx.send(job);
+                }
+            }
         }
         if once {
             drop(tx);
             let _ = worker.join();
+            drop(sync_tx);
+            let _ = syncer.join();
             return if polled { exit::OK } else { exit::FAILED };
         }
         thread::sleep(Duration::from_millis(interval));

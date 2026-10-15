@@ -59,7 +59,7 @@ esac
         );
         // mem: `sync` fails while sync-fails says always, or once, and finds
         // a round already running, as mem says with exit 0, while
-        // sync-busy says once.
+        // sync-busy says once. A sync-slow file makes every round take 3 s.
         work.script(
             "mem",
             r#"
@@ -68,6 +68,7 @@ echo "mem $*" >>"$dir/calls.log"
 case "$1" in
 projects) cat "$dir/projects.json" ;;
 sync)
+	if [ -e "$dir/sync-slow" ]; then sleep 3; fi
 	case "$(cat "$dir/sync-fails" 2>/dev/null)" in
 	always) exit 1 ;;
 	once) rm "$dir/sync-fails"; exit 1 ;;
@@ -290,16 +291,21 @@ fn start_and_sync_run_in_the_order_the_hub_gave_them() {
     ]));
     let out = w.agent(&["--once"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
+    // The sync job runs on its own thread, so only the starts have an order.
+    let calls = w.command_calls();
+    let starts: Vec<&String> = calls
+        .iter()
+        .filter(|c| c.starts_with("systemd-run"))
+        .collect();
     assert_eq!(
-        w.command_calls(),
+        starts,
         [
-            "mem sync --json",
             "systemd-run --user --scope --quiet workflow go gamma",
-            "mem sync --json",
-            "mem sync --json",
             "systemd-run --user --scope --quiet workflow go workflow",
         ]
     );
+    let syncs = calls.iter().filter(|c| *c == "mem sync --json").count();
+    assert_eq!(syncs, 3, "{calls:?}");
     assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 3);
 }
 
@@ -335,6 +341,32 @@ fn a_start_waits_for_a_performed_sync_round() {
     );
 }
 
+/// A slow memory sync round runs on its own thread, so the resume behind it
+/// in the same poll is not held up.
+#[test]
+fn a_resume_does_not_wait_for_a_slow_sync_round() {
+    let w = World::new("agent-resume-slow-sync");
+    w.paired();
+    w.work.put("sync-slow", "");
+    w.work.put(
+        "ls.json",
+        r#"[{"id":"gamma-m1","state":"stopped","ended":1791400500}]"#,
+    );
+    w.hub_says(json!([
+        {"kind": "sync"},
+        {"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": "yes"}
+    ]));
+    let started = Instant::now();
+    let mut child = w.command(&[]).spawn().unwrap();
+    while !w.work.has("last-arg") && started.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let waited = started.elapsed();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(waited < Duration::from_secs(1), "{waited:?}");
+}
+
 #[test]
 fn a_resume_hands_amx_the_message_byte_for_byte() {
     let w = World::new("agent-resume-bytes");
@@ -352,10 +384,9 @@ fn a_resume_hands_amx_the_message_byte_for_byte() {
     assert_eq!(w.work.read("last-arg"), message);
     assert!(!w.work.has("pwned"));
     let calls = w.command_calls();
-    assert_eq!(calls[0], "mem sync --json");
-    assert_eq!(calls[1], "amx ls --json");
+    assert_eq!(calls[0], "amx ls --json");
     assert!(
-        calls[2].starts_with(&format!(
+        calls[1].starts_with(&format!(
             "systemd-run --user --scope --quiet {} resume gamma-m1 use",
             w.work.at("amx").display()
         )),
@@ -364,7 +395,7 @@ fn a_resume_hands_amx_the_message_byte_for_byte() {
 }
 
 #[test]
-fn a_resume_waits_for_its_sync() {
+fn a_resume_runs_though_its_sync_fails() {
     let w = World::new("agent-resume-nosync");
     w.paired();
     w.work.put("sync-fails", "always");
@@ -377,7 +408,11 @@ fn a_resume_waits_for_its_sync() {
     ]));
     let out = w.agent(&["--once"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(w.command_calls(), ["mem sync --json"]);
+    assert_eq!(w.work.read("last-arg"), "yes");
+    assert_eq!(
+        w.command_calls().last().map(String::as_str),
+        Some("mem sync --json")
+    );
 }
 
 /// mem sync exits 0 when a round is already running and it did nothing, and
@@ -406,7 +441,7 @@ fn a_sync_no_round_performed_runs_again_after_the_next_poll() {
 }
 
 #[test]
-fn a_resume_whose_sync_failed_runs_after_the_next_poll() {
+fn a_resume_whose_sync_failed_syncs_again_after_the_next_poll() {
     let w = World::new("agent-resume-retry");
     w.paired();
     w.work.put("sync-fails", "once");
@@ -419,21 +454,15 @@ fn a_resume_whose_sync_failed_runs_after_the_next_poll() {
     ]));
     let mut child = w.command(&[]).spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !w.work.has("last-arg") && Instant::now() < deadline {
+    let syncs = |w: &World| w.calls().iter().filter(|c| *c == "mem sync --json").count();
+    while syncs(&w) < 2 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
     child.kill().unwrap();
     child.wait().unwrap();
 
-    let polls_before_resume = w
-        .calls()
-        .iter()
-        .take_while(|c| !c.starts_with("systemd-run"))
-        .filter(|c| c.starts_with("curl "))
-        .count();
-    assert!(polls_before_resume >= 2, "{:?}", w.calls());
-    // A daemon's polls interleave with its commands, so only the syncs and
-    // the resume are read.
+    // A daemon's polls interleave with its commands, so only the resume and
+    // the syncs are read: the resume went first, the failed round came back.
     let ran: Vec<String> = w
         .calls()
         .into_iter()
@@ -442,13 +471,13 @@ fn a_resume_whose_sync_failed_runs_after_the_next_poll() {
     assert_eq!(
         ran,
         [
-            "mem sync --json",
-            "mem sync --json",
             &format!(
                 "systemd-run --user --scope --quiet {} resume gamma-m1 yes",
                 w.work.at("amx").display()
             ),
             "amx resume gamma-m1 yes",
+            "mem sync --json",
+            "mem sync --json",
         ]
     );
 }
@@ -465,8 +494,8 @@ fn a_resume_for_a_gone_session_starts_the_project() {
     assert_eq!(
         w.command_calls(),
         [
-            "mem sync --json",
             "amx ls --json",
+            "mem sync --json",
             "systemd-run --user --scope --quiet workflow go gamma",
         ]
     );
@@ -485,5 +514,5 @@ fn a_resume_for_a_live_session_runs_nothing() {
     ]));
     let out = w.agent(&["--once"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    assert_eq!(w.command_calls(), ["mem sync --json", "amx ls --json"]);
+    assert_eq!(w.command_calls(), ["amx ls --json", "mem sync --json"]);
 }
