@@ -946,7 +946,12 @@ fn project_rename_relabels_every_item_and_keeps_the_old_name_as_an_alias() {
     theirs.meta.project = Some("other".to_string());
     let their_path = common::put(&store, Some(&other), &theirs);
     let their_bytes = std::fs::read(&their_path).unwrap();
+    std::fs::create_dir_all(store.wiki_dir(&rexa)).unwrap();
+    std::fs::write(store.wiki_page(&rexa, "setup"), "# Rexa setup notes\n").unwrap();
     let cwd = w.plain_dir("anywhere");
+    // Indexed under the old name before the rename, as the real store is.
+    let out = common::mem(&w, &cwd, &["search", "setup", "--project", "rexa"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
 
     let out = common::mem(
         &w,
@@ -983,6 +988,16 @@ fn project_rename_relabels_every_item_and_keeps_the_old_name_as_an_alias() {
         assert!(text.contains("\"project\":\"lathe\""), "{text}");
         assert!(!text.contains("\"project\":\"rexa\""), "{text}");
     }
+    // A page carries no label: the index names its project, and must
+    // learn the new name though the file never changed.
+    let out = common::mem(
+        &w,
+        &cwd,
+        &["search", "setup", "--json", "--project", "lathe"],
+    );
+    let text = common::stdout(&out);
+    assert!(text.contains("Rexa setup notes"), "{text}");
+    assert!(!text.contains("\"project\":\"rexa\""), "{text}");
 
     // An item a sync brings back under the old label is relabelled by
     // running the rename again.

@@ -611,6 +611,12 @@ pub fn project_rename(app: &App, name: &str) -> Result<i32> {
     let old = identity.name().unwrap_or(id).to_string();
     crate::project::rename(&app.store, id, name)?;
     let relabelled = crate::project::relabel_items(&app.store, id, name)?;
+    // A wiki page carries no label: the index copied the project's name when
+    // it read the page, and an unchanged file is never read again.
+    let index = crate::index::Index::open(&app.dirs.index_db(), crate::index::Purpose::Write)?;
+    if index.reindex(&app.store, true)?.skipped {
+        eprintln!("mem: another process holds the index; run `mem reindex --full` for the wiki");
+    }
     crate::sync::trigger(&app.dirs.qshell_status_json());
     if app.json {
         println!(
