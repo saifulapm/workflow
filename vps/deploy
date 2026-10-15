@@ -4,8 +4,8 @@
 #
 #   vps/deploy [<commit>]        HEAD when no commit is given
 #
-# The VPS has no git, so the commit travels as a git archive over Tailscale
-# SSH, and HUB_COMMIT carries its name into `hub --version`.
+# The VPS has no git, so the commit travels as a git archive over ssh, and
+# HUB_COMMIT carries its name into `hub --version`.
 set -euo pipefail
 
 host=${VPS_HOST:-root@dulali}

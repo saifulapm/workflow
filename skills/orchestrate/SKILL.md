@@ -247,8 +247,8 @@ step that passed. Two failed walks of the same step go to Saiful.
    roadmap is not approved yet, or because the folder is another
    project's, or because the project is paused. Show its output. A
    refusal is a normal end, and never a reason to switch a branch.
-   Saiful approves the rest from the hub, then presses Resume there on a
-   machine with a checkout, which runs `workflow go`.
+   Saiful approves the rest from the hub, then presses Start there, which
+   has the runner's machine run `workflow go`.
 
 Done when the goal's conditions all show in this conversation.
 
@@ -262,9 +262,10 @@ word is how the hub tells a parked milestone from a stalled one, and a
 stalled one rings his phone. Then end your own session with `amx stop
 --force "$AMX_ID"`: a session that only stops talking idles at its prompt,
 which the hub and `workflow go` read as a live orchestrator, so nothing
-could resume the milestone. The hub shows the question. Once he answers,
-he presses Resume on the hub of a machine with a checkout, which starts a
-fresh orchestrator that reads your handoff and his answer.
+could resume the milestone. The hub shows the question. Once he answers
+the last question this session asked, the hub has this machine `amx
+resume` this very session with his answers as its first message; if amx
+no longer has it, a fresh orchestrator starts from your handoff.
 
 ## Hygiene
 
