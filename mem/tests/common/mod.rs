@@ -144,6 +144,11 @@ pub fn mem(w: &World, cwd: &Path, args: &[&str]) -> std::process::Output {
 /// The same, with extra environment — the seams (`MEM_SYNC_CMD`,
 /// `MEM_POLL_MS`) that keep a test from shelling out to the real thing.
 ///
+/// `MEM_SYNC_CMD` is `true` unless the caller names one: the real
+/// qshell-sync bisyncs the developer's own store, under a lock in this
+/// World's state dir, so it would race the live round and leave conflict
+/// copies.
+///
 /// `PI_CODING_AGENT_DIR` points inside the World because pi's extension
 /// directory is the one path mem does not take from XDG: without it `mem
 /// doctor` reads, and `--fix` writes, the developer's own `~/.pi`. A caller
@@ -162,6 +167,7 @@ pub fn mem_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> st
         .env("XDG_STATE_HOME", &dirs.state)
         .env("XDG_CONFIG_HOME", &dirs.config)
         .env("PI_CODING_AGENT_DIR", w.pi_agent_dir())
+        .env("MEM_SYNC_CMD", "true")
         .env_remove("MEM_PROJECT")
         .env_remove("CARGO_TARGET_DIR");
     for (key, value) in env {

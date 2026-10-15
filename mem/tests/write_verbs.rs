@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{World, code, mem, run_git, stderr, stdout};
+use common::{World, code, mem, mem_env, run_git, stderr, stdout};
 use mem::index::{Index, Purpose};
 
 fn json(out: &std::process::Output) -> serde_json::Value {
@@ -937,4 +937,32 @@ fn mem_project_naming_a_stranger_to_the_directory_yields_to_the_directory() {
         "{}",
         stdout(&out)
     );
+}
+
+#[test]
+fn a_write_through_the_test_helper_never_runs_the_real_sync() {
+    // The real qshell-sync bisyncs the developer's own store, under a lock
+    // in the test's state dir, so it races the live round. One on PATH here
+    // only leaves a mark.
+    let w = World::new("write-no-real-sync");
+    let repo = w.repo("thing", None);
+    let bin = w.plain_dir("bin");
+    let mark = w.plain_dir("marks").join("ran");
+    let fake = bin.join("qshell-sync");
+    std::fs::write(&fake, format!("#!/bin/sh\ntouch '{}'\n", mark.display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+
+    for args in [
+        &["save", "a fact"][..],
+        &["log", "an entry"],
+        &["handoff", "--set", "fine"],
+    ] {
+        let out = mem_env(&w, &repo, args, &[("PATH", &path)]);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+    }
+    // The trigger is detached, so give a stray one time to land.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!mark.exists(), "a test write ran qshell-sync");
 }
