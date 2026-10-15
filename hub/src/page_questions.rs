@@ -182,7 +182,8 @@ pub fn pending_block(
 /// the code in the query so nothing from the query string reaches the page.
 pub fn banner_line(banner: &Banner) -> String {
     let (kind, text) = match banner {
-        Banner::None => return String::new(),
+        // Only home's route buttons redirect with NoMachine, and only to home.
+        Banner::None | Banner::NoMachine => return String::new(),
         Banner::Answered(id) => ("ok", format!("Answered #{}.", esc(id))),
         Banner::Unknown => (
             "warn",

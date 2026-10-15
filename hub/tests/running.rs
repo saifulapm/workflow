@@ -74,6 +74,12 @@ fn mini() -> Value {
 
 /// One poll from `machine`, listing gamma-m4-x in `state` and `checkouts`, and
 /// the commands it was handed.
+/// The route every poll answer carries: Phone, with `waiting` person
+/// questions pending.
+fn phone(waiting: u64) -> Value {
+    json!({"route": "phone", "machine": null, "waiting": waiting})
+}
+
 fn poll(hub: &Hub, machine: &str, state: &str, checkouts: &[&str]) -> Value {
     let report = json!({"machine": machine,
         "agents": [{"id": "gamma-m4-x", "state": state, "ended": 0, "created": 1791400000}],
@@ -157,11 +163,11 @@ fn resume_queues_one_start_for_the_runners_machine_and_none_elsewhere() {
 
     assert_eq!(
         poll(&hub, "nuc", "stopped", &["gamma"]),
-        json!({"commands": []})
+        json!({"commands": [], "route": phone(0)})
     );
     assert_eq!(
         poll(&hub, "mini", "stopped", &["gamma"]),
-        json!({"commands": [{"kind": "start", "project": "gamma"}]})
+        json!({"commands": [{"kind": "start", "project": "gamma"}], "route": phone(0)})
     );
 }
 
@@ -185,12 +191,15 @@ fn with_no_runner_only_an_online_machine_with_a_checkout_is_offered() {
 
     let refused = hub.post_form("/p/gamma/control", "do=go&machine=mini");
     assert_eq!(status_of(&refused), 409, "{refused}");
-    assert_eq!(poll(&hub, "mini", "stopped", &[]), json!({"commands": []}));
+    assert_eq!(
+        poll(&hub, "mini", "stopped", &[]),
+        json!({"commands": [], "route": phone(0)})
+    );
     let response = hub.post_form("/p/gamma/control", "do=go&machine=nuc");
     assert_eq!(status_of(&response), 303, "{response}");
     assert_eq!(
         poll(&hub, "nuc", "stopped", &["gamma"]),
-        json!({"commands": [{"kind": "start", "project": "gamma"}]})
+        json!({"commands": [{"kind": "start", "project": "gamma"}], "route": phone(0)})
     );
 }
 

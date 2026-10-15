@@ -11,13 +11,16 @@ use crate::html::{self, Banner};
 use crate::http::{Request, Response};
 use crate::memcli::{MemCli, Run};
 use crate::origin::Guard;
+use crate::route::Route;
 use crate::{api, model, pages};
 
-/// Every path hub answers, and the one method it answers it with. Anything
-/// else on a known path is a 405 that says so; anything else at all is a 404.
-/// The pages are `pages::route_page`'s; these are the rest.
+/// Every path hub answers, and the methods it answers it with, as the
+/// `Allow` header lists them. Anything else on a known path is a 405 that says
+/// so; anything else at all is a 404. The pages are `pages::route_page`'s;
+/// these are the rest.
 const ROUTES: &[(&str, &str)] = &[
     ("/api/agent", "POST"),
+    ("/api/route", "GET, POST"),
     ("/api/agents", "GET"),
     ("/api/presence", "GET"),
     ("/api/stamp", "GET"),
@@ -37,6 +40,8 @@ pub struct App {
     pub guard: Guard,
     /// The device agents' reports and command queues.
     pub agents: Arc<Agents>,
+    /// Where questions and rings reach the owner.
+    pub route: Route,
     /// One answer at a time, per question id.
     ///
     /// `MemCli`'s gate serialises the child *processes*; it cannot serialise
@@ -69,9 +74,8 @@ impl App {
         // With no HOME the path is relative to the working directory; a save
         // that fails there says so in the journal, and the queue lives on in
         // memory.
-        let path = crate::config::state_home()
-            .unwrap_or_default()
-            .join("hub/agents.json");
+        let state = crate::config::state_home().unwrap_or_default();
+        let path = state.join("hub/agents.json");
         App {
             config,
             port,
@@ -79,6 +83,7 @@ impl App {
             mem: Arc::new(MemCli::new()),
             guard,
             agents: Arc::new(Agents::open(path, crate::agents::window())),
+            route: Route::open(state.join("hub/route.json")),
             answering: Mutex::new(HashMap::new()),
         }
     }
@@ -99,17 +104,24 @@ impl App {
         let Some(allowed) = allowed else {
             return Response::not_found();
         };
-        if request.method != allowed {
+        if !allowed.split(", ").any(|method| method == request.method) {
             return Response::method_not_allowed(allowed);
         }
         match request.path.as_str() {
-            "/api/agent" => crate::agents::poll_post(&self.agents, request),
+            "/api/agent" => {
+                crate::agents::poll_post(&self.agents, request, || self.route.object(&self.mem))
+            }
+            "/api/route" if request.method == "GET" => {
+                crate::route::get(&self.route, &self.mem, request)
+            }
+            "/api/route" => crate::route::post(&self.route, &self.mem, request),
             "/api/agents" => crate::agents::list_get(&self.agents, request),
             "/api/presence" => {
                 Response::json(api::presence(&crate::presence::sample(), &self.machine))
             }
             "/api/stamp" => Response::json(
-                serde_json::json!({"stamp": crate::page_home::stamp(&self.mem)}).to_string(),
+                serde_json::json!({"stamp": crate::page_home::stamp(&self.mem, &self.route)})
+                    .to_string(),
             ),
             "/subscribe" => self.subscribe(),
             _ => Response::not_found(),

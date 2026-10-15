@@ -16,8 +16,9 @@ use crate::memcli::{MemCli, Outcome};
 use crate::model::{self, list_fault};
 use crate::page_questions::{pending_block, question_row};
 use crate::pages::{PageCtx, page_shell};
+use crate::route::{NoMachine, Route};
 
-/// What keeps the page live: every 15 s it asks `/api/stamp` whether what
+/// What keeps the page live: every 5 s it asks `/api/stamp` whether what
 /// home shows has changed, and reloads only then, and only while no field
 /// has focus or text, and no text is selected, so a reload never moves the
 /// page from under an answer being written or a word being picked. `{stamp}`
@@ -32,15 +33,17 @@ fn reload_script(stamp: &str) -> String {
          if(String(window.getSelection())!=='')return;\
          var f=document.querySelectorAll('textarea,input:not([type=hidden])');\
          for(var i=0;i<f.length;i++){{if(f[i].value)return;}}\
-         location.reload();}}).catch(function(){{}});}},15000);}})();</script>\n"
+         location.reload();}}).catch(function(){{}});}},5000);}})();</script>\n"
     )
 }
 
-/// A stamp of what home draws: its two reads, hashed. The ages on the page
-/// move with the clock, not with the reads, so they leave it alone.
-pub fn stamp(mem: &MemCli) -> String {
+/// A stamp of what home draws: its two reads and the route, hashed. The
+/// ages on the page move with the clock, not with the reads, so they leave it
+/// alone.
+pub fn stamp(mem: &MemCli, route: &Route) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    route.get().hash(&mut hasher);
     for read in [mem.projects(), mem.questions()] {
         match &*read {
             Outcome::Json(doc) => doc.to_string().hash(&mut hasher),
@@ -83,6 +86,7 @@ pub fn get(ctx: &PageCtx) -> Response {
     Response::html(render(
         &app.mem,
         &app.agents,
+        &app.route,
         &app.config,
         &app.machine,
         now_ms,
@@ -166,9 +170,13 @@ pub fn lifecycle_stage(row: &Value) -> &'static str {
 }
 
 /// The whole page.
+// Each argument is one thing the page draws; a struct around them would only
+// move the list.
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     mem: &MemCli,
     agents: &Agents,
+    route: &Route,
     config: &Config,
     machine: &str,
     now_ms: i64,
@@ -180,7 +188,7 @@ pub fn render(
     let mut questions_rows = questions.rows("questions");
     questions_rows.sort_by(|a, b| b["id"].as_str().cmp(&a["id"].as_str()));
 
-    let mut body = reload_script(&stamp(mem));
+    let mut body = reload_script(&stamp(mem, route));
     body.push_str("<nav class=\"pages\">\n");
     for sibling in &config.siblings {
         if html::safe_link(sibling).is_some() {
@@ -189,6 +197,7 @@ pub fn render(
         }
     }
     body.push_str("<a href=\"/wiki\">wiki</a>\n<a href=\"/subscribe\">subscribe</a>\n</nav>\n");
+    body.push_str(&route_header(&route.get(), pair_notice));
 
     body.push_str(&banner_line(banner));
     // The cache answers this second read, so it spawns nothing.
@@ -268,6 +277,46 @@ pub fn render(
     }
 
     page_shell(machine, None, &body)
+}
+
+/// `Route: Phone` or `Route: Device (<machine>)`, then the two buttons
+/// posting to `/route`, the current one pressed. An unpaired browser gets the
+/// pairing line in place of the buttons.
+fn route_header(saved: &crate::route::Saved, pair_notice: Option<&str>) -> String {
+    let name = match (saved.device, &saved.machine) {
+        (true, Some(machine)) => format!("Device ({})", esc(machine)),
+        _ => "Phone".to_string(),
+    };
+    let button = |value: &str, label: &str, on: bool| {
+        format!(
+            "<button type=\"submit\" name=\"route\" value=\"{value}\" aria-pressed=\"{on}\">{label}</button>\n"
+        )
+    };
+    let controls = match pair_notice {
+        Some(notice) => notice.to_string(),
+        None => format!(
+            "<form class=\"opt\" method=\"post\" action=\"/route\">\n{}{}</form>\n",
+            button("phone", "Phone", !saved.device),
+            button("device", "Device", saved.device),
+        ),
+    };
+    format!("<p class=\"row\">Route: {name}</p>\n{controls}")
+}
+
+/// `POST /route`, home's two buttons. Device keeps the machine that last
+/// took it; with none ever taken the route stays as it is and the banner
+/// says where to take Device first.
+pub fn route_post(ctx: &PageCtx) -> Response {
+    let form = ctx.request.form();
+    let device = match form.get("route").unwrap_or("") {
+        "phone" => false,
+        "device" => true,
+        _ => return Response::text(400, "unknown route"),
+    };
+    match ctx.app.route.set(device, None) {
+        Ok(()) => Response::see_other("/"),
+        Err(NoMachine) => Response::see_other(&format!("/{}", Banner::NoMachine.query())),
+    }
 }
 
 /// One live project under Running: `<project> · <machine> · <milestone> ·
@@ -416,6 +465,11 @@ fn banner_line(banner: &Banner) -> String {
         Banner::Failed => (
             "warn",
             "mem could not record that answer. Nothing was written.".to_string(),
+        ),
+        Banner::NoMachine => (
+            "warn",
+            "No machine has taken Device yet. Take Device from a machine's qshell panel first."
+                .to_string(),
         ),
     };
     format!("<p class=\"banner {kind}\">{text}</p>\n")

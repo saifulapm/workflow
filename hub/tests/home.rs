@@ -11,6 +11,7 @@ use hub::config::Config;
 use hub::html::Banner;
 use hub::memcli::{MemCli, QUESTIONS_ARGV};
 use hub::page_home::{self, lifecycle_stage};
+use hub::route::Route;
 use serde_json::{Value, json};
 
 /// 2026-10-05T12:00:00Z, two hours after every project's last activity.
@@ -124,9 +125,11 @@ fn render(tag: &str) -> (TempDir, String, Vec<String>) {
     let (bin, log) = fake_mem(dir.path());
     let mem = MemCli::with_path(bin);
     let agents = Agents::open(dir.join("agents.json"), DEFAULT_WINDOW);
+    let route = Route::open(dir.join("route.json"));
     let page = page_home::render(
         &mem,
         &agents,
+        &route,
         &siblings(),
         "here",
         NOW_MS,

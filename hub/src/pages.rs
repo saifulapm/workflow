@@ -97,6 +97,7 @@ fn page_for<'a>(
     match path {
         "/" => return Some(("GET", None, "", page_home::get)),
         "/answer" => return Some(("POST", None, "", page_questions::answer_post)),
+        "/route" => return Some(("POST", None, "", page_home::route_post)),
         "/wiki" => return Some(("GET", None, "", page_wiki::get)),
         _ => {}
     }

@@ -236,23 +236,28 @@ pub fn window() -> Duration {
 
 /// Whether the request carries `Authorization: Bearer <token>` for a paired
 /// device. An agent sends no cookie and no Origin, so this is its only check.
-fn authorized(request: &Request) -> bool {
+pub(crate) fn authorized(request: &Request) -> bool {
     request
         .header("authorization")
         .and_then(|value| value.strip_prefix("Bearer "))
         .is_some_and(|token| pair::token_known(token.trim()))
 }
 
-fn json(status: u16, value: serde_json::Value) -> Response {
+pub(crate) fn json(status: u16, value: serde_json::Value) -> Response {
     Response::new(status, "application/json", value.to_string())
 }
 
-fn unauthorized() -> Response {
+pub(crate) fn unauthorized() -> Response {
     json(401, serde_json::json!({"error": "not a paired device"}))
 }
 
 /// `POST /api/agent`: the token first, so a refused poll touches nothing.
-pub fn poll_post(agents: &Agents, request: &Request) -> Response {
+/// The answer carries the route, from `route` once the poll is taken.
+pub fn poll_post(
+    agents: &Agents,
+    request: &Request,
+    route: impl FnOnce() -> serde_json::Value,
+) -> Response {
     if !authorized(request) {
         return unauthorized();
     }
@@ -263,7 +268,11 @@ pub fn poll_post(agents: &Agents, request: &Request) -> Response {
     if poll.machine.trim().is_empty() {
         return json(400, serde_json::json!({"error": "machine is empty"}));
     }
-    json(200, serde_json::json!({"commands": agents.poll(poll)}))
+    let commands = agents.poll(poll);
+    json(
+        200,
+        serde_json::json!({"commands": commands, "route": route()}),
+    )
 }
 
 /// `GET /api/agents`: each machine that has polled, whether it is online, and

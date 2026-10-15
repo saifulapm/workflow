@@ -82,6 +82,8 @@ pub enum Banner {
     Unknown,
     Empty,
     Failed,
+    /// Device was chosen before any machine took it.
+    NoMachine,
 }
 
 impl Banner {
@@ -102,6 +104,9 @@ impl Banner {
         if query.get("failed").is_some() {
             return Banner::Failed;
         }
+        if query.get("nomachine").is_some() {
+            return Banner::NoMachine;
+        }
         Banner::None
     }
 
@@ -113,6 +118,7 @@ impl Banner {
             Banner::Unknown => "?unknown=1".to_string(),
             Banner::Empty => "?empty=1".to_string(),
             Banner::Failed => "?failed=1".to_string(),
+            Banner::NoMachine => "?nomachine=1".to_string(),
         }
     }
 }

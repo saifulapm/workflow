@@ -12,14 +12,17 @@ use hub::config::Config;
 use hub::html::Banner;
 use hub::memcli::MemCli;
 use hub::page_home;
+use hub::route::Route;
 
 /// The script home draws, taken from the page.
 fn script(dir: &TempDir) -> String {
     let mem = MemCli::with_path(dir.join("no-mem-here"));
     let agents = Agents::open(dir.join("agents.json"), DEFAULT_WINDOW);
+    let route = Route::open(dir.join("route.json"));
     let page = page_home::render(
         &mem,
         &agents,
+        &route,
         &Config::default(),
         "here",
         0,
@@ -108,7 +111,7 @@ fn home_reloads_on_a_change_and_never_under_the_cursor() {
     ];
     for ((name, reloaded, ms), (want_name, want_reload)) in got.iter().zip(want) {
         assert_eq!((name.as_str(), *reloaded), (want_name, want_reload));
-        assert_eq!(*ms, 15_000, "every 15 s");
+        assert_eq!(*ms, 5_000, "every 5 s");
     }
     assert_eq!(got.len(), want.len());
 }

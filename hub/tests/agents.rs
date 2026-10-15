@@ -15,6 +15,12 @@ use serde_json::{Value, json};
 
 const REPORT: &str = r#"{"machine":"mini","agents":[{"id":"gamma-m1","state":"working","ended":0,"created":1791400000}],"checkouts":["gamma","workflow"]}"#;
 
+/// The route every poll answer carries: Phone, with `waiting` person
+/// questions pending.
+fn phone(waiting: u64) -> Value {
+    json!({"route": "phone", "machine": null, "waiting": waiting})
+}
+
 fn report(machine: &str) -> String {
     REPORT.replace("\"mini\"", &format!("\"{machine}\""))
 }
@@ -103,9 +109,12 @@ fn a_poll_without_a_paired_token_records_and_drains_nothing() {
     assert_eq!(machines(&hub), json!({"machines": []}));
     assert_eq!(
         poll(&hub, "mini"),
-        json!({"commands": [{"kind": "start", "project": "gamma"}]})
+        json!({"commands": [{"kind": "start", "project": "gamma"}], "route": phone(0)})
     );
-    assert_eq!(poll(&hub, "mini"), json!({"commands": []}));
+    assert_eq!(
+        poll(&hub, "mini"),
+        json!({"commands": [], "route": phone(0)})
+    );
 }
 
 #[test]
@@ -161,8 +170,14 @@ fn a_hub_write_queues_one_sync_for_every_machine_that_has_polled() {
     assert_eq!(ids.len(), 2);
     let hub = Hub::spawn(&home, &[&bin], &["--port", "0"]);
 
-    assert_eq!(poll(&hub, "mini"), json!({"commands": []}));
-    assert_eq!(poll(&hub, "nuc"), json!({"commands": []}));
+    assert_eq!(
+        poll(&hub, "mini"),
+        json!({"commands": [], "route": phone(2)})
+    );
+    assert_eq!(
+        poll(&hub, "nuc"),
+        json!({"commands": [], "route": phone(2)})
+    );
     for id in &ids {
         let response = hub.post_form("/answer", &format!("id={id}&text=seven"));
         assert_eq!(status_of(&response), 303, "{response}");
@@ -174,10 +189,14 @@ fn a_hub_write_queues_one_sync_for_every_machine_that_has_polled() {
     for machine in ["mini", "nuc"] {
         assert_eq!(
             poll(&hub, machine),
-            json!({"commands": [{"kind": "sync"}]}),
+            json!({"commands": [{"kind": "sync"}], "route": phone(0)}),
             "{machine}"
         );
-        assert_eq!(poll(&hub, machine), json!({"commands": []}), "{machine}");
+        assert_eq!(
+            poll(&hub, machine),
+            json!({"commands": [], "route": phone(0)}),
+            "{machine}"
+        );
     }
 }
 
@@ -208,6 +227,7 @@ fn a_queued_resume_comes_back_byte_for_byte_after_a_restart() {
     assert_eq!(commands["commands"][0]["message"].as_str(), Some(message));
     assert_eq!(
         commands,
-        json!({"commands": [{"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": message}]})
+        json!({"commands": [{"kind": "resume", "project": "gamma", "id": "gamma-m1", "message": message}],
+            "route": phone(0)})
     );
 }
