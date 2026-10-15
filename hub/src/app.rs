@@ -357,7 +357,11 @@ impl App {
     /// ahead of it: the cloud reads mem's server, not the mini's store. It
     /// is queued while the mini is off too, and goes out on its next poll.
     fn after_cloud_answer(&self, project: &str, runner: &Runner) {
-        let asked = self.cloud_questions(project, runner);
+        // A question handed to the Claude app may stay open in mem for good,
+        // and must not hold back the answers to a later park.
+        let told = self.agents.delivered(&runner.id);
+        let mut asked = self.cloud_questions(project, runner);
+        asked.retain(|row| !told.iter().any(|id| row["id"] == id.as_str()));
         if asked.is_empty() || asked.iter().any(|row| row["answered"] != true) {
             return;
         }
@@ -371,13 +375,13 @@ impl App {
     }
 
     /// Saiful replies in the Claude app while the mini is off: the cloud
-    /// commands waiting for it are dropped, and the run's answers so far
-    /// count as told.
+    /// commands waiting for it are dropped, and every question the run asked
+    /// so far counts as told, answered or not: he answers the open ones in
+    /// the app.
     pub fn replied_in_app(&self, project: &str, runner: &Runner) {
         let ids: Vec<String> = self
             .cloud_questions(project, runner)
             .iter()
-            .filter(|row| row["answered"] == true)
             .filter_map(|row| row["id"].as_str().map(str::to_string))
             .collect();
         self.agents

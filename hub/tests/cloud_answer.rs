@@ -224,10 +224,10 @@ fn with_the_mini_online_there_is_no_notice() {
     assert!(!body.contains(REPLY_IN_APP), "{body}");
 }
 
-/// An answer given before tapping counts as handled in the app, even when
-/// the run still had a question open, so only later answers reach the mini.
+/// The tap hands every question the run asked so far to the Claude app,
+/// answered or not, so a later answer to one on the hub reaches no one.
 #[test]
-fn answers_before_the_tap_never_reach_the_session_again() {
+fn questions_asked_before_the_tap_never_reach_the_session_again() {
     let world = World::new("cloud-answer-in-app-partial");
     let hub = world.hub();
     let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
@@ -241,6 +241,25 @@ fn answers_before_the_tap_never_reach_the_session_again() {
     assert_eq!(status_of(&response), 303, "{response}");
 
     world.questions(&[r(None)], &[r(Some("no")), q(Some("8787"))]);
+    answer(&hub, &q2, "no");
+    assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
+}
+
+/// A question asked after the tap is a new park, and its answer goes to the
+/// session though one it asked before stays open in mem.
+#[test]
+fn a_question_asked_after_the_tap_is_forwarded() {
+    let world = World::new("cloud-answer-after-tap");
+    let hub = world.hub();
+    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
+    let q = question(&q1, "Which port?", None);
+    world.questions(std::slice::from_ref(&q), std::slice::from_ref(&q));
+    let response = hub.post_form("/p/gamma/control", "do=reply-in-app");
+    assert_eq!(status_of(&response), 303, "{response}");
+
+    let q2 = id_ago(5, "Q2BBBBBBBBBBBBBB");
+    let r = |a| question(&q2, "Keep the old route?", a);
+    world.questions(&[q.clone(), r(None)], &[r(Some("no")), q]);
     answer(&hub, &q2, "no");
     assert_eq!(
         cloud_polled(&hub),
