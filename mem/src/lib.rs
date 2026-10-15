@@ -19,6 +19,7 @@ pub mod paths;
 pub mod project;
 pub mod questions;
 pub mod records;
+pub mod remote;
 pub mod search;
 pub mod sections;
 pub mod session;
