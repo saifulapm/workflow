@@ -318,6 +318,17 @@ fn no_card_while_any_cloud_run_is_live_or_parked() {
 }
 
 #[test]
+fn a_cloud_run_silent_for_eight_hours_frees_the_card() {
+    let world = World::new("cloud-card-lapsed");
+    world.set("gamma", "runner", cloud("m2-next", &ago(8 * 60)));
+    let hub = world.hub();
+    poll(&hub);
+    let body = page(&hub);
+    assert!(card(&body).is_some(), "{body}");
+    assert!(body.contains(RUN_IN_CLOUD), "{body}");
+}
+
+#[test]
 fn the_run_line_shows_a_cloud_runner_by_its_state_and_session() {
     let world = World::new("cloud-run-line");
     world.set("gamma", "runner", cloud("m2-next", &ago(10)));
