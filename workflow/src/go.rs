@@ -485,9 +485,10 @@ pub fn amx_agents() -> Result<Vec<AmxRow>, String> {
 }
 
 /// Fast-forward `dir`'s trunk to origin's `branch`, the work a cloud run
-/// pushed. A branch origin lacks has nothing to bring; a trunk with commits
-/// the branch lacks is refused, never merged.
-fn fast_forward(dir: &str, branch: &str) -> Result<(), String> {
+/// pushed. A branch origin lacks has nothing to bring, unless the run
+/// `landed`, whose work is only there; a trunk with commits the branch
+/// lacks is refused, never merged.
+fn fast_forward(dir: &str, branch: &str, landed: bool) -> Result<(), String> {
     let git = |args: &[&str]| {
         Command::new("git")
             .args(["-C", dir])
@@ -498,7 +499,13 @@ fn fast_forward(dir: &str, branch: &str) -> Result<(), String> {
     };
     let listed = git(&["ls-remote", "--exit-code", "--heads", "origin", branch])?;
     if listed.status.code() == Some(2) {
-        return Ok(());
+        return if landed {
+            Err(format!(
+                "origin has no {branch}, though its milestone is ticked"
+            ))
+        } else {
+            Ok(())
+        };
     }
     let reason =
         |out: &std::process::Output| String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -559,6 +566,32 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
         me.as_deref(),
     ) {
         Decision::Done(project) => {
+            // The last milestone may have landed in the cloud: its work is
+            // still on its branch, and the trunk takes it now.
+            let row = projects.iter().find(|row| row.name == project);
+            let landed = row.and_then(|row| {
+                let run = row.runner.as_ref().filter(|r| r.machine == "cloud")?;
+                let dir = row.checkouts.iter().find(|dir| Path::new(dir).is_dir())?;
+                Some((cloud::branch(&project, run.milestone.as_deref()?), dir))
+            });
+            if let Some((from, dir)) = landed.filter(|_| !dry_run) {
+                let branch = branch_of(dir);
+                let worktree = row.and_then(|row| row.worktree.as_deref());
+                if let Some(why) = trunk_refusal(dir, branch.as_deref(), worktree) {
+                    warn(format!("go: {why}"));
+                    return exit::USAGE;
+                }
+                if let Err(why) = fast_forward(dir, &from, true) {
+                    warn(format!(
+                        "go: cannot fast-forward {} to {from}: {why}",
+                        branch.as_deref().unwrap_or("the trunk")
+                    ));
+                    return exit::USAGE;
+                }
+                if !memcli::unset_runner(&project) {
+                    warn(format!("go: mem would not clear {project}'s cloud runner"));
+                }
+            }
             println!("{project}: the roadmap is done");
             exit::OK
         }
@@ -611,7 +644,8 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
             }
             if let Some(slug) = landed_from.filter(|_| !dry_run) {
                 let from = cloud::branch(&start.project, &slug);
-                if let Err(why) = fast_forward(&start.dir, &from) {
+                let landed = matches!(cloud, Some((cloud::State::Landed, _)));
+                if let Err(why) = fast_forward(&start.dir, &from, landed) {
                     warn(format!(
                         "go: cannot fast-forward {} to {from}: {why}",
                         branch.as_deref().unwrap_or("the trunk")

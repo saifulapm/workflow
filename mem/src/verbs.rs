@@ -1231,10 +1231,14 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
     let path = (which.path)(&app.store, id);
     let outcome = crate::write::tick_task(&path, task, which.item)?;
     let flipped = outcome == crate::write::Ticked::Flipped;
-    // The roadmap is done, so no orchestrator runs this project any more.
+    // The roadmap is done, so no orchestrator runs this project any more. A
+    // cloud run's record stays: it names the branch the mini still has to
+    // fast-forward its trunk to.
     if which.status_key.is_some() {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        if checkboxes(&text, false).iter().all(|(_, done)| *done) {
+        let cloud = crate::project::declared(&app.store, id, "runner")
+            .is_some_and(|runner| runner.starts_with("cloud "));
+        if !cloud && checkboxes(&text, false).iter().all(|(_, done)| *done) {
             crate::project::unset_key(&app.store, id, "runner")?;
             crate::project::unset_key(&app.store, id, "runner_since")?;
             crate::project::unset_key(&app.store, id, "runner_milestone")?;

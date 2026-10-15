@@ -581,3 +581,56 @@ fn a_cloud_run_takes_the_next_milestone_only() {
     assert!(stderr(&out).contains("m2-next"), "{}", stderr(&out));
     assert!(!w.claude_ran());
 }
+
+#[test]
+fn a_cloud_run_that_landed_the_last_milestone_still_reaches_the_trunk() {
+    let w = World::new("cloud-ff-last");
+    let tip = w.origin_with_cloud_branch();
+    w.work.put(
+        "roadmap-gamma.md",
+        "# roadmap: gamma\n\n- [x] m1-first One\n",
+    );
+    let projects = w.work.read("projects.json").replacen(
+        r#""name":"gamma","remote":"github.com/me/gamma","#,
+        &format!(
+            r#""name":"gamma","remote":"github.com/me/gamma","runner":{{"machine":"cloud","id":"session_01Last","since":"{}","milestone":"m1-first"}},"#,
+            now_minus(2)
+        ),
+        1,
+    ).replacen(r#""milestone":"m2-next"}"#, r#""milestone":null}"#, 1);
+    w.work.put("projects.json", &projects);
+    let out = w.go_local(&["gamma"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "gamma: the roadmap is done");
+    assert_eq!(head(&w.checkout("gamma")), tip);
+    assert!(
+        w.mem_calls()
+            .iter()
+            .any(|c| c == "project unset runner --project gamma"),
+        "{:?}",
+        w.mem_calls()
+    );
+    assert!(!w.amx_started());
+}
+
+#[test]
+fn a_landed_run_whose_branch_is_missing_refuses_and_keeps_its_record() {
+    let w = World::new("cloud-ff-missing");
+    w.origin_with_cloud_branch();
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Gone","since":"{}","milestone":"m0-gone"}}"#,
+            now_minus(3)
+        ),
+    );
+    let out = w.go_local(&["gamma"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("cloud/gamma-m0-gone"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!w.mem_calls().iter().any(|c| c.contains("unset runner")));
+    assert!(!w.amx_started());
+}

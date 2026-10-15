@@ -681,6 +681,21 @@ fn a_cloud_runner_carries_its_milestone_and_the_list_says_when_the_handoff_was_w
 }
 
 #[test]
+fn a_cloud_runner_outlives_the_last_milestone_so_its_branch_can_still_land() {
+    let w = World::new("write-cloud-last");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    let ok = |args: &[&str]| assert_eq!(code(&mem(&w, &repo, args)), 0, "{args:?}");
+    let roadmap = w.dir.join("roadmap.md");
+    std::fs::write(&roadmap, "# roadmap: thing\n\n- [ ] m1-auth Sign-in\n").unwrap();
+    ok(&["roadmap", "--set-file", roadmap.to_str().unwrap()]);
+    ok(&["project", "set", "runner", "cloud", "session_01Z", "--milestone", "m1-auth"]);
+    ok(&["roadmap", "--tick", "m1-auth"]);
+    let runner = json(&mem(&w, &repo, &["projects", "--json"]))["projects"][0]["runner"].clone();
+    assert_eq!(runner["machine"], "cloud", "{runner}");
+    assert_eq!(runner["milestone"], "m1-auth", "{runner}");
+}
+
+#[test]
 fn the_runner_is_a_machine_and_an_id_and_the_last_milestone_clears_it() {
     let w = World::new("write-runner");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
