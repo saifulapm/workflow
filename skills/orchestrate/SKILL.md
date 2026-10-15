@@ -275,12 +275,13 @@ A cloud run is this skill in a claude.ai cloud session
 prompt names the milestone, its branch `cloud/<project>-<milestone>` and the
 branch to cut it from. Everything above holds, with these changes:
 
-- First, record the run: `mem project set runner cloud <id> --milestone
-  <slug>`, where `<id>` is `$CLAUDE_CODE_REMOTE_SESSION_ID` with `cse_`
-  swapped for `session_`. mem here is the mem server's store, the same one
-  the devices read.
-- The trunk is the cloud branch. Check it out as the prompt says, never
-  `main`. Land each task on it as §2 says, then `git push origin
+- First check out the cloud branch as the prompt says, never `main`: mem
+  here is the mem server's store, the same one the devices read, and it
+  tells this project from others in the same repo by that branch. Then
+  record the run: `mem project set runner cloud <id> --milestone <slug>`,
+  where `<id>` is `$CLAUDE_CODE_REMOTE_SESSION_ID` with `cse_` swapped for
+  `session_`.
+- The trunk is the cloud branch. Land each task on it as §2 says, then `git push origin
   cloud/<project>-<milestone>` right after its tick, so the branch gains one
   commit, or one fast-forward, per landed task.
 - A task that needs a device, Saiful's desktop, or a login the cloud cannot
@@ -289,8 +290,10 @@ branch to cut it from. Everything above holds, with these changes:
   `parked:` that names the task and the question. Then stop: the answer
   comes back as a message in this session.
 - Land as §7 says, except that nothing runs `workflow go` and nothing
-  pushes `main`: the run ends with the branch pushed, the milestone ticked
-  and the handoff written. The mini fast-forwards its trunk from the branch.
+  pushes `main`, and the branch is pushed before `mem roadmap --tick`: the
+  tick tells the mini it may fast-forward, so the review and dogfood fixes
+  must be on the branch by then. The run ends with the branch pushed, the
+  milestone ticked and the handoff written. The mini fast-forwards its trunk from the branch.
 - Stop after 6 hours with a handoff starting `parked: 6-hour stop`. There
   is no amx here, so end by saying so.
 
