@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::agents::Agents;
+use serde_json::Value;
+
+use crate::agents::{Agents, Command};
 use crate::config::Config;
 use crate::html::{self, Banner};
 use crate::http::{Request, Response};
@@ -53,9 +55,10 @@ pub struct App {
 /// Whether a question is still waiting — and the third answer, which matters:
 /// "mem could not tell us" is not "no such question". Answering the second way
 /// would report an unknown id for a store that is merely slow, and now that a
-/// `mem` child can be killed on a deadline, that is reachable.
+/// `mem` child can be killed on a deadline, that is reachable. A waiting one
+/// carries its row, whose project and session the step after the answer needs.
 enum Pending {
-    Yes,
+    Yes(Value),
     No,
     Unreadable(String),
 }
@@ -225,12 +228,16 @@ impl App {
                     eprintln!("hub: answer: could not read the queue: {why}");
                     self.back(Banner::Failed)
                 }
-                Pending::Yes => {
+                Pending::Yes(row) => {
                     let run = self.mem.answer(id, text);
                     self.mem.invalidate();
                     match run.code {
                         Some(0) => {
                             self.agents.queue_sync_all();
+                            self.after_answer(
+                                row["project"].as_str().unwrap_or(""),
+                                row["session"].as_str(),
+                            );
                             self.back(Banner::Answered(short(id)))
                         }
                         // Exit 1 with a plain-text stderr is "no such
@@ -260,6 +267,72 @@ impl App {
         run
     }
 
+    /// After an answer took, and after its sync was queued: when it was the
+    /// last open question `session` asked, one `resume` of that session for
+    /// the project's runner machine, carrying every answer it got. The sync
+    /// sits ahead of it, so the agent's mem holds the answers first.
+    pub fn after_answer(&self, project: &str, session: Option<&str>) {
+        let Some(session) = session else {
+            return;
+        };
+        let mut asked: Vec<Value> = self
+            .mem
+            .questions_all(project)
+            .rows("questions")
+            .into_iter()
+            .filter(|row| row["session"] == session)
+            .collect();
+        if asked.is_empty() || asked.iter().any(|row| row["answered"] != true) {
+            return;
+        }
+        let runner = self
+            .mem
+            .projects()
+            .rows("projects")
+            .iter()
+            .map(crate::page_home::summary_of)
+            .find(|s| s.name == project)
+            .and_then(|s| s.runner);
+        let Some(runner) = runner else {
+            eprintln!("hub: {project} has no runner to resume {session} on");
+            return;
+        };
+        // A second tap on the same last question finds the first resume still
+        // waiting, and adds nothing.
+        let queued = self.agents.pending(&runner.machine).iter().any(|c| {
+            matches!(c, Command::Resume { project: p, id, .. } if p == project && id == session)
+        });
+        if queued {
+            return;
+        }
+        // mem lists newest first; a ULID sorts in the order it was made.
+        asked.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        let answers: Vec<String> = asked
+            .iter()
+            .map(|row| {
+                format!(
+                    "#{} {}\nAnswer: {}",
+                    row["short_id"].as_str().unwrap_or(""),
+                    row["body"].as_str().unwrap_or(""),
+                    row["answer"].as_str().unwrap_or(""),
+                )
+            })
+            .collect();
+        let message = format!(
+            "Saiful answered your questions on the hub. Each answer is below, \
+             and `mem questions` has them too.\n\n{}",
+            answers.join("\n\n")
+        );
+        self.agents.queue(
+            &runner.machine,
+            Command::Resume {
+                project: project.to_string(),
+                id: session.to_string(),
+                message,
+            },
+        );
+    }
+
     /// The lock for one key, created on first use: a question id here, and
     /// whatever a page's write has to serialise on.
     pub fn lock_for(&self, key: &str) -> Arc<Mutex<()>> {
@@ -286,9 +359,12 @@ impl App {
         }
         let waiting = outcome
             .rows("questions")
-            .iter()
-            .any(|row| row["id"] == id || row["short_id"] == id);
-        if waiting { Pending::Yes } else { Pending::No }
+            .into_iter()
+            .find(|row| row["id"] == id || row["short_id"] == id);
+        match waiting {
+            Some(row) => Pending::Yes(row),
+            None => Pending::No,
+        }
     }
 
     fn back(&self, banner: Banner) -> Response {

@@ -7,6 +7,8 @@
 //! because the hub runs outside any checkout, and puts free text after `--`,
 //! so text starting with a dash is never read as a flag.
 
+use serde_json::Value;
+
 use crate::agents::Command;
 use crate::html::{esc, project_url};
 use crate::http::Response;
@@ -68,8 +70,12 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             } else {
                 &answer
             };
-            let run = match pending_approval(ctx, project) {
-                Some(id) => ctx.app.write_through(&["answer", &flag, "--", &id, answer]),
+            let question = pending_approval(ctx, project);
+            let run = match &question {
+                Some(row) => {
+                    let id = row["id"].as_str().unwrap_or("");
+                    ctx.app.write_through(&["answer", &flag, "--", id, answer])
+                }
                 None if verb == "changes" => {
                     let line = format!("roadmap changes requested: {text}");
                     ctx.app.write_through(&["log", &flag, "--", &line])
@@ -78,6 +84,9 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             };
             if !run.ok() {
                 return failed(&run);
+            }
+            if let Some(row) = question {
+                ctx.app.after_answer(project, row["session"].as_str());
             }
             Response::see_other(&roadmap)
         }
@@ -164,16 +173,15 @@ fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
     Response::see_other(&project_url(project))
 }
 
-/// The id of the project's pending approval question, found by its project
-/// and the first words of its body.
-pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<String> {
+/// The project's pending approval question, found by its project and the
+/// first words of its body.
+pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<Value> {
     ctx.app
         .mem
         .questions_fresh()
         .rows("questions")
-        .iter()
+        .into_iter()
         .find(|row| row["project"] == project && row["body"].as_str().is_some_and(is_approval))
-        .and_then(|row| row["id"].as_str().map(str::to_string))
 }
 
 /// Whether a question asks for the roadmap's approval.
