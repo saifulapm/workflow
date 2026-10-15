@@ -571,7 +571,7 @@ fn a_route_in_the_answer_is_written_for_qshell() {
         serde_json::from_str(&w.work.read("run/workflow-route.json")).unwrap();
     assert_eq!(
         file,
-        json!({"route":"device","machine":"mac-mini-m2","waiting":2,"hub":HUB})
+        json!({"route":"device","machine":"mac-mini-m2","waiting":2,"hub":HUB,"self":"mini"})
     );
     let leftovers: Vec<_> = std::fs::read_dir(w.work.at("run"))
         .unwrap()

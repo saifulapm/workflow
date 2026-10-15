@@ -275,7 +275,7 @@ fn poll(hub: &str, token: &str, name: &str) -> Option<Vec<Job>> {
     };
     // An older hub sends no route; the file then stays as it is.
     if let Some(route) = doc.get("route") {
-        route::write_file(hub, route);
+        route::write_file(hub, Some(name), route);
     }
     let commands = doc.get("commands").and_then(Value::as_array).cloned();
     // A kind this agent does not know is skipped, not a reason to drop the rest.

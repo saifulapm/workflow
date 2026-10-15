@@ -73,7 +73,7 @@ fn route_device_posts_this_machine_and_writes_the_file() {
     let file: serde_json::Value = serde_json::from_str(&w.read("run/workflow-route.json")).unwrap();
     assert_eq!(
         file,
-        json!({"route":"device","machine":"mini","waiting":0,"hub":HUB})
+        json!({"route":"device","machine":"mini","waiting":0,"hub":HUB,"self":"mini"})
     );
 }
 
