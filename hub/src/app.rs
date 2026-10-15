@@ -280,7 +280,9 @@ impl App {
             .questions_all(project)
             .rows("questions")
             .into_iter()
-            .filter(|row| row["session"] == session)
+            // An orchestrator's own question from its implementers carries
+            // the same amx id, but nobody answers it here.
+            .filter(|row| row["session"] == session && row["audience"].is_null())
             .collect();
         if asked.is_empty() || asked.iter().any(|row| row["answered"] != true) {
             return;

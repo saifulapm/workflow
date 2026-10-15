@@ -151,6 +151,26 @@ fn the_last_answer_of_a_session_queues_one_resume_with_every_answer_in_order() {
     assert_eq!(poll(&hub), resume(&message));
 }
 
+/// An implementer's `mem ask --for orchestrator` carries its orchestrator's
+/// amx id too, and nobody answers it on the hub, so it never holds back the
+/// resume of the questions Saiful answers.
+#[test]
+fn a_question_for_the_orchestrator_does_not_hold_back_the_resume() {
+    let world = World::new("resume-audience", mini());
+    let hub = world.hub(&[]);
+    poll(&hub);
+
+    let q1 = |a| question(Q1, "Ship it?", Some("gamma-m4"), a);
+    let mut worker = question(Q2, "Widen the files?", Some("gamma-m4"), None);
+    worker["audience"] = json!("orchestrator");
+    world.questions(&[q1(None)], &[worker, q1(Some("yes"))]);
+    answer(&hub, Q1, "yes");
+    assert_eq!(
+        poll(&hub),
+        resume(&format!("{HEAD}#Q1AAAAAA Ship it?\nAnswer: yes"))
+    );
+}
+
 #[test]
 fn answering_the_last_question_twice_queues_one_resume() {
     let world = World::new("resume-twice", mini());
