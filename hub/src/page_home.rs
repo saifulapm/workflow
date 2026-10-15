@@ -12,7 +12,7 @@ use crate::config::Config;
 use crate::dulali::Held;
 use crate::html::{self, Banner, esc};
 use crate::http::Response;
-use crate::live::{self, Run, Runner};
+use crate::live::{self, CloudRun, CloudState, Run, Runner};
 use crate::memcli::{MemCli, Outcome};
 use crate::model::{self, list_fault};
 use crate::page_questions::{pending_block, question_row};
@@ -219,12 +219,24 @@ pub fn render(
         .iter()
         .map(|p| live::run(p.runner.as_ref(), &p.name, p.milestone.as_deref(), agents))
         .collect();
+    // A cloud run, which no agent reports, from its runner and handoff.
+    let now = jiff::Timestamp::from_millisecond(now_ms).unwrap_or_else(|_| jiff::Timestamp::now());
+    let clouds: Vec<Option<CloudRun>> = projects
+        .iter()
+        .map(|p| live::cloud_run(p, || handoff_body(mem, &p.name), now))
+        .collect();
+    let showing = |run: &Run, cloud: &Option<CloudRun>| {
+        matches!(run, Run::Live(_))
+            || cloud
+                .as_ref()
+                .is_some_and(|c| matches!(c.state, CloudState::Live | CloudState::Parked))
+    };
     body.push_str("<h2>Running</h2>\n");
     let running: Vec<String> = projects
         .iter()
-        .zip(&runs)
-        .filter(|(_, run)| matches!(run, Run::Live(_)))
-        .map(|(project, _)| running_line(project))
+        .zip(runs.iter().zip(&clouds))
+        .filter(|(_, (run, cloud))| showing(run, cloud))
+        .map(|(project, (_, cloud))| running_line(project, cloud.as_ref()))
         .collect();
     if running.is_empty() {
         body.push_str("<p class=\"empty\">Nothing running.</p>\n");
@@ -252,8 +264,9 @@ pub fn render(
     // A live project is listed under Running only.
     let projects: Vec<(&ProjectSummary, &Run)> = projects
         .iter()
-        .zip(&runs)
-        .filter(|(_, run)| !matches!(run, Run::Live(_)))
+        .zip(runs.iter().zip(&clouds))
+        .filter(|(_, (run, cloud))| !showing(run, cloud))
+        .map(|(project, (run, _))| (project, run))
         .collect();
     let waits = projects
         .iter()
@@ -272,8 +285,12 @@ pub fn render(
     } else {
         body.push_str("<div class=\"cards\">\n");
         for (project, run) in &projects {
+            // No agent ever polls as the cloud, so a cloud runner is never
+            // offline.
             let away = match run {
-                Run::Away(machine) => Some(live::away(machine, &project.name, agents)),
+                Run::Away(machine) if machine != "cloud" => {
+                    Some(live::away(machine, &project.name, agents))
+                }
                 _ => None,
             };
             body.push_str(&project_card(
@@ -374,14 +391,16 @@ fn dulali_block(rows: &[(String, Held)], now_ms: i64, pair_notice: Option<&str>)
 }
 
 /// One live project under Running: `<project> · <machine> · <milestone> ·
-/// since <HH:MM>`, the time in the hub's own zone, linking to its page.
-fn running_line(project: &ProjectSummary) -> String {
+/// since <HH:MM>`, the time in the hub's own zone, linking to its page. A
+/// cloud run names the milestone it runs, and ends ` · parked` once parked.
+fn running_line(project: &ProjectSummary, cloud: Option<&CloudRun>) -> String {
     let mut parts = vec![project.name.clone()];
     if let Some(runner) = &project.runner {
         parts.push(runner.machine.clone());
     }
-    if let Some(milestone) = &project.milestone {
-        parts.push(milestone.clone());
+    match cloud {
+        Some(cloud) => parts.push(cloud.milestone.clone()),
+        None => parts.extend(project.milestone.clone()),
     }
     let since = project
         .runner
@@ -391,6 +410,9 @@ fn running_line(project: &ProjectSummary) -> String {
     if let Some(since) = since {
         let zoned = since.to_zoned(jiff::tz::TimeZone::system());
         parts.push(format!("since {}", zoned.strftime("%H:%M")));
+    }
+    if cloud.is_some_and(|cloud| cloud.state == CloudState::Parked) {
+        parts.push("parked".to_string());
     }
     format!(
         "<li><a href=\"{}\">{}</a></li>\n",
@@ -535,4 +557,12 @@ fn text(row: &Value, key: &str) -> Option<String> {
 
 fn count(row: &Value, key: &str) -> u64 {
     row[key].as_u64().unwrap_or(0)
+}
+
+/// The text of `project`'s latest handoff, when mem gave it.
+fn handoff_body(mem: &MemCli, project: &str) -> Option<String> {
+    match &*mem.handoff(project) {
+        Outcome::Json(doc) => text(doc, "body"),
+        _ => None,
+    }
 }
