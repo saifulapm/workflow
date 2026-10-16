@@ -235,7 +235,14 @@ fn run_local(port: u16) -> Result<()> {
         let local = Arc::clone(&local);
         std::thread::Builder::new()
             .name("hub-slack".to_string())
-            .spawn(move || slack.run_socket(move |tap| local.on_tap(tap)))
+            // Each tap on a thread of its own: a peer that is slow to answer
+            // must not hold up the acks of the taps behind it.
+            .spawn(move || {
+                slack.run_socket(move |tap| {
+                    let local = Arc::clone(&local);
+                    std::thread::spawn(move || local.on_tap(tap));
+                })
+            })
             .context("starting the Slack socket")?;
     }
     let for_mem = Arc::clone(&local);

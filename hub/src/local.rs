@@ -126,6 +126,15 @@ impl Local {
                 Err(e) => Response::text(400, &format!("not a question: {e}")),
             },
             ("POST", "/answer") => match serde_json::from_slice::<Answer>(&request.body) {
+                // Only a Slack tap travels between hubs; an answer claiming
+                // any other surface would be recorded under a name nobody
+                // checked.
+                Ok(answer) if answer.by != "slack" => {
+                    Response::text(400, "only a Slack tap travels between hubs")
+                }
+                Ok(answer) if self.is_review(&answer.question) => {
+                    Response::text(403, "a roadmap review is Saiful's to answer, on the hub")
+                }
                 Ok(answer) => {
                     self.deliver(&answer.question, &answer.answer, &answer.by);
                     Response::text(200, "ok")
@@ -150,13 +159,24 @@ impl Local {
         }
     }
 
+    /// Whether `question`, asked here, is a roadmap review: answering it
+    /// starts work, so it is answered on the hub and never by a tap.
+    fn is_review(&self, question: &str) -> bool {
+        self.asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(question)
+            .is_some_and(Asked::is_review)
+    }
+
     /// Posts a person's question to Slack, on a thread of its own so mem is
-    /// not kept waiting. An orchestrator's question never rings.
+    /// not kept waiting. An orchestrator's question never rings, and a
+    /// roadmap review stays on the hub.
     fn post(&self, asked: &Asked) {
         let Some(slack) = self.slack.clone() else {
             return;
         };
-        if asked.audience.as_deref() == Some("orchestrator") {
+        if asked.audience.as_deref() == Some("orchestrator") || asked.is_review() {
             return;
         }
         let question = Question {
@@ -242,7 +262,8 @@ impl Local {
             .unwrap_or_else(|e| e.into_inner())
             .contains_key(question);
         if self.records && asked_here {
-            let argv = ["answer", question, answer, "--by", by].map(str::to_string);
+            // `--`, so an option that starts with a dash is not read as a flag.
+            let argv = ["answer", "--by", by, "--", question, answer].map(str::to_string);
             std::thread::spawn(move || {
                 match std::process::Command::new("mem")
                     .args(&argv)
@@ -252,10 +273,10 @@ impl Local {
                     Ok(out) if out.status.success() => {}
                     Ok(out) => eprintln!(
                         "hub: local: mem answer {} failed: {}",
-                        argv[1],
+                        argv[4],
                         String::from_utf8_lossy(&out.stderr).trim()
                     ),
-                    Err(e) => eprintln!("hub: local: mem answer {}: {e}", argv[1]),
+                    Err(e) => eprintln!("hub: local: mem answer {}: {e}", argv[4]),
                 }
             });
         }
@@ -293,6 +314,16 @@ pub struct Asked {
     pub audience: Option<String>,
 }
 
+impl Asked {
+    /// The hub's own rule for a roadmap review, as the connector applies it.
+    fn is_review(&self) -> bool {
+        let text = self.text.trim();
+        crate::page_control::is_approval(text)
+            || (self.options.iter().any(|o| o == "approve")
+                && text.to_lowercase().contains("roadmap"))
+    }
+}
+
 /// An answer as a peer hands it in, with the surface that took it.
 #[derive(Debug, serde::Deserialize)]
 struct Answer {
@@ -327,8 +358,7 @@ pub fn request(
     let (host, port) = split_target(target)?;
     let mut stream = match std::env::var("HUB_SOCKS5").ok().filter(|v| !v.is_empty()) {
         Some(proxy) => socks5_connect(&proxy, &host, port)?,
-        None => TcpStream::connect((host.as_str(), port))
-            .with_context(|| format!("connecting {target}"))?,
+        None => connect_within(&host, port).with_context(|| format!("connecting {target}"))?,
     };
     stream.set_read_timeout(Some(PEER_TIMEOUT))?;
     stream.set_write_timeout(Some(PEER_TIMEOUT))?;
@@ -359,6 +389,20 @@ pub fn request(
     Ok((status, body))
 }
 
+/// A connect that gives up after `PEER_TIMEOUT`, so a peer that is listed
+/// but off costs seconds, not the system's two minutes.
+fn connect_within(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+    let mut last = std::io::Error::other("no address");
+    for addr in (host, port).to_socket_addrs()? {
+        match TcpStream::connect_timeout(&addr, PEER_TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 fn split_target(target: &str) -> Result<(String, u16)> {
     match target.rsplit_once(':') {
         Some((host, port)) => Ok((
@@ -372,7 +416,8 @@ fn split_target(target: &str) -> Result<(String, u16)> {
 /// A SOCKS5 CONNECT with no authentication, naming the host so the proxy
 /// resolves it (tailscaled knows MagicDNS names; this machine may not).
 fn socks5_connect(proxy: &str, host: &str, port: u16) -> Result<TcpStream> {
-    let mut stream = TcpStream::connect(proxy)
+    let (proxy_host, proxy_port) = split_target(proxy)?;
+    let mut stream = connect_within(&proxy_host, proxy_port)
         .with_context(|| format!("connecting the SOCKS5 proxy {proxy}"))?;
     stream.set_read_timeout(Some(PEER_TIMEOUT))?;
     stream.write_all(&[5, 1, 0])?;

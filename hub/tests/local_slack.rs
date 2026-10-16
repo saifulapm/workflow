@@ -347,3 +347,26 @@ fn an_orchestrators_question_never_reaches_slack() {
     thread::sleep(Duration::from_millis(500));
     assert!(p.asker_slack.calls_to("chat.postMessage").is_empty());
 }
+
+#[test]
+fn a_roadmap_review_never_reaches_slack() {
+    let p = pair("ls-review");
+    let body = json!({
+        "id": "REVW1234",
+        "project": "walk",
+        "text": "Review the walk roadmap",
+        "options": ["approve", "changes"],
+        "audience": "human",
+    })
+    .to_string();
+    let response = on_socket(
+        &p.asker_dir.join("local.sock"),
+        &format!(
+            "POST /ask HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert_eq!(status_of(&response), 200, "{response}");
+    thread::sleep(Duration::from_millis(500));
+    assert!(p.asker_slack.calls_to("chat.postMessage").is_empty());
+}

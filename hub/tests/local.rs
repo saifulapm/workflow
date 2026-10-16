@@ -305,14 +305,14 @@ fn an_answer_to_a_question_asked_here_is_recorded_in_the_store_signed_by_its_sur
     );
     assert_eq!(status_of(&answered), 200, "{answered}");
     common::wait_for("mem answer", std::time::Duration::from_secs(5), || {
-        std::fs::read_to_string(&log).is_ok_and(|l| l.lines().count() >= 5)
+        std::fs::read_to_string(&log).is_ok_and(|l| l.lines().count() >= 6)
     });
     let argv: Vec<String> = std::fs::read_to_string(&log)
         .unwrap()
         .lines()
         .map(str::to_string)
         .collect();
-    assert_eq!(argv, ["answer", "ABCD1234", "yes", "--by", "slack"]);
+    assert_eq!(argv, ["answer", "--by", "slack", "--", "ABCD1234", "yes"]);
 }
 
 /// A cloud session's mem is the mem server's, which refuses an answer; its
@@ -350,4 +350,58 @@ fn an_answer_to_a_question_asked_elsewhere_is_not_recorded_here() {
     );
     std::thread::sleep(std::time::Duration::from_millis(500));
     assert!(!log.exists());
+}
+
+/// The peer port carries taps from Slack and nothing else, so an answer
+/// claiming any other surface is refused rather than recorded under it.
+#[test]
+fn a_peer_answer_signed_by_anything_but_slack_is_refused() {
+    let dir = TempDir::new("local-signed");
+    let (bin, log) = logging_mem(&dir);
+    let hub = spawn_local_with(&dir, "testbox", &[&bin], &[]);
+    ask_on(&dir.join("local.sock"));
+    let forged = post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ABCD1234","answer":"yes","by":"saiful"}"#,
+    );
+    assert_eq!(status_of(&forged), 400, "{forged}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!log.exists());
+    let response = on_socket(
+        &dir.join("local.sock"),
+        "GET /wait/ABCD1234?s=1 HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_eq!(status_of(&response), 204, "{response}");
+}
+
+/// A roadmap review starts work once approved: it is Saiful's to answer on the
+/// hub, never by a tap carried between hubs.
+#[test]
+fn a_roadmap_review_cannot_be_answered_over_the_peer_port() {
+    let dir = TempDir::new("local-review");
+    let (bin, log) = logging_mem(&dir);
+    let hub = spawn_local_with(&dir, "testbox", &[&bin], &[]);
+    let ask = r#"{"id":"REVW1234","project":"walk","text":"Review the walk roadmap","options":["approve","changes"],"audience":"human"}"#;
+    let asked = on_socket(
+        &dir.join("local.sock"),
+        &format!(
+            "POST /ask HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{ask}",
+            ask.len()
+        ),
+    );
+    assert_eq!(status_of(&asked), 200, "{asked}");
+    let refused = post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"REVW1234","answer":"approve","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&refused), 403, "{refused}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!log.exists());
+    let response = on_socket(
+        &dir.join("local.sock"),
+        "GET /wait/REVW1234?s=1 HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_eq!(status_of(&response), 204, "{response}");
 }
