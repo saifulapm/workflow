@@ -55,12 +55,17 @@ pub fn dir_stamp(dir: &Path) -> Option<(u64, u64)> {
 
 pub enum Waited {
     Answered(Box<Row>),
+    /// The local hub had the answer before any store did.
+    Delivered(String),
     TimedOut,
 }
 
 /// Polls until the question is answered or the deadline passes. Reindexing only
 /// happens when the directory actually changed, so a five minute wait is a
 /// handful of stat calls rather than twenty full reindexes.
+///
+/// `nap` spends each interval between polls: a plain sleep, or a long poll on
+/// the local hub, which ends the wait the moment it hands back an answer.
 pub fn wait_for_answer(
     index_path: &Path,
     store: &crate::store::Store,
@@ -68,6 +73,7 @@ pub fn wait_for_answer(
     question_id: &str,
     timeout: Duration,
     mut on_sync: impl FnMut(),
+    mut nap: impl FnMut(Duration) -> Option<String>,
 ) -> Result<Waited> {
     let started = Instant::now();
     let interval = poll_interval();
@@ -86,7 +92,9 @@ pub fn wait_for_answer(
             if started.elapsed() >= timeout {
                 return Ok(Waited::TimedOut);
             }
-            std::thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+            if let Some(answer) = nap(interval.min(timeout.saturating_sub(started.elapsed()))) {
+                return Ok(Waited::Delivered(answer));
+            }
             let elapsed = started.elapsed().as_secs();
             if next_sync < SYNC_AT.len() && elapsed >= SYNC_AT[next_sync] {
                 next_sync += 1;

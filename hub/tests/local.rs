@@ -174,3 +174,95 @@ fn hub_ping_goes_through_a_socks5_proxy_when_one_is_named() {
     assert_eq!(name, "mini.tailnet");
     assert_eq!(port, hub_port);
 }
+
+fn on_socket(socket: &Path, request: &str) -> String {
+    let mut stream = UnixStream::connect(socket).unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn post_answer(hub: &Hub, token: &str, body: &str) -> String {
+    hub.raw(&format!(
+        "POST /answer HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    ))
+}
+
+#[test]
+fn a_waiting_mem_gets_the_answer_a_peer_hands_in() {
+    let dir = TempDir::new("local-answer");
+    let hub = spawn_local(&dir, "testbox");
+    let socket = dir.join("local.sock");
+    let ask = r#"{"id":"ABCD1234","project":"walk","text":"probe?","options":["yes","no"],"audience":"human"}"#;
+    let asked = on_socket(
+        &socket,
+        &format!(
+            "POST /ask HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{ask}",
+            ask.len()
+        ),
+    );
+    assert_eq!(status_of(&asked), 200, "{asked}");
+
+    let waiter = {
+        let socket = socket.clone();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let response = on_socket(
+                &socket,
+                "GET /wait/ABCD1234?s=10 HTTP/1.1\r\nHost: x\r\n\r\n",
+            );
+            (response, started.elapsed())
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let answered = post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ABCD1234","answer":"yes","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&answered), 200, "{answered}");
+    let (response, took) = waiter.join().unwrap();
+    assert_eq!(status_of(&response), 200, "{response}");
+    assert_eq!(body_of(&response), "yes");
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+
+    // A wait after the answer has it at once.
+    let again = on_socket(
+        &socket,
+        "GET /wait/ABCD1234?s=10 HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_eq!(body_of(&again), "yes");
+}
+
+#[test]
+fn a_wait_with_no_answer_ends_empty_when_its_time_is_up() {
+    let dir = TempDir::new("local-noanswer");
+    let _hub = spawn_local(&dir, "testbox");
+    let started = std::time::Instant::now();
+    let response = on_socket(
+        &dir.join("local.sock"),
+        "GET /wait/NOPE0000?s=1 HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_eq!(status_of(&response), 204, "{response}");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(900));
+}
+
+#[test]
+fn an_answer_without_the_peer_token_wakes_nobody() {
+    let dir = TempDir::new("local-forged");
+    let hub = spawn_local(&dir, "testbox");
+    let forged = post_answer(
+        &hub,
+        "wrong",
+        r#"{"question":"ABCD1234","answer":"yes","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&forged), 401);
+    let response = on_socket(
+        &dir.join("local.sock"),
+        "GET /wait/ABCD1234?s=1 HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_eq!(status_of(&response), 204, "{response}");
+}

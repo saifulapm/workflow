@@ -169,6 +169,7 @@ pub fn mem_env(w: &World, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> st
         .env("PI_CODING_AGENT_DIR", w.pi_agent_dir())
         .env("MEM_SYNC_CMD", "true")
         .env_remove("MEM_PROJECT")
+        .env_remove("HUB_LOCAL_SOCKET")
         .env_remove("CARGO_TARGET_DIR");
     for (key, value) in env {
         cmd.env(key, value);

@@ -49,6 +49,14 @@ pub fn request(
 
 /// Runs this invocation on the server at `url` and returns the exit code.
 pub fn run(url: &str) -> i32 {
+    let (code, stdout, stderr) = run_captured(url);
+    let _ = std::io::stdout().write_all(stdout.as_bytes());
+    let _ = std::io::stderr().write_all(stderr.as_bytes());
+    code
+}
+
+/// `run`, handing back what the server's mem printed instead of printing it.
+pub fn run_captured(url: &str) -> (i32, String, String) {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let env_project = std::env::var("MEM_PROJECT")
         .ok()
@@ -63,18 +71,99 @@ pub fn run(url: &str) -> i32 {
     );
     match post(url, &body.to_string()) {
         Ok(reply) => {
-            let field = |key: &str| reply.get(key).and_then(Value::as_str).unwrap_or("");
-            let _ = std::io::stdout().write_all(field("stdout").as_bytes());
-            let _ = std::io::stderr().write_all(field("stderr").as_bytes());
-            reply
+            let field = |key: &str| {
+                reply
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let code = reply
                 .get("code")
                 .and_then(Value::as_i64)
-                .map_or(exit::STORE, |c| c as i32)
+                .map_or(exit::STORE, |c| c as i32);
+            (code, field("stdout"), field("stderr"))
         }
-        Err(why) => {
-            eprintln!("mem: {url} {why}");
-            exit::STORE
+        Err(why) => (exit::STORE, String::new(), format!("mem: {url} {why}\n")),
+    }
+}
+
+/// `run`, for a machine whose local hub carries questions and answers: the
+/// server writes a question, then the local hub is handed it, and a wait is
+/// the local hub's alone, since the server refuses one.
+pub fn run_with_local_hub(url: &str, cli: &crate::cli::Cli) -> i32 {
+    let socket = match crate::paths::Dirs::from_env() {
+        Ok(dirs) => crate::localhub::socket_path(&dirs.state),
+        Err(_) => return run(url),
+    };
+    match &cli.command {
+        Some(crate::cli::Command::Questions {
+            wait: Some(id),
+            timeout,
+            ..
+        }) => {
+            let Some(within) = crate::questions::parse_timeout(timeout) else {
+                return run(url);
+            };
+            let short = crate::localhub::short_id(id);
+            match crate::localhub::wait_until(&socket, &short, within) {
+                crate::localhub::Waited::Answered(text) => {
+                    print!("{text}");
+                    exit::OK
+                }
+                crate::localhub::Waited::Nothing => {
+                    eprintln!(
+                        "mem: #{short} is still unanswered — park the work with `mem handoff`"
+                    );
+                    exit::WAIT_TIMEOUT
+                }
+                crate::localhub::Waited::NoHub => run(url),
+            }
         }
+        Some(crate::cli::Command::Ask {
+            question,
+            options,
+            audience,
+            ..
+        }) => {
+            let (code, stdout, stderr) = run_captured(url);
+            let _ = std::io::stdout().write_all(stdout.as_bytes());
+            let _ = std::io::stderr().write_all(stderr.as_bytes());
+            // `#<id>`, or with --json the reply's short_id.
+            let id = stdout
+                .lines()
+                .find_map(|l| l.trim().strip_prefix('#'))
+                .map(str::to_string)
+                .or_else(|| {
+                    serde_json::from_str::<Value>(&stdout).ok()?["short_id"]
+                        .as_str()
+                        .map(str::to_string)
+                });
+            if code == exit::OK
+                && let Some(id) = id
+            {
+                let project = cli.project.clone().or_else(|| {
+                    std::env::var("MEM_PROJECT")
+                        .ok()
+                        .map(|p| p.trim().to_string())
+                        .filter(|p| !p.is_empty())
+                });
+                crate::localhub::ask(
+                    &socket,
+                    &crate::localhub::Asked {
+                        id: &id,
+                        project: project.as_deref(),
+                        text: question,
+                        options,
+                        audience: Some(crate::verbs::person_or_orchestrator(
+                            audience.and_then(crate::cli::Audience::stored),
+                        )),
+                    },
+                );
+            }
+            code
+        }
+        _ => run(url),
     }
 }
 

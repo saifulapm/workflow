@@ -14,6 +14,7 @@ pub mod ids;
 pub mod index;
 pub mod item;
 pub mod lint;
+pub mod localhub;
 pub mod maint;
 pub mod paths;
 pub mod project;

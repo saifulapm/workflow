@@ -7,10 +7,12 @@
 //! 127.0.0.1, so the address a request came from proves nothing; the token
 //! and the socket's file mode are the only guards.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -22,6 +24,9 @@ pub const PORT: u16 = 8789;
 /// How long a peer may take to answer.
 const PEER_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The longest a wait is held open; mem asks again.
+const MAX_HOLD: Duration = Duration::from_secs(25);
+
 /// The peer token, from the environment only: a flag would put it in `ps`.
 pub fn token_from_env() -> Result<String> {
     let token = std::env::var("HUB_PEER_TOKEN").unwrap_or_default();
@@ -32,14 +37,12 @@ pub fn token_from_env() -> Result<String> {
     Ok(token.to_string())
 }
 
-/// `HUB_LOCAL_SOCKET`, else `$XDG_RUNTIME_DIR/hub-local.sock`, else under the
-/// state directory. mem works out the same path.
+/// `HUB_LOCAL_SOCKET`, else `hub/local.sock` under the state directory. mem
+/// works out the same path; a test that moves the state directory can never
+/// reach the real local hub, and so never posts to Slack.
 pub fn socket_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("HUB_LOCAL_SOCKET").filter(|p| !p.is_empty()) {
         return Ok(PathBuf::from(path));
-    }
-    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|p| !p.is_empty()) {
-        return Ok(PathBuf::from(dir).join("hub-local.sock"));
     }
     Ok(crate::config::state_home()?.join("hub/local.sock"))
 }
@@ -47,11 +50,19 @@ pub fn socket_path() -> Result<PathBuf> {
 pub struct Local {
     machine: String,
     token: String,
+    /// Answers by question short id, kept for a wait that comes later.
+    answers: Mutex<HashMap<String, String>>,
+    answered: Condvar,
 }
 
 impl Local {
     pub fn new(machine: String, token: String) -> Local {
-        Local { machine, token }
+        Local {
+            machine,
+            token,
+            answers: Mutex::new(HashMap::new()),
+            answered: Condvar::new(),
+        }
     }
 
     /// A request on the peer port.
@@ -68,12 +79,83 @@ impl Local {
     }
 
     fn route(&self, request: &Request) -> Response {
-        match (request.method.as_str(), request.path.as_str()) {
+        let method = request.method.as_str();
+        match (method, request.path.as_str()) {
             ("GET", "/ping") => Response::text(200, &self.machine),
             (_, "/ping") => Response::method_not_allowed("GET"),
+            ("POST", "/ask") => match serde_json::from_slice::<Asked>(&request.body) {
+                Ok(_) => Response::text(200, "ok"),
+                Err(e) => Response::text(400, &format!("not a question: {e}")),
+            },
+            ("POST", "/answer") => match serde_json::from_slice::<Answer>(&request.body) {
+                Ok(answer) => {
+                    self.deliver(&answer.question, answer.answer);
+                    Response::text(200, "ok")
+                }
+                Err(e) => Response::text(400, &format!("not an answer: {e}")),
+            },
+            ("GET", path) if path.starts_with("/wait/") => {
+                let id = &path["/wait/".len()..];
+                let hold = request
+                    .query
+                    .get("s")
+                    .and_then(|s| s.parse().ok())
+                    .map(Duration::from_secs)
+                    .unwrap_or(MAX_HOLD)
+                    .min(MAX_HOLD);
+                match self.wait(id, hold) {
+                    Some(answer) => Response::new(200, "text/plain; charset=utf-8", answer),
+                    None => Response::new(204, "text/plain; charset=utf-8", ""),
+                }
+            }
             _ => Response::not_found(),
         }
     }
+
+    /// Keeps the answer and wakes every wait on it.
+    pub fn deliver(&self, question: &str, answer: String) {
+        let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        answers.insert(question.to_string(), answer);
+        self.answered.notify_all();
+    }
+
+    /// The answer to `question`, waiting up to `hold` for it.
+    fn wait(&self, question: &str, hold: Duration) -> Option<String> {
+        let deadline = Instant::now() + hold;
+        let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(answer) = answers.get(question) {
+                return Some(answer.clone());
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return None;
+            }
+            answers = self
+                .answered
+                .wait_timeout(answers, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+}
+
+/// A question as mem hands it over.
+#[derive(Debug, serde::Deserialize)]
+pub struct Asked {
+    pub id: String,
+    pub project: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    pub audience: Option<String>,
+}
+
+/// An answer as a peer hands it in.
+#[derive(Debug, serde::Deserialize)]
+struct Answer {
+    question: String,
+    answer: String,
 }
 
 /// Whether `Authorization: Bearer <token>` names `token`, compared in

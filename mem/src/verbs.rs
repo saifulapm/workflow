@@ -1778,6 +1778,21 @@ pub fn ask(
     // arrived twice — and this one carried the question text, which the
     // doorbell deliberately never does.
     crate::sync::trigger(&app.dirs.qshell_status_json());
+    let project = match &identity {
+        crate::project::Identity::Known { name, .. } => Some(name.as_str()),
+        crate::project::Identity::UnknownRepo { name_hint } => Some(name_hint.as_str()),
+        crate::project::Identity::NonGit => None,
+    };
+    crate::localhub::ask(
+        &crate::localhub::socket_path(&app.dirs.state),
+        &crate::localhub::Asked {
+            id: &written.short_id,
+            project,
+            text: question,
+            options,
+            audience: Some(person_or_orchestrator(audience)),
+        },
+    );
     if app.json {
         println!(
             "{}",
@@ -1793,6 +1808,14 @@ pub fn ask(
         println!("#{}", written.short_id);
     }
     Ok(exit::OK)
+}
+
+/// What the local hub needs of a stored audience: whether a person answers.
+pub fn person_or_orchestrator(audience: Option<&str>) -> &'static str {
+    match audience {
+        Some("orchestrator") => "orchestrator",
+        _ => "human",
+    }
 }
 
 /// `mem questions` and `mem questions --wait <id>`.
@@ -1913,6 +1936,8 @@ fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
         None => app.store.global_items(),
     };
     let status_path = app.dirs.qshell_status_json();
+    let socket = crate::localhub::socket_path(&app.dirs.state);
+    let short = question.short_id.clone();
     let outcome = crate::questions::wait_for_answer(
         &app.dirs.index_db(),
         &app.store,
@@ -1920,6 +1945,7 @@ fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
         &question.id,
         timeout,
         || crate::sync::trigger(&status_path),
+        |within| nap_on_local_hub(&socket, &short, within),
     )?;
     match outcome {
         crate::questions::Waited::Answered(answer) => {
@@ -1932,6 +1958,14 @@ fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
             }
             Ok(exit::OK)
         }
+        crate::questions::Waited::Delivered(text) => {
+            if app.json {
+                println!("{}", serde_json::to_string(&json!({ "body": text }))?);
+            } else {
+                print!("{text}");
+            }
+            Ok(exit::OK)
+        }
         crate::questions::Waited::TimedOut => {
             if !app.quiet && !app.json {
                 eprintln!(
@@ -1940,6 +1974,35 @@ fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
                 );
             }
             Ok(exit::WAIT_TIMEOUT)
+        }
+    }
+}
+
+/// One interval of a wait: long polls on the local hub when there is one,
+/// else a sleep.
+fn nap_on_local_hub(
+    socket: &std::path::Path,
+    short: &str,
+    within: std::time::Duration,
+) -> Option<String> {
+    let started = std::time::Instant::now();
+    loop {
+        let left = within.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            return None;
+        }
+        let asked = std::time::Instant::now();
+        match crate::localhub::wait(socket, short, left) {
+            crate::localhub::Waited::Answered(text) => return Some(text),
+            crate::localhub::Waited::Nothing => {
+                // A hub that answers at once must not turn the wait into a spin.
+                let floor = std::time::Duration::from_millis(200);
+                std::thread::sleep(floor.saturating_sub(asked.elapsed()).min(left));
+            }
+            crate::localhub::Waited::NoHub => {
+                std::thread::sleep(left);
+                return None;
+            }
         }
     }
 }
