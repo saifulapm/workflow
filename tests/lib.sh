@@ -92,20 +92,21 @@ run_out() {
 # slots (flock files in WF_CF_SLOTS) the first time it starts cf dev and
 # holds it until it ends. The lock sits in a small watcher of the test's
 # shell, never in a file descriptor the test's children inherit, so a
-# server left behind cannot keep a slot.
+# server left behind cannot keep a slot; and the watcher is no child of the
+# test, so a test's bare `wait` does not wait on it.
 t_cf_dev() {
-	local app=$1 log=$2 _try _ _slot _mark _pid _me=$BASHPID
+	local app=$1 log=$2 _try _ _slot _mark _me=$BASHPID
 	shift 2
 	mkdir -p "${WF_CF_SLOTS:=${TMPDIR:-/tmp}/wf-cf-slots-$(id -u)}"
 	while [ -z "${_cf_slot:-}" ]; do
 		for _slot in 1 2; do
 			_mark=$WF_CF_SLOTS/$_slot.$_me
-			rm -f "$_mark"
-			flock -n -o "$WF_CF_SLOTS/$_slot" sh -c \
+			rm -f "$_mark" "$_mark.busy"
+			( (flock -n -o "$WF_CF_SLOTS/$_slot" sh -c \
 				'touch "$1"; while kill -0 "$2" 2>/dev/null; do sleep 0.5; done' \
-				_ "$_mark" "$_me" </dev/null >/dev/null 2>&1 &
-			_pid=$!
-			while [ ! -e "$_mark" ] && kill -0 "$_pid" 2>/dev/null; do sleep 0.05; done
+				_ "$_mark" "$_me" || touch "$_mark.busy") </dev/null >/dev/null 2>&1 &)
+			while [ ! -e "$_mark" ] && [ ! -e "$_mark.busy" ]; do sleep 0.05; done
+			rm -f "$_mark.busy"
 			if [ -e "$_mark" ]; then
 				rm -f "$_mark"
 				_cf_slot=$_slot

@@ -31,3 +31,14 @@ is "$up" 2 "two cf dev tests run at once, the third waits"
 wait
 up=$(find "$T_TMP" -maxdepth 1 -name 'up*' | wc -l)
 is "$up" 3 "the third starts once one of the two has ended"
+
+# A test that ends with a bare `wait` must not wait on its own slot.
+(
+	t_cf_dev "$T_TMP/app" "$T_TMP/cfw.log" || exit 1
+	kill -TERM -- "-$CF_DEV_PID" 2>/dev/null
+	wait
+	touch "$T_TMP/waited"
+) &
+for _ in $(seq 1 60); do [ -e "$T_TMP/waited" ] && break; sleep 0.1; done
+[ -e "$T_TMP/waited" ] && ok "a test's bare wait returns with its slot held" ||
+	notok "a test's bare wait returns with its slot held" "still waiting after 6 s"
