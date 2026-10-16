@@ -1,9 +1,16 @@
 //! The Worker: one entry point for every request, the walk store Durable
 //! Object, and the home page built from it.
 
-use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use serde_json::{Value, json};
+use worker::wasm_bindgen::{JsCast, JsValue};
+use worker::wasm_bindgen_futures::JsFuture;
 use worker::*;
 
+use crate::access::{self, Access, Jwt};
+use crate::mcp::{self, Step};
 use crate::page;
 
 /// The store's binding, and the one instance every request reaches.
@@ -17,14 +24,146 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     handle(req, env).await
 }
 
-/// Every request passes through here, so a check that guards every path
-/// (the Access JWT) goes in this one place.
+/// A JWKS lookup for a kid the cached keys lack happens at most this often,
+/// so a stream of made-up kids cannot turn into a stream of fetches.
+const REFETCH_EVERY_MS: u64 = 60_000;
+
+/// Every request passes through here, so the Access JWT is checked in this
+/// one place.
 async fn handle(req: Request, env: Env) -> Result<Response> {
-    match (req.method(), req.path().as_str()) {
+    let path = req.path();
+    // The store write carries its own bearer STORE_TOKEN, so a machine can
+    // send records with no Access login.
+    if req.method() == Method::Put && path == "/store/records" {
+        return put_records(req, &env).await;
+    }
+    if let Err(why) = guard(&req, &env).await {
+        console_log!("hubweb: refused {:?} {path}: {why}", req.method());
+        return Response::error("Unauthorized", 401);
+    }
+    match (req.method(), path.as_str()) {
         (Method::Get, "/") => home(&env).await,
-        (Method::Put, "/store/records") => put_records(req, &env).await,
+        (Method::Post, "/" | "/mcp") => serve_mcp(req, &env).await,
+        (_, "/mcp") => Response::error("Method Not Allowed", 405),
         _ => Response::error("Not Found", 404),
     }
+}
+
+/// `Ok` only for a token one of this Worker's Access apps would have issued,
+/// and never while ACCESS_AUD or ACCESS_TEAM is unset. The error says why,
+/// for the log.
+async fn guard(req: &Request, env: &Env) -> std::result::Result<(), &'static str> {
+    let setting = |name| env.secret(name).map(|value| value.to_string()).ok();
+    let access = Access::new(
+        setting("ACCESS_AUD").as_deref(),
+        setting("ACCESS_TEAM").as_deref(),
+    )
+    .ok_or("ACCESS_AUD or ACCESS_TEAM is unset")?;
+    let token = req.headers().get("Cf-Access-Jwt-Assertion").ok().flatten();
+    let jwt = access::parse(token.as_deref())?;
+    let jwk = key(&access, &jwt.kid).await.ok_or("unknown kid")?;
+    if !verify(&jwk, &jwt).await.unwrap_or(false) {
+        return Err("bad signature");
+    }
+    let now = (Date::now().as_millis() / 1000) as i64;
+    access.claims(&jwt, now)
+}
+
+/// The team's keys, kept for as long as the isolate lives.
+#[derive(Default)]
+struct Keys {
+    by_kid: HashMap<String, Value>,
+    fetched: Option<u64>,
+}
+
+thread_local! {
+    static KEYS: RefCell<Keys> = RefCell::default();
+}
+
+/// The JWK for `kid`, fetching the team's keys when none are cached yet or,
+/// at most once a minute, when `kid` is new (Access rotates keys).
+async fn key(access: &Access, kid: &str) -> Option<Value> {
+    if let Some(jwk) = KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned()) {
+        return Some(jwk);
+    }
+    let now = Date::now().as_millis();
+    let due = KEYS.with_borrow_mut(|keys| {
+        if keys.fetched.is_some_and(|at| now - at < REFETCH_EVERY_MS) {
+            return false;
+        }
+        keys.fetched = Some(now);
+        true
+    });
+    if !due {
+        return None;
+    }
+    match fetch_keys(access).await {
+        Ok(fresh) => KEYS.with_borrow_mut(|keys| keys.by_kid = fresh),
+        Err(why) => console_error!("hubweb: fetching Access keys: {why}"),
+    }
+    KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned())
+}
+
+/// A Request, not a `Url`: `Url::parse` brings the url crate's IDNA tables,
+/// about 200 KB of wasm.
+async fn fetch_keys(access: &Access) -> std::result::Result<HashMap<String, Value>, String> {
+    let request = Request::new(&access.certs_url(), Method::Get).map_err(|e| e.to_string())?;
+    let mut answer = Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !(200..300).contains(&answer.status_code()) {
+        return Err(format!("status {}", answer.status_code()));
+    }
+    let body = answer.bytes().await.map_err(|e| e.to_string())?;
+    access::jwks(&body)
+}
+
+/// Checks the token's RS256 signature with the runtime's WebCrypto.
+async fn verify(jwk: &Value, jwt: &Jwt<'_>) -> std::result::Result<bool, JsValue> {
+    const RS256: &str = "RSASSA-PKCS1-v1_5";
+    let object = |value: &Value| {
+        js_sys::JSON::parse(&value.to_string()).map(JsCast::unchecked_into::<js_sys::Object>)
+    };
+    let crypto: web_sys::Crypto =
+        js_sys::Reflect::get(&js_sys::global(), &"crypto".into())?.unchecked_into();
+    let subtle = crypto.subtle();
+    let algorithm = object(&json!({"name": RS256, "hash": "SHA-256"}))?;
+    let usages = js_sys::Array::of1(&"verify".into());
+    let imported =
+        subtle.import_key_with_object("jwk", &object(jwk)?, &algorithm, false, &usages)?;
+    let key: web_sys::CryptoKey = JsFuture::from(imported).await?.unchecked_into();
+    let verified = subtle.verify_with_str_and_u8_array_and_u8_array(
+        RS256,
+        &key,
+        &jwt.signature,
+        jwt.signed.as_bytes(),
+    )?;
+    Ok(JsFuture::from(verified).await?.as_bool() == Some(true))
+}
+
+/// One JSON-RPC message in, its JSON reply out; a `handoff` call reads the
+/// project's handoff record from the store.
+async fn serve_mcp(mut req: Request, env: &Env) -> Result<Response> {
+    let body = req.bytes().await?;
+    let (status, reply) = match mcp::handle(&body) {
+        Step::Reply(status, reply) => (status, reply),
+        Step::Handoff { id, project } => {
+            let mut answer = store(env)?
+                .fetch_with_str(&format!("https://store/handoff/{project}"))
+                .await?;
+            let text = match answer.status_code() {
+                200 => Some(answer.text().await?),
+                _ => None,
+            };
+            (200, mcp::handoff_reply(id, &project, text.as_deref()))
+        }
+    };
+    let mut response = Response::ok(reply)?.with_status(status);
+    response
+        .headers_mut()
+        .set("Content-Type", "application/json")?;
+    Ok(response)
 }
 
 fn store(env: &Env) -> Result<Stub> {
@@ -146,6 +285,21 @@ impl DurableObject for Store {
                     .to_array()?;
                 let bodies: Vec<&str> = rows.iter().filter_map(|r| r["body"].as_str()).collect();
                 Response::from_json(&bodies)
+            }
+            (Method::Get, path) if path.starts_with("/handoff/") => {
+                let project = &path["/handoff/".len()..];
+                let rows: Vec<Value> = self
+                    .sql
+                    .exec(
+                        "SELECT body FROM records WHERE project = ? AND kind = 'handoff' \
+                         AND key = ?",
+                        vec![project.into(), project.into()],
+                    )?
+                    .to_array()?;
+                match rows.first().and_then(|row| row["body"].as_str()) {
+                    Some(text) => Response::ok(text),
+                    None => Response::error("No handoff", 404),
+                }
             }
             _ => Response::error("Not Found", 404),
         }

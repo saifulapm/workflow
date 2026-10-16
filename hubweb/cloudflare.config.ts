@@ -15,6 +15,11 @@ export default defineConfig({
     env: {
       STORE: bindings.durableObject({ worker: "hubweb", exportName: "Store" }),
       STORE_TOKEN: bindings.secret(),
+      // The Access apps' auds, comma-separated, and the team URL, such as
+      // https://saifulapm.cloudflareaccess.com. Neither is secret; they are
+      // secrets because cf dev reads secrets from its environment.
+      ACCESS_AUD: bindings.secret(),
+      ACCESS_TEAM: bindings.secret(),
     },
     // next-hub.on-rexa.com and next-mem.on-rexa.com are added when the
     // Worker is first deployed, not before.
