@@ -267,34 +267,39 @@ fn a_kick_is_mems_alone_and_answers_even_with_sharing_off() {
     assert_eq!(status_of(&mem), 204, "{mem}");
 }
 
+/// Sharing needs both variables. With only one of them set, the hub answers
+/// on mem's socket and the store at `HUB_STORE_URL`, when there is one,
+/// hears nothing.
 #[test]
-fn without_a_store_url_nothing_connects_and_the_hub_still_serves() {
-    let dir = TempDir::new("share-off");
-    let bin = share_mem(&dir);
-    std::fs::write(dir.join("pending"), format!("{WRITE_A}\n")).unwrap();
+fn without_both_store_variables_nothing_connects_and_the_hub_still_serves() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    // Only the token: without the URL too, sharing stays off.
-    let home = dir.join("home");
-    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
-    std::fs::write(home.join("config/qshell/machine"), "testbox\n").unwrap();
-    let socket = dir.join("local.sock");
-    let _hub = Hub::spawn_env(
-        &home,
-        &[&bin],
-        &["local", "--port", "0"],
-        &[
-            ("HUB_PEER_TOKEN", PEER_TOKEN),
-            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
-            ("HUB_STORE_TOKEN", STORE_TOKEN),
-        ],
-    );
-    assert_eq!(status_of(&kick(&dir)), 204);
-    std::thread::sleep(Duration::from_millis(1500));
-    assert!(
-        matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
-        "the hub connected with sharing off"
-    );
-    let ping = on_socket(&socket, "GET /ping HTTP/1.1\r\nHost: x\r\n\r\n");
-    assert_eq!(status_of(&ping), 200, "{ping}");
+    let url = format!("ws://{}/store/share", listener.local_addr().unwrap());
+    for (name, value) in [("HUB_STORE_TOKEN", STORE_TOKEN), ("HUB_STORE_URL", &url)] {
+        let dir = TempDir::new("share-off");
+        let bin = share_mem(&dir);
+        std::fs::write(dir.join("pending"), format!("{WRITE_A}\n")).unwrap();
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+        std::fs::write(home.join("config/qshell/machine"), "testbox\n").unwrap();
+        let socket = dir.join("local.sock");
+        let _hub = Hub::spawn_env(
+            &home,
+            &[&bin],
+            &["local", "--port", "0"],
+            &[
+                ("HUB_PEER_TOKEN", PEER_TOKEN),
+                ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+                (name, value),
+            ],
+        );
+        assert_eq!(status_of(&kick(&dir)), 204);
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "the hub connected with only {name} set"
+        );
+        let ping = on_socket(&socket, "GET /ping HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert_eq!(status_of(&ping), 200, "{ping}");
+    }
 }
