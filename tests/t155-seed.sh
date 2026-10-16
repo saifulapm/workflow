@@ -56,7 +56,7 @@ on() { # on <machine> <command...> -- runs a command with that machine's store
 		XDG_STATE_HOME="$root/state" XDG_CONFIG_HOME="$root/config" \
 		HUB_LOCAL_SOCKET="$root/state/hub/local.sock" MEM_SYNC_CMD=true "$@")
 }
-for m in mini fresh; do
+for m in mini fresh walker; do
 	mkdir -p "$T_TMP/m/$m"/{data,cache,state,config/qshell}
 	printf '%s\n' "$m" >"$T_TMP/m/$m/config/qshell/machine"
 done
@@ -113,4 +113,7 @@ is "$(curl -s -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
 is "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
 	"http://127.0.0.1:$CF_DEV_PORT/store/files/projects/$PROJECT/raw/old.bin")" 404 \
 	"the file older than 90 days is not"
+on walker env HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token HUB_STORE_NAME=walk timeout 30 "$HUB_BIN" share sync 2>/dev/null
+is "$(find "$T_TMP/m/walker/data/mem/store" -type f 2>/dev/null | wc -l)" 0 \
+	"the walk's store object holds none of the import"
 unlike "$(cat "$T_TMP/seed1.err")" 'error|refused' "no import printed an error"

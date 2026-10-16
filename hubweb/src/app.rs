@@ -25,7 +25,12 @@ use hubpages::page_evidence::image_kind;
 
 /// The store's binding, and the one instance every request reaches.
 const STORE: &str = "STORE";
-const STORE_NAME: &str = "walk";
+/// The walk's store object, which the next-* hosts reach.
+const WALK: &str = "walk";
+/// The real store object, which every other host reaches.
+const MAIN: &str = "main";
+/// The header a machine names its store object with.
+const STORE_HEADER: &str = "X-Hub-Store";
 /// Saiful reads the hub from Dhaka, so the store is created in Asia-Pacific.
 const STORE_LOCATION: &str = "apac";
 /// The tags the store's sockets carry: a machine's sharing socket, or an
@@ -48,17 +53,18 @@ const REFETCH_EVERY_MS: u64 = 60_000;
 /// one place.
 async fn handle(req: Request, env: Env) -> Result<Response> {
     let path = req.path();
+    let object = store_name(&req)?;
     // The store write carries its own bearer STORE_TOKEN, so a machine can
     // send records with no Access login.
     if req.method() == Method::Put && path == "/store/records" {
-        return put_records(req, &env).await;
+        return put_records(req, &env, object).await;
     }
     // The sharing socket takes the same bearer or a machine's own token, and
     // the store answers the upgrade itself so it can keep the socket while it
     // hibernates. The store trusts the bound header, so a copy the client
     // sent never reaches it.
     if req.method() == Method::Get && path == "/store/share" {
-        let Some(holder) = holder(&req, &env).await? else {
+        let Some(holder) = holder(&req, &env, object).await? else {
             return Response::error("Unauthorized", 401);
         };
         let headers = req.headers().clone();
@@ -68,7 +74,7 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         }
         let mut init = RequestInit::new();
         init.with_method(Method::Get).with_headers(headers);
-        return store(&env)?
+        return store(&env, object)?
             .fetch_with_request(Request::new_with_init("https://store/store/share", &init)?)
             .await;
     }
@@ -82,7 +88,7 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         let mut init = RequestInit::new();
         init.with_method(Method::Post);
         let target = format!("https://store/mint/{name}");
-        return store(&env)?
+        return store(&env, object)?
             .fetch_with_request(Request::new_with_init(&target, &init)?)
             .await;
     }
@@ -91,7 +97,7 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
     if matches!(req.method(), Method::Put | Method::Get)
         && let Some(raw) = path.strip_prefix("/store/files/")
     {
-        if holder(&req, &env).await?.is_none() {
+        if holder(&req, &env, object).await?.is_none() {
             return Response::error("Unauthorized", 401);
         }
         let Some(project) = files::decode(raw)
@@ -112,7 +118,7 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         if !bearer(&req, &env)? {
             return Response::error("Unauthorized", 401);
         }
-        return store(&env)?.fetch_with_request(req).await;
+        return store(&env, object)?.fetch_with_request(req).await;
     }
     if let Err(why) = guard(&req, &env).await {
         console_log!("hubweb: refused {:?} {path}: {why}", req.method());
@@ -120,10 +126,10 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
     }
     match (req.method(), path.as_str()) {
         // An open page's socket, which hears only that the store changed.
-        (Method::Get, "/live") => store(&env)?.fetch_with_request(req).await,
+        (Method::Get, "/live") => store(&env, object)?.fetch_with_request(req).await,
         (Method::Get, _) if evidence_file(&path).is_some() => {
             let (project, id) = evidence_file(&path).unwrap_or_default();
-            serve_evidence(project, id, &env).await
+            serve_evidence(project, id, &env, object).await
         }
         (Method::Post, "/" | "/mcp") => {
             // claude.ai calls the connector from its servers. A browser
@@ -140,10 +146,10 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             if !json {
                 return Response::error("the connector takes application/json", 415);
             }
-            serve_mcp(req, &env).await
+            serve_mcp(req, &env, object).await
         }
         (_, "/mcp") => Response::error("Method Not Allowed", 405),
-        (Method::Get | Method::Post, _) => page(req, &env).await,
+        (Method::Get | Method::Post, _) => page(req, &env, object).await,
         _ => Response::error("Method Not Allowed", 405),
     }
 }
@@ -243,18 +249,36 @@ async fn verify(jwk: &Value, jwt: &Jwt<'_>) -> std::result::Result<bool, JsValue
 
 /// One JSON-RPC message in, its JSON reply out, served by the store from
 /// its files; a write the connector makes becomes the store's own.
-async fn serve_mcp(mut req: Request, env: &Env) -> Result<Response> {
+async fn serve_mcp(mut req: Request, env: &Env, object: &str) -> Result<Response> {
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_body(Some(req.bytes().await?.into()));
-    store(env)?
+    store(env, object)?
         .fetch_with_request(Request::new_with_init("https://store/mcp", &init)?)
         .await
 }
 
-fn store(env: &Env) -> Result<Stub> {
+fn store(env: &Env, object: &str) -> Result<Stub> {
     env.durable_object(STORE)?
-        .get_by_name_with_location_hint(STORE_NAME, STORE_LOCATION)
+        .get_by_name_with_location_hint(object, STORE_LOCATION)
+}
+
+/// The store object a request reaches: the one its X-Hub-Store names, else
+/// the walk's on a next-* host and the real one on any other. The walk's
+/// projects never reach a real replica, and nothing of the walk is deleted.
+fn store_name(req: &Request) -> Result<&'static str> {
+    Ok(match req.headers().get(STORE_HEADER)?.as_deref() {
+        Some(MAIN) => MAIN,
+        Some(WALK) => WALK,
+        _ if req
+            .url()?
+            .host_str()
+            .is_some_and(|host| host.starts_with("next-")) =>
+        {
+            WALK
+        }
+        _ => MAIN,
+    })
 }
 
 /// The project and id of `/p/<project>/file/<id>`, as the path spells them.
@@ -268,8 +292,8 @@ fn evidence_file(path: &str) -> Option<(&str, &str)> {
 /// One evidence file: the store names its path, the project's Files object
 /// holds the bytes. A Durable Object cannot fetch another one synchronously,
 /// so the page code cannot do this and the Worker does.
-async fn serve_evidence(project: &str, id: &str, env: &Env) -> Result<Response> {
-    let mut named = store(env)?
+async fn serve_evidence(project: &str, id: &str, env: &Env, object: &str) -> Result<Response> {
+    let mut named = store(env, object)?
         .fetch_with_str(&format!("https://store/evidence/{project}/{id}"))
         .await?;
     if named.status_code() != 200 {
@@ -300,7 +324,7 @@ async fn serve_evidence(project: &str, id: &str, env: &Env) -> Result<Response> 
 
 /// A hub page, which the store draws from its files. Server-Timing carries
 /// the store's own build time and the whole round trip to it.
-async fn page(mut req: Request, env: &Env) -> Result<Response> {
+async fn page(mut req: Request, env: &Env, object: &str) -> Result<Response> {
     let start = Date::now().as_millis();
     // The store sees the request under its own host, so whether the POST
     // came from the hub web's own pages is decided here, and any such
@@ -322,7 +346,7 @@ async fn page(mut req: Request, env: &Env) -> Result<Response> {
         init.with_body(Some(req.bytes().await?.into()));
     }
     let target = format!("https://store/page{}", path_and_query(&req));
-    let mut answer = store(env)?
+    let mut answer = store(env, object)?
         .fetch_with_request(Request::new_with_init(&target, &init)?)
         .await?;
     let bytes = answer.bytes().await?;
@@ -362,14 +386,14 @@ fn path_and_query(req: &Request) -> String {
 
 /// Hands the records to the store when the request carries the bearer
 /// STORE_TOKEN or a machine's own token; 401 otherwise.
-async fn put_records(mut req: Request, env: &Env) -> Result<Response> {
-    if holder(&req, env).await?.is_none() {
+async fn put_records(mut req: Request, env: &Env, object: &str) -> Result<Response> {
+    if holder(&req, env, object).await?.is_none() {
         return Response::error("Unauthorized", 401);
     }
     let body = req.text().await?;
     let mut init = RequestInit::new();
     init.with_method(Method::Put).with_body(Some(body.into()));
-    store(env)?
+    store(env, object)?
         .fetch_with_request(Request::new_with_init("https://store/records", &init)?)
         .await
 }
@@ -402,7 +426,7 @@ enum Holder {
 /// The holder of the request's bearer; None when it is neither the shared
 /// STORE_TOKEN nor a token the store minted. Only the store knows the
 /// machine tokens, so the Worker asks it.
-async fn holder(req: &Request, env: &Env) -> Result<Option<Holder>> {
+async fn holder(req: &Request, env: &Env, object: &str) -> Result<Option<Holder>> {
     if bearer(req, env)? {
         return Ok(Some(Holder::Shared));
     }
@@ -417,7 +441,7 @@ async fn holder(req: &Request, env: &Env) -> Result<Option<Holder>> {
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_body(Some(token.to_string().into()));
-    let mut answer = store(env)?
+    let mut answer = store(env, object)?
         .fetch_with_request(Request::new_with_init("https://store/whose", &init)?)
         .await?;
     if answer.status_code() != 200 {
