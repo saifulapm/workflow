@@ -895,3 +895,68 @@ fn with_sharing_off_a_file_is_not_found() {
     let _hub = spawn_local(&dir, &bin, None);
     assert_eq!(get_file(&dir, "projects/P/evidence/t1/a%20b.png").0, 404);
 }
+
+fn route_on(dir: &TempDir) -> serde_json::Value {
+    let response = on_socket(
+        &dir.join("local.sock"),
+        "GET /route HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+    );
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    serde_json::from_str(body).unwrap_or_default()
+}
+
+/// The hub web chooses the route through the store, which hands it to every
+/// machine; the hub keeps it as it keeps a peer's, and mem never sees it.
+#[test]
+fn a_newer_route_from_the_store_is_taken_and_never_reaches_mem() {
+    let dir = TempDir::new("share-route-in");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let _hub = spawn_local(&dir, &bin, Some(&store));
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    store.send(r#"{"t":"route","route":"device","machine":"nuc","at":4102444800000}"#);
+    store.send(r#"{"t":"ready","seq":41}"#);
+    wait_for("the route taken", Duration::from_secs(2), || {
+        route_on(&dir)["machine"] == "nuc"
+    });
+    assert_eq!(route_on(&dir)["route"], "device");
+    wait_for("the ready applied", Duration::from_secs(2), || {
+        applied(&dir).contains("ready")
+    });
+    assert!(!applied(&dir).contains("route"), "{}", applied(&dir));
+    // Taken from the store, so not sent back to it.
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(store.texts_on(0), [HELLO]);
+}
+
+/// A route chosen on this machine reaches the store, which keeps the newest
+/// and shows it on the hub web.
+#[test]
+fn a_route_chosen_here_reaches_the_store() {
+    let dir = TempDir::new("share-route-out");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let _hub = spawn_local(&dir, &bin, Some(&store));
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    let body = r#"{"route":"device"}"#;
+    let chosen = on_socket(
+        &dir.join("local.sock"),
+        &format!(
+            "POST /route HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert_eq!(status_of(&chosen), 200, "{chosen}");
+    wait_for("the route sent", Duration::from_secs(2), || {
+        store.texts_on(0).len() >= 2
+    });
+    let sent: serde_json::Value = serde_json::from_str(&store.texts_on(0)[1]).unwrap();
+    assert_eq!(sent["t"], "route");
+    assert_eq!(sent["route"], "device");
+    assert_eq!(sent["machine"], route_on(&dir)["machine"]);
+    assert_eq!(sent["at"], route_on(&dir)["at"]);
+}

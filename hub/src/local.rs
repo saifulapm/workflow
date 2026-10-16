@@ -466,6 +466,16 @@ impl Local {
         }
     }
 
+    /// The route this hub holds.
+    pub fn route_now(&self) -> Stamped {
+        self.route_now.get()
+    }
+
+    /// A route from the store, taken only when it is newer than this hub's.
+    pub fn offer_route(&self, theirs: Stamped) -> bool {
+        self.route_now.offer(theirs)
+    }
+
     /// Ends every wait early, so each mem waiting looks at its store again.
     pub fn nudge(&self) {
         let _answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());

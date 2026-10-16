@@ -18,6 +18,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde_json::Value;
+
+use crate::localroute::Stamped;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::error::UrlError;
 use tungstenite::stream::MaybeTlsStream;
@@ -343,6 +345,8 @@ fn session(
         send_pending(&mut socket, &mut sent, store, uploads)?;
     }
 
+    // The route this socket last carried either way; a newer one goes out.
+    let mut told: Option<Stamped> = None;
     let mut heard = Instant::now();
     let mut pinged = Instant::now();
     let mut held: Vec<String> = Vec::new();
@@ -352,6 +356,9 @@ fn session(
             Ok(message) => {
                 heard = Instant::now();
                 match message {
+                    Message::Text(text) if kind(&text) == "route" => {
+                        told = take_route(&text).or(told);
+                    }
                     Message::Text(text) => {
                         if held.is_empty() {
                             held_since = Instant::now();
@@ -402,6 +409,12 @@ fn session(
         // A kick during the pause is dropped: the resume above sends it all.
         if kick.swap(false, Ordering::SeqCst) && paused_until.is_none() {
             send_pending(&mut socket, &mut sent, store, uploads)?;
+        }
+        if let Some(route) = route_to_tell(told.as_ref()) {
+            socket
+                .send(Message::text(route_message(&route)))
+                .context("sending the route")?;
+            told = Some(route);
         }
         if heard.elapsed() >= QUIET {
             bail!("the store was silent for {QUIET:?}");
@@ -517,6 +530,49 @@ fn apply(frames: &[String]) -> Result<()> {
         applied();
     }
     Ok(())
+}
+
+/// The local hubs' route: how to read it, and how to offer one the store
+/// sent, which is taken only when it is newer.
+struct Routes {
+    get: Box<dyn Fn() -> Stamped + Send + Sync>,
+    offer: Box<dyn Fn(Stamped) -> bool + Send + Sync>,
+}
+
+static ROUTES: OnceLock<Routes> = OnceLock::new();
+
+/// Lets the socket carry this machine's route to the store and take the
+/// store's; the first call wins. Without it no route travels.
+pub fn when_routed(
+    get: impl Fn() -> Stamped + Send + Sync + 'static,
+    offer: impl Fn(Stamped) -> bool + Send + Sync + 'static,
+) {
+    let _ = ROUTES.set(Routes {
+        get: Box::new(get),
+        offer: Box::new(offer),
+    });
+}
+
+/// Offers the store's route to this machine, and returns the route the hub
+/// now holds when it took it, so it is not sent back.
+fn take_route(frame: &str) -> Option<Stamped> {
+    let routes = ROUTES.get()?;
+    let theirs: Stamped = serde_json::from_str(frame).ok()?;
+    theirs.at?;
+    (routes.offer)(theirs).then(|| (routes.get)())
+}
+
+/// This machine's route when it was chosen (it has a stamp) and differs from
+/// the one the socket last carried.
+fn route_to_tell(told: Option<&Stamped>) -> Option<Stamped> {
+    let now = (ROUTES.get()?.get)();
+    (now.at.is_some_and(|at| at > 0) && Some(&now) != told).then_some(now)
+}
+
+fn route_message(route: &Stamped) -> String {
+    let mut message = serde_json::to_value(route).unwrap_or_default();
+    message["t"] = "route".into();
+    message.to_string()
 }
 
 fn kind(frame: &str) -> String {

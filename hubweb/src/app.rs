@@ -328,6 +328,12 @@ impl DurableObject for Store {
         )
         .expect("index the files by kind");
         fill_files(&sql).expect("fill the files table from the log");
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS route(one INTEGER PRIMARY KEY CHECK (one = 1), \
+             body TEXT NOT NULL)",
+            None,
+        )
+        .expect("create the route table");
         Self {
             state,
             sql,
@@ -633,6 +639,29 @@ impl Log for SqlLog<'_> {
             )
             .map_err(fault)?;
         keep_file(self.0, rec).map_err(fault)
+    }
+
+    fn route(&self) -> std::result::Result<Option<Value>, Fault> {
+        let rows: Vec<Value> = self
+            .0
+            .exec("SELECT body FROM route", None)
+            .and_then(|cursor| cursor.to_array())
+            .map_err(fault)?;
+        Ok(rows
+            .first()
+            .and_then(|row| row["body"].as_str())
+            .and_then(|body| serde_json::from_str(body).ok()))
+    }
+
+    fn set_route(&mut self, route: &Value) -> std::result::Result<(), Fault> {
+        self.0
+            .exec(
+                "INSERT INTO route(one, body) VALUES (1, ?) ON CONFLICT(one) DO UPDATE SET \
+                 body = excluded.body",
+                vec![route.to_string().into()],
+            )
+            .map(|_| ())
+            .map_err(fault)
     }
 }
 

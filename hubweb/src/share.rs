@@ -36,6 +36,9 @@ pub trait Log {
     /// The highest seq, 0 for an empty log.
     fn last(&self) -> Result<i64, Fault>;
     fn append(&mut self, rec: &Rec) -> Result<(), Fault>;
+    /// The newest route a machine or the hub web chose, as a route message.
+    fn route(&self) -> Result<Option<Value>, Fault>;
+    fn set_route(&mut self, route: &Value) -> Result<(), Fault>;
 }
 
 /// What one message from a machine sends back.
@@ -61,7 +64,11 @@ pub fn handle(log: &mut impl Log, machine: Option<&str>, text: &str) -> Outcome 
                 Some(machine) => write(log, machine, &message),
                 None => Err(Fault::Broken("say hello before writing".into())),
             },
-            _ => Err(Fault::Broken("t must be hello or write".into())),
+            Some("route") => match machine {
+                Some(_) => route(log, &message),
+                None => Err(Fault::Broken("say hello before routing".into())),
+            },
+            _ => Err(Fault::Broken("t must be hello, write or route".into())),
         },
         Err(why) => Err(Fault::Broken(format!("not JSON: {why}"))),
     };
@@ -84,6 +91,9 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
         return Err(Fault::Broken("hello needs machine and since".into()));
     };
     let mut sender: Vec<String> = log.after(since)?.iter().map(rec).collect();
+    // A machine that was away takes the route chosen meanwhile; its own,
+    // when newer, comes back as a route message of its own.
+    sender.extend(log.route()?.map(|route| route.to_string()));
     sender.push(json!({"t":"ready","seq":log.last()?}).to_string());
     Ok(Outcome {
         sender,
@@ -134,6 +144,37 @@ fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, 
     })
 }
 
+/// Where questions ring, as the local hubs hold it: Phone, or Device on one
+/// machine, stamped with when it was chosen. The newest stamp wins, so the
+/// store keeps a route only when it is newer than the one it has, and hands
+/// it to every other machine.
+pub fn route(log: &mut impl Log, message: &Value) -> Result<Outcome, Fault> {
+    let machine = message["machine"].as_str();
+    let (Some(kind @ ("phone" | "device")), Some(at)) =
+        (message["route"].as_str(), message["at"].as_i64())
+    else {
+        return Err(Fault::Broken(
+            "route needs route phone or device and at".into(),
+        ));
+    };
+    if at < 0 || (kind == "device" && machine.is_none()) {
+        return Err(Fault::Broken(
+            "a device route names its machine; at is a time".into(),
+        ));
+    }
+    let kept = log.route()?.and_then(|route| route["at"].as_i64());
+    if kept.is_some_and(|kept| kept >= at) {
+        return Ok(Outcome::default());
+    }
+    let machine = machine.filter(|_| kind == "device");
+    let route = json!({"t":"route","route":kind,"machine":machine,"at":at});
+    log.set_route(&route)?;
+    Ok(Outcome {
+        others: Some(route.to_string()),
+        ..Outcome::default()
+    })
+}
+
 fn rec(rec: &Rec) -> String {
     json!({"t":"rec","seq":rec.seq,"id":rec.id,"path":rec.path,"body":rec.body,"machine":rec.machine})
         .to_string()
@@ -174,6 +215,7 @@ mod tests {
     struct Memory {
         recs: Vec<Rec>,
         full: bool,
+        route: Option<Value>,
     }
 
     impl Log for Memory {
@@ -196,6 +238,67 @@ mod tests {
             self.recs.push(rec.clone());
             Ok(())
         }
+        fn route(&self) -> Result<Option<Value>, Fault> {
+            Ok(self.route.clone())
+        }
+        fn set_route(&mut self, route: &Value) -> Result<(), Fault> {
+            self.route = Some(route.clone());
+            Ok(())
+        }
+    }
+
+    fn route(log: &mut Memory, machine: Option<&str>, kind: &str, on: Value, at: i64) -> Outcome {
+        let message = json!({"t":"route","route":kind,"machine":on,"at":at});
+        handle(log, machine, &message.to_string())
+    }
+
+    #[test]
+    fn a_newer_route_is_kept_and_passed_to_the_others() {
+        let mut log = Memory::default();
+        let taken = route(&mut log, Some("nuc"), "device", json!("nuc"), 10);
+        let sent = json!({"t":"route","route":"device","machine":"nuc","at":10});
+        assert!(taken.sender.is_empty());
+        assert_eq!(
+            serde_json::from_str::<Value>(taken.others.as_deref().unwrap()).unwrap(),
+            sent
+        );
+        let stale = route(&mut log, Some("mini"), "phone", Value::Null, 10);
+        assert_eq!(stale, Outcome::default());
+        assert_eq!(log.route, Some(sent));
+    }
+
+    #[test]
+    fn a_route_needs_a_hello_a_kind_a_time_and_a_device_machine() {
+        let mut log = Memory::default();
+        for (machine, kind, on, at) in [
+            (None, "phone", Value::Null, 5),
+            (Some("nuc"), "dulali", Value::Null, 5),
+            (Some("nuc"), "device", Value::Null, 5),
+            (Some("nuc"), "phone", Value::Null, -1),
+        ] {
+            let refused = route(&mut log, machine, kind, on, at);
+            assert_eq!(parse(&refused.sender)[0]["t"], "error", "{kind} {at}");
+            assert_eq!(refused.others, None);
+        }
+        assert_eq!(log.route, None);
+    }
+
+    #[test]
+    fn a_hello_hears_the_kept_route_before_ready() {
+        let mut log = Memory::default();
+        route(&mut log, Some("nuc"), "phone", Value::Null, 7);
+        let hello = handle(
+            &mut log,
+            None,
+            r#"{"t":"hello","machine":"mini","since":0}"#,
+        );
+        assert_eq!(
+            parse(&hello.sender),
+            [
+                json!({"t":"route","route":"phone","machine":null,"at":7}),
+                json!({"t":"ready","seq":0}),
+            ]
+        );
     }
 
     const ITEM: &str = "projects/P1/items/01ITEM.md";

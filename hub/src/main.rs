@@ -294,6 +294,8 @@ fn run_local(port: u16) -> Result<()> {
         let kick = local.kick();
         let applied = Arc::clone(&local);
         hub::share::when_applied(move || applied.nudge());
+        let (reads, offers) = (Arc::clone(&local), Arc::clone(&local));
+        hub::share::when_routed(move || reads.route_now(), move |r| offers.offer_route(r));
         std::thread::Builder::new()
             .name("hub-share".to_string())
             .spawn(move || hub::share::run(store, kick, notice))
