@@ -389,7 +389,10 @@ const END: &str = "WORKFLOW_EOF";
 /// The setup script: every file of `skills/` and `agents/` under
 /// `~/.claude`, and a `mem` that fetches the real binary from the mem server
 /// the first time it runs. The script runs before the session, where the
-/// proxy adds no Access token, so the binary cannot come with it.
+/// proxy adds no Access token, so the binary comes with it only when the
+/// environment's variables hold one. With the store's variables as well, it
+/// bakes a replica into the cached environment, which a session
+/// starts from when the store cannot be reached.
 pub fn setup_script(files: &[(&str, &[u8])]) -> String {
     let mut out = String::from(
         "#!/bin/bash\n\
@@ -408,36 +411,94 @@ set -euo pipefail\n",
     out.push_str(&format!(
         "bin=/usr/local/bin\n\
 mkdir -p \"$bin\"\n\
+cat > \"$bin/mem-cloud\" <<'{END}'\n{HELPER}{END}\n\
+chmod +x \"$bin/mem-cloud\"\n\
 cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
-chmod +x \"$bin/mem\"\n"
+chmod +x \"$bin/mem\"\n\
+if [ -n \"${{HUB_STORE_URL:-}}\" ] && [ -n \"${{HUB_STORE_TOKEN:-}}\" ]; then\n\
+  if PATH=\"$bin:$PATH\" \"$bin/mem-cloud\" sync 120; then\n\
+    echo \"setup: baked the replica up to the store\"\n\
+  else\n\
+    echo \"setup: no baked replica: the store did not answer; each session fills its own\"\n\
+  fi\n\
+fi\n"
     ));
     out
 }
 
+/// `mem-cloud fetch <mem|hub>` puts `$MEM_REMOTE/dl/<name>` at
+/// `~/.local/bin/<name>-x86_64` once; with the Access service token among
+/// the variables it goes as headers read from a file, never on a command
+/// line. `mem-cloud sync <seconds>` brings the replica up to the store with
+/// `hub share sync`, and fails when the store cannot be reached in time.
+const HELPER: &str = r#"#!/bin/sh
+bin="$HOME/.local/bin"
+state="$HOME/.local/state/hub"
+fetch() {
+  [ -x "$bin/$1-x86_64" ] && return 0
+  mkdir -p "$bin" "$state"
+  part="$bin/$1-x86_64.part.$$"
+  hdr="$state/access.hdr.$$"
+  if [ -n "${HUB_STORE_ACCESS_ID:-}" ] && [ -n "${HUB_STORE_ACCESS_SECRET:-}" ]; then
+    (umask 077 && printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' \
+      "$HUB_STORE_ACCESS_ID" "$HUB_STORE_ACCESS_SECRET" >"$hdr")
+    curl -fsSL --max-time 120 -H "@$hdr" "${MEM_REMOTE:?MEM_REMOTE is not set}/dl/$1" -o "$part"
+    got=$?
+    rm -f "$hdr"
+  else
+    curl -fsSL --max-time 120 "${MEM_REMOTE:?MEM_REMOTE is not set}/dl/$1" -o "$part"
+    got=$?
+  fi
+  if [ "$got" != 0 ]; then
+    rm -f "$part"
+    echo "mem: cannot fetch the $1 binary from $MEM_REMOTE/dl/$1" >&2
+    return 1
+  fi
+  chmod +x "$part"
+  mv "$part" "$bin/$1-x86_64"
+}
+case "${1:-}" in
+  fetch) fetch "$2" ;;
+  sync) fetch mem && fetch hub && timeout "$2" "$bin/hub-x86_64" share sync ;;
+  *) echo "mem-cloud: fetch <mem|hub> or sync <seconds>" >&2; exit 2 ;;
+esac
+"#;
+
 /// The `mem` a cloud session runs: the x86_64 binary from `$MEM_REMOTE/dl/mem`,
 /// fetched inside the session, where the proxy adds the Access token.
 ///
-/// With `TS_AUTHKEY` and `HUB_PEER_TOKEN` among the environment's secrets, the
-/// first mem of a session also joins the tailnet as an ephemeral `tag:cloud`
-/// machine (Tailscale in userspace, since the VM has no tun device) and starts
-/// the local hub from `$MEM_REMOTE/dl/hub`, in the background. The key goes
-/// to tailscale in a file that is removed once read, and no process started
-/// here keeps it in its environment.
+/// With `HUB_STORE_URL` and `HUB_STORE_TOKEN` among the environment's
+/// variables, mem keeps a replica of the store like a device's:
+/// the first mem of a session brings it up to the store before it reads,
+/// and a store that cannot be reached leaves the replica baked at setup;
+/// then the local hub holds the socket. Without them, mem runs on the mem
+/// server, as before the move.
+///
+/// With `TS_AUTHKEY` and a peer token (`HUB_PEER_TOKEN`, or a cloud
+/// session's `HUB_CLOUD_TOKEN`) as well, the first mem of a session also
+/// joins the tailnet as an ephemeral `tag:cloud` machine (Tailscale in
+/// userspace, since the VM has no tun device). The local hub starts from
+/// `$MEM_REMOTE/dl/hub`, in the background. The key goes to tailscale in a
+/// file that is removed once read, and no process started here keeps it in
+/// its environment.
 const SHIM: &str = r#"#!/bin/sh
+helper="$(dirname "$0")/mem-cloud"
 real="$HOME/.local/bin/mem-x86_64"
-if [ ! -x "$real" ]; then
-  mkdir -p "$HOME/.local/bin"
-  if ! curl -fsSL --max-time 120 "${MEM_REMOTE:?MEM_REMOTE is not set}/dl/mem" -o "$real.part"; then
-    echo "mem: cannot fetch the mem binary from $MEM_REMOTE/dl/mem" >&2
-    exit 1
-  fi
-  chmod +x "$real.part"
-  mv "$real.part" "$real"
-fi
+"$helper" fetch mem || exit 1
+store=
+if [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ]; then store=1; fi
+# The local hub's own calls into the replica: never a sync or a hub of their own.
+if [ "${1:-}" = share ] && [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" "$@"; fi
 state="$HOME/.local/state/hub"
 # Alive when the local hub answers on mem's socket.
 hub_alive() { curl -s -m 2 --unix-socket "$state/local.sock" http://local/ping >/dev/null 2>&1; }
-if [ -n "${TS_AUTHKEY:-}" ] && [ -n "${HUB_PEER_TOKEN:-}" ] && mkdir -p "$state" && ! hub_alive; then
+peer="${HUB_PEER_TOKEN:-}${HUB_CLOUD_TOKEN:-}"
+if [ -n "$peer" ] && { [ -n "$store" ] || [ -n "${TS_AUTHKEY:-}" ]; } && mkdir -p "$state" && ! hub_alive; then
+  # The replica as the store has it now, before this mem reads it.
+  if [ -n "$store" ]; then
+    flock "$state/sync.lock" "$helper" sync 20 >"$state/sync.log" 2>&1 ||
+      echo "mem: the store did not answer; reading the replica as it was" >&2
+  fi
   # One start at a time; a later mem finds a dead hub and starts it again.
   (
     # The daemons started below close fd 9, so the lock ends with this start.
@@ -446,38 +507,37 @@ if [ -n "${TS_AUTHKEY:-}" ] && [ -n "${HUB_PEER_TOKEN:-}" ] && mkdir -p "$state"
     ts=1.98.8
     sock="$state/tailscaled.sock"
     set -e
-    if [ ! -x "$bin/tailscaled" ]; then
-      curl -fsSL --max-time 120 "https://pkgs.tailscale.com/stable/tailscale_${ts}_amd64.tgz" -o "$state/ts.tgz"
-      tar xzf "$state/ts.tgz" -C "$state"
-      cp "$state/tailscale_${ts}_amd64/tailscale" "$state/tailscale_${ts}_amd64/tailscaled" "$bin/"
+    "$helper" fetch hub
+    host=
+    if [ -n "${TS_AUTHKEY:-}" ]; then
+      if [ ! -x "$bin/tailscaled" ]; then
+        curl -fsSL --max-time 120 "https://pkgs.tailscale.com/stable/tailscale_${ts}_amd64.tgz" -o "$state/ts.tgz"
+        tar xzf "$state/ts.tgz" -C "$state"
+        cp "$state/tailscale_${ts}_amd64/tailscale" "$state/tailscale_${ts}_amd64/tailscaled" "$bin/"
+      fi
+      if ! env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" status >/dev/null 2>&1; then
+        env -u TS_AUTHKEY "$bin/tailscaled" --tun=userspace-networking \
+          --socks5-server=localhost:1055 --state=mem: --socket="$sock" >"$state/tailscaled.log" 2>&1 9>&- &
+        i=0
+        while [ ! -e "$sock" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+        key="$state/ts-authkey"
+        (umask 077 && printf '%s' "$TS_AUTHKEY" >"$key")
+        joined=0
+        # The tag is asked for, so a key that cannot give it fails here rather
+        # than joining with its owner's rights.
+        env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" up --auth-key="file:$key" \
+          --hostname="cloud-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)" --advertise-tags=tag:cloud || joined=$?
+        rm -f "$key"
+        [ "$joined" = 0 ]
+      fi
+      # The name Tailscale gave this machine, which may not be the one asked
+      # for: it is what a Slack button carries back.
+      host=$(env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" status --json --peers=false |
+        tr -d '\n' | sed -n 's/.*"Self": *{[^}]*"DNSName": *"\([^"]*\)".*/\1/p' | sed 's/\.$//')
+      [ -n "$host" ]
+      export HUB_SOCKS5=127.0.0.1:1055 HUB_HOST="$host"
     fi
-    if [ ! -x "$bin/hub-x86_64" ]; then
-      curl -fsSL --max-time 120 "$MEM_REMOTE/dl/hub" -o "$bin/hub-x86_64.part"
-      chmod +x "$bin/hub-x86_64.part"
-      mv "$bin/hub-x86_64.part" "$bin/hub-x86_64"
-    fi
-    if ! env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" status >/dev/null 2>&1; then
-      env -u TS_AUTHKEY "$bin/tailscaled" --tun=userspace-networking \
-        --socks5-server=localhost:1055 --state=mem: --socket="$sock" >"$state/tailscaled.log" 2>&1 9>&- &
-      i=0
-      while [ ! -e "$sock" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-      key="$state/ts-authkey"
-      (umask 077 && printf '%s' "$TS_AUTHKEY" >"$key")
-      joined=0
-      # The tag is asked for, so a key that cannot give it fails here rather
-      # than joining with its owner's rights.
-      env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" up --auth-key="file:$key" \
-        --hostname="cloud-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)" --advertise-tags=tag:cloud || joined=$?
-      rm -f "$key"
-      [ "$joined" = 0 ]
-    fi
-    # The name Tailscale gave this machine, which may not be the one asked
-    # for: it is what a Slack button carries back.
-    host=$(env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" status --json --peers=false |
-      tr -d '\n' | sed -n 's/.*"Self": *{[^}]*"DNSName": *"\([^"]*\)".*/\1/p' | sed 's/\.$//')
-    [ -n "$host" ]
-    env -u TS_AUTHKEY HUB_SOCKS5=127.0.0.1:1055 HUB_HOST="$host" \
-      nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 9>&- &
+    env -u TS_AUTHKEY nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 9>&- &
   ) 9>"$state/start.lock" >"$state/start.log" 2>&1 </dev/null &
   # A question goes to the local hub the moment mem writes it, so an ask
   # waits for the hub it just started.
@@ -486,6 +546,7 @@ if [ -n "${TS_AUTHKEY:-}" ] && [ -n "${HUB_PEER_TOKEN:-}" ] && mkdir -p "$state"
     while ! hub_alive && [ $i -lt 60 ]; do sleep 0.5; i=$((i + 1)); done
   fi
 fi
+if [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" "$@"; fi
 exec "$real" "$@"
 "#;
 

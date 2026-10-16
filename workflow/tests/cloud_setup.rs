@@ -293,3 +293,191 @@ fn without_the_keys_the_shim_starts_nothing() {
     assert!(out.status.success(), "{out:?}");
     assert!(!home.has(".local/state/hub"));
 }
+
+/// The variables of an environment whose sessions keep a replica of the
+/// store, the walk's `workflow-next`.
+const STORE_ENV: [(&str, &str); 6] = [
+    ("MEM_REMOTE", "https://mem.example.test"),
+    ("HUB_STORE_URL", "wss://store.example.test/store/share"),
+    ("HUB_STORE_TOKEN", "store-secret"),
+    ("HUB_STORE_ACCESS_ID", "access-id.access"),
+    ("HUB_STORE_ACCESS_SECRET", "access-secret"),
+    ("HUB_CLOUD_TOKEN", "cloud-secret"),
+];
+
+/// Fakes for the setup script: a curl that logs its argv and the header
+/// file it was given, then writes a binary that logs how it was run.
+fn store_fakes(home: &Scratch, hub_sync_exit: u8) -> (PathBuf, String) {
+    let log = home.at("started.log");
+    let mem = format!(
+        "#!/bin/sh\necho \"mem $* remote=${{MEM_REMOTE:-}}\" >> {}\necho real mem \"$@\"\n",
+        log.display()
+    );
+    let hub = format!(
+        "#!/bin/sh\necho \"hub $* url=${{HUB_STORE_URL:-}}\" >> {log}\n\
+         case \"$*\" in 'share sync') exit {hub_sync_exit};; esac\n",
+        log = log.display()
+    );
+    home.put("fake-mem", &mem);
+    home.put("fake-hub", &hub);
+    home.script(
+        "fake/curl",
+        &format!(
+            "#!/bin/sh\nargs=\"$*\"\necho \"curl $args\" >> {log}\n\
+             prev=; for a in \"$@\"; do [ \"$prev\" = -H ] && case $a in @*) cat \"${{a#@}}\" >> {log};; esac; prev=$a; done\n\
+             case \"$args\" in *--unix-socket*) [ -e {state}/local.sock ]; exit;; esac\n\
+             while [ \"$1\" != -o ]; do shift; done\n\
+             case \"$args\" in */dl/hub*) cp {hub} \"$2\";; *) cp {mem} \"$2\";; esac\n",
+            log = log.display(),
+            state = home.at(".local/state/hub").display(),
+            hub = home.at("fake-hub").display(),
+            mem = home.at("fake-mem").display(),
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        home.at("fake").display(),
+        std::env::var("PATH").unwrap()
+    );
+    (log, path)
+}
+
+fn setup_with(home: &Scratch, path: &str, vars: &[(&str, &str)]) -> std::process::Output {
+    home.put("setup.sh", &script(home));
+    let mut setup = Command::new("bash");
+    setup
+        .arg(home.at("setup.sh"))
+        .env("HOME", home.path())
+        .env("PATH", path);
+    for (k, v) in vars {
+        setup.env(k, v);
+    }
+    let ran = setup.output().unwrap();
+    assert!(ran.status.success(), "{ran:?}");
+    ran
+}
+
+/// The setup script runs before the session, where no network secret is
+/// added, so it fetches the binaries with the Access token from the
+/// variables, off the command line, and bakes the replica into the cached
+/// environment with `hub share sync`.
+#[test]
+fn with_the_store_variables_the_setup_bakes_a_replica() {
+    let home = Scratch::new("cloud-setup-bake");
+    let (log, path) = store_fakes(&home, 0);
+    let ran = setup_with(&home, &path, &STORE_ENV);
+    let started = fs::read_to_string(&log).unwrap();
+    let curls = lines_of(&log, "curl");
+    assert!(
+        curls
+            .iter()
+            .any(|c| c.contains("https://mem.example.test/dl/mem")),
+        "{started}"
+    );
+    assert!(
+        curls
+            .iter()
+            .any(|c| c.contains("https://mem.example.test/dl/hub")),
+        "{started}"
+    );
+    assert!(
+        started.contains("CF-Access-Client-Id: access-id.access"),
+        "{started}"
+    );
+    assert!(
+        curls.iter().all(|c| !c.contains("access-secret")),
+        "{curls:?}"
+    );
+    let hub = lines_of(&log, "hub");
+    assert_eq!(
+        hub,
+        ["hub share sync url=wss://store.example.test/store/share"],
+        "{started}"
+    );
+    assert!(
+        String::from_utf8_lossy(&ran.stdout).contains("baked"),
+        "{ran:?}"
+    );
+}
+
+/// A store the setup cannot reach leaves no baked replica, and the setup
+/// still succeeds: the session fills it.
+#[test]
+fn a_bake_that_fails_does_not_fail_the_setup() {
+    let home = Scratch::new("cloud-setup-bake-fails");
+    let (_, path) = store_fakes(&home, 1);
+    let ran = setup_with(&home, &path, &STORE_ENV);
+    assert!(
+        String::from_utf8_lossy(&ran.stdout).contains("no baked replica"),
+        "{ran:?}"
+    );
+}
+
+#[test]
+fn without_the_store_variables_the_setup_bakes_nothing() {
+    let home = Scratch::new("cloud-setup-no-bake");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &[("MEM_REMOTE", "https://mem.example.test")]);
+    assert!(lines_of(&log, "hub").is_empty());
+    assert!(lines_of(&log, "curl").is_empty());
+}
+
+/// In a session with the store variables, the first mem brings the replica
+/// up to the store before it reads, then starts the local hub that holds the
+/// socket; mem itself runs on the replica, not on the mem server.
+#[test]
+fn the_first_mem_of_a_store_session_syncs_before_it_reads() {
+    let home = Scratch::new("cloud-shim-sync");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    fs::remove_file(&log).unwrap();
+    let run = |args: &[&str]| {
+        let mut shim = Command::new(home.at("usr-local-bin/mem"));
+        shim.args(args).env("HOME", home.path()).env("PATH", &path);
+        for (k, v) in STORE_ENV {
+            shim.env(k, v);
+        }
+        shim.env("HUB_PEER_TOKEN_SHA256", "ab12");
+        let out = shim.output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        out
+    };
+    run(&["context"]);
+    let started = fs::read_to_string(&log).unwrap();
+    let order: Vec<&str> = started
+        .lines()
+        .filter(|l| l.starts_with("hub share sync") || l.starts_with("mem context"))
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "hub share sync url=wss://store.example.test/store/share",
+            "mem context remote="
+        ],
+        "{started}"
+    );
+    // The hub starts in the background; wait for its line.
+    for _ in 0..50 {
+        if lines_of(&log, "hub")
+            .iter()
+            .any(|l| l.starts_with("hub local"))
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(
+        lines_of(&log, "hub")
+            .iter()
+            .any(|l| l.starts_with("hub local")),
+        "{}",
+        fs::read_to_string(&log).unwrap()
+    );
+    // The hub's own mem calls go straight to the replica: no sync, no hub.
+    fs::remove_file(&log).unwrap();
+    run(&["share", "apply", "--all"]);
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        "mem share apply --all remote=\n"
+    );
+}
