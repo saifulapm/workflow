@@ -30,20 +30,14 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use hubpages::{Mem, Source, Written};
 use serde_json::Value;
 
 use crate::proc::{self, Ended};
 
-/// The one listing hub shows and rings for: pending, every project, and
-/// only what a person is meant to answer.
-pub const QUESTIONS_ARGV: [&str; 6] = [
-    "questions",
-    "--pending",
-    "--all-projects",
-    "--for",
-    "human",
-    "--json",
-];
+// The listing and the outcome are the pages', so a Worker classifies
+// mem's word the same way; this file runs the binary behind them.
+pub use hubpages::{Outcome, QUESTIONS_ARGV};
 
 /// A small in-process cache with a 5 s TTL, so a phone refresh doesn't
 /// stampede. The key is the whole argv, so it is per-project by construction.
@@ -65,43 +59,6 @@ pub fn mem_timeout() -> Duration {
         // A zero would kill every child before it could exec.
         .map(|t| t.max(Duration::from_millis(10)))
         .unwrap_or(DEFAULT_MEM_TIMEOUT)
-}
-
-/// What one `mem` call meant, once the table above has been applied to it.
-#[derive(Debug, Clone)]
-pub enum Outcome {
-    /// A document. Possibly one with an empty array in it — that is a result,
-    /// not a failure.
-    Json(Value),
-    /// Nothing on stdout and a non-zero exit: absent, or an unknown id. The
-    /// page renders `—`.
-    Absent,
-    /// mem is broken: the binary is missing, or it printed something that is
-    /// not JSON. This, and only this, is what the degraded page is for.
-    Broken(String),
-}
-
-impl Outcome {
-    /// The array under a verb's own key — `questions`, `items`, `projects`.
-    /// An absent key is an empty list, because "no such key" and "no rows" are
-    /// the same answer to the page.
-    pub fn rows(&self, key: &str) -> Vec<Value> {
-        match self {
-            Outcome::Json(value) => value
-                .get(key)
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        }
-    }
-
-    pub fn broken(&self) -> Option<&str> {
-        match self {
-            Outcome::Broken(why) => Some(why),
-            _ => None,
-        }
-    }
 }
 
 /// One raw run of the binary.
@@ -312,116 +269,62 @@ impl MemCli {
         }
     }
 
-    /// `--for human`: a worker's question is the orchestrator's to answer
-    /// and never a phone's to see. Before the audience existed, every
-    /// "may I widen my Files line" reached the hub and rang the doorbell.
+    /// The pending questions a person answers.
     pub fn questions(&self) -> Arc<Outcome> {
-        self.read(&QUESTIONS_ARGV)
+        Mem::questions(self)
     }
 
     /// The same call, straight from the binary (see `refresh`).
     pub fn questions_fresh(&self) -> Arc<Outcome> {
-        self.refresh(&QUESTIONS_ARGV)
+        Mem::questions_fresh(self)
     }
 
     pub fn projects(&self) -> Arc<Outcome> {
-        self.read(&["projects", "--json"])
+        Mem::projects(self)
     }
 
-    /// One project's pages: slug, title, bytes and date. A project with none
-    /// still prints `{"pages":[]}`, so this reads like the other list verbs.
     pub fn wiki(&self, project: &str) -> Arc<Outcome> {
-        self.read(&["wiki", &format!("--project={project}"), "--json"])
+        Mem::wiki(self, project)
     }
 
-    /// One page's text. `--` last, so a slug is a value and never a flag —
-    /// belt and braces, since `app` refuses anything that is not a slug first.
     pub fn wiki_page(&self, project: &str, slug: &str) -> Arc<Outcome> {
-        self.read(&[
-            "wiki",
-            &format!("--project={project}"),
-            "--json",
-            "--",
-            slug,
-        ])
+        Mem::wiki_page(self, project, slug)
     }
 
-    /// The full text of one item. `mem questions` reports only the first line
-    /// of a question as `title`, and workflow's asks are batched and
-    /// multi-line, so the answer field would otherwise sit under a heading with
-    /// the questions missing.
     pub fn show(&self, id: &str) -> Arc<Outcome> {
-        self.read(&["show", "--json", "--", id])
+        Mem::show(self, id)
     }
 
-    /// The project's roadmap, byte for byte, milestone ticks and all.
     pub fn roadmap(&self, project: &str) -> Arc<Outcome> {
-        self.read(&["roadmap", &format!("--project={project}"), "--json"])
+        Mem::roadmap(self, project)
     }
 
-    /// The current plan, byte for byte, task ticks and all. No slug: the
-    /// file at `plan.md`, not one filed under `plans/`.
     pub fn plan(&self, project: &str) -> Arc<Outcome> {
-        self.read(&["plan", &format!("--project={project}"), "--json"])
+        Mem::plan(self, project)
     }
 
-    /// The stored plans beside the current plan: slug, bytes, date — the
-    /// same list shape `wiki` already has.
     pub fn plan_list(&self, project: &str) -> Arc<Outcome> {
-        self.read(&["plan", "--list", &format!("--project={project}"), "--json"])
+        Mem::plan_list(self, project)
     }
 
-    /// One stored plan's text, by slug. `--` last, exactly as `wiki_page`: a
-    /// slug is a value and never a flag, belt and braces over the route's
-    /// own check.
     pub fn plan_slug(&self, project: &str, slug: &str) -> Arc<Outcome> {
-        self.read(&[
-            "plan",
-            &format!("--project={project}"),
-            "--json",
-            "--",
-            slug,
-        ])
+        Mem::plan_slug(self, project, slug)
     }
 
-    /// The latest handoff, body and all.
     pub fn handoff(&self, project: &str) -> Arc<Outcome> {
-        self.read(&["handoff", &format!("--project={project}"), "--json"])
+        Mem::handoff(self, project)
     }
 
-    /// Up to `limit` recent log lines. There is no `--all-projects` on `log`,
-    /// so it is one call per project.
     pub fn log_n(&self, project: &str, limit: usize) -> Arc<Outcome> {
-        let limit = limit.to_string();
-        self.read(&[
-            "log",
-            "--limit",
-            &limit,
-            &format!("--project={project}"),
-            "--json",
-        ])
+        Mem::log_n(self, project, limit)
     }
 
-    /// Up to `limit` items of one kind — fact, ruling, handoff, question or
-    /// log. `--kind=`, merged like `--project=`, so a kind is a value and
-    /// never a flag.
     pub fn items(&self, project: &str, kind: &str, limit: usize) -> Arc<Outcome> {
-        let limit = limit.to_string();
-        self.read(&[
-            "log",
-            &format!("--kind={kind}"),
-            "--limit",
-            &limit,
-            &format!("--project={project}"),
-            "--json",
-        ])
+        Mem::items(self, project, kind, limit)
     }
 
-    /// Every question this project has, pending and answered, most recent
-    /// first — the page sorts pending to the top and trims to the last 10
-    /// answered.
     pub fn questions_all(&self, project: &str) -> Arc<Outcome> {
-        self.read(&["questions", &format!("--project={project}"), "--json"])
+        Mem::questions_all(self, project)
     }
 
     /// A write a page makes: run it, then drop every cached read, so the page
@@ -443,12 +346,39 @@ impl MemCli {
     /// The one write hub makes. `--` first, so an answer beginning with a dash
     /// is text rather than a flag mem rejects with exit 2.
     pub fn answer(&self, id: &str, text: &str, by: &str, supersedes: Option<&str>) -> Run {
-        let mut args = vec!["answer", "--json", "--by", by];
-        if let Some(earlier) = supersedes {
-            args.extend(["--supersedes", earlier]);
+        self.exec(&hubpages::mem::answer_argv(id, text, by, supersedes))
+    }
+}
+
+/// The pages' mem: the cache and the gate above, and the binary behind them.
+impl Source for MemCli {
+    fn read(&self, argv: &[&str]) -> Arc<Outcome> {
+        MemCli::read(self, argv)
+    }
+
+    fn write(&self, argv: &[&str], input: Option<&[u8]>) -> Written {
+        let run = match input {
+            Some(input) => self.write_through_fed(argv, input),
+            None => self.write_through(argv),
+        };
+        Written {
+            ok: run.ok(),
+            stdout: String::from_utf8_lossy(&run.stdout).into_owned(),
+            stderr: run.stderr,
         }
-        args.extend(["--", id, text]);
-        self.exec(&args)
+    }
+
+    fn refresh(&self, argv: &[&str]) -> Arc<Outcome> {
+        MemCli::refresh(self, argv)
+    }
+
+    fn invalidate(&self) {
+        MemCli::invalidate(self)
+    }
+
+    fn bytes(&self, argv: &[&str]) -> Option<Vec<u8>> {
+        let run = self.exec(argv);
+        run.ok().then_some(run.stdout)
     }
 }
 

@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::form::encode_component;
 use crate::html::{self, degraded_banner, esc, item_url, page_url};
 use crate::http::Response;
+use crate::mem::Mem;
 use crate::model;
 use crate::pages::{PageCtx, page_shell, page_shell_in};
 
@@ -18,7 +19,7 @@ const TOP: &str = "top";
 /// One handler for three paths, told apart by the path itself.
 pub fn get(ctx: &PageCtx) -> Response {
     if ctx.request.path == "/wiki" {
-        return Response::html(html::wiki_index(&model::wiki(&ctx.app.mem)));
+        return Response::html(html::wiki_index(&model::wiki(ctx.site.mem)));
     }
     if ctx.request.path.starts_with("/wiki/") {
         return page_get(ctx);
@@ -38,11 +39,11 @@ pub fn page_get(ctx: &PageCtx) -> Response {
     if !model::is_slug(slug) {
         return Response::not_found();
     }
-    let Some(text) = model::wiki_text(&ctx.app.mem, project, slug) else {
+    let Some(text) = model::wiki_text(ctx.site.mem, project, slug) else {
         return Response::not_found();
     };
     let sections = ctx
-        .app
+        .site
         .mem
         .read(&[
             "wiki",
@@ -127,7 +128,7 @@ pub fn query(raw: &str) -> &str {
 /// hit links to its section, read off its `<slug>#<hslug>` short id; any
 /// other hit links to its item.
 pub fn hits(ctx: &PageCtx, project: &str, q: &str) -> String {
-    let outcome = ctx.app.mem.read(&[
+    let outcome = ctx.site.mem.read(&[
         "search",
         &format!("--project={project}"),
         "--limit",
@@ -179,7 +180,7 @@ pub fn hit_row(row: &Value, project: &str) -> String {
 
 /// The project's pages, `index` first and then by slug, each by its title.
 pub fn pages(ctx: &PageCtx, project: &str) -> String {
-    let outcome = ctx.app.mem.wiki(project);
+    let outcome = ctx.site.mem.wiki(project);
     if let Some(why) = model::list_fault(&outcome, "wiki") {
         return degraded_banner(&why);
     }

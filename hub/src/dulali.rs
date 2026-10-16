@@ -37,25 +37,8 @@ pub const KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 /// The most of Dulali's answer the override ring carries.
 pub const RING_ANSWER_CHARS: usize = 80;
 
-/// One answer Dulali gave, from the moment it arrived.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Held {
-    pub answer: String,
-    pub checked: String,
-    pub project: String,
-    pub session: Option<String>,
-    pub machine: String,
-    pub title: String,
-    pub at_ms: i64,
-    /// When the window closes and the answer goes to mem.
-    pub until_ms: i64,
-    /// The answer item's id, once it is in mem.
-    #[serde(default)]
-    pub written: Option<String>,
-    /// Saiful answered first, inside the window or after it.
-    #[serde(default)]
-    pub replaced: bool,
-}
+// Home draws the answers Dulali gave, so their shape lives with the pages.
+pub use hubpages::host::Held;
 
 /// What `dulali.json` holds.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

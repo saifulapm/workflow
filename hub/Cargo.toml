@@ -20,6 +20,8 @@ anyhow = "1.0.104"
 # A screenshot travels between local hubs inside an answer's JSON.
 base64 = "0.23.1"
 hmac = "0.13.0"
+# The pages, which build for wasm too, so a Worker draws the same ones.
+hubpages = { path = "../hubpages" }
 jiff = "0.2.35"
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
 # Checks the RS256 signature on Cloudflare Access's token. The 0.10 line is

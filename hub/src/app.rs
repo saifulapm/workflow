@@ -5,16 +5,21 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use hubpages::page_questions::{Pending, pending, short};
+
 use crate::agents::{Agents, CLOUD_MACHINE, Command};
 use crate::config::Config;
 use crate::dulali::{self, Dulali, Held};
-use crate::html::{self, Banner};
+use crate::html;
 use crate::http::{Request, Response};
 use crate::live::Runner;
-use crate::memcli::{MemCli, Run};
+use crate::memcli::MemCli;
 use crate::origin::Guard;
-use crate::route::Route;
+use crate::route::{Kind, NoMachine, Route, Saved};
 use crate::{api, model, pages};
+
+/// How long `workflow pause|unpause` may take: a few mem reads and a write.
+const PAUSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Every path hub answers, and the methods it answers it with, as the
 /// `Allow` header lists them. Anything else on a known path is a 405 that says
@@ -59,17 +64,6 @@ pub struct App {
     /// Per id rather than one lock for the whole route, so two different
     /// questions still answer at the same time.
     answering: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-}
-
-/// Whether a question is still waiting — and the third answer, which matters:
-/// "mem could not tell us" is not "no such question". Answering the second way
-/// would report an unknown id for a store that is merely slow, and now that a
-/// `mem` child can be killed on a deadline, that is reachable. A waiting one
-/// carries its row, whose project and session the step after the answer needs.
-enum Pending {
-    Yes(Value),
-    No,
-    Unreadable(String),
 }
 
 impl App {
@@ -136,169 +130,6 @@ impl App {
             "/subscribe" => self.subscribe(),
             _ => Response::not_found(),
         }
-    }
-
-    /// The detail routes under `GET /p/<project>/`: everything after the
-    /// project is checked against one of the known shapes — `plan`,
-    /// `plan/<slug>`, `item/<id>` — before it reaches an argv.
-    /// Anything else is a 404, as `/wiki/` already does.
-    pub fn project_page(&self, rest: &str) -> Response {
-        let Some((project, sub)) = rest.split_once('/') else {
-            return Response::not_found();
-        };
-        if project.is_empty() || !model::is_known_project(&self.mem, project) {
-            return Response::not_found();
-        }
-        match sub {
-            "plan" => self.project_plan(project),
-            sub => {
-                if let Some(slug) = sub.strip_prefix("plan/") {
-                    self.project_plan_slug(project, slug)
-                } else if let Some(id) = sub.strip_prefix("item/") {
-                    self.project_item(project, id)
-                } else {
-                    Response::not_found()
-                }
-            }
-        }
-    }
-
-    /// `GET /p/<project>/plan` — the current plan's whole text, from one
-    /// read. A project with no current plan still gets the page, empty.
-    fn project_plan(&self, project: &str) -> Response {
-        let plan = model::plan_text(&self.mem, project);
-        Response::html(html::plan_page(
-            project,
-            None,
-            plan.value.as_deref(),
-            plan.degraded.as_deref(),
-        ))
-    }
-
-    /// `GET /p/<project>/plan/<slug>` — one stored plan, whole. A broken mem
-    /// renders degraded; a slug mem simply does not have is a 404.
-    fn project_plan_slug(&self, project: &str, slug: &str) -> Response {
-        if !model::is_slug(slug) {
-            return Response::not_found();
-        }
-        let plan = model::plan_slug_text(&self.mem, project, slug);
-        if plan.value.is_none() && plan.degraded.is_none() {
-            return Response::not_found();
-        }
-        Response::html(html::plan_page(
-            project,
-            Some(slug),
-            plan.value.as_deref(),
-            plan.degraded.as_deref(),
-        ))
-    }
-
-    /// `GET /p/<project>/item/<id>` — one item, whole. `mem show` has no
-    /// `--project`, so an id that resolves under another project 404s here
-    /// rather than leaking that project's item.
-    fn project_item(&self, project: &str, id: &str) -> Response {
-        if !model::is_item_id(id) {
-            return Response::not_found();
-        }
-        let item = model::item_detail(&self.mem, id);
-        match &item.value {
-            Some(detail) if detail.project.as_deref() == Some(project) => Response::html(
-                html::item_page(project, Some(detail), item.degraded.as_deref()),
-            ),
-            Some(_) => Response::not_found(),
-            None if item.degraded.is_some() => {
-                Response::html(html::item_page(project, None, item.degraded.as_deref()))
-            }
-            None => Response::not_found(),
-        }
-    }
-
-    /// The order matters: nothing runs `mem answer` until the
-    /// origin has been checked, and the redirect is a 303 so a reload of the
-    /// result page cannot answer twice.
-    pub fn answer(&self, request: &Request) -> Response {
-        if !self.guard.may_write(request) {
-            return Response::text(403, "cross-origin writes are refused");
-        }
-        let form = request.form();
-        let id = form.get("id").unwrap_or("").trim();
-        // `mem ask` prints the id behind a `#`, and that is what a human
-        // copies. The page's own form supplies the bare id, so the phone path
-        // never met this; anything typed or pasted from a terminal did, and got
-        // `?unknown=1` with the question still pending.
-        let id = id.strip_prefix('#').unwrap_or(id);
-        let text = form.get("text").unwrap_or("").trim();
-        if id.is_empty() || text.is_empty() {
-            return self.back(Banner::Empty);
-        }
-
-        let response = {
-            let lock = self.lock_for(id);
-            // Held across all three steps. Dropping it between the read and the
-            // write is the race.
-            let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-
-            // The queue as it is right now, not as it was up to five seconds
-            // ago. Without this the answered question stays on screen for the
-            // rest of the TTL and a second tap writes a second answer — which
-            // mem accepts, and which the waiting agent never sees, because the
-            // first one won.
-            self.mem.invalidate();
-            match self.is_pending(id) {
-                Pending::No => match self.dulali.find(id) {
-                    Some((full, held)) if held.written.is_some() && !held.replaced => {
-                        self.replace_dulali(&full, &held, text)
-                    }
-                    _ => self.back(Banner::Unknown),
-                },
-                Pending::Unreadable(why) => {
-                    eprintln!("hub: answer: could not read the queue: {why}");
-                    self.back(Banner::Failed)
-                }
-                Pending::Yes(row) => {
-                    let run = self.mem.answer(id, text, "saiful", None);
-                    self.mem.invalidate();
-                    match run.code {
-                        Some(0) => {
-                            // Inside Dulali's window, Saiful's answer is the
-                            // one that stands; the held one never reaches mem.
-                            if let Some(full) = row["id"].as_str()
-                                && self.dulali.held(full).is_some()
-                            {
-                                self.dulali.replaced(full);
-                            }
-                            self.agents.queue_sync_all();
-                            self.after_answer(
-                                row["project"].as_str().unwrap_or(""),
-                                row["session"].as_str(),
-                            );
-                            self.back(Banner::Answered(short(id)))
-                        }
-                        // Exit 1 with a plain-text stderr is "no such
-                        // question", which is a banner, not a 500.
-                        Some(1) => self.back(Banner::Unknown),
-                        _ => {
-                            if !run.stderr.is_empty() {
-                                eprintln!("hub: mem answer: {}", run.stderr);
-                            }
-                            self.back(Banner::Failed)
-                        }
-                    }
-                }
-            }
-        };
-        self.forget_lock();
-        response
-    }
-
-    /// A write a page makes through mem. One that took queues a sync for
-    /// every machine, so each one's mem store sees it within one poll.
-    pub fn write_through(&self, args: &[&str]) -> Run {
-        let run = self.mem.write_through(args);
-        if run.ok() {
-            self.agents.queue_sync_all();
-        }
-        run
     }
 
     /// After an answer took, and after its sync was queued: when it was the
@@ -484,32 +315,6 @@ impl App {
             .filter_map(|row| row["id"].as_str().map(str::to_string))
             .collect();
         self.agents.queue_resume(machine, make(message), &ids);
-    }
-
-    /// Saiful's answer to a question Dulali's answer already closed: it
-    /// supersedes Dulali's in mem, and reaches the running session as a new
-    /// message.
-    fn replace_dulali(&self, id: &str, held: &Held, text: &str) -> Response {
-        let earlier = held.written.as_deref();
-        let run = self.mem.answer(id, text, "saiful", earlier);
-        self.mem.invalidate();
-        if !run.ok() {
-            if !run.stderr.is_empty() {
-                eprintln!("hub: mem answer: {}", run.stderr);
-            }
-            return self.back(Banner::Failed);
-        }
-        self.dulali.replaced(id);
-        self.agents.queue_sync_all();
-        let short_id = short(id);
-        let message = format!(
-            "Saiful replaced Dulali's answer to #{short_id} ({}). Dulali had answered: {}\n\n\
-             Saiful's answer, which stands: {text}",
-            held.title,
-            dulali::ring_answer(&held.answer),
-        );
-        self.follow_up(&held.project, held.session.as_deref(), message);
-        self.back(Banner::Answered(short_id))
     }
 
     /// A message for a session that may still be running: the runner's
@@ -732,22 +537,7 @@ impl App {
     }
 
     fn is_pending(&self, id: &str) -> Pending {
-        let outcome = self.mem.questions();
-        if let Some(why) = model::list_fault(&outcome, "questions") {
-            return Pending::Unreadable(why);
-        }
-        let waiting = outcome
-            .rows("questions")
-            .into_iter()
-            .find(|row| row["id"] == id || row["short_id"] == id);
-        match waiting {
-            Some(row) => Pending::Yes(row),
-            None => Pending::No,
-        }
-    }
-
-    fn back(&self, banner: Banner) -> Response {
-        Response::see_other(&format!("/{}", banner.query()))
+        pending(&*self.mem, id)
     }
 
     /// The topic as plain text and as both links. No QR, no image crate.
@@ -756,31 +546,140 @@ impl App {
     }
 }
 
-/// mem's own short id: the last eight characters of a ULID. A banner showing
-/// those eight behind a `#` matches what `mem ask` printed and what the page
-/// shows; the full 26-character id matches nothing a human has looked at.
-fn short(id: &str) -> String {
-    // `is_ascii` as well as the length: the id came off a form, and slicing a
-    // 26-byte string that is not 26 characters would panic on the connection
-    // thread.
-    if id.len() == 26 && id.is_ascii() {
-        id[18..].to_string()
-    } else {
-        id.to_string()
+/// What the pages ask of this hub beyond mem: its agents, route, Dulali,
+/// locks, the `workflow` binary and its state directory.
+impl hubpages::Host for App {
+    fn fleet(&self) -> &dyn hubpages::Fleet {
+        &*self.agents
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    fn queue(&self, machine: &str, command: Command) {
+        self.agents.queue(machine, command);
+    }
 
-    #[test]
-    fn a_full_ulid_shortens_to_the_id_mem_prints() {
-        assert_eq!(short("01M0BF1F8BY8FXGZS428J1TSD1"), "28J1TSD1");
-        assert_eq!(short("28J1TSD1"), "28J1TSD1");
-        assert_eq!(short(""), "");
-        // Twenty-six bytes, thirteen characters: sliced blindly, this panics.
-        let multibyte = "é".repeat(13);
-        assert_eq!(short(&multibyte), multibyte);
+    /// A sync for every machine, so each one's mem store sees the write
+    /// within one poll.
+    fn wrote(&self) {
+        self.agents.queue_sync_all();
+    }
+
+    fn lock(&self, key: &str) -> Arc<Mutex<()>> {
+        self.lock_for(key)
+    }
+
+    fn forget_locks(&self) {
+        self.forget_lock();
+    }
+
+    fn route(&self) -> Saved {
+        self.route.get()
+    }
+
+    fn set_route(&self, kind: Kind) -> Result<(), NoMachine> {
+        self.route.set(kind, None)
+    }
+
+    fn replaceable(&self, now_ms: i64) -> Vec<(String, Held)> {
+        self.dulali.replaceable(now_ms)
+    }
+
+    fn held_written(&self, id: &str) -> Option<(String, Held)> {
+        self.dulali
+            .find(id)
+            .filter(|(_, held)| held.written.is_some() && !held.replaced)
+    }
+
+    /// Saiful's answer replaced Dulali's in mem; it reaches the running
+    /// session as a new message.
+    fn superseded(&self, id: &str, held: &Held, text: &str) {
+        self.dulali.replaced(id);
+        self.agents.queue_sync_all();
+        let message = format!(
+            "Saiful replaced Dulali's answer to #{} ({}). Dulali had answered: {}\n\n\
+             Saiful's answer, which stands: {text}",
+            short(id),
+            held.title,
+            dulali::ring_answer(&held.answer),
+        );
+        self.follow_up(&held.project, held.session.as_deref(), message);
+    }
+
+    fn answered(&self, row: &Value) {
+        // Inside Dulali's window, Saiful's answer is the one that stands; the
+        // held one never reaches mem.
+        if let Some(full) = row["id"].as_str()
+            && self.dulali.held(full).is_some()
+        {
+            self.dulali.replaced(full);
+        }
+        self.agents.queue_sync_all();
+        self.after_answer(
+            row["project"].as_str().unwrap_or(""),
+            row["session"].as_str(),
+        );
+    }
+
+    fn after_answer(&self, project: &str, session: Option<&str>) {
+        App::after_answer(self, project, session);
+    }
+
+    fn replied_in_app(&self, project: &str, runner: &Runner) {
+        App::replied_in_app(self, project, runner);
+    }
+
+    /// `workflow pause|unpause`, which write mem and start nothing.
+    fn pause(&self, verb: &str, project: &str) -> Result<(), String> {
+        let mut command = std::process::Command::new("workflow");
+        command.args([verb, project]);
+        if verb == "pause" {
+            command.args(["--by", "hub"]);
+        }
+        let ended = crate::proc::output_within(&mut command, PAUSE_TIMEOUT);
+        self.mem.invalidate();
+        match ended {
+            crate::proc::Ended::Exited(done) if done.code == Some(0) => {
+                self.agents.queue_sync_all();
+                Ok(())
+            }
+            crate::proc::Ended::Exited(done) => {
+                Err(String::from_utf8_lossy(&done.stderr).trim().to_string())
+            }
+            crate::proc::Ended::TimedOut => Err(format!("workflow {verb} did not finish in time.")),
+            crate::proc::Ended::Failed(why) => Err(format!("cannot run workflow {verb}: {why}")),
+        }
+    }
+
+    /// A photo under the hub's state directory, never /tmp with its small
+    /// quota, named by the hub so no path comes from the request.
+    fn stash_photo(&self, kind: &str, bytes: &[u8]) -> Result<String, String> {
+        let stash = || -> anyhow::Result<std::path::PathBuf> {
+            let dir = crate::config::state_home()?.join("hub/uploads");
+            std::fs::create_dir_all(&dir)?;
+            let ext = match kind {
+                "image/png" => "png",
+                "image/webp" => "webp",
+                _ => "jpg",
+            };
+            let hex: String = crate::config::urandom::<4>()?
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            let time = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ");
+            let path = dir.join(format!("photo-{time}-{hex}.{ext}"));
+            let mut file = std::fs::File::create_new(&path)?;
+            if let Err(e) = std::io::Write::write_all(&mut file, bytes) {
+                let _ = std::fs::remove_file(&path);
+                return Err(e.into());
+            }
+            Ok(path)
+        };
+        stash()
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    /// mem has copied the photo in, or refused it: either way it goes.
+    fn drop_photo(&self, path: &str) {
+        let _ = std::fs::remove_file(path);
     }
 }

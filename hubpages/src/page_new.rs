@@ -4,17 +4,13 @@
 //! A form writes mem and nothing else. An idea and a brief are text; a
 //! finding is filed against a milestone's step, with a photo from the phone.
 
-use std::io::Write;
-use std::path::PathBuf;
-
-use crate::config::{state_home, urandom};
 use crate::html::{esc, project_url};
 use crate::http::Response;
-use crate::memcli::Outcome;
+use crate::mem::{Mem, Outcome};
 use crate::multipart::parse_multipart;
 use crate::page_evidence::image_kind;
 use crate::page_roadmap::{MilestoneRow, roadmap_rows};
-use crate::pages::{PageCtx, page_shell};
+use crate::pages::{PageCtx, page_shell, write_through};
 
 /// The text forms the page posts, in the order it shows them.
 pub const FORMS: [&str; 2] = ["idea", "brief"];
@@ -68,13 +64,15 @@ pub fn new_post(ctx: &PageCtx) -> Response {
 
     let flag = format!("--project={project}");
     let run = if form == "idea" {
-        ctx.app.write_through(&["idea", &flag, "--", text])
+        write_through(ctx.site, &["idea", &flag, "--", text], None)
     } else {
-        ctx.app
-            .write_through(&["brief", &flag, &format!("--set={text}")])
+        write_through(ctx.site, &["brief", &flag, &format!("--set={text}")], None)
     };
-    if !run.ok() {
-        eprintln!("hub: new {form}: mem exited {:?}: {}", run.code, run.stderr);
+    if !run.ok {
+        eprintln!(
+            "hub: new {form}: mem did not take the write: {}",
+            run.stderr
+        );
         return Response::text(502, "mem did not take the write");
     }
     Response::see_other(&format!("{page}?sent={form}"))
@@ -94,7 +92,7 @@ pub fn text_form(project: &str, form: &str, heading: &str, hint: &str, label: &s
 
 /// The roadmap's milestones, in order; none when the project has no roadmap.
 pub fn milestones(ctx: &PageCtx, project: &str) -> Vec<MilestoneRow> {
-    match &*ctx.app.mem.roadmap(project) {
+    match &*ctx.site.mem.roadmap(project) {
         Outcome::Json(doc) => doc["text"].as_str().map(roadmap_rows).unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -179,15 +177,17 @@ pub fn finding_post(ctx: &PageCtx, project: &str) -> Response {
         return Response::text(400, "the roadmap has no such milestone");
     }
 
-    let upload = match kind.map(|kind| Upload::write(kind, photo)).transpose() {
-        Ok(upload) => upload,
-        Err(e) => {
-            eprintln!("hub: new finding: {e:#}");
+    // The host keeps the photo under a name of its own, so no path comes
+    // from the request, and drops it once mem has copied it in.
+    let host = ctx.site.host;
+    let file = match kind.map(|kind| host.stash_photo(kind, photo)).transpose() {
+        Ok(file) => file,
+        Err(why) => {
+            eprintln!("hub: new finding: {why}");
             return Response::text(500, "the photo could not be stored");
         }
     };
     let flag = format!("--project={project}");
-    let file = upload.as_ref().map(|u| u.0.to_string_lossy().into_owned());
     let mut args = vec![
         "finding",
         "add",
@@ -201,43 +201,16 @@ pub fn finding_post(ctx: &PageCtx, project: &str) -> Response {
         args.extend(["--evidence", file]);
     }
     args.extend(["--", text]);
-    let run = ctx.app.write_through(&args);
-    drop(upload);
-    if !run.ok() {
+    let run = write_through(ctx.site, &args, None);
+    if let Some(file) = &file {
+        host.drop_photo(file);
+    }
+    if !run.ok {
         eprintln!(
-            "hub: new finding: mem exited {:?}: {}",
-            run.code, run.stderr
+            "hub: new finding: mem did not take the write: {}",
+            run.stderr
         );
         return Response::text(502, "mem did not take the write");
     }
     Response::see_other(&format!("{}/evidence", project_url(project)))
-}
-
-/// A photo under the hub's state directory, never /tmp with its small
-/// quota, named by the hub so no path comes from the request. mem copies it
-/// in, and dropping this removes it whatever mem answered.
-pub struct Upload(pub PathBuf);
-
-impl Upload {
-    pub fn write(kind: &str, bytes: &[u8]) -> anyhow::Result<Upload> {
-        let dir = state_home()?.join("hub/uploads");
-        std::fs::create_dir_all(&dir)?;
-        let ext = match kind {
-            "image/png" => "png",
-            "image/webp" => "webp",
-            _ => "jpg",
-        };
-        let hex: String = urandom::<4>()?.iter().map(|b| format!("{b:02x}")).collect();
-        let time = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ");
-        let upload = Upload(dir.join(format!("photo-{time}-{hex}.{ext}")));
-        let mut file = std::fs::File::create_new(&upload.0)?;
-        file.write_all(bytes)?;
-        Ok(upload)
-    }
-}
-
-impl Drop for Upload {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
 }

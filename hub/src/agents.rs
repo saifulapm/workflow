@@ -15,57 +15,17 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
+use hubpages::host::Polled;
+
 use crate::http::{Request, Response};
 use crate::live::Agent;
 use crate::pair;
 
-/// The machine whose agent starts cloud runs and carries answers to them.
-pub const CLOUD_MACHINE: &str = "mini";
-
 /// A machine with no poll for this long reads offline.
 pub const DEFAULT_WINDOW: Duration = Duration::from_secs(30);
 
-/// One command for a machine's agent, as the poll hands it out and as the
-/// queue file keeps it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum Command {
-    Sync,
-    /// `workflow go <project>`, or with `cloud` its `--cloud` form.
-    Start {
-        project: String,
-        #[serde(default, skip_serializing_if = "is_false")]
-        cloud: bool,
-    },
-    Resume {
-        project: String,
-        id: String,
-        message: String,
-    },
-    /// A desktop notification on the machine the route names.
-    Notify {
-        title: String,
-        body: String,
-    },
-    /// A message for a session that may still be running: `amx send` while
-    /// it runs, `amx resume` with it once it has stopped.
-    #[serde(rename = "follow_up")]
-    FollowUp {
-        project: String,
-        id: String,
-        message: String,
-    },
-    /// Answers for a cloud session: `claude -p <message> --cloud <id>`.
-    Cloud {
-        project: String,
-        id: String,
-        message: String,
-    },
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
-}
+// The pages read the queues and name the commands, so both live with them.
+pub use hubpages::host::{CLOUD_MACHINE, Command};
 
 /// What a machine said in its last poll.
 #[derive(Debug, Clone)]
@@ -84,6 +44,30 @@ pub struct Report {
     /// memory like the rest, so a hub restart starts the count again.
     pub unwatched_since: Option<SystemTime>,
     pub last_poll: SystemTime,
+}
+
+/// What the pages read of the agents.
+impl hubpages::Fleet for Agents {
+    fn online(&self, machine: &str) -> bool {
+        Agents::online(self, machine)
+    }
+
+    fn report(&self, machine: &str) -> Option<Polled> {
+        Agents::report(self, machine).map(|report| Polled {
+            agents: report.agents,
+            checkouts: report.checkouts,
+            worktrees: report.worktrees,
+            unpushed: report.unpushed,
+        })
+    }
+
+    fn machines(&self) -> Vec<String> {
+        Agents::machines(self)
+    }
+
+    fn pending(&self, machine: &str) -> Vec<Command> {
+        Agents::pending(self, machine)
+    }
 }
 
 /// The body of a poll.

@@ -13,10 +13,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::app::App;
 use crate::config::{self, Config};
 use crate::html::esc;
 use crate::http::{Request, Response};
-use crate::pages::{PageCtx, page_shell};
+use crate::pages::page_shell;
+
+pub use hubpages::pages::pair_first;
 
 /// How long a printed link works.
 pub const CODE_TTL: Duration = Duration::from_secs(10 * 60);
@@ -153,8 +156,7 @@ fn poll_interval() -> Duration {
 
 /// `GET /pair/<code>`: the Pair button, or a 404 page when the code is not
 /// pending. Nothing is spent here.
-pub fn get(ctx: &PageCtx) -> Response {
-    let code = ctx.rest;
+pub fn get(app: &App, code: &str) -> Response {
     let pending = pair_path().is_ok_and(|path| is_pending(&path, code, now_ms()));
     if !pending {
         return gone();
@@ -164,7 +166,7 @@ pub fn get(ctx: &PageCtx) -> Response {
          <form method=\"post\" action=\"/pair/{}\">\n\
          <button type=\"submit\">Pair this device</button>\n\
          </form>\n",
-        esc(&ctx.app.machine),
+        esc(&app.machine),
         esc(code),
     );
     Response::html(page_shell("pair", None, &body))
@@ -172,10 +174,10 @@ pub fn get(ctx: &PageCtx) -> Response {
 
 /// `POST /pair/<code>`: spends the code and hands the device its cookie.
 /// The lock keeps two presses of one link from both finding it pending.
-pub fn post(ctx: &PageCtx) -> Response {
-    let lock = ctx.app.lock_for("pair");
+pub fn post(app: &App, request: &Request, code: &str) -> Response {
+    let lock = app.lock_for("pair");
     let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-    match spend(ctx.rest, ctx.request.header("user-agent")) {
+    match spend(code, request.header("user-agent")) {
         Ok(Some(token)) => Response::see_other("/").header(
             "Set-Cookie",
             // No Secure: the tailnet URL is plain http, and a Secure cookie
@@ -221,15 +223,6 @@ fn gone() -> Response {
 }
 
 /// Whether the request carries the cookie of a paired device.
-/// What a browser that never paired sees in place of every control that
-/// posts, since the hub would refuse the post.
-pub fn pair_first(machine: &str) -> String {
-    format!(
-        "<p class=\"banner warn\">Pair this device first: from a workflow checkout run vps/pair, which runs hub pair on {}</p>\n",
-        esc(machine)
-    )
-}
-
 pub fn paired(request: &Request) -> bool {
     let devices = devices_path()
         .and_then(|path| Ok(std::fs::read_to_string(path)?))

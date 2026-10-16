@@ -249,7 +249,7 @@ impl Doorbell {
         let s = summary_of(project);
         s.milestone.as_deref()?;
         let runner = s.runner.as_ref()?;
-        let run = live::run(Some(runner), &s.name, s.milestone.as_deref(), &self.agents);
+        let run = live::run(Some(runner), &s.name, s.milestone.as_deref(), &*self.agents);
         let Run::Dead(dead) = &run else {
             return None;
         };

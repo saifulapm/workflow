@@ -8,14 +8,15 @@
 
 use serde_json::Value;
 
-use crate::agents::{Agents, CLOUD_MACHINE, Command};
 use crate::form::encode_component;
+use crate::host::{CLOUD_MACHINE, Command, Fleet};
 use crate::html::{
-    degraded_banner, esc, item_list_section, markdown_article, outside_link, page_url, project_url,
+    self, degraded_banner, esc, item_list_section, markdown_article, outside_link, page_url,
+    project_url,
 };
 use crate::http::Response;
 use crate::live::{self, CloudRun, CloudState, Run};
-use crate::memcli::{MemCli, Outcome};
+use crate::mem::{Mem, Outcome, Source};
 use crate::model;
 use crate::page_decisions::{ruling_block, ruling_rows};
 use crate::page_evidence::{FindingRow, finding_rows, findings_section};
@@ -31,10 +32,10 @@ const RULINGS_SHOWN: usize = 10;
 pub fn get(ctx: &PageCtx) -> Response {
     if !ctx.rest.is_empty() {
         let path = ctx.request.path.strip_prefix("/p/").unwrap_or_default();
-        return ctx.app.project_page(path);
+        return project_page(ctx.site.mem, path);
     }
     let project = ctx.project.unwrap_or_default();
-    let Some(summary) = project_summaries(&ctx.app.mem)
+    let Some(summary) = project_summaries(ctx.site.mem)
         .into_iter()
         .find(|s| s.name == project)
     else {
@@ -96,14 +97,14 @@ pub fn stage_header(s: &ProjectSummary) -> String {
 /// plan's ticks, then the one after it. A milestone with a stored plan links
 /// to it. Two spawns, and the walk body finds the roadmap cached.
 fn timeline(ctx: &PageCtx, project: &str, s: &ProjectSummary) -> String {
-    let roadmap = ctx.app.mem.roadmap(project);
+    let roadmap = ctx.site.mem.roadmap(project);
     let text = match &*roadmap {
         Outcome::Broken(why) => return degraded_banner(why),
         Outcome::Json(doc) => doc["text"].as_str().unwrap_or_default(),
         Outcome::Absent => return String::new(),
     };
     let plans: Vec<String> = ctx
-        .app
+        .site
         .mem
         .plan_list(project)
         .rows("plans")
@@ -171,7 +172,7 @@ fn live_pill(s: &ProjectSummary, slug: &str, project: &str) -> String {
 /// extra read for it.
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
-    let agents = &ctx.app.agents;
+    let agents = ctx.site.host.fleet();
     let paused = s.paused.is_some();
     let paused_pill = if paused {
         "<span class=\"pill wait\">paused</span> "
@@ -235,10 +236,85 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     device_line(ctx, s)
 }
 
+/// The detail routes under `GET /p/<project>/`: everything after the
+/// project is checked against one of the known shapes — `plan`,
+/// `plan/<slug>`, `item/<id>` — before it reaches an argv.
+/// Anything else is a 404, as `/wiki/` already does.
+pub fn project_page(mem: &dyn Source, rest: &str) -> Response {
+    let Some((project, sub)) = rest.split_once('/') else {
+        return Response::not_found();
+    };
+    if project.is_empty() || !model::is_known_project(mem, project) {
+        return Response::not_found();
+    }
+    match sub {
+        "plan" => project_plan(mem, project),
+        sub => {
+            if let Some(slug) = sub.strip_prefix("plan/") {
+                project_plan_slug(mem, project, slug)
+            } else if let Some(id) = sub.strip_prefix("item/") {
+                project_item(mem, project, id)
+            } else {
+                Response::not_found()
+            }
+        }
+    }
+}
+
+/// `GET /p/<project>/plan` — the current plan's whole text, from one
+/// read. A project with no current plan still gets the page, empty.
+fn project_plan(mem: &dyn Source, project: &str) -> Response {
+    let plan = model::plan_text(mem, project);
+    Response::html(html::plan_page(
+        project,
+        None,
+        plan.value.as_deref(),
+        plan.degraded.as_deref(),
+    ))
+}
+
+/// `GET /p/<project>/plan/<slug>` — one stored plan, whole. A broken mem
+/// renders degraded; a slug mem simply does not have is a 404.
+fn project_plan_slug(mem: &dyn Source, project: &str, slug: &str) -> Response {
+    if !model::is_slug(slug) {
+        return Response::not_found();
+    }
+    let plan = model::plan_slug_text(mem, project, slug);
+    if plan.value.is_none() && plan.degraded.is_none() {
+        return Response::not_found();
+    }
+    Response::html(html::plan_page(
+        project,
+        Some(slug),
+        plan.value.as_deref(),
+        plan.degraded.as_deref(),
+    ))
+}
+
+/// `GET /p/<project>/item/<id>` — one item, whole. `mem show` has no
+/// `--project`, so an id that resolves under another project 404s here
+/// rather than leaking that project's item.
+fn project_item(mem: &dyn Source, project: &str, id: &str) -> Response {
+    if !model::is_item_id(id) {
+        return Response::not_found();
+    }
+    let item = model::item_detail(mem, id);
+    match &item.value {
+        Some(detail) if detail.project.as_deref() == Some(project) => Response::html(
+            html::item_page(project, Some(detail), item.degraded.as_deref()),
+        ),
+        Some(_) => Response::not_found(),
+        None if item.degraded.is_some() => {
+            Response::html(html::item_page(project, None, item.degraded.as_deref()))
+        }
+        None => Response::not_found(),
+    }
+}
+
 /// A device runner's line, or with no runner the Start buttons.
 fn device_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
-    let agents = &ctx.app.agents;
+    let agents = ctx.site.host.fleet();
     let run = live::run(s.runner.as_ref(), &s.name, s.milestone.as_deref(), agents);
     let paused = s.paused.is_some();
     let paused_pill = if paused {
@@ -265,7 +341,7 @@ fn device_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
             live::away(machine, project, agents),
         ),
         _ if live::idle(s, &run) => {
-            let handoff = match &*ctx.app.mem.handoff(project) {
+            let handoff = match &*ctx.site.mem.handoff(project) {
                 Outcome::Json(doc) => doc["body"].as_str().unwrap_or_default().to_string(),
                 _ => String::new(),
             };
@@ -347,18 +423,21 @@ fn device_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
 /// `s`'s cloud run, its handoff read only when one was written since it
 /// began.
 pub fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
-    let handoff = || match &*ctx.app.mem.handoff(&s.name) {
+    let handoff = || match &*ctx.site.mem.handoff(&s.name) {
         Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
         _ => None,
     };
-    live::cloud_run(s, handoff, jiff::Timestamp::now())
+    live::cloud_run(s, handoff, ctx.site.now)
 }
 
 /// The project's cloud run that holds the one cloud slot, live or parked,
 /// with its project's name. A handoff is read only for a cloud runner that
 /// wrote one since it began.
-pub fn cloud_slot(mem: &MemCli, summaries: &[ProjectSummary]) -> Option<(String, CloudRun)> {
-    let now = jiff::Timestamp::now();
+pub fn cloud_slot(
+    mem: &dyn Source,
+    summaries: &[ProjectSummary],
+    now: jiff::Timestamp,
+) -> Option<(String, CloudRun)> {
     summaries.iter().find_map(|s| {
         let handoff = || match &*mem.handoff(&s.name) {
             Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
@@ -374,10 +453,11 @@ pub fn cloud_slot(mem: &MemCli, summaries: &[ProjectSummary]) -> Option<(String,
 /// --cloud` wants an approved milestone, no pause, a git remote, the trunk
 /// on main, no device orchestrator on it, and the slot free.
 pub fn cloud_refusal(
-    mem: &MemCli,
-    agents: &Agents,
+    mem: &dyn Source,
+    agents: &dyn Fleet,
     summaries: &[ProjectSummary],
     s: &ProjectSummary,
+    now: jiff::Timestamp,
 ) -> Option<String> {
     let (done, total) = s.milestones;
     if s.roadmap_status.as_deref() != Some("approved") || done >= total || s.milestone.is_none() {
@@ -411,7 +491,7 @@ pub fn cloud_refusal(
     {
         return Some(format!("{} is already running.", agent.id));
     }
-    cloud_slot(mem, summaries)
+    cloud_slot(mem, summaries, now)
         .map(|(project, run)| {
             format!(
                 "a cloud run is live: {project} ({}, {}); one runs at a time.",
@@ -423,7 +503,7 @@ pub fn cloud_refusal(
 
 /// Why a cloud run of `project` must wait for Saiful to push main: the
 /// mini's main holds commits origin/main lacks, and the run clones origin.
-fn unpushed(agents: &Agents, project: &str) -> Option<String> {
+fn unpushed(agents: &dyn Fleet, project: &str) -> Option<String> {
     let report = agents.report(CLOUD_MACHINE)?;
     let n = *report.unpushed.get(project).filter(|n| **n > 0)?;
     let commits = if n == 1 { "commit" } else { "commits" };
@@ -473,10 +553,11 @@ fn cloud_prompt(project: &str, slug: &str, base: &str) -> String {
 /// mini is online, and the Start in cloud card for starting one by hand in
 /// the Claude app.
 fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
-    let summaries = project_summaries(&ctx.app.mem);
-    if let Some(why) = cloud_refusal(&ctx.app.mem, &ctx.app.agents, &summaries, s) {
+    let summaries = project_summaries(ctx.site.mem);
+    let site = ctx.site;
+    if let Some(why) = cloud_refusal(site.mem, site.host.fleet(), &summaries, s, site.now) {
         // Only a missing push gets a card: it is the one Saiful can clear.
-        if unpushed(&ctx.app.agents, &s.name).is_some_and(|wait| wait == why) {
+        if unpushed(ctx.site.host.fleet(), &s.name).is_some_and(|wait| wait == why) {
             return format!(
                 "<h2>Cloud run</h2>\n<div class=\"card\">\n<p>{}</p>\n</div>\n",
                 esc(&why)
@@ -486,7 +567,7 @@ fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
     }
     let slug = s.milestone.as_deref().unwrap_or_default();
     let remote = ctx
-        .app
+        .site
         .mem
         .projects()
         .rows("projects")
@@ -507,7 +588,7 @@ fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
         esc(&prompt),
         outside_link(CODE_PAGE, "Open Claude"),
     );
-    if ctx.app.agents.online(CLOUD_MACHINE) {
+    if ctx.site.host.fleet().online(CLOUD_MACHINE) {
         out.push_str(&controls(
             ctx,
             format!(
@@ -551,7 +632,7 @@ pub fn run_summary(ctx: &PageCtx, project: &str) -> String {
 
     // Every project's pending questions, which the doorbell's poll keeps
     // cached, rather than a read of this project's own.
-    let questions = ctx.app.mem.questions();
+    let questions = ctx.site.mem.questions();
     match questions.broken() {
         Some(why) => out.push_str(&degraded_banner(why)),
         None => {
@@ -581,7 +662,7 @@ pub fn run_summary(ctx: &PageCtx, project: &str) -> String {
 /// The brief, or the way to write one when there is none.
 fn brief_body(ctx: &PageCtx, project: &str) -> String {
     let outcome = ctx
-        .app
+        .site
         .mem
         .read(&["brief", &format!("--project={project}"), "--json"]);
     let brief = match &*outcome {
@@ -603,7 +684,7 @@ fn brief_body(ctx: &PageCtx, project: &str) -> String {
 
 /// The research pages written so far.
 fn research_body(ctx: &PageCtx, project: &str) -> String {
-    let outcome = ctx.app.mem.wiki(project);
+    let outcome = ctx.site.mem.wiki(project);
     if let Some(why) = model::list_fault(&outcome, "wiki") {
         return degraded_banner(&why);
     }
@@ -630,7 +711,7 @@ fn research_body(ctx: &PageCtx, project: &str) -> String {
 /// to the questions page where it is answered.
 fn grilling_body(ctx: &PageCtx, project: &str) -> String {
     let mut out = String::from("<h2>Decisions</h2>\n");
-    let rulings = ctx.app.mem.items(project, "ruling", RULINGS_SHOWN);
+    let rulings = ctx.site.mem.items(project, "ruling", RULINGS_SHOWN);
     match model::list_fault(&rulings, "log") {
         Some(why) => out.push_str(&degraded_banner(&why)),
         None => {
@@ -645,7 +726,7 @@ fn grilling_body(ctx: &PageCtx, project: &str) -> String {
     }
 
     out.push_str("<h2>Questions</h2>\n");
-    let questions = ctx.app.mem.read(&[
+    let questions = ctx.site.mem.read(&[
         "questions",
         "--pending",
         "--for",
@@ -677,7 +758,7 @@ fn grilling_body(ctx: &PageCtx, project: &str) -> String {
 
 /// The spec's sections, each linked to its place on the page.
 fn spec_body(ctx: &PageCtx, project: &str) -> String {
-    let outcome = ctx.app.mem.read(&[
+    let outcome = ctx.site.mem.read(&[
         "wiki",
         "--sections",
         &format!("--project={project}"),
@@ -705,7 +786,7 @@ fn spec_body(ctx: &PageCtx, project: &str) -> String {
 /// The last handoff, under its heading.
 fn handoff_section(ctx: &PageCtx, project: &str) -> String {
     let mut out = String::from("<h2>Handoff</h2>\n");
-    match &*ctx.app.mem.handoff(project) {
+    match &*ctx.site.mem.handoff(project) {
         Outcome::Broken(why) => out.push_str(&degraded_banner(why)),
         Outcome::Json(doc) => {
             let text = doc["body"]
@@ -721,11 +802,7 @@ fn handoff_section(ctx: &PageCtx, project: &str) -> String {
 
 /// The last moves and the last handoff, for a building project.
 fn building_body(ctx: &PageCtx, project: &str) -> String {
-    let moves = model::last_moves(
-        &ctx.app.mem,
-        project,
-        jiff::Timestamp::now().as_millisecond(),
-    );
+    let moves = model::last_moves(ctx.site.mem, project, ctx.site.now.as_millisecond());
     let mut out = String::new();
     if let Some(why) = &moves.degraded {
         out.push_str(&degraded_banner(why));
@@ -738,7 +815,7 @@ fn building_body(ctx: &PageCtx, project: &str) -> String {
 /// The open milestone's Show path as numbered steps, each marked by the
 /// milestone's open findings, then those findings and the way to file one.
 fn walk_body(ctx: &PageCtx, project: &str) -> String {
-    let roadmap = ctx.app.mem.roadmap(project);
+    let roadmap = ctx.site.mem.roadmap(project);
     let text = match &*roadmap {
         Outcome::Broken(why) => return degraded_banner(why),
         Outcome::Json(doc) => doc["text"].as_str().unwrap_or_default(),
@@ -811,7 +888,7 @@ pub fn step_mark(n: usize, findings: &[FindingRow]) -> &'static str {
 /// The project's open findings in mem's order; a fault leaves a banner in
 /// `out` and no rows.
 fn open_findings(ctx: &PageCtx, project: &str, out: &mut String) -> Vec<FindingRow> {
-    let outcome = ctx.app.mem.read(&[
+    let outcome = ctx.site.mem.read(&[
         "finding",
         "list",
         "--open",
@@ -835,7 +912,7 @@ fn backlog_body(ctx: &PageCtx, project: &str) -> String {
     out.push_str(&findings_section(&findings, project));
 
     out.push_str("<h2>Ideas</h2>\n");
-    let ideas = ctx.app.mem.read(&[
+    let ideas = ctx.site.mem.read(&[
         "search",
         "--kind",
         "idea",

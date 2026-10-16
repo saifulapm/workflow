@@ -1,0 +1,17 @@
+[package]
+name = "hubpages"
+version = "0.1.0"
+edition = "2024"
+
+# The hub's pages, drawn from what mem prints. They build for
+# wasm32-unknown-unknown too, so nothing here may spawn, touch a file or read
+# the clock: mem comes in through `Source`, everything else through `Host` or
+# as a plain value.
+#
+# jiff has no tz database feature: the time zone comes in as a value, since a
+# named zone needs a tzdb a Worker does not have.
+[dependencies]
+jiff = { version = "0.2.35", default-features = false, features = ["std"] }
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"

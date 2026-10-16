@@ -3,10 +3,12 @@
 
 use serde_json::Value;
 
+use crate::host::Held;
 use crate::html::{Banner, degraded_banner, esc, linked, project_url};
 use crate::http::Response;
+use crate::mem::{Mem, Source, answer_argv};
 use crate::model;
-use crate::pages::{PageCtx, page_shell};
+use crate::pages::{PageCtx, Site, page_shell};
 
 /// One row of `mem questions --project=<name> --json`.
 #[derive(Debug, PartialEq, Eq)]
@@ -27,7 +29,7 @@ pub fn get(ctx: &PageCtx) -> Response {
 /// known project back to that project's questions page with the same
 /// banner, so a tap on this page lands on this page.
 pub fn answer_post(ctx: &PageCtx) -> Response {
-    let mut response = ctx.app.answer(ctx.request);
+    let mut response = answer(ctx);
     if response.status != 303 {
         return response;
     }
@@ -35,7 +37,7 @@ pub fn answer_post(ctx: &PageCtx) -> Response {
     let Some(project) = form.get("project").map(str::trim) else {
         return response;
     };
-    if !model::is_known_project(&ctx.app.mem, project) {
+    if !model::is_known_project(ctx.site.mem, project) {
         return response;
     }
     for (name, value) in &mut response.headers {
@@ -45,6 +47,131 @@ pub fn answer_post(ctx: &PageCtx) -> Response {
         }
     }
     response
+}
+
+/// Whether a question is still waiting — and the third answer, which matters:
+/// "mem could not tell us" is not "no such question". Answering the second way
+/// would report an unknown id for a store that is merely slow, and now that a
+/// `mem` child can be killed on a deadline, that is reachable. A waiting one
+/// carries its row, whose project and session the step after the answer needs.
+pub enum Pending {
+    Yes(Value),
+    No,
+    Unreadable(String),
+}
+
+/// Whether `id`, full or short, is among the questions waiting on a person.
+pub fn pending(mem: &dyn Source, id: &str) -> Pending {
+    let outcome = mem.questions();
+    if let Some(why) = model::list_fault(&outcome, "questions") {
+        return Pending::Unreadable(why);
+    }
+    let waiting = outcome
+        .rows("questions")
+        .into_iter()
+        .find(|row| row["id"] == id || row["short_id"] == id);
+    match waiting {
+        Some(row) => Pending::Yes(row),
+        None => Pending::No,
+    }
+}
+
+/// The order matters: nothing runs `mem answer` until the
+/// origin has been checked, and the redirect is a 303 so a reload of the
+/// result page cannot answer twice.
+pub fn answer(ctx: &PageCtx) -> Response {
+    let site = ctx.site;
+    if !site.may_write {
+        return Response::text(403, "cross-origin writes are refused");
+    }
+    let form = ctx.request.form();
+    let id = form.get("id").unwrap_or("").trim();
+    // `mem ask` prints the id behind a `#`, and that is what a human
+    // copies. The page's own form supplies the bare id, so the phone path
+    // never met this; anything typed or pasted from a terminal did, and got
+    // `?unknown=1` with the question still pending.
+    let id = id.strip_prefix('#').unwrap_or(id);
+    let text = form.get("text").unwrap_or("").trim();
+    if id.is_empty() || text.is_empty() {
+        return back(Banner::Empty);
+    }
+
+    let response = {
+        // One answer at a time, per question id. Held across all three
+        // steps: dropping it between the read and the write is the race,
+        // every racer seeing the question waiting and every one writing.
+        let lock = site.host.lock(id);
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+
+        // The queue as it is right now, not as it was up to five seconds
+        // ago. Without this the answered question stays on screen for the
+        // rest of the TTL and a second tap writes a second answer — which
+        // mem accepts, and which the waiting agent never sees, because the
+        // first one won.
+        site.mem.invalidate();
+        match pending(site.mem, id) {
+            Pending::No => match site.host.held_written(id) {
+                Some((full, held)) => supersede(site, &full, &held, text),
+                None => back(Banner::Unknown),
+            },
+            Pending::Unreadable(why) => {
+                eprintln!("hub: answer: could not read the queue: {why}");
+                back(Banner::Failed)
+            }
+            Pending::Yes(row) => {
+                let run = site.mem.write(&answer_argv(id, text, site.by, None), None);
+                site.mem.invalidate();
+                if run.ok {
+                    site.host.answered(&row);
+                    back(Banner::Answered(short(id)))
+                } else {
+                    if !run.stderr.is_empty() {
+                        eprintln!("hub: mem answer: {}", run.stderr);
+                    }
+                    back(Banner::Failed)
+                }
+            }
+        }
+    };
+    site.host.forget_locks();
+    response
+}
+
+/// Saiful's answer to a question Dulali's answer already closed: it
+/// supersedes Dulali's in mem, and reaches the running session as a new
+/// message.
+fn supersede(site: &Site, id: &str, held: &Held, text: &str) -> Response {
+    let earlier = held.written.as_deref();
+    let run = site
+        .mem
+        .write(&answer_argv(id, text, site.by, earlier), None);
+    site.mem.invalidate();
+    if !run.ok {
+        if !run.stderr.is_empty() {
+            eprintln!("hub: mem answer: {}", run.stderr);
+        }
+        return back(Banner::Failed);
+    }
+    site.host.superseded(id, held, text);
+    back(Banner::Answered(short(id)))
+}
+
+fn back(banner: Banner) -> Response {
+    Response::see_other(&format!("/{}", banner.query()))
+}
+
+/// mem's own short id: the last eight characters of a ULID. A banner showing
+/// those eight behind a `#` matches what `mem ask` printed and what the page
+/// shows; the full 26-character id matches nothing a human has looked at.
+pub fn short(id: &str) -> String {
+    // `is_ascii` as well as the length: the id came off a form, and slicing a
+    // 26-byte string that is not 26 characters would panic on the connection
+    // thread.
+    if id.len() == 26 && id.is_ascii() {
+        id[18..].to_string()
+    } else {
+        id.to_string()
+    }
 }
 
 /// Newest first, the pending ahead of the answered.
@@ -85,7 +212,7 @@ pub fn question_row(row: &Value) -> QuestionRow {
 pub fn questions_body(ctx: &PageCtx) -> String {
     let project = ctx.project.unwrap_or_default();
     let mut out = banner_line(&Banner::from_query(&ctx.request.query));
-    let outcome = ctx.app.mem.questions_all(project);
+    let outcome = ctx.site.mem.questions_all(project);
     if let Some(why) = model::list_fault(&outcome, "questions") {
         out.push_str(&degraded_banner(&why));
         return out;
@@ -200,4 +327,19 @@ pub fn banner_line(banner: &Banner) -> String {
 
 fn text_of(row: &Value, key: &str) -> Option<String> {
     row[key].as_str().map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_ulid_shortens_to_the_id_mem_prints() {
+        assert_eq!(short("01M0BF1F8BY8FXGZS428J1TSD1"), "28J1TSD1");
+        assert_eq!(short("28J1TSD1"), "28J1TSD1");
+        assert_eq!(short(""), "");
+        // Twenty-six bytes, thirteen characters: sliced blindly, this panics.
+        let multibyte = "é".repeat(13);
+        assert_eq!(short(&multibyte), multibyte);
+    }
 }

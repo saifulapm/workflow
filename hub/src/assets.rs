@@ -3,13 +3,12 @@
 //! a release changes these bytes only with the binary, so they cache for a
 //! year.
 
-use crate::http::Response;
-use crate::pages::PageCtx;
+use crate::http::{Request, Response};
 
 const LONG_CACHE: &str = "public, max-age=31536000, immutable";
 
-pub fn get(ctx: &PageCtx) -> Response {
-    let (content_type, body): (&str, &[u8]) = match ctx.request.path.as_str() {
+pub fn get(request: &Request) -> Response {
+    let (content_type, body): (&str, &[u8]) = match request.path.as_str() {
         "/assets/maple-mono-400.woff2" => (
             "font/woff2",
             include_bytes!("../assets/maple-mono-400.woff2"),

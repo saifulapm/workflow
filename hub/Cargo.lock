@@ -314,6 +314,7 @@ dependencies = [
  "anyhow",
  "base64",
  "hmac",
+ "hubpages",
  "jiff",
  "pulldown-cmark",
  "rsa",
@@ -325,6 +326,16 @@ dependencies = [
  "toml",
  "tungstenite",
  "ureq",
+]
+
+[[package]]
+name = "hubpages"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::agents;
@@ -16,51 +16,8 @@ use crate::http::{Request, Response};
 use crate::memcli::MemCli;
 use crate::pair;
 
-/// Where questions and rings go.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Kind {
-    #[default]
-    Phone,
-    Device,
-    Dulali,
-}
-
-/// What `route.json` holds. A missing file is Phone with no machine.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(from = "Disk")]
-pub struct Saved {
-    pub route: Kind,
-    /// The machine that last took Device.
-    pub machine: Option<String>,
-}
-
-/// The file as it may be read: new files carry `route`, files written before
-/// Dulali carry only the `device` bool.
-#[derive(Deserialize)]
-struct Disk {
-    route: Option<Kind>,
-    #[serde(default)]
-    device: bool,
-    machine: Option<String>,
-}
-
-impl From<Disk> for Saved {
-    fn from(disk: Disk) -> Saved {
-        let route = disk.route.unwrap_or(if disk.device {
-            Kind::Device
-        } else {
-            Kind::Phone
-        });
-        Saved {
-            route,
-            machine: disk.machine,
-        }
-    }
-}
-
-/// Device was asked for with no machine named and none ever taken.
-pub struct NoMachine;
+// The route's values are what home draws, so they live with the pages.
+pub use hubpages::host::{Kind, NoMachine, Saved};
 
 pub struct Route {
     path: PathBuf,

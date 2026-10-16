@@ -47,7 +47,7 @@ pub fn ruling_rows(rows: &[Value]) -> Vec<RulingRow> {
 /// one search.
 pub fn decisions_body(ctx: &PageCtx) -> String {
     let project = ctx.project.unwrap_or_default();
-    let outcome = ctx.app.mem.read(&[
+    let outcome = ctx.site.mem.read(&[
         "search",
         "--kind",
         "ruling",
