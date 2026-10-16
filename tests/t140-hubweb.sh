@@ -41,11 +41,14 @@ printf 'Authorization: Bearer %s\n' "$token" >"$T_TMP/auth.hdr"
 printf 'Authorization: Bearer wrong-%s\n' "$token" >"$T_TMP/wrong.hdr"
 
 # setsid gives cf dev, wrangler and workerd one process group to kill at the
-# end. CARGO_TARGET_DIR reuses hubweb's compiled dependencies.
+# end. CARGO_TARGET_DIR reuses hubweb's compiled dependencies. cf and
+# wrangler each send usage telemetry unless told not to; the sandbox HOME
+# holds no Cloudflare login, so nothing else can reach the account.
 (
 	cd "$app" &&
 		STORE_TOKEN=$token XDG_CACHE_HOME=$real_cache CARGO_TARGET_DIR=$HUBWEB/target \
-			WRANGLER_SEND_METRICS=false exec setsid "$HUBWEB/node_modules/.bin/cf" dev --port "$port"
+			CF_SEND_TELEMETRY=false WRANGLER_SEND_METRICS=false \
+			exec setsid "$HUBWEB/node_modules/.bin/cf" dev --port "$port"
 ) </dev/null >"$T_TMP/dev.log" 2>&1 &
 dev_pid=$!
 
