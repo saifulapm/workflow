@@ -129,8 +129,10 @@ pub fn request(
 
 /// The page's own socket: on a change the page reloads, but never while a
 /// field has focus or text or text is selected; then it reloads once the
-/// field is left. A closed socket comes back after 5 s.
-const LISTEN: &str = "<script>(function(){var due=false,t;\
+/// field is left. A closed socket comes back after 5 s, and the page then
+/// reloads once, since it may have missed a change (a phone suspends the
+/// socket of a page in the background).
+const LISTEN: &str = "<script>(function(){var due=false,lost=false,t;\
 function busy(){var a=document.activeElement;\
 if(a&&/^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName))return true;\
 if(String(window.getSelection())!=='')return true;\
@@ -140,8 +142,9 @@ function go(){if(busy()){due=true;return;}location.reload();}\
 document.addEventListener('focusout',function(){setTimeout(function(){if(due)go();},0);});\
 document.addEventListener('selectionchange',function(){if(due&&!busy())go();});\
 function open(){var s=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/live');\
+s.onopen=function(){if(lost){lost=false;go();}};\
 s.onmessage=function(){clearTimeout(t);t=setTimeout(go,150);};\
-s.onclose=function(){setTimeout(open,5000);};}open();})();</script>\n";
+s.onclose=function(){lost=true;setTimeout(open,5000);};}open();})();</script>\n";
 
 /// Opened with `?timing`, a page reports how long its own load took to the
 /// store (`/api/timing`), so a load on the phone is a record, not a reading.
@@ -411,6 +414,13 @@ mod tests {
         assert!(limit_is_today(Some(20742), now));
         assert!(!limit_is_today(Some(20741), now));
         assert!(!limit_is_today(None, now));
+    }
+
+    #[test]
+    fn a_page_reloads_once_when_its_socket_comes_back() {
+        let page = html(draw(&store(), ask(&get("/"))).unwrap());
+        assert!(page.contains("s.onclose=function(){lost=true;"), "{page}");
+        assert!(page.contains("s.onopen=function(){if(lost){lost=false;go();}}"), "{page}");
     }
 
     #[test]
