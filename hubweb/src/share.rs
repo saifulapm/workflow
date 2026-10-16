@@ -39,6 +39,17 @@ pub trait Log {
     /// The newest route a machine or the hub web chose, as a route message.
     fn route(&self) -> Result<Option<Value>, Fault>;
     fn set_route(&mut self, route: &Value) -> Result<(), Fault>;
+    /// The store's clock, in Unix milliseconds.
+    fn now_ms(&self) -> i64;
+    /// A machine's last report, as `report` keeps it.
+    fn report(&self, machine: &str) -> Result<Option<Value>, Fault>;
+    /// Keeps `report` as `machine`'s newest, received at `at`.
+    fn set_report(&mut self, machine: &str, at: i64, report: &Value) -> Result<(), Fault>;
+    /// The commands waiting for `machine`, oldest first, by id.
+    fn commands(&self, machine: &str) -> Result<Vec<(String, Value)>, Fault>;
+    fn add_command(&mut self, id: &str, machine: &str, command: &Value) -> Result<(), Fault>;
+    /// Drops one of `machine`'s commands; false when it had no such command.
+    fn drop_command(&mut self, id: &str, machine: &str) -> Result<bool, Fault>;
 }
 
 /// What one message from a machine sends back.
@@ -52,6 +63,8 @@ pub struct Outcome {
     pub hello: Option<String>,
     /// The log hit a Free daily limit, so the store notes it for the home.
     pub limit: bool,
+    /// What the pages show of the machines changed: open pages are told.
+    pub changed: bool,
 }
 
 /// Answers one text frame from a socket whose machine said hello as
@@ -68,7 +81,17 @@ pub fn handle(log: &mut impl Log, machine: Option<&str>, text: &str) -> Outcome 
                 Some(_) => route(log, &message),
                 None => Err(Fault::Broken("say hello before routing".into())),
             },
-            _ => Err(Fault::Broken("t must be hello, write or route".into())),
+            Some("report") => match machine {
+                Some(_) => report(log, &message),
+                None => Err(Fault::Broken("say hello before reporting".into())),
+            },
+            Some("done") => match machine {
+                Some(_) => done(log, &message),
+                None => Err(Fault::Broken("say hello before saying done".into())),
+            },
+            _ => Err(Fault::Broken(
+                "t must be hello, write, route, report or done".into(),
+            )),
         },
         Err(why) => Err(Fault::Broken(format!("not JSON: {why}"))),
     };
@@ -147,6 +170,86 @@ fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, 
         others: Some(rec(&stored)),
         ..Outcome::default()
     })
+}
+
+/// The fields of a machine's report the pages read. Anything else a report
+/// carries is dropped, so a report cannot grow the store.
+const REPORT_FIELDS: [&str; 6] = [
+    "machine",
+    "agents",
+    "checkouts",
+    "worktrees",
+    "unpushed",
+    "cloud",
+];
+
+/// A runner name as workflow takes it from the tailnet: `mini`, `nuc`.
+fn runner_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && !name.starts_with('.')
+}
+
+/// A local hub's word on its machine: its runs, checkouts, worktrees and
+/// unpushed counts, under the runner name workflow records (not the name
+/// the socket said hello as). The store keeps the newest with its own
+/// receive time, never in the write log, and answers with every command
+/// still waiting for that machine: a command lost on a closing socket goes
+/// out again with the next report.
+fn report(log: &mut impl Log, message: &Value) -> Result<Outcome, Fault> {
+    let Some(machine) = message["machine"].as_str().filter(|m| runner_name(m)) else {
+        return Err(Fault::Broken(
+            "a report names its machine: letters, digits, - _ or .".into(),
+        ));
+    };
+    let mut kept = serde_json::Map::new();
+    for field in REPORT_FIELDS {
+        if let Some(value) = message.get(field) {
+            kept.insert(field.to_string(), value.clone());
+        }
+    }
+    let kept = Value::Object(kept);
+    let changed = log.report(machine)?.as_ref() != Some(&kept);
+    log.set_report(machine, log.now_ms(), &kept)?;
+    let sender = log
+        .commands(machine)?
+        .iter()
+        .map(|(id, command)| cmd(id, machine, command))
+        .collect();
+    Ok(Outcome {
+        sender,
+        changed,
+        ..Outcome::default()
+    })
+}
+
+/// A machine ran a command (or had run it before): the store forgets it.
+fn done(log: &mut impl Log, message: &Value) -> Result<Outcome, Fault> {
+    let (Some(id), Some(machine)) = (message["id"].as_str(), message["machine"].as_str()) else {
+        return Err(Fault::Broken("done needs id and machine".into()));
+    };
+    Ok(Outcome {
+        changed: log.drop_command(id, machine)?,
+        ..Outcome::default()
+    })
+}
+
+/// Keeps a command for `machine` and gives the frame every machine's socket
+/// is to hear: each local hub runs only those that name its own machine.
+pub fn queue_command(
+    log: &mut impl Log,
+    id: &str,
+    machine: &str,
+    command: &Value,
+) -> Result<String, Fault> {
+    log.add_command(id, machine, command)?;
+    Ok(cmd(id, machine, command))
+}
+
+fn cmd(id: &str, machine: &str, command: &Value) -> String {
+    json!({"t":"cmd","id":id,"machine":machine,"command":command}).to_string()
 }
 
 /// Where questions ring, as the local hubs hold it: Phone, or Device on one
@@ -284,6 +387,9 @@ mod tests {
         recs: Vec<Rec>,
         full: bool,
         route: Option<Value>,
+        now: i64,
+        reports: std::collections::BTreeMap<String, (i64, Value)>,
+        commands: Vec<(String, String, Value)>,
     }
 
     impl Log for Memory {
@@ -312,6 +418,35 @@ mod tests {
         fn set_route(&mut self, route: &Value) -> Result<(), Fault> {
             self.route = Some(route.clone());
             Ok(())
+        }
+        fn now_ms(&self) -> i64 {
+            self.now
+        }
+        fn report(&self, machine: &str) -> Result<Option<Value>, Fault> {
+            Ok(self.reports.get(machine).map(|(_, r)| r.clone()))
+        }
+        fn set_report(&mut self, machine: &str, at: i64, report: &Value) -> Result<(), Fault> {
+            self.reports
+                .insert(machine.to_string(), (at, report.clone()));
+            Ok(())
+        }
+        fn commands(&self, machine: &str) -> Result<Vec<(String, Value)>, Fault> {
+            Ok(self
+                .commands
+                .iter()
+                .filter(|(_, m, _)| m == machine)
+                .map(|(id, _, c)| (id.clone(), c.clone()))
+                .collect())
+        }
+        fn add_command(&mut self, id: &str, machine: &str, command: &Value) -> Result<(), Fault> {
+            self.commands
+                .push((id.to_string(), machine.to_string(), command.clone()));
+            Ok(())
+        }
+        fn drop_command(&mut self, id: &str, machine: &str) -> Result<bool, Fault> {
+            let before = self.commands.len();
+            self.commands.retain(|(i, m, _)| !(i == id && m == machine));
+            Ok(self.commands.len() != before)
         }
     }
 
@@ -623,5 +758,132 @@ mod tests {
         assert_eq!(newest_limit_day(&sockets), Some(20742));
         assert_eq!(newest_limit_day(&[json!("old"), Value::Null]), None);
         assert_eq!(newest_limit_day(&[]), None);
+    }
+
+    fn report(log: &mut Memory, body: Value) -> Outcome {
+        let mut message = body;
+        message["t"] = json!("report");
+        handle(log, Some("mac-mini-m2"), &message.to_string())
+    }
+
+    fn mini(agents: Value) -> Value {
+        json!({"machine":"mini","agents":agents,"checkouts":["walk01"],
+               "worktrees":[],"unpushed":{"walk01":2},"cloud":null})
+    }
+
+    #[test]
+    fn a_report_is_kept_by_its_runner_name_with_the_store_time_and_never_logged() {
+        let mut log = Memory {
+            now: 1_000,
+            ..Memory::default()
+        };
+        let agents = json!([{"id":"walk01-m1","state":"running","ended":0,"created":5}]);
+        let answer = report(&mut log, mini(agents.clone()));
+        assert!(answer.sender.is_empty());
+        assert_eq!(answer.others, None);
+        assert!(answer.changed, "a first report changes what pages show");
+        assert!(log.recs.is_empty(), "a report is no write");
+        let (at, kept) = log.reports.get("mini").cloned().unwrap();
+        assert_eq!(at, 1_000);
+        assert_eq!(kept, mini(agents));
+    }
+
+    #[test]
+    fn the_same_report_again_moves_only_its_time() {
+        let mut log = Memory::default();
+        report(&mut log, mini(json!([])));
+        log.now = 30_000;
+        let again = report(&mut log, mini(json!([])));
+        assert!(!again.changed, "an unchanged report wakes no page");
+        assert_eq!(log.reports["mini"].0, 30_000);
+        let busy = report(
+            &mut log,
+            mini(json!([{"id":"x","state":"running","ended":0,"created":1}])),
+        );
+        assert!(busy.changed);
+    }
+
+    #[test]
+    fn a_report_keeps_only_the_fields_the_pages_read() {
+        let mut log = Memory::default();
+        let mut body = mini(json!([]));
+        body["secret"] = json!("x".repeat(10));
+        report(&mut log, body);
+        assert_eq!(log.reports["mini"].1, mini(json!([])));
+    }
+
+    #[test]
+    fn a_report_needs_a_hello_and_a_plain_machine_name() {
+        let mut log = Memory::default();
+        let before = handle(
+            &mut log,
+            None,
+            &json!({"t":"report","machine":"mini"}).to_string(),
+        );
+        assert_eq!(parse(&before.sender)[0]["t"], "error");
+        for name in [
+            json!(""),
+            json!("a b"),
+            json!("../x"),
+            json!(7),
+            Value::Null,
+            json!("m".repeat(65)),
+        ] {
+            let answer = report(&mut log, json!({"machine":name}));
+            assert_eq!(parse(&answer.sender)[0]["t"], "error", "{name}");
+        }
+        assert!(log.reports.is_empty());
+    }
+
+    #[test]
+    fn a_queued_command_goes_to_every_machine_naming_whose_it_is() {
+        let mut log = Memory::default();
+        let start = json!({"kind":"start","project":"walk01"});
+        let frame = queue_command(&mut log, "01CMD", "mini", &start).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&frame).unwrap(),
+            json!({"t":"cmd","id":"01CMD","machine":"mini","command":start})
+        );
+        assert_eq!(log.commands(&"mini".to_string()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn each_report_hears_the_commands_still_waiting_for_its_machine() {
+        let mut log = Memory::default();
+        let start = json!({"kind":"start","project":"walk01"});
+        queue_command(&mut log, "01A", "mini", &start).unwrap();
+        queue_command(&mut log, "01B", "nuc", &start).unwrap();
+        let first = report(&mut log, mini(json!([])));
+        assert_eq!(
+            parse(&first.sender),
+            [json!({"t":"cmd","id":"01A","machine":"mini","command":start})]
+        );
+        // Until it says done, every report hears it again: a frame lost on
+        // a closing socket is not lost for good.
+        let again = report(&mut log, mini(json!([])));
+        assert_eq!(parse(&again.sender).len(), 1);
+    }
+
+    #[test]
+    fn done_drops_the_command_for_that_machine_only() {
+        let mut log = Memory::default();
+        let start = json!({"kind":"start","project":"walk01"});
+        queue_command(&mut log, "01A", "mini", &start).unwrap();
+        let wrong = handle(
+            &mut log,
+            Some("nuc"),
+            &json!({"t":"done","id":"01A","machine":"nuc"}).to_string(),
+        );
+        assert!(!wrong.changed);
+        assert_eq!(log.commands.len(), 1);
+        let done = handle(
+            &mut log,
+            Some("mac-mini-m2"),
+            &json!({"t":"done","id":"01A","machine":"mini"}).to_string(),
+        );
+        assert!(done.sender.is_empty());
+        assert!(done.changed, "a page waiting for mini stops waiting");
+        assert!(log.commands.is_empty());
+        assert!(report(&mut log, mini(json!([]))).sender.is_empty());
     }
 }

@@ -593,7 +593,8 @@ impl Store {
     }
 
     /// What the store has seen, for a page to compare with the stamp it was
-    /// drawn at: the newest write's seq and the route's time.
+    /// drawn at: the newest write's seq, the route's time, and when a
+    /// machine's report or its commands last changed.
     fn stamp(&self) -> Result<String> {
         let log = SqlLog(&self.sql);
         let fault = |fault: Fault| Error::RustError(format!("{fault:?}"));
@@ -603,7 +604,12 @@ impl Store {
             .map_err(fault)?
             .and_then(|route| route["at"].as_i64())
             .unwrap_or(0);
-        Ok(format!("{seq}.{at}"))
+        let fleet = SqlFiles::new(&self.sql)
+            .rows("SELECT max(changed) AS changed FROM machines", None)
+            .first()
+            .and_then(|row| row["changed"].as_i64())
+            .unwrap_or(0);
+        Ok(format!("{seq}.{at}.{fleet}"))
     }
 
     /// The message an open page hears: the store changed, and its stamp.
@@ -680,6 +686,21 @@ impl DurableObject for Store {
             None,
         )
         .expect("create the route table");
+        // Each machine's newest report, by runner name: `at` moves with
+        // every report, `changed` only when what it says does, so a page's
+        // stamp holds still while machines report the same.
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS machines(name TEXT PRIMARY KEY, at INTEGER NOT NULL, \
+             changed INTEGER NOT NULL, body TEXT NOT NULL)",
+            None,
+        )
+        .expect("create the machines table");
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY, machine TEXT NOT NULL, \
+             at INTEGER NOT NULL, body TEXT NOT NULL)",
+            None,
+        )
+        .expect("create the commands table");
         Self {
             state,
             env,
@@ -858,6 +879,8 @@ impl DurableObject for Store {
                     let _ = other.send_with_str(rec);
                 }
             }
+            self.nudge_pages();
+        } else if outcome.changed {
             self.nudge_pages();
         }
         Ok(())
@@ -1150,6 +1173,103 @@ impl Log for SqlLog<'_> {
             )
             .map(|_| ())
             .map_err(fault)
+    }
+
+    fn now_ms(&self) -> i64 {
+        now_ms() as i64
+    }
+
+    fn report(&self, machine: &str) -> std::result::Result<Option<Value>, Fault> {
+        let rows: Vec<Value> = self
+            .0
+            .exec(
+                "SELECT body FROM machines WHERE name = ?",
+                vec![machine.into()],
+            )
+            .and_then(|cursor| cursor.to_array())
+            .map_err(fault)?;
+        Ok(rows
+            .first()
+            .and_then(|row| row["body"].as_str())
+            .and_then(|body| serde_json::from_str(body).ok()))
+    }
+
+    fn set_report(
+        &mut self,
+        machine: &str,
+        at: i64,
+        report: &Value,
+    ) -> std::result::Result<(), Fault> {
+        self.0
+            .exec(
+                "INSERT INTO machines(name, at, changed, body) VALUES (?1, ?2, ?2, ?3) \
+                 ON CONFLICT(name) DO UPDATE SET at = excluded.at, \
+                 changed = CASE WHEN body = excluded.body THEN changed ELSE excluded.at END, \
+                 body = excluded.body",
+                vec![machine.into(), at.into(), report.to_string().into()],
+            )
+            .map(|_| ())
+            .map_err(fault)
+    }
+
+    fn commands(&self, machine: &str) -> std::result::Result<Vec<(String, Value)>, Fault> {
+        let rows: Vec<Value> = self
+            .0
+            .exec(
+                "SELECT id, body FROM commands WHERE machine = ? ORDER BY at, id",
+                vec![machine.into()],
+            )
+            .and_then(|cursor| cursor.to_array())
+            .map_err(fault)?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let id = row["id"].as_str()?.to_string();
+                let body = serde_json::from_str(row["body"].as_str()?).ok()?;
+                Some((id, body))
+            })
+            .collect())
+    }
+
+    fn add_command(
+        &mut self,
+        id: &str,
+        machine: &str,
+        command: &Value,
+    ) -> std::result::Result<(), Fault> {
+        self.0
+            .exec(
+                "INSERT INTO commands(id, machine, at, body) VALUES (?, ?, ?, ?)",
+                vec![
+                    id.into(),
+                    machine.into(),
+                    (now_ms() as i64).into(),
+                    command.to_string().into(),
+                ],
+            )
+            .map(|_| ())
+            .map_err(fault)
+    }
+
+    fn drop_command(&mut self, id: &str, machine: &str) -> std::result::Result<bool, Fault> {
+        let gone = self
+            .0
+            .exec(
+                "DELETE FROM commands WHERE id = ? AND machine = ?",
+                vec![id.into(), machine.into()],
+            )
+            .map_err(fault)?
+            .rows_written();
+        if gone > 0 {
+            // A page reading `waiting for <machine>` is to hear it stopped.
+            self.0
+                .exec(
+                    "UPDATE machines SET changed = ? WHERE name = ?",
+                    vec![(now_ms() as i64).into(), machine.into()],
+                )
+                .map_err(fault)?;
+        }
+        Ok(gone > 0)
     }
 }
 
