@@ -377,3 +377,30 @@ fn a_project_the_file_brings_imports_with_it() {
     );
     assert_eq!(pending(&mini).len(), 2);
 }
+
+/// Even in a known project, a file speaks only for mem's own records.
+#[test]
+fn a_path_that_is_no_record_imports_nothing() {
+    for rest in [
+        "items/notulid.md",
+        "stray.txt",
+        "wiki/a/b.md",
+        "items/.hidden.md",
+    ] {
+        let mini = machine("mini");
+        let repo = checkout(&mini);
+        let path = format!("projects/{ID}/{rest}");
+        let file = json!({"machine": "cloud", "writes": [
+            {"id": "01K0OUTBOXW000000000000020", "path": path, "base": null, "body": "x\n"},
+        ]});
+        std::fs::write(repo.join(FILE), file.to_string()).unwrap();
+        let out = walk_in(&mini, &repo, &["projects"]);
+        assert!(
+            stderr(&out).contains("left in place"),
+            "{rest}: {}",
+            stderr(&out)
+        );
+        assert!(repo.join(FILE).exists(), "{rest}");
+        assert!(pending(&mini).is_empty(), "{rest}");
+    }
+}

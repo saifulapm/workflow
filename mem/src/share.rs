@@ -527,6 +527,7 @@ pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
         let (Some(id), Some(rel)) = (text("id")?, text("path")?) else {
             anyhow::bail!("a write has no id or path");
         };
+        anyhow::ensure!(is_record(&rel), "{rel} is not one of mem's records");
         let file =
             replica_path(root, &rel).with_context(|| format!("{rel} is not a project path"))?;
         writes.push((id, rel, file, text("base")?, text("body")?));
@@ -565,6 +566,28 @@ pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
     remove_outbox_file(top)?;
     kick();
     Ok(())
+}
+
+/// Whether `rel` is where mem keeps a record of a project: its project.toml,
+/// roadmap or plan, an item, a wiki page or a milestone plan. Bytes travel
+/// on their own, never in an outbox file.
+fn is_record(rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').collect();
+    let named = |name: &str| {
+        name.strip_suffix(".md")
+            .is_some_and(crate::store::is_valid_slug)
+    };
+    match parts.as_slice() {
+        ["projects", _, "project.toml" | "roadmap.md" | "plan.md"] => true,
+        ["projects", _, "items", name] => name.strip_suffix(".md").is_some_and(|id| {
+            id.len() == 26
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+        }),
+        ["projects", _, "wiki" | "plans", name] => named(name),
+        _ => false,
+    }
 }
 
 /// Deletes the outbox file and stages its removal.
