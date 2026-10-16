@@ -2,7 +2,9 @@
 //! store onto the Cloudflare store.
 //!
 //! It refuses while any session runs here, because a session's write landing
-//! between the last VPS round and the switch would reach neither store. Every
+//! between the last VPS round and the switch would reach neither store, and
+//! while qshell-sync would go on bisyncing memory after it. On a machine that
+//! already switched it only moves the store's URL. Every
 //! program it runs is found on PATH (amx and mem also by `$WORKFLOW_AMX` and
 //! `$WORKFLOW_MEM`), so a test can put a script in each one's place.
 

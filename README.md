@@ -62,6 +62,12 @@ put a second copy in `~/.cargo/bin`, which comes first on PATH.
     workflow install
     systemctl --user restart hub
 
+On the mini, the weekly snapshot that keeps files past 90 days in Dropbox:
+
+    install -m 755 mem/units/mem-snapshot.sh ~/.local/bin/mem-snapshot
+    cp mem/units/mem-snapshot.service mem/units/mem-snapshot.timer ~/.config/systemd/user/
+    systemctl --user enable --now mem-snapshot.timer
+
 Tests are `cargo test` in each crate and `bash tests/run.sh` for the hooks
 and the hygiene check. The project's `verify` key runs all of them.
 
