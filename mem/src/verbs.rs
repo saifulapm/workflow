@@ -2154,7 +2154,8 @@ fn hand_answer_to_hub(
         "POST",
         "/answer",
         sent.to_string().as_bytes(),
-        std::time::Duration::from_secs(10),
+        // Longer than the hub's own 10 s to reach the asking machine.
+        std::time::Duration::from_secs(15),
     );
     match called {
         Ok((200, _)) => {
@@ -2169,14 +2170,24 @@ fn hand_answer_to_hub(
             eprintln!("mem: {refusal}");
             Some(1)
         }
-        Ok(_) => None,
-        Err(e) => {
-            if e.kind() != std::io::ErrorKind::NotFound
-                && e.kind() != std::io::ErrorKind::ConnectionRefused
-            {
-                eprintln!("mem: the local hub did not take the answer: {e}");
-            }
+        // The hub does not know the question, or (an older hub) takes no
+        // answer from mem: nothing was passed on, so it is this store's.
+        Ok((400 | 404, _)) => None,
+        // The asking machine could not be reached, or took it too late to
+        // say: an answer written here as well could make two.
+        Ok((_, why)) => {
+            eprintln!("mem: #{short} was not answered: {}", why.trim());
+            Some(1)
+        }
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                || e.kind() == std::io::ErrorKind::ConnectionRefused =>
+        {
             None
+        }
+        Err(e) => {
+            eprintln!("mem: #{short} was not answered: the local hub did not answer: {e}");
+            Some(1)
         }
     }
 }

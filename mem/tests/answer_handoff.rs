@@ -194,6 +194,28 @@ fn a_refusal_is_printed_and_nothing_is_written() {
     assert!(unanswered(&w, &repo, &id));
 }
 
+/// The asking machine could not be reached, or may have taken it after all:
+/// a second answer written here would make two, so mem says so instead.
+#[test]
+fn an_answer_the_hub_could_not_pass_on_is_reported_and_nothing_is_written() {
+    let w = World::new("ah-502");
+    let repo = w.repo("thing", None);
+    let id = ask(&w, &repo);
+    fake_hub(
+        &socket_of(&w),
+        "502 Bad Gateway",
+        "the asking machine could not be reached",
+    );
+
+    let out = mem_env(&w, &repo, &["answer", &id, "yes"], &[]);
+    assert_eq!(code(&out), 1);
+    assert_eq!(
+        stderr(&out),
+        format!("mem: #{id} was not answered: the asking machine could not be reached\n")
+    );
+    assert!(unanswered(&w, &repo, &id));
+}
+
 #[test]
 fn a_hub_that_does_not_know_the_question_leaves_the_write_to_mem() {
     let w = World::new("ah-404");
