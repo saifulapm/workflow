@@ -9,7 +9,7 @@ use hubpages::host::{Command, Held, Kind, NoMachine, Polled, Saved};
 use hubpages::http::Request;
 use hubpages::live::Runner;
 use hubpages::pages::{Site, route_page};
-use hubpages::{Fleet, Host, Outcome, QUESTIONS_ARGV, Source, Written};
+use hubpages::{Fleet, Host, Outcome, Source, Written};
 use serde_json::{Value, json};
 
 /// mem as a table: argv, joined by spaces, to the document it prints.
