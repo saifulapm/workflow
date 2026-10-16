@@ -1,0 +1,188 @@
+//! The local hub: `hub local`, one per machine and one per cloud session.
+//!
+//! Local hubs reach each other on one TCP port over the tailnet, and every
+//! request there carries the peer token. mem reaches its own
+//! machine's local hub on a unix socket instead, so the token never reaches
+//! mem. A cloud VM's userspace Tailscale hands tailnet connections in from
+//! 127.0.0.1, so the address a request came from proves nothing; the token
+//! and the socket's file mode are the only guards.
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{Context, Result, bail};
+
+use crate::http::{Request, Response};
+
+/// The port local hubs talk to each other on. The hub web keeps 8787.
+pub const PORT: u16 = 8789;
+
+/// How long a peer may take to answer.
+const PEER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The peer token, from the environment only: a flag would put it in `ps`.
+pub fn token_from_env() -> Result<String> {
+    let token = std::env::var("HUB_PEER_TOKEN").unwrap_or_default();
+    let token = token.trim();
+    if token.is_empty() {
+        bail!("HUB_PEER_TOKEN is not set; the local hub will not take requests it cannot check");
+    }
+    Ok(token.to_string())
+}
+
+/// `HUB_LOCAL_SOCKET`, else `$XDG_RUNTIME_DIR/hub-local.sock`, else under the
+/// state directory. mem works out the same path.
+pub fn socket_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("HUB_LOCAL_SOCKET").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(dir).join("hub-local.sock"));
+    }
+    Ok(crate::config::state_home()?.join("hub/local.sock"))
+}
+
+pub struct Local {
+    machine: String,
+    token: String,
+}
+
+impl Local {
+    pub fn new(machine: String, token: String) -> Local {
+        Local { machine, token }
+    }
+
+    /// A request on the peer port.
+    pub fn peer(&self, request: &Request) -> Response {
+        if !bearer_matches(request, &self.token) {
+            return Response::text(401, "a peer token is needed");
+        }
+        self.route(request)
+    }
+
+    /// A request on mem's socket.
+    pub fn mem(&self, request: &Request) -> Response {
+        self.route(request)
+    }
+
+    fn route(&self, request: &Request) -> Response {
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/ping") => Response::text(200, &self.machine),
+            (_, "/ping") => Response::method_not_allowed("GET"),
+            _ => Response::not_found(),
+        }
+    }
+}
+
+/// Whether `Authorization: Bearer <token>` names `token`, compared in
+/// constant time.
+fn bearer_matches(request: &Request, token: &str) -> bool {
+    let Some(given) = request
+        .header("authorization")
+        .and_then(|v| v.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    let (a, b) = (given.trim().as_bytes(), token.as_bytes());
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Sends one request to the local hub at `target` (`host` or `host:port`)
+/// and returns its status and body. With `HUB_SOCKS5` set (a cloud VM's
+/// tailscaled), the connection goes through that SOCKS5 listener, by name.
+pub fn request(
+    target: &str,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: &[u8],
+) -> Result<(u16, String)> {
+    let (host, port) = split_target(target)?;
+    let mut stream = match std::env::var("HUB_SOCKS5").ok().filter(|v| !v.is_empty()) {
+        Some(proxy) => socks5_connect(&proxy, &host, port)?,
+        None => TcpStream::connect((host.as_str(), port))
+            .with_context(|| format!("connecting {target}"))?,
+    };
+    stream.set_read_timeout(Some(PEER_TIMEOUT))?;
+    stream.set_write_timeout(Some(PEER_TIMEOUT))?;
+    let head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()?;
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line)?;
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .with_context(|| format!("{target} sent no status line"))?;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 || line == "\r\n" {
+            break;
+        }
+    }
+    let mut body = String::new();
+    reader.read_to_string(&mut body)?;
+    Ok((status, body))
+}
+
+fn split_target(target: &str) -> Result<(String, u16)> {
+    match target.rsplit_once(':') {
+        Some((host, port)) => Ok((
+            host.to_string(),
+            port.parse().with_context(|| format!("port in {target}"))?,
+        )),
+        None => Ok((target.to_string(), PORT)),
+    }
+}
+
+/// A SOCKS5 CONNECT with no authentication, naming the host so the proxy
+/// resolves it (tailscaled knows MagicDNS names; this machine may not).
+fn socks5_connect(proxy: &str, host: &str, port: u16) -> Result<TcpStream> {
+    let mut stream = TcpStream::connect(proxy)
+        .with_context(|| format!("connecting the SOCKS5 proxy {proxy}"))?;
+    stream.set_read_timeout(Some(PEER_TIMEOUT))?;
+    stream.write_all(&[5, 1, 0])?;
+    let mut choice = [0u8; 2];
+    stream.read_exact(&mut choice)?;
+    if choice != [5, 0] {
+        bail!("SOCKS5 proxy {proxy} wants authentication");
+    }
+    let name = host.as_bytes();
+    if name.len() > 255 {
+        bail!("host name too long for SOCKS5: {host}");
+    }
+    let mut connect = vec![5, 1, 0, 3, name.len() as u8];
+    connect.extend_from_slice(name);
+    connect.extend_from_slice(&port.to_be_bytes());
+    stream.write_all(&connect)?;
+    let mut reply = [0u8; 4];
+    stream.read_exact(&mut reply)?;
+    if reply[1] != 0 {
+        bail!(
+            "SOCKS5 proxy {proxy} could not reach {host}:{port} (code {})",
+            reply[1]
+        );
+    }
+    let rest = match reply[3] {
+        1 => 4 + 2,
+        4 => 16 + 2,
+        3 => {
+            let mut len = [0u8; 1];
+            stream.read_exact(&mut len)?;
+            len[0] as usize + 2
+        }
+        other => bail!("SOCKS5 proxy {proxy} sent address type {other}"),
+    };
+    let mut skip = vec![0u8; rest];
+    stream.read_exact(&mut skip)?;
+    Ok(stream)
+}

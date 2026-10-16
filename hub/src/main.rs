@@ -13,7 +13,7 @@ use hub::app::App;
 use hub::config::Config;
 use hub::doorbell::Doorbell;
 use hub::mcp::Mcp;
-use hub::{config, dulali, http, pair};
+use hub::{config, dulali, http, local, pair};
 
 const USAGE: &str = "\
 hub — mem's phone-facing view
@@ -21,12 +21,17 @@ hub — mem's phone-facing view
 Usage: hub [OPTIONS]
        hub pair [OPTIONS]
        hub dulali-token
+       hub local [--port <PORT>]
+       hub ping <HOST[:PORT]>
 
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
                 wait for it to be opened
   dulali-token  Print Dulali's token for the dulali socket, making it the
                 first time
+  local         Run this machine's local hub: the peer port (8789) for other
+                local hubs, and a socket for mem. HUB_PEER_TOKEN is required
+  ping          Ask another local hub its machine name, with HUB_PEER_TOKEN
 
 Options:
       --config <PATH>  Config file (default $XDG_CONFIG_HOME/hub/config.toml)
@@ -39,6 +44,8 @@ Options:
 struct Args {
     pair: bool,
     dulali_token: bool,
+    local: bool,
+    ping: Option<String>,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
@@ -47,6 +54,8 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
         pair: false,
         dulali_token: false,
+        local: false,
+        ping: None,
         config: None,
         port: None,
     };
@@ -55,6 +64,8 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
         match arg.as_str() {
             "pair" => args.pair = true,
             "dulali-token" => args.dulali_token = true,
+            "local" => args.local = true,
+            "ping" => args.ping = Some(argv.next().context("ping needs a host")?),
             "--config" => {
                 let value = argv.next().context("--config needs a path")?;
                 args.config = Some(PathBuf::from(value));
@@ -91,6 +102,12 @@ fn run() -> Result<()> {
     if args.dulali_token {
         println!("{}", dulali::token(&dulali::token_path()?)?);
         return Ok(());
+    }
+    if let Some(target) = args.ping {
+        return ping(&target);
+    }
+    if args.local {
+        return run_local(args.port.unwrap_or(local::PORT));
     }
     let config_path = match args.config {
         Some(path) => path,
@@ -179,6 +196,47 @@ fn mcp_listener(config: &Config) -> Result<Option<(TcpListener, Access)>> {
     println!("mcp listening on {}", listener.local_addr()?);
     std::io::stdout().flush()?;
     Ok(Some((listener, Access::new(aud, team))))
+}
+
+/// `hub local`: the peer port on every address, since other machines reach
+/// it over the tailnet and the token is its guard, and mem's socket, 0600.
+fn run_local(port: u16) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let token = local::token_from_env()?;
+    let listener =
+        TcpListener::bind(("0.0.0.0", port)).with_context(|| format!("binding 0.0.0.0:{port}"))?;
+    let socket_path = local::socket_path()?;
+    if let Some(dir) = socket_path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let socket = bind_socket(&socket_path)?;
+    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("closing {} to this user", socket_path.display()))?;
+
+    // The tests read the port off this line, as off the web hub's.
+    println!("local hub listening on {}", listener.local_addr()?);
+    println!("local hub socket {}", socket_path.display());
+    std::io::stdout().flush()?;
+
+    let local = Arc::new(local::Local::new(hub::machine_name(), token));
+    let for_mem = Arc::clone(&local);
+    std::thread::Builder::new()
+        .name("hub-local-socket".to_string())
+        .spawn(move || http::serve_unix(socket, move |request| for_mem.mem(request)))
+        .context("starting the local socket")?;
+    http::serve(listener, move |request| local.peer(request))
+}
+
+/// `hub ping`: prints the machine name another local hub answers with.
+fn ping(target: &str) -> Result<()> {
+    let token = local::token_from_env()?;
+    let (status, body) = local::request(target, "GET", "/ping", &token, b"")?;
+    if status != 200 {
+        anyhow::bail!("{target} answered {status}: {}", body.trim());
+    }
+    println!("{}", body.trim());
+    Ok(())
 }
 
 /// A socket left by the last run is removed first; the new one is 0660, so
