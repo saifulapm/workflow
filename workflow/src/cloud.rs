@@ -582,20 +582,10 @@ pub fn cmd_cloud_setup() -> i32 {
     exit::OK
 }
 
-/// A ws:// or wss:// URL with a host, ending in /store/share, as
-/// `workflow switch` checks it.
-fn store_url(url: &str) -> bool {
-    let rest = url
-        .strip_prefix("wss://")
-        .or_else(|| url.strip_prefix("ws://"));
-    rest.and_then(|r| r.strip_suffix("/store/share"))
-        .is_some_and(|host| !host.is_empty() && !host.contains('/'))
-}
-
 /// `workflow cloud-switch`: refuse while a cloud run is live or parked, so
 /// no session loses a write mid-switch, else print the steps.
 pub fn cmd_cloud_switch(store: &str) -> i32 {
-    if !store_url(store) {
+    if !crate::switch::store_url(store) {
         warn(format!(
             "cloud-switch: --store must be a ws:// or wss:// URL ending in /store/share, not {store}"
         ));

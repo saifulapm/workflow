@@ -136,7 +136,7 @@ fn switch(url: &str) -> Step<()> {
 
 /// A ws:// or wss:// URL with a host, ending in /store/share, the way the hub
 /// reads `HUB_STORE_URL`.
-fn store_url(url: &str) -> bool {
+pub fn store_url(url: &str) -> bool {
     let rest = url
         .strip_prefix("wss://")
         .or_else(|| url.strip_prefix("ws://"));
