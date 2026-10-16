@@ -1129,6 +1129,13 @@ impl DurableObject for Files {
             None,
         )
         .expect("create the stored table");
+        // Files stored before the table existed count from the first wake
+        // that finds them, so they too leave 90 days on.
+        sql.exec(
+            "INSERT OR IGNORE INTO stored(path, at) SELECT DISTINCT path, ? FROM chunks",
+            vec![(now_ms() as i64).into()],
+        )
+        .expect("time the files stored before the stored table");
         Self { sql }
     }
 

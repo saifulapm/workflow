@@ -990,7 +990,7 @@ mod tests {
             serde_json::from_str::<Value>(&frame).unwrap(),
             json!({"t":"cmd","id":"01CMD","machine":"mini","command":start})
         );
-        assert_eq!(log.commands(&"mini".to_string()).unwrap().len(), 1);
+        assert_eq!(log.commands("mini").unwrap().len(), 1);
     }
 
     #[test]
