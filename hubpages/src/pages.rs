@@ -27,6 +27,8 @@ pub struct Site<'a> {
     pub by: &'a str,
     /// Whether the request comes from a device that paired.
     pub paired: bool,
+    /// How an unpaired browser pairs, after "Pair this device first: ".
+    pub pair_how: &'a str,
     /// Whether the request's origin may write.
     pub may_write: bool,
     pub now: jiff::Timestamp,
@@ -55,17 +57,22 @@ impl PageCtx<'_> {
     /// The line an unpaired browser sees in place of each control that
     /// posts, or `None` for a paired one, which gets the controls.
     pub fn pair_notice(&self) -> Option<String> {
-        (!self.site.paired).then(|| pair_first(self.site.machine))
+        (!self.site.paired).then(|| pair_first(self.site.pair_how))
     }
 }
 
 /// What a browser that never paired sees in place of every control that
 /// posts, since the hub would refuse the post.
-pub fn pair_first(machine: &str) -> String {
+pub fn pair_first(how: &str) -> String {
     format!(
-        "<p class=\"banner warn\">Pair this device first: from a workflow checkout run vps/pair, which runs hub pair on {}</p>\n",
-        html::esc(machine)
+        "<p class=\"banner warn\">Pair this device first: {}</p>\n",
+        html::esc(how)
     )
+}
+
+/// How a browser pairs with the hub on `machine`.
+pub fn pair_how(machine: &str) -> String {
+    format!("from a workflow checkout run vps/pair, which runs hub pair on {machine}")
 }
 
 pub type Handler = fn(&PageCtx) -> Response;
@@ -102,7 +109,7 @@ pub fn route_page(site: &Site, request: &Request) -> Option<Response> {
         );
         let body = format!(
             "<p class=\"banner warn\">This device is not paired, so this was not sent.</p>\n{}",
-            pair_first(site.machine)
+            pair_first(site.pair_how)
         );
         return Some(Response::new(
             403,

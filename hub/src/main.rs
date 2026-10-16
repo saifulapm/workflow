@@ -20,13 +20,16 @@ hub — mem's phone-facing view
 
 Usage: hub [OPTIONS]
        hub pair [OPTIONS]
+       hub pair --web
        hub dulali-token
        hub local [--port <PORT>]
        hub ping <HOST[:PORT]>
 
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
-                wait for it to be opened
+                wait for it to be opened; with --web, a single-use link that
+                pairs it with the hub web, from the store (HUB_STORE_URL and
+                HUB_STORE_TOKEN)
   dulali-token  Print Dulali's token for the dulali socket, making it the
                 first time
   local         Run this machine's local hub: the peer port (8789) for other
@@ -43,6 +46,8 @@ Options:
 
 struct Args {
     pair: bool,
+    /// `pair --web`: a link that pairs a device with the hub web.
+    web: bool,
     dulali_token: bool,
     local: bool,
     ping: Option<String>,
@@ -53,6 +58,7 @@ struct Args {
 fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
         pair: false,
+        web: false,
         dulali_token: false,
         local: false,
         ping: None,
@@ -63,6 +69,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "pair" => args.pair = true,
+            "--web" => args.web = true,
             "dulali-token" => args.dulali_token = true,
             "local" => args.local = true,
             "ping" => match argv.next().context("ping needs a host")? {
@@ -114,6 +121,12 @@ fn run() -> Result<()> {
     }
     if args.local {
         return run_local(args.port.unwrap_or(local::PORT));
+    }
+    if args.pair && args.web {
+        let store = hub::share::from_env()
+            .context("hub pair --web needs HUB_STORE_URL and HUB_STORE_TOKEN")?;
+        println!("{}", store.pair_link()?);
+        return Ok(());
     }
     let config_path = match args.config {
         Some(path) => path,

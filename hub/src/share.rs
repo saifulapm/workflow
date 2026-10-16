@@ -129,16 +129,40 @@ impl Store {
         headers
     }
 
-    /// `<files base>/store/files/<path>`, the base being the socket's scheme
-    /// and host: `ws://h:p/store/share` gives `http://h:p`.
+    /// `<files base>/store/files/<path>`.
     fn file_url(&self, path: &str) -> Result<String> {
+        Ok(format!("{}/store/files/{}", self.base()?, encode(path)))
+    }
+
+    /// The store's web address, the socket's scheme and host: `ws://h:p/store/share`
+    /// gives `http://h:p`.
+    fn base(&self) -> Result<String> {
         let (scheme, rest) = match self.url.split_once("://") {
             Some(("wss", rest)) => ("https", rest),
             Some(("ws", rest)) => ("http", rest),
             _ => bail!("HUB_STORE_URL is neither ws:// nor wss://"),
         };
         let host = rest.split('/').next().unwrap_or(rest);
-        Ok(format!("{scheme}://{host}/store/files/{}", encode(path)))
+        Ok(format!("{scheme}://{host}"))
+    }
+
+    /// A single-use link that pairs a device with the hub web, from a code
+    /// the store makes for the holder of its token.
+    pub fn pair_link(&self) -> Result<String> {
+        let base = self.base()?;
+        let mut request = self.agent.post(format!("{base}/store/pair"));
+        for (name, value) in self.headers() {
+            request = request.header(name, value);
+        }
+        let mut answer = request
+            .send_empty()
+            .context("asking the store for a code")?;
+        let status = answer.status().as_u16();
+        let code = answer.body_mut().read_to_string().unwrap_or_default();
+        if status != 200 {
+            bail!("the store answered {status} to /store/pair");
+        }
+        Ok(format!("{base}/pair/{}", code.trim()))
     }
 
     /// The bytes the store holds at `path`, None when it holds none.

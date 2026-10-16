@@ -39,6 +39,7 @@ pub fn route_page(app: &App, request: &Request) -> Option<Response> {
         siblings: &app.config.siblings,
         by: "saiful",
         paired: pair::paired(request),
+        pair_how: &hubpages::pages::pair_how(&app.machine),
         may_write: app.guard.may_write(request),
         now: jiff::Timestamp::now(),
         tz: jiff::tz::TimeZone::system(),

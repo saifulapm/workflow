@@ -4,6 +4,7 @@ pub mod item;
 pub mod latest;
 pub mod mcp;
 pub mod memview;
+pub mod pair;
 pub mod share;
 pub mod site;
 

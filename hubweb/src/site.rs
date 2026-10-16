@@ -67,6 +67,7 @@ pub fn page(files: &impl Files, ask: Ask) -> Option<Response> {
         siblings: &[],
         by: "hub-web",
         paired: ask.paired,
+        pair_how: crate::pair::HOW,
         may_write: ask.may_write,
         now: ask.now,
         tz: dhaka(),

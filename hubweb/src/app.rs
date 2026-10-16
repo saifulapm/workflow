@@ -14,6 +14,7 @@ use crate::files;
 use crate::latest::{self, Change};
 use crate::mcp::{self, Step};
 use crate::memview;
+use crate::pair;
 use crate::share::{self, Fault, Log, Rec};
 use crate::site;
 
@@ -75,6 +76,13 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             .get_by_name_with_location_hint(&project, STORE_LOCATION)?
             .fetch_with_request(req)
             .await;
+    }
+    // A machine with the store token asks for a pairing code.
+    if req.method() == Method::Post && path == "/store/pair" {
+        if !bearer(&req, &env)? {
+            return Response::error("Unauthorized", 401);
+        }
+        return store(&env)?.fetch_with_request(req).await;
     }
     if let Err(why) = guard(&req, &env).await {
         console_log!("hubweb: refused {:?} {path}: {why}", req.method());
@@ -216,9 +224,22 @@ fn store(env: &Env) -> Result<Stub> {
 /// the store's own build time and the whole round trip to it.
 async fn page(mut req: Request, env: &Env) -> Result<Response> {
     let start = Date::now().as_millis();
+    // The store sees the request under its own host, so whether the POST
+    // came from the hub web's own pages is decided here, and any such
+    // header the browser sent is replaced.
+    let headers = req.headers().clone();
+    let asked = site::request(
+        req.method().as_ref(),
+        &req.path(),
+        headers.entries().collect(),
+        Vec::new(),
+    );
+    headers.set(MAY_WRITE, if pair::may_write(&asked) { "1" } else { "0" })?;
     let mut init = RequestInit::new();
+    // A page's See Other is the browser's to follow, not this fetch's.
     init.with_method(req.method())
-        .with_headers(req.headers().clone());
+        .with_headers(headers)
+        .with_redirect(RequestRedirect::Manual);
     if req.method() == Method::Post {
         init.with_body(Some(req.bytes().await?.into()));
     }
@@ -239,6 +260,10 @@ async fn page(mut req: Request, env: &Env) -> Result<Response> {
     }
     Ok(page)
 }
+
+/// The header the Worker tells the store with whether a POST came from the
+/// hub web's own pages.
+const MAY_WRITE: &str = "X-Hub-May-Write";
 
 /// The path and query of a request, from its URL string: `Request::url`
 /// brings the url crate's IDNA tables, about 200 KB of wasm.
@@ -317,6 +342,7 @@ impl Store {
         } else {
             Vec::new()
         };
+        let req_may_write = req.headers().get(MAY_WRITE)?.as_deref() == Some("1");
         let start = Date::now().as_millis();
         let request = site::request(&method, &target, headers, body);
         let route = SqlLog(&self.sql)
@@ -326,8 +352,8 @@ impl Store {
             request: &request,
             now: jiff::Timestamp::from_millisecond(now_ms() as i64).unwrap_or_default(),
             route,
-            paired: false,
-            may_write: false,
+            paired: self.paired(&request)?,
+            may_write: req_may_write,
             limited: site::limit_is_today(self.limit_day()?, now_ms()),
         };
         let Some(drawn) = site::page(&SqlFiles(&self.sql), ask) else {
@@ -342,6 +368,68 @@ impl Store {
         }
         headers.set("Server-Timing", &format!("build;dur={took}"))?;
         Ok(response)
+    }
+
+    /// Whether the request carries a paired device's cookie.
+    fn paired(&self, request: &hubpages::http::Request) -> Result<bool> {
+        let Some(token) = pair::token(request) else {
+            return Ok(false);
+        };
+        let rows: Vec<Value> = self
+            .sql
+            .exec("SELECT 1 FROM devices WHERE token = ?", vec![token.into()])?
+            .to_array()?;
+        Ok(!rows.is_empty())
+    }
+
+    /// `GET /pair/<code>`: the Pair button while the code is pending.
+    /// `POST /pair/<code>`, from the hub web's own page: spends the code and
+    /// hands the device its cookie.
+    async fn pair(&self, req: Request) -> Result<Response> {
+        let code = path_and_query(&req)["/page/pair/".len()..].to_string();
+        let now = now_ms() as i64;
+        let pending = pair::is_code(&code)
+            && !self
+                .sql
+                .exec(
+                    "SELECT 1 FROM pair_codes WHERE code = ? AND expires > ?",
+                    vec![code.as_str().into(), now.into()],
+                )?
+                .to_array::<Value>()?
+                .is_empty();
+        if !pending {
+            return Ok(Response::from_html(pair::gone())?.with_status(404));
+        }
+        match req.method() {
+            Method::Get => Response::from_html(pair::page(&code)),
+            Method::Post if req.headers().get(MAY_WRITE)?.as_deref() == Some("1") => {
+                let token = pair::new_token(random()?);
+                let agent = req.headers().get("User-Agent")?;
+                self.sql.exec(
+                    "INSERT INTO devices(token, created, name) VALUES (?, ?, ?)",
+                    vec![
+                        token.as_str().into(),
+                        jiff::Timestamp::from_millisecond(now)
+                            .unwrap_or_default()
+                            .to_string()
+                            .into(),
+                        pair::device_name(agent.as_deref()).into(),
+                    ],
+                )?;
+                self.sql.exec(
+                    "DELETE FROM pair_codes WHERE code = ?",
+                    vec![code.as_str().into()],
+                )?;
+                let mut response = Response::empty()?.with_status(303);
+                response.headers_mut().set("Location", "/")?;
+                response
+                    .headers_mut()
+                    .set("Set-Cookie", &pair::cookie(&token))?;
+                Ok(response)
+            }
+            Method::Post => Response::error("cross-origin writes are refused", 403),
+            _ => Response::error("Method Not Allowed", 405),
+        }
     }
 
     /// Tells every open page the store changed, and nothing more: the page
@@ -395,6 +483,17 @@ impl DurableObject for Store {
         .expect("index the files by kind");
         fill_files(&sql).expect("fill the files table from the log");
         sql.exec(
+            "CREATE TABLE IF NOT EXISTS pair_codes(code TEXT PRIMARY KEY, expires INTEGER NOT NULL)",
+            None,
+        )
+        .expect("create the pair_codes table");
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS devices(token TEXT PRIMARY KEY, created TEXT NOT NULL, \
+             name TEXT NOT NULL)",
+            None,
+        )
+        .expect("create the devices table");
+        sql.exec(
             "CREATE TABLE IF NOT EXISTS route(one INTEGER PRIMARY KEY CHECK (one = 1), \
              body TEXT NOT NULL)",
             None,
@@ -445,7 +544,23 @@ impl DurableObject for Store {
                 }
                 Ok(Response::empty()?.with_status(204))
             }
+            (_, path) if path.starts_with("/page/pair/") => self.pair(req).await,
             (_, path) if path.starts_with("/page/") => self.page(req).await,
+            (Method::Post, "/store/pair") => {
+                let code = pair::new_code(random()?);
+                self.sql.exec(
+                    "DELETE FROM pair_codes WHERE expires <= ?",
+                    vec![(now_ms() as i64).into()],
+                )?;
+                self.sql.exec(
+                    "INSERT INTO pair_codes(code, expires) VALUES (?, ?)",
+                    vec![
+                        code.as_str().into(),
+                        (now_ms() as i64 + pair::CODE_TTL_MS).into(),
+                    ],
+                )?;
+                Response::ok(code)
+            }
             (Method::Get, path) if path.starts_with("/handoff/") => {
                 let project = &path["/handoff/".len()..];
                 let rows: Vec<Value> = self
@@ -842,6 +957,15 @@ fn fill_files(sql: &SqlStorage) -> Result<()> {
         keep_file(sql, &rec)?;
     }
     Ok(())
+}
+
+/// Ten random bytes from the runtime's WebCrypto.
+fn random() -> Result<[u8; 10]> {
+    let crypto: web_sys::Crypto =
+        js_sys::Reflect::get(&js_sys::global(), &"crypto".into())?.unchecked_into();
+    let mut bytes = [0u8; 10];
+    crypto.get_random_values_with_u8_array(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn names_limit(why: &str) -> bool {

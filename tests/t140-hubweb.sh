@@ -202,6 +202,43 @@ for path in /p/gamma /p/beta/roadmap /p/gamma/plan /p/beta/plan/b1-box /p/gamma/
 		"$path reads everything it needs from the store"
 done
 
+# Pairing: a machine with the store token gets a single-use code; the
+# device opens /pair/<code> and presses Pair from the page itself.
+mint_code() { curl -s -X POST "$@" "$base/store/pair"; }
+is "$(mint_code -o /dev/null -w '%{http_code}')" 401 "POST /store/pair without the store token is refused"
+code=$(mint_code -H "@$T_TMP/auth.hdr")
+like "$code" '^[0-9A-HJKMNP-TV-Z]{6}$' "POST /store/pair with the store token makes a six-character code"
+is "$(page_of "/pair/$code")" 200 "the pairing page answers 200 while the code is pending"
+like "$(cat "$T_TMP/page.html")" "action=\"/pair/$code\"" "the pairing page has its Pair button"
+pair_post() { # pair_post <code> [curl args...] -- prints the status code, headers in $T_TMP/pair.hdr
+	local c=$1
+	shift
+	curl -s -X POST -H "@$T_TMP/jwt.hdr" -D "$T_TMP/pair.hdr" -o /dev/null -w '%{http_code}' "$@" "$base/pair/$c"
+}
+is "$(pair_post "$code" -H 'Sec-Fetch-Site: cross-site')" 403 "a cross-site Pair is refused"
+is "$(pair_post "$code" -H 'Sec-Fetch-Site: same-origin')" 303 "Pair from the page itself pairs"
+cookie=$(tr -d '\r' <"$T_TMP/pair.hdr" | sed -n 's/^[Ss]et-[Cc]ookie: \(hub_device=[^;]*\);.*/\1/p')
+like "$(tr -d '\r' <"$T_TMP/pair.hdr")" 'hub_device=[0-9A-Z]{16}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Strict' \
+	"the device gets a year's cookie, HttpOnly, Secure and SameSite=Strict"
+is "$(pair_post "$code" -H 'Sec-Fetch-Site: same-origin')" 404 "a spent code pairs nothing more"
+is "$(page_of /pair/ZZZZZZ)" 404 "an unknown code is not found"
+
+paired_home=$(curl -s -H "@$T_TMP/jwt.hdr" -H "Cookie: $cookie" "$base/" | tr -d '\n')
+like "$paired_home" '>Phone</button>.*>Device</button>' "a paired device's home offers Phone and Device"
+like "$paired_home" 'name="text" value="nine"' "a paired device's home has the question's option buttons"
+unlike "$paired_home" 'Pair this device first' "a paired device is not asked to pair"
+
+# A POST from an unpaired browser gets the 403 page and writes nothing.
+qid=$(cd "$sb/gamma" && mem questions --pending --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["questions"][0]["id"])')
+answer_post() { # answer_post [curl args...] -- prints the status code, the page in $T_TMP/answer.html
+	curl -s -X POST -H "@$T_TMP/jwt.hdr" -o "$T_TMP/answer.html" -w '%{http_code}' "$@" \
+		--data-urlencode "id=$qid" --data-urlencode "text=nine" "$base/answer"
+}
+is "$(answer_post -H 'Sec-Fetch-Site: same-origin')" 403 "an unpaired browser's answer is refused"
+like "$(cat "$T_TMP/answer.html")" 'This device is not paired, so this was not sent' "the 403 page says nothing was sent"
+is "$(answer_post -H 'Sec-Fetch-Site: cross-site' -H "Cookie: $cookie")" 403 \
+	"a paired device's cookie on a cross-site POST is refused"
+
 font=$base/assets/maple-mono-400.woff2
 curl -s -o /dev/null "$font"
 fonthdr=$(curl -s -D - -o /dev/null "$font" | tr -d '\r')
