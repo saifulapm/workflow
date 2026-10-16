@@ -435,11 +435,16 @@ if [ ! -x "$real" ]; then
   mv "$real.part" "$real"
 fi
 state="$HOME/.local/state/hub"
-if [ -n "${TS_AUTHKEY:-}" ] && [ -n "${HUB_PEER_TOKEN:-}" ] &&
-  mkdir -p "$state" && mkdir "$state/started" 2>/dev/null; then
+# Alive when the local hub answers on mem's socket.
+hub_alive() { curl -s -m 2 --unix-socket "$state/local.sock" http://local/ping >/dev/null 2>&1; }
+if [ -n "${TS_AUTHKEY:-}" ] && [ -n "${HUB_PEER_TOKEN:-}" ] && mkdir -p "$state" && ! hub_alive; then
+  # One start at a time; a later mem finds a dead hub and starts it again.
   (
+    # The daemons started below close fd 9, so the lock ends with this start.
+    flock -n 9 || exit 0
     bin="$HOME/.local/bin"
     ts=1.98.8
+    sock="$state/tailscaled.sock"
     set -e
     if [ ! -x "$bin/tailscaled" ]; then
       curl -fsSL --max-time 120 "https://pkgs.tailscale.com/stable/tailscale_${ts}_amd64.tgz" -o "$state/ts.tgz"
@@ -451,19 +456,35 @@ if [ -n "${TS_AUTHKEY:-}" ] && [ -n "${HUB_PEER_TOKEN:-}" ] &&
       chmod +x "$bin/hub-x86_64.part"
       mv "$bin/hub-x86_64.part" "$bin/hub-x86_64"
     fi
-    key="$state/ts-authkey"
-    (umask 077 && printf '%s' "$TS_AUTHKEY" >"$key")
-    sock="$state/tailscaled.sock"
-    host="cloud-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)"
-    env -u TS_AUTHKEY "$bin/tailscaled" --tun=userspace-networking       --socks5-server=localhost:1055 --state=mem: --socket="$sock" >"$state/tailscaled.log" 2>&1 &
+    if ! env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" status >/dev/null 2>&1; then
+      env -u TS_AUTHKEY "$bin/tailscaled" --tun=userspace-networking \
+        --socks5-server=localhost:1055 --state=mem: --socket="$sock" >"$state/tailscaled.log" 2>&1 9>&- &
+      i=0
+      while [ ! -e "$sock" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+      key="$state/ts-authkey"
+      (umask 077 && printf '%s' "$TS_AUTHKEY" >"$key")
+      joined=0
+      # The tag is asked for, so a key that cannot give it fails here rather
+      # than joining with its owner's rights.
+      env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" up --auth-key="file:$key" \
+        --hostname="cloud-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)" --advertise-tags=tag:cloud || joined=$?
+      rm -f "$key"
+      [ "$joined" = 0 ]
+    fi
+    # The name Tailscale gave this machine, which may not be the one asked
+    # for: it is what a Slack button carries back.
+    host=$(env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" status --json --peers=false |
+      tr -d '\n' | sed -n 's/.*"Self": *{[^}]*"DNSName": *"\([^"]*\)".*/\1/p' | sed 's/\.$//')
+    [ -n "$host" ]
+    env -u TS_AUTHKEY HUB_SOCKS5=127.0.0.1:1055 HUB_HOST="$host" \
+      nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 9>&- &
+  ) 9>"$state/start.lock" >"$state/start.log" 2>&1 </dev/null &
+  # A question goes to the local hub the moment mem writes it, so an ask
+  # waits for the hub it just started.
+  if [ "${1:-}" = ask ]; then
     i=0
-    while [ ! -S "$sock" ] && [ ! -e "$sock" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
-    joined=0
-    env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" up --auth-key="file:$key" --hostname="$host" || joined=$?
-    rm -f "$key"
-    [ "$joined" = 0 ]
-    env -u TS_AUTHKEY HUB_SOCKS5=127.0.0.1:1055 HUB_HOST="$host"       nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 &
-  ) >"$state/start.log" 2>&1 </dev/null &
+    while ! hub_alive && [ $i -lt 60 ]; do sleep 0.5; i=$((i + 1)); done
+  fi
 fi
 exec "$real" "$@"
 "#;

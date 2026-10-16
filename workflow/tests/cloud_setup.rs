@@ -120,12 +120,13 @@ printf '#!/bin/sh\\necho real mem \"$@\"\\n' > \"$2\"\n",
     );
 }
 
-/// With the Tailscale key and the peer token in its environment, the first mem
-/// of a cloud session joins the tailnet in userspace and starts the local hub,
-/// once, with neither secret on a command line.
-#[test]
-fn the_first_mem_with_the_keys_starts_tailscale_and_the_local_hub_once() {
-    let home = Scratch::new("cloud-setup-local-hub");
+/// A cloud home where every binary is already fetched and each logs how it
+/// was started. The fake hub "listens" by creating its socket file, and the
+/// fake curl's liveness probe succeeds while that file is there. The fake
+/// tailscale answers `status` only once `up` has run, naming the machine
+/// `cloud-given-1`, as Tailscale does when the name asked for is taken.
+fn cloud_home(tag: &str) -> (Scratch, PathBuf, String) {
+    let home = Scratch::new(tag);
     home.put("setup.sh", &script(&home));
     let ran = Command::new("bash")
         .arg(home.at("setup.sh"))
@@ -133,8 +134,6 @@ fn the_first_mem_with_the_keys_starts_tailscale_and_the_local_hub_once() {
         .output()
         .unwrap();
     assert!(ran.status.success(), "{ran:?}");
-
-    // Every binary is already fetched; each logs how it was started.
     let log = home.at("started.log");
     let logs = |name: &str| {
         format!(
@@ -142,6 +141,7 @@ fn the_first_mem_with_the_keys_starts_tailscale_and_the_local_hub_once() {
             log.display()
         )
     };
+    let state = home.at(".local/state/hub");
     home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");
     home.script(
         ".local/bin/tailscaled",
@@ -153,67 +153,123 @@ fn the_first_mem_with_the_keys_starts_tailscale_and_the_local_hub_once() {
     home.script(
         ".local/bin/tailscale",
         &format!(
-            "{}for a in \"$@\"; do case $a in --auth-key=file:*) cat \"${{a#--auth-key=file:}}\" >> {};; esac; done\n",
+            "case \"$*\" in *' status'*) [ -e {joined} ] || exit 1\n\
+             printf '{{\"BackendState\": \"Running\",\\n\"Self\": {{\"ID\": \"n1\", \"HostName\": \"cloud-given\", \"DNSName\": \"cloud-given-1.tail.ts.net.\"}}}}\\n'; exit 0;; esac\n\
+             {}for a in \"$@\"; do case $a in --auth-key=file:*) cat \"${{a#--auth-key=file:}}\" >> {};; esac; done\n: > {joined}\n",
             logs("tailscale"),
-            home.at("key-read").display()
+            home.at("key-read").display(),
+            joined = home.at("joined").display()
         ),
     );
-    home.script(".local/bin/hub-x86_64", &logs("hub"));
+    home.script(
+        ".local/bin/hub-x86_64",
+        &format!("{}: > {}/local.sock\n", logs("hub"), state.display()),
+    );
+    home.script(
+        "fake/curl",
+        &format!(
+            "#!/bin/sh\ncase \"$*\" in *--unix-socket*) [ -e {}/local.sock ];; *) exit 1;; esac\n",
+            state.display()
+        ),
+    );
+    let path = format!(
+        "{}:{}",
+        home.at("fake").display(),
+        std::env::var("PATH").unwrap()
+    );
+    (home, log, path)
+}
 
-    let shim = home.at("usr-local-bin/mem");
-    for _ in 0..2 {
-        let out = Command::new(&shim)
-            .args(["context"])
-            .env("HOME", home.path())
-            .env("MEM_REMOTE", "https://mem.example.test")
-            .env("TS_AUTHKEY", "tskey-auth-secret")
-            .env("HUB_PEER_TOKEN", "peer-secret")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{out:?}");
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "real mem context\n");
-    }
+fn run_shim(home: &Scratch, path: &str, args: &[&str]) {
+    let out = Command::new(home.at("usr-local-bin/mem"))
+        .args(args)
+        .env("HOME", home.path())
+        .env("PATH", path)
+        .env("MEM_REMOTE", "https://mem.example.test")
+        .env("TS_AUTHKEY", "tskey-auth-secret")
+        .env("HUB_PEER_TOKEN", "peer-secret")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("real mem {}\n", args.join(" "))
+    );
+}
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !fs::read_to_string(&log)
+fn lines_of(log: &Path, name: &str) -> Vec<String> {
+    fs::read_to_string(log)
         .unwrap_or_default()
-        .contains("hub local")
-    {
-        assert!(std::time::Instant::now() < deadline, "no local hub started");
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let started = fs::read_to_string(&log).unwrap();
-    let line = |name: &str| {
-        started
-            .lines()
-            .filter(|l| l.starts_with(&format!("{name} ")))
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(line("tailscaled").len(), 1, "{started}");
+        .lines()
+        .filter(|l| l.starts_with(&format!("{name} ")))
+        .map(str::to_string)
+        .collect()
+}
+
+/// With the Tailscale key and the peer token in its environment, a cloud
+/// session's mem joins the tailnet in userspace as tag:cloud and starts the
+/// local hub under the name Tailscale gave it, with neither secret on a
+/// command line; an ask waits for that hub.
+#[test]
+fn the_first_mem_with_the_keys_starts_tailscale_and_the_local_hub_once() {
+    let (home, log, path) = cloud_home("cloud-setup-local-hub");
+    // The ask itself waits for the hub it started.
+    run_shim(&home, &path, &["ask", "probe?"]);
+    assert_eq!(
+        lines_of(&log, "hub").len(),
+        1,
+        "{:?}",
+        fs::read_to_string(&log)
+    );
+    run_shim(&home, &path, &["context"]);
+
+    let tailscaled = lines_of(&log, "tailscaled");
+    assert_eq!(tailscaled.len(), 1, "{tailscaled:?}");
     assert!(
-        line("tailscaled")[0].contains("--tun=userspace-networking"),
-        "{started}"
+        tailscaled[0].contains("--tun=userspace-networking"),
+        "{tailscaled:?}"
     );
     assert!(
-        line("tailscaled")[0].contains("--socks5-server=localhost:1055"),
-        "{started}"
+        tailscaled[0].contains("--socks5-server=localhost:1055"),
+        "{tailscaled:?}"
     );
-    assert_eq!(line("tailscale").len(), 1, "{started}");
-    assert!(line("tailscale")[0].contains(" up "), "{started}");
-    assert!(
-        line("tailscale")[0].contains("--hostname=cloud-"),
-        "{started}"
-    );
+    let up = lines_of(&log, "tailscale");
+    assert_eq!(up.len(), 1, "{up:?}");
+    assert!(up[0].contains(" up "), "{up:?}");
+    assert!(up[0].contains("--hostname=cloud-"), "{up:?}");
+    assert!(up[0].contains("--advertise-tags=tag:cloud"), "{up:?}");
     assert_eq!(home.read("key-read"), "tskey-auth-secret");
-    assert_eq!(line("hub").len(), 1, "{started}");
-    let hub = line("hub")[0];
-    assert!(hub.starts_with("hub local "), "{hub}");
-    assert!(hub.contains("socks=127.0.0.1:1055"), "{hub}");
-    assert!(hub.contains("host=cloud-"), "{hub}");
+    let hub = lines_of(&log, "hub");
+    assert_eq!(hub.len(), 1, "{hub:?}");
+    assert!(hub[0].starts_with("hub local "), "{hub:?}");
+    assert!(hub[0].contains("socks=127.0.0.1:1055"), "{hub:?}");
+    assert!(
+        hub[0].ends_with("host=cloud-given-1.tail.ts.net"),
+        "{hub:?}"
+    );
     // The key went in a file, read and removed; no process was handed it.
+    let started = fs::read_to_string(&log).unwrap();
     assert!(!started.contains("tskey-auth-secret"), "{started}");
     assert!(!started.contains("peer-secret"), "{started}");
     assert!(!home.has(".local/state/hub/ts-authkey"));
+}
+
+/// A local hub that died is started again by the next mem, without joining
+/// the tailnet a second time.
+#[test]
+fn a_dead_local_hub_is_started_again_by_the_next_mem() {
+    let (home, log, path) = cloud_home("cloud-setup-restart");
+    run_shim(&home, &path, &["ask", "probe?"]);
+    fs::remove_file(home.at(".local/state/hub/local.sock")).unwrap();
+    run_shim(&home, &path, &["ask", "again?"]);
+    assert_eq!(
+        lines_of(&log, "hub").len(),
+        2,
+        "{:?}",
+        fs::read_to_string(&log)
+    );
+    assert_eq!(lines_of(&log, "tailscaled").len(), 1);
+    assert_eq!(lines_of(&log, "tailscale").len(), 1);
 }
 
 #[test]
@@ -235,5 +291,5 @@ fn without_the_keys_the_shim_starts_nothing() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
-    assert!(!home.has(".local/state/hub/started"));
+    assert!(!home.has(".local/state/hub"));
 }
