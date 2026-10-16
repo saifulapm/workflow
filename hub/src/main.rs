@@ -213,6 +213,7 @@ fn run_local(port: u16) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let token = local::token_from_env()?;
+    http::allow_answer_uploads();
     let listener = TcpListener::bind(("127.0.0.1", port))
         .with_context(|| format!("binding 127.0.0.1:{port}"))?;
     let socket_path = local::socket_path()?;
@@ -267,6 +268,8 @@ fn run_local(port: u16) -> Result<()> {
     }
     if let Some(store) = store {
         let kick = local.kick();
+        let applied = Arc::clone(&local);
+        hub::share::when_applied(move || applied.nudge());
         std::thread::Builder::new()
             .name("hub-share".to_string())
             .spawn(move || hub::share::run(store, kick, notice))

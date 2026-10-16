@@ -499,11 +499,24 @@ fn closing(held: &[String], end: Result<()>) -> Result<()> {
     end
 }
 
+/// Run after each batch mem applies: the local hub ends its waits early, so a
+/// waiting mem finds an answer that came through the store at once.
+static APPLIED: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// Sets what runs after each applied batch; the first call wins.
+pub fn when_applied(f: impl Fn() + Send + Sync + 'static) {
+    let _ = APPLIED.set(Box::new(f));
+}
+
 /// Hands the store's messages to mem, one per line, in the order they came.
 fn apply(frames: &[String]) -> Result<()> {
     let mut input = frames.join("\n");
     input.push('\n');
-    mem(&["share", "apply"], Some(input.as_bytes())).map(drop)
+    mem(&["share", "apply"], Some(input.as_bytes()))?;
+    if let Some(applied) = APPLIED.get() {
+        applied();
+    }
+    Ok(())
 }
 
 fn kind(frame: &str) -> String {

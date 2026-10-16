@@ -83,7 +83,7 @@ pub fn upload_deadline() -> Duration {
 }
 
 /// The most body `path` may carry: `MAX_UPLOAD_BODY` for
-/// `/p/<project>/new/finding`, `MAX_BODY` for every other path. `path` is the
+/// `/p/<project>/new/finding`, and `/answer` in a local hub, `MAX_BODY` for every other path. `path` is the
 /// decoded one, the same string routing matches.
 pub fn body_cap(path: &str) -> usize {
     let project = path
@@ -91,8 +91,18 @@ pub fn body_cap(path: &str) -> usize {
         .and_then(|rest| rest.strip_suffix("/new/finding"));
     match project {
         Some(project) if !project.is_empty() && !project.contains('/') => MAX_UPLOAD_BODY,
+        _ if path == "/answer" && ANSWER_UPLOADS.load(Ordering::Relaxed) => MAX_UPLOAD_BODY,
         _ => MAX_BODY,
     }
+}
+
+/// Set by `hub local`, whose `/answer` may carry a screenshot; the web hub's
+/// `/answer` is a form and keeps `MAX_BODY`.
+static ANSWER_UPLOADS: AtomicBool = AtomicBool::new(false);
+
+/// Lets `/answer` bodies grow to `MAX_UPLOAD_BODY` in this process.
+pub fn allow_answer_uploads() {
+    ANSWER_UPLOADS.store(true, Ordering::Relaxed);
 }
 
 /// Set while one request holds a body over `MAX_BODY`, so at most one such

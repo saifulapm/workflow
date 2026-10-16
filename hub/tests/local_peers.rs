@@ -187,8 +187,8 @@ fn a_restarted_hub_forgets_a_question_its_asker_no_longer_lists() {
     let dir = TempDir::new("peers-restart");
     let bin = quiet_mem(&dir);
     let nuc = spawn(&dir, "nuc", &[], Some(&bin));
-    let mini = spawn(&dir, "mini", &[&nuc], Some(&bin));
     ask(&socket_of(&dir, "nuc"), PROBE);
+    let mini = spawn(&dir, "mini", &[&nuc], Some(&bin));
     common::wait_for("the mini learns it", Duration::from_secs(3), || {
         listed(&dir, "mini").len() == 1
     });
@@ -217,8 +217,8 @@ fn a_restarted_hub_forgets_a_question_its_asker_no_longer_lists() {
 fn a_restarted_hub_keeps_what_it_knew_while_the_asker_is_away() {
     let dir = TempDir::new("peers-keep");
     let nuc = spawn(&dir, "nuc", &[], None);
-    let mini = spawn(&dir, "mini", &[&nuc], None);
     ask(&socket_of(&dir, "nuc"), PROBE);
+    let mini = spawn(&dir, "mini", &[&nuc], None);
     common::wait_for("the mini learns it", Duration::from_secs(3), || {
         listed(&dir, "mini").len() == 1
     });
@@ -337,4 +337,207 @@ fn a_route_that_is_neither_phone_nor_device_is_refused() {
         assert_eq!(status_of(&response), 400, "{body}: {response}");
     }
     assert_eq!(route_of(&socket_of(&dir, "mini"))["route"], "phone");
+}
+
+/// A mem that lists no answered questions and logs every other call, each
+/// as a `direct=<MEM_ANSWER_DIRECT>` line then its argv, copying a
+/// `--screenshot` file to `shot.png` beside the log while it still exists.
+fn answering_mem(dir: &TempDir, machine: &str) -> (PathBuf, PathBuf) {
+    let bin = dir.join(&format!("{machine}-bin"));
+    let log = dir.join(&format!("{machine}-mem.log"));
+    let shot = dir.join(&format!("{machine}-shot.png"));
+    common::fixture_mem(
+        &bin,
+        &format!(
+            "case \"$*\" in *questions*) echo '{{\"questions\":[]}}'; exit 0;; esac\n\
+             {{ echo \"direct=$MEM_ANSWER_DIRECT\"; printf '%s\\n' \"$@\"; }} >> '{log}'\n\
+             prev=\n\
+             for a in \"$@\"; do [ \"$prev\" = --screenshot ] && cp \"$a\" '{shot}'; prev=$a; done\n\
+             exit 0",
+            log = log.display(),
+            shot = shot.display(),
+        ),
+    );
+    (bin, log)
+}
+
+fn answer_on(socket: &Path, body: &str) -> String {
+    on_socket(
+        socket,
+        &format!(
+            "POST /answer HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+}
+
+fn wait_on(socket: &Path, id: &str, secs: u64) -> (String, Duration) {
+    let started = std::time::Instant::now();
+    let response = on_socket(
+        socket,
+        &format!("GET /wait/{id}?s={secs} HTTP/1.1\r\nHost: x\r\n\r\n"),
+    );
+    (response, started.elapsed())
+}
+
+/// The nuc asks, the mini hears it: the pair most answer tests start from.
+fn asked_on_the_nuc(dir: &TempDir) -> (Hub, Hub, PathBuf, PathBuf) {
+    let (nuc_bin, nuc_log) = answering_mem(dir, "nuc");
+    let (mini_bin, mini_log) = answering_mem(dir, "mini");
+    let mini = spawn(dir, "mini", &[], Some(&mini_bin));
+    let nuc = spawn(dir, "nuc", &[&mini], Some(&nuc_bin));
+    ask(&socket_of(dir, "nuc"), PROBE);
+    common::wait_for("the mini hears it", Duration::from_secs(2), || {
+        listed(dir, "mini").len() == 1
+    });
+    (nuc, mini, nuc_log, mini_log)
+}
+
+#[test]
+fn an_answer_given_on_another_machine_wakes_the_asker_and_is_recorded_there() {
+    let dir = TempDir::new("answer-elsewhere");
+    let (_nuc, _mini, nuc_log, mini_log) = asked_on_the_nuc(&dir);
+    let waiter = {
+        let socket = socket_of(&dir, "nuc");
+        std::thread::spawn(move || wait_on(&socket, "ABCD1234", 10))
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    let given = answer_on(
+        &socket_of(&dir, "mini"),
+        r#"{"question":"ABCD1234","answer":"use hash","by":"cli"}"#,
+    );
+    assert_eq!(status_of(&given), 200, "{given}");
+    let (response, took) = waiter.join().unwrap();
+    assert_eq!(common::body_of(&response), "use hash");
+    assert!(took < Duration::from_secs(2), "{took:?}");
+
+    common::wait_for("the nuc records it", Duration::from_secs(5), || {
+        std::fs::read_to_string(&nuc_log).is_ok_and(|l| l.contains("use hash"))
+    });
+    let logged = std::fs::read_to_string(&nuc_log).unwrap();
+    let lines: Vec<&str> = logged.lines().collect();
+    // Written straight to the store: mem must not hand it back to the hub.
+    assert_eq!(
+        lines,
+        [
+            "direct=1", "answer", "--by", "cli", "--", "ABCD1234", "use hash"
+        ]
+    );
+    assert!(
+        !mini_log.exists(),
+        "{:?}",
+        std::fs::read_to_string(&mini_log)
+    );
+    common::wait_for("the mini drops it", Duration::from_secs(2), || {
+        listed(&dir, "mini").is_empty()
+    });
+}
+
+#[test]
+fn a_popup_answer_carries_its_screenshot_to_the_asking_machine() {
+    let dir = TempDir::new("answer-shot");
+    let (_nuc, _mini, nuc_log, _) = asked_on_the_nuc(&dir);
+    let png: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let file = dir.join("grabbed.png");
+    std::fs::write(&file, &png).unwrap();
+    let body = serde_json::json!({
+        "question": "ABCD1234",
+        "answer": "ok",
+        "by": "popup",
+        "screenshot": file.to_str().unwrap(),
+    })
+    .to_string();
+    let given = answer_on(&socket_of(&dir, "mini"), &body);
+    assert_eq!(status_of(&given), 200, "{given}");
+    common::wait_for("the nuc records it", Duration::from_secs(5), || {
+        dir.join("nuc-shot.png").exists()
+    });
+    let logged = std::fs::read_to_string(&nuc_log).unwrap();
+    let lines: Vec<&str> = logged.lines().collect();
+    assert_eq!(&lines[..4], ["direct=1", "answer", "--by", "popup"]);
+    assert_eq!(lines[4], "--screenshot");
+    assert_eq!(&lines[6..], ["--", "ABCD1234", "ok"]);
+    assert_eq!(std::fs::read(dir.join("nuc-shot.png")).unwrap(), png);
+}
+
+#[test]
+fn the_first_answer_stands_whichever_machine_gives_the_next() {
+    let dir = TempDir::new("answer-first");
+    let (nuc, _mini, nuc_log, _) = asked_on_the_nuc(&dir);
+    let first = answer_on(
+        &socket_of(&dir, "mini"),
+        r#"{"question":"ABCD1234","answer":"yes","by":"cli"}"#,
+    );
+    assert_eq!(status_of(&first), 200, "{first}");
+    let here = answer_on(
+        &socket_of(&dir, "nuc"),
+        r#"{"question":"ABCD1234","answer":"no","by":"cli"}"#,
+    );
+    assert_eq!(status_of(&here), 409, "{here}");
+    assert_eq!(common::body_of(&here).trim(), "yes");
+    let tapped = answer(
+        &nuc,
+        r#"{"question":"ABCD1234","answer":"no","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&tapped), 409, "{tapped}");
+    std::thread::sleep(Duration::from_millis(300));
+    let logged = std::fs::read_to_string(&nuc_log).unwrap();
+    assert_eq!(logged.matches("answer\n").count(), 1, "{logged}");
+    assert!(!logged.contains("no\n"), "{logged}");
+}
+
+#[test]
+fn a_roadmap_review_answered_from_another_machine_is_refused() {
+    let dir = TempDir::new("answer-review");
+    let (nuc_bin, nuc_log) = answering_mem(&dir, "nuc");
+    let mini = spawn(&dir, "mini", &[], None);
+    let _nuc = spawn(&dir, "nuc", &[&mini], Some(&nuc_bin));
+    ask(
+        &socket_of(&dir, "nuc"),
+        r#"{"id":"REVW0001","project":"walk","text":"Review the move roadmap","options":["approve","change"],"audience":"human"}"#,
+    );
+    common::wait_for("the mini hears it", Duration::from_secs(2), || {
+        listed(&dir, "mini").len() == 1
+    });
+    let given = answer_on(
+        &socket_of(&dir, "mini"),
+        r#"{"question":"REVW0001","answer":"approve","by":"cli"}"#,
+    );
+    assert_eq!(status_of(&given), 403, "{given}");
+    assert!(common::body_of(&given).contains("Saiful"), "{given}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!nuc_log.exists());
+}
+
+#[test]
+fn an_answer_to_a_question_no_hub_here_knows_is_left_to_mem() {
+    let dir = TempDir::new("answer-unknown");
+    let _mini = spawn(&dir, "mini", &[], None);
+    let given = answer_on(
+        &socket_of(&dir, "mini"),
+        r#"{"question":"ZZZZ9999","answer":"yes","by":"cli"}"#,
+    );
+    assert_eq!(status_of(&given), 404, "{given}");
+}
+
+/// An answer that reaches the store another way (mem answer written
+/// straight, the hub web through sharing) ends the wait early, so mem
+/// looks at its store again at once.
+#[test]
+fn a_write_to_the_store_ends_a_wait_early() {
+    let dir = TempDir::new("answer-kick");
+    let _mini = spawn(&dir, "mini", &[], None);
+    let waiter = {
+        let socket = socket_of(&dir, "mini");
+        std::thread::spawn(move || wait_on(&socket, "ABCD1234", 10))
+    };
+    std::thread::sleep(Duration::from_millis(300));
+    let kicked = on_socket(
+        &socket_of(&dir, "mini"),
+        "POST /share/kick HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+    );
+    assert_eq!(status_of(&kicked), 204, "{kicked}");
+    let (response, took) = waiter.join().unwrap();
+    assert_eq!(status_of(&response), 204, "{response}");
+    assert!(took < Duration::from_secs(2), "{took:?}");
 }

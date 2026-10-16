@@ -70,6 +70,11 @@ impl Known {
         self.doc_of(&self.lock())
     }
 
+    /// The open question `id`, if this hub knows it.
+    pub fn get(&self, id: &str) -> Option<Open> {
+        self.lock().iter().find(|o| o.id == id).cloned()
+    }
+
     /// Adds `open`, or replaces the copy of it this hub had.
     pub fn add(&self, open: Open) {
         let mut all = self.lock();

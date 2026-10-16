@@ -11,11 +11,12 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
 
 use crate::http::{Request, Response};
 use crate::localroute::{LocalRoute, Stamped};
@@ -87,6 +88,9 @@ pub struct Local {
     /// Answers by question short id, kept for a wait that comes later.
     answers: Mutex<HashMap<String, String>>,
     answered: Condvar,
+    /// Bumped, under the answers lock, when the store may have gained an
+    /// answer some other way; a wait then ends early so mem looks again.
+    nudged: AtomicU64,
     /// Set by mem's `POST /share/kick`, taken by the sharing thread.
     kick: Arc<AtomicBool>,
     /// The store, while sharing is on; mem's file fetches go there.
@@ -107,6 +111,7 @@ impl Local {
             asked: Mutex::new(HashMap::new()),
             answers: Mutex::new(HashMap::new()),
             answered: Condvar::new(),
+            nudged: AtomicU64::new(0),
             kick: Arc::new(AtomicBool::new(false)),
             store: None,
         }
@@ -136,8 +141,12 @@ impl Local {
         match (request.method.as_str(), request.path.as_str()) {
             ("POST", "/share/kick") => {
                 self.kick.store(true, Ordering::SeqCst);
+                // mem kicks after every write, an answer written straight
+                // to the store among them.
+                self.nudge();
                 Response::new(204, "text/plain; charset=utf-8", "")
             }
+            ("POST", "/answer") => self.answer_from_mem(request),
             ("GET", "/share/file") => self.file(request),
             _ => self.route(request),
         }
@@ -230,20 +239,27 @@ impl Local {
                 Response::new(200, "application/json", self.known.doc().to_string())
             }
             ("POST", "/answer") => match serde_json::from_slice::<Answer>(&request.body) {
-                // Only a Slack tap travels between hubs; an answer claiming
-                // any other surface would be recorded under a name nobody
-                // checked.
-                Ok(answer) if answer.by != "slack" => {
-                    Response::text(400, "only a Slack tap travels between hubs")
-                }
+                // Only the surfaces a hub passes on travel between hubs; an
+                // answer claiming any other would be recorded under a name
+                // nobody checked.
+                Ok(answer) if !TRAVELS.contains(&answer.by.as_str()) => Response::text(
+                    400,
+                    "only a Slack, popup or terminal answer travels between hubs",
+                ),
                 Ok(answer) if self.is_review(&answer.question) => {
-                    Response::text(403, "a roadmap review is Saiful's to answer, on the hub")
+                    Response::text(403, REVIEW_REFUSAL)
                 }
-                Ok(answer) => match self.deliver(&answer.question, &answer.answer, &answer.by) {
-                    Ok(()) => Response::text(200, "ok"),
-                    // The answer that stands, so the tapping hub can show it.
-                    Err(standing) => Response::text(409, &standing),
-                },
+                Ok(answer) => {
+                    let shot = match answer.screenshot.as_ref().map(Shot::bytes).transpose() {
+                        Ok(shot) => shot,
+                        Err(e) => return Response::text(400, &e),
+                    };
+                    match self.deliver(&answer.question, &answer.answer, &answer.by, shot) {
+                        Ok(()) => Response::text(200, "ok"),
+                        // The answer that stands, so the tapping hub can show it.
+                        Err(standing) => Response::text(409, &standing),
+                    }
+                }
                 Err(e) => Response::text(400, &format!("not an answer: {e}")),
             },
             ("GET", path) if path.starts_with("/wait/") => {
@@ -267,11 +283,101 @@ impl Local {
     /// Whether `question`, asked here, is a roadmap review: answering it
     /// starts work, so it is answered on the hub and never by a tap.
     fn is_review(&self, question: &str) -> bool {
-        self.asked
+        if let Some(asked) = self
+            .asked
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(question)
-            .is_some_and(Asked::is_review)
+        {
+            return asked.is_review();
+        }
+        self.asked_here(question)
+            .is_some_and(|open| is_review(&open.text, &open.options))
+    }
+
+    /// The open question `question`, when this hub asked it: the copy kept
+    /// across a restart, for a question asked before it.
+    fn asked_here(&self, question: &str) -> Option<Open> {
+        self.known.get(question).filter(|o| o.machine == self.host)
+    }
+
+    /// An answer given on this machine (`mem answer`, the popup): kept here
+    /// when the question was asked here, else passed to the hub that asked
+    /// it. A 404 tells mem to write it to the store itself.
+    fn answer_from_mem(&self, asked: &Request) -> Response {
+        let given = match serde_json::from_slice::<Given>(&asked.body) {
+            Ok(given) if !given.by.trim().is_empty() => given,
+            Ok(_) => return Response::text(400, "an answer is signed by its surface"),
+            Err(e) => return Response::text(400, &format!("not an answer: {e}")),
+        };
+        let shot = match &given.screenshot {
+            Some(path) => match std::fs::read(path) {
+                Ok(bytes) => Some(bytes),
+                Err(e) => return Response::text(400, &format!("reading {}: {e}", path.display())),
+            },
+            None => None,
+        };
+        let here = self
+            .asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&given.question)
+            || self.asked_here(&given.question).is_some();
+        if here {
+            if self.is_review(&given.question) {
+                return Response::text(403, REVIEW_REFUSAL);
+            }
+            return match self.deliver(&given.question, &given.answer, &given.by, shot) {
+                Ok(()) => Response::text(200, "ok"),
+                Err(standing) => Response::text(409, &standing),
+            };
+        }
+        let Some(open) = self.known.get(&given.question) else {
+            return Response::not_found();
+        };
+        if !TRAVELS.contains(&given.by.as_str()) {
+            return Response::not_found();
+        }
+        let mut body = serde_json::json!({
+            "question": given.question,
+            "answer": given.answer,
+            "by": given.by,
+        });
+        if let Some(bytes) = &shot {
+            body["screenshot"] = serde_json::json!({
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            });
+        }
+        match request(
+            &open.machine,
+            "POST",
+            "/answer",
+            &self.token,
+            body.to_string().as_bytes(),
+        ) {
+            Ok((status @ (200 | 403 | 409), text)) => Response::text(status, text.trim()),
+            Ok((status, _)) => {
+                eprintln!(
+                    "hub: local: {} answered {status} to the answer to #{}",
+                    open.machine, given.question
+                );
+                Response::text(502, "the asking machine refused the answer")
+            }
+            Err(e) => {
+                eprintln!(
+                    "hub: local: the answer to #{} did not reach {}: {e:#}",
+                    given.question, open.machine
+                );
+                Response::text(502, "the asking machine could not be reached")
+            }
+        }
+    }
+
+    /// Ends every wait early, so each mem waiting looks at its store again.
+    pub fn nudge(&self) {
+        let _answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        self.nudged.fetch_add(1, Ordering::SeqCst);
+        self.answered.notify_all();
     }
 
     /// Posts a person's question to Slack, on a thread of its own so mem is
@@ -303,7 +409,7 @@ impl Local {
         // The answer the message ends up showing: this tap's, or the one
         // that already stood, so a late tap still clears the buttons.
         let shown = if tap.machine == self.host {
-            match self.deliver(&tap.question, &tap.answer, "slack") {
+            match self.deliver(&tap.question, &tap.answer, "slack", None) {
                 Ok(()) => Some(tap.answer.clone()),
                 Err(standing) => Some(standing),
             }
@@ -362,13 +468,20 @@ impl Local {
     /// surface that took it. The first answer stands: when the question
     /// already has one, here or in the store (a terminal, the hub web), nothing
     /// is done and that answer comes back as the error.
-    pub fn deliver(&self, question: &str, answer: &str, by: &str) -> Result<(), String> {
+    pub fn deliver(
+        &self,
+        question: &str,
+        answer: &str,
+        by: &str,
+        shot: Option<Vec<u8>>,
+    ) -> Result<(), String> {
         let project = self
             .asked
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(question)
-            .map(|a| a.project.clone());
+            .map(|a| a.project.clone())
+            .or_else(|| self.asked_here(question).map(|o| o.project));
         let asked_here = project.is_some();
         let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(standing) = answers.get(question) {
@@ -391,21 +504,32 @@ impl Local {
             self.closed(question);
         }
         if self.records && asked_here {
+            let mut argv = vec!["answer".to_string(), "--by".into(), by.into()];
+            let file = shot.and_then(|bytes| save_shot(question, &bytes));
+            if let Some(file) = &file {
+                argv.extend(["--screenshot".into(), file.display().to_string()]);
+            }
             // `--`, so an option that starts with a dash is not read as a flag.
-            let argv = ["answer", "--by", by, "--", question, answer].map(str::to_string);
+            argv.extend(["--".into(), question.into(), answer.into()]);
+            let question = question.to_string();
             std::thread::spawn(move || {
+                // Straight to the store: this hub is where mem's answer
+                // would be handed, so handing it here again would loop.
                 match std::process::Command::new("mem")
                     .args(&argv)
+                    .env("MEM_ANSWER_DIRECT", "1")
                     .stdin(std::process::Stdio::null())
                     .output()
                 {
                     Ok(out) if out.status.success() => {}
                     Ok(out) => eprintln!(
-                        "hub: local: mem answer {} failed: {}",
-                        argv[4],
+                        "hub: local: mem answer {question} failed: {}",
                         String::from_utf8_lossy(&out.stderr).trim()
                     ),
-                    Err(e) => eprintln!("hub: local: mem answer {}: {e}", argv[4]),
+                    Err(e) => eprintln!("hub: local: mem answer {question}: {e}"),
+                }
+                if let Some(file) = file {
+                    let _ = std::fs::remove_file(file);
                 }
             });
         }
@@ -471,9 +595,13 @@ impl Local {
     fn wait(&self, question: &str, hold: Duration) -> Option<String> {
         let deadline = Instant::now() + hold;
         let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        let nudged = self.nudged.load(Ordering::SeqCst);
         loop {
             if let Some(answer) = answers.get(question) {
                 return Some(answer.clone());
+            }
+            if self.nudged.load(Ordering::SeqCst) != nudged {
+                return None;
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -502,10 +630,68 @@ pub struct Asked {
 impl Asked {
     /// The hub's own rule for a roadmap review, as the connector applies it.
     fn is_review(&self) -> bool {
-        let text = self.text.trim();
-        crate::page_control::is_approval(text)
-            || (self.options.iter().any(|o| o == "approve")
-                && text.to_lowercase().contains("roadmap"))
+        is_review(&self.text, &self.options)
+    }
+}
+
+/// The hub's own rule for a roadmap review, as the connector applies it.
+fn is_review(text: &str, options: &[String]) -> bool {
+    let text = text.trim();
+    crate::page_control::is_approval(text)
+        || (options.iter().any(|o| o == "approve") && text.to_lowercase().contains("roadmap"))
+}
+
+/// The surfaces whose answers one local hub passes to another.
+const TRAVELS: [&str; 3] = ["slack", "popup", "cli"];
+
+const REVIEW_REFUSAL: &str = "a roadmap review is Saiful's to answer, on the hub";
+
+/// An answer given on this machine, as mem hands it over: the screenshot is
+/// a file here.
+#[derive(Debug, serde::Deserialize)]
+struct Given {
+    question: String,
+    answer: String,
+    by: String,
+    screenshot: Option<PathBuf>,
+}
+
+/// A screenshot as it travels between hubs.
+#[derive(Debug, serde::Deserialize)]
+struct Shot {
+    data: String,
+}
+
+impl Shot {
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .map_err(|e| format!("the screenshot is not base64: {e}"))
+    }
+}
+
+/// Keeps a screenshot where mem can file it, 0600 under the state
+/// directory, until mem has.
+fn save_shot(question: &str, bytes: &[u8]) -> Option<PathBuf> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = crate::config::state_home().ok()?.join("hub/screenshots");
+    std::fs::create_dir_all(&dir).ok()?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let path = dir.join(format!("{question}-{nanos}.png"));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .and_then(|mut file| file.write_all(bytes));
+    match written {
+        Ok(()) => Some(path),
+        Err(e) => {
+            eprintln!("hub: local: keeping the screenshot for #{question}: {e}");
+            None
+        }
     }
 }
 
@@ -515,6 +701,7 @@ struct Answer {
     question: String,
     answer: String,
     by: String,
+    screenshot: Option<Shot>,
 }
 
 /// A question a peer says was answered.
