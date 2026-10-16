@@ -6,6 +6,7 @@
   "required": [
     "id",
     "short_id",
+    "project",
     "options",
     "recommend",
     "audience"
@@ -16,6 +17,13 @@
     },
     "short_id": {
       "type": "string"
+    },
+    "project": {
+      "description": "The project the question was written in, or null outside one. Over the remote it is the one the server picked, which the asking machine's local hub shows.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "options": {
       "type": "array",
