@@ -496,14 +496,12 @@ impl Store {
         Ok(())
     }
 
-    /// A page's own load time, from a paired device's page: the last 100
-    /// are kept.
+    /// A page's own load time, from the hub web's own pages: the last 100
+    /// are kept. No pairing: a timing is no mem write, and a cold load is
+    /// measured in a private tab, which holds no pair cookie.
     async fn timing(&self, mut req: Request) -> Result<Response> {
-        let target = path_and_query(&req)["/page".len()..].to_string();
-        let headers: Vec<(String, String)> = req.headers().entries().collect();
-        let request = site::request("POST", &target, headers, Vec::new());
-        if req.headers().get(MAY_WRITE)?.as_deref() != Some("1") || !self.paired(&request)? {
-            return Response::error("Pair this device first", 403);
+        if req.headers().get(MAY_WRITE)?.as_deref() != Some("1") {
+            return Response::error("cross-origin writes are refused", 403);
         }
         let body = req.text().await?;
         if body.len() > 2048 || serde_json::from_str::<Value>(&body).is_err() {

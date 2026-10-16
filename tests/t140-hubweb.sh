@@ -200,8 +200,9 @@ like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/?timing" | tr -d '\n')" "sendBeacon\
 	"a page opened with ?timing reports its load"
 beacon() { curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: same-origin' \
 	"$@" --data '{"path":"/","load":321}' "$base/api/timing"; }
-is "$(beacon)" 403 "an unpaired device's timing is refused"
-is "$(beacon -H "Cookie: $cookie")" 204 "a paired device's timing is kept"
+is "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: cross-site' \
+	--data '{"load":1}' "$base/api/timing")" 403 "a cross-site timing is refused"
+is "$(beacon)" 204 "a timing from the hub web's own page is kept, paired or not (a private tab measures the cold load)"
 like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/api/timing")" '\\"load\\":321' "GET /api/timing lists it"
 
 # A POST from an unpaired browser gets the 403 page and writes nothing.
