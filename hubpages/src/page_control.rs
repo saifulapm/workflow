@@ -205,7 +205,7 @@ fn cloud(ctx: &PageCtx, project: &str) -> Response {
 /// Where a cloud start for `project` goes: the mini when it is online, else
 /// the first online device by name, never `cloud`, that has the project
 /// checked out. Ok(None) when any machine already holds the start.
-fn cloud_machine(agents: &dyn Fleet, project: &str) -> Result<Option<String>, String> {
+pub(crate) fn cloud_machine(agents: &dyn Fleet, project: &str) -> Result<Option<String>, String> {
     let queued = Command::Start {
         project: project.to_string(),
         cloud: true,

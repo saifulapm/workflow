@@ -161,13 +161,16 @@ fn run_in_cloud_queues_a_cloud_start_for_the_mini() {
 }
 
 #[test]
-fn run_in_cloud_is_refused_while_the_mini_is_offline() {
+fn run_in_cloud_is_refused_while_no_device_is_online() {
     let world = World::new("cloud-run-offline");
     let hub = world.hub();
     assert!(!page(&hub).contains(RUN_IN_CLOUD));
     let response = hub.post_form("/p/gamma/control", "do=cloud");
     assert_eq!(status_of(&response), 409, "{response}");
-    assert!(body_of(&response).contains("mini is offline"), "{response}");
+    assert!(
+        body_of(&response).contains("no device is online to start it"),
+        "{response}"
+    );
 }
 
 #[test]

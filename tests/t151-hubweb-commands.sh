@@ -67,6 +67,8 @@ cookie=$(curl -s -X POST -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: same-origin' -
 like "$cookie" '^hub_device=' "a browser pairs"
 
 get() { curl -s -H "@$T_TMP/jwt.hdr" "$base$1" | tr -d '\n'; }
+# As the paired browser sees it: its forms, not the pairing notice.
+paired_get() { curl -s -H "@$T_TMP/jwt.hdr" -H "Cookie: $cookie" "$base$1" | tr -d '\n'; }
 control() {
 	curl -s -X POST -H "@$T_TMP/jwt.hdr" -H "Cookie: $cookie" -H 'Sec-Fetch-Site: same-origin' \
 		-o /dev/null -w '%{http_code}' "$@" "$base/p/gamma/control"
@@ -133,6 +135,7 @@ unlike "$(get /p/gamma)" 'waiting for mini' "once mini is done the project no lo
 # Only nuc is online now: Run in cloud goes to it, once.
 agent nuc
 is "$?" 0 "nuc says hello and reports"
+like "$(paired_get /p/gamma)" 'name="do" value="cloud"' "with the mini away the page still offers Run in cloud"
 status=$(control --data-urlencode do=cloud)
 is "$status" 303 "Run in cloud is taken"
 control --data-urlencode do=cloud >/dev/null

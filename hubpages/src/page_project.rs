@@ -588,7 +588,9 @@ fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
         esc(&prompt),
         outside_link(CODE_PAGE, "Open Claude"),
     );
-    if ctx.site.host.fleet().online(CLOUD_MACHINE) {
+    // The mini first, else another online device with the project; one
+    // already queued still shows the button, which then adds nothing.
+    if crate::page_control::cloud_machine(ctx.site.host.fleet(), &s.name).is_ok() {
         out.push_str(&controls(
             ctx,
             format!(
