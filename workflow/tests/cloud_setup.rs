@@ -272,6 +272,23 @@ fn a_dead_local_hub_is_started_again_by_the_next_mem() {
     assert_eq!(lines_of(&log, "tailscale").len(), 1);
 }
 
+/// A run that logged out of the tailnet (a landed or local-only run's last
+/// step) and then asks again joins it again, though its hub never died:
+/// otherwise no answer could reach it.
+#[test]
+fn a_mem_after_a_logout_joins_the_tailnet_again() {
+    let (home, log, path) = cloud_home("cloud-setup-rejoin");
+    run_shim(&home, &path, &["ask", "probe?"]);
+    fs::remove_file(home.at("joined")).unwrap();
+    run_shim(&home, &path, &["ask", "again?"]);
+    let up: Vec<String> = lines_of(&log, "tailscale")
+        .into_iter()
+        .filter(|l| l.contains(" up "))
+        .collect();
+    assert_eq!(up.len(), 2, "{:?}", fs::read_to_string(&log));
+    assert_eq!(lines_of(&log, "hub").len(), 1, "the live hub is kept");
+}
+
 #[test]
 fn without_the_keys_the_shim_starts_nothing() {
     let home = Scratch::new("cloud-setup-no-keys");

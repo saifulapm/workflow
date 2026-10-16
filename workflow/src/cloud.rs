@@ -499,10 +499,23 @@ if [ "${1:-}" = share ] && [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" 
 state="$HOME/.local/state/hub"
 # Alive when the local hub answers on mem's socket.
 hub_alive() { curl -s -m 2 --unix-socket "$state/local.sock" http://local/ping >/dev/null 2>&1; }
+# Off the tailnet though Tailscale was set up: a run that logged out (its
+# last step) and asks again must join again, or no answer reaches it.
+ts_down() {
+  [ -n "${TS_AUTHKEY:-}" ] && [ -x "$HOME/.local/bin/tailscale" ] &&
+    ! env -u TS_AUTHKEY "$HOME/.local/bin/tailscale" --socket="$state/tailscaled.sock" status >/dev/null 2>&1
+}
 peer="${HUB_PEER_TOKEN:-}${HUB_CLOUD_TOKEN:-}"
-if [ -n "$peer" ] && { [ -n "$store" ] || [ -n "${TS_AUTHKEY:-}" ]; } && mkdir -p "$state" && ! hub_alive; then
+if [ -n "$peer" ] && { [ -n "$store" ] || [ -n "${TS_AUTHKEY:-}" ]; } && mkdir -p "$state"; then
+  alive=1
+  hub_alive || alive=
+else
+  alive=1
+  peer=
+fi
+if [ -n "$peer" ] && { [ -z "$alive" ] || ts_down; }; then
   # The replica as the store has it now, before this mem reads it.
-  if [ -n "$store" ]; then
+  if [ -n "$store" ] && [ -z "$alive" ]; then
     flock "$state/sync.lock" "$helper" sync 20 >"$state/sync.log" 2>&1 ||
       echo "mem: the store did not answer; reading the replica as it was" >&2
   fi
@@ -547,13 +560,17 @@ if [ -n "$peer" ] && { [ -n "$store" ] || [ -n "${TS_AUTHKEY:-}" ]; } && mkdir -
     # With the store, mem works on the replica, so the hub records answers
     # there: it records nothing while MEM_REMOTE says mem is remote.
     if [ -n "$store" ]; then unset MEM_REMOTE; fi
-    env -u TS_AUTHKEY nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 9>&- &
+    # A live hub keeps its socket; it reaches the tailnet through the same
+    # SOCKS5 port the new tailscaled listens on.
+    if ! hub_alive; then
+      env -u TS_AUTHKEY nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 9>&- &
+    fi
   ) 9>"$state/start.lock" >"$state/start.log" 2>&1 </dev/null &
   # A question goes to the local hub the moment mem writes it, so an ask
   # waits for the hub it just started.
   if [ "${1:-}" = ask ]; then
     i=0
-    while ! hub_alive && [ $i -lt 60 ]; do sleep 0.5; i=$((i + 1)); done
+    while { ! hub_alive || ts_down; } && [ $i -lt 60 ]; do sleep 0.5; i=$((i + 1)); done
   fi
 fi
 if [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" "$@"; fi
