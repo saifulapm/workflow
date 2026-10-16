@@ -10,6 +10,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 serde_json = "1.0.151"
+# mem's items are TOML frontmatter; the same crate mem writes them with.
+toml = "1.1.4"
 
 # The Worker runtime only builds for wasm. Everything the host tests touch
 # lives outside it, so `cargo test` never compiles the bindings.
