@@ -164,18 +164,23 @@ impl Slack {
                 })
             })
             .collect();
+        let mut blocks = vec![
+            json!({"type": "section", "text": {"type": "mrkdwn", "text": format!(
+                "*{}* on `{}`\n{}",
+                escape(&q.project),
+                escape(&q.machine),
+                escape(&q.text)
+            )}}),
+        ];
+        // Slack refuses an actions block with no elements; a question
+        // without options is answered in its thread.
+        if !buttons.is_empty() {
+            blocks.push(json!({"type": "actions", "elements": buttons}));
+        }
         let body = json!({
             "channel": self.user_id,
             "text": format!("{} on {}: {}", q.project, q.machine, q.text),
-            "blocks": [
-                {"type": "section", "text": {"type": "mrkdwn", "text": format!(
-                    "*{}* on `{}`\n{}",
-                    escape(&q.project),
-                    escape(&q.machine),
-                    escape(&q.text)
-                )}},
-                {"type": "actions", "elements": buttons},
-            ],
+            "blocks": blocks,
         });
         let reply = self.call("chat.postMessage", &self.bot_token, Some(&body))?;
         Ok(Posted {

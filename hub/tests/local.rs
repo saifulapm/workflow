@@ -469,3 +469,14 @@ fn a_second_answer_to_an_answered_question_is_refused() {
     );
     assert_eq!(body_of(&response), "yes");
 }
+
+#[test]
+fn hub_ping_help_prints_the_usage_and_pings_nothing() {
+    let out = Command::new(hub_bin())
+        .args(["ping", "--help"])
+        .env_remove("HUB_PEER_TOKEN")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("hub ping <HOST[:PORT]>"));
+}

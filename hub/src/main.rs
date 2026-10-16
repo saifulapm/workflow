@@ -65,7 +65,13 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "pair" => args.pair = true,
             "dulali-token" => args.dulali_token = true,
             "local" => args.local = true,
-            "ping" => args.ping = Some(argv.next().context("ping needs a host")?),
+            "ping" => match argv.next().context("ping needs a host")? {
+                help if help == "-h" || help == "--help" => {
+                    print!("{USAGE}");
+                    return Ok(None);
+                }
+                host => args.ping = Some(host),
+            },
             "--config" => {
                 let value = argv.next().context("--config needs a path")?;
                 args.config = Some(PathBuf::from(value));

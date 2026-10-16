@@ -447,3 +447,29 @@ fn socket_mode_goes_through_the_proxy_when_one_is_named() {
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert!(asked[0].starts_with("CONNECT 127.0.0.1:"), "{asked:?}");
 }
+
+/// Slack refuses an actions block with no elements, so a question without
+/// options goes as the text alone, to be answered in its thread.
+#[test]
+fn a_question_without_options_posts_without_buttons() {
+    let fake = fake(Vec::new());
+    let (slack, _) = client(&fake.api);
+    slack
+        .post_question(&Question {
+            id: "Q2".into(),
+            project: "walk".into(),
+            machine: "nuc".into(),
+            text: "which name?".into(),
+            options: Vec::new(),
+        })
+        .unwrap();
+    let calls = fake.calls.lock().unwrap();
+    let posted = calls
+        .iter()
+        .find(|c| c.path == "/api/chat.postMessage")
+        .unwrap();
+    let body: Value = serde_json::from_str(&posted.body).unwrap();
+    let blocks = body["blocks"].as_array().unwrap();
+    assert!(blocks.iter().all(|b| b["type"] != "actions"), "{body}");
+    assert!(body["text"].as_str().unwrap().contains("which name?"));
+}
