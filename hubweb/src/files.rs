@@ -18,6 +18,23 @@ pub fn project_of(path: &str) -> Option<&str> {
     (plain(project) && !rest.is_empty() && rest.iter().all(plain)).then_some(*project)
 }
 
+/// The project whose Files object answers a `/store/files` request, from its
+/// path and query: the project of the file path, or `?project=<id>` on the
+/// bare `/store/files`, which lists the project's files.
+pub fn target(path_and_query: &str) -> Option<String> {
+    let (path, query) = path_and_query
+        .split_once('?')
+        .unwrap_or((path_and_query, ""));
+    if path == "/store/files" {
+        let raw = query.split('&').find_map(|p| p.strip_prefix("project="))?;
+        let project = decode(raw)?;
+        return (!matches!(project.as_str(), "" | "." | "..") && !project.contains('/'))
+            .then_some(project);
+    }
+    let file = decode(path.strip_prefix("/store/files/")?)?;
+    project_of(&file).map(str::to_string)
+}
+
 /// `raw` with each `%XX` turned back into its byte; None when an escape is
 /// broken or the bytes are not UTF-8.
 pub fn decode(raw: &str) -> Option<String> {
@@ -72,6 +89,35 @@ mod tests {
             "/projects/P1/evidence/a.png",
         ] {
             assert_eq!(project_of(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_request_names_the_project_by_its_file_path_or_its_query() {
+        assert_eq!(
+            target("/store/files/projects/P1/evidence/t1/a%20b.png").as_deref(),
+            Some("P1")
+        );
+        assert_eq!(
+            target("/store/files/projects/P2/raw/n.pdf").as_deref(),
+            Some("P2")
+        );
+        assert_eq!(target("/store/files?project=P1").as_deref(), Some("P1"));
+        assert_eq!(
+            target("/store/files?x=1&project=P%31").as_deref(),
+            Some("P1")
+        );
+        for bad in [
+            "/store/files",
+            "/store/files?",
+            "/store/files?project=",
+            "/store/files?project=..",
+            "/store/files?project=a%2Fb",
+            "/store/files?other=P1",
+            "/store/files/projects/P1/wiki/a.md",
+            "/store/filesx?project=P1",
+        ] {
+            assert_eq!(target(bad), None, "{bad}");
         }
     }
 

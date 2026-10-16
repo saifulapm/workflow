@@ -94,18 +94,14 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             .await;
     }
     // A project's files take either bearer, so a machine uploads and
-    // fetches them with no Access login.
-    if matches!(req.method(), Method::Put | Method::Get)
-        && let Some(raw) = path.strip_prefix("/store/files/")
+    // fetches, lists and archives them with no Access login.
+    if matches!(req.method(), Method::Put | Method::Get | Method::Delete)
+        && (path == "/store/files" || path.starts_with("/store/files/"))
     {
         if holder(&req, &env, object).await?.is_none() {
             return Response::error("Unauthorized", 401);
         }
-        let Some(project) = files::decode(raw)
-            .as_deref()
-            .and_then(files::project_of)
-            .map(str::to_string)
-        else {
+        let Some(project) = files::target(&path_and_query(&req)) else {
             return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
         };
         return env
@@ -313,6 +309,11 @@ async fn serve_evidence(project: &str, id: &str, env: &Env, object: &str) -> Res
         .get_by_name_with_location_hint(owner, STORE_LOCATION)?
         .fetch_with_str(&format!("https://files/store/files/{}", encoded.join("/")))
         .await?;
+    // The store names the file but holds no bytes: after 90 days they live
+    // only in the Dropbox snapshot.
+    if answer.status_code() == 404 {
+        return Response::error("archived", 404);
+    }
     if answer.status_code() != 200 {
         return Response::error("Not Found", 404);
     }
@@ -1121,10 +1122,23 @@ impl DurableObject for Files {
             None,
         )
         .expect("create the chunks table");
+        // When each file was uploaded, in ms, so the hub can archive the
+        // ones a Dropbox snapshot holds once they are 90 days old.
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS stored(path TEXT PRIMARY KEY, at INTEGER)",
+            None,
+        )
+        .expect("create the stored table");
         Self { sql }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
+        if req.path() == "/store/files" {
+            return match req.method() {
+                Method::Get => self.list().and_then(|rows| Response::from_json(&rows)),
+                _ => Response::error("Method Not Allowed", 405),
+            };
+        }
         let Some(path) = req
             .path()
             .strip_prefix("/store/files/")
@@ -1144,6 +1158,11 @@ impl DurableObject for Files {
             Method::Get => match self.get(&path) {
                 Ok(rows) if rows.is_empty() => Response::error("No such file", 404),
                 Ok(rows) => Response::from_bytes(files::join(rows)),
+                Err(error) => Err(error),
+            },
+            Method::Delete => match self.delete(&path) {
+                Ok(true) => Ok(Response::empty()?.with_status(204)),
+                Ok(false) => Response::error("No such file", 404),
                 Err(error) => Err(error),
             },
             _ => Response::error("Method Not Allowed", 405),
@@ -1174,7 +1193,42 @@ impl Files {
                 ],
             )?;
         }
+        self.sql.exec(
+            "INSERT OR REPLACE INTO stored(path, at) VALUES (?, ?)",
+            vec![path.into(), (now_ms() as i64).into()],
+        )?;
         Ok(())
+    }
+
+    /// Drops every row of `path`; false when it was not stored.
+    fn delete(&self, path: &str) -> Result<bool> {
+        let held = self
+            .sql
+            .exec(
+                "SELECT 1 FROM chunks WHERE path = ? LIMIT 1",
+                vec![path.into()],
+            )?
+            .raw()
+            .next()
+            .is_some();
+        self.sql
+            .exec("DELETE FROM chunks WHERE path = ?", vec![path.into()])?;
+        self.sql
+            .exec("DELETE FROM stored WHERE path = ?", vec![path.into()])?;
+        Ok(held)
+    }
+
+    /// Every stored path with its upload time in ms, by path.
+    fn list(&self) -> Result<Vec<Value>> {
+        let rows: Vec<Value> = self
+            .sql
+            .exec("SELECT path, at FROM stored ORDER BY path", None)?
+            .to_array()?;
+        // A JS number may reach serde as a float, so `at` is put back whole.
+        Ok(rows
+            .iter()
+            .map(|row| json!({"path": row["path"], "at": row["at"].as_f64().unwrap_or_default() as i64}))
+            .collect())
     }
 
     /// The rows of `path` in order; none when it is not stored. A BLOB comes
