@@ -319,8 +319,9 @@ fn recording_mem(dir: &TempDir) -> std::path::PathBuf {
              if [ \"$prev\" = --screenshot ]; then cp \"$a\" '{d}/shot.bin'; fi\n\
              prev=\"$a\"\n\
              done\n\
+             all=\"$*\"; [ \"${{1#--project=}}\" != \"$1\" ] && shift\n\
              if [ \"$1 $2\" = 'evidence add' ]; then cp \"$5\" '{d}/evidence.bin'; fi\n\
-             printf '%s\\n' \"$*\" >> '{d}/mem.log'\n\
+             printf '%s\\n' \"$all\" >> '{d}/mem.log'\n\
              exit 0",
             d = dir.path().display()
         ),
@@ -691,8 +692,10 @@ fn a_photo_alone_becomes_evidence_on_the_hub_that_asked() {
     wait_until("mem evidence add", || !mem_log(&p.asker_dir).is_empty());
     let log = mem_log(&p.asker_dir);
     assert_eq!(log.len(), 1, "{log:?}");
+    // Filed in the question's project: the hub runs from $HOME, where mem
+    // could not tell which project is meant.
     assert!(
-        log[0].starts_with("evidence add --task #ABCD1234 "),
+        log[0].starts_with("--project=walk evidence add --task #ABCD1234 "),
         "{log:?}"
     );
     assert!(
@@ -832,4 +835,20 @@ fn a_start_reads_only_the_answer_from_a_thread_not_its_photos_again() {
     let _hub = spawn_local_on(&dir, "cloudbox", &second, &log, port);
     thread::sleep(Duration::from_millis(800));
     assert!(mem_log(&dir).is_empty(), "{:?}", mem_log(&dir));
+}
+
+/// A real photo is bigger than an ordinary request: through the hub whose
+/// Slack connection got it, it still reaches the asking hub whole.
+#[test]
+fn a_photo_bigger_than_a_request_reaches_the_hub_that_asked() {
+    let p = pair("ls-photo-big");
+    asked(&p, &["yes", "no"]);
+    let big: Vec<u8> = (0..300_000u32).map(|i| (i * 31 % 253) as u8).collect();
+    let url = p.taker_slack.file("big.png", &big);
+    p.taker_slack.event(with_photo(reply_by(SAIFUL, ""), &url));
+    wait_until("mem evidence add", || !mem_log(&p.asker_dir).is_empty());
+    assert_eq!(
+        std::fs::read(p.asker_dir.join("evidence.bin")).unwrap(),
+        big
+    );
 }

@@ -556,7 +556,20 @@ impl Local {
                     continue;
                 };
                 let task = format!("#{id}");
-                match std::process::Command::new("mem")
+                // In the question's project: the hub runs from $HOME, where
+                // mem could not tell which project is meant.
+                let project = self
+                    .asked
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&id)
+                    .and_then(|a| a.project.clone())
+                    .or_else(|| self.asked_here(&id).and_then(|o| o.project));
+                let mut command = std::process::Command::new("mem");
+                if let Some(project) = &project {
+                    command.arg(format!("--project={project}"));
+                }
+                match command
                     .args(["evidence", "add", "--task", &task])
                     .arg(&file)
                     .args(["--note", &format!("photo from Slack for {task}")])
