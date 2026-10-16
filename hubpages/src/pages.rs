@@ -4,7 +4,7 @@
 //! Each page family lives in its own `page_<name>` module, so two pages can
 //! change without touching the same file.
 
-use crate::host::Host;
+use crate::host::{Host, Kind};
 use crate::html;
 use crate::http::{Request, Response};
 use crate::mem::{Source, Written};
@@ -32,6 +32,11 @@ pub struct Site<'a> {
     pub now: jiff::Timestamp,
     /// The zone a time of day is shown in.
     pub tz: jiff::tz::TimeZone,
+    /// The routes home offers, in button order.
+    pub routes: &'a [Kind],
+    /// Whether home polls `/api/stamp` to reload; a server that pushes
+    /// changes to the page draws it without.
+    pub poll: bool,
 }
 
 /// What a page module is handed.

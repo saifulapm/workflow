@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::dulali::Held;
 use crate::html::Banner;
 use crate::memcli::MemCli;
-use crate::route::Route;
+use crate::route::{Kind, Route};
 
 /// The whole page, its times of day in this machine's zone.
 // Each argument is one thing the page draws; a struct around them would only
@@ -36,8 +36,13 @@ pub fn render(
         pair_notice,
         dulali,
         &jiff::tz::TimeZone::system(),
+        &ROUTES,
+        true,
     )
 }
+
+/// The routes this hub offers: Phone, Device and Dulali.
+pub const ROUTES: [Kind; 3] = [Kind::Phone, Kind::Device, Kind::Dulali];
 
 /// A stamp of what home draws, for `/api/stamp`.
 pub fn stamp(mem: &MemCli, route: &Route, dulali: &[(String, Held)]) -> String {

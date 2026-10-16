@@ -42,6 +42,8 @@ pub fn route_page(app: &App, request: &Request) -> Option<Response> {
         may_write: app.guard.may_write(request),
         now: jiff::Timestamp::now(),
         tz: jiff::tz::TimeZone::system(),
+        routes: &crate::page_home::ROUTES,
+        poll: true,
     };
     hubpages::pages::route_page(&site, request)
 }

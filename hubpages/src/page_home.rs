@@ -95,6 +95,8 @@ pub fn get(ctx: &PageCtx) -> Response {
         ctx.pair_notice().as_deref(),
         &site.host.replaceable(now_ms),
         &site.tz,
+        site.routes,
+        site.poll,
     ))
 }
 
@@ -188,13 +190,19 @@ pub fn render(
     pair_notice: Option<&str>,
     dulali: &[(String, Held)],
     tz: &jiff::tz::TimeZone,
+    routes: &[Kind],
+    poll: bool,
 ) -> String {
     let projects = project_summaries(mem);
     let questions = mem.questions();
     let mut questions_rows = questions.rows("questions");
     questions_rows.sort_by(|a, b| b["id"].as_str().cmp(&a["id"].as_str()));
 
-    let mut body = reload_script(&stamp(mem, route, dulali));
+    let mut body = if poll {
+        reload_script(&stamp(mem, route, dulali))
+    } else {
+        String::new()
+    };
     body.push_str("<nav class=\"pages\">\n");
     for sibling in siblings {
         if html::safe_link(sibling).is_some() {
@@ -203,7 +211,7 @@ pub fn render(
         }
     }
     body.push_str("<a href=\"/wiki\">wiki</a>\n<a href=\"/subscribe\">subscribe</a>\n</nav>\n");
-    body.push_str(&route_header(route, pair_notice));
+    body.push_str(&route_header(route, routes, pair_notice));
 
     body.push_str(&banner_line(banner));
     // The cache answers this second read, so it spawns nothing.
@@ -305,10 +313,10 @@ pub fn render(
     page_shell(machine, None, &body)
 }
 
-/// `Route: Phone`, `Route: Device (<machine>)` or `Route: Dulali`, then the three buttons
-/// posting to `/route`, the current one pressed. An unpaired browser gets the
-/// pairing line in place of the buttons.
-fn route_header(saved: &Saved, pair_notice: Option<&str>) -> String {
+/// `Route: Phone`, `Route: Device (<machine>)` or `Route: Dulali`, then a
+/// button for each route on offer posting to `/route`, the current one
+/// pressed. An unpaired browser gets the pairing line in place of the buttons.
+fn route_header(saved: &Saved, routes: &[Kind], pair_notice: Option<&str>) -> String {
     let name = match (saved.route, &saved.machine) {
         (Kind::Device, Some(machine)) => format!("Device ({})", esc(machine)),
         (Kind::Dulali, _) => "Dulali".to_string(),
@@ -324,10 +332,15 @@ fn route_header(saved: &Saved, pair_notice: Option<&str>) -> String {
     let controls = match pair_notice {
         Some(notice) => notice.to_string(),
         None => format!(
-            "<form class=\"opt\" method=\"post\" action=\"/route\">\n{}{}{}</form>\n",
-            button("phone", "Phone", saved.route == Kind::Phone),
-            button("device", "Device", saved.route == Kind::Device),
-            button("dulali", "Dulali", saved.route == Kind::Dulali),
+            "<form class=\"opt\" method=\"post\" action=\"/route\">\n{}</form>\n",
+            routes
+                .iter()
+                .map(|kind| match kind {
+                    Kind::Phone => button("phone", "Phone", saved.route == Kind::Phone),
+                    Kind::Device => button("device", "Device", saved.route == Kind::Device),
+                    Kind::Dulali => button("dulali", "Dulali", saved.route == Kind::Dulali),
+                })
+                .collect::<String>(),
         ),
     };
     format!("<p class=\"route\">Route: {name}</p>\n{controls}")
@@ -344,6 +357,9 @@ pub fn route_post(ctx: &PageCtx) -> Response {
         "dulali" => Kind::Dulali,
         _ => return Response::text(400, "unknown route"),
     };
+    if !ctx.site.routes.contains(&kind) {
+        return Response::text(400, "unknown route");
+    }
     match ctx.site.host.set_route(kind) {
         Ok(()) => Response::see_other("/"),
         Err(NoMachine) => Response::see_other(&format!("/{}", Banner::NoMachine.query())),

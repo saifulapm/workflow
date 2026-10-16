@@ -140,6 +140,8 @@ fn home_draws_a_project_card_and_a_waiting_question_from_any_source() {
         may_write: true,
         now: "2026-10-05T12:00:00Z".parse().unwrap(),
         tz: jiff::tz::TimeZone::UTC,
+        routes: &[Kind::Phone, Kind::Device],
+        poll: false,
     };
 
     let response = route_page(&site, &get("/")).expect("home is a page");
@@ -164,5 +166,35 @@ fn home_draws_a_project_card_and_a_waiting_question_from_any_source() {
     assert!(
         page.contains("<input type=\"hidden\" name=\"id\" value=\"01K6Z9QH4V7M3ZJ8D2C5XWRT9P\">"),
         "the buttons answer that question: {page}"
+    );
+}
+
+/// The hub web offers Phone and Device only, and hears of changes on its page
+/// socket, so its home names no Dulali and polls nothing.
+#[test]
+fn a_home_without_dulali_or_polling_shows_neither() {
+    let mem = Canned(HashMap::from([
+        ("projects --json".to_string(), json!({"projects": []})),
+        (QUESTIONS_ARGV.join(" "), json!({"questions": []})),
+    ]));
+    let site = Site {
+        mem: &mem,
+        host: &Quiet,
+        machine: "worker",
+        siblings: &[],
+        by: "hub-web",
+        paired: true,
+        may_write: true,
+        now: "2026-10-05T12:00:00Z".parse().unwrap(),
+        tz: jiff::tz::TimeZone::UTC,
+        routes: &[Kind::Phone, Kind::Device],
+        poll: false,
+    };
+    let page = String::from_utf8(route_page(&site, &get("/")).unwrap().body).unwrap();
+    assert!(!page.to_lowercase().contains("dulali"), "{page}");
+    assert!(!page.contains("/api/stamp"), "{page}");
+    assert!(
+        page.contains("value=\"phone\"") && page.contains("value=\"device\""),
+        "{page}"
     );
 }
