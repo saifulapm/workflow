@@ -12,6 +12,7 @@ use worker::*;
 use crate::access::{self, Access, Jwt};
 use crate::mcp::{self, Step};
 use crate::page;
+use crate::share::{self, Fault, Log, Rec};
 
 /// The store's binding, and the one instance every request reaches.
 const STORE: &str = "STORE";
@@ -36,6 +37,14 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
     // send records with no Access login.
     if req.method() == Method::Put && path == "/store/records" {
         return put_records(req, &env).await;
+    }
+    // The sharing socket takes the same bearer, and the store answers the
+    // upgrade itself so it can keep the socket while it hibernates.
+    if req.method() == Method::Get && path == "/store/share" {
+        if !bearer(&req, &env)? {
+            return Response::error("Unauthorized", 401);
+        }
+        return store(&env)?.fetch_with_request(req).await;
     }
     if let Err(why) = guard(&req, &env).await {
         console_log!("hubweb: refused {:?} {path}: {why}", req.method());
@@ -193,15 +202,7 @@ async fn home(env: &Env) -> Result<Response> {
 /// Hands the records to the store when the request carries the bearer
 /// STORE_TOKEN; 401 otherwise, and 401 while no token is configured.
 async fn put_records(mut req: Request, env: &Env) -> Result<Response> {
-    let token = env.secret("STORE_TOKEN").map(|t| t.to_string()).ok();
-    let given = req.headers().get("Authorization")?;
-    let allowed = match (token, given) {
-        (Some(token), Some(given)) => {
-            !token.is_empty() && same(given.as_bytes(), format!("Bearer {token}").as_bytes())
-        }
-        _ => false,
-    };
-    if !allowed {
+    if !bearer(&req, env)? {
         return Response::error("Unauthorized", 401);
     }
     let body = req.text().await?;
@@ -212,16 +213,30 @@ async fn put_records(mut req: Request, env: &Env) -> Result<Response> {
         .await
 }
 
+/// True when the request carries `Authorization: Bearer <STORE_TOKEN>`;
+/// false while no token is configured.
+fn bearer(req: &Request, env: &Env) -> Result<bool> {
+    let token = env.secret("STORE_TOKEN").map(|t| t.to_string()).ok();
+    let given = req.headers().get("Authorization")?;
+    Ok(match (token, given) {
+        (Some(token), Some(given)) => {
+            !token.is_empty() && same(given.as_bytes(), format!("Bearer {token}").as_bytes())
+        }
+        _ => false,
+    })
+}
+
 /// Compares two byte strings in time that depends on their length only, so
 /// a wrong token does not tell how much of it matched.
 fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// The walk store: records keyed by project, kind and key, in the Durable
-/// Object's SQLite.
+/// The walk store: records keyed by project, kind and key, and the shared
+/// mem write log, in the Durable Object's SQLite.
 #[durable_object]
 pub struct Store {
+    state: State,
     sql: SqlStorage,
 }
 
@@ -234,7 +249,20 @@ impl DurableObject for Store {
             None,
         )
         .expect("create the records table");
-        Self { sql }
+        // share::handle sets seq one above the highest, and no row is ever
+        // deleted, so a seq is never handed out twice.
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS writes(seq INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, \
+             path TEXT NOT NULL, body TEXT, machine TEXT)",
+            None,
+        )
+        .expect("create the writes table");
+        sql.exec(
+            "CREATE INDEX IF NOT EXISTS writes_by_path ON writes(path, seq)",
+            None,
+        )
+        .expect("index the writes by path");
+        Self { state, sql }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
@@ -301,7 +329,139 @@ impl DurableObject for Store {
                     None => Response::error("No handoff", 404),
                 }
             }
+            (Method::Get, "/store/share") => {
+                if req.headers().get("Upgrade")?.as_deref() != Some("websocket") {
+                    return Response::error("Expected a WebSocket upgrade", 426);
+                }
+                let pair = WebSocketPair::new()?;
+                self.state.accept_web_socket(&pair.server);
+                Response::from_websocket(pair.client)
+            }
             _ => Response::error("Not Found", 404),
         }
+    }
+
+    /// Nothing here awaits, so the order the store numbers writes in is the
+    /// order their recs go out on every socket.
+    async fn websocket_message(
+        &self,
+        ws: WebSocket,
+        message: WebSocketIncomingMessage,
+    ) -> Result<()> {
+        let WebSocketIncomingMessage::String(text) = message else {
+            ws.send_with_str(r#"{"t":"error","why":"messages are JSON text frames"}"#)?;
+            return Ok(());
+        };
+        // The machine's name lives on the socket, which outlasts hibernation.
+        let machine: Option<String> = ws.deserialize_attachment()?;
+        let outcome = share::handle(&mut SqlLog(&self.sql), machine.as_deref(), &text);
+        if let Some(machine) = &outcome.hello {
+            ws.serialize_attachment(machine)?;
+        }
+        for reply in &outcome.sender {
+            ws.send_with_str(reply)?;
+        }
+        if let Some(rec) = &outcome.others {
+            for other in self.state.get_websockets() {
+                if other.as_ref() != ws.as_ref() {
+                    // A socket that is closing misses the rec; its machine
+                    // gets it from the replay after its next hello.
+                    let _ = other.send_with_str(rec);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn websocket_close(
+        &self,
+        _ws: WebSocket,
+        _code: usize,
+        _reason: String,
+        _was_clean: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn websocket_error(&self, _ws: WebSocket, _error: Error) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// The write log in the store's SQLite.
+struct SqlLog<'a>(&'a SqlStorage);
+
+const COLUMNS: &str = "SELECT seq, id, path, body, machine FROM writes";
+
+impl SqlLog<'_> {
+    fn rows(
+        &self,
+        query: &str,
+        bindings: Vec<SqlStorageValue>,
+    ) -> std::result::Result<Vec<Rec>, Fault> {
+        let rows: Vec<Value> = self
+            .0
+            .exec(query, Some(bindings))
+            .and_then(|cursor| cursor.to_array())
+            .map_err(fault)?;
+        Ok(rows
+            .iter()
+            .map(|row| Rec {
+                seq: row["seq"].as_i64().unwrap_or_default(),
+                id: row["id"].as_str().unwrap_or_default().to_string(),
+                path: row["path"].as_str().unwrap_or_default().to_string(),
+                body: row["body"].as_str().map(str::to_string),
+                machine: row["machine"].as_str().map(str::to_string),
+            })
+            .collect())
+    }
+}
+
+impl Log for SqlLog<'_> {
+    fn seq_of(&self, id: &str) -> std::result::Result<Option<i64>, Fault> {
+        let rows = self.rows(&format!("{COLUMNS} WHERE id = ?"), vec![id.into()])?;
+        Ok(rows.first().map(|rec| rec.seq))
+    }
+
+    fn head(&self, path: &str) -> std::result::Result<Option<Rec>, Fault> {
+        let query = format!("{COLUMNS} WHERE path = ? ORDER BY seq DESC LIMIT 1");
+        Ok(self.rows(&query, vec![path.into()])?.pop())
+    }
+
+    fn after(&self, seq: i64) -> std::result::Result<Vec<Rec>, Fault> {
+        let query = format!("{COLUMNS} WHERE seq > ? ORDER BY seq");
+        self.rows(&query, vec![seq.into()])
+    }
+
+    fn last(&self) -> std::result::Result<i64, Fault> {
+        let query = format!("{COLUMNS} ORDER BY seq DESC LIMIT 1");
+        Ok(self.rows(&query, vec![])?.first().map_or(0, |rec| rec.seq))
+    }
+
+    fn append(&mut self, rec: &Rec) -> std::result::Result<(), Fault> {
+        self.0
+            .exec(
+                "INSERT INTO writes(seq, id, path, body, machine) VALUES (?, ?, ?, ?, ?)",
+                vec![
+                    rec.seq.into(),
+                    rec.id.as_str().into(),
+                    rec.path.as_str().into(),
+                    rec.body.clone().into(),
+                    rec.machine.clone().into(),
+                ],
+            )
+            .map(|_| ())
+            .map_err(fault)
+    }
+}
+
+/// A storage error that names a limit is the Free plan's daily cap, which
+/// the machine answers by keeping the write; anything else is an error.
+fn fault(error: Error) -> Fault {
+    let why = error.to_string();
+    if why.contains("limit") || why.contains("free tier") {
+        Fault::Limit
+    } else {
+        Fault::Broken(why)
     }
 }
