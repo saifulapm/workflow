@@ -1993,31 +1993,32 @@ fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
     }
 }
 
-/// One interval of a wait: long polls on the local hub when there is one,
-/// else a sleep.
+/// One interval of a wait: a long poll on the local hub when there is one,
+/// else a sleep. It ends when the hub hands back an answer or lets the poll
+/// go empty.
 fn nap_on_local_hub(
     socket: &std::path::Path,
     short: &str,
     within: std::time::Duration,
 ) -> Option<String> {
-    let started = std::time::Instant::now();
-    loop {
-        let left = within.saturating_sub(started.elapsed());
-        if left.is_zero() {
-            return None;
+    if within.is_zero() {
+        return None;
+    }
+    let asked = std::time::Instant::now();
+    match crate::localhub::wait(socket, short, within) {
+        crate::localhub::Waited::Answered(text) => Some(text),
+        crate::localhub::Waited::Nothing => {
+            // A hub that answers at once must not turn the wait into a spin.
+            let floor = std::time::Duration::from_millis(200);
+            std::thread::sleep(floor.saturating_sub(asked.elapsed()).min(within));
+            // The hub ends a wait early when a write from the store was
+            // applied, so the store is looked at again: an answer from the
+            // hub web or another machine arrives that way.
+            None
         }
-        let asked = std::time::Instant::now();
-        match crate::localhub::wait(socket, short, left) {
-            crate::localhub::Waited::Answered(text) => return Some(text),
-            crate::localhub::Waited::Nothing => {
-                // A hub that answers at once must not turn the wait into a spin.
-                let floor = std::time::Duration::from_millis(200);
-                std::thread::sleep(floor.saturating_sub(asked.elapsed()).min(left));
-            }
-            crate::localhub::Waited::NoHub => {
-                std::thread::sleep(left);
-                return None;
-            }
+        crate::localhub::Waited::NoHub => {
+            std::thread::sleep(within);
+            None
         }
     }
 }
