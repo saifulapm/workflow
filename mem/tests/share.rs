@@ -956,7 +956,7 @@ fn the_import_never_sends_conflict_copies_temps_or_the_version() {
 }
 
 #[test]
-fn the_import_uploads_files_younger_than_90_days_once() {
+fn the_import_uploads_every_file_once() {
     let w = World::new("seed-files");
     w.project(ID, "walk");
     let fresh = format!("projects/{ID}/evidence/m1/shot.png");
@@ -977,11 +977,16 @@ fn the_import_uploads_files_younger_than_90_days_once() {
         file["local"],
         w.dirs().store().join(&fresh).to_str().unwrap()
     );
-    assert!(by_path(&plan, &old).is_none(), "{plan:?}");
+    assert_eq!(
+        by_path(&plan, &old).expect("the old file goes too")["t"],
+        "file"
+    );
 
     let out = mem_in(&w, &["share", "seeded"], &format!("{fresh}\n"));
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(by_path(&seed(&w, &[]), &fresh).is_none());
+    let again = seed(&w, &[]);
+    assert!(by_path(&again, &fresh).is_none());
+    assert!(by_path(&again, &old).is_some());
 }
 
 #[test]

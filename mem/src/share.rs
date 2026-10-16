@@ -493,16 +493,11 @@ fn land(file: &Path, body: Option<&str>) -> Result<()> {
     }
 }
 
-/// How long an evidence or raw file stays in the store; an older one lives
-/// in the weekly snapshot alone.
-pub const FILE_DAYS: u64 = 90;
-
 /// The import's plan against the store's replay (its `rec` messages, in any
 /// order): an import write for every text file here that the store lacks or
 /// holds otherwise, based on the store's head of the path; a removal for each
 /// path the store holds in a project here that this store no longer holds;
-/// then each evidence or raw file younger than `FILE_DAYS` that no import
-/// has uploaded yet. Text first, so the files come once the text is in.
+/// then each evidence or raw file that no import has uploaded yet. Text first, so the files come once the text is in.
 ///
 /// Only a path whose head `machine` (this one) wrote is replaced or removed:
 /// until it switches, everything under its name came from its own imports,
@@ -584,20 +579,16 @@ pub fn seed(
         plan.push(write(rel, Some(head), None));
     }
     let conn = open(db)?;
-    let young = std::time::SystemTime::now() - std::time::Duration::from_secs(FILE_DAYS * 86_400);
     let mut files = Vec::new();
     for rel in bytes {
         let file = root.join(&rel);
-        let fresh = std::fs::metadata(&file)
-            .and_then(|m| m.modified())
-            .is_ok_and(|at| at > young);
         let uploaded = conn
             .query_row("SELECT 1 FROM seeded_files WHERE path = ?1", [&rel], |_| {
                 Ok(())
             })
             .optional()?
             .is_some();
-        if fresh && !uploaded {
+        if !uploaded {
             files.push(json!({"t": "file", "path": rel, "local": file.to_string_lossy()}));
         }
     }

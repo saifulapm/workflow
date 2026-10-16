@@ -309,7 +309,7 @@ pub enum ShareCommand {
     Export,
     /// Print the import's plan, one JSON per line, against the store's
     /// replay on stdin: a write for each text file the store lacks or holds
-    /// otherwise, then each evidence or raw file younger than 90 days.
+    /// otherwise, then each evidence or raw file no import has uploaded.
     Seed,
     /// Note the files the import uploaded, one store path per line on stdin.
     Seeded,

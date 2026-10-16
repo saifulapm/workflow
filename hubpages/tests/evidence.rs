@@ -104,7 +104,7 @@ fn get(path: &str) -> Request {
 }
 
 #[test]
-fn evidence_older_than_90_days_shows_archived_in_place_of_its_image() {
+fn evidence_keeps_its_image_whatever_its_age() {
     let item = |id: &str, created: &str, file: &str| json!({"id": id, "task": "t1", "file": file, "note": "n", "created": created});
     let mem = Canned(HashMap::from([
         (
@@ -115,7 +115,7 @@ fn evidence_older_than_90_days_shows_archived_in_place_of_its_image() {
             "evidence list --project=alpha --json".to_string(),
             json!({"items": [
                 item("01K6Z9QH4V7M3ZJ8D2C5XWRT9P", "2026-10-04", "evidence/t1/new.png"),
-                item("01K6Z9QH4V7M3ZJ8D2C5XWRT9Q", "2026-07-06", "evidence/t1/old.png"),
+                item("01K6Z9QH4V7M3ZJ8D2C5XWRT9Q", "2026-06-27", "evidence/t1/old.png"),
             ]}),
         ),
         (
@@ -145,8 +145,8 @@ fn evidence_older_than_90_days_shows_archived_in_place_of_its_image() {
         "yesterday's evidence keeps its image: {page}"
     );
     assert!(
-        !page.contains("file/01K6Z9QH4V7M3ZJ8D2C5XWRT9Q"),
-        "91 days old, no image: {page}"
+        page.contains("file/01K6Z9QH4V7M3ZJ8D2C5XWRT9Q\""),
+        "91 days old, still its image: {page}"
     );
-    assert!(page.contains("archived"), "{page}");
+    assert!(!page.contains("archived"), "{page}");
 }
