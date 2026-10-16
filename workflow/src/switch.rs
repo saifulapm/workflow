@@ -76,16 +76,26 @@ fn switch(url: &str) -> Step<()> {
         )
     })?;
 
-    // Both secrets are read before anything changes, so a missing pass entry
-    // stops the switch on a machine that is still whole.
+    // Every secret is read before anything changes, so a missing pass entry
+    // stops the switch on a machine that is still whole. The store's names
+    // sit behind Cloudflare Access, which lets a machine through with the
+    // service token alone.
     let admin = pass("workflow/hubweb-store-token")?;
     let cloud = pass("workflow/hub-cloud-token")?;
-    let token = mint(url, &name, &admin)?;
+    let access_id = pass("workflow/cloud-next-access-id")?;
+    let access_secret = pass("workflow/cloud-next-access-secret")?;
+    let access = [
+        ("HUB_STORE_ACCESS_ID", access_id.as_str()),
+        ("HUB_STORE_ACCESS_SECRET", access_secret.as_str()),
+    ];
+    let token = mint(url, &name, &admin, &access)?;
 
     let store = [
         ("HUB_STORE_URL", url),
         ("HUB_STORE_NAME", STORE_NAME),
         ("HUB_STORE_TOKEN", token.as_str()),
+        access[0],
+        access[1],
     ];
     match status("hub", &["share", "seed"], &store)? {
         0 => {}
@@ -123,6 +133,8 @@ fn switch(url: &str) -> Step<()> {
             ("HUB_STORE_NAME", STORE_NAME),
             ("HUB_STORE_TOKEN", &token),
             ("HUB_CLOUD_TOKEN", &cloud),
+            access[0],
+            access[1],
         ],
     )
     .map_err(|e| (exit::FAILED, format!("cannot write {}: {e}", env.display())))?;
@@ -136,7 +148,8 @@ fn switch(url: &str) -> Step<()> {
         println!("  the second seed did not finish; the outbox holds new writes");
     }
     println!(
-        "  wrote HUB_STORE_URL, HUB_STORE_NAME, HUB_STORE_TOKEN and HUB_CLOUD_TOKEN to {}",
+        "  wrote HUB_STORE_URL, HUB_STORE_NAME, HUB_STORE_TOKEN, HUB_CLOUD_TOKEN and the \
+         Access service token to {}",
         env.display()
     );
     println!("  restarted hub-local");
@@ -264,9 +277,10 @@ fn pass(entry: &str) -> Step<String> {
 /// This machine's store token: the store's admin token goes to `hub share
 /// mint` on stdin, and the token comes back on its stdout, so neither is ever
 /// in an argv.
-fn mint(url: &str, machine: &str, admin: &str) -> Step<String> {
+fn mint(url: &str, machine: &str, admin: &str, access: &[(&str, &str)]) -> Step<String> {
     let mut child = Command::new("hub")
         .args(["share", "mint", machine])
+        .envs(access.iter().copied())
         .env("HUB_STORE_URL", url)
         .env("HUB_STORE_NAME", STORE_NAME)
         .env_remove("HUB_STORE_TOKEN")

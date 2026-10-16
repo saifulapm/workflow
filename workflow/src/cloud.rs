@@ -628,7 +628,10 @@ pub fn cmd_cloud_switch(store: &str) -> i32 {
    (the hex digest is the first field)
 6. Remove HUB_PEER_TOKEN
 7. Keep MEM_REMOTE for now: the binaries still come from it
-8. Replace the setup script with the output of: workflow cloud-setup"
+8. Set HUB_STORE_ACCESS_ID and HUB_STORE_ACCESS_SECRET, if not set yet, to the outputs of:
+   pass show workflow/cloud-next-access-id and pass show workflow/cloud-next-access-secret
+   (the store's names sit behind Cloudflare Access)
+9. Replace the setup script with the output of: workflow cloud-setup"
     );
     exit::OK
 }

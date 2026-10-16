@@ -16,6 +16,8 @@ const STORE: &str = "wss://example.test/store/share";
 const ADMIN: &str = "admin-SECRET-1";
 const MINTED: &str = "minted-SECRET-2";
 const CLOUD: &str = "cloud-SECRET-3";
+const ACCESS_ID: &str = "access-id-SECRET-4";
+const ACCESS_SECRET: &str = "access-secret-SECRET-5";
 
 /// A child forked while another test's fixture is still open for writing
 /// holds that file open, and its exec then fails with "Text file busy". So
@@ -52,14 +54,14 @@ fn world(tag: &str) -> Scratch {
     work.script(
         "bin/pass",
         &format!(
-            "{log}\ncase \"$2\" in\nworkflow/hubweb-store-token) echo {ADMIN} ;;\nworkflow/hub-cloud-token) echo {CLOUD} ;;\n*) exit 1 ;;\nesac"
+            "{log}\ncase \"$2\" in\nworkflow/hubweb-store-token) echo {ADMIN} ;;\nworkflow/hub-cloud-token) echo {CLOUD} ;;\nworkflow/cloud-next-access-id) echo {ACCESS_ID} ;;\nworkflow/cloud-next-access-secret) echo {ACCESS_SECRET} ;;\n*) exit 1 ;;\nesac"
         ),
     );
     work.script(
         "bin/hub",
         &format!(
             r#"{log}
-echo "$2 url=$HUB_STORE_URL name=$HUB_STORE_NAME token=$HUB_STORE_TOKEN" >>"$dir/hub.env"
+echo "$2 url=$HUB_STORE_URL name=$HUB_STORE_NAME token=$HUB_STORE_TOKEN access=${{HUB_STORE_ACCESS_ID:+set}}${{HUB_STORE_ACCESS_SECRET:+set}}" >>"$dir/hub.env"
 case "$2" in
 mint) cat >"$dir/mint.stdin"; echo {MINTED} ;;
 seed)
@@ -182,6 +184,8 @@ pgrep -a -x claude
 qshell-sync --only memory
 pass show workflow/hubweb-store-token
 pass show workflow/hub-cloud-token
+pass show workflow/cloud-next-access-id
+pass show workflow/cloud-next-access-secret
 hub share mint mini
 hub share seed
 mem share switch
@@ -193,16 +197,17 @@ systemctl --user restart hub-local
     assert_eq!(
         w.read("hub.env"),
         format!(
-            "mint url={STORE} name=main token=\n\
-             seed url={STORE} name=main token={MINTED}\n\
-             seed url={STORE} name=main token={MINTED}\n"
+            "mint url={STORE} name=main token= access=setset\n\
+             seed url={STORE} name=main token={MINTED} access=setset\n\
+             seed url={STORE} name=main token={MINTED} access=setset\n"
         )
     );
     assert_eq!(
         w.read("config/hub/local.env"),
         format!(
             "HUB_PORT=7777\nHUB_STORE_URL={STORE}\nHUB_STORE_NAME=main\n\
-             HUB_STORE_TOKEN={MINTED}\nHUB_CLOUD_TOKEN={CLOUD}\n"
+             HUB_STORE_TOKEN={MINTED}\nHUB_CLOUD_TOKEN={CLOUD}\n\
+             HUB_STORE_ACCESS_ID={ACCESS_ID}\nHUB_STORE_ACCESS_SECRET={ACCESS_SECRET}\n"
         )
     );
     let mode = std::fs::metadata(w.at("config/hub/local.env"))
@@ -212,7 +217,7 @@ systemctl --user restart hub-local
     assert_eq!(mode & 0o777, 0o600);
     let said = text(&out);
     let log = calls(&w);
-    for secret in [ADMIN, MINTED, CLOUD] {
+    for secret in [ADMIN, MINTED, CLOUD, ACCESS_ID, ACCESS_SECRET] {
         assert!(!said.contains(secret), "{said}");
         assert!(!log.contains(secret), "{log}");
     }
