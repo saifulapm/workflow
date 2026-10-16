@@ -8,7 +8,11 @@
 #     it filled before still answers;
 #   - the cloud's local hub reaches the store only through the VM's HTTP
 #     proxy (CONNECT), and once the proxy comes back after a long cut, a
-#     write the mini made meanwhile is listed in the cloud within 2 s.
+#     write the mini made meanwhile is listed in the cloud within 2 s;
+#   - a cloud session that ends cut off leaves its 3 unsent logs in
+#     .mem-outbox.json on its branch; the mini imports and sends them and
+#     stages the file's removal; importing that file again, here or on a
+#     third machine, still leaves each log in the store once.
 #
 # Needs what t142 needs: hubweb/node_modules, worker-build, the wasm target,
 # python3 and the hub's release binary, which tests/run.sh builds.
@@ -38,6 +42,7 @@ stop_all() {
 	[ -n "${hub_pid:-}" ] && kill "$hub_pid" 2>/dev/null
 	[ -n "${cloud_hub:-}" ] && kill "$cloud_hub" 2>/dev/null
 	[ -n "${proxy_pid:-}" ] && kill "$proxy_pid" 2>/dev/null
+	[ -n "${third_hub:-}" ] && kill "$third_hub" 2>/dev/null
 	for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
 	wait 2>/dev/null
 	(exit "$status")
@@ -188,3 +193,44 @@ if lists "made during the cut"; then
 else
 	notok "a write made during the cut is listed within 2 s of the proxy coming back" "$(tail -20 "$T_TMP/cloud.hub.log")"
 fi
+
+# Behaviour 4: cut off, the cloud writes 3 logs and exports them to its branch.
+block
+for n in 1 2 3; do on cloud mem --project walk log "unsent from the cloud $n" >/dev/null; done
+repo=$T_TMP/checkout
+git init -q -b main "$repo"
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m start
+(cd "$repo" && on cloud mem share export >/dev/null)
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m "Push the cloud's outbox"
+is "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["writes"]))' "$repo/.mem-outbox.json")" 3 \
+	"the branch carries .mem-outbox.json with the 3 unsent logs"
+
+# The mini reads the project in that checkout: it imports, sends, and stages
+# the file's removal.
+(cd "$repo" && on mini mem --project walk log --limit 50 >/dev/null)
+mini_lists() { on mini mem --project walk log --limit 50 | grep -c "unsent from the cloud"; }
+is "$(mini_lists)" 3 "the mini lists the 3 logs"
+is "$(git -C "$repo" diff --cached --name-status)" "D	.mem-outbox.json" "the mini's next commit removes the file"
+for _ in $(seq 1 100); do drained && break; sleep 0.1; done
+drained && ok "the mini sends them to the store" || notok "the mini sends them to the store" "$(on mini mem doctor)"
+
+# Again, from history on the mini, and on a third machine that never saw it.
+git -C "$repo" checkout -q HEAD -- .mem-outbox.json
+(cd "$repo" && on mini mem --project walk log --limit 1 >/dev/null)
+mkdir -p "$T_TMP/m/third"/{data,cache,state,config/qshell}
+printf 'third\n' >"$T_TMP/m/third/config/qshell/machine"
+on third env HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token timeout 30 "$HUB_BIN" share sync 2>/dev/null
+git -C "$repo" checkout -q HEAD -- .mem-outbox.json
+on third env HUB_PEER_TOKEN=peer-token HUB_PEERS= HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token \
+	"$HUB_BIN" local --port "$(free_port)" >>"$T_TMP/third.hub.log" 2>&1 &
+third_hub=$!
+(cd "$repo" && on third mem --project walk log --limit 1 >/dev/null)
+third_drained() { on third mem doctor | grep -qE '^sharing +seq [0-9]+, outbox 0$'; }
+for _ in $(seq 1 100); do third_drained && break; sleep 0.1; done
+kill "$third_hub" 2>/dev/null
+# A fresh replica reads what the store holds.
+mkdir -p "$T_TMP/m/fresh"/{data,cache,state,config/qshell}
+printf 'fresh\n' >"$T_TMP/m/fresh/config/qshell/machine"
+on fresh env HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token timeout 30 "$HUB_BIN" share sync 2>/dev/null
+is "$(on fresh mem --project walk log --limit 50 | grep -c "unsent from the cloud")" 3 \
+	"imported twice and on a third machine, the store holds each log once"
