@@ -198,6 +198,47 @@ fn doctor_reports_strays_conflicts_forks_and_secrets() {
 }
 
 #[test]
+fn doctor_counts_items_pages_and_files_first() {
+    let w = World::new("maint-doctor-counts");
+    w.project(P, "thing");
+    let store = w.store();
+    put(&store, Some(P), &item(Kind::Fact, "one", "body"));
+    put(&store, Some(P), &item(Kind::Fact, "two", "body"));
+    put(&store, None, &item(Kind::Fact, "global", "body"));
+    let mut archived = item(Kind::Fact, "old", "body");
+    archived.meta.archived = Some(true);
+    let kept = put(&store, Some(P), &archived);
+    std::fs::copy(&kept, kept.with_extension("md.conflict1")).unwrap();
+    let dir = store.project_items(P);
+    std::fs::write(dir.join(".tmp-x"), b"x").unwrap();
+
+    let wiki = store.wiki_dir(P);
+    std::fs::create_dir_all(&wiki).unwrap();
+    std::fs::write(wiki.join("index.md"), "# Index\n").unwrap();
+    std::fs::write(wiki.join("pricing.md"), "# Pricing\n").unwrap();
+    let plans = store.plans_dir(P);
+    std::fs::create_dir_all(&plans).unwrap();
+    std::fs::write(plans.join("m1.md"), "# Plan\n").unwrap();
+    let evidence = store.project_dir(P).join("evidence");
+    std::fs::create_dir_all(&evidence).unwrap();
+    std::fs::write(evidence.join("shot.png"), b"x").unwrap();
+    std::fs::write(evidence.join("shot.png.conflict1"), b"x").unwrap();
+    std::fs::write(evidence.join(".tmp-y"), b"x").unwrap();
+    let raw = store.project_dir(P).join("raw/deep");
+    std::fs::create_dir_all(&raw).unwrap();
+    std::fs::write(raw.join("source.txt"), b"x").unwrap();
+
+    let out = mem(&w, &w.plain_dir("cwd"), &["doctor"]);
+    assert_eq!(code(&out), 0);
+    let text = stdout(&out);
+    assert_eq!(
+        text.lines().next(),
+        Some("counts               items 4, pages 2, files 2"),
+        "{text}"
+    );
+}
+
+#[test]
 fn doctor_sees_strays_beside_pages_plans_and_singletons() {
     let w = World::new("maint-doctor-strays");
     w.project(P, "thing");

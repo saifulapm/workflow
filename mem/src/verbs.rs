@@ -2786,9 +2786,16 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
             "{}",
             serde_json::to_string(&json!({ "findings": findings }))?
         );
-    } else if findings.is_empty() {
-        println!("no findings");
     } else {
+        // Text only: the JSON contract's schema admits no other key.
+        let c = app.store.counts();
+        println!(
+            "{:<20} items {}, pages {}, files {}",
+            "counts", c.items, c.pages, c.files
+        );
+        if findings.is_empty() {
+            println!("no findings");
+        }
         for f in &findings {
             println!("{:<20} {}", f.check, f.detail);
         }

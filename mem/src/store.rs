@@ -153,6 +153,40 @@ impl Store {
         out
     }
 
+    /// How many items, wiki pages and evidence or raw files the store holds,
+    /// from directory listings alone. Conflict copies and dot-temps are not
+    /// counted, and a wiki file whose name is no page slug is not a page.
+    pub fn counts(&self) -> Counts {
+        let mut counts = Counts {
+            items: self.item_paths().len(),
+            ..Counts::default()
+        };
+        for project in read_dir_sorted(&self.projects_dir()) {
+            counts.pages += read_dir_sorted(&project.join("wiki"))
+                .iter()
+                .filter(|path| {
+                    path.is_file()
+                        && path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .and_then(|n| n.strip_suffix(".md"))
+                            .is_some_and(is_valid_slug)
+                })
+                .count();
+            for dir in [project.join("evidence"), project.join("raw")] {
+                counts.files += files_under(&dir)
+                    .iter()
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| !is_conflict_name(n) && !n.starts_with(".tmp-"))
+                    })
+                    .count();
+            }
+        }
+        counts
+    }
+
     pub fn read_item(&self, path: &Path) -> Result<Item> {
         read_item(path)
     }
@@ -163,6 +197,14 @@ impl Store {
         write_atomic(&path, &item.to_bytes()?)?;
         Ok(path)
     }
+}
+
+/// What `Store::counts` found.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Counts {
+    pub items: usize,
+    pub pages: usize,
+    pub files: usize,
 }
 
 /// The longest a page slug may be.
