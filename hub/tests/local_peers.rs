@@ -601,3 +601,32 @@ fn spawn_swept(dir: &TempDir, machine: &str, peers: &[&Hub], bin: &Path) -> Hub 
         ],
     )
 }
+
+/// A machine that slept while a question was asked and answered (the asker
+/// never reached it, since the tailnet listed it offline) catches up within
+/// a sweep once it is back: it counts what it missed, then drops it once
+/// answered.
+#[test]
+fn a_machine_that_was_asleep_catches_up_within_a_sweep() {
+    let dir = TempDir::new("peers-asleep");
+    let bin = quiet_mem(&dir);
+    let nuc = spawn(&dir, "nuc", &[], Some(&bin));
+    let _mini = spawn_swept(&dir, "mini", &[&nuc], &bin);
+    std::thread::sleep(Duration::from_millis(300));
+    ask(&socket_of(&dir, "nuc"), PROBE);
+    common::wait_for(
+        "the mini catches up on the question",
+        Duration::from_secs(2),
+        || listed(&dir, "mini").len() == 1,
+    );
+    let answered = answer(
+        &nuc,
+        r#"{"question":"ABCD1234","answer":"yes","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&answered), 200, "{answered}");
+    common::wait_for(
+        "the mini drops the answered question",
+        Duration::from_secs(2),
+        || listed(&dir, "mini").is_empty(),
+    );
+}

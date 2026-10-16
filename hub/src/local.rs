@@ -698,8 +698,14 @@ impl Local {
             .or_else(|| self.asked_here(question).map(|o| o.project));
         let asked_here = project.is_some();
         let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(standing) = answers.get(question) {
-            return Err(standing.clone());
+        if let Some(standing) = answers.get(question).cloned() {
+            drop(answers);
+            // A second answer comes from a surface that still showed the
+            // question, perhaps a peer that missed the close: close it again.
+            if asked_here {
+                self.closed(question, &standing);
+            }
+            return Err(standing);
         }
         if self.records
             && let Some(project) = &project
@@ -780,6 +786,20 @@ impl Local {
     /// Asks every peer for its open questions, once at start, so a hub that
     /// was away learns what was asked meanwhile and forgets what was answered.
     pub fn learn_from_peers(&self) {
+        self.catch_up(false);
+    }
+
+    /// Takes the newest route and the open questions from every online peer.
+    /// At start a peer's news of every question is taken, for an asker that
+    /// is away; in a sweep only the questions each peer asked itself, so a
+    /// peer that missed a close cannot pass the question on again. A sweep
+    /// says nothing of a peer it cannot reach: the start said it once.
+    fn catch_up(&self, sweeping: bool) {
+        let say = |line: String| {
+            if !sweeping {
+                eprintln!("{line}");
+            }
+        };
         for peer in crate::tailnet_peers() {
             if peer == self.host {
                 continue;
@@ -789,28 +809,40 @@ impl Local {
                     Ok(theirs) => {
                         self.route_now.offer(theirs);
                     }
-                    Err(e) => eprintln!("hub: local: {peer} sent no route: {e}"),
+                    Err(e) => say(format!("hub: local: {peer} sent no route: {e}")),
                 },
-                Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to /route"),
+                Ok((status, _)) => say(format!("hub: local: {peer} answered {status} to /route")),
                 Err(e) => {
-                    eprintln!("hub: local: /route did not reach {peer}: {e:#}");
+                    say(format!("hub: local: /route did not reach {peer}: {e:#}"));
                     continue;
                 }
             }
             match request(&peer, "GET", "/questions", &self.token, b"") {
                 Ok((200, body)) => match serde_json::from_str::<Listed>(&body) {
-                    Ok(listed) => self.known.reconcile(&listed.host, listed.questions),
-                    Err(e) => eprintln!("hub: local: {peer} sent no question list: {e}"),
+                    Ok(mut listed) => {
+                        if sweeping {
+                            listed.questions.retain(|o| o.machine == listed.host);
+                        }
+                        self.known.reconcile(&listed.host, listed.questions);
+                    }
+                    Err(e) => say(format!("hub: local: {peer} sent no question list: {e}")),
                 },
-                Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to /questions"),
-                Err(e) => eprintln!("hub: local: /questions did not reach {peer}: {e:#}"),
+                Ok((status, _)) => {
+                    say(format!(
+                        "hub: local: {peer} answered {status} to /questions"
+                    ));
+                }
+                Err(e) => say(format!(
+                    "hub: local: /questions did not reach {peer}: {e:#}"
+                )),
             }
         }
     }
 
-    /// Every `HUB_SWEEP_MS` (30 s), closes each question asked here that
-    /// the store already holds an answer for: one written straight to it,
-    /// or one from the hub web, which never passed this hub.
+    /// Every `HUB_SWEEP_MS` (30 s), catches up with the peers, then closes
+    /// each question asked here that the store already holds an answer for:
+    /// one written straight to it, or one from the hub web, which never
+    /// passed this hub.
     pub fn sweep(&self) -> ! {
         let every = std::env::var("HUB_SWEEP_MS")
             .ok()
@@ -818,6 +850,9 @@ impl Local {
             .map_or(Duration::from_secs(30), Duration::from_millis);
         loop {
             std::thread::sleep(every);
+            // A machine that slept through questions, listed offline so no
+            // asker reached it, catches up here.
+            self.catch_up(true);
             if !self.records {
                 continue;
             }
@@ -932,13 +967,16 @@ fn tell_peers(
                     }
                 }
             }
-            let still_open = open
-                .as_ref()
-                .is_none_or(|(known, id)| known.get(id).is_some());
-            if !missed || !still_open || Instant::now() >= until {
+            if !missed || Instant::now() >= until {
                 return;
             }
             std::thread::sleep(retry_every());
+            let still_open = open
+                .as_ref()
+                .is_none_or(|(known, id)| known.get(id).is_some());
+            if !still_open {
+                return;
+            }
         }
     });
 }
