@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::http::{Request, Response};
+use crate::share::Store;
 use crate::slack::{Question, Slack, Tap};
 
 /// The port local hubs talk to each other on. The hub web keeps 8787.
@@ -82,6 +83,8 @@ pub struct Local {
     answered: Condvar,
     /// Set by mem's `POST /share/kick`, taken by the sharing thread.
     kick: Arc<AtomicBool>,
+    /// The store, while sharing is on; mem's file fetches go there.
+    store: Option<Store>,
 }
 
 impl Local {
@@ -97,7 +100,13 @@ impl Local {
             answers: Mutex::new(HashMap::new()),
             answered: Condvar::new(),
             kick: Arc::new(AtomicBool::new(false)),
+            store: None,
         }
+    }
+
+    pub fn with_store(mut self, store: Option<Store>) -> Local {
+        self.store = store;
+        self
     }
 
     /// What the sharing thread watches for mem's kicks.
@@ -113,15 +122,40 @@ impl Local {
         self.route(request)
     }
 
-    /// A request on mem's socket. Only mem may kick the sharing thread, so
-    /// the peer port never serves `/share/kick`.
+    /// A request on mem's socket. Only mem may kick the sharing thread or
+    /// fetch a shared file, so the peer port serves neither.
     pub fn mem(&self, request: &Request) -> Response {
         match (request.method.as_str(), request.path.as_str()) {
             ("POST", "/share/kick") => {
                 self.kick.store(true, Ordering::SeqCst);
                 Response::new(204, "text/plain; charset=utf-8", "")
             }
+            ("GET", "/share/file") => self.file(request),
             _ => self.route(request),
+        }
+    }
+
+    /// A shared project's evidence or raw file from the store, for mem to
+    /// keep in its replica: 404 while sharing is off or when the store has
+    /// none, 502 when the store cannot be reached or answers otherwise.
+    fn file(&self, request: &Request) -> Response {
+        let Some(store) = &self.store else {
+            return Response::not_found();
+        };
+        let Some(path) = request
+            .query
+            .get("path")
+            .filter(|path| crate::share::is_file_path(path))
+        else {
+            return Response::text(400, "expected projects/<id>/evidence|raw/<name>");
+        };
+        match store.get_file(path) {
+            Ok(Some(bytes)) => Response::new(200, "application/octet-stream", bytes),
+            Ok(None) => Response::not_found(),
+            Err(e) => {
+                eprintln!("hub: local: fetching {path}: {e:#}");
+                Response::text(502, "the store could not be reached")
+            }
         }
     }
 

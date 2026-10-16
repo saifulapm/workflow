@@ -2,15 +2,16 @@
 //! shuttles JSON between it and mem, which owns the replica and the outbox.
 //!
 //! mem is run as `mem share hello`, `mem share pending` and `mem share apply`
-//! with the hub's own environment, argv only. The store token comes from the
-//! environment and travels only in the `Authorization` header, never in a
-//! log line.
+//! with the hub's own environment, argv only. The store token and the Access
+//! service token come from the environment and travel only in headers, never
+//! in a log line. Evidence and raw files skip the socket: the hub puts them
+//! to the project's files store over plain HTTP(S).
 
 use std::collections::HashSet;
 use std::net::TcpStream;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -53,16 +54,206 @@ const LIMIT_NOTICE: &str = "Cloudflare limit reached, resets 06:00";
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
 
-/// `HUB_STORE_URL` and `HUB_STORE_TOKEN`, when both are set. From the
-/// environment only, so the token stays out of `ps`.
-pub fn from_env() -> Option<(String, String)> {
+/// A files request may move a 16.8 MB screenshot over a slow uplink.
+const FILE_TIMEOUT: Duration = Duration::from_secs(300);
+/// A Worker takes a request body of at most 100 MB, so no stored file is
+/// larger.
+const MAX_FILE: u64 = 100 * 1000 * 1000;
+
+/// How the hub reaches the store: the socket's URL, the bearer, and the
+/// Access service token that gets a request through Cloudflare Access at the
+/// edge. No Debug, so neither secret can reach a log line.
+#[derive(Clone)]
+pub struct Store {
+    url: String,
+    token: String,
+    access: Option<(String, String)>,
+    agent: ureq::Agent,
+}
+
+/// `HUB_STORE_URL` and `HUB_STORE_TOKEN`, when both are set, with
+/// `HUB_STORE_ACCESS_ID` and `HUB_STORE_ACCESS_SECRET` when both of those
+/// are. From the environment only, so the secrets stay out of `ps`.
+pub fn from_env() -> Option<Store> {
     let read = |name| {
         std::env::var(name)
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
     };
-    Some((read("HUB_STORE_URL")?, read("HUB_STORE_TOKEN")?))
+    let access = read("HUB_STORE_ACCESS_ID").zip(read("HUB_STORE_ACCESS_SECRET"));
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build();
+    let agent = ureq::Agent::config_builder()
+        .tls_config(tls)
+        .timeout_global(Some(FILE_TIMEOUT))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    Some(Store {
+        url: read("HUB_STORE_URL")?,
+        token: read("HUB_STORE_TOKEN")?,
+        access,
+        agent,
+    })
+}
+
+impl Store {
+    /// What every store request carries, the socket's handshake included.
+    fn headers(&self) -> Vec<(&'static str, String)> {
+        let mut headers = vec![("Authorization", format!("Bearer {}", self.token))];
+        if let Some((id, secret)) = &self.access {
+            headers.push(("CF-Access-Client-Id", id.clone()));
+            headers.push(("CF-Access-Client-Secret", secret.clone()));
+        }
+        headers
+    }
+
+    /// `<files base>/store/files/<path>`, the base being the socket's scheme
+    /// and host: `ws://h:p/store/share` gives `http://h:p`.
+    fn file_url(&self, path: &str) -> Result<String> {
+        let (scheme, rest) = match self.url.split_once("://") {
+            Some(("wss", rest)) => ("https", rest),
+            Some(("ws", rest)) => ("http", rest),
+            _ => bail!("HUB_STORE_URL is neither ws:// nor wss://"),
+        };
+        let host = rest.split('/').next().unwrap_or(rest);
+        Ok(format!("{scheme}://{host}/store/files/{}", encode(path)))
+    }
+
+    /// The bytes the store holds at `path`, None when it holds none.
+    pub fn get_file(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        let mut request = self.agent.get(self.file_url(path)?);
+        for (name, value) in self.headers() {
+            request = request.header(name, value);
+        }
+        let mut response = request.call().context("reaching the store")?;
+        match response.status().as_u16() {
+            200 => Ok(Some(
+                response
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_FILE)
+                    .read_to_vec()
+                    .context("reading the file")?,
+            )),
+            404 => Ok(None),
+            status => bail!("the store answered {status}"),
+        }
+    }
+
+    /// Stores the bytes at `local` as `path`.
+    fn put_file(&self, path: &str, local: &str) -> Result<()> {
+        let bytes = std::fs::read(local).with_context(|| format!("reading {local}"))?;
+        let mut request = self.agent.put(self.file_url(path)?);
+        for (name, value) in self.headers() {
+            request = request.header(name, value);
+        }
+        let response = request.send(&bytes[..]).context("reaching the store")?;
+        match response.status().as_u16() {
+            200..=299 => Ok(()),
+            status => bail!("the store answered {status}"),
+        }
+    }
+}
+
+/// Whether `path` is `projects/<id>/(evidence|raw)/...` made of plain
+/// segments, the only paths the files store holds.
+pub fn is_file_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    let ["projects", project, "evidence" | "raw", rest @ ..] = parts.as_slice() else {
+        return false;
+    };
+    let plain = |part: &&str| !matches!(*part, "" | "." | "..");
+    plain(project) && !rest.is_empty() && rest.iter().all(plain)
+}
+
+/// `path` percent-encoded but for `A-Z a-z 0-9 - . _ ~ /`, as mem encodes it.
+fn encode(path: &str) -> String {
+    path.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Uploads the files mem lists on a thread of its own, so a large one never
+/// holds up the socket's reads, and one pass at a time, so a file is never
+/// uploaded twice at once.
+#[derive(Default)]
+struct Uploads {
+    pass: Mutex<Pass>,
+}
+
+#[derive(Default)]
+struct Pass {
+    running: bool,
+    /// Asked for while a pass ran: the files mem lists may have changed.
+    again: bool,
+}
+
+impl Uploads {
+    fn start(self: &Arc<Self>, store: &Store) {
+        let mut pass = self.pass.lock().unwrap_or_else(|e| e.into_inner());
+        if pass.running {
+            pass.again = true;
+            return;
+        }
+        pass.running = true;
+        drop(pass);
+        let (uploads, store) = (Arc::clone(self), store.clone());
+        let spawned = std::thread::Builder::new()
+            .name("hub-share-upload".to_string())
+            .spawn(move || {
+                loop {
+                    upload_pending(&store);
+                    let mut pass = uploads.pass.lock().unwrap_or_else(|e| e.into_inner());
+                    if !std::mem::take(&mut pass.again) {
+                        pass.running = false;
+                        return;
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("hub: share: starting an upload: {e}");
+            self.pass.lock().unwrap_or_else(|e| e.into_inner()).running = false;
+        }
+    }
+}
+
+/// Puts each file mem lists, and tells mem of each one stored. A file that
+/// fails stays listed, and the next kick or connection tries it again.
+fn upload_pending(store: &Store) {
+    let pending = match mem(&["share", "pending"], None) {
+        Ok(pending) => pending,
+        Err(e) => {
+            eprintln!("hub: share: {e:#}");
+            return;
+        }
+    };
+    for line in pending.lines() {
+        let Ok(file) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let (Some("file"), Some(path), Some(local)) = (
+            file["t"].as_str(),
+            file["path"].as_str(),
+            file["local"].as_str(),
+        ) else {
+            continue;
+        };
+        match store.put_file(path, local) {
+            Ok(()) => {
+                let path = serde_json::to_string(path).expect("a string serializes");
+                apply(&[format!(r#"{{"t":"stored","path":{path}}}"#)]);
+            }
+            Err(e) => eprintln!("hub: share: uploading {path}: {e:#}"),
+        }
+    }
 }
 
 /// Holds the socket for good. A dropped or failed connection is tried again
@@ -70,13 +261,14 @@ pub fn from_env() -> Option<(String, String)> {
 /// `kick` is set when mem has put a write in the outbox. After the store
 /// answers `limit`, no write is sent until the next 00:00 UTC, on this
 /// connection or the next; `slack` hears of it once per Dhaka day.
-pub fn run(url: &str, token: &str, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! {
+pub fn run(store: Store, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! {
     let mut backoff = BACKOFF_START;
     let mut paused_until = None;
+    let uploads = Arc::new(Uploads::default());
     loop {
         match session(
-            url,
-            token,
+            &store,
+            &uploads,
             &kick,
             &mut backoff,
             &mut paused_until,
@@ -92,20 +284,21 @@ pub fn run(url: &str, token: &str, kick: Arc<AtomicBool>, slack: Option<Arc<Slac
 
 /// One connection, until the store closes it (`Ok`) or it fails.
 fn session(
-    url: &str,
-    token: &str,
+    store: &Store,
+    uploads: &Arc<Uploads>,
     kick: &AtomicBool,
     backoff: &mut Duration,
     paused_until: &mut Option<Timestamp>,
     slack: Option<&Slack>,
 ) -> Result<()> {
+    let url = store.url.as_str();
     let mut request = url.into_client_request().context("reading HUB_STORE_URL")?;
-    request.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {token}")
+    for (name, value) in store.headers() {
+        let value = value
             .parse()
-            .context("HUB_STORE_TOKEN is not a header value")?,
-    );
+            .with_context(|| format!("the {name} header is not a header value"))?;
+        request.headers_mut().insert(name, value);
+    }
     let (mut socket, _) = tungstenite::connect(request)
         .map_err(|error| match error {
             tungstenite::Error::Url(UrlError::UnableToConnect(_)) => anyhow!("unable to connect"),
@@ -127,7 +320,7 @@ fn session(
     kick.store(false, Ordering::SeqCst);
     let mut sent = HashSet::new();
     if paused_until.is_none() {
-        send_pending(&mut socket, &mut sent)?;
+        send_pending(&mut socket, &mut sent, store, uploads)?;
     }
 
     let mut heard = Instant::now();
@@ -186,7 +379,7 @@ fn session(
         }
         // A kick during the pause is dropped: the resume above sends it all.
         if kick.swap(false, Ordering::SeqCst) && paused_until.is_none() {
-            send_pending(&mut socket, &mut sent)?;
+            send_pending(&mut socket, &mut sent, store, uploads)?;
         }
         if heard.elapsed() >= QUIET {
             bail!("the store was silent for {QUIET:?}");
@@ -238,7 +431,13 @@ fn notify_once_a_day(slack: Option<&Slack>, at: Timestamp) {
 
 /// Sends each outbox line not yet sent on this connection. A new connection
 /// starts with an empty `sent`, so it resends everything; the store dedupes.
-fn send_pending(socket: &mut Socket, sent: &mut HashSet<String>) -> Result<()> {
+/// Files never go on the socket: when mem lists one, an upload pass starts.
+fn send_pending(
+    socket: &mut Socket,
+    sent: &mut HashSet<String>,
+    store: &Store,
+    uploads: &Arc<Uploads>,
+) -> Result<()> {
     let pending = match mem(&["share", "pending"], None) {
         Ok(pending) => pending,
         Err(e) => {
@@ -246,9 +445,14 @@ fn send_pending(socket: &mut Socket, sent: &mut HashSet<String>) -> Result<()> {
             return Ok(());
         }
     };
+    let mut files = false;
     for line in pending.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let id = serde_json::from_str::<Value>(line)
-            .ok()
+        let message = serde_json::from_str::<Value>(line).ok();
+        if message.as_ref().is_some_and(|m| m["t"] == "file") {
+            files = true;
+            continue;
+        }
+        let id = message
             .and_then(|v| v["id"].as_str().map(str::to_string))
             .unwrap_or_else(|| line.to_string());
         if sent.contains(&id) {
@@ -258,6 +462,9 @@ fn send_pending(socket: &mut Socket, sent: &mut HashSet<String>) -> Result<()> {
             .send(Message::text(line))
             .context("sending a write")?;
         sent.insert(id);
+    }
+    if files {
+        uploads.start(store);
     }
     Ok(())
 }

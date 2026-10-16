@@ -238,7 +238,11 @@ fn run_local(port: u16) -> Result<()> {
             None
         }
     };
-    let local = Arc::new(local::Local::new(machine, host, token, slack.clone()));
+    // Sharing only with both set: a test that names neither never reaches
+    // the real store.
+    let store = hub::share::from_env();
+    let local =
+        Arc::new(local::Local::new(machine, host, token, slack.clone()).with_store(store.clone()));
     let notice = slack.clone();
     if let Some(slack) = slack {
         let local = Arc::clone(&local);
@@ -254,13 +258,11 @@ fn run_local(port: u16) -> Result<()> {
             })
             .context("starting the Slack socket")?;
     }
-    // Sharing only with both set: a test that names neither never reaches
-    // the real store.
-    if let Some((url, token)) = hub::share::from_env() {
+    if let Some(store) = store {
         let kick = local.kick();
         std::thread::Builder::new()
             .name("hub-share".to_string())
-            .spawn(move || hub::share::run(&url, &token, kick, notice))
+            .spawn(move || hub::share::run(store, kick, notice))
             .context("starting the sharing socket")?;
     }
     let for_mem = Arc::clone(&local);
