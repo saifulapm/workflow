@@ -5,7 +5,8 @@
 //! already takes the proxy from the environment.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
 use tungstenite::WebSocket;
 use tungstenite::client::IntoClientRequest;
@@ -21,12 +22,27 @@ pub fn from_env() -> Option<String> {
     var("HTTPS_PROXY").or_else(|| var("https_proxy"))
 }
 
+/// How long the proxy has to take the connection, open the tunnel and
+/// finish the handshakes over it.
+const TUNNEL_WITHIN: Duration = Duration::from_secs(15);
+
 /// Opens the WebSocket `request` names, through `proxy` (`http://host:port`)
 /// when there is one. A tunnel the proxy will not open is `UnableToConnect`,
 /// as a host that cannot be reached is without one.
 pub fn connect(
     request: impl IntoClientRequest,
     proxy: Option<&str>,
+) -> tungstenite::Result<(Socket, Response)> {
+    connect_within(request, proxy, TUNNEL_WITHIN)
+}
+
+/// `connect`, with a proxy that says nothing given up after `within` rather
+/// than holding the caller for good. The socket comes back with no read
+/// timeout, for the caller to set its own.
+pub fn connect_within(
+    request: impl IntoClientRequest,
+    proxy: Option<&str>,
+    within: Duration,
 ) -> tungstenite::Result<(Socket, Response)> {
     let Some(proxy) = proxy else {
         return tungstenite::connect(request);
@@ -47,7 +63,14 @@ pub fn connect(
         .trim_start_matches("http://")
         .trim_end_matches('/')
         .to_string();
-    let mut stream = TcpStream::connect(&proxy_at).map_err(|_| unable())?;
+    let addr = proxy_at
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+        .ok_or_else(unable)?;
+    let mut stream = TcpStream::connect_timeout(&addr, within).map_err(|_| unable())?;
+    stream.set_read_timeout(Some(within))?;
+    stream.set_write_timeout(Some(within))?;
     write!(
         stream,
         "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"
@@ -74,9 +97,19 @@ pub fn connect(
         .map_err(|e| tungstenite::Error::Tls(e.into()))?
         .with_no_client_auth();
     let connector = tungstenite::Connector::Rustls(std::sync::Arc::new(config));
-    tungstenite::client_tls_with_config(request, stream, None, Some(connector)).map_err(|e| match e
-    {
-        tungstenite::HandshakeError::Failure(e) => e,
-        tungstenite::HandshakeError::Interrupted(_) => unable(),
-    })
+    let (mut socket, response) =
+        tungstenite::client_tls_with_config(request, stream, None, Some(connector)).map_err(
+            |e| match e {
+                tungstenite::HandshakeError::Failure(e) => e,
+                tungstenite::HandshakeError::Interrupted(_) => unable(),
+            },
+        )?;
+    let tcp = match socket.get_mut() {
+        MaybeTlsStream::Plain(stream) => stream,
+        MaybeTlsStream::Rustls(stream) => stream.get_mut(),
+        _ => return Ok((socket, response)),
+    };
+    tcp.set_read_timeout(None)?;
+    tcp.set_write_timeout(None)?;
+    Ok((socket, response))
 }
