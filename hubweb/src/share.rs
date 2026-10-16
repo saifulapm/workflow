@@ -20,8 +20,12 @@ pub struct Rec {
 /// Why the log could not answer.
 #[derive(Debug, PartialEq)]
 pub enum Fault {
-    /// A Free daily limit is hit; the machine keeps the write and resends it.
+    /// Cloudflare refused with one of its own limits; the machine keeps the
+    /// write and resends it.
     Limit,
+    /// The store's own day cap (`DAY_ROWS`, `R2_DAY_WRITES`) is spent; the
+    /// machine keeps the write and resends it.
+    Cap,
     Broken(String),
 }
 
@@ -74,7 +78,7 @@ pub trait Log {
 /// day's `R2_DAY_WRITES` are spent; the machine keeps it and tries again.
 pub fn r2_write(log: &mut impl Log) -> Result<(), Fault> {
     if log.r2_writes_today()? >= R2_DAY_WRITES {
-        return Err(Fault::Limit);
+        return Err(Fault::Cap);
     }
     log.add_r2_write()
 }
@@ -88,8 +92,11 @@ pub struct Outcome {
     pub others: Option<String>,
     /// The machine this socket said hello as, to remember for its writes.
     pub hello: Option<String>,
-    /// The log hit a Free daily limit, so the store notes it for the home.
+    /// The log hit a limit or the store's cap, so the store notes it for the
+    /// home.
     pub limit: bool,
+    /// The refusal was the store's own day cap, not a Cloudflare limit.
+    pub cap: bool,
     /// What the pages show of the machines changed: open pages are told.
     pub changed: bool,
 }
@@ -138,10 +145,12 @@ pub fn handle(
         Err(why) => Err(Fault::Broken(format!("not JSON: {why}"))),
     };
     answer.unwrap_or_else(|fault| Outcome {
-        limit: fault == Fault::Limit,
+        limit: matches!(fault, Fault::Cap | Fault::Limit),
+        cap: fault == Fault::Cap,
         sender: vec![
             match fault {
                 Fault::Limit => json!({"t":"limit"}),
+                Fault::Cap => json!({"t":"limit","cap":true}),
                 Fault::Broken(why) => json!({"t":"error","why":why}),
             }
             .to_string(),
@@ -200,10 +209,10 @@ fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, 
         }
     }
     // The import waits for the next UTC day; the machine that hit the day's
-    // rows keeps its write until then, as it would at a Cloudflare limit.
+    // rows keeps its write until then.
     let rows = log.rows_today()?;
     if rows >= DAY_ROWS {
-        return Err(Fault::Limit);
+        return Err(Fault::Cap);
     }
     if message["import"] == true && rows >= IMPORT_ROWS {
         return Ok(Outcome {
@@ -406,20 +415,27 @@ fn rec(rec: &Rec) -> String {
 }
 
 /// What a socket keeps through the store's hibernation: the machine that
-/// said hello on it, and the UTC day number of the last Free limit the store
-/// hit. An attachment is no storage write, so it can be set past a limit.
-pub fn attachment(machine: Option<&str>, limit_day: Option<u64>) -> Value {
-    json!({"machine": machine, "limit": limit_day})
+/// said hello on it, and the UTC day number of the last limit the store hit
+/// with whether it was the store's own cap. An attachment is no storage
+/// write, so it can be set past a limit.
+pub fn attachment(machine: Option<&str>, limit_day: Option<(u64, bool)>) -> Value {
+    json!({
+        "machine": machine,
+        "limit": limit_day.map(|(day, _)| day),
+        "cap": limit_day.map(|(_, cap)| cap),
+    })
 }
 
 /// The machine and limit day in an attachment. One set before the limit day
 /// was kept is the machine's name alone.
-pub fn attached(value: &Value) -> (Option<String>, Option<u64>) {
+pub fn attached(value: &Value) -> (Option<String>, Option<(u64, bool)>) {
     match value {
         Value::String(machine) => (Some(machine.clone()), None),
         value => (
             value["machine"].as_str().map(str::to_string),
-            value["limit"].as_u64(),
+            value["limit"]
+                .as_u64()
+                .map(|day| (day, value["cap"].as_bool().unwrap_or(false))),
         ),
     }
 }
@@ -438,8 +454,11 @@ pub fn bound(value: &Value) -> Option<String> {
     value["bound"].as_str().map(str::to_string)
 }
 
-/// The newest limit day any socket's attachment holds.
-pub fn newest_limit_day<'a>(attachments: impl IntoIterator<Item = &'a Value>) -> Option<u64> {
+/// The newest limit day any socket's attachment holds; a cap outranks a
+/// Cloudflare limit on the same day.
+pub fn newest_limit_day<'a>(
+    attachments: impl IntoIterator<Item = &'a Value>,
+) -> Option<(u64, bool)> {
     attachments
         .into_iter()
         .filter_map(|value| attached(value).1)
@@ -816,6 +835,7 @@ mod tests {
         assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
         assert_eq!(answer.others, None);
         assert!(answer.limit);
+        assert!(!answer.cap);
     }
 
     fn import(log: &mut Memory, id: &str) -> Outcome {
@@ -860,8 +880,9 @@ mod tests {
             ..Memory::default()
         };
         let answer = write(&mut log, "01A", ITEM, Value::Null, json!("x"));
-        assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
+        assert_eq!(parse(&answer.sender), [json!({"t":"limit","cap":true})]);
         assert!(answer.limit);
+        assert!(answer.cap);
         assert!(log.recs.is_empty());
     }
 
@@ -874,7 +895,7 @@ mod tests {
         assert_eq!(r2_write(&mut log), Ok(()));
         assert_eq!(r2_write(&mut log), Ok(()));
         assert_eq!(log.r2_writes, R2_DAY_WRITES);
-        assert_eq!(r2_write(&mut log), Err(Fault::Limit));
+        assert_eq!(r2_write(&mut log), Err(Fault::Cap));
         assert_eq!(log.r2_writes, R2_DAY_WRITES);
     }
 
@@ -911,12 +932,16 @@ mod tests {
     #[test]
     fn an_attachment_carries_the_machine_and_the_limit_day() {
         assert_eq!(
-            attachment(Some("nuc"), Some(20742)),
-            json!({"machine":"nuc","limit":20742})
+            attachment(Some("nuc"), Some((20742, true))),
+            json!({"machine":"nuc","limit":20742,"cap":true})
+        );
+        assert_eq!(
+            attached(&json!({"machine":"nuc","limit":20742,"cap":true})),
+            (Some("nuc".to_string()), Some((20742, true)))
         );
         assert_eq!(
             attached(&json!({"machine":"nuc","limit":20742})),
-            (Some("nuc".to_string()), Some(20742))
+            (Some("nuc".to_string()), Some((20742, false)))
         );
         assert_eq!(
             attached(&json!({"machine":"nuc","limit":null})),
@@ -935,11 +960,12 @@ mod tests {
         let sockets = [
             json!({"machine":"nuc","limit":20741}),
             json!({"machine":"mac","limit":20742}),
+            json!({"machine":"vm","limit":20742,"cap":true}),
             json!({"machine":"pi","limit":null}),
             json!("old"),
             Value::Null,
         ];
-        assert_eq!(newest_limit_day(&sockets), Some(20742));
+        assert_eq!(newest_limit_day(&sockets), Some((20742, true)));
         assert_eq!(newest_limit_day(&[json!("old"), Value::Null]), None);
         assert_eq!(newest_limit_day(&[]), None);
     }

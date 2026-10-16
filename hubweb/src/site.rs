@@ -20,13 +20,17 @@ use crate::webwrite::{self, After, Clock, Written};
 /// The name the pages draw as the hub's own.
 pub const MACHINE: &str = "next-hub";
 
-/// The line the hub posts to Slack when the store hits a Free daily limit.
+/// The line the home shows when Cloudflare refuses the store.
 const LIMIT_LINE: &str = "Cloudflare limit reached, resets 06:00";
+/// The line when the store refuses on its own day cap.
+const CAP_LINE: &str = "The store's day cap is reached, writes wait until 06:00";
 
-/// Whether the store's flag (the UTC day number it was set on) is still
-/// today's: the Free limits reset at 00:00 UTC, so an older flag is stale.
-pub fn limit_is_today(day: Option<u64>, now_ms: u64) -> bool {
-    day == Some(now_ms / 86_400_000)
+/// Whether the store's flag (the UTC day number it was set on, and whether it
+/// was the store's own cap) is still today's: both reset at 00:00 UTC, so an
+/// older flag is stale. Some(true) is a cap today.
+pub fn limit_is_today(flag: Option<(u64, bool)>, now_ms: u64) -> Option<bool> {
+    flag.filter(|(day, _)| *day == now_ms / 86_400_000)
+        .map(|(_, cap)| cap)
 }
 
 /// The routes the hub web offers.
@@ -45,8 +49,9 @@ pub struct Ask<'a> {
     pub route: Option<Value>,
     pub paired: bool,
     pub may_write: bool,
-    /// The store hit a Free daily limit today, which home says.
-    pub limited: bool,
+    /// The store refused a write today, which home says: Some(true) for its
+    /// own day cap, Some(false) for a Cloudflare limit.
+    pub limited: Option<bool>,
     /// How old a machine's newest report may be and it still count as online.
     pub window_ms: u64,
     /// What the store has seen, as its /live socket names it: a page drawn
@@ -107,10 +112,11 @@ pub fn page(
     let mut response = route_page(&site, ask.request)?;
     if response.content_type.starts_with("text/html") {
         let mut html = String::from_utf8_lossy(&response.body).into_owned();
-        if ask.limited && ask.request.path == "/" {
+        if let (Some(cap), "/") = (ask.limited, ask.request.path.as_str()) {
+            let line = if cap { CAP_LINE } else { LIMIT_LINE };
             html = html.replacen(
                 "</nav>\n",
-                &format!("</nav>\n<p class=\"banner warn\">{LIMIT_LINE}</p>\n"),
+                &format!("</nav>\n<p class=\"banner warn\">{line}</p>\n"),
                 1,
             );
         }
@@ -466,7 +472,7 @@ mod tests {
             route: None,
             paired: true,
             may_write: true,
-            limited: false,
+            limited: None,
             window_ms: AGENT_WINDOW_MS,
             stamp: "7.0".into(),
         }
@@ -554,22 +560,34 @@ mod tests {
         let line = "Cloudflare limit reached, resets 06:00";
         let request = get("/");
         let mut limited = ask(&request);
-        limited.limited = true;
+        limited.limited = Some(false);
         assert!(html(draw(&store(), limited).unwrap()).contains(line));
         assert!(!html(draw(&store(), ask(&request)).unwrap()).contains(line));
         let other = get("/p/walk/questions");
         let mut limited = ask(&other);
-        limited.limited = true;
+        limited.limited = Some(false);
         assert!(!html(draw(&store(), limited).unwrap()).contains(line));
+    }
+
+    #[test]
+    fn the_home_says_the_day_cap_when_the_flag_is_a_cap() {
+        let cap = "The store's day cap is reached, writes wait until 06:00";
+        let request = get("/");
+        let mut capped = ask(&request);
+        capped.limited = Some(true);
+        let page = html(draw(&store(), capped).unwrap());
+        assert!(page.contains(cap), "{page}");
+        assert!(!page.contains("Cloudflare limit reached"), "{page}");
     }
 
     #[test]
     fn a_limit_flag_counts_only_on_the_utc_day_it_was_set() {
         // 2026-10-16T13:00:00Z is UTC day 20742.
         let now = 1_792_155_600_000;
-        assert!(limit_is_today(Some(20742), now));
-        assert!(!limit_is_today(Some(20741), now));
-        assert!(!limit_is_today(None, now));
+        assert_eq!(limit_is_today(Some((20742, false)), now), Some(false));
+        assert_eq!(limit_is_today(Some((20742, true)), now), Some(true));
+        assert_eq!(limit_is_today(Some((20741, true)), now), None);
+        assert_eq!(limit_is_today(None, now), None);
     }
 
     #[test]
@@ -661,7 +679,7 @@ mod tests {
         assert_eq!((refused.status, written.route), (400, None));
     }
 
-    /// Files whose every read failed, as the store's are past a Free limit.
+    /// Files whose every read failed, as the store's are past a Cloudflare limit.
     struct Failing;
 
     impl Files for Failing {

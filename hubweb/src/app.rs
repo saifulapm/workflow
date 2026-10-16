@@ -577,15 +577,16 @@ pub struct Store {
     state: State,
     env: Env,
     sql: SqlStorage,
-    /// The UTC day number a write last hit a Free limit, while the object is
-    /// awake. Each open socket's attachment holds it through hibernation.
-    limit_day: Cell<Option<u64>>,
+    /// The UTC day number a write last hit a limit, and whether it was the
+    /// store's own cap, while the object is awake. Each open socket's
+    /// attachment holds it through hibernation.
+    limit_day: Cell<Option<(u64, bool)>>,
 }
 
 impl Store {
     /// The newest limit day this object hit, from memory or from any open
     /// socket's attachment.
-    fn limit_day(&self) -> Result<Option<u64>> {
+    fn limit_day(&self) -> Result<Option<(u64, bool)>> {
         let mut attachments = Vec::new();
         for socket in self.state.get_websockets_with_tag(MACHINE) {
             attachments.push(attachment(&socket)?);
@@ -997,7 +998,10 @@ impl DurableObject for Store {
                     return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
                 };
                 if share::r2_write(&mut SqlLog(&self.sql)).is_err() {
-                    return Response::error("the store's day of R2 writes is spent", 503);
+                    return Response::error(
+                        "The store's day cap is reached, writes wait until 06:00",
+                        503,
+                    );
                 }
                 let body = match req.inner().body() {
                     Some(stream) => Data::ReadableStream(stream),
@@ -1179,7 +1183,7 @@ impl DurableObject for Store {
             ws.send_with_str(reply)?;
         }
         if outcome.limit {
-            let day = utc_day();
+            let day = (utc_day(), outcome.cap);
             self.limit_day.set(Some(day));
             // The object forgets its memory when it hibernates, so every
             // socket carries the day for the home to find. A socket that is
@@ -1289,8 +1293,7 @@ impl DurableObject for Files {
             },
             _ => Response::error("Method Not Allowed", 405),
         };
-        // A limit is the Free plan's daily cap: the hub keeps the file and
-        // tries again later.
+        // A Cloudflare limit: the hub keeps the file and tries again later.
         match answer {
             Err(error) if names_limit(&error.to_string()) => {
                 Response::error("Cloudflare limit reached", 503)
@@ -1824,8 +1827,8 @@ fn utc_day() -> u64 {
     now_ms() / 86_400_000
 }
 
-/// A storage error that names a limit is the Free plan's daily cap, which
-/// the machine answers by keeping the write; anything else is an error.
+/// A storage error that names a limit is a Cloudflare limit, which the
+/// machine answers by keeping the write; anything else is an error.
 fn fault(error: Error) -> Fault {
     let why = error.to_string();
     if names_limit(&why) {
