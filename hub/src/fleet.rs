@@ -27,6 +27,11 @@ pub fn runner_name() -> Option<String> {
     {
         return Some(name.trim().to_string());
     }
+    // A cloud VM's tailnet name is ephemeral; its session is what its
+    // runner record names.
+    if let Some(session) = cloud_session() {
+        return Some(session);
+    }
     let tailnet = crate::tailnet_name()?;
     let label = tailnet.split('.').next()?;
     (!label.is_empty()).then(|| label.to_string())
@@ -64,6 +69,21 @@ fn stdout_of(program: &str, args: &[&str]) -> Option<String> {
             None
         }
     }
+}
+
+/// The claude.ai session this machine is, when it is a cloud session, as
+/// its runner record names it: `CLAUDE_CODE_REMOTE_SESSION_ID` with `cse_`
+/// swapped for `session_`.
+pub fn cloud_session() -> Option<String> {
+    let id = std::env::var("CLAUDE_CODE_REMOTE_SESSION_ID").ok()?;
+    let id = id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(match id.strip_prefix("cse_") {
+        Some(rest) => format!("session_{rest}"),
+        None => id.to_string(),
+    })
 }
 
 /// `WORKFLOW_AMX`, else `amx`, as workflow names it.
@@ -113,7 +133,11 @@ fn unpushed(dir: &str) -> Option<u64> {
 /// The report as it goes out, without its frame kind. `None` when mem or
 /// amx could not be read: a half report would read as runs ended.
 pub fn report(machine: &str) -> Option<Value> {
-    let agents = agents()?;
+    // A cloud VM runs no amx: the session itself is its run.
+    let agents = match cloud_session() {
+        Some(_) => Vec::new(),
+        None => agents()?,
+    };
     let projects: Value = serde_json::from_str(&stdout_of("mem", &["projects", "--json"])?)
         .map_err(|e| eprintln!("hub: report: mem projects --json: {e}"))
         .ok()?;
@@ -154,7 +178,7 @@ pub fn report(machine: &str) -> Option<Value> {
         "checkouts": checkouts,
         "worktrees": worktrees,
         "unpushed": unpushed,
-        "cloud": Value::Null,
+        "cloud": cloud_session(),
     }))
 }
 

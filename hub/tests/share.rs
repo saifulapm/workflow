@@ -1367,3 +1367,44 @@ fn a_resume_of_a_live_session_runs_nothing() {
     });
     assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
 }
+
+/// A cloud VM has no amx, and its tailnet name is ephemeral: it reports as
+/// its session, which its runner record names.
+#[test]
+fn a_cloud_session_reports_itself_as_its_session() {
+    let dir = TempDir::new("share-report-cloud");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, "[]");
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(
+        &dir,
+        &bin,
+        Some(&store),
+        &[("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01VPKGED")],
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    let report = &reports_on(&store, 0)[0];
+    assert_eq!(report["machine"], "session_01VPKGED");
+    assert_eq!(report["cloud"], "session_01VPKGED");
+}
+
+#[test]
+fn a_cloud_session_without_amx_still_reports() {
+    let dir = TempDir::new("share-report-cloud-noamx");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, "[]");
+    std::fs::remove_file(bin.join("amx")).unwrap();
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(
+        &dir,
+        &bin,
+        Some(&store),
+        &[("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01VPKGED")],
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    assert_eq!(reports_on(&store, 0)[0]["agents"], serde_json::json!([]));
+}

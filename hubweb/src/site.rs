@@ -340,6 +340,7 @@ impl Fleet for Machines {
             checkouts: serde_json::from_value(field("checkouts")).unwrap_or_default(),
             worktrees: serde_json::from_value(field("worktrees")).unwrap_or_default(),
             unpushed: serde_json::from_value(field("unpushed")).unwrap_or_default(),
+            cloud: field("cloud").as_str().map(str::to_string),
         })
     }
     fn machines(&self) -> Vec<String> {

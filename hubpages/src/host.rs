@@ -67,6 +67,8 @@ pub struct Polled {
     /// The projects whose main there holds commits origin/main lacks, and
     /// how many: a cloud run clones origin, so it waits for a push.
     pub unpushed: BTreeMap<String, u64>,
+    /// The claude.ai session this machine is, when it is a cloud session.
+    pub cloud: Option<String>,
 }
 
 /// The device agents, as their polls left them.

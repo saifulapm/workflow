@@ -113,6 +113,29 @@ pub fn cloud_run(
     })
 }
 
+/// A cloud run as its own local hub tells it: a session that reports is
+/// live, past the seven hours too, and one whose reports have stopped has
+/// ended. A parked or landed run keeps its state, and so does one whose
+/// session never reported, which the seven hours alone still end.
+pub fn heard(mut run: CloudRun, agents: &dyn Fleet) -> CloudRun {
+    if matches!(run.state, CloudState::Parked | CloudState::Landed) {
+        return run;
+    }
+    let reporter = agents.machines().into_iter().find(|machine| {
+        agents
+            .report(machine)
+            .is_some_and(|report| report.cloud.as_deref() == Some(run.id.as_str()))
+    });
+    if let Some(machine) = reporter {
+        run.state = if agents.online(&machine) {
+            CloudState::Live
+        } else {
+            CloudState::Ended
+        };
+    }
+    run
+}
+
 /// What runs a project.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Run {
@@ -419,5 +442,86 @@ mod tests {
         let mut draft = summary(2, 3);
         draft.roadmap_status = Some("draft".to_string());
         assert!(!stalled(&draft, &dead, ""), "not approved");
+    }
+
+    /// Machines by name: (name, online, the cloud session it is).
+    struct Clouds(Vec<(&'static str, bool, Option<&'static str>)>);
+
+    impl Fleet for Clouds {
+        fn online(&self, machine: &str) -> bool {
+            self.0.iter().any(|m| m.0 == machine && m.1)
+        }
+        fn report(&self, machine: &str) -> Option<crate::host::Polled> {
+            let m = self.0.iter().find(|m| m.0 == machine)?;
+            Some(crate::host::Polled {
+                cloud: m.2.map(str::to_string),
+                ..Default::default()
+            })
+        }
+        fn machines(&self) -> Vec<String> {
+            self.0.iter().map(|m| m.0.to_string()).collect()
+        }
+        fn pending(&self, _machine: &str) -> Vec<crate::host::Command> {
+            Vec::new()
+        }
+    }
+
+    fn run_in(state: CloudState) -> CloudRun {
+        CloudRun {
+            id: "session_01ABC".to_string(),
+            milestone: "m2".to_string(),
+            since: Some("2026-10-15T08:00:00Z".to_string()),
+            state,
+        }
+    }
+
+    #[test]
+    fn a_cloud_session_that_reports_is_live_past_the_seven_hours() {
+        let fleet = Clouds(vec![
+            ("mini", true, None),
+            ("cloud-01abc", true, Some("session_01ABC")),
+        ]);
+        assert_eq!(
+            heard(run_in(CloudState::Ended), &fleet).state,
+            CloudState::Live
+        );
+        assert_eq!(
+            heard(run_in(CloudState::Live), &fleet).state,
+            CloudState::Live
+        );
+    }
+
+    #[test]
+    fn a_cloud_session_that_stopped_reporting_has_ended() {
+        let fleet = Clouds(vec![("cloud-01abc", false, Some("session_01ABC"))]);
+        assert_eq!(
+            heard(run_in(CloudState::Live), &fleet).state,
+            CloudState::Ended
+        );
+    }
+
+    #[test]
+    fn a_parked_or_landed_cloud_run_or_one_never_heard_keeps_its_state() {
+        let quiet = Clouds(vec![("cloud-01abc", false, Some("session_01ABC"))]);
+        assert_eq!(
+            heard(run_in(CloudState::Parked), &quiet).state,
+            CloudState::Parked
+        );
+        assert_eq!(
+            heard(run_in(CloudState::Landed), &quiet).state,
+            CloudState::Landed
+        );
+        let other = Clouds(vec![
+            ("cloud-9", true, Some("session_OTHER")),
+            ("mini", true, None),
+        ]);
+        assert_eq!(
+            heard(run_in(CloudState::Live), &other).state,
+            CloudState::Live
+        );
+        assert_eq!(
+            heard(run_in(CloudState::Ended), &other).state,
+            CloudState::Ended
+        );
     }
 }

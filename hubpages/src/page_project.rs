@@ -427,7 +427,7 @@ pub fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
         Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
         _ => None,
     };
-    live::cloud_run(s, handoff, ctx.site.now)
+    live::cloud_run(s, handoff, ctx.site.now).map(|run| live::heard(run, ctx.site.host.fleet()))
 }
 
 /// The project's cloud run that holds the one cloud slot, live or parked,

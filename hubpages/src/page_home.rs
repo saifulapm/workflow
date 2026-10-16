@@ -230,7 +230,10 @@ pub fn render(
     let now = jiff::Timestamp::from_millisecond(now_ms).unwrap_or_default();
     let clouds: Vec<Option<CloudRun>> = projects
         .iter()
-        .map(|p| live::cloud_run(p, || handoff_body(mem, &p.name), now))
+        .map(|p| {
+            live::cloud_run(p, || handoff_body(mem, &p.name), now)
+                .map(|run| live::heard(run, agents))
+        })
         .collect();
     let showing = |run: &Run, cloud: &Option<CloudRun>| {
         matches!(run, Run::Live(_))

@@ -58,6 +58,8 @@ impl hubpages::Fleet for Agents {
             checkouts: report.checkouts,
             worktrees: report.worktrees,
             unpushed: report.unpushed,
+            // workflow agent runs on devices only.
+            cloud: None,
         })
     }
 
