@@ -196,6 +196,48 @@ is "$(mcp /mcp "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["conten
 is "$(mcp / "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"][0]["text"]')" \
 	"Next: build the store." "POST / serves MCP too"
 
+# An open page listens on /live: the store nudges it after every stored
+# write, and a page socket can say nothing that the store acts on.
+cat >"$T_TMP/live.mjs" <<'JS'
+const [base, jwt, token] = process.argv.slice(2);
+const ws = (path, headers) => {
+  const s = new WebSocket(base.replace("http", "ws") + path, { headers });
+  const inbox = [];
+  s.onmessage = (e) => inbox.push(String(e.data));
+  const opened = new Promise((ok, fail) => { s.onopen = ok; s.onerror = () => fail(new Error(path)); });
+  const next = async (ms) => {
+    const until = Date.now() + ms;
+    while (!inbox.length && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    return inbox.shift() ?? null;
+  };
+  return { s, opened, next };
+};
+const page = ws("/live", { "Cf-Access-Jwt-Assertion": jwt });
+const mac = ws("/store/share", { Authorization: `Bearer ${token}` });
+await Promise.all([page.opened, mac.opened]);
+mac.s.send(JSON.stringify({ t: "hello", machine: "mac", since: 0 }));
+for (let m = await mac.next(2000); m && !m.includes('"ready"'); m = await mac.next(2000));
+const at = Date.now();
+mac.s.send(JSON.stringify({ t: "write", id: "01LIVE1", path: "projects/P9/items/01LIVEITEM.md", base: null, body: "x" }));
+const nudge = await page.next(2000);
+console.log("nudge", nudge, Date.now() - at < 2000);
+console.log("mac-ack", (await mac.next(2000))?.includes('"ack"'));
+page.s.send(JSON.stringify({ t: "hello", machine: "page", since: 0 }));
+page.s.send(JSON.stringify({ t: "write", id: "01LIVE2", path: "projects/P9/items/01FORGED.md", base: null, body: "y" }));
+console.log("page-answer", await page.next(800));
+console.log("mac-after-forgery", await mac.next(800));
+page.s.close(); mac.s.close();
+JS
+node "$T_TMP/live.mjs" "$base" "$valid" "$token" >"$T_TMP/live.out" 2>&1
+live() { sed -n "s/^$1 //p" "$T_TMP/live.out"; }
+is "$(live nudge)" '{"t":"changed"} true' "an open page hears changed within 2 s of a machine's write"
+is "$(live mac-ack)" true "the machine's write is stored as usual"
+is "$(live page-answer)" null "a page socket's hello and write get no answer"
+is "$(live mac-after-forgery)" null "a write sent on a page socket reaches no machine"
+is "$(curl -s -o /dev/null -w '%{http_code}' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+	-H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$base/live")" 401 \
+	"/live without a JWT is refused"
+
 # No Access settings: every guarded path is refused, the store write is not.
 start_dev bare STORE_TOKEN=$token
 bare_port=$CF_DEV_PORT

@@ -21,6 +21,10 @@ const STORE: &str = "STORE";
 const STORE_NAME: &str = "walk";
 /// Saiful reads the hub from Dhaka, so the store is created in Asia-Pacific.
 const STORE_LOCATION: &str = "apac";
+/// The tags the store's sockets carry: a machine's sharing socket, or an
+/// open page's, which hears only that the store changed.
+const MACHINE: &str = "machine";
+const PAGE: &str = "page";
 /// Each project's files, one Durable Object per project id.
 const FILES: &str = "FILES";
 
@@ -77,6 +81,8 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
     }
     match (req.method(), path.as_str()) {
         (Method::Get, "/") => home(&env).await,
+        // An open page's socket, which hears only that the store changed.
+        (Method::Get, "/live") => store(&env)?.fetch_with_request(req).await,
         (Method::Post, "/" | "/mcp") => serve_mcp(req, &env).await,
         (_, "/mcp") => Response::error("Method Not Allowed", 405),
         _ => Response::error("Not Found", 404),
@@ -281,10 +287,19 @@ impl Store {
     /// socket's attachment.
     fn limit_day(&self) -> Result<Option<u64>> {
         let mut attachments = Vec::new();
-        for socket in self.state.get_websockets() {
+        for socket in self.state.get_websockets_with_tag(MACHINE) {
             attachments.push(attachment(&socket)?);
         }
         Ok(share::newest_limit_day(&attachments).max(self.limit_day.get()))
+    }
+
+    /// Tells every open page the store changed, and nothing more: the page
+    /// reloads itself when no one is typing.
+    fn nudge_pages(&self) {
+        for page in self.state.get_websockets_with_tag(PAGE) {
+            // A page that is closing misses it; it loads fresh when reopened.
+            let _ = page.send_with_str(r#"{"t":"changed"}"#);
+        }
     }
 }
 
@@ -416,7 +431,16 @@ impl DurableObject for Store {
                     return Response::error("Expected a WebSocket upgrade", 426);
                 }
                 let pair = WebSocketPair::new()?;
-                self.state.accept_web_socket(&pair.server);
+                self.state
+                    .accept_websocket_with_tags(&pair.server, &[MACHINE]);
+                Response::from_websocket(pair.client)
+            }
+            (Method::Get, "/live") => {
+                if req.headers().get("Upgrade")?.as_deref() != Some("websocket") {
+                    return Response::error("Expected a WebSocket upgrade", 426);
+                }
+                let pair = WebSocketPair::new()?;
+                self.state.accept_websocket_with_tags(&pair.server, &[PAGE]);
                 Response::from_websocket(pair.client)
             }
             _ => Response::error("Not Found", 404),
@@ -430,6 +454,10 @@ impl DurableObject for Store {
         ws: WebSocket,
         message: WebSocketIncomingMessage,
     ) -> Result<()> {
+        // A page only listens: nothing it sends is a machine's message.
+        if self.state.get_tags(&ws).iter().any(|tag| tag == PAGE) {
+            return Ok(());
+        }
         let WebSocketIncomingMessage::String(text) = message else {
             ws.send_with_str(r#"{"t":"error","why":"messages are JSON text frames"}"#)?;
             return Ok(());
@@ -449,7 +477,7 @@ impl DurableObject for Store {
             // The object forgets its memory when it hibernates, so every
             // socket carries the day for the home to find. A socket that is
             // closing may refuse it; the others still hold the day.
-            for socket in self.state.get_websockets() {
+            for socket in self.state.get_websockets_with_tag(MACHINE) {
                 if let Ok(value) = attachment(&socket) {
                     let (machine, _) = share::attached(&value);
                     let _ = socket
@@ -458,13 +486,14 @@ impl DurableObject for Store {
             }
         }
         if let Some(rec) = &outcome.others {
-            for other in self.state.get_websockets() {
+            for other in self.state.get_websockets_with_tag(MACHINE) {
                 if other.as_ref() != ws.as_ref() {
                     // A socket that is closing misses the rec; its machine
                     // gets it from the replay after its next hello.
                     let _ = other.send_with_str(rec);
                 }
             }
+            self.nudge_pages();
         }
         Ok(())
     }
