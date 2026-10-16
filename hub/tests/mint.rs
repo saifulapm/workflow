@@ -64,6 +64,7 @@ fn share_mint_sends_the_bearer_from_stdin_and_prints_only_the_new_token() {
             "HUB_STORE_URL",
             format!("ws://127.0.0.1:{port}/store/share"),
         )
+        .env("HUB_STORE_NAME", "main")
         .env_remove("HUB_STORE_TOKEN")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -90,6 +91,13 @@ fn share_mint_sends_the_bearer_from_stdin_and_prints_only_the_new_token() {
     assert!(
         seen[0].contains(&format!("Bearer {SHARED}\r\n")),
         "{}",
+        seen[0]
+    );
+    assert!(
+        seen[0]
+            .to_ascii_lowercase()
+            .contains("x-hub-store: main\r\n"),
+        "the token is minted in the store object the machine will use: {}",
         seen[0]
     );
 }

@@ -50,6 +50,11 @@ fn mint(url: &str, bearer: &str, runner: &str) -> Result<String> {
         .post(format!("{scheme}://{host}/store/machines/{runner}"))
         .header("Authorization", format!("Bearer {bearer}"));
     let read = |name| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    // The token lives in the store object the machine will share with, so
+    // it is minted there, as every later request of the machine names it.
+    if let Some(object) = read("HUB_STORE_NAME") {
+        request = request.header("X-Hub-Store", object.trim());
+    }
     if let (Some(id), Some(secret)) = (read("HUB_STORE_ACCESS_ID"), read("HUB_STORE_ACCESS_SECRET"))
     {
         request = request
