@@ -94,6 +94,18 @@ pub fn wait_until(socket: &Path, short_id: &str, timeout: Duration) -> Waited {
     }
 }
 
+/// Tells the hub the sharing outbox has a new write. Never waits long: the
+/// write is already safe in the outbox.
+pub fn kick(socket: &Path) {
+    let _ = call(
+        socket,
+        "POST",
+        "/share/kick",
+        b"",
+        Duration::from_millis(200),
+    );
+}
+
 /// The short id a question is known by on the local hub: the last eight
 /// characters of whatever form it was given in.
 pub fn short_id(id: &str) -> String {

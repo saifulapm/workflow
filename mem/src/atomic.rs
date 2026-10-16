@@ -89,7 +89,33 @@ pub fn temp_path(dir: &Path) -> PathBuf {
     dir.join(format!(".tmp-{}-{}", std::process::id(), Ulid::generate()))
 }
 
+/// Replaces a store file, putting the write in the sharing outbox first when
+/// its project shares.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let shared = crate::share::before_write(path, Some(bytes))?;
+    write_replica(path, bytes)?;
+    if shared {
+        crate::share::kick();
+    }
+    Ok(())
+}
+
+/// Removes a store file, sharing the removal like a write.
+pub fn remove_file(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let shared = crate::share::before_write(path, None)?;
+    fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+    if shared {
+        crate::share::kick();
+    }
+    Ok(())
+}
+
+/// The atomic replace itself, with no sharing: what a write arriving from
+/// another machine lands through.
+pub fn write_replica(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;

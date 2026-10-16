@@ -1236,11 +1236,9 @@ fn writable_project(app: &App, noun: &str) -> Result<String> {
 /// Clearing what is not there is not an error: `--clear` states the end it
 /// wants, not a transition it expects to make.
 fn clear_file(path: &std::path::Path, noun: &str) -> Result<i32> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(exit::OK),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(exit::OK),
-        Err(e) => Err(exit::store_error(format!("clearing the {noun}: {e}"))),
-    }
+    crate::atomic::remove_file(path)
+        .map_err(|e| exit::store_error(format!("clearing the {noun}: {e:#}")))?;
+    Ok(exit::OK)
 }
 
 fn set_text(set_file: Option<&std::path::Path>) -> Result<String> {
@@ -2414,6 +2412,33 @@ fn write_pi_extension(path: &std::path::Path) -> Result<()> {
     crate::atomic::write_atomic(path, crate::maint::PI_EXTENSION.as_bytes())
 }
 
+/// `mem share hello|pending|apply`: the local hub's side of sharing.
+pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
+    use crate::cli::ShareCommand;
+    let db = app.dirs.share_db();
+    match command {
+        ShareCommand::Hello => println!("{}", crate::share::hello(&db, &app.machine)?),
+        ShareCommand::Pending => {
+            for write in crate::share::pending(&db)? {
+                println!("{write}");
+            }
+        }
+        ShareCommand::Apply => {
+            for line in std::io::stdin().lines() {
+                let line = anyhow::Context::context(line, "reading stdin")?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(message) => crate::share::apply(&db, &app.store.root, &message)?,
+                    Err(e) => eprintln!("mem: share apply: skipping a line that is not JSON: {e}"),
+                }
+            }
+        }
+    }
+    Ok(exit::OK)
+}
+
 /// `mem doctor [--fix]` — every health check. Findings are exit 0: they are
 /// for a human to read, not a failure of the command.
 pub fn doctor(app: &App, fix: bool) -> Result<i32> {
@@ -2618,6 +2643,10 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
                 format!("{} is in no read: {}", path.display(), e.root_cause()),
             )),
         }
+    }
+
+    if let Some((seq, waiting)) = crate::share::status(&app.dirs.share_db())? {
+        findings.push(finding("sharing", format!("seq {seq}, outbox {waiting}")));
     }
 
     let cleaned = crate::session::cleanup(&app.dirs.sessions_dir());

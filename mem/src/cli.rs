@@ -146,6 +146,11 @@ pub enum Command {
     },
     /// Ask qshell-sync for a round and verify that one happened.
     Sync,
+    /// The sharing outbox, for the local hub that carries it to the store.
+    Share {
+        #[command(subcommand)]
+        command: ShareCommand,
+    },
     /// Health checks over the store, the index and the sync unit.
     Doctor {
         #[arg(long)]
@@ -280,6 +285,18 @@ pub enum Command {
     },
 }
 
+/// What the local hub runs to share this machine's writes.
+#[derive(Subcommand, Debug)]
+pub enum ShareCommand {
+    /// Print the hello the hub sends first: this machine and the last
+    /// sequence it has seen.
+    Hello,
+    /// Print every write waiting to be sent, oldest first, one JSON per line.
+    Pending,
+    /// Apply the store's messages, one JSON per line on stdin.
+    Apply,
+}
+
 /// Who made a decision: Saiful, or an agent taking the default.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[value(rename_all = "lower")]
@@ -398,6 +415,7 @@ pub enum ProjectKey {
     HygieneExempt,
     Paused,
     Runner,
+    Share,
 }
 
 impl ProjectKey {
@@ -408,6 +426,7 @@ impl ProjectKey {
             ProjectKey::HygieneExempt => "hygiene_exempt",
             ProjectKey::Paused => "paused",
             ProjectKey::Runner => "runner",
+            ProjectKey::Share => "share",
         }
     }
 }
@@ -437,6 +456,9 @@ pub enum ProjectSetCommand {
         #[arg(long)]
         milestone: Option<String>,
     },
+    /// Share this project's writes with the other machines through the
+    /// store, rather than through qshell-sync alone.
+    Share,
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;

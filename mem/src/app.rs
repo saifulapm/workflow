@@ -32,6 +32,11 @@ impl App {
     pub fn new(cli: &Cli) -> Result<App> {
         let dirs = Dirs::from_env()?;
         let cwd = std::env::current_dir().context("reading the working directory")?;
+        crate::share::install(
+            dirs.store(),
+            dirs.share_db(),
+            crate::localhub::socket_path(&dirs.state),
+        );
         Ok(App {
             store: Store::new(dirs.store()),
             machine: machine_name(&dirs),

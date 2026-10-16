@@ -24,6 +24,7 @@ pub mod remote;
 pub mod search;
 pub mod sections;
 pub mod session;
+pub mod share;
 pub mod store;
 pub mod sync;
 pub mod timefmt;
@@ -128,6 +129,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     id,
                     milestone,
                 } => verbs::project_runner(&app, machine, id, milestone.as_deref()),
+                cli::ProjectSetCommand::Share => verbs::project_set(&app, "share", "true"),
             },
             cli::ProjectCommand::Rename { name } => verbs::project_rename(&app, name),
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
@@ -175,6 +177,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         cli::Command::Snapshot => verbs::snapshot(&app),
         cli::Command::Prune { apply } => verbs::prune(&app, apply),
         cli::Command::Sync => verbs::sync(&app),
+        cli::Command::Share { command } => verbs::share(&app, command),
         cli::Command::Doctor { fix } => verbs::doctor(&app, *fix),
         cli::Command::Ask {
             question,

@@ -58,6 +58,12 @@ impl Dirs {
         self.mem_state().join("outbox")
     }
 
+    /// The sharing outbox, the head of every shared path and the last
+    /// sequence seen. Machine-local, never synced.
+    pub fn share_db(&self) -> PathBuf {
+        self.mem_state().join("share/share.db")
+    }
+
     pub fn snapshots_dir(&self) -> PathBuf {
         self.mem_state().join("snapshots")
     }
