@@ -1046,3 +1046,66 @@ fn project_rename_refuses_a_name_another_project_holds() {
         "rexa"
     );
 }
+
+const PROXY: &str = "http://local_proxy@127.0.0.1:41234/git/O/R";
+
+fn project_on(w: &common::World, id: &str, name: &str, remote: &str) {
+    let store = w.store();
+    std::fs::create_dir_all(store.project_items(id)).unwrap();
+    mem::project::write_project(
+        &store,
+        &mem::project::Project {
+            id: id.to_string(),
+            name: name.to_string(),
+            remote: Some(remote.to_string()),
+            aliases: Vec::new(),
+            created: "2026-08-01T00:00:00Z".parse().unwrap(),
+            verify: None,
+            parent: None,
+            subdir: None,
+        },
+    )
+    .unwrap();
+}
+
+fn current(w: &common::World, repo: &Path) -> String {
+    let out = common::mem(w, repo, &["project", "current", "--json"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    let json: serde_json::Value = serde_json::from_str(&common::stdout(&out)).unwrap();
+    json["name"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_cloud_branch_picks_the_project_it_names_behind_a_proxy_origin() {
+    let w = common::World::new("ident-cloud-branch");
+    project_on(&w, "01K2AAAAAAAAAAAAAAAAAAAAAA", "alpha", "github.com/o/r");
+    project_on(
+        &w,
+        "01K2BBBBBBBBBBBBBBBBBBBBBB",
+        "alpha-web",
+        "github.com/o/r",
+    );
+
+    let repo = w.repo("vm", Some(PROXY));
+    common::run_git(&repo, &["checkout", "-q", "-b", "cloud/alpha-web-m1"]);
+    assert_eq!(current(&w, &repo), "alpha-web");
+    common::run_git(&repo, &["checkout", "-q", "-b", "cloud/alpha-m3"]);
+    assert_eq!(current(&w, &repo), "alpha");
+    assert!(
+        !w.dirs().paths_toml().exists(),
+        "a cloud pick records nothing"
+    );
+}
+
+#[test]
+fn a_plain_branch_behind_a_proxy_origin_finds_the_one_project_and_never_registers() {
+    let w = common::World::new("ident-cloud-main");
+    project_on(&w, "01K2AAAAAAAAAAAAAAAAAAAAAA", "alpha", "github.com/o/r");
+
+    let repo = w.repo("vm", Some(PROXY));
+    common::run_git(&repo, &["checkout", "-q", "-b", "main"]);
+    assert_eq!(current(&w, &repo), "alpha");
+    let out = common::mem(&w, &repo, &["log", "x"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert_eq!(Registry::load(&w.store()).projects.len(), 1);
+}

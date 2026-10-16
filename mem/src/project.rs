@@ -98,6 +98,29 @@ impl Registry {
             })
     }
 
+    /// Among the projects sharing `remote`'s owner/repo, the one a cloud run's
+    /// `cloud/<project>-<milestone>` branch names, the longest name winning
+    /// (`shopify_apps` over `shop`). The hub server picks the same way.
+    pub fn by_cloud_branch(&self, remote: &str, branch: &str) -> Option<&Project> {
+        let wanted = owner_repo(remote)?;
+        self.projects
+            .iter()
+            .filter(|p| p.remote.as_deref().and_then(owner_repo).as_ref() == Some(&wanted))
+            .filter(|p| branch.starts_with(&format!("cloud/{}-", p.name)))
+            .max_by_key(|p| p.name.len())
+    }
+
+    /// The one parent-less project with `remote`'s owner/repo. A cloud VM's
+    /// origin is a proxy URL, so the exact match in `by_remote` misses it.
+    pub fn by_owner_repo(&self, remote: &str) -> Option<&Project> {
+        let wanted = owner_repo(remote)?;
+        let mut hits = self.projects.iter().filter(|p| {
+            p.parent.is_none() && p.remote.as_deref().and_then(owner_repo).as_ref() == Some(&wanted)
+        });
+        let first = hits.next()?;
+        hits.next().is_none().then_some(first)
+    }
+
     /// A name matches a project's name first; aliases only get a say when no
     /// project owns the name outright. An alias shared by two projects is
     /// ambiguous rather than a coin flip.
@@ -308,6 +331,18 @@ pub fn resolve(
         return Ok(Identity::NonGit);
     };
 
+    // A cloud VM has no paths.toml and several projects may share its repo, so
+    // the run's branch decides before the path map and pins nothing.
+    if let (Some(remote), Some(branch)) = (&checkout.remote, &checkout.branch)
+        && let Some(p) = registry.by_cloud_branch(remote, branch)
+    {
+        let p = child_for(&registry, p, &checkout, cwd).unwrap_or(p);
+        return Ok(Identity::Known {
+            id: p.id.clone(),
+            name: p.name.clone(),
+        });
+    }
+
     let map_path = dirs.paths_toml();
     let map = PathMap::load(&map_path);
     if let Some(id) = map.lookup(&checkout.common_dir)
@@ -345,6 +380,16 @@ pub fn resolve(
         });
     }
 
+    if let Some(remote) = &checkout.remote
+        && let Some(root) = registry.by_owner_repo(remote)
+    {
+        let p = child_for(&registry, root, &checkout, cwd).unwrap_or(root);
+        return Ok(Identity::Known {
+            id: p.id.clone(),
+            name: p.name.clone(),
+        });
+    }
+
     match mode {
         Mode::Read => Ok(Identity::UnknownRepo {
             name_hint: checkout.default_name(),
@@ -357,6 +402,18 @@ pub fn resolve(
             })
         }
     }
+}
+
+/// The last two segments of a remote, lowercased, without `.git`: a proxy's
+/// `127.0.0.1/git/o/r` and `github.com/o/r` are both `o/r`. The hub server
+/// applies the same rule.
+fn owner_repo(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let mut parts = url.rsplit(['/', ':']).filter(|p| !p.is_empty());
+    let repo = parts.next()?;
+    let owner = parts.next()?;
+    Some(format!("{owner}/{repo}").to_ascii_lowercase())
 }
 
 /// The child of `root` that owns `cwd`, by the deepest `subdir` that is a

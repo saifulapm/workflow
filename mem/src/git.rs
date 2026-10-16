@@ -36,6 +36,11 @@ pub fn origin_url(cwd: &Path) -> Option<String> {
     git(cwd, &["config", "--get", "remote.origin.url"])
 }
 
+/// The checked-out branch, none on a detached HEAD.
+pub fn branch(cwd: &Path) -> Option<String> {
+    git(cwd, &["branch", "--show-current"])
+}
+
 /// Symlinks resolved where possible so two spellings of one path compare equal.
 pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
@@ -94,6 +99,7 @@ pub struct Checkout {
     pub common_dir: PathBuf,
     pub toplevel: PathBuf,
     pub remote: Option<String>,
+    pub branch: Option<String>,
 }
 
 impl Checkout {
@@ -102,6 +108,7 @@ impl Checkout {
         let toplevel = toplevel(cwd).unwrap_or_else(|| common_dir.clone());
         Some(Checkout {
             remote: origin_url(cwd).map(|u| normalize_remote(&u)),
+            branch: branch(cwd),
             common_dir,
             toplevel,
         })
