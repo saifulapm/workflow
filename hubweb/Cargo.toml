@@ -10,6 +10,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 serde_json = "1.0.151"
+# memview reads item frontmatter and its timestamps. No time zone data: every
+# date mem prints is UTC, and the tz features do not build for wasm.
+jiff = { version = "0.2.35", default-features = false, features = ["std"] }
 # mem's items are TOML frontmatter; the same crate mem writes them with.
 toml = "1.1.4"
 
