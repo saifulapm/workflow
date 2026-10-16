@@ -497,7 +497,8 @@ fn land(file: &Path, body: Option<&str>) -> Result<()> {
 /// order): an import write for every text file here that the store lacks or
 /// holds otherwise, based on the store's head of the path; a removal for each
 /// path the store holds in a project here that this store no longer holds;
-/// then each evidence or raw file that no import has uploaded yet. Text first, so the files come once the text is in.
+/// then each evidence or raw file that no import has uploaded yet. Text
+/// first, so the files come once the text is in.
 ///
 /// Only a path whose head `machine` (this one) wrote is replaced or removed:
 /// until it switches, everything under its name came from its own imports,
