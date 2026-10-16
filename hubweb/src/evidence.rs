@@ -24,11 +24,28 @@ pub fn store_path(store: &impl Files, project: &str, id: &str) -> Option<String>
     else {
         return None;
     };
-    let file = list["items"]
+    // A finding's photo is served under the finding's own id, as mem's
+    // `evidence cat` does.
+    let found = match list["items"]
         .as_array()?
         .iter()
-        .find(|row| row["id"].as_str() == Some(id))?["file"]
-        .as_str()?;
+        .find(|row| row["id"].as_str() == Some(id))
+    {
+        Some(row) => row.clone(),
+        None => {
+            let Reply::Json(findings) =
+                memview::read(store, &["finding", "list", &flag, "--json"], now)
+            else {
+                return None;
+            };
+            findings["items"]
+                .as_array()?
+                .iter()
+                .find(|row| row["id"].as_str() == Some(id))?
+                .clone()
+        }
+    };
+    let file = found["file"].as_str()?;
     let path = format!("projects/{project_id}/{file}");
     let stored = files::project_of(&path).is_some();
     stored.then_some(path)
