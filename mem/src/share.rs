@@ -509,7 +509,8 @@ pub const FILE_DAYS: u64 = 90;
 /// while a head another machine wrote may be that machine's work since its
 /// switch, which a store kept by the bisync must not undo. Such a page that
 /// differs here is kept beside it as `<name>.conflict-import`, which `mem
-/// doctor` lists. Neither the outbox nor the heads change: this machine
+/// doctor` lists, and the plan says so with a `kept` line. Neither the
+/// outbox nor the heads change: this machine
 /// shares nothing yet.
 pub fn seed(
     db: &Path,
@@ -562,9 +563,7 @@ pub fn seed(
             Some(_) => {
                 let copy = root.join(format!("{rel}.conflict-import"));
                 crate::atomic::write_replica(&copy, body.as_bytes())?;
-                eprintln!(
-                    "mem: share seed: another machine wrote {rel}; this copy is kept beside it"
-                );
+                plan.push(json!({"t": "kept", "path": rel}));
             }
             None => plan.push(write(rel, None, Some(&body))),
         }

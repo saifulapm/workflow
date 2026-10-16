@@ -78,6 +78,8 @@ fn a_budget_answer_ends_the_import_with_exit_3_before_any_file() {
             ) + "\n"
         })
         .collect::<String>()
+        + r#"{"t":"kept","path":"projects/P/wiki/lessons.md"}"#
+        + "\n"
         + r#"{"t":"file","path":"projects/P/evidence/x.png","local":"/nonexistent"}"#;
     std::fs::write(dir.join("plan"), format!("{plan}\n")).unwrap();
     fixture_mem(
@@ -113,6 +115,10 @@ fn a_budget_answer_ends_the_import_with_exit_3_before_any_file() {
     assert!(stdout.contains("sent 2 of 5 writes"), "{stdout}");
     assert!(stdout.contains("answered budget"), "{stdout}");
     assert!(stdout.contains("after 06:00 Dhaka"), "{stdout}");
+    assert!(
+        stdout.contains("1 page another machine wrote is kept here as .conflict-import"),
+        "{stdout}"
+    );
 
     let frames = frames.lock().unwrap().clone();
     let hello: serde_json::Value = serde_json::from_str(&frames[0]).unwrap();

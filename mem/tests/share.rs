@@ -1037,8 +1037,13 @@ fn the_import_leaves_alone_what_a_switched_machine_wrote_and_keeps_its_own_copy(
             ),
         ],
     );
-    assert!(by_path(&plan, &page).is_none(), "{plan:?}");
+    assert!(
+        !plan.iter().any(|m| m["t"] == "write" && m["path"] == page),
+        "{plan:?}"
+    );
     assert!(by_path(&plan, &item).is_none(), "{plan:?}");
+    let kept = by_path(&plan, &page).expect("the plan says the copy was kept");
+    assert_eq!(kept["t"], "kept");
     let copy = w.dirs().store().join(format!("{page}.conflict-import"));
     assert_eq!(
         std::fs::read_to_string(&copy).unwrap(),

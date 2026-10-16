@@ -33,6 +33,8 @@ pub struct Seeded {
     pub files: usize,
     pub uploaded: usize,
     pub failed_files: usize,
+    /// Pages another machine wrote, kept here as `.conflict-import`.
+    pub kept: usize,
     /// `budget` or `limit`: the store took no more today.
     pub stopped: Option<String>,
 }
@@ -61,9 +63,14 @@ impl Seeded {
             }
             _ => "something was not stored: run hub share seed again".to_string(),
         };
+        let kept = match self.kept {
+            0 => String::new(),
+            1 => "; 1 page another machine wrote is kept here as .conflict-import".to_string(),
+            n => format!("; {n} pages other machines wrote are kept here as .conflict-import"),
+        };
         format!(
             "seed: the store held {} writes and had written {} rows today; \
-             sent {} of {} writes ({} refused, {} errors), uploaded {} of {} files ({} failed); {end}",
+             sent {} of {} writes ({} refused, {} errors), uploaded {} of {} files ({} failed){kept}; {end}",
             self.held,
             self.rows,
             self.acked,
@@ -117,6 +124,7 @@ pub fn run(store: &Store) -> Result<Seeded> {
         match message["t"].as_str() {
             Some("write") => writes.push(line.to_string()),
             Some("file") => files.push(message),
+            Some("kept") => seeded.kept += 1,
             _ => {}
         }
     }
