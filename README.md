@@ -62,7 +62,7 @@ put a second copy in `~/.cargo/bin`, which comes first on PATH.
     workflow install
     systemctl --user restart hub
 
-On the mini, the weekly snapshot that keeps files past 90 days in Dropbox:
+On the mini, the weekly snapshot copied to Dropbox:
 
     install -m 755 mem/units/mem-snapshot.sh ~/.local/bin/mem-snapshot
     cp mem/units/mem-snapshot.service mem/units/mem-snapshot.timer ~/.config/systemd/user/

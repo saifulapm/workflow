@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# The weekly snapshot job: mem snapshot, then rclone to Dropbox, then hub
-# share archive, each only if the one before it succeeded. mem, rclone and hub
-# are stand-ins that log their argv; the unit files name the script and a
-# weekly, persistent timer.
+# The weekly snapshot job: mem snapshot, then rclone to Dropbox, the copy
+# only if the snapshot succeeded. mem and rclone are stand-ins that log
+# their argv; the unit files name the script and a weekly, persistent timer.
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -10,7 +9,7 @@ units=$WF_ROOT/mem/units
 bin=$T_TMP/standins
 tarball=$T_TMP/snapshots/mem-20261017T000000Z.tar.gz
 mkdir -p "$bin"
-for tool in mem rclone hub; do
+for tool in mem rclone; do
 	cat >"$bin/$tool" <<'STANDIN'
 #!/usr/bin/env bash
 echo "${0##*/} $*" >>"$CALLS"
@@ -37,21 +36,18 @@ job() {
 RCLONE_RC=0 job
 is "$RC" 0 'success: exits 0'
 is "$OUT" "mem snapshot
-rclone copy $tarball Dropbox:mem-snapshots/
-hub share archive $tarball" 'success: snapshot, copy, then archive that tarball'
+rclone copy $tarball Dropbox:mem-snapshots/" 'success: snapshot, then copy that tarball'
 
 ## ------------------------------------------------------------ copy fails
 
 RCLONE_RC=1 job
 isnt "$RC" 0 'copy fails: exits non-zero'
-is "$OUT" "mem snapshot
-rclone copy $tarball Dropbox:mem-snapshots/" 'copy fails: hub share archive never runs'
 
 ## ------------------------------------------------------ snapshot fails
 
 MEM_FAIL=1 job
 isnt "$RC" 0 'snapshot fails: exits non-zero'
-is "$OUT" "mem snapshot" 'snapshot fails: neither rclone nor hub runs'
+is "$OUT" "mem snapshot" 'snapshot fails: rclone never runs'
 
 ## ------------------------------------------------------------- units
 

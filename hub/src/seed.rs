@@ -57,7 +57,7 @@ impl Seeded {
 
     pub fn summary(&self) -> String {
         let end = match (self.code(), &self.stopped) {
-            (0, _) => "the store holds every item, page and file under 90 days".to_string(),
+            (0, _) => "the store holds every item, page and file".to_string(),
             (3, Some(why)) => {
                 format!("the store answered {why}: run hub share seed again after 06:00 Dhaka")
             }
@@ -170,7 +170,7 @@ pub fn run(store: &Store) -> Result<Seeded> {
 
     let mut stored = HashSet::new();
     // A file the store already holds, put there by another machine's import,
-    // is not put again: that would cost rows and restart its 90 days.
+    // is not put again: that would cost rows.
     let mut held: std::collections::HashMap<String, HashSet<String>> = Default::default();
     for file in &files {
         let (Some(path), Some(local)) = (file["path"].as_str(), file["local"].as_str()) else {
@@ -178,7 +178,7 @@ pub fn run(store: &Store) -> Result<Seeded> {
         };
         let project = path.split('/').nth(1).unwrap_or_default().to_string();
         let listed = held.entry(project.clone()).or_insert_with(|| {
-            crate::archive::list(store, &project)
+            list(store, &project)
                 .map(|rows| rows.into_iter().map(|(path, _)| path).collect())
                 .unwrap_or_default()
         });
@@ -221,4 +221,24 @@ fn read_text(socket: &mut crate::share::Socket) -> Result<String> {
             Err(e) => return Err(e).context("reading the store"),
         }
     }
+}
+
+/// The project's stored files with their upload times.
+fn list(store: &Store, project: &str) -> Result<Vec<(String, i64)>> {
+    let url = format!("{}/store/files?project={project}", store.base()?);
+    let mut request = store.agent.get(url);
+    for (name, value) in store.headers() {
+        request = request.header(name, value);
+    }
+    let mut response = request.call().context("reaching the store")?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        bail!("the store answered {status}");
+    }
+    let rows: Vec<Value> =
+        serde_json::from_reader(response.body_mut().as_reader()).context("reading the list")?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| Some((row["path"].as_str()?.to_string(), row["at"].as_i64()?)))
+        .collect())
 }

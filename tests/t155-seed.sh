@@ -3,7 +3,7 @@
 # store, which shares nothing, into the store as imports, then its files.
 #
 #   - a first run sends every item, page, singleton and global item, and
-#     each file younger than 90 days, and exits 0;
+#     each evidence and raw file, and exits 0;
 #   - a second run sends nothing;
 #   - writes made meanwhile (a log, a page edit, a cleared plan) go with the
 #     next run, the page based on the store's head;
@@ -81,8 +81,8 @@ seed() { on mini env HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token HUB_STORE_NAM
 out=$(seed 2>"$T_TMP/seed1.err")
 is "$?" 0 "the first import exits 0"
 texts=$(find "$top" -type f ! -path '*/evidence/*' ! -path '*/raw/*' ! -name VERSION | wc -l)
-like "$out" "sent $texts of $texts writes \(0 refused, 0 errors\), uploaded 1 of 1 files" \
-	"it sends every text file and the one file under 90 days"
+like "$out" "sent $texts of $texts writes \(0 refused, 0 errors\), uploaded 2 of 2 files" \
+	"it sends every text file and both files, the old one too"
 unlike "$(on mini mem doctor)" 'outbox [1-9]' "the importing machine's outbox stays empty"
 
 out=$(seed 2>>"$T_TMP/seed1.err")
@@ -111,8 +111,8 @@ is "$(curl -s -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
 	"http://127.0.0.1:$CF_DEV_PORT/store/files/projects/$PROJECT/evidence/m1/shot.png")" "png bytes" \
 	"the file is in the store byte for byte"
 is "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
-	"http://127.0.0.1:$CF_DEV_PORT/store/files/projects/$PROJECT/raw/old.bin")" 404 \
-	"the file older than 90 days is not"
+	"http://127.0.0.1:$CF_DEV_PORT/store/files/projects/$PROJECT/raw/old.bin")" 200 \
+	"and so is the file older than 90 days"
 files_at() {
 	curl -s -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
 		"http://127.0.0.1:$CF_DEV_PORT/store/files?project=$PROJECT"
