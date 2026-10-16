@@ -303,6 +303,9 @@ branch to cut it from. Everything above holds, with these changes:
   tick tells the mini it may fast-forward, so the review and dogfood fixes
   must be on the branch by then. The run ends with the branch pushed, the
   milestone ticked and the handoff written. The mini fast-forwards its trunk from the branch.
+- After the last handoff, parked or landed, run `mem share export` once
+  more, commit what it stages and push: the tick and the handoff come after
+  the last task's push, and a store cut off at the end would keep them.
 - Stop after 6 hours with a handoff starting `parked: 6-hour stop`. There
   is no amx here, so end by saying so.
 

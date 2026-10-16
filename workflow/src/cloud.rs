@@ -465,7 +465,8 @@ fetch() {
 }
 case "${1:-}" in
   fetch) fetch "$2" ;;
-  sync) fetch mem && fetch hub && timeout "$2" "$bin/hub-x86_64" share sync ;;
+  # The binaries come from the mem server; the hub then works on the replica.
+  sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
   *) echo "mem-cloud: fetch <mem|hub> or sync <seconds>" >&2; exit 2 ;;
 esac
 "#;
@@ -543,6 +544,9 @@ if [ -n "$peer" ] && { [ -n "$store" ] || [ -n "${TS_AUTHKEY:-}" ]; } && mkdir -
       [ -n "$host" ]
       export HUB_SOCKS5=127.0.0.1:1055 HUB_HOST="$host"
     fi
+    # With the store, mem works on the replica, so the hub records answers
+    # there: it records nothing while MEM_REMOTE says mem is remote.
+    if [ -n "$store" ]; then unset MEM_REMOTE; fi
     env -u TS_AUTHKEY nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 9>&- &
   ) 9>"$state/start.lock" >"$state/start.log" 2>&1 </dev/null &
   # A question goes to the local hub the moment mem writes it, so an ask
@@ -597,6 +601,11 @@ mod tests {
     fn every_push_carries_the_unsent_outbox() {
         assert!(PROMPT.contains("mem share export"), "{PROMPT}");
         assert!(PROMPT.contains("before every push"), "{PROMPT}");
+        // The tick and the last handoff come after the last task's push.
+        assert!(
+            PROMPT.contains("after the handoff, run `mem share export` once more"),
+            "{PROMPT}"
+        );
     }
 
     /// A local-only task parks the run for a device with no question, which

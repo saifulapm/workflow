@@ -314,7 +314,7 @@ fn store_fakes(home: &Scratch, hub_sync_exit: u8) -> (PathBuf, String) {
         log.display()
     );
     let hub = format!(
-        "#!/bin/sh\necho \"hub $* url=${{HUB_STORE_URL:-}}\" >> {log}\n\
+        "#!/bin/sh\necho \"hub $* url=${{HUB_STORE_URL:-}} remote=${{MEM_REMOTE:-}}\" >> {log}\n\
          case \"$*\" in 'share sync') exit {hub_sync_exit};; esac\n",
         log = log.display()
     );
@@ -391,7 +391,7 @@ fn with_the_store_variables_the_setup_bakes_a_replica() {
     let hub = lines_of(&log, "hub");
     assert_eq!(
         hub,
-        ["hub share sync url=wss://store.example.test/store/share"],
+        ["hub share sync url=wss://store.example.test/store/share remote="],
         "{started}"
     );
     assert!(
@@ -451,7 +451,7 @@ fn the_first_mem_of_a_store_session_syncs_before_it_reads() {
     assert_eq!(
         order,
         [
-            "hub share sync url=wss://store.example.test/store/share",
+            "hub share sync url=wss://store.example.test/store/share remote=",
             "mem context remote="
         ],
         "{started}"
@@ -466,10 +466,11 @@ fn the_first_mem_of_a_store_session_syncs_before_it_reads() {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    // The hub records answers in the replica only when mem is not remote.
     assert!(
         lines_of(&log, "hub")
             .iter()
-            .any(|l| l.starts_with("hub local")),
+            .any(|l| l.starts_with("hub local ") && l.ends_with(" remote=")),
         "{}",
         fs::read_to_string(&log).unwrap()
     );
@@ -480,4 +481,29 @@ fn the_first_mem_of_a_store_session_syncs_before_it_reads() {
         fs::read_to_string(&log).unwrap(),
         "mem share apply --all remote=\n"
     );
+}
+
+/// A store the session cannot reach leaves the replica as it was baked, and
+/// mem still reads it, never the mem server.
+#[test]
+fn a_failed_sync_reads_the_baked_replica() {
+    let home = Scratch::new("cloud-shim-sync-fails");
+    let (log, path) = store_fakes(&home, 1);
+    setup_with(&home, &path, &STORE_ENV);
+    fs::remove_file(&log).unwrap();
+    let mut shim = Command::new(home.at("usr-local-bin/mem"));
+    shim.args(["context"])
+        .env("HOME", home.path())
+        .env("PATH", &path);
+    for (k, v) in STORE_ENV {
+        shim.env(k, v);
+    }
+    let out = shim.env("HUB_PEER_TOKEN_SHA256", "ab12").output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("the store did not answer"),
+        "{out:?}"
+    );
+    let ran = fs::read_to_string(&log).unwrap();
+    assert!(ran.lines().any(|l| l == "mem context remote="), "{ran}");
 }
