@@ -132,13 +132,14 @@ fn run() -> Result<()> {
 
     let mcp = mcp_listener(&config)?;
     let mem_binary = config.mem_binary.clone();
+    let hub_binary = config.hub_binary.clone();
     let socket = config.dulali_socket.clone();
     let app = Arc::new(App::new(config, bound.port(), hub::machine_name()));
 
     // mem's MCP endpoint, for the tunnel. Its own handler: the Access token
     // is its guard, so the pages' pairing and origin checks never see it.
     if let Some((listener, access)) = mcp {
-        let mcp = Mcp::new(access, Arc::clone(&app.mem), mem_binary);
+        let mcp = Mcp::new(access, Arc::clone(&app.mem), mem_binary, hub_binary);
         std::thread::Builder::new()
             .name("hub-mcp".to_string())
             .spawn(move || http::serve(listener, move |request| mcp.handle(request)))

@@ -66,6 +66,10 @@ pub struct Config {
     /// mem to fetch on first use; with none, that path is a 404.
     #[serde(default)]
     pub mem_binary: Option<PathBuf>,
+    /// The hub binary served at `/dl/hub`, so a cloud session can run its
+    /// local hub; with none, that path is a 404.
+    #[serde(default)]
+    pub hub_binary: Option<PathBuf>,
 }
 
 fn default_port() -> u16 {
@@ -91,6 +95,7 @@ impl Default for Config {
             access_aud: None,
             access_team: None,
             mem_binary: None,
+            hub_binary: None,
         }
     }
 }

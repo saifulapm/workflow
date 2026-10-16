@@ -23,6 +23,8 @@ pub struct Mcp {
     mem: Arc<MemCli>,
     /// What `/dl/mem` serves.
     mem_binary: Option<PathBuf>,
+    /// What `/dl/hub` serves.
+    hub_binary: Option<PathBuf>,
 }
 
 /// One tool: its listing, and the call that runs it.
@@ -160,11 +162,17 @@ const TOOLS: &[Tool] = &[
 ];
 
 impl Mcp {
-    pub fn new(access: Access, mem: Arc<MemCli>, mem_binary: Option<PathBuf>) -> Mcp {
+    pub fn new(
+        access: Access,
+        mem: Arc<MemCli>,
+        mem_binary: Option<PathBuf>,
+        hub_binary: Option<PathBuf>,
+    ) -> Mcp {
         Mcp {
             access,
             mem,
             mem_binary,
+            hub_binary,
         }
     }
 
@@ -183,6 +191,8 @@ impl Mcp {
             (_, "/cli") => return Response::method_not_allowed("POST"),
             ("GET", "/dl/mem") => return memserve::download(self.mem_binary.as_deref()),
             (_, "/dl/mem") => return Response::method_not_allowed("GET"),
+            ("GET", "/dl/hub") => return memserve::download(self.hub_binary.as_deref()),
+            (_, "/dl/hub") => return Response::method_not_allowed("GET"),
             _ => {}
         }
         if request.path != "/" && request.path != "/mcp" {

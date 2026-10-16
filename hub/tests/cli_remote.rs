@@ -25,6 +25,7 @@ const TEAM: &str = "https://test-team.cloudflareaccess.com";
 const AUD: &str = "4714c1358e65fe4b408ad6d432a5f878f08194bdb4752441fd56faefa9b2b6f2";
 const KID: &str = "test-kid-1";
 const BINARY: &str = "#!/bin/sh\necho a stand-in for mem\n";
+const HUB_BINARY: &str = "#!/bin/sh\necho a stand-in for hub\n";
 
 struct Urandom(std::fs::File);
 
@@ -167,6 +168,8 @@ impl World {
 
         let binary = dir.join("mem-binary");
         std::fs::write(&binary, BINARY).unwrap();
+        let hub_binary = dir.join("hub-binary");
+        std::fs::write(&hub_binary, HUB_BINARY).unwrap();
         let config = dir.join("config.toml");
         std::fs::write(
             &config,
@@ -174,8 +177,9 @@ impl World {
                 "topic = \"workflow-TESTTESTTESTTESTTESTTESTTE\"\n\
                  ntfy_base = \"http://127.0.0.1:9\"\n\
                  mcp_port = 0\naccess_aud = \"{AUD}\"\naccess_team = \"{TEAM}\"\n\
-                 mem_binary = \"{}\"\n",
-                binary.display()
+                 mem_binary = \"{}\"\nhub_binary = \"{}\"\n",
+                binary.display(),
+                hub_binary.display()
             ),
         )
         .unwrap();
@@ -370,5 +374,20 @@ fn the_mem_binary_downloads_only_with_a_token() {
     );
 
     let response = text(&world.get("/dl/mem", None));
+    assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+}
+
+/// A cloud session runs its local hub from the binary the mem server hands it.
+#[test]
+fn the_hub_binary_downloads_only_with_a_token() {
+    let world = World::new("remote-dl-hub");
+    let response = text(&world.get("/dl/hub", Some(&token())));
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(
+        response.ends_with(&format!("\r\n\r\n{HUB_BINARY}")),
+        "{response}"
+    );
+
+    let response = text(&world.get("/dl/hub", None));
     assert!(response.starts_with("HTTP/1.1 401"), "{response}");
 }
