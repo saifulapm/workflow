@@ -11,6 +11,7 @@
 //! so no answer holds one.
 
 mod item;
+mod search;
 mod sections;
 
 use std::collections::BTreeMap;
@@ -105,6 +106,9 @@ pub fn read(files: &impl Files, argv: &[&str], now: jiff::Timestamp) -> Reply {
         ["search"] if args.flag("kind") => args
             .only(&["kind", "limit", "project"])
             .then(|| view.log(&args, true)),
+        ["search", query] => args
+            .only(&["limit", "project"])
+            .then(|| view.search(&args, query, now)),
         ["evidence", "list"] => args.only(&["project"]).then(|| view.evidence(&args)),
         ["finding", "list"] => args
             .only(&["open", "project"])
@@ -112,7 +116,6 @@ pub fn read(files: &impl Files, argv: &[&str], now: jiff::Timestamp) -> Reply {
         ["show", id] => args.only(&[]).then(|| view.show(id)),
         _ => None,
     };
-    let _ = now;
     served.unwrap_or(Reply::Unknown)
 }
 
@@ -508,6 +511,54 @@ impl<F: Files> View<'_, F> {
             })
             .collect();
         Reply::Json(json!({ "items": items }))
+    }
+
+    /// `mem search -- <query>`: the project's items and page sections that
+    /// hold every word, ranked as `search::search` describes. It reads every
+    /// item and page in the store, since BM25 weighs a word by the whole
+    /// table.
+    fn search(&self, args: &Args, query: &str, now: jiff::Timestamp) -> Reply {
+        let limit = match args.value("limit").map(str::parse::<usize>) {
+            None => 20,
+            Some(Ok(n)) => n,
+            Some(Err(_)) => return Reply::Absent,
+        };
+        let p = match self.project(args) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        let pages: Vec<(&Project, Vec<Page>)> = self
+            .registry
+            .projects
+            .iter()
+            .map(|q| (q, self.pages(q, "wiki")))
+            .collect();
+        let corpus = search::Corpus {
+            items: self
+                .registry
+                .projects
+                .iter()
+                .flat_map(|q| self.rows(q, &[]).into_iter().map(|r| (q.id.as_str(), r)))
+                .collect(),
+            sections: pages
+                .iter()
+                .flat_map(|(q, pages)| {
+                    pages.iter().flat_map(|page| {
+                        sections::split(&page.text)
+                            .into_iter()
+                            .map(|section| search::SectionHit {
+                                project_id: &q.id,
+                                project: &q.name,
+                                page,
+                                section,
+                            })
+                    })
+                })
+                .collect(),
+            project_id: &p.id,
+        };
+        let hits = search::search(&corpus, query, limit, now.as_second());
+        Reply::Json(json!({ "hits": hits }))
     }
 
     /// The active items of one kind in the project `--project` names,
