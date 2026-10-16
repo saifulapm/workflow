@@ -248,3 +248,93 @@ fn a_question_from_a_hub_without_the_token_is_refused() {
     std::thread::sleep(Duration::from_millis(200));
     assert!(listed(&dir, "mini").is_empty());
 }
+
+fn route_on(socket: &Path, body: &str) -> String {
+    on_socket(
+        socket,
+        &format!(
+            "POST /route HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    )
+}
+
+fn route_of(socket: &Path) -> Value {
+    let response = on_socket(socket, "GET /route HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert_eq!(status_of(&response), 200, "{response}");
+    serde_json::from_str(common::body_of(&response)).unwrap()
+}
+
+#[test]
+fn a_route_set_on_one_hub_reaches_its_peers() {
+    let dir = TempDir::new("route-spread");
+    let nuc = spawn(&dir, "nuc", &[], None);
+    let mini = spawn(&dir, "mini", &[&nuc], None);
+    assert_eq!(route_of(&socket_of(&dir, "mini"))["route"], "phone");
+
+    // Device with no machine named is Device here, by this hub's own host.
+    let set = route_on(&socket_of(&dir, "mini"), r#"{"route":"device"}"#);
+    assert_eq!(status_of(&set), 200, "{set}");
+    let here = route_of(&socket_of(&dir, "mini"));
+    assert_eq!(here["route"], "device");
+    assert_eq!(here["machine"], format!("127.0.0.1:{}", mini.port));
+    common::wait_for("the nuc hears the route", Duration::from_secs(2), || {
+        route_of(&socket_of(&dir, "nuc"))["route"] == "device"
+    });
+    assert_eq!(
+        route_of(&socket_of(&dir, "nuc"))["machine"],
+        here["machine"]
+    );
+
+    let phone = route_on(&socket_of(&dir, "mini"), r#"{"route":"phone"}"#);
+    assert_eq!(status_of(&phone), 200, "{phone}");
+    common::wait_for("the nuc hears Phone", Duration::from_secs(2), || {
+        route_of(&socket_of(&dir, "nuc"))["route"] == "phone"
+    });
+}
+
+#[test]
+fn an_older_route_from_a_peer_loses_to_the_newer_one_here() {
+    let dir = TempDir::new("route-older");
+    let mini = spawn(&dir, "mini", &[], None);
+    route_on(&socket_of(&dir, "mini"), r#"{"route":"device"}"#);
+    let stale = r#"{"route":"phone","machine":null,"at":1}"#;
+    let response = mini.raw(&format!(
+        "POST /route HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n\
+         Content-Length: {}\r\n\r\n{stale}",
+        stale.len()
+    ));
+    assert_eq!(status_of(&response), 200, "{response}");
+    assert_eq!(route_of(&socket_of(&dir, "mini"))["route"], "device");
+}
+
+#[test]
+fn a_hub_keeps_its_route_across_a_restart_and_a_late_one_learns_the_newest() {
+    let dir = TempDir::new("route-late");
+    let nuc = spawn(&dir, "nuc", &[], None);
+    route_on(&socket_of(&dir, "nuc"), r#"{"route":"device"}"#);
+    let machine = route_of(&socket_of(&dir, "nuc"))["machine"].clone();
+    drop(nuc);
+    let nuc = spawn(&dir, "nuc", &[], None);
+    let kept = route_of(&socket_of(&dir, "nuc"));
+    assert_eq!(kept["route"], "device");
+    assert_eq!(kept["machine"], machine);
+
+    let _mini = spawn(&dir, "mini", &[&nuc], None);
+    common::wait_for(
+        "the late mini learns Device",
+        Duration::from_secs(2),
+        || route_of(&socket_of(&dir, "mini"))["route"] == "device",
+    );
+}
+
+#[test]
+fn a_route_that_is_neither_phone_nor_device_is_refused() {
+    let dir = TempDir::new("route-bad");
+    let _mini = spawn(&dir, "mini", &[], None);
+    for body in [r#"{"route":"dulali"}"#, r#"{"route":"pager"}"#, "nonsense"] {
+        let response = route_on(&socket_of(&dir, "mini"), body);
+        assert_eq!(status_of(&response), 400, "{body}: {response}");
+    }
+    assert_eq!(route_of(&socket_of(&dir, "mini"))["route"], "phone");
+}

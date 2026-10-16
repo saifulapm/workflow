@@ -38,8 +38,56 @@ pub fn write_file(hub: &str, name: Option<&str>, route: &Value) {
     }
 }
 
+/// This machine's local hub's socket: `HUB_LOCAL_SOCKET`, else `hub/local.sock`
+/// under the state directory, the hub's own rule.
+fn local_socket() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("HUB_LOCAL_SOCKET").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::paths::home().map(|h| h.join(".local/state")))?;
+    Some(state.join("hub/local.sock"))
+}
+
+/// Tells this machine's local hub the route, which it sends on to every
+/// other local hub: questions ring by the local hubs' route. Device names no
+/// machine, so the hub takes it under its own tailnet name. Best effort: a
+/// machine with no local hub still has the hub's.
+fn tell_local_hub(kind: &str) {
+    use std::io::{Read, Write};
+    let Some(socket) = local_socket() else { return };
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket) else {
+        return;
+    };
+    let timeout = Some(std::time::Duration::from_secs(5));
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+    let body = json!({ "route": kind }).to_string();
+    let request = format!(
+        "POST /route HTTP/1.1\r\nHost: local\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let mut reply = String::new();
+    let sent = stream
+        .write_all(request.as_bytes())
+        .and_then(|()| stream.read_to_string(&mut reply));
+    let ok = reply.split_whitespace().nth(1) == Some("200");
+    if sent.is_err() || !ok {
+        say(format!(
+            "the local hub did not take the route: {}",
+            reply.lines().next().unwrap_or("no answer")
+        ));
+    }
+}
+
 /// `workflow route [phone|device|dulali]`.
 pub fn cmd_route(to: Option<&str>) -> i32 {
+    if let Some(kind @ ("phone" | "device")) = to {
+        tell_local_hub(kind);
+    }
     let Some((token, hub)) = pairing() else {
         say("not paired; run `workflow agent pair <link>`");
         return exit::USAGE;

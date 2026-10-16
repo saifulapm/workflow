@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::http::{Request, Response};
+use crate::localroute::{LocalRoute, Stamped};
 use crate::open::{Known, Open};
 use crate::share::Store;
 use crate::slack::{Question, Slack, Tap};
@@ -81,6 +82,8 @@ pub struct Local {
     asked: Mutex<HashMap<String, Asked>>,
     /// Every open question this hub knows, asked here or on a peer.
     known: Known,
+    /// Where this machine's person questions ring.
+    route_now: LocalRoute,
     /// Answers by question short id, kept for a wait that comes later.
     answers: Mutex<HashMap<String, String>>,
     answered: Condvar,
@@ -96,6 +99,7 @@ impl Local {
         Local {
             machine,
             known: Known::load(host.clone()),
+            route_now: LocalRoute::load(),
             host,
             token,
             slack,
@@ -202,6 +206,25 @@ impl Local {
                     Response::text(200, "ok")
                 }
                 Err(e) => Response::text(400, &format!("not a question id: {e}")),
+            },
+            ("GET", "/route") => Response::new(
+                200,
+                "application/json",
+                serde_json::to_string(&self.route_now.get()).unwrap_or_default(),
+            ),
+            // A change made on this machine carries no stamp; a peer's does.
+            ("POST", "/route") => match serde_json::from_slice::<Stamped>(&request.body) {
+                Ok(theirs) if theirs.at.is_some() => {
+                    self.route_now.offer(theirs);
+                    Response::text(200, "ok")
+                }
+                Ok(chosen) => {
+                    let chosen = self.route_now.choose(chosen, &self.host);
+                    let body = serde_json::to_vec(&chosen).unwrap_or_default();
+                    self.tell_peers("/route", body.clone());
+                    Response::new(200, "application/json", body)
+                }
+                Err(e) => Response::text(400, &format!("route to phone or device: {e}")),
             },
             ("GET", "/questions") => {
                 Response::new(200, "application/json", self.known.doc().to_string())
@@ -419,6 +442,19 @@ impl Local {
         for peer in crate::tailnet_peers() {
             if peer == self.host {
                 continue;
+            }
+            match request(&peer, "GET", "/route", &self.token, b"") {
+                Ok((200, body)) => match serde_json::from_str::<Stamped>(&body) {
+                    Ok(theirs) => {
+                        self.route_now.offer(theirs);
+                    }
+                    Err(e) => eprintln!("hub: local: {peer} sent no route: {e}"),
+                },
+                Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to /route"),
+                Err(e) => {
+                    eprintln!("hub: local: /route did not reach {peer}: {e:#}");
+                    continue;
+                }
             }
             match request(&peer, "GET", "/questions", &self.token, b"") {
                 Ok((200, body)) => match serde_json::from_str::<Listed>(&body) {

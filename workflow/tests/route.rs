@@ -175,3 +175,97 @@ fn an_unknown_route_names_all_three_choices() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("phone, device, dulali"), "{err}");
 }
+
+/// A local hub on this machine's socket that takes one request and keeps it.
+fn local_hub(work: &Scratch) -> std::os::unix::net::UnixListener {
+    work.mkdir("state/hub");
+    let listener = std::os::unix::net::UnixListener::bind(work.at("state/hub/local.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    listener
+}
+
+/// The request the local hub got, if any, answering it 200.
+fn taken(listener: &std::os::unix::net::UnixListener) -> Option<String> {
+    use std::io::{Read, Write};
+    let (mut stream, _) = listener.accept().ok()?;
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .unwrap();
+    let mut got = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut buf).unwrap_or(0);
+        got.extend_from_slice(&buf[..n]);
+        let text = String::from_utf8_lossy(&got).to_string();
+        if let Some((head, body)) = text.split_once("\r\n\r\n") {
+            let want = head
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            if body.len() >= want || n == 0 {
+                break;
+            }
+        }
+        if n == 0 {
+            break;
+        }
+    }
+    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+    Some(String::from_utf8_lossy(&got).to_string())
+}
+
+#[test]
+fn route_device_and_phone_also_set_this_machines_local_hub() {
+    for (kind, reply) in [
+        (
+            "device",
+            r#"{"route":"device","machine":"mini","waiting":0}"#,
+        ),
+        ("phone", r#"{"route":"phone","machine":null,"waiting":0}"#),
+    ] {
+        let w = world(&format!("route-local-{kind}"), "200", reply);
+        paired(&w);
+        let hub = local_hub(&w);
+        let asking = {
+            let hub = hub.try_clone().unwrap();
+            std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    if let Some(got) = taken(&hub) {
+                        return Some(got);
+                    }
+                    if std::time::Instant::now() > deadline {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            })
+        };
+        let out = route(&w, &[kind]);
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        let got = asking.join().unwrap().expect("the local hub was told");
+        assert!(got.starts_with("POST /route "), "{got}");
+        let body = got.split_once("\r\n\r\n").unwrap().1;
+        let sent: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(sent, json!({ "route": kind }));
+    }
+}
+
+#[test]
+fn route_alone_leaves_the_local_hub_alone() {
+    let w = world(
+        "route-local-get",
+        "200",
+        r#"{"route":"phone","machine":null,"waiting":0}"#,
+    );
+    paired(&w);
+    let hub = local_hub(&w);
+    let out = route(&w, &[]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(taken(&hub).is_none());
+}
