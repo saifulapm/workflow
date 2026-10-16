@@ -166,7 +166,7 @@ fn named_for(id: &str, project: &str, slug: &str) -> bool {
 /// alive and thinking, so it takes both fields. The hub reads them the same
 /// way, so it never offers a Resume for a milestone that is still running;
 /// the folder and trunk refusals it shows as its banner.
-fn live(row: &AmxRow) -> bool {
+pub fn live(row: &AmxRow) -> bool {
     row.ended.unwrap_or(0) == 0 && !matches!(row.state.as_deref(), Some("stopped" | "failed"))
 }
 

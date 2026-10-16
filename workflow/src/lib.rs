@@ -5,6 +5,7 @@
 //!   workflow hook            the body of a git hook stub
 //!   workflow install         write the embedded skills, agents and hook stubs
 //!   workflow go              start the orchestrator for a project's next milestone
+//!   workflow switch          move this machine's memory onto the Cloudflare store
 //!
 //! Exit codes are a contract; `workflow help` prints them.
 //!
@@ -29,6 +30,7 @@ pub mod pause;
 pub mod route;
 #[cfg(test)]
 mod scratch;
+pub mod switch;
 
 use clap::Parser;
 
@@ -134,6 +136,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Pause { project, by } => pause::cmd_pause(&project, by.as_deref()),
         Command::Unpause { project } => pause::cmd_unpause(&project),
         Command::Route { to } => route::cmd_route(to.as_deref()),
+        Command::Switch { store } => switch::cmd_switch(&store),
         Command::Agent { once, action } => match action {
             Some(cli::AgentAction::Pair { link }) => agent::cmd_pair(&link),
             None => agent::cmd_run(once),

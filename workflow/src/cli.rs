@@ -181,6 +181,23 @@ machine is not paired."
         #[arg(value_parser = ["phone", "device", "dulali"])]
         to: Option<String>,
     },
+    /// Move this machine's memory from the VPS store onto the Cloudflare store.
+    #[command(
+        long_about = "Move this machine's memory from the VPS store onto the Cloudflare store.
+
+It refuses, exit 2, while any live amx agent or claude process (Remote Control
+included) runs on this machine, naming each one. Then: a last qshell-sync
+memory round with dulali, a store token minted for this machine, hub share
+seed, mem share switch, a second seed, the store keys written to the hub's
+local.env, and hub-local restarted. A first seed that runs out of today's
+import budget refuses, exit 2, before mem switches. Running it again on a
+switched machine does the same steps."
+    )]
+    Switch {
+        /// The store's socket, ws:// or wss://, ending in /store/share.
+        #[arg(long, value_name = "URL")]
+        store: String,
+    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
