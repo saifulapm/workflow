@@ -23,6 +23,9 @@ export default defineConfig({
       // secrets because cf dev reads secrets from its environment.
       ACCESS_AUD: bindings.secret(),
       ACCESS_TEAM: bindings.secret(),
+      // How old a machine's newest report may be, in ms, and it still counts
+      // as online. Unset, it is 45000: an idle machine reports every 30 s.
+      HUB_AGENT_WINDOW_MS: bindings.secret(),
     },
     // The hub web and the connector on their own names until the switch,
     // when hub.on-rexa.com and mem.on-rexa.com move here.

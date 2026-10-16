@@ -1,6 +1,6 @@
 //! The hub's pages drawn from the store: memview answers the pages' mem
 //! reads from the store's files, and a host that runs nothing stands in for
-//! the hub's machines. The Worker hands this the files and the request; the
+//! the hub's machines, which report to the store. The Worker hands this the files and the request; the
 //! host can test it with files in memory.
 
 use std::cell::RefCell;
@@ -48,6 +48,8 @@ pub struct Ask<'a> {
     pub may_write: bool,
     /// The store hit a Free daily limit today, which home says.
     pub limited: bool,
+    /// How old a machine's newest report may be and it still count as online.
+    pub window_ms: u64,
     /// What the store has seen, as its /live socket names it: a page drawn
     /// at another stamp is out of date.
     pub stamp: String,
@@ -76,6 +78,12 @@ pub fn page(
     let host = Web {
         route: saved(ask.route.as_ref()),
         device: ask.route.as_ref().and_then(crate::share::last_device),
+        fleet: Machines::new(
+            files.reports(),
+            files.queued(),
+            ask.now.as_millisecond(),
+            ask.window_ms,
+        ),
         files,
         shared: &shared,
     };
@@ -253,37 +261,93 @@ impl<F: Files> Source for StoreMem<'_, '_, F> {
     }
 }
 
-/// The hub web's host: no machines report to it and it runs nothing; the
-/// route is the store's, and a pause or a photo is a write like mem's.
+/// The hub web's host: machines report to the store, which it reads, and it
+/// runs nothing; the route is the store's, and a pause or a photo is a write
+/// like mem's.
 struct Web<'a, 'c, F: Files> {
     route: Saved,
     /// The machine that last took Device.
     device: Option<String>,
+    fleet: Machines,
     files: &'a F,
     shared: &'a Shared<'c>,
 }
 
-/// No machine reports to the hub web.
-struct NoFleet;
+/// How long a report keeps its machine online: an idle machine reports
+/// every 30 s, so 45 s is one missed report.
+pub const AGENT_WINDOW_MS: u64 = 45_000;
 
-impl Fleet for NoFleet {
-    fn online(&self, _machine: &str) -> bool {
-        false
+/// The machines as their reports and queued commands left them in the
+/// store, read once for the page being drawn.
+pub struct Machines {
+    /// (name, received at in Unix ms, body), by name.
+    reports: Vec<(String, i64, Value)>,
+    /// (machine, command), oldest first.
+    queued: Vec<(String, Value)>,
+    now_ms: i64,
+    window_ms: u64,
+}
+
+impl Machines {
+    /// From the store's rows: reports as (name, at, body JSON) and commands
+    /// as (machine, body JSON). A body that does not parse is left out.
+    pub fn new(
+        reports: Vec<(String, i64, String)>,
+        commands: Vec<(String, String)>,
+        now_ms: i64,
+        window_ms: u64,
+    ) -> Self {
+        Machines {
+            reports: reports
+                .into_iter()
+                .filter_map(|(name, at, body)| Some((name, at, serde_json::from_str(&body).ok()?)))
+                .collect(),
+            queued: commands
+                .into_iter()
+                .filter_map(|(machine, body)| Some((machine, serde_json::from_str(&body).ok()?)))
+                .collect(),
+            now_ms,
+            window_ms,
+        }
     }
-    fn report(&self, _machine: &str) -> Option<Polled> {
-        None
+
+    fn row(&self, machine: &str) -> Option<&(String, i64, Value)> {
+        self.reports.iter().find(|(name, ..)| name == machine)
+    }
+}
+
+impl Fleet for Machines {
+    fn online(&self, machine: &str) -> bool {
+        self.row(machine)
+            .is_some_and(|(_, at, _)| self.now_ms.saturating_sub(*at) <= self.window_ms as i64)
+    }
+    fn report(&self, machine: &str) -> Option<Polled> {
+        let (_, _, body) = self.row(machine)?;
+        let field = |name: &str| body.get(name).cloned().unwrap_or(Value::Null);
+        Some(Polled {
+            agents: serde_json::from_value(field("agents")).unwrap_or_default(),
+            checkouts: serde_json::from_value(field("checkouts")).unwrap_or_default(),
+            worktrees: serde_json::from_value(field("worktrees")).unwrap_or_default(),
+            unpushed: serde_json::from_value(field("unpushed")).unwrap_or_default(),
+        })
     }
     fn machines(&self) -> Vec<String> {
-        Vec::new()
+        let mut names: Vec<String> = self.reports.iter().map(|(n, ..)| n.clone()).collect();
+        names.sort();
+        names
     }
-    fn pending(&self, _machine: &str) -> Vec<Command> {
-        Vec::new()
+    fn pending(&self, machine: &str) -> Vec<Command> {
+        self.queued
+            .iter()
+            .filter(|(to, _)| to == machine)
+            .filter_map(|(_, command)| serde_json::from_value(command.clone()).ok())
+            .collect()
     }
 }
 
 impl<F: Files> Host for Web<'_, '_, F> {
     fn fleet(&self) -> &dyn Fleet {
-        &NoFleet
+        &self.fleet
     }
     fn queue(&self, _machine: &str, _command: Command) {}
     fn wrote(&self) {}
@@ -388,6 +452,7 @@ mod tests {
             paired: true,
             may_write: true,
             limited: false,
+            window_ms: AGENT_WINDOW_MS,
             stamp: "7.0".into(),
         }
     }
@@ -399,6 +464,63 @@ mod tests {
 
     fn html(response: Response) -> String {
         String::from_utf8(response.body).unwrap()
+    }
+
+    const NOW_MS: i64 = 1_792_152_000_000;
+
+    fn machines() -> Machines {
+        let mini = r#"{"machine":"mini","agents":[{"id":"walk01-m1","state":"running","ended":0,"created":5}],"checkouts":["walk"],"worktrees":["walk"],"unpushed":{"walk":2},"cloud":null}"#;
+        Machines::new(
+            vec![
+                ("mini".into(), NOW_MS - 10_000, mini.into()),
+                (
+                    "nuc".into(),
+                    NOW_MS - 46_000,
+                    r#"{"machine":"nuc","agents":[]}"#.into(),
+                ),
+            ],
+            vec![
+                ("mini".into(), r#"{"kind":"start","project":"walk"}"#.into()),
+                ("nuc".into(), r#"{"kind":"sync"}"#.into()),
+            ],
+            NOW_MS,
+            45_000,
+        )
+    }
+
+    #[test]
+    fn a_machine_is_online_while_its_newest_report_is_inside_the_window() {
+        let fleet = machines();
+        assert!(fleet.online("mini"));
+        assert!(!fleet.online("nuc"));
+        assert!(!fleet.online("ghost"));
+    }
+
+    #[test]
+    fn a_report_carries_what_the_machine_said() {
+        let polled = machines().report("mini").expect("mini reported");
+        assert_eq!(polled.agents.len(), 1);
+        assert_eq!(polled.agents[0].id, "walk01-m1");
+        assert!(polled.agents[0].live());
+        assert_eq!(polled.checkouts, ["walk"]);
+        assert_eq!(polled.worktrees, ["walk"]);
+        assert_eq!(polled.unpushed.get("walk"), Some(&2));
+        assert!(machines().report("ghost").is_none());
+    }
+
+    #[test]
+    fn machines_lists_every_reporter_and_pending_parses_its_commands() {
+        let fleet = machines();
+        assert_eq!(fleet.machines(), ["mini", "nuc"]);
+        assert_eq!(
+            fleet.pending("mini"),
+            [Command::Start {
+                project: "walk".into(),
+                cloud: false
+            }]
+        );
+        assert_eq!(fleet.pending("nuc"), [Command::Sync]);
+        assert!(fleet.pending("ghost").is_empty());
     }
 
     #[test]

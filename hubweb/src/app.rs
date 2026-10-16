@@ -415,6 +415,12 @@ impl Store {
             paired: self.paired(&request)?,
             may_write: req_may_write,
             limited: site::limit_is_today(self.limit_day()?, now_ms()),
+            window_ms: self
+                .env
+                .secret("HUB_AGENT_WINDOW_MS")
+                .ok()
+                .and_then(|window| window.to_string().trim().parse().ok())
+                .unwrap_or(site::AGENT_WINDOW_MS),
             stamp: self.stamp()?,
         };
         let mut random = || random().unwrap_or_default();
@@ -1067,6 +1073,31 @@ impl memview::Files for SqlFiles<'_> {
         );
         rows.iter()
             .filter_map(|row| row["project"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    fn reports(&self) -> Vec<(String, i64, String)> {
+        let rows = self.rows("SELECT name, at, body FROM machines ORDER BY name", None);
+        rows.iter()
+            .filter_map(|row| {
+                Some((
+                    row["name"].as_str()?.to_string(),
+                    row["at"].as_i64()?,
+                    row["body"].as_str()?.to_string(),
+                ))
+            })
+            .collect()
+    }
+
+    fn queued(&self) -> Vec<(String, String)> {
+        let rows = self.rows("SELECT machine, body FROM commands ORDER BY at, id", None);
+        rows.iter()
+            .filter_map(|row| {
+                Some((
+                    row["machine"].as_str()?.to_string(),
+                    row["body"].as_str()?.to_string(),
+                ))
+            })
             .collect()
     }
 

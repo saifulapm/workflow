@@ -35,6 +35,15 @@ pub trait Files {
     fn fault(&self) -> Option<String> {
         None
     }
+    /// Every machine's newest report as (name, received at in Unix ms, body).
+    fn reports(&self) -> Vec<(String, i64, String)> {
+        Vec::new()
+    }
+    /// Every command still waiting for a machine, as (machine, body), oldest
+    /// first.
+    fn queued(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
     fn items(&self, project: &str, kinds: &[&str]) -> Vec<(String, String)> {
         let mut all = self.list(&format!("projects/{project}/items/"));
         if !kinds.is_empty() {
