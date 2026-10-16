@@ -690,3 +690,66 @@ fn a_peer_answer_to_a_question_this_hub_did_not_ask_is_not_found() {
     );
     assert_eq!(status_of(&response), 404, "{response}");
 }
+
+fn peer_post(hub: &Hub, path: &str, body: &str) -> String {
+    hub.raw(&format!(
+        "POST {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    ))
+}
+
+/// mem asks on its own socket; the peer port takes no questions, or a peer
+/// could re-register a roadmap review under harmless words.
+#[test]
+fn the_peer_port_takes_no_question_to_ask() {
+    let dir = TempDir::new("peers-no-ask");
+    let nuc = spawn(&dir, "nuc", &[], None);
+    let response = peer_post(&nuc, "/ask", PROBE);
+    assert_eq!(status_of(&response), 404, "{response}");
+    assert!(listed(&dir, "nuc").is_empty());
+}
+
+/// Only the asking hub closes or rings its own question: a peer's close or
+/// ring for it changes nothing here.
+#[test]
+fn a_peer_cannot_close_or_ring_a_question_this_hub_asked() {
+    let dir = TempDir::new("peers-own-close");
+    let nuc = spawn(&dir, "nuc", &[], None);
+    ask(&socket_of(&dir, "nuc"), PROBE);
+    // Once its own ring is decided, Phone with no Slack here.
+    common::wait_for("the nuc rings it", Duration::from_secs(2), || {
+        listed(&dir, "nuc")
+            .first()
+            .is_some_and(|q| q["ring"] == "phone")
+    });
+    let before = listed(&dir, "nuc");
+
+    let closed = peer_post(&nuc, "/closed", r#"{"question":"ABCD1234"}"#);
+    assert_eq!(status_of(&closed), 200, "{closed}");
+    let forged = r#"{"id":"ABCD1234","project":"walk","machine":"evil","text":"harmless","options":["x"],"person":true}"#;
+    let rung = peer_post(&nuc, "/ring", forged);
+    assert_ne!(status_of(&rung), 200, "{rung}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(listed(&dir, "nuc"), before);
+}
+
+/// An answer signed by a name that does not travel between machines, given
+/// for a question asked elsewhere, is refused with why, not left to a store
+/// that does not have the question.
+#[test]
+fn an_answer_that_cannot_travel_is_refused_with_why() {
+    let dir = TempDir::new("peers-no-travel");
+    let mini = spawn(&dir, "mini", &[], None);
+    let _nuc = spawn(&dir, "nuc", &[&mini], None);
+    ask(&socket_of(&dir, "nuc"), PROBE);
+    common::wait_for("the mini hears it", Duration::from_secs(2), || {
+        listed(&dir, "mini").len() == 1
+    });
+    let given = answer_on(
+        &socket_of(&dir, "mini"),
+        r#"{"question":"ABCD1234","answer":"yes","by":"dogfood"}"#,
+    );
+    assert_eq!(status_of(&given), 403, "{given}");
+    assert!(common::body_of(&given).contains("--by cli"), "{given}");
+}

@@ -151,6 +151,47 @@ impl Local {
                 Response::new(204, "text/plain; charset=utf-8", "")
             }
             ("POST", "/answer") => self.answer_from_mem(request),
+            // Asked only here, by mem: a peer could otherwise register a
+            // question under any id, a roadmap review's among them.
+            ("POST", "/ask") => match serde_json::from_slice::<Asked>(&request.body) {
+                Ok(asked) => {
+                    let open = Open {
+                        id: asked.id.clone(),
+                        project: asked.project.clone(),
+                        machine: self.host.clone(),
+                        text: asked.text.clone(),
+                        options: asked.options.clone(),
+                        person: asked.audience.as_deref() != Some("orchestrator"),
+                        ring: None,
+                    };
+                    self.known.add(open.clone());
+                    tell_peers(
+                        &self.host,
+                        &self.token,
+                        "/question",
+                        serde_json::to_vec(&open).unwrap_or_default(),
+                        Some((Arc::clone(&self.known), open.id.clone())),
+                    );
+                    self.post(&asked, open);
+                    self.asked
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(asked.id.clone(), asked);
+                    Response::text(200, "ok")
+                }
+                Err(e) => Response::text(400, &format!("not a question: {e}")),
+            },
+            // A route chosen on this machine; a peer's comes stamped.
+            ("POST", "/route") => match serde_json::from_slice::<Stamped>(&request.body) {
+                Ok(chosen) if chosen.at.is_none() => {
+                    let chosen = self.route_now.choose(chosen, &self.host);
+                    let body = serde_json::to_vec(&chosen).unwrap_or_default();
+                    self.tell_peers("/route", body.clone());
+                    Response::new(200, "application/json", body)
+                }
+                Ok(_) => self.route(request),
+                Err(e) => Response::text(400, &format!("route to phone or device: {e}")),
+            },
             ("GET", "/share/file") => self.file(request),
             _ => self.route(request),
         }
@@ -185,36 +226,11 @@ impl Local {
         match (method, request.path.as_str()) {
             ("GET", "/ping") => Response::text(200, &self.machine),
             (_, "/ping") => Response::method_not_allowed("GET"),
-            ("POST", "/ask") => match serde_json::from_slice::<Asked>(&request.body) {
-                Ok(asked) => {
-                    let open = Open {
-                        id: asked.id.clone(),
-                        project: asked.project.clone(),
-                        machine: self.host.clone(),
-                        text: asked.text.clone(),
-                        options: asked.options.clone(),
-                        person: asked.audience.as_deref() != Some("orchestrator"),
-                        ring: None,
-                    };
-                    self.known.add(open.clone());
-                    tell_peers(
-                        &self.host,
-                        &self.token,
-                        "/question",
-                        serde_json::to_vec(&open).unwrap_or_default(),
-                        Some((Arc::clone(&self.known), open.id.clone())),
-                    );
-                    self.post(&asked, open);
-                    self.asked
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(asked.id.clone(), asked);
-                    Response::text(200, "ok")
-                }
-                Err(e) => Response::text(400, &format!("not a question: {e}")),
-            },
             // The asking hub offers its question to this, the route device.
             ("POST", "/ring") => match serde_json::from_slice::<Open>(&request.body) {
+                Ok(open) if self.asks(&open.id) => {
+                    Response::text(409, "this hub asked it, and rings it itself")
+                }
                 Ok(_) if crate::presence::sample().away() => Response::text(409, "away"),
                 Ok(open) => {
                     if self.known.take(open, &self.host) {
@@ -238,6 +254,8 @@ impl Local {
                 Err(e) => Response::text(400, &format!("not a question: {e}")),
             },
             ("POST", "/closed") => match serde_json::from_slice::<Closed>(&request.body) {
+                // This hub closes its own questions, when they are answered.
+                Ok(closed) if self.asks(&closed.question) => Response::text(200, "ok"),
                 Ok(closed) => {
                     self.known.close(&closed.question);
                     Response::text(200, "ok")
@@ -255,12 +273,7 @@ impl Local {
                     self.route_now.offer(theirs);
                     Response::text(200, "ok")
                 }
-                Ok(chosen) => {
-                    let chosen = self.route_now.choose(chosen, &self.host);
-                    let body = serde_json::to_vec(&chosen).unwrap_or_default();
-                    self.tell_peers("/route", body.clone());
-                    Response::new(200, "application/json", body)
-                }
+                Ok(_) => Response::text(400, "a peer's route carries the time it was chosen"),
                 Err(e) => Response::text(400, &format!("route to phone or device: {e}")),
             },
             ("GET", "/questions") => {
@@ -407,7 +420,14 @@ impl Local {
             return Response::not_found();
         };
         if !TRAVELS.contains(&given.by.as_str()) {
-            return Response::not_found();
+            return Response::text(
+                403,
+                &format!(
+                    "#{} was asked on {}; only a slack, popup or cli answer travels \
+                     between machines: answer there, or here with --by cli",
+                    given.question, open.machine
+                ),
+            );
         }
         let mut body = serde_json::json!({
             "question": given.question,
