@@ -134,6 +134,7 @@ fn evidence_older_than_90_days_shows_archived_in_place_of_its_image() {
         siblings: &[],
         by: "hub-web",
         paired: true,
+        pair_how: "pair it",
         may_write: true,
         now: "2026-10-05T12:00:00Z".parse().unwrap(),
         tz: jiff::tz::TimeZone::UTC,
