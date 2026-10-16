@@ -322,6 +322,14 @@ fn run_local(port: u16) -> Result<()> {
             .spawn(move || hub::share::run(store, kick, notice))
             .context("starting the sharing socket")?;
     }
+    // A parked session's answers may come with no network at all, from the
+    // popup or `mem answer` here, so this needs no store.
+    if let Some(name) = hub::fleet::runner_name() {
+        std::thread::Builder::new()
+            .name("hub-parked".to_string())
+            .spawn(move || hub::parked::run(name))
+            .context("starting the parked-session check")?;
+    }
     let for_mem = Arc::clone(&local);
     std::thread::Builder::new()
         .name("hub-local-socket".to_string())

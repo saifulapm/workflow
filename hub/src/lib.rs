@@ -33,6 +33,7 @@ pub mod page_home;
 pub mod page_roadmap;
 pub mod pages;
 pub mod pair;
+pub mod parked;
 pub mod presence;
 pub mod proc;
 pub mod route;
