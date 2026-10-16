@@ -1,0 +1,342 @@
+//! The sharing socket's protocol: each machine sends its mem writes to the
+//! store, which numbers them, refuses a page write made from an old version,
+//! and hands every write to the other machines. The Worker keeps the log in
+//! the store's SQLite and owns the sockets; this file decides what each
+//! message does and what goes back, so the host can test it.
+
+use serde_json::{Value, json};
+
+/// One stored write.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rec {
+    pub seq: i64,
+    pub id: String,
+    pub path: String,
+    /// None: the file was removed.
+    pub body: Option<String>,
+    pub machine: Option<String>,
+}
+
+/// Why the log could not answer.
+#[derive(Debug, PartialEq)]
+pub enum Fault {
+    /// A Free daily limit is hit; the machine keeps the write and resends it.
+    Limit,
+    Broken(String),
+}
+
+/// The store's write log, oldest first, every write kept.
+pub trait Log {
+    /// The seq of the write with this id, if it is stored.
+    fn seq_of(&self, id: &str) -> Result<Option<i64>, Fault>;
+    /// The newest write to this path.
+    fn head(&self, path: &str) -> Result<Option<Rec>, Fault>;
+    /// Every write with a seq above `seq`, oldest first.
+    fn after(&self, seq: i64) -> Result<Vec<Rec>, Fault>;
+    /// The highest seq, 0 for an empty log.
+    fn last(&self) -> Result<i64, Fault>;
+    fn append(&mut self, rec: &Rec) -> Result<(), Fault>;
+}
+
+/// What one message from a machine sends back.
+#[derive(Debug, Default, PartialEq)]
+pub struct Outcome {
+    /// Messages for the socket the message came on, in order.
+    pub sender: Vec<String>,
+    /// A message for every other open socket.
+    pub others: Option<String>,
+    /// The machine this socket said hello as, to remember for its writes.
+    pub hello: Option<String>,
+}
+
+/// Answers one text frame from a socket whose machine said hello as
+/// `machine` (None before its hello).
+pub fn handle(log: &mut impl Log, machine: Option<&str>, text: &str) -> Outcome {
+    let answer = match serde_json::from_str::<Value>(text) {
+        Ok(message) => match message["t"].as_str() {
+            Some("hello") => hello(log, &message),
+            Some("write") => match machine {
+                Some(machine) => write(log, machine, &message),
+                None => Err(Fault::Broken("say hello before writing".into())),
+            },
+            _ => Err(Fault::Broken("t must be hello or write".into())),
+        },
+        Err(why) => Err(Fault::Broken(format!("not JSON: {why}"))),
+    };
+    answer.unwrap_or_else(|fault| Outcome {
+        sender: vec![
+            match fault {
+                Fault::Limit => json!({"t":"limit"}),
+                Fault::Broken(why) => json!({"t":"error","why":why}),
+            }
+            .to_string(),
+        ],
+        ..Outcome::default()
+    })
+}
+
+fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
+    let (Some(machine), Some(since)) = (message["machine"].as_str(), message["since"].as_i64())
+    else {
+        return Err(Fault::Broken("hello needs machine and since".into()));
+    };
+    let mut sender: Vec<String> = log.after(since)?.iter().map(rec).collect();
+    sender.push(json!({"t":"ready","seq":log.last()?}).to_string());
+    Ok(Outcome {
+        sender,
+        others: None,
+        hello: Some(machine.to_string()),
+    })
+}
+
+fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, Fault> {
+    let text = |name: &str| match &message[name] {
+        Value::Null => Ok(None),
+        Value::String(text) => Ok(Some(text.clone())),
+        _ => Err(Fault::Broken(format!("{name} must be a string or null"))),
+    };
+    let (Some(id), Some(path)) = (text("id")?, text("path")?) else {
+        return Err(Fault::Broken("write needs id and path".into()));
+    };
+    let (base, body) = (text("base")?, text("body")?);
+    let ack = |seq| json!({"t":"ack","id":id,"seq":seq}).to_string();
+    if let Some(seq) = log.seq_of(&id)? {
+        return Ok(Outcome {
+            sender: vec![ack(seq)],
+            ..Outcome::default()
+        });
+    }
+    if !path.contains("/items/") {
+        let head = log.head(&path)?;
+        if head.as_ref().map(|h| &h.id) != base.as_ref() {
+            let head = head.map(|h| json!({"seq":h.seq,"id":h.id,"path":h.path,"body":h.body}));
+            return Ok(Outcome {
+                sender: vec![json!({"t":"refused","id":id,"head":head}).to_string()],
+                ..Outcome::default()
+            });
+        }
+    }
+    let stored = Rec {
+        seq: log.last()? + 1,
+        id: id.clone(),
+        path,
+        body,
+        machine: Some(machine.to_string()),
+    };
+    log.append(&stored)?;
+    Ok(Outcome {
+        sender: vec![ack(stored.seq)],
+        others: Some(rec(&stored)),
+        hello: None,
+    })
+}
+
+fn rec(rec: &Rec) -> String {
+    json!({"t":"rec","seq":rec.seq,"id":rec.id,"path":rec.path,"body":rec.body,"machine":rec.machine})
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Memory {
+        recs: Vec<Rec>,
+        full: bool,
+    }
+
+    impl Log for Memory {
+        fn seq_of(&self, id: &str) -> Result<Option<i64>, Fault> {
+            Ok(self.recs.iter().find(|r| r.id == id).map(|r| r.seq))
+        }
+        fn head(&self, path: &str) -> Result<Option<Rec>, Fault> {
+            Ok(self.recs.iter().rev().find(|r| r.path == path).cloned())
+        }
+        fn after(&self, seq: i64) -> Result<Vec<Rec>, Fault> {
+            Ok(self.recs.iter().filter(|r| r.seq > seq).cloned().collect())
+        }
+        fn last(&self) -> Result<i64, Fault> {
+            Ok(self.recs.last().map_or(0, |r| r.seq))
+        }
+        fn append(&mut self, rec: &Rec) -> Result<(), Fault> {
+            if self.full {
+                return Err(Fault::Limit);
+            }
+            self.recs.push(rec.clone());
+            Ok(())
+        }
+    }
+
+    const ITEM: &str = "projects/P1/items/01ITEM.md";
+    const PAGE: &str = "projects/P1/wiki/lessons.md";
+
+    fn parse(texts: &[String]) -> Vec<Value> {
+        texts
+            .iter()
+            .map(|t| serde_json::from_str(t).unwrap())
+            .collect()
+    }
+
+    fn write(log: &mut Memory, id: &str, path: &str, base: Value, body: Value) -> Outcome {
+        let message = json!({"t":"write","id":id,"path":path,"base":base,"body":body});
+        handle(log, Some("nuc"), &message.to_string())
+    }
+
+    #[test]
+    fn writes_are_numbered_from_one_and_broadcast_to_the_others() {
+        let mut log = Memory::default();
+        let first = write(&mut log, "01A", ITEM, Value::Null, json!("one"));
+        assert_eq!(
+            parse(&first.sender),
+            [json!({"t":"ack","id":"01A","seq":1})]
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(first.others.as_deref().unwrap()).unwrap(),
+            json!({"t":"rec","seq":1,"id":"01A","path":ITEM,"body":"one","machine":"nuc"})
+        );
+        let second = write(&mut log, "01B", ITEM, Value::Null, json!("two"));
+        assert_eq!(
+            parse(&second.sender),
+            [json!({"t":"ack","id":"01B","seq":2})]
+        );
+    }
+
+    #[test]
+    fn a_resent_id_gets_its_first_seq_and_is_neither_stored_nor_broadcast() {
+        let mut log = Memory::default();
+        write(&mut log, "01A", ITEM, Value::Null, json!("one"));
+        let again = write(&mut log, "01A", ITEM, Value::Null, json!("one"));
+        assert_eq!(
+            parse(&again.sender),
+            [json!({"t":"ack","id":"01A","seq":1})]
+        );
+        assert_eq!(again.others, None);
+        assert_eq!(log.recs.len(), 1);
+    }
+
+    #[test]
+    fn a_page_write_from_the_head_is_stored_and_one_from_an_old_version_is_refused() {
+        let mut log = Memory::default();
+        let new = write(&mut log, "01A", PAGE, Value::Null, json!("v1"));
+        assert_eq!(parse(&new.sender), [json!({"t":"ack","id":"01A","seq":1})]);
+        let next = write(&mut log, "01B", PAGE, json!("01A"), json!("v2"));
+        assert_eq!(parse(&next.sender), [json!({"t":"ack","id":"01B","seq":2})]);
+        let stale = write(&mut log, "01C", PAGE, json!("01A"), json!("v2 elsewhere"));
+        assert_eq!(
+            parse(&stale.sender),
+            [json!({"t":"refused","id":"01C",
+                    "head":{"seq":2,"id":"01B","path":PAGE,"body":"v2"}})]
+        );
+        assert_eq!(stale.others, None);
+        assert_eq!(log.recs.len(), 2);
+    }
+
+    #[test]
+    fn a_second_new_page_on_one_path_is_refused() {
+        let mut log = Memory::default();
+        write(&mut log, "01A", PAGE, Value::Null, json!("mine"));
+        let other = write(&mut log, "01B", PAGE, Value::Null, json!("theirs"));
+        assert_eq!(
+            parse(&other.sender),
+            [json!({"t":"refused","id":"01B",
+                    "head":{"seq":1,"id":"01A","path":PAGE,"body":"mine"}})]
+        );
+    }
+
+    #[test]
+    fn items_on_two_paths_written_at_once_are_both_stored() {
+        let mut log = Memory::default();
+        let a = write(
+            &mut log,
+            "01A",
+            "projects/P1/items/A.md",
+            Value::Null,
+            json!("a"),
+        );
+        let b = write(
+            &mut log,
+            "01B",
+            "projects/P1/items/B.md",
+            Value::Null,
+            json!("b"),
+        );
+        assert_eq!(parse(&a.sender), [json!({"t":"ack","id":"01A","seq":1})]);
+        assert_eq!(parse(&b.sender), [json!({"t":"ack","id":"01B","seq":2})]);
+        assert_eq!(log.recs.len(), 2);
+    }
+
+    #[test]
+    fn hello_replays_the_writes_after_since_then_says_ready() {
+        let mut log = Memory::default();
+        write(&mut log, "01A", ITEM, Value::Null, json!("one"));
+        write(&mut log, "01B", PAGE, Value::Null, Value::Null);
+        write(&mut log, "01C", ITEM, Value::Null, json!("three"));
+        let hello = handle(&mut log, None, r#"{"t":"hello","machine":"mac","since":1}"#);
+        assert_eq!(
+            parse(&hello.sender),
+            [
+                json!({"t":"rec","seq":2,"id":"01B","path":PAGE,"body":null,"machine":"nuc"}),
+                json!({"t":"rec","seq":3,"id":"01C","path":ITEM,"body":"three","machine":"nuc"}),
+                json!({"t":"ready","seq":3}),
+            ]
+        );
+        assert_eq!(hello.hello.as_deref(), Some("mac"));
+        assert_eq!(hello.others, None);
+    }
+
+    #[test]
+    fn hello_to_an_empty_store_is_ready_at_zero() {
+        let mut log = Memory::default();
+        let hello = handle(&mut log, None, r#"{"t":"hello","machine":"mac","since":0}"#);
+        assert_eq!(parse(&hello.sender), [json!({"t":"ready","seq":0})]);
+    }
+
+    #[test]
+    fn a_removal_keeps_its_null_body() {
+        let mut log = Memory::default();
+        let removed = write(&mut log, "01A", ITEM, Value::Null, Value::Null);
+        let rec: Value = serde_json::from_str(removed.others.as_deref().unwrap()).unwrap();
+        assert_eq!(rec["body"], Value::Null);
+        assert_eq!(log.recs[0].body, None);
+    }
+
+    #[test]
+    fn a_malformed_message_gets_an_error() {
+        let mut log = Memory::default();
+        for text in [
+            "not json",
+            r#"{"t":"shout"}"#,
+            r#"{"t":"hello","machine":"mac"}"#,
+            r#"{"t":"write","id":"01A","base":null,"body":"x"}"#,
+        ] {
+            let answer = handle(&mut log, Some("nuc"), text);
+            let replies = parse(&answer.sender);
+            assert_eq!(replies.len(), 1, "{text}");
+            assert_eq!(replies[0]["t"], "error", "{text}");
+            assert!(replies[0]["why"].is_string(), "{text}");
+            assert_eq!(answer.others, None, "{text}");
+        }
+        assert!(log.recs.is_empty());
+    }
+
+    #[test]
+    fn a_write_before_hello_gets_an_error() {
+        let mut log = Memory::default();
+        let message = json!({"t":"write","id":"01A","path":ITEM,"base":null,"body":"x"});
+        let answer = handle(&mut log, None, &message.to_string());
+        assert_eq!(parse(&answer.sender)[0]["t"], "error");
+        assert!(log.recs.is_empty());
+    }
+
+    #[test]
+    fn a_write_past_the_daily_limit_gets_limit_and_is_not_stored() {
+        let mut log = Memory {
+            full: true,
+            ..Memory::default()
+        };
+        let answer = write(&mut log, "01A", ITEM, Value::Null, json!("x"));
+        assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
+        assert_eq!(answer.others, None);
+    }
+}
