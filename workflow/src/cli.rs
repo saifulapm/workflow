@@ -133,6 +133,20 @@ It writes this repository's skills and agents under ~/.claude, and a mem in
 time it runs, inside the session, where the proxy adds the Access token."
     )]
     CloudSetup,
+    /// Print the steps that move the claude.ai cloud environment `workflow`
+    /// onto the Cloudflare store.
+    #[command(
+        name = "cloud-switch",
+        long_about = "Print the steps that move the claude.ai cloud environment `workflow` onto
+the Cloudflare store. It refuses, exit 2, naming each cloud run that is live
+or parked, and with a bad --store. It runs no pass command and prints no
+secret, only the pass entry names."
+    )]
+    CloudSwitch {
+        /// The store's socket, ws:// or wss://, ending in /store/share.
+        #[arg(long, value_name = "URL")]
+        store: String,
+    },
     /// Pause a project: `go` refuses it unless its handoff starts `parked:`.
     Pause {
         /// The project, by mem's name.

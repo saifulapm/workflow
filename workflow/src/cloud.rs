@@ -582,6 +582,67 @@ pub fn cmd_cloud_setup() -> i32 {
     exit::OK
 }
 
+/// A ws:// or wss:// URL with a host, ending in /store/share, as
+/// `workflow switch` checks it.
+fn store_url(url: &str) -> bool {
+    let rest = url
+        .strip_prefix("wss://")
+        .or_else(|| url.strip_prefix("ws://"));
+    rest.and_then(|r| r.strip_suffix("/store/share"))
+        .is_some_and(|host| !host.is_empty() && !host.contains('/'))
+}
+
+/// `workflow cloud-switch`: refuse while a cloud run is live or parked, so
+/// no session loses a write mid-switch, else print the steps.
+pub fn cmd_cloud_switch(store: &str) -> i32 {
+    if !store_url(store) {
+        warn(format!(
+            "cloud-switch: --store must be a ws:// or wss:// URL ending in /store/share, not {store}"
+        ));
+        return exit::USAGE;
+    }
+    let Some(projects) = memcli::projects() else {
+        warn("cloud-switch: mem cannot list its projects");
+        return exit::FAILED;
+    };
+    let now = jiff::Timestamp::now();
+    let mut running = false;
+    for row in &projects {
+        if matches!(
+            state(row, || memcli::handoff(&row.name), now),
+            Some(State::Live | State::Parked)
+        ) {
+            let runner = row.runner.as_ref().expect("a cloud state has a runner");
+            warn(format!(
+                "cloud-switch: a cloud run is running: {} ({}, {})",
+                row.name,
+                runner.milestone.as_deref().unwrap_or("?"),
+                runner.id
+            ));
+            running = true;
+        }
+    }
+    if running {
+        warn("cloud-switch: wait for it to land or end, then run this again");
+        return exit::USAGE;
+    }
+    println!(
+        "In claude.ai, on the Code page, open Settings of the environment `workflow` and:
+
+1. Set HUB_STORE_URL to {store}
+2. Set HUB_STORE_NAME to main
+3. Set HUB_STORE_TOKEN to the output of: pass show workflow/hubweb-store-token
+   (the shared bearer: a cloud session reports under per-session names, so it keeps the shared one)
+4. Set HUB_CLOUD_TOKEN to the output of: pass show workflow/hub-cloud-token
+5. Set HUB_PEER_TOKEN_SHA256 to the output of: pass show workflow/hub-peer-token | head -n1 | tr -d '\\n' | sha256sum
+   (the hex digest is the first field)
+6. Remove HUB_PEER_TOKEN
+7. Keep MEM_REMOTE for now: the binaries still come from it
+8. Replace the setup script with the output of: workflow cloud-setup"
+    );
+    exit::OK
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
