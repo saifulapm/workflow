@@ -27,10 +27,11 @@ pub enum Fault {
 
 /// Rows the store writes in a UTC day before it refuses the import's
 /// writes, leaving room under `DAY_ROWS` for the machines' own.
-pub const IMPORT_ROWS: i64 = 90_000;
-/// Rows the store writes in a UTC day before it refuses every write, under
-/// the Free plan's 100,000.
-pub const DAY_ROWS: i64 = 95_000;
+pub const IMPORT_ROWS: i64 = 500_000;
+/// Rows the store writes in a UTC day before it refuses every write. Workers
+/// Paid includes 50 million rows written a month; at most 30 million at this
+/// cap, so the bill never grows past the plan.
+pub const DAY_ROWS: i64 = 1_000_000;
 
 /// The store's write log, oldest first, every write kept.
 pub trait Log {
@@ -182,7 +183,7 @@ fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, 
         }
     }
     // The import waits for the next UTC day; the machine that hit the day's
-    // rows keeps its write until then, as it would at the Free limit.
+    // rows keeps its write until then, as it would at a Cloudflare limit.
     let rows = log.rows_today()?;
     if rows >= DAY_ROWS {
         return Err(Fault::Limit);
