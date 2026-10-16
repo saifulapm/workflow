@@ -1758,6 +1758,12 @@ pub fn ask(
     recommend: Option<&str>,
     audience: Option<crate::cli::Audience>,
 ) -> Result<i32> {
+    // A blank question would reach the phone as buttons under nothing.
+    if question.trim().is_empty() {
+        return Err(exit::usage(
+            "the question is empty — say what you are asking",
+        ));
+    }
     let identity = app.identity(Mode::Write)?;
     let mut meta = crate::item::Meta::new(
         String::new(),

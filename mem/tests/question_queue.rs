@@ -655,3 +655,16 @@ fn an_answer_cannot_supersede_an_item_that_is_not_its_questions_answer() {
     let out = ask_env(&w, &repo, &["answer", &b, "no", "--supersedes", &a]);
     assert_ne!(code(&out), 0, "an answer replaced a question");
 }
+
+#[test]
+fn a_question_with_no_text_is_refused() {
+    let w = World::new("q-empty");
+    let repo = w.repo("thing", None);
+    for text in ["", "   "] {
+        let out = ask_env(&w, &repo, &["ask", text, "--options", "yes,no"]);
+        assert_eq!(code(&out), 2, "{:?}: {}", text, stderr(&out));
+        assert!(stderr(&out).contains("question"), "{}", stderr(&out));
+    }
+    let out = ask_env(&w, &repo, &["questions", "--pending"]);
+    assert_eq!(code(&out), 1, "nothing was asked: {}", stdout(&out));
+}
