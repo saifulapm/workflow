@@ -21,7 +21,8 @@ export default defineConfig({
       ACCESS_AUD: bindings.secret(),
       ACCESS_TEAM: bindings.secret(),
     },
-    // next-hub.on-rexa.com and next-mem.on-rexa.com are added when the
-    // Worker is first deployed, not before.
+    // The hub web and the connector on their own names until the switch,
+    // when hub.on-rexa.com and mem.on-rexa.com move here.
+    domains: ["next-hub.on-rexa.com", "next-mem.on-rexa.com"],
   },
 });
