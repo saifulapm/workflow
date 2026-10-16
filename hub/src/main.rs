@@ -26,6 +26,7 @@ Usage: hub [OPTIONS]
        hub ping <HOST[:PORT]>
        hub share sync
        hub share seed
+       hub share mint <RUNNER>
 
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
@@ -51,6 +52,9 @@ Commands:
                 once the store holds them all, 3 when the day's budget is
                 spent (run it again after 06:00 Dhaka), 1 when anything else
                 stopped it
+  share mint    Print a new store token for one machine, by its runner
+                name, from the store (HUB_STORE_URL) and the shared store
+                bearer read from stdin
 
 Options:
       --config <PATH>  Config file (default $XDG_CONFIG_HOME/hub/config.toml)
@@ -71,6 +75,8 @@ struct Args {
     sync: bool,
     /// `share seed`: the import into the store.
     seed: bool,
+    /// `share mint <runner>`: a machine's own store token.
+    mint: Option<String>,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
@@ -84,6 +90,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
         ping: None,
         sync: false,
         seed: false,
+        mint: None,
         config: None,
         port: None,
     };
@@ -97,7 +104,10 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "share" => match argv.next().as_deref() {
                 Some("sync") => args.sync = true,
                 Some("seed") => args.seed = true,
-                _ => anyhow::bail!("share takes sync or seed\n\n{USAGE}"),
+                Some("mint") => {
+                    args.mint = Some(argv.next().context("share mint needs a runner name")?)
+                }
+                _ => anyhow::bail!("share takes sync, seed or mint\n\n{USAGE}"),
             },
             "ping" => match argv.next().context("ping needs a host")? {
                 help if help == "-h" || help == "--help" => {
@@ -159,6 +169,9 @@ fn run() -> Result<()> {
         let seeded = hub::seed::run(&store)?;
         println!("{}", seeded.summary());
         std::process::exit(seeded.code());
+    }
+    if let Some(runner) = args.mint {
+        return hub::mint::run(&runner);
     }
     if args.local {
         return run_local(args.port.unwrap_or(local::PORT));

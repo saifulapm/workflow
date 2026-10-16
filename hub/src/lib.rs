@@ -23,6 +23,7 @@ pub mod localroute;
 pub mod mcp;
 pub mod memcli;
 pub mod memserve;
+pub mod mint;
 pub mod model;
 pub mod multipart;
 pub mod open;
