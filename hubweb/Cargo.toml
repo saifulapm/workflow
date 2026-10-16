@@ -1,0 +1,22 @@
+[package]
+name = "hubweb"
+version = "0.1.0"
+edition = "2024"
+
+# cdylib is what worker-build turns into the Worker's wasm; rlib lets
+# `cargo test` on the host build the page and stage code without a Worker.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json = "1.0.151"
+
+# The Worker runtime only builds for wasm. Everything the host tests touch
+# lives outside it, so `cargo test` never compiles the bindings.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = "0.8.7"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
