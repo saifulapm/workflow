@@ -20,7 +20,13 @@ pub struct EvidenceRow {
     pub task: String,
     pub file: String,
     pub note: String,
+    /// The day it was filed, `YYYY-MM-DD`.
+    pub created: String,
 }
+
+/// Files older than this many days have left Cloudflare, so the hub shows
+/// their evidence as archived.
+pub const ARCHIVE_DAYS: i32 = 90;
 
 /// One row of `mem finding list --json`.
 #[derive(Debug, PartialEq, Eq)]
@@ -78,6 +84,7 @@ pub fn evidence_rows(rows: &[Value]) -> Vec<EvidenceRow> {
             task: text_of(row, "task").unwrap_or_default(),
             file: text_of(row, "file").unwrap_or_default(),
             note: text_of(row, "note").unwrap_or_default(),
+            created: text_of(row, "created").unwrap_or_default(),
         })
         .collect()
 }
@@ -121,7 +128,7 @@ pub fn evidence_body(ctx: &PageCtx) -> String {
         .and_then(|p| p.parse::<usize>().ok())
         .filter(|p| *p >= 1)
         .unwrap_or(1);
-    out.push_str(&gallery(&rows, page, project));
+    out.push_str(&gallery(&rows, page, project, ctx.site.now));
     out.push_str(&findings_section(
         &finding_rows(&findings.rows("items")),
         project,
@@ -131,7 +138,7 @@ pub fn evidence_body(ctx: &PageCtx) -> String {
 
 /// One page of rows, a group per task in the order the rows bring them,
 /// then the links to the pages either side.
-pub fn gallery(rows: &[EvidenceRow], page: usize, project: &str) -> String {
+pub fn gallery(rows: &[EvidenceRow], page: usize, project: &str, now: jiff::Timestamp) -> String {
     let mut out = String::from("<h2>Evidence</h2>\n");
     let pages = rows.len().div_ceil(PAGE_ROWS);
     let shown: Vec<&EvidenceRow> = rows
@@ -154,7 +161,13 @@ pub fn gallery(rows: &[EvidenceRow], page: usize, project: &str) -> String {
             ));
             task = Some(&row.task);
         }
-        if is_image(&row.file) {
+        if is_archived(&row.created, now) {
+            out.push_str(&format!(
+                "<li>{file}<div class=\"meta\">archived · {note}</div></li>\n",
+                file = esc(&row.file),
+                note = esc(&row.note),
+            ));
+        } else if is_image(&row.file) {
             let text = format!("<p>{} · {}</p>", esc(&row.task), esc(&row.note));
             out.push_str(&tile(project, &row.id, &row.file, &esc(&row.note), &text));
             out.push('\n');
@@ -241,6 +254,21 @@ pub fn file_view(project: &str, id: &str, file: &str) -> String {
         esc(&file_url(project, id)),
         esc(file)
     )
+}
+
+/// Whether `created` is more than `ARCHIVE_DAYS` days before `now`. A day
+/// that does not parse is not archived.
+fn is_archived(created: &str, now: jiff::Timestamp) -> bool {
+    let Some(day) = created
+        .get(..10)
+        .and_then(|d| d.parse::<jiff::civil::Date>().ok())
+    else {
+        return false;
+    };
+    let today = now.to_zoned(jiff::tz::TimeZone::UTC).date();
+    today
+        .since(day)
+        .is_ok_and(|age| age.get_days() > ARCHIVE_DAYS)
 }
 
 fn is_image(file: &str) -> bool {
