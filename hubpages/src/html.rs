@@ -190,6 +190,7 @@ body>ul:not([class])>li:last-child{border-bottom:0}
 .tl>li.done::before{background:var(--ok)}
 .tl>li.live::before{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
 .gallery{display:grid;gap:10px;grid-template-columns:repeat(auto-fill,minmax(10rem,1fr));margin-block:0 16px}
+.gallery>li{min-width:0;overflow-wrap:anywhere}
 .gallery figure{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .gallery img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--track)}
 .gallery figcaption{padding:8px 10px;font-size:12px;color:var(--mut);overflow-wrap:anywhere}

@@ -150,3 +150,14 @@ fn evidence_keeps_its_image_whatever_its_age() {
     );
     assert!(!page.contains("archived"), "{page}");
 }
+
+#[test]
+fn a_file_row_in_the_gallery_wraps_its_name_inside_a_phone_width() {
+    // A grid item is as wide as its longest word unless told otherwise, and
+    // a file path has no breaks, so a video's row pushed the page sideways.
+    let style = hubpages::html::STYLE;
+    assert!(
+        style.contains(".gallery>li{min-width:0;overflow-wrap:anywhere}"),
+        "{style}"
+    );
+}
