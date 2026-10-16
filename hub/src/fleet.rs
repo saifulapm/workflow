@@ -210,9 +210,9 @@ pub fn run(machine: String) -> ! {
     let mut last: Option<(Value, Instant)> = None;
     loop {
         if let Some(report) = report(&machine) {
-            let due = last
-                .as_ref()
-                .is_none_or(|(said, at)| *said != report || at.elapsed() >= every);
+            let due = last.as_ref().is_none_or(|(said, at)| {
+                live_part(said) != live_part(&report) || at.elapsed() >= every
+            });
             if due {
                 offer(&report);
                 last = Some((report, Instant::now()));
@@ -220,4 +220,21 @@ pub fn run(machine: String) -> ! {
         }
         std::thread::sleep(check);
     }
+}
+
+/// The report as far as what runs here goes: each agent's state word cut
+/// to live or not, as the pages' `Agent::live` reads it. amx's word flips
+/// all the time while an agent works (working, waiting, idle), and sending
+/// each flip would report every 5 s and reload every open page with it; the
+/// word itself rides the next interval's report.
+fn live_part(report: &Value) -> Value {
+    let mut part = report.clone();
+    if let Some(agents) = part["agents"].as_array_mut() {
+        for agent in agents {
+            let ended = agent["ended"].as_i64().unwrap_or(0) != 0;
+            let stopped = matches!(agent["state"].as_str(), Some("stopped" | "failed"));
+            agent["state"] = Value::Bool(!ended && !stopped);
+        }
+    }
+    part
 }

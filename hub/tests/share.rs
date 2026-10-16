@@ -1408,3 +1408,52 @@ fn a_cloud_session_without_amx_still_reports() {
     });
     assert_eq!(reports_on(&store, 0)[0]["agents"], serde_json::json!([]));
 }
+
+/// amx's state word flips while an agent works (working, waiting, idle):
+/// that rides the next 30 s report. Only a change in what is live goes at
+/// once, so a busy machine stays near one report per 30 s.
+#[test]
+fn a_working_agents_state_word_waits_for_the_interval() {
+    let dir = TempDir::new("share-report-busy");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, RUNNING);
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(
+        &dir,
+        &bin,
+        Some(&store),
+        &[
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_REPORT_EVERY_MS", "60000"),
+            ("HUB_REPORT_CHECK_MS", "100"),
+        ],
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    for state in ["working", "waiting", "idle", "done"] {
+        std::fs::write(
+            dir.join("amx.json"),
+            format!(r#"[{{"id":"walk01-m1","state":"{state}","ended":0,"created":5}}]"#),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    assert_eq!(
+        reports_on(&store, 0).len(),
+        1,
+        "{:?}",
+        reports_on(&store, 0)
+    );
+    // A new agent is a change in what runs: it goes at once.
+    std::fs::write(
+        dir.join("amx.json"),
+        r#"[{"id":"walk01-m1","state":"idle","ended":0,"created":5},{"id":"walk01-m1-t3","state":"working","ended":0,"created":6}]"#,
+    )
+    .unwrap();
+    wait_for(
+        "the report of the new agent",
+        Duration::from_secs(2),
+        || reports_on(&store, 0).len() >= 2,
+    );
+}
