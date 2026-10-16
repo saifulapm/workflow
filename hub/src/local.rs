@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -79,6 +80,8 @@ pub struct Local {
     /// Answers by question short id, kept for a wait that comes later.
     answers: Mutex<HashMap<String, String>>,
     answered: Condvar,
+    /// Set by mem's `POST /share/kick`, taken by the sharing thread.
+    kick: Arc<AtomicBool>,
 }
 
 impl Local {
@@ -93,7 +96,13 @@ impl Local {
             asked: Mutex::new(HashMap::new()),
             answers: Mutex::new(HashMap::new()),
             answered: Condvar::new(),
+            kick: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// What the sharing thread watches for mem's kicks.
+    pub fn kick(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.kick)
     }
 
     /// A request on the peer port.
@@ -104,9 +113,16 @@ impl Local {
         self.route(request)
     }
 
-    /// A request on mem's socket.
+    /// A request on mem's socket. Only mem may kick the sharing thread, so
+    /// the peer port never serves `/share/kick`.
     pub fn mem(&self, request: &Request) -> Response {
-        self.route(request)
+        match (request.method.as_str(), request.path.as_str()) {
+            ("POST", "/share/kick") => {
+                self.kick.store(true, Ordering::SeqCst);
+                Response::new(204, "text/plain; charset=utf-8", "")
+            }
+            _ => self.route(request),
+        }
     }
 
     fn route(&self, request: &Request) -> Response {

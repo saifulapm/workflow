@@ -38,6 +38,7 @@ pub mod pair;
 pub mod presence;
 pub mod proc;
 pub mod route;
+pub mod share;
 pub mod slack;
 
 /// How long `tailscale status` may take. It runs once, before the listener is

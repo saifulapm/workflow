@@ -253,6 +253,15 @@ fn run_local(port: u16) -> Result<()> {
             })
             .context("starting the Slack socket")?;
     }
+    // Sharing only with both set: a test that names neither never reaches
+    // the real store.
+    if let Some((url, token)) = hub::share::from_env() {
+        let kick = local.kick();
+        std::thread::Builder::new()
+            .name("hub-share".to_string())
+            .spawn(move || hub::share::run(&url, &token, kick))
+            .context("starting the sharing socket")?;
+    }
     let for_mem = Arc::clone(&local);
     std::thread::Builder::new()
         .name("hub-local-socket".to_string())
