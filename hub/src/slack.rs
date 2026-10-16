@@ -26,6 +26,12 @@ const BACKOFF_CAP: Duration = Duration::from_secs(60);
 /// the connection is taken for dead: a laptop that slept, or a NAT entry that
 /// was dropped, leaves a read that would otherwise block for good.
 const QUIET: Duration = Duration::from_secs(90);
+/// The `event_type` of the metadata that names a posted question.
+const METADATA_TYPE: &str = "workflow_question";
+/// The largest photo a reply may bring.
+const PHOTO_MAX: u64 = 8 * 1024 * 1024;
+/// How many of the DM's newest messages the catch-up reads.
+const HISTORY: &str = "100";
 
 pub struct Question {
     pub id: String,
@@ -50,6 +56,19 @@ pub struct Tap {
     pub answer: String,
     pub channel: String,
     pub ts: String,
+}
+
+/// Saiful's reply in a question's thread: its words and the photos it brought.
+#[derive(Debug)]
+pub struct Reply {
+    pub channel: String,
+    /// The question's message.
+    pub thread_ts: String,
+    pub question: String,
+    /// The asking machine.
+    pub machine: String,
+    pub text: String,
+    pub photos: Vec<Vec<u8>>,
 }
 
 /// What a button's `value` carries, kept short for Slack's 2000-character cap.
@@ -177,10 +196,16 @@ impl Slack {
         if !buttons.is_empty() {
             blocks.push(json!({"type": "actions", "elements": buttons}));
         }
+        // The metadata names the question for a reply in its thread, which
+        // a question without buttons has no other way to do.
         let body = json!({
             "channel": self.user_id,
             "text": format!("{} on {}: {}", q.project, q.machine, q.text),
             "blocks": blocks,
+            "metadata": {
+                "event_type": METADATA_TYPE,
+                "event_payload": {"q": q.id, "m": q.machine},
+            },
         });
         let reply = self.call("chat.postMessage", &self.bot_token, Some(&body))?;
         Ok(Posted {
@@ -212,10 +237,16 @@ impl Slack {
     /// Holds a Socket Mode connection for good, calling `on_tap` for each of
     /// Saiful's button taps. Slack's `disconnect` reconnects at once; an
     /// error reconnects after a backoff that doubles up to a minute.
-    pub fn run_socket(&self, mut on_tap: impl FnMut(Tap)) -> ! {
+    pub fn run_socket(&self, on_tap: impl FnMut(Tap)) -> ! {
+        self.listen(on_tap, |_| {})
+    }
+
+    /// `run_socket`, calling `on_reply` as well for each of Saiful's replies
+    /// in the thread of a posted question.
+    pub fn listen(&self, mut on_tap: impl FnMut(Tap), mut on_reply: impl FnMut(Reply)) -> ! {
         let mut backoff = BACKOFF_START;
         loop {
-            if let Err(error) = self.session(&mut on_tap, &mut backoff) {
+            if let Err(error) = self.session(&mut on_tap, &mut on_reply, &mut backoff) {
                 (self.log)(&format!("slack: socket: {error:#}"));
                 std::thread::sleep(backoff);
                 backoff = (backoff * 2).min(BACKOFF_CAP);
@@ -224,7 +255,12 @@ impl Slack {
     }
 
     /// One connection, until Slack asks for a new one (`Ok`) or it fails.
-    fn session(&self, on_tap: &mut impl FnMut(Tap), backoff: &mut Duration) -> Result<()> {
+    fn session(
+        &self,
+        on_tap: &mut impl FnMut(Tap),
+        on_reply: &mut impl FnMut(Reply),
+        backoff: &mut Duration,
+    ) -> Result<()> {
         let reply = self.call("apps.connections.open", &self.app_token, None)?;
         let url = reply["url"]
             .as_str()
@@ -285,6 +321,11 @@ impl Slack {
                 Some("hello") => *backoff = BACKOFF_START,
                 Some("disconnect") => return Ok(()),
                 Some("interactive") => self.interactive(&envelope["payload"], on_tap),
+                Some("events_api") => {
+                    if let Some(reply) = self.reply(&envelope["payload"]["event"]) {
+                        on_reply(reply);
+                    }
+                }
                 _ => {}
             }
         }
@@ -324,6 +365,166 @@ impl Slack {
         });
     }
 
+    /// A DM message event, when it is Saiful's reply in the thread of a
+    /// posted question.
+    fn reply(&self, event: &Value) -> Option<Reply> {
+        if event["type"] != "message" || !self.by_saiful(event) {
+            return None;
+        }
+        let channel = event["channel"].as_str()?;
+        // A parent with replies carries its own ts as `thread_ts`.
+        let thread_ts = event["thread_ts"]
+            .as_str()
+            .filter(|t| Some(*t) != event["ts"].as_str())?;
+        let parent = self.form(
+            "conversations.replies",
+            &[
+                ("channel", channel),
+                ("ts", thread_ts),
+                ("limit", "1"),
+                ("include_all_metadata", "true"),
+            ],
+        );
+        let parent = match parent {
+            Ok(parent) => parent,
+            Err(error) => {
+                (self.log)(&format!("slack: reading a reply's question: {error:#}"));
+                return None;
+            }
+        };
+        let (question, machine) = question_of(&parent["messages"][0])?;
+        Some(self.reply_in(channel, thread_ts, question, machine, event))
+    }
+
+    /// Whether `message` is Saiful's own words: never the bot's post, and
+    /// never an edit or a deletion.
+    fn by_saiful(&self, message: &Value) -> bool {
+        message.get("bot_id").is_none()
+            && message["user"] == self.user_id.as_str()
+            && matches!(message["subtype"].as_str(), None | Some("file_share"))
+    }
+
+    fn reply_in(
+        &self,
+        channel: &str,
+        thread_ts: &str,
+        question: String,
+        machine: String,
+        message: &Value,
+    ) -> Reply {
+        let photos = message["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|file| {
+                file["mimetype"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("image/"))
+            })
+            .filter_map(|file| {
+                file["url_private_download"]
+                    .as_str()
+                    .or(file["url_private"].as_str())
+            })
+            .filter_map(|url| match self.download(url) {
+                Ok(bytes) => Some(bytes),
+                Err(error) => {
+                    (self.log)(&format!("slack: a photo for #{question}: {error:#}"));
+                    None
+                }
+            })
+            .collect();
+        Reply {
+            channel: channel.to_string(),
+            thread_ts: thread_ts.to_string(),
+            question,
+            machine,
+            text: message["text"].as_str().unwrap_or_default().to_string(),
+            photos,
+        }
+    }
+
+    /// Saiful's replies, oldest first, in the threads of the DM's newest
+    /// messages whose question `wanted(question, machine)` picks: what he
+    /// wrote while no hub was connected. Slack keeps the DM, so nothing
+    /// needs saving here.
+    pub fn replies_in_history(&self, wanted: impl Fn(&str, &str) -> bool) -> Result<Vec<Reply>> {
+        let opened = self.form("conversations.open", &[("users", &self.user_id)])?;
+        let channel = opened["channel"]["id"]
+            .as_str()
+            .context("conversations.open returned no channel")?;
+        let history = self.form(
+            "conversations.history",
+            &[
+                ("channel", channel),
+                ("limit", HISTORY),
+                ("include_all_metadata", "true"),
+            ],
+        )?;
+        let mut replies = Vec::new();
+        for parent in history["messages"].as_array().into_iter().flatten() {
+            if parent["reply_count"].as_u64().unwrap_or(0) == 0 {
+                continue;
+            }
+            let Some((question, machine)) = question_of(parent).filter(|(q, m)| wanted(q, m))
+            else {
+                continue;
+            };
+            let ts = parent["ts"].as_str().unwrap_or_default();
+            let thread = self.form("conversations.replies", &[("channel", channel), ("ts", ts)])?;
+            for message in thread["messages"].as_array().into_iter().flatten() {
+                if message["ts"] != ts && self.by_saiful(message) {
+                    replies.push(self.reply_in(
+                        channel,
+                        ts,
+                        question.clone(),
+                        machine.clone(),
+                        message,
+                    ));
+                }
+            }
+        }
+        Ok(replies)
+    }
+
+    /// A file Saiful shared, fetched with the bot token (files:read).
+    fn download(&self, url: &str) -> Result<Vec<u8>> {
+        // The token goes to Slack's file host only, or to the API's own
+        // origin, which is where a test's fake Slack serves its files.
+        let api_origin = format!("{}/", origin(&self.api_url));
+        if !url.starts_with("https://files.slack.com/") && !url.starts_with(&api_origin) {
+            bail!("a file outside Slack");
+        }
+        let mut response = self
+            .agent
+            .get(url)
+            .header("Authorization", &format!("Bearer {}", self.bot_token))
+            .call()
+            .context("fetching a file")?;
+        if !response.status().is_success() {
+            bail!("fetching a file: {}", response.status());
+        }
+        response
+            .body_mut()
+            .with_config()
+            .limit(PHOTO_MAX)
+            .read_to_vec()
+            .context("reading a file")
+    }
+
+    /// POSTs a read method its arguments as a form, which every method
+    /// takes. They are ids, timestamps and numbers: nothing to escape.
+    fn form(&self, method: &str, args: &[(&str, &str)]) -> Result<Value> {
+        let body: Vec<String> = args.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let sent = self
+            .agent
+            .post(&format!("{}/{method}", self.api_url))
+            .header("Authorization", &format!("Bearer {}", self.bot_token))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .send(&body.join("&"));
+        read_reply(method, sent)
+    }
+
     /// POSTs one Web API method. Slack answers 200 with `ok: false` on most
     /// failures, so `ok` decides.
     fn call(&self, method: &str, token: &str, body: Option<&Value>) -> Result<Value> {
@@ -340,18 +541,55 @@ impl Slack {
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .send_empty(),
         };
-        let mut response = sent.with_context(|| format!("slack {method}"))?;
-        let text = response
-            .body_mut()
-            .read_to_string()
-            .with_context(|| format!("slack {method}: reading the reply"))?;
-        let reply: Value = serde_json::from_str(&text)
-            .with_context(|| format!("slack {method}: a reply that is not JSON"))?;
-        if reply["ok"] != true {
-            let error = reply["error"].as_str().unwrap_or("no error given");
-            bail!("slack {method}: {error}");
-        }
-        Ok(reply)
+        read_reply(method, sent)
+    }
+}
+
+/// A Web API reply, when its `ok` is true.
+fn read_reply(
+    method: &str,
+    sent: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<Value> {
+    let mut response = sent.with_context(|| format!("slack {method}"))?;
+    let text = response
+        .body_mut()
+        .read_to_string()
+        .with_context(|| format!("slack {method}: reading the reply"))?;
+    let reply: Value = serde_json::from_str(&text)
+        .with_context(|| format!("slack {method}: a reply that is not JSON"))?;
+    if reply["ok"] != true {
+        let error = reply["error"].as_str().unwrap_or("no error given");
+        bail!("slack {method}: {error}");
+    }
+    Ok(reply)
+}
+
+/// The question a posted message asks, and the machine that asked it: from
+/// its metadata, else from a button, as a message posted before the
+/// metadata carries it.
+fn question_of(message: &Value) -> Option<(String, String)> {
+    let metadata = &message["metadata"];
+    if metadata["event_type"] == METADATA_TYPE {
+        let payload = &metadata["event_payload"];
+        return Some((
+            payload["q"].as_str()?.to_string(),
+            payload["m"].as_str()?.to_string(),
+        ));
+    }
+    message["blocks"]
+        .as_array()?
+        .iter()
+        .flat_map(|block| block["elements"].as_array().into_iter().flatten())
+        .find_map(|element| serde_json::from_str::<ButtonValue>(element["value"].as_str()?).ok())
+        .map(|value| (value.q, value.m))
+}
+
+/// `scheme://host[:port]` of `url`.
+fn origin(url: &str) -> &str {
+    let after_scheme = url.find("://").map_or(0, |i| i + 3);
+    match url[after_scheme..].find('/') {
+        Some(slash) => &url[..after_scheme + slash],
+        None => url,
     }
 }
 

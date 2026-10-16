@@ -257,6 +257,37 @@ impl Local {
             ("GET", "/questions") => {
                 Response::new(200, "application/json", self.known.doc().to_string())
             }
+            // A photo Saiful posted alone in the thread of a question asked
+            // here, from the hub whose Slack connection got it.
+            ("POST", "/evidence") => {
+                let given =
+                    serde_json::from_slice::<serde_json::Value>(&request.body).unwrap_or_default();
+                let (Some(id), Some(data)) = (given["question"].as_str(), given["data"].as_str())
+                else {
+                    return Response::text(400, "expected a question and its photo's data");
+                };
+                let Ok(photo) = base64::engine::general_purpose::STANDARD.decode(data) else {
+                    return Response::text(400, "the photo is not base64");
+                };
+                let here = self
+                    .asked
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(id)
+                    || self.asked_here(id).is_some();
+                if !here {
+                    return Response::not_found();
+                }
+                self.on_reply(crate::slack::Reply {
+                    channel: String::new(),
+                    thread_ts: String::new(),
+                    question: id.to_string(),
+                    machine: self.host.clone(),
+                    text: String::new(),
+                    photos: vec![photo],
+                });
+                Response::text(200, "ok")
+            }
             ("POST", "/answer") => match serde_json::from_slice::<Answer>(&request.body) {
                 // Only the surfaces a hub passes on travel between hubs; an
                 // answer claiming any other would be recorded under a name
@@ -480,6 +511,152 @@ impl Local {
             if let Err(e) = slack.mark_answered(&tap.channel, &tap.ts, &shown, &text) {
                 eprintln!("hub: local: #{} not marked answered: {e:#}", tap.question);
             }
+        }
+    }
+
+    /// Saiful's reply in a question's thread, for the hub that asked, this
+    /// one or a peer. Words are the answer, with the first photo as its
+    /// screenshot, and the message loses its buttons; a photo alone is
+    /// evidence on the question.
+    pub fn on_reply(&self, reply: crate::slack::Reply) {
+        let id = reply.question;
+        if reply.text.trim().is_empty() {
+            for photo in &reply.photos {
+                if reply.machine != self.host {
+                    let body = serde_json::json!({
+                        "question": id,
+                        "data": base64::engine::general_purpose::STANDARD.encode(photo),
+                    })
+                    .to_string();
+                    match request(
+                        &reply.machine,
+                        "POST",
+                        "/evidence",
+                        &self.token,
+                        body.as_bytes(),
+                    ) {
+                        Ok((200, _)) => {}
+                        Ok((status, _)) => eprintln!(
+                            "hub: local: {} answered {status} to a photo for #{id}",
+                            reply.machine
+                        ),
+                        Err(e) => eprintln!(
+                            "hub: local: a photo for #{id} did not reach {}: {e:#}",
+                            reply.machine
+                        ),
+                    }
+                    continue;
+                }
+                let Some(file) = save_shot(&id, photo) else {
+                    continue;
+                };
+                let task = format!("#{id}");
+                match std::process::Command::new("mem")
+                    .args(["evidence", "add", "--task", &task])
+                    .arg(&file)
+                    .args(["--note", &format!("photo from Slack for {task}")])
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => eprintln!(
+                        "hub: local: mem evidence add for {task} failed: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                    Err(e) => eprintln!("hub: local: mem evidence add for {task}: {e}"),
+                }
+                let _ = std::fs::remove_file(file);
+            }
+            return;
+        }
+        // Read before the answer closes the question here.
+        let text = self
+            .asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&id)
+            .map(|a| a.text.clone())
+            .or_else(|| self.known.get(&id).map(|o| o.text))
+            .unwrap_or_else(|| format!("#{id}"));
+        let shot = reply.photos.into_iter().next();
+        let shown = if reply.machine == self.host {
+            match self.deliver(&id, &reply.text, "slack", shot) {
+                Ok(()) => Some(reply.text.clone()),
+                Err(standing) => Some(standing),
+            }
+        } else {
+            let mut body = serde_json::json!({
+                "question": id,
+                "answer": reply.text,
+                "by": "slack",
+            });
+            if let Some(bytes) = &shot {
+                body["screenshot"] = serde_json::json!({
+                    "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                });
+            }
+            match request(
+                &reply.machine,
+                "POST",
+                "/answer",
+                &self.token,
+                body.to_string().as_bytes(),
+            ) {
+                Ok((200, _)) => Some(reply.text.clone()),
+                Ok((409, standing)) => Some(standing.trim().to_string()),
+                Ok((status, _)) => {
+                    eprintln!(
+                        "hub: local: {} answered {status} to the answer to #{id}",
+                        reply.machine
+                    );
+                    None
+                }
+                Err(e) => {
+                    eprintln!(
+                        "hub: local: the answer to #{id} did not reach {}: {e:#}",
+                        reply.machine
+                    );
+                    None
+                }
+            }
+        };
+        let Some(shown) = shown else {
+            return;
+        };
+        eprintln!("hub: local: #{id} answered in its Slack thread");
+        if let Some(slack) = &self.slack
+            && let Err(e) = slack.mark_answered(&reply.channel, &reply.thread_ts, &shown, &text)
+        {
+            eprintln!("hub: local: #{id} not marked answered: {e:#}");
+        }
+    }
+
+    /// Reads what Saiful wrote in the threads of the questions still open
+    /// here while no hub was connected: in each thread, the first reply
+    /// with words answers, and the photos before it are evidence.
+    pub fn catch_up_replies(&self) {
+        let Some(slack) = &self.slack else {
+            return;
+        };
+        let replies = slack.replies_in_history(|question, machine| {
+            machine == self.host && self.asked_here(question).is_some()
+        });
+        let replies = match replies {
+            Ok(replies) => replies,
+            Err(e) => {
+                eprintln!("hub: local: reading the Slack DM: {e:#}");
+                return;
+            }
+        };
+        let mut answered = std::collections::HashSet::new();
+        for reply in replies {
+            if answered.contains(&reply.question) {
+                continue;
+            }
+            if !reply.text.trim().is_empty() {
+                answered.insert(reply.question.clone());
+            }
+            self.on_reply(reply);
         }
     }
 

@@ -261,17 +261,29 @@ fn run_local(port: u16) -> Result<()> {
     let notice = slack.clone();
     if let Some(slack) = slack {
         let local = Arc::clone(&local);
+        let replies = Arc::clone(&local);
+        let catch_up = Arc::clone(&local);
         std::thread::Builder::new()
             .name("hub-slack".to_string())
-            // Each tap on a thread of its own: a peer that is slow to answer
-            // must not hold up the acks of the taps behind it.
+            // Each tap and reply on a thread of its own: a peer that is slow
+            // to answer must not hold up the acks of the envelopes behind it.
             .spawn(move || {
-                slack.run_socket(move |tap| {
-                    let local = Arc::clone(&local);
-                    std::thread::spawn(move || local.on_tap(tap));
-                })
+                slack.listen(
+                    move |tap| {
+                        let local = Arc::clone(&local);
+                        std::thread::spawn(move || local.on_tap(tap));
+                    },
+                    move |reply| {
+                        let local = Arc::clone(&replies);
+                        std::thread::spawn(move || local.on_reply(reply));
+                    },
+                )
             })
             .context("starting the Slack socket")?;
+        std::thread::Builder::new()
+            .name("hub-slack-catch-up".to_string())
+            .spawn(move || catch_up.catch_up_replies())
+            .context("starting the Slack catch-up")?;
     }
     if let Some(store) = store {
         let kick = local.kick();
