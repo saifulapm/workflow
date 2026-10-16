@@ -270,9 +270,26 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 pub struct Store {
     state: State,
     sql: SqlStorage,
-    /// The UTC day number a write last hit a Free limit. Kept in memory: an
-    /// evicted store forgets it, and the next refused write sets it again.
+    /// The UTC day number a write last hit a Free limit, while the object is
+    /// awake. Each open socket's attachment holds it through hibernation.
     limit_day: Cell<Option<u64>>,
+}
+
+impl Store {
+    /// The newest limit day this object hit, from memory or from any open
+    /// socket's attachment.
+    fn limit_day(&self) -> Result<Option<u64>> {
+        let mut attachments = Vec::new();
+        for socket in self.state.get_websockets() {
+            attachments.push(attachment(&socket)?);
+        }
+        Ok(share::newest_limit_day(&attachments).max(self.limit_day.get()))
+    }
+}
+
+/// A socket's attachment, Null when it has none.
+fn attachment(socket: &WebSocket) -> Result<Value> {
+    Ok(socket.deserialize_attachment()?.unwrap_or(Value::Null))
 }
 
 impl DurableObject for Store {
@@ -352,7 +369,7 @@ impl DurableObject for Store {
                     .to_array()?;
                 let bodies: Vec<&str> = rows.iter().filter_map(|r| r["body"].as_str()).collect();
                 let mut response = Response::from_json(&bodies)?;
-                if let Some(day) = self.limit_day.get() {
+                if let Some(day) = self.limit_day()? {
                     response
                         .headers_mut()
                         .set("X-Store-Limit", &day.to_string())?;
@@ -398,16 +415,27 @@ impl DurableObject for Store {
             return Ok(());
         };
         // The machine's name lives on the socket, which outlasts hibernation.
-        let machine: Option<String> = ws.deserialize_attachment()?;
+        let (machine, _) = share::attached(&attachment(&ws)?);
         let outcome = share::handle(&mut SqlLog(&self.sql), machine.as_deref(), &text);
         if let Some(machine) = &outcome.hello {
-            ws.serialize_attachment(machine)?;
-        }
-        if outcome.limit {
-            self.limit_day.set(Some(utc_day()));
+            ws.serialize_attachment(share::attachment(Some(machine), self.limit_day()?))?;
         }
         for reply in &outcome.sender {
             ws.send_with_str(reply)?;
+        }
+        if outcome.limit {
+            let day = utc_day();
+            self.limit_day.set(Some(day));
+            // The object forgets its memory when it hibernates, so every
+            // socket carries the day for the home to find. A socket that is
+            // closing may refuse it; the others still hold the day.
+            for socket in self.state.get_websockets() {
+                if let Ok(value) = attachment(&socket) {
+                    let (machine, _) = share::attached(&value);
+                    let _ = socket
+                        .serialize_attachment(share::attachment(machine.as_deref(), Some(day)));
+                }
+            }
         }
         if let Some(rec) = &outcome.others {
             for other in self.state.get_websockets() {

@@ -139,6 +139,33 @@ fn rec(rec: &Rec) -> String {
         .to_string()
 }
 
+/// What a socket keeps through the store's hibernation: the machine that
+/// said hello on it, and the UTC day number of the last Free limit the store
+/// hit. An attachment is no storage write, so it can be set past a limit.
+pub fn attachment(machine: Option<&str>, limit_day: Option<u64>) -> Value {
+    json!({"machine": machine, "limit": limit_day})
+}
+
+/// The machine and limit day in an attachment. One set before the limit day
+/// was kept is the machine's name alone.
+pub fn attached(value: &Value) -> (Option<String>, Option<u64>) {
+    match value {
+        Value::String(machine) => (Some(machine.clone()), None),
+        value => (
+            value["machine"].as_str().map(str::to_string),
+            value["limit"].as_u64(),
+        ),
+    }
+}
+
+/// The newest limit day any socket's attachment holds.
+pub fn newest_limit_day<'a>(attachments: impl IntoIterator<Item = &'a Value>) -> Option<u64> {
+    attachments
+        .into_iter()
+        .filter_map(|value| attached(value).1)
+        .max()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +369,41 @@ mod tests {
         assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
         assert_eq!(answer.others, None);
         assert!(answer.limit);
+    }
+
+    #[test]
+    fn an_attachment_carries_the_machine_and_the_limit_day() {
+        assert_eq!(
+            attachment(Some("nuc"), Some(20742)),
+            json!({"machine":"nuc","limit":20742})
+        );
+        assert_eq!(
+            attached(&json!({"machine":"nuc","limit":20742})),
+            (Some("nuc".to_string()), Some(20742))
+        );
+        assert_eq!(
+            attached(&json!({"machine":"nuc","limit":null})),
+            (Some("nuc".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn an_attachment_from_before_the_limit_day_still_reads() {
+        assert_eq!(attached(&json!("nuc")), (Some("nuc".to_string()), None));
+        assert_eq!(attached(&Value::Null), (None, None));
+    }
+
+    #[test]
+    fn the_newest_limit_day_across_sockets_wins() {
+        let sockets = [
+            json!({"machine":"nuc","limit":20741}),
+            json!({"machine":"mac","limit":20742}),
+            json!({"machine":"pi","limit":null}),
+            json!("old"),
+            Value::Null,
+        ];
+        assert_eq!(newest_limit_day(&sockets), Some(20742));
+        assert_eq!(newest_limit_day(&[json!("old"), Value::Null]), None);
+        assert_eq!(newest_limit_day(&[]), None);
     }
 }
