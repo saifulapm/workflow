@@ -1939,7 +1939,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Runs a statement that writes, and adds the rows it wrote to today's
-/// count: the store's own measure of what the Free plan meters each day.
+/// count: the store's own measure, which its day cap reads.
 fn counted(
     sql: &SqlStorage,
     query: &str,
