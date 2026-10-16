@@ -447,6 +447,46 @@ fn a_dropped_socket_comes_back_with_a_hello_and_every_pending_line() {
     );
 }
 
+/// mem raises its `since` only for the recs it committed, so a failed apply
+/// ends the connection: the next hello asks the store for the rest.
+#[test]
+fn a_failed_apply_reconnects_and_later_frames_still_reach_mem() {
+    let dir = TempDir::new("share-apply-fails");
+    let bin = dir.join("bin");
+    fixture_mem(
+        &bin,
+        &format!(
+            "case \"$1 $2\" in\n\
+             'share hello') echo '{HELLO}' ;;\n\
+             'share pending') ;;\n\
+             'share apply') if [ -e '{failed}' ]; then cat >> '{applied}'; \
+             else touch '{failed}'; exit 1; fi ;;\n\
+             esac",
+            failed = dir.join("failed").display(),
+            applied = dir.join("applied").display(),
+        ),
+    );
+    let store = FakeStore::start();
+    let _hub = spawn_local(&dir, &bin, Some(&store));
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    let lost = r#"{"t":"rec","seq":42,"id":"01J00000000000000000000CCC","path":"projects/P/wiki/c.md","body":"c","machine":"nuc"}"#;
+    store.send(lost);
+    wait_for("a second hello", Duration::from_secs(5), || {
+        !store.texts_on(1).is_empty()
+    });
+    assert_eq!(store.texts_on(1), [HELLO]);
+
+    let replayed = r#"{"t":"ready","seq":42}"#;
+    store.send(replayed);
+    wait_for(
+        "the frame after the reconnect",
+        Duration::from_secs(2),
+        || applied(&dir) == format!("{replayed}\n"),
+    );
+}
+
 #[test]
 fn a_kick_is_mems_alone_and_answers_even_with_sharing_off() {
     let dir = TempDir::new("share-kick");

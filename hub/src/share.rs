@@ -249,7 +249,10 @@ fn upload_pending(store: &Store) {
         match store.put_file(path, local) {
             Ok(()) => {
                 let path = serde_json::to_string(path).expect("a string serializes");
-                apply(&[format!(r#"{{"t":"stored","path":{path}}}"#)]);
+                // Left unmarked, the file stays listed and is put again.
+                if let Err(e) = apply(&[format!(r#"{{"t":"stored","path":{path}}}"#)]) {
+                    eprintln!("hub: share: {e:#}");
+                }
             }
             Err(e) => eprintln!("hub: share: uploading {path}: {e:#}"),
         }
@@ -357,7 +360,9 @@ fn session(
         if !held.is_empty() && (quiet || held_since.elapsed() >= APPLY_WITHIN) {
             let frames = std::mem::take(&mut held);
             let kinds: Vec<String> = frames.iter().map(|f| kind(f)).collect();
-            apply(&frames);
+            // mem raised its `since` only for what it committed, so ending
+            // here makes the next hello ask the store for the rest.
+            apply(&frames)?;
             if kinds.iter().any(|k| k == "ready") {
                 *backoff = BACKOFF_START;
             }
@@ -472,18 +477,16 @@ fn send_pending(
 /// Applies what arrived before the socket ended, then ends the session.
 fn closing(held: &[String], end: Result<()>) -> Result<()> {
     if !held.is_empty() {
-        apply(held);
+        apply(held)?;
     }
     end
 }
 
 /// Hands the store's messages to mem, one per line, in the order they came.
-fn apply(frames: &[String]) {
+fn apply(frames: &[String]) -> Result<()> {
     let mut input = frames.join("\n");
     input.push('\n');
-    if let Err(e) = mem(&["share", "apply"], Some(input.as_bytes())) {
-        eprintln!("hub: share: {e:#}");
-    }
+    mem(&["share", "apply"], Some(input.as_bytes())).map(drop)
 }
 
 fn kind(frame: &str) -> String {
