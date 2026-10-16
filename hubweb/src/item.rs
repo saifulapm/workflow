@@ -75,6 +75,21 @@ pub fn file(new: &New, id: &str, at: &str, machine: &str) -> String {
     format!("+++\n{front}+++\n\n{}\n", new.text.trim_end())
 }
 
+/// An item file with `keys` set in its frontmatter and its body byte for
+/// byte, as mem rewrites a finding it closes; None when `text` is no item.
+pub fn rewrite(text: &str, keys: &[(&str, &str)]) -> Option<String> {
+    let (front, body) = crate::memview::split_item(text)?;
+    let mut table: Table = toml::from_str(front).ok()?;
+    for (key, value) in keys {
+        table.insert(key.to_string(), Value::String(collapse(value)));
+    }
+    let mut front = toml::to_string(&table).ok()?;
+    if !front.ends_with('\n') {
+        front.push('\n');
+    }
+    Some(format!("+++\n{front}+++\n{body}"))
+}
+
 /// A frontmatter value with its line breaks as spaces, so no value can put a
 /// bare `+++` line in the frontmatter (mem's fence guard).
 fn collapse(value: &str) -> String {

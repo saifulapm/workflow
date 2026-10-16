@@ -49,7 +49,7 @@ pub struct Item {
 
 /// The frontmatter text and the body, split on the first complete fence
 /// pair; a fence is a line that is `+++` once its LF or CRLF is stripped.
-fn split(text: &str) -> Option<(&str, &str)> {
+pub fn split(text: &str) -> Option<(&str, &str)> {
     let is_fence = |line: &str| line.trim_end_matches('\n').trim_end_matches('\r') == "+++";
     let mut lines = text.split_inclusive('\n');
     let first = lines.next()?;

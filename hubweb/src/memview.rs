@@ -12,7 +12,7 @@
 
 mod item;
 mod search;
-mod sections;
+pub mod sections;
 
 use std::collections::BTreeMap;
 
@@ -54,6 +54,20 @@ pub enum Reply {
 /// The `kind` of an item file's frontmatter.
 pub fn item_kind(body: &str) -> Option<String> {
     item::table(body)?.get("kind")?.as_str().map(str::to_string)
+}
+
+/// The id and name of the project `name` names, by name or alias as mem
+/// finds one.
+pub fn project(files: &impl Files, name: &str) -> Option<(String, String)> {
+    let registry = Registry::load(files);
+    let p = registry.by_name(name)?;
+    Some((p.id.clone(), p.name.clone()))
+}
+
+/// An item file's frontmatter text and its body, split on the first fence
+/// pair as mem splits them.
+pub fn split_item(text: &str) -> Option<(&str, &str)> {
+    item::split(text)
 }
 
 /// What `mem <argv>` prints for this read.
@@ -735,7 +749,7 @@ struct Page {
 }
 
 /// `[a-z0-9][a-z0-9-]{0,63}`, mem's rule for a page or plan slug.
-fn is_valid_slug(slug: &str) -> bool {
+pub fn is_valid_slug(slug: &str) -> bool {
     let mut chars = slug.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -761,7 +775,7 @@ fn page_title(text: &str) -> String {
 
 /// mem's `truncate_bytes`: newlines flattened, then cut on a character
 /// boundary with an ellipsis when anything is cut.
-fn truncate_bytes(text: &str, budget: usize) -> String {
+pub fn truncate_bytes(text: &str, budget: usize) -> String {
     let flat = text.replace(['\n', '\r'], " ");
     if flat.len() <= budget {
         return flat;
