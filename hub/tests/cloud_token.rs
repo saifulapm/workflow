@@ -259,6 +259,29 @@ fn a_cloud_hub_opens_no_slack_socket() {
     );
 }
 
+/// A cloud session's environment holds the bot token only: the app token
+/// opens Socket Mode, which a cloud hub never does.
+#[test]
+fn a_cloud_hub_posts_its_question_with_the_bot_token_alone() {
+    let dir = TempDir::new("cloud-hub-bot-only");
+    let (port, seen) = fake();
+    let api = format!("http://127.0.0.1:{port}/api");
+    let mut env = cloud_env();
+    env.extend([
+        ("SLACK_BOT_TOKEN", "xoxb-fake"),
+        ("SLACK_USER_ID", "U0SAIFUL"),
+        ("SLACK_API_URL", api.as_str()),
+    ]);
+    let _hub = spawn(&dir, "cloud-1", &env);
+    ask_on(&dir);
+    common::wait_for("the question's post", Duration::from_secs(5), || {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|(p, _)| p == "/api/chat.postMessage")
+    });
+}
+
 #[test]
 fn a_hub_with_the_cloud_token_alone_will_not_start() {
     let dir = TempDir::new("cloud-hub-nohash");

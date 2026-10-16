@@ -269,7 +269,7 @@ fn run_local(port: u16) -> Result<()> {
     let machine = hub::machine_name();
     let host = local::host(&machine, listener.local_addr()?.port());
     // A machine without the Slack tokens still passes answers between hubs.
-    let slack = match hub::slack::Slack::from_env() {
+    let slack = match hub::slack::Slack::from_env(tokens.cloud()) {
         Ok(slack) => slack.map(Arc::new),
         Err(e) => {
             eprintln!("hub: local: Slack is off: {e:#}");

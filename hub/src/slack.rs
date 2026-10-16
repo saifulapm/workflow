@@ -175,10 +175,12 @@ impl Slack {
     }
 
     /// `None` when either token is unset: a machine without Slack still runs
-    /// its local hub.
-    pub fn from_env() -> Result<Option<Slack>> {
+    /// its local hub. With `post_only` (a cloud session's hub, which never
+    /// listens), the bot token is enough.
+    pub fn from_env(post_only: bool) -> Result<Option<Slack>> {
         let var = |name| std::env::var(name).ok().filter(|v: &String| !v.is_empty());
-        let (Some(bot), Some(app)) = (var("SLACK_BOT_TOKEN"), var("SLACK_APP_TOKEN")) else {
+        let app = var("SLACK_APP_TOKEN").or_else(|| post_only.then(String::new));
+        let (Some(bot), Some(app)) = (var("SLACK_BOT_TOKEN"), app) else {
             return Ok(None);
         };
         let Some(user) = var("SLACK_USER_ID") else {
