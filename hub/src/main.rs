@@ -272,6 +272,8 @@ fn run_local(port: u16) -> Result<()> {
             .context("starting the answered-question sweep")?;
     }
     let notice = slack.clone();
+    // The stall bell posts to Slack too, store or none.
+    let bell = slack.clone();
     if let Some(slack) = slack {
         let local = Arc::clone(&local);
         let replies = Arc::clone(&local);
@@ -323,8 +325,13 @@ fn run_local(port: u16) -> Result<()> {
             .context("starting the sharing socket")?;
     }
     // A parked session's answers may come with no network at all, from the
-    // popup or `mem answer` here, so this needs no store.
+    // popup or `mem answer` here, so this needs no store; nor do the rings.
     if let Some(name) = hub::fleet::runner_name() {
+        let (name_too, slack) = (name.clone(), bell);
+        std::thread::Builder::new()
+            .name("hub-stalls".to_string())
+            .spawn(move || hub::stalls::run(name_too, slack))
+            .context("starting the stall bell")?;
         std::thread::Builder::new()
             .name("hub-parked".to_string())
             .spawn(move || hub::parked::run(name))

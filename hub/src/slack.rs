@@ -222,6 +222,30 @@ impl Slack {
         })
     }
 
+    /// Posts a stall to the bot's DM with Saiful, with one Resume button
+    /// that names the project and the machine to run it on again.
+    pub fn post_stall(&self, text: &str, project: &str, machine: &str) -> Result<Posted> {
+        let value = json!({"k": "resume", "m": machine, "p": project});
+        let body = json!({
+            "channel": self.user_id,
+            "text": cut(text, TEXT_MAX),
+            "blocks": [
+                {"type": "section", "text": {"type": "mrkdwn", "text": cut(&escape(text), SECTION_MAX)}},
+                {"type": "actions", "elements": [{
+                    "type": "button",
+                    "action_id": "resume",
+                    "text": {"type": "plain_text", "text": "Resume"},
+                    "value": value.to_string(),
+                }]},
+            ],
+        });
+        let reply = self.call("chat.postMessage", &self.bot_token, Some(&body))?;
+        Ok(Posted {
+            channel: reply["channel"].as_str().unwrap_or_default().to_string(),
+            ts: reply["ts"].as_str().unwrap_or_default().to_string(),
+        })
+    }
+
     /// Posts one plain line to the bot's DM with Saiful.
     pub fn post_text(&self, text: &str) -> Result<()> {
         let body = json!({"channel": self.user_id, "text": text});
