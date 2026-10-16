@@ -1170,3 +1170,200 @@ fn a_dropped_socket_reports_again_after_its_hello() {
     });
     assert_eq!(store.texts_on(1)[0], HELLO);
 }
+
+/// `report_bins`, plus a `systemd-run` and a `notify-send` that each append
+/// their arguments to `ran`, one line a call, and a `workflow` that is never
+/// to run outside them.
+fn command_bins(dir: &TempDir) -> PathBuf {
+    let bin = report_bins(dir);
+    let ran = dir.join("ran");
+    for name in ["systemd-run", "notify-send"] {
+        common::fixture_bin(
+            &bin,
+            name,
+            &format!("echo \"{name} $*\" >> '{}'", ran.display()),
+        );
+    }
+    bin
+}
+
+fn ran(dir: &TempDir) -> Vec<String> {
+    std::fs::read_to_string(dir.join("ran"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn dones_on(store: &FakeStore, conn: usize) -> Vec<serde_json::Value> {
+    store
+        .texts_on(conn)
+        .iter()
+        .filter_map(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+        .filter(|v| v["t"] == "done")
+        .collect()
+}
+
+fn cmd(id: &str, machine: &str, command: serde_json::Value) -> String {
+    serde_json::json!({"t":"cmd","id":id,"machine":machine,"command":command}).to_string()
+}
+
+fn commanded_hub(dir: &TempDir, agents: &str, store: &FakeStore) -> Hub {
+    let bin = command_bins(dir);
+    seed_machine(dir, agents);
+    let hub = spawn_local_env(dir, &bin, Some(store), &[("WORKFLOW_MACHINE", "mini")]);
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(store, 0).is_empty()
+    });
+    hub
+}
+
+#[test]
+fn a_start_for_this_machine_runs_workflow_go_in_a_scope_of_its_own_then_says_done() {
+    let dir = TempDir::new("share-cmd-start");
+    let store = FakeStore::start();
+    let _hub = commanded_hub(&dir, "[]", &store);
+    let at = Instant::now();
+    store.send(&cmd(
+        "01CMDA",
+        "mini",
+        serde_json::json!({"kind":"start","project":"walk01"}),
+    ));
+    wait_for("the done", Duration::from_secs(5), || {
+        !dones_on(&store, 0).is_empty()
+    });
+    assert!(at.elapsed() < Duration::from_secs(5));
+    assert_eq!(
+        ran(&dir),
+        ["systemd-run --user --scope --quiet workflow go walk01"]
+    );
+    assert_eq!(
+        dones_on(&store, 0),
+        [serde_json::json!({"t":"done","id":"01CMDA","machine":"mini"})]
+    );
+}
+
+#[test]
+fn run_in_cloud_runs_workflow_go_cloud() {
+    let dir = TempDir::new("share-cmd-cloud");
+    let store = FakeStore::start();
+    let _hub = commanded_hub(&dir, "[]", &store);
+    store.send(&cmd(
+        "01CMDC",
+        "mini",
+        serde_json::json!({"kind":"start","project":"walk01","cloud":true}),
+    ));
+    wait_for("the done", Duration::from_secs(5), || {
+        !dones_on(&store, 0).is_empty()
+    });
+    assert_eq!(
+        ran(&dir),
+        ["systemd-run --user --scope --quiet workflow go walk01 --cloud"]
+    );
+}
+
+/// The store sends a command again with each report until it hears done;
+/// one already run is only answered again.
+#[test]
+fn a_command_heard_twice_runs_once_and_is_answered_each_time() {
+    let dir = TempDir::new("share-cmd-twice");
+    let store = FakeStore::start();
+    let _hub = commanded_hub(&dir, "[]", &store);
+    let start = cmd(
+        "01CMDT",
+        "mini",
+        serde_json::json!({"kind":"start","project":"walk01"}),
+    );
+    store.send(&start);
+    wait_for("the done", Duration::from_secs(5), || {
+        !dones_on(&store, 0).is_empty()
+    });
+    store.send(&start);
+    wait_for("the second done", Duration::from_secs(5), || {
+        dones_on(&store, 0).len() >= 2
+    });
+    assert_eq!(ran(&dir).len(), 1, "{:?}", ran(&dir));
+    // And after a restart of the hub too.
+    store.drop_connection();
+    wait_for("a new socket", Duration::from_secs(8), || {
+        !reports_on(&store, 1).is_empty()
+    });
+    store.send(&start);
+    wait_for("the done on it", Duration::from_secs(5), || {
+        !dones_on(&store, 1).is_empty()
+    });
+    assert_eq!(ran(&dir).len(), 1, "{:?}", ran(&dir));
+}
+
+#[test]
+fn a_command_for_another_machine_is_left_alone() {
+    let dir = TempDir::new("share-cmd-other");
+    let store = FakeStore::start();
+    let _hub = commanded_hub(&dir, "[]", &store);
+    store.send(&cmd(
+        "01CMDN",
+        "nuc",
+        serde_json::json!({"kind":"start","project":"walk01"}),
+    ));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
+    assert!(dones_on(&store, 0).is_empty());
+}
+
+#[test]
+fn a_resume_of_a_stopped_session_runs_amx_resume_with_the_message() {
+    let dir = TempDir::new("share-cmd-resume");
+    let store = FakeStore::start();
+    let _hub = commanded_hub(
+        &dir,
+        r#"[{"id":"walk01-m1","state":"stopped","ended":9,"created":5}]"#,
+        &store,
+    );
+    store.send(&cmd(
+        "01CMDR",
+        "mini",
+        serde_json::json!({"kind":"resume","project":"walk01","id":"walk01-m1","message":"yes"}),
+    ));
+    wait_for("the done", Duration::from_secs(5), || {
+        !dones_on(&store, 0).is_empty()
+    });
+    assert_eq!(
+        ran(&dir),
+        ["systemd-run --user --scope --quiet amx resume walk01-m1 yes"]
+    );
+}
+
+#[test]
+fn a_resume_of_a_session_amx_lost_starts_the_project_instead() {
+    let dir = TempDir::new("share-cmd-lost");
+    let store = FakeStore::start();
+    let _hub = commanded_hub(&dir, "[]", &store);
+    store.send(&cmd(
+        "01CMDL",
+        "mini",
+        serde_json::json!({"kind":"resume","project":"walk01","id":"walk01-m1","message":"yes"}),
+    ));
+    wait_for("the done", Duration::from_secs(5), || {
+        !dones_on(&store, 0).is_empty()
+    });
+    assert_eq!(
+        ran(&dir),
+        ["systemd-run --user --scope --quiet workflow go walk01"]
+    );
+}
+
+#[test]
+fn a_resume_of_a_live_session_runs_nothing() {
+    let dir = TempDir::new("share-cmd-live");
+    let store = FakeStore::start();
+    let _hub = commanded_hub(&dir, RUNNING, &store);
+    store.send(&cmd(
+        "01CMDV",
+        "mini",
+        serde_json::json!({"kind":"resume","project":"walk01","id":"walk01-m1","message":"yes"}),
+    ));
+    wait_for("the done", Duration::from_secs(5), || {
+        !dones_on(&store, 0).is_empty()
+    });
+    assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
+}

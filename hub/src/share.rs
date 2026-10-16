@@ -374,6 +374,8 @@ fn session(
     // The number of the last report this socket carried; a new socket
     // carries the newest at once.
     let mut reported = 0;
+    // Commands heard behind recs not yet applied.
+    let mut commands: Vec<String> = Vec::new();
     let mut heard = Instant::now();
     let mut pinged = Instant::now();
     let mut held: Vec<String> = Vec::new();
@@ -385,6 +387,15 @@ fn session(
                 match message {
                     Message::Text(text) if kind(&text) == "route" => {
                         told = take_route(&text).or(told);
+                    }
+                    // A command runs after the recs that came before it,
+                    // which it may read (an approval, then Start).
+                    Message::Text(text) if kind(&text) == "cmd" => {
+                        if held.is_empty() {
+                            crate::runs::take(&text);
+                        } else {
+                            commands.push(text.to_string());
+                        }
                     }
                     Message::Text(text) => {
                         if held.is_empty() {
@@ -414,6 +425,9 @@ fn session(
             // mem raised its `since` only for what it committed, so ending
             // here makes the next hello ask the store for the rest.
             apply(&frames)?;
+            for command in commands.drain(..) {
+                crate::runs::take(&command);
+            }
             if kinds.iter().any(|k| k == "ready") {
                 *backoff = BACKOFF_START;
             }
@@ -445,6 +459,9 @@ fn session(
         }
         // A report is no write: it goes out past a Free limit too, as the
         // store keeps it off its log.
+        for done in crate::runs::dones() {
+            socket.send(Message::text(done)).context("sending a done")?;
+        }
         if let Some((n, report)) = crate::fleet::to_send(reported) {
             socket
                 .send(Message::text(report))
