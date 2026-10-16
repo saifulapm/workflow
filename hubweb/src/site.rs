@@ -55,6 +55,9 @@ pub struct Ask<'a> {
     pub stamp: String,
 }
 
+/// The commands a page queued: (machine, command).
+pub type Queued = Vec<(String, Command)>;
+
 /// The page for `ask.request` and the writes it made, or None for a path no
 /// page owns. Every page listens on /live, so an open one reloads when the
 /// store changes.
@@ -62,9 +65,10 @@ pub fn page(
     files: &impl Files,
     ask: Ask,
     random: &mut dyn FnMut() -> [u8; 10],
-) -> Option<(Response, Written)> {
+) -> Option<(Response, Written, Queued)> {
     let shared = Shared {
         written: RefCell::new(Written::default()),
+        queued: RefCell::new(Vec::new()),
         clock: RefCell::new(Clock {
             now: ask.now,
             random,
@@ -114,7 +118,11 @@ pub fn page(
         response.body = listening(&html, &ask.stamp);
     }
     drop((mem, host));
-    Some((response, shared.written.into_inner()))
+    Some((
+        response,
+        shared.written.into_inner(),
+        shared.queued.into_inner(),
+    ))
 }
 
 /// A request as the pages read it, from its parts.
@@ -202,6 +210,9 @@ fn saved(route: Option<&Value>) -> Saved {
 /// What a request's pages and host write, and the clock they write by.
 struct Shared<'a> {
     written: RefCell<Written>,
+    /// Commands the page queued, (machine, command), for the store to keep
+    /// and send once the page's writes are kept.
+    queued: RefCell<Queued>,
     clock: RefCell<Clock<'a>>,
 }
 
@@ -349,7 +360,12 @@ impl<F: Files> Host for Web<'_, '_, F> {
     fn fleet(&self) -> &dyn Fleet {
         &self.fleet
     }
-    fn queue(&self, _machine: &str, _command: Command) {}
+    fn queue(&self, machine: &str, command: Command) {
+        self.shared
+            .queued
+            .borrow_mut()
+            .push((machine.to_string(), command));
+    }
     fn wrote(&self) {}
     fn lock(&self, _key: &str) -> Arc<Mutex<()>> {
         // A Durable Object runs one request at a time.
@@ -459,7 +475,7 @@ mod tests {
 
     fn draw(files: &Mem, ask: Ask) -> Option<Response> {
         let mut random = || [3; 10];
-        page(files, ask, &mut random).map(|(response, _)| response)
+        page(files, ask, &mut random).map(|(response, ..)| response)
     }
 
     fn html(response: Response) -> String {
@@ -588,7 +604,7 @@ mod tests {
             form,
         );
         let mut random = || [5; 10];
-        let (response, written) = page(&files, ask(&request), &mut random).unwrap();
+        let (response, written, _) = page(&files, ask(&request), &mut random).unwrap();
         assert_eq!(response.status, 303);
         let location = response
             .headers
@@ -608,7 +624,7 @@ mod tests {
 
         let mut unpaired = ask(&request);
         unpaired.paired = false;
-        let (refused, nothing) = page(&files, unpaired, &mut random).unwrap();
+        let (refused, nothing, _) = page(&files, unpaired, &mut random).unwrap();
         assert_eq!(refused.status, 403);
         assert!(nothing.files.is_empty());
     }
@@ -629,20 +645,20 @@ mod tests {
             )
         };
         let device = post("device");
-        let (response, written) = page(&files, ask(&device), &mut random).unwrap();
+        let (response, written, _) = page(&files, ask(&device), &mut random).unwrap();
         assert_eq!(response.status, 303);
         assert_eq!(written.route, None, "no machine has taken Device yet");
         let mut known = ask(&device);
         known.route = Some(
             serde_json::json!({"t":"route","route":"phone","machine":null,"at":5,"device":"nuc"}),
         );
-        let (_, written) = page(&files, known, &mut random).unwrap();
+        let (_, written, _) = page(&files, known, &mut random).unwrap();
         assert_eq!(written.route, Some("device"));
         let phone = post("phone");
-        let (_, written) = page(&files, ask(&phone), &mut random).unwrap();
+        let (_, written, _) = page(&files, ask(&phone), &mut random).unwrap();
         assert_eq!(written.route, Some("phone"));
         let dulali = post("dulali");
-        let (refused, written) = page(&files, ask(&dulali), &mut random).unwrap();
+        let (refused, written, _) = page(&files, ask(&dulali), &mut random).unwrap();
         assert_eq!((refused.status, written.route), (400, None));
     }
 
@@ -668,7 +684,7 @@ mod tests {
     fn a_store_that_cannot_be_read_never_says_nothing_waits() {
         let request = get("/");
         let mut random = || [1; 10];
-        let (response, _) = page(&Failing, ask(&request), &mut random).unwrap();
+        let (response, ..) = page(&Failing, ask(&request), &mut random).unwrap();
         let page = html(response);
         assert!(page.contains("rows read limit exceeded"), "{page}");
         assert!(!page.contains("Nothing waiting"), "{page}");
@@ -688,5 +704,35 @@ mod tests {
             Some(serde_json::json!({"t":"route","route":"device","machine":"nuc","at":5}));
         let page = html(draw(&store(), asked).unwrap());
         assert!(page.contains("Route: Device (nuc)"), "{page}");
+    }
+
+    #[test]
+    fn a_queued_command_is_handed_back_for_the_store_to_keep() {
+        let files = store();
+        let mut random = || [1; 10];
+        let shared = Shared {
+            written: RefCell::new(Written::default()),
+            queued: RefCell::new(Vec::new()),
+            clock: RefCell::new(Clock {
+                now: "2026-10-16T12:00:00Z".parse().unwrap(),
+                random: &mut random,
+            }),
+        };
+        let host = Web {
+            route: Saved::default(),
+            device: None,
+            fleet: machines(),
+            files: &files,
+            shared: &shared,
+        };
+        let start = Command::Start {
+            project: "walk".into(),
+            cloud: false,
+        };
+        host.queue("mini", start.clone());
+        assert_eq!(
+            shared.queued.into_inner(),
+            vec![("mini".to_string(), start)]
+        );
     }
 }

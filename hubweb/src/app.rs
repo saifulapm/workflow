@@ -424,7 +424,9 @@ impl Store {
             stamp: self.stamp()?,
         };
         let mut random = || random().unwrap_or_default();
-        let Some((drawn, written)) = site::page(&SqlFiles::new(&self.sql), ask, &mut random) else {
+        let Some((drawn, written, queued)) =
+            site::page(&SqlFiles::new(&self.sql), ask, &mut random)
+        else {
             return Response::error("Not Found", 404);
         };
         let took = Date::now().as_millis() - start;
@@ -433,6 +435,7 @@ impl Store {
         if let Some(kind) = written.route {
             self.route(kind)?;
         }
+        self.send_commands(queued)?;
         let mut response = Response::from_bytes(drawn.body)?.with_status(drawn.status);
         let headers = response.headers_mut();
         headers.set("Content-Type", &drawn.content_type)?;
@@ -483,6 +486,26 @@ impl Store {
             for socket in self.state.get_websockets_with_tag(MACHINE) {
                 // A closing socket's machine gets it from the replay.
                 let _ = socket.send_with_str(&rec);
+            }
+        }
+        self.nudge_pages();
+        Ok(())
+    }
+
+    /// Keeps the commands a page queued and sends each at once as a cmd
+    /// frame to every machine socket; a machine that is away gets it from
+    /// the replay. Then one nudge, so open pages read `waiting for`.
+    fn send_commands(&self, queued: site::Queued) -> Result<()> {
+        if queued.is_empty() {
+            return Ok(());
+        }
+        for (machine, command) in queued {
+            let id = item::ulid(now_ms(), random()?);
+            let body = serde_json::to_value(&command)?;
+            let frame = share::queue_command(&mut SqlLog(&self.sql), &id, &machine, &body)
+                .map_err(|fault| Error::RustError(format!("{fault:?}")))?;
+            for socket in self.state.get_websockets_with_tag(MACHINE) {
+                let _ = socket.send_with_str(&frame);
             }
         }
         self.nudge_pages();
@@ -1277,6 +1300,13 @@ impl Log for SqlLog<'_> {
                     (now_ms() as i64).into(),
                     command.to_string().into(),
                 ],
+            )
+            .map_err(fault)?;
+        // A page reading `waiting for <machine>` is to hear it start.
+        self.0
+            .exec(
+                "UPDATE machines SET changed = ? WHERE name = ?",
+                vec![(now_ms() as i64).into(), machine.into()],
             )
             .map(|_| ())
             .map_err(fault)
