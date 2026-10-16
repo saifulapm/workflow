@@ -8,13 +8,16 @@ pub const CHUNK: usize = 1 << 20;
 
 /// The project a file path belongs to, when the path is
 /// `projects/<id>/(evidence|raw)/...` made of plain segments: none empty,
-/// none `.` or `..`.
+/// none `.` or `..`, and none holding a control character or a backslash,
+/// which no replica could name a file with.
 pub fn project_of(path: &str) -> Option<&str> {
     let parts: Vec<&str> = path.split('/').collect();
     let ["projects", project, "evidence" | "raw", rest @ ..] = parts.as_slice() else {
         return None;
     };
-    let plain = |part: &&str| !matches!(*part, "" | "." | "..");
+    let plain = |part: &&str| {
+        !matches!(*part, "" | "." | "..") && !part.chars().any(|c| c.is_control() || c == '\\')
+    };
     (plain(project) && !rest.is_empty() && rest.iter().all(plain)).then_some(*project)
 }
 
@@ -168,6 +171,9 @@ mod tests {
             "projects/P1/evidence/t1//a.png",
             "other/P1/evidence/a.png",
             "/projects/P1/evidence/a.png",
+            "projects/P1/evidence/t1/a\0.png",
+            "projects/P1/evidence/t1/a\nb.png",
+            "projects/P1/evidence/t1\\..\\a.png",
         ] {
             assert_eq!(project_of(bad), None, "{bad}");
         }
