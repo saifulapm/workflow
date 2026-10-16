@@ -109,15 +109,31 @@ fn project_card(row: &Value) -> String {
     )
 }
 
-/// The whole home page, one card per project record.
-pub fn render_home(projects: &[Value]) -> String {
+/// The line the hub posts to Slack when the store hits a Free daily limit.
+const LIMIT_LINE: &str = "Cloudflare limit reached, resets 06:00";
+
+/// Whether the store's flag (the UTC day number it was set on, from the
+/// `X-Store-Limit` header) is still today's: the Free limits reset at
+/// 00:00 UTC, so a flag from an earlier day is stale.
+pub fn limit_is_today(flag: Option<&str>, now_ms: u64) -> bool {
+    flag.and_then(|day| day.parse::<u64>().ok()) == Some(now_ms / 86_400_000)
+}
+
+/// The whole home page, one card per project record, and the limit line
+/// above them when `limited`.
+pub fn render_home(projects: &[Value], limited: bool) -> String {
     let cards: String = projects.iter().map(project_card).collect();
+    let notice = if limited {
+        format!("<p class=\"notice\">{LIMIT_LINE}</p>\n")
+    } else {
+        String::new()
+    };
     format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <title>hub</title><style>{STYLE}</style></head>\n<body>\n\
          <header class=\"top\"><a class=\"brand\" href=\"/\">hub</a></header>\n\
-         <h2>Projects</h2>\n<div class=\"cards\">\n{cards}</div>\n</body></html>\n"
+         {notice}<h2>Projects</h2>\n<div class=\"cards\">\n{cards}</div>\n</body></html>\n"
     )
 }
 
@@ -145,6 +161,7 @@ h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;
 .card h3{margin:0;font-size:15px}
 .card>.meta{margin-top:4px}
 .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.notice{background:var(--wait-soft);color:var(--wait);border-radius:var(--radius);padding:8px 14px;margin-block:14px 0}
 .pill{display:inline-block;font-size:11.5px;font-weight:600;line-height:1.7;padding:0 9px;border-radius:99px;background:var(--accent-soft);color:var(--accent);white-space:nowrap}
 .pill.ok{background:var(--ok-soft);color:var(--ok)}
 .pill.wait{background:var(--wait-soft);color:var(--wait)}
@@ -223,7 +240,7 @@ mod tests {
         let row = json!({"name": "walkone", "roadmap_status": "approved", "milestone": "m1-x",
             "plan_slug": "m1-x", "plan_ticked": 1, "plan_total": 3,
             "milestones_done": 0, "milestones_total": 2});
-        let html = render_home(&[row]);
+        let html = render_home(&[row], false);
         assert!(html.contains("<h3>walkone</h3>"), "{html}");
         assert!(
             html.contains(r#"<span class="pill">execution</span>"#),
@@ -236,16 +253,35 @@ mod tests {
     #[test]
     fn home_escapes_what_a_record_holds() {
         let row = json!({"name": "<b>x</b>", "milestone": "a&b"});
-        let html = render_home(&[row]);
+        let html = render_home(&[row], false);
         assert!(html.contains("&lt;b&gt;x&lt;/b&gt;"), "{html}");
         assert!(html.contains("a&amp;b"), "{html}");
         assert!(!html.contains("<b>x"), "{html}");
     }
 
     #[test]
+    fn the_home_shows_the_limit_line_only_when_the_limit_is_flagged() {
+        let line = "Cloudflare limit reached, resets 06:00";
+        assert!(render_home(&[], true).contains(line));
+        assert!(!render_home(&[], false).contains(line));
+    }
+
+    #[test]
+    fn a_limit_flag_counts_only_on_the_utc_day_it_was_set() {
+        // 2026-10-16T13:00:00Z is UTC day 20742.
+        let now = 1_792_155_600_000;
+        assert!(limit_is_today(Some("20742"), now));
+        assert!(!limit_is_today(Some("20741"), now));
+        assert!(!limit_is_today(Some("soon"), now));
+        assert!(!limit_is_today(None, now));
+    }
+
+    #[test]
     fn a_card_links_to_no_page_hubweb_does_not_serve() {
-        let home =
-            render_home(&[serde_json::json!({"name": "walkone", "roadmap_status": "approved"})]);
+        let home = render_home(
+            &[serde_json::json!({"name": "walkone", "roadmap_status": "approved"})],
+            false,
+        );
         assert!(home.contains("walkone"));
         assert!(!home.contains("/p/"), "{home}");
     }

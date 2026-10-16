@@ -1,7 +1,7 @@
 //! The Worker: one entry point for every request, the walk store Durable
 //! Object, and the home page built from it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use serde_json::{Value, json};
@@ -184,13 +184,21 @@ fn store(env: &Env) -> Result<Stub> {
 /// included) in Server-Timing.
 async fn home(env: &Env) -> Result<Response> {
     let start = Date::now().as_millis();
-    let mut answer = store(env)?.fetch_with_str("https://store/projects").await?;
-    let bodies: Vec<String> = answer.json().await?;
-    let projects: Vec<Value> = bodies
-        .iter()
-        .filter_map(|body| serde_json::from_str(body).ok())
-        .collect();
-    let html = page::render_home(&projects);
+    let (projects, limited) = match store(env)?.fetch_with_str("https://store/projects").await {
+        Ok(mut answer) => {
+            let flag = answer.headers().get("X-Store-Limit")?;
+            let bodies: Vec<String> = answer.json().await?;
+            let projects: Vec<Value> = bodies
+                .iter()
+                .filter_map(|body| serde_json::from_str(body).ok())
+                .collect();
+            (projects, page::limit_is_today(flag.as_deref(), now_ms()))
+        }
+        // The read itself hit the limit: the home says so, with no cards.
+        Err(error) if names_limit(&error.to_string()) => (Vec::new(), true),
+        Err(error) => return Err(error),
+    };
+    let html = page::render_home(&projects, limited);
     let took = Date::now().as_millis() - start;
     let mut response = Response::from_html(html)?;
     response
@@ -238,6 +246,9 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 pub struct Store {
     state: State,
     sql: SqlStorage,
+    /// The UTC day number a write last hit a Free limit. Kept in memory: an
+    /// evicted store forgets it, and the next refused write sets it again.
+    limit_day: Cell<Option<u64>>,
 }
 
 impl DurableObject for Store {
@@ -262,7 +273,11 @@ impl DurableObject for Store {
             None,
         )
         .expect("index the writes by path");
-        Self { state, sql }
+        Self {
+            state,
+            sql,
+            limit_day: Cell::new(None),
+        }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
@@ -312,7 +327,13 @@ impl DurableObject for Store {
                     )?
                     .to_array()?;
                 let bodies: Vec<&str> = rows.iter().filter_map(|r| r["body"].as_str()).collect();
-                Response::from_json(&bodies)
+                let mut response = Response::from_json(&bodies)?;
+                if let Some(day) = self.limit_day.get() {
+                    response
+                        .headers_mut()
+                        .set("X-Store-Limit", &day.to_string())?;
+                }
+                Ok(response)
             }
             (Method::Get, path) if path.starts_with("/handoff/") => {
                 let project = &path["/handoff/".len()..];
@@ -357,6 +378,9 @@ impl DurableObject for Store {
         let outcome = share::handle(&mut SqlLog(&self.sql), machine.as_deref(), &text);
         if let Some(machine) = &outcome.hello {
             ws.serialize_attachment(machine)?;
+        }
+        if outcome.limit {
+            self.limit_day.set(Some(utc_day()));
         }
         for reply in &outcome.sender {
             ws.send_with_str(reply)?;
@@ -455,11 +479,24 @@ impl Log for SqlLog<'_> {
     }
 }
 
+fn names_limit(why: &str) -> bool {
+    why.contains("limit") || why.contains("free tier")
+}
+
+fn now_ms() -> u64 {
+    Date::now().as_millis()
+}
+
+/// The UTC day number, the unit the store's limit flag is kept in.
+fn utc_day() -> u64 {
+    now_ms() / 86_400_000
+}
+
 /// A storage error that names a limit is the Free plan's daily cap, which
 /// the machine answers by keeping the write; anything else is an error.
 fn fault(error: Error) -> Fault {
     let why = error.to_string();
-    if why.contains("limit") || why.contains("free tier") {
+    if names_limit(&why) {
         Fault::Limit
     } else {
         Fault::Broken(why)

@@ -47,6 +47,8 @@ pub struct Outcome {
     pub others: Option<String>,
     /// The machine this socket said hello as, to remember for its writes.
     pub hello: Option<String>,
+    /// The log hit a Free daily limit, so the store notes it for the home.
+    pub limit: bool,
 }
 
 /// Answers one text frame from a socket whose machine said hello as
@@ -64,6 +66,7 @@ pub fn handle(log: &mut impl Log, machine: Option<&str>, text: &str) -> Outcome 
         Err(why) => Err(Fault::Broken(format!("not JSON: {why}"))),
     };
     answer.unwrap_or_else(|fault| Outcome {
+        limit: fault == Fault::Limit,
         sender: vec![
             match fault {
                 Fault::Limit => json!({"t":"limit"}),
@@ -84,8 +87,8 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
     sender.push(json!({"t":"ready","seq":log.last()?}).to_string());
     Ok(Outcome {
         sender,
-        others: None,
         hello: Some(machine.to_string()),
+        ..Outcome::default()
     })
 }
 
@@ -127,7 +130,7 @@ fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, 
     Ok(Outcome {
         sender: vec![ack(stored.seq)],
         others: Some(rec(&stored)),
-        hello: None,
+        ..Outcome::default()
     })
 }
 
@@ -338,5 +341,6 @@ mod tests {
         let answer = write(&mut log, "01A", ITEM, Value::Null, json!("x"));
         assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
         assert_eq!(answer.others, None);
+        assert!(answer.limit);
     }
 }
