@@ -7,7 +7,7 @@
 use toml::Value as Toml;
 
 use crate::item;
-use crate::memview::{self, Files, Reply};
+use crate::memview::{self, Files};
 
 /// The machine name on what the hub web writes, and the surface an answer
 /// from it is signed with.
@@ -162,27 +162,33 @@ fn answer(
     by: &str,
     supersedes: Option<&String>,
 ) -> Result<(), String> {
-    let projects: Vec<String> = match project {
-        Some(name) => vec![name.to_string()],
-        None => names(files),
+    let candidates: Vec<(String, String)> = match project {
+        Some(name) => vec![named(files, Some(name))?],
+        None => files
+            .projects()
+            .into_iter()
+            .filter_map(|pid| {
+                let toml: toml::Table =
+                    toml::from_str(&files.read(&format!("projects/{pid}/project.toml"))?).ok()?;
+                let name = toml.get("name")?.as_str()?.to_string();
+                Some((pid, name))
+            })
+            .collect(),
     };
-    for name in projects {
-        let Reply::Json(doc) = memview::read(
-            files,
-            &["questions", &format!("--project={name}"), "--json"],
-            clock.now,
-        ) else {
+    // The question item itself, by its full id or its last eight characters,
+    // as mem answer finds it: a listing would stop at its newest rows.
+    for (pid, name) in candidates {
+        let found = files
+            .items(&pid, &["question"])
+            .into_iter()
+            .filter_map(|(path, _)| {
+                let stem = path.rsplit('/').next()?.strip_suffix(".md")?.to_string();
+                Some(stem)
+            })
+            .find(|stem| stem == id || (id.len() == 8 && stem.ends_with(id)));
+        let Some(question) = found else {
             continue;
         };
-        let rows = doc["questions"].as_array().cloned().unwrap_or_default();
-        let Some(row) = rows
-            .iter()
-            .find(|q| q["id"].as_str() == Some(id) || q["short_id"].as_str() == Some(id))
-        else {
-            continue;
-        };
-        let question = row["id"].as_str().unwrap_or(id).to_string();
-        let (pid, name) = named(files, Some(&name))?;
         let mut keys = vec![
             ("answers", Toml::String(question)),
             ("by", Toml::String(by.to_string())),
@@ -257,20 +263,6 @@ fn named(files: &impl Files, name: Option<&str>) -> Result<(String, String), Str
     memview::project(files, name).ok_or_else(|| format!("mem: no project named '{name}'"))
 }
 
-fn names(files: &impl Files) -> Vec<String> {
-    match memview::read(files, &["projects", "--json"], jiff::Timestamp::UNIX_EPOCH) {
-        Reply::Json(doc) => doc["projects"]
-            .as_array()
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|row| row["name"].as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    }
-}
-
 /// The `--name value` and `--name=value` flags of an argv, and its words
 /// after `--` (or the bare ones).
 fn split(argv: &[&str]) -> (std::collections::HashMap<String, String>, Vec<String>) {
@@ -338,6 +330,9 @@ impl<F: Files> Files for After<'_, F> {
     fn projects(&self) -> Vec<String> {
         self.files.projects()
     }
+    fn fault(&self) -> Option<String> {
+        self.files.fault()
+    }
 }
 
 /// The `kind` of a JSON row, for tests.
@@ -349,6 +344,7 @@ fn kind_of(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memview::Reply;
     use serde_json::Value;
     use std::collections::BTreeMap;
 
@@ -444,6 +440,36 @@ mod tests {
         assert_eq!(
             kind_of(done.files[0].1.as_deref().unwrap()).as_deref(),
             Some("answer")
+        );
+    }
+
+    #[test]
+    fn the_oldest_of_many_waiting_questions_can_be_answered() {
+        let mut files = store();
+        for n in 0..60 {
+            let id = format!("01M5300000000000000000{n:04}");
+            files.0.insert(
+                format!("projects/{P}/items/{id}.md"),
+                format!(
+                    "+++\ncreated = \"2026-10-16T11:00:00Z\"\nid = \"{id}\"\nkind = \"question\"\n\
+                     machine = \"mac\"\nmodified = \"2026-10-16T11:00:00Z\"\nproject = \"walk\"\n\
+                     title = \"q{n}\"\n+++\n\nq{n}\n"
+                ),
+            );
+        }
+        let mut done = Written::default();
+        write(
+            &files,
+            &mut done,
+            &["answer", "--json", "--by", "hub-web", "--", &Q[18..], "yes"],
+        )
+        .unwrap();
+        assert!(
+            done.files[0]
+                .1
+                .as_deref()
+                .unwrap()
+                .contains(&format!("answers = \"{Q}\""))
         );
     }
 
