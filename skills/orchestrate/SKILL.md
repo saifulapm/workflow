@@ -276,19 +276,28 @@ prompt names the milestone, its branch `cloud/<project>-<milestone>` and the
 branch to cut it from. Everything above holds, with these changes:
 
 - First check out the cloud branch as the prompt says, never `main`: mem
-  here is the mem server's store, the same one the devices read, and it
-  tells this project from others in the same repo by that branch. Then
+  here reads the same store the devices read, and it tells this project
+  from others in the same repo by that branch. Then
   record the run: `mem project set runner cloud <id> --milestone <slug>`,
   where `<id>` is `$CLAUDE_CODE_REMOTE_SESSION_ID` with `cse_` swapped for
   `session_`.
 - The trunk is the cloud branch. Land each task on it as §2 says, then `git push origin
   cloud/<project>-<milestone>` right after its tick, so the branch gains one
   commit, or one fast-forward, per landed task.
+- Before every push, run `mem share export` and commit the
+  `.mem-outbox.json` it stages, when it stages one: no signal reaches a
+  session that ends, so writes the store has not taken yet travel on the
+  branch, and the next machine to read the project sends them.
 - A task that needs a device, Saiful's desktop, or a login the cloud cannot
-  reach is local-only: commit nothing for it, ask with `mem ask --for
-  saiful` naming it, push the branch, and write a handoff starting
-  `parked:` that names the task and the question. Then stop: the answer
-  comes back as a message in this session.
+  reach is local-only, and its checklist line ends `[local]` (mark it when
+  you cut the checklist). Land every task before it that does not wait on
+  it, commit nothing for it, push the branch, and write a handoff starting
+  `parked: local-only <task>:` that names it and says what it needs. File
+  no question: `workflow go` on a device reads that handoff, takes the
+  branch and runs the rest. Then stop.
+- A question only Saiful can answer parks the run the same way, with
+  `mem ask --for saiful` and a handoff starting `parked:` that names it.
+  Then stop: the answer comes back as a message in this session.
 - Land as §7 says, except that nothing runs `workflow go` and nothing
   pushes `main`, and the branch is pushed before `mem roadmap --tick`: the
   tick tells the mini it may fast-forward, so the review and dogfood fixes

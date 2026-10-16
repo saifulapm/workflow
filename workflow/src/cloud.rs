@@ -585,6 +585,22 @@ mod tests {
         assert!(PROMPT.contains("not when parked"), "{PROMPT}");
     }
 
+    /// No end signal reaches a cloud session, so its unsent writes go on
+    /// the branch with every push.
+    #[test]
+    fn every_push_carries_the_unsent_outbox() {
+        assert!(PROMPT.contains("mem share export"), "{PROMPT}");
+        assert!(PROMPT.contains("before every push"), "{PROMPT}");
+    }
+
+    /// A local-only task parks the run for a device with no question, which
+    /// `workflow go` there reads off the handoff.
+    #[test]
+    fn a_local_only_task_parks_for_a_device() {
+        assert!(PROMPT.contains("`[local]`"), "{PROMPT}");
+        assert!(PROMPT.contains("parked: local-only"), "{PROMPT}");
+    }
+
     #[test]
     fn hooks_stay_out_of_the_cloud() {
         let script = setup_script(&[("hooks/pre-commit", b"x\n"), ("skills/a/SKILL.md", b"a\n")]);
