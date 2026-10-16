@@ -45,6 +45,9 @@ struct Seen {
     access: Vec<(Option<String>, Option<String>)>,
     /// Each text frame, with the index of the connection it came on.
     texts: Vec<(usize, String)>,
+    /// Each frame that is not text, by kind ("ping", "binary", ...), with
+    /// the index of the connection it came on.
+    others: Vec<(usize, &'static str)>,
 }
 
 /// One plain HTTP request to the fake's files routes.
@@ -255,7 +258,16 @@ fn serve(streams: Receiver<TcpStream>, seen: Arc<Mutex<Seen>>, orders: Receiver<
                 Ok(Message::Text(text)) => {
                     seen.lock().unwrap().texts.push((conn, text.to_string()));
                 }
-                Ok(_) => {}
+                Ok(other) => {
+                    let kind = match other {
+                        Message::Ping(_) => "ping",
+                        Message::Pong(_) => "pong",
+                        Message::Binary(_) => "binary",
+                        Message::Close(_) => "close",
+                        _ => "frame",
+                    };
+                    seen.lock().unwrap().others.push((conn, kind));
+                }
                 Err(tungstenite::Error::Io(e))
                     if matches!(
                         e.kind(),
@@ -485,6 +497,31 @@ fn a_failed_apply_reconnects_and_later_frames_still_reach_mem() {
         Duration::from_secs(2),
         || applied(&dir) == format!("{replayed}\n"),
     );
+}
+
+/// The runtime answers a protocol ping without waking the store, so an idle
+/// hub costs the store no requests.
+#[test]
+fn an_idle_hub_sends_the_store_only_pings() {
+    let dir = TempDir::new("share-idle");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(&dir, &bin, Some(&store), &[("HUB_SHARE_PING_MS", "200")]);
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    let before = store.seen.lock().unwrap().others.len();
+    std::thread::sleep(Duration::from_millis(1500));
+    let seen = store.seen.lock().unwrap();
+    let watched = &seen.others[before..];
+    assert!(
+        watched
+            .iter()
+            .all(|&(conn, kind)| (conn, kind) == (0, "ping")),
+        "{watched:?}"
+    );
+    assert!(watched.len() >= 3, "{watched:?}");
+    assert_eq!(seen.texts, [(0, HELLO.to_string())]);
 }
 
 #[test]

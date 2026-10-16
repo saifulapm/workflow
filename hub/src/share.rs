@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::net::TcpStream;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -32,7 +32,24 @@ const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(8);
 /// Short, so a kick waits at most this long behind a read.
 const READ_TICK: Duration = Duration::from_millis(150);
+/// Liveness is a WebSocket protocol ping, never a message: Cloudflare's
+/// runtime answers it without calling webSocketMessage or waking a
+/// hibernated store ("Automatic ping/pong handling" in
+/// developers.cloudflare.com/durable-objects/best-practices/websockets), so
+/// an idle machine costs the store no requests.
 const PING_EVERY: Duration = Duration::from_secs(30);
+
+/// `PING_EVERY`, or `HUB_SHARE_PING_MS` when set, so a test can watch an idle
+/// hub ping without waiting minutes. Read once.
+fn ping_every() -> Duration {
+    static EVERY: OnceLock<Duration> = OnceLock::new();
+    *EVERY.get_or_init(|| {
+        std::env::var("HUB_SHARE_PING_MS")
+            .ok()
+            .and_then(|ms| ms.trim().parse().ok())
+            .map_or(PING_EVERY, Duration::from_millis)
+    })
+}
 /// Two pings and more without a pong: the peer is gone, though the kernel has
 /// not said so yet (a laptop that slept, a dropped NAT entry).
 const QUIET: Duration = Duration::from_secs(75);
@@ -389,7 +406,7 @@ fn session(
         if heard.elapsed() >= QUIET {
             bail!("the store was silent for {QUIET:?}");
         }
-        if pinged.elapsed() >= PING_EVERY {
+        if pinged.elapsed() >= ping_every() {
             socket
                 .send(Message::Ping(Default::default()))
                 .context("pinging the store")?;
