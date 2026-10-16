@@ -27,7 +27,8 @@ t_access_team
 pids=()
 stop_all() {
 	local status=$?
-	[ -n "${hub:-}" ] && kill "$hub" 2>/dev/null
+	# $hub is the subshell `on` ran in; the hub itself is its child.
+	[ -n "${hub:-}" ] && pkill -P "$hub" 2>/dev/null && kill "$hub" 2>/dev/null
 	[ -n "${waiter:-}" ] && kill "$waiter" 2>/dev/null
 	for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
 	kill "$team_pid" 2>/dev/null
