@@ -121,10 +121,13 @@ pub fn cloud_run(
 
 /// A cloud run as its own local hub tells it: a session that reports is
 /// live, past the seven hours too, and one whose reports have stopped has
-/// ended. A parked or landed run keeps its state, and so does one whose
-/// session never reported, which the seven hours alone still end.
+/// ended. A parked, landed or local-only run keeps its state, and so does
+/// one whose session never reported, which the seven hours alone still end.
 pub fn heard(mut run: CloudRun, agents: &dyn Fleet) -> CloudRun {
-    if matches!(run.state, CloudState::Parked | CloudState::Landed) {
+    if matches!(
+        run.state,
+        CloudState::Parked | CloudState::Landed | CloudState::LocalOnly
+    ) {
         return run;
     }
     let reporter = agents.machines().into_iter().find(|machine| {
@@ -494,6 +497,17 @@ mod tests {
         assert_eq!(
             heard(run_in(CloudState::Live), &fleet).state,
             CloudState::Live
+        );
+    }
+
+    /// Parked for a device, a run waits for one whether or not its session
+    /// still reports.
+    #[test]
+    fn a_run_parked_for_a_device_stays_so_while_its_session_reports() {
+        let fleet = Clouds(vec![("cloud-01abc", true, Some("session_01ABC"))]);
+        assert_eq!(
+            heard(run_in(CloudState::LocalOnly), &fleet).state,
+            CloudState::LocalOnly
         );
     }
 
