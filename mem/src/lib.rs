@@ -60,6 +60,17 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         return Ok(exit::USAGE);
     };
     let app = app::App::new(cli)?;
+    // The hub's own share commands never import: they run outside any checkout.
+    if !matches!(command, cli::Command::Share { .. })
+        && let Err(e) = share::import(
+            &app.dirs.share_db(),
+            &app.store.root,
+            &app.machine,
+            &app.cwd,
+        )
+    {
+        eprintln!("mem: {} left in place: {e}", share::OUTBOX_FILE);
+    }
     match command {
         cli::Command::Context {
             project,

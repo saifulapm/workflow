@@ -150,7 +150,8 @@ fn open(db: &Path) -> Result<Connection> {
          CREATE TABLE IF NOT EXISTS heads(path TEXT PRIMARY KEY, id TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS skipped(path TEXT PRIMARY KEY, id TEXT NOT NULL, seq INTEGER NOT NULL, body TEXT);
          CREATE TABLE IF NOT EXISTS files(n INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE);
-         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS imported(id TEXT PRIMARY KEY);",
     )?;
     Ok(conn)
 }
@@ -446,4 +447,124 @@ fn land(file: &Path, body: Option<&str>) -> Result<()> {
             _ => Ok(()),
         },
     }
+}
+
+/// Where a cloud session leaves its unsent writes, at the top of the checkout
+/// it pushes.
+pub const OUTBOX_FILE: &str = ".mem-outbox.json";
+
+/// Saves the outbox, oldest first, into `top`'s outbox file and stages it;
+/// with nothing waiting, takes an old file out of the tree and the index.
+/// Returns how many writes it saved.
+pub fn export(db: &Path, top: &Path, machine: &str) -> Result<usize> {
+    let conn = open(db)?;
+    let mut stmt = conn.prepare("SELECT id, path, base, body FROM outbox ORDER BY n")?;
+    let writes = stmt
+        .query_map([], |r| {
+            Ok(json!({
+                "id": r.get::<_, String>(0)?,
+                "path": r.get::<_, String>(1)?,
+                "base": r.get::<_, Option<String>>(2)?,
+                "body": r.get::<_, Option<String>>(3)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<Value>>>()?;
+    if writes.is_empty() {
+        remove_outbox_file(top)?;
+        return Ok(0);
+    }
+    let text = serde_json::to_string_pretty(&json!({"machine": machine, "writes": writes}))?;
+    crate::atomic::write_replica(&top.join(OUTBOX_FILE), format!("{text}\n").as_bytes())?;
+    // -f: a .gitignore naming the file must not keep it off the branch.
+    git_in(top, &["add", "-f", "--", OUTBOX_FILE])?;
+    Ok(writes.len())
+}
+
+/// Imports another machine's outbox file found at the top of the checkout
+/// holding `cwd`, then deletes it and stages its removal. Each write keeps
+/// its id, so the store re-acks one it already holds, and `imported`
+/// remembers the ids so a file restored from history adds nothing. The
+/// file of this machine's own export stays where it is.
+pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
+    // A walk for `.git` rather than asking git: most mem runs ask git nothing.
+    let Some(top) = cwd
+        .ancestors()
+        .find(|d| d.join(".git").symlink_metadata().is_ok())
+    else {
+        return Ok(());
+    };
+    let Ok(text) = std::fs::read_to_string(top.join(OUTBOX_FILE)) else {
+        return Ok(());
+    };
+    let saved: Value = serde_json::from_str(&text).context("not JSON")?;
+    if saved["machine"].as_str().context("no machine")? == machine {
+        return Ok(());
+    }
+    let mut writes = Vec::new();
+    for write in saved["writes"].as_array().context("no writes")? {
+        let text = |name: &str| match &write[name] {
+            Value::Null => Ok(None),
+            Value::String(s) => Ok(Some(s.clone())),
+            _ => Err(anyhow::anyhow!("a write's {name} is not a string")),
+        };
+        let (Some(id), Some(rel)) = (text("id")?, text("path")?) else {
+            anyhow::bail!("a write has no id or path");
+        };
+        let file =
+            replica_path(root, &rel).with_context(|| format!("{rel} is not a project path"))?;
+        writes.push((id, rel, file, text("base")?, text("body")?));
+    }
+    let mut conn = open(db)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (id, rel, file, base, body) in writes {
+        if tx.execute("INSERT OR IGNORE INTO imported(id) VALUES (?1)", [&id])? == 0 {
+            continue;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO outbox(id, path, base, body) VALUES (?1, ?2, ?3, ?4)",
+            params![id, rel, base, body],
+        )?;
+        // An item is never refused, so it lands now. A page waits for the
+        // store: its ack lands it through the heal path, which wants the head
+        // to be this write, and a refusal turns it into a conflict file.
+        if is_item(&rel) {
+            land(&file, body.as_deref())?;
+        }
+        set_head(&tx, &rel, &id)?;
+    }
+    tx.commit()?;
+    remove_outbox_file(top)?;
+    kick();
+    Ok(())
+}
+
+/// Deletes the outbox file and stages its removal.
+fn remove_outbox_file(top: &Path) -> Result<()> {
+    git_in(
+        top,
+        &[
+            "rm",
+            "-q",
+            "--cached",
+            "--ignore-unmatch",
+            "--",
+            OUTBOX_FILE,
+        ],
+    )?;
+    land(&top.join(OUTBOX_FILE), None)
+}
+
+fn git_in(top: &Path, args: &[&str]) -> Result<()> {
+    let out = std::process::Command::new("git")
+        .current_dir(top)
+        .args(args)
+        .output()
+        .context("running git")?;
+    anyhow::ensure!(
+        out.status.success(),
+        "git {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(())
 }

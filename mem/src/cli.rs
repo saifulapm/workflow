@@ -304,6 +304,9 @@ pub enum ShareCommand {
         #[arg(long)]
         all: bool,
     },
+    /// Save the writes still waiting into `.mem-outbox.json` at the top of
+    /// this git checkout and stage it, for the next machine to import.
+    Export,
 }
 
 /// Who made a decision: Saiful, or an agent taking the default.

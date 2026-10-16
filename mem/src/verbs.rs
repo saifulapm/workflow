@@ -2522,7 +2522,7 @@ pub fn project_share(app: &App) -> Result<i32> {
     Ok(code)
 }
 
-/// `mem share hello|pending|apply`: the local hub's side of sharing.
+/// `mem share hello|pending|apply|export`: the local hub's side of sharing.
 pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
     use crate::cli::ShareCommand;
     let db = app.dirs.share_db();
@@ -2544,6 +2544,15 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
                     Err(e) => eprintln!("mem: share apply: skipping a line that is not JSON: {e}"),
                 }
             }
+        }
+        ShareCommand::Export => {
+            let Some(top) = crate::git::toplevel(&app.cwd) else {
+                return Err(exit::usage(
+                    "mem share export: this directory is not in a git checkout",
+                ));
+            };
+            let saved = crate::share::export(&db, &top, &app.machine)?;
+            println!("saved {saved} writes to {}", crate::share::OUTBOX_FILE);
         }
     }
     Ok(exit::OK)
