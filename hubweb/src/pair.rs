@@ -63,21 +63,23 @@ pub fn cookie(token: &str) -> String {
 /// same-origin` on its own, else an `Origin` or a `Referer` on the request's
 /// own host. A request with none of the three is refused (hub/src/origin.rs).
 pub fn may_write(request: &Request) -> bool {
+    let host = request.header("host").map(str::to_ascii_lowercase);
+    // Our own host, over https, or http under cf dev.
+    let ours = |url: &str| {
+        url.strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+            .and_then(|rest| rest.split(['/', '?', '#']).next())
+            .is_some_and(|authority| Some(authority.to_ascii_lowercase()) == host)
+    };
+    let origin = request.header("origin");
+    // An Origin that is not ours refuses, whatever else the request says.
+    if origin.is_some_and(|origin| !ours(origin)) {
+        return false;
+    }
     if let Some(site) = request.header("sec-fetch-site") {
         return site == "same-origin";
     }
-    let Some(host) = request.header("host").map(str::to_ascii_lowercase) else {
-        return false;
-    };
-    let ours = |url: &str| {
-        url.strip_prefix("https://")
-            .and_then(|rest| rest.split(['/', '?', '#']).next())
-            .is_some_and(|authority| authority.to_ascii_lowercase() == host)
-    };
-    if let Some(origin) = request.header("origin") {
-        return ours(origin);
-    }
-    request.header("referer").is_some_and(ours)
+    origin.is_some() || request.header("referer").is_some_and(ours)
 }
 
 /// The name a device is kept under, from its User-Agent.
@@ -176,13 +178,24 @@ mod tests {
             ("Origin", "https://evil.example")
         ])));
         assert!(!may_write(&request(&[host, ("Origin", "null")])));
+        // A foreign Origin refuses even beside a same-origin claim.
+        assert!(!may_write(&request(&[
+            host,
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Origin", "https://evil.example")
+        ])));
+        assert!(may_write(&request(&[
+            host,
+            ("Sec-Fetch-Site", "same-origin"),
+            ("Origin", "https://next-hub.on-rexa.com")
+        ])));
         assert!(may_write(&request(&[
             host,
             ("Referer", "https://next-hub.on-rexa.com/p/walk/questions")
         ])));
         assert!(!may_write(&request(&[
             host,
-            ("Referer", "http://next-hub.on-rexa.com/")
+            ("Referer", "http://evil.example/")
         ])));
         assert!(!may_write(&request(&[host])));
     }
