@@ -10,6 +10,7 @@ use worker::wasm_bindgen_futures::JsFuture;
 use worker::*;
 
 use crate::access::{self, Access, Jwt};
+use crate::evidence;
 use crate::files;
 use crate::latest::{self, Change};
 use crate::mcp::{self, Step};
@@ -17,6 +18,8 @@ use crate::memview;
 use crate::pair;
 use crate::share::{self, Fault, Log, Rec};
 use crate::site;
+use hubpages::form::encode_component;
+use hubpages::page_evidence::image_kind;
 
 /// The store's binding, and the one instance every request reaches.
 const STORE: &str = "STORE";
@@ -91,6 +94,10 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
     match (req.method(), path.as_str()) {
         // An open page's socket, which hears only that the store changed.
         (Method::Get, "/live") => store(&env)?.fetch_with_request(req).await,
+        (Method::Get, _) if evidence_file(&path).is_some() => {
+            let (project, id) = evidence_file(&path).unwrap_or_default();
+            serve_evidence(project, id, &env).await
+        }
         (Method::Post, "/" | "/mcp") => serve_mcp(req, &env).await,
         (_, "/mcp") => Response::error("Method Not Allowed", 405),
         (Method::Get | Method::Post, _) => page(req, &env).await,
@@ -218,6 +225,47 @@ async fn serve_mcp(mut req: Request, env: &Env) -> Result<Response> {
 fn store(env: &Env) -> Result<Stub> {
     env.durable_object(STORE)?
         .get_by_name_with_location_hint(STORE_NAME, STORE_LOCATION)
+}
+
+/// The project and id of `/p/<project>/file/<id>`, as the path spells them.
+fn evidence_file(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/p/")?;
+    let (project, id) = rest.split_once("/file/")?;
+    (!project.is_empty() && !id.is_empty() && !project.contains('/') && !id.contains('/'))
+        .then_some((project, id))
+}
+
+/// One evidence file: the store names its path, the project's Files object
+/// holds the bytes. A Durable Object cannot fetch another one synchronously,
+/// so the page code cannot do this and the Worker does.
+async fn serve_evidence(project: &str, id: &str, env: &Env) -> Result<Response> {
+    let mut named = store(env)?
+        .fetch_with_str(&format!("https://store/evidence/{project}/{id}"))
+        .await?;
+    if named.status_code() != 200 {
+        return Response::error("Not Found", 404);
+    }
+    let path = named.text().await?;
+    let Some(owner) = files::project_of(&path) else {
+        return Response::error("Not Found", 404);
+    };
+    let encoded: Vec<String> = path.split('/').map(encode_component).collect();
+    let mut answer = env
+        .durable_object(FILES)?
+        .get_by_name_with_location_hint(owner, STORE_LOCATION)?
+        .fetch_with_str(&format!("https://files/store/files/{}", encoded.join("/")))
+        .await?;
+    if answer.status_code() != 200 {
+        return Response::error("Not Found", 404);
+    }
+    let bytes = answer.bytes().await?;
+    let kind = image_kind(&bytes).unwrap_or("text/plain; charset=utf-8");
+    let mut response = Response::from_bytes(bytes)?;
+    let headers = response.headers_mut();
+    headers.set("Content-Type", kind)?;
+    headers.set("Cache-Control", "private, max-age=3600")?;
+    headers.set("X-Content-Type-Options", "nosniff")?;
+    Ok(response)
 }
 
 /// A hub page, which the store draws from its files. Server-Timing carries
@@ -545,6 +593,16 @@ impl DurableObject for Store {
                 Ok(Response::empty()?.with_status(204))
             }
             (_, path) if path.starts_with("/page/pair/") => self.pair(req).await,
+            (Method::Get, path) if path.starts_with("/evidence/") => {
+                let Some((project, id)) = path["/evidence/".len()..].split_once('/') else {
+                    return Response::error("Not Found", 404);
+                };
+                let project = hubpages::form::decode_path(project);
+                match evidence::store_path(&SqlFiles(&self.sql), &project, id) {
+                    Some(path) => Response::ok(path),
+                    None => Response::error("Not Found", 404),
+                }
+            }
             (_, path) if path.starts_with("/page/") => self.page(req).await,
             (Method::Post, "/store/pair") => {
                 let code = pair::new_code(random()?);
