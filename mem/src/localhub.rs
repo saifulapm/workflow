@@ -114,6 +114,25 @@ pub fn short_id(id: &str) -> String {
     id.chars().skip(skip).collect()
 }
 
+/// A shared project's file, fetched by the hub from the project's files
+/// store; None when the hub is not there or has no such file.
+pub fn file(socket: &Path, rel: &str) -> Option<Vec<u8>> {
+    let query: String = rel
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    let path = format!("/share/file?path={query}");
+    match call_bytes(socket, "GET", &path, b"", Duration::from_secs(60)) {
+        Ok((200, bytes)) => Some(bytes),
+        _ => None,
+    }
+}
+
 fn call(
     socket: &Path,
     method: &str,
@@ -121,6 +140,17 @@ fn call(
     body: &[u8],
     timeout: Duration,
 ) -> std::io::Result<(u16, String)> {
+    let (code, bytes) = call_bytes(socket, method, path, body, timeout)?;
+    Ok((code, String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+fn call_bytes(
+    socket: &Path,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    timeout: Duration,
+) -> std::io::Result<(u16, Vec<u8>)> {
     let mut stream = UnixStream::connect(socket)?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
@@ -146,9 +176,9 @@ fn call(
             break;
         }
     }
-    let mut text = String::new();
-    reader.read_to_string(&mut text)?;
-    Ok((code, text))
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok((code, bytes))
 }
 
 #[cfg(test)]

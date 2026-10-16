@@ -103,6 +103,7 @@ pub fn evidence_cat(app: &App, id: &str) -> Result<i32> {
         return Err(exit::not_found(format!("#{} names no file", row.short_id)));
     };
     let path = app.store.project_dir(project).join(file);
+    crate::share::fetch_missing(&path);
     let bytes =
         std::fs::read(&path).map_err(|e| exit::not_found(format!("{}: {e}", path.display())))?;
     std::io::Write::write_all(&mut std::io::stdout().lock(), &bytes)?;
@@ -313,7 +314,7 @@ fn copy_in(app: &App, dir: &Path, rel: &str, from: &Path) -> Result<()> {
     }
     std::fs::copy(from, &dest)
         .map_err(|e| exit::store_error(format!("copying {}: {e}", from.display())))?;
-    Ok(())
+    crate::share::queue_file(&dest)
 }
 
 fn fetch(app: &App, dest: &Path, url: &str) -> Result<()> {
@@ -335,7 +336,7 @@ fn fetch(app: &App, dest: &Path, url: &str) -> Result<()> {
         let _ = std::fs::remove_file(dest);
         return Err(exit::not_found(format!("could not fetch {url} ({status})")));
     }
-    Ok(())
+    crate::share::queue_file(dest)
 }
 
 /// The project's rows of one kind, newest first, each with its item: the

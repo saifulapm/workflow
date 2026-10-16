@@ -2419,7 +2419,7 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
     match command {
         ShareCommand::Hello => println!("{}", crate::share::hello(&db, &app.machine)?),
         ShareCommand::Pending => {
-            for write in crate::share::pending(&db)? {
+            for write in crate::share::pending(&db, &app.store.root)? {
                 println!("{write}");
             }
         }

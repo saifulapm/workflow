@@ -417,3 +417,122 @@ fn a_shared_write_kicks_the_local_hub() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(seen.join().unwrap().trim(), "POST /share/kick HTTP/1.1");
 }
+
+#[test]
+fn evidence_in_a_shared_project_waits_to_be_uploaded() {
+    let w = shared("share-evidence");
+    let shot = w.dir.join("shot.png");
+    std::fs::write(&shot, [0u8, 159, 146, 150, 255]).unwrap();
+    walk(
+        &w,
+        &[
+            "evidence",
+            "add",
+            "--task",
+            "t1",
+            shot.to_str().unwrap(),
+            "--note",
+            "the screenshot",
+        ],
+    );
+
+    let files: Vec<Value> = pending(&w)
+        .into_iter()
+        .filter(|line| line["t"] == "file")
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let rel = format!("projects/{ID}/evidence/t1/shot.png");
+    assert_eq!(files[0]["path"], rel);
+    let local = files[0]["local"].as_str().unwrap();
+    assert_eq!(std::fs::read(local).unwrap(), [0u8, 159, 146, 150, 255]);
+
+    apply(&w, &[json!({"t": "stored", "path": rel})]);
+    assert!(pending(&w).iter().all(|line| line["t"] != "file"));
+}
+
+#[test]
+fn evidence_in_a_project_that_does_not_share_is_not_uploaded() {
+    let w = World::new("share-evidence-off");
+    w.project(ID, "walk");
+    let shot = w.dir.join("shot.png");
+    std::fs::write(&shot, b"png").unwrap();
+    walk(
+        &w,
+        &[
+            "evidence",
+            "add",
+            "--task",
+            "t1",
+            shot.to_str().unwrap(),
+            "--note",
+            "the screenshot",
+        ],
+    );
+    assert!(pending(&w).is_empty());
+}
+
+#[test]
+fn evidence_missing_from_the_replica_is_fetched_through_the_hub() {
+    let w = shared("share-evidence-fetch");
+    let shot = w.dir.join("shot.png");
+    let bytes: Vec<u8> = (0..300_000u32).map(|n| (n % 251) as u8).collect();
+    std::fs::write(&shot, &bytes).unwrap();
+    let out = walk(
+        &w,
+        &[
+            "evidence",
+            "add",
+            "--task",
+            "t1",
+            shot.to_str().unwrap(),
+            "--note",
+            "the screenshot",
+            "--json",
+        ],
+    );
+    let id = serde_json::from_slice::<Value>(&out.stdout).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The record arrived from another machine; the bytes did not.
+    let stored = w
+        .dirs()
+        .store()
+        .join(format!("projects/{ID}/evidence/t1/shot.png"));
+    std::fs::remove_file(&stored).unwrap();
+
+    let socket = w.dir.join("hub.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let served = bytes.clone();
+    let asked = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(stream.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            served.len()
+        );
+        (&stream).write_all(head.as_bytes()).unwrap();
+        (&stream).write_all(&served).unwrap();
+        line
+    });
+    let out = mem_env(
+        &w,
+        w.dir.path(),
+        &["--project", "walk", "evidence", "cat", &id],
+        &[("HUB_LOCAL_SOCKET", socket.to_str().unwrap())],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(out.stdout, bytes);
+    assert_eq!(
+        asked.join().unwrap().trim(),
+        format!("GET /share/file?path=projects/{ID}/evidence/t1/shot.png HTTP/1.1")
+    );
+    assert_eq!(
+        std::fs::read(&stored).unwrap(),
+        bytes,
+        "kept in the replica"
+    );
+}

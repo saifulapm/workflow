@@ -52,7 +52,7 @@ pub fn kick() {
 /// Puts the write of `path` in the outbox when its project shares, and
 /// returns the write's id; None when the path is not shared.
 pub fn queue(db: &Path, root: &Path, path: &Path, body: Option<&[u8]>) -> Result<Option<String>> {
-    let Some(rel) = shared_rel(root, path) else {
+    let Some((rel, false)) = shared(root, path) else {
         return Ok(None);
     };
     let body = match body.map(std::str::from_utf8) {
@@ -78,26 +78,54 @@ pub fn queue(db: &Path, root: &Path, path: &Path, body: Option<&[u8]>) -> Result
     Ok(Some(id))
 }
 
-/// `path` relative to the store, when it belongs to a shared project and is a
-/// file mem shares as text: not evidence or raw bytes, not a temp or a
-/// conflict copy.
-fn shared_rel(root: &Path, path: &Path) -> Option<String> {
+/// Puts an evidence or raw file of a shared project on the list the hub
+/// uploads to the project's files store, and kicks the hub.
+pub fn queue_file(path: &Path) -> Result<()> {
+    let Some(ctx) = CTX.get() else {
+        return Ok(());
+    };
+    let Some((rel, true)) = shared(&ctx.root, path) else {
+        return Ok(());
+    };
+    open(&ctx.db)?.execute("INSERT OR IGNORE INTO files(path) VALUES (?1)", [rel])?;
+    kick();
+    Ok(())
+}
+
+/// Fetches an evidence or raw file of a shared project that this replica
+/// has the record of but not the bytes, through the local hub. False when
+/// there is nothing to fetch or the hub could not get it.
+pub fn fetch_missing(path: &Path) -> bool {
+    let Some(ctx) = CTX.get() else {
+        return false;
+    };
+    let Some((rel, true)) = shared(&ctx.root, path) else {
+        return false;
+    };
+    if path.exists() {
+        return false;
+    }
+    crate::localhub::file(&ctx.socket, &rel)
+        .is_some_and(|bytes| crate::atomic::write_replica(path, &bytes).is_ok())
+}
+
+/// `path` relative to the store when it belongs to a shared project, with
+/// whether it is evidence or raw bytes (shared as a file) rather than text
+/// (shared as a write). Temps and conflict copies are never shared.
+fn shared(root: &Path, path: &Path) -> Option<(String, bool)> {
     let rel = path.strip_prefix(root).ok()?;
     let parts: Vec<&str> = rel.iter().map(|p| p.to_str()).collect::<Option<_>>()?;
     let [first, project, rest @ ..] = parts.as_slice() else {
         return None;
     };
     let name = rest.last()?;
-    if *first != "projects"
-        || matches!(rest.first(), Some(&"evidence" | &"raw"))
-        || name.starts_with('.')
-        || crate::store::is_conflict_name(name)
-    {
+    if *first != "projects" || name.starts_with('.') || crate::store::is_conflict_name(name) {
         return None;
     }
     let store = crate::store::Store::new(root.to_path_buf());
+    let bytes = matches!(rest.first(), Some(&"evidence" | &"raw"));
     (crate::project::declared(&store, project, "share").as_deref() == Some("true"))
-        .then(|| parts.join("/"))
+        .then(|| (parts.join("/"), bytes))
 }
 
 fn is_item(rel: &str) -> bool {
@@ -120,6 +148,7 @@ fn open(db: &Path) -> Result<Connection> {
              base TEXT,
              body TEXT);
          CREATE TABLE IF NOT EXISTS heads(path TEXT PRIMARY KEY, id TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS files(n INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE);
          CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
     )?;
     Ok(conn)
@@ -175,8 +204,10 @@ pub fn hello(db: &Path, machine: &str) -> Result<Value> {
     Ok(json!({"t": "hello", "machine": machine, "since": seq(&conn)?}))
 }
 
-/// The outbox, oldest first, as the store's `write` messages.
-pub fn pending(db: &Path) -> Result<Vec<Value>> {
+/// The outbox, oldest first, as the store's `write` messages, then each file
+/// still to upload as `{"t":"file","path","local"}`, `local` being where the
+/// bytes are on this machine.
+pub fn pending(db: &Path, root: &Path) -> Result<Vec<Value>> {
     let conn = open(db)?;
     let mut stmt = conn.prepare("SELECT id, path, base, body FROM outbox ORDER BY n")?;
     let rows = stmt.query_map([], |r| {
@@ -188,7 +219,14 @@ pub fn pending(db: &Path) -> Result<Vec<Value>> {
             "body": r.get::<_, Option<String>>(3)?,
         }))
     })?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
+    let mut out: Vec<Value> = rows.collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn.prepare("SELECT path FROM files ORDER BY n")?;
+    for rel in stmt.query_map([], |r| r.get::<_, String>(0))? {
+        let rel = rel?;
+        let local = root.join(&rel);
+        out.push(json!({"t": "file", "path": rel, "local": local.to_string_lossy()}));
+    }
+    Ok(out)
 }
 
 /// What `doctor` says about sharing: the last sequence seen and how many
@@ -268,6 +306,11 @@ pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
             {
                 land(&file, head_msg["body"].as_str())?;
                 set_head(&tx, &rel, &theirs)?;
+            }
+        }
+        Some("stored") => {
+            if let Some(rel) = text(&message["path"]) {
+                tx.execute("DELETE FROM files WHERE path = ?1", [rel])?;
             }
         }
         Some("ready") => {
