@@ -43,6 +43,16 @@ pub fn dl_name(path: &str) -> Option<&str> {
     ((1..=64).contains(&name.len()) && name.bytes().all(plain)).then_some(name)
 }
 
+/// The R2 key of a `/store/files/<path>` or `/store/dl/<name>` request: the
+/// decoded file path, or `dl/<name>` for a built binary.
+pub fn key(path: &str) -> Option<String> {
+    if let Some(name) = dl_name(path) {
+        return Some(format!("dl/{name}"));
+    }
+    let file = decode(path.strip_prefix("/store/files/")?)?;
+    project_of(&file).is_some().then_some(file)
+}
+
 /// `raw` with each `%XX` turned back into its byte; None when an escape is
 /// broken or the bytes are not UTF-8.
 pub fn decode(raw: &str) -> Option<String> {
@@ -148,6 +158,28 @@ mod tests {
             assert_eq!(dl_name(bad), None, "{bad}");
         }
         assert_eq!(dl_name(&format!("/store/dl/{}", "a".repeat(65))), None);
+    }
+
+    #[test]
+    fn a_request_names_its_object_by_the_file_path_or_dl_and_the_name() {
+        assert_eq!(
+            key("/store/files/projects/P1/evidence/t1/a%20b.png").as_deref(),
+            Some("projects/P1/evidence/t1/a b.png")
+        );
+        assert_eq!(
+            key("/store/dl/mem-x86_64").as_deref(),
+            Some("dl/mem-x86_64")
+        );
+        for bad in [
+            "/store/files",
+            "/store/files/projects/P1/wiki/a.md",
+            "/store/files/projects/P1/evidence/..%2F..%2Fx",
+            "/store/dl/Mem",
+            "/store/dl/",
+            "/store/other/projects/P1/evidence/a.png",
+        ] {
+            assert_eq!(key(bad), None, "{bad}");
+        }
     }
 
     #[test]

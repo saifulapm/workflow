@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # A shared project's evidence and raw bytes under `cf dev`: PUT and GET
-# /store/files/<path> with the bearer STORE_TOKEN keep a file in the
-# project's own Durable Object, in rows of at most 1 MiB, and give it back
-# byte for byte. Then two machines end to end: evidence added on the mini is
+# /store/files/<path> with the bearer STORE_TOKEN keep a file whole as one
+# object of the R2 bucket, keyed by its path, and give it back byte for
+# byte. Then two machines end to end: evidence added on the mini is
 # uploaded by its hub, and `mem evidence cat` on the macbook fetches it.
 #
 # Needs what t142 needs: hubweb/node_modules, worker-build, the wasm target,
@@ -65,10 +65,15 @@ get() { # get <url> <out> -- prints the status
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 
-head -c 16800000 /dev/urandom >"$T_TMP/big.bin"
-is "$(put "$T_TMP/big.bin" "$files/big%20one.bin")" 204 "a 16.8 MB file is stored"
-is "$(get "$files/big%20one.bin" "$T_TMP/big.back")" 200 "the 16.8 MB file is read back"
-is "$(sha "$T_TMP/big.back")" "$(sha "$T_TMP/big.bin")" "the 16.8 MB file reads back with the same sha256"
+head -c 20971520 /dev/urandom >"$T_TMP/big.bin"
+is "$(put "$T_TMP/big.bin" "$files/big%20one.bin")" 204 "a 20 MB file is stored"
+is "$(get "$files/big%20one.bin" "$T_TMP/big.back")" 200 "the 20 MB file is read back"
+is "$(sha "$T_TMP/big.back")" "$(sha "$T_TMP/big.bin")" "the 20 MB file reads back with the same sha256"
+# cf dev keeps the local bucket's objects as files of their own, so a whole
+# object is one file of the same bytes.
+whole=$(find "$app/.wrangler/state" -path '*r2*' -type f -size 20971520c -exec sha256sum {} + |
+	cut -d' ' -f1)
+is "$whole" "$(sha "$T_TMP/big.bin")" "the bucket holds the 20 MB file as one whole object"
 
 head -c 3000000 /dev/urandom >"$T_TMP/first.bin"
 head -c 3000000 /dev/urandom >"$T_TMP/second.bin"
@@ -82,6 +87,8 @@ is "$(curl -s -o /dev/null -w '%{http_code}' "$files/shot.png")" 401 "a GET with
 is "$(curl -s -o /dev/null -w '%{http_code}' -X PUT --data-binary x "$files/shot.png")" 401 \
 	"a PUT with no bearer is 401"
 is "$(get "$base/store/files/projects/P1/wiki/a.md" /dev/null)" 400 "a path outside evidence and raw is 400"
+is "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $token" "$files/shot.png")" \
+	405 "a DELETE is 405: files stay"
 
 # Two machines, each its own replica and its own hub, as in t142.
 PROJECT=01K0SHAREWA7K0000000000000

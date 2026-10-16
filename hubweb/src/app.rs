@@ -36,8 +36,10 @@ const MACHINE: &str = "machine";
 const PAGE: &str = "page";
 /// Each project's files, one Durable Object per project id.
 const FILES: &str = "FILES";
-/// The Files object that holds the built binaries, at `dl/<name>`.
+/// The Files object that held the built binaries, at `dl/<name>`.
 const DL: &str = "dl";
+/// The R2 bucket that keeps every file whole, keyed by its store path.
+const BUCKET: &str = "FILES_BUCKET";
 const DL_EXPECTED: &str = "Expected /store/dl/<name> of a-z 0-9 _ . -";
 
 #[event(fetch)]
@@ -97,8 +99,7 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             .await;
     }
     // A built binary a cloud session's setup fetches takes either bearer as
-    // well. It lives in one Files object of its own, outside every project,
-    // so no archive of a project ever lists it.
+    // well. It is kept under `dl/`, outside every project.
     if path == "/store/dl" || path.starts_with("/store/dl/") {
         if holder(&req, &env, object).await?.is_none() {
             return Response::error("Unauthorized", 401);
@@ -109,28 +110,28 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         if files::dl_name(&path).is_none() {
             return Response::error(DL_EXPECTED, 400);
         }
-        return env
-            .durable_object(FILES)?
-            .get_by_name_with_location_hint(DL, STORE_LOCATION)?
-            .fetch_with_request(req)
-            .await;
+        return file(req, &env, object, DL).await;
     }
-    // A project's files take either bearer, so a machine uploads and
-    // fetches, lists and archives them with no Access login.
-    if matches!(req.method(), Method::Put | Method::Get | Method::Delete)
-        && (path == "/store/files" || path.starts_with("/store/files/"))
-    {
+    // A project's files take either bearer, so a machine uploads, fetches
+    // and lists them with no Access login. A file stays: none is deleted.
+    if path == "/store/files" || path.starts_with("/store/files/") {
         if holder(&req, &env, object).await?.is_none() {
             return Response::error("Unauthorized", 401);
+        }
+        if !matches!(req.method(), Method::Put | Method::Get) {
+            return Response::error("Method Not Allowed", 405);
         }
         let Some(project) = files::target(&path_and_query(&req)) else {
             return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
         };
-        return env
-            .durable_object(FILES)?
-            .get_by_name_with_location_hint(&project, STORE_LOCATION)?
-            .fetch_with_request(req)
-            .await;
+        if path == "/store/files" {
+            return env
+                .durable_object(FILES)?
+                .get_by_name_with_location_hint(&project, STORE_LOCATION)?
+                .fetch_with_request(req)
+                .await;
+        }
+        return file(req, &env, object, &project).await;
     }
     // A machine with the store token asks for a pairing code.
     if req.method() == Method::Post && path == "/store/pair" {
@@ -303,6 +304,43 @@ fn store_name(req: &Request) -> Result<&'static str> {
     ))
 }
 
+/// One file's bytes. A PUT goes through the store, which puts them in R2 as
+/// one object; a GET reads them.
+async fn file(req: Request, env: &Env, object: &str, owner: &str) -> Result<Response> {
+    if req.method() == Method::Put {
+        return store(env, object)?.fetch_with_request(req).await;
+    }
+    read_file(req, env, owner).await
+}
+
+/// Streams the R2 object a file GET names, or reads `owner`'s Files object
+/// for a file stored there before the move to R2.
+async fn read_file(req: Request, env: &Env, owner: &str) -> Result<Response> {
+    let Some(key) = files::key(&req.path()) else {
+        return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
+    };
+    if let Some(found) = env.bucket(BUCKET)?.get(key).execute().await?
+        && let Some(body) = found.body()
+    {
+        return Response::from_body(body.response_body()?);
+    }
+    env.durable_object(FILES)?
+        .get_by_name_with_location_hint(owner, STORE_LOCATION)?
+        .fetch_with_request(req)
+        .await
+}
+
+/// The bytes of the file `url` names, from R2 or from `owner`'s Files
+/// object; None when neither holds it.
+async fn file_bytes(env: &Env, url: &str, owner: &str) -> Result<Option<Vec<u8>>> {
+    let request = Request::new(url, Method::Get)?;
+    let mut answer = read_file(request, env, owner).await?;
+    if answer.status_code() != 200 {
+        return Ok(None);
+    }
+    answer.bytes().await.map(Some)
+}
+
 /// The project and id of `/p/<project>/file/<id>`, as the path spells them.
 fn evidence_file(path: &str) -> Option<(&str, &str)> {
     let rest = path.strip_prefix("/p/")?;
@@ -326,20 +364,10 @@ async fn serve_evidence(project: &str, id: &str, env: &Env, object: &str) -> Res
         return Response::error("Not Found", 404);
     };
     let encoded: Vec<String> = path.split('/').map(encode_component).collect();
-    let mut answer = env
-        .durable_object(FILES)?
-        .get_by_name_with_location_hint(owner, STORE_LOCATION)?
-        .fetch_with_str(&format!("https://files/store/files/{}", encoded.join("/")))
-        .await?;
-    // The store names the file but holds no bytes: after 90 days they live
-    // only in the Dropbox snapshot.
-    if answer.status_code() == 404 {
-        return Response::error("archived", 404);
-    }
-    if answer.status_code() != 200 {
+    let target = format!("https://files/store/files/{}", encoded.join("/"));
+    let Some(bytes) = file_bytes(env, &target, owner).await? else {
         return Response::error("Not Found", 404);
-    }
-    let bytes = answer.bytes().await?;
+    };
     let kind = image_kind(&bytes).unwrap_or("text/plain; charset=utf-8");
     let mut response = Response::from_bytes(bytes)?;
     let headers = response.headers_mut();
@@ -562,7 +590,7 @@ impl Store {
     }
 
     /// Adds writes the store made itself (the hub web's, the connector's) to
-    /// its log: each file's bytes to its project's Files store first, so a
+    /// its log: each file's bytes to R2 first, so a
     /// machine that hears of an item finds its file; then each write, which
     /// every machine hears as a rec; then one nudge to the open pages.
     async fn keep(
@@ -572,24 +600,10 @@ impl Store {
         bytes: Vec<(String, Vec<u8>)>,
     ) -> Result<()> {
         for (path, data) in bytes {
-            let Some(project) = files::project_of(&path) else {
+            if files::project_of(&path).is_none() {
                 return Err(Error::RustError(format!("{path} is not a project's file")));
-            };
-            let mut init = RequestInit::new();
-            init.with_method(Method::Put).with_body(Some(data.into()));
-            let target = format!("https://files/store/files/{}", encode_component(&path));
-            let answer = self
-                .env
-                .durable_object(FILES)?
-                .get_by_name_with_location_hint(project, STORE_LOCATION)?
-                .fetch_with_request(Request::new_with_init(&target, &init)?)
-                .await?;
-            if answer.status_code() != 204 {
-                return Err(Error::RustError(format!(
-                    "the files store answered {} for {path}",
-                    answer.status_code()
-                )));
             }
+            self.env.bucket(BUCKET)?.put(path, data).execute().await?;
         }
         if writes.is_empty() {
             return Ok(());
@@ -910,6 +924,18 @@ impl DurableObject for Store {
                 }
                 Ok(Response::empty()?.with_status(204))
             }
+            // A machine's file, which the Worker checked the bearer of.
+            (Method::Put, path) if path.starts_with("/store/") => {
+                let Some(key) = files::key(path) else {
+                    return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
+                };
+                let body = match req.inner().body() {
+                    Some(stream) => Data::ReadableStream(stream),
+                    None => Data::Empty,
+                };
+                self.env.bucket(BUCKET)?.put(key, body).execute().await?;
+                Ok(Response::empty()?.with_status(204))
+            }
             (_, path) if path.starts_with("/page/pair/") => self.pair(req).await,
             // A bare round trip, the baseline a page's build is measured by.
             (Method::Get, "/page/api/ping") => {
@@ -1129,8 +1155,8 @@ impl DurableObject for Store {
 }
 
 /// One project's evidence and raw files, or in the object named `dl` the
-/// built binaries, each stored as rows of at most `files::CHUNK` bytes in
-/// the object's SQLite.
+/// built binaries, as they were stored before R2: rows of at most
+/// `files::CHUNK` bytes in the object's SQLite, read until they move.
 #[durable_object]
 pub struct Files {
     sql: SqlStorage,
@@ -1162,7 +1188,7 @@ impl DurableObject for Files {
         Self { sql }
     }
 
-    async fn fetch(&self, mut req: Request) -> Result<Response> {
+    async fn fetch(&self, req: Request) -> Result<Response> {
         if req.path() == "/store/files" {
             return match req.method() {
                 Method::Get => self.list().and_then(|rows| Response::from_json(&rows)),
@@ -1186,21 +1212,9 @@ impl DurableObject for Files {
             path
         };
         let answer = match req.method() {
-            Method::Put => {
-                // Every await comes before the first write, so the delete and
-                // the inserts commit together and two PUTs never interleave.
-                let bytes = req.bytes().await?;
-                self.put(&path, &bytes)
-                    .and_then(|()| Ok(Response::empty()?.with_status(204)))
-            }
             Method::Get => match self.get(&path) {
                 Ok(rows) if rows.is_empty() => Response::error("No such file", 404),
                 Ok(rows) => Response::from_bytes(files::join(rows)),
-                Err(error) => Err(error),
-            },
-            Method::Delete => match self.delete(&path) {
-                Ok(true) => Ok(Response::empty()?.with_status(204)),
-                Ok(false) => Response::error("No such file", 404),
                 Err(error) => Err(error),
             },
             _ => Response::error("Method Not Allowed", 405),
@@ -1217,45 +1231,6 @@ impl DurableObject for Files {
 }
 
 impl Files {
-    /// Replaces every row of `path` with the rows of `bytes`.
-    fn put(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        self.sql
-            .exec("DELETE FROM chunks WHERE path = ?", vec![path.into()])?;
-        for (n, row) in files::split(bytes).into_iter().enumerate() {
-            self.sql.exec(
-                "INSERT INTO chunks(path, n, data) VALUES (?, ?, ?)",
-                vec![
-                    path.into(),
-                    (n as i64).into(),
-                    SqlStorageValue::Blob(row.to_vec()),
-                ],
-            )?;
-        }
-        self.sql.exec(
-            "INSERT OR REPLACE INTO stored(path, at) VALUES (?, ?)",
-            vec![path.into(), (now_ms() as i64).into()],
-        )?;
-        Ok(())
-    }
-
-    /// Drops every row of `path`; false when it was not stored.
-    fn delete(&self, path: &str) -> Result<bool> {
-        let held = self
-            .sql
-            .exec(
-                "SELECT 1 FROM chunks WHERE path = ? LIMIT 1",
-                vec![path.into()],
-            )?
-            .raw()
-            .next()
-            .is_some();
-        self.sql
-            .exec("DELETE FROM chunks WHERE path = ?", vec![path.into()])?;
-        self.sql
-            .exec("DELETE FROM stored WHERE path = ?", vec![path.into()])?;
-        Ok(held)
-    }
-
     /// Every stored path with its upload time in ms, by path.
     fn list(&self) -> Result<Vec<Value>> {
         let rows: Vec<Value> = self

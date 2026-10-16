@@ -17,6 +17,9 @@ export default defineConfig({
     env: {
       STORE: bindings.durableObject({ worker: "hubweb", exportName: "Store" }),
       FILES: bindings.durableObject({ worker: "hubweb", exportName: "Files" }),
+      // Every evidence and raw file, and the built binaries, each one whole
+      // object keyed by its store path. Only the Worker holds it.
+      FILES_BUCKET: bindings.r2({ name: "hubweb-files" }),
       STORE_TOKEN: bindings.secret(),
       // The Access apps' auds, comma-separated, and the team URL, such as
       // https://saifulapm.cloudflareaccess.com. Neither is secret; they are
