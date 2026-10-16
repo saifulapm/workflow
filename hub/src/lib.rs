@@ -102,8 +102,8 @@ pub fn tailnet_name() -> Option<String> {
 
 /// The local hubs this one tells about its questions: `HUB_PEERS` (a comma
 /// list of `host[:port]`, empty for none) when set, else every online peer
-/// `tailscale status --json` lists, by MagicDNS name. A peer that runs no
-/// local hub refuses the connection and costs nothing.
+/// `tailscale status --json` lists, phones aside, by MagicDNS name. A peer
+/// that runs no local hub refuses the connection and costs nothing.
 pub fn tailnet_peers() -> Vec<String> {
     if let Some(peers) = std::env::var_os("HUB_PEERS") {
         return peers
@@ -130,6 +130,8 @@ pub fn tailnet_peers() -> Vec<String> {
         .into_iter()
         .flat_map(|peers| peers.values())
         .filter(|peer| peer["Online"] == true)
+        // A phone runs no local hub.
+        .filter(|peer| !matches!(peer["OS"].as_str(), Some("iOS" | "android")))
         .filter_map(|peer| peer["DNSName"].as_str())
         .map(|name| name.trim().trim_end_matches('.').to_ascii_lowercase())
         .filter(|name| !name.is_empty())

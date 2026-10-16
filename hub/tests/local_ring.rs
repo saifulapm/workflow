@@ -24,7 +24,10 @@ struct Slack {
 }
 
 fn slack() -> Slack {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    slack_on(TcpListener::bind("127.0.0.1:0").unwrap())
+}
+
+fn slack_on(listener: TcpListener) -> Slack {
     let api = format!("http://{}/api", listener.local_addr().unwrap());
     let posts = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&posts);
@@ -126,6 +129,18 @@ fn machine(
     slack: Option<&Slack>,
     extra: &[(&str, &str)],
 ) -> Machine {
+    machine_at(dir, name, seat, peers, slack, extra, 0)
+}
+
+fn machine_at(
+    dir: &TempDir,
+    name: &str,
+    seat: Seat,
+    peers: &[&str],
+    slack: Option<&Slack>,
+    extra: &[(&str, &str)],
+    port: u16,
+) -> Machine {
     let home = dir.join(name);
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::create_dir_all(home.join("run")).unwrap();
@@ -175,7 +190,8 @@ fn machine(
         ]);
     }
     env.extend_from_slice(extra);
-    let hub = Hub::spawn_env(&home, &[&bin], &["local", "--port", "0"], &env);
+    let port = port.to_string();
+    let hub = Hub::spawn_env(&home, &[&bin], &["local", "--port", &port], &env);
     Machine { hub, home }
 }
 
@@ -403,7 +419,10 @@ fn a_question_gone_to_phone_never_shows_as_a_popup_later() {
 
     // Nor can it take down a popup the route device rightly shows.
     assert_eq!(status_of(&peer("/ring", &open("LATE0003", "null"))), 200);
-    assert_eq!(status_of(&peer("/question", &open("LATE0003", "null"))), 200);
+    assert_eq!(
+        status_of(&peer("/question", &open("LATE0003", "null"))),
+        200
+    );
     assert_eq!(mini.popups(), 1);
     assert_eq!(mini.listed().len(), 3);
 }
@@ -474,4 +493,81 @@ fn an_orchestrator_question_and_a_roadmap_review_ring_nowhere() {
     quiet_for("nothing rings", Duration::from_millis(800), || {
         slack.posted() == 0 && mini.popups() == 0
     });
+}
+
+/// No network: Slack cannot be reached when the question is asked, and the
+/// post goes out soon after it can.
+#[test]
+fn a_question_asked_offline_reaches_slack_once_the_network_returns() {
+    let dir = TempDir::new("ring-offline-slack");
+    let port = {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let api = format!("http://127.0.0.1:{port}/api");
+    let away = Slack {
+        api,
+        posts: Arc::new(Mutex::new(Vec::new())),
+    };
+    let nuc = machine(
+        &dir,
+        "nuc",
+        Seat::NoShell,
+        &[],
+        Some(&away),
+        &[("HUB_RETRY_MS", "200")],
+    );
+    ask(&nuc);
+    std::thread::sleep(Duration::from_millis(700));
+    let back = slack_on(TcpListener::bind(("127.0.0.1", port)).unwrap());
+    common::wait_for(
+        "the post once Slack is back",
+        Duration::from_secs(2),
+        || back.posted() == 1,
+    );
+    quiet_for("one post only", Duration::from_millis(600), || {
+        back.posted() == 1
+    });
+}
+
+/// A peer that was unreachable when the question was asked hears it once it
+/// is back, so its bar counts it. Unreachable is a connection that goes
+/// nowhere, here one cut at once; a refused one is a machine with no hub.
+#[test]
+fn a_peer_that_was_away_hears_the_question_when_it_returns() {
+    let dir = TempDir::new("ring-offline-peer");
+    let cutter = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = cutter.local_addr().unwrap().port();
+    cutter.set_nonblocking(true).unwrap();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cutting = {
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Ok((stream, _)) = cutter.accept() {
+                    drop(stream);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        })
+    };
+    let later = format!("127.0.0.1:{port}");
+    let nuc = machine(
+        &dir,
+        "nuc",
+        Seat::NoShell,
+        &[&later],
+        None,
+        &[("HUB_RETRY_MS", "200")],
+    );
+    ask(&nuc);
+    std::thread::sleep(Duration::from_millis(700));
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    cutting.join().unwrap();
+    let mini = machine_at(&dir, "mini", Seat::NoShell, &[], None, &[], port);
+    common::wait_for(
+        "the mini hears it once back",
+        Duration::from_secs(2),
+        || mini.listed().len() == 1,
+    );
 }

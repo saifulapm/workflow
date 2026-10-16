@@ -193,7 +193,13 @@ impl Local {
                         ring: None,
                     };
                     self.known.add(open.clone());
-                    self.tell_peers("/question", serde_json::to_vec(&open).unwrap_or_default());
+                    tell_peers(
+                        &self.host,
+                        &self.token,
+                        "/question",
+                        serde_json::to_vec(&open).unwrap_or_default(),
+                        Some((Arc::clone(&self.known), open.id.clone())),
+                    );
                     self.post(&asked, open);
                     self.asked
                         .lock()
@@ -558,7 +564,7 @@ impl Local {
     }
 
     fn tell_peers(&self, path: &'static str, body: Vec<u8>) {
-        tell_peers(&self.host, &self.token, path, body);
+        tell_peers(&self.host, &self.token, path, body, None);
     }
 
     /// Asks every peer for its open questions, once at start, so a hub that
@@ -617,21 +623,93 @@ impl Local {
     }
 }
 
-/// POSTs `body` to `path` on every peer but `host`, each on a thread of its
-/// own, so a peer that is listed but off holds up nobody.
-fn tell_peers(host: &str, token: &str, path: &'static str, body: Vec<u8>) {
-    for peer in crate::tailnet_peers() {
-        if peer == host {
-            continue;
+/// How long a send to a peer that could not be reached is tried again.
+const RETRY_FOR: Duration = Duration::from_secs(60 * 60);
+
+/// How often an unreached peer or Slack is tried again: 3 s, so a question
+/// goes out within seconds of the network coming back, or `HUB_RETRY_MS`.
+fn retry_every() -> Duration {
+    std::env::var("HUB_RETRY_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(Duration::from_secs(3), Duration::from_millis)
+}
+
+/// POSTs `body` to `path` on every peer but `host`, off this thread. A
+/// round sends to every peer at once, so one that is listed but off holds up
+/// nobody; peers that could not be reached are tried again each
+/// `retry_every`, for `RETRY_FOR`, and for a question only while `open`
+/// still lists it.
+fn tell_peers(
+    host: &str,
+    token: &str,
+    path: &'static str,
+    body: Vec<u8>,
+    open: Option<(Arc<Known>, String)>,
+) {
+    let host = host.to_string();
+    let token = token.to_string();
+    std::thread::spawn(move || {
+        let until = Instant::now() + RETRY_FOR;
+        let mut heard: Vec<String> = Vec::new();
+        loop {
+            let peers: Vec<String> = crate::tailnet_peers()
+                .into_iter()
+                .filter(|p| *p != host && !heard.contains(p))
+                .collect();
+            let reached: Vec<(String, bool)> = std::thread::scope(|scope| {
+                let sends: Vec<_> = peers
+                    .into_iter()
+                    .map(|peer| {
+                        let (token, body) = (&token, &body);
+                        scope.spawn(move || {
+                            let reached = match request(&peer, "POST", path, token, body) {
+                                Ok((200, _)) => true,
+                                Ok((status, _)) => {
+                                    eprintln!("hub: local: {peer} answered {status} to {path}");
+                                    true
+                                }
+                                // Nothing listens there: a machine with no
+                                // local hub, nothing to try again.
+                                Err(e) if refused(&e) => true,
+                                Err(e) => {
+                                    eprintln!("hub: local: {path} did not reach {peer}: {e:#}");
+                                    false
+                                }
+                            };
+                            (peer, reached)
+                        })
+                    })
+                    .collect();
+                sends.into_iter().filter_map(|s| s.join().ok()).collect()
+            });
+            // No peers at all is most likely this machine off the network.
+            let mut missed = reached.is_empty() && heard.is_empty();
+            for (peer, reached) in reached {
+                if reached {
+                    heard.push(peer);
+                } else {
+                    missed = true;
+                }
+            }
+            let still_open = open
+                .as_ref()
+                .is_none_or(|(known, id)| known.get(id).is_some());
+            if !missed || !still_open || Instant::now() >= until {
+                return;
+            }
+            std::thread::sleep(retry_every());
         }
-        let token = token.to_string();
-        let body = body.clone();
-        std::thread::spawn(move || match request(&peer, "POST", path, &token, &body) {
-            Ok((200, _)) => {}
-            Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to {path}"),
-            Err(e) => eprintln!("hub: local: {path} did not reach {peer}: {e:#}"),
-        });
-    }
+    });
+}
+
+/// Whether a connection was refused: the machine is there, its hub is not.
+fn refused(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
+    })
 }
 
 /// How long the route device has to take a question before it goes to
@@ -678,6 +756,7 @@ impl Ringer {
             &self.token,
             "/question",
             serde_json::to_vec(&open).unwrap_or_default(),
+            Some((Arc::clone(&self.known), open.id.clone())),
         );
         if taken.is_none() {
             self.post_to_slack();
@@ -711,14 +790,23 @@ impl Ringer {
         }
     }
 
+    /// Posts the question, trying again while it is open and Slack cannot
+    /// be reached: asked with no network, it goes out once there is one.
     fn post_to_slack(&self) {
         let Some(slack) = &self.slack else { return };
-        match slack.post_question(&self.question) {
-            Ok(_) => eprintln!("hub: local: #{} posted to Slack", self.question.id),
-            Err(e) => eprintln!(
-                "hub: local: #{} not posted to Slack: {e:#}",
-                self.question.id
-            ),
+        let id = &self.question.id;
+        loop {
+            match slack.post_question(&self.question) {
+                Ok(_) => {
+                    eprintln!("hub: local: #{id} posted to Slack");
+                    return;
+                }
+                Err(e) => eprintln!("hub: local: #{id} not posted to Slack yet: {e:#}"),
+            }
+            std::thread::sleep(retry_every());
+            if self.known.get(id).is_none() {
+                return;
+            }
         }
     }
 }
