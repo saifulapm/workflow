@@ -321,11 +321,10 @@ fn disconnect_opens_a_new_connection() {
 
 #[test]
 fn no_token_reaches_a_log_line_an_error_or_debug() {
-    // A port nothing listens on: every call fails, and the socket loop logs.
-    let closed = TcpListener::bind("127.0.0.1:0").unwrap();
-    let api = format!("http://{}/api", closed.local_addr().unwrap());
-    drop(closed);
-    let (slack, lines) = client(&api);
+    // The discard port, which nothing listens on: every call fails, and the
+    // socket loop logs. A port bound and dropped here could be another test's
+    // listener by the time the call is made.
+    let (slack, lines) = client("http://127.0.0.1:9/api");
     let question = Question {
         id: "Q1".into(),
         project: "walk".into(),
