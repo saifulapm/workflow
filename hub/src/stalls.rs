@@ -267,10 +267,14 @@ pub fn standing(machine: &str, project: &str) -> Standing {
         agents: serde_json::from_value(Value::Array(agents)).unwrap_or_default(),
     };
     let run = live::run(Some(runner), &s.name, s.milestone.as_deref(), &here);
-    let Some(handoff) = mem_json(&["handoff", "--project", &s.name, "--json"]) else {
-        return Standing::Unknown;
-    };
-    if live::stalled(&s, &run, handoff["body"].as_str().unwrap_or_default()) {
+    // mem answers a project that never wrote a handoff with an error; the
+    // bell reads that as no handoff, and so does this.
+    let handoff = mem_json(&["handoff", "--project", &s.name, "--json"]);
+    let handoff = handoff
+        .as_ref()
+        .and_then(|doc| doc["body"].as_str())
+        .unwrap_or_default();
+    if live::stalled(&s, &run, handoff) {
         Standing::Stalled
     } else {
         Standing::NotStalled

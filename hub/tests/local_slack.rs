@@ -887,7 +887,7 @@ fn spawn_runner_with(dir: &TempDir, slack: &Fake, log: &Path, runner: &str, amx:
             "case \"$*\" in\n\
              *questions*) echo '{{\"questions\":[]}}' ;;\n\
              'projects --json') cat '{d}/projects.json' ;;\n\
-             handoff*) cat '{d}/handoff.json' ;;\n\
+             handoff*) cat '{d}/handoff.json' 2>/dev/null || {{ echo 'mem: no handoff recorded for this project' >&2; exit 1; }} ;;\n\
              esac",
             d = dir.path().display()
         ),
@@ -1086,4 +1086,18 @@ fn a_resume_tap_on_a_run_that_has_parked_since_starts_nothing() {
             .any(|u| u.contains("walk01"))
     });
     assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
+}
+
+/// mem answers a project that never wrote a handoff with an error; the
+/// bell rings such a stall, and the tap starts it just the same.
+#[test]
+fn a_resume_tap_starts_a_stall_with_no_handoff_at_all() {
+    let dir = TempDir::new("ls-resume-nohandoff");
+    let slack = fake();
+    let _runner = spawn_runner(&dir, &slack, &dir.join("err.log"));
+    std::fs::remove_file(dir.join("handoff.json")).unwrap();
+    let value = resume_value(&slack);
+    slack.tap(SAIFUL, &value);
+    wait_until("the start", || !ran(&dir).is_empty());
+    assert_eq!(ran(&dir), ["--user --scope --quiet workflow go walk01"]);
 }
