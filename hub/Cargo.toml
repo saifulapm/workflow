@@ -11,6 +11,10 @@ edition = "2024"
 # is not something to hand-roll on the origin that owns `POST /answer`.
 # `default-features = false` drops `getopts`, which only the crate's own binary
 # needs.
+#
+# ureq and tungstenite are added for Slack: a sync HTTPS client for the Web
+# API and a sync WebSocket client for Socket Mode, each on a thread of its
+# own, so the hub still runs without an async runtime.
 [dependencies]
 anyhow = "1.0.104"
 hmac = "0.13.0"
@@ -24,3 +28,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.1"
 toml = "1.1.4"
+# Socket Mode. `rustls-tls-webpki-roots` uses the rustls that ureq already
+# brings, with ureq's ring provider; plain ws:// needs no TLS at all.
+tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+# Slack's Web API. Only `rustls`: no gzip, and serde_json builds the bodies.
+ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }

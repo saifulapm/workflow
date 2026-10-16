@@ -38,6 +38,7 @@ pub mod pair;
 pub mod presence;
 pub mod proc;
 pub mod route;
+pub mod slack;
 
 /// How long `tailscale status` may take. It runs once, before the listener is
 /// serving, so a wedged `tailscaled` must not become the reason hub never
