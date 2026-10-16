@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::live::{Agent, Runner};
+use crate::live::Agent;
 
-/// The machine whose agent starts cloud runs and carries answers to them.
+/// The machine whose agent starts cloud runs.
 pub const CLOUD_MACHINE: &str = "mini";
 
 /// One command for a machine's agent, as the poll hands it out and as the
@@ -40,12 +40,6 @@ pub enum Command {
     /// it runs, `amx resume` with it once it has stopped.
     #[serde(rename = "follow_up")]
     FollowUp {
-        project: String,
-        id: String,
-        message: String,
-    },
-    /// Answers for a cloud session: `claude -p <message> --cloud <id>`.
-    Cloud {
         project: String,
         id: String,
         message: String,
@@ -176,8 +170,6 @@ pub trait Host {
     /// After an answer took: resume the session that asked, once it has every
     /// answer it waits on.
     fn after_answer(&self, project: &str, session: Option<&str>);
-    /// Saiful replies to `runner`'s cloud run in the Claude app.
-    fn replied_in_app(&self, project: &str, runner: &Runner);
     /// `workflow pause|unpause <project>`, or why it did not take.
     fn pause(&self, verb: &str, project: &str) -> Result<(), String>;
     /// Keeps a photo where mem can copy it in, and names that path.

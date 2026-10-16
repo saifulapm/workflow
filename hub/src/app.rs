@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use hubpages::page_questions::{Pending, pending, short};
 
-use crate::agents::{Agents, CLOUD_MACHINE, Command};
+use crate::agents::{Agents, Command};
 use crate::config::Config;
 use crate::dulali::{self, Dulali, Held};
 use crate::html;
@@ -16,7 +16,7 @@ use crate::live::Runner;
 use crate::memcli::MemCli;
 use crate::origin::Guard;
 use crate::route::{Kind, NoMachine, Route, Saved};
-use crate::{api, model, pages};
+use crate::{api, pages};
 
 /// How long `workflow pause|unpause` may take: a few mem reads and a write.
 const PAUSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -135,12 +135,11 @@ impl App {
     /// After an answer took, and after its sync was queued: when it was the
     /// last open question `session` asked, one `resume` of that session for
     /// the project's runner machine, carrying every answer it got. The sync
-    /// sits ahead of it, so the agent's mem holds the answers first. A cloud
-    /// runner's questions carry no session, so they go [`Self::after_cloud_answer`].
+    /// sits ahead of it, so the agent's mem holds the answers first.
     pub fn after_answer(&self, project: &str, session: Option<&str>) {
         let runner = self.runner_of(project);
-        if let Some(runner) = runner.as_ref().filter(|r| r.machine == "cloud") {
-            self.after_cloud_answer(project, runner);
+        // A cloud run takes its answers over Tailscale, from its own hub.
+        if runner.as_ref().is_some_and(|r| r.machine == "cloud") {
             return;
         }
         let Some(session) = session else {
@@ -181,67 +180,6 @@ impl App {
         });
     }
 
-    /// A cloud run's answers: the questions a person owes it are the
-    /// project's with no session asked since the run began, as the VM has no
-    /// amx id to stamp on them. Once all are answered, one `cloud` command
-    /// for the mini, whose agent hands them to the session. No sync goes
-    /// ahead of it: the cloud reads mem's server, not the mini's store. It
-    /// is queued while the mini is off too, and goes out on its next poll.
-    fn after_cloud_answer(&self, project: &str, runner: &Runner) {
-        // A question handed to the Claude app may stay open in mem for good,
-        // and must not hold back the answers to a later park.
-        let told = self.agents.delivered(&runner.id);
-        let mut asked = self.cloud_questions(project, runner);
-        asked.retain(|row| !told.iter().any(|id| row["id"] == id.as_str()));
-        if asked.is_empty() || asked.iter().any(|row| row["answered"] != true) {
-            return;
-        }
-        self.deliver(CLOUD_MACHINE, project, &runner.id, asked, |message| {
-            Command::Cloud {
-                project: project.to_string(),
-                id: runner.id.clone(),
-                message,
-            }
-        });
-    }
-
-    /// Saiful replies in the Claude app while the mini is off: the cloud
-    /// commands waiting for it are dropped, and every question the run asked
-    /// so far counts as told, answered or not: he answers the open ones in
-    /// the app.
-    pub fn replied_in_app(&self, project: &str, runner: &Runner) {
-        let ids: Vec<String> = self
-            .cloud_questions(project, runner)
-            .iter()
-            .filter_map(|row| row["id"].as_str().map(str::to_string))
-            .collect();
-        self.agents
-            .withdraw_cloud(CLOUD_MACHINE, project, &runner.id, &ids);
-    }
-
-    /// The person questions of `runner`'s cloud run.
-    fn cloud_questions(&self, project: &str, runner: &Runner) -> Vec<Value> {
-        let since = runner
-            .since
-            .as_deref()
-            .and_then(|since| since.parse::<jiff::Timestamp>().ok())
-            .map(|since| since.as_millisecond());
-        self.mem
-            .questions_all(project)
-            .rows("questions")
-            .into_iter()
-            .filter(|row| {
-                row["audience"] != "orchestrator"
-                    && row["session"].as_str().is_none_or(str::is_empty)
-                    && row["id"]
-                        .as_str()
-                        .and_then(model::ulid_millis)
-                        .zip(since)
-                        .is_some_and(|(asked, since)| asked > since)
-            })
-            .collect()
-    }
-
     /// The runner record of `project`, if it has one.
     fn runner_of(&self, project: &str) -> Option<Runner> {
         self.mem
@@ -266,9 +204,7 @@ impl App {
         // A second tap on the same last question finds the first command
         // still waiting, and adds nothing.
         let queued = self.agents.pending(machine).iter().any(|c| match c {
-            Command::Resume { project: p, id, .. } | Command::Cloud { project: p, id, .. } => {
-                p == project && id == session
-            }
+            Command::Resume { project: p, id, .. } => p == project && id == session,
             _ => false,
         });
         if queued {
@@ -621,10 +557,6 @@ impl hubpages::Host for App {
 
     fn after_answer(&self, project: &str, session: Option<&str>) {
         App::after_answer(self, project, session);
-    }
-
-    fn replied_in_app(&self, project: &str, runner: &Runner) {
-        App::replied_in_app(self, project, runner);
     }
 
     /// `workflow pause|unpause`, which write mem and start nothing.

@@ -9,7 +9,7 @@
 use serde_json::Value;
 
 use crate::form::encode_component;
-use crate::host::{CLOUD_MACHINE, Command, Fleet};
+use crate::host::{CLOUD_MACHINE, Fleet};
 use crate::html::{
     self, degraded_banner, esc, item_list_section, markdown_article, outside_link, page_url,
     project_url,
@@ -172,7 +172,6 @@ fn live_pill(s: &ProjectSummary, slug: &str, project: &str) -> String {
 /// extra read for it.
 fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     let project = s.name.as_str();
-    let agents = ctx.site.host.fleet();
     let paused = s.paused.is_some();
     let paused_pill = if paused {
         "<span class=\"pill wait\">paused</span> "
@@ -187,24 +186,6 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
             CloudState::Landed => ("<span class=\"pill ok\">landed</span>", "landed"),
             CloudState::Ended => ("<span class=\"pill mut\">ended</span>", "ended"),
         };
-        let mut forms = String::new();
-        // Answers for the session wait in the mini's queue, or will, and
-        // only the mini can hand them over.
-        let waiting = cloud.state == CloudState::Parked
-            || agents
-                .pending(CLOUD_MACHINE)
-                .iter()
-                .any(|c| matches!(c, Command::Cloud { project: p, .. } if p == project));
-        if waiting && !agents.online(CLOUD_MACHINE) {
-            forms.push_str(&format!(
-                "<p class=\"banner\">{CLOUD_MACHINE} is off: reply in the Claude app to resume now</p>\n\
-                 <form method=\"post\" action=\"{}/control\">\n\
-                 <input type=\"hidden\" name=\"do\" value=\"reply-in-app\">\n\
-                 <button type=\"submit\">Reply in the Claude app</button>\n\
-                 </form>\n",
-                esc(&project_url(project))
-            ));
-        }
         let line = format!(
             "{pill} <span class=\"meta\">{}</span> {}",
             esc(&format!("cloud · {} · {state}", cloud.milestone)),
@@ -219,18 +200,12 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
             };
             let device = device_line(ctx, &free);
             if !device.is_empty() {
-                let banner = if forms.is_empty() {
-                    String::new()
-                } else {
-                    controls(ctx, forms)
-                };
-                return format!("<p class=\"row\">{line}</p>\n{banner}{device}");
+                return format!("<p class=\"row\">{line}</p>\n{device}");
             }
         }
-        forms.push_str(&pause_form(project, paused));
         return format!(
             "<p class=\"row\">{paused_pill}{line}</p>\n{}",
-            controls(ctx, forms)
+            controls(ctx, pause_form(project, paused))
         );
     }
     device_line(ctx, s)

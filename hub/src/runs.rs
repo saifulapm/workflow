@@ -266,8 +266,6 @@ fn run(job: &Job) {
                 eprintln!("hub: commands: notify-send could not show {title:?}");
             }
         }
-        // A cloud session takes its answers over Tailscale now.
-        Job::Cloud { id, .. } => eprintln!("hub: commands: cloud {id}: no longer forwarded"),
     }
 }
 

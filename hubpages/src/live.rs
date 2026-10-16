@@ -209,7 +209,7 @@ pub fn away(machine: &str, project: &str, agents: &dyn Fleet) -> String {
         Command::Start { project: p, .. }
         | Command::Resume { project: p, .. }
         | Command::FollowUp { project: p, .. } => p == project,
-        Command::Cloud { .. } | Command::Sync | Command::Notify { .. } => false,
+        Command::Sync | Command::Notify { .. } => false,
     });
     if waiting {
         format!("waiting for {machine}")

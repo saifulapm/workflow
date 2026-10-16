@@ -29,7 +29,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
     let text = form.get("text").unwrap_or("").trim();
     if !matches!(
         verb,
-        "approve" | "changes" | "go" | "cloud" | "reply-in-app" | "pause" | "unpause"
+        "approve" | "changes" | "go" | "cloud" | "pause" | "unpause"
     ) {
         return Response::text(400, "unknown control");
     }
@@ -92,7 +92,6 @@ pub fn control_post(ctx: &PageCtx) -> Response {
         }
         "pause" | "unpause" => pause(ctx, project, verb),
         "cloud" => cloud(ctx, project),
-        "reply-in-app" => reply_in_app(ctx, project),
         _ => go(ctx, project, form.get("machine").unwrap_or("")),
     }
 }
@@ -233,27 +232,6 @@ pub(crate) fn cloud_machine(agents: &dyn Fleet, project: &str) -> Result<Option<
         })
         .map(Some)
         .ok_or_else(|| "no device is online to start it.".to_string())
-}
-
-/// Reply in the Claude app: the answers waiting for the mini are withdrawn
-/// and marked handled, and the browser goes to the cloud session. Called
-/// with the control lock held.
-fn reply_in_app(ctx: &PageCtx, project: &str) -> Response {
-    let mem = ctx.site.mem;
-    mem.invalidate();
-    let runner = mem
-        .refresh(&["projects", "--json"])
-        .rows("projects")
-        .iter()
-        .map(summary_of)
-        .find(|s| s.name == project)
-        .and_then(|s| s.runner)
-        .filter(|runner| runner.machine == "cloud");
-    let Some(runner) = runner else {
-        return conflict(ctx, &format!("{project} has no cloud run."));
-    };
-    ctx.site.host.replied_in_app(project, &runner);
-    Response::see_other(&format!("{}/{}", page_project::CODE_PAGE, runner.id))
 }
 
 /// The project's pending approval question, found by its project and the

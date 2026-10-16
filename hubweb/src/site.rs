@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use hubpages::form::Form;
 use hubpages::host::{Command, Held, Kind, NoMachine, Polled, Saved};
 use hubpages::http::{Request, Response};
-use hubpages::live::Runner;
 use hubpages::pages::{Site, route_page};
 use hubpages::{Fleet, Host, Outcome, Source};
 use serde_json::Value;
@@ -394,7 +393,6 @@ impl<F: Files> Host for Web<'_, '_, F> {
     fn superseded(&self, _id: &str, _held: &Held, _text: &str) {}
     fn answered(&self, _row: &Value) {}
     fn after_answer(&self, _project: &str, _session: Option<&str>) {}
-    fn replied_in_app(&self, _project: &str, _runner: &Runner) {}
     fn pause(&self, verb: &str, project: &str) -> Result<(), String> {
         let mut written = self.shared.written.borrow_mut();
         let clock = self.shared.clock.borrow();

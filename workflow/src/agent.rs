@@ -31,12 +31,6 @@ pub enum Job {
         #[serde(default)]
         cloud: bool,
     },
-    /// An answer for a cloud session, forwarded with `claude --cloud`.
-    Cloud {
-        project: String,
-        id: String,
-        message: String,
-    },
     Resume {
         project: String,
         id: String,
@@ -367,30 +361,6 @@ fn start(project: &str, cloud: bool) -> bool {
     succeeds(&bin("WORKFLOW_SYSTEMD_RUN", "systemd-run"), &args)
 }
 
-/// Queue an answer on a cloud session. `None` when claude gave no answer at
-/// all (it did not run, or failed with no JSON), the one case worth running
-/// again: a reply that says `ok:false` was the session's own, and running
-/// again would forward the message twice.
-fn forward_to_cloud(id: &str, message: &str) -> Option<String> {
-    let out = Command::new(bin("WORKFLOW_CLAUDE", "claude"))
-        .arg("-p")
-        .arg(message)
-        .args(["--cloud", id, "--output-format", "json"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    match serde_json::from_slice::<Value>(&out.stdout) {
-        Ok(doc) if doc["ok"] == true => Some("sent".to_string()),
-        Ok(doc) => {
-            let error = doc["error"].as_str().unwrap_or("no reason given");
-            Some(format!("failed: {error}"))
-        }
-        Err(_) if out.status.success() => Some("failed: claude printed no JSON".to_string()),
-        Err(_) => None,
-    }
-}
-
 /// Run one command and print one line for it. `false` when it must be tried
 /// again after the next poll. Syncs are not commands: they run on the sync
 /// thread, and a resume asks it for a round through `sync`.
@@ -399,13 +369,6 @@ fn run(job: &Job, sync: &mpsc::Sender<()>) -> bool {
         Job::Sync => {
             let _ = sync.send(());
         }
-        Job::Cloud { id, message, .. } => match forward_to_cloud(id, message) {
-            Some(result) => println!("cloud {id}: {result}"),
-            None => {
-                println!("cloud {id}: claude did not run, trying again after the next poll");
-                return false;
-            }
-        },
         Job::Start { project, cloud } => {
             // Start often follows an approval the hub just wrote, and
             // workflow go reads this machine's store.

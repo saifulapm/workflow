@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use hubpages::form::Form;
 use hubpages::host::{Command, Held, Kind, NoMachine, Polled, Saved};
 use hubpages::http::Request;
-use hubpages::live::Runner;
 use hubpages::pages::{Site, route_page};
 use hubpages::{Fleet, Host, Outcome, QUESTIONS_ARGV, Source, Written};
 use serde_json::{Value, json};
@@ -81,9 +80,6 @@ impl Host for Quiet {
     }
     fn after_answer(&self, _project: &str, _session: Option<&str>) {
         panic!("home resumed a session")
-    }
-    fn replied_in_app(&self, _project: &str, _runner: &Runner) {
-        panic!("home replied in the app")
     }
     fn pause(&self, verb: &str, _project: &str) -> Result<(), String> {
         panic!("home ran workflow {verb}")

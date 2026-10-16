@@ -1,20 +1,16 @@
-//! Answers to a parked cloud run reach it through the mini's agent, as one
-//! `cloud` command, or, while the mini is off, through the Claude app. A
-//! cloud run's questions carry no session, so they are the project's
-//! person questions asked since the run began. Over a fake `mem` that prints
-//! whatever JSON the test last put in `data/`.
+//! A parked cloud run takes its answers over Tailscale, so the hub queues
+//! nothing for the mini and the project page offers no way to reply in the
+//! Claude app. Over a fake `mem` that prints whatever JSON the test last put
+//! in `data/`.
 
 mod common;
 
 use std::path::PathBuf;
 
-use common::{Hub, TempDir, body_of, fixture_bin, header_of, status_of, ulid_at};
+use common::{Hub, TempDir, body_of, fixture_bin, status_of, ulid_at};
 use serde_json::{Value, json};
 
 const SESSION: &str = "session_01CloudRun";
-
-const HEAD: &str = "Saiful answered your questions on the hub. Each answer is below; \
-                    `mem questions` shows them once this machine's sync round lands.\n\n";
 
 struct World {
     dir: TempDir,
@@ -128,60 +124,6 @@ fn answer(hub: &Hub, id: &str, text: &str) {
     assert_eq!(status_of(&response), 303, "{response}");
 }
 
-fn cloud(message: &str) -> Vec<Value> {
-    vec![json!({"kind": "cloud", "project": "gamma", "id": SESSION, "message": message})]
-}
-
-#[test]
-fn answering_the_parked_runs_question_queues_one_cloud_command_for_the_mini() {
-    let world = World::new("cloud-answer-online");
-    let hub = world.hub();
-    assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
-
-    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
-    // Asked before the run began, and one a device session asked: neither
-    // is the cloud run's.
-    let older = question(&id_ago(90, "OLDAAAAAAAAAAAAA"), "Old?", None);
-    let mut device = question(&id_ago(10, "DEVAAAAAAAAAAAAA"), "Device?", None);
-    device["session"] = json!("gamma-m1");
-    let q = |a| question(&q1, "Which port?", a);
-    world.questions(&[q(None)], &[device, q(Some("8787")), older]);
-    answer(&hub, &q1, "8787");
-    assert_eq!(
-        cloud_polled(&hub),
-        cloud(&format!("{HEAD}#AAAAAAAA Which port?\nAnswer: 8787"))
-    );
-    assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
-
-    // Parked again on a new question: only its answer goes.
-    let q2 = id_ago(5, "Q2BBBBBBBBBBBBBB");
-    let r = |a| question(&q2, "Keep the old route?", a);
-    world.questions(&[r(None)], &[r(Some("no")), q(Some("8787"))]);
-    answer(&hub, &q2, "no");
-    assert_eq!(
-        cloud_polled(&hub),
-        cloud(&format!("{HEAD}#BBBBBBBB Keep the old route?\nAnswer: no"))
-    );
-}
-
-#[test]
-fn an_answer_while_the_mini_is_off_reaches_it_once_it_polls() {
-    let world = World::new("cloud-answer-offline");
-    let hub = world.hub();
-    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
-    let q = |a| question(&q1, "Which port?", a);
-    world.questions(&[q(None)], &[q(Some("8787"))]);
-    answer(&hub, &q1, "8787");
-    assert_eq!(
-        cloud_polled(&hub),
-        cloud(&format!("{HEAD}#AAAAAAAA Which port?\nAnswer: 8787"))
-    );
-    assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
-}
-
-const MINI_OFF: &str = "mini is off: reply in the Claude app to resume now";
-const REPLY_IN_APP: &str = "<input type=\"hidden\" name=\"do\" value=\"reply-in-app\">";
-
 fn page(hub: &Hub) -> String {
     let response = hub.get("/p/gamma");
     assert_eq!(status_of(&response), 200, "{response}");
@@ -189,126 +131,33 @@ fn page(hub: &Hub) -> String {
 }
 
 #[test]
-fn with_the_mini_off_the_page_offers_the_claude_app_and_that_withdraws_the_answers() {
-    let world = World::new("cloud-answer-in-app");
+fn a_parked_run_with_the_mini_off_offers_no_reply_in_the_claude_app() {
+    let world = World::new("cloud-answer-no-card");
     let hub = world.hub();
     let body = page(&hub);
-    assert!(body.contains(MINI_OFF), "parked: {body}");
-
-    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
-    let q = |a| question(&q1, "Which port?", a);
-    world.questions(&[q(None)], &[q(Some("8787"))]);
-    answer(&hub, &q1, "8787");
-    let body = page(&hub);
-    assert!(body.contains(MINI_OFF), "{body}");
-    assert!(body.contains(REPLY_IN_APP), "{body}");
-
-    let response = hub.post_form("/p/gamma/control", "do=reply-in-app");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(
-        header_of(&response, "location"),
-        Some(format!("https://claude.ai/code/{SESSION}").as_str())
-    );
-    // A second tap on the answer finds it handled, and queues nothing.
-    answer(&hub, &q1, "8787");
-    assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
+    assert!(body.contains("cloud · m2 · parked"), "{body}");
+    assert!(!body.contains("reply in the Claude app"), "{body}");
+    assert!(!body.contains("Reply in the Claude app"), "{body}");
+    assert!(!body.contains("reply-in-app"), "{body}");
 }
 
 #[test]
-fn with_the_mini_online_there_is_no_notice() {
-    let world = World::new("cloud-answer-no-notice");
+fn reply_in_app_is_an_unknown_control() {
+    let world = World::new("cloud-answer-no-control");
+    let hub = world.hub();
+    let response = hub.post_form("/p/gamma/control", "do=reply-in-app");
+    assert_eq!(status_of(&response), 400, "{response}");
+    assert!(body_of(&response).contains("unknown control"), "{response}");
+}
+
+#[test]
+fn answering_every_question_of_a_parked_run_queues_nothing_for_the_mini() {
+    let world = World::new("cloud-answer-queues-nothing");
     let hub = world.hub();
     cloud_polled(&hub);
-    let body = page(&hub);
-    assert!(!body.contains(MINI_OFF), "{body}");
-    assert!(!body.contains(REPLY_IN_APP), "{body}");
-}
-
-/// The tap hands every question the run asked so far to the Claude app,
-/// answered or not, so a later answer to one on the hub reaches no one.
-#[test]
-fn questions_asked_before_the_tap_never_reach_the_session_again() {
-    let world = World::new("cloud-answer-in-app-partial");
-    let hub = world.hub();
     let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
-    let q2 = id_ago(15, "Q2BBBBBBBBBBBBBB");
     let q = |a| question(&q1, "Which port?", a);
-    let r = |a| question(&q2, "Keep the old route?", a);
-    world.questions(&[q(None), r(None)], &[r(None), q(Some("8787"))]);
+    world.questions(&[q(None)], &[q(Some("8787"))]);
     answer(&hub, &q1, "8787");
-
-    let response = hub.post_form("/p/gamma/control", "do=reply-in-app");
-    assert_eq!(status_of(&response), 303, "{response}");
-
-    world.questions(&[r(None)], &[r(Some("no")), q(Some("8787"))]);
-    answer(&hub, &q2, "no");
     assert_eq!(cloud_polled(&hub), Vec::<Value>::new());
-}
-
-/// A question asked after the tap is a new park, and its answer goes to the
-/// session though one it asked before stays open in mem.
-#[test]
-fn a_question_asked_after_the_tap_is_forwarded() {
-    let world = World::new("cloud-answer-after-tap");
-    let hub = world.hub();
-    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
-    let q = question(&q1, "Which port?", None);
-    world.questions(std::slice::from_ref(&q), std::slice::from_ref(&q));
-    let response = hub.post_form("/p/gamma/control", "do=reply-in-app");
-    assert_eq!(status_of(&response), 303, "{response}");
-
-    let q2 = id_ago(5, "Q2BBBBBBBBBBBBBB");
-    let r = |a| question(&q2, "Keep the old route?", a);
-    world.questions(&[q.clone(), r(None)], &[r(Some("no")), q]);
-    answer(&hub, &q2, "no");
-    assert_eq!(
-        cloud_polled(&hub),
-        cloud(&format!("{HEAD}#BBBBBBBB Keep the old route?\nAnswer: no"))
-    );
-}
-
-/// A live run's answers waiting in the mini's queue bring the notice too.
-#[test]
-fn answers_waiting_for_an_off_mini_bring_the_notice_on_a_live_run() {
-    let world = World::new("cloud-answer-live-waiting");
-    let path = world.data.join("projects.json");
-    let mut doc: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    doc["projects"][0]["handoff_at"] = Value::Null;
-    world.put("projects.json", doc);
-    let hub = world.hub();
-    let body = page(&hub);
-    assert!(body.contains("cloud · m2 · live"), "{body}");
-    assert!(!body.contains(MINI_OFF), "nothing waits yet: {body}");
-
-    let q1 = id_ago(20, "Q1AAAAAAAAAAAAAA");
-    let q = |a| question(&q1, "Which port?", a);
-    world.questions(&[q(None)], &[q(Some("8787"))]);
-    answer(&hub, &q1, "8787");
-    let body = page(&hub);
-    assert!(body.contains(MINI_OFF), "{body}");
-}
-
-/// A park lapses seven hours after the run began, but its runner record is
-/// still there, so an answer still reaches the session.
-#[test]
-fn an_answer_to_a_park_older_than_seven_hours_still_reaches_the_session() {
-    let world = World::new("cloud-answer-lapsed");
-    let path = world.data.join("projects.json");
-    let mut doc: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    doc["projects"][0]["runner"]["since"] = json!(ago(8 * 60));
-    doc["projects"][0]["handoff_at"] = json!(ago(7 * 60));
-    world.put("projects.json", doc);
-    let hub = world.hub();
-    cloud_polled(&hub);
-    let body = page(&hub);
-    assert!(body.contains("cloud · m2 · ended"), "{body}");
-
-    let q1 = id_ago(7 * 60, "Q1AAAAAAAAAAAAAA");
-    let q = |a| question(&q1, "Which port?", a);
-    world.questions(&[q(None)], &[q(Some("8787"))]);
-    answer(&hub, &q1, "8787");
-    assert_eq!(
-        cloud_polled(&hub),
-        cloud(&format!("{HEAD}#AAAAAAAA Which port?\nAnswer: 8787"))
-    );
 }
