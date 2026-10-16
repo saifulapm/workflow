@@ -298,7 +298,12 @@ pub enum ShareCommand {
     /// Print every write waiting to be sent, oldest first, one JSON per line.
     Pending,
     /// Apply the store's messages, one JSON per line on stdin.
-    Apply,
+    Apply {
+        /// Land every project's writes, shared here or not: a cloud
+        /// session's replica starts with no project to say it shares one.
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 /// Who made a decision: Saiful, or an agent taking the default.

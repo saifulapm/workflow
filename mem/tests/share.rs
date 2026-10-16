@@ -634,6 +634,28 @@ fn a_streamed_write_that_cannot_land_is_passed_over_and_the_rest_land() {
 }
 
 #[test]
+fn applied_with_all_a_project_this_replica_has_never_seen_lands() {
+    let w = World::new("share-all");
+    let project = "projects/01K0SHARE0NKN0WN0000000000P";
+    let toml = "created = \"2026-10-16T00:00:00Z\"\nid = \"01K0SHARE0NKN0WN0000000000P\"\nname = \"far\"\nshare = \"true\"\n";
+    let input: String = [
+        json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC00000000000031",
+               "path": format!("{project}/project.toml"), "body": toml, "machine": "mini"}),
+        json!({"t": "rec", "seq": 2, "id": "01K0SHAREREC00000000000032",
+               "path": format!("{project}/wiki/notes.md"), "body": "# Notes\n", "machine": "mini"}),
+        json!({"t": "ready", "seq": 2}),
+    ]
+    .iter()
+    .map(|m| format!("{m}\n"))
+    .collect();
+    let out = mem_in(&w, &["share", "apply", "--all"], &input);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let notes = mem(&w, w.dir.path(), &["--project", "far", "wiki", "notes"]);
+    assert_eq!(stdout(&notes), "# Notes\n", "{}", stderr(&notes));
+    assert_eq!(hello(&w)["since"], 2);
+}
+
+#[test]
 fn sharing_a_project_late_asks_the_store_for_everything_again() {
     let w = World::new("share-late");
     w.project(ID, "walk");

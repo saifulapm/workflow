@@ -24,6 +24,7 @@ Usage: hub [OPTIONS]
        hub dulali-token
        hub local [--port <PORT>]
        hub ping <HOST[:PORT]>
+       hub share sync
 
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
@@ -35,6 +36,9 @@ Commands:
   local         Run this machine's local hub: the peer port (8789) for other
                 local hubs, and a socket for mem. HUB_PEER_TOKEN is required
   ping          Ask another local hub its machine name, with HUB_PEER_TOKEN
+  share sync    Bring this machine's replica up to the store (HUB_STORE_URL
+                and HUB_STORE_TOKEN) once, landing every shared project, and
+                end; it fails when the store cannot be reached
 
 Options:
       --config <PATH>  Config file (default $XDG_CONFIG_HOME/hub/config.toml)
@@ -51,6 +55,8 @@ struct Args {
     dulali_token: bool,
     local: bool,
     ping: Option<String>,
+    /// `share sync`: fill the replica from the store once.
+    sync: bool,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
@@ -62,6 +68,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
         dulali_token: false,
         local: false,
         ping: None,
+        sync: false,
         config: None,
         port: None,
     };
@@ -72,6 +79,10 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "--web" => args.web = true,
             "dulali-token" => args.dulali_token = true,
             "local" => args.local = true,
+            "share" => match argv.next().as_deref() {
+                Some("sync") => args.sync = true,
+                _ => anyhow::bail!("share takes sync\n\n{USAGE}"),
+            },
             "ping" => match argv.next().context("ping needs a host")? {
                 help if help == "-h" || help == "--help" => {
                     print!("{USAGE}");
@@ -118,6 +129,13 @@ fn run() -> Result<()> {
     }
     if let Some(target) = args.ping {
         return ping(&target);
+    }
+    if args.sync {
+        let store = hub::share::from_env()
+            .context("hub share sync needs HUB_STORE_URL and HUB_STORE_TOKEN")?;
+        let applied = hub::share::sync(&store)?;
+        eprintln!("hub: share sync: the replica is up to the store ({applied} messages)");
+        return Ok(());
     }
     if args.local {
         return run_local(args.port.unwrap_or(local::PORT));

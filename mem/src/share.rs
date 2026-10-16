@@ -254,7 +254,8 @@ pub fn status(db: &Path) -> Result<Option<(u64, u64)>> {
 
 /// Applies one message from the store. A message mem cannot use is skipped:
 /// the store's reply to something else must not stop the ones behind it.
-pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
+/// With `all`, a record lands whether or not its project shares here.
+pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
     let mut conn = open(db)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let text = |v: &Value| v.as_str().map(str::to_string);
@@ -272,7 +273,7 @@ pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
             };
             // The store carries every machine's shared projects; this
             // replica lands only the ones it shares too.
-            if shared(root, &file).is_none() {
+            if !all && shared(root, &file).is_none() {
                 raise_seq(&tx, seen)?;
                 tx.commit()?;
                 return Ok(());

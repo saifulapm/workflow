@@ -328,6 +328,75 @@ pub fn run(store: Store, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! 
     }
 }
 
+/// The socket to the store, its handshake carrying the bearer and the
+/// Access service token.
+fn connect(store: &Store) -> Result<Socket> {
+    let url = store.url.as_str();
+    let mut request = url.into_client_request().context("reading HUB_STORE_URL")?;
+    for (name, value) in store.headers() {
+        let value = value
+            .parse()
+            .with_context(|| format!("the {name} header is not a header value"))?;
+        request.headers_mut().insert(name, value);
+    }
+    let (socket, _) = tungstenite::connect(request)
+        .map_err(|error| match error {
+            tungstenite::Error::Url(UrlError::UnableToConnect(_)) => anyhow!("unable to connect"),
+            error => anyhow!(error),
+        })
+        .context("connecting to the store")?;
+    eprintln!("hub: share: connected to {url}");
+    Ok(socket)
+}
+
+/// `hub share sync`: one connection that brings the replica up to the
+/// store's `ready` and ends, landing every project's writes, since a cloud
+/// session's replica starts with no project to say it shares one. Nothing
+/// of the outbox is sent. Returns the frames applied.
+pub fn sync(store: &Store) -> Result<usize> {
+    /// Frames handed to mem at once, so a long replay is not one stdin.
+    const BATCH: usize = 500;
+    let mut socket = connect(store)?;
+    read_timeout(&mut socket, QUIET).context("timing store reads")?;
+    let hello = mem(&["share", "hello"], None)?;
+    let hello = hello.lines().next().unwrap_or_default().trim();
+    if hello.is_empty() {
+        bail!("mem share hello printed nothing");
+    }
+    socket
+        .send(Message::text(hello))
+        .context("sending the hello")?;
+    let mut held = Vec::new();
+    let mut applied = 0;
+    loop {
+        let text = match socket.read() {
+            Ok(Message::Text(text)) => text.to_string(),
+            Ok(Message::Close(_)) | Err(tungstenite::Error::ConnectionClosed) => {
+                bail!("the store closed the socket before it was ready")
+            }
+            Ok(_) => continue,
+            Err(e) => return Err(e).context("reading the store"),
+        };
+        // Routes and commands are the long-running hub's business.
+        let what = kind(&text);
+        if what == "route" || what == "cmd" {
+            continue;
+        }
+        held.push(text);
+        if what == "ready" || held.len() >= BATCH {
+            let mut input = held.join("\n");
+            input.push('\n');
+            mem(&["share", "apply", "--all"], Some(input.as_bytes()))?;
+            applied += held.len();
+            held.clear();
+        }
+        if what == "ready" {
+            let _ = socket.close(None);
+            return Ok(applied);
+        }
+    }
+}
+
 /// One connection, until the store closes it (`Ok`) or it fails.
 fn session(
     store: &Store,
@@ -337,21 +406,7 @@ fn session(
     paused_until: &mut Option<Timestamp>,
     slack: Option<&Slack>,
 ) -> Result<()> {
-    let url = store.url.as_str();
-    let mut request = url.into_client_request().context("reading HUB_STORE_URL")?;
-    for (name, value) in store.headers() {
-        let value = value
-            .parse()
-            .with_context(|| format!("the {name} header is not a header value"))?;
-        request.headers_mut().insert(name, value);
-    }
-    let (mut socket, _) = tungstenite::connect(request)
-        .map_err(|error| match error {
-            tungstenite::Error::Url(UrlError::UnableToConnect(_)) => anyhow!("unable to connect"),
-            error => anyhow!(error),
-        })
-        .context("connecting to the store")?;
-    eprintln!("hub: share: connected to {url}");
+    let mut socket = connect(store)?;
     read_timeout(&mut socket, READ_TICK).context("timing store reads")?;
 
     let hello = mem(&["share", "hello"], None)?;

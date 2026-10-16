@@ -2533,14 +2533,14 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
                 println!("{write}");
             }
         }
-        ShareCommand::Apply => {
+        ShareCommand::Apply { all } => {
             for line in std::io::stdin().lines() {
                 let line = anyhow::Context::context(line, "reading stdin")?;
                 if line.trim().is_empty() {
                     continue;
                 }
                 match serde_json::from_str::<serde_json::Value>(&line) {
-                    Ok(message) => crate::share::apply(&db, &app.store.root, &message)?,
+                    Ok(message) => crate::share::apply(&db, &app.store.root, &message, *all)?,
                     Err(e) => eprintln!("mem: share apply: skipping a line that is not JSON: {e}"),
                 }
             }
