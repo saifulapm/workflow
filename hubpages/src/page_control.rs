@@ -122,10 +122,14 @@ fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
     let Some(mut summary) = summary else {
         return Response::not_found();
     };
-    // A landed or ended cloud run holds the project no more, as on the page.
-    if page_project::cloud_run(ctx, &summary)
-        .is_some_and(|run| matches!(run.state, CloudState::Landed | CloudState::Ended))
-    {
+    // A landed, ended or local-only cloud run holds the project no more, as
+    // on the page.
+    if page_project::cloud_run(ctx, &summary).is_some_and(|run| {
+        matches!(
+            run.state,
+            CloudState::Landed | CloudState::Ended | CloudState::LocalOnly
+        )
+    }) {
         summary.runner = None;
     }
     let agents = ctx.site.host.fleet();

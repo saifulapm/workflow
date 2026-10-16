@@ -106,6 +106,12 @@ esac
     /// An origin for gamma's checkout holding main, and a cloud run's branch
     /// `cloud/gamma-m1-first` one commit ahead of it. Returns that tip.
     fn origin_with_cloud_branch(&self) -> String {
+        self.origin_with_cloud_branch_for("m1-first")
+    }
+
+    /// The same with the cloud run of `slug`.
+    fn origin_with_cloud_branch_for(&self, slug: &str) -> String {
+        let branch = format!("cloud/gamma-{slug}");
         let origin = self.work.at("origin.git");
         git(
             self.work.path(),
@@ -135,9 +141,9 @@ esac
                 cloud.to_str().unwrap(),
             ],
         );
-        git(&cloud, &["checkout", "-q", "-b", "cloud/gamma-m1-first"]);
+        git(&cloud, &["checkout", "-q", "-b", &branch]);
         commit(&cloud, "Land t1 in the cloud");
-        git(&cloud, &["push", "-q", "origin", "cloud/gamma-m1-first"]);
+        git(&cloud, &["push", "-q", "origin", &branch]);
         head(&cloud)
     }
 }
@@ -449,6 +455,62 @@ fn the_next_local_go_fast_forwards_the_trunk_to_a_landed_cloud_runs_branch() {
         w.mem_calls()
     );
     assert!(w.amx_started());
+}
+
+/// A cloud run that met a local-only task parks for a device with no
+/// question: the next local go takes its branch and runs the rest.
+#[test]
+fn a_run_parked_local_only_is_taken_over_by_the_next_local_go() {
+    let w = World::new("cloud-local-only");
+    let tip = w.origin_with_cloud_branch_for("m2-next");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Parked","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(2)
+        ),
+    );
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put(
+        "handoff-gamma.md",
+        "parked: local-only t2: needs the desktop to walk the popup\n",
+    );
+    let out = w.go_local(&["gamma"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        head(&w.checkout("gamma")),
+        tip,
+        "the trunk takes the cloud branch"
+    );
+    assert!(
+        w.mem_calls()
+            .iter()
+            .any(|c| c == "project unset runner --project gamma"),
+        "{:?}",
+        w.mem_calls()
+    );
+    assert!(w.amx_started());
+}
+
+/// Parked for a device, a run no longer holds the one cloud slot.
+#[test]
+fn a_run_parked_local_only_frees_the_cloud_slot() {
+    let w = World::new("cloud-local-only-slot");
+    w.runner(
+        "delta",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(2)
+        ),
+    );
+    w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put(
+        "handoff-delta.md",
+        "parked: local-only t2: needs the desktop\n",
+    );
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran());
 }
 
 #[test]

@@ -183,6 +183,10 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
         let (pill, state) = match cloud.state {
             CloudState::Live => ("<span class=\"pill\">running</span>", "live"),
             CloudState::Parked => ("<span class=\"pill wait\">parked</span>", "parked"),
+            CloudState::LocalOnly => (
+                "<span class=\"pill wait\">parked</span>",
+                "parked for a device",
+            ),
             CloudState::Landed => ("<span class=\"pill ok\">landed</span>", "landed"),
             CloudState::Ended => ("<span class=\"pill mut\">ended</span>", "ended"),
         };
@@ -191,9 +195,13 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
             esc(&format!("cloud · {} · {state}", cloud.milestone)),
             outside_link(&format!("{CODE_PAGE}/{}", cloud.id), "session"),
         );
-        // A landed or ended run holds the project no more: `workflow go` on
-        // a device takes it on from the cloud branch, as with no runner.
-        if matches!(cloud.state, CloudState::Landed | CloudState::Ended) {
+        // A landed, ended or local-only run holds the project no more:
+        // `workflow go` on a device takes it on from the cloud branch, as
+        // with no runner.
+        if matches!(
+            cloud.state,
+            CloudState::Landed | CloudState::Ended | CloudState::LocalOnly
+        ) {
             let free = ProjectSummary {
                 runner: None,
                 ..s.clone()

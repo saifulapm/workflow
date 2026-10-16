@@ -281,8 +281,8 @@ fn poll_with_gamma(hub: &Hub) -> Value {
     serde_json::from_str::<Value>(&hub.poll_agent(&report.to_string())).unwrap()["commands"].clone()
 }
 
-/// Once a cloud run has landed or ended, `workflow go` on a device takes
-/// the project on from its branch, so the page offers a device start as it
+/// Once a cloud run has landed, ended or parked for a device, `workflow go`
+/// on a device takes the project on from its branch, so the page offers a device start as it
 /// does with no runner, beside the cloud line.
 #[test]
 fn a_landed_or_ended_cloud_run_offers_a_device_start() {
@@ -299,6 +299,14 @@ fn a_landed_or_ended_cloud_run_offers_a_device_start() {
             cloud("m2-next", &ago(30)),
             Some("m2-t3 done, picking up t4\n"),
             "cloud · m2-next · ended",
+            ">Resume on mini</button>",
+        ),
+        // Parked on a task only a device can do: a device takes it over.
+        (
+            "cloud-device-local-only",
+            cloud("m2-next", &ago(30)),
+            Some("parked: local-only t2: needs the desktop\n"),
+            "cloud · m2-next · parked for a device",
             ">Resume on mini</button>",
         ),
     ] {

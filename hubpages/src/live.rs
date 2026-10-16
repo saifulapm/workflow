@@ -51,6 +51,9 @@ pub struct Runner {
 pub enum CloudState {
     Live,
     Parked,
+    /// Parked on a task only a device can do, which `workflow go` there
+    /// takes over from the run's branch.
+    LocalOnly,
     Landed,
     Ended,
 }
@@ -95,7 +98,10 @@ pub fn cloud_run(
         // The 6-hour stop parks with no question, so a park lapses too, or
         // it would hold the one cloud slot for ever.
         let text = handoff().unwrap_or_default();
-        if text.trim_start().starts_with("parked:") && fresh {
+        let text = text.trim_start();
+        if text.starts_with("parked: local-only") {
+            CloudState::LocalOnly
+        } else if text.starts_with("parked:") && fresh {
             CloudState::Parked
         } else {
             CloudState::Ended

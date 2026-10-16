@@ -65,6 +65,9 @@ pub enum State {
     Live,
     /// Its handoff says `parked:`: it waits for an answer.
     Parked,
+    /// Its handoff says `parked: local-only`: a task only a device can do
+    /// waits, and `workflow go` there takes the run over from its branch.
+    LocalOnly,
     /// Its milestone is ticked.
     Landed,
     /// It wrote another handoff, or said nothing for 7 hours.
@@ -93,8 +96,11 @@ pub fn state(
     if let (Some(since), Some(at)) = (since, time(&row.handoff_at))
         && at > since
     {
-        let parked = handoff().is_some_and(|text| text.trim_start().starts_with("parked:"));
-        return Some(if parked && within {
+        let text = handoff().unwrap_or_default();
+        let text = text.trim_start();
+        return Some(if text.starts_with("parked: local-only") {
+            State::LocalOnly
+        } else if text.starts_with("parked:") && within {
             State::Parked
         } else {
             State::Ended
