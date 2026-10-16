@@ -47,6 +47,10 @@ pub struct AmxRow {
     /// What it was started on; an orchestrator's is the goal [`task`] writes.
     #[serde(default)]
     pub task: Option<String>,
+    /// What amx read its state from; `parked` for one that ended its own
+    /// session and waits to be resumed.
+    #[serde(default)]
+    pub evidence: Option<String>,
 }
 
 /// What `go` has settled on.
@@ -758,6 +762,7 @@ The first stretch of a shop.
             ended: Some(0),
             dir: None,
             task: None,
+            evidence: None,
         }
     }
 
@@ -766,6 +771,7 @@ The first stretch of a shop.
         AmxRow {
             dir: Some(dir.display().to_string()),
             task: Some(task(project, slug)),
+            evidence: None,
             ..agent(&amx_name(&format!("{project}-{slug}")), state)
         }
     }
@@ -857,6 +863,7 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
             ended: Some(1791397552),
             dir: None,
             task: None,
+            evidence: None,
         }));
         assert!(live(&AmxRow {
             id: "a-b".into(),
@@ -864,6 +871,7 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
             ended: None,
             dir: None,
             task: None,
+            evidence: None,
         }));
     }
 
@@ -1189,6 +1197,7 @@ one orchestrator per folder, so give alpha a worktree of its own (mem project wo
             vec![AmxRow {
                 dir: Some(repo.display().to_string()),
                 task: Some("look around beta".into()),
+                evidence: None,
                 ..agent("plan-beta", "idle")
             }],
         ] {

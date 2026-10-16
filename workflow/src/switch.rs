@@ -151,7 +151,9 @@ fn sessions() -> Step<Vec<String>> {
     let rows = go::amx_agents().or_else(fail)?;
     let mut lines: Vec<String> = rows
         .iter()
-        .filter(|row| go::live(row))
+        // A parked agent has no process and writes nothing until it is
+        // resumed, after the switch, when its writes go to the outbox.
+        .filter(|row| go::live(row) && row.evidence.as_deref() != Some("parked"))
         .map(|row| format!("amx {}", row.id))
         .collect();
     let out = Command::new("pgrep")

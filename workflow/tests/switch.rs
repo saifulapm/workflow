@@ -126,6 +126,18 @@ fn a_live_amx_agent_refuses_before_anything_runs() {
 }
 
 #[test]
+fn a_parked_amx_agent_with_no_process_is_not_a_running_session() {
+    let w = world("switch-parked");
+    w.put(
+        "ls.json",
+        r#"[{"id":"dulali-m1-skeleton","state":"idle","ended":0,"evidence":"parked"}]"#,
+    );
+    let out = switch(&w, STORE);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(!text(&out).contains("dulali-m1-skeleton"), "{}", text(&out));
+}
+
+#[test]
 fn a_running_claude_process_refuses_naming_its_pid_and_cwd() {
     let w = world("switch-claude");
     // PPID is the workflow process, so its cwd is the test's cwd dir.
