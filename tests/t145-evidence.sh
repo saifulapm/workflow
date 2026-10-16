@@ -82,6 +82,8 @@ sb=$T_TMP/sb
 mkdir -p "$sb"
 # shellcheck source=../hub/tests/seed.sh
 (source "$WF_ROOT/hub/tests/seed.sh") >/dev/null
+head -c 3000000 /dev/urandom >"$T_TMP/clip.mp4"
+(cd "$sb/gamma" && mem evidence add --project=gamma --task t9 "$T_TMP/clip.mp4" --note "the clip") >/dev/null
 cd "$T_TMP" || exit 1
 like "$(node "$WF_ROOT/tests/push-store.mjs" "ws://127.0.0.1:$port/store/share" "$token" \
 	"$XDG_DATA_HOME/mem/store" "$base" 2>&1)" '^pushed [1-9][0-9]*$' \
@@ -89,8 +91,12 @@ like "$(node "$WF_ROOT/tests/push-store.mjs" "ws://127.0.0.1:$port/store/share" 
 
 # The first evidence item of gamma: its id and the file mem keeps for it.
 listing=$(cd "$sb/gamma" && mem evidence list --project=gamma --json)
-id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["id"])' <<<"$listing")
-file=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["file"])' <<<"$listing")
+first() { # first <python test of row> <field> -- that field of the first evidence row passing the test
+	python3 -c 'import json,sys; print(next(r[sys.argv[2]] for r in json.load(sys.stdin)["items"] if eval(sys.argv[1])))' "$1" "$2" <<<"$listing"
+}
+id=$(first 'not r["file"].endswith(".mp4")' id)
+file=$(first 'not r["file"].endswith(".mp4")' file)
+clip=$(first 'r["file"].endswith(".mp4")' id)
 seeded=$(ls "$XDG_DATA_HOME"/mem/store/projects/*/"$file")
 
 fetch() { # fetch <path> [curl args...] -- prints the status; body in file.out, headers in file.hdr
@@ -105,6 +111,22 @@ hdr=$(tr -d '\r' <"$T_TMP/file.hdr")
 like "$hdr" '[Cc]ontent-[Tt]ype: image/png' "the type is image/png"
 like "$hdr" '[Cc]ache-[Cc]ontrol: private, max-age=3600' "the file is cached privately for an hour"
 like "$hdr" '[Xx]-[Cc]ontent-[Tt]ype-[Oo]ptions: nosniff' "the file is sent with nosniff"
+
+# Safari plays a video only from a server that answers byte ranges.
+is "$(fetch "/p/gamma/file/$clip" -H "@$T_TMP/jwt.hdr")" 200 "GET the clip answers 200"
+is "$(sha256sum <"$T_TMP/file.out" | cut -d' ' -f1)" "$(sha256sum <"$T_TMP/clip.mp4" | cut -d' ' -f1)" \
+	"the clip comes whole"
+hdr=$(tr -d '\r' <"$T_TMP/file.hdr")
+like "$hdr" '[Cc]ontent-[Tt]ype: video/mp4' "the clip's type is video/mp4"
+like "$hdr" '[Aa]ccept-[Rr]anges: bytes' "the clip says it takes byte ranges"
+is "$(fetch "/p/gamma/file/$clip" -H "@$T_TMP/jwt.hdr" -H 'Range: bytes=0-1')" 206 "a range of the clip answers 206"
+is "$(head -c 2 "$T_TMP/clip.mp4" | od -An -tx1)" "$(od -An -tx1 <"$T_TMP/file.out")" "with the clip's first two bytes"
+like "$(tr -d '\r' <"$T_TMP/file.hdr")" '[Cc]ontent-[Rr]ange: bytes 0-1/3000000' "and its Content-Range"
+like "$(tr -d '\r' <"$T_TMP/file.hdr")" '[Cc]ontent-[Ll]ength: 2' "and its length"
+is "$(fetch "/p/gamma/file/$clip" -H "@$T_TMP/jwt.hdr" -H 'Range: bytes=2999990-')" 206 "an open range answers 206"
+is "$(stat -c %s "$T_TMP/file.out")" 10 "with the clip's last ten bytes"
+like "$(tr -d '\r' <"$T_TMP/file.hdr")" '[Cc]ontent-[Rr]ange: bytes 2999990-2999999/3000000' "and its Content-Range"
+is "$(fetch "/p/gamma/file/$clip" -H "@$T_TMP/jwt.hdr" -H 'Range: bytes=3000000-')" 416 "a range past the end answers 416"
 
 is "$(fetch "/p/gamma/file/01K0000000000000000000NONE" -H "@$T_TMP/jwt.hdr")" 404 "an unknown id is 404"
 is "$(fetch "/p/beta/file/$id" -H "@$T_TMP/jwt.hdr")" 404 "an id of another project is 404"

@@ -53,6 +53,65 @@ pub fn key(path: &str) -> Option<String> {
     project_of(&file).is_some().then_some(file)
 }
 
+/// The content type a file is served as, by its extension: the images and
+/// videos a browser shows. None for anything else.
+pub fn kind(path: &str) -> Option<&'static str> {
+    let (_, ext) = path.rsplit_once('.')?;
+    Some(match ext.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        _ => return None,
+    })
+}
+
+/// One byte range a `Range` header asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Span {
+    /// `bytes=a-b`
+    Between(u64, u64),
+    /// `bytes=a-`
+    From(u64),
+    /// `bytes=-n`, the last n bytes.
+    Last(u64),
+}
+
+/// The single range a `Range` header asks for; None for none, several, or
+/// one this does not read, which gets the whole file.
+pub fn span(header: &str) -> Option<Span> {
+    let spec = header.trim().strip_prefix("bytes=")?.trim();
+    if spec.contains(',') {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    let number = |text: &str| text.trim().parse::<u64>().ok();
+    match (start.trim(), end.trim()) {
+        ("", "") => None,
+        ("", last) => number(last).map(Span::Last),
+        (start, "") => number(start).map(Span::From),
+        (start, end) => {
+            let (start, end) = (number(start)?, number(end)?);
+            (start <= end).then_some(Span::Between(start, end))
+        }
+    }
+}
+
+/// The first and last byte `span` covers of a file of `size` bytes; None
+/// when it covers none, which is answered 416.
+pub fn covered(span: Span, size: u64) -> Option<(u64, u64)> {
+    let last = size.checked_sub(1)?;
+    match span {
+        Span::Between(start, end) => (start <= last).then_some((start, end.min(last))),
+        Span::From(start) => (start <= last).then_some((start, last)),
+        Span::Last(0) => None,
+        Span::Last(n) => Some((size - n.min(size), last)),
+    }
+}
+
 /// `raw` with each `%XX` turned back into its byte; None when an escape is
 /// broken or the bytes are not UTF-8.
 pub fn decode(raw: &str) -> Option<String> {
@@ -180,6 +239,59 @@ mod tests {
         ] {
             assert_eq!(key(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn images_and_videos_are_typed_by_their_extension() {
+        assert_eq!(kind("projects/P/evidence/t1/a.PNG"), Some("image/png"));
+        assert_eq!(kind("projects/P/evidence/t1/a.jpeg"), Some("image/jpeg"));
+        assert_eq!(kind("projects/P/evidence/t1/rec.mp4"), Some("video/mp4"));
+        assert_eq!(
+            kind("projects/P/evidence/t1/rec.mov"),
+            Some("video/quicktime")
+        );
+        assert_eq!(kind("projects/P/evidence/t1/rec.webm"), Some("video/webm"));
+        for other in [
+            "a.svg",
+            "a.html",
+            "a.pdf",
+            "noext",
+            "projects/P.d/evidence/x",
+        ] {
+            assert_eq!(kind(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn a_range_header_names_one_span() {
+        assert_eq!(span("bytes=0-1"), Some(Span::Between(0, 1)));
+        assert_eq!(span("bytes=100-"), Some(Span::From(100)));
+        assert_eq!(span("bytes=-500"), Some(Span::Last(500)));
+        assert_eq!(span(" bytes= 5 - 9 "), Some(Span::Between(5, 9)));
+        for whole in [
+            "",
+            "bytes=",
+            "bytes=-",
+            "bytes=0-1,4-5",
+            "bytes=9-5",
+            "items=0-1",
+            "bytes=a-b",
+        ] {
+            assert_eq!(span(whole), None, "{whole}");
+        }
+    }
+
+    #[test]
+    fn a_span_covers_the_bytes_the_file_has() {
+        assert_eq!(covered(Span::Between(0, 1), 10), Some((0, 1)));
+        assert_eq!(covered(Span::Between(5, 99), 10), Some((5, 9)));
+        assert_eq!(covered(Span::From(9), 10), Some((9, 9)));
+        assert_eq!(covered(Span::Last(3), 10), Some((7, 9)));
+        assert_eq!(covered(Span::Last(30), 10), Some((0, 9)));
+        assert_eq!(covered(Span::From(10), 10), None);
+        assert_eq!(covered(Span::Between(10, 12), 10), None);
+        assert_eq!(covered(Span::Last(0), 10), None);
+        assert_eq!(covered(Span::From(0), 0), None);
     }
 
     #[test]

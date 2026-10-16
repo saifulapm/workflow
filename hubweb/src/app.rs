@@ -149,7 +149,7 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         (Method::Get, "/live") => store(&env, object)?.fetch_with_request(req).await,
         (Method::Get, _) if evidence_file(&path).is_some() => {
             let (project, id) = evidence_file(&path).unwrap_or_default();
-            serve_evidence(project, id, &env, object).await
+            serve_evidence(&req, project, id, &env, object).await
         }
         (Method::Post, "/" | "/mcp") => {
             // claude.ai calls the connector from its servers. A browser
@@ -349,10 +349,18 @@ fn evidence_file(path: &str) -> Option<(&str, &str)> {
         .then_some((project, id))
 }
 
-/// One evidence file: the store names its path, the project's Files object
-/// holds the bytes. A Durable Object cannot fetch another one synchronously,
-/// so the page code cannot do this and the Worker does.
-async fn serve_evidence(project: &str, id: &str, env: &Env, object: &str) -> Result<Response> {
+/// One evidence file: the store names its path, R2 holds the bytes, or the
+/// project's Files object for a file stored before the move. A Durable
+/// Object cannot fetch another one synchronously, so the page code cannot do
+/// this and the Worker does. Safari plays a video only from byte ranges, so
+/// a `Range` header gets just that slice.
+async fn serve_evidence(
+    req: &Request,
+    project: &str,
+    id: &str,
+    env: &Env,
+    object: &str,
+) -> Result<Response> {
     let mut named = store(env, object)?
         .fetch_with_str(&format!("https://store/evidence/{project}/{id}"))
         .await?;
@@ -363,17 +371,68 @@ async fn serve_evidence(project: &str, id: &str, env: &Env, object: &str) -> Res
     let Some(owner) = files::project_of(&path) else {
         return Response::error("Not Found", 404);
     };
-    let encoded: Vec<String> = path.split('/').map(encode_component).collect();
-    let target = format!("https://files/store/files/{}", encoded.join("/"));
-    let Some(bytes) = file_bytes(env, &target, owner).await? else {
-        return Response::error("Not Found", 404);
+    let kind = files::kind(&path).unwrap_or("text/plain; charset=utf-8");
+    let bucket = env.bucket(BUCKET)?;
+    let span = req.headers().get("Range")?.as_deref().and_then(files::span);
+    let held = match span {
+        Some(_) => bucket.head(path.clone()).await?,
+        None => None,
     };
-    let kind = image_kind(&bytes).unwrap_or("text/plain; charset=utf-8");
-    let mut response = Response::from_bytes(bytes)?;
+    let mut response = match (span, held) {
+        (Some(span), Some(held)) => {
+            let size = held.size();
+            let Some((start, end)) = files::covered(span, size) else {
+                let mut response = Response::empty()?.with_status(416);
+                response
+                    .headers_mut()
+                    .set("Content-Range", &format!("bytes */{size}"))?;
+                return Ok(response);
+            };
+            let range = Range::OffsetWithLength {
+                offset: start,
+                length: end - start + 1,
+            };
+            let Some(body) = bucket.get(path.clone()).range(range).execute().await? else {
+                return Response::error("Not Found", 404);
+            };
+            let mut response = object_response(&body)?.with_status(206);
+            let headers = response.headers_mut();
+            headers.set("Content-Range", &format!("bytes {start}-{end}/{size}"))?;
+            headers.set("Content-Type", kind)?;
+            response
+        }
+        _ => match bucket.get(path.clone()).execute().await? {
+            Some(body) => {
+                let mut response = object_response(&body)?;
+                response.headers_mut().set("Content-Type", kind)?;
+                response
+            }
+            None => {
+                let encoded: Vec<String> = path.split('/').map(encode_component).collect();
+                let target = format!("https://files/store/files/{}", encoded.join("/"));
+                let Some(bytes) = file_bytes(env, &target, owner).await? else {
+                    return Response::error("Not Found", 404);
+                };
+                let kind = image_kind(&bytes).unwrap_or(kind);
+                let mut response = Response::from_bytes(bytes)?;
+                response.headers_mut().set("Content-Type", kind)?;
+                response
+            }
+        },
+    };
     let headers = response.headers_mut();
-    headers.set("Content-Type", kind)?;
     headers.set("Cache-Control", "private, max-age=3600")?;
     headers.set("X-Content-Type-Options", "nosniff")?;
+    Ok(response)
+}
+
+/// An R2 object's body as a response that says it takes byte ranges.
+fn object_response(found: &Object) -> Result<Response> {
+    let Some(body) = found.body() else {
+        return Response::error("Not Found", 404);
+    };
+    let mut response = Response::from_body(body.response_body()?)?;
+    response.headers_mut().set("Accept-Ranges", "bytes")?;
     Ok(response)
 }
 
