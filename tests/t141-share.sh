@@ -111,13 +111,22 @@ await d.ready;
 const replay = [];
 for (let m = await d.next(); m; m = m.t === "ready" ? null : await d.next()) replay.push(m);
 say("replay", replay.map((m) => m.t === "rec" ? [m.seq, m.id, m.body, m.machine] : [m.t, m.seq]));
-for (const s of [a, b, c, d]) s.ws.close();
+const before = replay.at(-1).rows;
+say("rows", before);
+for (let n = 0; n < 10; n++) {
+  d.send({ t: "write", id: `01R${n}`, path: `projects/P1/items/01R${n}.md`, base: null, body: "+++\nkind = \"log\"\n+++\n\nrow" });
+  await d.next();
+}
+const e = open("pi", 1000);
+await e.ready;
+say("per-item", ((await e.next()).rows - before) / 10);
+for (const s of [a, b, c, d, e]) s.ws.close();
 JS
 ws_url=ws://127.0.0.1:$port/store/share
 node "$T_TMP/share.mjs" "$ws_url" "$token" >"$T_TMP/share.out" 2>&1
 fact() { sed -n "s/^$1 //p" "$T_TMP/share.out"; }
 
-is "$(fact hello)" '[{"seq":0,"t":"ready"},{"seq":0,"t":"ready"},{"seq":0,"t":"ready"}]' \
+is "$(fact hello)" '[{"rows":0,"seq":0,"t":"ready"},{"rows":0,"seq":0,"t":"ready"},{"rows":0,"seq":0,"t":"ready"}]' \
 	"three sockets with the bearer connect and hello an empty store"
 is "$(fact ack)" '{"id":"01W1","seq":1,"t":"ack"}' "A's first write is acked as seq 1"
 rec='{"body":"first item","id":"01W1","machine":"mac","path":"projects/P1/items/01ITEM.md","seq":1,"t":"rec"}'
@@ -132,6 +141,10 @@ is "$(fact stale)" \
 	"a page write from an old version is refused with the head"
 is "$(fact replay)" '[[1,"01W1","first item","mac"],[2,"01P1","lessons v1","mac"],["ready",2]]' \
 	"a fourth socket's hello since 0 replays every rec in seq order, then ready"
+like "$(fact rows)" '^[1-9][0-9]*$' "ready counts the rows the store wrote today"
+per_item=$(fact per-item)
+like "$per_item" '^[1-9][0-9]*(\.[0-9]+)?$' "each item write adds its rows to the count"
+echo "# rows written per item write: $per_item"
 unlike "$(grep -v '^[a-z-]* ' "$T_TMP/share.out")" . "the client printed only facts, no errors"
 
 records='[{"project":"walkone","kind":"handoff","key":"walkone","body":"Next: share."}]'

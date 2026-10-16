@@ -25,6 +25,13 @@ pub enum Fault {
     Broken(String),
 }
 
+/// Rows the store writes in a UTC day before it refuses the import's
+/// writes, leaving room under `DAY_ROWS` for the machines' own.
+pub const IMPORT_ROWS: i64 = 90_000;
+/// Rows the store writes in a UTC day before it refuses every write, under
+/// the Free plan's 100,000.
+pub const DAY_ROWS: i64 = 95_000;
+
 /// The store's write log, oldest first, every write kept.
 pub trait Log {
     /// The seq of the write with this id, if it is stored.
@@ -50,6 +57,8 @@ pub trait Log {
     fn add_command(&mut self, id: &str, machine: &str, command: &Value) -> Result<(), Fault>;
     /// Drops one of `machine`'s commands; false when it had no such command.
     fn drop_command(&mut self, id: &str, machine: &str) -> Result<bool, Fault>;
+    /// The rows the store wrote since 00:00 UTC, by its own count.
+    fn rows_today(&self) -> Result<i64, Fault>;
 }
 
 /// What one message from a machine sends back.
@@ -122,7 +131,7 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
         }
         route.to_string()
     }));
-    sender.push(json!({"t":"ready","seq":log.last()?}).to_string());
+    sender.push(json!({"t":"ready","seq":log.last()?,"rows":log.rows_today()?}).to_string());
     Ok(Outcome {
         sender,
         hello: Some(machine.to_string()),
@@ -156,6 +165,18 @@ fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, 
                 ..Outcome::default()
             });
         }
+    }
+    // The import waits for the next UTC day; the machine that hit the day's
+    // rows keeps its write until then, as it would at the Free limit.
+    let rows = log.rows_today()?;
+    if rows >= DAY_ROWS {
+        return Err(Fault::Limit);
+    }
+    if message["import"] == true && rows >= IMPORT_ROWS {
+        return Ok(Outcome {
+            sender: vec![json!({"t":"budget","id":id,"rows":rows}).to_string()],
+            ..Outcome::default()
+        });
     }
     let stored = Rec {
         seq: log.last()? + 1,
@@ -386,6 +407,7 @@ mod tests {
     struct Memory {
         recs: Vec<Rec>,
         full: bool,
+        rows_today: i64,
         route: Option<Value>,
         now: i64,
         reports: std::collections::BTreeMap<String, (i64, Value)>,
@@ -447,6 +469,9 @@ mod tests {
             let before = self.commands.len();
             self.commands.retain(|(i, m, _)| !(i == id && m == machine));
             Ok(self.commands.len() != before)
+        }
+        fn rows_today(&self) -> Result<i64, Fault> {
+            Ok(self.rows_today)
         }
     }
 
@@ -546,7 +571,7 @@ mod tests {
             parse(&hello.sender),
             [
                 json!({"t":"route","route":"phone","machine":null,"at":7}),
-                json!({"t":"ready","seq":0}),
+                json!({"t":"ready","seq":0,"rows":0}),
             ]
         );
     }
@@ -661,7 +686,7 @@ mod tests {
             [
                 json!({"t":"rec","seq":2,"id":"01B","path":PAGE,"body":null,"machine":"nuc"}),
                 json!({"t":"rec","seq":3,"id":"01C","path":ITEM,"body":"three","machine":"nuc"}),
-                json!({"t":"ready","seq":3}),
+                json!({"t":"ready","seq":3,"rows":0}),
             ]
         );
         assert_eq!(hello.hello.as_deref(), Some("mac"));
@@ -672,7 +697,10 @@ mod tests {
     fn hello_to_an_empty_store_is_ready_at_zero() {
         let mut log = Memory::default();
         let hello = handle(&mut log, None, r#"{"t":"hello","machine":"mac","since":0}"#);
-        assert_eq!(parse(&hello.sender), [json!({"t":"ready","seq":0})]);
+        assert_eq!(
+            parse(&hello.sender),
+            [json!({"t":"ready","seq":0,"rows":0})]
+        );
     }
 
     #[test]
@@ -722,6 +750,78 @@ mod tests {
         assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
         assert_eq!(answer.others, None);
         assert!(answer.limit);
+    }
+
+    fn import(log: &mut Memory, id: &str) -> Outcome {
+        let message = json!({"t":"write","id":id,"path":ITEM,"base":null,"body":"x","import":true});
+        handle(log, Some("mini"), &message.to_string())
+    }
+
+    #[test]
+    fn an_import_write_past_the_import_rows_gets_budget_and_a_live_write_is_still_stored() {
+        let mut log = Memory {
+            rows_today: IMPORT_ROWS,
+            ..Memory::default()
+        };
+        let answer = import(&mut log, "01A");
+        assert_eq!(
+            parse(&answer.sender),
+            [json!({"t":"budget","id":"01A","rows":IMPORT_ROWS})]
+        );
+        assert!(!answer.limit);
+        assert!(log.recs.is_empty());
+        let live = write(&mut log, "01B", ITEM, Value::Null, json!("x"));
+        assert_eq!(parse(&live.sender), [json!({"t":"ack","id":"01B","seq":1})]);
+    }
+
+    #[test]
+    fn an_import_write_under_the_import_rows_is_stored() {
+        let mut log = Memory {
+            rows_today: IMPORT_ROWS - 1,
+            ..Memory::default()
+        };
+        let answer = import(&mut log, "01A");
+        assert_eq!(
+            parse(&answer.sender),
+            [json!({"t":"ack","id":"01A","seq":1})]
+        );
+    }
+
+    #[test]
+    fn every_write_past_the_day_rows_gets_limit_and_is_not_stored() {
+        let mut log = Memory {
+            rows_today: DAY_ROWS,
+            ..Memory::default()
+        };
+        let answer = write(&mut log, "01A", ITEM, Value::Null, json!("x"));
+        assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
+        assert!(answer.limit);
+        assert!(log.recs.is_empty());
+    }
+
+    #[test]
+    fn a_resent_import_is_acked_even_past_the_import_rows() {
+        let mut log = Memory::default();
+        import(&mut log, "01A");
+        log.rows_today = DAY_ROWS;
+        let again = import(&mut log, "01A");
+        assert_eq!(
+            parse(&again.sender),
+            [json!({"t":"ack","id":"01A","seq":1})]
+        );
+    }
+
+    #[test]
+    fn ready_says_how_many_rows_the_store_wrote_today() {
+        let mut log = Memory {
+            rows_today: 1234,
+            ..Memory::default()
+        };
+        let hello = handle(&mut log, None, r#"{"t":"hello","machine":"mac","since":0}"#);
+        assert_eq!(
+            parse(&hello.sender),
+            [json!({"t":"ready","seq":0,"rows":1234})]
+        );
     }
 
     #[test]

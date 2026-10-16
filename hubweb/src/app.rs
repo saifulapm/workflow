@@ -536,11 +536,13 @@ impl Store {
         if body.len() > 2048 || serde_json::from_str::<Value>(&body).is_err() {
             return Response::error("Expected a small JSON timing", 400);
         }
-        self.sql.exec(
+        counted(
+            &self.sql,
             "INSERT INTO timings(at, body) VALUES (?, ?)",
             vec![(now_ms() as i64).into(), body.into()],
         )?;
-        self.sql.exec(
+        counted(
+            &self.sql,
             "DELETE FROM timings WHERE at NOT IN (SELECT at FROM timings ORDER BY at DESC LIMIT 100)",
             None,
         )?;
@@ -582,7 +584,8 @@ impl Store {
             Method::Post if req.headers().get(MAY_WRITE)?.as_deref() == Some("1") => {
                 let token = pair::new_token(random()?);
                 let agent = req.headers().get("User-Agent")?;
-                self.sql.exec(
+                counted(
+                    &self.sql,
                     "INSERT INTO devices(token, created, name) VALUES (?, ?, ?)",
                     vec![
                         token.as_str().into(),
@@ -593,7 +596,8 @@ impl Store {
                         pair::device_name(agent.as_deref()).into(),
                     ],
                 )?;
-                self.sql.exec(
+                counted(
+                    &self.sql,
                     "DELETE FROM pair_codes WHERE code = ?",
                     vec![code.as_str().into()],
                 )?;
@@ -655,6 +659,12 @@ fn attachment(socket: &WebSocket) -> Result<Value> {
 impl DurableObject for Store {
     fn new(state: State, env: Env) -> Self {
         let sql = state.storage().sql();
+        // Rows written each UTC day, by the store's own count (`counted`).
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS usage(day INTEGER PRIMARY KEY, rows INTEGER NOT NULL)",
+            None,
+        )
+        .expect("create the usage table");
         sql.exec(
             "CREATE TABLE IF NOT EXISTS records(project TEXT, kind TEXT, key TEXT, body TEXT, \
              PRIMARY KEY(project, kind, key))",
@@ -768,7 +778,8 @@ impl DurableObject for Store {
                     }
                 }
                 for [project, kind, key, body] in rows {
-                    self.sql.exec(
+                    counted(
+                        &self.sql,
                         "INSERT INTO records(project, kind, key, body) VALUES (?, ?, ?, ?) \
                          ON CONFLICT(project, kind, key) DO UPDATE SET body = excluded.body",
                         vec![project.into(), kind.into(), key.into(), body.into()],
@@ -807,11 +818,13 @@ impl DurableObject for Store {
             (_, path) if path.starts_with("/page/") => self.page(req).await,
             (Method::Post, "/store/pair") => {
                 let code = pair::new_code(random()?);
-                self.sql.exec(
+                counted(
+                    &self.sql,
                     "DELETE FROM pair_codes WHERE expires <= ?",
                     vec![(now_ms() as i64).into()],
                 )?;
-                self.sql.exec(
+                counted(
+                    &self.sql,
                     "INSERT INTO pair_codes(code, expires) VALUES (?, ?)",
                     vec![
                         code.as_str().into(),
@@ -1191,18 +1204,18 @@ impl Log for SqlLog<'_> {
     }
 
     fn append(&mut self, rec: &Rec) -> std::result::Result<(), Fault> {
-        self.0
-            .exec(
-                "INSERT INTO writes(seq, id, path, body, machine) VALUES (?, ?, ?, ?, ?)",
-                vec![
-                    rec.seq.into(),
-                    rec.id.as_str().into(),
-                    rec.path.as_str().into(),
-                    rec.body.clone().into(),
-                    rec.machine.clone().into(),
-                ],
-            )
-            .map_err(fault)?;
+        counted(
+            self.0,
+            "INSERT INTO writes(seq, id, path, body, machine) VALUES (?, ?, ?, ?, ?)",
+            vec![
+                rec.seq.into(),
+                rec.id.as_str().into(),
+                rec.path.as_str().into(),
+                rec.body.clone().into(),
+                rec.machine.clone().into(),
+            ],
+        )
+        .map_err(fault)?;
         keep_file(self.0, rec).map_err(fault)
     }
 
@@ -1219,14 +1232,14 @@ impl Log for SqlLog<'_> {
     }
 
     fn set_route(&mut self, route: &Value) -> std::result::Result<(), Fault> {
-        self.0
-            .exec(
-                "INSERT INTO route(one, body) VALUES (1, ?) ON CONFLICT(one) DO UPDATE SET \
+        counted(
+            self.0,
+            "INSERT INTO route(one, body) VALUES (1, ?) ON CONFLICT(one) DO UPDATE SET \
                  body = excluded.body",
-                vec![route.to_string().into()],
-            )
-            .map(|_| ())
-            .map_err(fault)
+            vec![route.to_string().into()],
+        )
+        .map(|_| ())
+        .map_err(fault)
     }
 
     fn now_ms(&self) -> i64 {
@@ -1254,16 +1267,16 @@ impl Log for SqlLog<'_> {
         at: i64,
         report: &Value,
     ) -> std::result::Result<(), Fault> {
-        self.0
-            .exec(
-                "INSERT INTO machines(name, at, changed, body) VALUES (?1, ?2, ?2, ?3) \
+        counted(
+            self.0,
+            "INSERT INTO machines(name, at, changed, body) VALUES (?1, ?2, ?2, ?3) \
                  ON CONFLICT(name) DO UPDATE SET at = excluded.at, \
                  changed = CASE WHEN body = excluded.body THEN changed ELSE excluded.at END, \
                  body = excluded.body",
-                vec![machine.into(), at.into(), report.to_string().into()],
-            )
-            .map(|_| ())
-            .map_err(fault)
+            vec![machine.into(), at.into(), report.to_string().into()],
+        )
+        .map(|_| ())
+        .map_err(fault)
     }
 
     fn commands(&self, machine: &str) -> std::result::Result<Vec<(String, Value)>, Fault> {
@@ -1291,25 +1304,40 @@ impl Log for SqlLog<'_> {
         machine: &str,
         command: &Value,
     ) -> std::result::Result<(), Fault> {
-        self.0
-            .exec(
-                "INSERT INTO commands(id, machine, at, body) VALUES (?, ?, ?, ?)",
-                vec![
-                    id.into(),
-                    machine.into(),
-                    (now_ms() as i64).into(),
-                    command.to_string().into(),
-                ],
-            )
-            .map_err(fault)?;
+        counted(
+            self.0,
+            "INSERT INTO commands(id, machine, at, body) VALUES (?, ?, ?, ?)",
+            vec![
+                id.into(),
+                machine.into(),
+                (now_ms() as i64).into(),
+                command.to_string().into(),
+            ],
+        )
+        .map_err(fault)?;
         // A page reading `waiting for <machine>` is to hear it start.
-        self.0
+        counted(
+            self.0,
+            "UPDATE machines SET changed = ? WHERE name = ?",
+            vec![(now_ms() as i64).into(), machine.into()],
+        )
+        .map(|_| ())
+        .map_err(fault)
+    }
+
+    fn rows_today(&self) -> std::result::Result<i64, Fault> {
+        let rows: Vec<Value> = self
+            .0
             .exec(
-                "UPDATE machines SET changed = ? WHERE name = ?",
-                vec![(now_ms() as i64).into(), machine.into()],
+                "SELECT rows FROM usage WHERE day = ?",
+                vec![(utc_day() as i64).into()],
             )
-            .map(|_| ())
-            .map_err(fault)
+            .and_then(|cursor| cursor.to_array())
+            .map_err(fault)?;
+        Ok(rows
+            .first()
+            .and_then(|row| row["rows"].as_i64())
+            .unwrap_or(0))
     }
 
     fn drop_command(&mut self, id: &str, machine: &str) -> std::result::Result<bool, Fault> {
@@ -1326,21 +1354,21 @@ impl Log for SqlLog<'_> {
         if held.is_empty() {
             return Ok(false);
         }
-        self.0
-            .exec(
-                "DELETE FROM commands WHERE id = ? AND machine = ?",
-                vec![id.into(), machine.into()],
-            )
-            .and_then(|cursor| cursor.to_array::<Value>())
-            .map_err(fault)?;
+        counted(
+            self.0,
+            "DELETE FROM commands WHERE id = ? AND machine = ?",
+            vec![id.into(), machine.into()],
+        )
+        .and_then(|cursor| cursor.to_array::<Value>())
+        .map_err(fault)?;
         // A page reading `waiting for <machine>` is to hear it stopped.
-        self.0
-            .exec(
-                "UPDATE machines SET changed = ? WHERE name = ?",
-                vec![(now_ms() as i64).into(), machine.into()],
-            )
-            .and_then(|cursor| cursor.to_array::<Value>())
-            .map_err(fault)?;
+        counted(
+            self.0,
+            "UPDATE machines SET changed = ? WHERE name = ?",
+            vec![(now_ms() as i64).into(), machine.into()],
+        )
+        .and_then(|cursor| cursor.to_array::<Value>())
+        .map_err(fault)?;
         Ok(true)
     }
 }
@@ -1353,7 +1381,8 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
             project,
             kind,
             body,
-        }) => sql.exec(
+        }) => counted(
+            sql,
             "INSERT INTO files(path, project, kind, seq, body) VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT(path) DO UPDATE SET project = excluded.project, kind = excluded.kind, \
              seq = excluded.seq, body = excluded.body",
@@ -1365,7 +1394,8 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
                 body.into(),
             ],
         )?,
-        Some(Change::Drop) => sql.exec(
+        Some(Change::Drop) => counted(
+            sql,
             "DELETE FROM files WHERE path = ?",
             vec![rec.path.as_str().into()],
         )?,
@@ -1384,7 +1414,8 @@ fn mark_projects(sql: &SqlStorage) -> Result<()> {
         )?
         .to_array()?;
     if marked.is_empty() {
-        sql.exec(
+        counted(
+            sql,
             "UPDATE files SET kind = ? WHERE path = 'projects/' || project || '/project.toml'",
             vec![latest::PROJECT.into()],
         )?;
@@ -1415,6 +1446,29 @@ fn random() -> Result<[u8; 10]> {
     let mut bytes = [0u8; 10];
     crypto.get_random_values_with_u8_array(&mut bytes)?;
     Ok(bytes)
+}
+
+/// Runs a statement that writes, and adds the rows it wrote to today's
+/// count: the store's own measure of what the Free plan meters each day.
+fn counted(
+    sql: &SqlStorage,
+    query: &str,
+    bindings: impl Into<Option<Vec<SqlStorageValue>>>,
+) -> Result<SqlCursor> {
+    let cursor = sql.exec(query, bindings)?;
+    // rowsWritten grows only as the cursor is read.
+    cursor.to_array::<Value>()?;
+    let rows = cursor.rows_written() as i64;
+    if rows > 0 {
+        // The count's own row is one more.
+        sql.exec(
+            "INSERT INTO usage(day, rows) VALUES (?, ?) \
+             ON CONFLICT(day) DO UPDATE SET rows = rows + excluded.rows",
+            vec![(utc_day() as i64).into(), (rows + 1).into()],
+        )?
+        .to_array::<Value>()?;
+    }
+    Ok(cursor)
 }
 
 fn names_limit(why: &str) -> bool {
