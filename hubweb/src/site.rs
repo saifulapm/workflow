@@ -143,10 +143,21 @@ function open(){var s=new WebSocket((location.protocol==='https:'?'wss://':'ws:/
 s.onmessage=function(){clearTimeout(t);t=setTimeout(go,150);};\
 s.onclose=function(){setTimeout(open,5000);};}open();})();</script>\n";
 
+/// Opened with `?timing`, a page reports how long its own load took to the
+/// store (`/api/timing`), so a load on the phone is a record, not a reading.
+const TIMING: &str = "<script>if(/[?&]timing\\b/.test(location.search))\
+addEventListener('load',function(){setTimeout(function(){\
+var n=performance.getEntriesByType('navigation')[0];if(!n)return;\
+navigator.sendBeacon('/api/timing',JSON.stringify({path:location.pathname,\
+load:Math.round(n.loadEventEnd),ttfb:Math.round(n.responseStart),\
+dns:Math.round(n.domainLookupEnd-n.domainLookupStart),\
+connect:Math.round(n.connectEnd-n.connectStart),size:n.transferSize,\
+ua:navigator.userAgent}));},0);});</script>\n";
+
 fn listening(html: &str) -> Vec<u8> {
     match html.rfind("</body>") {
-        Some(at) => format!("{}{LISTEN}{}", &html[..at], &html[at..]).into_bytes(),
-        None => format!("{html}{LISTEN}").into_bytes(),
+        Some(at) => format!("{}{LISTEN}{TIMING}{}", &html[..at], &html[at..]).into_bytes(),
+        None => format!("{html}{LISTEN}{TIMING}").into_bytes(),
     }
 }
 

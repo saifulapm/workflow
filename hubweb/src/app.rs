@@ -473,6 +473,30 @@ impl Store {
         Ok(())
     }
 
+    /// A page's own load time, from a paired device's page: the last 100
+    /// are kept.
+    async fn timing(&self, mut req: Request) -> Result<Response> {
+        let target = path_and_query(&req)["/page".len()..].to_string();
+        let headers: Vec<(String, String)> = req.headers().entries().collect();
+        let request = site::request("POST", &target, headers, Vec::new());
+        if req.headers().get(MAY_WRITE)?.as_deref() != Some("1") || !self.paired(&request)? {
+            return Response::error("Pair this device first", 403);
+        }
+        let body = req.text().await?;
+        if body.len() > 2048 || serde_json::from_str::<Value>(&body).is_err() {
+            return Response::error("Expected a small JSON timing", 400);
+        }
+        self.sql.exec(
+            "INSERT INTO timings(at, body) VALUES (?, ?)",
+            vec![(now_ms() as i64).into(), body.into()],
+        )?;
+        self.sql.exec(
+            "DELETE FROM timings WHERE at NOT IN (SELECT at FROM timings ORDER BY at DESC LIMIT 100)",
+            None,
+        )?;
+        Response::empty().map(|r| r.with_status(204))
+    }
+
     /// Whether the request carries a paired device's cookie.
     fn paired(&self, request: &hubpages::http::Request) -> Result<bool> {
         let Some(token) = pair::token(request) else {
@@ -586,6 +610,11 @@ impl DurableObject for Store {
         .expect("index the files by kind");
         fill_files(&sql).expect("fill the files table from the log");
         sql.exec(
+            "CREATE TABLE IF NOT EXISTS timings(at INTEGER NOT NULL, body TEXT NOT NULL)",
+            None,
+        )
+        .expect("create the timings table");
+        sql.exec(
             "CREATE TABLE IF NOT EXISTS pair_codes(code TEXT PRIMARY KEY, expires INTEGER NOT NULL)",
             None,
         )
@@ -649,6 +678,23 @@ impl DurableObject for Store {
                 Ok(Response::empty()?.with_status(204))
             }
             (_, path) if path.starts_with("/page/pair/") => self.pair(req).await,
+            // A bare round trip, the baseline a page's build is measured by.
+            (Method::Get, "/page/api/ping") => {
+                let mut response = Response::empty()?.with_status(204);
+                response.headers_mut().set("Server-Timing", "build;dur=0")?;
+                Ok(response)
+            }
+            (Method::Post, "/page/api/timing") => self.timing(req).await,
+            (Method::Get, "/page/api/timing") => {
+                let rows: Vec<Value> = self
+                    .sql
+                    .exec(
+                        "SELECT at, body FROM timings ORDER BY at DESC LIMIT 50",
+                        None,
+                    )?
+                    .to_array()?;
+                Response::from_json(&rows)
+            }
             (Method::Get, path) if path.starts_with("/evidence/") => {
                 let Some((project, id)) = path["/evidence/".len()..].split_once('/') else {
                     return Response::error("Not Found", 404);

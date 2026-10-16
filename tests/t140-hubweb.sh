@@ -189,6 +189,18 @@ like "$paired_home" '>Phone</button>.*>Device</button>' "a paired device's home 
 like "$paired_home" 'name="text" value="nine"' "a paired device's home has the question's option buttons"
 unlike "$paired_home" 'Pair this device first' "a paired device is not asked to pair"
 
+# The walk's measures: a bare store round trip, and a page's own load time
+# reported by a paired device's page opened with ?timing.
+like "$(curl -s -o /dev/null -D - -H "@$T_TMP/jwt.hdr" "$base/api/ping" | tr -d '\r' | tr '\n' ' ')" \
+	'^HTTP/[0-9.]+ 204.*[Ss]erver-[Tt]iming: build;dur=0, store;dur=[0-9]+' "GET /api/ping times a bare store round trip"
+like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/?timing" | tr -d '\n')" "sendBeacon\('/api/timing'" \
+	"a page opened with ?timing reports its load"
+beacon() { curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: same-origin' \
+	"$@" --data '{"path":"/","load":321}' "$base/api/timing"; }
+is "$(beacon)" 403 "an unpaired device's timing is refused"
+is "$(beacon -H "Cookie: $cookie")" 204 "a paired device's timing is kept"
+like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/api/timing")" '\\"load\\":321' "GET /api/timing lists it"
+
 # A POST from an unpaired browser gets the 403 page and writes nothing.
 qid=$(cd "$sb/gamma" && mem questions --pending --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["questions"][0]["id"])')
 answer_post() { # answer_post [curl args...] -- prints the status code, the page in $T_TMP/answer.html
