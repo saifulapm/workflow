@@ -57,7 +57,17 @@ pub fn run(url: &str) -> i32 {
 
 /// `run`, handing back what the server's mem printed instead of printing it.
 pub fn run_captured(url: &str) -> (i32, String, String) {
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    run_captured_with(url, &[])
+}
+
+/// `run_captured`, with `front` put before this invocation's own arguments:
+/// global flags only.
+fn run_captured_with(url: &str, front: &[&str]) -> (i32, String, String) {
+    let argv: Vec<String> = front
+        .iter()
+        .map(|a| a.to_string())
+        .chain(std::env::args().skip(1))
+        .collect();
     let env_project = std::env::var("MEM_PROJECT")
         .ok()
         .map(|v| v.trim().to_string())
@@ -126,28 +136,36 @@ pub fn run_with_local_hub(url: &str, cli: &crate::cli::Cli) -> i32 {
             audience,
             ..
         }) => {
-            let (code, stdout, stderr) = run_captured(url);
-            let _ = std::io::stdout().write_all(stdout.as_bytes());
+            // Asked as JSON, so the reply names the project the server picked
+            // by the git remote, which this machine cannot know.
+            let front: &[&str] = if cli.json { &[] } else { &["--json"] };
+            let (code, stdout, stderr) = run_captured_with(url, front);
+            let reply = serde_json::from_str::<Value>(&stdout).ok();
+            let field = |key: &str| {
+                reply
+                    .as_ref()
+                    .and_then(|r| r[key].as_str())
+                    .map(str::to_string)
+            };
+            let id = field("short_id");
+            match (&id, cli.json) {
+                (Some(id), false) => println!("#{id}"),
+                _ => {
+                    let _ = std::io::stdout().write_all(stdout.as_bytes());
+                }
+            }
             let _ = std::io::stderr().write_all(stderr.as_bytes());
-            // `#<id>`, or with --json the reply's short_id.
-            let id = stdout
-                .lines()
-                .find_map(|l| l.trim().strip_prefix('#'))
-                .map(str::to_string)
-                .or_else(|| {
-                    serde_json::from_str::<Value>(&stdout).ok()?["short_id"]
-                        .as_str()
-                        .map(str::to_string)
-                });
             if code == exit::OK
                 && let Some(id) = id
             {
-                let project = cli.project.clone().or_else(|| {
-                    std::env::var("MEM_PROJECT")
-                        .ok()
-                        .map(|p| p.trim().to_string())
-                        .filter(|p| !p.is_empty())
-                });
+                let project = field("project")
+                    .or_else(|| cli.project.clone())
+                    .or_else(|| {
+                        std::env::var("MEM_PROJECT")
+                            .ok()
+                            .map(|p| p.trim().to_string())
+                            .filter(|p| !p.is_empty())
+                    });
                 crate::localhub::ask(
                     &socket,
                     &crate::localhub::Asked {

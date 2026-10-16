@@ -1799,6 +1799,7 @@ pub fn ask(
             serde_json::to_string(&json!({
                 "id": written.id,
                 "short_id": written.short_id,
+                "project": project,
                 "options": options,
                 "recommend": recommend,
                 "audience": audience,

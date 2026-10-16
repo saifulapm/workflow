@@ -180,12 +180,15 @@ fn over_the_remote_a_wait_is_answered_by_the_local_hub_without_the_server() {
 }
 
 /// And an ask over the remote is written on the server, then handed to the
-/// local hub under the id the server gave it.
+/// local hub under the id and the project the server gave it: in a cloud
+/// session the server picks the project by the git remote, so only it knows
+/// the name.
 #[test]
 fn over_the_remote_an_ask_is_handed_to_the_local_hub_after_the_server_writes_it() {
     let w = World::new("lh-remote-ask");
     let server = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://127.0.0.1:{}", server.local_addr().unwrap().port());
+    let (sent_tx, sent_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let (mut stream, _) = server.accept().unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -202,7 +205,10 @@ fn over_the_remote_an_ask_is_handed_to_the_local_hub_after_the_server_writes_it(
         }
         let mut body = vec![0; length];
         reader.read_exact(&mut body).unwrap();
-        let reply = r##"{"stdout":"#WXYZ5678\n","stderr":"","code":0}"##;
+        sent_tx.send(String::from_utf8(body).unwrap()).unwrap();
+        let printed = serde_json::json!({"id": "01M5000000000000000WXYZ5678", "short_id": "WXYZ5678", "project": "cloud_walk"}).to_string();
+        let reply = serde_json::json!({"stdout": format!("{printed}\n"), "stderr": "", "code": 0})
+            .to_string();
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
@@ -216,14 +222,33 @@ fn over_the_remote_an_ask_is_handed_to_the_local_hub_after_the_server_writes_it(
         &w,
         w.dir.path(),
         &["ask", "probe?", "--options", "yes,no"],
-        &[("MEM_REMOTE", &url), ("MEM_PROJECT", "cloud_walk")],
+        &[("MEM_REMOTE", &url)],
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "#WXYZ5678");
+    let sent: serde_json::Value = serde_json::from_str(&sent_rx.recv().unwrap()).unwrap();
+    assert!(
+        sent["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a == "--json"),
+        "{sent}"
+    );
     let ask = seen.recv_timeout(Duration::from_secs(5)).unwrap();
     let v: serde_json::Value = serde_json::from_str(&ask.body).unwrap();
     assert_eq!(v["id"], "WXYZ5678");
     assert_eq!(v["project"], "cloud_walk");
     assert_eq!(v["text"], "probe?");
     assert_eq!(v["options"], serde_json::json!(["yes", "no"]));
+}
+
+#[test]
+fn an_asks_json_names_its_project() {
+    let w = World::new("lh-ask-json");
+    let repo = w.repo("thing", None);
+    let out = mem_env(&w, &repo, &["ask", "probe?", "--json"], &[]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["project"], "thing");
 }
