@@ -199,14 +199,16 @@ fn mcp_listener(config: &Config) -> Result<Option<(TcpListener, Access)>> {
     Ok(Some((listener, Access::new(aud, team))))
 }
 
-/// `hub local`: the peer port on every address, since other machines reach
-/// it over the tailnet and the token is its guard, and mem's socket, 0600.
+/// `hub local`: the peer port and mem's socket, 0600. Loopback only, like the
+/// web hub: tailnet peers arrive through `tailscale serve --tcp` on a device
+/// and through userspace Tailscale's own forwarding in a cloud VM, so the port
+/// never faces a café network. The peer token still guards it.
 fn run_local(port: u16) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let token = local::token_from_env()?;
-    let listener =
-        TcpListener::bind(("0.0.0.0", port)).with_context(|| format!("binding 0.0.0.0:{port}"))?;
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .with_context(|| format!("binding 127.0.0.1:{port}"))?;
     let socket_path = local::socket_path()?;
     if let Some(dir) = socket_path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;

@@ -405,3 +405,35 @@ fn a_roadmap_review_cannot_be_answered_over_the_peer_port() {
     );
     assert_eq!(status_of(&response), 204, "{response}");
 }
+
+/// Loopback only: tailnet peers come in through `tailscale serve` or
+/// userspace Tailscale, never straight off a network the machine has joined.
+#[test]
+fn the_peer_port_listens_on_loopback_only() {
+    let dir = TempDir::new("local-loopback");
+    let mut hub = spawn_local(&dir, "testbox");
+    let mut socket_line = String::new();
+    std::io::BufRead::read_line(&mut hub.stdout, &mut socket_line).unwrap();
+    let ours = std::net::TcpStream::connect(("127.0.0.1", hub.port));
+    assert!(ours.is_ok());
+    let listening = std::fs::read_to_string("/proc/net/tcp").unwrap();
+    let port = format!(":{:04X} ", hub.port);
+    let rows: Vec<&str> = listening
+        .lines()
+        .filter(|l| {
+            l.split_whitespace()
+                .nth(1)
+                .is_some_and(|a| a.ends_with(port.trim()))
+        })
+        .filter(|l| l.split_whitespace().nth(3) == Some("0A"))
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        rows[0]
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .starts_with("0100007F:"),
+        "{rows:?}"
+    );
+}
