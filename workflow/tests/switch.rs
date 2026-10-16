@@ -22,6 +22,9 @@ const CLOUD: &str = "cloud-SECRET-3";
 /// a fixture is written under the write lock and every spawn waits for it.
 static FORKS: RwLock<()> = RwLock::new(());
 
+const LOG: &str = r#"dir=$(dirname "$0")/..
+echo "$(basename "$0") $*" >>"$dir/calls.log""#;
+
 /// Every fake logs its argv; `hub share seed` exits with the next line of
 /// seed-exits (0 once they run out) and records the store environment it saw.
 fn world(tag: &str) -> Scratch {
@@ -29,8 +32,7 @@ fn world(tag: &str) -> Scratch {
     let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
     work.put("ls.json", "[]");
     work.put("pgrep.out", "");
-    let log = r#"dir=$(dirname "$0")/..
-echo "$(basename "$0") $*" >>"$dir/calls.log""#;
+    let log = LOG;
     work.script(
         "bin/amx",
         &format!("{log}\n[ \"$1\" = ls ] && cat \"$dir/ls.json\""),
@@ -42,7 +44,11 @@ echo "$(basename "$0") $*" >>"$dir/calls.log""#;
             "{log}\nout=$(cat \"$dir/pgrep.out\")\n[ -z \"$out\" ] && exit 1\nprintf '%s\\n' \"$out\" | sed \"s/PPID/$PPID/\""
         ),
     );
-    work.script("bin/qshell-sync", log);
+    // The marker the real qshell-sync tests for to skip its memory unit.
+    work.script(
+        "bin/qshell-sync",
+        &format!("# [[ -e $XDG_STATE_HOME/mem/share/switched ]]\n{log}"),
+    );
     work.script(
         "bin/pass",
         &format!(
@@ -241,4 +247,24 @@ fn a_store_url_not_ending_in_store_share_is_refused_first() {
         assert_eq!(out.status.code(), Some(2), "{bad}: {out:?}");
         assert_eq!(calls(&w), "", "{bad}");
     }
+}
+
+#[test]
+fn a_qshell_sync_that_still_bisyncs_memory_refuses_before_anything_runs() {
+    let w = world("switch-old-sync");
+    {
+        let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
+        w.script("bin/qshell-sync", LOG);
+    }
+    let out = switch(&w, STORE);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        text(&out).contains(
+            "qshell-sync here still bisyncs memory after a switch: update the dotfiles (chezmoi update) first"
+        ),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(calls(&w), "amx ls --json\npgrep -a -x claude\n");
+    assert!(!w.has("config/hub/local.env"));
 }

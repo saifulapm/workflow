@@ -54,6 +54,12 @@ fn switch(url: &str) -> Step<()> {
             sessions.len()
         ));
     }
+    if !sync_skips_memory() {
+        return refuse(
+            "qshell-sync here still bisyncs memory after a switch: \
+             update the dotfiles (chezmoi update) first",
+        );
+    }
     let Some(name) = machine::name() else {
         return fail("cannot tell this machine's name; set WORKFLOW_MACHINE");
     };
@@ -132,6 +138,17 @@ fn switch(url: &str) -> Step<()> {
     );
     println!("  restarted hub-local");
     Ok(())
+}
+
+/// Does the `qshell-sync` on PATH test for the switched flag before it
+/// bisyncs memory? An older one would copy the VPS store back over the new one.
+fn sync_skips_memory() -> bool {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("qshell-sync"))
+        .find(|p| p.is_file())
+        .and_then(|p| fs::read_to_string(p).ok())
+        .is_some_and(|text| text.contains("mem/share/switched"))
 }
 
 /// A ws:// or wss:// URL with a host, ending in /store/share, the way the hub
