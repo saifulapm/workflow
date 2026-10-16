@@ -90,36 +90,18 @@ stop_all() {
 }
 trap stop_all EXIT
 
-start_dev() { # start_dev <name> <port> [VAR=value...] -- cf dev on a copy of hubweb
-	local name=$1 port=$2
-	shift 2
+start_dev() { # start_dev <name> [VAR=value...] -- cf dev on a copy of hubweb; sets CF_DEV_PORT
+	local name=$1
+	shift
 	local app=$T_TMP/$name
 	mkdir -p "$app"
 	cp -r "$HUBWEB"/{Cargo.toml,Cargo.lock,src,package.json,cloudflare.config.ts,wrangler.config.ts} "$app/"
 	ln -s "$HUBWEB/node_modules" "$app/node_modules"
-	# setsid gives cf dev, wrangler and workerd one process group to kill at
-	# the end. CARGO_TARGET_DIR reuses hubweb's compiled dependencies. cf and
-	# wrangler each send usage telemetry unless told not to; the sandbox HOME
-	# holds no Cloudflare login, so nothing else can reach the account.
-	(
-		cd "$app" &&
-			exec env "$@" XDG_CACHE_HOME="$real_cache" CARGO_TARGET_DIR="$HUBWEB/target" \
-				CF_SEND_TELEMETRY=false WRANGLER_SEND_METRICS=false \
-				setsid "$HUBWEB/node_modules/.bin/cf" dev --port "$port"
-	) </dev/null >"$T_TMP/$name.log" 2>&1 &
-	pids+=($!)
-	# A cold run compiles the crate to wasm first, so the wait is long.
-	local up=0
-	for _ in $(seq 1 600); do
-		if curl -s -o /dev/null "http://127.0.0.1:$port/" 2>/dev/null; then
-			up=1
-			break
-		fi
-		kill -0 "${pids[-1]}" 2>/dev/null || break
-		sleep 0.5
-	done
-	if [ "$up" != 1 ]; then
-		notok "cf dev answers on port $port" "$(tail -40 "$T_TMP/$name.log")"
+	t_cf_dev "$app" "$T_TMP/$name.log" "$@"
+	local up=$?
+	pids+=("$CF_DEV_PID")
+	if [ "$up" != 0 ]; then
+		notok "cf dev answers on port $CF_DEV_PORT" "$(tail -40 "$T_TMP/$name.log")"
 		exit 1
 	fi
 }
@@ -129,10 +111,10 @@ printf 'Authorization: Bearer %s\n' "$token" >"$T_TMP/auth.hdr"
 printf 'Authorization: Bearer wrong-%s\n' "$token" >"$T_TMP/wrong.hdr"
 printf '%s\n' "$(with_jwt "$valid")" >"$T_TMP/jwt.hdr"
 
-port=$(free_port)
-base=http://127.0.0.1:$port
 # Two auds: next-hub and next-mem are two Access apps on one Worker.
-start_dev hubweb "$port" STORE_TOKEN=$token ACCESS_AUD="next-mem-aud, $aud" ACCESS_TEAM="$team"
+start_dev hubweb STORE_TOKEN=$token ACCESS_AUD="next-mem-aud, $aud" ACCESS_TEAM="$team"
+port=$CF_DEV_PORT
+base=http://127.0.0.1:$port
 
 put() { # put <body> [curl args...] -- prints the status code
 	local body=$1
@@ -215,8 +197,8 @@ is "$(mcp / "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"]
 	"Next: build the store." "POST / serves MCP too"
 
 # No Access settings: every guarded path is refused, the store write is not.
-bare_port=$(free_port)
-start_dev bare "$bare_port" STORE_TOKEN=$token
+start_dev bare STORE_TOKEN=$token
+bare_port=$CF_DEV_PORT
 is "$(curl -s -o /dev/null -w '%{http_code}' -H "@$T_TMP/jwt.hdr" "http://127.0.0.1:$bare_port/")" 401 \
 	"GET / without ACCESS_AUD and ACCESS_TEAM is refused, even with a JWT"
 like "$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "@$T_TMP/auth.hdr" \

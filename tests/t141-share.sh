@@ -24,10 +24,6 @@ if [ ! -x "$HUBWEB/node_modules/.bin/cf" ]; then
 	exit 1
 fi
 
-free_port() {
-	python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
-}
-
 dev_pid=
 stop_dev() {
 	local status=$?
@@ -38,32 +34,16 @@ stop_dev() {
 trap stop_dev EXIT
 
 token=test-store-token
-port=$(free_port)
-base=http://127.0.0.1:$port
 app=$T_TMP/hubweb
 mkdir -p "$app"
 cp -r "$HUBWEB"/{Cargo.toml,Cargo.lock,src,package.json,cloudflare.config.ts,wrangler.config.ts} "$app/"
 ln -s "$HUBWEB/node_modules" "$app/node_modules"
-# setsid gives cf dev, wrangler and workerd one process group to kill at the
-# end; CARGO_TARGET_DIR reuses hubweb's compiled dependencies.
-(
-	cd "$app" &&
-		exec env STORE_TOKEN=$token XDG_CACHE_HOME="$real_cache" CARGO_TARGET_DIR="$HUBWEB/target" \
-			CF_SEND_TELEMETRY=false WRANGLER_SEND_METRICS=false \
-			setsid "$HUBWEB/node_modules/.bin/cf" dev --port "$port"
-) </dev/null >"$T_TMP/dev.log" 2>&1 &
-dev_pid=$!
-# A cold run compiles the crate to wasm first, so the wait is long.
-up=0
-for _ in $(seq 1 600); do
-	if curl -s -o /dev/null "$base/" 2>/dev/null; then
-		up=1
-		break
-	fi
-	kill -0 "$dev_pid" 2>/dev/null || break
-	sleep 0.5
-done
-if [ "$up" != 1 ]; then
+t_cf_dev "$app" "$T_TMP/dev.log" STORE_TOKEN=$token
+up=$?
+dev_pid=$CF_DEV_PID
+port=$CF_DEV_PORT
+base=http://127.0.0.1:$port
+if [ "$up" != 0 ]; then
 	notok "cf dev answers on port $port" "$(tail -40 "$T_TMP/dev.log")"
 	exit 1
 fi

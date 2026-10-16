@@ -77,6 +77,41 @@ run_out() {
 	return 0
 }
 
+# t_cf_dev <app> <log> [VAR=value...] -- runs `cf dev` in <app>, a copy of
+# hubweb, with the variables in its environment, and waits until it answers.
+# Sets CF_DEV_PORT, and CF_DEV_PID, the leader of its process group (setsid),
+# for the caller to kill. A port found free can be taken by another test's
+# workerd before this one binds it, so a bind failure is tried again on a new
+# port. Callers set real_cache and HUBWEB: worker-build keeps its tools in the
+# real cache, and CARGO_TARGET_DIR reuses hubweb's compiled dependencies. cf
+# and wrangler each send usage telemetry unless told not to; the sandbox HOME
+# holds no Cloudflare login, so nothing else can reach the account.
+t_cf_dev() {
+	local app=$1 log=$2 _try _
+	shift 2
+	for _try in 1 2 3; do
+		CF_DEV_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+		(
+			cd "$app" &&
+				exec env "$@" XDG_CACHE_HOME="$real_cache" CARGO_TARGET_DIR="$HUBWEB/target" \
+					CF_SEND_TELEMETRY=false WRANGLER_SEND_METRICS=false \
+					setsid "$HUBWEB/node_modules/.bin/cf" dev --port "$CF_DEV_PORT"
+		) </dev/null >"$log" 2>&1 &
+		CF_DEV_PID=$!
+		# A cold run compiles the crate to wasm first, so the wait is long.
+		for _ in $(seq 1 600); do
+			curl -s -o /dev/null "http://127.0.0.1:$CF_DEV_PORT/" 2>/dev/null && return 0
+			kill -0 "$CF_DEV_PID" 2>/dev/null || break
+			grep -q 'Address already in use' "$log" && break
+			sleep 0.5
+		done
+		kill -TERM -- "-$CF_DEV_PID" 2>/dev/null
+		wait "$CF_DEV_PID" 2>/dev/null
+		grep -q 'Address already in use' "$log" || return 1
+	done
+	return 1
+}
+
 # Print the plan and exit with the right status. Registered as an EXIT trap by
 # t_init so a test that dies mid-way still reports what it managed to run.
 t_done() {
