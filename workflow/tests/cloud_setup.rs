@@ -119,3 +119,121 @@ printf '#!/bin/sh\\necho real mem \"$@\"\\n' > \"$2\"\n",
         "{fetched}"
     );
 }
+
+/// With the Tailscale key and the peer token in its environment, the first mem
+/// of a cloud session joins the tailnet in userspace and starts the local hub,
+/// once, with neither secret on a command line.
+#[test]
+fn the_first_mem_with_the_keys_starts_tailscale_and_the_local_hub_once() {
+    let home = Scratch::new("cloud-setup-local-hub");
+    home.put("setup.sh", &script(&home));
+    let ran = Command::new("bash")
+        .arg(home.at("setup.sh"))
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(ran.status.success(), "{ran:?}");
+
+    // Every binary is already fetched; each logs how it was started.
+    let log = home.at("started.log");
+    let logs = |name: &str| {
+        format!(
+            "#!/bin/sh\necho \"{name} $* ts=${{TS_AUTHKEY:-}} socks=${{HUB_SOCKS5:-}} host=${{HUB_HOST:-}}\" >> {}\n",
+            log.display()
+        )
+    };
+    home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");
+    home.script(
+        ".local/bin/tailscaled",
+        &format!(
+            "{}for a in \"$@\"; do case $a in --socket=*) : > \"${{a#--socket=}}\";; esac; done\nsleep 5\n",
+            logs("tailscaled")
+        ),
+    );
+    home.script(
+        ".local/bin/tailscale",
+        &format!(
+            "{}for a in \"$@\"; do case $a in --auth-key=file:*) cat \"${{a#--auth-key=file:}}\" >> {};; esac; done\n",
+            logs("tailscale"),
+            home.at("key-read").display()
+        ),
+    );
+    home.script(".local/bin/hub-x86_64", &logs("hub"));
+
+    let shim = home.at("usr-local-bin/mem");
+    for _ in 0..2 {
+        let out = Command::new(&shim)
+            .args(["context"])
+            .env("HOME", home.path())
+            .env("MEM_REMOTE", "https://mem.example.test")
+            .env("TS_AUTHKEY", "tskey-auth-secret")
+            .env("HUB_PEER_TOKEN", "peer-secret")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "real mem context\n");
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !fs::read_to_string(&log)
+        .unwrap_or_default()
+        .contains("hub local")
+    {
+        assert!(std::time::Instant::now() < deadline, "no local hub started");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let started = fs::read_to_string(&log).unwrap();
+    let line = |name: &str| {
+        started
+            .lines()
+            .filter(|l| l.starts_with(&format!("{name} ")))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(line("tailscaled").len(), 1, "{started}");
+    assert!(
+        line("tailscaled")[0].contains("--tun=userspace-networking"),
+        "{started}"
+    );
+    assert!(
+        line("tailscaled")[0].contains("--socks5-server=localhost:1055"),
+        "{started}"
+    );
+    assert_eq!(line("tailscale").len(), 1, "{started}");
+    assert!(line("tailscale")[0].contains(" up "), "{started}");
+    assert!(
+        line("tailscale")[0].contains("--hostname=cloud-"),
+        "{started}"
+    );
+    assert_eq!(home.read("key-read"), "tskey-auth-secret");
+    assert_eq!(line("hub").len(), 1, "{started}");
+    let hub = line("hub")[0];
+    assert!(hub.starts_with("hub local "), "{hub}");
+    assert!(hub.contains("socks=127.0.0.1:1055"), "{hub}");
+    assert!(hub.contains("host=cloud-"), "{hub}");
+    // The key went in a file, read and removed; no process was handed it.
+    assert!(!started.contains("tskey-auth-secret"), "{started}");
+    assert!(!started.contains("peer-secret"), "{started}");
+    assert!(!home.has(".local/state/hub/ts-authkey"));
+}
+
+#[test]
+fn without_the_keys_the_shim_starts_nothing() {
+    let home = Scratch::new("cloud-setup-no-keys");
+    home.put("setup.sh", &script(&home));
+    Command::new("bash")
+        .arg(home.at("setup.sh"))
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");
+    let out = Command::new(home.at("usr-local-bin/mem"))
+        .args(["context"])
+        .env("HOME", home.path())
+        .env("MEM_REMOTE", "https://mem.example.test")
+        .env_remove("TS_AUTHKEY")
+        .env_remove("HUB_PEER_TOKEN")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(!home.has(".local/state/hub/started"));
+}

@@ -416,6 +416,13 @@ chmod +x \"$bin/mem\"\n"
 
 /// The `mem` a cloud session runs: the x86_64 binary from `$MEM_REMOTE/dl/mem`,
 /// fetched inside the session, where the proxy adds the Access token.
+///
+/// With `TS_AUTHKEY` and `HUB_PEER_TOKEN` among the environment's secrets, the
+/// first mem of a session also joins the tailnet as an ephemeral `tag:cloud`
+/// machine (Tailscale in userspace, since the VM has no tun device) and starts
+/// the local hub from `$MEM_REMOTE/dl/hub`, in the background. The key goes
+/// to tailscale in a file that is removed once read, and no process started
+/// here keeps it in its environment.
 const SHIM: &str = r#"#!/bin/sh
 real="$HOME/.local/bin/mem-x86_64"
 if [ ! -x "$real" ]; then
@@ -426,6 +433,37 @@ if [ ! -x "$real" ]; then
   fi
   chmod +x "$real.part"
   mv "$real.part" "$real"
+fi
+state="$HOME/.local/state/hub"
+if [ -n "${TS_AUTHKEY:-}" ] && [ -n "${HUB_PEER_TOKEN:-}" ] &&
+  mkdir -p "$state" && mkdir "$state/started" 2>/dev/null; then
+  (
+    bin="$HOME/.local/bin"
+    ts=1.98.8
+    set -e
+    if [ ! -x "$bin/tailscaled" ]; then
+      curl -fsSL --max-time 120 "https://pkgs.tailscale.com/stable/tailscale_${ts}_amd64.tgz" -o "$state/ts.tgz"
+      tar xzf "$state/ts.tgz" -C "$state"
+      cp "$state/tailscale_${ts}_amd64/tailscale" "$state/tailscale_${ts}_amd64/tailscaled" "$bin/"
+    fi
+    if [ ! -x "$bin/hub-x86_64" ]; then
+      curl -fsSL --max-time 120 "$MEM_REMOTE/dl/hub" -o "$bin/hub-x86_64.part"
+      chmod +x "$bin/hub-x86_64.part"
+      mv "$bin/hub-x86_64.part" "$bin/hub-x86_64"
+    fi
+    key="$state/ts-authkey"
+    (umask 077 && printf '%s' "$TS_AUTHKEY" >"$key")
+    sock="$state/tailscaled.sock"
+    host="cloud-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)"
+    env -u TS_AUTHKEY "$bin/tailscaled" --tun=userspace-networking       --socks5-server=localhost:1055 --state=mem: --socket="$sock" >"$state/tailscaled.log" 2>&1 &
+    i=0
+    while [ ! -S "$sock" ] && [ ! -e "$sock" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+    joined=0
+    env -u TS_AUTHKEY "$bin/tailscale" --socket="$sock" up --auth-key="file:$key" --hostname="$host" || joined=$?
+    rm -f "$key"
+    [ "$joined" = 0 ]
+    env -u TS_AUTHKEY HUB_SOCKS5=127.0.0.1:1055 HUB_HOST="$host"       nohup "$bin/hub-x86_64" local >"$state/local.log" 2>&1 &
+  ) >"$state/start.log" 2>&1 </dev/null &
 fi
 exec "$real" "$@"
 "#;
