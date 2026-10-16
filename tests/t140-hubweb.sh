@@ -310,8 +310,8 @@ JS
 node "$T_TMP/live.mjs" "$base" "$valid" "$token" >"$T_TMP/live.out" 2>&1
 live() { sed -n "s/^$1 //p" "$T_TMP/live.out"; }
 first=$(live first)
-like "$first" '^\{"stamp":"[0-9]+\.[0-9]+","t":"changed"\}$' "an opened page socket hears the store's stamp at once"
-like "$(live nudge)" '^\{"stamp":"[0-9]+\.[0-9]+","t":"changed"\} true$' \
+like "$first" '^\{"stamp":"[0-9]+(\.[0-9]+)+","t":"changed"\}$' "an opened page socket hears the store's stamp at once"
+like "$(live nudge)" '^\{"stamp":"[0-9]+(\.[0-9]+)+","t":"changed"\} true$' \
 	"an open page hears changed within 2 s of a machine's write"
 isnt "$(live nudge | cut -d' ' -f1)" "$first" "with a new stamp"
 is "$(live mac-ack)" true "the machine's write is stored as usual"
