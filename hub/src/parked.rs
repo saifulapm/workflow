@@ -115,14 +115,18 @@ fn round(machine: &str, told: &mut HashSet<String>, seeding: bool) -> bool {
         }
         // mem lists newest first; a ULID sorts in the order it was made.
         asked.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        if !seeding {
+            eprintln!("hub: parked: {name}: every answer is in, resuming {session}");
+            // Told only once it was handled: amx that could not say is
+            // asked again next round.
+            if !runs::resume(name, session, &message(&asked)) {
+                continue;
+            }
+        }
         for row in &asked {
             told.insert(key(row));
         }
         changed = true;
-        if !seeding {
-            eprintln!("hub: parked: {name}: every answer is in, resuming {session}");
-            runs::resume(name, session, &message(&asked));
-        }
     }
     if changed {
         write_told(told);

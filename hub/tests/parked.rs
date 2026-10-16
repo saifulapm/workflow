@@ -31,8 +31,8 @@ fn bins(dir: &TempDir) -> PathBuf {
         &bin,
         "amx",
         &format!(
-            "[ \"$1 $2\" = 'ls --json' ] && cat '{}'",
-            dir.join("amx.json").display()
+            "[ -e '{d}/amx.fail' ] && exit 1\n[ \"$1 $2\" = 'ls --json' ] && cat '{d}/amx.json'",
+            d = dir.path().display()
         ),
     );
     fixture_bin(
@@ -265,4 +265,36 @@ fn an_open_orchestrator_question_holds_nothing_back() {
         !ran(&dir).is_empty()
     });
     assert!(!ran(&dir)[0].contains("Implementer"), "{:?}", ran(&dir));
+}
+
+/// amx that cannot answer is no sign the session is gone: the answers wait
+/// for amx, and the session resumes with them once it answers again.
+#[test]
+fn an_amx_that_cannot_answer_holds_the_resume_until_it_can() {
+    let dir = TempDir::new("parked-amx-down");
+    let _hub = parked(&dir);
+    std::fs::write(dir.join("amx.fail"), "").unwrap();
+    set_questions(
+        &dir,
+        &[
+            question("01Q2", "Q2", "Which colour?", Some("teal")),
+            question("01Q1", "Q1", "Ship it?", Some("yes")),
+        ],
+    );
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(
+        ran(&dir).is_empty(),
+        "nothing starts while amx is down: {:?}",
+        ran(&dir)
+    );
+    std::fs::remove_file(dir.join("amx.fail")).unwrap();
+    wait_for("the resume", Duration::from_secs(5), || {
+        !ran(&dir).is_empty()
+    });
+    let line = &ran(&dir)[0];
+    assert!(
+        line.starts_with("--user --scope --quiet amx resume walk01-m1 "),
+        "{line}"
+    );
+    assert!(line.contains("#Q2 Which colour?\nAnswer: teal"), "{line}");
 }

@@ -618,7 +618,10 @@ impl Local {
         };
         let line = match status {
             200 => format!("{} resumed on {}", resume.project, resume.runner),
-            409 => format!("{} is running on {}", resume.project, resume.runner),
+            409 => format!(
+                "{} needs no Resume on {} now",
+                resume.project, resume.runner
+            ),
             status => {
                 eprintln!(
                     "hub: local: {} answered {status} to Resume {}",

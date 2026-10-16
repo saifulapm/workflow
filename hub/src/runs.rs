@@ -158,23 +158,42 @@ pub fn start_project(project: &str, cloud: bool) -> bool {
     ok
 }
 
-/// What amx says of session `id`: `Some(true)` live, `Some(false)` stopped,
-/// `None` when amx does not list it or cannot say.
-pub fn session_live(id: &str) -> Option<bool> {
-    let agents = fleet::agents()?;
-    let row = agents.iter().find(|a| a["id"] == id)?;
+/// What amx says of a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Session {
+    Live,
+    Stopped,
+    /// amx does not list it: it is gone.
+    Gone,
+    /// amx could not be asked, which says nothing about the session.
+    Unknown,
+}
+
+pub fn session(id: &str) -> Session {
+    let Some(agents) = fleet::agents() else {
+        return Session::Unknown;
+    };
+    let Some(row) = agents.iter().find(|a| a["id"] == id) else {
+        return Session::Gone;
+    };
     let ended = row["ended"].as_i64().unwrap_or(0);
     let state = row["state"].as_str().unwrap_or("");
-    Some(ended == 0 && state != "stopped" && state != "failed")
+    if ended == 0 && state != "stopped" && state != "failed" {
+        Session::Live
+    } else {
+        Session::Stopped
+    }
 }
 
 /// Resumes session `id` with `message` once it has stopped; starts the
 /// project afresh when amx has lost it. A live session reads its answers
-/// itself.
-pub fn resume(project: &str, id: &str, message: &str) {
-    match session_live(id) {
-        Some(true) => eprintln!("hub: commands: resume {id}: live, it reads its answers itself"),
-        Some(false) => {
+/// itself. False when amx could not say, so nothing was done and the
+/// caller tries again: a session amx merely failed to list must not lose
+/// its answers to a fresh start.
+pub fn resume(project: &str, id: &str, message: &str) -> bool {
+    match session(id) {
+        Session::Live => eprintln!("hub: commands: resume {id}: live, it reads its answers itself"),
+        Session::Stopped => {
             let amx = fleet::amx_bin();
             let ok = succeeds(
                 &bin("WORKFLOW_SYSTEMD_RUN", "systemd-run"),
@@ -187,11 +206,16 @@ pub fn resume(project: &str, id: &str, message: &str) {
                 start_project(project, false);
             }
         }
-        None => {
+        Session::Gone => {
             eprintln!("hub: commands: resume {id}: session gone, start {project}");
             start_project(project, false);
         }
+        Session::Unknown => {
+            eprintln!("hub: commands: resume {id}: amx cannot say, trying later");
+            return false;
+        }
     }
+    true
 }
 
 fn run(job: &Job) {
@@ -205,13 +229,15 @@ fn run(job: &Job) {
             project,
             id,
             message,
-        } => resume(project, id, message),
+        } => {
+            resume(project, id, message);
+        }
         Job::FollowUp {
             project,
             id,
             message,
         } => {
-            if session_live(id) != Some(true) {
+            if session(id) != Session::Live {
                 resume(project, id, message);
                 return;
             }
@@ -247,36 +273,20 @@ static RESUMED: Mutex<Vec<(String, std::time::Instant)>> = Mutex::new(Vec::new()
 const RESUME_AGAIN_AFTER: Duration = Duration::from_secs(60);
 
 /// A Resume tap on a stall: `workflow go <project>` here, when this machine
-/// is its runner and its session is not live. The HTTP status says how it
-/// went: 200 started, 404 not a run of this machine, 409 already running
-/// (or resumed a moment ago), 502 the start failed.
+/// is its runner and it is stalled by the bell's own rule (so a finished
+/// orchestrator idle in amx does not count as running, and a run that has
+/// parked since is left to its answers). The HTTP status says how it went:
+/// 200 started, 404 not a run of this machine, 409 not stalled (or resumed a
+/// moment ago), 502 mem or amx could not say, or the start failed.
 pub fn resume_stalled(project: &str) -> u16 {
     let Some(machine) = fleet::runner_name() else {
         return 404;
     };
-    let mut command = Command::new("mem");
-    command.args(["projects", "--json"]);
-    let projects: Value = match proc::output_within(&mut command, AMX_TIMEOUT) {
-        Ended::Exited(done) if done.code == Some(0) => {
-            serde_json::from_slice(&done.stdout).unwrap_or_default()
-        }
-        _ => return 502,
-    };
-    let runner = projects["projects"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|p| p["name"] == project)
-        .map(|p| p["runner"].clone())
-        .filter(|r| r["machine"] == machine.as_str());
-    let Some(runner) = runner else {
-        return 404;
-    };
-    if runner["id"]
-        .as_str()
-        .is_some_and(|id| session_live(id) == Some(true))
-    {
-        return 409;
+    match crate::stalls::standing(&machine, project) {
+        crate::stalls::Standing::NotHere => return 404,
+        crate::stalls::Standing::NotStalled => return 409,
+        crate::stalls::Standing::Unknown => return 502,
+        crate::stalls::Standing::Stalled => {}
     }
     let mut resumed = RESUMED.lock().unwrap_or_else(|e| e.into_inner());
     resumed.retain(|(_, at)| at.elapsed() < RESUME_AGAIN_AFTER);

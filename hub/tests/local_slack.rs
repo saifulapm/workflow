@@ -857,29 +857,37 @@ fn a_photo_bigger_than_a_request_reaches_the_hub_that_asked() {
 /// machine (`mini`) as runner, its amx lists the session stopped, and its
 /// systemd-run records each call to `ran`. It posts the stall itself.
 fn spawn_runner(dir: &TempDir, slack: &Fake, log: &Path) -> Hub {
+    spawn_runner_with(
+        dir,
+        slack,
+        log,
+        "walk01-w2",
+        r#"[{"id":"walk01-w2","state":"stopped","ended":9,"created":5}]"#,
+    )
+}
+
+/// `spawn_runner` with the runner's amx id and what amx lists.
+fn spawn_runner_with(dir: &TempDir, slack: &Fake, log: &Path, runner: &str, amx: &str) -> Hub {
     let bin = dir.join("bin");
     std::fs::write(
         dir.join("projects.json"),
         json!({"projects": [{
             "name": "walk01", "checkouts": ["/x"], "roadmap_status": "approved",
             "milestone": "w2", "milestones_done": 1, "milestones_total": 3,
-            "runner": {"machine": "mini", "id": "walk01-w2", "milestone": null,
+            "runner": {"machine": "mini", "id": runner, "milestone": null,
                        "since": "2026-10-16T00:00:00Z"}}]})
         .to_string(),
     )
     .unwrap();
-    std::fs::write(
-        dir.join("amx.json"),
-        r#"[{"id":"walk01-w2","state":"stopped","ended":9,"created":5}]"#,
-    )
-    .unwrap();
+    std::fs::write(dir.join("amx.json"), amx).unwrap();
+    std::fs::write(dir.join("handoff.json"), r#"{"body":"Next: w2."}"#).unwrap();
     common::fixture_mem(
         &bin,
         &format!(
             "case \"$*\" in\n\
              *questions*) echo '{{\"questions\":[]}}' ;;\n\
              'projects --json') cat '{d}/projects.json' ;;\n\
-             handoff*) echo '{{\"body\":\"Next: w2.\"}}' ;;\n\
+             handoff*) cat '{d}/handoff.json' ;;\n\
              esac",
             d = dir.path().display()
         ),
@@ -1034,5 +1042,48 @@ fn a_forged_resume_on_the_peer_port_needs_the_token_and_a_stalled_run_here() {
     )
     .unwrap();
     assert_eq!(status, 404, "not a run of this machine");
+    assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
+}
+
+/// The usual stall after a landing: the runner is the last milestone's
+/// orchestrator, idle in amx, and no successor started. The bell and the
+/// tap read it alike, so the tap starts the next one.
+#[test]
+fn a_resume_tap_starts_a_stall_whose_runner_finished_an_earlier_milestone() {
+    let dir = TempDir::new("ls-resume-landed");
+    let slack = fake();
+    let _runner = spawn_runner_with(
+        &dir,
+        &slack,
+        &dir.join("err.log"),
+        "walk01-w1",
+        r#"[{"id":"walk01-w1","state":"idle","ended":0,"created":5}]"#,
+    );
+    let value = resume_value(&slack);
+    slack.tap(SAIFUL, &value);
+    wait_until("the start", || !ran(&dir).is_empty());
+    assert_eq!(ran(&dir), ["--user --scope --quiet workflow go walk01"]);
+}
+
+/// A stall's old button tapped after the run went on and parked on a
+/// question starts nothing beside the parked session.
+#[test]
+fn a_resume_tap_on_a_run_that_has_parked_since_starts_nothing() {
+    let dir = TempDir::new("ls-resume-parked");
+    let slack = fake();
+    let _runner = spawn_runner(&dir, &slack, &dir.join("err.log"));
+    let value = resume_value(&slack);
+    std::fs::write(
+        dir.join("handoff.json"),
+        r#"{"body":"parked: waiting on #Q1"}"#,
+    )
+    .unwrap();
+    slack.tap(SAIFUL, &value);
+    wait_until("the stall message updated", || {
+        slack
+            .calls_to("chat.update")
+            .iter()
+            .any(|u| u.contains("walk01"))
+    });
     assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
 }

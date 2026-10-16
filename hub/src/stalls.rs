@@ -230,6 +230,53 @@ impl Bell {
     }
 }
 
+/// Where a project stands for a Resume tap on this machine, by the same
+/// rule the bell rings by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// Its runner is another machine, or it has none.
+    NotHere,
+    /// Live, parked, paused, or nothing left to run.
+    NotStalled,
+    Stalled,
+    /// mem or amx could not be read.
+    Unknown,
+}
+
+pub fn standing(machine: &str, project: &str) -> Standing {
+    let Some(projects) = mem_json(&["projects", "--json"]) else {
+        return Standing::Unknown;
+    };
+    let Some(s) = projects["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["name"] == project)
+        .map(summary_of)
+    else {
+        return Standing::NotHere;
+    };
+    let Some(runner) = s.runner.as_ref().filter(|r| r.machine == machine) else {
+        return Standing::NotHere;
+    };
+    let Some(agents) = fleet::agents() else {
+        return Standing::Unknown;
+    };
+    let here = Here {
+        machine: machine.to_string(),
+        agents: serde_json::from_value(Value::Array(agents)).unwrap_or_default(),
+    };
+    let run = live::run(Some(runner), &s.name, s.milestone.as_deref(), &here);
+    let Some(handoff) = mem_json(&["handoff", "--project", &s.name, "--json"]) else {
+        return Standing::Unknown;
+    };
+    if live::stalled(&s, &run, handoff["body"].as_str().unwrap_or_default()) {
+        Standing::Stalled
+    } else {
+        Standing::NotStalled
+    }
+}
+
 /// Looks at this machine's runs every 15 s (`HUB_STALL_CHECK_MS`); a stall
 /// rings once it has lasted 2 minutes (`HUB_STALL_AFTER_MS`).
 pub fn run(machine: String, host: String, slack: Option<Arc<Slack>>) -> ! {
