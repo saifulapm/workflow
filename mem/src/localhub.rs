@@ -133,7 +133,7 @@ pub fn file(socket: &Path, rel: &str) -> Option<Vec<u8>> {
     }
 }
 
-fn call(
+pub fn call(
     socket: &Path,
     method: &str,
     path: &str,

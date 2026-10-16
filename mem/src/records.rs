@@ -35,14 +35,29 @@ pub fn decide(app: &App, text: &str, by: &str, replaces: Option<&str>) -> Result
 
 /// `mem evidence add --task <id> <file> --note "<text>"`.
 pub fn evidence_add(app: &App, task: &str, file: &Path, note: &str) -> Result<i32> {
-    let (identity, dir) = project(app, "evidence")?;
+    let (identity, _) = project(app, "evidence")?;
+    let written = file_evidence(app, &identity, task, file, note)?;
+    report(app, &written, Kind::Evidence)
+}
+
+/// Files `file` as evidence for `task` in the project `identity` names.
+pub fn file_evidence(
+    app: &App,
+    identity: &Identity,
+    task: &str,
+    file: &Path,
+    note: &str,
+) -> Result<Written> {
+    let Some(id) = identity.id() else {
+        return Err(exit::usage("evidence belongs to a project"));
+    };
+    let dir = app.store.project_dir(id);
     let rel = format!("evidence/{}/{}", dir_name(task, "task")?, base_name(file)?);
     copy_in(app, &dir, &rel, file)?;
     let mut meta = new_meta(app, Kind::Evidence, note);
     meta.task = Some(task.to_string());
     meta.file = Some(rel);
-    let written = write_item(app, &identity, meta, note.to_string())?;
-    report(app, &written, Kind::Evidence)
+    write_item(app, identity, meta, note.to_string())
 }
 
 /// `mem evidence list`, newest first.

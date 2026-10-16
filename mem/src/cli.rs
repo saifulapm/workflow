@@ -197,6 +197,9 @@ pub enum Command {
         /// An earlier answer to the same question that this one replaces.
         #[arg(long)]
         supersedes: Option<String>,
+        /// A screenshot that goes with the answer, filed as evidence.
+        #[arg(long)]
+        screenshot: Option<std::path::PathBuf>,
     },
     /// Record a decision: who made it, and what it replaces.
     Decide {

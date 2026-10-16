@@ -2020,7 +2020,26 @@ pub fn answer(
     option: Option<&str>,
     by: Option<&str>,
     supersedes: Option<&str>,
+    screenshot: Option<&std::path::Path>,
 ) -> Result<i32> {
+    // A screenshot that cannot be filed is found out before the hub or the
+    // store is given anything.
+    let screenshot = match screenshot {
+        Some(file) if !file.is_file() => {
+            return Err(exit::usage(format!("no screenshot {}", file.display())));
+        }
+        Some(file) => Some(std::path::absolute(file)?),
+        None => None,
+    };
+    let body = match (text, option) {
+        (Some(t), _) => t.to_string(),
+        (None, Some(o)) => o.to_string(),
+        (None, None) => return Err(exit::usage("an answer needs text or --option")),
+    };
+    if let Some(code) = hand_answer_to_hub(app, id, &body, by, supersedes, screenshot.as_deref()) {
+        return Ok(code);
+    }
+
     let Some(id_ref) = crate::ids::IdRef::parse(id) else {
         return Err(exit::not_found(format!("'{id}' is not an id")));
     };
@@ -2073,12 +2092,6 @@ pub fn answer(
     };
     drop(index);
 
-    let body = match (text, option) {
-        (Some(t), _) => t.to_string(),
-        (None, Some(o)) => o.to_string(),
-        (None, None) => return Err(exit::usage("an answer needs text or --option")),
-    };
-
     // The answer is written where its question lives, so both travel together.
     let identity = match question.project_id.as_deref() {
         Some(pid) => match crate::project::Registry::load(&app.store).by_id(pid) {
@@ -2099,9 +2112,73 @@ pub fn answer(
     meta.answers = Some(question.id.clone());
     meta.by = by.map(str::to_string);
     meta.supersedes = replaced;
+    if screenshot.is_some() && identity.id().is_none() {
+        return Err(exit::usage(
+            "a screenshot is filed in the question's project, and this question has none",
+        ));
+    }
     let written = crate::write::write_item(app, &identity, meta, body)?;
+    if let Some(file) = screenshot {
+        let task = format!("#{}", question.short_id);
+        let note = format!("screenshot with the answer to {task}");
+        crate::records::file_evidence(app, &identity, &task, &file, &note)?;
+    }
     crate::sync::trigger(&app.dirs.qshell_status_json());
     report_written(app, &written, crate::item::Kind::Answer)
+}
+
+/// Offers the answer to this machine's local hub, which passes it to the
+/// machine that asked. Returns the exit code when the hub settled it, and
+/// None when mem should write the answer itself: the hub is not there, does
+/// not know the question, or a direct write was asked for.
+fn hand_answer_to_hub(
+    app: &App,
+    id: &str,
+    body: &str,
+    by: Option<&str>,
+    supersedes: Option<&str>,
+    screenshot: Option<&std::path::Path>,
+) -> Option<i32> {
+    let set = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    if set("MEM_ANSWER_DIRECT") || set("MEM_REMOTE") || supersedes.is_some() {
+        return None;
+    }
+    let short = crate::localhub::short_id(id);
+    let mut sent = json!({"question": short, "answer": body, "by": by.unwrap_or("cli")});
+    if let Some(file) = screenshot {
+        sent["screenshot"] = json!(file.to_string_lossy());
+    }
+    let socket = crate::localhub::socket_path(&app.dirs.state);
+    let called = crate::localhub::call(
+        &socket,
+        "POST",
+        "/answer",
+        sent.to_string().as_bytes(),
+        std::time::Duration::from_secs(10),
+    );
+    match called {
+        Ok((200, _)) => {
+            println!("answered #{short} (the hub passed it on)");
+            Some(exit::OK)
+        }
+        Ok((409, standing)) => {
+            eprintln!("mem: #{short} already has an answer: {standing}");
+            Some(1)
+        }
+        Ok((403, refusal)) => {
+            eprintln!("mem: {refusal}");
+            Some(1)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound
+                && e.kind() != std::io::ErrorKind::ConnectionRefused
+            {
+                eprintln!("mem: the local hub did not take the answer: {e}");
+            }
+            None
+        }
+    }
 }
 
 /// `mem reindex [--full]`.
