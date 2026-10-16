@@ -32,6 +32,14 @@ if [ -z "${MEM_BIN:-}" ] || [ ! -x "$mem_bin" ]; then
 fi
 export MEM_BIN=$mem_bin
 
+# The sharing tests run the local hub itself.
+hub_bin=${HUB_BIN:-$root/hub/target/release/hub}
+if [ -z "${HUB_BIN:-}" ] || [ ! -x "$hub_bin" ]; then
+	printf 'building hub (tests need %s)\n' "$hub_bin"
+	(cd "$root/hub" && CARGO_TARGET_DIR="$root/hub/target" cargo build --release) || exit 1
+fi
+export HUB_BIN=$hub_bin
+
 # Same rule for the program under test: when it is the crate's release binary,
 # build it every run so a stale binary cannot pass for changed sources.
 wf_bin=${WORKFLOW_BIN:-$root/workflow/target/release/workflow}
