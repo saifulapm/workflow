@@ -875,30 +875,29 @@ fn tell_peers(
     std::thread::spawn(move || {
         let until = Instant::now() + RETRY_FOR;
         let mut heard: Vec<String> = Vec::new();
+        // One line for each peer that cannot be reached, not one a round.
+        let mut told: Vec<String> = Vec::new();
         loop {
             let peers: Vec<String> = crate::tailnet_peers()
                 .into_iter()
                 .filter(|p| *p != host && !heard.contains(p))
                 .collect();
-            let reached: Vec<(String, bool)> = std::thread::scope(|scope| {
+            let reached: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
                 let sends: Vec<_> = peers
                     .into_iter()
                     .map(|peer| {
                         let (token, body) = (&token, &body);
                         scope.spawn(move || {
                             let reached = match request(&peer, "POST", path, token, body) {
-                                Ok((200, _)) => true,
+                                Ok((200, _)) => Ok(()),
                                 Ok((status, _)) => {
                                     eprintln!("hub: local: {peer} answered {status} to {path}");
-                                    true
+                                    Ok(())
                                 }
                                 // Nothing listens there: a machine with no
                                 // local hub, nothing to try again.
-                                Err(e) if refused(&e) => true,
-                                Err(e) => {
-                                    eprintln!("hub: local: {path} did not reach {peer}: {e:#}");
-                                    false
-                                }
+                                Err(e) if refused(&e) => Ok(()),
+                                Err(e) => Err(format!("{e:#}")),
                             };
                             (peer, reached)
                         })
@@ -909,10 +908,15 @@ fn tell_peers(
             // No peers at all is most likely this machine off the network.
             let mut missed = reached.is_empty() && heard.is_empty();
             for (peer, reached) in reached {
-                if reached {
-                    heard.push(peer);
-                } else {
-                    missed = true;
+                match reached {
+                    Ok(()) => heard.push(peer),
+                    Err(e) => {
+                        missed = true;
+                        if !told.contains(&peer) {
+                            eprintln!("hub: local: {path} did not reach {peer}, trying again: {e}");
+                            told.push(peer);
+                        }
+                    }
                 }
             }
             let still_open = open
