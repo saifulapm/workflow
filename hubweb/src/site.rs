@@ -420,7 +420,10 @@ mod tests {
     fn a_page_reloads_once_when_its_socket_comes_back() {
         let page = html(draw(&store(), ask(&get("/"))).unwrap());
         assert!(page.contains("s.onclose=function(){lost=true;"), "{page}");
-        assert!(page.contains("s.onopen=function(){if(lost){lost=false;go();}}"), "{page}");
+        assert!(
+            page.contains("s.onopen=function(){if(lost){lost=false;go();}}"),
+            "{page}"
+        );
     }
 
     #[test]
