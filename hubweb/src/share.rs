@@ -32,6 +32,10 @@ pub const IMPORT_ROWS: i64 = 500_000;
 /// Paid includes 50 million rows written a month; at most 30 million at this
 /// cap, so the bill never grows past the plan.
 pub const DAY_ROWS: i64 = 1_000_000;
+/// Files the store puts in R2 in a UTC day before it refuses the next. Each
+/// put is one R2 Class A operation; Workers Paid includes a million a month,
+/// and this cap keeps a month under a third of that.
+pub const R2_DAY_WRITES: i64 = 10_000;
 
 /// The store's write log, oldest first, every write kept.
 pub trait Log {
@@ -60,6 +64,19 @@ pub trait Log {
     fn drop_command(&mut self, id: &str, machine: &str) -> Result<bool, Fault>;
     /// The rows the store wrote since 00:00 UTC, by its own count.
     fn rows_today(&self) -> Result<i64, Fault>;
+    /// The files the store put in R2 since 00:00 UTC.
+    fn r2_writes_today(&self) -> Result<i64, Fault>;
+    /// Counts one more file put in R2 today.
+    fn add_r2_write(&mut self) -> Result<(), Fault>;
+}
+
+/// Counts a file the store is about to put in R2, or refuses it once the
+/// day's `R2_DAY_WRITES` are spent; the machine keeps it and tries again.
+pub fn r2_write(log: &mut impl Log) -> Result<(), Fault> {
+    if log.r2_writes_today()? >= R2_DAY_WRITES {
+        return Err(Fault::Limit);
+    }
+    log.add_r2_write()
 }
 
 /// What one message from a machine sends back.
@@ -438,6 +455,7 @@ mod tests {
         recs: Vec<Rec>,
         full: bool,
         rows_today: i64,
+        r2_writes: i64,
         route: Option<Value>,
         now: i64,
         reports: std::collections::BTreeMap<String, (i64, Value)>,
@@ -502,6 +520,13 @@ mod tests {
         }
         fn rows_today(&self) -> Result<i64, Fault> {
             Ok(self.rows_today)
+        }
+        fn r2_writes_today(&self) -> Result<i64, Fault> {
+            Ok(self.r2_writes)
+        }
+        fn add_r2_write(&mut self) -> Result<(), Fault> {
+            self.r2_writes += 1;
+            Ok(())
         }
     }
 
@@ -838,6 +863,19 @@ mod tests {
         assert_eq!(parse(&answer.sender), [json!({"t":"limit"})]);
         assert!(answer.limit);
         assert!(log.recs.is_empty());
+    }
+
+    #[test]
+    fn each_file_put_in_r2_is_counted_until_the_day_cap_refuses_the_next() {
+        let mut log = Memory {
+            r2_writes: R2_DAY_WRITES - 2,
+            ..Memory::default()
+        };
+        assert_eq!(r2_write(&mut log), Ok(()));
+        assert_eq!(r2_write(&mut log), Ok(()));
+        assert_eq!(log.r2_writes, R2_DAY_WRITES);
+        assert_eq!(r2_write(&mut log), Err(Fault::Limit));
+        assert_eq!(log.r2_writes, R2_DAY_WRITES);
     }
 
     #[test]

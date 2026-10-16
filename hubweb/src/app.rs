@@ -603,6 +603,8 @@ impl Store {
             if files::project_of(&path).is_none() {
                 return Err(Error::RustError(format!("{path} is not a project's file")));
             }
+            share::r2_write(&mut SqlLog(&self.sql))
+                .map_err(|fault| Error::RustError(format!("{path}: {fault:?}")))?;
             self.env.bucket(BUCKET)?.put(path, data).execute().await?;
         }
         if writes.is_empty() {
@@ -794,6 +796,12 @@ impl DurableObject for Store {
             None,
         )
         .expect("create the usage table");
+        // Files put in R2 each UTC day, each one R2 Class A operation.
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS r2_usage(day INTEGER PRIMARY KEY, writes INTEGER NOT NULL)",
+            None,
+        )
+        .expect("create the r2_usage table");
         sql.exec(
             "CREATE TABLE IF NOT EXISTS records(project TEXT, kind TEXT, key TEXT, body TEXT, \
              PRIMARY KEY(project, kind, key))",
@@ -929,6 +937,9 @@ impl DurableObject for Store {
                 let Some(key) = files::key(path) else {
                     return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
                 };
+                if share::r2_write(&mut SqlLog(&self.sql)).is_err() {
+                    return Response::error("the store's day of R2 writes is spent", 503);
+                }
                 let body = match req.inner().body() {
                     Some(stream) => Data::ReadableStream(stream),
                     None => Data::Empty,
@@ -1567,6 +1578,32 @@ impl Log for SqlLog<'_> {
             .first()
             .and_then(|row| row["rows"].as_i64())
             .unwrap_or(0))
+    }
+
+    fn r2_writes_today(&self) -> std::result::Result<i64, Fault> {
+        let rows: Vec<Value> = self
+            .0
+            .exec(
+                "SELECT writes FROM r2_usage WHERE day = ?",
+                vec![(utc_day() as i64).into()],
+            )
+            .and_then(|cursor| cursor.to_array())
+            .map_err(fault)?;
+        Ok(rows
+            .first()
+            .and_then(|row| row["writes"].as_i64())
+            .unwrap_or(0))
+    }
+
+    fn add_r2_write(&mut self) -> std::result::Result<(), Fault> {
+        counted(
+            self.0,
+            "INSERT INTO r2_usage(day, writes) VALUES (?, 1) \
+             ON CONFLICT(day) DO UPDATE SET writes = writes + 1",
+            vec![(utc_day() as i64).into()],
+        )
+        .map(|_| ())
+        .map_err(fault)
     }
 
     fn drop_command(&mut self, id: &str, machine: &str) -> std::result::Result<bool, Fault> {
