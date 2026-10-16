@@ -279,7 +279,7 @@ impl<F: Files> View<'_, F> {
                     "id": p.id,
                     "name": p.name,
                     "remote": p.remote,
-                    "aliases": [],
+                    "aliases": p.aliases,
                     "created": p.created.to_string(),
                     "current": false,
                     "checkouts": [],
