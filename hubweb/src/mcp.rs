@@ -1,66 +1,156 @@
 //! mem's MCP endpoint, as hub serves it: Streamable HTTP, one JSON-RPC
-//! message per POST, a JSON reply, no session. The Worker has one tool so
-//! far, `handoff`, listed as hub lists it so claude.ai sees the same tool.
-//! The store read the tool needs is the Worker's; this file decides what
-//! each message asks for and shapes the reply.
+//! message per POST, a JSON reply, no session. It lists hub's tools and
+//! answers each from the store's files: a read goes through memview, and a
+//! write comes back as the store paths to write, since only the Worker can
+//! write the store. Nothing here runs mem.
+
+mod reads;
+mod tools;
+mod writes;
 
 use serde_json::{Value, json};
+
+use crate::memview;
 
 /// The revisions whose `initialize` handshake this endpoint speaks, newest
 /// first. A client asking for any other gets the newest.
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 
-/// What the Worker does with one message.
-#[derive(Debug, PartialEq)]
-pub enum Step {
-    /// Send this status and JSON body.
-    Reply(u16, String),
-    /// Read this project's handoff from the store, then answer with
-    /// `handoff_reply`.
-    Handoff { id: Value, project: String },
+/// The machine every item the connector writes names.
+const MACHINE: &str = "connector";
+
+/// What a call reads, when it runs, and the randomness each new item id takes.
+pub struct Store<'a, F: memview::Files> {
+    pub files: &'a F,
+    pub now: jiff::Timestamp,
+    pub random: &'a mut dyn FnMut() -> [u8; 10],
 }
 
-pub fn handle(body: &[u8]) -> Step {
-    let Ok(message) = serde_json::from_slice::<Value>(body) else {
-        return Step::Reply(400, error(Value::Null, -32700, "parse error"));
-    };
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
-        return Step::Reply(400, error(Value::Null, -32600, "invalid request"));
-    };
-    // A notification has no id and gets no answer.
-    let Some(id) = message.get("id").cloned() else {
-        return Step::Reply(202, String::new());
-    };
-    let params = message.get("params").cloned().unwrap_or(Value::Null);
-    let reply = match method {
-        "initialize" => result(id, initialize(&params)),
-        "ping" => result(id, json!({})),
-        "tools/list" => result(id, tools_list()),
-        "tools/call" => return tools_call(id, &params),
-        _ => error(id, -32601, "method not found"),
-    };
-    Step::Reply(200, reply)
+/// One message's answer.
+pub struct Served {
+    pub status: u16,
+    pub body: String,
+    /// Store paths to write, in order; None removes the path.
+    pub writes: Vec<(String, Option<String>)>,
+    /// Evidence bytes, by store path, for the files store.
+    pub files: Vec<(String, Vec<u8>)>,
 }
 
-/// The answer to a `handoff` call, from the store's text for the project.
-pub fn handoff_reply(id: Value, project: &str, text: Option<&str>) -> String {
-    match text {
-        Some(text) => result(id, tool_text(text, false)),
-        None => result(id, tool_text(&format!("no handoff for {project}"), true)),
+/// One JSON-RPC message in; the reply, the store paths to write (body None =
+/// remove) in order, and any evidence bytes to store.
+pub fn serve<F: memview::Files>(body: &[u8], store: Store<F>) -> Served {
+    let mut call = Call {
+        store,
+        writes: Vec::new(),
+        files: Vec::new(),
+    };
+    let (status, body) = call.message(body);
+    Served {
+        status,
+        body,
+        writes: call.writes,
+        files: call.files,
     }
 }
 
-fn tools_call(id: Value, params: &Value) -> Step {
-    if params.get("name").and_then(Value::as_str) != Some("handoff") {
-        return Step::Reply(200, error(id, -32602, "unknown tool"));
+/// One message being served, and the writes it has made so far.
+struct Call<'a, F: memview::Files> {
+    store: Store<'a, F>,
+    writes: Vec<(String, Option<String>)>,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+/// A tool's text, or the refusal it ends on.
+type Text = Result<String, String>;
+
+/// A project as the store names it: its directory id and its name.
+struct Project {
+    id: String,
+    name: String,
+}
+
+impl<F: memview::Files> Call<'_, F> {
+    fn message(&mut self, body: &[u8]) -> (u16, String) {
+        let Ok(message) = serde_json::from_slice::<Value>(body) else {
+            return (400, error(Value::Null, -32700, "parse error"));
+        };
+        let Some(method) = message.get("method").and_then(Value::as_str) else {
+            return (400, error(Value::Null, -32600, "invalid request"));
+        };
+        // A notification has no id and gets no answer.
+        let Some(id) = message.get("id").cloned() else {
+            return (202, String::new());
+        };
+        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let reply = match method {
+            "initialize" => result(id, initialize(&params)),
+            "ping" => result(id, json!({})),
+            "tools/list" => result(id, tools::tools_list()),
+            "tools/call" => self.tools_call(id, &params),
+            _ => error(id, -32601, "method not found"),
+        };
+        (200, reply)
     }
-    let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-    match project_arg(&arguments) {
-        Ok(project) => Step::Handoff {
-            id,
-            project: project.to_string(),
-        },
-        Err(why) => Step::Reply(200, result(id, tool_text(why, true))),
+
+    fn tools_call(&mut self, id: Value, params: &Value) -> String {
+        let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+        if !tools::TOOLS.iter().any(|tool| tool.name == name) {
+            return error(id, -32602, "unknown tool");
+        }
+        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+        let text = self.project(&arguments).and_then(|project| {
+            let a = &arguments;
+            let p = &project;
+            match name {
+                "context" => self.context(p, a),
+                "search" => self.search(p, a),
+                "show" => self.show(a),
+                "wiki" => self.wiki(p, a),
+                "questions" => self.questions(p, a),
+                "plan" => self.plan(p, a),
+                "roadmap" => self.roadmap(p, a),
+                "log" => self.log(p, a),
+                "handoff" => self.handoff(p),
+                "ask" => self.ask(p, a),
+                "answer" => self.answer(p, a),
+                "set_handoff" => self.save(p, "handoff", required(a, "text")?, vec![]),
+                "add_log" => self.save(p, "log", required(a, "text")?, vec![]),
+                "decide" => self.decide(p, a),
+                "tick_task" => self.tick(p, a, "task", "plan"),
+                "tick_milestone" => self.tick(p, a, "milestone", "roadmap"),
+                "write_wiki" => self.write_wiki(p, a),
+                "add_evidence" => self.add_evidence(p, a),
+                "add_finding" => self.add_finding(p, a),
+                _ => self.close_finding(a),
+            }
+        });
+        match text {
+            Ok(text) => result(id, tool_text(&text, false)),
+            Err(why) => result(id, tool_text(&why, true)),
+        }
+    }
+
+    /// The project the arguments name: checked to be only a name before the
+    /// store is read, then found as mem finds it, by name or alias.
+    fn project(&self, arguments: &Value) -> Result<Project, String> {
+        let name = project_arg(arguments)?;
+        let (id, name) = memview::project(self.store.files, name).ok_or_else(|| {
+            format!("mem: no project named '{name}' \u{2014} `mem projects` lists them")
+        })?;
+        Ok(Project { id, name })
+    }
+
+    /// What `mem <argv> --json` prints, read from the store; None where mem
+    /// prints nothing.
+    fn view(&self, argv: &[&str]) -> Result<Option<Value>, String> {
+        // First, since everything after a `--` is a word.
+        let mut argv = argv.to_vec();
+        argv.insert(0, "--json");
+        match memview::read(self.store.files, &argv, self.store.now) {
+            memview::Reply::Json(doc) => Ok(Some(doc)),
+            memview::Reply::Absent => Ok(None),
+            memview::Reply::Unknown => Err(format!("cannot read {argv:?} from the store")),
+        }
     }
 }
 
@@ -77,19 +167,70 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-fn tools_list() -> Value {
-    json!({"tools": [{
-        "name": "handoff",
-        "description": "The latest session handoff for a project: what was done and what comes next.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"project": {"type": "string", "description": "The project's name, as mem knows it."}},
-            "required": ["project"],
-        },
-    }]})
+/// The punctuation each kind of name may carry after its first character,
+/// which is always a letter or a digit, so no name can start like a flag.
+const ID: &[u8] = b"";
+const SLUG: &[u8] = b"._-";
+const WIKI_SLUG: &[u8] = b"._#-";
+
+fn checked<'a>(value: &'a str, key: &str, extra: &[u8]) -> Result<&'a str, String> {
+    let valid = value
+        .bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b));
+    if valid {
+        Ok(value)
+    } else {
+        Err(format!("{key} {value:?} is not a valid name"))
+    }
 }
 
-fn project_arg(arguments: &Value) -> Result<&str, &'static str> {
+fn one_of<'a>(value: &'a str, key: &str, allowed: &[&str]) -> Result<&'a str, String> {
+    if allowed.contains(&value) {
+        Ok(value)
+    } else {
+        Err(format!("{key} must be one of {}", allowed.join(", ")))
+    }
+}
+
+fn optional<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(format!("{key} must be a string")),
+    }
+}
+
+fn required<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, String> {
+    optional(arguments, key)?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{key} is required"))
+}
+
+fn flag(arguments: &Value, key: &str) -> Result<bool, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(on)) => Ok(*on),
+        Some(_) => Err(format!("{key} must be true or false")),
+    }
+}
+
+fn limit(arguments: &Value) -> Result<Option<String>, String> {
+    match arguments.get("limit") {
+        None | Some(Value::Null) => Ok(None),
+        Some(n) => n
+            .as_u64()
+            .map(|n| Some(n.to_string()))
+            .ok_or_else(|| "limit must be a whole number".into()),
+    }
+}
+
+/// A project name is checked before anything is read, so it can only ever
+/// be a name: no flag, no path, no space.
+fn project_arg(arguments: &Value) -> Result<&str, String> {
     let project = arguments
         .get("project")
         .and_then(Value::as_str)
@@ -101,7 +242,7 @@ fn project_arg(arguments: &Value) -> Result<&str, &'static str> {
     if valid {
         Ok(project)
     } else {
-        Err("project must be letters, digits, '.', '_' or '-'")
+        Err("project must be letters, digits, '.', '_' or '-'".into())
     }
 }
 
@@ -117,73 +258,65 @@ fn error(id: Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// What the Worker did with one message before `serve`: kept only so the
+/// Worker's current caller builds, and goes once that caller uses `serve`.
+#[derive(Debug, PartialEq)]
+pub enum Step {
+    /// Send this status and JSON body.
+    Reply(u16, String),
+    /// Read this project's handoff from the store, then answer with
+    /// `handoff_reply`.
+    Handoff { id: Value, project: String },
+}
 
-    fn reply(body: &str) -> (u16, Value) {
-        match handle(body.as_bytes()) {
-            Step::Reply(status, body) if body.is_empty() => (status, Value::Null),
-            Step::Reply(status, body) => (status, serde_json::from_str(&body).unwrap()),
-            step => panic!("expected a reply, got {step:?}"),
+/// The one-tool connector `Step` drives, kept beside `serve` until the
+/// Worker's caller moves to it.
+pub fn handle(body: &[u8]) -> Step {
+    let Ok(message) = serde_json::from_slice::<Value>(body) else {
+        return Step::Reply(400, error(Value::Null, -32700, "parse error"));
+    };
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return Step::Reply(400, error(Value::Null, -32600, "invalid request"));
+    };
+    let Some(id) = message.get("id").cloned() else {
+        return Step::Reply(202, String::new());
+    };
+    let params = message.get("params").cloned().unwrap_or(Value::Null);
+    let handoff = &tools::TOOLS[8];
+    let reply = match method {
+        "initialize" => result(id, initialize(&params)),
+        "ping" => result(id, json!({})),
+        "tools/list" => result(
+            id,
+            json!({"tools": [{
+                "name": handoff.name,
+                "description": handoff.description,
+                "inputSchema": (handoff.schema)(),
+            }]}),
+        ),
+        "tools/call" if params.get("name").and_then(Value::as_str) == Some("handoff") => {
+            let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+            return match project_arg(&arguments) {
+                Ok(project) => Step::Handoff {
+                    id,
+                    project: project.to_string(),
+                },
+                Err(why) => Step::Reply(200, result(id, tool_text(&why, true))),
+            };
         }
-    }
+        "tools/call" => error(id, -32602, "unknown tool"),
+        _ => error(id, -32601, "method not found"),
+    };
+    Step::Reply(200, reply)
+}
 
-    #[test]
-    fn initialize_answers_the_version_asked_for_or_the_newest() {
-        let (status, body) = reply(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
-        );
-        assert_eq!(status, 200);
-        assert_eq!(body["result"]["protocolVersion"], "2025-03-26");
-        assert_eq!(body["result"]["serverInfo"]["name"], "mem");
-        let (_, body) = reply(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}"#,
-        );
-        assert_eq!(body["result"]["protocolVersion"], "2025-11-25");
-    }
-
-    #[test]
-    fn a_notification_gets_202_and_no_body() {
-        assert_eq!(
-            reply(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#),
-            (202, Value::Null)
-        );
-    }
-
-    #[test]
-    fn unreadable_messages_get_400() {
-        assert_eq!(reply("{").1["error"]["code"], -32700);
-        assert_eq!(reply(r#"{"id":1}"#).1["error"]["code"], -32600);
-    }
-
-    #[test]
-    fn tools_call_handoff_asks_for_the_project_s_handoff() {
-        let step = handle(br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"handoff","arguments":{"project":"walkone"}}}"#);
-        assert_eq!(
-            step,
-            Step::Handoff {
-                id: json!(7),
-                project: "walkone".to_string()
-            }
-        );
-        let body: Value =
-            serde_json::from_str(&handoff_reply(json!(7), "walkone", Some("Next: ship."))).unwrap();
-        assert_eq!(
-            body,
-            json!({"jsonrpc": "2.0", "id": 7, "result": {"content": [{"type": "text", "text": "Next: ship."}], "isError": false}})
-        );
-    }
-
-    #[test]
-    fn tools_call_refuses_a_bad_project_and_an_unknown_tool() {
-        let (_, body) = reply(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"handoff","arguments":{"project":"../x"}}}"#,
-        );
-        assert_eq!(body["result"]["isError"], true);
-        let (_, body) = reply(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{}}}"#,
-        );
-        assert_eq!(body["error"]["code"], -32602);
+/// The answer to a `handoff` call `Step` asked for.
+pub fn handoff_reply(id: Value, project: &str, text: Option<&str>) -> String {
+    match text {
+        Some(text) => result(id, tool_text(text, false)),
+        None => result(id, tool_text(&format!("no handoff for {project}"), true)),
     }
 }
+
+#[cfg(test)]
+mod tests;
