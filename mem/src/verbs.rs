@@ -2552,7 +2552,8 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
                 ));
             };
             let saved = crate::share::export(&db, &top, &app.machine)?;
-            println!("saved {saved} writes to {}", crate::share::OUTBOX_FILE);
+            let noun = if saved == 1 { "write" } else { "writes" };
+            println!("saved {saved} {noun} to {}", crate::share::OUTBOX_FILE);
         }
     }
     Ok(exit::OK)

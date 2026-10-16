@@ -245,3 +245,97 @@ fn an_imported_page_keeps_its_base_and_lands_nothing_before_the_store_answers() 
     assert_eq!(write["base"], first);
     assert_eq!(write["body"], "# Notes\n\nthe cloud's\n");
 }
+
+/// Puts a cloud's outbox file holding `writes` in a checkout of `w`'s and
+/// runs mem there, which imports it.
+fn import(w: &World, writes: Value) {
+    let repo = checkout(w);
+    let file = json!({"machine": "cloud", "writes": writes});
+    std::fs::write(repo.join(FILE), file.to_string()).unwrap();
+    walk_in(w, &repo, &["projects"]);
+    assert!(!repo.join(FILE).exists());
+}
+
+fn notes(w: &World) -> String {
+    stdout(&walk_in(w, w.dir.path(), &["wiki", "notes"]))
+}
+
+const PAGE_X: &str = "01K0OUTBOXX000000000000001";
+
+#[test]
+fn a_late_ack_of_an_imported_page_never_lands_over_a_newer_one() {
+    let page = format!("projects/{ID}/wiki/notes.md");
+    let mini = machine("mini");
+    apply(
+        &mini,
+        &[
+            json!({"t": "rec", "seq": 7, "id": "01K0OUTBOXY000000000000001", "path": page,
+                 "body": "# Notes\n\nY\n", "machine": "mini"}),
+        ],
+    );
+    import(
+        &mini,
+        json!([{"id": PAGE_X, "path": page, "base": null, "body": "# Notes\n\nX\n"}]),
+    );
+    apply(&mini, &[json!({"t": "ack", "id": PAGE_X, "seq": 5})]);
+    assert_eq!(notes(&mini), "# Notes\n\nY\n");
+    assert!(pending(&mini).is_empty());
+}
+
+#[test]
+fn a_fresh_ack_of_an_imported_page_lands_it() {
+    let page = format!("projects/{ID}/wiki/notes.md");
+    let mini = machine("mini");
+    import(
+        &mini,
+        json!([{"id": PAGE_X, "path": page, "base": null, "body": "# Notes\n\nX\n"}]),
+    );
+    apply(&mini, &[json!({"t": "ack", "id": PAGE_X, "seq": 3})]);
+    assert_eq!(notes(&mini), "# Notes\n\nX\n");
+}
+
+#[test]
+fn an_imported_page_replayed_before_its_ack_lands_it() {
+    // The store already held X: the replay after hello brings X while it
+    // still waits here, and the re-ack carries the same seq.
+    let page = format!("projects/{ID}/wiki/notes.md");
+    let mini = machine("mini");
+    import(
+        &mini,
+        json!([{"id": PAGE_X, "path": page, "base": null, "body": "# Notes\n\nX\n"}]),
+    );
+    apply(
+        &mini,
+        &[
+            json!({"t": "rec", "seq": 5, "id": PAGE_X, "path": page,
+                   "body": "# Notes\n\nX\n", "machine": "cloud"}),
+            json!({"t": "ack", "id": PAGE_X, "seq": 5}),
+        ],
+    );
+    assert_eq!(notes(&mini), "# Notes\n\nX\n");
+}
+
+#[test]
+fn an_imported_item_never_replaces_one_the_replica_holds() {
+    let mini = machine("mini");
+    let mut item = common::item(mem::item::Kind::Log, "outbox item", "the mini's\n");
+    item.meta.id = "01K0OUTBOX1TEM000000000001".to_string();
+    item.meta.project = Some("walk".to_string());
+    let path = format!("projects/{ID}/items/{}.md", item.meta.id);
+    let held = String::from_utf8(item.to_bytes().unwrap()).unwrap();
+    apply(
+        &mini,
+        &[
+            json!({"t": "rec", "seq": 7, "id": "01K0OUTBOXW000000000000001", "path": path,
+                 "body": held, "machine": "mini"}),
+        ],
+    );
+    item.body = b"the cloud's older\n".to_vec();
+    let older = String::from_utf8(item.to_bytes().unwrap()).unwrap();
+    import(
+        &mini,
+        json!([{"id": "01K0OUTBOXW000000000000000", "path": path, "base": null, "body": older}]),
+    );
+    let file = mini.dirs().store().join(&path);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), held);
+}

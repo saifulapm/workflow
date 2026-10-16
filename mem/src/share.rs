@@ -314,10 +314,20 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
                 match take_skipped(&tx, &rel)? {
                     // Another machine wrote this path after mine while mine
                     // waited (a lost ack, then a replay): its version is the
-                    // newer one.
-                    Some((theirs, seq, theirs_body)) if seq > acked => {
+                    // newer one. At the same seq it is this write itself,
+                    // replayed to a replica that imported it and holds no
+                    // head for it.
+                    Some((theirs, seq, theirs_body)) if seq >= acked => {
                         land(&file, theirs_body.as_deref())?;
                         set_head(&tx, &rel, &theirs)?;
+                    }
+                    // An imported write the store appended just now, past
+                    // every record this replica has seen, is the newest. A
+                    // re-ack at or below that seq is a write this replica
+                    // already passed, so nothing lands.
+                    _ if acked > seq(&tx)? as i64 && was_imported(&tx, &id)? => {
+                        land(&file, body.as_deref())?;
+                        set_head(&tx, &rel, &id)?;
                     }
                     // The replica missed this write when mem died between the
                     // outbox and the rename; the ack is the moment to heal it.
@@ -372,6 +382,13 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
     }
     tx.commit()?;
     Ok(())
+}
+
+fn was_imported(conn: &Connection, id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row("SELECT 1 FROM imported WHERE id = ?1", [id], |_| Ok(()))
+        .optional()?
+        .is_some())
 }
 
 /// Removes the newest record from elsewhere that was passed over for `rel`
@@ -524,13 +541,13 @@ pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
             "INSERT OR IGNORE INTO outbox(id, path, base, body) VALUES (?1, ?2, ?3, ?4)",
             params![id, rel, base, body],
         )?;
-        // An item is never refused, so it lands now. A page waits for the
-        // store: its ack lands it through the heal path, which wants the head
-        // to be this write, and a refusal turns it into a conflict file.
-        if is_item(&rel) {
+        // The replica may already hold something newer than this write, so
+        // nothing but a new item lands now and no head moves: the store's
+        // ack says whether the write is the newest (see `apply`), and a
+        // refusal turns a page into a conflict file.
+        if is_item(&rel) && !file.exists() {
             land(&file, body.as_deref())?;
         }
-        set_head(&tx, &rel, &id)?;
     }
     tx.commit()?;
     remove_outbox_file(top)?;
