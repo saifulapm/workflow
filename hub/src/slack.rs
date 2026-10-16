@@ -189,6 +189,13 @@ impl Slack {
         })
     }
 
+    /// Posts one plain line to the bot's DM with Saiful.
+    pub fn post_text(&self, text: &str) -> Result<()> {
+        let body = json!({"channel": self.user_id, "text": text});
+        self.call("chat.postMessage", &self.bot_token, Some(&body))?;
+        Ok(())
+    }
+
     /// Replaces the buttons with the answer, so the message offers no second tap.
     pub fn mark_answered(&self, channel: &str, ts: &str, answer: &str, text: &str) -> Result<()> {
         let line = format!("{}\n*Answered:* {}", escape(text), escape(answer));

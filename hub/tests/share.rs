@@ -3,8 +3,8 @@
 
 mod common;
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -19,6 +19,8 @@ const PEER_TOKEN: &str = "peer-token-for-tests-0123456789abcdef";
 const STORE_TOKEN: &str = "store-token-for-tests-fedcba9876543210";
 const HELLO: &str = r#"{"t":"hello","machine":"testbox","since":41}"#;
 const WRITE_A: &str = r#"{"t":"write","id":"01J00000000000000000000AAA","path":"projects/P/wiki/a.md","base":null,"body":"a"}"#;
+const LIMIT: &str = r#"{"t":"limit"}"#;
+const NOTICE: &str = "Cloudflare limit reached, resets 06:00";
 const WRITE_B: &str = r#"{"t":"write","id":"01J00000000000000000000BBB","path":"projects/P/wiki/b.md","base":null,"body":"b"}"#;
 
 /// What the fake store saw, connection by connection.
@@ -302,4 +304,179 @@ fn without_both_store_variables_nothing_connects_and_the_hub_still_serves() {
         let ping = on_socket(&socket, "GET /ping HTTP/1.1\r\nHost: x\r\n\r\n");
         assert_eq!(status_of(&ping), 200, "{ping}");
     }
+}
+
+/// A Slack Web API that records the body of each chat.postMessage.
+fn fake_slack() -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let api = format!("http://{}/api", listener.local_addr().unwrap());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&posts);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            answer_slack(stream, &recorded);
+        }
+    });
+    (api, posts)
+}
+
+fn answer_slack(mut stream: TcpStream, posts: &Mutex<Vec<String>>) {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let path = line.split(' ').nth(1).unwrap_or("").to_string();
+    let mut length = 0;
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().unwrap();
+        }
+    }
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).unwrap();
+    let reply = if path == "/api/chat.postMessage" {
+        posts.lock().unwrap().push(String::from_utf8(body).unwrap());
+        r#"{"ok":true,"channel":"D0DM","ts":"1700000000.000100"}"#
+    } else {
+        r#"{"ok":false,"error":"unknown_method"}"#
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+        reply.len()
+    );
+}
+
+fn spawn_limited(
+    dir: &TempDir,
+    bin: &Path,
+    store: &FakeStore,
+    slack: Option<&str>,
+    now: &str,
+) -> Hub {
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), "testbox\n").unwrap();
+    let socket = dir.join("local.sock");
+    let clock = dir.join("now");
+    std::fs::write(&clock, now).unwrap();
+    let mut env = vec![
+        ("HUB_PEER_TOKEN", PEER_TOKEN),
+        ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+        ("HUB_STORE_URL", store.url.as_str()),
+        ("HUB_STORE_TOKEN", STORE_TOKEN),
+        ("HUB_SHARE_NOW_FILE", clock.to_str().unwrap()),
+    ];
+    if let Some(api) = slack {
+        env.extend([
+            ("SLACK_BOT_TOKEN", "xoxb-fake"),
+            ("SLACK_APP_TOKEN", "xapp-fake"),
+            ("SLACK_USER_ID", "U0SAIFUL"),
+            ("SLACK_API_URL", api),
+        ]);
+    }
+    Hub::spawn_env(&home, &[bin], &["local", "--port", "0"], &env)
+}
+
+/// The store has refused the first write; returns once the hub has heard it.
+fn hit_the_limit(dir: &TempDir, store: &FakeStore) {
+    std::fs::write(dir.join("pending"), format!("{WRITE_A}\n")).unwrap();
+    wait_for("the first write", Duration::from_secs(5), || {
+        store.texts_on(0).len() >= 2
+    });
+    store.send(LIMIT);
+    let applied = dir.join("applied");
+    wait_for("the limit applied", Duration::from_secs(2), || {
+        std::fs::read_to_string(&applied)
+            .unwrap_or_default()
+            .contains(LIMIT)
+    });
+}
+
+#[test]
+fn the_next_reset_is_the_next_midnight_utc() {
+    let at = |s: &str| s.parse::<jiff::Timestamp>().unwrap();
+    assert_eq!(
+        hub::share::next_reset(at("2026-10-16T13:00:00+06:00")),
+        at("2026-10-17T00:00:00Z")
+    );
+    assert_eq!(
+        hub::share::next_reset(at("2026-10-16T05:59:00+06:00")),
+        at("2026-10-16T00:00:00Z")
+    );
+    assert_eq!(
+        hub::share::next_reset(at("2026-10-16T00:00:00Z")),
+        at("2026-10-17T00:00:00Z")
+    );
+}
+
+#[test]
+fn after_a_limit_writes_are_held_but_the_stores_frames_still_apply() {
+    let dir = TempDir::new("share-limit");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let _hub = spawn_limited(&dir, &bin, &store, None, "2026-10-16T13:00:00+06:00");
+    hit_the_limit(&dir, &store);
+
+    std::fs::write(dir.join("pending"), format!("{WRITE_A}\n{WRITE_B}\n")).unwrap();
+    assert_eq!(status_of(&kick(&dir)), 204);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(store.texts_on(0), [HELLO, WRITE_A]);
+
+    let rec = r#"{"t":"rec","seq":42,"id":"01J00000000000000000000CCC","path":"projects/P/wiki/c.md","body":"c","machine":"nuc"}"#;
+    store.send(rec);
+    let applied = dir.join("applied");
+    wait_for("the rec applied", Duration::from_secs(2), || {
+        std::fs::read_to_string(&applied)
+            .unwrap_or_default()
+            .contains(rec)
+    });
+}
+
+#[test]
+fn past_the_reset_the_held_writes_go_out_again() {
+    let dir = TempDir::new("share-resume");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let _hub = spawn_limited(&dir, &bin, &store, None, "2026-10-16T13:00:00+06:00");
+    hit_the_limit(&dir, &store);
+    std::fs::write(dir.join("pending"), format!("{WRITE_A}\n{WRITE_B}\n")).unwrap();
+    assert_eq!(status_of(&kick(&dir)), 204);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(store.texts_on(0), [HELLO, WRITE_A]);
+
+    // 06:00 Dhaka the next day is 2026-10-17T00:00:00Z.
+    std::fs::write(dir.join("now"), "2026-10-17T00:00:01Z").unwrap();
+    wait_for("the held writes", Duration::from_secs(2), || {
+        store.texts_on(0).len() >= 4
+    });
+    assert_eq!(store.texts_on(0), [HELLO, WRITE_A, WRITE_A, WRITE_B]);
+}
+
+#[test]
+fn the_first_limit_of_a_dhaka_day_posts_one_dm_line_and_a_second_posts_none() {
+    let dir = TempDir::new("share-notice");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let (api, posts) = fake_slack();
+    let _hub = spawn_limited(&dir, &bin, &store, Some(&api), "2026-10-16T13:00:00+06:00");
+    hit_the_limit(&dir, &store);
+    wait_for("the DM", Duration::from_secs(3), || {
+        !posts.lock().unwrap().is_empty()
+    });
+    let post: serde_json::Value = serde_json::from_str(&posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(post["channel"], "U0SAIFUL");
+    assert_eq!(post["text"], NOTICE);
+
+    store.send(LIMIT);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(posts.lock().unwrap().len(), 1);
 }

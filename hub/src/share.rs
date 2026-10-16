@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde_json::Value;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::error::UrlError;
@@ -21,6 +23,7 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 use crate::proc::{self, Ended};
+use crate::slack::Slack;
 
 const BACKOFF_START: Duration = Duration::from_secs(1);
 /// The outbox should empty within 10 s of the store coming back, so the wait
@@ -35,6 +38,18 @@ const QUIET: Duration = Duration::from_secs(75);
 /// Frames are handed to `mem share apply` once the socket goes quiet, or once
 /// they have waited this long.
 const APPLY_WITHIN: Duration = Duration::from_millis(300);
+
+/// The next 00:00 UTC after `now`, which is 06:00 in Dhaka (UTC+6, no DST):
+/// when Cloudflare's Free daily counters start again.
+pub fn next_reset(now: jiff::Timestamp) -> jiff::Timestamp {
+    const DAY: i64 = 86_400;
+    jiff::Timestamp::from_second((now.as_second().div_euclid(DAY) + 1) * DAY)
+        .expect("a day after a valid time is in range")
+}
+
+/// What Saiful is told when the store answers `limit`; the hubweb home shows
+/// the same line.
+const LIMIT_NOTICE: &str = "Cloudflare limit reached, resets 06:00";
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
 
@@ -52,11 +67,21 @@ pub fn from_env() -> Option<(String, String)> {
 
 /// Holds the socket for good. A dropped or failed connection is tried again
 /// after 1, 2, 4, then 8 s, and a `ready` from the store resets the wait.
-/// `kick` is set when mem has put a write in the outbox.
-pub fn run(url: &str, token: &str, kick: Arc<AtomicBool>) -> ! {
+/// `kick` is set when mem has put a write in the outbox. After the store
+/// answers `limit`, no write is sent until the next 00:00 UTC, on this
+/// connection or the next; `slack` hears of it once per Dhaka day.
+pub fn run(url: &str, token: &str, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! {
     let mut backoff = BACKOFF_START;
+    let mut paused_until = None;
     loop {
-        match session(url, token, &kick, &mut backoff) {
+        match session(
+            url,
+            token,
+            &kick,
+            &mut backoff,
+            &mut paused_until,
+            slack.as_deref(),
+        ) {
             Ok(()) => eprintln!("hub: share: the store closed the socket"),
             Err(e) => eprintln!("hub: share: disconnected: {e:#}"),
         }
@@ -66,7 +91,14 @@ pub fn run(url: &str, token: &str, kick: Arc<AtomicBool>) -> ! {
 }
 
 /// One connection, until the store closes it (`Ok`) or it fails.
-fn session(url: &str, token: &str, kick: &AtomicBool, backoff: &mut Duration) -> Result<()> {
+fn session(
+    url: &str,
+    token: &str,
+    kick: &AtomicBool,
+    backoff: &mut Duration,
+    paused_until: &mut Option<Timestamp>,
+    slack: Option<&Slack>,
+) -> Result<()> {
     let mut request = url.into_client_request().context("reading HUB_STORE_URL")?;
     request.headers_mut().insert(
         "Authorization",
@@ -94,7 +126,9 @@ fn session(url: &str, token: &str, kick: &AtomicBool, backoff: &mut Duration) ->
     // A kick before this point is covered by the full send below.
     kick.store(false, Ordering::SeqCst);
     let mut sent = HashSet::new();
-    send_pending(&mut socket, &mut sent)?;
+    if paused_until.is_none() {
+        send_pending(&mut socket, &mut sent)?;
+    }
 
     let mut heard = Instant::now();
     let mut pinged = Instant::now();
@@ -134,12 +168,24 @@ fn session(url: &str, token: &str, kick: &AtomicBool, backoff: &mut Duration) ->
             if kinds.iter().any(|k| k == "ready") {
                 *backoff = BACKOFF_START;
             }
+            if kinds.iter().any(|k| k == "limit") {
+                let at = now();
+                *paused_until = Some(next_reset(at));
+                notify_once_a_day(slack, at);
+            }
             // An ack or a refusal changes the outbox; mem may have more.
             if kinds.iter().any(|k| k == "ack" || k == "refused") {
                 kick.store(true, Ordering::SeqCst);
             }
         }
-        if kick.swap(false, Ordering::SeqCst) {
+        if paused_until.is_some_and(|until| now() >= until) {
+            *paused_until = None;
+            // The write the store refused is in `sent` too.
+            sent.clear();
+            kick.store(true, Ordering::SeqCst);
+        }
+        // A kick during the pause is dropped: the resume above sends it all.
+        if kick.swap(false, Ordering::SeqCst) && paused_until.is_none() {
             send_pending(&mut socket, &mut sent)?;
         }
         if heard.elapsed() >= QUIET {
@@ -151,6 +197,42 @@ fn session(url: &str, token: &str, kick: &AtomicBool, backoff: &mut Duration) ->
                 .context("pinging the store")?;
             pinged = Instant::now();
         }
+    }
+}
+
+/// The clock. `HUB_SHARE_NOW_FILE` names a file holding an RFC 3339 time that
+/// stands in for it, so a test can move past the reset without waiting.
+fn now() -> Timestamp {
+    std::env::var("HUB_SHARE_NOW_FILE")
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or_else(Timestamp::now)
+}
+
+/// Posts the limit line to Saiful's DM unless it already went out this Dhaka
+/// day. The day is kept in `$XDG_STATE_HOME/hub/limit-notice`, so a restart
+/// does not post again, and only once Slack took the post.
+fn notify_once_a_day(slack: Option<&Slack>, at: Timestamp) {
+    let Some(slack) = slack else { return };
+    let Ok(state) = crate::config::state_home() else {
+        return;
+    };
+    let dir = state.join("hub");
+    let file = dir.join("limit-notice");
+    let day = at
+        .to_zoned(TimeZone::fixed(jiff::tz::offset(6)))
+        .date()
+        .to_string();
+    if std::fs::read_to_string(&file).is_ok_and(|seen| seen.trim() == day) {
+        return;
+    }
+    if let Err(e) = slack.post_text(LIMIT_NOTICE) {
+        eprintln!("hub: share: posting the limit notice: {e:#}");
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&file, &day)) {
+        eprintln!("hub: share: remembering the limit notice: {e}");
     }
 }
 

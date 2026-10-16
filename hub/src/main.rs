@@ -239,6 +239,7 @@ fn run_local(port: u16) -> Result<()> {
         }
     };
     let local = Arc::new(local::Local::new(machine, host, token, slack.clone()));
+    let notice = slack.clone();
     if let Some(slack) = slack {
         let local = Arc::clone(&local);
         std::thread::Builder::new()
@@ -259,7 +260,7 @@ fn run_local(port: u16) -> Result<()> {
         let kick = local.kick();
         std::thread::Builder::new()
             .name("hub-share".to_string())
-            .spawn(move || hub::share::run(&url, &token, kick))
+            .spawn(move || hub::share::run(&url, &token, kick, notice))
             .context("starting the sharing socket")?;
     }
     let for_mem = Arc::clone(&local);
