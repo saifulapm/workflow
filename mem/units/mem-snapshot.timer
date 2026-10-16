@@ -1,0 +1,9 @@
+[Unit]
+Description=Snapshot the mem store to Dropbox each week
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

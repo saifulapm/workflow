@@ -1,0 +1,12 @@
+[Unit]
+Description=Snapshot the mem store to Dropbox and archive old files off Cloudflare
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# HUB_STORE_URL, HUB_STORE_TOKEN and HUB_STORE_NAME for hub share archive.
+EnvironmentFile=%h/.config/hub/local.env
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/.local/bin/mem-snapshot
+SyslogIdentifier=mem-snapshot
