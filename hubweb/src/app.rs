@@ -1389,8 +1389,9 @@ impl Files {
     /// Copies files into R2, oldest path first, until about `MOVE_BYTES`
     /// have gone. Each is put with its SHA-256, which R2 checks against the
     /// bytes it got, and its rows go only once the stored object's size and
-    /// SHA-256 match them. A path R2 already holds with other bytes was put
-    /// again since the move to R2, so that newer copy stays and the rows go.
+    /// SHA-256 match them. A path R2 already holds was put again since the
+    /// move to R2: when its bytes are the rows' own, the file counts as
+    /// moved, and otherwise that newer copy stays; the rows go either way.
     async fn move_batch(&self) -> Result<Value> {
         let bucket = self.env.bucket(BUCKET)?;
         let paths: Vec<Value> = self
@@ -1404,19 +1405,27 @@ impl Files {
                 break;
             }
             let bytes = files::join(self.get(path)?);
-            let (size, digest) = (bytes.len(), digest(&bytes).await?);
+            let (size, sha) = (bytes.len(), digest(&bytes).await?);
             let same = |found: &Object| {
-                found.size() == size as u64 && found.checksum().sha256.as_ref() == Some(&digest)
+                found.size() == size as u64 && found.checksum().sha256.as_ref() == Some(&sha)
             };
             match bucket.head(path).await? {
                 Some(held) if same(&held) => moved += 1,
-                Some(_) => newer += 1,
+                // An object a machine put carries no SHA-256, so its bytes
+                // are read to tell the same file from a newer one.
+                Some(_) => match bucket.get(path).execute().await? {
+                    Some(found) if found.size() == size as u64 => {
+                        let body = found.body().ok_or(Error::BodyUsed)?.bytes().await?;
+                        if digest(&body).await? == sha {
+                            moved += 1;
+                        } else {
+                            newer += 1;
+                        }
+                    }
+                    _ => newer += 1,
+                },
                 None => {
-                    let put = bucket
-                        .put(path, bytes)
-                        .sha256(digest.clone())
-                        .execute()
-                        .await;
+                    let put = bucket.put(path, bytes).sha256(sha.clone()).execute().await;
                     match put {
                         Ok(Some(found)) if same(&found) => moved += 1,
                         Ok(_) => {
@@ -1430,10 +1439,13 @@ impl Files {
                     }
                 }
             }
+            // A cursor writes only as it is read.
             self.sql
-                .exec("DELETE FROM chunks WHERE path = ?", vec![path.into()])?;
+                .exec("DELETE FROM chunks WHERE path = ?", vec![path.into()])?
+                .to_array::<Value>()?;
             self.sql
-                .exec("DELETE FROM stored WHERE path = ?", vec![path.into()])?;
+                .exec("DELETE FROM stored WHERE path = ?", vec![path.into()])?
+                .to_array::<Value>()?;
             sent += size.max(1);
         }
         let left: Vec<Value> = self

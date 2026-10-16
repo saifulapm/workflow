@@ -5,7 +5,8 @@
 # those rows, then `hub share move` has each Files object copy its files
 # into R2, checking each copy's length and SHA-256 before its rows go.
 # After the move each file reads the same, a binary put again since the new
-# build keeps its newer copy, and a second move finds nothing left. Only the
+# build keeps its newer copy, a file put again with the same bytes counts as
+# moved, and a second move finds nothing left. Only the
 # shared bearer moves.
 #
 # Needs what t143 needs, and git: the old build is hubweb and hubpages as
@@ -96,6 +97,8 @@ done
 is "$same" 3 "before the move, the new build reads each file from its Files object"
 is "$(sha_of /store/dl/mem-x86_64)" "$(sha "$T_TMP/mem.old")" "and the binary"
 is "$(put "$T_TMP/mem.new" /store/dl/mem-x86_64)" 204 "a newer binary goes to R2"
+is "$(put "$T_TMP/shot.png" "/store/files/projects/$P1/evidence/t1/shot.png")" 204 \
+	"the same shot put again goes to R2, where it counts as moved"
 
 # The store has no items of these projects, so the move learns them from
 # this replica's project folders.
