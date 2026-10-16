@@ -37,6 +37,11 @@ static DONE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// The worker's queue, once `start` has run.
 static QUEUE: OnceLock<Sender<(String, Job)>> = OnceLock::new();
 
+/// This machine's runner name, as `start` was given it: a cmd frame names
+/// the machine to run it, and asking tailscale again for each would hold
+/// the socket's thread on a wedged tailscaled.
+static MACHINE: OnceLock<String> = OnceLock::new();
+
 /// The done frames to send, taken.
 pub fn dones() -> Vec<String> {
     std::mem::take(&mut *DONE.lock().unwrap_or_else(|e| e.into_inner()))
@@ -88,6 +93,7 @@ pub fn start(machine: String) {
     if QUEUE.set(tx).is_err() {
         return;
     }
+    let _ = MACHINE.set(machine.clone());
     let spawned = std::thread::Builder::new()
         .name("hub-commands".to_string())
         .spawn(move || {
@@ -116,7 +122,7 @@ pub fn take(frame: &str) {
     let (Some(id), Some(machine)) = (message["id"].as_str(), message["machine"].as_str()) else {
         return;
     };
-    if fleet::runner_name().as_deref() != Some(machine) {
+    if MACHINE.get().map(String::as_str) != Some(machine) {
         return;
     }
     match serde_json::from_value::<Job>(message["command"].clone()) {
@@ -279,7 +285,7 @@ const RESUME_AGAIN_AFTER: Duration = Duration::from_secs(60);
 /// 200 started, 404 not a run of this machine, 409 not stalled (or resumed a
 /// moment ago), 502 mem or amx could not say, or the start failed.
 pub fn resume_stalled(project: &str) -> u16 {
-    let Some(machine) = fleet::runner_name() else {
+    let Some(machine) = MACHINE.get().cloned().or_else(fleet::runner_name) else {
         return 404;
     };
     match crate::stalls::standing(&machine, project) {

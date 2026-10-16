@@ -37,6 +37,28 @@ pub fn runner_name() -> Option<String> {
     (!label.is_empty()).then(|| label.to_string())
 }
 
+/// The runner name, asked again every 10 s until there is one; said once
+/// in the log while there is none.
+pub fn wait_for_runner_name() -> String {
+    let mut said = false;
+    loop {
+        if let Some(name) = runner_name() {
+            if said {
+                eprintln!("hub: runs: this machine is {name}");
+            }
+            return name;
+        }
+        if !said {
+            eprintln!(
+                "hub: runs: no runner name yet (WORKFLOW_MACHINE unset, no tailnet name): \
+                 no report, commands, stalls or resumes until there is; asking every 10 s"
+            );
+            said = true;
+        }
+        std::thread::sleep(Duration::from_secs(10));
+    }
+}
+
 fn ms_from_env(name: &str, default: Duration) -> Duration {
     std::env::var(name)
         .ok()

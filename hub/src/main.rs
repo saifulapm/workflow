@@ -306,15 +306,8 @@ fn run_local(port: u16) -> Result<()> {
             .spawn(move || catch_up.catch_up_replies())
             .context("starting the Slack catch-up")?;
     }
+    let sharing = store.is_some();
     if let Some(store) = store {
-        // Without a runner name no run here could be matched to its report.
-        if let Some(name) = hub::fleet::runner_name() {
-            hub::runs::start(name.clone());
-            std::thread::Builder::new()
-                .name("hub-report".to_string())
-                .spawn(move || hub::fleet::run(name))
-                .context("starting the machine report")?;
-        }
         let kick = local.kick();
         let applied = Arc::clone(&local);
         hub::share::when_applied(move || applied.nudge());
@@ -325,19 +318,38 @@ fn run_local(port: u16) -> Result<()> {
             .spawn(move || hub::share::run(store, kick, notice))
             .context("starting the sharing socket")?;
     }
+    // The runs of this machine, under its runner name: without one no run
+    // here could be matched to its report. tailscale may not answer yet
+    // when the unit starts, so the name is asked again until it does,
+    // rather than the jobs going missing for the process's whole life.
     // A parked session's answers may come with no network at all, from the
-    // popup or `mem answer` here, so this needs no store; nor do the rings.
-    if let Some(name) = hub::fleet::runner_name() {
-        let (name_too, slack, hub_host) = (name.clone(), bell, host.clone());
-        std::thread::Builder::new()
-            .name("hub-stalls".to_string())
-            .spawn(move || hub::stalls::run(name_too, hub_host, slack))
-            .context("starting the stall bell")?;
-        std::thread::Builder::new()
-            .name("hub-parked".to_string())
-            .spawn(move || hub::parked::run(name))
-            .context("starting the parked-session check")?;
-    }
+    // popup or `mem answer` here, so the parked check and the rings need no
+    // store; the report and the commands do.
+    let hub_host = host.clone();
+    std::thread::Builder::new()
+        .name("hub-runs".to_string())
+        .spawn(move || {
+            let name = hub::fleet::wait_for_runner_name();
+            if sharing {
+                hub::runs::start(name.clone());
+                let report = name.clone();
+                if let Err(e) = std::thread::Builder::new()
+                    .name("hub-report".to_string())
+                    .spawn(move || hub::fleet::run(report))
+                {
+                    eprintln!("hub: starting the machine report: {e}");
+                }
+            }
+            let stalls = name.clone();
+            if let Err(e) = std::thread::Builder::new()
+                .name("hub-stalls".to_string())
+                .spawn(move || hub::stalls::run(stalls, hub_host, bell))
+            {
+                eprintln!("hub: starting the stall bell: {e}");
+            }
+            hub::parked::run(name)
+        })
+        .context("starting this machine's runs")?;
     let for_mem = Arc::clone(&local);
     std::thread::Builder::new()
         .name("hub-local-socket".to_string())
