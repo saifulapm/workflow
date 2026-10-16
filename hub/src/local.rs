@@ -83,6 +83,9 @@ pub struct Local {
     asked: Mutex<HashMap<String, Asked>>,
     /// Every open question this hub knows, asked here or on a peer.
     known: Arc<Known>,
+    /// The Slack message (channel, ts) of each question this hub posted, so
+    /// an answer from anywhere takes its buttons away.
+    posted: Arc<Mutex<HashMap<String, (String, String)>>>,
     /// Where this machine's person questions ring.
     route_now: LocalRoute,
     /// Answers by question short id, kept for a wait that comes later.
@@ -103,6 +106,7 @@ impl Local {
         Local {
             machine,
             known: Arc::new(Known::load(host.clone())),
+            posted: Arc::new(Mutex::new(HashMap::new())),
             route_now: LocalRoute::load(),
             host,
             token,
@@ -440,6 +444,7 @@ impl Local {
         let ringer = Ringer {
             slack: self.slack.clone(),
             known: Arc::clone(&self.known),
+            posted: Arc::clone(&self.posted),
             host: self.host.clone(),
             token: self.token.clone(),
             question: Question {
@@ -690,14 +695,14 @@ impl Local {
             answers.insert(question.to_string(), standing.clone());
             self.answered.notify_all();
             drop(answers);
-            self.closed(question);
+            self.closed(question, &standing);
             return Err(standing);
         }
         answers.insert(question.to_string(), answer.to_string());
         self.answered.notify_all();
         drop(answers);
         if asked_here {
-            self.closed(question);
+            self.closed(question, answer);
         }
         if self.records && asked_here {
             let mut argv = vec!["answer".to_string(), "--by".into(), by.into()];
@@ -732,11 +737,27 @@ impl Local {
         Ok(())
     }
 
-    /// Drops an answered question here and on every peer, so no bar counts it.
-    fn closed(&self, question: &str) {
+    /// Drops an answered question here and on every peer, so no bar counts
+    /// it, and takes the buttons off its Slack message.
+    fn closed(&self, question: &str, answer: &str) {
+        let text = self.known.get(question).map(|o| o.text);
         self.known.close(question);
         let body = serde_json::json!({ "question": question }).to_string();
         self.tell_peers("/closed", body.into_bytes());
+        let posted = self
+            .posted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(question);
+        if let (Some((channel, ts)), Some(slack)) = (posted, self.slack.clone()) {
+            let text = text.unwrap_or_else(|| format!("#{question}"));
+            let (question, answer) = (question.to_string(), answer.to_string());
+            std::thread::spawn(move || {
+                if let Err(e) = slack.mark_answered(&channel, &ts, &answer, &text) {
+                    eprintln!("hub: local: #{question} not marked answered: {e:#}");
+                }
+            });
+        }
     }
 
     fn tell_peers(&self, path: &'static str, body: Vec<u8>) {
@@ -792,10 +813,10 @@ impl Local {
                     continue;
                 };
                 let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
-                answers.entry(open.id.clone()).or_insert(standing);
+                answers.entry(open.id.clone()).or_insert(standing.clone());
                 self.answered.notify_all();
                 drop(answers);
-                self.closed(&open.id);
+                self.closed(&open.id, &standing);
             }
         }
     }
@@ -927,6 +948,7 @@ fn ring_timeout() -> Duration {
 struct Ringer {
     slack: Option<Arc<Slack>>,
     known: Arc<Known>,
+    posted: Arc<Mutex<HashMap<String, (String, String)>>>,
     host: String,
     token: String,
     question: Question,
@@ -999,8 +1021,12 @@ impl Ringer {
         let id = &self.question.id;
         loop {
             match slack.post_question(&self.question) {
-                Ok(_) => {
+                Ok(posted) => {
                     eprintln!("hub: local: #{id} posted to Slack");
+                    self.posted
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(id.clone(), (posted.channel, posted.ts));
                     return;
                 }
                 Err(e) => eprintln!("hub: local: #{id} not posted to Slack yet: {e:#}"),

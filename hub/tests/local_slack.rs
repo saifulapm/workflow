@@ -304,22 +304,23 @@ fn with_photo(mut event: Value, url: &str) -> Value {
     event
 }
 
-/// A mem that logs each argv as one line to `mem.log` and copies the file
-/// it is handed, which the hub removes once mem returns: a screenshot to
-/// `shot.bin`, evidence to `evidence.bin`.
+/// A mem that copies the file it is handed, which the hub removes once mem
+/// returns (a screenshot to `shot.bin`, evidence to `evidence.bin`), then
+/// logs its argv as one line to `mem.log`, so a test that sees the line finds
+/// the file.
 fn recording_mem(dir: &TempDir) -> std::path::PathBuf {
     let bin = dir.join("bin");
     common::fixture_mem(
         &bin,
         &format!(
             "case \"$*\" in *questions*) echo '{{\"questions\":[]}}'; exit 0;; esac\n\
-             printf '%s\\n' \"$*\" >> '{d}/mem.log'\n\
              prev=''\n\
              for a in \"$@\"; do\n\
              if [ \"$prev\" = --screenshot ]; then cp \"$a\" '{d}/shot.bin'; fi\n\
              prev=\"$a\"\n\
              done\n\
              if [ \"$1 $2\" = 'evidence add' ]; then cp \"$5\" '{d}/evidence.bin'; fi\n\
+             printf '%s\\n' \"$*\" >> '{d}/mem.log'\n\
              exit 0",
             d = dir.path().display()
         ),

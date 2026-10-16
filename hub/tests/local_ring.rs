@@ -16,11 +16,13 @@ use serde_json::Value;
 
 const TOKEN: &str = "peer-token-for-tests-0123456789abcdef";
 
-/// A Slack Web API that records each `chat.postMessage` and refuses the rest,
+/// A Slack Web API that records each `chat.postMessage` and `chat.update`
+/// and refuses the rest,
 /// Socket Mode included, which the hub then retries quietly.
 struct Slack {
     api: String,
     posts: Arc<Mutex<Vec<String>>>,
+    updates: Arc<Mutex<Vec<String>>>,
 }
 
 fn slack() -> Slack {
@@ -31,6 +33,8 @@ fn slack_on(listener: TcpListener) -> Slack {
     let api = format!("http://{}/api", listener.local_addr().unwrap());
     let posts = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&posts);
+    let updates = Arc::new(Mutex::new(Vec::new()));
+    let kept_updates = Arc::clone(&updates);
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
@@ -62,6 +66,12 @@ fn slack_on(listener: TcpListener) -> Slack {
                     .unwrap()
                     .push(String::from_utf8_lossy(&body).to_string());
                 r#"{"ok":true,"channel":"D0DM","ts":"1700000000.000100"}"#
+            } else if line.contains("/api/chat.update") {
+                kept_updates
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&body).to_string());
+                r#"{"ok":true}"#
             } else {
                 r#"{"ok":false,"error":"not_in_this_fake"}"#
             };
@@ -73,7 +83,11 @@ fn slack_on(listener: TcpListener) -> Slack {
             );
         }
     });
-    Slack { api, posts }
+    Slack {
+        api,
+        posts,
+        updates,
+    }
 }
 
 impl Slack {
@@ -508,6 +522,7 @@ fn a_question_asked_offline_reaches_slack_once_the_network_returns() {
     let away = Slack {
         api,
         posts: Arc::new(Mutex::new(Vec::new())),
+        updates: Arc::new(Mutex::new(Vec::new())),
     };
     let nuc = machine(
         &dir,
@@ -569,5 +584,34 @@ fn a_peer_that_was_away_hears_the_question_when_it_returns() {
         "the mini hears it once back",
         Duration::from_secs(2),
         || mini.listed().len() == 1,
+    );
+}
+
+/// Answered anywhere else, the question's Slack message loses its buttons,
+/// so the DM never shows it open.
+#[test]
+fn a_question_answered_elsewhere_is_marked_answered_in_slack() {
+    let dir = TempDir::new("ring-mark");
+    let slack = slack();
+    let nuc = machine(&dir, "nuc", Seat::NoShell, &[], Some(&slack), &[]);
+    ask(&nuc);
+    common::wait_for("a Slack post", Duration::from_secs(2), || {
+        slack.posted() == 1
+    });
+    post(
+        &nuc.socket(),
+        "/answer",
+        r#"{"question":"ABCD1234","answer":"no","by":"cli"}"#,
+    );
+    common::wait_for(
+        "the message marked answered",
+        Duration::from_secs(2),
+        || !slack.updates.lock().unwrap().is_empty(),
+    );
+    let update: Value = serde_json::from_str(&slack.updates.lock().unwrap()[0]).unwrap();
+    assert_eq!(update["ts"], "1700000000.000100");
+    assert!(
+        update["text"].as_str().unwrap().ends_with("Answered: no"),
+        "{update}"
     );
 }
