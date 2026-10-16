@@ -40,12 +40,9 @@ fn ms_from_env(name: &str, default: Duration) -> Duration {
 }
 
 /// Runs `program args` and returns its stdout when it exits 0.
-fn stdout_of(program: &str, args: &[&str], dir: Option<&Path>) -> Option<String> {
+fn stdout_of(program: &str, args: &[&str]) -> Option<String> {
     let mut command = Command::new(program);
     command.args(args);
-    if let Some(dir) = dir {
-        command.current_dir(dir);
-    }
     match proc::output_within(&mut command, RUN_TIMEOUT) {
         Ended::Exited(done) if done.code == Some(0) => {
             Some(String::from_utf8_lossy(&done.stdout).into_owned())
@@ -80,7 +77,7 @@ pub fn amx_bin() -> String {
 /// This machine's amx agents, each cut to the four keys the pages read.
 /// `None` when amx could not say, which is not the same as none running.
 pub fn agents() -> Option<Vec<Value>> {
-    let text = stdout_of(&amx_bin(), &["ls", "--json"], None)?;
+    let text = stdout_of(&amx_bin(), &["ls", "--json"])?;
     if text.trim().is_empty() {
         return Some(Vec::new());
     }
@@ -98,20 +95,26 @@ pub fn agents() -> Option<Vec<Value>> {
 }
 
 /// How many commits `dir`'s main holds that origin/main lacks.
+/// Quiet when git cannot say: a checkout with no origin/main is common, and
+/// a line every 5 s for each would bury the log.
 fn unpushed(dir: &str) -> Option<u64> {
-    let text = stdout_of(
-        "git",
-        &["rev-list", "--count", "origin/main..main"],
-        Some(Path::new(dir)),
-    )?;
-    text.trim().parse().ok()
+    let mut command = Command::new("git");
+    command
+        .args(["rev-list", "--count", "origin/main..main"])
+        .current_dir(dir);
+    match proc::output_within(&mut command, RUN_TIMEOUT) {
+        Ended::Exited(done) if done.code == Some(0) => {
+            String::from_utf8_lossy(&done.stdout).trim().parse().ok()
+        }
+        _ => None,
+    }
 }
 
 /// The report as it goes out, without its frame kind. `None` when mem or
 /// amx could not be read: a half report would read as runs ended.
 pub fn report(machine: &str) -> Option<Value> {
     let agents = agents()?;
-    let projects: Value = serde_json::from_str(&stdout_of("mem", &["projects", "--json"], None)?)
+    let projects: Value = serde_json::from_str(&stdout_of("mem", &["projects", "--json"])?)
         .map_err(|e| eprintln!("hub: report: mem projects --json: {e}"))
         .ok()?;
     let projects = projects["projects"].as_array().cloned().unwrap_or_default();

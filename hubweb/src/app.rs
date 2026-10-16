@@ -1313,24 +1313,35 @@ impl Log for SqlLog<'_> {
     }
 
     fn drop_command(&mut self, id: &str, machine: &str) -> std::result::Result<bool, Fault> {
-        let gone = self
+        // A cursor's rowsWritten grows only as the cursor is read, so the
+        // command is looked up first rather than counted after the DELETE.
+        let held: Vec<Value> = self
             .0
+            .exec(
+                "SELECT id FROM commands WHERE id = ? AND machine = ?",
+                vec![id.into(), machine.into()],
+            )
+            .and_then(|cursor| cursor.to_array())
+            .map_err(fault)?;
+        if held.is_empty() {
+            return Ok(false);
+        }
+        self.0
             .exec(
                 "DELETE FROM commands WHERE id = ? AND machine = ?",
                 vec![id.into(), machine.into()],
             )
-            .map_err(fault)?
-            .rows_written();
-        if gone > 0 {
-            // A page reading `waiting for <machine>` is to hear it stopped.
-            self.0
-                .exec(
-                    "UPDATE machines SET changed = ? WHERE name = ?",
-                    vec![(now_ms() as i64).into(), machine.into()],
-                )
-                .map_err(fault)?;
-        }
-        Ok(gone > 0)
+            .and_then(|cursor| cursor.to_array::<Value>())
+            .map_err(fault)?;
+        // A page reading `waiting for <machine>` is to hear it stopped.
+        self.0
+            .exec(
+                "UPDATE machines SET changed = ? WHERE name = ?",
+                vec![(now_ms() as i64).into(), machine.into()],
+            )
+            .and_then(|cursor| cursor.to_array::<Value>())
+            .map_err(fault)?;
+        Ok(true)
     }
 }
 

@@ -121,6 +121,7 @@ pub fn take(frame: &str) {
     }
     match serde_json::from_value::<Job>(message["command"].clone()) {
         Ok(job) => {
+            eprintln!("hub: commands: took {id}");
             let _ = queue.send((id.to_string(), job));
         }
         Err(e) => {
