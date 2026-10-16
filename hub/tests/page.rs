@@ -155,7 +155,8 @@ fn the_header_carries_the_machine_name_and_the_sibling_links() {
         ),
         "{body}"
     );
-    assert!(body.contains("<a href=\"/subscribe\">"), "{body}");
+    // ntfy retires with the move, and the hub web has no subscribe page.
+    assert!(!body.contains("/subscribe"), "{body}");
     // A scheme that is not http(s) never becomes a link.
     assert!(!body.contains("javascript:"), "{body}");
 }

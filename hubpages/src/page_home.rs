@@ -210,7 +210,7 @@ pub fn render(
             body.push('\n');
         }
     }
-    body.push_str("<a href=\"/wiki\">wiki</a>\n<a href=\"/subscribe\">subscribe</a>\n</nav>\n");
+    body.push_str("<a href=\"/wiki\">wiki</a>\n</nav>\n");
     body.push_str(&route_header(route, routes, pair_notice));
 
     body.push_str(&banner_line(banner));
