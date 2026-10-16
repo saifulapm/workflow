@@ -371,6 +371,9 @@ fn session(
 
     // The route this socket last carried either way; a newer one goes out.
     let mut told: Option<Stamped> = None;
+    // The number of the last report this socket carried; a new socket
+    // carries the newest at once.
+    let mut reported = 0;
     let mut heard = Instant::now();
     let mut pinged = Instant::now();
     let mut held: Vec<String> = Vec::new();
@@ -439,6 +442,14 @@ fn session(
                 .send(Message::text(route_message(&route)))
                 .context("sending the route")?;
             told = Some(route);
+        }
+        // A report is no write: it goes out past a Free limit too, as the
+        // store keeps it off its log.
+        if let Some((n, report)) = crate::fleet::to_send(reported) {
+            socket
+                .send(Message::text(report))
+                .context("sending the report")?;
+            reported = n;
         }
         if heard.elapsed() >= QUIET {
             bail!("the store was silent for {QUIET:?}");

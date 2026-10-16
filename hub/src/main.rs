@@ -304,6 +304,13 @@ fn run_local(port: u16) -> Result<()> {
             .context("starting the Slack catch-up")?;
     }
     if let Some(store) = store {
+        // Without a runner name no run here could be matched to its report.
+        if let Some(name) = hub::fleet::runner_name() {
+            std::thread::Builder::new()
+                .name("hub-report".to_string())
+                .spawn(move || hub::fleet::run(name))
+                .context("starting the machine report")?;
+        }
         let kick = local.kick();
         let applied = Arc::clone(&local);
         hub::share::when_applied(move || applied.nudge());

@@ -960,3 +960,213 @@ fn a_route_chosen_here_reaches_the_store() {
     assert_eq!(sent["machine"], route_on(&dir)["machine"]);
     assert_eq!(sent["at"], route_on(&dir)["at"]);
 }
+
+/// A `mem` like `share_mem` that also lists `projects.json` for
+/// `projects --json`, and an `amx` that lists `amx.json`.
+fn report_bins(dir: &TempDir) -> PathBuf {
+    let bin = dir.join("bin");
+    fixture_mem(
+        &bin,
+        &format!(
+            "case \"$1 $2\" in\n\
+             'share hello') echo '{HELLO}' ;;\n\
+             'share pending') true ;;\n\
+             'share apply') cat >> '{applied}' ;;\n\
+             'projects --json') cat '{projects}' ;;\n\
+             esac",
+            applied = dir.join("applied").display(),
+            projects = dir.join("projects.json").display(),
+        ),
+    );
+    common::fixture_bin(
+        &bin,
+        "amx",
+        &format!(
+            "[ \"$1 $2\" = 'ls --json' ] && cat '{}'",
+            dir.join("amx.json").display()
+        ),
+    );
+    bin
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let done = std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "git {args:?}: {done:?}");
+}
+
+/// A checkout whose main is two commits ahead of origin/main.
+fn checkout_ahead(dir: &TempDir) -> PathBuf {
+    let repo = dir.join("walk01");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    for n in 1..=3 {
+        git(
+            &repo,
+            &["commit", "-q", "--allow-empty", "-m", &format!("c{n}")],
+        );
+    }
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD~2"]);
+    repo
+}
+
+fn seed_machine(dir: &TempDir, agents: &str) {
+    let repo = checkout_ahead(dir);
+    std::fs::write(
+        dir.join("projects.json"),
+        serde_json::json!({"projects": [
+            {"name": "walk01", "checkouts": [repo], "worktree": null},
+            {"name": "walk02", "checkouts": [], "worktree": null},
+            {"name": "walk03", "checkouts": [dir.join("nowhere")], "worktree": "/w/walk03"},
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("amx.json"), agents).unwrap();
+}
+
+const RUNNING: &str = r#"[{"id":"walk01-m1","state":"running","ended":0,"created":5,"dir":"/x","last_words":"long text"}]"#;
+
+fn reports_on(store: &FakeStore, conn: usize) -> Vec<serde_json::Value> {
+    store
+        .texts_on(conn)
+        .iter()
+        .filter_map(|t| serde_json::from_str::<serde_json::Value>(t).ok())
+        .filter(|v| v["t"] == "report")
+        .collect()
+}
+
+#[test]
+fn a_hub_reports_its_machine_by_runner_name_after_the_hello() {
+    let dir = TempDir::new("share-report");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, RUNNING);
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(&dir, &bin, Some(&store), &[("WORKFLOW_MACHINE", "mini")]);
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    assert_eq!(store.texts_on(0)[0], HELLO);
+    assert_eq!(
+        reports_on(&store, 0)[0],
+        serde_json::json!({
+            "t": "report",
+            "machine": "mini",
+            "agents": [{"id":"walk01-m1","state":"running","ended":0,"created":5}],
+            "checkouts": ["walk01", "walk03"],
+            "worktrees": ["walk03"],
+            "unpushed": {"walk01": 2},
+            "cloud": null,
+        })
+    );
+}
+
+#[test]
+fn the_runner_name_is_the_tailnet_names_first_label() {
+    let dir = TempDir::new("share-report-tailnet");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, "[]");
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(
+        &dir,
+        &bin,
+        Some(&store),
+        &[("HUB_TAILNET_NAME", "nuc.taila27604.ts.net")],
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    assert_eq!(reports_on(&store, 0)[0]["machine"], "nuc");
+}
+
+/// 2,880 a day: an idle machine says the same again once per interval, and
+/// no more often.
+#[test]
+fn an_idle_hub_reports_again_once_each_interval() {
+    let dir = TempDir::new("share-report-idle");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, RUNNING);
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(
+        &dir,
+        &bin,
+        Some(&store),
+        &[
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_REPORT_EVERY_MS", "600"),
+            ("HUB_REPORT_CHECK_MS", "50"),
+        ],
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    std::thread::sleep(Duration::from_millis(2000));
+    let reports = reports_on(&store, 0);
+    assert!(
+        (3..=5).contains(&reports.len()),
+        "{} reports in about 2 s at one per 600 ms",
+        reports.len()
+    );
+    assert!(reports.iter().all(|r| *r == reports[0]));
+}
+
+#[test]
+fn a_change_is_reported_at_the_next_check_not_the_next_interval() {
+    let dir = TempDir::new("share-report-change");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, RUNNING);
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(
+        &dir,
+        &bin,
+        Some(&store),
+        &[
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_REPORT_EVERY_MS", "60000"),
+            ("HUB_REPORT_CHECK_MS", "100"),
+        ],
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    std::fs::write(
+        dir.join("amx.json"),
+        r#"[{"id":"walk01-m1","state":"stopped","ended":9,"created":5}]"#,
+    )
+    .unwrap();
+    let at = Instant::now();
+    wait_for("the changed report", Duration::from_secs(3), || {
+        reports_on(&store, 0).len() >= 2
+    });
+    assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
+    assert_eq!(reports_on(&store, 0)[1]["agents"][0]["state"], "stopped");
+}
+
+#[test]
+fn a_dropped_socket_reports_again_after_its_hello() {
+    let dir = TempDir::new("share-report-again");
+    let bin = report_bins(&dir);
+    seed_machine(&dir, RUNNING);
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(
+        &dir,
+        &bin,
+        Some(&store),
+        &[
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_REPORT_EVERY_MS", "60000"),
+        ],
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
+    store.drop_connection();
+    wait_for("a report on the new socket", Duration::from_secs(8), || {
+        !reports_on(&store, 1).is_empty()
+    });
+    assert_eq!(store.texts_on(1)[0], HELLO);
+}
