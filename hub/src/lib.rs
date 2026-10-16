@@ -9,6 +9,7 @@ pub mod access;
 pub mod agents;
 pub mod api;
 pub mod app;
+pub mod archive;
 pub mod assets;
 pub mod config;
 pub mod doorbell;

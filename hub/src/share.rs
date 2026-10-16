@@ -104,7 +104,7 @@ pub struct Store {
     access: Option<(String, String)>,
     /// The cloud VM's HTTP proxy, which the socket tunnels through.
     proxy: Option<String>,
-    agent: ureq::Agent,
+    pub(crate) agent: ureq::Agent,
 }
 
 /// `HUB_STORE_URL` and `HUB_STORE_TOKEN`, when both are set, with
@@ -139,7 +139,7 @@ pub fn from_env() -> Option<Store> {
 
 impl Store {
     /// What every store request carries, the socket's handshake included.
-    fn headers(&self) -> Vec<(&'static str, String)> {
+    pub(crate) fn headers(&self) -> Vec<(&'static str, String)> {
         let mut headers = vec![("Authorization", format!("Bearer {}", self.token))];
         if let Some(name) = &self.name {
             headers.push(("X-Hub-Store", name.clone()));
@@ -152,13 +152,13 @@ impl Store {
     }
 
     /// `<files base>/store/files/<path>`.
-    fn file_url(&self, path: &str) -> Result<String> {
+    pub(crate) fn file_url(&self, path: &str) -> Result<String> {
         Ok(format!("{}/store/files/{}", self.base()?, encode(path)))
     }
 
     /// The store's web address, the socket's scheme and host: `ws://h:p/store/share`
     /// gives `http://h:p`.
-    fn base(&self) -> Result<String> {
+    pub(crate) fn base(&self) -> Result<String> {
         let (scheme, rest) = match self.url.split_once("://") {
             Some(("wss", rest)) => ("https", rest),
             Some(("ws", rest)) => ("http", rest),
@@ -571,7 +571,7 @@ fn session(
 
 /// The clock. `HUB_SHARE_NOW_FILE` names a file holding an RFC 3339 time that
 /// stands in for it, so a test can move past the reset without waiting.
-fn now() -> Timestamp {
+pub(crate) fn now() -> Timestamp {
     std::env::var("HUB_SHARE_NOW_FILE")
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok())
