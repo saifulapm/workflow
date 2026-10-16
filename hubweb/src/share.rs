@@ -77,10 +77,25 @@ pub struct Outcome {
 }
 
 /// Answers one text frame from a socket whose machine said hello as
-/// `machine` (None before its hello).
-pub fn handle(log: &mut impl Log, machine: Option<&str>, text: &str) -> Outcome {
+/// `machine` (None before its hello). A socket opened with a machine's own
+/// token is `bound` to that token's runner name, and reports and says done
+/// as that machine only; one opened with the shared bearer is bound to none.
+pub fn handle(
+    log: &mut impl Log,
+    machine: Option<&str>,
+    bound: Option<&str>,
+    text: &str,
+) -> Outcome {
     let answer = match serde_json::from_str::<Value>(text) {
         Ok(message) => match message["t"].as_str() {
+            Some(t @ ("report" | "done"))
+                if bound.is_some_and(|bound| message["machine"].as_str() != Some(bound)) =>
+            {
+                Err(Fault::Broken(format!(
+                    "this socket's token is {}'s: a {t} names that machine only",
+                    bound.unwrap_or_default()
+                )))
+            }
             Some("hello") => hello(log, &message),
             Some("write") => match machine {
                 Some(machine) => write(log, machine, &message),
@@ -205,7 +220,7 @@ const REPORT_FIELDS: [&str; 6] = [
 ];
 
 /// A runner name as workflow takes it from the tailnet: `mini`, `nuc`.
-fn runner_name(name: &str) -> bool {
+pub fn runner_name(name: &str) -> bool {
     (1..=64).contains(&name.len())
         && name
             .chars()
@@ -391,6 +406,20 @@ pub fn attached(value: &Value) -> (Option<String>, Option<u64>) {
     }
 }
 
+/// `value` with the runner name the socket's token is bound to, which the
+/// store sets when it opens the socket and keeps through every rewrite.
+pub fn bind(mut value: Value, bound: Option<&str>) -> Value {
+    if let Some(bound) = bound {
+        value["bound"] = json!(bound);
+    }
+    value
+}
+
+/// The runner name an attachment is bound to; None on a shared-bearer socket.
+pub fn bound(value: &Value) -> Option<String> {
+    value["bound"].as_str().map(str::to_string)
+}
+
 /// The newest limit day any socket's attachment holds.
 pub fn newest_limit_day<'a>(attachments: impl IntoIterator<Item = &'a Value>) -> Option<u64> {
     attachments
@@ -477,7 +506,7 @@ mod tests {
 
     fn route(log: &mut Memory, machine: Option<&str>, kind: &str, on: Value, at: i64) -> Outcome {
         let message = json!({"t":"route","route":kind,"machine":on,"at":at});
-        handle(log, machine, &message.to_string())
+        handle(log, machine, None, &message.to_string())
     }
 
     #[test]
@@ -565,6 +594,7 @@ mod tests {
         let hello = handle(
             &mut log,
             None,
+            None,
             r#"{"t":"hello","machine":"mini","since":0}"#,
         );
         assert_eq!(
@@ -588,7 +618,7 @@ mod tests {
 
     fn write(log: &mut Memory, id: &str, path: &str, base: Value, body: Value) -> Outcome {
         let message = json!({"t":"write","id":id,"path":path,"base":base,"body":body});
-        handle(log, Some("nuc"), &message.to_string())
+        handle(log, Some("nuc"), None, &message.to_string())
     }
 
     #[test]
@@ -680,7 +710,12 @@ mod tests {
         write(&mut log, "01A", ITEM, Value::Null, json!("one"));
         write(&mut log, "01B", PAGE, Value::Null, Value::Null);
         write(&mut log, "01C", ITEM, Value::Null, json!("three"));
-        let hello = handle(&mut log, None, r#"{"t":"hello","machine":"mac","since":1}"#);
+        let hello = handle(
+            &mut log,
+            None,
+            None,
+            r#"{"t":"hello","machine":"mac","since":1}"#,
+        );
         assert_eq!(
             parse(&hello.sender),
             [
@@ -696,7 +731,12 @@ mod tests {
     #[test]
     fn hello_to_an_empty_store_is_ready_at_zero() {
         let mut log = Memory::default();
-        let hello = handle(&mut log, None, r#"{"t":"hello","machine":"mac","since":0}"#);
+        let hello = handle(
+            &mut log,
+            None,
+            None,
+            r#"{"t":"hello","machine":"mac","since":0}"#,
+        );
         assert_eq!(
             parse(&hello.sender),
             [json!({"t":"ready","seq":0,"rows":0})]
@@ -721,7 +761,7 @@ mod tests {
             r#"{"t":"hello","machine":"mac"}"#,
             r#"{"t":"write","id":"01A","base":null,"body":"x"}"#,
         ] {
-            let answer = handle(&mut log, Some("nuc"), text);
+            let answer = handle(&mut log, Some("nuc"), None, text);
             let replies = parse(&answer.sender);
             assert_eq!(replies.len(), 1, "{text}");
             assert_eq!(replies[0]["t"], "error", "{text}");
@@ -735,7 +775,7 @@ mod tests {
     fn a_write_before_hello_gets_an_error() {
         let mut log = Memory::default();
         let message = json!({"t":"write","id":"01A","path":ITEM,"base":null,"body":"x"});
-        let answer = handle(&mut log, None, &message.to_string());
+        let answer = handle(&mut log, None, None, &message.to_string());
         assert_eq!(parse(&answer.sender)[0]["t"], "error");
         assert!(log.recs.is_empty());
     }
@@ -754,7 +794,7 @@ mod tests {
 
     fn import(log: &mut Memory, id: &str) -> Outcome {
         let message = json!({"t":"write","id":id,"path":ITEM,"base":null,"body":"x","import":true});
-        handle(log, Some("mini"), &message.to_string())
+        handle(log, Some("mini"), None, &message.to_string())
     }
 
     #[test]
@@ -817,7 +857,12 @@ mod tests {
             rows_today: 1234,
             ..Memory::default()
         };
-        let hello = handle(&mut log, None, r#"{"t":"hello","machine":"mac","since":0}"#);
+        let hello = handle(
+            &mut log,
+            None,
+            None,
+            r#"{"t":"hello","machine":"mac","since":0}"#,
+        );
         assert_eq!(
             parse(&hello.sender),
             [json!({"t":"ready","seq":0,"rows":1234})]
@@ -863,7 +908,7 @@ mod tests {
     fn report(log: &mut Memory, body: Value) -> Outcome {
         let mut message = body;
         message["t"] = json!("report");
-        handle(log, Some("mac-mini-m2"), &message.to_string())
+        handle(log, Some("mac-mini-m2"), None, &message.to_string())
     }
 
     fn mini(agents: Value) -> Value {
@@ -917,6 +962,7 @@ mod tests {
         let mut log = Memory::default();
         let before = handle(
             &mut log,
+            None,
             None,
             &json!({"t":"report","machine":"mini"}).to_string(),
         );
@@ -972,6 +1018,7 @@ mod tests {
         let wrong = handle(
             &mut log,
             Some("nuc"),
+            None,
             &json!({"t":"done","id":"01A","machine":"nuc"}).to_string(),
         );
         assert!(!wrong.changed);
@@ -979,11 +1026,33 @@ mod tests {
         let done = handle(
             &mut log,
             Some("mac-mini-m2"),
+            None,
             &json!({"t":"done","id":"01A","machine":"mini"}).to_string(),
         );
         assert!(done.sender.is_empty());
         assert!(done.changed, "a page waiting for mini stops waiting");
         assert!(log.commands.is_empty());
         assert!(report(&mut log, mini(json!([]))).sender.is_empty());
+    }
+
+    #[test]
+    fn a_socket_bound_to_mini_reports_and_says_done_as_mini_only() {
+        let mut log = Memory::default();
+        let start = json!({"kind":"start","project":"walk01"});
+        queue_command(&mut log, "01N", "nuc", &start).unwrap();
+        let send = |log: &mut Memory, message: Value| {
+            handle(log, Some("mac-mini-m2"), Some("mini"), &message.to_string())
+        };
+        let forged = send(&mut log, json!({"t":"report","machine":"nuc","agents":[]}));
+        assert_eq!(parse(&forged.sender)[0]["t"], "error");
+        assert!(!forged.changed);
+        assert!(log.reports.is_empty());
+        let dropped = send(&mut log, json!({"t":"done","id":"01N","machine":"nuc"}));
+        assert_eq!(parse(&dropped.sender)[0]["t"], "error");
+        assert_eq!(log.commands.len(), 1, "nuc's command stays");
+        let mut own = mini(json!([]));
+        own["t"] = json!("report");
+        send(&mut log, own);
+        assert_eq!(log.reports["mini"].1, mini(json!([])));
     }
 }

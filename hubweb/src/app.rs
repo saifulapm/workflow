@@ -53,20 +53,45 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
     if req.method() == Method::Put && path == "/store/records" {
         return put_records(req, &env).await;
     }
-    // The sharing socket takes the same bearer, and the store answers the
-    // upgrade itself so it can keep the socket while it hibernates.
+    // The sharing socket takes the same bearer or a machine's own token, and
+    // the store answers the upgrade itself so it can keep the socket while it
+    // hibernates. The store trusts the bound header, so a copy the client
+    // sent never reaches it.
     if req.method() == Method::Get && path == "/store/share" {
+        let Some(holder) = holder(&req, &env).await? else {
+            return Response::error("Unauthorized", 401);
+        };
+        let headers = req.headers().clone();
+        headers.delete(BOUND)?;
+        if let Holder::Machine(name) = &holder {
+            headers.set(BOUND, name)?;
+        }
+        let mut init = RequestInit::new();
+        init.with_method(Method::Get).with_headers(headers);
+        return store(&env)?
+            .fetch_with_request(Request::new_with_init("https://store/store/share", &init)?)
+            .await;
+    }
+    // The holder of the shared bearer mints a machine's own token.
+    if req.method() == Method::Post
+        && let Some(name) = path.strip_prefix("/store/machines/")
+    {
         if !bearer(&req, &env)? {
             return Response::error("Unauthorized", 401);
         }
-        return store(&env)?.fetch_with_request(req).await;
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post);
+        let target = format!("https://store/mint/{name}");
+        return store(&env)?
+            .fetch_with_request(Request::new_with_init(&target, &init)?)
+            .await;
     }
-    // A project's files take the same bearer, so a machine uploads and
+    // A project's files take either bearer, so a machine uploads and
     // fetches them with no Access login.
     if matches!(req.method(), Method::Put | Method::Get)
         && let Some(raw) = path.strip_prefix("/store/files/")
     {
-        if !bearer(&req, &env)? {
+        if holder(&req, &env).await?.is_none() {
             return Response::error("Unauthorized", 401);
         }
         let Some(project) = files::decode(raw)
@@ -336,9 +361,9 @@ fn path_and_query(req: &Request) -> String {
 }
 
 /// Hands the records to the store when the request carries the bearer
-/// STORE_TOKEN; 401 otherwise, and 401 while no token is configured.
+/// STORE_TOKEN or a machine's own token; 401 otherwise.
 async fn put_records(mut req: Request, env: &Env) -> Result<Response> {
-    if !bearer(&req, env)? {
+    if holder(&req, env).await?.is_none() {
         return Response::error("Unauthorized", 401);
     }
     let body = req.text().await?;
@@ -360,6 +385,45 @@ fn bearer(req: &Request, env: &Env) -> Result<bool> {
         }
         _ => false,
     })
+}
+
+/// The header the Worker tells the store with which machine a sharing
+/// socket's token was minted for.
+const BOUND: &str = "X-Hub-Bound";
+
+/// Who holds a store request's bearer.
+enum Holder {
+    /// The shared STORE_TOKEN, which may speak for any machine.
+    Shared,
+    /// A machine's own token, minted for this runner name.
+    Machine(String),
+}
+
+/// The holder of the request's bearer; None when it is neither the shared
+/// STORE_TOKEN nor a token the store minted. Only the store knows the
+/// machine tokens, so the Worker asks it.
+async fn holder(req: &Request, env: &Env) -> Result<Option<Holder>> {
+    if bearer(req, env)? {
+        return Ok(Some(Holder::Shared));
+    }
+    let given = req.headers().get("Authorization")?;
+    let Some(token) = given
+        .as_deref()
+        .and_then(|given| given.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+    else {
+        return Ok(None);
+    };
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_body(Some(token.to_string().into()));
+    let mut answer = store(env)?
+        .fetch_with_request(Request::new_with_init("https://store/whose", &init)?)
+        .await?;
+    if answer.status_code() != 200 {
+        return Ok(None);
+    }
+    Ok(Some(Holder::Machine(answer.text().await?)))
 }
 
 /// Compares two byte strings in time that depends on their length only, so
@@ -740,6 +804,14 @@ impl DurableObject for Store {
             None,
         )
         .expect("create the commands table");
+        // Each machine's own store token, by runner name: only its SHA-256,
+        // so the table never holds a token that works.
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS machine_tokens(name TEXT PRIMARY KEY, hash TEXT NOT NULL, \
+             created TEXT NOT NULL)",
+            None,
+        )
+        .expect("create the machine_tokens table");
         Self {
             state,
             env,
@@ -858,7 +930,56 @@ impl DurableObject for Store {
                 let pair = WebSocketPair::new()?;
                 self.state
                     .accept_websocket_with_tags(&pair.server, &[MACHINE]);
+                if let Some(bound) = req.headers().get(BOUND)? {
+                    pair.server
+                        .serialize_attachment(share::bind(Value::Null, Some(&bound)))?;
+                }
                 Response::from_websocket(pair.client)
+            }
+            (Method::Post, path) if path.starts_with("/mint/") => {
+                let name = &path["/mint/".len()..];
+                if !share::runner_name(name) {
+                    return Response::error("A runner name is letters, digits, - _ or .", 400);
+                }
+                let mut bytes = Vec::new();
+                for _ in 0..3 {
+                    bytes.extend(random()?);
+                }
+                let token = hex(&bytes);
+                counted(
+                    &self.sql,
+                    "INSERT INTO machine_tokens(name, hash, created) VALUES (?, ?, ?) \
+                     ON CONFLICT(name) DO UPDATE SET hash = excluded.hash, created = excluded.created",
+                    vec![
+                        name.into(),
+                        sha256(&token).await?.into(),
+                        jiff::Timestamp::from_millisecond(now_ms() as i64)
+                            .unwrap_or_default()
+                            .to_string()
+                            .into(),
+                    ],
+                )?;
+                Response::ok(token)
+            }
+            (Method::Post, "/whose") => {
+                let hash = sha256(&req.text().await?).await?;
+                let rows: Vec<Value> = self
+                    .sql
+                    .exec("SELECT name, hash FROM machine_tokens", None)?
+                    .to_array()?;
+                // Every row is compared in constant time, so the answer's
+                // timing does not tell how much of a hash matched.
+                let mut found = None;
+                for row in &rows {
+                    let kept = row["hash"].as_str().unwrap_or_default();
+                    if same(kept.as_bytes(), hash.as_bytes()) {
+                        found = row["name"].as_str().map(str::to_string);
+                    }
+                }
+                match found {
+                    Some(name) => Response::ok(name),
+                    None => Response::error("Not Found", 404),
+                }
             }
             (Method::Get, "/live") => {
                 if req.headers().get("Upgrade")?.as_deref() != Some("websocket") {
@@ -890,11 +1011,22 @@ impl DurableObject for Store {
             ws.send_with_str(r#"{"t":"error","why":"messages are JSON text frames"}"#)?;
             return Ok(());
         };
-        // The machine's name lives on the socket, which outlasts hibernation.
-        let (machine, _) = share::attached(&attachment(&ws)?);
-        let outcome = share::handle(&mut SqlLog(&self.sql), machine.as_deref(), &text);
+        // The machine's name lives on the socket, which outlasts hibernation,
+        // with the runner name its token was minted for.
+        let attached = attachment(&ws)?;
+        let (machine, _) = share::attached(&attached);
+        let bound = share::bound(&attached);
+        let outcome = share::handle(
+            &mut SqlLog(&self.sql),
+            machine.as_deref(),
+            bound.as_deref(),
+            &text,
+        );
         if let Some(machine) = &outcome.hello {
-            ws.serialize_attachment(share::attachment(Some(machine), self.limit_day()?))?;
+            ws.serialize_attachment(share::bind(
+                share::attachment(Some(machine), self.limit_day()?),
+                bound.as_deref(),
+            ))?;
         }
         for reply in &outcome.sender {
             ws.send_with_str(reply)?;
@@ -908,8 +1040,10 @@ impl DurableObject for Store {
             for socket in self.state.get_websockets_with_tag(MACHINE) {
                 if let Ok(value) = attachment(&socket) {
                     let (machine, _) = share::attached(&value);
-                    let _ = socket
-                        .serialize_attachment(share::attachment(machine.as_deref(), Some(day)));
+                    let _ = socket.serialize_attachment(share::bind(
+                        share::attachment(machine.as_deref(), Some(day)),
+                        share::bound(&value).as_deref(),
+                    ));
                 }
             }
         }
@@ -1446,6 +1580,21 @@ fn random() -> Result<[u8; 10]> {
     let mut bytes = [0u8; 10];
     crypto.get_random_values_with_u8_array(&mut bytes)?;
     Ok(bytes)
+}
+
+/// The SHA-256 of `text`, in hex, from the runtime's WebCrypto.
+async fn sha256(text: &str) -> Result<String> {
+    let crypto: web_sys::Crypto =
+        js_sys::Reflect::get(&js_sys::global(), &"crypto".into())?.unchecked_into();
+    let digest = crypto
+        .subtle()
+        .digest_with_str_and_u8_array("SHA-256", text.as_bytes())?;
+    let bytes = js_sys::Uint8Array::new(&JsFuture::from(digest).await?).to_vec();
+    Ok(hex(&bytes))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Runs a statement that writes, and adds the rows it wrote to today's
