@@ -193,6 +193,15 @@ like "$(tr -d '\n' <"$T_TMP/page.html")" 'Which hour does the nag go out\?' \
 	"the questions page lists gamma's question"
 is "$(page_of /p/nope/questions)" 404 "a project the store lacks is not found"
 
+# Every page kind the hub has, drawn from the store with nothing missing.
+item=$(cd "$sb/gamma" && mem log --kind=ruling --limit 1 --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["short_id"])')
+for path in /p/gamma /p/beta/roadmap /p/gamma/plan /p/beta/plan/b1-box /p/gamma/questions \
+	/p/gamma/evidence /p/gamma/wiki /wiki/gamma/spec /p/gamma/decisions /p/gamma/new "/p/gamma/item/$item"; do
+	is "$(page_of "$path")" 200 "$path answers 200"
+	unlike "$(tr -d '\n' <"$T_TMP/page.html")" 'the store does not answer|class="banner degraded"' \
+		"$path reads everything it needs from the store"
+done
+
 font=$base/assets/maple-mono-400.woff2
 curl -s -o /dev/null "$font"
 fonthdr=$(curl -s -D - -o /dev/null "$font" | tr -d '\r')
