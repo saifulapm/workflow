@@ -388,13 +388,17 @@ fn with_the_store_variables_the_setup_bakes_a_replica() {
     assert!(
         curls
             .iter()
-            .any(|c| c.contains("https://mem.example.test/dl/mem")),
+            .any(|c| c.contains("https://store.example.test/store/dl/mem-x86_64")),
         "{started}"
     );
     assert!(
         curls
             .iter()
-            .any(|c| c.contains("https://mem.example.test/dl/hub")),
+            .any(|c| c.contains("https://store.example.test/store/dl/hub-x86_64")),
+        "{started}"
+    );
+    assert!(
+        started.contains("Authorization: Bearer store-secret"),
         "{started}"
     );
     assert!(
@@ -402,7 +406,9 @@ fn with_the_store_variables_the_setup_bakes_a_replica() {
         "{started}"
     );
     assert!(
-        curls.iter().all(|c| !c.contains("access-secret")),
+        curls
+            .iter()
+            .all(|c| !c.contains("access-secret") && !c.contains("store-secret")),
         "{curls:?}"
     );
     let hub = lines_of(&log, "hub");

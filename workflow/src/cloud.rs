@@ -393,12 +393,13 @@ fn session_of(said: &str) -> Option<String> {
 const END: &str = "WORKFLOW_EOF";
 
 /// The setup script: every file of `skills/` and `agents/` under
-/// `~/.claude`, and a `mem` that fetches the real binary from the mem server
-/// the first time it runs. The script runs before the session, where the
-/// proxy adds no Access token, so the binary comes with it only when the
-/// environment's variables hold one. With the store's variables as well, it
-/// bakes a replica into the cached environment, which a session
-/// starts from when the store cannot be reached.
+/// `~/.claude`, and a `mem` that fetches the real binary from the store
+/// (from the mem server without the store's variables) the first time it
+/// runs. The script runs before the session, where the proxy adds no Access
+/// token, so the binary comes with it only when the environment's variables
+/// hold one. With the store's variables, it fetches both binaries and bakes
+/// a replica into the cached environment, which a session starts from when
+/// the store cannot be reached.
 pub fn setup_script(files: &[(&str, &[u8])]) -> String {
     let mut out = String::from(
         "#!/bin/bash\n\
@@ -432,11 +433,14 @@ fi\n"
     out
 }
 
-/// `mem-cloud fetch <mem|hub>` puts `$MEM_REMOTE/dl/<name>` at
-/// `~/.local/bin/<name>-x86_64` once; with the Access service token among
-/// the variables it goes as headers read from a file, never on a command
-/// line. `mem-cloud sync <seconds>` brings the replica up to the store with
-/// `hub share sync`, and fails when the store cannot be reached in time.
+/// `mem-cloud fetch <mem|hub>` puts the store's `/store/dl/<name>-x86_64`
+/// at `~/.local/bin/<name>-x86_64` once, the store's web address taken from
+/// `HUB_STORE_URL` and the bearer from `HUB_STORE_TOKEN`; an environment
+/// without those two still fetches `$MEM_REMOTE/dl/<name>`. The bearer and
+/// the Access service token, when the variables hold one, go as headers
+/// read from a file, never on a command line. `mem-cloud sync <seconds>`
+/// brings the replica up to the store with `hub share sync`, and fails when
+/// the store cannot be reached in time.
 const HELPER: &str = r#"#!/bin/sh
 bin="$HOME/.local/bin"
 state="$HOME/.local/state/hub"
@@ -444,20 +448,29 @@ fetch() {
   [ -x "$bin/$1-x86_64" ] && return 0
   mkdir -p "$bin" "$state"
   part="$bin/$1-x86_64.part.$$"
-  hdr="$state/access.hdr.$$"
-  if [ -n "${HUB_STORE_ACCESS_ID:-}" ] && [ -n "${HUB_STORE_ACCESS_SECRET:-}" ]; then
-    (umask 077 && printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' \
-      "$HUB_STORE_ACCESS_ID" "$HUB_STORE_ACCESS_SECRET" >"$hdr")
-    curl -fsSL --max-time 120 -H "@$hdr" "${MEM_REMOTE:?MEM_REMOTE is not set}/dl/$1" -o "$part"
-    got=$?
-    rm -f "$hdr"
+  hdr="$state/fetch.hdr.$$"
+  store=
+  if [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ]; then
+    store=1
+    # The socket's URL, ws(s)://host/store/share, gives the web address.
+    case "$HUB_STORE_URL" in wss://*) url=https ;; *) url=http ;; esac
+    host="${HUB_STORE_URL#*://}"
+    url="$url://${host%%/*}/store/dl/$1-x86_64"
   else
-    curl -fsSL --max-time 120 "${MEM_REMOTE:?MEM_REMOTE is not set}/dl/$1" -o "$part"
-    got=$?
+    url="${MEM_REMOTE:?MEM_REMOTE is not set}/dl/$1"
   fi
+  (umask 077 && : >"$hdr")
+  if [ -n "$store" ]; then printf 'Authorization: Bearer %s\n' "$HUB_STORE_TOKEN" >>"$hdr"; fi
+  if [ -n "${HUB_STORE_ACCESS_ID:-}" ] && [ -n "${HUB_STORE_ACCESS_SECRET:-}" ]; then
+    printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' \
+      "$HUB_STORE_ACCESS_ID" "$HUB_STORE_ACCESS_SECRET" >>"$hdr"
+  fi
+  curl -fsSL --max-time 120 -H "@$hdr" "$url" -o "$part"
+  got=$?
+  rm -f "$hdr"
   if [ "$got" != 0 ]; then
     rm -f "$part"
-    echo "mem: cannot fetch the $1 binary from $MEM_REMOTE/dl/$1" >&2
+    echo "mem: cannot fetch the $1 binary from $url" >&2
     return 1
   fi
   chmod +x "$part"
@@ -465,14 +478,16 @@ fetch() {
 }
 case "${1:-}" in
   fetch) fetch "$2" ;;
-  # The binaries come from the mem server; the hub then works on the replica.
+  # The binaries come from the store; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
   *) echo "mem-cloud: fetch <mem|hub> or sync <seconds>" >&2; exit 2 ;;
 esac
 "#;
 
-/// The `mem` a cloud session runs: the x86_64 binary from `$MEM_REMOTE/dl/mem`,
-/// fetched inside the session, where the proxy adds the Access token.
+/// The `mem` a cloud session runs: the x86_64 binary `mem-cloud fetch mem`
+/// takes from the store, or from `$MEM_REMOTE/dl/mem` without the store's
+/// variables, fetched inside the session, where the proxy adds the Access
+/// token.
 ///
 /// With `HUB_STORE_URL` and `HUB_STORE_TOKEN` among the environment's
 /// variables, mem keeps a replica of the store like a device's:
@@ -485,7 +500,7 @@ esac
 /// session's `HUB_CLOUD_TOKEN`) as well, the first mem of a session also
 /// joins the tailnet as an ephemeral `tag:cloud` machine (Tailscale in
 /// userspace, since the VM has no tun device). The local hub starts from
-/// `$MEM_REMOTE/dl/hub`, in the background. The key goes to tailscale in a
+/// the binary `mem-cloud fetch hub` takes, in the background. The key goes to tailscale in a
 /// file that is removed once read, and no process started here keeps it in
 /// its environment.
 const SHIM: &str = r#"#!/bin/sh
