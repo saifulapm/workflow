@@ -305,3 +305,18 @@ fn a_rerun_without_a_stored_token_refuses() {
     assert!(text(&out).contains("HUB_STORE_TOKEN"), "{}", text(&out));
     assert!(!calls(&w).contains("systemctl"));
 }
+
+#[test]
+fn a_failed_second_seed_warns_and_the_switch_still_lands() {
+    let w = world("switch-second-seed");
+    w.put("seed-exits", "0\n1\n");
+    let out = switch(&w, STORE);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("second hub share seed exited 1"),
+        "{stderr}"
+    );
+    assert!(calls(&w).ends_with("systemctl --user restart hub-local\n"));
+    assert!(w.read("config/hub/local.env").contains(MINTED));
+}

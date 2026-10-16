@@ -100,17 +100,17 @@ fn switch(url: &str) -> Step<()> {
         .map_err(|e| (exit::FAILED, format!("mem share switch: {e}")))?;
 
     // A write made between the first seed and the switch reaches the store
-    // only through this second one.
+    // only through this second one. If it fails, the switch has already
+    // happened: the outbox holds any new write and the restarted hub sends it.
     let reseeded = match status("hub", &["share", "seed"], &store)? {
         0 => true,
-        3 => {
-            warn(
-                "the store's import budget for today is spent; new writes wait in the outbox, \
-                 run workflow switch again after 06:00 Dhaka",
-            );
+        code => {
+            warn(format!(
+                "the second hub share seed exited {code}; new writes wait in the outbox \
+                 and the restarted hub sends them"
+            ));
             false
         }
-        code => return fail(format!("the second hub share seed exited {code}")),
     };
 
     let env = env_file()?;
@@ -131,9 +131,7 @@ fn switch(url: &str) -> Step<()> {
     println!("switched {name} to {url}");
     println!("  memory shares through the local hub; qshell-sync's memory unit is done");
     if !reseeded {
-        println!(
-            "  the store's import is not complete; run workflow switch again after 06:00 Dhaka"
-        );
+        println!("  the second seed did not finish; the outbox holds new writes");
     }
     println!(
         "  wrote HUB_STORE_URL, HUB_STORE_NAME, HUB_STORE_TOKEN and HUB_CLOUD_TOKEN to {}",
