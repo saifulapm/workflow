@@ -309,7 +309,13 @@ async fn page(mut req: Request, env: &Env) -> Result<Response> {
             "server-timing" => format!("{value}, store;dur={took}"),
             _ => value,
         };
-        page.headers_mut().append(&name, &value)?;
+        // A new response has a content type of its own: set replaces it,
+        // where append would send both and a phone would offer a download.
+        // A cookie is the one header that may come more than once.
+        match name.as_str() {
+            "set-cookie" => page.headers_mut().append(&name, &value)?,
+            _ => page.headers_mut().set(&name, &value)?,
+        }
     }
     Ok(page)
 }

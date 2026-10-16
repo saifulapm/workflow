@@ -143,6 +143,8 @@ unlike "$home_text" '/api/stamp' "home polls nothing"
 like "$home_text" 'Route: Phone</p><p class="banner warn">Pair this device first' \
 	"an unpaired browser sees the route and the pairing line in place of its buttons"
 
+is "$(tr -d '\r' <"$T_TMP/home.hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: //p')" 'text/html; charset=utf-8' \
+	"GET / is HTML and nothing else, so a phone shows it rather than offering a download"
 like "$(tr -d '\r' <"$T_TMP/home.hdr")" '^[Ss]erver-[Tt]iming: build;dur=[0-9.]+, store;dur=[0-9.]+' \
 	"GET / carries the store's build time and the round trip in Server-Timing"
 
