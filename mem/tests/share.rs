@@ -506,10 +506,17 @@ fn evidence_missing_from_the_replica_is_fetched_through_the_hub() {
     let served = bytes.clone();
     let asked = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut line = String::new();
-        BufReader::new(stream.try_clone().unwrap())
-            .read_line(&mut line)
-            .unwrap();
+        reader.read_line(&mut line).unwrap();
+        // Read the rest of the request: closing a socket with unread bytes
+        // resets it, and mem would lose the reply.
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).unwrap() == 0 || header == "\r\n" {
+                break;
+            }
+        }
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             served.len()
