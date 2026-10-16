@@ -543,3 +543,24 @@ fn evidence_missing_from_the_replica_is_fetched_through_the_hub() {
         "kept in the replica"
     );
 }
+
+#[test]
+fn a_streamed_write_for_a_project_this_replica_does_not_share_is_not_landed() {
+    let w = shared("share-other-project");
+    w.project("01K0SHARE0THER00000000000P", "other");
+    let other = "projects/01K0SHARE0THER00000000000P/wiki/notes.md";
+    let unknown = "projects/01K0SHARE0NKN0WN0000000000P/wiki/notes.md";
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC00000000000011", "path": other,
+                   "body": "# Notes\n", "machine": "nuc"}),
+            json!({"t": "rec", "seq": 2, "id": "01K0SHAREREC00000000000012", "path": unknown,
+                   "body": "# Notes\n", "machine": "nuc"}),
+        ],
+    );
+    let store = w.dirs().store();
+    assert!(!store.join(other).exists());
+    assert!(!store.join("projects/01K0SHARE0NKN0WN0000000000P").exists());
+    assert_eq!(hello(&w)["since"], 2);
+}

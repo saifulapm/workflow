@@ -258,6 +258,13 @@ pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
             let Some(file) = replica_path(root, &rel) else {
                 return Ok(());
             };
+            // The store carries every machine's shared projects; this
+            // replica lands only the ones it shares too.
+            if shared(root, &file).is_none() {
+                raise_seq(&tx, seen)?;
+                tx.commit()?;
+                return Ok(());
+            }
             // A local write still waiting wins: the store answers it with an
             // ack, or with a refusal that carries this record's version.
             if head(&tx, &rel)?.as_deref() != Some(id.as_str()) && !waiting_for(&tx, &rel)? {
