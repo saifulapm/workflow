@@ -19,7 +19,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 
 use crate::http::{Request, Response};
-use crate::localroute::{LocalRoute, Stamped};
+use crate::localroute::{Kind, LocalRoute, Stamped};
 use crate::open::{Known, Open};
 use crate::share::Store;
 use crate::slack::{Question, Slack, Tap};
@@ -82,7 +82,7 @@ pub struct Local {
     /// The questions asked on this machine, by short id.
     asked: Mutex<HashMap<String, Asked>>,
     /// Every open question this hub knows, asked here or on a peer.
-    known: Known,
+    known: Arc<Known>,
     /// Where this machine's person questions ring.
     route_now: LocalRoute,
     /// Answers by question short id, kept for a wait that comes later.
@@ -102,7 +102,7 @@ impl Local {
         let remote = std::env::var_os("MEM_REMOTE").is_some_and(|v| !v.is_empty());
         Local {
             machine,
-            known: Known::load(host.clone()),
+            known: Arc::new(Known::load(host.clone())),
             route_now: LocalRoute::load(),
             host,
             token,
@@ -183,7 +183,6 @@ impl Local {
             (_, "/ping") => Response::method_not_allowed("GET"),
             ("POST", "/ask") => match serde_json::from_slice::<Asked>(&request.body) {
                 Ok(asked) => {
-                    self.post(&asked);
                     let open = Open {
                         id: asked.id.clone(),
                         project: asked.project.clone(),
@@ -191,14 +190,28 @@ impl Local {
                         text: asked.text.clone(),
                         options: asked.options.clone(),
                         person: asked.audience.as_deref() != Some("orchestrator"),
+                        ring: None,
                     };
                     self.known.add(open.clone());
                     self.tell_peers("/question", serde_json::to_vec(&open).unwrap_or_default());
+                    self.post(&asked, open);
                     self.asked
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .insert(asked.id.clone(), asked);
                     Response::text(200, "ok")
+                }
+                Err(e) => Response::text(400, &format!("not a question: {e}")),
+            },
+            // The asking hub offers its question to this, the route device.
+            ("POST", "/ring") => match serde_json::from_slice::<Open>(&request.body) {
+                Ok(_) if crate::presence::sample().away() => Response::text(409, "away"),
+                Ok(open) => {
+                    if self.known.take(open, &self.host) {
+                        Response::text(200, "taken")
+                    } else {
+                        Response::text(409, "it rings elsewhere now")
+                    }
                 }
                 Err(e) => Response::text(400, &format!("not a question: {e}")),
             },
@@ -380,27 +393,28 @@ impl Local {
         self.answered.notify_all();
     }
 
-    /// Posts a person's question to Slack, on a thread of its own so mem is
-    /// not kept waiting. An orchestrator's question never rings, and a
-    /// roadmap review stays on the hub.
-    fn post(&self, asked: &Asked) {
-        let Some(slack) = self.slack.clone() else {
-            return;
-        };
-        if asked.audience.as_deref() == Some("orchestrator") || asked.is_review() {
+    /// Rings a person's question on its route, on a thread of its own so
+    /// mem is not kept waiting. An orchestrator's question never rings, and
+    /// a roadmap review stays on the hub.
+    fn post(&self, asked: &Asked, open: Open) {
+        if !open.person || asked.is_review() {
             return;
         }
-        let question = Question {
-            id: asked.id.clone(),
-            project: asked.project.clone().unwrap_or_default(),
-            machine: self.host.clone(),
-            text: asked.text.clone(),
-            options: asked.options.clone(),
+        let ringer = Ringer {
+            slack: self.slack.clone(),
+            known: Arc::clone(&self.known),
+            host: self.host.clone(),
+            token: self.token.clone(),
+            question: Question {
+                id: asked.id.clone(),
+                project: asked.project.clone().unwrap_or_default(),
+                machine: self.host.clone(),
+                text: asked.text.clone(),
+                options: asked.options.clone(),
+            },
         };
-        std::thread::spawn(move || match slack.post_question(&question) {
-            Ok(_) => eprintln!("hub: local: #{} posted to Slack", question.id),
-            Err(e) => eprintln!("hub: local: #{} not posted to Slack: {e:#}", question.id),
-        });
+        let route = self.route_now.get();
+        std::thread::spawn(move || ringer.ring(&route, open));
     }
 
     /// Saiful's tap: the answer goes to the hub that asked, this one or a
@@ -543,21 +557,8 @@ impl Local {
         self.tell_peers("/closed", body.into_bytes());
     }
 
-    /// POSTs `body` to `path` on every peer, each on a thread of its own, so a
-    /// peer that is listed but off holds up nobody.
     fn tell_peers(&self, path: &'static str, body: Vec<u8>) {
-        for peer in crate::tailnet_peers() {
-            if peer == self.host {
-                continue;
-            }
-            let token = self.token.clone();
-            let body = body.clone();
-            std::thread::spawn(move || match request(&peer, "POST", path, &token, &body) {
-                Ok((200, _)) => {}
-                Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to {path}"),
-                Err(e) => eprintln!("hub: local: {path} did not reach {peer}: {e:#}"),
-            });
-        }
+        tell_peers(&self.host, &self.token, path, body);
     }
 
     /// Asks every peer for its open questions, once at start, so a hub that
@@ -612,6 +613,112 @@ impl Local {
                 .wait_timeout(answers, left)
                 .unwrap_or_else(|e| e.into_inner())
                 .0;
+        }
+    }
+}
+
+/// POSTs `body` to `path` on every peer but `host`, each on a thread of its
+/// own, so a peer that is listed but off holds up nobody.
+fn tell_peers(host: &str, token: &str, path: &'static str, body: Vec<u8>) {
+    for peer in crate::tailnet_peers() {
+        if peer == host {
+            continue;
+        }
+        let token = token.to_string();
+        let body = body.clone();
+        std::thread::spawn(move || match request(&peer, "POST", path, &token, &body) {
+            Ok((200, _)) => {}
+            Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to {path}"),
+            Err(e) => eprintln!("hub: local: {path} did not reach {peer}: {e:#}"),
+        });
+    }
+}
+
+/// How long the route device has to take a question before it goes to
+/// Phone: 10 s, or `HUB_RING_MS`.
+fn ring_timeout() -> Duration {
+    std::env::var("HUB_RING_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(Duration::from_secs(10), Duration::from_millis)
+}
+
+/// What the asking hub needs, off its own thread, to ring one question.
+struct Ringer {
+    slack: Option<Arc<Slack>>,
+    known: Arc<Known>,
+    host: String,
+    token: String,
+    question: Question,
+}
+
+impl Ringer {
+    /// Device when the route device takes it, else Phone; then every peer
+    /// hears where it rings, so the route device drops a popup it showed
+    /// too late.
+    fn ring(&self, route: &Stamped, mut open: Open) {
+        let device = match (route.route, &route.machine) {
+            (Kind::Device, Some(machine)) => Some(machine.as_str()),
+            _ => None,
+        };
+        let taken = device.filter(|machine| self.taken_by(machine, &open));
+        let ring = taken.unwrap_or("phone").to_string();
+        if let Some(machine) = device
+            && taken.is_none()
+        {
+            eprintln!(
+                "hub: local: #{} not taken by {machine}; ringing Phone",
+                open.id
+            );
+        }
+        open.ring = Some(ring);
+        self.known.add(open.clone());
+        tell_peers(
+            &self.host,
+            &self.token,
+            "/question",
+            serde_json::to_vec(&open).unwrap_or_default(),
+        );
+        if taken.is_none() {
+            self.post_to_slack();
+        }
+    }
+
+    /// Whether the route device took the question: this machine when someone
+    /// is at it, else a peer the tailnet lists online that says so in time.
+    fn taken_by(&self, machine: &str, open: &Open) -> bool {
+        if machine == self.host {
+            return !crate::presence::sample().away();
+        }
+        if !crate::tailnet_peers().iter().any(|p| p == machine) {
+            eprintln!("hub: local: {machine} is offline");
+            return false;
+        }
+        let body = serde_json::to_vec(open).unwrap_or_default();
+        match request_within(machine, "POST", "/ring", &self.token, &body, ring_timeout()) {
+            Ok((200, _)) => true,
+            Ok((status, why)) => {
+                eprintln!(
+                    "hub: local: {machine} answered {status} to /ring: {}",
+                    why.trim()
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!("hub: local: /ring did not reach {machine}: {e:#}");
+                false
+            }
+        }
+    }
+
+    fn post_to_slack(&self) {
+        let Some(slack) = &self.slack else { return };
+        match slack.post_question(&self.question) {
+            Ok(_) => eprintln!("hub: local: #{} posted to Slack", self.question.id),
+            Err(e) => eprintln!(
+                "hub: local: #{} not posted to Slack: {e:#}",
+                self.question.id
+            ),
         }
     }
 }
@@ -762,13 +869,28 @@ pub fn request(
     token: &str,
     body: &[u8],
 ) -> Result<(u16, String)> {
+    request_within(target, method, path, token, body, PEER_TIMEOUT)
+}
+
+/// `request`, given up after `within` for the connection and for each read
+/// and write.
+pub fn request_within(
+    target: &str,
+    method: &str,
+    path: &str,
+    token: &str,
+    body: &[u8],
+    within: Duration,
+) -> Result<(u16, String)> {
     let (host, port) = split_target(target)?;
     let mut stream = match std::env::var("HUB_SOCKS5").ok().filter(|v| !v.is_empty()) {
         Some(proxy) => socks5_connect(&proxy, &host, port)?,
-        None => connect_within(&host, port).with_context(|| format!("connecting {target}"))?,
+        None => {
+            connect_within(&host, port, within).with_context(|| format!("connecting {target}"))?
+        }
     };
-    stream.set_read_timeout(Some(PEER_TIMEOUT))?;
-    stream.set_write_timeout(Some(PEER_TIMEOUT))?;
+    stream.set_read_timeout(Some(within))?;
+    stream.set_write_timeout(Some(within))?;
     let head = format!(
         "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n",
@@ -796,13 +918,13 @@ pub fn request(
     Ok((status, body))
 }
 
-/// A connect that gives up after `PEER_TIMEOUT`, so a peer that is listed
+/// A connect that gives up after `within`, so a peer that is listed
 /// but off costs seconds, not the system's two minutes.
-fn connect_within(host: &str, port: u16) -> std::io::Result<TcpStream> {
+fn connect_within(host: &str, port: u16, within: Duration) -> std::io::Result<TcpStream> {
     use std::net::ToSocketAddrs;
     let mut last = std::io::Error::other("no address");
     for addr in (host, port).to_socket_addrs()? {
-        match TcpStream::connect_timeout(&addr, PEER_TIMEOUT) {
+        match TcpStream::connect_timeout(&addr, within) {
             Ok(stream) => return Ok(stream),
             Err(e) => last = e,
         }
@@ -824,7 +946,7 @@ fn split_target(target: &str) -> Result<(String, u16)> {
 /// resolves it (tailscaled knows MagicDNS names; this machine may not).
 fn socks5_connect(proxy: &str, host: &str, port: u16) -> Result<TcpStream> {
     let (proxy_host, proxy_port) = split_target(proxy)?;
-    let mut stream = connect_within(&proxy_host, proxy_port)
+    let mut stream = connect_within(&proxy_host, proxy_port, PEER_TIMEOUT)
         .with_context(|| format!("connecting the SOCKS5 proxy {proxy}"))?;
     stream.set_read_timeout(Some(PEER_TIMEOUT))?;
     stream.write_all(&[5, 1, 0])?;

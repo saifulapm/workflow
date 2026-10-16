@@ -24,6 +24,11 @@ pub struct Open {
     pub options: Vec<String>,
     /// A question for Saiful; an orchestrator's is not one.
     pub person: bool,
+    /// Where it rings, once the asking hub has decided: `phone`, or the host
+    /// of the route device that took it. None while undecided, and for a
+    /// question that never rings.
+    #[serde(default)]
+    pub ring: Option<String>,
 }
 
 pub struct Known {
@@ -75,15 +80,42 @@ impl Known {
         self.lock().iter().find(|o| o.id == id).cloned()
     }
 
-    /// Adds `open`, or replaces the copy of it this hub had.
-    pub fn add(&self, open: Open) {
+    /// Adds `open`, or replaces the copy of it this hub had. A copy that
+    /// does not say where it rings keeps what this hub already knew, so the
+    /// first news of a question, arriving late, cannot undo the ring.
+    pub fn add(&self, mut open: Open) {
         let mut all = self.lock();
         match all.iter_mut().find(|o| o.id == open.id) {
-            Some(had) if *had == open => return,
-            Some(had) => *had = open,
+            Some(had) => {
+                if open.ring.is_none() {
+                    open.ring = had.ring.clone();
+                }
+                if *had == open {
+                    return;
+                }
+                *had = open;
+            }
             None => all.push(open),
         }
         self.write(&all);
+    }
+
+    /// The route device's side: rings `open` on `host` unless the asking hub
+    /// already sent it elsewhere. Whether it rings here now.
+    pub fn take(&self, mut open: Open, host: &str) -> bool {
+        let mut all = self.lock();
+        let decided = all
+            .iter()
+            .find(|o| o.id == open.id)
+            .and_then(|o| o.ring.clone());
+        if let Some(ring) = decided {
+            return ring == host;
+        }
+        open.ring = Some(host.to_string());
+        all.retain(|o| o.id != open.id);
+        all.push(open);
+        self.write(&all);
+        true
     }
 
     /// Drops `id`; whether it was open here.
@@ -121,7 +153,7 @@ impl Known {
             .iter()
             .map(|o| {
                 let mut row = serde_json::to_value(o).unwrap_or_default();
-                row["popup"] = json!(false);
+                row["popup"] = json!(o.ring.as_deref() == Some(self.host.as_str()));
                 row
             })
             .collect();
