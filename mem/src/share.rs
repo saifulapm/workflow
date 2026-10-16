@@ -139,7 +139,7 @@ fn shared(root: &Path, path: &Path, switched: bool) -> Option<(String, bool)> {
 
 /// Whether this machine has switched to the store: a flag beside the
 /// sharing database, never synced.
-fn is_switched(db: &Path) -> bool {
+pub fn is_switched(db: &Path) -> bool {
     db.with_file_name("switched").exists()
 }
 

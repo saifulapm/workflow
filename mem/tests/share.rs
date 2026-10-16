@@ -988,3 +988,15 @@ fn the_import_leaves_the_outbox_and_the_replicas_heads_alone() {
     assert!(pending(&w).is_empty());
     assert_eq!(hello(&w)["since"], 0);
 }
+
+#[test]
+fn doctor_on_a_switched_machine_does_not_ask_for_the_memory_unit() {
+    let w = switched("share-switched-doctor");
+    let out = mem(&w, w.dir.path(), &["doctor"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(!text.lines().any(|l| l.starts_with("sync ")), "{text}");
+    let unswitched = shared("share-unswitched-doctor");
+    let text = stdout(&mem(&unswitched, unswitched.dir.path(), &["doctor"]));
+    assert!(text.lines().any(|l| l.starts_with("sync ")), "{text}");
+}

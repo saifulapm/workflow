@@ -2610,8 +2610,13 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
         findings.extend(crate::maint::pi_extension_findings(&pi_extension));
     }
 
-    match crate::sync::Status::read(&app.dirs.qshell_status_json()) {
-        Some(status) => match status.unit(crate::sync::UNIT) {
+    // A switched machine shares through its local hub; qshell-sync's memory
+    // unit stands down there.
+    let status = (!crate::share::is_switched(&app.dirs.share_db()))
+        .then(|| crate::sync::Status::read(&app.dirs.qshell_status_json()));
+    match status {
+        None => {}
+        Some(Some(status)) => match status.unit(crate::sync::UNIT) {
             Some(unit) if unit.ok == Some(false) => findings.push(finding(
                 "sync",
                 format!(
@@ -2631,7 +2636,7 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
                 "qshell-sync has no memory unit yet; the dotfiles' bin/qshell-sync script sets up the unit `memory`",
             )),
         },
-        None => findings.push(finding(
+        Some(None) => findings.push(finding(
             "sync",
             "no qshell-sync status file on this machine",
         )),
