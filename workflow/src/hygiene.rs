@@ -40,6 +40,11 @@ const IGNORED_FILES: &[&str] = &[
     "skills-lock.json",
 ];
 
+/// Files whose lines are never read for the hard tier, by their path from
+/// the top. mem saves a cloud session's unsent writes, ids and log text
+/// included, in `.mem-outbox.json`, and the next machine's mem removes it.
+const EXEMPT_FILES: &[&str] = &[".mem-outbox.json"];
+
 /// What the no-flag sweep reads of history.
 const SWEEP_COMMITS: usize = 200;
 
@@ -386,7 +391,7 @@ fn hunk_start(header: &str) -> usize {
 }
 
 fn exempt(globs: &[String], path: &str) -> bool {
-    globs.iter().any(|g| covers(g, path))
+    EXEMPT_FILES.contains(&path) || globs.iter().any(|g| covers(g, path))
 }
 
 /// Does the pattern claim the path? A pattern with no glob in it is the path
@@ -641,6 +646,25 @@ mod tests {
             .filter(|r| r.hits(line))
             .map(Rule::label)
             .collect()
+    }
+
+    #[test]
+    fn a_staged_mem_outbox_file_passes_with_ids_in_it() {
+        let dir = std::env::temp_dir().join(format!("hygiene-outbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = Git::at(&dir);
+        assert!(git.quiet(&["init", "-q"]));
+        let line = format!("{{\"body\": \"see #{}\"}}\n", "QZ7RKWVM");
+        for name in [".mem-outbox.json", "notes.json"] {
+            std::fs::write(dir.join(name), &line).unwrap();
+        }
+        assert!(git.quiet(&["add", "-f", ".mem-outbox.json", "notes.json"]));
+        let mut report = Report::default();
+        scan_staged(&git, &[], &[], &mut report);
+        let flagged: Vec<&str> = report.findings.iter().map(|f| f.path.as_str()).collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(flagged, ["notes.json"]);
     }
 
     // The numbered shapes are built at run time so this file stays clean
