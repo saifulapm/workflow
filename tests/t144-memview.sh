@@ -2,7 +2,7 @@
 # memview against the real mem: the hub sandbox's seeded store, and for
 # every read the hub's pages make, `mem <argv>` beside `memview <store>
 # <argv>`. The two documents must be equal once the keys mem takes from the
-# machine rather than the store are set aside: a project's aliases, checkouts,
+# machine rather than the store are set aside: a project's checkouts,
 # current and worktree, the store directory in front of every path, and the
 # file mtime mem reports as a page's or a stored plan's modified date. Where
 # mem prints nothing, memview must print nothing too.
@@ -32,7 +32,7 @@ cat >"$T_TMP/same.py" <<'PY'
 import json, sys
 
 store, mem_file, view_file = sys.argv[1:4]
-MACHINE = {"aliases", "checkouts", "current", "worktree"}
+MACHINE = {"checkouts", "current", "worktree"}
 
 def norm(value, parent=None):
     if isinstance(value, dict):
@@ -70,6 +70,11 @@ same() {
 	"$MEM_BIN" "$@" >"$T_TMP/mem.out" 2>/dev/null
 	cargo run -q --manifest-path "$HUBWEB/Cargo.toml" --example memview -- "$store" "$@" \
 		>"$T_TMP/view.out" 2>"$T_TMP/view.err"
+	# Exit 2 is an argv memview does not serve, which prints nothing either.
+	if [ $? -eq 2 ]; then
+		notok "memview answers: mem $*" "$(cat "$T_TMP/view.err")"
+		return
+	fi
 	if out=$(python3 -I "$T_TMP/same.py" "$store" "$T_TMP/mem.out" "$T_TMP/view.out" 2>&1); then
 		ok "memview answers: mem $*"
 	else
