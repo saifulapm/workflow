@@ -48,6 +48,9 @@ pub struct Ask<'a> {
     pub may_write: bool,
     /// The store hit a Free daily limit today, which home says.
     pub limited: bool,
+    /// What the store has seen, as its /live socket names it: a page drawn
+    /// at another stamp is out of date.
+    pub stamp: String,
 }
 
 /// The page for `ask.request` and the writes it made, or None for a path no
@@ -100,7 +103,7 @@ pub fn page(
                 1,
             );
         }
-        response.body = listening(&html);
+        response.body = listening(&html, &ask.stamp);
     }
     drop((mem, host));
     Some((response, shared.written.into_inner()))
@@ -127,24 +130,33 @@ pub fn request(
     }
 }
 
-/// The page's own socket: on a change the page reloads, but never while a
-/// field has focus or text or text is selected; then it reloads once the
-/// field is left. A closed socket comes back after 5 s, and the page then
-/// reloads once, since it may have missed a change (a phone suspends the
-/// socket of a page in the background).
-const LISTEN: &str = "<script>(function(){var due=false,lost=false,t;\
-function busy(){var a=document.activeElement;\
+/// The page's own socket. The store sends its stamp when the socket opens
+/// and after every change; a stamp other than the one the page was drawn at
+/// reloads the page, so a change made before the socket opened, or while a
+/// phone kept the page in the background, is not missed. Never while a
+/// field has focus, holds text of its own or text is selected: the page
+/// reloads once the field is left. A closed socket comes back after 1 s,
+/// then 2, 4, up to a minute, and at once when the page is shown again.
+fn listen(stamp: &str) -> String {
+    format!(
+        "<script>(function(){{var seen=\"{stamp}\",due=false,t,wait=1000,s;\
+function busy(){{var a=document.activeElement;\
 if(a&&/^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName))return true;\
 if(String(window.getSelection())!=='')return true;\
 var f=document.querySelectorAll('textarea,input:not([type=hidden])');\
-for(var i=0;i<f.length;i++){if(f[i].value)return true;}return false;}\
-function go(){if(busy()){due=true;return;}location.reload();}\
-document.addEventListener('focusout',function(){setTimeout(function(){if(due)go();},0);});\
-document.addEventListener('selectionchange',function(){if(due&&!busy())go();});\
-function open(){var s=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/live');\
-s.onopen=function(){if(lost){lost=false;go();}};\
-s.onmessage=function(){clearTimeout(t);t=setTimeout(go,150);};\
-s.onclose=function(){lost=true;setTimeout(open,5000);};}open();})();</script>\n";
+for(var i=0;i<f.length;i++){{if(f[i].value!==f[i].defaultValue)return true;}}return false;}}\
+function go(){{if(busy()){{due=true;return;}}location.reload();}}\
+document.addEventListener('focusout',function(){{setTimeout(function(){{if(due)go();}},0);}});\
+document.addEventListener('selectionchange',function(){{if(due&&!busy())go();}});\
+function open(){{clearTimeout(t);s=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/live');\
+s.onopen=function(){{wait=1000;}};\
+s.onmessage=function(e){{var m={{}};try{{m=JSON.parse(e.data);}}catch(x){{}}\
+if(m.stamp!==seen){{clearTimeout(t);t=setTimeout(go,150);}}}};\
+s.onclose=function(){{t=setTimeout(open,wait);wait=Math.min(wait*2,60000);}};}}\
+document.addEventListener('visibilitychange',function(){{\
+if(!document.hidden&&s&&s.readyState>1)open();}});open();}})();</script>\n"
+    )
+}
 
 /// Opened with `?timing`, a page reports how long its own load took to the
 /// store (`/api/timing`), so a load on the phone is a record, not a reading.
@@ -157,10 +169,11 @@ dns:Math.round(n.domainLookupEnd-n.domainLookupStart),\
 connect:Math.round(n.connectEnd-n.connectStart),size:n.transferSize,\
 ua:navigator.userAgent}));},0);});</script>\n";
 
-fn listening(html: &str) -> Vec<u8> {
+fn listening(html: &str, stamp: &str) -> Vec<u8> {
+    let scripts = format!("{}{TIMING}", listen(stamp));
     match html.rfind("</body>") {
-        Some(at) => format!("{}{LISTEN}{TIMING}{}", &html[..at], &html[at..]).into_bytes(),
-        None => format!("{html}{LISTEN}{TIMING}").into_bytes(),
+        Some(at) => format!("{}{scripts}{}", &html[..at], &html[at..]).into_bytes(),
+        None => format!("{html}{scripts}").into_bytes(),
     }
 }
 
@@ -205,10 +218,15 @@ impl<F: Files> Source for StoreMem<'_, '_, F> {
             files: self.files,
             written: &written.files,
         };
-        let outcome = Arc::new(match memview::read(&view, argv, now) {
-            Reply::Json(doc) => Outcome::Json(doc),
-            Reply::Absent => Outcome::Absent,
-            Reply::Unknown => Outcome::Broken(format!("the store does not answer {argv:?}")),
+        let reply = memview::read(&view, argv, now);
+        let outcome = Arc::new(match (self.files.fault(), reply) {
+            // A read that failed is no answer, never an empty one.
+            (Some(why), _) => Outcome::Broken(format!("the store could not be read: {why}")),
+            (None, Reply::Json(doc)) => Outcome::Json(doc),
+            (None, Reply::Absent) => Outcome::Absent,
+            (None, Reply::Unknown) => {
+                Outcome::Broken(format!("the store does not answer {argv:?}"))
+            }
         });
         self.read.borrow_mut().insert(key, Arc::clone(&outcome));
         outcome
@@ -370,6 +388,7 @@ mod tests {
             paired: true,
             may_write: true,
             limited: false,
+            stamp: "7.0".into(),
         }
     }
 
@@ -417,13 +436,12 @@ mod tests {
     }
 
     #[test]
-    fn a_page_reloads_once_when_its_socket_comes_back() {
+    fn a_page_knows_the_stamp_it_was_drawn_at_and_reloads_on_another() {
         let page = html(draw(&store(), ask(&get("/"))).unwrap());
-        assert!(page.contains("s.onclose=function(){lost=true;"), "{page}");
-        assert!(
-            page.contains("s.onopen=function(){if(lost){lost=false;go();}}"),
-            "{page}"
-        );
+        assert!(page.contains("var seen=\"7.0\""), "{page}");
+        assert!(page.contains("if(m.stamp!==seen)"), "{page}");
+        // A form's own default (the finding's step) is no text being typed.
+        assert!(page.contains("f[i].value!==f[i].defaultValue"), "{page}");
     }
 
     #[test]
@@ -504,6 +522,34 @@ mod tests {
         let dulali = post("dulali");
         let (refused, written) = page(&files, ask(&dulali), &mut random).unwrap();
         assert_eq!((refused.status, written.route), (400, None));
+    }
+
+    /// Files whose every read failed, as the store's are past a Free limit.
+    struct Failing;
+
+    impl Files for Failing {
+        fn read(&self, _path: &str) -> Option<String> {
+            None
+        }
+        fn list(&self, _prefix: &str) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn projects(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn fault(&self) -> Option<String> {
+            Some("rows read limit exceeded".into())
+        }
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_read_never_says_nothing_waits() {
+        let request = get("/");
+        let mut random = || [1; 10];
+        let (response, _) = page(&Failing, ask(&request), &mut random).unwrap();
+        let page = html(response);
+        assert!(page.contains("rows read limit exceeded"), "{page}");
+        assert!(!page.contains("Nothing waiting"), "{page}");
     }
 
     #[test]

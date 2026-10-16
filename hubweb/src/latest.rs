@@ -18,6 +18,10 @@ pub enum Change {
     Drop,
 }
 
+/// The kind a project's project.toml is kept under, so the list of projects
+/// is an indexed lookup; no item kind starts with `@`.
+pub const PROJECT: &str = "@project";
+
 /// What `rec` does to the table, or None for a path outside any project,
 /// which no page reads.
 pub fn change(rec: &Rec) -> Option<Change> {
@@ -26,11 +30,14 @@ pub fn change(rec: &Rec) -> Option<Change> {
         None => Change::Drop,
         Some(body) => Change::Keep {
             project: project.to_string(),
-            kind: rec
-                .path
-                .contains("/items/")
-                .then(|| item_kind(body))
-                .flatten(),
+            kind: if rec.path == format!("projects/{project}/project.toml") {
+                Some(PROJECT.to_string())
+            } else {
+                rec.path
+                    .contains("/items/")
+                    .then(|| item_kind(body))
+                    .flatten()
+            },
             body: body.clone(),
         },
     })
@@ -112,6 +119,18 @@ mod tests {
             change(&rec(3, "projects/P1/wiki/spec.md", None)),
             Some(Change::Drop)
         );
+    }
+
+    #[test]
+    fn a_project_toml_is_kept_under_the_project_kind() {
+        let kept = change(&rec(
+            4,
+            "projects/P1/project.toml",
+            Some("name = \"walk\"\n"),
+        ));
+        assert!(matches!(kept, Some(Change::Keep { kind: Some(k), .. }) if k == PROJECT));
+        let nested = change(&rec(5, "projects/P1/wiki/project.toml", Some("x")));
+        assert!(matches!(nested, Some(Change::Keep { kind: None, .. })));
     }
 
     #[test]

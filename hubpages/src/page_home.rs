@@ -252,7 +252,9 @@ pub fn render(
     }
 
     body.push_str("<h2>Waiting on you</h2>\n");
-    if questions_rows.is_empty() {
+    // A read that failed says so in the banner above; "Nothing waiting" then
+    // could be false.
+    if questions_rows.is_empty() && list_fault(&questions, "questions").is_none() {
         body.push_str("<p class=\"empty\">Nothing waiting.</p>\n");
     }
     for question in &questions_rows {

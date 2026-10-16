@@ -31,6 +31,10 @@ pub trait Files {
     fn projects(&self) -> Vec<String>;
     /// The items of one project whose `kind` is one of `kinds` (all items
     /// when empty), as (path, body).
+    /// Why a read failed, once one has: an empty answer is then no answer.
+    fn fault(&self) -> Option<String> {
+        None
+    }
     fn items(&self, project: &str, kinds: &[&str]) -> Vec<(String, String)> {
         let mut all = self.list(&format!("projects/{project}/items/"));
         if !kinds.is_empty() {

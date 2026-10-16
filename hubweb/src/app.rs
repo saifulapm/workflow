@@ -100,7 +100,23 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             let (project, id) = evidence_file(&path).unwrap_or_default();
             serve_evidence(project, id, &env).await
         }
-        (Method::Post, "/" | "/mcp") => serve_mcp(req, &env).await,
+        (Method::Post, "/" | "/mcp") => {
+            // claude.ai calls the connector from its servers. A browser
+            // says where its request comes from, and a form can send only
+            // a few content types: refusing both keeps a page signed in to
+            // Access from writing through the connector.
+            if req.headers().get("Sec-Fetch-Site")?.is_some() {
+                return Response::error("the connector does not take a browser's request", 403);
+            }
+            let json = req
+                .headers()
+                .get("Content-Type")?
+                .is_some_and(|kind| kind.trim_start().starts_with("application/json"));
+            if !json {
+                return Response::error("the connector takes application/json", 415);
+            }
+            serve_mcp(req, &env).await
+        }
         (_, "/mcp") => Response::error("Method Not Allowed", 405),
         (Method::Get | Method::Post, _) => page(req, &env).await,
         _ => Response::error("Method Not Allowed", 405),
@@ -393,9 +409,10 @@ impl Store {
             paired: self.paired(&request)?,
             may_write: req_may_write,
             limited: site::limit_is_today(self.limit_day()?, now_ms()),
+            stamp: self.stamp()?,
         };
         let mut random = || random().unwrap_or_default();
-        let Some((drawn, written)) = site::page(&SqlFiles(&self.sql), ask, &mut random) else {
+        let Some((drawn, written)) = site::page(&SqlFiles::new(&self.sql), ask, &mut random) else {
             return Response::error("Not Found", 404);
         };
         let took = Date::now().as_millis() - start;
@@ -562,10 +579,32 @@ impl Store {
     /// Tells every open page the store changed, and nothing more: the page
     /// reloads itself when no one is typing.
     fn nudge_pages(&self) {
+        let Ok(changed) = self.changed() else {
+            return;
+        };
         for page in self.state.get_websockets_with_tag(PAGE) {
-            // A page that is closing misses it; it loads fresh when reopened.
-            let _ = page.send_with_str(r#"{"t":"changed"}"#);
+            // A page that is closing misses it; its next socket hears the stamp.
+            let _ = page.send_with_str(&changed);
         }
+    }
+
+    /// What the store has seen, for a page to compare with the stamp it was
+    /// drawn at: the newest write's seq and the route's time.
+    fn stamp(&self) -> Result<String> {
+        let log = SqlLog(&self.sql);
+        let fault = |fault: Fault| Error::RustError(format!("{fault:?}"));
+        let seq = log.last().map_err(fault)?;
+        let at = log
+            .route()
+            .map_err(fault)?
+            .and_then(|route| route["at"].as_i64())
+            .unwrap_or(0);
+        Ok(format!("{seq}.{at}"))
+    }
+
+    /// The message an open page hears: the store changed, and its stamp.
+    fn changed(&self) -> Result<String> {
+        Ok(json!({"t":"changed","stamp":self.stamp()?}).to_string())
     }
 }
 
@@ -609,6 +648,12 @@ impl DurableObject for Store {
         )
         .expect("index the files by kind");
         fill_files(&sql).expect("fill the files table from the log");
+        sql.exec(
+            "CREATE INDEX IF NOT EXISTS files_by_kind_alone ON files(kind)",
+            None,
+        )
+        .expect("index the files by kind alone");
+        mark_projects(&sql).expect("mark each project.toml");
         sql.exec(
             "CREATE TABLE IF NOT EXISTS timings(at INTEGER NOT NULL, body TEXT NOT NULL)",
             None,
@@ -700,7 +745,7 @@ impl DurableObject for Store {
                     return Response::error("Not Found", 404);
                 };
                 let project = hubpages::form::decode_path(project);
-                match evidence::store_path(&SqlFiles(&self.sql), &project, id) {
+                match evidence::store_path(&SqlFiles::new(&self.sql), &project, id) {
                     Some(path) => Response::ok(path),
                     None => Response::error("Not Found", 404),
                 }
@@ -727,7 +772,7 @@ impl DurableObject for Store {
                 let served = mcp::serve(
                     &body,
                     mcp::Store {
-                        files: &SqlFiles(&self.sql),
+                        files: &SqlFiles::new(&self.sql),
                         now: jiff::Timestamp::from_millisecond(now_ms() as i64).unwrap_or_default(),
                         random: &mut random,
                     },
@@ -754,6 +799,9 @@ impl DurableObject for Store {
                 }
                 let pair = WebSocketPair::new()?;
                 self.state.accept_websocket_with_tags(&pair.server, &[PAGE]);
+                // The page compares this with the stamp it was drawn at, so
+                // a change before its socket opened is not missed.
+                pair.server.send_with_str(&self.changed()?)?;
                 Response::from_websocket(pair.client)
             }
             _ => Response::error("Not Found", 404),
@@ -917,16 +965,38 @@ impl Files {
     }
 }
 
-/// The store's files table, as memview reads files.
-struct SqlFiles<'a>(&'a SqlStorage);
+/// The store's files table, as memview reads files. A failed query is kept,
+/// so the page says the store could not be read instead of drawing an empty
+/// one.
+struct SqlFiles<'a> {
+    sql: &'a SqlStorage,
+    fault: RefCell<Option<String>>,
+}
 
-impl SqlFiles<'_> {
-    fn pairs(&self, query: &str, bindings: Vec<SqlStorageValue>) -> Vec<(String, String)> {
-        let rows: Vec<Value> = self
-            .0
-            .exec(query, Some(bindings))
+impl<'a> SqlFiles<'a> {
+    fn new(sql: &'a SqlStorage) -> Self {
+        SqlFiles {
+            sql,
+            fault: RefCell::new(None),
+        }
+    }
+
+    fn rows(&self, query: &str, bindings: Option<Vec<SqlStorageValue>>) -> Vec<Value> {
+        match self
+            .sql
+            .exec(query, bindings)
             .and_then(|cursor| cursor.to_array())
-            .unwrap_or_default();
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.fault.borrow_mut().get_or_insert(error.to_string());
+                Vec::new()
+            }
+        }
+    }
+
+    fn pairs(&self, query: &str, bindings: Vec<SqlStorageValue>) -> Vec<(String, String)> {
+        let rows = self.rows(query, Some(bindings));
         rows.iter()
             .filter_map(|row| {
                 Some((
@@ -939,6 +1009,10 @@ impl SqlFiles<'_> {
 }
 
 impl memview::Files for SqlFiles<'_> {
+    fn fault(&self) -> Option<String> {
+        self.fault.borrow().clone()
+    }
+
     fn read(&self, path: &str) -> Option<String> {
         self.pairs(
             "SELECT path, body FROM files WHERE path = ?",
@@ -957,15 +1031,13 @@ impl memview::Files for SqlFiles<'_> {
     }
 
     fn projects(&self) -> Vec<String> {
-        let rows: Vec<Value> = self
-            .0
-            .exec(
-                "SELECT project FROM files WHERE path = 'projects/' || project || '/project.toml' \
-                 ORDER BY project",
-                None,
-            )
-            .and_then(|cursor| cursor.to_array())
-            .unwrap_or_default();
+        let rows = self.rows(
+            &format!(
+                "SELECT project FROM files WHERE kind = '{}' ORDER BY project",
+                latest::PROJECT
+            ),
+            None,
+        );
         rows.iter()
             .filter_map(|row| row["project"].as_str().map(str::to_string))
             .collect()
@@ -1103,6 +1175,24 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
         )?,
         None => return Ok(()),
     };
+    Ok(())
+}
+
+/// Marks the project.toml rows a store kept before they had a kind of their
+/// own, once: while one is marked, this is one indexed lookup.
+fn mark_projects(sql: &SqlStorage) -> Result<()> {
+    let marked: Vec<Value> = sql
+        .exec(
+            "SELECT 1 FROM files WHERE kind = ? LIMIT 1",
+            vec![latest::PROJECT.into()],
+        )?
+        .to_array()?;
+    if marked.is_empty() {
+        sql.exec(
+            "UPDATE files SET kind = ? WHERE path = 'projects/' || project || '/project.toml'",
+            vec![latest::PROJECT.into()],
+        )?;
+    }
     Ok(())
 }
 

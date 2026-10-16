@@ -159,6 +159,7 @@ item=$(cd "$sb/gamma" && mem log --kind=ruling --limit 1 --json | python3 -c 'im
 for path in /p/gamma /p/beta/roadmap /p/gamma/plan /p/beta/plan/b1-box /p/gamma/questions \
 	/p/gamma/evidence /p/gamma/wiki /wiki/gamma/spec /p/gamma/decisions /p/gamma/new "/p/gamma/item/$item"; do
 	is "$(page_of "$path")" 200 "$path answers 200"
+	unlike "$(cat "$T_TMP/page.html")" '[Dd]ulali' "$path names no Dulali"
 	unlike "$(tr -d '\n' <"$T_TMP/page.html")" 'the store does not answer|class="banner degraded"' \
 		"$path reads everything it needs from the store"
 done
@@ -253,6 +254,17 @@ refused=$(mcp /mcp "$(call answer "{\"project\":\"beta\",\"id\":\"$review\",\"op
 is "$(field 'r["result"]["isError"]' <<<"$refused")" True "answering the roadmap review through the connector is refused"
 like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/p/beta/questions" | tr -d '\n')" 'Review the beta roadmap' \
 	"the review is still waiting after the refused answer"
+# Only claude.ai's connector calls /mcp, from its servers: a browser's call
+# (it says where it was made) and a body a form could send are refused, so
+# a page signed in to Access cannot write through the connector.
+forged=$(call answer "{\"project\":\"gamma\",\"id\":\"$review\",\"option\":\"x\"}")
+is "$(mcp /mcp "$forged" -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: cross-site' -o /dev/null -w '%{http_code}')" 403 \
+	"a browser's cross-site call to /mcp is refused"
+is "$(mcp /mcp "$forged" -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: same-origin' -o /dev/null -w '%{http_code}')" 403 \
+	"a page's own call to /mcp is refused too"
+is "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H 'Content-Type: text/plain' \
+	--data "$forged" "$base/mcp")" 415 "a body that is not JSON is refused"
+
 nag=$(cd "$sb/gamma" && mem questions --pending --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["questions"][0]["short_id"])')
 taken=$(mcp /mcp "$(call answer "{\"project\":\"gamma\",\"id\":\"$nag\",\"option\":\"eight\"}")" -H "@$T_TMP/jwt.hdr")
 is "$(field 'r["result"]["isError"]' <<<"$taken")" False "an ordinary question is answered through the connector"
@@ -278,6 +290,7 @@ const ws = (path, headers) => {
 const page = ws("/live", { "Cf-Access-Jwt-Assertion": jwt });
 const mac = ws("/store/share", { Authorization: `Bearer ${token}` });
 await Promise.all([page.opened, mac.opened]);
+console.log("first", await page.next(2000));
 mac.s.send(JSON.stringify({ t: "hello", machine: "mac", since: 0 }));
 for (let m = await mac.next(2000); m && !m.includes('"ready"'); m = await mac.next(2000));
 const at = Date.now();
@@ -293,7 +306,11 @@ page.s.close(); mac.s.close();
 JS
 node "$T_TMP/live.mjs" "$base" "$valid" "$token" >"$T_TMP/live.out" 2>&1
 live() { sed -n "s/^$1 //p" "$T_TMP/live.out"; }
-is "$(live nudge)" '{"t":"changed"} true' "an open page hears changed within 2 s of a machine's write"
+first=$(live first)
+like "$first" '^\{"stamp":"[0-9]+\.[0-9]+","t":"changed"\}$' "an opened page socket hears the store's stamp at once"
+like "$(live nudge)" '^\{"stamp":"[0-9]+\.[0-9]+","t":"changed"\} true$' \
+	"an open page hears changed within 2 s of a machine's write"
+isnt "$(live nudge | cut -d' ' -f1)" "$first" "with a new stamp"
 is "$(live mac-ack)" true "the machine's write is stored as usual"
 is "$(live page-answer)" null "a page socket's hello and write get no answer"
 is "$(live mac-after-forgery)" null "a write sent on a page socket reaches no machine"
