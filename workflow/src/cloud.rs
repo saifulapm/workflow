@@ -516,6 +516,14 @@ mod tests {
         assert_eq!(session_of(&format!("View: {CODE_PAGE}/session_")), None);
     }
 
+    /// Tailscale drops an offline ephemeral machine only after 30 to 60
+    /// minutes; a landed run leaves the tailnet itself.
+    #[test]
+    fn a_landed_run_logs_out_of_the_tailnet_last() {
+        assert!(PROMPT.contains("tailscaled.sock\" logout"), "{PROMPT}");
+        assert!(PROMPT.contains("not when parked"), "{PROMPT}");
+    }
+
     #[test]
     fn hooks_stay_out_of_the_cloud() {
         let script = setup_script(&[("hooks/pre-commit", b"x\n"), ("skills/a/SKILL.md", b"a\n")]);
