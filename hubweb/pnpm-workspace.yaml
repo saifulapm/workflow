@@ -1,0 +1,5 @@
+# workerd and esbuild ship their binaries as platform packages, so their
+# install scripts (a check and a fallback download) are not needed.
+allowBuilds:
+  esbuild: false
+  workerd: false
