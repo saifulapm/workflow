@@ -135,13 +135,11 @@ impl Local {
                 Ok(answer) if self.is_review(&answer.question) => {
                     Response::text(403, "a roadmap review is Saiful's to answer, on the hub")
                 }
-                Ok(answer) => {
-                    if self.deliver(&answer.question, &answer.answer, &answer.by) {
-                        Response::text(200, "ok")
-                    } else {
-                        Response::text(409, "already answered")
-                    }
-                }
+                Ok(answer) => match self.deliver(&answer.question, &answer.answer, &answer.by) {
+                    Ok(()) => Response::text(200, "ok"),
+                    // The answer that stands, so the tapping hub can show it.
+                    Err(standing) => Response::text(409, &standing),
+                },
                 Err(e) => Response::text(400, &format!("not an answer: {e}")),
             },
             ("GET", path) if path.starts_with("/wait/") => {
@@ -198,8 +196,13 @@ impl Local {
     /// Saiful's tap: the answer goes to the hub that asked, this one or a
     /// peer, and the message loses its buttons once that hub has it.
     pub fn on_tap(&self, tap: Tap) {
-        let handed = if tap.machine == self.host {
-            self.deliver(&tap.question, &tap.answer, "slack")
+        // The answer the message ends up showing: this tap's, or the one
+        // that already stood, so a late tap still clears the buttons.
+        let shown = if tap.machine == self.host {
+            match self.deliver(&tap.question, &tap.answer, "slack") {
+                Ok(()) => Some(tap.answer.clone()),
+                Err(standing) => Some(standing),
+            }
         } else {
             let body = serde_json::json!({
                 "question": tap.question,
@@ -214,26 +217,27 @@ impl Local {
                 &self.token,
                 body.as_bytes(),
             ) {
-                Ok((200, _)) => true,
+                Ok((200, _)) => Some(tap.answer.clone()),
+                Ok((409, standing)) => Some(standing.trim().to_string()),
                 Ok((status, _)) => {
                     eprintln!(
                         "hub: local: {} answered {status} to the answer to #{}",
                         tap.machine, tap.question
                     );
-                    false
+                    None
                 }
                 Err(e) => {
                     eprintln!(
                         "hub: local: the answer to #{} did not reach {}: {e:#}",
                         tap.question, tap.machine
                     );
-                    false
+                    None
                 }
             }
         };
-        if !handed {
+        let Some(shown) = shown else {
             return;
-        }
+        };
         eprintln!("hub: local: #{} answered from Slack", tap.question);
         if let Some(slack) = &self.slack {
             let text = self
@@ -243,7 +247,7 @@ impl Local {
                 .get(&tap.question)
                 .map(|a| a.text.clone())
                 .unwrap_or_else(|| format!("#{}", tap.question));
-            if let Err(e) = slack.mark_answered(&tap.channel, &tap.ts, &tap.answer, &text) {
+            if let Err(e) = slack.mark_answered(&tap.channel, &tap.ts, &shown, &text) {
                 eprintln!("hub: local: #{} not marked answered: {e:#}", tap.question);
             }
         }
@@ -251,23 +255,32 @@ impl Local {
 
     /// Keeps the answer and wakes every wait on it, then records it in this
     /// machine's store when the question was asked here, signed by the
-    /// surface that took it.
-    /// `false`, and nothing done, when the question already has an answer:
-    /// the first one stands, so a replayed tap cannot change it.
-    pub fn deliver(&self, question: &str, answer: &str, by: &str) -> bool {
-        {
-            let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
-            if answers.contains_key(question) {
-                return false;
-            }
-            answers.insert(question.to_string(), answer.to_string());
-            self.answered.notify_all();
-        }
-        let asked_here = self
+    /// surface that took it. The first answer stands: when the question
+    /// already has one, here or in the store (a terminal, the hub web), nothing
+    /// is done and that answer comes back as the error.
+    pub fn deliver(&self, question: &str, answer: &str, by: &str) -> Result<(), String> {
+        let project = self
             .asked
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains_key(question);
+            .get(question)
+            .map(|a| a.project.clone());
+        let asked_here = project.is_some();
+        let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(standing) = answers.get(question) {
+            return Err(standing.clone());
+        }
+        if self.records
+            && let Some(project) = &project
+            && let Some(standing) = answered_in_store(project.as_deref(), question)
+        {
+            answers.insert(question.to_string(), standing.clone());
+            self.answered.notify_all();
+            return Err(standing);
+        }
+        answers.insert(question.to_string(), answer.to_string());
+        self.answered.notify_all();
+        drop(answers);
         if self.records && asked_here {
             // `--`, so an option that starts with a dash is not read as a flag.
             let argv = ["answer", "--by", by, "--", question, answer].map(str::to_string);
@@ -287,7 +300,7 @@ impl Local {
                 }
             });
         }
-        true
+        Ok(())
     }
 
     /// The answer to `question`, waiting up to `hold` for it.
@@ -338,6 +351,27 @@ struct Answer {
     question: String,
     answer: String,
     by: String,
+}
+
+/// The answer this machine's store already holds for `question`, if any.
+fn answered_in_store(project: Option<&str>, question: &str) -> Option<String> {
+    let mut command = std::process::Command::new("mem");
+    if let Some(project) = project {
+        command.arg(format!("--project={project}"));
+    }
+    let out = command
+        .args(["questions", "--json"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let listed: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    listed["questions"]
+        .as_array()?
+        .iter()
+        .find(|q| q["short_id"] == question)
+        .filter(|q| q["answered"] == true)
+        .and_then(|q| q["answer"].as_str())
+        .map(str::to_string)
 }
 
 /// Whether `Authorization: Bearer <token>` names `token`, compared in

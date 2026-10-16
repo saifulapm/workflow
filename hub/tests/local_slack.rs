@@ -370,3 +370,26 @@ fn a_roadmap_review_never_reaches_slack() {
     thread::sleep(Duration::from_millis(500));
     assert!(p.asker_slack.calls_to("chat.postMessage").is_empty());
 }
+
+/// A tap on a question already answered changes nothing, but the message
+/// still loses its buttons and shows the answer that stands.
+#[test]
+fn a_tap_on_an_answered_question_clears_its_buttons_with_the_standing_answer() {
+    let p = pair("ls-late");
+    ask(&p.asker_dir.join("local.sock"), "human");
+    wait_until("the question posted", || {
+        !p.asker_slack.calls_to("chat.postMessage").is_empty()
+    });
+    let posted = p.asker_slack.calls_to("chat.postMessage")[0].clone();
+    p.taker_slack.tap(SAIFUL, &button_value(&posted, "yes"));
+    wait_until("the first update", || {
+        p.taker_slack.calls_to("chat.update").len() == 1
+    });
+    p.taker_slack.tap(SAIFUL, &button_value(&posted, "no"));
+    wait_until("the second update", || {
+        p.taker_slack.calls_to("chat.update").len() == 2
+    });
+    let second = &p.taker_slack.calls_to("chat.update")[1];
+    assert!(second.contains("Answered: yes"), "{second}");
+    assert!(!second.contains("\"actions\""), "{second}");
+}

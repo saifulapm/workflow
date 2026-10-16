@@ -281,13 +281,18 @@ fn ask_on(socket: &Path) {
     assert_eq!(status_of(&asked), 200, "{asked}");
 }
 
-/// A mem that writes its argv, one per line, to `log`.
+/// A mem that writes its argv, one per line, to `log`, and lists no
+/// answered questions.
 fn logging_mem(dir: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     let log = dir.join("mem.log");
     let bin = dir.join("bin");
     common::fixture_mem(
         &bin,
-        &format!("printf '%s\\n' \"$@\" >> '{}'", log.display()),
+        &format!(
+            "case \"$*\" in *questions*) echo '{{\"questions\":[]}}';; \
+             *) printf '%s\\n' \"$@\" >> '{}';; esac",
+            log.display()
+        ),
     );
     (bin, log)
 }
@@ -479,4 +484,37 @@ fn hub_ping_help_prints_the_usage_and_pings_nothing() {
         .unwrap();
     assert!(out.status.success(), "{out:?}");
     assert!(String::from_utf8_lossy(&out.stdout).contains("hub ping <HOST[:PORT]>"));
+}
+
+/// An answer given in the store first, at a terminal or on the hub web,
+/// stands too: the hub asks mem before it takes a tap.
+#[test]
+fn a_tap_after_an_answer_in_the_store_is_refused_with_the_standing_answer() {
+    let dir = TempDir::new("local-store-first");
+    let log = dir.join("mem.log");
+    let bin = dir.join("bin");
+    common::fixture_mem(
+        &bin,
+        &format!(
+            "case \"$*\" in *questions*) printf '%s\\n' '{{\"questions\":[{{\"short_id\":\"ABCD1234\",\"answered\":true,\"answer\":\"yes\"}}]}}';; \
+             *) printf '%s\\n' \"$@\" >> '{}';; esac",
+            log.display()
+        ),
+    );
+    let hub = spawn_local_with(&dir, "testbox", &[&bin], &[]);
+    ask_on(&dir.join("local.sock"));
+    let late = post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ABCD1234","answer":"no","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&late), 409, "{late}");
+    assert_eq!(body_of(&late).trim(), "yes");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!log.exists(), "{:?}", std::fs::read_to_string(&log));
+    let response = on_socket(
+        &dir.join("local.sock"),
+        "GET /wait/ABCD1234?s=1 HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_eq!(body_of(&response), "yes");
 }
