@@ -615,3 +615,67 @@ fn a_question_answered_elsewhere_is_marked_answered_in_slack() {
         "{update}"
     );
 }
+
+/// Cloudflare unreachable on every machine: the store's socket fails, and a
+/// question still rings Slack, pops up on the route device and has its
+/// answer carried back, all inside the targets.
+#[test]
+fn questions_flow_with_the_store_unreachable() {
+    let dir = TempDir::new("ring-no-store");
+    let blocked = [
+        ("HUB_STORE_URL", "ws://127.0.0.1:9/store/share"),
+        ("HUB_STORE_TOKEN", "store-token-for-tests"),
+    ];
+    let slack = slack();
+    let mini = machine(&dir, "mini", Seat::Watching, &[], None, &blocked);
+    let nuc = machine(
+        &dir,
+        "nuc",
+        Seat::NoShell,
+        &[&mini.host()],
+        Some(&slack),
+        &blocked,
+    );
+
+    // Phone: the asking hub posts to Slack itself.
+    ask(&nuc);
+    common::wait_for("a Slack post", Duration::from_secs(2), || {
+        slack.posted() == 1
+    });
+    post(
+        &nuc.socket(),
+        "/answer",
+        r#"{"question":"ABCD1234","answer":"yes","by":"cli"}"#,
+    );
+
+    // Device: the popup on the mini, and its answer back on the nuc.
+    route_device(&nuc, &mini.host());
+    post(
+        &nuc.socket(),
+        "/ask",
+        r#"{"id":"EFGH5678","project":"walk","text":"popup?","options":["ok"],"audience":"human"}"#,
+    );
+    common::wait_for("the mini's popup", Duration::from_secs(2), || {
+        mini.popups() == 1
+    });
+    let waiter = {
+        let socket = nuc.socket();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let got = on_socket(
+                &socket,
+                "GET /wait/EFGH5678?s=10 HTTP/1.1\r\nHost: x\r\n\r\n",
+            );
+            (got, started.elapsed())
+        })
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    post(
+        &mini.socket(),
+        "/answer",
+        r#"{"question":"EFGH5678","answer":"ok","by":"popup"}"#,
+    );
+    let (got, took) = waiter.join().unwrap();
+    assert_eq!(common::body_of(&got), "ok", "{got}");
+    assert!(took < Duration::from_secs(2), "{took:?}");
+}
