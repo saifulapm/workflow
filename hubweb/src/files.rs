@@ -35,6 +35,14 @@ pub fn target(path_and_query: &str) -> Option<String> {
     project_of(&file).map(str::to_string)
 }
 
+/// The name of a `/store/dl/<name>` request, a built binary such as
+/// `mem-x86_64`: 1 to 64 of `a-z 0-9 _ . -`.
+pub fn dl_name(path: &str) -> Option<&str> {
+    let name = path.strip_prefix("/store/dl/")?;
+    let plain = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b);
+    ((1..=64).contains(&name.len()) && name.bytes().all(plain)).then_some(name)
+}
+
 /// `raw` with each `%XX` turned back into its byte; None when an escape is
 /// broken or the bytes are not UTF-8.
 pub fn decode(raw: &str) -> Option<String> {
@@ -119,6 +127,27 @@ mod tests {
         ] {
             assert_eq!(target(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_binary_is_named_by_lowercase_letters_digits_and_dots() {
+        assert_eq!(dl_name("/store/dl/mem-x86_64"), Some("mem-x86_64"));
+        assert_eq!(dl_name("/store/dl/hub.v2"), Some("hub.v2"));
+        let long = format!("/store/dl/{}", "a".repeat(64));
+        assert_eq!(dl_name(&long), Some("a".repeat(64).as_str()));
+        for bad in [
+            "/store/dl/",
+            "/store/dl",
+            "/store/dl/Mem",
+            "/store/dl/a/b",
+            "/store/dl/a%20b",
+            "/store/dl/a b",
+            "/store/files/mem-x86_64",
+            "/store/dlx/mem",
+        ] {
+            assert_eq!(dl_name(bad), None, "{bad}");
+        }
+        assert_eq!(dl_name(&format!("/store/dl/{}", "a".repeat(65))), None);
     }
 
     #[test]

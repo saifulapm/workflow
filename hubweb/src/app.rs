@@ -36,6 +36,9 @@ const MACHINE: &str = "machine";
 const PAGE: &str = "page";
 /// Each project's files, one Durable Object per project id.
 const FILES: &str = "FILES";
+/// The Files object that holds the built binaries, at `dl/<name>`.
+const DL: &str = "dl";
+const DL_EXPECTED: &str = "Expected /store/dl/<name> of a-z 0-9 _ . -";
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -91,6 +94,25 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         let target = format!("https://store/mint/{name}");
         return store(&env, object)?
             .fetch_with_request(Request::new_with_init(&target, &init)?)
+            .await;
+    }
+    // A built binary a cloud session's setup fetches takes either bearer as
+    // well. It lives in one Files object of its own, outside every project,
+    // so no archive of a project ever lists it.
+    if path == "/store/dl" || path.starts_with("/store/dl/") {
+        if holder(&req, &env, object).await?.is_none() {
+            return Response::error("Unauthorized", 401);
+        }
+        if !matches!(req.method(), Method::Put | Method::Get) {
+            return Response::error("Method Not Allowed", 405);
+        }
+        if files::dl_name(&path).is_none() {
+            return Response::error(DL_EXPECTED, 400);
+        }
+        return env
+            .durable_object(FILES)?
+            .get_by_name_with_location_hint(DL, STORE_LOCATION)?
+            .fetch_with_request(req)
             .await;
     }
     // A project's files take either bearer, so a machine uploads and
@@ -1106,8 +1128,9 @@ impl DurableObject for Store {
     }
 }
 
-/// One project's evidence and raw files, each stored as rows of at most
-/// `files::CHUNK` bytes in the object's SQLite.
+/// One project's evidence and raw files, or in the object named `dl` the
+/// built binaries, each stored as rows of at most `files::CHUNK` bytes in
+/// the object's SQLite.
 #[durable_object]
 pub struct Files {
     sql: SqlStorage,
@@ -1146,13 +1169,21 @@ impl DurableObject for Files {
                 _ => Response::error("Method Not Allowed", 405),
             };
         }
-        let Some(path) = req
-            .path()
-            .strip_prefix("/store/files/")
-            .and_then(files::decode)
-            .filter(|path| files::project_of(path).is_some())
-        else {
-            return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
+        let path = if req.path().starts_with("/store/dl/") {
+            match files::dl_name(&req.path()) {
+                Some(name) => format!("dl/{name}"),
+                None => return Response::error(DL_EXPECTED, 400),
+            }
+        } else {
+            let Some(path) = req
+                .path()
+                .strip_prefix("/store/files/")
+                .and_then(files::decode)
+                .filter(|path| files::project_of(path).is_some())
+            else {
+                return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
+            };
+            path
         };
         let answer = match req.method() {
             Method::Put => {
