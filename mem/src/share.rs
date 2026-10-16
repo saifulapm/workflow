@@ -531,6 +531,18 @@ pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
             replica_path(root, &rel).with_context(|| format!("{rel} is not a project path"))?;
         writes.push((id, rel, file, text("base")?, text("body")?));
     }
+    // A file speaks only for projects this machine knows, or one it brings
+    // with its own project.toml: a branch is no licence to make others.
+    for (_, rel, ..) in &writes {
+        let project: String = rel.split('/').take(2).collect::<Vec<_>>().join("/");
+        let brought = writes
+            .iter()
+            .any(|(_, other, ..)| *other == format!("{project}/project.toml"));
+        anyhow::ensure!(
+            brought || root.join(&project).join("project.toml").is_file(),
+            "{rel} is in a project this machine does not know"
+        );
+    }
     let mut conn = open(db)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for (id, rel, file, base, body) in writes {

@@ -339,3 +339,41 @@ fn an_imported_item_never_replaces_one_the_replica_holds() {
     let file = mini.dirs().store().join(&path);
     assert_eq!(std::fs::read_to_string(file).unwrap(), held);
 }
+
+/// A branch's file speaks only for projects this machine knows, or one it
+/// brings with its own project.toml: a forged write for any other project
+/// imports nothing, and the file stays for a person to look at.
+#[test]
+fn a_write_for_a_project_this_machine_does_not_know_imports_nothing() {
+    let mini = machine("mini");
+    let repo = checkout(&mini);
+    let stranger = "projects/01K0NKN0WNPR0JECT000000000/items/01K0OUTBOX1TEM000000000009.md";
+    let file = json!({"machine": "cloud", "writes": [
+        {"id": "01K0OUTBOXW000000000000009", "path": stranger, "base": null, "body": "x\n"},
+    ]});
+    std::fs::write(repo.join(FILE), file.to_string()).unwrap();
+    let out = walk_in(&mini, &repo, &["projects"]);
+    assert!(stderr(&out).contains("left in place"), "{}", stderr(&out));
+    assert!(repo.join(FILE).exists());
+    assert!(!mini.dirs().store().join(stranger).exists());
+    assert!(pending(&mini).is_empty());
+}
+
+/// A project made in the cloud travels with its project.toml, so its
+/// writes import.
+#[test]
+fn a_project_the_file_brings_imports_with_it() {
+    let mini = machine("mini");
+    let new = "01K0NEWPR0JECT000000000000";
+    let toml = format!(
+        "created = \"2026-10-16T00:00:00Z\"\nid = \"{new}\"\nname = \"fresh\"\nshare = \"true\"\n"
+    );
+    import(
+        &mini,
+        json!([
+            {"id": "01K0OUTBOXW000000000000010", "path": format!("projects/{new}/project.toml"), "base": null, "body": toml},
+            {"id": "01K0OUTBOXW000000000000011", "path": format!("projects/{new}/wiki/notes.md"), "base": null, "body": "# Notes\n"},
+        ]),
+    );
+    assert_eq!(pending(&mini).len(), 2);
+}
