@@ -12,12 +12,14 @@ use worker::*;
 use crate::access::{self, Access, Jwt};
 use crate::evidence;
 use crate::files;
+use crate::item;
 use crate::latest::{self, Change};
 use crate::mcp::{self, Step};
 use crate::memview;
 use crate::pair;
 use crate::share::{self, Fault, Log, Rec};
 use crate::site;
+use crate::webwrite;
 use hubpages::form::encode_component;
 use hubpages::page_evidence::image_kind;
 
@@ -362,6 +364,7 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 #[durable_object]
 pub struct Store {
     state: State,
+    env: Env,
     sql: SqlStorage,
     /// The UTC day number a write last hit a Free limit, while the object is
     /// awake. Each open socket's attachment holds it through hibernation.
@@ -404,10 +407,13 @@ impl Store {
             may_write: req_may_write,
             limited: site::limit_is_today(self.limit_day()?, now_ms()),
         };
-        let Some(drawn) = site::page(&SqlFiles(&self.sql), ask) else {
+        let mut random = || random().unwrap_or_default();
+        let Some((drawn, written)) = site::page(&SqlFiles(&self.sql), ask, &mut random) else {
             return Response::error("Not Found", 404);
         };
         let took = Date::now().as_millis() - start;
+        self.keep(webwrite::MACHINE, written.files, written.bytes)
+            .await?;
         let mut response = Response::from_bytes(drawn.body)?.with_status(drawn.status);
         let headers = response.headers_mut();
         headers.set("Content-Type", &drawn.content_type)?;
@@ -416,6 +422,52 @@ impl Store {
         }
         headers.set("Server-Timing", &format!("build;dur={took}"))?;
         Ok(response)
+    }
+
+    /// Adds writes the store made itself (the hub web's, the connector's) to
+    /// its log: each file's bytes to its project's Files store first, so a
+    /// machine that hears of an item finds its file; then each write, which
+    /// every machine hears as a rec; then one nudge to the open pages.
+    async fn keep(
+        &self,
+        machine: &str,
+        writes: Vec<(String, Option<String>)>,
+        bytes: Vec<(String, Vec<u8>)>,
+    ) -> Result<()> {
+        for (path, data) in bytes {
+            let Some(project) = files::project_of(&path) else {
+                return Err(Error::RustError(format!("{path} is not a project's file")));
+            };
+            let mut init = RequestInit::new();
+            init.with_method(Method::Put).with_body(Some(data.into()));
+            let target = format!("https://files/store/files/{}", encode_component(&path));
+            let answer = self
+                .env
+                .durable_object(FILES)?
+                .get_by_name_with_location_hint(project, STORE_LOCATION)?
+                .fetch_with_request(Request::new_with_init(&target, &init)?)
+                .await?;
+            if answer.status_code() != 204 {
+                return Err(Error::RustError(format!(
+                    "the files store answered {} for {path}",
+                    answer.status_code()
+                )));
+            }
+        }
+        if writes.is_empty() {
+            return Ok(());
+        }
+        for (path, body) in writes {
+            let id = item::ulid(now_ms(), random()?);
+            let rec = share::local_write(&mut SqlLog(&self.sql), &id, &path, body, machine)
+                .map_err(|fault| Error::RustError(format!("{fault:?}")))?;
+            for socket in self.state.get_websockets_with_tag(MACHINE) {
+                // A closing socket's machine gets it from the replay.
+                let _ = socket.send_with_str(&rec);
+            }
+        }
+        self.nudge_pages();
+        Ok(())
     }
 
     /// Whether the request carries a paired device's cookie.
@@ -496,7 +548,7 @@ fn attachment(socket: &WebSocket) -> Result<Value> {
 }
 
 impl DurableObject for Store {
-    fn new(state: State, _env: Env) -> Self {
+    fn new(state: State, env: Env) -> Self {
         let sql = state.storage().sql();
         sql.exec(
             "CREATE TABLE IF NOT EXISTS records(project TEXT, kind TEXT, key TEXT, body TEXT, \
@@ -549,6 +601,7 @@ impl DurableObject for Store {
         .expect("create the route table");
         Self {
             state,
+            env,
             sql,
             limit_day: Cell::new(None),
         }

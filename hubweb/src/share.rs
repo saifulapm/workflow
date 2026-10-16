@@ -175,6 +175,27 @@ pub fn route(log: &mut impl Log, message: &Value) -> Result<Outcome, Fault> {
     })
 }
 
+/// A write the store makes itself, from the hub web or the connector: the
+/// next seq, kept in the log, and the rec every machine is to hear. Written
+/// from the store's own view, so it has no base to refuse.
+pub fn local_write(
+    log: &mut impl Log,
+    id: &str,
+    path: &str,
+    body: Option<String>,
+    machine: &str,
+) -> Result<String, Fault> {
+    let stored = Rec {
+        seq: log.last()? + 1,
+        id: id.to_string(),
+        path: path.to_string(),
+        body,
+        machine: Some(machine.to_string()),
+    };
+    log.append(&stored)?;
+    Ok(rec(&stored))
+}
+
 fn rec(rec: &Rec) -> String {
     json!({"t":"rec","seq":rec.seq,"id":rec.id,"path":rec.path,"body":rec.body,"machine":rec.machine})
         .to_string()
@@ -250,6 +271,25 @@ mod tests {
     fn route(log: &mut Memory, machine: Option<&str>, kind: &str, on: Value, at: i64) -> Outcome {
         let message = json!({"t":"route","route":kind,"machine":on,"at":at});
         handle(log, machine, &message.to_string())
+    }
+
+    #[test]
+    fn a_write_the_store_makes_takes_the_next_seq_and_goes_to_every_machine() {
+        let mut log = Memory::default();
+        write(&mut log, "01A", ITEM, Value::Null, json!("one"));
+        let sent = local_write(&mut log, "01WEB", PAGE, Some("v2".into()), "hub-web").unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&sent).unwrap(),
+            json!({"t":"rec","seq":2,"id":"01WEB","path":PAGE,"body":"v2","machine":"hub-web"})
+        );
+        // A machine's page write made from the old head is refused with this one.
+        let stale = write(&mut log, "01B", PAGE, Value::Null, json!("v1"));
+        assert_eq!(parse(&stale.sender)[0]["head"]["id"], "01WEB");
+        log.full = true;
+        assert_eq!(
+            local_write(&mut log, "01W2", PAGE, None, "hub-web"),
+            Err(Fault::Limit)
+        );
     }
 
     #[test]

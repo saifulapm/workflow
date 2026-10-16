@@ -37,47 +37,7 @@ free_port() {
 	python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }
 
-# The team: a key, its JWKS, and a server for it. `other` signs the forgery.
-openssl genrsa -out "$T_TMP/key.pem" 2048 2>/dev/null
-openssl genrsa -out "$T_TMP/other.pem" 2048 2>/dev/null
-mkdir -p "$T_TMP/team/cdn-cgi/access"
-openssl rsa -in "$T_TMP/key.pem" -noout -modulus | python3 -c '
-import base64, json, sys
-n = bytes.fromhex(sys.stdin.read().strip().split("=", 1)[1])
-n = base64.urlsafe_b64encode(n).rstrip(b"=").decode()
-print(json.dumps({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k1", "use": "sig", "n": n, "e": "AQAB"}]}))
-' >"$T_TMP/team/cdn-cgi/access/certs"
-team_port=$(free_port)
-team=http://127.0.0.1:$team_port
-python3 -m http.server --bind 127.0.0.1 --directory "$T_TMP/team" "$team_port" \
-	>"$T_TMP/team.log" 2>&1 &
-team_pid=$!
-
-aud=next-hub-aud
-cat >"$T_TMP/mint.py" <<'PY'
-import base64, hashlib, hmac, json, subprocess, sys
-key, alg, kid, claims = sys.argv[1:5]
-def b64(raw):
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-signed = b64(json.dumps({"alg": alg, "kid": kid, "typ": "JWT"}).encode()) + "." + b64(claims.encode())
-if alg == "RS256":
-    sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=signed.encode(),
-                         capture_output=True, check=True).stdout
-elif alg == "HS256":
-    sig = hmac.new(b"guessed", signed.encode(), hashlib.sha256).digest()
-else:
-    sig = b""
-print(signed + "." + b64(sig))
-PY
-now=$(date +%s)
-claims() { # claims <aud> <iss> <exp> -- one token's claims
-	printf '{"aud":["%s"],"iss":"%s","exp":%s,"iat":%s,"email":"saiful@example.com"}' "$1" "$2" "$3" "$now"
-}
-mint() { # mint <key> <alg> <kid> <claims> -- prints the token
-	python3 "$T_TMP/mint.py" "$T_TMP/$1.pem" "$2" "$3" "$4"
-}
-with_jwt() { printf 'Cf-Access-Jwt-Assertion: %s' "$1"; }
-valid=$(mint key RS256 k1 "$(claims "$aud" "$team" $((now + 600)))")
+t_access_team
 
 pids=()
 stop_all() {

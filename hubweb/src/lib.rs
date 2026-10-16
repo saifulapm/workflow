@@ -8,6 +8,7 @@ pub mod memview;
 pub mod pair;
 pub mod share;
 pub mod site;
+pub mod webwrite;
 
 #[cfg(target_arch = "wasm32")]
 mod app;

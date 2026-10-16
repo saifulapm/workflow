@@ -12,10 +12,11 @@ use hubpages::host::{Command, Held, Kind, NoMachine, Polled, Saved};
 use hubpages::http::{Request, Response};
 use hubpages::live::Runner;
 use hubpages::pages::{Site, route_page};
-use hubpages::{Fleet, Host, Outcome, Source, Written};
+use hubpages::{Fleet, Host, Outcome, Source};
 use serde_json::Value;
 
 use crate::memview::{self, Files, Reply};
+use crate::webwrite::{self, After, Clock, Written};
 
 /// The name the pages draw as the hub's own.
 pub const MACHINE: &str = "next-hub";
@@ -49,16 +50,30 @@ pub struct Ask<'a> {
     pub limited: bool,
 }
 
-/// The page for `ask.request`, or None for a path no page owns. Every page
-/// listens on /live, so an open one reloads when the store changes.
-pub fn page(files: &impl Files, ask: Ask) -> Option<Response> {
+/// The page for `ask.request` and the writes it made, or None for a path no
+/// page owns. Every page listens on /live, so an open one reloads when the
+/// store changes.
+pub fn page(
+    files: &impl Files,
+    ask: Ask,
+    random: &mut dyn FnMut() -> [u8; 10],
+) -> Option<(Response, Written)> {
+    let shared = Shared {
+        written: RefCell::new(Written::default()),
+        clock: RefCell::new(Clock {
+            now: ask.now,
+            random,
+        }),
+    };
     let mem = StoreMem {
         files,
-        now: ask.now,
+        shared: &shared,
         read: RefCell::new(HashMap::new()),
     };
     let host = Web {
         route: saved(ask.route.as_ref()),
+        files,
+        shared: &shared,
     };
     let site = Site {
         mem: &mem,
@@ -86,7 +101,8 @@ pub fn page(files: &impl Files, ask: Ask) -> Option<Response> {
         }
         response.body = listening(&html);
     }
-    Some(response)
+    drop((mem, host));
+    Some((response, shared.written.into_inner()))
 }
 
 /// A request as the pages read it, from its parts.
@@ -147,21 +163,34 @@ fn saved(route: Option<&Value>) -> Saved {
     }
 }
 
-/// mem's reads, answered from the store's files. One page asks some reads
-/// twice, so each is kept for the request.
-struct StoreMem<'a, F: Files> {
+/// What a request's pages and host write, and the clock they write by.
+struct Shared<'a> {
+    written: RefCell<Written>,
+    clock: RefCell<Clock<'a>>,
+}
+
+/// mem's reads, answered from the store's files with this request's own
+/// writes on top; and mem's writes, kept for the store to add to its log.
+/// One page asks some reads twice, so each is kept until the next write.
+struct StoreMem<'a, 'c, F: Files> {
     files: &'a F,
-    now: jiff::Timestamp,
+    shared: &'a Shared<'c>,
     read: RefCell<HashMap<String, Arc<Outcome>>>,
 }
 
-impl<F: Files> Source for StoreMem<'_, F> {
+impl<F: Files> Source for StoreMem<'_, '_, F> {
     fn read(&self, argv: &[&str]) -> Arc<Outcome> {
         let key = argv.join("\u{0}");
         if let Some(kept) = self.read.borrow().get(&key) {
             return Arc::clone(kept);
         }
-        let outcome = Arc::new(match memview::read(self.files, argv, self.now) {
+        let written = self.shared.written.borrow();
+        let now = self.shared.clock.borrow().now;
+        let view = After {
+            files: self.files,
+            written: &written.files,
+        };
+        let outcome = Arc::new(match memview::read(&view, argv, now) {
             Reply::Json(doc) => Outcome::Json(doc),
             Reply::Absent => Outcome::Absent,
             Reply::Unknown => Outcome::Broken(format!("the store does not answer {argv:?}")),
@@ -170,19 +199,33 @@ impl<F: Files> Source for StoreMem<'_, F> {
         outcome
     }
 
-    fn write(&self, _argv: &[&str], _input: Option<&[u8]>) -> Written {
-        Written {
-            ok: false,
+    fn write(&self, argv: &[&str], _input: Option<&[u8]>) -> hubpages::Written {
+        self.read.borrow_mut().clear();
+        let mut written = self.shared.written.borrow_mut();
+        let mut clock = self.shared.clock.borrow_mut();
+        let view = After {
+            files: self.files,
+            written: &written.files.clone(),
+        };
+        let applied = webwrite::apply(&view, &mut clock, &mut written, argv);
+        hubpages::Written {
+            ok: applied.is_ok(),
             stdout: String::new(),
-            stderr: "the hub web does not write yet".to_string(),
+            stderr: applied.err().unwrap_or_default(),
         }
+    }
+
+    fn invalidate(&self) {
+        self.read.borrow_mut().clear();
     }
 }
 
 /// The hub web's host: no machines report to it and it runs nothing; the
-/// route is the store's.
-struct Web {
+/// route is the store's, and a pause or a photo is a write like mem's.
+struct Web<'a, 'c, F: Files> {
     route: Saved,
+    files: &'a F,
+    shared: &'a Shared<'c>,
 }
 
 /// No machine reports to the hub web.
@@ -203,7 +246,7 @@ impl Fleet for NoFleet {
     }
 }
 
-impl Host for Web {
+impl<F: Files> Host for Web<'_, '_, F> {
     fn fleet(&self) -> &dyn Fleet {
         &NoFleet
     }
@@ -230,11 +273,19 @@ impl Host for Web {
     fn answered(&self, _row: &Value) {}
     fn after_answer(&self, _project: &str, _session: Option<&str>) {}
     fn replied_in_app(&self, _project: &str, _runner: &Runner) {}
-    fn pause(&self, _verb: &str, _project: &str) -> Result<(), String> {
-        Err("the hub web does not pause yet".to_string())
+    fn pause(&self, verb: &str, project: &str) -> Result<(), String> {
+        let mut written = self.shared.written.borrow_mut();
+        let clock = self.shared.clock.borrow();
+        let view = After {
+            files: self.files,
+            written: &written.files.clone(),
+        };
+        webwrite::pause(&view, &clock, &mut written, verb, project)
     }
-    fn stash_photo(&self, _kind: &str, _bytes: &[u8]) -> Result<String, String> {
-        Err("the hub web keeps no photos yet".to_string())
+    fn stash_photo(&self, kind: &str, bytes: &[u8]) -> Result<String, String> {
+        let mut written = self.shared.written.borrow_mut();
+        let mut clock = self.shared.clock.borrow_mut();
+        Ok(webwrite::keep_photo(&mut clock, &mut written, kind, bytes))
     }
     fn drop_photo(&self, _path: &str) {}
 }
@@ -299,13 +350,18 @@ mod tests {
         }
     }
 
+    fn draw(files: &Mem, ask: Ask) -> Option<Response> {
+        let mut random = || [3; 10];
+        page(files, ask, &mut random).map(|(response, _)| response)
+    }
+
     fn html(response: Response) -> String {
         String::from_utf8(response.body).unwrap()
     }
 
     #[test]
     fn home_lists_the_store_project_and_its_waiting_question_and_listens() {
-        let page = html(page(&store(), ask(&get("/"))).expect("home"));
+        let page = html(draw(&store(), ask(&get("/"))).expect("home"));
         assert!(page.contains("<a href=\"/p/walk\">walk</a>"), "{page}");
         assert!(page.contains("Ship the walk?"), "{page}");
         assert!(!page.contains("Nothing waiting"), "{page}");
@@ -320,12 +376,12 @@ mod tests {
         let request = get("/");
         let mut limited = ask(&request);
         limited.limited = true;
-        assert!(html(page(&store(), limited).unwrap()).contains(line));
-        assert!(!html(page(&store(), ask(&request)).unwrap()).contains(line));
+        assert!(html(draw(&store(), limited).unwrap()).contains(line));
+        assert!(!html(draw(&store(), ask(&request)).unwrap()).contains(line));
         let other = get("/p/walk/questions");
         let mut limited = ask(&other);
         limited.limited = true;
-        assert!(!html(page(&store(), limited).unwrap()).contains(line));
+        assert!(!html(draw(&store(), limited).unwrap()).contains(line));
     }
 
     #[test]
@@ -339,15 +395,54 @@ mod tests {
 
     #[test]
     fn the_questions_page_draws_from_the_store() {
-        let response = page(&store(), ask(&get("/p/walk/questions"))).expect("a page");
+        let response = draw(&store(), ask(&get("/p/walk/questions"))).expect("a page");
         assert_eq!(response.status, 200);
         let page = html(response);
         assert!(page.contains("Ship the walk?"), "{page}");
     }
 
     #[test]
+    fn a_paired_answer_writes_one_answer_signed_hub_web() {
+        let files = store();
+        let form = b"id=01M52000000000000000QWAKT1&text=yes".to_vec();
+        let request = request(
+            "POST",
+            "/answer",
+            vec![(
+                "Content-Type".into(),
+                "application/x-www-form-urlencoded".into(),
+            )],
+            form,
+        );
+        let mut random = || [5; 10];
+        let (response, written) = page(&files, ask(&request), &mut random).unwrap();
+        assert_eq!(response.status, 303);
+        let location = response
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("location"));
+        assert!(
+            location.is_some_and(|(_, v)| v.contains("answered")),
+            "{location:?}"
+        );
+        assert_eq!(written.files.len(), 1);
+        let answer = written.files[0].1.as_deref().unwrap();
+        assert!(
+            answer.contains("by = \"hub-web\"")
+                && answer.contains("answers = \"01M52000000000000000QWAKT1\""),
+            "{answer}"
+        );
+
+        let mut unpaired = ask(&request);
+        unpaired.paired = false;
+        let (refused, nothing) = page(&files, unpaired, &mut random).unwrap();
+        assert_eq!(refused.status, 403);
+        assert!(nothing.files.is_empty());
+    }
+
+    #[test]
     fn a_project_the_store_lacks_is_not_found() {
-        let response = page(&store(), ask(&get("/p/nope/questions"))).expect("a page");
+        let response = draw(&store(), ask(&get("/p/nope/questions"))).expect("a page");
         assert_eq!(response.status, 404);
     }
 
@@ -357,7 +452,7 @@ mod tests {
         let mut asked = ask(&request);
         asked.route =
             Some(serde_json::json!({"t":"route","route":"device","machine":"nuc","at":5}));
-        let page = html(page(&store(), asked).unwrap());
+        let page = html(draw(&store(), asked).unwrap());
         assert!(page.contains("Route: Device (nuc)"), "{page}");
     }
 }
