@@ -11,6 +11,7 @@ use worker::*;
 
 use crate::access::{self, Access, Jwt};
 use crate::files;
+use crate::latest::{self, Change};
 use crate::mcp::{self, Step};
 use crate::page;
 use crate::share::{self, Fault, Log, Rec};
@@ -314,6 +315,19 @@ impl DurableObject for Store {
             None,
         )
         .expect("index the writes by path");
+        // The newest body of each project path, which the pages read.
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, project TEXT NOT NULL, \
+             kind TEXT, seq INTEGER NOT NULL, body TEXT NOT NULL)",
+            None,
+        )
+        .expect("create the files table");
+        sql.exec(
+            "CREATE INDEX IF NOT EXISTS files_by_kind ON files(project, kind)",
+            None,
+        )
+        .expect("index the files by kind");
+        fill_files(&sql).expect("fill the files table from the log");
         Self {
             state,
             sql,
@@ -617,9 +631,54 @@ impl Log for SqlLog<'_> {
                     rec.machine.clone().into(),
                 ],
             )
-            .map(|_| ())
-            .map_err(fault)
+            .map_err(fault)?;
+        keep_file(self.0, rec).map_err(fault)
     }
+}
+
+/// Puts `rec` in the files table: its body becomes the path's newest, or a
+/// removal drops the path.
+fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
+    match latest::change(rec) {
+        Some(Change::Keep {
+            project,
+            kind,
+            body,
+        }) => sql.exec(
+            "INSERT INTO files(path, project, kind, seq, body) VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(path) DO UPDATE SET project = excluded.project, kind = excluded.kind, \
+             seq = excluded.seq, body = excluded.body",
+            vec![
+                rec.path.as_str().into(),
+                project.into(),
+                kind.into(),
+                rec.seq.into(),
+                body.into(),
+            ],
+        )?,
+        Some(Change::Drop) => sql.exec(
+            "DELETE FROM files WHERE path = ?",
+            vec![rec.path.as_str().into()],
+        )?,
+        None => return Ok(()),
+    };
+    Ok(())
+}
+
+/// Fills an empty files table from the whole log, once: a store that kept
+/// writes before the table existed.
+fn fill_files(sql: &SqlStorage) -> Result<()> {
+    let kept: Vec<Value> = sql.exec("SELECT 1 FROM files LIMIT 1", None)?.to_array()?;
+    if !kept.is_empty() {
+        return Ok(());
+    }
+    let log = SqlLog(sql)
+        .after(0)
+        .map_err(|fault| Error::RustError(format!("{fault:?}")))?;
+    for rec in latest::newest(log) {
+        keep_file(sql, &rec)?;
+    }
+    Ok(())
 }
 
 fn names_limit(why: &str) -> bool {

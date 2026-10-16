@@ -1,5 +1,6 @@
 pub mod access;
 pub mod files;
+pub mod latest;
 pub mod mcp;
 pub mod page;
 pub mod share;
