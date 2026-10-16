@@ -358,3 +358,40 @@ fn assert_tokenless(seen: &[String]) {
         assert!(!text.contains("SECRET"), "a token in {text:?}");
     }
 }
+
+/// A connection that goes silent, pings unanswered, is dropped and opened
+/// again, rather than read from for good.
+#[test]
+fn a_silent_connection_is_opened_again() {
+    let ws = TcpListener::bind("127.0.0.1:0").unwrap();
+    let ws_port = ws.local_addr().unwrap().port();
+    let sockets = Arc::new(AtomicUsize::new(0));
+    {
+        let sockets = Arc::clone(&sockets);
+        thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in ws.incoming() {
+                let Ok(stream) = stream else { continue };
+                sockets.fetch_add(1, Ordering::SeqCst);
+                let Ok(mut socket) = tungstenite::accept(stream) else {
+                    continue;
+                };
+                let _ = socket.send(Message::text(r#"{"type":"hello"}"#));
+                // Held open and never read, so no ping is ever answered.
+                held.push(socket);
+            }
+        });
+    }
+    let http = TcpListener::bind("127.0.0.1:0").unwrap();
+    let api = format!("http://{}/api", http.local_addr().unwrap());
+    thread::spawn(move || {
+        for stream in http.incoming() {
+            let Ok(stream) = stream else { continue };
+            let calls = Mutex::new(Vec::new());
+            serve(stream, ws_port, &calls, &AtomicUsize::new(0));
+        }
+    });
+    let (slack, _) = client(&api);
+    let _taps = socket(slack.with_quiet(Duration::from_millis(600)));
+    wait_for("a second socket", || sockets.load(Ordering::SeqCst) >= 2);
+}

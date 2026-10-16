@@ -141,6 +141,17 @@ impl Hub {
         Hub::spawn_with(home, path_dirs, args, &[], Stdio::from(file))
     }
 
+    /// `spawn_env`, with hub's stderr in `stderr`.
+    pub fn spawn_with_stderr(
+        home: &Path,
+        path_dirs: &[&Path],
+        args: &[&str],
+        env: &[(&str, &str)],
+        stderr: std::fs::File,
+    ) -> Hub {
+        Hub::spawn_with(home, path_dirs, args, env, Stdio::from(stderr))
+    }
+
     fn spawn_with(
         home: &Path,
         path_dirs: &[&Path],

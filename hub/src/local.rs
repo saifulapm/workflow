@@ -11,12 +11,13 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
 use crate::http::{Request, Response};
+use crate::slack::{Question, Slack, Tap};
 
 /// The port local hubs talk to each other on. The hub web keeps 8787.
 pub const PORT: u16 = 8789;
@@ -37,6 +38,23 @@ pub fn token_from_env() -> Result<String> {
     Ok(token.to_string())
 }
 
+/// The name other local hubs reach this one by: `HUB_HOST`, else this
+/// machine's tailnet name, else its machine name, with the port when it is not
+/// the usual one. A Slack button carries it, so a tap finds its way back.
+pub fn host(machine: &str, port: u16) -> String {
+    let name = std::env::var("HUB_HOST")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .or_else(crate::tailnet_name)
+        .unwrap_or_else(|| machine.to_string());
+    if port == PORT {
+        name
+    } else {
+        format!("{name}:{port}")
+    }
+}
+
 /// `HUB_LOCAL_SOCKET`, else `hub/local.sock` under the state directory. mem
 /// works out the same path; a test that moves the state directory can never
 /// reach the real local hub, and so never posts to Slack.
@@ -49,7 +67,10 @@ pub fn socket_path() -> Result<PathBuf> {
 
 pub struct Local {
     machine: String,
+    /// What `host` gives: the name peers and Slack buttons use.
+    host: String,
     token: String,
+    slack: Option<Arc<Slack>>,
     /// Whether this machine's mem writes its own store; a cloud session's
     /// runs on the mem server, which refuses an answer.
     records: bool,
@@ -61,11 +82,13 @@ pub struct Local {
 }
 
 impl Local {
-    pub fn new(machine: String, token: String) -> Local {
+    pub fn new(machine: String, host: String, token: String, slack: Option<Arc<Slack>>) -> Local {
         let remote = std::env::var_os("MEM_REMOTE").is_some_and(|v| !v.is_empty());
         Local {
             machine,
+            host,
             token,
+            slack,
             records: !remote,
             asked: Mutex::new(HashMap::new()),
             answers: Mutex::new(HashMap::new()),
@@ -93,6 +116,7 @@ impl Local {
             (_, "/ping") => Response::method_not_allowed("GET"),
             ("POST", "/ask") => match serde_json::from_slice::<Asked>(&request.body) {
                 Ok(asked) => {
+                    self.post(&asked);
                     self.asked
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -123,6 +147,83 @@ impl Local {
                 }
             }
             _ => Response::not_found(),
+        }
+    }
+
+    /// Posts a person's question to Slack, on a thread of its own so mem is
+    /// not kept waiting. An orchestrator's question never rings.
+    fn post(&self, asked: &Asked) {
+        let Some(slack) = self.slack.clone() else {
+            return;
+        };
+        if asked.audience.as_deref() == Some("orchestrator") {
+            return;
+        }
+        let question = Question {
+            id: asked.id.clone(),
+            project: asked.project.clone().unwrap_or_default(),
+            machine: self.host.clone(),
+            text: asked.text.clone(),
+            options: asked.options.clone(),
+        };
+        std::thread::spawn(move || match slack.post_question(&question) {
+            Ok(_) => eprintln!("hub: local: #{} posted to Slack", question.id),
+            Err(e) => eprintln!("hub: local: #{} not posted to Slack: {e:#}", question.id),
+        });
+    }
+
+    /// Saiful's tap: the answer goes to the hub that asked, this one or a
+    /// peer, and the message loses its buttons once that hub has it.
+    pub fn on_tap(&self, tap: Tap) {
+        let handed = if tap.machine == self.host {
+            self.deliver(&tap.question, &tap.answer, "slack");
+            true
+        } else {
+            let body = serde_json::json!({
+                "question": tap.question,
+                "answer": tap.answer,
+                "by": "slack",
+            })
+            .to_string();
+            match request(
+                &tap.machine,
+                "POST",
+                "/answer",
+                &self.token,
+                body.as_bytes(),
+            ) {
+                Ok((200, _)) => true,
+                Ok((status, _)) => {
+                    eprintln!(
+                        "hub: local: {} answered {status} to the answer to #{}",
+                        tap.machine, tap.question
+                    );
+                    false
+                }
+                Err(e) => {
+                    eprintln!(
+                        "hub: local: the answer to #{} did not reach {}: {e:#}",
+                        tap.question, tap.machine
+                    );
+                    false
+                }
+            }
+        };
+        if !handed {
+            return;
+        }
+        eprintln!("hub: local: #{} answered from Slack", tap.question);
+        if let Some(slack) = &self.slack {
+            let text = self
+                .asked
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&tap.question)
+                .map(|a| a.text.clone())
+                .unwrap_or_else(|| format!("#{}", tap.question));
+            if let Err(e) = slack.mark_answered(&tap.channel, &tap.ts, &tap.answer, &text) {
+                eprintln!("hub: local: #{} not marked answered: {e:#}", tap.question);
+            }
         }
     }
 

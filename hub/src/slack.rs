@@ -6,13 +6,15 @@
 //! from the environment and travel only in `Authorization` headers: never in
 //! a URL, an argument, a log line, an error or `Debug`.
 
-use std::time::Duration;
+use std::net::TcpStream;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tungstenite::Message;
 use tungstenite::error::UrlError;
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{Message, WebSocket};
 
 const DEFAULT_API: &str = "https://slack.com/api";
 /// Slack cuts a button's text at 75 characters.
@@ -20,6 +22,10 @@ const LABEL_MAX: usize = 75;
 const API_TIMEOUT: Duration = Duration::from_secs(10);
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_CAP: Duration = Duration::from_secs(60);
+/// How long Socket Mode may stay silent, pings unanswered included, before
+/// the connection is taken for dead: a laptop that slept, or a NAT entry that
+/// was dropped, leaves a read that would otherwise block for good.
+const QUIET: Duration = Duration::from_secs(90);
 
 pub struct Question {
     pub id: String,
@@ -63,6 +69,7 @@ pub struct Slack {
     api_url: String,
     agent: ureq::Agent,
     log: Log,
+    quiet: Duration,
 }
 
 /// Written by hand so the tokens never reach a `{:?}`.
@@ -78,7 +85,14 @@ impl std::fmt::Debug for Slack {
 impl Slack {
     /// Logs to stderr; `with_log` sends the lines elsewhere.
     pub fn new(bot_token: String, app_token: String, user_id: String, api_url: String) -> Slack {
+        // The system's roots, not a bundled list: a cloud VM's proxy signs
+        // with a CA only the system store holds. ureq takes that proxy from
+        // the environment by itself.
+        let tls = ureq::tls::TlsConfig::builder()
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .build();
         let agent = ureq::Agent::config_builder()
+            .tls_config(tls)
             .timeout_global(Some(API_TIMEOUT))
             .http_status_as_error(false)
             .build()
@@ -90,7 +104,14 @@ impl Slack {
             api_url: api_url.trim_end_matches('/').to_string(),
             agent,
             log: Box::new(|line| eprintln!("{line}")),
+            quiet: QUIET,
         }
+    }
+
+    /// How long Socket Mode may stay silent; it is pinged at a third of that.
+    pub fn with_quiet(mut self, quiet: Duration) -> Slack {
+        self.quiet = quiet;
+        self
     }
 
     pub fn with_log(mut self, log: impl Fn(&str) + Send + Sync + 'static) -> Slack {
@@ -195,8 +216,31 @@ impl Slack {
                 error => anyhow!(error),
             })
             .context("connecting to Socket Mode")?;
+        read_timeout(&mut socket, Some(self.quiet / 3)).context("timing Socket Mode reads")?;
+        let mut heard = Instant::now();
         loop {
-            let Message::Text(text) = socket.read().context("reading Socket Mode")? else {
+            let message = match socket.read() {
+                Ok(message) => {
+                    heard = Instant::now();
+                    message
+                }
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if heard.elapsed() >= self.quiet {
+                        bail!("Socket Mode was silent for {:?}", self.quiet);
+                    }
+                    socket
+                        .send(Message::Ping(Default::default()))
+                        .context("pinging Socket Mode")?;
+                    continue;
+                }
+                Err(e) => return Err(e).context("reading Socket Mode"),
+            };
+            let Message::Text(text) = message else {
                 continue;
             };
             let Ok(envelope) = serde_json::from_str::<Value>(&text) else {
@@ -281,6 +325,17 @@ impl Slack {
             bail!("slack {method}: {error}");
         }
         Ok(reply)
+    }
+}
+
+fn read_timeout(
+    socket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
+    timeout: Option<Duration>,
+) -> std::io::Result<()> {
+    match socket.get_mut() {
+        MaybeTlsStream::Plain(stream) => stream.set_read_timeout(timeout),
+        MaybeTlsStream::Rustls(stream) => stream.get_mut().set_read_timeout(timeout),
+        _ => Ok(()),
     }
 }
 

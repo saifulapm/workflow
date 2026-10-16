@@ -220,7 +220,24 @@ fn run_local(port: u16) -> Result<()> {
     println!("local hub socket {}", socket_path.display());
     std::io::stdout().flush()?;
 
-    let local = Arc::new(local::Local::new(hub::machine_name(), token));
+    let machine = hub::machine_name();
+    let host = local::host(&machine, listener.local_addr()?.port());
+    // A machine without the Slack tokens still passes answers between hubs.
+    let slack = match hub::slack::Slack::from_env() {
+        Ok(slack) => slack.map(Arc::new),
+        Err(e) => {
+            eprintln!("hub: local: Slack is off: {e:#}");
+            None
+        }
+    };
+    let local = Arc::new(local::Local::new(machine, host, token, slack.clone()));
+    if let Some(slack) = slack {
+        let local = Arc::clone(&local);
+        std::thread::Builder::new()
+            .name("hub-slack".to_string())
+            .spawn(move || slack.run_socket(move |tap| local.on_tap(tap)))
+            .context("starting the Slack socket")?;
+    }
     let for_mem = Arc::clone(&local);
     std::thread::Builder::new()
         .name("hub-local-socket".to_string())

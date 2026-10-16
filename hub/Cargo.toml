@@ -32,4 +32,6 @@ toml = "1.1.4"
 # brings, with ureq's ring provider; plain ws:// needs no TLS at all.
 tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 # Slack's Web API. Only `rustls`: no gzip, and serde_json builds the bodies.
-ureq = { version = "3.4.2", default-features = false, features = ["rustls"] }
+# `platform-verifier` trusts the system's roots, which in a cloud VM include
+# the CA of the proxy every request goes through.
+ureq = { version = "3.4.2", default-features = false, features = ["rustls", "platform-verifier"] }
