@@ -28,6 +28,7 @@ Usage: hub [OPTIONS]
        hub share seed
        hub share mint <RUNNER>
        hub share archive <TARBALL>
+       hub share put-bin <NAME> <FILE>
 
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
@@ -60,6 +61,9 @@ Commands:
                 90 days ago that the `mem snapshot` tarball holds, and fetch
                 into this machine's replica one it lacks; exits 1 when a
                 request failed
+  share put-bin Put FILE in the store (HUB_STORE_URL and HUB_STORE_TOKEN)
+                as the binary NAME, such as mem-x86_64, which a cloud
+                session's setup fetches, and print the bytes stored
 
 Options:
       --config <PATH>  Config file (default $XDG_CONFIG_HOME/hub/config.toml)
@@ -84,6 +88,8 @@ struct Args {
     mint: Option<String>,
     /// `share archive <tarball>`: old files leave the store.
     archive: Option<PathBuf>,
+    /// `share put-bin <name> <file>`: a build for cloud sessions.
+    put_bin: Option<(String, String)>,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
@@ -99,6 +105,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
         seed: false,
         mint: None,
         archive: None,
+        put_bin: None,
         config: None,
         port: None,
     };
@@ -119,7 +126,12 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
                     let tarball = argv.next().context("share archive needs a tarball")?;
                     args.archive = Some(PathBuf::from(tarball));
                 }
-                _ => anyhow::bail!("share takes sync, seed, mint or archive\n\n{USAGE}"),
+                Some("put-bin") => {
+                    let name = argv.next().context("share put-bin needs a name")?;
+                    let file = argv.next().context("share put-bin needs a file")?;
+                    args.put_bin = Some((name, file));
+                }
+                _ => anyhow::bail!("share takes sync, seed, mint, archive or put-bin\n\n{USAGE}"),
             },
             "ping" => match argv.next().context("ping needs a host")? {
                 help if help == "-h" || help == "--help" => {
@@ -188,6 +200,13 @@ fn run() -> Result<()> {
         let archived = hub::archive::run(&store, &tarball)?;
         println!("{}", archived.summary());
         std::process::exit(i32::from(archived.failed > 0));
+    }
+    if let Some((name, file)) = args.put_bin {
+        let store = hub::share::from_env()
+            .context("hub share put-bin needs HUB_STORE_URL and HUB_STORE_TOKEN")?;
+        let stored = hub::bin_upload::run(&store, &name, &file)?;
+        println!("stored {name}: {stored} bytes");
+        return Ok(());
     }
     if let Some(runner) = args.mint {
         return hub::mint::run(&runner);

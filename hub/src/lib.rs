@@ -11,6 +11,7 @@ pub mod api;
 pub mod app;
 pub mod archive;
 pub mod assets;
+pub mod bin_upload;
 pub mod config;
 pub mod doorbell;
 pub mod dulali;
