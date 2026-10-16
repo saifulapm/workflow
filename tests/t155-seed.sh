@@ -56,7 +56,7 @@ on() { # on <machine> <command...> -- runs a command with that machine's store
 		XDG_STATE_HOME="$root/state" XDG_CONFIG_HOME="$root/config" \
 		HUB_LOCAL_SOCKET="$root/state/hub/local.sock" MEM_SYNC_CMD=true "$@")
 }
-for m in mini fresh walker; do
+for m in mini fresh walker nuc; do
 	mkdir -p "$T_TMP/m/$m"/{data,cache,state,config/qshell}
 	printf '%s\n' "$m" >"$T_TMP/m/$m/config/qshell/machine"
 done
@@ -113,6 +113,18 @@ is "$(curl -s -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
 is "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
 	"http://127.0.0.1:$CF_DEV_PORT/store/files/projects/$PROJECT/raw/old.bin")" 404 \
 	"the file older than 90 days is not"
+files_at() {
+	curl -s -H "Authorization: Bearer $token" -H 'X-Hub-Store: main' \
+		"http://127.0.0.1:$CF_DEV_PORT/store/files?project=$PROJECT"
+}
+before=$(files_at)
+like "$before" '"at":[0-9]+' "the store lists the file with its upload time"
+cp -a "$top" "$T_TMP/m/nuc/data/mem/"
+out=$(on nuc env HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token HUB_STORE_NAME=main timeout 60 "$HUB_BIN" share seed 2>>"$T_TMP/seed1.err")
+is "$?" 0 "a second machine holding the same store imports and exits 0"
+like "$out" "sent 0 of 0 writes" "it sends no write the first machine sent"
+is "$(files_at)" "$before" "and puts no file again, so its upload time stands"
+
 on walker env HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token HUB_STORE_NAME=walk timeout 30 "$HUB_BIN" share sync 2>/dev/null
 is "$(find "$T_TMP/m/walker/data/mem/store" -type f 2>/dev/null | wc -l)" 0 \
 	"the walk's store object holds none of the import"

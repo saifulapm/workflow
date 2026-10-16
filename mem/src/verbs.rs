@@ -2563,7 +2563,7 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
                     replay.push(message);
                 }
             }
-            for message in crate::share::seed(&db, &app.store.root, replay)? {
+            for message in crate::share::seed(&db, &app.store.root, &app.machine, replay)? {
                 println!("{message}");
             }
         }

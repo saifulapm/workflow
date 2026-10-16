@@ -143,7 +143,7 @@ fn store_root() -> Result<PathBuf> {
 }
 
 /// The project's stored files with their upload times.
-fn list(store: &Store, project: &str) -> Result<Vec<(String, i64)>> {
+pub(crate) fn list(store: &Store, project: &str) -> Result<Vec<(String, i64)>> {
     let url = format!("{}/store/files?project={project}", store.base()?);
     let mut request = store.agent.get(url);
     for (name, value) in store.headers() {

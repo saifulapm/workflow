@@ -503,10 +503,22 @@ pub const FILE_DAYS: u64 = 90;
 /// path the store holds in a project here that this store no longer holds;
 /// then each evidence or raw file younger than `FILE_DAYS` that no import
 /// has uploaded yet. Text first, so the files come once the text is in.
-/// Neither the outbox nor the heads change: this machine shares nothing yet.
-pub fn seed(db: &Path, root: &Path, replay: impl IntoIterator<Item = Value>) -> Result<Vec<Value>> {
-    let mut newest: std::collections::HashMap<String, (u64, String, Option<String>)> =
-        std::collections::HashMap::new();
+///
+/// Only a path whose head `machine` (this one) wrote is replaced or removed:
+/// until it switches, everything under its name came from its own imports,
+/// while a head another machine wrote may be that machine's work since its
+/// switch, which a store kept by the bisync must not undo. Such a page that
+/// differs here is kept beside it as `<name>.conflict-import`, which `mem
+/// doctor` lists. Neither the outbox nor the heads change: this machine
+/// shares nothing yet.
+pub fn seed(
+    db: &Path,
+    root: &Path,
+    machine: &str,
+    replay: impl IntoIterator<Item = Value>,
+) -> Result<Vec<Value>> {
+    type Head = (u64, String, Option<String>, String);
+    let mut newest: std::collections::HashMap<String, Head> = std::collections::HashMap::new();
     for message in replay {
         let (Some("rec"), Some(path), Some(id), Some(seq)) = (
             message["t"].as_str(),
@@ -516,9 +528,10 @@ pub fn seed(db: &Path, root: &Path, replay: impl IntoIterator<Item = Value>) -> 
         ) else {
             continue;
         };
-        if newest.get(path).is_none_or(|(kept, _, _)| *kept < seq) {
+        if newest.get(path).is_none_or(|(kept, ..)| *kept < seq) {
             let body = message["body"].as_str().map(str::to_string);
-            newest.insert(path.to_string(), (seq, id.to_string(), body));
+            let by = message["machine"].as_str().unwrap_or_default().to_string();
+            newest.insert(path.to_string(), (seq, id.to_string(), body, by));
         }
     }
     let write = |path: &str, base: Option<&str>, body: Option<&str>| {
@@ -541,20 +554,31 @@ pub fn seed(db: &Path, root: &Path, replay: impl IntoIterator<Item = Value>) -> 
             continue;
         };
         match newest.get(rel) {
-            Some((_, _, Some(theirs))) if *theirs == body => {}
-            Some((_, head, _)) => plan.push(write(rel, Some(head), Some(&body))),
+            Some((_, _, Some(theirs), _)) if *theirs == body => {}
+            Some((_, head, _, by)) if by == machine => {
+                plan.push(write(rel, Some(head), Some(&body)))
+            }
+            Some(_) if is_item(rel) => {}
+            Some(_) => {
+                let copy = root.join(format!("{rel}.conflict-import"));
+                crate::atomic::write_replica(&copy, body.as_bytes())?;
+                eprintln!(
+                    "mem: share seed: another machine wrote {rel}; this copy is kept beside it"
+                );
+            }
             None => plan.push(write(rel, None, Some(&body))),
         }
     }
     let mut gone: Vec<(&String, &String)> = newest
         .iter()
-        .filter(|(rel, (_, _, body))| {
+        .filter(|(rel, (_, _, body, by))| {
             body.is_some()
+                && by == machine
                 && !here.contains(rel.as_str())
                 && !is_file_rel(rel)
                 && project_dir(root, rel).is_some_and(|dir| dir.is_dir())
         })
-        .map(|(rel, (_, head, _))| (rel, head))
+        .map(|(rel, (_, head, ..))| (rel, head))
         .collect();
     gone.sort();
     for (rel, head) in gone {

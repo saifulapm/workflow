@@ -161,10 +161,23 @@ pub fn run(store: &Store) -> Result<Seeded> {
     let _ = socket.close(None);
 
     let mut stored = HashSet::new();
+    // A file the store already holds, put there by another machine's import,
+    // is not put again: that would cost rows and restart its 90 days.
+    let mut held: std::collections::HashMap<String, HashSet<String>> = Default::default();
     for file in &files {
         let (Some(path), Some(local)) = (file["path"].as_str(), file["local"].as_str()) else {
             continue;
         };
+        let project = path.split('/').nth(1).unwrap_or_default().to_string();
+        let listed = held.entry(project.clone()).or_insert_with(|| {
+            crate::archive::list(store, &project)
+                .map(|rows| rows.into_iter().map(|(path, _)| path).collect())
+                .unwrap_or_default()
+        });
+        if listed.contains(path) {
+            stored.insert(path.to_string());
+            continue;
+        }
         match store.put_file(path, local) {
             Ok(()) => {
                 stored.insert(path.to_string());

@@ -846,6 +846,11 @@ fn switching_asks_the_store_for_every_write_again() {
 /// The import's plan: what `mem share seed` prints for the store's replay
 /// fed on stdin, one JSON per line.
 fn seed(w: &World, store: &[Value]) -> Vec<Value> {
+    let machine = w.dirs().qshell_machine();
+    if !machine.exists() {
+        std::fs::create_dir_all(machine.parent().unwrap()).unwrap();
+        std::fs::write(&machine, "nuc\n").unwrap();
+    }
     let input: String = store.iter().map(|m| format!("{m}\n")).collect();
     let out = mem_in(w, &["share", "seed"], &input);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
@@ -999,4 +1004,68 @@ fn doctor_on_a_switched_machine_does_not_ask_for_the_memory_unit() {
     let unswitched = shared("share-unswitched-doctor");
     let text = stdout(&mem(&unswitched, unswitched.dir.path(), &["doctor"]));
     assert!(text.lines().any(|l| l.starts_with("sync ")), "{text}");
+}
+
+fn rec_by(seq: u64, id: &str, path: &str, body: Value, machine: &str) -> Value {
+    json!({"t": "rec", "seq": seq, "id": id, "path": path, "body": body, "machine": machine})
+}
+
+#[test]
+fn the_import_leaves_alone_what_a_switched_machine_wrote_and_keeps_its_own_copy() {
+    let w = World::new("seed-switched-wrote");
+    w.project(ID, "walk");
+    let page = format!("projects/{ID}/wiki/lessons.md");
+    let item = format!("projects/{ID}/items/01K0SEEDITEM00000000000000.md");
+    put(&w, &page, "lessons as the VPS has them");
+    put(&w, &item, "item, archived on the VPS");
+    let plan = seed(
+        &w,
+        &[
+            rec_by(
+                1,
+                "01K0SEEDREC00000000000001A",
+                &page,
+                json!("lessons the mini wrote"),
+                "mini",
+            ),
+            rec_by(
+                2,
+                "01K0SEEDREC00000000000001B",
+                &item,
+                json!("item"),
+                "mini",
+            ),
+        ],
+    );
+    assert!(by_path(&plan, &page).is_none(), "{plan:?}");
+    assert!(by_path(&plan, &item).is_none(), "{plan:?}");
+    let copy = w.dirs().store().join(format!("{page}.conflict-import"));
+    assert_eq!(
+        std::fs::read_to_string(&copy).unwrap(),
+        "lessons as the VPS has them"
+    );
+    assert!(
+        !w.dirs()
+            .store()
+            .join(format!("{item}.conflict-import"))
+            .exists()
+    );
+}
+
+#[test]
+fn the_import_never_removes_what_a_switched_machine_wrote() {
+    let w = World::new("seed-switched-removal");
+    w.project(ID, "walk");
+    let item = format!("projects/{ID}/items/01K0SEEDMINI00000000000000.md");
+    let plan = seed(
+        &w,
+        &[rec_by(
+            1,
+            "01K0SEEDREC00000000000001C",
+            &item,
+            json!("the mini's log"),
+            "mini",
+        )],
+    );
+    assert!(by_path(&plan, &item).is_none(), "{plan:?}");
 }
