@@ -437,3 +437,35 @@ fn the_peer_port_listens_on_loopback_only() {
         "{rows:?}"
     );
 }
+
+/// The first answer stands: a second one handed in for the same question,
+/// a replayed tap or a forged one, changes nothing.
+#[test]
+fn a_second_answer_to_an_answered_question_is_refused() {
+    let dir = TempDir::new("local-replay");
+    let (bin, log) = logging_mem(&dir);
+    let hub = spawn_local_with(&dir, "testbox", &[&bin], &[]);
+    ask_on(&dir.join("local.sock"));
+    let first = post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ABCD1234","answer":"yes","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&first), 200, "{first}");
+    common::wait_for("mem answer", std::time::Duration::from_secs(5), || {
+        std::fs::read_to_string(&log).is_ok_and(|l| l.lines().count() >= 6)
+    });
+    let second = post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ABCD1234","answer":"no","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&second), 409, "{second}");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 6);
+    let response = on_socket(
+        &dir.join("local.sock"),
+        "GET /wait/ABCD1234?s=1 HTTP/1.1\r\nHost: x\r\n\r\n",
+    );
+    assert_eq!(body_of(&response), "yes");
+}

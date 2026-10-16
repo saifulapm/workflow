@@ -136,8 +136,11 @@ impl Local {
                     Response::text(403, "a roadmap review is Saiful's to answer, on the hub")
                 }
                 Ok(answer) => {
-                    self.deliver(&answer.question, &answer.answer, &answer.by);
-                    Response::text(200, "ok")
+                    if self.deliver(&answer.question, &answer.answer, &answer.by) {
+                        Response::text(200, "ok")
+                    } else {
+                        Response::text(409, "already answered")
+                    }
                 }
                 Err(e) => Response::text(400, &format!("not an answer: {e}")),
             },
@@ -196,8 +199,7 @@ impl Local {
     /// peer, and the message loses its buttons once that hub has it.
     pub fn on_tap(&self, tap: Tap) {
         let handed = if tap.machine == self.host {
-            self.deliver(&tap.question, &tap.answer, "slack");
-            true
+            self.deliver(&tap.question, &tap.answer, "slack")
         } else {
             let body = serde_json::json!({
                 "question": tap.question,
@@ -250,9 +252,14 @@ impl Local {
     /// Keeps the answer and wakes every wait on it, then records it in this
     /// machine's store when the question was asked here, signed by the
     /// surface that took it.
-    pub fn deliver(&self, question: &str, answer: &str, by: &str) {
+    /// `false`, and nothing done, when the question already has an answer:
+    /// the first one stands, so a replayed tap cannot change it.
+    pub fn deliver(&self, question: &str, answer: &str, by: &str) -> bool {
         {
             let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+            if answers.contains_key(question) {
+                return false;
+            }
             answers.insert(question.to_string(), answer.to_string());
             self.answered.notify_all();
         }
@@ -280,6 +287,7 @@ impl Local {
                 }
             });
         }
+        true
     }
 
     /// The answer to `question`, waiting up to `hold` for it.
