@@ -31,10 +31,11 @@ git archive --format=tar "$commit" |
   ssh "$host" "rm -rf $src && mkdir -p $src && tar x -C $src"
 # The mem and the local hub a cloud session runs, served at
 # mem.on-rexa.com/dl/mem and /dl/hub: x86_64 and static, so they are built
-# here (cargo zigbuild, zig on PATH), not on the VPS.
+# here (cargo zigbuild, zig on PATH), not on the VPS. The hub embeds the
+# cloud prompt from workflow/, so that file travels with them.
 x86=$(mktemp -d)
 trap 'rm -rf "$x86"' EXIT
-git archive --format=tar "$commit" mem hub | tar x -C "$x86"
+git archive --format=tar "$commit" mem hub workflow/src/cloud-prompt.txt | tar x -C "$x86"
 for crate in mem hub; do
   HUB_COMMIT=$short cargo zigbuild -q --release --target x86_64-unknown-linux-musl \
     --manifest-path "$x86/$crate/Cargo.toml" \
