@@ -1919,19 +1919,29 @@ fn wait_for(app: &App, id: &str, timeout: &str) -> Result<i32> {
     let Some(id_ref) = crate::ids::IdRef::parse(id) else {
         return Err(exit::not_found(format!("'{id}' is not an id")));
     };
-    let index = app.read_index()?;
-    let mut rows = index.resolve_ref(&id_ref)?;
-    let question = match rows.len() {
-        0 => return Err(exit::not_found(format!("no question {id}"))),
-        1 => rows.remove(0),
-        _ => {
-            return Err(exit::coded(
-                exit::AMBIGUOUS,
-                format!("'{id}' is ambiguous — use the full ULID"),
-            ));
+    // Another mem holding the index's write lock makes the reindex step
+    // aside, and a question asked a moment ago is then not in it yet: look
+    // again for a little while before saying there is no such question.
+    let looking_until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let question = loop {
+        let index = crate::index::Index::open(&app.dirs.index_db(), crate::index::Purpose::Read)?;
+        let skipped = index.reindex(&app.store, false)?.skipped;
+        let mut rows = index.resolve_ref(&id_ref)?;
+        match rows.len() {
+            0 if skipped && std::time::Instant::now() < looking_until => {
+                drop(index);
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            0 => return Err(exit::not_found(format!("no question {id}"))),
+            1 => break rows.remove(0),
+            _ => {
+                return Err(exit::coded(
+                    exit::AMBIGUOUS,
+                    format!("'{id}' is ambiguous — use the full ULID"),
+                ));
+            }
         }
     };
-    drop(index);
 
     // The directory watched is the QUESTION's, not this checkout's: `mem
     // questions --wait` is routinely run from somewhere else entirely, and

@@ -668,3 +668,42 @@ fn a_question_with_no_text_is_refused() {
     let out = ask_env(&w, &repo, &["questions", "--pending"]);
     assert_eq!(code(&out), 1, "nothing was asked: {}", stdout(&out));
 }
+
+/// Another mem holding the index's write lock (a sync round, the local
+/// hub's sweep) makes a reindex step aside. A question asked a moment ago is
+/// then missing from the index for a little while, and a wait on it must
+/// look again instead of saying there is no such question.
+#[test]
+fn waiting_on_a_question_the_index_has_not_caught_up_with_finds_it() {
+    let w = World::new("q-wait-busy");
+    let repo = w.repo("thing", None);
+    // Make sure the index exists before it is locked.
+    let out = ask_env(&w, &repo, &["ask", "the first?", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    ask_env(&w, &repo, &["questions", "--pending"]);
+
+    let db = w.index_path();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let out = ask_env(&w, &repo, &["ask", "locked out?", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let asked: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let id = asked["short_id"]
+        .as_str()
+        .or(asked["id"].as_str())
+        .unwrap()
+        .to_string();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(600));
+        conn.execute_batch("COMMIT").unwrap();
+    });
+    let out = ask_env(&w, &repo, &["questions", "--wait", &id, "--timeout", "2s"]);
+    releaser.join().unwrap();
+    assert!(
+        !stderr(&out).contains("no question"),
+        "the wait gave up on a question it had not indexed yet: {}",
+        stderr(&out)
+    );
+    // Found, and unanswered: the wait times out.
+    assert_eq!(code(&out), 4, "{}", stderr(&out));
+}
