@@ -231,11 +231,15 @@ impl Slack {
 
     /// Replaces the buttons with the answer, so the message offers no second tap.
     pub fn mark_answered(&self, channel: &str, ts: &str, answer: &str, text: &str) -> Result<()> {
-        let line = format!("{}\n*Answered:* {}", escape(text), escape(answer));
+        // The answer whole, as far as it goes, and the question in what is
+        // left: Slack refuses a section over its limit, and the buttons stay.
+        let answered = cut(&format!("*Answered:* {}", escape(answer)), SECTION_MAX / 2);
+        let room = SECTION_MAX - answered.chars().count() - 1;
+        let line = format!("{}\n{answered}", cut(&escape(text), room));
         let body = json!({
             "channel": channel,
             "ts": ts,
-            "text": format!("{text} Answered: {answer}"),
+            "text": cut(&format!("{text} Answered: {answer}"), TEXT_MAX),
             "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": line}}],
         });
         self.call("chat.update", &self.bot_token, Some(&body))?;

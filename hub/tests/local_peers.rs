@@ -753,3 +753,25 @@ fn an_answer_that_cannot_travel_is_refused_with_why() {
     assert_eq!(status_of(&given), 403, "{given}");
     assert!(common::body_of(&given).contains("--by cli"), "{given}");
 }
+
+/// A ring or a question naming this hub as the asker, for an id it never
+/// asked, or with an id that is not one, is not taken.
+#[test]
+fn a_ring_for_a_question_this_hub_never_asked_in_its_name_is_refused() {
+    let dir = TempDir::new("peers-fake-ring");
+    let nuc = spawn(&dir, "nuc", &[], None);
+    let host = format!("127.0.0.1:{}", nuc.port);
+    for id in ["FAKE0001", "../../tmp/x", ""] {
+        let open = serde_json::json!({
+            "id": id, "project": "walk", "machine": host,
+            "text": "t", "options": ["x"], "person": true,
+        })
+        .to_string();
+        let rung = peer_post(&nuc, "/ring", &open);
+        assert_ne!(status_of(&rung), 200, "{id}: {rung}");
+    }
+    let odd = r#"{"id":"../x","project":"walk","machine":"elsewhere","text":"t","options":[],"person":true}"#;
+    assert_eq!(status_of(&peer_post(&nuc, "/question", odd)), 400);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(listed(&dir, "nuc").is_empty(), "{:?}", listed(&dir, "nuc"));
+}

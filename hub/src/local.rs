@@ -228,7 +228,10 @@ impl Local {
             (_, "/ping") => Response::method_not_allowed("GET"),
             // The asking hub offers its question to this, the route device.
             ("POST", "/ring") => match serde_json::from_slice::<Open>(&request.body) {
-                Ok(open) if self.asks(&open.id) => {
+                Ok(open) if !plain_id(&open.id) => Response::text(400, "not a question id"),
+                // This hub rings what it asked itself; a ring in its name for
+                // a question it never asked is a forgery.
+                Ok(open) if self.asks(&open.id) || open.machine == self.host => {
                     Response::text(409, "this hub asked it, and rings it itself")
                 }
                 Ok(_) if crate::presence::sample().away() => Response::text(409, "away"),
@@ -242,6 +245,7 @@ impl Local {
                 Err(e) => Response::text(400, &format!("not a question: {e}")),
             },
             ("POST", "/question") => match serde_json::from_slice::<Open>(&request.body) {
+                Ok(open) if !plain_id(&open.id) => Response::text(400, "not a question id"),
                 Ok(open) => {
                     // This hub alone speaks for the questions it asked; its
                     // copy is what tells a roadmap review after a restart.
@@ -1016,6 +1020,11 @@ fn tell_peers(
             }
         }
     });
+}
+
+/// Whether `id` could be one of mem's short ids: letters and digits only.
+fn plain_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 32 && id.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// Whether Slack could not be reached at all, as against answering no.

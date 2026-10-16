@@ -805,3 +805,39 @@ fn a_question_too_long_for_slack_or_with_an_empty_option_still_posts() {
         .collect();
     assert_eq!(labels, ["a", "b"]);
 }
+
+/// A question cut to post is cut again when marked answered, or Slack
+/// refuses the update and the buttons stay.
+#[test]
+fn a_long_question_loses_its_buttons_once_answered() {
+    let dir = TempDir::new("ring-long-mark");
+    let slack = slack();
+    let nuc = machine(&dir, "nuc", Seat::NoShell, &[], Some(&slack), &[]);
+    let body = serde_json::json!({
+        "id": "LONG0002", "project": "walk", "text": "word ".repeat(700),
+        "options": ["yes", "no"], "audience": "human",
+    })
+    .to_string();
+    post(&nuc.socket(), "/ask", &body);
+    common::wait_for("a Slack post", Duration::from_secs(2), || {
+        slack.posted() == 1
+    });
+    post(
+        &nuc.socket(),
+        "/answer",
+        r#"{"question":"LONG0002","answer":"no","by":"cli"}"#,
+    );
+    common::wait_for(
+        "the message marked answered",
+        Duration::from_secs(2),
+        || !slack.updates.lock().unwrap().is_empty(),
+    );
+    let update: Value = serde_json::from_str(&slack.updates.lock().unwrap()[0]).unwrap();
+    let section = update["blocks"][0]["text"]["text"].as_str().unwrap();
+    assert!(
+        section.chars().count() <= 3000,
+        "{}",
+        section.chars().count()
+    );
+    assert!(section.ends_with("*Answered:* no"), "{section}");
+}
