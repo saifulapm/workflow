@@ -395,3 +395,55 @@ fn a_silent_connection_is_opened_again() {
     let _taps = socket(slack.with_quiet(Duration::from_millis(600)));
     wait_for("a second socket", || sockets.load(Ordering::SeqCst) >= 2);
 }
+
+/// A cloud VM reaches the internet only through an HTTP proxy, which
+/// tungstenite does not speak: Socket Mode tunnels through it with CONNECT.
+#[test]
+fn socket_mode_goes_through_the_proxy_when_one_is_named() {
+    let fake = fake(vec![tap_envelope("env-p", SAIFUL)]);
+    let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    {
+        let asked = Arc::clone(&asked);
+        thread::spawn(move || {
+            for client in proxy.incoming() {
+                let Ok(client) = client else { continue };
+                let asked = Arc::clone(&asked);
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(client.try_clone().unwrap());
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    loop {
+                        let mut header = String::new();
+                        reader.read_line(&mut header).unwrap();
+                        if header == "\r\n" {
+                            break;
+                        }
+                    }
+                    let target = line.split(' ').nth(1).unwrap().to_string();
+                    asked.lock().unwrap().push(line.trim().to_string());
+                    let upstream = TcpStream::connect(&target).unwrap();
+                    let mut client = client;
+                    client
+                        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                        .unwrap();
+                    let mut up = upstream.try_clone().unwrap();
+                    let mut down = client.try_clone().unwrap();
+                    thread::spawn(move || {
+                        let _ = std::io::copy(&mut reader, &mut up);
+                    });
+                    let mut upstream = upstream;
+                    let _ = std::io::copy(&mut upstream, &mut down);
+                });
+            }
+        });
+    }
+    let (slack, _) = client(&fake.api);
+    let taps = socket(slack.with_proxy(Some(proxy_url)));
+    let tap = taps.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(tap.answer, "yes");
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(asked[0].starts_with("CONNECT 127.0.0.1:"), "{asked:?}");
+}
