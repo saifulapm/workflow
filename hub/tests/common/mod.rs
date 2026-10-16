@@ -211,6 +211,9 @@ impl Hub {
             // same string every assertion in this suite was written against. A
             // test that wants the tailnet branch sets it to a name of its own.
             .env("HUB_TAILNET_NAME", "")
+            // Nor may a local hub tell the real tailnet's hubs about a test's
+            // question: empty means no peers.
+            .env("HUB_PEERS", "")
             .current_dir(home)
             .stdout(Stdio::piped())
             .stderr(stderr);

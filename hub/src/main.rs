@@ -243,6 +243,13 @@ fn run_local(port: u16) -> Result<()> {
     let store = hub::share::from_env();
     let local =
         Arc::new(local::Local::new(machine, host, token, slack.clone()).with_store(store.clone()));
+    {
+        let local = Arc::clone(&local);
+        std::thread::Builder::new()
+            .name("hub-learn".to_string())
+            .spawn(move || local.learn_from_peers())
+            .context("starting the question catch-up")?;
+    }
     let notice = slack.clone();
     if let Some(slack) = slack {
         let local = Arc::clone(&local);

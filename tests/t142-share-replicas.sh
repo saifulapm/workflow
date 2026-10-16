@@ -109,7 +109,7 @@ block() { kill "${proxy_pid[$1]}" 2>/dev/null; wait "${proxy_pid[$1]}" 2>/dev/nu
 
 start_hub() { # start_hub <machine>
 	local name=$1
-	on "$name" env HUB_PEER_TOKEN=peer-token \
+	on "$name" env HUB_PEER_TOKEN=peer-token HUB_PEERS= \
 		HUB_STORE_URL="ws://127.0.0.1:${proxy_port[$name]}/store/share" HUB_STORE_TOKEN=$token \
 		"$HUB_BIN" local --port "${hub_port[$name]}" >>"$T_TMP/$name.hub.log" 2>&1 &
 	hub_pid[$name]=$!

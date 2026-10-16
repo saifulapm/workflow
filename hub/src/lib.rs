@@ -23,6 +23,7 @@ pub mod memcli;
 pub mod memserve;
 pub mod model;
 pub mod multipart;
+pub mod open;
 pub mod origin;
 pub mod page_control;
 pub mod page_decisions;
@@ -96,4 +97,40 @@ pub fn tailnet_name() -> Option<String> {
     let name = status.get("Self")?.get("DNSName")?.as_str()?;
     let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
     (!name.is_empty()).then_some(name)
+}
+
+/// The local hubs this one tells about its questions: `HUB_PEERS` (a comma
+/// list of `host[:port]`, empty for none) when set, else every online peer
+/// `tailscale status --json` lists, by MagicDNS name. A peer that runs no
+/// local hub refuses the connection and costs nothing.
+pub fn tailnet_peers() -> Vec<String> {
+    if let Some(peers) = std::env::var_os("HUB_PEERS") {
+        return peers
+            .to_string_lossy()
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    let mut command = std::process::Command::new("tailscale");
+    command.args(["status", "--json"]);
+    let proc::Ended::Exited(done) = proc::output_within(&mut command, TAILSCALE_TIMEOUT) else {
+        return Vec::new();
+    };
+    if done.code != Some(0) {
+        return Vec::new();
+    }
+    let Ok(status) = serde_json::from_slice::<serde_json::Value>(&done.stdout) else {
+        return Vec::new();
+    };
+    status["Peer"]
+        .as_object()
+        .into_iter()
+        .flat_map(|peers| peers.values())
+        .filter(|peer| peer["Online"] == true)
+        .filter_map(|peer| peer["DNSName"].as_str())
+        .map(|name| name.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }

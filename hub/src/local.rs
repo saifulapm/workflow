@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::http::{Request, Response};
+use crate::open::{Known, Open};
 use crate::share::Store;
 use crate::slack::{Question, Slack, Tap};
 
@@ -78,6 +79,8 @@ pub struct Local {
     records: bool,
     /// The questions asked on this machine, by short id.
     asked: Mutex<HashMap<String, Asked>>,
+    /// Every open question this hub knows, asked here or on a peer.
+    known: Known,
     /// Answers by question short id, kept for a wait that comes later.
     answers: Mutex<HashMap<String, String>>,
     answered: Condvar,
@@ -92,6 +95,7 @@ impl Local {
         let remote = std::env::var_os("MEM_REMOTE").is_some_and(|v| !v.is_empty());
         Local {
             machine,
+            known: Known::load(host.clone()),
             host,
             token,
             slack,
@@ -167,6 +171,16 @@ impl Local {
             ("POST", "/ask") => match serde_json::from_slice::<Asked>(&request.body) {
                 Ok(asked) => {
                     self.post(&asked);
+                    let open = Open {
+                        id: asked.id.clone(),
+                        project: asked.project.clone(),
+                        machine: self.host.clone(),
+                        text: asked.text.clone(),
+                        options: asked.options.clone(),
+                        person: asked.audience.as_deref() != Some("orchestrator"),
+                    };
+                    self.known.add(open.clone());
+                    self.tell_peers("/question", serde_json::to_vec(&open).unwrap_or_default());
                     self.asked
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -175,6 +189,23 @@ impl Local {
                 }
                 Err(e) => Response::text(400, &format!("not a question: {e}")),
             },
+            ("POST", "/question") => match serde_json::from_slice::<Open>(&request.body) {
+                Ok(open) => {
+                    self.known.add(open);
+                    Response::text(200, "ok")
+                }
+                Err(e) => Response::text(400, &format!("not a question: {e}")),
+            },
+            ("POST", "/closed") => match serde_json::from_slice::<Closed>(&request.body) {
+                Ok(closed) => {
+                    self.known.close(&closed.question);
+                    Response::text(200, "ok")
+                }
+                Err(e) => Response::text(400, &format!("not a question id: {e}")),
+            },
+            ("GET", "/questions") => {
+                Response::new(200, "application/json", self.known.doc().to_string())
+            }
             ("POST", "/answer") => match serde_json::from_slice::<Answer>(&request.body) {
                 // Only a Slack tap travels between hubs; an answer claiming
                 // any other surface would be recorded under a name nobody
@@ -326,11 +357,16 @@ impl Local {
         {
             answers.insert(question.to_string(), standing.clone());
             self.answered.notify_all();
+            drop(answers);
+            self.closed(question);
             return Err(standing);
         }
         answers.insert(question.to_string(), answer.to_string());
         self.answered.notify_all();
         drop(answers);
+        if asked_here {
+            self.closed(question);
+        }
         if self.records && asked_here {
             // `--`, so an option that starts with a dash is not read as a flag.
             let argv = ["answer", "--by", by, "--", question, answer].map(str::to_string);
@@ -351,6 +387,48 @@ impl Local {
             });
         }
         Ok(())
+    }
+
+    /// Drops an answered question here and on every peer, so no bar counts it.
+    fn closed(&self, question: &str) {
+        self.known.close(question);
+        let body = serde_json::json!({ "question": question }).to_string();
+        self.tell_peers("/closed", body.into_bytes());
+    }
+
+    /// POSTs `body` to `path` on every peer, each on a thread of its own, so a
+    /// peer that is listed but off holds up nobody.
+    fn tell_peers(&self, path: &'static str, body: Vec<u8>) {
+        for peer in crate::tailnet_peers() {
+            if peer == self.host {
+                continue;
+            }
+            let token = self.token.clone();
+            let body = body.clone();
+            std::thread::spawn(move || match request(&peer, "POST", path, &token, &body) {
+                Ok((200, _)) => {}
+                Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to {path}"),
+                Err(e) => eprintln!("hub: local: {path} did not reach {peer}: {e:#}"),
+            });
+        }
+    }
+
+    /// Asks every peer for its open questions, once at start, so a hub that
+    /// was away learns what was asked meanwhile and forgets what was answered.
+    pub fn learn_from_peers(&self) {
+        for peer in crate::tailnet_peers() {
+            if peer == self.host {
+                continue;
+            }
+            match request(&peer, "GET", "/questions", &self.token, b"") {
+                Ok((200, body)) => match serde_json::from_str::<Listed>(&body) {
+                    Ok(listed) => self.known.reconcile(&listed.host, listed.questions),
+                    Err(e) => eprintln!("hub: local: {peer} sent no question list: {e}"),
+                },
+                Ok((status, _)) => eprintln!("hub: local: {peer} answered {status} to /questions"),
+                Err(e) => eprintln!("hub: local: /questions did not reach {peer}: {e:#}"),
+            }
+        }
     }
 
     /// The answer to `question`, waiting up to `hold` for it.
@@ -401,6 +479,20 @@ struct Answer {
     question: String,
     answer: String,
     by: String,
+}
+
+/// A question a peer says was answered.
+#[derive(Debug, serde::Deserialize)]
+struct Closed {
+    question: String,
+}
+
+/// A peer's open questions, as `GET /questions` gives them.
+#[derive(Debug, serde::Deserialize)]
+struct Listed {
+    #[serde(rename = "self")]
+    host: String,
+    questions: Vec<Open>,
 }
 
 /// The answer this machine's store already holds for `question`, if any.
