@@ -109,6 +109,16 @@ impl Known {
         self.write(&all);
     }
 
+    /// Sets where `id` rings, when it is still open; the updated copy.
+    pub fn set_ring(&self, id: &str, ring: &str) -> Option<Open> {
+        let mut all = self.lock();
+        let open = all.iter_mut().find(|o| o.id == id)?;
+        open.ring = Some(ring.to_string());
+        let open = open.clone();
+        self.write(&all);
+        Some(open)
+    }
+
     /// The route device's side: rings `open` on `host` unless the asking hub
     /// already sent it elsewhere. Whether it rings here now.
     pub fn take(&self, mut open: Open, host: &str) -> bool {
@@ -148,6 +158,11 @@ impl Known {
         let before = all.clone();
         all.retain(|o| o.machine != peer || listed.iter().any(|l| l.id == o.id));
         for open in listed {
+            // This hub's own questions it knows best: a peer's copy may be
+            // one it answered long ago.
+            if open.machine == self.host {
+                continue;
+            }
             if !all.iter().any(|o| o.id == open.id) {
                 all.push(open);
             }

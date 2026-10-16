@@ -679,3 +679,96 @@ fn questions_flow_with_the_store_unreachable() {
     assert_eq!(common::body_of(&got), "ok", "{got}");
     assert!(took < Duration::from_secs(2), "{took:?}");
 }
+
+/// Answered while the route device was being asked: when the wait ends,
+/// the question is not brought back, and Slack never hears of it.
+#[test]
+fn a_question_answered_while_the_route_device_is_asked_stays_answered() {
+    let dir = TempDir::new("ring-answered-meanwhile");
+    let slack = slack();
+    let silent = TcpListener::bind("127.0.0.1:0").unwrap();
+    let silent_host = format!("127.0.0.1:{}", silent.local_addr().unwrap().port());
+    let _held = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in silent.incoming() {
+            held.push(stream);
+        }
+    });
+    let nuc = machine(
+        &dir,
+        "nuc",
+        Seat::NoShell,
+        &[&silent_host],
+        Some(&slack),
+        &[("HUB_RING_MS", "800")],
+    );
+    route_device(&nuc, &silent_host);
+    ask(&nuc);
+    std::thread::sleep(Duration::from_millis(200));
+    post(
+        &nuc.socket(),
+        "/answer",
+        r#"{"question":"ABCD1234","answer":"yes","by":"cli"}"#,
+    );
+    quiet_for("no post, nothing open", Duration::from_millis(1500), || {
+        slack.posted() == 0 && nuc.listed().is_empty()
+    });
+}
+
+/// Slack refusing a post (too long, a bad token) is not the network: the
+/// hub does not post it again and again.
+#[test]
+fn a_post_slack_refuses_is_not_tried_again() {
+    let dir = TempDir::new("ring-refused");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let api = format!("http://{}/api", listener.local_addr().unwrap());
+    let tries = Arc::new(Mutex::new(0usize));
+    let counted = Arc::clone(&tries);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            let mut length = 0;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((n, v)) = header.trim_end().split_once(':')
+                    && n.eq_ignore_ascii_case("content-length")
+                {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0; length];
+            let _ = reader.read_exact(&mut body);
+            if line.contains("chat.postMessage") {
+                *counted.lock().unwrap() += 1;
+            }
+            let reply = r#"{"ok":false,"error":"msg_too_long"}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+        }
+    });
+    let refusing = Slack {
+        api,
+        posts: Arc::new(Mutex::new(Vec::new())),
+        updates: Arc::new(Mutex::new(Vec::new())),
+    };
+    let nuc = machine(
+        &dir,
+        "nuc",
+        Seat::NoShell,
+        &[],
+        Some(&refusing),
+        &[("HUB_RETRY_MS", "100")],
+    );
+    ask(&nuc);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(*tries.lock().unwrap(), 1);
+}

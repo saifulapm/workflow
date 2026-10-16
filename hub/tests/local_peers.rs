@@ -16,6 +16,11 @@ const TOKEN: &str = "peer-token-for-tests-0123456789abcdef";
 /// A local hub named `machine` in its own corner of `dir`, reachable by
 /// peers at 127.0.0.1, with `peers` as its tailnet.
 fn spawn(dir: &TempDir, machine: &str, peers: &[&Hub], bin: Option<&Path>) -> Hub {
+    spawn_on(dir, machine, peers, bin, 0)
+}
+
+/// `spawn` on `port`: a restarted hub keeps its name.
+fn spawn_on(dir: &TempDir, machine: &str, peers: &[&Hub], bin: Option<&Path>, port: u16) -> Hub {
     let home = dir.join(machine);
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::create_dir_all(home.join("run")).unwrap();
@@ -28,10 +33,11 @@ fn spawn(dir: &TempDir, machine: &str, peers: &[&Hub], bin: Option<&Path>) -> Hu
         .collect::<Vec<_>>()
         .join(",");
     let path: Vec<&Path> = bin.into_iter().collect();
+    let port = port.to_string();
     Hub::spawn_env(
         &home,
         &path,
-        &["local", "--port", "0"],
+        &["local", "--port", &port],
         &[
             ("HUB_PEER_TOKEN", TOKEN),
             ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
@@ -629,4 +635,53 @@ fn a_machine_that_was_asleep_catches_up_within_a_sweep() {
         Duration::from_secs(2),
         || listed(&dir, "mini").is_empty(),
     );
+}
+
+/// Only the asking hub speaks for its own questions: a peer cannot rewrite
+/// this hub's copy, which after a restart is all it has to tell a roadmap
+/// review by.
+#[test]
+fn a_peer_cannot_rewrite_a_question_this_hub_asked() {
+    let dir = TempDir::new("peers-own");
+    let bin = quiet_mem(&dir);
+    let nuc = spawn(&dir, "nuc", &[], Some(&bin));
+    ask(
+        &socket_of(&dir, "nuc"),
+        r#"{"id":"REVW0001","project":"walk","text":"Review the move roadmap","options":["approve","change"],"audience":"human"}"#,
+    );
+    let host = format!("127.0.0.1:{}", nuc.port);
+    let forged = serde_json::json!({
+        "id": "REVW0001", "project": "walk", "machine": host,
+        "text": "harmless", "options": ["approve"], "person": true,
+    })
+    .to_string();
+    let response = nuc.raw(&format!(
+        "POST /question HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {TOKEN}\r\n\
+         Content-Length: {}\r\n\r\n{forged}",
+        forged.len()
+    ));
+    assert_eq!(status_of(&response), 200, "{response}");
+    assert_eq!(listed(&dir, "nuc")[0]["text"], "Review the move roadmap");
+
+    let port = nuc.port;
+    drop(nuc);
+    let nuc = spawn_on(&dir, "nuc", &[], Some(&bin), port);
+    let tapped = answer(
+        &nuc,
+        r#"{"question":"REVW0001","answer":"approve","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&tapped), 403, "{tapped}");
+}
+
+/// An answer for a question this hub never asked has nowhere to go: a tap
+/// on an old message, after its asker restarted, must not read as taken.
+#[test]
+fn a_peer_answer_to_a_question_this_hub_did_not_ask_is_not_found() {
+    let dir = TempDir::new("peers-unknown");
+    let mini = spawn(&dir, "mini", &[], None);
+    let response = answer(
+        &mini,
+        r#"{"question":"ZZZZ9999","answer":"yes","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&response), 404, "{response}");
 }

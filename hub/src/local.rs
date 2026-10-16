@@ -227,7 +227,12 @@ impl Local {
             },
             ("POST", "/question") => match serde_json::from_slice::<Open>(&request.body) {
                 Ok(open) => {
-                    self.known.add(open);
+                    // This hub alone speaks for the questions it asked; its
+                    // copy is what tells a roadmap review after a restart.
+                    let mine = open.machine == self.host || self.asked_here(&open.id).is_some();
+                    if !mine {
+                        self.known.add(open);
+                    }
                     Response::text(200, "ok")
                 }
                 Err(e) => Response::text(400, &format!("not a question: {e}")),
@@ -303,6 +308,9 @@ impl Local {
                 Ok(answer) if self.is_review(&answer.question) => {
                     Response::text(403, REVIEW_REFUSAL)
                 }
+                // Nowhere to keep it: a tap on an old message whose asker
+                // forgot it must not read as taken.
+                Ok(answer) if !self.asks(&answer.question) => Response::not_found(),
                 Ok(answer) => {
                     let shot = match answer.screenshot.as_ref().map(Shot::bytes).transpose() {
                         Ok(shot) => shot,
@@ -347,6 +355,15 @@ impl Local {
         }
         self.asked_here(question)
             .is_some_and(|open| is_review(&open.text, &open.options))
+    }
+
+    /// Whether this hub asked `question`, now or before a restart.
+    fn asks(&self, question: &str) -> bool {
+        self.asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(question)
+            || self.asked_here(question).is_some()
     }
 
     /// The open question `question`, when this hub asked it: the copy kept
@@ -981,6 +998,12 @@ fn tell_peers(
     });
 }
 
+/// Whether Slack could not be reached at all, as against answering no.
+fn unreachable(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|cause| cause.downcast_ref::<ureq::Error>().is_some())
+}
+
 /// Whether a connection was refused: the machine is there, its hub is not.
 fn refused(e: &anyhow::Error) -> bool {
     e.chain().any(|cause| {
@@ -1013,7 +1036,7 @@ impl Ringer {
     /// Device when the route device takes it, else Phone; then every peer
     /// hears where it rings, so the route device drops a popup it showed
     /// too late.
-    fn ring(&self, route: &Stamped, mut open: Open) {
+    fn ring(&self, route: &Stamped, open: Open) {
         let device = match (route.route, &route.machine) {
             (Kind::Device, Some(machine)) => Some(machine.as_str()),
             _ => None,
@@ -1028,8 +1051,10 @@ impl Ringer {
                 open.id
             );
         }
-        open.ring = Some(ring);
-        self.known.add(open.clone());
+        // Answered while the route device was asked: leave it closed.
+        let Some(open) = self.known.set_ring(&open.id, &ring) else {
+            return;
+        };
         tell_peers(
             &self.host,
             &self.token,
@@ -1082,6 +1107,12 @@ impl Ringer {
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .insert(id.clone(), (posted.channel, posted.ts));
+                    return;
+                }
+                // Slack's own refusal (a bad token, a message too long)
+                // comes back the same however often it is tried.
+                Err(e) if !unreachable(&e) => {
+                    eprintln!("hub: local: #{id} not posted to Slack: {e:#}");
                     return;
                 }
                 Err(e) => eprintln!("hub: local: #{id} not posted to Slack yet: {e:#}"),
@@ -1152,6 +1183,11 @@ impl Shot {
 /// directory, until mem has.
 fn save_shot(question: &str, bytes: &[u8]) -> Option<PathBuf> {
     use std::os::unix::fs::OpenOptionsExt;
+    // A question id names the file, so it may name nothing else.
+    if question.is_empty() || !question.chars().all(|c| c.is_ascii_alphanumeric()) {
+        eprintln!("hub: local: not keeping a screenshot for the id {question:?}");
+        return None;
+    }
     let dir = crate::config::state_home().ok()?.join("hub/screenshots");
     std::fs::create_dir_all(&dir).ok()?;
     let nanos = std::time::SystemTime::now()
