@@ -60,6 +60,9 @@ fn switch(url: &str) -> Step<()> {
              update the dotfiles (chezmoi update) first",
         );
     }
+    if switched() {
+        return move_store(url);
+    }
     let Some(name) = machine::name() else {
         return fail("cannot tell this machine's name; set WORKFLOW_MACHINE");
     };
@@ -134,6 +137,49 @@ fn switch(url: &str) -> Step<()> {
     }
     println!(
         "  wrote HUB_STORE_URL, HUB_STORE_NAME, HUB_STORE_TOKEN and HUB_CLOUD_TOKEN to {}",
+        env.display()
+    );
+    println!("  restarted hub-local");
+    Ok(())
+}
+
+/// Has `mem share switch` run here? It leaves the flag file qshell-sync tests.
+fn switched() -> bool {
+    let base = match std::env::var("XDG_STATE_HOME") {
+        Ok(v) if !v.is_empty() => PathBuf::from(v),
+        _ => match paths::home() {
+            Some(home) => home.join(".local/state"),
+            None => return false,
+        },
+    };
+    base.join("mem/share/switched").exists()
+}
+
+/// A re-run after the switch: the memory is already in the store, so only
+/// the URL moves. The token and the cloud token stay as local.env has them.
+fn move_store(url: &str) -> Step<()> {
+    let env = env_file()?;
+    let text = fs::read_to_string(&env).unwrap_or_default();
+    let has_token = text.lines().any(|l| {
+        l.strip_prefix("HUB_STORE_TOKEN=")
+            .is_some_and(|v| !v.is_empty())
+    });
+    if !has_token {
+        return refuse(format!(
+            "{} has no HUB_STORE_TOKEN to reuse; the machine switched but its token is gone",
+            env.display()
+        ));
+    }
+    write_env(
+        &env,
+        &[("HUB_STORE_URL", url), ("HUB_STORE_NAME", STORE_NAME)],
+    )
+    .map_err(|e| (exit::FAILED, format!("cannot write {}: {e}", env.display())))?;
+    run("systemctl", &["--user", "restart", "hub-local"], &[])
+        .map_err(|e| (exit::FAILED, format!("restarting hub-local: {e}")))?;
+    println!("moved this machine's store to {url}");
+    println!(
+        "  wrote HUB_STORE_URL and HUB_STORE_NAME to {}",
         env.display()
     );
     println!("  restarted hub-local");

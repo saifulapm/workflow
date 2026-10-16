@@ -88,6 +88,7 @@ fn switch(work: &Scratch, store: &str) -> Output {
         )
         .env("HOME", work.at("home"))
         .env("XDG_CONFIG_HOME", work.at("config"))
+        .env("XDG_STATE_HOME", work.at("state"))
         .env("WORKFLOW_MACHINE", "mini")
         .env_remove("WORKFLOW_AMX")
         .env_remove("WORKFLOW_MEM")
@@ -267,4 +268,40 @@ fn a_qshell_sync_that_still_bisyncs_memory_refuses_before_anything_runs() {
     );
     assert_eq!(calls(&w), "amx ls --json\npgrep -a -x claude\n");
     assert!(!w.has("config/hub/local.env"));
+}
+
+#[test]
+fn a_rerun_on_a_switched_machine_only_moves_the_store_url() {
+    let w = world("switch-rerun");
+    w.put("state/mem/share/switched", "");
+    w.put(
+        "config/hub/local.env",
+        "HUB_PORT=7777\nHUB_STORE_URL=ws://old/store/share\nHUB_STORE_NAME=main\n\
+         HUB_STORE_TOKEN=old-token\nHUB_CLOUD_TOKEN=old-cloud\n",
+    );
+    let new = "wss://new.test/store/share";
+    let out = switch(&w, new);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        calls(&w),
+        "amx ls --json\npgrep -a -x claude\nsystemctl --user restart hub-local\n"
+    );
+    assert_eq!(
+        w.read("config/hub/local.env"),
+        format!(
+            "HUB_PORT=7777\nHUB_STORE_URL={new}\nHUB_STORE_NAME=main\n\
+             HUB_STORE_TOKEN=old-token\nHUB_CLOUD_TOKEN=old-cloud\n"
+        )
+    );
+}
+
+#[test]
+fn a_rerun_without_a_stored_token_refuses() {
+    let w = world("switch-rerun-bare");
+    w.put("state/mem/share/switched", "");
+    w.put("config/hub/local.env", "HUB_PORT=7777\n");
+    let out = switch(&w, STORE);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(text(&out).contains("HUB_STORE_TOKEN"), "{}", text(&out));
+    assert!(!calls(&w).contains("systemctl"));
 }
