@@ -157,7 +157,6 @@ pub struct Row {
     pub item: Item,
     /// Store-relative: `projects/<id>/items/<ulid>.md`.
     pub path: String,
-    pub project_id: String,
     pub project: Option<String>,
     pub active: bool,
     pub superseded_by: Option<String>,
@@ -219,7 +218,6 @@ pub fn rows(files: Vec<(String, String)>, project_id: &str, name: Option<&str>) 
             Some(Row {
                 item,
                 path,
-                project_id: project_id.to_string(),
                 project,
                 active: true,
                 superseded_by: None,

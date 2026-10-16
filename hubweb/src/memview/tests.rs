@@ -83,7 +83,7 @@ fn the_pending_listing_holds_only_a_persons_unanswered_questions() {
     );
     store.item(
         ALPHA,
-        "01K2000000000000000000ORCH",
+        "01K2000000000000000000QRCH",
         "alpha",
         "question",
         "May I widen the files line?",
@@ -126,4 +126,80 @@ fn the_pending_listing_holds_only_a_persons_unanswered_questions() {
     assert_eq!(questions[0]["project"], "alpha");
     assert_eq!(questions[0]["body"], "Ship it today?");
     assert_eq!(questions[0]["answered"], false);
+}
+
+#[test]
+fn a_replaced_or_archived_item_drops_out_as_it_does_from_mem() {
+    let mut store = Store::default();
+    store.project(ALPHA, "alpha");
+    store.item(
+        ALPHA,
+        "01K2000000000000000000QSTN",
+        "alpha",
+        "question",
+        "Which colour?",
+        "",
+    );
+    let answers = "answers = \"01K2000000000000000000QSTN\"\n";
+    store.item(
+        ALPHA,
+        "01K2000000000000000000ANS1",
+        "alpha",
+        "answer",
+        "Red",
+        answers,
+    );
+    let replaced = format!("{answers}supersedes = \"01K2000000000000000000ANS1\"\n");
+    store.item(
+        ALPHA,
+        "01K2000000000000000000ANS2",
+        "alpha",
+        "answer",
+        "Blue",
+        &replaced,
+    );
+    store.item(
+        ALPHA,
+        "01K2000000000000000000RAA1",
+        "alpha",
+        "ruling",
+        "Kept",
+        "",
+    );
+    store.item(
+        ALPHA,
+        "01K2000000000000000000RAA2",
+        "alpha",
+        "ruling",
+        "Shelved",
+        "archived = true\n",
+    );
+
+    let doc = json(read(
+        &store,
+        &["questions", "--project=alpha", "--json"],
+        now(),
+    ));
+    assert_eq!(doc["questions"][0]["answer"], "Blue");
+    assert_eq!(
+        doc["questions"][0]["answer_id"],
+        "01K2000000000000000000ANS2"
+    );
+
+    let argv = [
+        "log",
+        "--kind=ruling",
+        "--limit",
+        "5",
+        "--project=alpha",
+        "--json",
+    ];
+    let doc = json(read(&store, &argv, now()));
+    let titles: Vec<&str> = doc["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Kept"]);
 }

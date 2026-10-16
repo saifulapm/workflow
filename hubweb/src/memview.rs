@@ -11,12 +11,13 @@
 //! so no answer holds one.
 
 mod item;
+mod sections;
 
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 
-use item::{Row, date, newest_first, row_json};
+use item::{Row, newest_first, row_json};
 
 /// The store's files, by store-relative path.
 pub trait Files {
@@ -62,16 +63,53 @@ pub fn read(files: &impl Files, argv: &[&str], now: jiff::Timestamp) -> Reply {
     if !args.flag("json") {
         return Reply::Unknown;
     }
-    let words: Vec<&str> = args.words.clone();
     let view = View {
         files,
         registry: Registry::load(files),
     };
-    let served = match words.as_slice() {
+    let served = match args.words.as_slice() {
         ["projects"] => args.only(&[]).then(|| view.projects()),
         ["questions"] => args
             .only(&["pending", "all-projects", "for", "project"])
             .then(|| view.questions(&args)),
+        ["brief"] => args.only(&["project"]).then(|| view.latest(&args, "brief")),
+        ["handoff"] => args
+            .only(&["project"])
+            .then(|| view.latest(&args, "handoff")),
+        ["roadmap"] => args
+            .only(&["project"])
+            .then(|| view.singleton(&args, "roadmap.md", true)),
+        ["plan"] if args.flag("list") => args
+            .only(&["list", "project"])
+            .then(|| view.listing(&args, "plans", "plans")),
+        ["plan"] => args
+            .only(&["project"])
+            .then(|| view.singleton(&args, "plan.md", false)),
+        ["plan", slug] => args
+            .only(&["project"])
+            .then(|| view.slug_file(&args, "plans", slug)),
+        ["wiki"] if args.flag("sections") => Some(Reply::Absent),
+        ["wiki"] => args
+            .only(&["project"])
+            .then(|| view.listing(&args, "wiki", "pages")),
+        ["wiki", slug] if slug.contains('#') => None,
+        ["wiki", slug] if args.flag("sections") => args
+            .only(&["sections", "project"])
+            .then(|| view.sections(&args, slug)),
+        ["wiki", slug] => args
+            .only(&["project"])
+            .then(|| view.slug_file(&args, "wiki", slug)),
+        ["log"] => args
+            .only(&["kind", "limit", "project"])
+            .then(|| view.log(&args, false)),
+        ["search"] if args.flag("kind") => args
+            .only(&["kind", "limit", "project"])
+            .then(|| view.log(&args, true)),
+        ["evidence", "list"] => args.only(&["project"]).then(|| view.evidence(&args)),
+        ["finding", "list"] => args
+            .only(&["open", "project"])
+            .then(|| view.findings(&args)),
+        ["show", id] => args.only(&[]).then(|| view.show(id)),
         _ => None,
     };
     let _ = now;
@@ -134,7 +172,9 @@ impl<'a> Args<'a> {
 struct Project {
     id: String,
     name: String,
+    remote: Option<String>,
     aliases: Vec<String>,
+    created: jiff::Timestamp,
     toml: toml::Table,
 }
 
@@ -161,7 +201,7 @@ impl Registry {
                     toml::from_str(&files.read(&format!("projects/{id}/project.toml"))?).ok()?;
                 let text = |key: &str| toml.get(key)?.as_str().map(str::to_string);
                 // id, name and created are the keys mem cannot load one without.
-                text("created")?.parse::<jiff::Timestamp>().ok()?;
+                let created = text("created")?.parse::<jiff::Timestamp>().ok()?;
                 let aliases = match toml.get("aliases") {
                     None => Vec::new(),
                     Some(value) => value
@@ -173,7 +213,9 @@ impl Registry {
                 Some(Project {
                     id: text("id")?,
                     name: text("name")?,
+                    remote: text("remote"),
                     aliases,
+                    created,
                     toml,
                 })
             })
@@ -196,10 +238,6 @@ impl Registry {
             _ => None,
         }
     }
-
-    fn by_id(&self, id: &str) -> Option<&Project> {
-        self.projects.iter().find(|p| p.id == id)
-    }
 }
 
 struct View<'f, F: Files> {
@@ -217,9 +255,340 @@ impl<F: Files> View<'_, F> {
         )
     }
 
+    /// The project `--project` names: Err(Unknown) without one, since mem
+    /// would read the working directory, and Err(Absent) for a name mem does
+    /// not know.
+    fn project(&self, args: &Args) -> Result<&Project, Reply> {
+        let name = args.value("project").ok_or(Reply::Unknown)?;
+        self.registry.by_name(name).ok_or(Reply::Absent)
+    }
+
+    /// `mem projects`: each project's record and what its page shows of it.
+    /// The keys mem takes from this machine's paths.toml and working
+    /// directory are empty.
     fn projects(&self) -> Reply {
-        let _ = &self.registry;
-        Reply::Unknown
+        let rows: Vec<Value> = self
+            .registry
+            .projects
+            .iter()
+            .map(|p| {
+                let mut row = json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "remote": p.remote,
+                    "aliases": [],
+                    "created": p.created.to_string(),
+                    "current": false,
+                    "checkouts": [],
+                    "worktree": null,
+                });
+                for (key, value) in self.summary(p) {
+                    row[key] = value;
+                }
+                row
+            })
+            .collect();
+        Reply::Json(json!({ "projects": rows }))
+    }
+
+    /// mem's `project_summary`, from project.toml, the roadmap, the plan,
+    /// the wiki and the items.
+    fn summary(&self, p: &Project) -> Vec<(&'static str, Value)> {
+        let read = |name: &str| {
+            self.files
+                .read(&format!("projects/{}/{name}", p.id))
+                .unwrap_or_default()
+        };
+        let roadmap_text = read("roadmap.md");
+        let roadmap = checkboxes(&roadmap_text, false);
+        let plan_text = read("plan.md");
+        let plan = checkboxes(&plan_text, true);
+        let plan_slug = plan_text
+            .lines()
+            .next()
+            .and_then(|first| header_slug(first, "plan"));
+        let mut rows = self.rows(p, &[]);
+        let count = rows.len();
+        rows.retain(|r| r.active);
+        newest_first(&mut rows);
+        let stamp = |row: Option<&Row>| {
+            row.and_then(|r| jiff::Timestamp::from_second(r.meta().modified).ok())
+                .map(|ts| ts.to_string())
+        };
+        let last_activity = stamp(rows.first());
+        let handoff_at = stamp(rows.iter().find(|r| r.meta().kind == "handoff"));
+        let pages = self.pages(p, "wiki");
+        let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
+        let runner = match p
+            .declared("runner")
+            .as_deref()
+            .and_then(|r| r.split_once(' '))
+        {
+            Some((machine, run)) => json!({
+                "machine": machine,
+                "id": run,
+                "since": p.declared("runner_since"),
+                "milestone": p.declared("runner_milestone"),
+            }),
+            None => Value::Null,
+        };
+        vec![
+            ("items", json!(count)),
+            ("roadmap_status", json!(p.declared("roadmap_status"))),
+            ("paused", json!(p.declared("paused"))),
+            ("runner", runner),
+            (
+                "milestone",
+                json!(roadmap.iter().find(|(_, done)| !done).map(|(slug, _)| slug)),
+            ),
+            (
+                "milestones_done",
+                json!(roadmap.iter().filter(|(_, done)| *done).count()),
+            ),
+            ("milestones_total", json!(roadmap.len())),
+            ("plan_slug", json!(plan_slug)),
+            (
+                "plan_ticked",
+                json!(plan.iter().filter(|(_, done)| *done).count()),
+            ),
+            ("plan_total", json!(plan.len())),
+            ("last_activity", json!(last_activity)),
+            ("handoff_at", json!(handoff_at)),
+            (
+                "has_research",
+                json!(has_page(|s| s.starts_with("research"))),
+            ),
+            (
+                "has_research_summary",
+                json!(has_page(|s| s == "research-summary")),
+            ),
+            ("has_spec", json!(has_page(|s| s == "spec"))),
+        ]
+    }
+
+    /// The `<slug>.md` files of a project's `wiki` or `plans` directory, in
+    /// slug order; anything else there is skipped, as mem skips it.
+    fn pages(&self, p: &Project, dir: &str) -> Vec<Page> {
+        let prefix = format!("projects/{}/{dir}/", p.id);
+        self.files
+            .list(&prefix)
+            .into_iter()
+            .filter_map(|(path, text)| {
+                let slug = path.strip_prefix(&prefix)?.strip_suffix(".md")?;
+                is_valid_slug(slug).then(|| Page {
+                    slug: slug.to_string(),
+                    path: path.clone(),
+                    text,
+                })
+            })
+            .collect()
+    }
+
+    /// `mem brief` and `mem handoff`: the newest active item of the kind,
+    /// body and all.
+    fn latest(&self, args: &Args, kind: &str) -> Reply {
+        let rows = match self.records(args, kind) {
+            Ok(rows) => rows,
+            Err(reply) => return reply,
+        };
+        let Some(row) = rows.first() else {
+            return Reply::Absent;
+        };
+        let mut v = row_json(row);
+        v["body"] = json!(row.item.body);
+        Reply::Json(v)
+    }
+
+    /// `mem roadmap` and `mem plan`: the file whole, and the roadmap's
+    /// status when project.toml declares one.
+    fn singleton(&self, args: &Args, name: &str, with_status: bool) -> Reply {
+        let p = match self.project(args) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        let path = format!("projects/{}/{name}", p.id);
+        let Some(text) = self.files.read(&path) else {
+            return Reply::Absent;
+        };
+        let mut out = json!({ "text": text, "path": path });
+        if let Some(status) = p.declared("roadmap_status").filter(|_| with_status) {
+            out["status"] = json!(status);
+        }
+        Reply::Json(out)
+    }
+
+    /// `mem wiki` and `mem plan --list`: one row per page. The date is null:
+    /// mem takes it from the file's mtime, which the store does not keep.
+    fn listing(&self, args: &Args, dir: &str, key: &str) -> Reply {
+        let p = match self.project(args) {
+            Ok(p) => p,
+            Err(reply) => return reply,
+        };
+        let rows: Vec<Value> = self
+            .pages(p, dir)
+            .iter()
+            .map(|page| {
+                json!({
+                    "slug": page.slug,
+                    "title": page_title(&page.text),
+                    "bytes": page.text.len(),
+                    "modified": null,
+                    "path": page.path,
+                })
+            })
+            .collect();
+        Reply::Json(json!({ key: rows }))
+    }
+
+    /// `mem wiki -- <slug>` and `mem plan -- <slug>`: one page whole.
+    fn slug_file(&self, args: &Args, dir: &str, slug: &str) -> Reply {
+        let path = match self.page_path(args, dir, slug) {
+            Ok(path) => path,
+            Err(reply) => return reply,
+        };
+        match self.files.read(&path) {
+            Some(text) => Reply::Json(json!({
+                "slug": slug,
+                "text": text,
+                "bytes": text.len(),
+                "path": path,
+            })),
+            None => Reply::Absent,
+        }
+    }
+
+    /// The project and store path of one page; a slug mem refuses is its
+    /// usage error, with nothing on stdout.
+    fn page_path(&self, args: &Args, dir: &str, slug: &str) -> Result<String, Reply> {
+        if !is_valid_slug(slug) {
+            return Err(Reply::Absent);
+        }
+        let p = self.project(args)?;
+        Ok(format!("projects/{}/{dir}/{slug}.md", p.id))
+    }
+
+    /// `mem wiki --sections -- <slug>`: the page's `## ` sections.
+    fn sections(&self, args: &Args, slug: &str) -> Reply {
+        let path = match self.page_path(args, "wiki", slug) {
+            Ok(path) => path,
+            Err(reply) => return reply,
+        };
+        let Some(text) = self.files.read(&path) else {
+            return Reply::Absent;
+        };
+        let rows: Vec<Value> = sections::split(&text)
+            .iter()
+            .map(|s| json!({ "hslug": s.hslug, "heading": s.heading, "bytes": s.end - s.start }))
+            .collect();
+        Reply::Json(json!({ "sections": rows }))
+    }
+
+    /// `mem log` and `mem search --kind <kind>` with no query: the newest
+    /// active items of one kind, `log` by default. The search form carries
+    /// each body.
+    fn log(&self, args: &Args, bodies: bool) -> Reply {
+        let limit = match args.value("limit").map(str::parse::<usize>) {
+            None => 20,
+            Some(Ok(n)) => n.max(1),
+            Some(Err(_)) => return Reply::Absent,
+        };
+        let mut rows = match self.records(args, args.value("kind").unwrap_or("log")) {
+            Ok(rows) => rows,
+            Err(reply) => return reply,
+        };
+        rows.truncate(limit);
+        let items: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                let mut v = row_json(row);
+                if bodies {
+                    v["body"] = json!(row.item.body);
+                }
+                v
+            })
+            .collect();
+        Reply::Json(json!({ "items": items }))
+    }
+
+    /// The active items of one kind in the project `--project` names,
+    /// newest first.
+    fn records(&self, args: &Args, kind: &str) -> Result<Vec<Row>, Reply> {
+        let p = self.project(args)?;
+        let mut rows = self.rows(p, &[kind]);
+        rows.retain(|r| r.active);
+        newest_first(&mut rows);
+        Ok(rows)
+    }
+
+    /// `mem evidence list`.
+    fn evidence(&self, args: &Args) -> Reply {
+        let rows = match self.records(args, "evidence") {
+            Ok(rows) => rows,
+            Err(reply) => return reply,
+        };
+        let items: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                let mut v = row_json(row);
+                v["file"] = json!(row.meta().file);
+                v["note"] = json!(row.item.body.trim());
+                v
+            })
+            .collect();
+        Reply::Json(json!({ "items": items }))
+    }
+
+    /// `mem finding list`, `--open` keeping only the open ones.
+    fn findings(&self, args: &Args) -> Reply {
+        let mut rows = match self.records(args, "finding") {
+            Ok(rows) => rows,
+            Err(reply) => return reply,
+        };
+        if args.flag("open") {
+            rows.retain(|r| r.meta().status.as_deref() == Some("open"));
+        }
+        let items: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                let m = row.meta();
+                let mut v = row_json(row);
+                v["milestone"] = json!(m.milestone);
+                v["step"] = json!(m.step);
+                v["status"] = json!(m.status);
+                v["fixed_by"] = json!(m.fixed_by);
+                v["file"] = json!(m.file);
+                v["body"] = json!(row.item.body);
+                v
+            })
+            .collect();
+        Reply::Json(json!({ "items": items }))
+    }
+
+    /// `mem show -- <id>`: a full ULID or its last 8 characters, matched
+    /// against every project's items. No match, or a short id two items
+    /// share, is mem's exit 1 or 3 with nothing on stdout.
+    fn show(&self, raw: &str) -> Reply {
+        let wanted = raw.trim().trim_start_matches('#').to_ascii_uppercase();
+        let full = item::is_ulid(&wanted);
+        if !full && !(wanted.len() == 8 && wanted.chars().all(item::is_ulid_char)) {
+            return Reply::Absent;
+        }
+        let mut found: Vec<Row> = Vec::new();
+        for p in &self.registry.projects {
+            found.extend(self.rows(p, &[]).into_iter().filter(|r| {
+                if full {
+                    r.meta().id == wanted
+                } else {
+                    r.short_id() == wanted
+                }
+            }));
+        }
+        let [row] = found.as_slice() else {
+            return Reply::Absent;
+        };
+        let mut v = row_json(row);
+        v["body"] = json!(row.item.body);
+        Reply::Json(json!({ "items": [v] }))
     }
 
     /// `mem questions`: with `--all-projects` every project's pending
@@ -305,6 +674,80 @@ fn question_json(question: &Row, rows: &[Row]) -> Value {
     v["session"] = json!(m.session);
     v["recommend"] = json!(m.recommend);
     v
+}
+
+/// A page or a stored plan.
+struct Page {
+    slug: String,
+    path: String,
+    text: String,
+}
+
+/// `[a-z0-9][a-z0-9-]{0,63}`, mem's rule for a page or plan slug.
+fn is_valid_slug(slug: &str) -> bool {
+    let mut chars = slug.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let plain = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    slug.len() <= 64 && plain(first) && chars.all(|c| plain(c) || c == '-')
+}
+
+/// What a listing calls a page: its first heading, or its first non-empty
+/// line when it has none, cut at 100 bytes.
+fn page_title(text: &str) -> String {
+    let Some(line) = text.lines().map(str::trim).find(|l| !l.is_empty()) else {
+        return String::new();
+    };
+    let stripped = line.trim_start_matches('#');
+    let title = if stripped.len() < line.len() {
+        stripped.trim_start()
+    } else {
+        line
+    };
+    truncate_bytes(title, 100)
+}
+
+/// mem's `truncate_bytes`: newlines flattened, then cut on a character
+/// boundary with an ellipsis when anything is cut.
+fn truncate_bytes(text: &str, budget: usize) -> String {
+    let flat = text.replace(['\n', '\r'], " ");
+    if flat.len() <= budget {
+        return flat;
+    }
+    let ellipsis = '…'.len_utf8();
+    if budget <= ellipsis {
+        return String::new();
+    }
+    let mut end = budget - ellipsis;
+    while end > 0 && !flat.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &flat[..end])
+}
+
+/// The `- [ ] <id>` and `- [x] <id>` lines of a plan or a roadmap, as the
+/// id and whether it is ticked. A plan's tasks may sit indented; a
+/// roadmap's milestones start at the margin.
+fn checkboxes(text: &str, indented: bool) -> Vec<(&str, bool)> {
+    text.lines()
+        .filter_map(|l| {
+            let l = if indented { l.trim_start() } else { l };
+            let (rest, done) = if let Some(rest) = l.strip_prefix("- [ ] ") {
+                (rest, false)
+            } else {
+                (l.strip_prefix("- [x] ").or(l.strip_prefix("- [X] "))?, true)
+            };
+            Some((rest.split_whitespace().next()?, done))
+        })
+        .collect()
+}
+
+/// The slug of a `# <noun>: <slug>` header line.
+fn header_slug<'a>(line: &'a str, noun: &str) -> Option<&'a str> {
+    let rest = line.trim_start().strip_prefix('#')?.trim_start();
+    let slug = rest.strip_prefix(noun)?.strip_prefix(':')?.trim();
+    (!slug.is_empty()).then_some(slug)
 }
 
 #[cfg(test)]
