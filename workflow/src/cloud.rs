@@ -610,6 +610,8 @@ mod tests {
     fn a_landed_run_logs_out_of_the_tailnet_last() {
         assert!(PROMPT.contains("tailscaled.sock\" logout"), "{PROMPT}");
         assert!(PROMPT.contains("not when parked"), "{PROMPT}");
+        // A local-only park still takes messages, as the m6 walk showed.
+        assert!(PROMPT.contains("a local-only park included"), "{PROMPT}");
     }
 
     /// No end signal reaches a cloud session, so its unsent writes go on
