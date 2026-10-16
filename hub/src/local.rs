@@ -598,6 +598,32 @@ impl Local {
         }
     }
 
+    /// Every `HUB_SWEEP_MS` (30 s), closes each question asked here that
+    /// the store already holds an answer for: one written straight to it,
+    /// or one from the hub web, which never passed this hub.
+    pub fn sweep(&self) -> ! {
+        let every = std::env::var("HUB_SWEEP_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map_or(Duration::from_secs(30), Duration::from_millis);
+        loop {
+            std::thread::sleep(every);
+            if !self.records {
+                continue;
+            }
+            for open in self.known.asked_by(&self.host) {
+                let Some(standing) = answered_in_store(open.project.as_deref(), &open.id) else {
+                    continue;
+                };
+                let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+                answers.entry(open.id.clone()).or_insert(standing);
+                self.answered.notify_all();
+                drop(answers);
+                self.closed(&open.id);
+            }
+        }
+    }
+
     /// The answer to `question`, waiting up to `hold` for it.
     fn wait(&self, question: &str, hold: Duration) -> Option<String> {
         let deadline = Instant::now() + hold;

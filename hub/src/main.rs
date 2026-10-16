@@ -251,6 +251,13 @@ fn run_local(port: u16) -> Result<()> {
             .spawn(move || local.learn_from_peers())
             .context("starting the question catch-up")?;
     }
+    {
+        let local = Arc::clone(&local);
+        std::thread::Builder::new()
+            .name("hub-sweep".to_string())
+            .spawn(move || local.sweep())
+            .context("starting the answered-question sweep")?;
+    }
     let notice = slack.clone();
     if let Some(slack) = slack {
         let local = Arc::clone(&local);

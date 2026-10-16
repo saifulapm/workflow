@@ -541,3 +541,63 @@ fn a_write_to_the_store_ends_a_wait_early() {
     assert_eq!(status_of(&response), 204, "{response}");
     assert!(took < Duration::from_secs(2), "{took:?}");
 }
+
+/// An answer that reached the asking machine's store without passing this
+/// hub (written straight, or from the hub web) still closes the question
+/// everywhere, so no bar counts it for ever.
+#[test]
+fn a_question_answered_in_the_store_is_closed_on_every_hub() {
+    let dir = TempDir::new("answer-swept");
+    let flag = dir.join("answered");
+    let bin = dir.join("nuc-bin");
+    common::fixture_mem(
+        &bin,
+        &format!(
+            "case \"$*\" in *questions*) if [ -e '{flag}' ]; then \
+             echo '{{\"questions\":[{{\"short_id\":\"ABCD1234\",\"answered\":true,\"answer\":\"yes\"}}]}}'; \
+             else echo '{{\"questions\":[]}}'; fi;; esac",
+            flag = flag.display()
+        ),
+    );
+    let mini = spawn(&dir, "mini", &[], None);
+    let _nuc = spawn_swept(&dir, "nuc", &[&mini], &bin);
+    ask(&socket_of(&dir, "nuc"), PROBE);
+    common::wait_for("the mini hears it", Duration::from_secs(2), || {
+        listed(&dir, "mini").len() == 1
+    });
+    std::fs::write(&flag, "").unwrap();
+    common::wait_for("the mini drops it", Duration::from_secs(2), || {
+        listed(&dir, "mini").is_empty()
+    });
+    assert!(listed(&dir, "nuc").is_empty());
+    let (response, _) = wait_on(&socket_of(&dir, "nuc"), "ABCD1234", 1);
+    assert_eq!(common::body_of(&response), "yes");
+}
+
+/// `spawn`, sweeping its own open questions every 200 ms.
+fn spawn_swept(dir: &TempDir, machine: &str, peers: &[&Hub], bin: &Path) -> Hub {
+    let home = dir.join(machine);
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::create_dir_all(home.join("run")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), format!("{machine}\n")).unwrap();
+    let socket = home.join("local.sock");
+    let runtime = home.join("run");
+    let peers = peers
+        .iter()
+        .map(|p| format!("127.0.0.1:{}", p.port))
+        .collect::<Vec<_>>()
+        .join(",");
+    Hub::spawn_env(
+        &home,
+        &[bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("HUB_HOST", "127.0.0.1"),
+            ("HUB_PEERS", &peers),
+            ("XDG_RUNTIME_DIR", runtime.to_str().unwrap()),
+            ("HUB_SWEEP_MS", "200"),
+        ],
+    )
+}

@@ -80,6 +80,15 @@ impl Known {
         self.lock().iter().find(|o| o.id == id).cloned()
     }
 
+    /// The open questions `host` asked.
+    pub fn asked_by(&self, host: &str) -> Vec<Open> {
+        self.lock()
+            .iter()
+            .filter(|o| o.machine == host)
+            .cloned()
+            .collect()
+    }
+
     /// Adds `open`, or replaces the copy of it this hub had. A copy that
     /// does not say where it rings keeps what this hub already knew, so the
     /// first news of a question, arriving late, cannot undo the ring.
