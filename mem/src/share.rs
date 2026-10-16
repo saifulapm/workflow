@@ -176,7 +176,8 @@ fn open(db: &Path) -> Result<Connection> {
          CREATE TABLE IF NOT EXISTS skipped(path TEXT PRIMARY KEY, id TEXT NOT NULL, seq INTEGER NOT NULL, body TEXT);
          CREATE TABLE IF NOT EXISTS files(n INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE);
          CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-         CREATE TABLE IF NOT EXISTS imported(id TEXT PRIMARY KEY);",
+         CREATE TABLE IF NOT EXISTS imported(id TEXT PRIMARY KEY);
+         CREATE TABLE IF NOT EXISTS seeded_files(path TEXT PRIMARY KEY);",
     )?;
     Ok(conn)
 }
@@ -489,6 +490,153 @@ fn land(file: &Path, body: Option<&str>) -> Result<()> {
             }
             _ => Ok(()),
         },
+    }
+}
+
+/// How long an evidence or raw file stays in the store; an older one lives
+/// in the weekly snapshot alone.
+pub const FILE_DAYS: u64 = 90;
+
+/// The import's plan against the store's replay (its `rec` messages, in any
+/// order): an import write for every text file here that the store lacks or
+/// holds otherwise, based on the store's head of the path; a removal for each
+/// path the store holds in a project here that this store no longer holds;
+/// then each evidence or raw file younger than `FILE_DAYS` that no import
+/// has uploaded yet. Text first, so the files come once the text is in.
+/// Neither the outbox nor the heads change: this machine shares nothing yet.
+pub fn seed(db: &Path, root: &Path, replay: impl IntoIterator<Item = Value>) -> Result<Vec<Value>> {
+    let mut newest: std::collections::HashMap<String, (u64, String, Option<String>)> =
+        std::collections::HashMap::new();
+    for message in replay {
+        let (Some("rec"), Some(path), Some(id), Some(seq)) = (
+            message["t"].as_str(),
+            message["path"].as_str(),
+            message["id"].as_str(),
+            message["seq"].as_u64(),
+        ) else {
+            continue;
+        };
+        if newest.get(path).is_none_or(|(kept, _, _)| *kept < seq) {
+            let body = message["body"].as_str().map(str::to_string);
+            newest.insert(path.to_string(), (seq, id.to_string(), body));
+        }
+    }
+    let write = |path: &str, base: Option<&str>, body: Option<&str>| {
+        json!({"t": "write", "id": Ulid::generate().to_string(), "path": path,
+               "base": base, "body": body, "import": true})
+    };
+    let mut texts = Vec::new();
+    collect(root, &root.join("global/items"), false, &mut texts)?;
+    let mut projects = Vec::new();
+    collect(root, &root.join("projects"), true, &mut projects)?;
+    let (bytes, text): (Vec<String>, Vec<String>) =
+        projects.into_iter().partition(|rel| is_file_rel(rel));
+    texts.extend(text);
+    let mut plan = Vec::new();
+    let mut here = std::collections::HashSet::new();
+    for rel in &texts {
+        here.insert(rel.as_str());
+        let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+            eprintln!("mem: share seed: {rel} is not text; passing over it");
+            continue;
+        };
+        match newest.get(rel) {
+            Some((_, _, Some(theirs))) if *theirs == body => {}
+            Some((_, head, _)) => plan.push(write(rel, Some(head), Some(&body))),
+            None => plan.push(write(rel, None, Some(&body))),
+        }
+    }
+    let mut gone: Vec<(&String, &String)> = newest
+        .iter()
+        .filter(|(rel, (_, _, body))| {
+            body.is_some()
+                && !here.contains(rel.as_str())
+                && !is_file_rel(rel)
+                && project_dir(root, rel).is_some_and(|dir| dir.is_dir())
+        })
+        .map(|(rel, (_, head, _))| (rel, head))
+        .collect();
+    gone.sort();
+    for (rel, head) in gone {
+        plan.push(write(rel, Some(head), None));
+    }
+    let conn = open(db)?;
+    let young = std::time::SystemTime::now() - std::time::Duration::from_secs(FILE_DAYS * 86_400);
+    let mut files = Vec::new();
+    for rel in bytes {
+        let file = root.join(&rel);
+        let fresh = std::fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .is_ok_and(|at| at > young);
+        let uploaded = conn
+            .query_row("SELECT 1 FROM seeded_files WHERE path = ?1", [&rel], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_some();
+        if fresh && !uploaded {
+            files.push(json!({"t": "file", "path": rel, "local": file.to_string_lossy()}));
+        }
+    }
+    plan.extend(files);
+    Ok(plan)
+}
+
+/// Notes files the import uploaded, so the next run passes over them.
+pub fn seeded(db: &Path, paths: impl IntoIterator<Item = String>) -> Result<()> {
+    let conn = open(db)?;
+    for path in paths {
+        conn.execute(
+            "INSERT OR IGNORE INTO seeded_files(path) VALUES (?1)",
+            [path],
+        )?;
+    }
+    Ok(())
+}
+
+/// Every file under `dir`, as a path relative to `root`, sorted; with
+/// `deep`, in its subdirectories too. Dot names and conflict copies are not
+/// mem's and are left out.
+fn collect(root: &Path, dir: &Path, deep: bool, out: &mut Vec<String>) -> Result<()> {
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries.collect::<std::io::Result<_>>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
+    };
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with('.') || crate::store::is_conflict_name(name) {
+            continue;
+        }
+        let path = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_dir() && deep {
+            collect(root, &path, deep, out)?;
+        } else if kind.is_file()
+            && let Ok(rel) = path.strip_prefix(root)
+            && let Some(rel) = rel.to_str()
+        {
+            out.push(rel.to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Whether `rel` is a project's evidence or raw file, shared as bytes.
+fn is_file_rel(rel: &str) -> bool {
+    matches!(
+        rel.split('/').collect::<Vec<_>>().as_slice(),
+        ["projects", _, "evidence" | "raw", _, ..]
+    )
+}
+
+/// The project folder `rel` belongs to, None outside the projects.
+fn project_dir(root: &Path, rel: &str) -> Option<PathBuf> {
+    match rel.split('/').collect::<Vec<_>>().as_slice() {
+        ["projects", project, _, ..] => Some(root.join("projects").join(project)),
+        _ => None,
     }
 }
 

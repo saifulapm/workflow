@@ -39,6 +39,7 @@ pub mod proc;
 pub mod proxy;
 pub mod route;
 pub mod runs;
+pub mod seed;
 pub mod share;
 pub mod slack;
 pub mod stalls;

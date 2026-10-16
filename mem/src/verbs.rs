@@ -2555,6 +2555,26 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
             let noun = if saved == 1 { "write" } else { "writes" };
             println!("saved {saved} {noun} to {}", crate::share::OUTBOX_FILE);
         }
+        ShareCommand::Seed => {
+            let mut replay = Vec::new();
+            for line in std::io::stdin().lines() {
+                let line = anyhow::Context::context(line, "reading stdin")?;
+                if let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) {
+                    replay.push(message);
+                }
+            }
+            for message in crate::share::seed(&db, &app.store.root, replay)? {
+                println!("{message}");
+            }
+        }
+        ShareCommand::Seeded => {
+            let paths = std::io::stdin()
+                .lines()
+                .map_while(std::result::Result::ok)
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty());
+            crate::share::seeded(&db, paths)?;
+        }
         ShareCommand::Switch => {
             crate::share::switch(&db)?;
             println!("switched: every project and the global items share from now on");

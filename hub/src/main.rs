@@ -25,6 +25,7 @@ Usage: hub [OPTIONS]
        hub local [--port <PORT>]
        hub ping <HOST[:PORT]>
        hub share sync
+       hub share seed
 
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
@@ -44,6 +45,12 @@ Commands:
   share sync    Bring this machine's replica up to the store (HUB_STORE_URL
                 and HUB_STORE_TOKEN) once, landing every shared project, and
                 end; it fails when the store cannot be reached
+  share seed    Import into the store every item, page and file under 90
+                days this machine's store holds and the store does not, as
+                far as the store's import budget for the day allows; exits 0
+                once the store holds them all, 3 when the day's budget is
+                spent (run it again after 06:00 Dhaka), 1 when anything else
+                stopped it
 
 Options:
       --config <PATH>  Config file (default $XDG_CONFIG_HOME/hub/config.toml)
@@ -62,6 +69,8 @@ struct Args {
     ping: Option<String>,
     /// `share sync`: fill the replica from the store once.
     sync: bool,
+    /// `share seed`: the import into the store.
+    seed: bool,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
@@ -74,6 +83,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
         local: false,
         ping: None,
         sync: false,
+        seed: false,
         config: None,
         port: None,
     };
@@ -86,7 +96,8 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "local" => args.local = true,
             "share" => match argv.next().as_deref() {
                 Some("sync") => args.sync = true,
-                _ => anyhow::bail!("share takes sync\n\n{USAGE}"),
+                Some("seed") => args.seed = true,
+                _ => anyhow::bail!("share takes sync or seed\n\n{USAGE}"),
             },
             "ping" => match argv.next().context("ping needs a host")? {
                 help if help == "-h" || help == "--help" => {
@@ -141,6 +152,13 @@ fn run() -> Result<()> {
         let applied = hub::share::sync(&store)?;
         eprintln!("hub: share sync: the replica is up to the store ({applied} messages)");
         return Ok(());
+    }
+    if args.seed {
+        let store = hub::share::from_env()
+            .context("hub share seed needs HUB_STORE_URL and HUB_STORE_TOKEN")?;
+        let seeded = hub::seed::run(&store)?;
+        println!("{}", seeded.summary());
+        std::process::exit(seeded.code());
     }
     if args.local {
         return run_local(args.port.unwrap_or(local::PORT));

@@ -307,6 +307,12 @@ pub enum ShareCommand {
     /// Save the writes still waiting into `.mem-outbox.json` at the top of
     /// this git checkout and stage it, for the next machine to import.
     Export,
+    /// Print the import's plan, one JSON per line, against the store's
+    /// replay on stdin: a write for each text file the store lacks or holds
+    /// otherwise, then each evidence or raw file younger than 90 days.
+    Seed,
+    /// Note the files the import uploaded, one store path per line on stdin.
+    Seeded,
     /// Switch this machine to the store: every project and the global items
     /// share from now on, and the hub's next hello replays every write.
     Switch,

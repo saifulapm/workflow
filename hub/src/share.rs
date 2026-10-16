@@ -53,7 +53,7 @@ fn ping_every() -> Duration {
 }
 /// Two pings and more without a pong: the peer is gone, though the kernel has
 /// not said so yet (a laptop that slept, a dropped NAT entry).
-const QUIET: Duration = Duration::from_secs(75);
+pub(crate) const QUIET: Duration = Duration::from_secs(75);
 /// Frames are handed to `mem share apply` once the socket goes quiet, or once
 /// they have waited this long.
 const APPLY_WITHIN: Duration = Duration::from_millis(300);
@@ -70,7 +70,7 @@ pub fn next_reset(now: jiff::Timestamp) -> jiff::Timestamp {
 /// the same line.
 const LIMIT_NOTICE: &str = "Cloudflare limit reached, resets 06:00";
 
-type Socket = crate::proxy::Socket;
+pub(crate) type Socket = crate::proxy::Socket;
 
 /// The store could not be reached at all: no answer, no route, or a proxy
 /// that would not open the way.
@@ -98,6 +98,9 @@ const MAX_FILE: u64 = 100 * 1000 * 1000;
 pub struct Store {
     url: String,
     token: String,
+    /// The store object to reach, `main` for the real store; unset, the
+    /// Worker picks it by host.
+    name: Option<String>,
     access: Option<(String, String)>,
     /// The cloud VM's HTTP proxy, which the socket tunnels through.
     proxy: Option<String>,
@@ -127,6 +130,7 @@ pub fn from_env() -> Option<Store> {
     Some(Store {
         url: read("HUB_STORE_URL")?,
         token: read("HUB_STORE_TOKEN")?,
+        name: read("HUB_STORE_NAME"),
         access,
         proxy: crate::proxy::from_env(),
         agent,
@@ -137,6 +141,9 @@ impl Store {
     /// What every store request carries, the socket's handshake included.
     fn headers(&self) -> Vec<(&'static str, String)> {
         let mut headers = vec![("Authorization", format!("Bearer {}", self.token))];
+        if let Some(name) = &self.name {
+            headers.push(("X-Hub-Store", name.clone()));
+        }
         if let Some((id, secret)) = &self.access {
             headers.push(("CF-Access-Client-Id", id.clone()));
             headers.push(("CF-Access-Client-Secret", secret.clone()));
@@ -202,7 +209,7 @@ impl Store {
     }
 
     /// Stores the bytes at `local` as `path`.
-    fn put_file(&self, path: &str, local: &str) -> Result<()> {
+    pub(crate) fn put_file(&self, path: &str, local: &str) -> Result<()> {
         let bytes = std::fs::read(local).with_context(|| format!("reading {local}"))?;
         let mut request = self.agent.put(self.file_url(path)?);
         for (name, value) in self.headers() {
@@ -354,7 +361,7 @@ pub fn run(store: Store, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! 
 
 /// The socket to the store, its handshake carrying the bearer and the
 /// Access service token.
-fn connect(store: &Store) -> Result<Socket> {
+pub(crate) fn connect(store: &Store) -> Result<Socket> {
     let url = store.url.as_str();
     let mut request = url.into_client_request().context("reading HUB_STORE_URL")?;
     for (name, value) in store.headers() {
@@ -709,7 +716,7 @@ fn route_message(route: &Stamped) -> String {
     message.to_string()
 }
 
-fn kind(frame: &str) -> String {
+pub(crate) fn kind(frame: &str) -> String {
     serde_json::from_str::<Value>(frame)
         .ok()
         .and_then(|v| v["t"].as_str().map(str::to_string))
@@ -717,7 +724,7 @@ fn kind(frame: &str) -> String {
 }
 
 /// Runs `mem <args>` and returns its stdout, or why it failed.
-fn mem(args: &[&str], input: Option<&[u8]>) -> Result<String> {
+pub(crate) fn mem(args: &[&str], input: Option<&[u8]>) -> Result<String> {
     let mut command = Command::new("mem");
     command.args(args);
     match proc::output_fed(&mut command, input, crate::memcli::mem_timeout()) {
@@ -734,7 +741,7 @@ fn mem(args: &[&str], input: Option<&[u8]>) -> Result<String> {
     }
 }
 
-fn read_timeout(socket: &mut Socket, timeout: Duration) -> std::io::Result<()> {
+pub(crate) fn read_timeout(socket: &mut Socket, timeout: Duration) -> std::io::Result<()> {
     match socket.get_mut() {
         MaybeTlsStream::Plain(stream) => stream.set_read_timeout(Some(timeout)),
         MaybeTlsStream::Rustls(stream) => stream.get_mut().set_read_timeout(Some(timeout)),

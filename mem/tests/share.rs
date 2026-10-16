@@ -842,3 +842,149 @@ fn switching_asks_the_store_for_every_write_again() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(hello(&w)["since"], 0);
 }
+
+/// The import's plan: what `mem share seed` prints for the store's replay
+/// fed on stdin, one JSON per line.
+fn seed(w: &World, store: &[Value]) -> Vec<Value> {
+    let input: String = store.iter().map(|m| format!("{m}\n")).collect();
+    let out = mem_in(w, &["share", "seed"], &input);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    stdout(&out)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON per line"))
+        .collect()
+}
+
+fn put(w: &World, rel: &str, body: &str) {
+    let file = w.dirs().store().join(rel);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, body).unwrap();
+}
+
+fn rec(seq: u64, id: &str, path: &str, body: Value) -> Value {
+    json!({"t": "rec", "seq": seq, "id": id, "path": path, "body": body, "machine": "nuc"})
+}
+
+fn by_path<'a>(plan: &'a [Value], path: &str) -> Option<&'a Value> {
+    plan.iter().find(|m| m["path"] == path)
+}
+
+#[test]
+fn the_import_sends_what_the_store_lacks_or_holds_otherwise() {
+    let w = World::new("seed-plan");
+    w.project(ID, "walk");
+    let same = format!("projects/{ID}/items/01K0SEEDSAME0000000000000A.md");
+    let page = format!("projects/{ID}/wiki/lessons.md");
+    let rule = "global/items/01K0SEEDRULE0000000000000A.md";
+    put(&w, &same, "same body");
+    put(&w, &page, "newer lessons");
+    put(&w, rule, "a rule");
+    let plan = seed(
+        &w,
+        &[
+            rec(1, "01K0SEEDREC00000000000000A", &same, json!("same body")),
+            rec(2, "01K0SEEDREC00000000000000B", &page, json!("old lessons")),
+            rec(3, "01K0SEEDREC00000000000000C", &page, json!("lessons v2")),
+            json!({"t": "ready", "seq": 3, "rows": 0}),
+        ],
+    );
+    assert!(by_path(&plan, &same).is_none(), "{plan:?}");
+    let sent = by_path(&plan, &page).expect("the page differs");
+    assert_eq!(sent["t"], "write");
+    assert_eq!(sent["base"], "01K0SEEDREC00000000000000C");
+    assert_eq!(sent["body"], "newer lessons");
+    assert_eq!(sent["import"], true);
+    assert_eq!(sent["id"].as_str().unwrap().len(), 26);
+    let sent = by_path(&plan, rule).expect("the store lacks the rule");
+    assert_eq!(sent["base"], Value::Null);
+    assert_eq!(sent["body"], "a rule");
+    let toml = format!("projects/{ID}/project.toml");
+    assert!(by_path(&plan, &toml).is_some(), "{plan:?}");
+}
+
+#[test]
+fn the_import_removes_from_the_store_what_this_store_no_longer_holds() {
+    let w = World::new("seed-removal");
+    w.project(ID, "walk");
+    let plan_md = format!("projects/{ID}/plan.md");
+    let elsewhere = "projects/01K0SEEDOTHERPROJECT000000/plan.md";
+    let plan = seed(
+        &w,
+        &[
+            rec(
+                1,
+                "01K0SEEDREC00000000000000D",
+                &plan_md,
+                json!("# plan: m1"),
+            ),
+            rec(
+                2,
+                "01K0SEEDREC00000000000000E",
+                elsewhere,
+                json!("# plan: x"),
+            ),
+            rec(
+                3,
+                "01K0SEEDREC00000000000000F",
+                &format!("projects/{ID}/roadmap.md"),
+                Value::Null,
+            ),
+        ],
+    );
+    let removal = by_path(&plan, &plan_md).expect("the plan was cleared here");
+    assert_eq!(removal["body"], Value::Null);
+    assert_eq!(removal["base"], "01K0SEEDREC00000000000000D");
+    assert!(by_path(&plan, elsewhere).is_none(), "{plan:?}");
+    assert!(by_path(&plan, &format!("projects/{ID}/roadmap.md")).is_none());
+}
+
+#[test]
+fn the_import_never_sends_conflict_copies_temps_or_the_version() {
+    let w = World::new("seed-skips");
+    w.project(ID, "walk");
+    put(&w, &format!("projects/{ID}/plan.md.conflict1"), "x");
+    put(&w, &format!("projects/{ID}/items/.tmp-123"), "x");
+    put(&w, "VERSION", "3");
+    let plan = seed(&w, &[]);
+    let paths: Vec<&str> = plan.iter().map(|m| m["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, [format!("projects/{ID}/project.toml").as_str()]);
+}
+
+#[test]
+fn the_import_uploads_files_younger_than_90_days_once() {
+    let w = World::new("seed-files");
+    w.project(ID, "walk");
+    let fresh = format!("projects/{ID}/evidence/m1/shot.png");
+    let old = format!("projects/{ID}/raw/old.bin");
+    put(&w, &fresh, "png");
+    put(&w, &old, "bin");
+    let month = Duration::from_secs(86_400 * 100);
+    std::fs::File::options()
+        .write(true)
+        .open(w.dirs().store().join(&old))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - month)
+        .unwrap();
+    let plan = seed(&w, &[]);
+    let file = by_path(&plan, &fresh).expect("the fresh file goes");
+    assert_eq!(file["t"], "file");
+    assert_eq!(
+        file["local"],
+        w.dirs().store().join(&fresh).to_str().unwrap()
+    );
+    assert!(by_path(&plan, &old).is_none(), "{plan:?}");
+
+    let out = mem_in(&w, &["share", "seeded"], &format!("{fresh}\n"));
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(by_path(&seed(&w, &[]), &fresh).is_none());
+}
+
+#[test]
+fn the_import_leaves_the_outbox_and_the_replicas_heads_alone() {
+    let w = World::new("seed-alone");
+    w.project(ID, "walk");
+    put(&w, &format!("projects/{ID}/wiki/lessons.md"), "lessons");
+    seed(&w, &[json!({"t": "ready", "seq": 9, "rows": 0})]);
+    assert!(pending(&w).is_empty());
+    assert_eq!(hello(&w)["since"], 0);
+}
