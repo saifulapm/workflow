@@ -13,8 +13,9 @@ use crate::access::{self, Access, Jwt};
 use crate::files;
 use crate::latest::{self, Change};
 use crate::mcp::{self, Step};
-use crate::page;
+use crate::memview;
 use crate::share::{self, Fault, Log, Rec};
+use crate::site;
 
 /// The store's binding, and the one instance every request reaches.
 const STORE: &str = "STORE";
@@ -80,12 +81,12 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         return Response::error("Unauthorized", 401);
     }
     match (req.method(), path.as_str()) {
-        (Method::Get, "/") => home(&env).await,
         // An open page's socket, which hears only that the store changed.
         (Method::Get, "/live") => store(&env)?.fetch_with_request(req).await,
         (Method::Post, "/" | "/mcp") => serve_mcp(req, &env).await,
         (_, "/mcp") => Response::error("Method Not Allowed", 405),
-        _ => Response::error("Not Found", 404),
+        (Method::Get | Method::Post, _) => page(req, &env).await,
+        _ => Response::error("Method Not Allowed", 405),
     }
 }
 
@@ -211,31 +212,43 @@ fn store(env: &Env) -> Result<Stub> {
         .get_by_name_with_location_hint(STORE_NAME, STORE_LOCATION)
 }
 
-/// The home, with the time the Worker took to build it (store read
-/// included) in Server-Timing.
-async fn home(env: &Env) -> Result<Response> {
+/// A hub page, which the store draws from its files. Server-Timing carries
+/// the store's own build time and the whole round trip to it.
+async fn page(mut req: Request, env: &Env) -> Result<Response> {
     let start = Date::now().as_millis();
-    let (projects, limited) = match store(env)?.fetch_with_str("https://store/projects").await {
-        Ok(mut answer) => {
-            let flag = answer.headers().get("X-Store-Limit")?;
-            let bodies: Vec<String> = answer.json().await?;
-            let projects: Vec<Value> = bodies
-                .iter()
-                .filter_map(|body| serde_json::from_str(body).ok())
-                .collect();
-            (projects, page::limit_is_today(flag.as_deref(), now_ms()))
-        }
-        // The read itself hit the limit: the home says so, with no cards.
-        Err(error) if names_limit(&error.to_string()) => (Vec::new(), true),
-        Err(error) => return Err(error),
-    };
-    let html = page::render_home(&projects, limited);
+    let mut init = RequestInit::new();
+    init.with_method(req.method())
+        .with_headers(req.headers().clone());
+    if req.method() == Method::Post {
+        init.with_body(Some(req.bytes().await?.into()));
+    }
+    let target = format!("https://store/page{}", path_and_query(&req));
+    let mut answer = store(env)?
+        .fetch_with_request(Request::new_with_init(&target, &init)?)
+        .await?;
+    let bytes = answer.bytes().await?;
     let took = Date::now().as_millis() - start;
-    let mut response = Response::from_html(html)?;
-    response
-        .headers_mut()
-        .set("Server-Timing", &format!("build;dur={took}"))?;
-    Ok(response)
+    // The store's response is immutable, so its parts go into a new one.
+    let mut page = Response::from_bytes(bytes)?.with_status(answer.status_code());
+    for (name, value) in answer.headers().entries() {
+        let value = match name.as_str() {
+            "server-timing" => format!("{value}, store;dur={took}"),
+            _ => value,
+        };
+        page.headers_mut().append(&name, &value)?;
+    }
+    Ok(page)
+}
+
+/// The path and query of a request, from its URL string: `Request::url`
+/// brings the url crate's IDNA tables, about 200 KB of wasm.
+fn path_and_query(req: &Request) -> String {
+    let url = req.inner().url();
+    let after_scheme = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
+    match after_scheme.find('/') {
+        Some(at) => after_scheme[at..].to_string(),
+        None => "/".to_string(),
+    }
 }
 
 /// Hands the records to the store when the request carries the bearer
@@ -291,6 +304,44 @@ impl Store {
             attachments.push(attachment(&socket)?);
         }
         Ok(share::newest_limit_day(&attachments).max(self.limit_day.get()))
+    }
+
+    /// Draws the page the Worker forwarded as `/page<path>`, timing the
+    /// build in Server-Timing.
+    async fn page(&self, mut req: Request) -> Result<Response> {
+        let target = path_and_query(&req)["/page".len()..].to_string();
+        let method = req.method().to_string();
+        let headers: Vec<(String, String)> = req.headers().entries().collect();
+        let body = if req.method() == Method::Post {
+            req.bytes().await?
+        } else {
+            Vec::new()
+        };
+        let start = Date::now().as_millis();
+        let request = site::request(&method, &target, headers, body);
+        let route = SqlLog(&self.sql)
+            .route()
+            .map_err(|fault| Error::RustError(format!("{fault:?}")))?;
+        let ask = site::Ask {
+            request: &request,
+            now: jiff::Timestamp::from_millisecond(now_ms() as i64).unwrap_or_default(),
+            route,
+            paired: false,
+            may_write: false,
+            limited: site::limit_is_today(self.limit_day()?, now_ms()),
+        };
+        let Some(drawn) = site::page(&SqlFiles(&self.sql), ask) else {
+            return Response::error("Not Found", 404);
+        };
+        let took = Date::now().as_millis() - start;
+        let mut response = Response::from_bytes(drawn.body)?.with_status(drawn.status);
+        let headers = response.headers_mut();
+        headers.set("Content-Type", &drawn.content_type)?;
+        for (name, value) in &drawn.headers {
+            headers.append(name, value)?;
+        }
+        headers.set("Server-Timing", &format!("build;dur={took}"))?;
+        Ok(response)
     }
 
     /// Tells every open page the store changed, and nothing more: the page
@@ -394,23 +445,7 @@ impl DurableObject for Store {
                 }
                 Ok(Response::empty()?.with_status(204))
             }
-            (Method::Get, "/projects") => {
-                let rows: Vec<Value> = self
-                    .sql
-                    .exec(
-                        "SELECT body FROM records WHERE kind = 'project' ORDER BY key",
-                        None,
-                    )?
-                    .to_array()?;
-                let bodies: Vec<&str> = rows.iter().filter_map(|r| r["body"].as_str()).collect();
-                let mut response = Response::from_json(&bodies)?;
-                if let Some(day) = self.limit_day()? {
-                    response
-                        .headers_mut()
-                        .set("X-Store-Limit", &day.to_string())?;
-                }
-                Ok(response)
-            }
+            (_, path) if path.starts_with("/page/") => self.page(req).await,
             (Method::Get, path) if path.starts_with("/handoff/") => {
                 let project = &path["/handoff/".len()..];
                 let rows: Vec<Value> = self
@@ -601,6 +636,76 @@ impl Files {
                 ))),
             })
             .collect()
+    }
+}
+
+/// The store's files table, as memview reads files.
+struct SqlFiles<'a>(&'a SqlStorage);
+
+impl SqlFiles<'_> {
+    fn pairs(&self, query: &str, bindings: Vec<SqlStorageValue>) -> Vec<(String, String)> {
+        let rows: Vec<Value> = self
+            .0
+            .exec(query, Some(bindings))
+            .and_then(|cursor| cursor.to_array())
+            .unwrap_or_default();
+        rows.iter()
+            .filter_map(|row| {
+                Some((
+                    row["path"].as_str()?.to_string(),
+                    row["body"].as_str()?.to_string(),
+                ))
+            })
+            .collect()
+    }
+}
+
+impl memview::Files for SqlFiles<'_> {
+    fn read(&self, path: &str) -> Option<String> {
+        self.pairs(
+            "SELECT path, body FROM files WHERE path = ?",
+            vec![path.into()],
+        )
+        .pop()
+        .map(|(_, body)| body)
+    }
+
+    fn list(&self, prefix: &str) -> Vec<(String, String)> {
+        // A range on the primary key: every path that starts with `prefix`.
+        self.pairs(
+            "SELECT path, body FROM files WHERE path >= ? AND path < ? ORDER BY path",
+            vec![prefix.into(), format!("{prefix}\u{10FFFF}").into()],
+        )
+    }
+
+    fn projects(&self) -> Vec<String> {
+        let rows: Vec<Value> = self
+            .0
+            .exec(
+                "SELECT project FROM files WHERE path = 'projects/' || project || '/project.toml' \
+                 ORDER BY project",
+                None,
+            )
+            .and_then(|cursor| cursor.to_array())
+            .unwrap_or_default();
+        rows.iter()
+            .filter_map(|row| row["project"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    fn items(&self, project: &str, kinds: &[&str]) -> Vec<(String, String)> {
+        if kinds.is_empty() {
+            return self.list(&format!("projects/{project}/items/"));
+        }
+        let marks = vec!["?"; kinds.len()].join(", ");
+        let mut bindings: Vec<SqlStorageValue> = vec![project.into()];
+        bindings.extend(kinds.iter().map(|kind| (*kind).into()));
+        self.pairs(
+            &format!(
+                "SELECT path, body FROM files WHERE project = ? AND kind IN ({marks}) ORDER BY path"
+            ),
+            bindings,
+        )
     }
 }
 

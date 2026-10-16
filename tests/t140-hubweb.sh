@@ -94,9 +94,7 @@ start_dev() { # start_dev <name> [VAR=value...] -- cf dev on a copy of hubweb; s
 	local name=$1
 	shift
 	local app=$T_TMP/$name
-	mkdir -p "$app"
-	cp -r "$HUBWEB"/{Cargo.toml,Cargo.lock,src,package.json,cloudflare.config.ts,wrangler.config.ts} "$app/"
-	ln -s "$HUBWEB/node_modules" "$app/node_modules"
+	t_hubweb_copy "$app"
 	t_cf_dev "$app" "$T_TMP/$name.log" "$@"
 	local up=$?
 	pids+=("$CF_DEV_PID")
@@ -156,20 +154,51 @@ is "$(get_home -H "$(with_jwt "$(mint key RS256 k1 "$(claims "$aud" "$team" $((n
 is "$(get_home -H "$(with_jwt "$(mint key RS256 k2 "$(claims "$aud" "$team" $fresh)")")")" 401 \
 	"GET / with a JWT naming an unknown kid is refused"
 
+# The hub sandbox's four projects, written by real mem and sent to the
+# store as a machine sends its writes: the pages draw from these files.
+export MEM_NOTIFY_CMD=true
+sb=$T_TMP/sb
+mkdir -p "$sb"
+# shellcheck source=../hub/tests/seed.sh
+(source "$WF_ROOT/hub/tests/seed.sh") >/dev/null
+cd "$T_TMP" || exit 1
+like "$(node "$WF_ROOT/tests/push-store.mjs" "ws://127.0.0.1:$port/store/share" "$token" \
+	"$XDG_DATA_HOME/mem/store" 2>&1)" '^pushed [1-9][0-9]*$' "the seeded store's files reach the store"
+
 home=$(curl -s -H "@$T_TMP/jwt.hdr" -D "$T_TMP/home.hdr" -o "$T_TMP/home.html" -w '%{http_code}' "$base/")
 is "$home" 200 "GET / with a valid JWT answers 200"
 
 # One line per card, so each check reads the card of the project it names.
 card() { tr -d '\n' <"$T_TMP/home.html" | sed 's/<article/\n<article/g' | grep -F ">$1<"; }
-one=$(card walkone)
-like "$one" 'class="pill">execution<' "walkone's card shows the stage execution"
-like "$one" 'm1-x' "walkone's card shows its milestone"
-first=1
-like "$one" "milestone $first of 2" "walkone's card shows milestone $first of 2"
-like "$(card walkdone)" 'class="pill ok">done<' "a project with every milestone ticked shows done"
+like "$(card gamma)" 'class="pill">execution<' "gamma's card shows the stage execution"
+like "$(card delta)" 'class="pill ok">done<' "a project with every milestone ticked shows done"
+like "$(card beta)" 'planning' "a draft roadmap shows planning"
+home_text=$(tr -d '\n' <"$T_TMP/home.html")
+like "$home_text" 'Which hour does the nag go out\?' "home lists the question waiting on Saiful"
+unlike "$home_text" 'Nothing waiting' "home never says nothing waits while a question does"
+unlike "$home_text" '[Dd]ulali' "home names no Dulali"
+like "$home_text" "new WebSocket\(.*'/live'\)" "home listens on /live"
+unlike "$home_text" '/api/stamp' "home polls nothing"
+like "$home_text" 'Route: Phone</p><p class="banner warn">Pair this device first' \
+	"an unpaired browser sees the route and the pairing line in place of its buttons"
 
-like "$(tr -d '\r' <"$T_TMP/home.hdr")" '^[Ss]erver-[Tt]iming: build;dur=[0-9.]+' \
-	"GET / carries a Server-Timing build duration"
+like "$(tr -d '\r' <"$T_TMP/home.hdr")" '^[Ss]erver-[Tt]iming: build;dur=[0-9.]+, store;dur=[0-9.]+' \
+	"GET / carries the store's build time and the round trip in Server-Timing"
+
+page_of() { # page_of <path> -- prints the status code, the page in $T_TMP/page.html
+	curl -s -H "@$T_TMP/jwt.hdr" -o "$T_TMP/page.html" -w '%{http_code}' "$base$1"
+}
+is "$(page_of /p/gamma/questions)" 200 "a project's questions page answers 200"
+like "$(tr -d '\n' <"$T_TMP/page.html")" 'Which hour does the nag go out\?' \
+	"the questions page lists gamma's question"
+is "$(page_of /p/nope/questions)" 404 "a project the store lacks is not found"
+
+font=$base/assets/maple-mono-400.woff2
+curl -s -o /dev/null "$font"
+fonthdr=$(curl -s -D - -o /dev/null "$font" | tr -d '\r')
+like "$fonthdr" '^HTTP/[0-9.]+ 200' "the font is served"
+like "$fonthdr" '[Cc][Ff]-[Cc]ache-[Ss]tatus: HIT' "the font's second load comes from Cloudflare's cache"
+like "$fonthdr" '[Cc]ache-[Cc]ontrol: public, max-age=31536000, immutable' "the font is cached for a year"
 
 mcp() { # mcp <path> <json-rpc message> [curl args...] -- prints the reply body
 	local path=$1 message=$2

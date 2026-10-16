@@ -112,6 +112,17 @@ t_cf_dev() {
 	return 1
 }
 
+# t_hubweb_copy <dir> -- a copy of hubweb at <dir> that cf dev can run: its
+# sources and config copied, node_modules linked, and hubpages (a path
+# dependency, and the static assets) linked beside it.
+t_hubweb_copy() {
+	local app=$1
+	mkdir -p "$app"
+	cp -r "$HUBWEB"/{Cargo.toml,Cargo.lock,src,package.json,cloudflare.config.ts,wrangler.config.ts} "$app/"
+	ln -s "$HUBWEB/node_modules" "$app/node_modules"
+	[ -e "$(dirname -- "$app")/hubpages" ] || ln -s "$WF_ROOT/hubpages" "$(dirname -- "$app")/hubpages"
+}
+
 # Print the plan and exit with the right status. Registered as an EXIT trap by
 # t_init so a test that dies mid-way still reports what it managed to run.
 t_done() {

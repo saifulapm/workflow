@@ -35,9 +35,7 @@ trap stop_dev EXIT
 
 token=test-store-token
 app=$T_TMP/hubweb
-mkdir -p "$app"
-cp -r "$HUBWEB"/{Cargo.toml,Cargo.lock,src,package.json,cloudflare.config.ts,wrangler.config.ts} "$app/"
-ln -s "$HUBWEB/node_modules" "$app/node_modules"
+t_hubweb_copy "$app"
 t_cf_dev "$app" "$T_TMP/dev.log" STORE_TOKEN=$token
 up=$?
 dev_pid=$CF_DEV_PID

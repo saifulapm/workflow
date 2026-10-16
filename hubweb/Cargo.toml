@@ -9,6 +9,8 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# The hub's pages, which this Worker draws from the store.
+hubpages = { path = "../hubpages" }
 serde_json = "1.0.151"
 # memview reads item frontmatter and its timestamps. No time zone data: every
 # date mem prints is UTC, and the tz features do not build for wasm.

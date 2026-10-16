@@ -11,23 +11,23 @@ pub fn get(request: &Request) -> Response {
     let (content_type, body): (&str, &[u8]) = match request.path.as_str() {
         "/assets/maple-mono-400.woff2" => (
             "font/woff2",
-            include_bytes!("../assets/maple-mono-400.woff2"),
+            include_bytes!("../../hubpages/public/assets/maple-mono-400.woff2"),
         ),
         "/assets/maple-mono-600.woff2" => (
             "font/woff2",
-            include_bytes!("../assets/maple-mono-600.woff2"),
+            include_bytes!("../../hubpages/public/assets/maple-mono-600.woff2"),
         ),
         "/assets/maple-mono-700.woff2" => (
             "font/woff2",
-            include_bytes!("../assets/maple-mono-700.woff2"),
+            include_bytes!("../../hubpages/public/assets/maple-mono-700.woff2"),
         ),
         "/assets/maple-mono-400-italic.woff2" => (
             "font/woff2",
-            include_bytes!("../assets/maple-mono-400-italic.woff2"),
+            include_bytes!("../../hubpages/public/assets/maple-mono-400-italic.woff2"),
         ),
         "/assets/maple-mono-OFL.txt" => (
             "text/plain; charset=utf-8",
-            include_bytes!("../assets/maple-mono-OFL.txt"),
+            include_bytes!("../../hubpages/public/assets/maple-mono-OFL.txt"),
         ),
         _ => return Response::not_found(),
     };
