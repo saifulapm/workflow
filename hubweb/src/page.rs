@@ -100,10 +100,10 @@ fn project_card(row: &Value) -> String {
     };
     format!(
         "<article class=\"card\">\n\
-         <div class=\"row\"><h3><a href=\"/p/{href}\">{name}</a></h3>\
+         <div class=\"row\"><h3>{name}</h3>\
          <span class=\"{pill}\">{stage}</span></div>\n\
          {meta}</article>\n",
-        href = esc(name),
+        // No link yet: hubweb serves no project page until m4 moves them.
         name = esc(name),
         pill = stage_pill(stage),
     )
@@ -224,7 +224,7 @@ mod tests {
             "plan_slug": "m1-x", "plan_ticked": 1, "plan_total": 3,
             "milestones_done": 0, "milestones_total": 2});
         let html = render_home(&[row]);
-        assert!(html.contains(">walkone</a>"), "{html}");
+        assert!(html.contains("<h3>walkone</h3>"), "{html}");
         assert!(
             html.contains(r#"<span class="pill">execution</span>"#),
             "{html}"
@@ -240,5 +240,13 @@ mod tests {
         assert!(html.contains("&lt;b&gt;x&lt;/b&gt;"), "{html}");
         assert!(html.contains("a&amp;b"), "{html}");
         assert!(!html.contains("<b>x"), "{html}");
+    }
+
+    #[test]
+    fn a_card_links_to_no_page_hubweb_does_not_serve() {
+        let home =
+            render_home(&[serde_json::json!({"name": "walkone", "roadmap_status": "approved"})]);
+        assert!(home.contains("walkone"));
+        assert!(!home.contains("/p/"), "{home}");
     }
 }
