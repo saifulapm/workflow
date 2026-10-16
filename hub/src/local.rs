@@ -312,11 +312,11 @@ impl Local {
                 // forgot it must not read as taken.
                 Ok(answer) if !self.asks(&answer.question) => Response::not_found(),
                 Ok(answer) => {
-                    let shot = match answer.screenshot.as_ref().map(Shot::bytes).transpose() {
-                        Ok(shot) => shot,
+                    let shots = match answer.shots().iter().map(|s| s.bytes()).collect() {
+                        Ok(shots) => shots,
                         Err(e) => return Response::text(400, &e),
                     };
-                    match self.deliver(&answer.question, &answer.answer, &answer.by, shot) {
+                    match self.deliver(&answer.question, &answer.answer, &answer.by, shots) {
                         Ok(()) => Response::text(200, "ok"),
                         // The answer that stands, so the tapping hub can show it.
                         Err(standing) => Response::text(409, &standing),
@@ -381,13 +381,13 @@ impl Local {
             Ok(_) => return Response::text(400, "an answer is signed by its surface"),
             Err(e) => return Response::text(400, &format!("not an answer: {e}")),
         };
-        let shot = match &given.screenshot {
-            Some(path) => match std::fs::read(path) {
-                Ok(bytes) => Some(bytes),
+        let mut shots = Vec::new();
+        for path in given.screenshot.iter().chain(&given.screenshots) {
+            match std::fs::read(path) {
+                Ok(bytes) => shots.push(bytes),
                 Err(e) => return Response::text(400, &format!("reading {}: {e}", path.display())),
-            },
-            None => None,
-        };
+            }
+        }
         let here = self
             .asked
             .lock()
@@ -398,7 +398,7 @@ impl Local {
             if self.is_review(&given.question) {
                 return Response::text(403, REVIEW_REFUSAL);
             }
-            return match self.deliver(&given.question, &given.answer, &given.by, shot) {
+            return match self.deliver(&given.question, &given.answer, &given.by, shots) {
                 Ok(()) => Response::text(200, "ok"),
                 Err(standing) => Response::text(409, &standing),
             };
@@ -414,10 +414,8 @@ impl Local {
             "answer": given.answer,
             "by": given.by,
         });
-        if let Some(bytes) = &shot {
-            body["screenshot"] = serde_json::json!({
-                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
-            });
+        if !shots.is_empty() {
+            body["screenshots"] = encoded(&shots);
         }
         match request(
             &open.machine,
@@ -482,7 +480,7 @@ impl Local {
         // The answer the message ends up showing: this tap's, or the one
         // that already stood, so a late tap still clears the buttons.
         let shown = if tap.machine == self.host {
-            match self.deliver(&tap.question, &tap.answer, "slack", None) {
+            match self.deliver(&tap.question, &tap.answer, "slack", Vec::new()) {
                 Ok(()) => Some(tap.answer.clone()),
                 Err(standing) => Some(standing),
             }
@@ -569,7 +567,7 @@ impl Local {
                     }
                     continue;
                 }
-                let Some(file) = save_shot(&id, photo) else {
+                let Some(file) = save_shot(&id, 0, photo) else {
                     continue;
                 };
                 let task = format!("#{id}");
@@ -613,9 +611,9 @@ impl Local {
             .map(|a| a.text.clone())
             .or_else(|| self.known.get(&id).map(|o| o.text))
             .unwrap_or_else(|| format!("#{id}"));
-        let shot = reply.photos.into_iter().next();
+        let shots = reply.photos;
         let shown = if reply.machine == self.host {
-            match self.deliver(&id, &reply.text, "slack", shot) {
+            match self.deliver(&id, &reply.text, "slack", shots) {
                 Ok(()) => Some(reply.text.clone()),
                 Err(standing) => Some(standing),
             }
@@ -625,10 +623,8 @@ impl Local {
                 "answer": reply.text,
                 "by": "slack",
             });
-            if let Some(bytes) = &shot {
-                body["screenshot"] = serde_json::json!({
-                    "data": base64::engine::general_purpose::STANDARD.encode(bytes),
-                });
+            if !shots.is_empty() {
+                body["screenshots"] = encoded(&shots);
             }
             match request(
                 &reply.machine,
@@ -704,7 +700,7 @@ impl Local {
         question: &str,
         answer: &str,
         by: &str,
-        shot: Option<Vec<u8>>,
+        shots: Vec<Vec<u8>>,
     ) -> Result<(), String> {
         let project = self
             .asked
@@ -742,8 +738,12 @@ impl Local {
         }
         if self.records && asked_here {
             let mut argv = vec!["answer".to_string(), "--by".into(), by.into()];
-            let file = shot.and_then(|bytes| save_shot(question, &bytes));
-            if let Some(file) = &file {
+            let files: Vec<PathBuf> = shots
+                .iter()
+                .enumerate()
+                .filter_map(|(n, bytes)| save_shot(question, n, bytes))
+                .collect();
+            for file in &files {
                 argv.extend(["--screenshot".into(), file.display().to_string()]);
             }
             // `--`, so an option that starts with a dash is not read as a flag.
@@ -765,7 +765,7 @@ impl Local {
                     ),
                     Err(e) => eprintln!("hub: local: mem answer {question}: {e}"),
                 }
-                if let Some(file) = file {
+                for file in files {
                     let _ = std::fs::remove_file(file);
                 }
             });
@@ -1155,14 +1155,25 @@ const TRAVELS: [&str; 3] = ["slack", "popup", "cli"];
 
 const REVIEW_REFUSAL: &str = "a roadmap review is Saiful's to answer, on the hub";
 
-/// An answer given on this machine, as mem hands it over: the screenshot is
-/// a file here.
+/// An answer given on this machine, as mem hands it over: each image is a
+/// file here. `screenshot`, one image, is what an older mem sends.
 #[derive(Debug, serde::Deserialize)]
 struct Given {
     question: String,
     answer: String,
     by: String,
     screenshot: Option<PathBuf>,
+    #[serde(default)]
+    screenshots: Vec<PathBuf>,
+}
+
+/// Images as they travel between hubs, in order.
+fn encoded(shots: &[Vec<u8>]) -> serde_json::Value {
+    let all: Vec<_> = shots
+        .iter()
+        .map(|bytes| serde_json::json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}))
+        .collect();
+    serde_json::Value::Array(all)
 }
 
 /// A screenshot as it travels between hubs.
@@ -1181,7 +1192,7 @@ impl Shot {
 
 /// Keeps a screenshot where mem can file it, 0600 under the state
 /// directory, until mem has.
-fn save_shot(question: &str, bytes: &[u8]) -> Option<PathBuf> {
+fn save_shot(question: &str, n: usize, bytes: &[u8]) -> Option<PathBuf> {
     use std::os::unix::fs::OpenOptionsExt;
     // A question id names the file, so it may name nothing else.
     if question.is_empty() || !question.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -1193,7 +1204,7 @@ fn save_shot(question: &str, bytes: &[u8]) -> Option<PathBuf> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let path = dir.join(format!("{question}-{nanos}.png"));
+    let path = dir.join(format!("{question}-{nanos}-{n}.png"));
     let written = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1215,7 +1226,16 @@ struct Answer {
     question: String,
     answer: String,
     by: String,
+    /// One image, as an older hub sends it.
     screenshot: Option<Shot>,
+    #[serde(default)]
+    screenshots: Vec<Shot>,
+}
+
+impl Answer {
+    fn shots(&self) -> Vec<&Shot> {
+        self.screenshot.iter().chain(&self.screenshots).collect()
+    }
 }
 
 /// A question a peer says was answered.

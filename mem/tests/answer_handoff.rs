@@ -116,12 +116,14 @@ fn a_hub_that_takes_the_answer_gets_it_and_mem_writes_nothing() {
 }
 
 #[test]
-fn by_and_the_screenshot_path_travel_with_the_answer() {
+fn by_and_the_screenshot_paths_travel_with_the_answer_in_order() {
     let w = World::new("ah-shot");
     let repo = w.repo("thing", None);
     let id = ask(&w, &repo);
-    let shot = w.dir.join("shot.png");
-    std::fs::write(&shot, b"png").unwrap();
+    let first = w.dir.join("first.png");
+    let second = w.dir.join("second.png");
+    std::fs::write(&first, b"png1").unwrap();
+    std::fs::write(&second, b"png2").unwrap();
     let seen = fake_hub(&socket_of(&w), "200 OK", "ok");
 
     let out = mem_env(
@@ -132,7 +134,9 @@ fn by_and_the_screenshot_path_travel_with_the_answer() {
             "--by",
             "popup",
             "--screenshot",
-            shot.to_str().unwrap(),
+            first.to_str().unwrap(),
+            "--screenshot",
+            second.to_str().unwrap(),
             &id,
             "yes",
         ],
@@ -144,9 +148,50 @@ fn by_and_the_screenshot_path_travel_with_the_answer() {
         body,
         serde_json::json!({
             "question": id, "answer": "yes", "by": "popup",
-            "screenshot": shot.to_str().unwrap(),
+            "screenshots": [first.to_str().unwrap(), second.to_str().unwrap()],
         })
     );
+}
+
+/// Written here, each image becomes its own evidence item.
+#[test]
+fn every_screenshot_of_an_answer_written_here_is_filed() {
+    let w = World::new("ah-shots-here");
+    let repo = w.repo("thing", None);
+    let id = ask(&w, &repo);
+    let first = w.dir.join("first.png");
+    let second = w.dir.join("second.png");
+    std::fs::write(&first, b"FIRST").unwrap();
+    std::fs::write(&second, b"SECOND").unwrap();
+
+    let out = mem_env(
+        &w,
+        &repo,
+        &[
+            "answer",
+            "--screenshot",
+            first.to_str().unwrap(),
+            "--screenshot",
+            second.to_str().unwrap(),
+            &id,
+            "yes",
+        ],
+        &[("MEM_ANSWER_DIRECT", "1")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let listing = stdout(&mem_env(&w, &repo, &["evidence", "list"], &[]));
+    let ids: Vec<&str> = listing
+        .lines()
+        .filter(|l| l.contains(&format!("  #{id}  ")))
+        .filter_map(|l| l.trim_start_matches('#').split_whitespace().next())
+        .collect();
+    assert_eq!(ids.len(), 2, "{listing}");
+    let mut bytes: Vec<Vec<u8>> = ids
+        .iter()
+        .map(|e| mem_env(&w, &repo, &["evidence", "cat", e], &[]).stdout)
+        .collect();
+    bytes.sort();
+    assert_eq!(bytes, [b"FIRST".to_vec(), b"SECOND".to_vec()]);
 }
 
 #[test]

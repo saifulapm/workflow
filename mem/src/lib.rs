@@ -213,7 +213,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             option.as_deref(),
             by.as_deref(),
             supersedes.as_deref(),
-            screenshot.as_deref(),
+            screenshot,
         ),
         cli::Command::Decide { text, by, replaces } => {
             records::decide(&app, text, by.as_str(), replaces.as_deref())

@@ -2020,23 +2020,23 @@ pub fn answer(
     option: Option<&str>,
     by: Option<&str>,
     supersedes: Option<&str>,
-    screenshot: Option<&std::path::Path>,
+    screenshots: &[std::path::PathBuf],
 ) -> Result<i32> {
     // A screenshot that cannot be filed is found out before the hub or the
     // store is given anything.
-    let screenshot = match screenshot {
-        Some(file) if !file.is_file() => {
+    let mut screenshot = Vec::new();
+    for file in screenshots {
+        if !file.is_file() {
             return Err(exit::usage(format!("no screenshot {}", file.display())));
         }
-        Some(file) => Some(std::path::absolute(file)?),
-        None => None,
-    };
+        screenshot.push(std::path::absolute(file)?);
+    }
     let body = match (text, option) {
         (Some(t), _) => t.to_string(),
         (None, Some(o)) => o.to_string(),
         (None, None) => return Err(exit::usage("an answer needs text or --option")),
     };
-    if let Some(code) = hand_answer_to_hub(app, id, &body, by, supersedes, screenshot.as_deref()) {
+    if let Some(code) = hand_answer_to_hub(app, id, &body, by, supersedes, &screenshot) {
         return Ok(code);
     }
 
@@ -2112,16 +2112,16 @@ pub fn answer(
     meta.answers = Some(question.id.clone());
     meta.by = by.map(str::to_string);
     meta.supersedes = replaced;
-    if screenshot.is_some() && identity.id().is_none() {
+    if !screenshot.is_empty() && identity.id().is_none() {
         return Err(exit::usage(
             "a screenshot is filed in the question's project, and this question has none",
         ));
     }
     let written = crate::write::write_item(app, &identity, meta, body)?;
-    if let Some(file) = screenshot {
-        let task = format!("#{}", question.short_id);
-        let note = format!("screenshot with the answer to {task}");
-        crate::records::file_evidence(app, &identity, &task, &file, &note)?;
+    let task = format!("#{}", question.short_id);
+    let note = format!("screenshot with the answer to {task}");
+    for file in &screenshot {
+        crate::records::file_evidence(app, &identity, &task, file, &note)?;
     }
     crate::sync::trigger(&app.dirs.qshell_status_json());
     report_written(app, &written, crate::item::Kind::Answer)
@@ -2137,7 +2137,7 @@ fn hand_answer_to_hub(
     body: &str,
     by: Option<&str>,
     supersedes: Option<&str>,
-    screenshot: Option<&std::path::Path>,
+    screenshots: &[std::path::PathBuf],
 ) -> Option<i32> {
     let set = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
     if set("MEM_ANSWER_DIRECT") || set("MEM_REMOTE") || supersedes.is_some() {
@@ -2145,8 +2145,9 @@ fn hand_answer_to_hub(
     }
     let short = crate::localhub::short_id(id);
     let mut sent = json!({"question": short, "answer": body, "by": by.unwrap_or("cli")});
-    if let Some(file) = screenshot {
-        sent["screenshot"] = json!(file.to_string_lossy());
+    if !screenshots.is_empty() {
+        let paths: Vec<_> = screenshots.iter().map(|f| f.to_string_lossy()).collect();
+        sent["screenshots"] = json!(paths);
     }
     let socket = crate::localhub::socket_path(&app.dirs.state);
     let called = crate::localhub::call(

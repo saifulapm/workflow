@@ -347,18 +347,19 @@ fn a_route_that_is_neither_phone_nor_device_is_refused() {
 
 /// A mem that lists no answered questions and logs every other call, each
 /// as a `direct=<MEM_ANSWER_DIRECT>` line then its argv, copying a
-/// `--screenshot` file to `shot.png` beside the log while it still exists.
+/// `--screenshot` file, in order, to `<machine>-shot-<n>.png` beside the log
+/// while it still exists, before it logs.
 fn answering_mem(dir: &TempDir, machine: &str) -> (PathBuf, PathBuf) {
     let bin = dir.join(&format!("{machine}-bin"));
     let log = dir.join(&format!("{machine}-mem.log"));
-    let shot = dir.join(&format!("{machine}-shot.png"));
+    let shot = dir.join(&format!("{machine}-shot"));
     common::fixture_mem(
         &bin,
         &format!(
             "case \"$*\" in *questions*) echo '{{\"questions\":[]}}'; exit 0;; esac\n\
+             prev=; n=0\n\
+             for a in \"$@\"; do if [ \"$prev\" = --screenshot ]; then cp \"$a\" '{shot}'-$n.png; n=$((n+1)); fi; prev=$a; done\n\
              {{ echo \"direct=$MEM_ANSWER_DIRECT\"; printf '%s\\n' \"$@\"; }} >> '{log}'\n\
-             prev=\n\
-             for a in \"$@\"; do [ \"$prev\" = --screenshot ] && cp \"$a\" '{shot}'; prev=$a; done\n\
              exit 0",
             log = log.display(),
             shot = shot.display(),
@@ -440,30 +441,34 @@ fn an_answer_given_on_another_machine_wakes_the_asker_and_is_recorded_there() {
 }
 
 #[test]
-fn a_popup_answer_carries_its_screenshot_to_the_asking_machine() {
+fn a_popup_answer_carries_its_screenshots_to_the_asking_machine_in_order() {
     let dir = TempDir::new("answer-shot");
     let (_nuc, _mini, nuc_log, _) = asked_on_the_nuc(&dir);
-    let png: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect();
-    let file = dir.join("grabbed.png");
-    std::fs::write(&file, &png).unwrap();
+    let first: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let second: Vec<u8> = (0..90_000u32).map(|i| (i * 13 % 241) as u8).collect();
+    let (a, b) = (dir.join("first.png"), dir.join("second.png"));
+    std::fs::write(&a, &first).unwrap();
+    std::fs::write(&b, &second).unwrap();
     let body = serde_json::json!({
         "question": "ABCD1234",
         "answer": "ok",
         "by": "popup",
-        "screenshot": file.to_str().unwrap(),
+        "screenshots": [a.to_str().unwrap(), b.to_str().unwrap()],
     })
     .to_string();
     let given = answer_on(&socket_of(&dir, "mini"), &body);
     assert_eq!(status_of(&given), 200, "{given}");
     common::wait_for("the nuc records it", Duration::from_secs(5), || {
-        dir.join("nuc-shot.png").exists()
+        std::fs::read_to_string(&nuc_log).is_ok_and(|l| l.contains("ABCD1234"))
     });
     let logged = std::fs::read_to_string(&nuc_log).unwrap();
     let lines: Vec<&str> = logged.lines().collect();
     assert_eq!(&lines[..4], ["direct=1", "answer", "--by", "popup"]);
     assert_eq!(lines[4], "--screenshot");
-    assert_eq!(&lines[6..], ["--", "ABCD1234", "ok"]);
-    assert_eq!(std::fs::read(dir.join("nuc-shot.png")).unwrap(), png);
+    assert_eq!(lines[6], "--screenshot");
+    assert_eq!(&lines[8..], ["--", "ABCD1234", "ok"]);
+    assert_eq!(std::fs::read(dir.join("nuc-shot-0.png")).unwrap(), first);
+    assert_eq!(std::fs::read(dir.join("nuc-shot-1.png")).unwrap(), second);
 }
 
 #[test]
