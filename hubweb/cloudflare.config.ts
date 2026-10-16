@@ -11,9 +11,12 @@ export default defineConfig({
     compatibilityDate: "2026-09-01",
     exports: {
       Store: exports.durableObject({ storage: "sqlite" }),
+      // Each shared project's evidence and raw bytes, one object per project.
+      Files: exports.durableObject({ storage: "sqlite" }),
     },
     env: {
       STORE: bindings.durableObject({ worker: "hubweb", exportName: "Store" }),
+      FILES: bindings.durableObject({ worker: "hubweb", exportName: "Files" }),
       STORE_TOKEN: bindings.secret(),
       // The Access apps' auds, comma-separated, and the team URL, such as
       // https://saifulapm.cloudflareaccess.com. Neither is secret; they are

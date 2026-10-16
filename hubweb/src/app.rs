@@ -10,6 +10,7 @@ use worker::wasm_bindgen_futures::JsFuture;
 use worker::*;
 
 use crate::access::{self, Access, Jwt};
+use crate::files;
 use crate::mcp::{self, Step};
 use crate::page;
 use crate::share::{self, Fault, Log, Rec};
@@ -19,6 +20,8 @@ const STORE: &str = "STORE";
 const STORE_NAME: &str = "walk";
 /// Saiful reads the hub from Dhaka, so the store is created in Asia-Pacific.
 const STORE_LOCATION: &str = "apac";
+/// Each project's files, one Durable Object per project id.
+const FILES: &str = "FILES";
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -45,6 +48,27 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             return Response::error("Unauthorized", 401);
         }
         return store(&env)?.fetch_with_request(req).await;
+    }
+    // A project's files take the same bearer, so a machine uploads and
+    // fetches them with no Access login.
+    if matches!(req.method(), Method::Put | Method::Get)
+        && let Some(raw) = path.strip_prefix("/store/files/")
+    {
+        if !bearer(&req, &env)? {
+            return Response::error("Unauthorized", 401);
+        }
+        let Some(project) = files::decode(raw)
+            .as_deref()
+            .and_then(files::project_of)
+            .map(str::to_string)
+        else {
+            return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
+        };
+        return env
+            .durable_object(FILES)?
+            .get_by_name_with_location_hint(&project, STORE_LOCATION)?
+            .fetch_with_request(req)
+            .await;
     }
     if let Err(why) = guard(&req, &env).await {
         console_log!("hubweb: refused {:?} {path}: {why}", req.method());
@@ -409,6 +433,97 @@ impl DurableObject for Store {
 
     async fn websocket_error(&self, _ws: WebSocket, _error: Error) -> Result<()> {
         Ok(())
+    }
+}
+
+/// One project's evidence and raw files, each stored as rows of at most
+/// `files::CHUNK` bytes in the object's SQLite.
+#[durable_object]
+pub struct Files {
+    sql: SqlStorage,
+}
+
+impl DurableObject for Files {
+    fn new(state: State, _env: Env) -> Self {
+        let sql = state.storage().sql();
+        sql.exec(
+            "CREATE TABLE IF NOT EXISTS chunks(path TEXT, n INTEGER, data BLOB, \
+             PRIMARY KEY(path, n))",
+            None,
+        )
+        .expect("create the chunks table");
+        Self { sql }
+    }
+
+    async fn fetch(&self, mut req: Request) -> Result<Response> {
+        let Some(path) = req
+            .path()
+            .strip_prefix("/store/files/")
+            .and_then(files::decode)
+            .filter(|path| files::project_of(path).is_some())
+        else {
+            return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
+        };
+        let answer = match req.method() {
+            Method::Put => {
+                // Every await comes before the first write, so the delete and
+                // the inserts commit together and two PUTs never interleave.
+                let bytes = req.bytes().await?;
+                self.put(&path, &bytes)
+                    .and_then(|()| Ok(Response::empty()?.with_status(204)))
+            }
+            Method::Get => match self.get(&path) {
+                Ok(rows) if rows.is_empty() => Response::error("No such file", 404),
+                Ok(rows) => Response::from_bytes(files::join(rows)),
+                Err(error) => Err(error),
+            },
+            _ => Response::error("Method Not Allowed", 405),
+        };
+        // A limit is the Free plan's daily cap: the hub keeps the file and
+        // tries again later.
+        match answer {
+            Err(error) if names_limit(&error.to_string()) => {
+                Response::error("Cloudflare limit reached", 503)
+            }
+            answer => answer,
+        }
+    }
+}
+
+impl Files {
+    /// Replaces every row of `path` with the rows of `bytes`.
+    fn put(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        self.sql
+            .exec("DELETE FROM chunks WHERE path = ?", vec![path.into()])?;
+        for (n, row) in files::split(bytes).into_iter().enumerate() {
+            self.sql.exec(
+                "INSERT INTO chunks(path, n, data) VALUES (?, ?, ?)",
+                vec![
+                    path.into(),
+                    (n as i64).into(),
+                    SqlStorageValue::Blob(row.to_vec()),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The rows of `path` in order; none when it is not stored. A BLOB comes
+    /// back as an ArrayBuffer, which only the raw cursor turns into bytes.
+    fn get(&self, path: &str) -> Result<Vec<Vec<u8>>> {
+        self.sql
+            .exec(
+                "SELECT data FROM chunks WHERE path = ? ORDER BY n",
+                vec![path.into()],
+            )?
+            .raw()
+            .map(|row| match row?.pop() {
+                Some(SqlStorageValue::Blob(bytes)) => Ok(bytes),
+                other => Err(Error::RustError(format!(
+                    "a chunk is {other:?}, not a blob"
+                ))),
+            })
+            .collect()
     }
 }
 
