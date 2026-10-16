@@ -633,7 +633,8 @@ impl Local {
 
     /// Reads what Saiful wrote in the threads of the questions still open
     /// here while no hub was connected: in each thread, the first reply
-    /// with words answers, and the photos before it are evidence.
+    /// with words answers. A photo posted alone was filed when it came, so
+    /// it is not filed again.
     pub fn catch_up_replies(&self) {
         let Some(slack) = &self.slack else {
             return;
@@ -650,12 +651,10 @@ impl Local {
         };
         let mut answered = std::collections::HashSet::new();
         for reply in replies {
-            if answered.contains(&reply.question) {
+            if reply.text.trim().is_empty() || answered.contains(&reply.question) {
                 continue;
             }
-            if !reply.text.trim().is_empty() {
-                answered.insert(reply.question.clone());
-            }
+            answered.insert(reply.question.clone());
             self.on_reply(reply);
         }
     }

@@ -793,3 +793,42 @@ fn a_reply_made_while_the_hub_was_away_answers_when_it_starts() {
     wait_until("mem answer", || !mem_log(&dir).is_empty());
     assert_eq!(mem_log(&dir), ["answer --by slack -- ABCD1234 use hash"]);
 }
+
+/// Slack escapes `&`, `<` and `>` in a message's text; the answer is what
+/// Saiful typed.
+#[test]
+fn a_thread_reply_is_recorded_as_typed_not_as_slack_escapes_it() {
+    let p = pair("ls-reply-escaped");
+    asked(&p, &["yes", "no"]);
+    let waiter = waiting(&p.asker_dir.join("local.sock"), 10);
+    thread::sleep(Duration::from_millis(200));
+    p.asker_slack
+        .event(reply_by(SAIFUL, "use &lt;hash&gt; &amp; keep &amp;lt;"));
+    let (response, _) = waiter.join().unwrap();
+    assert_eq!(body_of(&response), "use <hash> & keep &lt;");
+}
+
+/// A photo posted alone was filed when it came; reading the thread again at
+/// a start must not file it twice.
+#[test]
+fn a_start_reads_only_the_answer_from_a_thread_not_its_photos_again() {
+    let dir = TempDir::new("ls-catch-up-photo");
+    let log = dir.join("stderr.log");
+    let first = fake();
+    let hub = spawn_local(&dir, "cloudbox", &first, &log);
+    let port = hub.port;
+    ask(&dir.join("local.sock"), "human");
+    wait_until("the question posted", || {
+        !first.calls_to("chat.postMessage").is_empty()
+    });
+    drop(hub);
+
+    let second = fake_on(Arc::clone(&first.dm));
+    let url = second.file("photo.png", PHOTO);
+    let mut photo = with_photo(reply_by(SAIFUL, ""), &url);
+    photo["ts"] = json!("1700000000.500000");
+    first.dm.lock().unwrap().messages.push(photo);
+    let _hub = spawn_local_on(&dir, "cloudbox", &second, &log, port);
+    thread::sleep(Duration::from_millis(800));
+    assert!(mem_log(&dir).is_empty(), "{:?}", mem_log(&dir));
+}

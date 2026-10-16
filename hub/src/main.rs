@@ -263,6 +263,7 @@ fn run_local(port: u16) -> Result<()> {
         let local = Arc::clone(&local);
         let replies = Arc::clone(&local);
         let catch_up = Arc::clone(&local);
+        let reader = Arc::clone(&slack);
         std::thread::Builder::new()
             .name("hub-slack".to_string())
             // Each tap and reply on a thread of its own: a peer that is slow
@@ -273,9 +274,13 @@ fn run_local(port: u16) -> Result<()> {
                         let local = Arc::clone(&local);
                         std::thread::spawn(move || local.on_tap(tap));
                     },
-                    move |reply| {
-                        let local = Arc::clone(&replies);
-                        std::thread::spawn(move || local.on_reply(reply));
+                    move |event| {
+                        let (local, reader) = (Arc::clone(&replies), Arc::clone(&reader));
+                        std::thread::spawn(move || {
+                            if let Some(reply) = reader.reply(&event) {
+                                local.on_reply(reply);
+                            }
+                        });
                     },
                 )
             })

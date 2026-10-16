@@ -241,12 +241,13 @@ impl Slack {
         self.listen(on_tap, |_| {})
     }
 
-    /// `run_socket`, calling `on_reply` as well for each of Saiful's replies
-    /// in the thread of a posted question.
-    pub fn listen(&self, mut on_tap: impl FnMut(Tap), mut on_reply: impl FnMut(Reply)) -> ! {
+    /// `run_socket`, calling `on_message` as well with each DM message event,
+    /// for `reply` to read off the socket's thread: reading a reply's question
+    /// and its photos takes calls to Slack.
+    pub fn listen(&self, mut on_tap: impl FnMut(Tap), mut on_message: impl FnMut(Value)) -> ! {
         let mut backoff = BACKOFF_START;
         loop {
-            if let Err(error) = self.session(&mut on_tap, &mut on_reply, &mut backoff) {
+            if let Err(error) = self.session(&mut on_tap, &mut on_message, &mut backoff) {
                 (self.log)(&format!("slack: socket: {error:#}"));
                 std::thread::sleep(backoff);
                 backoff = (backoff * 2).min(BACKOFF_CAP);
@@ -258,7 +259,7 @@ impl Slack {
     fn session(
         &self,
         on_tap: &mut impl FnMut(Tap),
-        on_reply: &mut impl FnMut(Reply),
+        on_message: &mut impl FnMut(Value),
         backoff: &mut Duration,
     ) -> Result<()> {
         let reply = self.call("apps.connections.open", &self.app_token, None)?;
@@ -321,10 +322,8 @@ impl Slack {
                 Some("hello") => *backoff = BACKOFF_START,
                 Some("disconnect") => return Ok(()),
                 Some("interactive") => self.interactive(&envelope["payload"], on_tap),
-                Some("events_api") => {
-                    if let Some(reply) = self.reply(&envelope["payload"]["event"]) {
-                        on_reply(reply);
-                    }
+                Some("events_api") if envelope["payload"]["event"]["type"] == "message" => {
+                    on_message(envelope["payload"]["event"].clone());
                 }
                 _ => {}
             }
@@ -367,7 +366,7 @@ impl Slack {
 
     /// A DM message event, when it is Saiful's reply in the thread of a
     /// posted question.
-    fn reply(&self, event: &Value) -> Option<Reply> {
+    pub fn reply(&self, event: &Value) -> Option<Reply> {
         if event["type"] != "message" || !self.by_saiful(event) {
             return None;
         }
@@ -439,7 +438,7 @@ impl Slack {
             thread_ts: thread_ts.to_string(),
             question,
             machine,
-            text: message["text"].as_str().unwrap_or_default().to_string(),
+            text: unescape(message["text"].as_str().unwrap_or_default()),
             photos,
         }
     }
@@ -582,6 +581,14 @@ fn question_of(message: &Value) -> Option<(String, String)> {
         .flat_map(|block| block["elements"].as_array().into_iter().flatten())
         .find_map(|element| serde_json::from_str::<ButtonValue>(element["value"].as_str()?).ok())
         .map(|value| (value.q, value.m))
+}
+
+/// A message's text as typed: Slack escapes `&`, `<` and `>`, and `&` last
+/// so an escape Saiful typed stays as he typed it.
+fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 /// `scheme://host[:port]` of `url`.
