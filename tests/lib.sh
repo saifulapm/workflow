@@ -86,9 +86,34 @@ run_out() {
 # real cache, and CARGO_TARGET_DIR reuses hubweb's compiled dependencies. cf
 # and wrangler each send usage telemetry unless told not to; the sandbox HOME
 # holds no Cloudflare login, so nothing else can reach the account.
+#
+# At most two cf dev servers run at once on the machine, whatever WF_JOBS
+# says: seven at once overflowed the mini's memory. A test takes one of two
+# slots (flock files in WF_CF_SLOTS) the first time it starts cf dev and
+# holds it until it ends. The lock sits in a small watcher of the test's
+# shell, never in a file descriptor the test's children inherit, so a
+# server left behind cannot keep a slot.
 t_cf_dev() {
-	local app=$1 log=$2 _try _
+	local app=$1 log=$2 _try _ _slot _mark _pid _me=$BASHPID
 	shift 2
+	mkdir -p "${WF_CF_SLOTS:=${TMPDIR:-/tmp}/wf-cf-slots-$(id -u)}"
+	while [ -z "${_cf_slot:-}" ]; do
+		for _slot in 1 2; do
+			_mark=$WF_CF_SLOTS/$_slot.$_me
+			rm -f "$_mark"
+			flock -n -o "$WF_CF_SLOTS/$_slot" sh -c \
+				'touch "$1"; while kill -0 "$2" 2>/dev/null; do sleep 0.5; done' \
+				_ "$_mark" "$_me" </dev/null >/dev/null 2>&1 &
+			_pid=$!
+			while [ ! -e "$_mark" ] && kill -0 "$_pid" 2>/dev/null; do sleep 0.05; done
+			if [ -e "$_mark" ]; then
+				rm -f "$_mark"
+				_cf_slot=$_slot
+				break
+			fi
+		done
+		[ -n "${_cf_slot:-}" ] || sleep 0.2
+	done
 	for _try in 1 2 3; do
 		CF_DEV_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 		(
