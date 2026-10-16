@@ -2555,6 +2555,10 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
             let noun = if saved == 1 { "write" } else { "writes" };
             println!("saved {saved} {noun} to {}", crate::share::OUTBOX_FILE);
         }
+        ShareCommand::Switch => {
+            crate::share::switch(&db)?;
+            println!("switched: every project and the global items share from now on");
+        }
     }
     Ok(exit::OK)
 }

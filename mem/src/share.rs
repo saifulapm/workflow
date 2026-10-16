@@ -52,7 +52,7 @@ pub fn kick() {
 /// Puts the write of `path` in the outbox when its project shares, and
 /// returns the write's id; None when the path is not shared.
 pub fn queue(db: &Path, root: &Path, path: &Path, body: Option<&[u8]>) -> Result<Option<String>> {
-    let Some((rel, false)) = shared(root, path) else {
+    let Some((rel, false)) = shared(root, path, is_switched(db)) else {
         return Ok(None);
     };
     let body = match body.map(std::str::from_utf8) {
@@ -84,7 +84,7 @@ pub fn queue_file(path: &Path) -> Result<()> {
     let Some(ctx) = CTX.get() else {
         return Ok(());
     };
-    let Some((rel, true)) = shared(&ctx.root, path) else {
+    let Some((rel, true)) = shared(&ctx.root, path, is_switched(&ctx.db)) else {
         return Ok(());
     };
     open(&ctx.db)?.execute("INSERT OR IGNORE INTO files(path) VALUES (?1)", [rel])?;
@@ -99,7 +99,7 @@ pub fn fetch_missing(path: &Path) -> bool {
     let Some(ctx) = CTX.get() else {
         return false;
     };
-    let Some((rel, true)) = shared(&ctx.root, path) else {
+    let Some((rel, true)) = shared(&ctx.root, path, is_switched(&ctx.db)) else {
         return false;
     };
     if path.exists() {
@@ -111,21 +111,46 @@ pub fn fetch_missing(path: &Path) -> bool {
 
 /// `path` relative to the store when it belongs to a shared project, with
 /// whether it is evidence or raw bytes (shared as a file) rather than text
-/// (shared as a write). Temps and conflict copies are never shared.
-fn shared(root: &Path, path: &Path) -> Option<(String, bool)> {
+/// (shared as a write). On a switched machine every project shares, and so
+/// do the global items. Temps and conflict copies are never shared.
+fn shared(root: &Path, path: &Path, switched: bool) -> Option<(String, bool)> {
     let rel = path.strip_prefix(root).ok()?;
     let parts: Vec<&str> = rel.iter().map(|p| p.to_str()).collect::<Option<_>>()?;
-    let [first, project, rest @ ..] = parts.as_slice() else {
+    let [first, second, rest @ ..] = parts.as_slice() else {
         return None;
     };
     let name = rest.last()?;
-    if *first != "projects" || name.starts_with('.') || crate::store::is_conflict_name(name) {
+    if name.starts_with('.') || crate::store::is_conflict_name(name) {
         return None;
     }
-    let store = crate::store::Store::new(root.to_path_buf());
-    let bytes = matches!(rest.first(), Some(&"evidence" | &"raw"));
-    (crate::project::declared(&store, project, "share").as_deref() == Some("true"))
-        .then(|| (parts.join("/"), bytes))
+    let rel = parts.join("/");
+    match (*first, *second, rest) {
+        ("global", "items", [_]) => switched.then_some((rel, false)),
+        ("projects", project, _) => {
+            let store = crate::store::Store::new(root.to_path_buf());
+            let bytes = matches!(rest.first(), Some(&"evidence" | &"raw"));
+            (switched
+                || crate::project::declared(&store, project, "share").as_deref() == Some("true"))
+            .then_some((rel, bytes))
+        }
+        _ => None,
+    }
+}
+
+/// Whether this machine has switched to the store: a flag beside the
+/// sharing database, never synced.
+fn is_switched(db: &Path) -> bool {
+    db.with_file_name("switched").exists()
+}
+
+/// Switches this machine to the store: from now on every project and the
+/// global items share, and the next hello asks for every write again, so
+/// the replica learns the head of each path the store already holds.
+pub fn switch(db: &Path) -> Result<()> {
+    open(db)?;
+    let flag = db.with_file_name("switched");
+    std::fs::write(&flag, "").with_context(|| format!("writing {}", flag.display()))?;
+    resync(db)
 }
 
 fn is_item(rel: &str) -> bool {
@@ -274,7 +299,7 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
             };
             // The store carries every machine's shared projects; this
             // replica lands only the ones it shares too.
-            if !all && shared(root, &file).is_none() {
+            if !all && shared(root, &file, is_switched(db)).is_none() {
                 raise_seq(&tx, seen)?;
                 tx.commit()?;
                 return Ok(());
@@ -439,17 +464,18 @@ fn take(conn: &Connection, id: &str) -> Result<Option<(String, Option<String>)>>
 }
 
 /// Where a store path lives in this replica, or None for a path that would
-/// leave the projects directory.
+/// leave the projects directory or the global items.
 fn replica_path(root: &Path, rel: &str) -> Option<PathBuf> {
     let rel = Path::new(rel);
-    let mut parts = rel.components();
-    if parts.next() != Some(Component::Normal("projects".as_ref())) {
+    if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
         return None;
     }
-    if !rel.components().all(|c| matches!(c, Component::Normal(_))) || parts.count() < 2 {
-        return None;
-    }
-    Some(root.join(rel))
+    let parts: Vec<&str> = rel.iter().map(|p| p.to_str()).collect::<Option<_>>()?;
+    let inside = matches!(
+        parts.as_slice(),
+        ["global", "items", _] | ["projects", _, _, ..]
+    );
+    inside.then(|| root.join(rel))
 }
 
 /// Writes or removes the replica's copy, never through the outbox: this is

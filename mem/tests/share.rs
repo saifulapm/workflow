@@ -752,3 +752,93 @@ fn a_raw_file_missing_from_the_replica_is_fetched_through_the_hub() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert_eq!(out.stdout, bytes);
 }
+
+fn switched(tag: &str) -> World {
+    let w = World::new(tag);
+    w.project(ID, "walk");
+    let out = mem(&w, w.dir.path(), &["share", "switch"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    w
+}
+
+#[test]
+fn a_switched_machine_shares_a_project_that_never_said_share() {
+    let w = switched("share-switched-project");
+    walk(&w, &["log", "after the switch"]);
+    let writes = pending(&w);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert!(
+        writes[0]["path"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("projects/{ID}/items/"))
+    );
+}
+
+#[test]
+fn a_switched_machine_shares_a_global_item() {
+    let w = switched("share-switched-global");
+    let out = mem(&w, w.dir.path(), &["save", "a standing rule", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let item: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        item["path"].as_str().unwrap().contains("/global/items/"),
+        "{item}"
+    );
+    let writes = pending(&w);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert!(
+        writes[0]["path"]
+            .as_str()
+            .unwrap()
+            .starts_with("global/items/"),
+        "{writes:?}"
+    );
+}
+
+#[test]
+fn a_machine_that_has_not_switched_keeps_global_items_to_itself() {
+    let w = shared("share-global-unswitched");
+    let out = mem(&w, w.dir.path(), &["save", "a standing rule"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(pending(&w).is_empty());
+}
+
+#[test]
+fn a_streamed_global_item_lands_in_a_switched_replica() {
+    let w = switched("share-global-lands");
+    let rel = "global/items/01K0SHAREGLOBAL00000000001.md";
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC0000000000000G",
+                 "path": rel, "body": "+++\nkind = \"fact\"\n+++\n\nrule\n", "machine": "nuc"}),
+        ],
+    );
+    assert!(w.dirs().store().join(rel).exists());
+    assert_eq!(hello(&w)["since"], 1);
+}
+
+#[test]
+fn a_streamed_global_item_is_not_landed_where_the_machine_has_not_switched() {
+    let w = shared("share-global-not-landed");
+    let rel = "global/items/01K0SHAREGLOBAL00000000002.md";
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC0000000000000H",
+                 "path": rel, "body": "x", "machine": "nuc"}),
+        ],
+    );
+    assert!(!w.dirs().store().join(rel).exists());
+}
+
+#[test]
+fn switching_asks_the_store_for_every_write_again() {
+    let w = shared("share-switch-resync");
+    apply(&w, &[json!({"t": "ready", "seq": 7})]);
+    assert_eq!(hello(&w)["since"], 7);
+    let out = mem(&w, w.dir.path(), &["share", "switch"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(hello(&w)["since"], 0);
+}

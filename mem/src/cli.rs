@@ -307,6 +307,9 @@ pub enum ShareCommand {
     /// Save the writes still waiting into `.mem-outbox.json` at the top of
     /// this git checkout and stage it, for the next machine to import.
     Export,
+    /// Switch this machine to the store: every project and the global items
+    /// share from now on, and the hub's next hello replays every write.
+    Switch,
 }
 
 /// Who made a decision: Saiful, or an agent taking the default.
