@@ -26,13 +26,17 @@ pub fn target(path_and_query: &str) -> Option<String> {
         .split_once('?')
         .unwrap_or((path_and_query, ""));
     if path == "/store/files" {
-        let raw = query.split('&').find_map(|p| p.strip_prefix("project="))?;
-        let project = decode(raw)?;
-        return (!matches!(project.as_str(), "" | "." | "..") && !project.contains('/'))
-            .then_some(project);
+        return project_param(query);
     }
     let file = decode(path.strip_prefix("/store/files/")?)?;
     project_of(&file).map(str::to_string)
+}
+
+/// The `project=<id>` of a query: one plain path segment.
+pub fn project_param(query: &str) -> Option<String> {
+    let raw = query.split('&').find_map(|p| p.strip_prefix("project="))?;
+    let project = decode(raw)?;
+    (!matches!(project.as_str(), "" | "." | "..") && !project.contains('/')).then_some(project)
 }
 
 /// The name of a `/store/dl/<name>` request, a built binary such as

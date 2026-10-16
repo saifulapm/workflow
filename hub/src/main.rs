@@ -28,6 +28,7 @@ Usage: hub [OPTIONS]
        hub share seed
        hub share mint <RUNNER>
        hub share put-bin <NAME> <FILE>
+       hub share move
 
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
@@ -47,15 +48,19 @@ Commands:
   share sync    Bring this machine's replica up to the store (HUB_STORE_URL
                 and HUB_STORE_TOKEN) once, landing every shared project, and
                 end; it fails when the store cannot be reached
-  share seed    Import into the store every item, page and file under 90
-                days this machine's store holds and the store does not, as
-                far as the store's import budget for the day allows; exits 0
+  share seed    Import into the store every item, page and file this
+                machine's store holds and the store does not, as far as
+                the store's import budget for the day allows; exits 0
                 once the store holds them all, 3 when the day's budget is
                 spent (run it again after 06:00 Dhaka), 1 when anything else
                 stopped it
   share mint    Print a new store token for one machine, by its runner
                 name, from the store (HUB_STORE_URL) and the shared store
                 bearer read from stdin
+  share move    Move every file the store kept as rows of its Files objects
+                into R2 (HUB_STORE_URL and the shared HUB_STORE_TOKEN), each
+                copy checked by size and SHA-256 before its rows go; exits 0
+                once no file is left as rows
   share put-bin Put FILE in the store (HUB_STORE_URL and HUB_STORE_TOKEN)
                 as the binary NAME, such as mem-x86_64, which a cloud
                 session's setup fetches, and print the bytes stored
@@ -83,6 +88,8 @@ struct Args {
     mint: Option<String>,
     /// `share put-bin <name> <file>`: a build for cloud sessions.
     put_bin: Option<(String, String)>,
+    /// `share move`: the store's files into R2.
+    move_files: bool,
     config: Option<PathBuf>,
     port: Option<u16>,
 }
@@ -98,6 +105,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
         seed: false,
         mint: None,
         put_bin: None,
+        move_files: false,
         config: None,
         port: None,
     };
@@ -111,6 +119,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
             "share" => match argv.next().as_deref() {
                 Some("sync") => args.sync = true,
                 Some("seed") => args.seed = true,
+                Some("move") => args.move_files = true,
                 Some("mint") => {
                     args.mint = Some(argv.next().context("share mint needs a runner name")?)
                 }
@@ -119,7 +128,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
                     let file = argv.next().context("share put-bin needs a file")?;
                     args.put_bin = Some((name, file));
                 }
-                _ => anyhow::bail!("share takes sync, seed, mint or put-bin\n\n{USAGE}"),
+                _ => anyhow::bail!("share takes sync, seed, mint, put-bin or move\n\n{USAGE}"),
             },
             "ping" => match argv.next().context("ping needs a host")? {
                 help if help == "-h" || help == "--help" => {
@@ -188,6 +197,13 @@ fn run() -> Result<()> {
         let stored = hub::bin_upload::run(&store, &name, &file)?;
         println!("stored {name}: {stored} bytes");
         return Ok(());
+    }
+    if args.move_files {
+        let store = hub::share::from_env()
+            .context("hub share move needs HUB_STORE_URL and HUB_STORE_TOKEN")?;
+        let moved = hub::files_move::run(&store)?;
+        println!("{}", moved.summary());
+        std::process::exit(moved.code());
     }
     if let Some(runner) = args.mint {
         return hub::mint::run(&runner);

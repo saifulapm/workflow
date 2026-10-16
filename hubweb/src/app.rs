@@ -41,6 +41,11 @@ const DL: &str = "dl";
 /// The R2 bucket that keeps every file whole, keyed by its store path.
 const BUCKET: &str = "FILES_BUCKET";
 const DL_EXPECTED: &str = "Expected /store/dl/<name> of a-z 0-9 _ . -";
+/// What a write refused at the store's own day cap is told.
+const DAY_CAP: &str = "The store's day cap is reached, writes wait until 06:00";
+/// About how many bytes one move request copies into R2: at least one file,
+/// and none after this many.
+const MOVE_BYTES: usize = 32 << 20;
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -124,14 +129,35 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         let Some(project) = files::target(&path_and_query(&req)) else {
             return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
         };
+        // The store lists R2, counting each page it asks for.
         if path == "/store/files" {
-            return env
-                .durable_object(FILES)?
-                .get_by_name_with_location_hint(&project, STORE_LOCATION)?
-                .fetch_with_request(req)
-                .await;
+            return store(&env, object)?.fetch_with_request(req).await;
         }
         return file(req, &env, object, &project).await;
+    }
+    // The one-time move of the Files objects' rows into R2, by the shared
+    // bearer alone: GET names the projects the store knows, and each POST
+    // has one project's Files object, or `dl`'s, move a batch.
+    if path == "/store/move" {
+        if !bearer(&req, &env)? {
+            return Response::error("Unauthorized", 401);
+        }
+        return match req.method() {
+            Method::Get => store(&env, object)?.fetch_with_request(req).await,
+            Method::Post => {
+                let query = req.url()?.query().unwrap_or_default().to_string();
+                let Some(project) = files::project_param(&query) else {
+                    return Response::error("Expected ?project=<id>", 400);
+                };
+                let mut init = RequestInit::new();
+                init.with_method(Method::Post);
+                env.durable_object(FILES)?
+                    .get_by_name_with_location_hint(&project, STORE_LOCATION)?
+                    .fetch_with_request(Request::new_with_init("https://files/move", &init)?)
+                    .await
+            }
+            _ => Response::error("Method Not Allowed", 405),
+        };
     }
     // A machine with the store token asks for a pairing code.
     if req.method() == Method::Post && path == "/store/pair" {
@@ -683,6 +709,43 @@ impl Store {
         Ok(())
     }
 
+    /// Counts one R2 operation against the day's cap, or the answer that
+    /// refuses it.
+    fn r2_refusal(&self) -> Result<Option<Response>> {
+        match share::r2_write(&mut SqlLog(&self.sql)) {
+            Ok(()) => Ok(None),
+            Err(Fault::Cap) => Response::error(DAY_CAP, 503).map(Some),
+            Err(Fault::Limit) => Response::error("Cloudflare limit reached", 503).map(Some),
+            Err(Fault::Broken(why)) => Err(Error::RustError(why)),
+        }
+    }
+
+    /// Every file R2 holds of `project`, with its upload time in ms, by path;
+    /// each page of the listing is one R2 operation of the day's cap.
+    async fn list_files(&self, project: &str) -> Result<Response> {
+        let bucket = self.env.bucket(BUCKET)?;
+        let mut rows = Vec::new();
+        let mut cursor = None;
+        loop {
+            if let Some(refused) = self.r2_refusal()? {
+                return Ok(refused);
+            }
+            let mut list = bucket.list().prefix(format!("projects/{project}/"));
+            if let Some(cursor) = cursor.take() {
+                list = list.cursor(cursor);
+            }
+            let page = list.execute().await?;
+            for found in page.objects() {
+                rows.push(json!({"path": found.key(), "at": found.uploaded().as_millis()}));
+            }
+            match page.cursor().filter(|_| page.truncated()) {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Response::from_json(&rows)
+    }
+
     /// Keeps the commands a page queued and sends each at once as a cmd
     /// frame to every machine socket; a machine that is away gets it from
     /// the replay. Then one nudge, so open pages read `waiting for`.
@@ -997,11 +1060,8 @@ impl DurableObject for Store {
                 let Some(key) = files::key(path) else {
                     return Response::error("Expected projects/<id>/evidence|raw/<name>", 400);
                 };
-                if share::r2_write(&mut SqlLog(&self.sql)).is_err() {
-                    return Response::error(
-                        "The store's day cap is reached, writes wait until 06:00",
-                        503,
-                    );
+                if let Some(refused) = self.r2_refusal()? {
+                    return Ok(refused);
                 }
                 let body = match req.inner().body() {
                     Some(stream) => Data::ReadableStream(stream),
@@ -1009,6 +1069,21 @@ impl DurableObject for Store {
                 };
                 self.env.bucket(BUCKET)?.put(key, body).execute().await?;
                 Ok(Response::empty()?.with_status(204))
+            }
+            (Method::Get, "/store/files") => {
+                let query = req.url()?.query().unwrap_or_default().to_string();
+                let Some(project) = files::project_param(&query) else {
+                    return Response::error("Expected ?project=<id>", 400);
+                };
+                self.list_files(&project).await
+            }
+            (Method::Get, "/store/move") => {
+                let rows: Vec<Value> = self
+                    .sql
+                    .exec("SELECT DISTINCT project FROM files ORDER BY project", None)?
+                    .to_array()?;
+                let projects: Vec<&Value> = rows.iter().map(|row| &row["project"]).collect();
+                Response::from_json(&json!({ "projects": projects }))
             }
             (_, path) if path.starts_with("/page/pair/") => self.pair(req).await,
             // A bare round trip, the baseline a page's build is measured by.
@@ -1233,11 +1308,12 @@ impl DurableObject for Store {
 /// `files::CHUNK` bytes in the object's SQLite, read until they move.
 #[durable_object]
 pub struct Files {
+    env: Env,
     sql: SqlStorage,
 }
 
 impl DurableObject for Files {
-    fn new(state: State, _env: Env) -> Self {
+    fn new(state: State, env: Env) -> Self {
         let sql = state.storage().sql();
         sql.exec(
             "CREATE TABLE IF NOT EXISTS chunks(path TEXT, n INTEGER, data BLOB, \
@@ -1259,10 +1335,16 @@ impl DurableObject for Files {
             vec![(now_ms() as i64).into()],
         )
         .expect("time the files stored before the stored table");
-        Self { sql }
+        Self { env, sql }
     }
 
     async fn fetch(&self, req: Request) -> Result<Response> {
+        if req.method() == Method::Post && req.path() == "/move" {
+            return self
+                .move_batch()
+                .await
+                .and_then(|moved| Response::from_json(&moved));
+        }
         if req.path() == "/store/files" {
             return match req.method() {
                 Method::Get => self.list().and_then(|rows| Response::from_json(&rows)),
@@ -1304,6 +1386,67 @@ impl DurableObject for Files {
 }
 
 impl Files {
+    /// Copies files into R2, oldest path first, until about `MOVE_BYTES`
+    /// have gone. Each is put with its SHA-256, which R2 checks against the
+    /// bytes it got, and its rows go only once the stored object's size and
+    /// SHA-256 match them. A path R2 already holds with other bytes was put
+    /// again since the move to R2, so that newer copy stays and the rows go.
+    async fn move_batch(&self) -> Result<Value> {
+        let bucket = self.env.bucket(BUCKET)?;
+        let paths: Vec<Value> = self
+            .sql
+            .exec("SELECT DISTINCT path FROM chunks ORDER BY path", None)?
+            .to_array()?;
+        let (mut moved, mut newer, mut sent) = (0, 0, 0);
+        let mut failed = Vec::new();
+        for path in paths.iter().filter_map(|row| row["path"].as_str()) {
+            if sent >= MOVE_BYTES {
+                break;
+            }
+            let bytes = files::join(self.get(path)?);
+            let (size, digest) = (bytes.len(), digest(&bytes).await?);
+            let same = |found: &Object| {
+                found.size() == size as u64 && found.checksum().sha256.as_ref() == Some(&digest)
+            };
+            match bucket.head(path).await? {
+                Some(held) if same(&held) => moved += 1,
+                Some(_) => newer += 1,
+                None => {
+                    let put = bucket
+                        .put(path, bytes)
+                        .sha256(digest.clone())
+                        .execute()
+                        .await;
+                    match put {
+                        Ok(Some(found)) if same(&found) => moved += 1,
+                        Ok(_) => {
+                            failed.push(json!({"path": path, "why": "the copy differs"}));
+                            continue;
+                        }
+                        Err(error) => {
+                            failed.push(json!({"path": path, "why": error.to_string()}));
+                            continue;
+                        }
+                    }
+                }
+            }
+            self.sql
+                .exec("DELETE FROM chunks WHERE path = ?", vec![path.into()])?;
+            self.sql
+                .exec("DELETE FROM stored WHERE path = ?", vec![path.into()])?;
+            sent += size.max(1);
+        }
+        let left: Vec<Value> = self
+            .sql
+            .exec("SELECT COUNT(DISTINCT path) AS n FROM chunks", None)?
+            .to_array()?;
+        let left = left
+            .first()
+            .and_then(|row| row["n"].as_f64())
+            .unwrap_or(0.0) as i64;
+        Ok(json!({"moved": moved, "newer": newer, "left": left, "failed": failed}))
+    }
+
     /// Every stored path with its upload time in ms, by path.
     fn list(&self) -> Result<Vec<Value>> {
         let rows: Vec<Value> = self
@@ -1778,13 +1921,17 @@ fn random() -> Result<[u8; 10]> {
 
 /// The SHA-256 of `text`, in hex, from the runtime's WebCrypto.
 async fn sha256(text: &str) -> Result<String> {
+    Ok(hex(&digest(text.as_bytes()).await?))
+}
+
+/// The SHA-256 of `bytes`, from the runtime's WebCrypto.
+async fn digest(bytes: &[u8]) -> Result<Vec<u8>> {
     let crypto: web_sys::Crypto =
         js_sys::Reflect::get(&js_sys::global(), &"crypto".into())?.unchecked_into();
     let digest = crypto
         .subtle()
-        .digest_with_str_and_u8_array("SHA-256", text.as_bytes())?;
-    let bytes = js_sys::Uint8Array::new(&JsFuture::from(digest).await?).to_vec();
-    Ok(hex(&bytes))
+        .digest_with_str_and_u8_array("SHA-256", bytes)?;
+    Ok(js_sys::Uint8Array::new(&JsFuture::from(digest).await?).to_vec())
 }
 
 fn hex(bytes: &[u8]) -> String {
