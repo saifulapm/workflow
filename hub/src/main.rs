@@ -34,8 +34,13 @@ Commands:
   dulali-token  Print Dulali's token for the dulali socket, making it the
                 first time
   local         Run this machine's local hub: the peer port (8789) for other
-                local hubs, and a socket for mem. HUB_PEER_TOKEN is required
-  ping          Ask another local hub its machine name, with HUB_PEER_TOKEN
+                local hubs, and a socket for mem. A device needs
+                HUB_PEER_TOKEN, the device token, and takes HUB_CLOUD_TOKEN
+                for asking only; a cloud session needs HUB_CLOUD_TOKEN and
+                HUB_PEER_TOKEN_SHA256, the device token's sha256, and opens
+                no Slack socket
+  ping          Ask another local hub its machine name, with the token
+                this machine's local hub sends
   share sync    Bring this machine's replica up to the store (HUB_STORE_URL
                 and HUB_STORE_TOKEN) once, landing every shared project, and
                 end; it fails when the store cannot be reached
@@ -243,7 +248,8 @@ fn mcp_listener(config: &Config) -> Result<Option<(TcpListener, Access)>> {
 fn run_local(port: u16) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let token = local::token_from_env()?;
+    let tokens = local::token_from_env()?;
+    let cloud = tokens.cloud();
     http::allow_answer_uploads();
     let listener = TcpListener::bind(("127.0.0.1", port))
         .with_context(|| format!("binding 127.0.0.1:{port}"))?;
@@ -274,7 +280,7 @@ fn run_local(port: u16) -> Result<()> {
     // the real store.
     let store = hub::share::from_env();
     let local = Arc::new(
-        local::Local::new(machine, host.clone(), token, slack.clone()).with_store(store.clone()),
+        local::Local::new(machine, host.clone(), tokens, slack.clone()).with_store(store.clone()),
     );
     {
         let local = Arc::clone(&local);
@@ -293,7 +299,12 @@ fn run_local(port: u16) -> Result<()> {
     let notice = slack.clone();
     // The stall bell posts to Slack too, store or none.
     let bell = slack.clone();
-    if let Some(slack) = slack {
+    if cloud && slack.is_some() {
+        // Slack hands a tap to any open socket; a hub without the device
+        // token could not pass another machine's tap on, and must not take it.
+        eprintln!("hub: local: a cloud session opens no Slack socket; taps reach the devices");
+    }
+    if let Some(slack) = slack.filter(|_| !cloud) {
         let local = Arc::clone(&local);
         let replies = Arc::clone(&local);
         let catch_up = Arc::clone(&local);
@@ -378,8 +389,8 @@ fn run_local(port: u16) -> Result<()> {
 
 /// `hub ping`: prints the machine name another local hub answers with.
 fn ping(target: &str) -> Result<()> {
-    let token = local::token_from_env()?;
-    let (status, body) = local::request(target, "GET", "/ping", &token, b"")?;
+    let tokens = local::token_from_env()?;
+    let (status, body) = local::request(target, "GET", "/ping", tokens.send(), b"")?;
     if status != 200 {
         anyhow::bail!("{target} answered {status}: {}", body.trim());
     }

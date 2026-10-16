@@ -33,14 +33,83 @@ const PEER_TIMEOUT: Duration = Duration::from_secs(10);
 /// The longest a wait is held open; mem asks again.
 const MAX_HOLD: Duration = Duration::from_secs(25);
 
-/// The peer token, from the environment only: a flag would put it in `ps`.
-pub fn token_from_env() -> Result<String> {
-    let token = std::env::var("HUB_PEER_TOKEN").unwrap_or_default();
-    let token = token.trim();
-    if token.is_empty() {
-        bail!("HUB_PEER_TOKEN is not set; the local hub will not take requests it cannot check");
+/// The peer tokens, from the environment only: a flag would put them in `ps`.
+/// A device holds the device token (`HUB_PEER_TOKEN`) and may hold the cloud
+/// token (`HUB_CLOUD_TOKEN`) too; a cloud session holds the cloud token and
+/// the device token's sha256 (`HUB_PEER_TOKEN_SHA256`), so an agent there can
+/// never send what a device sends.
+pub fn token_from_env() -> Result<Tokens> {
+    let var = |name| {
+        let value = std::env::var(name).unwrap_or_default();
+        Some(value.trim().to_string()).filter(|v| !v.is_empty())
+    };
+    let cloud = var("HUB_CLOUD_TOKEN");
+    if let Some(device) = var("HUB_PEER_TOKEN") {
+        return Ok(Tokens {
+            send: device.clone(),
+            device: Device::Token(device),
+            cloud,
+        });
     }
-    Ok(token.to_string())
+    match (cloud, var("HUB_PEER_TOKEN_SHA256")) {
+        (Some(cloud), Some(sha256)) => Ok(Tokens {
+            send: cloud.clone(),
+            device: Device::Sha256(sha256),
+            cloud: Some(cloud),
+        }),
+        _ => bail!(
+            "neither HUB_PEER_TOKEN nor HUB_CLOUD_TOKEN with HUB_PEER_TOKEN_SHA256 is set; \
+             the local hub will not take requests it cannot check"
+        ),
+    }
+}
+
+/// The tokens this hub sends and takes on the peer port.
+pub struct Tokens {
+    send: String,
+    device: Device,
+    cloud: Option<String>,
+}
+
+/// How a device's bearer is known: by the token itself, or, in a cloud
+/// session, only by its sha256.
+enum Device {
+    Token(String),
+    Sha256(String),
+}
+
+impl Tokens {
+    /// The token this hub's own peer requests carry.
+    pub fn send(&self) -> &str {
+        &self.send
+    }
+
+    /// Whether this hub runs without the device token, as a cloud session.
+    pub fn cloud(&self) -> bool {
+        matches!(self.device, Device::Sha256(_))
+    }
+
+    fn is_device(&self, request: &Request) -> bool {
+        let Some(given) = bearer(request) else {
+            return false;
+        };
+        match &self.device {
+            Device::Token(token) => same(given, token),
+            Device::Sha256(hex) => {
+                use sha2::Digest as _;
+                let digest = sha2::Sha256::digest(given.as_bytes());
+                let given: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+                same(&given, hex)
+            }
+        }
+    }
+
+    fn is_cloud(&self, request: &Request) -> bool {
+        match (bearer(request), &self.cloud) {
+            (Some(given), Some(cloud)) => same(given, cloud),
+            _ => false,
+        }
+    }
 }
 
 /// The name other local hubs reach this one by: `HUB_HOST`, else this
@@ -74,7 +143,9 @@ pub struct Local {
     machine: String,
     /// What `host` gives: the name peers and Slack buttons use.
     host: String,
+    /// What this hub's peer requests carry.
     token: String,
+    tokens: Tokens,
     slack: Option<Arc<Slack>>,
     /// Whether this machine's mem writes its own store; a cloud session's
     /// runs on the mem server, which refuses an answer.
@@ -101,7 +172,7 @@ pub struct Local {
 }
 
 impl Local {
-    pub fn new(machine: String, host: String, token: String, slack: Option<Arc<Slack>>) -> Local {
+    pub fn new(machine: String, host: String, tokens: Tokens, slack: Option<Arc<Slack>>) -> Local {
         let remote = std::env::var_os("MEM_REMOTE").is_some_and(|v| !v.is_empty());
         Local {
             machine,
@@ -109,7 +180,8 @@ impl Local {
             posted: Arc::new(Mutex::new(HashMap::new())),
             route_now: LocalRoute::load(),
             host,
-            token,
+            token: tokens.send.clone(),
+            tokens,
             slack,
             records: !remote,
             asked: Mutex::new(HashMap::new()),
@@ -133,10 +205,20 @@ impl Local {
 
     /// A request on the peer port.
     pub fn peer(&self, request: &Request) -> Response {
-        if !bearer_matches(request, &self.token) {
+        if self.tokens.is_device(request) {
+            return self.route(request);
+        }
+        if !self.tokens.is_cloud(request) {
             return Response::text(401, "a peer token is needed");
         }
-        self.route(request)
+        // A cloud session's agent holds the cloud token, so it may ring and
+        // tell of its own questions but never answer one.
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/ping" | "/route") | ("POST", "/ring" | "/question" | "/closed") => {
+                self.route(request)
+            }
+            _ => Response::text(403, "a cloud session may only ask"),
+        }
     }
 
     /// A request on mem's socket. Only mem may kick the sharing thread or
@@ -1392,16 +1474,17 @@ fn answered_in_store(project: Option<&str>, question: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Whether `Authorization: Bearer <token>` names `token`, compared in
-/// constant time.
-fn bearer_matches(request: &Request, token: &str) -> bool {
-    let Some(given) = request
+/// The token in `Authorization: Bearer <token>`.
+fn bearer(request: &Request) -> Option<&str> {
+    request
         .header("authorization")
         .and_then(|v| v.strip_prefix("Bearer "))
-    else {
-        return false;
-    };
-    let (a, b) = (given.trim().as_bytes(), token.as_bytes());
+        .map(str::trim)
+}
+
+/// Whether `given` is `token`, compared in constant time.
+fn same(given: &str, token: &str) -> bool {
+    let (a, b) = (given.as_bytes(), token.as_bytes());
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
