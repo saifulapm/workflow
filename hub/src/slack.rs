@@ -54,6 +54,8 @@ pub struct Posted {
 }
 
 /// Saiful's tap on a button: the asking machine, the question and the option.
+/// A tap on a stall's Resume button carries `resume` instead, and `machine`
+/// is then the runner's local hub.
 #[derive(Debug)]
 pub struct Tap {
     pub machine: String,
@@ -61,6 +63,26 @@ pub struct Tap {
     pub answer: String,
     pub channel: String,
     pub ts: String,
+    pub resume: Option<Resume>,
+}
+
+/// What a stall's Resume button names: the project, and its runner by the
+/// name workflow records.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resume {
+    #[serde(rename = "p")]
+    pub project: String,
+    #[serde(rename = "m")]
+    pub runner: String,
+}
+
+/// A Resume button's `value`: `k` is `resume`, `h` the runner's local hub.
+#[derive(Deserialize)]
+struct ResumeValue {
+    k: String,
+    h: String,
+    #[serde(flatten)]
+    resume: Resume,
 }
 
 /// Saiful's reply in a question's thread: its words and the photos it brought.
@@ -224,8 +246,14 @@ impl Slack {
 
     /// Posts a stall to the bot's DM with Saiful, with one Resume button
     /// that names the project and the machine to run it on again.
-    pub fn post_stall(&self, text: &str, project: &str, machine: &str) -> Result<Posted> {
-        let value = json!({"k": "resume", "m": machine, "p": project});
+    pub fn post_stall(
+        &self,
+        text: &str,
+        project: &str,
+        machine: &str,
+        hub: &str,
+    ) -> Result<Posted> {
+        let value = json!({"k": "resume", "m": machine, "h": hub, "p": project});
         let body = json!({
             "channel": self.user_id,
             "text": cut(text, TEXT_MAX),
@@ -250,6 +278,18 @@ impl Slack {
     pub fn post_text(&self, text: &str) -> Result<()> {
         let body = json!({"channel": self.user_id, "text": text});
         self.call("chat.postMessage", &self.bot_token, Some(&body))?;
+        Ok(())
+    }
+
+    /// Replaces a message's blocks with one line, so it offers no second tap.
+    pub fn replace_with_line(&self, channel: &str, ts: &str, line: &str) -> Result<()> {
+        let body = json!({
+            "channel": channel,
+            "ts": ts,
+            "text": cut(line, TEXT_MAX),
+            "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": cut(&escape(line), SECTION_MAX)}}],
+        });
+        self.call("chat.update", &self.bot_token, Some(&body))?;
         Ok(())
     }
 
@@ -370,13 +410,33 @@ impl Slack {
         if payload["type"] != "block_actions" {
             return;
         }
-        let Some(value) = payload["actions"][0]["value"]
-            .as_str()
-            .and_then(|v| serde_json::from_str::<ButtonValue>(v).ok())
-        else {
+        let raw = payload["actions"][0]["value"].as_str().unwrap_or_default();
+        let user = payload["user"]["id"].as_str().unwrap_or_default();
+        let container = &payload["container"];
+        let field = |name: &str| container[name].as_str().unwrap_or_default().to_string();
+        if let Ok(value) = serde_json::from_str::<ResumeValue>(raw)
+            && value.k == "resume"
+        {
+            if user != self.user_id {
+                (self.log)(&format!(
+                    "slack: refused a tap by {user} on Resume {}",
+                    value.resume.project
+                ));
+                return;
+            }
+            on_tap(Tap {
+                machine: value.h,
+                question: String::new(),
+                answer: String::new(),
+                channel: field("channel_id"),
+                ts: field("message_ts"),
+                resume: Some(value.resume),
+            });
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<ButtonValue>(raw) else {
             return;
         };
-        let user = payload["user"]["id"].as_str().unwrap_or_default();
         if user != self.user_id {
             (self.log)(&format!(
                 "slack: refused a tap by {user} on question {}",
@@ -384,19 +444,13 @@ impl Slack {
             ));
             return;
         }
-        let container = &payload["container"];
         on_tap(Tap {
             machine: value.m,
             question: value.q,
             answer: value.o,
-            channel: container["channel_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            ts: container["message_ts"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
+            channel: field("channel_id"),
+            ts: field("message_ts"),
+            resume: None,
         });
     }
 

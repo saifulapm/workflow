@@ -255,8 +255,9 @@ fn run_local(port: u16) -> Result<()> {
     // Sharing only with both set: a test that names neither never reaches
     // the real store.
     let store = hub::share::from_env();
-    let local =
-        Arc::new(local::Local::new(machine, host, token, slack.clone()).with_store(store.clone()));
+    let local = Arc::new(
+        local::Local::new(machine, host.clone(), token, slack.clone()).with_store(store.clone()),
+    );
     {
         let local = Arc::clone(&local);
         std::thread::Builder::new()
@@ -327,10 +328,10 @@ fn run_local(port: u16) -> Result<()> {
     // A parked session's answers may come with no network at all, from the
     // popup or `mem answer` here, so this needs no store; nor do the rings.
     if let Some(name) = hub::fleet::runner_name() {
-        let (name_too, slack) = (name.clone(), bell);
+        let (name_too, slack, hub_host) = (name.clone(), bell, host.clone());
         std::thread::Builder::new()
             .name("hub-stalls".to_string())
-            .spawn(move || hub::stalls::run(name_too, slack))
+            .spawn(move || hub::stalls::run(name_too, hub_host, slack))
             .context("starting the stall bell")?;
         std::thread::Builder::new()
             .name("hub-parked".to_string())

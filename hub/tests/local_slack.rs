@@ -852,3 +852,187 @@ fn a_photo_bigger_than_a_request_reaches_the_hub_that_asked() {
         big
     );
 }
+
+/// A hub that runs walk01, stalled: its mem lists walk01 with this
+/// machine (`mini`) as runner, its amx lists the session stopped, and its
+/// systemd-run records each call to `ran`. It posts the stall itself.
+fn spawn_runner(dir: &TempDir, slack: &Fake, log: &Path) -> Hub {
+    let bin = dir.join("bin");
+    std::fs::write(
+        dir.join("projects.json"),
+        json!({"projects": [{
+            "name": "walk01", "checkouts": ["/x"], "roadmap_status": "approved",
+            "milestone": "w2", "milestones_done": 1, "milestones_total": 3,
+            "runner": {"machine": "mini", "id": "walk01-w2", "milestone": null,
+                       "since": "2026-10-16T00:00:00Z"}}]})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("amx.json"),
+        r#"[{"id":"walk01-w2","state":"stopped","ended":9,"created":5}]"#,
+    )
+    .unwrap();
+    common::fixture_mem(
+        &bin,
+        &format!(
+            "case \"$*\" in\n\
+             *questions*) echo '{{\"questions\":[]}}' ;;\n\
+             'projects --json') cat '{d}/projects.json' ;;\n\
+             handoff*) echo '{{\"body\":\"Next: w2.\"}}' ;;\n\
+             esac",
+            d = dir.path().display()
+        ),
+    );
+    common::fixture_bin(
+        &bin,
+        "amx",
+        &format!("cat '{}/amx.json'", dir.path().display()),
+    );
+    common::fixture_bin(
+        &bin,
+        "systemd-run",
+        &format!("echo \"$*\" >> '{}/ran'", dir.path().display()),
+    );
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), "mac-mini").unwrap();
+    let socket = dir.join("local.sock");
+    Hub::spawn_with_stderr(
+        &home,
+        &[&bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("HUB_HOST", "127.0.0.1"),
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_STALL_CHECK_MS", "100"),
+            ("HUB_STALL_AFTER_MS", "200"),
+            ("SLACK_BOT_TOKEN", BOT),
+            ("SLACK_APP_TOKEN", APP),
+            ("SLACK_USER_ID", SAIFUL),
+            ("SLACK_API_URL", &slack.api),
+        ],
+        std::fs::File::create(log).unwrap(),
+    )
+}
+
+fn ran(dir: &TempDir) -> Vec<String> {
+    std::fs::read_to_string(dir.join("ran"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// The Resume button's value on the stall the runner posted.
+fn resume_value(slack: &Fake) -> String {
+    wait_until("the stall posted", || {
+        slack
+            .calls_to("chat.postMessage")
+            .iter()
+            .any(|p| p.contains("stalled on mini"))
+    });
+    let posted = slack
+        .calls_to("chat.postMessage")
+        .into_iter()
+        .find(|p| p.contains("stalled on mini"))
+        .unwrap();
+    let message: Value = serde_json::from_str(&posted).unwrap();
+    message["blocks"][1]["elements"][0]["value"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn a_resume_tap_on_another_machine_starts_the_run_on_its_runner_once() {
+    let runner_dir = TempDir::new("ls-resume-runner");
+    let taker_dir = TempDir::new("ls-resume-taker");
+    let runner_slack = fake();
+    let taker_slack = fake_on(Arc::clone(&runner_slack.dm));
+    let _runner = spawn_runner(&runner_dir, &runner_slack, &runner_dir.join("err.log"));
+    let _taker = spawn_local(&taker_dir, "nuc", &taker_slack, &taker_dir.join("err.log"));
+    let value = resume_value(&runner_slack);
+    let carried: Value = serde_json::from_str(&value).unwrap();
+    assert_eq!(carried["k"], "resume");
+    assert_eq!(carried["m"], "mini");
+    assert_eq!(carried["p"], "walk01");
+    assert!(
+        carried["h"].as_str().unwrap().starts_with("127.0.0.1:"),
+        "the button names the runner's hub: {value}"
+    );
+
+    // Slack hands the tap to the nuc's connection.
+    let at = Instant::now();
+    taker_slack.tap(SAIFUL, &value);
+    wait_until("the start", || !ran(&runner_dir).is_empty());
+    assert!(at.elapsed() < Duration::from_secs(5), "{:?}", at.elapsed());
+    assert_eq!(
+        ran(&runner_dir),
+        ["--user --scope --quiet workflow go walk01"]
+    );
+    wait_until("the stall message updated", || {
+        taker_slack
+            .calls_to("chat.update")
+            .iter()
+            .any(|u| u.contains("resumed on mini"))
+    });
+    let update: Value = serde_json::from_str(&taker_slack.calls_to("chat.update")[0]).unwrap();
+    assert!(update["blocks"][1].is_null(), "no button is left: {update}");
+
+    // A second tap on the same button starts nothing more.
+    taker_slack.tap(SAIFUL, &value);
+    thread::sleep(Duration::from_millis(800));
+    assert_eq!(ran(&runner_dir).len(), 1, "{:?}", ran(&runner_dir));
+}
+
+#[test]
+fn a_resume_tap_on_the_runners_own_connection_starts_it_there() {
+    let dir = TempDir::new("ls-resume-own");
+    let slack = fake();
+    let _runner = spawn_runner(&dir, &slack, &dir.join("err.log"));
+    let value = resume_value(&slack);
+    slack.tap(SAIFUL, &value);
+    wait_until("the start", || !ran(&dir).is_empty());
+    assert_eq!(ran(&dir), ["--user --scope --quiet workflow go walk01"]);
+}
+
+#[test]
+fn a_resume_tap_by_anyone_but_saiful_starts_nothing() {
+    let dir = TempDir::new("ls-resume-refuse");
+    let slack = fake();
+    let _runner = spawn_runner(&dir, &slack, &dir.join("err.log"));
+    let value = resume_value(&slack);
+    slack.tap("U0SOMEONE", &value);
+    thread::sleep(Duration::from_millis(800));
+    assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
+}
+
+#[test]
+fn a_forged_resume_on_the_peer_port_needs_the_token_and_a_stalled_run_here() {
+    let dir = TempDir::new("ls-resume-forge");
+    let slack = fake();
+    let runner = spawn_runner(&dir, &slack, &dir.join("err.log"));
+    let body = r#"{"project":"walk01"}"#;
+    let (status, _) = hub::local::request(
+        &runner.origin()[7..],
+        "POST",
+        "/resume",
+        "wrong",
+        body.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(status, 401);
+    let (status, _) = hub::local::request(
+        &runner.origin()[7..],
+        "POST",
+        "/resume",
+        TOKEN,
+        br#"{"project":"walk09"}"#,
+    )
+    .unwrap();
+    assert_eq!(status, 404, "not a run of this machine");
+    assert!(ran(&dir).is_empty(), "{:?}", ran(&dir));
+}

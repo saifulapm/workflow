@@ -314,6 +314,26 @@ impl Local {
                 });
                 Response::text(200, "ok")
             }
+            // A Resume tap that reached another machine's hub.
+            ("POST", "/resume") => {
+                let project = serde_json::from_slice::<serde_json::Value>(&request.body)
+                    .ok()
+                    .and_then(|v| v["project"].as_str().map(str::to_string));
+                match project {
+                    Some(project) if project_name(&project) => {
+                        let status = crate::runs::resume_stalled(&project);
+                        Response::text(
+                            status,
+                            if status == 200 {
+                                "started"
+                            } else {
+                                "not started"
+                            },
+                        )
+                    }
+                    _ => Response::text(400, "a resume names its project"),
+                }
+            }
             ("POST", "/answer") => match serde_json::from_slice::<Answer>(&request.body) {
                 // Only the surfaces a hub passes on travel between hubs; an
                 // answer claiming any other would be recorded under a name
@@ -511,6 +531,10 @@ impl Local {
     /// Saiful's tap: the answer goes to the hub that asked, this one or a
     /// peer, and the message loses its buttons once that hub has it.
     pub fn on_tap(&self, tap: Tap) {
+        if let Some(resume) = tap.resume.clone() {
+            self.on_resume(&tap, &resume);
+            return;
+        }
         // The answer the message ends up showing: this tap's, or the one
         // that already stood, so a late tap still clears the buttons.
         let shown = if tap.machine == self.host {
@@ -565,6 +589,49 @@ impl Local {
             if let Err(e) = slack.mark_answered(&tap.channel, &tap.ts, &shown, &text) {
                 eprintln!("hub: local: #{} not marked answered: {e:#}", tap.question);
             }
+        }
+    }
+
+    /// Saiful's tap on a stall's Resume: the runner's hub, this one or a
+    /// peer, runs the project again, and the message loses its button.
+    fn on_resume(&self, tap: &Tap, resume: &crate::slack::Resume) {
+        let status = if tap.machine == self.host {
+            crate::runs::resume_stalled(&resume.project)
+        } else {
+            let body = serde_json::json!({ "project": resume.project }).to_string();
+            match request(
+                &tap.machine,
+                "POST",
+                "/resume",
+                &self.token,
+                body.as_bytes(),
+            ) {
+                Ok((status, _)) => status,
+                Err(e) => {
+                    eprintln!(
+                        "hub: local: Resume {} did not reach {}: {e:#}",
+                        resume.project, tap.machine
+                    );
+                    return;
+                }
+            }
+        };
+        let line = match status {
+            200 => format!("{} resumed on {}", resume.project, resume.runner),
+            409 => format!("{} is running on {}", resume.project, resume.runner),
+            status => {
+                eprintln!(
+                    "hub: local: {} answered {status} to Resume {}",
+                    tap.machine, resume.project
+                );
+                return;
+            }
+        };
+        eprintln!("hub: local: {line}");
+        if let Some(slack) = &self.slack
+            && let Err(e) = slack.replace_with_line(&tap.channel, &tap.ts, &line)
+        {
+            eprintln!("hub: local: the stall message kept its button: {e:#}");
         }
     }
 
@@ -1033,6 +1100,16 @@ fn tell_peers(
 }
 
 /// Whether `id` could be one of mem's short ids: letters and digits only.
+/// A project name as mem takes one: letters, digits, `-`, `_` and `.`, not
+/// leading with a dot.
+fn project_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 fn plain_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 32 && id.chars().all(|c| c.is_ascii_alphanumeric())
 }

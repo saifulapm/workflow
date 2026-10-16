@@ -99,6 +99,8 @@ fn write_rung(rung: &BTreeSet<String>) {
 
 pub struct Bell {
     machine: String,
+    /// The name peers reach this hub by, which a Resume button carries.
+    host: String,
     slack: Option<Arc<Slack>>,
     after: Duration,
     rung: BTreeSet<String>,
@@ -110,7 +112,7 @@ impl Bell {
     fn post_stall(&self, project: &str) -> bool {
         let text = format!("{project} stalled on {}", self.machine);
         match &self.slack {
-            Some(slack) => match slack.post_stall(&text, project, &self.machine) {
+            Some(slack) => match slack.post_stall(&text, project, &self.machine, &self.host) {
                 Ok(_) => true,
                 Err(e) => {
                     eprintln!("hub: stalls: posting {text:?}: {e:#}");
@@ -230,10 +232,11 @@ impl Bell {
 
 /// Looks at this machine's runs every 15 s (`HUB_STALL_CHECK_MS`); a stall
 /// rings once it has lasted 2 minutes (`HUB_STALL_AFTER_MS`).
-pub fn run(machine: String, slack: Option<Arc<Slack>>) -> ! {
+pub fn run(machine: String, host: String, slack: Option<Arc<Slack>>) -> ! {
     let every = ms_from_env("HUB_STALL_CHECK_MS", Duration::from_secs(15));
     let mut bell = Bell {
         machine,
+        host,
         slack,
         after: ms_from_env("HUB_STALL_AFTER_MS", Duration::from_secs(120)),
         rung: read_rung(),

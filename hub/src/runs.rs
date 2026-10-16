@@ -237,3 +237,54 @@ fn run(job: &Job) {
         Job::Cloud { id, .. } => eprintln!("hub: commands: cloud {id}: no longer forwarded"),
     }
 }
+
+/// When each project was last resumed from a Resume tap, so a second tap
+/// on the same button starts no second orchestrator.
+static RESUMED: Mutex<Vec<(String, std::time::Instant)>> = Mutex::new(Vec::new());
+
+/// How long after a resume another for the same project is refused.
+const RESUME_AGAIN_AFTER: Duration = Duration::from_secs(60);
+
+/// A Resume tap on a stall: `workflow go <project>` here, when this machine
+/// is its runner and its session is not live. The HTTP status says how it
+/// went: 200 started, 404 not a run of this machine, 409 already running
+/// (or resumed a moment ago), 502 the start failed.
+pub fn resume_stalled(project: &str) -> u16 {
+    let Some(machine) = fleet::runner_name() else {
+        return 404;
+    };
+    let mut command = Command::new("mem");
+    command.args(["projects", "--json"]);
+    let projects: Value = match proc::output_within(&mut command, AMX_TIMEOUT) {
+        Ended::Exited(done) if done.code == Some(0) => {
+            serde_json::from_slice(&done.stdout).unwrap_or_default()
+        }
+        _ => return 502,
+    };
+    let runner = projects["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|p| p["name"] == project)
+        .map(|p| p["runner"].clone())
+        .filter(|r| r["machine"] == machine.as_str());
+    let Some(runner) = runner else {
+        return 404;
+    };
+    if runner["id"]
+        .as_str()
+        .is_some_and(|id| session_live(id) == Some(true))
+    {
+        return 409;
+    }
+    let mut resumed = RESUMED.lock().unwrap_or_else(|e| e.into_inner());
+    resumed.retain(|(_, at)| at.elapsed() < RESUME_AGAIN_AFTER);
+    if resumed.iter().any(|(p, _)| p == project) {
+        return 409;
+    }
+    if !start_project(project, false) {
+        return 502;
+    }
+    resumed.push((project.to_string(), std::time::Instant::now()));
+    200
+}

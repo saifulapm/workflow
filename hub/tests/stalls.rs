@@ -189,7 +189,15 @@ fn a_stall_that_lasts_posts_once_with_a_resume_button() {
     let button = &post["blocks"][1]["elements"][0];
     assert_eq!(button["text"]["text"], "Resume");
     let value: Value = serde_json::from_str(button["value"].as_str().unwrap()).unwrap();
-    assert_eq!(value, json!({"k": "resume", "m": "mini", "p": "walk01"}));
+    assert_eq!(
+        (&value["k"], &value["m"], &value["p"]),
+        (&json!("resume"), &json!("mini"), &json!("walk01"))
+    );
+    // The hub to pass a tap to, as peers reach it.
+    assert!(
+        value["h"].as_str().is_some_and(|h| !h.is_empty()),
+        "{value}"
+    );
 }
 
 #[test]
