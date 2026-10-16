@@ -186,8 +186,9 @@ impl Slack {
         };
         let api = var("SLACK_API_URL").unwrap_or_else(|| DEFAULT_API.to_string());
         // ureq reads the proxy variables itself; tungstenite needs telling.
-        let proxy = var("HTTPS_PROXY").or_else(|| var("https_proxy"));
-        Ok(Some(Slack::new(bot, app, user, api).with_proxy(proxy)))
+        Ok(Some(
+            Slack::new(bot, app, user, api).with_proxy(crate::proxy::from_env()),
+        ))
     }
 
     /// Posts to the bot's DM with Saiful, one button per option.
@@ -344,10 +345,7 @@ impl Slack {
             .context("apps.connections.open returned no url")?;
         // The URL carries a one-use ticket, and tungstenite's connect error
         // quotes the URL whole, so that error is replaced.
-        let connected = match &self.proxy {
-            None => tungstenite::connect(url),
-            Some(proxy) => through_proxy(proxy, url),
-        };
+        let connected = crate::proxy::connect(url, self.proxy.as_deref());
         let (mut socket, _) = connected
             .map_err(|error| match error {
                 tungstenite::Error::Url(UrlError::UnableToConnect(_)) => {
@@ -688,68 +686,6 @@ fn origin(url: &str) -> &str {
         Some(slash) => &url[..after_scheme + slash],
         None => url,
     }
-}
-
-/// Opens `url` through the HTTP proxy at `proxy` with CONNECT, then speaks
-/// TLS (against the system's roots, which hold a cloud proxy's CA) and the
-/// WebSocket handshake over the tunnel.
-fn through_proxy(
-    proxy: &str,
-    url: &str,
-) -> tungstenite::Result<(
-    WebSocket<MaybeTlsStream<TcpStream>>,
-    tungstenite::handshake::client::Response,
-)> {
-    use std::io::{BufRead, BufReader, Write};
-
-    let unable = || tungstenite::Error::Url(UrlError::UnableToConnect(String::new()));
-    let rest = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .ok_or_else(unable)?;
-    let authority = rest.split('/').next().unwrap_or_default();
-    let target = if authority.contains(':') {
-        authority.to_string()
-    } else if url.starts_with("wss://") {
-        format!("{authority}:443")
-    } else {
-        format!("{authority}:80")
-    };
-    let proxy_at = proxy
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_string();
-    let mut stream = TcpStream::connect(&proxy_at)?;
-    write!(
-        stream,
-        "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"
-    )?;
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut status = String::new();
-    reader.read_line(&mut status)?;
-    if status.split_whitespace().nth(1) != Some("200") {
-        return Err(unable());
-    }
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 || line == "\r\n" {
-            break;
-        }
-    }
-    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .and_then(|b| {
-            use rustls_platform_verifier::BuilderVerifierExt;
-            b.with_platform_verifier()
-        })
-        .map_err(|e| tungstenite::Error::Tls(e.into()))?
-        .with_no_client_auth();
-    let connector = tungstenite::Connector::Rustls(std::sync::Arc::new(config));
-    tungstenite::client_tls_with_config(url, stream, None, Some(connector)).map_err(|e| match e {
-        tungstenite::HandshakeError::Failure(e) => e,
-        tungstenite::HandshakeError::Interrupted(_) => unable(),
-    })
 }
 
 fn read_timeout(

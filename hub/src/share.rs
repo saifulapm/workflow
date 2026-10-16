@@ -8,7 +8,6 @@
 //! to the project's files store over plain HTTP(S).
 
 use std::collections::HashSet;
-use std::net::TcpStream;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -20,10 +19,10 @@ use jiff::tz::TimeZone;
 use serde_json::Value;
 
 use crate::localroute::Stamped;
+use tungstenite::Message;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::error::UrlError;
 use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{Message, WebSocket};
 
 use crate::proc::{self, Ended};
 use crate::slack::Slack;
@@ -71,7 +70,20 @@ pub fn next_reset(now: jiff::Timestamp) -> jiff::Timestamp {
 /// the same line.
 const LIMIT_NOTICE: &str = "Cloudflare limit reached, resets 06:00";
 
-type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
+type Socket = crate::proxy::Socket;
+
+/// The store could not be reached at all: no answer, no route, or a proxy
+/// that would not open the way.
+#[derive(Debug)]
+struct Unreachable;
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the store cannot be reached")
+    }
+}
+
+impl std::error::Error for Unreachable {}
 
 /// A files request may move a 16.8 MB screenshot over a slow uplink.
 const FILE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -87,6 +99,8 @@ pub struct Store {
     url: String,
     token: String,
     access: Option<(String, String)>,
+    /// The cloud VM's HTTP proxy, which the socket tunnels through.
+    proxy: Option<String>,
     agent: ureq::Agent,
 }
 
@@ -114,6 +128,7 @@ pub fn from_env() -> Option<Store> {
         url: read("HUB_STORE_URL")?,
         token: read("HUB_STORE_TOKEN")?,
         access,
+        proxy: crate::proxy::from_env(),
         agent,
     })
 }
@@ -303,7 +318,8 @@ fn upload_pending(store: &Store) {
 }
 
 /// Holds the socket for good. A dropped or failed connection is tried again
-/// after 1, 2, 4, then 8 s, and a `ready` from the store resets the wait.
+/// after 1, 2, 4, then 8 s, and a `ready` from the store resets the wait; a
+/// store that cannot be reached at all is tried every second.
 /// `kick` is set when mem has put a write in the outbox. After the store
 /// answers `limit`, no write is sent until the next 00:00 UTC, on this
 /// connection or the next; `slack` hears of it once per Dhaka day.
@@ -321,6 +337,14 @@ pub fn run(store: Store, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! 
             slack.as_deref(),
         ) {
             Ok(()) => eprintln!("hub: share: the store closed the socket"),
+            // Cut off costs the store nothing, so it is tried every second:
+            // the outbox goes out, and other writes come in, within 2 s of
+            // the way back.
+            Err(e) if e.chain().any(|c| c.is::<Unreachable>()) => {
+                eprintln!("hub: share: disconnected: {e:#}");
+                std::thread::sleep(BACKOFF_START);
+                continue;
+            }
             Err(e) => eprintln!("hub: share: disconnected: {e:#}"),
         }
         std::thread::sleep(backoff);
@@ -339,9 +363,12 @@ fn connect(store: &Store) -> Result<Socket> {
             .with_context(|| format!("the {name} header is not a header value"))?;
         request.headers_mut().insert(name, value);
     }
-    let (socket, _) = tungstenite::connect(request)
+    let (socket, _) = crate::proxy::connect(request, store.proxy.as_deref())
         .map_err(|error| match error {
-            tungstenite::Error::Url(UrlError::UnableToConnect(_)) => anyhow!("unable to connect"),
+            // A host that cannot be reached, or a proxy that will not reach
+            // it: the store is cut off, not refusing.
+            tungstenite::Error::Url(UrlError::UnableToConnect(_)) => anyhow!(Unreachable),
+            tungstenite::Error::Io(e) => anyhow!(e).context(Unreachable),
             error => anyhow!(error),
         })
         .context("connecting to the store")?;

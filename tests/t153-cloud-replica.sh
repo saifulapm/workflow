@@ -5,7 +5,10 @@
 #
 #   - an empty replica gets every shared project, handoff included;
 #   - cut off from the store, `hub share sync` fails at once and the replica
-#     it filled before still answers.
+#     it filled before still answers;
+#   - the cloud's local hub reaches the store only through the VM's HTTP
+#     proxy (CONNECT), and once the proxy comes back after a long cut, a
+#     write the mini made meanwhile is listed in the cloud within 2 s.
 #
 # Needs what t142 needs: hubweb/node_modules, worker-build, the wasm target,
 # python3 and the hub's release binary, which tests/run.sh builds.
@@ -33,6 +36,8 @@ pids=()
 stop_all() {
 	local status=$?
 	[ -n "${hub_pid:-}" ] && kill "$hub_pid" 2>/dev/null
+	[ -n "${cloud_hub:-}" ] && kill "$cloud_hub" 2>/dev/null
+	[ -n "${proxy_pid:-}" ] && kill "$proxy_pid" 2>/dev/null
 	for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null; done
 	wait 2>/dev/null
 	(exit "$status")
@@ -115,3 +120,71 @@ fi
 is "$(($(date +%s) - start < 5))" 1 "and says so within 5 s"
 is "$(on cloud mem --project walk handoff 2>&1)" "$handoff" \
 	"the replica filled before still answers while the store is cut off"
+
+# The VM's proxy: CONNECT <host:port>, then bytes both ways. Stopping it is
+# the cloud losing Cloudflare.
+cat >"$T_TMP/connect.py" <<'PY'
+import asyncio, sys
+async def pipe(r, w):
+    try:
+        while data := await r.read(65536):
+            w.write(data)
+            await w.drain()
+    finally:
+        w.close()
+async def serve(r, w):
+    head = await r.readuntil(b"\r\n\r\n")
+    host, port = head.split(b" ")[1].decode().rsplit(":", 1)
+    with open(sys.argv[2], "a") as log:
+        log.write(head.split(b"\r\n")[0].decode() + "\n")
+    # Only the proxy knows the store's name, as only the VM's proxy reaches
+    # Cloudflare.
+    tr, tw = await asyncio.open_connection("127.0.0.1" if host == "store.invalid" else host, int(port))
+    w.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+    await w.drain()
+    await asyncio.gather(pipe(r, tw), pipe(tr, w), return_exceptions=True)
+async def main():
+    server = await asyncio.start_server(serve, "127.0.0.1", int(sys.argv[1]), reuse_address=True)
+    async with server:
+        await server.serve_forever()
+asyncio.run(main())
+PY
+proxy_port=$(free_port)
+unblock() {
+	python3 "$T_TMP/connect.py" "$proxy_port" "$T_TMP/connects.log" >>"$T_TMP/proxy.log" 2>&1 &
+	proxy_pid=$!
+	for _ in $(seq 1 50); do
+		python3 -c "import socket; socket.create_connection(('127.0.0.1', $proxy_port), 0.2)" 2>/dev/null && return
+		sleep 0.1
+	done
+}
+block() { kill "$proxy_pid" 2>/dev/null; wait "$proxy_pid" 2>/dev/null; }
+now_ms() { date +%s%3N; }
+lists() { on cloud mem --project walk log --limit 50 | grep -qF "$1"; }
+
+unblock
+on cloud env HUB_PEER_TOKEN=peer-token HUB_PEERS= HUB_STORE_URL="ws://store.invalid:$CF_DEV_PORT/store/share" \
+	HUB_STORE_TOKEN=$token HTTPS_PROXY="http://127.0.0.1:$proxy_port" "$HUB_BIN" local --port "$(free_port)" >>"$T_TMP/cloud.hub.log" 2>&1 &
+cloud_hub=$!
+on mini mem --project walk log "before the cut" >/dev/null
+for _ in $(seq 1 40); do lists "before the cut" && break; sleep 0.1; done
+if lists "before the cut"; then
+	ok "the cloud's hub takes the mini's writes through the proxy"
+else
+	notok "the cloud's hub takes the mini's writes through the proxy" "$(cat "$T_TMP/cloud.hub.log" "$T_TMP/proxy.log")"
+fi
+like "$(cat "$T_TMP/connects.log" 2>/dev/null)" "^CONNECT store.invalid:$CF_DEV_PORT HTTP/1.1" \
+	"the socket asked the proxy to CONNECT to the store"
+
+block
+on mini mem --project walk log "made during the cut" >/dev/null
+# Long enough for a doubling wait to have grown past 2 s.
+sleep 10
+unblock
+start=$(now_ms)
+while ! lists "made during the cut" && [ $(($(now_ms) - start)) -le 2000 ]; do sleep 0.05; done
+if lists "made during the cut"; then
+	ok "a write made during the cut is listed within 2 s of the proxy coming back ($(($(now_ms) - start)) ms)"
+else
+	notok "a write made during the cut is listed within 2 s of the proxy coming back" "$(tail -20 "$T_TMP/cloud.hub.log")"
+fi
