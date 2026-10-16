@@ -20,17 +20,18 @@ fn home_named(dir: &TempDir, machine: &str) -> std::path::PathBuf {
 }
 
 fn spawn_local(dir: &TempDir, machine: &str) -> Hub {
+    spawn_local_with(dir, machine, &[], &[])
+}
+
+fn spawn_local_with(dir: &TempDir, machine: &str, path: &[&Path], env: &[(&str, &str)]) -> Hub {
     let home = home_named(dir, machine);
     let socket = dir.join("local.sock");
-    Hub::spawn_env(
-        &home,
-        &[],
-        &["local", "--port", "0"],
-        &[
-            ("HUB_PEER_TOKEN", TOKEN),
-            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
-        ],
-    )
+    let mut all = vec![
+        ("HUB_PEER_TOKEN", TOKEN),
+        ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+    ];
+    all.extend_from_slice(env);
+    Hub::spawn_env(&home, path, &["local", "--port", "0"], &all)
 }
 
 fn ping(home: &Path, target: &str, env: &[(&str, &str)]) -> std::process::Output {
@@ -265,4 +266,88 @@ fn an_answer_without_the_peer_token_wakes_nobody() {
         "GET /wait/ABCD1234?s=1 HTTP/1.1\r\nHost: x\r\n\r\n",
     );
     assert_eq!(status_of(&response), 204, "{response}");
+}
+
+const ASK: &str = r#"{"id":"ABCD1234","project":"walk","text":"probe?","options":["yes","no"],"audience":"human"}"#;
+
+fn ask_on(socket: &Path) {
+    let asked = on_socket(
+        socket,
+        &format!(
+            "POST /ask HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{ASK}",
+            ASK.len()
+        ),
+    );
+    assert_eq!(status_of(&asked), 200, "{asked}");
+}
+
+/// A mem that writes its argv, one per line, to `log`.
+fn logging_mem(dir: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let log = dir.join("mem.log");
+    let bin = dir.join("bin");
+    common::fixture_mem(
+        &bin,
+        &format!("printf '%s\\n' \"$@\" >> '{}'", log.display()),
+    );
+    (bin, log)
+}
+
+#[test]
+fn an_answer_to_a_question_asked_here_is_recorded_in_the_store_signed_by_its_surface() {
+    let dir = TempDir::new("local-record");
+    let (bin, log) = logging_mem(&dir);
+    let hub = spawn_local_with(&dir, "testbox", &[&bin], &[]);
+    ask_on(&dir.join("local.sock"));
+    let answered = post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ABCD1234","answer":"yes","by":"slack"}"#,
+    );
+    assert_eq!(status_of(&answered), 200, "{answered}");
+    common::wait_for("mem answer", std::time::Duration::from_secs(5), || {
+        std::fs::read_to_string(&log).is_ok_and(|l| l.lines().count() >= 5)
+    });
+    let argv: Vec<String> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(argv, ["answer", "ABCD1234", "yes", "--by", "slack"]);
+}
+
+/// A cloud session's mem is the mem server's, which refuses an answer; its
+/// store record waits for sharing.
+#[test]
+fn a_hub_whose_mem_is_remote_records_nothing() {
+    let dir = TempDir::new("local-remote");
+    let (bin, log) = logging_mem(&dir);
+    let hub = spawn_local_with(
+        &dir,
+        "testbox",
+        &[&bin],
+        &[("MEM_REMOTE", "https://mem.example.test")],
+    );
+    ask_on(&dir.join("local.sock"));
+    post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ABCD1234","answer":"yes","by":"slack"}"#,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!log.exists(), "{:?}", std::fs::read_to_string(&log));
+}
+
+/// An answer for a question this hub never asked is a peer's to record.
+#[test]
+fn an_answer_to_a_question_asked_elsewhere_is_not_recorded_here() {
+    let dir = TempDir::new("local-elsewhere");
+    let (bin, log) = logging_mem(&dir);
+    let hub = spawn_local_with(&dir, "testbox", &[&bin], &[]);
+    post_answer(
+        &hub,
+        TOKEN,
+        r#"{"question":"ZZZZ9999","answer":"yes","by":"slack"}"#,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!log.exists());
 }

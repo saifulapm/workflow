@@ -50,6 +50,11 @@ pub fn socket_path() -> Result<PathBuf> {
 pub struct Local {
     machine: String,
     token: String,
+    /// Whether this machine's mem writes its own store; a cloud session's
+    /// runs on the mem server, which refuses an answer.
+    records: bool,
+    /// The questions asked on this machine, by short id.
+    asked: Mutex<HashMap<String, Asked>>,
     /// Answers by question short id, kept for a wait that comes later.
     answers: Mutex<HashMap<String, String>>,
     answered: Condvar,
@@ -57,9 +62,12 @@ pub struct Local {
 
 impl Local {
     pub fn new(machine: String, token: String) -> Local {
+        let remote = std::env::var_os("MEM_REMOTE").is_some_and(|v| !v.is_empty());
         Local {
             machine,
             token,
+            records: !remote,
+            asked: Mutex::new(HashMap::new()),
             answers: Mutex::new(HashMap::new()),
             answered: Condvar::new(),
         }
@@ -84,12 +92,18 @@ impl Local {
             ("GET", "/ping") => Response::text(200, &self.machine),
             (_, "/ping") => Response::method_not_allowed("GET"),
             ("POST", "/ask") => match serde_json::from_slice::<Asked>(&request.body) {
-                Ok(_) => Response::text(200, "ok"),
+                Ok(asked) => {
+                    self.asked
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(asked.id.clone(), asked);
+                    Response::text(200, "ok")
+                }
                 Err(e) => Response::text(400, &format!("not a question: {e}")),
             },
             ("POST", "/answer") => match serde_json::from_slice::<Answer>(&request.body) {
                 Ok(answer) => {
-                    self.deliver(&answer.question, answer.answer);
+                    self.deliver(&answer.question, &answer.answer, &answer.by);
                     Response::text(200, "ok")
                 }
                 Err(e) => Response::text(400, &format!("not an answer: {e}")),
@@ -112,11 +126,38 @@ impl Local {
         }
     }
 
-    /// Keeps the answer and wakes every wait on it.
-    pub fn deliver(&self, question: &str, answer: String) {
-        let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
-        answers.insert(question.to_string(), answer);
-        self.answered.notify_all();
+    /// Keeps the answer and wakes every wait on it, then records it in this
+    /// machine's store when the question was asked here, signed by the
+    /// surface that took it.
+    pub fn deliver(&self, question: &str, answer: &str, by: &str) {
+        {
+            let mut answers = self.answers.lock().unwrap_or_else(|e| e.into_inner());
+            answers.insert(question.to_string(), answer.to_string());
+            self.answered.notify_all();
+        }
+        let asked_here = self
+            .asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(question);
+        if self.records && asked_here {
+            let argv = ["answer", question, answer, "--by", by].map(str::to_string);
+            std::thread::spawn(move || {
+                match std::process::Command::new("mem")
+                    .args(&argv)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => eprintln!(
+                        "hub: local: mem answer {} failed: {}",
+                        argv[1],
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                    Err(e) => eprintln!("hub: local: mem answer {}: {e}", argv[1]),
+                }
+            });
+        }
     }
 
     /// The answer to `question`, waiting up to `hold` for it.
@@ -151,11 +192,12 @@ pub struct Asked {
     pub audience: Option<String>,
 }
 
-/// An answer as a peer hands it in.
+/// An answer as a peer hands it in, with the surface that took it.
 #[derive(Debug, serde::Deserialize)]
 struct Answer {
     question: String,
     answer: String,
+    by: String,
 }
 
 /// Whether `Authorization: Bearer <token>` names `token`, compared in
