@@ -59,7 +59,8 @@ pub(crate) const QUIET: Duration = Duration::from_secs(75);
 const APPLY_WITHIN: Duration = Duration::from_millis(300);
 
 /// The next 00:00 UTC after `now`, which is 06:00 in Dhaka (UTC+6, no DST):
-/// when Cloudflare's Free daily counters start again.
+/// when the store's day counters start again, and Cloudflare's if it is
+/// on a plan that has daily limits.
 pub fn next_reset(now: jiff::Timestamp) -> jiff::Timestamp {
     const DAY: i64 = 86_400;
     jiff::Timestamp::from_second((now.as_second().div_euclid(DAY) + 1) * DAY)
@@ -69,6 +70,8 @@ pub fn next_reset(now: jiff::Timestamp) -> jiff::Timestamp {
 /// What Saiful is told when the store answers `limit`; the hubweb home shows
 /// the same line.
 const LIMIT_NOTICE: &str = "Cloudflare limit reached, resets 06:00";
+/// The same, when the `limit` frame says `cap`: the store's own day cap.
+const CAP_NOTICE: &str = "The store's day cap is reached, writes wait until 06:00";
 
 pub(crate) type Socket = crate::proxy::Socket;
 
@@ -523,7 +526,11 @@ fn session(
             if kinds.iter().any(|k| k == "limit") {
                 let at = now();
                 *paused_until = Some(next_reset(at));
-                notify_once_a_day(slack, at);
+                let cap = frames.iter().any(|f| {
+                    serde_json::from_str::<Value>(f)
+                        .is_ok_and(|v| v["t"] == "limit" && v["cap"] == true)
+                });
+                notify_once_a_day(slack, at, if cap { CAP_NOTICE } else { LIMIT_NOTICE });
             }
             // An ack or a refusal changes the outbox; mem may have more.
             if kinds.iter().any(|k| k == "ack" || k == "refused") {
@@ -579,10 +586,10 @@ pub(crate) fn now() -> Timestamp {
         .unwrap_or_else(Timestamp::now)
 }
 
-/// Posts the limit line to Saiful's DM unless it already went out this Dhaka
+/// Posts `notice` to Saiful's DM unless it already went out this Dhaka
 /// day. The day is kept in `$XDG_STATE_HOME/hub/limit-notice`, so a restart
 /// does not post again, and only once Slack took the post.
-fn notify_once_a_day(slack: Option<&Slack>, at: Timestamp) {
+fn notify_once_a_day(slack: Option<&Slack>, at: Timestamp, notice: &str) {
     let Some(slack) = slack else { return };
     let Ok(state) = crate::config::state_home() else {
         return;
@@ -596,7 +603,7 @@ fn notify_once_a_day(slack: Option<&Slack>, at: Timestamp) {
     if std::fs::read_to_string(&file).is_ok_and(|seen| seen.trim() == day) {
         return;
     }
-    if let Err(e) = slack.post_text(LIMIT_NOTICE) {
+    if let Err(e) = slack.post_text(notice) {
         eprintln!("hub: share: posting the limit notice: {e:#}");
         return;
     }

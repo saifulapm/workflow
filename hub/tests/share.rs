@@ -21,7 +21,9 @@ const STORE_TOKEN: &str = "store-token-for-tests-fedcba9876543210";
 const HELLO: &str = r#"{"t":"hello","machine":"testbox","since":41}"#;
 const WRITE_A: &str = r#"{"t":"write","id":"01J00000000000000000000AAA","path":"projects/P/wiki/a.md","base":null,"body":"a"}"#;
 const LIMIT: &str = r#"{"t":"limit"}"#;
+const CAP: &str = r#"{"t":"limit","cap":true}"#;
 const NOTICE: &str = "Cloudflare limit reached, resets 06:00";
+const CAP_NOTICE: &str = "The store's day cap is reached, writes wait until 06:00";
 const WRITE_B: &str = r#"{"t":"write","id":"01J00000000000000000000BBB","path":"projects/P/wiki/b.md","base":null,"body":"b"}"#;
 const ACCESS_ID: &str = "access-id-for-tests.access";
 const ACCESS_SECRET: &str = "access-secret-for-tests-0123456789";
@@ -657,16 +659,22 @@ fn spawn_limited(
 
 /// The store has refused the first write; returns once the hub has heard it.
 fn hit_the_limit(dir: &TempDir, store: &FakeStore) {
+    hit(dir, store, LIMIT);
+}
+
+/// The store has refused the first write with `frame`; returns once the hub
+/// has heard it.
+fn hit(dir: &TempDir, store: &FakeStore, frame: &str) {
     std::fs::write(dir.join("pending"), format!("{WRITE_A}\n")).unwrap();
     wait_for("the first write", Duration::from_secs(5), || {
         store.texts_on(0).len() >= 2
     });
-    store.send(LIMIT);
+    store.send(frame);
     let applied = dir.join("applied");
     wait_for("the limit applied", Duration::from_secs(2), || {
         std::fs::read_to_string(&applied)
             .unwrap_or_default()
-            .contains(LIMIT)
+            .contains(frame)
     });
 }
 
@@ -748,6 +756,21 @@ fn the_first_limit_of_a_dhaka_day_posts_one_dm_line_and_a_second_posts_none() {
     store.send(LIMIT);
     std::thread::sleep(Duration::from_millis(1000));
     assert_eq!(posts.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_cap_frame_posts_the_day_cap_line_not_the_cloudflare_one() {
+    let dir = TempDir::new("share-cap-notice");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let (api, posts) = fake_slack();
+    let _hub = spawn_limited(&dir, &bin, &store, Some(&api), "2026-10-16T13:00:00+06:00");
+    hit(&dir, &store, CAP);
+    wait_for("the DM", Duration::from_secs(3), || {
+        !posts.lock().unwrap().is_empty()
+    });
+    let post: serde_json::Value = serde_json::from_str(&posts.lock().unwrap()[0]).unwrap();
+    assert_eq!(post["text"], CAP_NOTICE);
 }
 
 #[test]
