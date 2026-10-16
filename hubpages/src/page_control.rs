@@ -203,7 +203,7 @@ fn cloud(ctx: &PageCtx, project: &str) -> Response {
 }
 
 /// Where a cloud start for `project` goes: the mini when it is online, else
-/// the first online device by name, never `cloud`, that has the project
+/// the first online device by name, never a cloud session, that has the project
 /// checked out. Ok(None) when any machine already holds the start.
 pub(crate) fn cloud_machine(agents: &dyn Fleet, project: &str) -> Result<Option<String>, String> {
     let queued = Command::Start {
@@ -225,11 +225,11 @@ pub(crate) fn cloud_machine(agents: &dyn Fleet, project: &str) -> Result<Option<
     names
         .into_iter()
         .find(|m| {
-            m != "cloud"
-                && agents.online(m)
-                && agents
-                    .report(m)
-                    .is_some_and(|r| r.checkouts.iter().any(|c| c == project))
+            agents.online(m)
+                && agents.report(m).is_some_and(|r| {
+                    // A cloud session is no device: it reports its session.
+                    r.cloud.is_none() && r.checkouts.iter().any(|c| c == project)
+                })
         })
         .map(Some)
         .ok_or_else(|| "no device is online to start it.".to_string())
@@ -344,12 +344,44 @@ mod tests {
     #[test]
     fn a_cloud_run_goes_to_another_online_device_with_the_checkout() {
         let fleet = Fake(vec![
-            ("cloud", true, vec!["gamma"], vec![]),
             ("mini", false, vec!["gamma"], vec![]),
             ("air", true, vec!["other"], vec![]),
             ("nuc", true, vec!["gamma"], vec![]),
         ]);
         assert_eq!(cloud_machine(&fleet, "gamma"), Ok(Some("nuc".into())));
+    }
+
+    /// A cloud session reports as its session id, never as `cloud`; it is
+    /// no device, and cannot start a cloud run from inside its VM.
+    #[test]
+    fn a_cloud_run_never_goes_to_a_cloud_session() {
+        struct WithCloud(Fake);
+        impl Fleet for WithCloud {
+            fn online(&self, machine: &str) -> bool {
+                self.0.online(machine)
+            }
+            fn report(&self, machine: &str) -> Option<Polled> {
+                let mut report = self.0.report(machine)?;
+                if machine.starts_with("session_") {
+                    report.cloud = Some(machine.to_string());
+                }
+                Some(report)
+            }
+            fn machines(&self) -> Vec<String> {
+                self.0.machines()
+            }
+            fn pending(&self, machine: &str) -> Vec<Command> {
+                self.0.pending(machine)
+            }
+        }
+        let fleet = WithCloud(Fake(vec![
+            ("mini", false, vec!["gamma"], vec![]),
+            ("session_01ABC", true, vec!["gamma"], vec![]),
+        ]));
+        assert_eq!(
+            cloud_machine(&fleet, "gamma"),
+            Err("no device is online to start it.".to_string())
+        );
     }
 
     #[test]
