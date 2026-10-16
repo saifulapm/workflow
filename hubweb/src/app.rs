@@ -14,7 +14,7 @@ use crate::evidence;
 use crate::files;
 use crate::item;
 use crate::latest::{self, Change};
-use crate::mcp::{self, Step};
+use crate::mcp;
 use crate::memview;
 use crate::pair;
 use crate::share::{self, Fault, Log, Rec};
@@ -200,28 +200,15 @@ async fn verify(jwk: &Value, jwt: &Jwt<'_>) -> std::result::Result<bool, JsValue
     Ok(JsFuture::from(verified).await?.as_bool() == Some(true))
 }
 
-/// One JSON-RPC message in, its JSON reply out; a `handoff` call reads the
-/// project's handoff record from the store.
+/// One JSON-RPC message in, its JSON reply out, served by the store from
+/// its files; a write the connector makes becomes the store's own.
 async fn serve_mcp(mut req: Request, env: &Env) -> Result<Response> {
-    let body = req.bytes().await?;
-    let (status, reply) = match mcp::handle(&body) {
-        Step::Reply(status, reply) => (status, reply),
-        Step::Handoff { id, project } => {
-            let mut answer = store(env)?
-                .fetch_with_str(&format!("https://store/handoff/{project}"))
-                .await?;
-            let text = match answer.status_code() {
-                200 => Some(answer.text().await?),
-                _ => None,
-            };
-            (200, mcp::handoff_reply(id, &project, text.as_deref()))
-        }
-    };
-    let mut response = Response::ok(reply)?.with_status(status);
-    response
-        .headers_mut()
-        .set("Content-Type", "application/json")?;
-    Ok(response)
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_body(Some(req.bytes().await?.into()));
+    store(env)?
+        .fetch_with_request(Request::new_with_init("https://store/mcp", &init)?)
+        .await
 }
 
 fn store(env: &Env) -> Result<Stub> {
@@ -672,20 +659,23 @@ impl DurableObject for Store {
                 )?;
                 Response::ok(code)
             }
-            (Method::Get, path) if path.starts_with("/handoff/") => {
-                let project = &path["/handoff/".len()..];
-                let rows: Vec<Value> = self
-                    .sql
-                    .exec(
-                        "SELECT body FROM records WHERE project = ? AND kind = 'handoff' \
-                         AND key = ?",
-                        vec![project.into(), project.into()],
-                    )?
-                    .to_array()?;
-                match rows.first().and_then(|row| row["body"].as_str()) {
-                    Some(text) => Response::ok(text),
-                    None => Response::error("No handoff", 404),
-                }
+            (Method::Post, "/mcp") => {
+                let body = req.bytes().await?;
+                let mut random = || random().unwrap_or_default();
+                let served = mcp::serve(
+                    &body,
+                    mcp::Store {
+                        files: &SqlFiles(&self.sql),
+                        now: jiff::Timestamp::from_millisecond(now_ms() as i64).unwrap_or_default(),
+                        random: &mut random,
+                    },
+                );
+                self.keep(mcp::MACHINE, served.writes, served.files).await?;
+                let mut response = Response::ok(served.body)?.with_status(served.status);
+                response
+                    .headers_mut()
+                    .set("Content-Type", "application/json")?;
+                Ok(response)
             }
             (Method::Get, "/store/share") => {
                 if req.headers().get("Upgrade")?.as_deref() != Some("websocket") {

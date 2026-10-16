@@ -17,7 +17,7 @@ use crate::memview;
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 
 /// The machine every item the connector writes names.
-const MACHINE: &str = "connector";
+pub const MACHINE: &str = "connector";
 
 /// What a call reads, when it runs, and the randomness each new item id takes.
 pub struct Store<'a, F: memview::Files> {
@@ -256,66 +256,6 @@ fn result(id: Value, result: Value) -> String {
 
 fn error(id: Value, code: i64, message: &str) -> String {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}).to_string()
-}
-
-/// What the Worker did with one message before `serve`: kept only so the
-/// Worker's current caller builds, and goes once that caller uses `serve`.
-#[derive(Debug, PartialEq)]
-pub enum Step {
-    /// Send this status and JSON body.
-    Reply(u16, String),
-    /// Read this project's handoff from the store, then answer with
-    /// `handoff_reply`.
-    Handoff { id: Value, project: String },
-}
-
-/// The one-tool connector `Step` drives, kept beside `serve` until the
-/// Worker's caller moves to it.
-pub fn handle(body: &[u8]) -> Step {
-    let Ok(message) = serde_json::from_slice::<Value>(body) else {
-        return Step::Reply(400, error(Value::Null, -32700, "parse error"));
-    };
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
-        return Step::Reply(400, error(Value::Null, -32600, "invalid request"));
-    };
-    let Some(id) = message.get("id").cloned() else {
-        return Step::Reply(202, String::new());
-    };
-    let params = message.get("params").cloned().unwrap_or(Value::Null);
-    let handoff = &tools::TOOLS[8];
-    let reply = match method {
-        "initialize" => result(id, initialize(&params)),
-        "ping" => result(id, json!({})),
-        "tools/list" => result(
-            id,
-            json!({"tools": [{
-                "name": handoff.name,
-                "description": handoff.description,
-                "inputSchema": (handoff.schema)(),
-            }]}),
-        ),
-        "tools/call" if params.get("name").and_then(Value::as_str) == Some("handoff") => {
-            let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-            return match project_arg(&arguments) {
-                Ok(project) => Step::Handoff {
-                    id,
-                    project: project.to_string(),
-                },
-                Err(why) => Step::Reply(200, result(id, tool_text(&why, true))),
-            };
-        }
-        "tools/call" => error(id, -32602, "unknown tool"),
-        _ => error(id, -32601, "method not found"),
-    };
-    Step::Reply(200, reply)
-}
-
-/// The answer to a `handoff` call `Step` asked for.
-pub fn handoff_reply(id: Value, project: &str, text: Option<&str>) -> String {
-    match text {
-        Some(text) => result(id, tool_text(text, false)),
-        None => result(id, tool_text(&format!("no handoff for {project}"), true)),
-    }
 }
 
 #[cfg(test)]

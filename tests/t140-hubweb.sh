@@ -2,9 +2,10 @@
 # hubweb under `cf dev`: every path but the store write wants Cloudflare
 # Access's JWT, signed RS256 by a key in the team's JWKS, for one of the
 # Access apps' auds, inside its lifetime. The store takes records only with
-# the bearer STORE_TOKEN, GET / renders one card per project record with its
-# stage, its milestone and a Server-Timing header for the page build, and
-# POST /mcp serves the handoff tool from the store.
+# the bearer STORE_TOKEN; every hub page is drawn from the files machines
+# share (the hub sandbox's seed, pushed over the sharing socket); a device
+# pairs before it may POST; and POST /mcp serves the connector's 20 tools
+# from the store.
 #
 # Needs hubweb/node_modules (pnpm -C hubweb install --frozen-lockfile),
 # worker-build, the wasm32-unknown-unknown target, openssl and python3.
@@ -215,21 +216,36 @@ mcp() { # mcp <path> <json-rpc message> [curl args...] -- prints the reply body
 field() { # field <python expression on r> -- reads the JSON reply on stdin
 	python3 -c "import json, sys; r = json.load(sys.stdin); print($1)" 2>/dev/null
 }
-handoff_call='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"handoff","arguments":{"project":"walkone"}}}'
+handoff_call='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"handoff","arguments":{"project":"delta"}}}'
+call() { # call <tool> <arguments json> -- a tools/call message
+	printf '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"%s","arguments":%s}}' "$1" "$2"
+}
+text_of() { field 'r["result"]["content"][0]["text"]'; }
 
 is "$(mcp /mcp "$handoff_call" -o /dev/null -w '%{http_code}')" 401 "POST /mcp without a JWT is refused"
 init=$(mcp /mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' -H "@$T_TMP/jwt.hdr")
 is "$(field 'r["result"]["serverInfo"]["name"], r["result"]["protocolVersion"]' <<<"$init")" "mem 2025-06-18" \
-	"initialize names the server and the protocol version asked for"
+	"initialize names the server mem and agrees the client's protocol"
 is "$(mcp /mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}' -H "@$T_TMP/jwt.hdr" \
-	-o /dev/null -w '%{http_code}')" 202 "notifications/initialized is accepted with no answer"
+	-o /dev/null -w '%{http_code}')" 202 "a notification gets 202 and no body"
 list=$(mcp /mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' -H "@$T_TMP/jwt.hdr")
-is "$(field '[t["name"] for t in r["result"]["tools"]], r["result"]["tools"][0]["inputSchema"]["required"]' <<<"$list")" \
-	"['handoff'] ['project']" "tools/list lists handoff, which needs a project"
-is "$(mcp /mcp "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"][0]["text"], r["result"]["isError"]')" \
-	"Next: build the store. False" "tools/call handoff answers walkone's stored handoff"
-is "$(mcp / "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"][0]["text"]')" \
-	"Next: build the store." "POST / serves MCP too"
+is "$(field 'len(r["result"]["tools"])' <<<"$list")" 20 "tools/list lists the connector's 20 tools"
+is "$(mcp /mcp "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"][0]["text"].strip(), r["result"]["isError"]')" \
+	"Nothing in flight; the last fix landed. False" "handoff answers delta's handoff from the store"
+is "$(mcp / "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"][0]["text"].strip()')" \
+	"Nothing in flight; the last fix landed." "POST / serves MCP too"
+like "$(mcp /mcp "$(call search '{"project":"gamma","query":"quiet"}')" -H "@$T_TMP/jwt.hdr" | text_of | head -1)" \
+	'spec' "search for a word only gamma's spec page holds finds that page first"
+review=$(cd "$sb/beta" && mem questions --pending --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["questions"][0]["short_id"])')
+refused=$(mcp /mcp "$(call answer "{\"project\":\"beta\",\"id\":\"$review\",\"option\":\"approve\"}")" -H "@$T_TMP/jwt.hdr")
+is "$(field 'r["result"]["isError"]' <<<"$refused")" True "answering the roadmap review through the connector is refused"
+like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/p/beta/questions" | tr -d '\n')" 'Review the beta roadmap' \
+	"the review is still waiting after the refused answer"
+nag=$(cd "$sb/gamma" && mem questions --pending --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["questions"][0]["short_id"])')
+taken=$(mcp /mcp "$(call answer "{\"project\":\"gamma\",\"id\":\"$nag\",\"option\":\"eight\"}")" -H "@$T_TMP/jwt.hdr")
+is "$(field 'r["result"]["isError"]' <<<"$taken")" False "an ordinary question is answered through the connector"
+like "$(mcp /mcp "$(call questions '{"project":"gamma"}')" -H "@$T_TMP/jwt.hdr" | text_of)" "$nag" \
+	"the connector reads the answered question back from the store"
 
 # An open page listens on /live: the store nudges it after every stored
 # write, and a page socket can say nothing that the store acts on.
