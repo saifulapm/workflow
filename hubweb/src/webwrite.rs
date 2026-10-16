@@ -18,7 +18,7 @@ pub const MACHINE: &str = "hub-web";
 pub struct Written {
     /// Store paths and their new bodies, in order; None removes the path.
     pub files: Vec<(String, Option<String>)>,
-    /// Photo bytes for the Files store, by store path.
+    /// Photo bytes for R2, by store path.
     pub bytes: Vec<(String, Vec<u8>)>,
     /// Photos a form handed in, by the name the page will pass back.
     pub photos: Vec<(String, Vec<u8>)>,

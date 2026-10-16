@@ -14,7 +14,6 @@ pub mod bin_upload;
 pub mod config;
 pub mod doorbell;
 pub mod dulali;
-pub mod files_move;
 pub mod fleet;
 pub mod form;
 pub mod html;

@@ -1,10 +1,7 @@
-//! A shared project's evidence and raw files. Each project's files live in a
-//! Durable Object of their own, as rows of at most `CHUNK` bytes: a SQLite
-//! row there holds at most 2 MB. This file decides which paths are files and
-//! how bytes become rows, so the host can test it.
-
-/// The most bytes one row holds.
-pub const CHUNK: usize = 1 << 20;
+//! A shared project's evidence and raw files, each one whole R2 object keyed
+//! by its store path. This file decides which paths are files, what type
+//! they are served as and which bytes a range asks for, so the host can test
+//! it.
 
 /// The project a file path belongs to, when the path is
 /// `projects/<id>/(evidence|raw)/...` made of plain segments: none empty,
@@ -21,8 +18,7 @@ pub fn project_of(path: &str) -> Option<&str> {
     (plain(project) && !rest.is_empty() && rest.iter().all(plain)).then_some(*project)
 }
 
-/// The project whose Files object answers a `/store/files` request, from its
-/// path and query: the project of the file path, or `?project=<id>` on the
+/// The project a `/store/files` request is about, from its path and query: the project of the file path, or `?project=<id>` on the
 /// bare `/store/files`, which lists the project's files.
 pub fn target(path_and_query: &str) -> Option<String> {
     let (path, query) = path_and_query
@@ -137,20 +133,6 @@ pub fn decode(raw: &str) -> Option<String> {
         }
     }
     String::from_utf8(bytes).ok()
-}
-
-/// The rows `bytes` is stored as, in order. Empty bytes are one empty row,
-/// so a stored empty file is told apart from a missing one.
-pub fn split(bytes: &[u8]) -> Vec<&[u8]> {
-    if bytes.is_empty() {
-        return vec![bytes];
-    }
-    bytes.chunks(CHUNK).collect()
-}
-
-/// The bytes the rows hold, in the order given.
-pub fn join(rows: Vec<Vec<u8>>) -> Vec<u8> {
-    rows.concat()
 }
 
 #[cfg(test)]
@@ -315,28 +297,5 @@ mod tests {
         assert_eq!(decode("a%zz"), None);
         assert_eq!(decode("a%+1"), None);
         assert_eq!(decode("%FF"), None);
-    }
-
-    fn round_trip(len: usize) -> Vec<usize> {
-        let bytes: Vec<u8> = (0..len).map(|i| (i * 7 % 251) as u8).collect();
-        let rows = split(&bytes);
-        let sizes = rows.iter().map(|r| r.len()).collect();
-        assert_eq!(join(rows.into_iter().map(<[u8]>::to_vec).collect()), bytes);
-        sizes
-    }
-
-    #[test]
-    fn bytes_split_into_rows_of_one_mib_and_join_back() {
-        assert_eq!(round_trip(0), [0]);
-        assert_eq!(round_trip(1_048_576), [1_048_576]);
-        assert_eq!(round_trip(1_048_577), [1_048_576, 1]);
-        assert_eq!(
-            round_trip(16_800_000),
-            [
-                1_048_576, 1_048_576, 1_048_576, 1_048_576, 1_048_576, 1_048_576, 1_048_576,
-                1_048_576, 1_048_576, 1_048_576, 1_048_576, 1_048_576, 1_048_576, 1_048_576,
-                1_048_576, 1_048_576, 22_784
-            ]
-        );
     }
 }

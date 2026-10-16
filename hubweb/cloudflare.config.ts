@@ -11,12 +11,12 @@ export default defineConfig({
     compatibilityDate: "2026-09-01",
     exports: {
       Store: exports.durableObject({ storage: "sqlite" }),
-      // Each shared project's evidence and raw bytes, one object per project.
-      Files: exports.durableObject({ storage: "sqlite" }),
+      // Each project's files lived here as rows before R2; the deploy that
+      // drops the class deletes the emptied objects.
+      Files: exports.durableObject({ state: "deleted" }),
     },
     env: {
       STORE: bindings.durableObject({ worker: "hubweb", exportName: "Store" }),
-      FILES: bindings.durableObject({ worker: "hubweb", exportName: "Files" }),
       // Every evidence and raw file, and the built binaries, each one whole
       // object keyed by its store path. Only the Worker holds it.
       FILES_BUCKET: bindings.r2({ name: "hubweb-files" }),

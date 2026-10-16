@@ -1,11 +1,10 @@
-//! Where an evidence item's bytes are in the Files store. The page code
-//! cannot fetch them, so the Worker asks here for the path and then reads
-//! the project's own Files object.
+//! Where an evidence item's bytes are in R2. The page code cannot fetch
+//! them, so the Worker asks here for the path and then reads the object.
 
 use crate::files;
 use crate::memview::{self, Files, Reply};
 
-/// The Files store path of evidence item `id` in the project named
+/// The store path of evidence item `id` in the project named
 /// `project`: `projects/<project id>/<file>`. None when the project or the
 /// item is unknown, or the item names no stored file.
 pub fn store_path(store: &impl Files, project: &str, id: &str) -> Option<String> {
