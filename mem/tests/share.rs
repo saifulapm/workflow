@@ -564,3 +564,169 @@ fn a_streamed_write_for_a_project_this_replica_does_not_share_is_not_landed() {
     assert!(!store.join("projects/01K0SHARE0NKN0WN0000000000P").exists());
     assert_eq!(hello(&w)["since"], 2);
 }
+
+#[test]
+fn a_write_from_elsewhere_skipped_behind_a_lost_ack_lands_when_the_ack_comes() {
+    let w = shared("share-lost-ack");
+    wiki_set(&w, "lessons", "# Lessons\n\nmine\n");
+    let mine = pending(&w)
+        .into_iter()
+        .find(|write| write["path"] == page_path("lessons"))
+        .unwrap();
+    // On reconnect the replay brings the nuc's later write to the same page
+    // while mine still waits; then the resend of mine is acked with its
+    // first, older seq.
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 10, "id": mine["id"], "path": page_path("lessons"),
+                   "body": "# Lessons\n\nmine\n", "machine": "mini"}),
+            json!({"t": "rec", "seq": 11, "id": "01K0SHAREREC00000000000021", "path": page_path("lessons"),
+                   "body": "# Lessons\n\ntheirs, later\n", "machine": "nuc"}),
+            json!({"t": "ready", "seq": 11}),
+            json!({"t": "ack", "id": mine["id"], "seq": 10}),
+        ],
+    );
+    assert_eq!(wiki(&w, "lessons"), "# Lessons\n\ntheirs, later\n");
+    wiki_set(&w, "lessons", "# Lessons\n\nnext\n");
+    let next = pending(&w)
+        .into_iter()
+        .find(|write| write["path"] == page_path("lessons"))
+        .unwrap();
+    assert_eq!(next["base"], "01K0SHAREREC00000000000021");
+}
+
+#[test]
+fn a_write_from_elsewhere_older_than_mine_does_not_replace_mine_on_the_ack() {
+    let w = shared("share-older");
+    walk(&w, &["log", "mine"]);
+    let mine = pending(&w).remove(0);
+    let path = mine["path"].as_str().unwrap().to_string();
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 9, "id": "01K0SHAREREC00000000000022", "path": path,
+                   "body": "older", "machine": "nuc"}),
+            json!({"t": "ack", "id": mine["id"], "seq": 10}),
+        ],
+    );
+    let file = w.dirs().store().join(&path);
+    assert_eq!(
+        std::fs::read_to_string(file).unwrap(),
+        mine["body"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn a_streamed_write_that_cannot_land_is_passed_over_and_the_rest_land() {
+    let w = shared("share-poison");
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 12, "id": "01K0SHAREREC00000000000023",
+                   "path": format!("projects/{ID}/items"), "body": "x", "machine": "nuc"}),
+            json!({"t": "rec", "seq": 13, "id": "01K0SHAREREC00000000000024", "path": page_path("after"),
+                   "body": "# After\n", "machine": "nuc"}),
+        ],
+    );
+    assert_eq!(wiki(&w, "after"), "# After\n");
+    assert_eq!(hello(&w)["since"], 13);
+}
+
+#[test]
+fn sharing_a_project_late_asks_the_store_for_everything_again() {
+    let w = World::new("share-late");
+    w.project(ID, "walk");
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 5, "id": "01K0SHAREREC00000000000025", "path": page_path("early"),
+                 "body": "# Early\n", "machine": "nuc"}),
+        ],
+    );
+    assert_eq!(hello(&w)["since"], 5);
+    walk(&w, &["project", "set", "share"]);
+
+    let lines = pending(&w);
+    assert_eq!(lines[0]["t"], "hello", "{lines:?}");
+    assert_eq!(lines[0]["since"], 0);
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 5, "id": "01K0SHAREREC00000000000025", "path": page_path("early"),
+                   "body": "# Early\n", "machine": "nuc"}),
+            json!({"t": "ready", "seq": 5}),
+        ],
+    );
+    assert_eq!(wiki(&w, "early"), "# Early\n");
+    assert!(pending(&w).iter().all(|line| line["t"] != "hello"));
+}
+
+#[test]
+fn a_write_the_replica_refuses_is_already_in_the_outbox() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = shared("share-outbox-first");
+    let items = w.dirs().store().join(format!("projects/{ID}/items"));
+    std::fs::set_permissions(&items, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // The replica cannot take the file, as if mem died before the rename.
+    let _ = mem(
+        &w,
+        w.dir.path(),
+        &["--project", "walk", "log", "still sent"],
+    );
+    std::fs::set_permissions(&items, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let writes = pending(&w);
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    assert!(writes[0]["body"].as_str().unwrap().contains("still sent"));
+
+    apply(&w, &[json!({"t": "ack", "id": writes[0]["id"], "seq": 1})]);
+    let file = w.dirs().store().join(writes[0]["path"].as_str().unwrap());
+    assert!(
+        std::fs::read_to_string(file)
+            .unwrap()
+            .contains("still sent")
+    );
+}
+
+#[test]
+fn a_raw_file_missing_from_the_replica_is_fetched_through_the_hub() {
+    let w = shared("share-raw-fetch");
+    let src = w.dir.join("big.bin");
+    let bytes: Vec<u8> = (0..200_000u32).map(|n| (n % 241) as u8).collect();
+    std::fs::write(&src, &bytes).unwrap();
+    let out = walk(&w, &["raw", "add", src.to_str().unwrap(), "--json"]);
+    let id = serde_json::from_slice::<Value>(&out.stdout).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let stored = w.dirs().store().join(format!("projects/{ID}/raw/big.bin"));
+    std::fs::remove_file(&stored).unwrap();
+
+    let socket = w.dir.join("hub.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let served = bytes.clone();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).unwrap() == 0 || header == "\r\n" {
+                break;
+            }
+        }
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            served.len()
+        );
+        (&stream).write_all(head.as_bytes()).unwrap();
+        (&stream).write_all(&served).unwrap();
+    });
+    let out = mem_env(
+        &w,
+        w.dir.path(),
+        &["--project", "walk", "raw", "cat", &id],
+        &[("HUB_LOCAL_SOCKET", socket.to_str().unwrap())],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(out.stdout, bytes);
+}

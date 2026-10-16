@@ -2412,6 +2412,16 @@ fn write_pi_extension(path: &std::path::Path) -> Result<()> {
     crate::atomic::write_atomic(path, crate::maint::PI_EXTENSION.as_bytes())
 }
 
+/// `mem project set share`: from now on this project's writes go through the
+/// store, and the store is asked for every write again, since this replica
+/// passed over the project's records until now.
+pub fn project_share(app: &App) -> Result<i32> {
+    let code = project_set(app, "share", "true")?;
+    crate::share::resync(&app.dirs.share_db())?;
+    crate::share::kick();
+    Ok(code)
+}
+
 /// `mem share hello|pending|apply`: the local hub's side of sharing.
 pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
     use crate::cli::ShareCommand;
@@ -2419,7 +2429,7 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
     match command {
         ShareCommand::Hello => println!("{}", crate::share::hello(&db, &app.machine)?),
         ShareCommand::Pending => {
-            for write in crate::share::pending(&db, &app.store.root)? {
+            for write in crate::share::pending(&db, &app.store.root, &app.machine)? {
                 println!("{write}");
             }
         }

@@ -129,7 +129,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     id,
                     milestone,
                 } => verbs::project_runner(&app, machine, id, milestone.as_deref()),
-                cli::ProjectSetCommand::Share => verbs::project_set(&app, "share", "true"),
+                cli::ProjectSetCommand::Share => verbs::project_share(&app),
             },
             cli::ProjectCommand::Rename { name } => verbs::project_rename(&app, name),
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
@@ -235,6 +235,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         },
         cli::Command::Raw { command } => match command {
             cli::RawCommand::Add { source } => records::raw_add(&app, source),
+            cli::RawCommand::Cat { id } => records::raw_cat(&app, id),
         },
         cli::Command::Brief { set } => records::brief(&app, set.as_deref()),
         cli::Command::Idea { text } => records::idea(&app, text),

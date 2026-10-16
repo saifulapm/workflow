@@ -148,6 +148,7 @@ fn open(db: &Path) -> Result<Connection> {
              base TEXT,
              body TEXT);
          CREATE TABLE IF NOT EXISTS heads(path TEXT PRIMARY KEY, id TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS skipped(path TEXT PRIMARY KEY, id TEXT NOT NULL, seq INTEGER NOT NULL, body TEXT);
          CREATE TABLE IF NOT EXISTS files(n INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE);
          CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
     )?;
@@ -201,14 +202,24 @@ fn waiting_for(conn: &Connection, rel: &str) -> Result<bool> {
 /// The hello the hub sends first on every connection.
 pub fn hello(db: &Path, machine: &str) -> Result<Value> {
     let conn = open(db)?;
+    // A fresh connection's hello is itself the replay a resync asks for.
+    conn.execute("DELETE FROM meta WHERE key = 'resync'", [])?;
     Ok(json!({"t": "hello", "machine": machine, "since": seq(&conn)?}))
 }
 
 /// The outbox, oldest first, as the store's `write` messages, then each file
 /// still to upload as `{"t":"file","path","local"}`, `local` being where the
 /// bytes are on this machine.
-pub fn pending(db: &Path, root: &Path) -> Result<Vec<Value>> {
+pub fn pending(db: &Path, root: &Path, machine: &str) -> Result<Vec<Value>> {
     let conn = open(db)?;
+    let resync = conn
+        .query_row("SELECT 1 FROM meta WHERE key = 'resync'", [], |_| Ok(()))
+        .optional()?
+        .is_some();
+    let mut first = Vec::new();
+    if resync {
+        first.push(json!({"t": "hello", "machine": machine, "since": seq(&conn)?}));
+    }
     let mut stmt = conn.prepare("SELECT id, path, base, body FROM outbox ORDER BY n")?;
     let rows = stmt.query_map([], |r| {
         Ok(json!({
@@ -219,7 +230,8 @@ pub fn pending(db: &Path, root: &Path) -> Result<Vec<Value>> {
             "body": r.get::<_, Option<String>>(3)?,
         }))
     })?;
-    let mut out: Vec<Value> = rows.collect::<rusqlite::Result<_>>()?;
+    let mut out = first;
+    out.extend(rows.collect::<rusqlite::Result<Vec<Value>>>()?);
     let mut stmt = conn.prepare("SELECT path FROM files ORDER BY n")?;
     for rel in stmt.query_map([], |r| r.get::<_, String>(0))? {
         let rel = rel?;
@@ -265,10 +277,25 @@ pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
                 tx.commit()?;
                 return Ok(());
             }
-            // A local write still waiting wins: the store answers it with an
-            // ack, or with a refusal that carries this record's version.
-            if head(&tx, &rel)?.as_deref() != Some(id.as_str()) && !waiting_for(&tx, &rel)? {
-                land(&file, message["body"].as_str())?;
+            let body = message["body"].as_str();
+            if head(&tx, &rel)?.as_deref() == Some(id.as_str()) {
+                // This replica already holds it: its own write, or a replay.
+            } else if waiting_for(&tx, &rel)? {
+                // A local write still waiting wins for now. The store answers
+                // it with a refusal carrying the newest version, or with an
+                // ack, after which this record lands if it is newer.
+                tx.execute(
+                    "INSERT INTO skipped(path, id, seq, body) VALUES (?1, ?2, ?3, ?4) \
+                     ON CONFLICT(path) DO UPDATE SET id = excluded.id, seq = excluded.seq, \
+                     body = excluded.body WHERE excluded.seq > skipped.seq",
+                    params![rel, id, seen as i64, body],
+                )?;
+            } else if file.is_dir() {
+                // No file can ever stand there; passing over it keeps one bad
+                // record from holding back every record behind it.
+                eprintln!("mem: share apply: {rel} is a directory here; passing over it");
+            } else {
+                land(&file, body)?;
                 set_head(&tx, &rel, &id)?;
             }
             raise_seq(&tx, seen)?;
@@ -277,15 +304,27 @@ pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
             let Some(id) = text(&message["id"]) else {
                 return Ok(());
             };
-            if let Some((rel, body)) = take(&tx, &id)? {
-                // The replica missed this write when mem died between the
-                // outbox and the rename; the ack is the moment to heal it.
-                if head(&tx, &rel)?.as_deref() == Some(id.as_str())
-                    && !waiting_for(&tx, &rel)?
-                    && let Some(file) = replica_path(root, &rel)
-                    && std::fs::read_to_string(&file).ok() != body
-                {
-                    land(&file, body.as_deref())?;
+            if let Some((rel, body)) = take(&tx, &id)?
+                && !waiting_for(&tx, &rel)?
+                && let Some(file) = replica_path(root, &rel)
+            {
+                let acked = message["seq"].as_i64().unwrap_or(i64::MAX);
+                match take_skipped(&tx, &rel)? {
+                    // Another machine wrote this path after mine while mine
+                    // waited (a lost ack, then a replay): its version is the
+                    // newer one.
+                    Some((theirs, seq, theirs_body)) if seq > acked => {
+                        land(&file, theirs_body.as_deref())?;
+                        set_head(&tx, &rel, &theirs)?;
+                    }
+                    // The replica missed this write when mem died between the
+                    // outbox and the rename; the ack is the moment to heal it.
+                    _ if head(&tx, &rel)?.as_deref() == Some(id.as_str())
+                        && std::fs::read_to_string(&file).ok() != body =>
+                    {
+                        land(&file, body.as_deref())?;
+                    }
+                    _ => {}
                 }
             }
             if let Some(seen) = message["seq"].as_u64() {
@@ -311,6 +350,7 @@ pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
             if !waiting_for(&tx, &rel)?
                 && let Some(theirs) = text(&head_msg["id"])
             {
+                take_skipped(&tx, &rel)?;
                 land(&file, head_msg["body"].as_str())?;
                 set_head(&tx, &rel, &theirs)?;
             }
@@ -324,10 +364,47 @@ pub fn apply(db: &Path, root: &Path, message: &Value) -> Result<()> {
             if let Some(seen) = message["seq"].as_u64() {
                 raise_seq(&tx, seen)?;
             }
+            tx.execute("DELETE FROM meta WHERE key = 'resync'", [])?;
         }
         _ => {}
     }
     tx.commit()?;
+    Ok(())
+}
+
+/// Removes the newest record from elsewhere that was passed over for `rel`
+/// while a local write waited, returning its id, seq and body.
+fn take_skipped(conn: &Connection, rel: &str) -> Result<Option<(String, i64, Option<String>)>> {
+    let row = conn
+        .query_row(
+            "SELECT id, seq, body FROM skipped WHERE path = ?1",
+            [rel],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    conn.execute("DELETE FROM skipped WHERE path = ?1", [rel])?;
+    Ok(row)
+}
+
+/// A project began sharing here after the store already held its writes,
+/// which this replica counted past: ask for every write again. The hub sends
+/// the hello `pending` prints, and the `ready` that ends the replay clears it.
+pub fn resync(db: &Path) -> Result<()> {
+    let conn = open(db)?;
+    // A replica that has counted nothing yet passed nothing over.
+    if seq(&conn)? == 0 {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('seq', 0) \
+         ON CONFLICT(key) DO UPDATE SET value = 0",
+        [],
+    )?;
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('resync', 1) \
+         ON CONFLICT(key) DO UPDATE SET value = 1",
+        [],
+    )?;
     Ok(())
 }
 

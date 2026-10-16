@@ -362,6 +362,8 @@ pub enum RawCommand {
     /// Store a file or URL under the project's raw/. A name already there
     /// is refused: a raw source is never replaced.
     Add { source: String },
+    /// Write a raw source's file to stdout, as stored.
+    Cat { id: String },
 }
 
 #[derive(Subcommand, Debug)]

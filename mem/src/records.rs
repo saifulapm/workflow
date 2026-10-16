@@ -71,6 +71,17 @@ pub fn evidence_list(app: &App) -> Result<i32> {
 /// Every miss is exit 1 with nothing on stdout: the file is read whole before
 /// a byte is written.
 pub fn evidence_cat(app: &App, id: &str) -> Result<i32> {
+    cat_file(app, id, &[Kind::Evidence, Kind::Finding])
+}
+
+/// `mem raw cat <id>`: a raw source's bytes.
+pub fn raw_cat(app: &App, id: &str) -> Result<i32> {
+    cat_file(app, id, &[Kind::Raw])
+}
+
+/// Writes the file an item of one of `kinds` names to stdout, fetching it
+/// first when the replica has the item but not the bytes.
+fn cat_file(app: &App, id: &str, kinds: &[Kind]) -> Result<i32> {
     let Some(id_ref) = IdRef::parse(id) else {
         return Err(exit::not_found(format!("'{id}' is not an id")));
     };
@@ -87,7 +98,7 @@ pub fn evidence_cat(app: &App, id: &str) -> Result<i32> {
         }
     };
     let item = crate::store::read_item(&row.path)?;
-    if !matches!(item.meta.kind, Kind::Evidence | Kind::Finding) {
+    if !kinds.contains(&item.meta.kind) {
         return Err(exit::not_found(format!(
             "#{} is a {}, which names no file",
             row.short_id, item.meta.kind
