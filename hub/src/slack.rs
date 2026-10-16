@@ -26,6 +26,11 @@ const BACKOFF_CAP: Duration = Duration::from_secs(60);
 /// the connection is taken for dead: a laptop that slept, or a NAT entry that
 /// was dropped, leaves a read that would otherwise block for good.
 const QUIET: Duration = Duration::from_secs(90);
+/// Slack's limits: a section's text, a message's text, and the buttons in
+/// one actions block.
+const SECTION_MAX: usize = 3000;
+const TEXT_MAX: usize = 40_000;
+const BUTTONS_MAX: usize = 25;
 /// The `event_type` of the metadata that names a posted question.
 const METADATA_TYPE: &str = "workflow_question";
 /// The largest photo a reply may bring.
@@ -165,10 +170,13 @@ impl Slack {
 
     /// Posts to the bot's DM with Saiful, one button per option.
     pub fn post_question(&self, q: &Question) -> Result<Posted> {
+        // Slack refuses a button with no label, and more than 25 in a block.
         let buttons: Vec<Value> = q
             .options
             .iter()
             .enumerate()
+            .filter(|(_, option)| !option.trim().is_empty())
+            .take(BUTTONS_MAX)
             .map(|(i, option)| {
                 let value = ButtonValue {
                     m: q.machine.clone(),
@@ -184,12 +192,12 @@ impl Slack {
             })
             .collect();
         let mut blocks = vec![
-            json!({"type": "section", "text": {"type": "mrkdwn", "text": format!(
+            json!({"type": "section", "text": {"type": "mrkdwn", "text": cut(&format!(
                 "*{}* on `{}`\n{}",
                 escape(&q.project),
                 escape(&q.machine),
                 escape(&q.text)
-            )}}),
+            ), SECTION_MAX)}}),
         ];
         // Slack refuses an actions block with no elements; a question
         // without options is answered in its thread.
@@ -200,7 +208,7 @@ impl Slack {
         // a question without buttons has no other way to do.
         let body = json!({
             "channel": self.user_id,
-            "text": format!("{} on {}: {}", q.project, q.machine, q.text),
+            "text": cut(&format!("{} on {}: {}", q.project, q.machine, q.text), TEXT_MAX),
             "blocks": blocks,
             "metadata": {
                 "event_type": METADATA_TYPE,
@@ -674,10 +682,15 @@ fn read_timeout(
 }
 
 fn label(option: &str) -> String {
-    if option.chars().count() <= LABEL_MAX {
-        return option.to_string();
+    cut(option, LABEL_MAX)
+}
+
+/// `text` whole when it fits in `max` characters, else cut to fit with `…`.
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
     }
-    let mut cut: String = option.chars().take(LABEL_MAX - 1).collect();
+    let mut cut: String = text.chars().take(max - 1).collect();
     cut.push('…');
     cut
 }

@@ -772,3 +772,36 @@ fn a_post_slack_refuses_is_not_tried_again() {
     std::thread::sleep(Duration::from_millis(1000));
     assert_eq!(*tries.lock().unwrap(), 1);
 }
+
+/// Slack refuses a section over 3000 characters and a button with no label:
+/// such a question still reaches Phone, cut to fit, with its real buttons.
+#[test]
+fn a_question_too_long_for_slack_or_with_an_empty_option_still_posts() {
+    let dir = TempDir::new("ring-limits");
+    let slack = slack();
+    let nuc = machine(&dir, "nuc", Seat::NoShell, &[], Some(&slack), &[]);
+    let text = "word ".repeat(700);
+    let body = serde_json::json!({
+        "id": "LONG0001", "project": "walk", "text": text,
+        "options": ["a", "", "  ", "b"], "audience": "human",
+    })
+    .to_string();
+    post(&nuc.socket(), "/ask", &body);
+    common::wait_for("a Slack post", Duration::from_secs(2), || {
+        slack.posted() == 1
+    });
+    let posted: Value = serde_json::from_str(&slack.posts.lock().unwrap()[0]).unwrap();
+    let section = posted["blocks"][0]["text"]["text"].as_str().unwrap();
+    assert!(
+        section.chars().count() <= 3000,
+        "{}",
+        section.chars().count()
+    );
+    let labels: Vec<&str> = posted["blocks"][1]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["a", "b"]);
+}
