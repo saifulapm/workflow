@@ -26,9 +26,17 @@ export default defineConfig({
       // How old a machine's newest report may be, in ms, and it still counts
       // as online. Unset, it is 45000: an idle machine reports every 30 s.
       HUB_AGENT_WINDOW_MS: bindings.secret(),
+      // Host names, comma-separated, that answer 404 to everything: the
+      // next- names once the switch moved the hub web and the connector.
+      RETIRED_HOSTS: bindings.secret(),
     },
-    // The hub web and the connector on their own names until the switch,
-    // when hub.on-rexa.com and mem.on-rexa.com move here.
-    domains: ["next-hub.on-rexa.com", "next-mem.on-rexa.com"],
+    // The hub web and the connector on their own names until the switch:
+    // a deploy with HUBWEB_DOMAINS=real moves hub.on-rexa.com and
+    // mem.on-rexa.com here, keeping the next- names attached for
+    // RETIRED_HOSTS to answer.
+    domains:
+      process.env.HUBWEB_DOMAINS === "real"
+        ? ["hub.on-rexa.com", "mem.on-rexa.com", "next-hub.on-rexa.com", "next-mem.on-rexa.com"]
+        : ["next-hub.on-rexa.com", "next-mem.on-rexa.com"],
   },
 });

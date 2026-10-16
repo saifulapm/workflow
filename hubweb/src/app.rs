@@ -12,6 +12,7 @@ use worker::*;
 use crate::access::{self, Access, Jwt};
 use crate::evidence;
 use crate::files;
+use crate::hosts;
 use crate::item;
 use crate::latest::{self, Change};
 use crate::mcp;
@@ -25,10 +26,6 @@ use hubpages::page_evidence::image_kind;
 
 /// The store's binding, and the one instance every request reaches.
 const STORE: &str = "STORE";
-/// The walk's store object, which the next-* hosts reach.
-const WALK: &str = "walk";
-/// The real store object, which every other host reaches.
-const MAIN: &str = "main";
 /// The header a machine names its store object with.
 const STORE_HEADER: &str = "X-Hub-Store";
 /// Saiful reads the hub from Dhaka, so the store is created in Asia-Pacific.
@@ -52,6 +49,10 @@ const REFETCH_EVERY_MS: u64 = 60_000;
 /// Every request passes through here, so the Access JWT is checked in this
 /// one place.
 async fn handle(req: Request, env: Env) -> Result<Response> {
+    // Since the switch, the next- names answer nothing.
+    if retired(&req, &env)? {
+        return Response::error("Not Found", 404);
+    }
     let path = req.path();
     let object = store_name(&req)?;
     // The store write carries its own bearer STORE_TOKEN, so a machine can
@@ -263,22 +264,25 @@ fn store(env: &Env, object: &str) -> Result<Stub> {
         .get_by_name_with_location_hint(object, STORE_LOCATION)
 }
 
-/// The store object a request reaches: the one its X-Hub-Store names, else
-/// the walk's on a next-* host and the real one on any other. The walk's
-/// projects never reach a real replica, and nothing of the walk is deleted.
+/// Whether the request's host is one of RETIRED_HOSTS: the names the
+/// switch took the hub web and the connector off.
+fn retired(req: &Request, env: &Env) -> Result<bool> {
+    let retired = env
+        .secret("RETIRED_HOSTS")
+        .map(|hosts| hosts.to_string())
+        .unwrap_or_default();
+    Ok(hosts::retired(
+        &retired,
+        req.url()?.host_str().unwrap_or_default(),
+    ))
+}
+
+/// The store object a request reaches (`hosts::object`).
 fn store_name(req: &Request) -> Result<&'static str> {
-    Ok(match req.headers().get(STORE_HEADER)?.as_deref() {
-        Some(MAIN) => MAIN,
-        Some(WALK) => WALK,
-        _ if req
-            .url()?
-            .host_str()
-            .is_some_and(|host| host.starts_with("next-")) =>
-        {
-            WALK
-        }
-        _ => MAIN,
-    })
+    Ok(hosts::object(
+        req.headers().get(STORE_HEADER)?.as_deref(),
+        req.url()?.host_str().unwrap_or_default(),
+    ))
 }
 
 /// The project and id of `/p/<project>/file/<id>`, as the path spells them.

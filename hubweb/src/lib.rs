@@ -1,6 +1,7 @@
 pub mod access;
 pub mod evidence;
 pub mod files;
+pub mod hosts;
 pub mod item;
 pub mod latest;
 pub mod mcp;
