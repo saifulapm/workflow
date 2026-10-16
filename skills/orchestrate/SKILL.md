@@ -295,9 +295,11 @@ branch to cut it from. Everything above holds, with these changes:
   `parked: local-only <task>:` that names it and says what it needs. File
   no question: `workflow go` on a device reads that handoff, takes the
   branch and runs the rest. Then stop.
-- A question only Saiful can answer parks the run the same way, with
-  `mem ask --for saiful` and a handoff starting `parked:` that names it.
-  Then stop: the answer comes back as a message in this session.
+- A question only Saiful can answer never parks a cloud run: nothing can
+  wake a stopped cloud session. Ask with `mem ask --for saiful`, do what
+  does not depend on the answer, then wait in the session with `mem
+  questions --wait <id>`, run again each time it returns without one. The
+  answer reaches this session's local hub over Tailscale.
 - Land as §7 says, except that nothing runs `workflow go` and nothing
   pushes `main`, and the branch is pushed before `mem roadmap --tick`: the
   tick tells the mini it may fast-forward, so the review and dogfood fixes

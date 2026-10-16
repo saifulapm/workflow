@@ -608,6 +608,14 @@ mod tests {
         );
     }
 
+    /// Nothing can wake a stopped cloud session, so a person's answer is
+    /// waited for inside it.
+    #[test]
+    fn a_question_is_waited_for_in_the_session() {
+        assert!(PROMPT.contains("mem questions --wait"), "{PROMPT}");
+        assert!(PROMPT.contains("never stop to wait"), "{PROMPT}");
+    }
+
     /// A local-only task parks the run for a device with no question, which
     /// `workflow go` there reads off the handoff.
     #[test]
