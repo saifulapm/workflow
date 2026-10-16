@@ -93,7 +93,12 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
     let mut sender: Vec<String> = log.after(since)?.iter().map(rec).collect();
     // A machine that was away takes the route chosen meanwhile; its own,
     // when newer, comes back as a route message of its own.
-    sender.extend(log.route()?.map(|route| route.to_string()));
+    sender.extend(log.route()?.map(|mut route| {
+        if let Some(fields) = route.as_object_mut() {
+            fields.remove("device");
+        }
+        route.to_string()
+    }));
     sender.push(json!({"t":"ready","seq":log.last()?}).to_string());
     Ok(Outcome {
         sender,
@@ -168,11 +173,53 @@ pub fn route(log: &mut impl Log, message: &Value) -> Result<Outcome, Fault> {
     }
     let machine = machine.filter(|_| kind == "device");
     let route = json!({"t":"route","route":kind,"machine":machine,"at":at});
-    log.set_route(&route)?;
+    keep_route(log, &route)?;
     Ok(Outcome {
         others: Some(route.to_string()),
         ..Outcome::default()
     })
+}
+
+/// The route the hub web chose, Phone or Device, stamped after the one the
+/// store keeps, as the message every machine is to hear. Device goes back
+/// to the machine that last took it; None when none ever did, and nothing
+/// changes.
+pub fn choose(log: &mut impl Log, kind: &str, now_ms: i64) -> Result<Option<String>, Fault> {
+    let kept = log.route()?;
+    let device = kept.as_ref().and_then(last_device);
+    let machine = match kind {
+        "device" => match device {
+            Some(machine) => Some(machine),
+            None => return Ok(None),
+        },
+        _ => None,
+    };
+    let at = kept
+        .as_ref()
+        .and_then(|route| route["at"].as_i64())
+        .map_or(now_ms, |at| now_ms.max(at + 1));
+    let route = json!({"t":"route","route":kind,"machine":machine,"at":at});
+    keep_route(log, &route)?;
+    Ok(Some(route.to_string()))
+}
+
+/// The machine that last took Device, from a kept route.
+pub fn last_device(route: &Value) -> Option<String> {
+    route["device"]
+        .as_str()
+        .or_else(|| route["machine"].as_str())
+        .map(str::to_string)
+}
+
+/// Keeps `route` with the machine that last took Device beside it.
+fn keep_route(log: &mut impl Log, route: &Value) -> Result<(), Fault> {
+    let device = match route["machine"].as_str() {
+        Some(machine) => Some(machine.to_string()),
+        None => log.route()?.as_ref().and_then(last_device),
+    };
+    let mut kept = route.clone();
+    kept["device"] = json!(device);
+    log.set_route(&kept)
 }
 
 /// A write the store makes itself, from the hub web or the connector: the
@@ -293,6 +340,30 @@ mod tests {
     }
 
     #[test]
+    fn the_hub_web_chooses_a_route_stamped_after_the_kept_one() {
+        let mut log = Memory::default();
+        assert_eq!(
+            choose(&mut log, "device", 100),
+            Ok(None),
+            "no machine took Device yet"
+        );
+        assert_eq!(log.route, None);
+        route(&mut log, Some("nuc"), "device", json!("nuc"), 500);
+        let phone: Value =
+            serde_json::from_str(&choose(&mut log, "phone", 100).unwrap().unwrap()).unwrap();
+        assert_eq!(
+            phone,
+            json!({"t":"route","route":"phone","machine":null,"at":501})
+        );
+        let device: Value =
+            serde_json::from_str(&choose(&mut log, "device", 900).unwrap().unwrap()).unwrap();
+        assert_eq!(
+            device,
+            json!({"t":"route","route":"device","machine":"nuc","at":900})
+        );
+    }
+
+    #[test]
     fn a_newer_route_is_kept_and_passed_to_the_others() {
         let mut log = Memory::default();
         let taken = route(&mut log, Some("nuc"), "device", json!("nuc"), 10);
@@ -304,7 +375,11 @@ mod tests {
         );
         let stale = route(&mut log, Some("mini"), "phone", Value::Null, 10);
         assert_eq!(stale, Outcome::default());
-        assert_eq!(log.route, Some(sent));
+        let kept = log.route.unwrap();
+        assert_eq!(
+            (kept["at"].clone(), kept["device"].clone()),
+            (json!(10), json!("nuc"))
+        );
     }
 
     #[test]

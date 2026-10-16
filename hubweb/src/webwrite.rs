@@ -22,6 +22,8 @@ pub struct Written {
     pub bytes: Vec<(String, Vec<u8>)>,
     /// Photos a form handed in, by the name the page will pass back.
     pub photos: Vec<(String, Vec<u8>)>,
+    /// The route chosen on the home, `phone` or `device`.
+    pub route: Option<&'static str>,
 }
 
 /// The time and randomness a write takes.

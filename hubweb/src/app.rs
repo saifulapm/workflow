@@ -401,6 +401,9 @@ impl Store {
         let took = Date::now().as_millis() - start;
         self.keep(webwrite::MACHINE, written.files, written.bytes)
             .await?;
+        if let Some(kind) = written.route {
+            self.route(kind)?;
+        }
         let mut response = Response::from_bytes(drawn.body)?.with_status(drawn.status);
         let headers = response.headers_mut();
         headers.set("Content-Type", &drawn.content_type)?;
@@ -454,6 +457,19 @@ impl Store {
             }
         }
         self.nudge_pages();
+        Ok(())
+    }
+
+    /// Takes the route the hub web chose and hands it to every machine.
+    fn route(&self, kind: &str) -> Result<()> {
+        let chosen = share::choose(&mut SqlLog(&self.sql), kind, now_ms() as i64)
+            .map_err(|fault| Error::RustError(format!("{fault:?}")))?;
+        if let Some(message) = chosen {
+            for socket in self.state.get_websockets_with_tag(MACHINE) {
+                let _ = socket.send_with_str(&message);
+            }
+            self.nudge_pages();
+        }
         Ok(())
     }
 

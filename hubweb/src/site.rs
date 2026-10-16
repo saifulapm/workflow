@@ -72,6 +72,7 @@ pub fn page(
     };
     let host = Web {
         route: saved(ask.route.as_ref()),
+        device: ask.route.as_ref().and_then(crate::share::last_device),
         files,
         shared: &shared,
     };
@@ -224,6 +225,8 @@ impl<F: Files> Source for StoreMem<'_, '_, F> {
 /// route is the store's, and a pause or a photo is a write like mem's.
 struct Web<'a, 'c, F: Files> {
     route: Saved,
+    /// The machine that last took Device.
+    device: Option<String>,
     files: &'a F,
     shared: &'a Shared<'c>,
 }
@@ -260,8 +263,14 @@ impl<F: Files> Host for Web<'_, '_, F> {
     fn route(&self) -> Saved {
         self.route.clone()
     }
-    fn set_route(&self, _kind: Kind) -> Result<(), NoMachine> {
-        Err(NoMachine)
+    fn set_route(&self, kind: Kind) -> Result<(), NoMachine> {
+        let chosen = match kind {
+            Kind::Phone => "phone",
+            Kind::Device if self.device.is_some() => "device",
+            _ => return Err(NoMachine),
+        };
+        self.shared.written.borrow_mut().route = Some(chosen);
+        Ok(())
     }
     fn replaceable(&self, _now_ms: i64) -> Vec<(String, Held)> {
         Vec::new()
@@ -438,6 +447,39 @@ mod tests {
         let (refused, nothing) = page(&files, unpaired, &mut random).unwrap();
         assert_eq!(refused.status, 403);
         assert!(nothing.files.is_empty());
+    }
+
+    #[test]
+    fn the_route_buttons_choose_phone_or_the_last_device() {
+        let files = store();
+        let mut random = || [5; 10];
+        let post = |route: &str| {
+            request(
+                "POST",
+                "/route",
+                vec![(
+                    "Content-Type".into(),
+                    "application/x-www-form-urlencoded".into(),
+                )],
+                format!("route={route}").into_bytes(),
+            )
+        };
+        let device = post("device");
+        let (response, written) = page(&files, ask(&device), &mut random).unwrap();
+        assert_eq!(response.status, 303);
+        assert_eq!(written.route, None, "no machine has taken Device yet");
+        let mut known = ask(&device);
+        known.route = Some(
+            serde_json::json!({"t":"route","route":"phone","machine":null,"at":5,"device":"nuc"}),
+        );
+        let (_, written) = page(&files, known, &mut random).unwrap();
+        assert_eq!(written.route, Some("device"));
+        let phone = post("phone");
+        let (_, written) = page(&files, ask(&phone), &mut random).unwrap();
+        assert_eq!(written.route, Some("phone"));
+        let dulali = post("dulali");
+        let (refused, written) = page(&files, ask(&dulali), &mut random).unwrap();
+        assert_eq!((refused.status, written.route), (400, None));
     }
 
     #[test]
