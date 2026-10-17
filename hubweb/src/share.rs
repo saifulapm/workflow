@@ -232,16 +232,19 @@ fn writer(bound: &Bound, hello: &str) -> Result<String, Fault> {
 }
 
 /// Whether a replica could hold `path`, as mem's own check has it:
-/// `global/items/<name>` or `projects/<id>/...`, each part a plain name.
+/// `global/items/<name>` or `projects/<id>/...`, each part a plain name a
+/// file system takes (255 bytes at most, no control character). A record
+/// no replica can land holds back every record after it.
 fn held_path(path: &str) -> bool {
     let parts: Vec<&str> = path.split('/').collect();
-    parts
-        .iter()
-        .all(|part| !matches!(*part, "" | "." | "..") && !part.contains('\\'))
-        && matches!(
-            parts.as_slice(),
-            ["global", "items", _] | ["projects", _, _, ..]
-        )
+    parts.iter().all(|part| {
+        !matches!(*part, "" | "." | "..")
+            && part.len() <= 255
+            && !part.chars().any(|c| c == '\\' || c.is_control())
+    }) && matches!(
+        parts.as_slice(),
+        ["global", "items", _] | ["projects", _, _, ..]
+    )
 }
 
 /// The `machine` in an item's frontmatter.
@@ -1549,6 +1552,9 @@ mod tests {
             "projects/P1/items/..",
             "projects/P1",
             "projects\\P1\\items\\01A.md",
+            &format!("projects/P1/wiki/{}.md", "a".repeat(253)),
+            "projects/P1/wiki/a\u{0}b.md",
+            "projects/P1/wiki/a\nb.md",
         ] {
             for bound in [Some(&nuc), None] {
                 let refused = write_as(&mut log, bound, "nuc", "01A", path, json!(item_by("nuc")));
@@ -1556,6 +1562,13 @@ mod tests {
             }
         }
         assert!(log.recs.is_empty());
+        let longest = format!("projects/P1/wiki/{}.md", "a".repeat(252));
+        let kept = write_as(&mut log, None, "nuc", "01B", &longest, json!("page"));
+        assert_eq!(
+            parse(&kept.sender)[0]["t"],
+            "ack",
+            "a name of 255 bytes fits"
+        );
     }
 
     #[test]
