@@ -258,6 +258,10 @@ t_init() {
 	unset WORKFLOW_AGENT PI_CODING_AGENT WORKFLOW_ALLOW_PUSH
 	unset MEM_PROJECT
 	unset GIT_DIR GIT_INDEX_FILE GIT_PREFIX GIT_WORK_TREE
+	# A session the hub starts carries the mini's local.env: its store and
+	# peer keys would point every sandboxed hub and mem at the real store.
+	for v in $(compgen -e | grep -E '^HUB_' | grep -vx HUB_BIN); do unset "$v"; done
+	unset TS_AUTHKEY MEM_REMOTE
 
 	HOOKS="$WF_ROOT/hooks"
 	cd "$T_TMP" || exit 1
