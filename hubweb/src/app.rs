@@ -71,8 +71,12 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         };
         let headers = req.headers().clone();
         headers.delete(BOUND)?;
-        if let Holder::Machine(name) = &holder {
-            headers.set(BOUND, name)?;
+        headers.delete(BOUND_MACHINE)?;
+        if let Holder::Machine(bound) = &holder {
+            headers.set(BOUND, &bound.runner)?;
+            if let Some(machine) = &bound.machine {
+                headers.set(BOUND_MACHINE, machine)?;
+            }
         }
         let mut init = RequestInit::new();
         init.with_method(Method::Get).with_headers(headers);
@@ -80,16 +84,18 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             .fetch_with_request(Request::new_with_init("https://store/store/share", &init)?)
             .await;
     }
-    // The holder of the shared bearer mints a machine's own token.
+    // The holder of the shared bearer mints a machine's own token, for its
+    // runner name and the mem machine it writes as:
+    // `/store/machines/<runner>/<machine>`.
     if req.method() == Method::Post
-        && let Some(name) = path.strip_prefix("/store/machines/")
+        && let Some(names) = path.strip_prefix("/store/machines/")
     {
         if !bearer(&req, &env)? {
             return Response::error("Unauthorized", 401);
         }
         let mut init = RequestInit::new();
         init.with_method(Method::Post);
-        let target = format!("https://store/mint/{name}");
+        let target = format!("https://store/mint/{names}");
         return store(&env, object)?
             .fetch_with_request(Request::new_with_init(&target, &init)?)
             .await;
@@ -489,13 +495,15 @@ fn bearer(req: &Request, env: &Env) -> Result<bool> {
 /// The header the Worker tells the store with which machine a sharing
 /// socket's token was minted for.
 const BOUND: &str = "X-Hub-Bound";
+/// The mem machine the socket's token writes as, beside its runner name.
+const BOUND_MACHINE: &str = "X-Hub-Bound-Machine";
 
 /// Who holds a store request's bearer.
 enum Holder {
     /// The shared STORE_TOKEN, which may speak for any machine.
     Shared,
-    /// A machine's own token, minted for this runner name.
-    Machine(String),
+    /// A machine's own token, minted for these names.
+    Machine(share::Bound),
 }
 
 /// The holder of the request's bearer; None when it is neither the shared
@@ -522,7 +530,12 @@ async fn holder(req: &Request, env: &Env, object: &str) -> Result<Option<Holder>
     if answer.status_code() != 200 {
         return Ok(None);
     }
-    Ok(Some(Holder::Machine(answer.text().await?)))
+    let names: Value = serde_json::from_str(&answer.text().await?)
+        .map_err(|e| Error::RustError(format!("the store's /whose: {e}")))?;
+    Ok(Some(Holder::Machine(share::Bound {
+        runner: names["runner"].as_str().unwrap_or_default().to_string(),
+        machine: names["machine"].as_str().map(str::to_string),
+    })))
 }
 
 /// Compares two byte strings in time that depends on their length only, so
@@ -943,6 +956,9 @@ impl DurableObject for Store {
             None,
         )
         .expect("create the machine_tokens table");
+        // The mem machine a token writes as, since m9; a token minted before
+        // has none. The column is there already on every start but the first.
+        let _ = sql.exec("ALTER TABLE machine_tokens ADD COLUMN machine TEXT", None);
         Self {
             state,
             env,
@@ -1083,16 +1099,28 @@ impl DurableObject for Store {
                 let pair = WebSocketPair::new()?;
                 self.state
                     .accept_websocket_with_tags(&pair.server, &[MACHINE]);
-                if let Some(bound) = req.headers().get(BOUND)? {
+                if let Some(runner) = req.headers().get(BOUND)? {
+                    let bound = share::Bound {
+                        runner,
+                        machine: req.headers().get(BOUND_MACHINE)?,
+                    };
                     pair.server
                         .serialize_attachment(share::bind(Value::Null, Some(&bound)))?;
                 }
                 Response::from_websocket(pair.client)
             }
             (Method::Post, path) if path.starts_with("/mint/") => {
-                let name = &path["/mint/".len()..];
-                if !share::runner_name(name) {
-                    return Response::error("A runner name is letters, digits, - _ or .", 400);
+                let Some((name, machine)) = path["/mint/".len()..].split_once('/') else {
+                    return Response::error(
+                        "Mint names the runner and the machine: /<runner>/<machine>",
+                        400,
+                    );
+                };
+                if !share::mint_name(name) || !share::mint_name(machine) {
+                    return Response::error(
+                        "A runner or machine name is letters, digits, - _ or ., and may end in *",
+                        400,
+                    );
                 }
                 let mut bytes = Vec::new();
                 for _ in 0..3 {
@@ -1101,10 +1129,12 @@ impl DurableObject for Store {
                 let token = hex(&bytes);
                 counted(
                     &self.sql,
-                    "INSERT INTO machine_tokens(name, hash, created) VALUES (?, ?, ?) \
-                     ON CONFLICT(name) DO UPDATE SET hash = excluded.hash, created = excluded.created",
+                    "INSERT INTO machine_tokens(name, machine, hash, created) VALUES (?, ?, ?, ?) \
+                     ON CONFLICT(name) DO UPDATE SET machine = excluded.machine, hash = excluded.hash, \
+                     created = excluded.created",
                     vec![
                         name.into(),
+                        machine.into(),
                         sha256(&token).await?.into(),
                         jiff::Timestamp::from_millisecond(now_ms() as i64)
                             .unwrap_or_default()
@@ -1118,7 +1148,7 @@ impl DurableObject for Store {
                 let hash = sha256(&req.text().await?).await?;
                 let rows: Vec<Value> = self
                     .sql
-                    .exec("SELECT name, hash FROM machine_tokens", None)?
+                    .exec("SELECT name, machine, hash FROM machine_tokens", None)?
                     .to_array()?;
                 // Every row is compared in constant time, so the answer's
                 // timing does not tell how much of a hash matched.
@@ -1126,11 +1156,11 @@ impl DurableObject for Store {
                 for row in &rows {
                     let kept = row["hash"].as_str().unwrap_or_default();
                     if same(kept.as_bytes(), hash.as_bytes()) {
-                        found = row["name"].as_str().map(str::to_string);
+                        found = Some(json!({"runner": row["name"], "machine": row["machine"]}));
                     }
                 }
                 match found {
-                    Some(name) => Response::ok(name),
+                    Some(names) => Response::ok(names.to_string()),
                     None => Response::error("Not Found", 404),
                 }
             }
@@ -1172,13 +1202,13 @@ impl DurableObject for Store {
         let outcome = share::handle(
             &mut SqlLog(&self.sql),
             machine.as_deref(),
-            bound.as_deref(),
+            bound.as_ref(),
             &text,
         );
         if let Some(machine) = &outcome.hello {
             ws.serialize_attachment(share::bind(
                 share::attachment(Some(machine), self.limit_day()?),
-                bound.as_deref(),
+                bound.as_ref(),
             ))?;
         }
         for reply in &outcome.sender {
@@ -1195,7 +1225,7 @@ impl DurableObject for Store {
                     let (machine, _) = share::attached(&value);
                     let _ = socket.serialize_attachment(share::bind(
                         share::attachment(machine.as_deref(), Some(day)),
-                        share::bound(&value).as_deref(),
+                        share::bound(&value).as_ref(),
                     ));
                 }
             }

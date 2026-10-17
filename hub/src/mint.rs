@@ -1,14 +1,16 @@
-//! `hub share mint <runner name>`: the holder of the shared store bearer
-//! asks the store for a machine's own token. The store keeps only its hash
-//! and ties that machine's reports and dones to it.
+//! `hub share mint <runner> <machine>`: the holder of the shared store
+//! bearer asks the store for a machine's own token. The store keeps only its
+//! hash, ties that machine's reports and dones to the runner name, and its
+//! writes to the mem machine name.
 
 use std::io::Read;
 
 use anyhow::{Context, Result, bail};
 
 /// Reads the shared bearer from stdin, so it stays out of `ps` and the
-/// shell history, and prints the token the store minted for `runner`.
-pub fn run(runner: &str) -> Result<()> {
+/// shell history, and prints the token the store minted for `runner`
+/// writing as `machine`.
+pub fn run(runner: &str, machine: &str) -> Result<()> {
     let url = std::env::var("HUB_STORE_URL")
         .ok()
         .map(|v| v.trim().to_string())
@@ -22,14 +24,14 @@ pub fn run(runner: &str) -> Result<()> {
     if bearer.is_empty() {
         bail!("hub share mint reads the shared store bearer from stdin");
     }
-    println!("{}", mint(&url, bearer, runner)?);
+    println!("{}", mint(&url, bearer, runner, machine)?);
     Ok(())
 }
 
-/// POSTs to `<store>/store/machines/<runner>` with the shared bearer, and
-/// the Access service token when the environment has one, as the hub's
-/// other store requests do.
-fn mint(url: &str, bearer: &str, runner: &str) -> Result<String> {
+/// POSTs to `<store>/store/machines/<runner>/<machine>` with the shared
+/// bearer, and the Access service token when the environment has one, as
+/// the hub's other store requests do.
+fn mint(url: &str, bearer: &str, runner: &str, machine: &str) -> Result<String> {
     // HUB_STORE_URL names the socket, `ws://h:p/store/share`; the store's
     // web address is its scheme and host.
     let (scheme, rest) = match url.split_once("://") {
@@ -47,7 +49,9 @@ fn mint(url: &str, bearer: &str, runner: &str) -> Result<String> {
         .build()
         .into();
     let mut request = agent
-        .post(format!("{scheme}://{host}/store/machines/{runner}"))
+        .post(format!(
+            "{scheme}://{host}/store/machines/{runner}/{machine}"
+        ))
         .header("Authorization", format!("Bearer {bearer}"));
     let read = |name| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
     // The token lives in the store object the machine will share with, so
@@ -65,7 +69,7 @@ fn mint(url: &str, bearer: &str, runner: &str) -> Result<String> {
     let status = answer.status().as_u16();
     let token = answer.body_mut().read_to_string().unwrap_or_default();
     if status != 200 {
-        bail!("the store answered {status} to /store/machines/{runner}");
+        bail!("the store answered {status} to /store/machines/{runner}/{machine}");
     }
     Ok(token.trim().to_string())
 }

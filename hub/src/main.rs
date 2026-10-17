@@ -26,7 +26,7 @@ Usage: hub [OPTIONS]
        hub ping <HOST[:PORT]>
        hub share sync
        hub share seed
-       hub share mint <RUNNER>
+       hub share mint <RUNNER> <MACHINE>
        hub share put-bin <NAME> <FILE>
 
 Commands:
@@ -54,8 +54,9 @@ Commands:
                 spent (run it again after 06:00 Dhaka), 1 when anything else
                 stopped it
   share mint    Print a new store token for one machine, by its runner
-                name, from the store (HUB_STORE_URL) and the shared store
-                bearer read from stdin
+                name and the mem machine name it writes as (either may end
+                in * for every longer name it begins), from the store
+                (HUB_STORE_URL) and the shared store bearer read from stdin
   share put-bin Put FILE in the store (HUB_STORE_URL and HUB_STORE_TOKEN)
                 as the binary NAME, such as mem-x86_64, which a cloud
                 session's setup fetches, and print the bytes stored
@@ -79,8 +80,8 @@ struct Args {
     sync: bool,
     /// `share seed`: the import into the store.
     seed: bool,
-    /// `share mint <runner>`: a machine's own store token.
-    mint: Option<String>,
+    /// `share mint <runner> <machine>`: a machine's own store token.
+    mint: Option<(String, String)>,
     /// `share put-bin <name> <file>`: a build for cloud sessions.
     put_bin: Option<(String, String)>,
     config: Option<PathBuf>,
@@ -112,7 +113,11 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
                 Some("sync") => args.sync = true,
                 Some("seed") => args.seed = true,
                 Some("mint") => {
-                    args.mint = Some(argv.next().context("share mint needs a runner name")?)
+                    let runner = argv.next().context("share mint needs a runner name")?;
+                    let machine = argv
+                        .next()
+                        .context("share mint needs the machine name it writes as")?;
+                    args.mint = Some((runner, machine))
                 }
                 Some("put-bin") => {
                     let name = argv.next().context("share put-bin needs a name")?;
@@ -189,8 +194,8 @@ fn run() -> Result<()> {
         println!("stored {name}: {stored} bytes");
         return Ok(());
     }
-    if let Some(runner) = args.mint {
-        return hub::mint::run(&runner);
+    if let Some((runner, machine)) = args.mint {
+        return hub::mint::run(&runner, &machine);
     }
     if args.local {
         return run_local(args.port.unwrap_or(local::PORT));

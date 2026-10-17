@@ -1,4 +1,4 @@
-//! `hub share mint <runner name>` sends the shared store bearer, read from
+//! `hub share mint <runner> <machine>` sends the shared store bearer, read from
 //! stdin, to the store's mint endpoint and prints only the machine's new
 //! token.
 
@@ -56,7 +56,7 @@ fn share_mint_sends_the_bearer_from_stdin_and_prints_only_the_new_token() {
     let dir = TempDir::new("share-mint");
     let (port, seen) = fake_store();
     let mut child = Command::new(hub_bin())
-        .args(["share", "mint", "mini"])
+        .args(["share", "mint", "mini", "mac-mini-m2"])
         .env("HOME", dir.join("home"))
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("XDG_STATE_HOME", dir.join("state"))
@@ -84,7 +84,7 @@ fn share_mint_sends_the_bearer_from_stdin_and_prints_only_the_new_token() {
     assert!(!stderr.contains(SHARED), "{stderr}");
     let seen = seen.lock().unwrap();
     assert!(
-        seen[0].starts_with("POST /store/machines/mini "),
+        seen[0].starts_with("POST /store/machines/mini/mac-mini-m2 "),
         "{}",
         seen[0]
     );

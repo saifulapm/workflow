@@ -2,35 +2,7 @@
 //! paused, so `workflow go` starts nothing new for it, and clear that again.
 //! Neither starts or stops an agent.
 
-use std::path::PathBuf;
-use std::process::Command;
-
-use crate::{exit, memcli, paths, warn};
-
-/// This machine's name, read the way mem reads it: `qshell/machine` under
-/// `$XDG_CONFIG_HOME` (else `~/.config`), else `uname -n`.
-fn machine_name() -> String {
-    let config = match std::env::var("XDG_CONFIG_HOME") {
-        Ok(v) if !v.is_empty() => Some(PathBuf::from(v)),
-        _ => paths::home().map(|home| home.join(".config")),
-    };
-    if let Some(text) = config.and_then(|c| std::fs::read_to_string(c.join("qshell/machine")).ok())
-    {
-        let name = text.trim();
-        if !name.is_empty() {
-            return name.to_string();
-        }
-    }
-    if let Ok(out) = Command::new("uname").arg("-n").output()
-        && out.status.success()
-    {
-        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !name.is_empty() {
-            return name;
-        }
-    }
-    "unknown".to_string()
-}
+use crate::{exit, machine, memcli, warn};
 
 /// Refuse a name mem does not know, as `go` does: exit 2, or 1 when mem
 /// cannot list its projects.
@@ -52,7 +24,7 @@ pub fn cmd_pause(project: &str, by: Option<&str>) -> i32 {
     if let Err(code) = known(project, "pause") {
         return code;
     }
-    let who = by.map_or_else(machine_name, str::to_string);
+    let who = by.map_or_else(machine::mem_name, str::to_string);
     if !memcli::set_paused(project, &who) {
         warn(format!(
             "pause: mem could not record the pause of {project}"

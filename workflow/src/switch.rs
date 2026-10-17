@@ -88,7 +88,7 @@ fn switch(url: &str) -> Step<()> {
         ("HUB_STORE_ACCESS_ID", access_id.as_str()),
         ("HUB_STORE_ACCESS_SECRET", access_secret.as_str()),
     ];
-    let token = mint(url, &name, &admin, &access)?;
+    let token = mint(url, &name, &machine::mem_name(), &admin, &access)?;
 
     let store = [
         ("HUB_STORE_URL", url),
@@ -274,12 +274,18 @@ fn pass(entry: &str) -> Step<String> {
     Ok(secret.to_string())
 }
 
-/// This machine's store token: the store's admin token goes to `hub share
-/// mint` on stdin, and the token comes back on its stdout, so neither is ever
-/// in an argv.
-fn mint(url: &str, machine: &str, admin: &str, access: &[(&str, &str)]) -> Step<String> {
+/// This machine's store token, for its runner name and the name mem writes
+/// as: the store's admin token goes to `hub share mint` on stdin, and the
+/// token comes back on its stdout, so neither is ever in an argv.
+fn mint(
+    url: &str,
+    runner: &str,
+    writes_as: &str,
+    admin: &str,
+    access: &[(&str, &str)],
+) -> Step<String> {
     let mut child = Command::new("hub")
-        .args(["share", "mint", machine])
+        .args(["share", "mint", runner, writes_as])
         .envs(access.iter().copied())
         .env("HUB_STORE_URL", url)
         .env("HUB_STORE_NAME", STORE_NAME)
@@ -297,7 +303,7 @@ fn mint(url: &str, machine: &str, admin: &str, access: &[(&str, &str)]) -> Step<
         .or_else(|e| fail(format!("hub share mint: {e}")))?;
     let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if !out.status.success() || token.is_empty() {
-        return fail(format!("hub share mint {machine} gave no token"));
+        return fail(format!("hub share mint {runner} {writes_as} gave no token"));
     }
     Ok(token)
 }

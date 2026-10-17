@@ -76,6 +76,8 @@ esac"#
     work.script("bin/systemctl", log);
     work.mkdir("home");
     work.mkdir("cwd");
+    // The name mem writes as, which the minted token carries.
+    work.put("config/qshell/machine", "mac-mini-m2\n");
     work
 }
 
@@ -186,7 +188,7 @@ pass show workflow/hubweb-store-token
 pass show workflow/hub-cloud-token
 pass show workflow/cloud-next-access-id
 pass show workflow/cloud-next-access-secret
-hub share mint mini
+hub share mint mini mac-mini-m2
 hub share seed
 mem share switch
 hub share seed

@@ -31,6 +31,31 @@ pub fn parse_status(text: &str) -> Option<String> {
     (!label.is_empty()).then(|| label.to_string())
 }
 
+/// The name mem stamps on this machine's writes: `qshell/machine` under
+/// `$XDG_CONFIG_HOME` (else `~/.config`), else `uname -n`.
+pub fn mem_name() -> String {
+    let config = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(v) if !v.is_empty() => Some(std::path::PathBuf::from(v)),
+        _ => crate::paths::home().map(|home| home.join(".config")),
+    };
+    if let Some(text) = config.and_then(|c| std::fs::read_to_string(c.join("qshell/machine")).ok())
+    {
+        let name = text.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    if let Ok(out) = Command::new("uname").arg("-n").output()
+        && out.status.success()
+    {
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    "unknown".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

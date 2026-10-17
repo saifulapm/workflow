@@ -101,24 +101,47 @@ pub struct Outcome {
     pub changed: bool,
 }
 
+/// The names a machine's own token was minted for: the runner its reports
+/// and dones name, and the mem machine its writes are made as. None for a
+/// token minted before tokens named a machine. Either may end in `*`, which
+/// names every longer name it begins: a cloud session's.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Bound {
+    pub runner: String,
+    pub machine: Option<String>,
+}
+
+/// Whether the minted name `pattern` names `name`.
+pub fn names(pattern: &str, name: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name.len() > prefix.len() && name.starts_with(prefix),
+        None => pattern == name,
+    }
+}
+
 /// Answers one text frame from a socket whose machine said hello as
 /// `machine` (None before its hello). A socket opened with a machine's own
-/// token is `bound` to that token's runner name, and reports and says done
-/// as that machine only; one opened with the shared bearer is bound to none.
+/// token is `bound` to the names that token was minted for, and reports and
+/// says done as its runner only; one opened with the shared bearer is bound
+/// to none.
 pub fn handle(
     log: &mut impl Log,
     machine: Option<&str>,
-    bound: Option<&str>,
+    bound: Option<&Bound>,
     text: &str,
 ) -> Outcome {
     let answer = match serde_json::from_str::<Value>(text) {
         Ok(message) => match message["t"].as_str() {
             Some(t @ ("report" | "done"))
-                if bound.is_some_and(|bound| message["machine"].as_str() != Some(bound)) =>
+                if bound.is_some_and(|bound| {
+                    !message["machine"]
+                        .as_str()
+                        .is_some_and(|name| names(&bound.runner, name))
+                }) =>
             {
                 Err(Fault::Broken(format!(
                     "this socket's token is {}'s: a {t} names that machine only",
-                    bound.unwrap_or_default()
+                    bound.map(|b| b.runner.as_str()).unwrap_or_default()
                 )))
             }
             Some("hello") => hello(log, &message),
@@ -253,6 +276,12 @@ pub fn runner_name(name: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
         && !name.starts_with('.')
+}
+
+/// Whether a token may be minted for `name`: a runner name, or one followed
+/// by a `*` that names every longer name it begins.
+pub fn mint_name(name: &str) -> bool {
+    runner_name(name.strip_suffix('*').unwrap_or(name))
 }
 
 /// A local hub's word on its machine: its runs, checkouts, worktrees and
@@ -440,18 +469,24 @@ pub fn attached(value: &Value) -> (Option<String>, Option<(u64, bool)>) {
     }
 }
 
-/// `value` with the runner name the socket's token is bound to, which the
+/// `value` with the names the socket's token is bound to, which the
 /// store sets when it opens the socket and keeps through every rewrite.
-pub fn bind(mut value: Value, bound: Option<&str>) -> Value {
+pub fn bind(mut value: Value, bound: Option<&Bound>) -> Value {
     if let Some(bound) = bound {
-        value["bound"] = json!(bound);
+        value["bound"] = json!(bound.runner);
+        if let Some(machine) = &bound.machine {
+            value["bound_machine"] = json!(machine);
+        }
     }
     value
 }
 
-/// The runner name an attachment is bound to; None on a shared-bearer socket.
-pub fn bound(value: &Value) -> Option<String> {
-    value["bound"].as_str().map(str::to_string)
+/// The names an attachment is bound to; None on a shared-bearer socket.
+pub fn bound(value: &Value) -> Option<Bound> {
+    Some(Bound {
+        runner: value["bound"].as_str()?.to_string(),
+        machine: value["bound_machine"].as_str().map(str::to_string),
+    })
 }
 
 /// The newest limit day any socket's attachment holds; a cap outranks a
@@ -1106,7 +1141,11 @@ mod tests {
         let start = json!({"kind":"start","project":"walk01"});
         queue_command(&mut log, "01N", "nuc", &start).unwrap();
         let send = |log: &mut Memory, message: Value| {
-            handle(log, Some("mac-mini-m2"), Some("mini"), &message.to_string())
+            let bound = Bound {
+                runner: "mini".into(),
+                machine: Some("mac-mini-m2".into()),
+            };
+            handle(log, Some("mac-mini-m2"), Some(&bound), &message.to_string())
         };
         let forged = send(&mut log, json!({"t":"report","machine":"nuc","agents":[]}));
         assert_eq!(parse(&forged.sender)[0]["t"], "error");
@@ -1119,5 +1158,54 @@ mod tests {
         own["t"] = json!("report");
         send(&mut log, own);
         assert_eq!(log.reports["mini"].1, mini(json!([])));
+    }
+
+    #[test]
+    fn a_minted_name_ending_in_a_star_names_every_longer_name_it_begins() {
+        assert!(names("mini", "mini"));
+        assert!(!names("mini", "minis"));
+        assert!(names("session_*", "session_01x"));
+        assert!(!names("session_*", "session_"));
+        assert!(!names("session_*", "mini"));
+        assert!(mint_name("session_*") && mint_name("cloud-*") && mint_name("mac-mini-m2"));
+        assert!(!mint_name("*") && !mint_name("a*b") && !mint_name("a**") && !mint_name(""));
+    }
+
+    #[test]
+    fn an_attachment_keeps_both_names_of_its_token() {
+        let bound = Bound {
+            runner: "session_*".into(),
+            machine: Some("cloud-*".into()),
+        };
+        let value = bind(attachment(Some("cloud-x"), None), Some(&bound));
+        assert_eq!(super::bound(&value), Some(bound));
+        assert_eq!(attached(&value).0.as_deref(), Some("cloud-x"));
+        // A socket bound before tokens named a machine.
+        let old = json!({"machine":"nuc","bound":"nuc"});
+        assert_eq!(
+            super::bound(&old),
+            Some(Bound {
+                runner: "nuc".into(),
+                machine: None
+            })
+        );
+        assert_eq!(super::bound(&attachment(Some("nuc"), None)), None);
+    }
+
+    #[test]
+    fn a_cloud_token_reports_as_any_session() {
+        let mut log = Memory::default();
+        let bound = Bound {
+            runner: "session_*".into(),
+            machine: Some("cloud-*".into()),
+        };
+        let send = |log: &mut Memory, machine: &str| {
+            let message = json!({"t":"report","machine":machine,"agents":[]});
+            handle(log, Some("cloud-a"), Some(&bound), &message.to_string())
+        };
+        assert_eq!(parse(&send(&mut log, "mini").sender)[0]["t"], "error");
+        assert!(log.reports.is_empty());
+        send(&mut log, "session_01abc");
+        assert!(log.reports.contains_key("session_01abc"));
     }
 }

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Each machine's own store token under `cf dev`: the holder of the shared
-# bearer mints one for mini (`hub share mint`) and one for nuc. A socket
-# opened with mini's token reports as mini, but a report or a done naming
-# nuc is refused and changes nothing. The shared bearer still speaks for
-# any machine, a client cannot bind its socket by sending the store's own
-# header, mini's token works on /store/files, and it cannot mint.
+# bearer mints one for mini (`hub share mint`), one for nuc and one for the
+# cloud sessions, each for a runner and a mem machine name. A socket opened
+# with mini's token reports as mini, but a report or a done naming nuc is
+# refused and changes nothing; the cloud's token reports as any session.
+# The shared bearer still speaks for any machine, a client cannot bind its
+# socket by sending the store's own header, mini's token works on
+# /store/files, and it cannot mint.
 #
 # Needs what t151 needs, and the hub's release binary, which tests/run.sh
 # builds.
@@ -103,14 +105,20 @@ report() { # report <machine> <agent id, or ""> -- a report frame
 		"$1" "$agents"
 }
 
-mini=$(printf '%s\n' "$token" | HUB_STORE_URL=$share "$HUB_BIN" share mint mini)
+mini=$(printf '%s\n' "$token" | HUB_STORE_URL=$share "$HUB_BIN" share mint mini mac-mini-m2)
 like "$mini" '^[0-9a-f]{60}$' "hub share mint prints mini's new token"
-nuc=$(curl -s -X POST -H "Authorization: Bearer $token" "$base/store/machines/nuc")
+nuc=$(curl -s -X POST -H "Authorization: Bearer $token" "$base/store/machines/nuc/nuc")
 like "$nuc" '^[0-9a-f]{60}$' "the shared bearer mints nuc's token"
 isnt "$mini" "$nuc" "each machine gets a token of its own"
-status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $mini" "$base/store/machines/x")
+cloud=$(curl -s -X POST -H "Authorization: Bearer $token" "$base/store/machines/session_*/cloud-*")
+like "$cloud" '^[0-9a-f]{60}$' "the shared bearer mints the cloud's token for every session"
+status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $token" "$base/store/machines/x")
+is "$status" 400 "a mint names the machine as well as the runner"
+status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $token" "$base/store/machines/x/a*b")
+is "$status" 400 "a star ends a name or is not there"
+status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $mini" "$base/store/machines/x/x")
 is "$status" 401 "a machine token cannot mint"
-status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/store/machines/x")
+status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/store/machines/x/x")
 is "$status" 401 "no bearer cannot mint"
 status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer nope" "$base/store/share")
 is "$status" 401 "an unknown token opens no socket"
@@ -131,6 +139,10 @@ like "$(running)" 'beta · mini · b1-box' "mini's report is kept"
 forged=$(say "$mini" "" "$(report nuc gamma-g2-nag)" "{\"t\":\"done\",\"id\":\"$id\",\"machine\":\"nuc\"}")
 is "$(printf '%s\n' "$forged" | grep -c '"t":"error"')" 2 "a report and a done naming nuc are refused"
 unlike "$(running)" 'gamma · nuc' "the refused report changed nothing"
+is "$(say "$cloud" "" "$(report session_01cloud "")" | grep -c '"t":"error"')" 0 \
+	"the cloud's token reports as a session"
+is "$(say "$cloud" "" "$(report mini "")" | grep -c '"t":"error"')" 1 \
+	"the cloud's token cannot report as mini"
 like "$(say "$token" "" "$(report nuc "")")" "\"id\":\"$id\"" "nuc's start is still waiting"
 
 # A client cannot bind a socket by sending the store's own header: the
