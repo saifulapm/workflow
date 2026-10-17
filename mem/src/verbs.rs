@@ -42,8 +42,13 @@ pub fn context(
         return Ok(exit::OK);
     }
     let index = app.read_index()?;
-    let staleness =
-        crate::sync::staleness_line(&app.dirs.qshell_status_json(), jiff::Timestamp::now());
+    // A switched machine shares through its local hub, and qshell-sync's
+    // memory unit stands down there, so its age says nothing.
+    let staleness = (!crate::share::is_switched(&app.dirs.share_db()))
+        .then(|| {
+            crate::sync::staleness_line(&app.dirs.qshell_status_json(), jiff::Timestamp::now())
+        })
+        .flatten();
     let sources = Sources::gather(&index, &app.store, identity.id(), staleness)?;
 
     if brief {

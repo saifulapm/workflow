@@ -1079,3 +1079,29 @@ fn the_import_never_removes_what_a_switched_machine_wrote() {
     );
     assert!(by_path(&plan, &item).is_none(), "{plan:?}");
 }
+
+#[test]
+fn context_on_a_switched_machine_says_nothing_of_the_memory_unit() {
+    let stale = |w: &World| {
+        let at =
+            jiff::Timestamp::from_second(jiff::Timestamp::now().as_second() - 95 * 60).unwrap();
+        let path = w.dirs().qshell_status_json();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"version":2,"lastRun":"{at}","running":false,"currentUnit":"memory",
+                    "units":[{{"id":"memory","ok":true,"lastRun":"{at}","lastOk":"{at}"}}]}}"#
+            ),
+        )
+        .unwrap();
+    };
+    let w = switched("share-switched-context");
+    stale(&w);
+    let text = stdout(&walk(&w, &["context"]));
+    assert!(!text.contains("memory last synced"), "{text}");
+    let unswitched = shared("share-unswitched-context");
+    stale(&unswitched);
+    let text = stdout(&walk(&unswitched, &["context"]));
+    assert!(text.contains("memory last synced"), "{text}");
+}
