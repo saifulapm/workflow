@@ -508,8 +508,9 @@ helper="$(dirname "$0")/mem-cloud"
 real="$HOME/.local/bin/mem-x86_64"
 # The store ties a cloud session's writes to its token by mem's machine name.
 if [ ! -s "$HOME/.config/qshell/machine" ]; then
+  vm=$(hostname | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9-' | cut -c1-20)
   mkdir -p "$HOME/.config/qshell" &&
-    echo "cloud-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)" > "$HOME/.config/qshell/machine" || true
+    echo "cloud-${vm:-vm}" > "$HOME/.config/qshell/machine" || true
 fi
 "$helper" fetch mem || exit 1
 store=

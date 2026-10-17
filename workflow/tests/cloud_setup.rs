@@ -531,9 +531,10 @@ fn a_failed_sync_reads_the_baked_replica() {
     assert!(ran.lines().any(|l| l == "mem context remote="), "{ran}");
 }
 
-/// Runs the shim once in a home with no keys, a fake `hostname`, and the
-/// machine file holding `before` (none when `None`). Returns the file after.
-fn machine_file_after(tag: &str, before: Option<&str>) -> Option<String> {
+/// Runs the shim once in a home with no keys, a fake `hostname` printing
+/// `host`, and the machine file holding `before` (none when `None`).
+/// Returns the file after.
+fn machine_file_after(tag: &str, host: &str, before: Option<&str>) -> Option<String> {
     let home = Scratch::new(tag);
     home.put("setup.sh", &script(&home));
     Command::new("bash")
@@ -542,7 +543,7 @@ fn machine_file_after(tag: &str, before: Option<&str>) -> Option<String> {
         .output()
         .unwrap();
     home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");
-    home.script("fake/hostname", "#!/bin/sh\necho My_Host.example\n");
+    home.script("fake/hostname", &format!("#!/bin/sh\necho {host}\n"));
     if let Some(text) = before {
         home.put(".config/qshell/machine", text);
     }
@@ -567,17 +568,20 @@ fn machine_file_after(tag: &str, before: Option<&str>) -> Option<String> {
 #[test]
 fn the_shim_names_a_cloud_machine_after_its_cleaned_host() {
     for before in [None, Some("")] {
-        let after = machine_file_after("cloud-machine-new", before);
+        let after = machine_file_after("cloud-machine-new", "My_Host.example", before);
         assert_eq!(
             after.as_deref().map(str::trim),
-            Some("cloud-yostexample"),
+            Some("cloud-myhostexample"),
             "{before:?}"
         );
     }
+    // The store takes no write from a machine called just `cloud-`.
+    let after = machine_file_after("cloud-machine-bare", "___", None);
+    assert_eq!(after.as_deref().map(str::trim), Some("cloud-vm"));
 }
 
 #[test]
 fn the_shim_leaves_a_machine_name_that_is_already_set() {
-    let after = machine_file_after("cloud-machine-kept", Some("mini\n"));
+    let after = machine_file_after("cloud-machine-kept", "x", Some("mini\n"));
     assert_eq!(after.as_deref(), Some("mini\n"));
 }
