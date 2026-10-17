@@ -101,6 +101,26 @@ fn an_ask_is_handed_to_the_local_hub_with_its_text_and_options() {
     assert_eq!(v["text"], "probe?");
     assert_eq!(v["options"], serde_json::json!(["yes", "no"]));
     assert_eq!(v["audience"], "human");
+    assert_eq!(v["recommend"], serde_json::Value::Null);
+}
+
+#[test]
+fn an_ask_hands_the_local_hub_its_recommended_option() {
+    let w = World::new("lh-recommend");
+    let repo = w.repo("thing", None);
+    let seen = fake_hub(&socket_of(&w), |_| ("200 OK".into(), "ok\n".into()));
+
+    let out = mem_env(
+        &w,
+        &repo,
+        &["ask", "probe?", "--options", "yes,no", "--recommend", "no"],
+        &[],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let ask = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&ask.body).unwrap();
+    assert_eq!(v["recommend"], "no");
 }
 
 #[test]

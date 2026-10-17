@@ -1799,6 +1799,7 @@ pub fn ask(
             project,
             text: question,
             options,
+            recommend,
             audience: Some(person_or_orchestrator(audience)),
         },
     );

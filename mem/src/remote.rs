@@ -133,6 +133,7 @@ pub fn run_with_local_hub(url: &str, cli: &crate::cli::Cli) -> i32 {
         Some(crate::cli::Command::Ask {
             question,
             options,
+            recommend,
             audience,
             ..
         }) => {
@@ -173,6 +174,7 @@ pub fn run_with_local_hub(url: &str, cli: &crate::cli::Cli) -> i32 {
                         project: project.as_deref(),
                         text: question,
                         options,
+                        recommend: recommend.as_deref(),
                         audience: Some(crate::verbs::person_or_orchestrator(
                             audience.and_then(crate::cli::Audience::stored),
                         )),

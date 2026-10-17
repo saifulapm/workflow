@@ -28,6 +28,7 @@ pub struct Asked<'a> {
     pub project: Option<&'a str>,
     pub text: &'a str,
     pub options: &'a [String],
+    pub recommend: Option<&'a str>,
     pub audience: Option<&'a str>,
 }
 
@@ -39,6 +40,7 @@ pub fn ask(socket: &Path, asked: &Asked) {
         "project": asked.project,
         "text": asked.text,
         "options": asked.options,
+        "recommend": asked.recommend,
         "audience": asked.audience.unwrap_or("human"),
     })
     .to_string();

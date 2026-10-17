@@ -209,6 +209,7 @@ fn a_question_posts_to_saifuls_dm_with_one_button_per_option() {
         machine: "nuc".into(),
         text: "probe?".into(),
         options: vec!["yes".into(), "no".into(), LONG.into()],
+        recommend: None,
     };
 
     let posted = slack.post_question(&question).unwrap();
@@ -331,6 +332,7 @@ fn no_token_reaches_a_log_line_an_error_or_debug() {
         machine: "nuc".into(),
         text: "probe?".into(),
         options: vec!["yes".into()],
+        recommend: None,
     };
     let mut seen = vec![format!("{slack:?}")];
     let error = slack.post_question(&question).unwrap_err();
@@ -461,6 +463,7 @@ fn a_question_without_options_posts_without_buttons() {
             machine: "nuc".into(),
             text: "which name?".into(),
             options: Vec::new(),
+            recommend: None,
         })
         .unwrap();
     let calls = fake.calls.lock().unwrap();

@@ -604,6 +604,7 @@ impl Local {
                 machine: self.host.clone(),
                 text: asked.text.clone(),
                 options: asked.options.clone(),
+                recommend: asked.recommend.clone(),
             },
         };
         let route = self.route_now.get();
@@ -962,7 +963,12 @@ impl Local {
     /// Drops an answered question here and on every peer, so no bar counts
     /// it, and takes the buttons off its Slack message.
     fn closed(&self, question: &str, answer: &str) {
-        let text = self.known.get(question).map(|o| o.text);
+        let open = self.known.get(question);
+        // Only a question that rang the phone was posted.
+        let rang = open
+            .as_ref()
+            .is_some_and(|o| o.ring.as_deref() == Some("phone"));
+        let text = open.map(|o| o.text);
         self.known.close(question);
         let body = serde_json::json!({ "question": question }).to_string();
         self.tell_peers("/closed", body.into_bytes());
@@ -971,15 +977,34 @@ impl Local {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(question);
-        if let (Some((channel, ts)), Some(slack)) = (posted, self.slack.clone()) {
-            let text = text.unwrap_or_else(|| format!("#{question}"));
-            let (question, answer) = (question.to_string(), answer.to_string());
-            std::thread::spawn(move || {
-                if let Err(e) = slack.mark_answered(&channel, &ts, &answer, &text) {
-                    eprintln!("hub: local: #{question} not marked answered: {e:#}");
-                }
-            });
+        let Some(slack) = self.slack.clone() else {
+            return;
+        };
+        if posted.is_none() && !rang {
+            return;
         }
+        let text = text.unwrap_or_else(|| format!("#{question}"));
+        let (question, answer, host) =
+            (question.to_string(), answer.to_string(), self.host.clone());
+        std::thread::spawn(move || {
+            // A hub that restarted since it posted no longer knows where:
+            // the DM's metadata does.
+            let posted = match posted {
+                Some(posted) => Some(posted),
+                None => match slack.find_post(&question, &host) {
+                    Ok(found) => found.map(|p| (p.channel, p.ts)),
+                    Err(e) => {
+                        eprintln!("hub: local: #{question}'s Slack post not found: {e:#}");
+                        None
+                    }
+                },
+            };
+            if let Some((channel, ts)) = posted
+                && let Err(e) = slack.mark_answered(&channel, &ts, &answer, &text)
+            {
+                eprintln!("hub: local: #{question} not marked answered: {e:#}");
+            }
+        });
     }
 
     fn tell_peers(&self, path: &'static str, body: Vec<u8>) {
@@ -1334,6 +1359,7 @@ pub struct Asked {
     pub text: String,
     #[serde(default)]
     pub options: Vec<String>,
+    pub recommend: Option<String>,
     pub audience: Option<String>,
 }
 

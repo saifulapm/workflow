@@ -44,6 +44,9 @@ pub struct Question {
     pub machine: String,
     pub text: String,
     pub options: Vec<String>,
+    /// The option the asker would pick: named under the question, and its
+    /// button is Slack's primary one.
+    pub recommend: Option<String>,
 }
 
 /// Where a posted question lives, for `mark_answered`.
@@ -208,21 +211,31 @@ impl Slack {
                     q: q.id.clone(),
                     o: option.clone(),
                 };
-                json!({
+                let mut button = json!({
                     "type": "button",
                     "action_id": i.to_string(),
                     "text": {"type": "plain_text", "text": label(option)},
                     "value": serde_json::to_string(&value).expect("strings serialize"),
-                })
+                });
+                if q.recommend.as_ref() == Some(option) {
+                    button["style"] = json!("primary");
+                }
+                button
             })
             .collect();
+        // The recommendation last, so a cut takes the question's tail first.
+        let recommended = match q.recommend.as_deref().map(str::trim) {
+            Some(r) if !r.is_empty() => format!("\n_Recommended: {}_", escape(r)),
+            _ => String::new(),
+        };
+        let room = SECTION_MAX - recommended.chars().count();
         let mut blocks = vec![
             json!({"type": "section", "text": {"type": "mrkdwn", "text": cut(&format!(
                 "*{}* on `{}`\n{}",
                 escape(&q.project),
                 escape(&q.machine),
                 escape(&q.text)
-            ), SECTION_MAX)}}),
+            ), room) + &recommended}}),
         ];
         // Slack refuses an actions block with no elements; a question
         // without options is answered in its thread.
@@ -574,6 +587,32 @@ impl Slack {
             }
         }
         Ok(replies)
+    }
+
+    /// Where `question`, asked on `machine`, was posted, from the metadata
+    /// of the DM's newest messages: for a hub that restarted since it posted.
+    pub fn find_post(&self, question: &str, machine: &str) -> Result<Option<Posted>> {
+        let opened = self.form("conversations.open", &[("users", &self.user_id)])?;
+        let channel = opened["channel"]["id"]
+            .as_str()
+            .context("conversations.open returned no channel")?;
+        let history = self.form(
+            "conversations.history",
+            &[
+                ("channel", channel),
+                ("limit", HISTORY),
+                ("include_all_metadata", "true"),
+            ],
+        )?;
+        let found = history["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|m| question_of(m).is_some_and(|(q, m)| q == question && m == machine));
+        Ok(found.map(|m| Posted {
+            channel: channel.to_string(),
+            ts: m["ts"].as_str().unwrap_or_default().to_string(),
+        }))
     }
 
     /// A file Saiful shared, fetched with the bot token (files:read).

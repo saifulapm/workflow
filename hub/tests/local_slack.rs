@@ -380,14 +380,20 @@ fn ask(socket: &Path, audience: &str) {
 }
 
 fn ask_with(socket: &Path, audience: &str, options: &[&str]) {
-    let body = json!({
-        "id": "ABCD1234",
-        "project": "walk",
-        "text": "probe?",
-        "options": options,
-        "audience": audience,
-    })
-    .to_string();
+    ask_body(
+        socket,
+        json!({
+            "id": "ABCD1234",
+            "project": "walk",
+            "text": "probe?",
+            "options": options,
+            "audience": audience,
+        }),
+    );
+}
+
+fn ask_body(socket: &Path, body: Value) {
+    let body = body.to_string();
     let response = on_socket(
         socket,
         &format!(
@@ -599,6 +605,79 @@ fn a_tap_on_an_answered_question_clears_its_buttons_with_the_standing_answer() {
     let second = &p.taker_slack.calls_to("chat.update")[1];
     assert!(second.contains("Answered: yes"), "{second}");
     assert!(!second.contains("\"actions\""), "{second}");
+}
+
+/// The option the asker recommends is named under the question, and its
+/// button is the green one.
+#[test]
+fn the_recommended_option_is_named_and_its_button_is_primary() {
+    let dir = TempDir::new("ls-recommend");
+    let log = dir.join("stderr.log");
+    let slack = fake();
+    let _hub = spawn_local(&dir, "cloudbox", &slack, &log);
+    ask_body(
+        &dir.join("local.sock"),
+        json!({
+            "id": "ABCD1234",
+            "project": "walk",
+            "text": "probe?",
+            "options": ["yes", "no"],
+            "recommend": "no",
+            "audience": "human",
+        }),
+    );
+    wait_until("the question posted", || {
+        !slack.calls_to("chat.postMessage").is_empty()
+    });
+    let posted: Value = serde_json::from_str(&slack.calls_to("chat.postMessage")[0]).unwrap();
+    let section = posted["blocks"][0]["text"]["text"].as_str().unwrap();
+    assert!(section.ends_with("\n_Recommended: no_"), "{section:?}");
+    let buttons = posted["blocks"][1]["elements"].as_array().unwrap();
+    assert_eq!(buttons[0]["text"]["text"], "yes");
+    assert!(buttons[0].get("style").is_none(), "{}", buttons[0]);
+    assert_eq!(buttons[1]["text"]["text"], "no");
+    assert_eq!(buttons[1]["style"], "primary");
+}
+
+/// A question answered from the terminal after its hub restarted still
+/// loses its buttons: the hub finds its post in the DM by the question's
+/// metadata, since the restart forgot where it posted.
+#[test]
+fn an_answer_after_a_restart_still_clears_the_posts_buttons() {
+    let dir = TempDir::new("ls-restart-close");
+    let log = dir.join("stderr.log");
+    let first = fake();
+    let hub = spawn_local(&dir, "cloudbox", &first, &log);
+    let port = hub.port;
+    ask(&dir.join("local.sock"), "human");
+    wait_until("the question posted", || {
+        !first.calls_to("chat.postMessage").is_empty()
+    });
+    drop(hub);
+
+    let second = fake_on(Arc::clone(&first.dm));
+    let _hub = spawn_local_on(&dir, "cloudbox", &second, &log, port);
+    let body = json!({"question": "ABCD1234", "answer": "yes", "by": "cli"}).to_string();
+    let response = on_socket(
+        &dir.join("local.sock"),
+        &format!(
+            "POST /answer HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ),
+    );
+    assert_eq!(status_of(&response), 200, "{response}");
+    wait_until("the post updated", || {
+        !second.calls_to("chat.update").is_empty()
+    });
+    let update: Value = serde_json::from_str(&second.calls_to("chat.update")[0]).unwrap();
+    assert_eq!(update["channel"], "D0DM");
+    assert_eq!(update["ts"], "1700000000.000100");
+    let text = update["blocks"][0]["text"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("probe?") && text.contains("Answered:* yes"),
+        "{text:?}"
+    );
+    assert!(!update.to_string().contains("\"actions\""), "{update}");
 }
 
 /// Saiful's thread reply is the answer, and the message loses its buttons.
