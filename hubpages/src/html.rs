@@ -225,7 +225,7 @@ form.search button{margin:0}
 .banner.ok{background:var(--ok-soft);color:var(--ok)}
 .banner.warn{background:var(--wait-soft);color:var(--wait)}
 .banner.degraded{background:var(--bad-soft);color:var(--bad)}
-article.md{padding:20px 22px;line-height:1.7}
+article.md{padding:20px 22px;line-height:1.7;overflow-wrap:anywhere}
 article.md h1{font-size:21px;line-height:1.3;margin:0 0 12px}
 article.md h2{font-size:16px;text-transform:none;letter-spacing:normal;color:var(--ink);margin:28px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
 article.md h3{font-size:14.5px}
