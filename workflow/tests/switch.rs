@@ -200,8 +200,8 @@ systemctl --user restart hub-local
         w.read("hub.env"),
         format!(
             "mint url={STORE} name=main token= access=setset\n\
-             seed url={STORE} name=main token={MINTED} access=setset\n\
-             seed url={STORE} name=main token={MINTED} access=setset\n"
+             seed url={STORE} name=main token={ADMIN} access=setset\n\
+             seed url={STORE} name=main token={ADMIN} access=setset\n"
         )
     );
     assert_eq!(

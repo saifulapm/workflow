@@ -90,10 +90,12 @@ fn switch(url: &str) -> Step<()> {
     ];
     let token = mint(url, &name, &machine::mem_name(), &admin, &access)?;
 
+    // The import goes out on the shared bearer: it carries other machines'
+    // items and global rules, which the store takes from no machine's token.
     let store = [
         ("HUB_STORE_URL", url),
         ("HUB_STORE_NAME", STORE_NAME),
-        ("HUB_STORE_TOKEN", token.as_str()),
+        ("HUB_STORE_TOKEN", admin.as_str()),
         access[0],
         access[1],
     ];
