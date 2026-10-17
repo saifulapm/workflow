@@ -209,8 +209,37 @@ t_done() {
 	exit 0
 }
 
+# A lone `bash tests/tNNN.sh` runs the release binaries as they are on disk,
+# unlike tests/run.sh, which rebuilds them. Refuse one that is older than the
+# newest source of its crate (or of a path dependency of it), and name the
+# build. Only the default release path inside this tree is checked; a binary
+# the caller points elsewhere is theirs.
+# _stale_guard <bin> <crate>
+_stale_guard() {
+	local bin=$1 crate=$2 dirs=("$WF_ROOT/$2") dep newer d
+	[ "$bin" = "$WF_ROOT/$crate/target/release/$crate" ] && [ -x "$bin" ] || return 0
+	while IFS= read -r dep; do
+		[ -d "$WF_ROOT/$crate/$dep/src" ] && dirs+=("$(cd -- "$WF_ROOT/$crate/$dep" && pwd)")
+	done < <(sed -n 's/.*path *= *"\([^"]*\)".*/\1/p' "$WF_ROOT/$crate/Cargo.toml" 2>/dev/null)
+	for d in "${dirs[@]}"; do
+		newer=$(find "$d/src" "$d/Cargo.toml" "$d/Cargo.lock" -type f -newer "$bin" -print -quit 2>/dev/null)
+		if [ -n "$newer" ]; then
+			printf 'stale %s: %s is newer than it.\nbuild it first: (cd %s && cargo build --release)\n' \
+				"$crate" "$newer" "$WF_ROOT/$crate" >&2
+			exit 1
+		fi
+	done
+}
+
 # t_init -- a sandbox HOME, an isolated git and mem, workflow on PATH.
 t_init() {
+	_stale_guard "$MEM_BIN" mem
+	_stale_guard "$WORKFLOW_BIN" workflow
+	# Tests default HUB_BIN themselves, after t_init, so a script that names
+	# it is a hub test.
+	if [ -n "${HUB_BIN:-}" ] || grep -q HUB_BIN "$0" 2>/dev/null; then
+		_stale_guard "${HUB_BIN:-$WF_ROOT/hub/target/release/hub}" hub
+	fi
 	T_TMP=$(mktemp -d "${TMPDIR:-/tmp}/wf-test.XXXXXX")
 	trap t_done EXIT
 
