@@ -490,6 +490,7 @@ fn session(
                         }
                     }
                     Message::Text(text) => {
+                        say_why(&text);
                         if held.is_empty() {
                             held_since = Instant::now();
                         }
@@ -650,6 +651,26 @@ fn send_pending(
         uploads.start(store);
     }
     Ok(())
+}
+
+/// Logs why the store answered with an error or refused a write: mem keeps
+/// the one in its outbox and the other as a conflict copy, and says
+/// nothing of the reason.
+fn say_why(frame: &str) {
+    let Ok(message) = serde_json::from_str::<Value>(frame) else {
+        return;
+    };
+    let Some(why) = message["why"].as_str() else {
+        return;
+    };
+    match message["t"].as_str() {
+        Some("error") => eprintln!("hub: share: the store said: {why}"),
+        Some("refused") => eprintln!(
+            "hub: share: the store refused {}: {why}",
+            message["id"].as_str().unwrap_or("a write")
+        ),
+        _ => {}
+    }
 }
 
 /// Applies what arrived before the socket ended, then ends the session.

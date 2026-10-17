@@ -441,6 +441,41 @@ fn every_frame_from_the_store_reaches_mem_share_apply_in_order() {
 }
 
 #[test]
+fn the_stores_error_and_the_why_of_a_refusal_reach_the_hubs_log() {
+    let dir = TempDir::new("share-why");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), "testbox\n").unwrap();
+    let log = dir.join("hub.log");
+    let socket = dir.join("local.sock");
+    let _hub = Hub::spawn_with_stderr(
+        &home,
+        &[&bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", PEER_TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("HUB_STORE_URL", store.url.as_str()),
+            ("HUB_STORE_TOKEN", STORE_TOKEN),
+        ],
+        std::fs::File::create(&log).unwrap(),
+    );
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    store.send(r#"{"t":"error","why":"mint it again with `hub share mint nuc <machine>`"}"#);
+    store.send(r#"{"t":"refused","id":"01J00000000000000000000AAA","head":null,"why":"only the mini's token writes global items"}"#);
+    wait_for("both lines in the log", Duration::from_secs(2), || {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        text.contains("mint it again with `hub share mint nuc <machine>`")
+            && text
+                .contains("01J00000000000000000000AAA: only the mini's token writes global items")
+    });
+}
+
+#[test]
 fn a_dropped_socket_comes_back_with_a_hello_and_every_pending_line() {
     let dir = TempDir::new("share-reconnect");
     let bin = share_mem(&dir);
