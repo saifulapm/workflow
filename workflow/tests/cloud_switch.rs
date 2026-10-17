@@ -117,7 +117,7 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
         "main",
         "HUB_STORE_TOKEN",
         "hub share mint 'session_*' 'cloud-*'",
-        "pass insert -m workflow/hub-store-cloud",
+        "pass insert -m -f workflow/hub-store-cloud",
         "pass show workflow/hub-store-cloud",
         "HUB_CLOUD_TOKEN",
         "pass show workflow/hub-cloud-token",

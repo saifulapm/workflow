@@ -648,7 +648,7 @@ pub fn cmd_cloud_switch(store: &str) -> i32 {
 1. Set HUB_STORE_URL to {store}
 2. Set HUB_STORE_NAME to main
 3. Mint the cloud's own store token once, and keep it in pass:
-   pass show workflow/hubweb-store-token | HUB_STORE_URL={store} HUB_STORE_NAME=main HUB_STORE_ACCESS_ID=$(pass show workflow/cloud-next-access-id) HUB_STORE_ACCESS_SECRET=$(pass show workflow/cloud-next-access-secret) hub share mint 'session_*' 'cloud-*' | pass insert -m workflow/hub-store-cloud
+   pass show workflow/hubweb-store-token | HUB_STORE_URL={store} HUB_STORE_NAME=main HUB_STORE_ACCESS_ID=$(pass show workflow/cloud-next-access-id) HUB_STORE_ACCESS_SECRET=$(pass show workflow/cloud-next-access-secret) hub share mint 'session_*' 'cloud-*' | pass insert -m -f workflow/hub-store-cloud
    Then set HUB_STORE_TOKEN to the output of: pass show workflow/hub-store-cloud
    (the shared bearer stays in pass on the mini, for minting only)
 4. Set HUB_CLOUD_TOKEN to the output of: pass show workflow/hub-cloud-token
