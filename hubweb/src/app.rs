@@ -187,10 +187,10 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
 
 /// The Worker's own parts of a page's Server-Timing: the Access check, the
 /// JWKS fetch within it when one ran, and whether the isolate started cold.
-fn timing(access: u64, jwks: Option<u64>, cold: bool) -> String {
+fn timing(access: u64, jwks: Option<String>, cold: bool) -> String {
     let mut parts = format!("access;dur={access}");
-    if let Some(took) = jwks {
-        parts.push_str(&format!(", jwks;dur={took}"));
+    if let Some(jwks) = jwks {
+        parts.push_str(&format!(", {jwks}"));
     }
     if cold {
         parts.push_str(", isolate;desc=cold");
@@ -199,9 +199,10 @@ fn timing(access: u64, jwks: Option<u64>, cold: bool) -> String {
 }
 
 /// `Ok` only for a token one of this Worker's Access apps would have issued,
-/// and never while ACCESS_AUD or ACCESS_TEAM is unset; it holds how long a
-/// JWKS fetch took when the check ran one. The error says why, for the log.
-async fn guard(req: &Request, env: &Env) -> std::result::Result<Option<u64>, &'static str> {
+/// and never while ACCESS_AUD or ACCESS_TEAM is unset; it holds the JWKS
+/// fetch's Server-Timing part when the check ran one. The error says why,
+/// for the log.
+async fn guard(req: &Request, env: &Env) -> std::result::Result<Option<String>, &'static str> {
     let setting = |name| env.secret(name).map(|value| value.to_string()).ok();
     let access = Access::new(
         setting("ACCESS_AUD").as_deref(),
@@ -231,9 +232,9 @@ thread_local! {
 }
 
 /// The JWK for `kid`, fetching the team's keys when none are cached yet or,
-/// at most once a minute, when `kid` is new (Access rotates keys); and how
-/// long the fetch took, when one ran.
-async fn key(access: &Access, kid: &str) -> (Option<Value>, Option<u64>) {
+/// at most once a minute, when `kid` is new (Access rotates keys); and the
+/// fetch's Server-Timing part, when one ran.
+async fn key(access: &Access, kid: &str) -> (Option<Value>, Option<String>) {
     if let Some(jwk) = KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned()) {
         return (Some(jwk), None);
     }
@@ -248,21 +249,46 @@ async fn key(access: &Access, kid: &str) -> (Option<Value>, Option<u64>) {
     if !due {
         return (None, None);
     }
-    match fetch_keys(access).await {
-        Ok(fresh) => KEYS.with_borrow_mut(|keys| keys.by_kid = fresh),
+    let mut cached = false;
+    match fetch_keys(access, kid).await {
+        Ok((fresh, hit)) => {
+            KEYS.with_borrow_mut(|keys| keys.by_kid = fresh);
+            cached = hit;
+        }
         Err(why) => console_error!("hubweb: fetching Access keys: {why}"),
     }
     let took = Date::now().as_millis() - now;
+    let part = match cached {
+        true => format!("jwks;dur={took};desc=cache"),
+        false => format!("jwks;dur={took}"),
+    };
     (
         KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned()),
-        Some(took),
+        Some(part),
     )
 }
 
+/// The team's keys, and whether they came from this data center's cache. A
+/// cold isolate takes them from there while they hold `kid`, since a fetch
+/// from Access takes about half a second; else they come from Access and
+/// are kept for as long as its Cache-Control says (4 h).
+///
 /// A Request, not a `Url`: `Url::parse` brings the url crate's IDNA tables,
 /// about 200 KB of wasm.
-async fn fetch_keys(access: &Access) -> std::result::Result<HashMap<String, Value>, String> {
-    let request = Request::new(&access.certs_url(), Method::Get).map_err(|e| e.to_string())?;
+async fn fetch_keys(
+    access: &Access,
+    kid: &str,
+) -> std::result::Result<(HashMap<String, Value>, bool), String> {
+    let url = access.certs_url();
+    let cache = Cache::default();
+    if let Ok(Some(mut hit)) = cache.get(url.as_str(), false).await
+        && let Ok(body) = hit.bytes().await
+        && let Ok(keys) = access::jwks(&body)
+        && keys.contains_key(kid)
+    {
+        return Ok((keys, true));
+    }
+    let request = Request::new(&url, Method::Get).map_err(|e| e.to_string())?;
     let mut answer = Fetch::Request(request)
         .send()
         .await
@@ -271,7 +297,15 @@ async fn fetch_keys(access: &Access) -> std::result::Result<HashMap<String, Valu
         return Err(format!("status {}", answer.status_code()));
     }
     let body = answer.bytes().await.map_err(|e| e.to_string())?;
-    access::jwks(&body)
+    let keys = access::jwks(&body)?;
+    if let Ok(Some(control)) = answer.headers().get("Cache-Control")
+        && let Ok(mut kept) = Response::from_bytes(body)
+        && kept.headers_mut().set("Cache-Control", &control).is_ok()
+        && let Err(why) = cache.put(url.as_str(), kept).await
+    {
+        console_error!("hubweb: keeping Access keys in the cache: {why}");
+    }
+    Ok((keys, false))
 }
 
 /// Checks the token's RS256 signature with the runtime's WebCrypto.
