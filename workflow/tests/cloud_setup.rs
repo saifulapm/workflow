@@ -4,6 +4,7 @@
 #[path = "../src/scratch.rs"]
 mod scratch;
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,9 +18,22 @@ fn repo() -> PathBuf {
         .to_path_buf()
 }
 
+/// A command that sees none of the cloud's variables from the shell running
+/// the tests: a session started by the hub carries the mini's `HUB_*` keys.
+fn command(program: impl AsRef<OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    for (k, _) in std::env::vars_os() {
+        let k = k.to_string_lossy();
+        if k.starts_with("HUB_") || k == "TS_AUTHKEY" || k == "MEM_REMOTE" {
+            cmd.env_remove(&*k);
+        }
+    }
+    cmd
+}
+
 /// The printed script, its shim folder moved into the scratch directory.
 fn script(home: &Scratch) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_workflow"))
+    let out = command(env!("CARGO_BIN_EXE_workflow"))
         .arg("cloud-setup")
         .output()
         .unwrap();
@@ -38,7 +52,7 @@ fn script(home: &Scratch) -> String {
 fn the_script_writes_every_skill_and_agent_byte_for_byte() {
     let home = Scratch::new("cloud-setup-files");
     home.put("setup.sh", &script(&home));
-    let ran = Command::new("bash")
+    let ran = command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
         .output()
@@ -75,7 +89,7 @@ fn the_script_writes_every_skill_and_agent_byte_for_byte() {
 fn the_mem_shim_fetches_the_binary_from_the_mem_server_once_then_runs_it() {
     let home = Scratch::new("cloud-setup-shim");
     home.put("setup.sh", &script(&home));
-    let ran = Command::new("bash")
+    let ran = command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
         .output()
@@ -99,7 +113,7 @@ printf '#!/bin/sh\\necho real mem \"$@\"\\n' > \"$2\"\n",
     );
     let shim = home.at("usr-local-bin/mem");
     for _ in 0..2 {
-        let out = Command::new(&shim)
+        let out = command(&shim)
             .args(["log", "landed t1"])
             .env("HOME", home.path())
             .env("PATH", &path)
@@ -128,7 +142,7 @@ printf '#!/bin/sh\\necho real mem \"$@\"\\n' > \"$2\"\n",
 fn cloud_home(tag: &str) -> (Scratch, PathBuf, String) {
     let home = Scratch::new(tag);
     home.put("setup.sh", &script(&home));
-    let ran = Command::new("bash")
+    let ran = command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
         .output()
@@ -181,7 +195,7 @@ fn cloud_home(tag: &str) -> (Scratch, PathBuf, String) {
 }
 
 fn run_shim(home: &Scratch, path: &str, args: &[&str]) {
-    let out = Command::new(home.at("usr-local-bin/mem"))
+    let out = command(home.at("usr-local-bin/mem"))
         .args(args)
         .env("HOME", home.path())
         .env("PATH", path)
@@ -293,18 +307,16 @@ fn a_mem_after_a_logout_joins_the_tailnet_again() {
 fn without_the_keys_the_shim_starts_nothing() {
     let home = Scratch::new("cloud-setup-no-keys");
     home.put("setup.sh", &script(&home));
-    Command::new("bash")
+    command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
         .output()
         .unwrap();
     home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");
-    let out = Command::new(home.at("usr-local-bin/mem"))
+    let out = command(home.at("usr-local-bin/mem"))
         .args(["context"])
         .env("HOME", home.path())
         .env("MEM_REMOTE", "https://mem.example.test")
-        .env_remove("TS_AUTHKEY")
-        .env_remove("HUB_PEER_TOKEN")
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
@@ -361,7 +373,7 @@ fn store_fakes(home: &Scratch, hub_sync_exit: u8) -> (PathBuf, String) {
 
 fn setup_with(home: &Scratch, path: &str, vars: &[(&str, &str)]) -> std::process::Output {
     home.put("setup.sh", &script(home));
-    let mut setup = Command::new("bash");
+    let mut setup = command("bash");
     setup
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
@@ -455,7 +467,7 @@ fn the_first_mem_of_a_store_session_syncs_before_it_reads() {
     setup_with(&home, &path, &STORE_ENV);
     fs::remove_file(&log).unwrap();
     let run = |args: &[&str]| {
-        let mut shim = Command::new(home.at("usr-local-bin/mem"));
+        let mut shim = command(home.at("usr-local-bin/mem"));
         shim.args(args).env("HOME", home.path()).env("PATH", &path);
         for (k, v) in STORE_ENV {
             shim.env(k, v);
@@ -514,7 +526,7 @@ fn a_failed_sync_reads_the_baked_replica() {
     let (log, path) = store_fakes(&home, 1);
     setup_with(&home, &path, &STORE_ENV);
     fs::remove_file(&log).unwrap();
-    let mut shim = Command::new(home.at("usr-local-bin/mem"));
+    let mut shim = command(home.at("usr-local-bin/mem"));
     shim.args(["context"])
         .env("HOME", home.path())
         .env("PATH", &path);
@@ -537,7 +549,7 @@ fn a_failed_sync_reads_the_baked_replica() {
 fn machine_file_after(tag: &str, host: &str, before: Option<&str>) -> Option<String> {
     let home = Scratch::new(tag);
     home.put("setup.sh", &script(&home));
-    Command::new("bash")
+    command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
         .output()
@@ -552,13 +564,11 @@ fn machine_file_after(tag: &str, host: &str, before: Option<&str>) -> Option<Str
         home.at("fake").display(),
         std::env::var("PATH").unwrap()
     );
-    let out = Command::new(home.at("usr-local-bin/mem"))
+    let out = command(home.at("usr-local-bin/mem"))
         .args(["context"])
         .env("HOME", home.path())
         .env("PATH", path)
         .env("MEM_REMOTE", "https://mem.example.test")
-        .env_remove("TS_AUTHKEY")
-        .env_remove("HUB_PEER_TOKEN")
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
