@@ -85,9 +85,26 @@ def project(pid, name, count):
 
 project(big, "big", n)
 project(small, "small", 40)
+
+# small's newest: an archived handoff over a kept one, a log a fact
+# supersedes, and a question nobody has answered.
+def newer(n, kind, title, extra=""):
+    iid = f"01K0R0WSSX{n:016d}"
+    at = f"2026-10-16T0{n}:00:00Z"
+    put(f"projects/{small}/items/{iid}.md",
+        f'+++\ncreated = "{at}"\n{extra}id = "{iid}"\nkind = "{kind}"\nmachine = "mini"\n'
+        f'modified = "{at}"\nproject = "small"\ntitle = "{title}"\n+++\n\n{title}\n')
+    return iid
+
+newer(1, "handoff", "small handoff kept")
+newer(2, "handoff", "small handoff archived", "archived = true\n")
+newer(3, "log", "small log kept")
+replaced = newer(4, "log", "small log replaced")
+newer(5, "fact", "small fact", f'supersedes = "{replaced}"\n')
+newer(6, "question", "Which colour for small?", 'audience = "human"\n')
 PY
 like "$(node "$WF_ROOT/tests/push-store.mjs" "ws://127.0.0.1:$CF_DEV_PORT/store/share" "$token" "$store" 2>&1)" \
-	"^pushed $((ITEMS + 40 + 10))\$" "the generated store reaches the store"
+	"^pushed $((ITEMS + 40 + 6 + 10))\$" "the generated store reaches the store"
 
 # rows <path> -- the rows the page's store queries read, from Server-Timing.
 rows() {
@@ -109,3 +126,41 @@ for page in / /wiki /p/big /p/big/wiki /wiki/big/notes /p/big/roadmap /p/big/pla
 		notok "$page reads under $BOUND rows" "it read '$read'"
 	fi
 done
+
+# The store's own answers say what reading every item would: what is
+# archived or superseded, by an item of any kind, is out, and a question
+# is pending until an answer to it is kept.
+page() { curl -s -H "@$T_TMP/jwt.hdr" "$base$1"; }
+like "$(page /p/small)" 'small handoff kept' "the project page shows the newest handoff not archived"
+unlike "$(page /p/small)" 'small handoff archived' "and never the archived one"
+like "$(page /p/small)" 'small log kept' "it lists the newest log"
+unlike "$(page /p/small)" 'small log replaced' "but not the log a fact supersedes"
+like "$(page /)" 'Which colour for small\?' "home lists the question nobody answered"
+QUESTION=01K0R0WSSX0000000000000006
+answer="+++
+answers = \"$QUESTION\"
+created = \"2026-10-16T07:00:00Z\"
+id = \"01K0R0WSSX0000000000000007\"
+kind = \"answer\"
+machine = \"mini\"
+modified = \"2026-10-16T07:00:00Z\"
+project = \"small\"
+title = \"Blue for small\"
++++
+
+Blue for small
+"
+node --input-type=module -e '
+const [url, token, path, body] = process.argv.slice(1);
+const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
+ws.onerror = () => { console.error("could not connect"); process.exit(1); };
+ws.onopen = () => ws.send(JSON.stringify({ t: "hello", machine: "seed", since: 0 }));
+ws.onmessage = (e) => {
+  const m = JSON.parse(e.data);
+  if (m.t === "ready") ws.send(JSON.stringify({ t: "write", id: "01PUSHANSWER", path, base: null, body }));
+  if (m.t === "ack") process.exit(0);
+};
+' "ws://127.0.0.1:$CF_DEV_PORT/store/share" "$token" "projects/$SMALL/items/01K0R0WSSX0000000000000007.md" "$answer"
+is "$?" 0 "an answer to it reaches the store"
+unlike "$(page /)" 'Which colour for small\?' "home no longer lists it"
+like "$(page /p/small/questions)" 'Blue for small' "and the project's questions page shows the answer"

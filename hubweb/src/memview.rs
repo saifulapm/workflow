@@ -100,15 +100,17 @@ pub trait Files {
 
 /// `Files::pending_questions` from every question and answer of the project.
 pub fn pending_by_reading<F: Files + ?Sized>(files: &F, project: &str) -> Vec<(String, String)> {
-    let all = files.items(project, &["question", "answer"]);
+    // Every item, since one of any kind may supersede a question.
+    let all = files.items(project, &[]);
     let rows = item::rows(all.clone(), project, None);
     let pending: Vec<&str> = rows
         .iter()
         .filter(|q| q.active && q.meta().kind == "question")
         .filter(|q| {
-            !rows
-                .iter()
-                .any(|a| a.meta().answers.as_ref() == Some(&q.meta().id))
+            !rows.iter().any(|a| {
+                matches!(a.meta().kind.as_str(), "question" | "answer")
+                    && a.meta().answers.as_ref() == Some(&q.meta().id)
+            })
         })
         .map(|q| q.path.as_str())
         .collect();

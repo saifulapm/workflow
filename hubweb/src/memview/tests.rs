@@ -253,3 +253,28 @@ fn a_page_listing_from_heads_names_each_page_as_its_whole_text_does() {
     assert_eq!(from_heads, whole);
     assert_eq!(whole["pages"][0]["title"], "Below the head");
 }
+
+#[test]
+fn a_question_another_kind_supersedes_is_not_pending() {
+    let mut store = Store::default();
+    store.project(ALPHA, "alpha");
+    store.item(
+        ALPHA,
+        "01K2000000000000000000QOLD",
+        "alpha",
+        "question",
+        "Asked twice?",
+        "",
+    );
+    store.item(
+        ALPHA,
+        "01K2000000000000000000FACT",
+        "alpha",
+        "fact",
+        "Settled",
+        "supersedes = \"01K2000000000000000000QOLD\"\n",
+    );
+    let argv = ["questions", "--pending", "--project=alpha", "--json"];
+    let doc = json(read(&store, &argv, now()));
+    assert_eq!(doc["questions"], json!([]), "{doc}");
+}
