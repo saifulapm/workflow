@@ -515,6 +515,15 @@ fi
 "$helper" fetch mem || exit 1
 store=
 if [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ]; then store=1; fi
+# Every machine shares through the store since the switch, and mem queues a
+# write only on a switched replica: without the flag, nothing a session
+# saves would leave the VM. The hub's own mem calls come here too, so the
+# setup's bake switches the replica it fills.
+switched="${XDG_STATE_HOME:-$HOME/.local/state}/mem/share/switched"
+if [ -n "$store" ] && [ ! -e "$switched" ]; then
+  env -u MEM_REMOTE "$real" share switch >/dev/null ||
+    echo "mem: cannot switch the replica to the store" >&2
+fi
 # The local hub's own calls into the replica: never a sync or a hub of their own.
 if [ "${1:-}" = share ] && [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" "$@"; fi
 state="$HOME/.local/state/hub"

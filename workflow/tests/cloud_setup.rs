@@ -24,7 +24,9 @@ fn command(program: impl AsRef<OsStr>) -> Command {
     let mut cmd = Command::new(program);
     for (k, _) in std::env::vars_os() {
         let k = k.to_string_lossy();
-        if k.starts_with("HUB_") || k == "TS_AUTHKEY" || k == "MEM_REMOTE" {
+        // A cloud VM sets no XDG dirs: the shim must find the scratch home's.
+        if k.starts_with("HUB_") || k.starts_with("XDG_") || k == "TS_AUTHKEY" || k == "MEM_REMOTE"
+        {
             cmd.env_remove(&*k);
         }
     }
@@ -338,9 +340,13 @@ const STORE_ENV: [(&str, &str); 6] = [
 /// file it was given, then writes a binary that logs how it was run.
 fn store_fakes(home: &Scratch, hub_sync_exit: u8) -> (PathBuf, String) {
     let log = home.at("started.log");
+    // `share switch` leaves the flag the real mem leaves.
     let mem = format!(
-        "#!/bin/sh\necho \"mem $* remote=${{MEM_REMOTE:-}}\" >> {}\necho real mem \"$@\"\n",
-        log.display()
+        "#!/bin/sh\necho \"mem $* remote=${{MEM_REMOTE:-}}\" >> {log}\n\
+         case \"$*\" in 'share switch') mkdir -p {share} && : > {share}/switched;; esac\n\
+         echo real mem \"$@\"\n",
+        log = log.display(),
+        share = home.at(".local/state/mem/share").display(),
     );
     let hub = format!(
         "#!/bin/sh\necho \"hub $* url=${{HUB_STORE_URL:-}} remote=${{MEM_REMOTE:-}}\" >> {log}\n\
@@ -515,6 +521,43 @@ fn the_first_mem_of_a_store_session_syncs_before_it_reads() {
     assert_eq!(
         fs::read_to_string(&log).unwrap(),
         "mem share apply --all remote=\n"
+    );
+}
+
+/// Every machine shares through the store since the switch, and mem queues
+/// a write only on a switched replica: a store session's first mem switches
+/// it, once, before it writes anything.
+#[test]
+fn a_store_sessions_first_mem_switches_the_replica_once_before_it_writes() {
+    let home = Scratch::new("cloud-shim-switch");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    fs::remove_file(&log).unwrap();
+    for text in ["one", "two"] {
+        let mut shim = command(home.at("usr-local-bin/mem"));
+        shim.args(["log", text])
+            .env("HOME", home.path())
+            .env("PATH", &path);
+        for (k, v) in STORE_ENV {
+            shim.env(k, v);
+        }
+        let out = shim.output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+    let ran = lines_of(&log, "mem");
+    let mems: Vec<&str> = ran
+        .iter()
+        .map(String::as_str)
+        .filter(|l| l.starts_with("mem share switch") || l.starts_with("mem log"))
+        .collect();
+    assert_eq!(
+        mems,
+        [
+            "mem share switch remote=",
+            "mem log one remote=",
+            "mem log two remote="
+        ],
+        "{ran:?}"
     );
 }
 
