@@ -1,13 +1,12 @@
-//! `workflow switch --store <url>` -- move this machine's memory from the VPS
-//! store onto the Cloudflare store.
+//! `workflow switch --store <url>` -- join this machine's memory to the
+//! Cloudflare store: a fresh machine, or one whose local.env lost its token.
 //!
-//! It refuses while any session runs here, because a session's write landing
-//! between the last VPS round and the switch would reach neither store, and
-//! while qshell-sync would go on bisyncing memory after it. On a machine that
-//! already switched it moves the store's URL and mints the machine's token
-//! again. Every
-//! program it runs is found on PATH (amx and mem also by `$WORKFLOW_AMX` and
-//! `$WORKFLOW_MEM`), so a test can put a script in each one's place.
+//! chezmoi runs it on apply, beside running sessions: a session's write
+//! between the first seed and the switch reaches the store through the second
+//! seed, and one after it through the outbox. On a machine that already
+//! switched it moves the store's URL and mints the machine's token again.
+//! Every program it runs is found on PATH (mem also by `$WORKFLOW_MEM`), so a
+//! test can put a script in each one's place.
 
 use std::fs;
 use std::io::Write;
@@ -15,7 +14,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use crate::{exit, go, machine, memcli, paths, warn};
+use crate::{exit, machine, memcli, paths, warn};
 
 /// The store object the hub shares through; the walk keeps its own.
 const STORE_NAME: &str = "main";
@@ -47,35 +46,12 @@ fn switch(url: &str) -> Step<()> {
             "--store must be a ws:// or wss:// URL ending in /store/share, not {url}"
         ));
     }
-    let sessions = sessions()?;
-    if !sessions.is_empty() {
-        for line in &sessions {
-            warn(format!("running: {line}"));
-        }
-        return refuse(format!(
-            "{} session(s) run on this machine; end them and run workflow switch again",
-            sessions.len()
-        ));
-    }
-    if !sync_skips_memory() {
-        return refuse(
-            "qshell-sync here still bisyncs memory after a switch: \
-             update the dotfiles (chezmoi update) first",
-        );
-    }
     let Some(name) = machine::name() else {
         return fail("cannot tell this machine's name; set WORKFLOW_MACHINE");
     };
     if switched() {
         return move_store(url, &name);
     }
-
-    run("qshell-sync", &["--only", "memory"], &[]).map_err(|e| {
-        (
-            exit::FAILED,
-            format!("the last memory round with dulali: {e}"),
-        )
-    })?;
 
     // Every secret is read before anything changes, so a missing pass entry
     // stops the switch on a machine that is still whole. The store's names
@@ -146,7 +122,7 @@ fn switch(url: &str) -> Step<()> {
         .map_err(|e| (exit::FAILED, format!("restarting hub-local: {e}")))?;
 
     println!("switched {name} to {url}");
-    println!("  memory shares through the local hub; qshell-sync's memory unit is done");
+    println!("  memory shares through the local hub");
     if !reseeded {
         println!("  the second seed did not finish; the outbox holds new writes");
     }
@@ -159,7 +135,7 @@ fn switch(url: &str) -> Step<()> {
     Ok(())
 }
 
-/// Has `mem share switch` run here? It leaves the flag file qshell-sync tests.
+/// Has `mem share switch` run here? It leaves a flag file.
 fn switched() -> bool {
     let base = match std::env::var("XDG_STATE_HOME") {
         Ok(v) if !v.is_empty() => PathBuf::from(v),
@@ -208,17 +184,6 @@ fn move_store(url: &str, name: &str) -> Step<()> {
     Ok(())
 }
 
-/// Does the `qshell-sync` on PATH test for the switched flag before it
-/// bisyncs memory? An older one would copy the VPS store back over the new one.
-fn sync_skips_memory() -> bool {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
-        .map(|dir| dir.join("qshell-sync"))
-        .find(|p| p.is_file())
-        .and_then(|p| fs::read_to_string(p).ok())
-        .is_some_and(|text| text.contains("mem/share/switched"))
-}
-
 /// A ws:// or wss:// URL with a host, ending in /store/share, the way the hub
 /// reads `HUB_STORE_URL`.
 pub fn store_url(url: &str) -> bool {
@@ -227,45 +192,6 @@ pub fn store_url(url: &str) -> bool {
         .or_else(|| url.strip_prefix("ws://"));
     rest.and_then(|r| r.strip_suffix("/store/share"))
         .is_some_and(|host| !host.is_empty() && !host.contains('/'))
-}
-
-/// One line per session on this machine: each live amx agent by id, each
-/// running claude process (the Remote Control server included) by pid, cwd
-/// and command line.
-fn sessions() -> Step<Vec<String>> {
-    let rows = go::amx_agents().or_else(fail)?;
-    let mut lines: Vec<String> = rows
-        .iter()
-        // A parked agent has no process and writes nothing until it is
-        // resumed, after the switch, when its writes go to the outbox.
-        .filter(|row| go::live(row) && row.evidence.as_deref() != Some("parked"))
-        .map(|row| format!("amx {}", row.id))
-        .collect();
-    let out = Command::new("pgrep")
-        .args(["-a", "-x", "claude"])
-        .stderr(Stdio::piped())
-        .output()
-        .or_else(|e| fail(format!("cannot run pgrep: {e}")))?;
-    // pgrep exits 1 when nothing matched.
-    match out.status.code() {
-        Some(0) | Some(1) => {}
-        _ => {
-            return fail(format!(
-                "pgrep failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-    }
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Some((pid, cmd)) = line.trim().split_once(' ') else {
-            continue;
-        };
-        let cwd = fs::read_link(format!("/proc/{pid}/cwd"))
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "?".to_string());
-        lines.push(format!("pid {pid} in {cwd}: {cmd}"));
-    }
-    Ok(lines)
 }
 
 /// A pass entry's first line. Never printed.

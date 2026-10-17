@@ -176,18 +176,18 @@ refuses or does not answer."
         #[arg(value_parser = ["phone", "device"])]
         to: Option<String>,
     },
-    /// Move this machine's memory from the VPS store onto the Cloudflare store.
+    /// Join this machine's memory to the Cloudflare store.
     #[command(
-        long_about = "Move this machine's memory from the VPS store onto the Cloudflare store.
+        long_about = "Join this machine's memory to the Cloudflare store.
 
-It refuses, exit 2, while any live amx agent or claude process (Remote Control
-included) runs on this machine, naming each one. Then: a last qshell-sync
-memory round with dulali, a store token minted for this machine, hub share
-seed, mem share switch, a second seed, the store keys written to the hub's
-local.env, and hub-local restarted. A first seed that runs out of today's
-import budget refuses, exit 2, before mem switches. Running it again on a
-switched machine moves the store's URL, mints the machine's token again and
-restarts hub-local."
+chezmoi runs it on apply when the hub's local.env has no store token: a store
+token minted for this machine, hub share seed, mem share switch, a second
+seed, the store keys written to the hub's local.env, and hub-local
+restarted. Running sessions do not stop it: the second seed carries what
+they write meanwhile. A first seed that runs out of today's import budget
+refuses, exit 2, before mem switches. Running it again on a switched machine
+moves the store's URL, mints the machine's token again and restarts
+hub-local."
     )]
     Switch {
         /// The store's socket, ws:// or wss://, ending in /store/share.

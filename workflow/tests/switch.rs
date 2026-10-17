@@ -120,54 +120,26 @@ fn text(out: &Output) -> String {
 }
 
 #[test]
-fn a_live_amx_agent_refuses_before_anything_runs() {
-    let w = world("switch-amx");
+fn running_sessions_and_an_old_qshell_sync_do_not_stop_a_switch() {
+    // chezmoi apply runs it beside the Remote Control servers, and the
+    // store's second seed carries a write a session makes meanwhile.
+    let w = world("switch-busy");
     w.put(
         "ls.json",
-        r#"[{"id":"shopify_themes-m3","state":"working","ended":0},
-           {"id":"old-m1","state":"stopped","ended":0}]"#,
+        r#"[{"id":"shopify_themes-m3","state":"working","ended":0}]"#,
     );
-    let out = switch(&w, STORE);
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
-    let said = text(&out);
-    assert!(said.contains("shopify_themes-m3"), "{said}");
-    assert!(!said.contains("old-m1"), "{said}");
-    assert_eq!(calls(&w), "amx ls --json\npgrep -a -x claude\n");
-    assert!(!w.has("config/hub/local.env"));
-}
-
-#[test]
-fn a_parked_amx_agent_with_no_process_is_not_a_running_session() {
-    let w = world("switch-parked");
-    w.put(
-        "ls.json",
-        r#"[{"id":"dulali-m1-skeleton","state":"idle","ended":0,"evidence":"parked"}]"#,
-    );
+    w.put("pgrep.out", "PPID claude remote-control --spawn worktree");
+    {
+        let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
+        w.script("bin/qshell-sync", LOG);
+    }
     let out = switch(&w, STORE);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
-    assert!(!text(&out).contains("dulali-m1-skeleton"), "{}", text(&out));
-}
-
-#[test]
-fn a_running_claude_process_refuses_naming_its_pid_and_cwd() {
-    let w = world("switch-claude");
-    // PPID is the workflow process, so its cwd is the test's cwd dir.
-    w.put("pgrep.out", "PPID claude remote-control --spawn worktree");
-    let out = switch(&w, STORE);
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
-    let said = text(&out);
-    let cwd = w.at("cwd").canonicalize().unwrap();
-    let line = said
-        .lines()
-        .find(|l| l.contains("claude remote-control --spawn worktree"))
-        .unwrap_or_else(|| panic!("{said}"));
-    assert!(line.contains(&cwd.display().to_string()), "{line}");
-    let pid = line
-        .split(|c: char| !c.is_ascii_digit())
-        .find(|s| !s.is_empty())
-        .unwrap();
-    assert!(pid.parse::<u32>().unwrap() > 1, "{line}");
-    assert_eq!(calls(&w), "amx ls --json\npgrep -a -x claude\n");
+    let log = calls(&w);
+    assert!(log.starts_with("pass show"), "{log}");
+    for never in ["amx", "pgrep", "qshell-sync"] {
+        assert!(!log.contains(never), "{log}");
+    }
 }
 
 #[test]
@@ -181,10 +153,7 @@ fn a_quiet_machine_switches_in_order_and_writes_local_env() {
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(
         calls(&w),
-        "amx ls --json
-pgrep -a -x claude
-qshell-sync --only memory
-pass show workflow/hubweb-store-token
+        "pass show workflow/hubweb-store-token
 pass show workflow/hub-cloud-token
 pass show workflow/cloud-next-access-id
 pass show workflow/cloud-next-access-secret
@@ -258,26 +227,6 @@ fn a_store_url_not_ending_in_store_share_is_refused_first() {
 }
 
 #[test]
-fn a_qshell_sync_that_still_bisyncs_memory_refuses_before_anything_runs() {
-    let w = world("switch-old-sync");
-    {
-        let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
-        w.script("bin/qshell-sync", LOG);
-    }
-    let out = switch(&w, STORE);
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
-    assert!(
-        text(&out).contains(
-            "qshell-sync here still bisyncs memory after a switch: update the dotfiles (chezmoi update) first"
-        ),
-        "{}",
-        text(&out)
-    );
-    assert_eq!(calls(&w), "amx ls --json\npgrep -a -x claude\n");
-    assert!(!w.has("config/hub/local.env"));
-}
-
-#[test]
 fn a_rerun_on_a_switched_machine_moves_the_store_url_and_mints_its_token_again() {
     let w = world("switch-rerun");
     w.put("state/mem/share/switched", "");
@@ -292,8 +241,7 @@ fn a_rerun_on_a_switched_machine_moves_the_store_url_and_mints_its_token_again()
     // A token minted before tokens named a machine writes nothing.
     assert_eq!(
         calls(&w),
-        "amx ls --json\npgrep -a -x claude\n\
-         pass show workflow/hubweb-store-token\n\
+        "pass show workflow/hubweb-store-token\n\
          pass show workflow/cloud-next-access-id\n\
          pass show workflow/cloud-next-access-secret\n\
          hub share mint mini mac-mini-m2\n\
