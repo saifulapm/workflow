@@ -530,3 +530,54 @@ fn a_failed_sync_reads_the_baked_replica() {
     let ran = fs::read_to_string(&log).unwrap();
     assert!(ran.lines().any(|l| l == "mem context remote="), "{ran}");
 }
+
+/// Runs the shim once in a home with no keys, a fake `hostname`, and the
+/// machine file holding `before` (none when `None`). Returns the file after.
+fn machine_file_after(tag: &str, before: Option<&str>) -> Option<String> {
+    let home = Scratch::new(tag);
+    home.put("setup.sh", &script(&home));
+    Command::new("bash")
+        .arg(home.at("setup.sh"))
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");
+    home.script("fake/hostname", "#!/bin/sh\necho My_Host.example\n");
+    if let Some(text) = before {
+        home.put(".config/qshell/machine", text);
+    }
+    let path = format!(
+        "{}:{}",
+        home.at("fake").display(),
+        std::env::var("PATH").unwrap()
+    );
+    let out = Command::new(home.at("usr-local-bin/mem"))
+        .args(["context"])
+        .env("HOME", home.path())
+        .env("PATH", path)
+        .env("MEM_REMOTE", "https://mem.example.test")
+        .env_remove("TS_AUTHKEY")
+        .env_remove("HUB_PEER_TOKEN")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    fs::read_to_string(home.at(".config/qshell/machine")).ok()
+}
+
+#[test]
+fn the_shim_names_a_cloud_machine_after_its_cleaned_host() {
+    for before in [None, Some("")] {
+        let after = machine_file_after("cloud-machine-new", before);
+        assert_eq!(
+            after.as_deref().map(str::trim),
+            Some("cloud-yostexample"),
+            "{before:?}"
+        );
+    }
+}
+
+#[test]
+fn the_shim_leaves_a_machine_name_that_is_already_set() {
+    let after = machine_file_after("cloud-machine-kept", Some("mini\n"));
+    assert_eq!(after.as_deref(), Some("mini\n"));
+}

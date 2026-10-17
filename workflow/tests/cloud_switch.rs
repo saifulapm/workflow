@@ -116,7 +116,9 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
         "HUB_STORE_NAME",
         "main",
         "HUB_STORE_TOKEN",
-        "pass show workflow/hubweb-store-token",
+        "hub share mint 'session_*' 'cloud-*'",
+        "pass insert -m workflow/hub-store-cloud",
+        "pass show workflow/hub-store-cloud",
         "HUB_CLOUD_TOKEN",
         "pass show workflow/hub-cloud-token",
         "HUB_PEER_TOKEN_SHA256",
@@ -127,6 +129,10 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
     ] {
         assert!(said.contains(want), "{want}\n{said}");
     }
+    assert!(
+        !said.contains("HUB_STORE_TOKEN to the output of: pass show workflow/hubweb-store-token"),
+        "{said}"
+    );
     assert!(!said.contains(SECRET));
     assert!(!text(&out.stderr).contains(SECRET));
     assert!(!w.has("pass.log"), "pass ran");
