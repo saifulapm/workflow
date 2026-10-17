@@ -279,12 +279,36 @@ pub fn status(db: &Path) -> Result<Option<(u64, u64)>> {
     Ok(Some((seq(&conn)?, waiting as u64)))
 }
 
-/// Applies one message from the store. A message mem cannot use is skipped:
-/// the store's reply to something else must not stop the ones behind it.
-/// With `all`, a record lands whether or not its project shares here.
-pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
+/// Applies a batch of the store's messages, in order, in one transaction:
+/// one commit for the batch, where a commit for each message cost a slow
+/// disk (a cloud VM's) most of a replay's time. A message mem cannot use is
+/// skipped: the store's reply to something else must not stop the ones
+/// behind it. With `all`, a record lands whether or not its project shares
+/// here. A message that fails ends the batch with its error, and the ones
+/// before it stay applied, as when each committed on its own.
+pub fn apply(db: &Path, root: &Path, messages: &[Value], all: bool) -> Result<()> {
     let mut conn = open(db)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for message in messages {
+        // A savepoint dropped without a commit rolls back.
+        let sp = tx.savepoint()?;
+        match apply_one(&sp, db, root, message, all) {
+            Ok(true) => sp.commit()?,
+            Ok(false) => drop(sp),
+            Err(e) => {
+                drop(sp);
+                tx.commit()?;
+                return Err(e);
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// One message of `apply`'s batch: whether its changes are kept. A message
+/// that changes nothing it can use is rolled back.
+fn apply_one(tx: &Connection, db: &Path, root: &Path, message: &Value, all: bool) -> Result<bool> {
     let text = |v: &Value| v.as_str().map(str::to_string);
     match message["t"].as_str() {
         Some("rec") => {
@@ -293,22 +317,21 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
                 text(&message["path"]),
                 message["seq"].as_u64(),
             ) else {
-                return Ok(());
+                return Ok(false);
             };
             let Some(file) = replica_path(root, &rel) else {
-                return Ok(());
+                return Ok(false);
             };
             // The store carries every machine's shared projects; this
             // replica lands only the ones it shares too.
             if !all && shared(root, &file, is_switched(db)).is_none() {
-                raise_seq(&tx, seen)?;
-                tx.commit()?;
-                return Ok(());
+                raise_seq(tx, seen)?;
+                return Ok(true);
             }
             let body = message["body"].as_str();
-            if head(&tx, &rel)?.as_deref() == Some(id.as_str()) {
+            if head(tx, &rel)?.as_deref() == Some(id.as_str()) {
                 // This replica already holds it: its own write, or a replay.
-            } else if waiting_for(&tx, &rel)? {
+            } else if waiting_for(tx, &rel)? {
                 // A local write still waiting wins for now. The store answers
                 // it with a refusal carrying the newest version, or with an
                 // ack, after which this record lands if it is newer.
@@ -324,20 +347,20 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
                 eprintln!("mem: share apply: {rel} is a directory here; passing over it");
             } else {
                 land(&file, body)?;
-                set_head(&tx, &rel, &id)?;
+                set_head(tx, &rel, &id)?;
             }
-            raise_seq(&tx, seen)?;
+            raise_seq(tx, seen)?;
         }
         Some("ack") => {
             let Some(id) = text(&message["id"]) else {
-                return Ok(());
+                return Ok(false);
             };
-            if let Some((rel, body)) = take(&tx, &id)?
-                && !waiting_for(&tx, &rel)?
+            if let Some((rel, body)) = take(tx, &id)?
+                && !waiting_for(tx, &rel)?
                 && let Some(file) = replica_path(root, &rel)
             {
                 let acked = message["seq"].as_i64().unwrap_or(i64::MAX);
-                match take_skipped(&tx, &rel)? {
+                match take_skipped(tx, &rel)? {
                     // Another machine wrote this path after mine while mine
                     // waited (a lost ack, then a replay): its version is the
                     // newer one. At the same seq it is this write itself,
@@ -345,19 +368,19 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
                     // head for it.
                     Some((theirs, seq, theirs_body)) if seq >= acked => {
                         land(&file, theirs_body.as_deref())?;
-                        set_head(&tx, &rel, &theirs)?;
+                        set_head(tx, &rel, &theirs)?;
                     }
                     // An imported write the store appended just now, past
                     // every record this replica has seen, is the newest. A
                     // re-ack at or below that seq is a write this replica
                     // already passed, so nothing lands.
-                    _ if acked > seq(&tx)? as i64 && was_imported(&tx, &id)? => {
+                    _ if acked > seq(tx)? as i64 && was_imported(tx, &id)? => {
                         land(&file, body.as_deref())?;
-                        set_head(&tx, &rel, &id)?;
+                        set_head(tx, &rel, &id)?;
                     }
                     // The replica missed this write when mem died between the
                     // outbox and the rename; the ack is the moment to heal it.
-                    _ if head(&tx, &rel)?.as_deref() == Some(id.as_str())
+                    _ if head(tx, &rel)?.as_deref() == Some(id.as_str())
                         && std::fs::read_to_string(&file).ok() != body =>
                     {
                         land(&file, body.as_deref())?;
@@ -366,31 +389,31 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
                 }
             }
             if let Some(seen) = message["seq"].as_u64() {
-                raise_seq(&tx, seen)?;
+                raise_seq(tx, seen)?;
             }
         }
         Some("refused") => {
             let Some(id) = text(&message["id"]) else {
-                return Ok(());
+                return Ok(false);
             };
             let head_msg = &message["head"];
-            let Some((rel, body)) = take(&tx, &id)? else {
-                return Ok(());
+            let Some((rel, body)) = take(tx, &id)? else {
+                return Ok(false);
             };
             let Some(file) = replica_path(root, &rel) else {
-                return Ok(());
+                return Ok(false);
             };
             if let Some(mine) = body {
                 let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("page");
                 let copy = file.with_file_name(format!("{name}.conflict-{}", id.to_lowercase()));
                 crate::atomic::write_replica(&copy, mine.as_bytes())?;
             }
-            if !waiting_for(&tx, &rel)?
+            if !waiting_for(tx, &rel)?
                 && let Some(theirs) = text(&head_msg["id"])
             {
-                take_skipped(&tx, &rel)?;
+                take_skipped(tx, &rel)?;
                 land(&file, head_msg["body"].as_str())?;
-                set_head(&tx, &rel, &theirs)?;
+                set_head(tx, &rel, &theirs)?;
             }
         }
         Some("stored") => {
@@ -400,14 +423,13 @@ pub fn apply(db: &Path, root: &Path, message: &Value, all: bool) -> Result<()> {
         }
         Some("ready") => {
             if let Some(seen) = message["seq"].as_u64() {
-                raise_seq(&tx, seen)?;
+                raise_seq(tx, seen)?;
             }
             tx.execute("DELETE FROM meta WHERE key = 'resync'", [])?;
         }
         _ => {}
     }
-    tx.commit()?;
-    Ok(())
+    Ok(true)
 }
 
 fn was_imported(conn: &Connection, id: &str) -> Result<bool> {

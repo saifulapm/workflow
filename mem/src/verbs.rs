@@ -2539,16 +2539,19 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
             }
         }
         ShareCommand::Apply { all } => {
+            // The hub hands over a bounded batch, applied in one transaction.
+            let mut messages = Vec::new();
             for line in std::io::stdin().lines() {
                 let line = anyhow::Context::context(line, "reading stdin")?;
                 if line.trim().is_empty() {
                     continue;
                 }
                 match serde_json::from_str::<serde_json::Value>(&line) {
-                    Ok(message) => crate::share::apply(&db, &app.store.root, &message, *all)?,
+                    Ok(message) => messages.push(message),
                     Err(e) => eprintln!("mem: share apply: skipping a line that is not JSON: {e}"),
                 }
             }
+            crate::share::apply(&db, &app.store.root, &messages, *all)?;
         }
         ShareCommand::Export => {
             let Some(top) = crate::git::toplevel(&app.cwd) else {

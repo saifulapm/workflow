@@ -1105,3 +1105,53 @@ fn context_on_a_switched_machine_says_nothing_of_the_memory_unit() {
     let text = stdout(&walk(&unswitched, &["context"]));
     assert!(text.contains("memory last synced"), "{text}");
 }
+
+/// One `mem share apply` takes a batch of the store's messages. Every record
+/// of the batch lands, and the next hello asks for what comes after the
+/// last of them.
+#[test]
+fn a_batch_of_records_lands_whole_and_raises_since_to_its_last() {
+    let w = shared("share-batch");
+    let recs: Vec<Value> = (1..=50)
+        .map(|n| {
+            json!({"t": "rec", "seq": 100 + n, "id": format!("01K0BATCH00000000000000{n:03}"),
+                   "path": page_path(&format!("b{n}")), "body": format!("# b{n}\n"), "machine": "nuc"})
+        })
+        .collect();
+    apply(&w, &recs);
+    for n in [1, 25, 50] {
+        assert_eq!(wiki(&w, &format!("b{n}")), format!("# b{n}\n"));
+    }
+    assert_eq!(hello(&w)["since"], 150);
+}
+
+/// A record that cannot land fails the apply, so the hub asks again; the
+/// records before it in the same batch stay landed, and the next hello asks
+/// from the one that failed.
+#[test]
+fn a_record_that_cannot_land_keeps_the_ones_before_it() {
+    let w = shared("share-batch-blocked");
+    let items = w.dirs().store().join(format!("projects/{ID}/items"));
+    std::fs::remove_dir_all(&items).unwrap();
+    std::fs::write(&items, "not a folder").unwrap();
+    let input: String = [
+        json!({"t": "rec", "seq": 201, "id": "01K0BLOCK0000000000000001", "path": page_path("before"),
+               "body": "# before\n", "machine": "nuc"}),
+        json!({"t": "rec", "seq": 202, "id": "01K0BLOCK0000000000000002",
+               "path": format!("projects/{ID}/items/01K0BLOCK0000000000000002.md"), "body": "x", "machine": "nuc"}),
+        json!({"t": "rec", "seq": 203, "id": "01K0BLOCK0000000000000003", "path": page_path("after"),
+               "body": "# after\n", "machine": "nuc"}),
+    ]
+    .iter()
+    .map(|m| format!("{m}\n"))
+    .collect();
+    let out = mem_in(&w, &["share", "apply"], &input);
+    assert_ne!(code(&out), 0, "{}", stdout(&out));
+    let page = |slug: &str| w.dirs().store().join(page_path(slug));
+    assert_eq!(
+        std::fs::read_to_string(page("before")).unwrap(),
+        "# before\n"
+    );
+    assert!(!page("after").exists());
+    assert_eq!(hello(&w)["since"], 201);
+}
