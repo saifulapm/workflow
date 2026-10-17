@@ -1,5 +1,5 @@
 //! The one global route: where questions and rings reach the owner, Phone,
-//! Device with its machine, or Dulali.
+//! or Device with its machine.
 //!
 //! It lives in `route.json` beside `agents.json`, written whole and renamed.
 //! The file keeps the machine that last took Device even while the route is
@@ -45,7 +45,7 @@ impl Route {
         self.lock().clone()
     }
 
-    /// Phone, Dulali, or Device on `machine`, or with `None` on the machine
+    /// Phone, or Device on `machine`, or with `None` on the machine
     /// that last took it. Changes run one at a time, and the last one wins.
     pub fn set(&self, kind: Kind, machine: Option<&str>) -> Result<(), NoMachine> {
         let mut saved = self.lock();
@@ -110,9 +110,8 @@ pub fn post(route: &Route, mem: &MemCli, request: &Request) -> Response {
     let kind = match choice.route.as_str() {
         "phone" => Kind::Phone,
         "device" => Kind::Device,
-        "dulali" => Kind::Dulali,
         _ => {
-            return agents::json(400, json!({"error": "route is phone, device or dulali"}));
+            return agents::json(400, json!({"error": "route is phone or device"}));
         }
     };
     if choice

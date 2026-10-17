@@ -43,14 +43,6 @@ pub struct Config {
     /// doorbell that opens nothing.
     #[serde(default)]
     pub hub_url: Option<String>,
-    /// Hermes's webhook for questions on the Dulali route; with none, that
-    /// route rings the phone. Its secret comes from `HUB_DULALI_SECRET`.
-    #[serde(default)]
-    pub dulali_webhook: Option<String>,
-    /// Where Dulali's socket goes, the one place its token opens; with none,
-    /// no socket.
-    #[serde(default)]
-    pub dulali_socket: Option<PathBuf>,
     /// The loopback port mem's MCP endpoint listens on; with none, no
     /// endpoint. It answers only a request carrying a Cloudflare Access
     /// token for `access_aud`, signed by `access_team`.
@@ -89,8 +81,6 @@ impl Default for Config {
             ntfy_base: default_ntfy_base(),
             origins: Vec::new(),
             hub_url: None,
-            dulali_webhook: None,
-            dulali_socket: None,
             mcp_port: None,
             access_aud: None,
             access_team: None,

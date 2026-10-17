@@ -10,8 +10,7 @@
 # Differences decided on purpose are blanked in the browser, the same on both
 # sides, before the shot:
 #   - the header's machine name: the hub's host against hub;
-#   - the route line and its form: the hub web offers Phone and Device, no
-#     Dulali;
+#   - the route line and its form;
 #   - home's nav: sibling hubs and the subscribe link;
 #   - relative ages ("10s", "2m"), which move with the clock.
 # Evidence images are not blanked: the test PUTs the seeded bytes to the

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use hubpages::form::Form;
-use hubpages::host::{Command, Held, Kind, NoMachine, Polled, Saved};
+use hubpages::host::{Command, Kind, NoMachine, Polled, Saved};
 use hubpages::http::Request;
 use hubpages::pages::{Site, route_page};
 use hubpages::{Fleet, Host, Outcome, Source, Written};
@@ -27,8 +27,8 @@ impl Source for Canned {
     }
 }
 
-/// A host with no agents, the route at Phone and nothing from Dulali. Home
-/// reads it and acts on nothing.
+/// A host with no agents, the route at Phone. Home reads it and
+/// acts on nothing.
 struct Quiet;
 
 impl Fleet for Quiet {
@@ -65,15 +65,6 @@ impl Host for Quiet {
     }
     fn set_route(&self, _kind: Kind) -> Result<(), NoMachine> {
         panic!("the page set the route")
-    }
-    fn replaceable(&self, _now_ms: i64) -> Vec<(String, Held)> {
-        Vec::new()
-    }
-    fn held_written(&self, _id: &str) -> Option<(String, Held)> {
-        None
-    }
-    fn superseded(&self, _id: &str, _held: &Held, _text: &str) {
-        panic!("the page superseded an answer")
     }
     fn answered(&self, _row: &Value) {
         panic!("the page answered")

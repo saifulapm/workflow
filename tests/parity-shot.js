@@ -15,7 +15,7 @@ async (page) => {
         };
         // The machine name in the header: the hub's host against next-hub.
         set("header.top h1", "machine");
-        // The route header: the hub web has no Dulali.
+        // The route header.
         for (const el of document.querySelectorAll("p.route, form.route, form[action='/route']")) {
           el.style.visibility = "hidden";
         }

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use hubpages::form::Form;
-use hubpages::host::{Command, Held, Kind, NoMachine, Polled, Saved};
+use hubpages::host::{Command, Kind, NoMachine, Polled, Saved};
 use hubpages::http::{Request, Response};
 use hubpages::pages::{Site, route_page};
 use hubpages::{Fleet, Host, Outcome, Source};
@@ -399,13 +399,6 @@ impl<F: Files> Host for Web<'_, '_, F> {
         self.shared.written.borrow_mut().route = Some(chosen);
         Ok(())
     }
-    fn replaceable(&self, _now_ms: i64) -> Vec<(String, Held)> {
-        Vec::new()
-    }
-    fn held_written(&self, _id: &str) -> Option<(String, Held)> {
-        None
-    }
-    fn superseded(&self, _id: &str, _held: &Held, _text: &str) {}
     fn answered(&self, _row: &Value) {}
     fn after_answer(&self, _project: &str, _session: Option<&str>) {}
     fn pause(&self, verb: &str, project: &str) -> Result<(), String> {

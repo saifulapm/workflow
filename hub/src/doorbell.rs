@@ -58,14 +58,11 @@ pub struct Doorbell {
     /// Where a ring goes: the phone, or a machine's desktop.
     pub route: Arc<Route>,
     pub away: Duration,
-    /// For Dulali's answers, whose windows close here.
-    pub app: Arc<App>,
 }
 
 impl Doorbell {
     pub fn from_app(app: &Arc<App>) -> Result<Doorbell> {
         Ok(Doorbell {
-            app: Arc::clone(app),
             seen_path: crate::config::state_home()?.join("hub/seen"),
             ntfy_url: app.config.ntfy_url(),
             machine: app.machine.clone(),
@@ -113,45 +110,17 @@ impl Doorbell {
             eprintln!("hub: doorbell: {why}");
             return;
         }
-        let route = self.route.get().route;
-        let dulali = &self.app.dulali;
         for row in outcome.rows("questions") {
             let Some(id) = row["id"].as_str() else {
                 continue;
             };
             let project = row["project"].as_str().unwrap_or("");
             let machine = row["machine"].as_str().unwrap_or(&self.machine);
-            // Dulali's silence rings the phone, whatever the route is now.
-            let silent_since = crate::dulali::ulid_ms(id)
-                .map(|asked| crate::dulali::now_ms() - asked)
-                .unwrap_or(0);
-            if state.seen.contains(&format!("dulali {id}"))
-                && silent_since >= dulali.silence.as_millis() as i64
-                && !dulali.has_spoken(id)
-                && self.record(state, &format!("silent {id}"))
-            {
-                self.ring(&format!(
-                    "Dulali did not answer a question on {machine} ({project}) — {}",
-                    self.hub_url
-                ));
-            }
             if !self.record(state, id) {
-                continue;
-            }
-            // Only a question first seen on the Dulali route, and one any
-            // person may answer, goes to Dulali: Saiful's own, and every one
-            // already rung before, stay his.
-            if route == Kind::Dulali
-                && row["audience"].is_null()
-                && dulali.reachable()
-                && self.record(state, &format!("dulali {id}"))
-            {
-                dulali.send(&row);
                 continue;
             }
             self.deliver(&self.body(machine, project));
         }
-        self.app.dulali_expire();
         // A fault anywhere keeps the next round seeding too, so a first start
         // never rings for a backlog it could not read whole.
         if self.stalls_and_finishes(mem, state) {
@@ -493,11 +462,6 @@ mod tests {
             )),
             route: Arc::new(Route::open(PathBuf::from("/nonexistent/route.json"))),
             away: DEFAULT_AWAY,
-            app: Arc::new(App::new(
-                crate::config::Config::default(),
-                8787,
-                "macbook".to_string(),
-            )),
         };
         assert_eq!(
             doorbell.body("macbook", "proj-alpha"),

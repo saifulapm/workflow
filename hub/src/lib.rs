@@ -13,7 +13,6 @@ pub mod assets;
 pub mod bin_upload;
 pub mod config;
 pub mod doorbell;
-pub mod dulali;
 pub mod fleet;
 pub mod form;
 pub mod html;

@@ -13,7 +13,7 @@ use hub::app::App;
 use hub::config::Config;
 use hub::doorbell::Doorbell;
 use hub::mcp::Mcp;
-use hub::{config, dulali, http, local, pair};
+use hub::{config, http, local, pair};
 
 const USAGE: &str = "\
 hub — mem's phone-facing view
@@ -21,7 +21,6 @@ hub — mem's phone-facing view
 Usage: hub [OPTIONS]
        hub pair [OPTIONS]
        hub pair --web
-       hub dulali-token
        hub local [--port <PORT>]
        hub ping <HOST[:PORT]>
        hub share sync
@@ -34,8 +33,6 @@ Commands:
                 wait for it to be opened; with --web, a single-use link that
                 pairs it with the hub web, from the store (HUB_STORE_URL and
                 HUB_STORE_TOKEN)
-  dulali-token  Print Dulali's token for the dulali socket, making it the
-                first time
   local         Run this machine's local hub: the peer port (8789) for other
                 local hubs, and a socket for mem. A device needs
                 HUB_PEER_TOKEN, the device token, and takes HUB_CLOUD_TOKEN
@@ -73,7 +70,6 @@ struct Args {
     pair: bool,
     /// `pair --web`: a link that pairs a device with the hub web.
     web: bool,
-    dulali_token: bool,
     local: bool,
     ping: Option<String>,
     /// `share sync`: fill the replica from the store once.
@@ -92,7 +88,6 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
     let mut args = Args {
         pair: false,
         web: false,
-        dulali_token: false,
         local: false,
         ping: None,
         sync: false,
@@ -107,7 +102,6 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
         match arg.as_str() {
             "pair" => args.pair = true,
             "--web" => args.web = true,
-            "dulali-token" => args.dulali_token = true,
             "local" => args.local = true,
             "share" => match argv.next().as_deref() {
                 Some("sync") => args.sync = true,
@@ -166,10 +160,6 @@ fn run() -> Result<()> {
     let Some(args) = parse(std::env::args())? else {
         return Ok(());
     };
-    if args.dulali_token {
-        println!("{}", dulali::token(&dulali::token_path()?)?);
-        return Ok(());
-    }
     if let Some(target) = args.ping {
         return ping(&target);
     }
@@ -230,7 +220,6 @@ fn run() -> Result<()> {
     let mcp = mcp_listener(&config)?;
     let mem_binary = config.mem_binary.clone();
     let hub_binary = config.hub_binary.clone();
-    let socket = config.dulali_socket.clone();
     let app = Arc::new(App::new(config, bound.port(), hub::machine_name()));
 
     // mem's MCP endpoint, for the tunnel. Its own handler: the Access token
@@ -241,18 +230,6 @@ fn run() -> Result<()> {
             .name("hub-mcp".to_string())
             .spawn(move || http::serve(listener, move |request| mcp.handle(request)))
             .context("starting the mcp listener")?;
-    }
-
-    // Dulali's own door: its token is made now, so the socket never opens
-    // with nothing that could pass it.
-    if let Some(path) = socket {
-        dulali::token(&dulali::token_path()?)?;
-        let listener = bind_socket(&path)?;
-        let app = Arc::clone(&app);
-        std::thread::Builder::new()
-            .name("hub-dulali".to_string())
-            .spawn(move || http::serve_unix(listener, move |request| app.dulali_post(request)))
-            .context("starting the dulali socket")?;
     }
 
     // A doorbell that cannot start is a doorbell that does not ring; it is

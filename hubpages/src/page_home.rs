@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use crate::host::{Fleet, Held, Kind, NoMachine, Saved};
+use crate::host::{Fleet, Kind, NoMachine, Saved};
 use crate::html::{self, Banner, esc};
 use crate::http::Response;
 use crate::live::{self, CloudRun, CloudState, Run, Runner};
@@ -38,11 +38,10 @@ fn reload_script(stamp: &str) -> String {
 /// A stamp of what home draws: its two reads and the route, hashed. The
 /// ages on the page move with the clock, not with the reads, so they leave it
 /// alone.
-pub fn stamp(mem: &dyn Source, route: &Saved, dulali: &[(String, Held)]) -> String {
+pub fn stamp(mem: &dyn Source, route: &Saved) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     route.hash(&mut hasher);
-    dulali.hash(&mut hasher);
     for read in [mem.projects(), mem.questions()] {
         match &*read {
             Outcome::Json(doc) => doc.to_string().hash(&mut hasher),
@@ -93,7 +92,6 @@ pub fn get(ctx: &PageCtx) -> Response {
         now_ms,
         &banner,
         ctx.pair_notice().as_deref(),
-        &site.host.replaceable(now_ms),
         &site.tz,
         site.routes,
         site.poll,
@@ -188,7 +186,6 @@ pub fn render(
     now_ms: i64,
     banner: &Banner,
     pair_notice: Option<&str>,
-    dulali: &[(String, Held)],
     tz: &jiff::tz::TimeZone,
     routes: &[Kind],
     poll: bool,
@@ -199,7 +196,7 @@ pub fn render(
     questions_rows.sort_by(|a, b| b["id"].as_str().cmp(&a["id"].as_str()));
 
     let mut body = if poll {
-        reload_script(&stamp(mem, route, dulali))
+        reload_script(&stamp(mem, route))
     } else {
         String::new()
     };
@@ -263,9 +260,6 @@ pub fn render(
     for question in &questions_rows {
         body.push_str(&question_block(question, now_ms, pair_notice));
     }
-    if !dulali.is_empty() {
-        body.push_str(&dulali_block(dulali, now_ms, pair_notice));
-    }
 
     let waiting = |name: &str| {
         questions_rows
@@ -318,13 +312,12 @@ pub fn render(
     page_shell(machine, None, &body)
 }
 
-/// `Route: Phone`, `Route: Device (<machine>)` or `Route: Dulali`, then a
+/// `Route: Phone`, or `Route: Device (<machine>)`, then a
 /// button for each route on offer posting to `/route`, the current one
 /// pressed. An unpaired browser gets the pairing line in place of the buttons.
 fn route_header(saved: &Saved, routes: &[Kind], pair_notice: Option<&str>) -> String {
     let name = match (saved.route, &saved.machine) {
         (Kind::Device, Some(machine)) => format!("Device ({})", esc(machine)),
-        (Kind::Dulali, _) => "Dulali".to_string(),
         _ => "Phone".to_string(),
     };
     // The current route's button is the filled one, the other the alternative.
@@ -343,7 +336,6 @@ fn route_header(saved: &Saved, routes: &[Kind], pair_notice: Option<&str>) -> St
                 .map(|kind| match kind {
                     Kind::Phone => button("phone", "Phone", saved.route == Kind::Phone),
                     Kind::Device => button("device", "Device", saved.route == Kind::Device),
-                    Kind::Dulali => button("dulali", "Dulali", saved.route == Kind::Dulali),
                 })
                 .collect::<String>(),
         ),
@@ -351,7 +343,7 @@ fn route_header(saved: &Saved, routes: &[Kind], pair_notice: Option<&str>) -> St
     format!("<p class=\"route\">Route: {name}</p>\n{controls}")
 }
 
-/// `POST /route`, home's three buttons. Device keeps the machine that last
+/// `POST /route`, home's two buttons. Device keeps the machine that last
 /// took it; with none ever taken the route stays as it is and the banner
 /// says where to take Device first.
 pub fn route_post(ctx: &PageCtx) -> Response {
@@ -359,7 +351,6 @@ pub fn route_post(ctx: &PageCtx) -> Response {
     let kind = match form.get("route").unwrap_or("") {
         "phone" => Kind::Phone,
         "device" => Kind::Device,
-        "dulali" => Kind::Dulali,
         _ => return Response::text(400, "unknown route"),
     };
     if !ctx.site.routes.contains(&kind) {
@@ -369,45 +360,6 @@ pub fn route_post(ctx: &PageCtx) -> Response {
         Ok(()) => Response::see_other("/"),
         Err(NoMachine) => Response::see_other(&format!("/{}", Banner::NoMachine.query())),
     }
-}
-
-/// Dulali's answers Saiful can still replace: each with what Dulali
-/// checked, whether its override window is still open, and a form whose
-/// answer takes its place.
-fn dulali_block(rows: &[(String, Held)], now_ms: i64, pair_notice: Option<&str>) -> String {
-    let mut out = String::from("<h2>Dulali answered</h2>\n");
-    for (id, held) in rows {
-        let state = if held.written.is_none() && held.until_ms > now_ms {
-            format!(
-                "override within {} s",
-                (held.until_ms - now_ms + 999) / 1000
-            )
-        } else {
-            "the run has it; your answer goes in as a new message".to_string()
-        };
-        out.push_str(&format!(
-            "<article>\n<p class=\"meta\">{} · #{} · {}</p>\n<p class=\"q\">{}</p>\n\
-             <p>Dulali: <strong>{}</strong></p>\n<p class=\"meta\">Checked: {}</p>\n",
-            esc(&held.project),
-            esc(&id[id.len().saturating_sub(8)..]),
-            esc(&state),
-            esc(&held.title),
-            esc(&held.answer),
-            esc(&held.checked),
-        ));
-        match pair_notice {
-            Some(notice) => out.push_str(notice),
-            None => out.push_str(&format!(
-                "<form method=\"post\" action=\"/answer\">\n\
-                 <input type=\"hidden\" name=\"id\" value=\"{}\">\n\
-                 <textarea name=\"text\" rows=\"2\" placeholder=\"your answer\" aria-label=\"your answer\"></textarea>\n\
-                 <button type=\"submit\">Replace</button>\n</form>\n",
-                esc(id)
-            )),
-        }
-        out.push_str("</article>\n");
-    }
-    out
 }
 
 /// One live project under Running: `<project> · <machine> · <milestone> ·

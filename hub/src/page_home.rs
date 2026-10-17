@@ -1,11 +1,9 @@
-//! `GET /`, drawn by hubpages from this hub's own mem, agents, route and
-//! Dulali.
+//! `GET /`, drawn by hubpages from this hub's own mem, agents and route.
 
 pub use hubpages::page_home::*;
 
 use crate::agents::Agents;
 use crate::config::Config;
-use crate::dulali::Held;
 use crate::html::Banner;
 use crate::memcli::MemCli;
 use crate::route::{Kind, Route};
@@ -23,7 +21,6 @@ pub fn render(
     now_ms: i64,
     banner: &Banner,
     pair_notice: Option<&str>,
-    dulali: &[(String, Held)],
 ) -> String {
     hubpages::page_home::render(
         mem,
@@ -34,17 +31,16 @@ pub fn render(
         now_ms,
         banner,
         pair_notice,
-        dulali,
         &jiff::tz::TimeZone::system(),
         &ROUTES,
         true,
     )
 }
 
-/// The routes this hub offers: Phone, Device and Dulali.
-pub const ROUTES: [Kind; 3] = [Kind::Phone, Kind::Device, Kind::Dulali];
+/// The routes this hub offers: Phone and Device.
+pub const ROUTES: [Kind; 2] = [Kind::Phone, Kind::Device];
 
 /// A stamp of what home draws, for `/api/stamp`.
-pub fn stamp(mem: &MemCli, route: &Route, dulali: &[(String, Held)]) -> String {
-    hubpages::page_home::stamp(mem, &route.get(), dulali)
+pub fn stamp(mem: &MemCli, route: &Route) -> String {
+    hubpages::page_home::stamp(mem, &route.get())
 }

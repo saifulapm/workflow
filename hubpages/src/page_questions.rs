@@ -3,12 +3,11 @@
 
 use serde_json::Value;
 
-use crate::host::Held;
 use crate::html::{Banner, degraded_banner, esc, linked, project_url};
 use crate::http::Response;
 use crate::mem::{Mem, Source, answer_argv};
 use crate::model;
-use crate::pages::{PageCtx, Site, page_shell};
+use crate::pages::{PageCtx, page_shell};
 
 /// One row of `mem questions --project=<name> --json`.
 #[derive(Debug, PartialEq, Eq)]
@@ -110,10 +109,7 @@ pub fn answer(ctx: &PageCtx) -> Response {
         // first one won.
         site.mem.invalidate();
         match pending(site.mem, id) {
-            Pending::No => match site.host.held_written(id) {
-                Some((full, held)) => supersede(site, &full, &held, text),
-                None => back(Banner::Unknown),
-            },
+            Pending::No => back(Banner::Unknown),
             Pending::Unreadable(why) => {
                 eprintln!("hub: answer: could not read the queue: {why}");
                 back(Banner::Failed)
@@ -135,25 +131,6 @@ pub fn answer(ctx: &PageCtx) -> Response {
     };
     site.host.forget_locks();
     response
-}
-
-/// Saiful's answer to a question Dulali's answer already closed: it
-/// supersedes Dulali's in mem, and reaches the running session as a new
-/// message.
-fn supersede(site: &Site, id: &str, held: &Held, text: &str) -> Response {
-    let earlier = held.written.as_deref();
-    let run = site
-        .mem
-        .write(&answer_argv(id, text, site.by, earlier), None);
-    site.mem.invalidate();
-    if !run.ok {
-        if !run.stderr.is_empty() {
-            eprintln!("hub: mem answer: {}", run.stderr);
-        }
-        return back(Banner::Failed);
-    }
-    site.host.superseded(id, held, text);
-    back(Banner::Answered(short(id)))
 }
 
 fn back(banner: Banner) -> Response {

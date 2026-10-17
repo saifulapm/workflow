@@ -1,5 +1,5 @@
 //! What the pages need from the server that is not mem: the device agents'
-//! reports and queues, the route, Dulali's answers, locks, and the actions
+//! reports and queues, the route, locks, and the actions
 //! that run a program or keep a file. The pages call these; the server
 //! behind them does the I/O.
 
@@ -84,7 +84,6 @@ pub enum Kind {
     #[default]
     Phone,
     Device,
-    Dulali,
 }
 
 /// What `route.json` holds. A missing file is Phone with no machine.
@@ -96,8 +95,8 @@ pub struct Saved {
     pub machine: Option<String>,
 }
 
-/// The file as it may be read: new files carry `route`, files written before
-/// Dulali carry only the `device` bool.
+/// The file as it may be read: new files carry `route`, older files carry
+/// only the `device` bool.
 #[derive(Deserialize)]
 struct Disk {
     route: Option<Kind>,
@@ -123,26 +122,6 @@ impl From<Disk> for Saved {
 /// Device was asked for with no machine named and none ever taken.
 pub struct NoMachine;
 
-/// One answer Dulali gave, from the moment it arrived.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Held {
-    pub answer: String,
-    pub checked: String,
-    pub project: String,
-    pub session: Option<String>,
-    pub machine: String,
-    pub title: String,
-    pub at_ms: i64,
-    /// When the window closes and the answer goes to mem.
-    pub until_ms: i64,
-    /// The answer item's id, once it is in mem.
-    #[serde(default)]
-    pub written: Option<String>,
-    /// Saiful answered first, inside the window or after it.
-    #[serde(default)]
-    pub replaced: bool,
-}
-
 /// Everything else a page asks of the server it runs in.
 pub trait Host {
     fn fleet(&self) -> &dyn Fleet;
@@ -158,13 +137,6 @@ pub trait Host {
     /// The route as it is now.
     fn route(&self) -> Saved;
     fn set_route(&self, kind: Kind) -> Result<(), NoMachine>;
-    /// Dulali's answers still replaceable at `now_ms`, by question id.
-    fn replaceable(&self, now_ms: i64) -> Vec<(String, Held)>;
-    /// Dulali's answer to `id`, by its full or short id, that is in mem and
-    /// still Saiful's to replace.
-    fn held_written(&self, id: &str) -> Option<(String, Held)>;
-    /// Saiful's answer `text` superseded Dulali's `held` answer to `id`.
-    fn superseded(&self, id: &str, held: &Held, text: &str);
     /// An answer to the pending question `row` took.
     fn answered(&self, row: &Value);
     /// After an answer took: resume the session that asked, once it has every
