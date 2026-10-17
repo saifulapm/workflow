@@ -75,11 +75,15 @@ is "$(status /store/dl/hub-x86_64 -H "Authorization: Bearer $token")" 404 "a nam
 is "$(status /store/dl/mem-x86_64 -X DELETE -H "Authorization: Bearer $token")" 405 "a DELETE is 405"
 
 # The setup script with its shim folder in the scratch directory, run
-# without the store's variables so it bakes nothing.
+# without the store's variables and with a curl that fails, so its bake from
+# the cloud-bins release takes nothing and never leaves this machine.
 cloud=$T_TMP/cloud
-mkdir -p "$cloud/home" "$cloud/bin"
+mkdir -p "$cloud/home" "$cloud/bin" "$cloud/nonet"
+printf '#!/bin/sh\nexit 22\n' >"$cloud/nonet/curl"
+chmod +x "$cloud/nonet/curl"
 workflow cloud-setup | sed "s|^bin=/usr/local/bin\$|bin=$cloud/bin|" >"$cloud/setup.sh"
-env -u HUB_STORE_URL -u HUB_STORE_TOKEN HOME="$cloud/home" bash "$cloud/setup.sh" >"$cloud/setup.log" 2>&1
+env -u HUB_STORE_URL -u HUB_STORE_TOKEN HOME="$cloud/home" PATH="$cloud/nonet:$PATH" \
+	bash "$cloud/setup.sh" >"$cloud/setup.log" 2>&1
 is "$?" 0 "the setup script runs"
 out=$(env -u MEM_REMOTE HOME="$cloud/home" HUB_STORE_URL="$store" HUB_STORE_TOKEN=$token \
 	"$cloud/bin/mem-cloud" fetch mem 2>&1)
