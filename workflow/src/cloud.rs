@@ -685,28 +685,46 @@ pub fn cmd_cloud_switch(store: &str) -> i32 {
         .and_then(|(_, rest)| rest.split('/').next())
         .unwrap_or_default();
     println!(
-        "In claude.ai, on the Code page, open Settings of the environment `workflow` and:
+        "Set up the claude.ai cloud environment `workflow`, on a new account or to check one.
 
-1. Set HUB_STORE_URL to {store}
-2. Set HUB_STORE_NAME to main
-3. Mint the cloud's own store token once, and keep it in pass:
+On each machine (the mini, the macbook, the nuc):
+1. claude /login with the account. On the mini, then: systemctl --user restart 'claude-rc@*'
+
+In claude.ai:
+2. On the Code page, connect GitHub, with access to saifulapm/workflow
+3. Open the environment selector under the message box: New environment, named workflow
+   (or, for one that exists, hover its row under Cloud and select the settings icon). Then:
+   Network: Custom, with these allowed hosts:
+     {host}  (the store, and the binaries and their sums at /store/dl)
+     github.com, *.github.com, *.githubusercontent.com  (the repo, and the cloud-bins release the setup bakes from)
+     *.tailscale.com, log.tailscale.io  (Tailscale, which carries questions and answers)
+   Network secrets: none for {host}
+     (the proxy would send its own Authorization over HUB_STORE_TOKEN, and its
+     interception drops the WebSocket upgrade: the store's socket gets 426)
+   Environment variables, one KEY=value line each, the value being the output of the command:
+     HUB_STORE_URL={store}
+     HUB_STORE_NAME=main
+     HUB_STORE_TOKEN: pass show workflow/hub-store-cloud
+     HUB_CLOUD_TOKEN: pass show workflow/hub-cloud-token
+     HUB_PEER_TOKEN_SHA256: pass show workflow/hub-peer-token | head -n1 | tr -d '\\n' | sha256sum
+       (the hex digest, the first field)
+     HUB_STORE_ACCESS_ID: pass show workflow/cloud-next-access-id
+     HUB_STORE_ACCESS_SECRET: pass show workflow/cloud-next-access-secret
+     TS_AUTHKEY: pass show workflow/tailscale-cloud-authkey
+       (a Tailscale auth key lasts 90 days at most: renew it when cloud sessions stop joining the tailnet)
+   No MEM_REMOTE, HUB_PEER_TOKEN or Slack variables: the mem server is gone, the peer
+   token stays on the devices, and a cloud session opens no Slack socket.
+   Setup script: the output of workflow cloud-setup (workflow cloud-setup | wl-copy)
+4. Add a custom connector: https://{host}, and log in with the Access PIN mailed to you
+
+On the mini:
+5. In Claude Code, /remote-env: choose workflow, where workflow go --cloud starts its sessions
+
+Check: in a cloud session, mem log \"setup test\" reaches the mini within a minute, from cloud-<host>.
+
+If pass has no workflow/hub-store-cloud, mint the cloud's own store token once, on the mini:
    pass show workflow/hubweb-store-token | HUB_STORE_URL={store} HUB_STORE_NAME=main HUB_STORE_ACCESS_ID=$(pass show workflow/cloud-next-access-id) HUB_STORE_ACCESS_SECRET=$(pass show workflow/cloud-next-access-secret) hub share mint 'session_*' 'cloud-*' | pass insert -m -f workflow/hub-store-cloud
-   Then set HUB_STORE_TOKEN to the output of: pass show workflow/hub-store-cloud
-   (the shared bearer stays in pass on the mini, for minting only)
-4. Set HUB_CLOUD_TOKEN to the output of: pass show workflow/hub-cloud-token
-5. Set HUB_PEER_TOKEN_SHA256 to the output of: pass show workflow/hub-peer-token | head -n1 | tr -d '\\n' | sha256sum
-   (the hex digest is the first field)
-6. Remove HUB_PEER_TOKEN
-7. Keep MEM_REMOTE: the setup falls back to it only while the store variables are unset
-8. Set HUB_STORE_ACCESS_ID and HUB_STORE_ACCESS_SECRET, if not set yet, to the outputs of:
-   pass show workflow/cloud-next-access-id and pass show workflow/cloud-next-access-secret
-   (the store's names sit behind Cloudflare Access)
-9. Replace the setup script with the output of: workflow cloud-setup
-10. Under Network, choose Custom and have this among the allowed hosts: {host}
-    (the store and the binaries at /store/dl are reached there)
-11. Network secrets: none for {host}
-    (the proxy then sends its own Authorization over HUB_STORE_TOKEN, and its
-    interception drops the WebSocket upgrade: the store's socket gets 426)"
+   (the shared bearer stays in pass on the mini, for minting only)"
     );
     exit::OK
 }

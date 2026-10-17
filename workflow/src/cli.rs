@@ -133,12 +133,14 @@ It writes this repository's skills and agents under ~/.claude, and a mem in
 time it runs, inside the session, where the proxy adds the Access token."
     )]
     CloudSetup,
-    /// Print the steps that move the claude.ai cloud environment `workflow`
-    /// onto the Cloudflare store.
+    /// Print the steps that set up the claude.ai cloud environment
+    /// `workflow` on the Cloudflare store.
     #[command(
         name = "cloud-switch",
-        long_about = "Print the steps that move the claude.ai cloud environment `workflow` onto
-the Cloudflare store. It refuses, exit 2, naming each cloud run that is live
+        long_about = "Print the steps that set up the claude.ai cloud environment `workflow` on
+the Cloudflare store, on a new account or to check one: the logins, GitHub,
+the environment's hosts, variables and setup script, the connector and the
+default environment. It refuses, exit 2, naming each cloud run that is live
 or parked, and with a bad --store. It runs no pass command and prints no
 secret, only the pass entry names."
     )]

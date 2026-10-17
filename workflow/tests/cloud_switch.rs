@@ -112,7 +112,7 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
     for want in [
         "HUB_STORE_URL",
         STORE,
-        "among the allowed hosts: example.test",
+        "example.test  (the store",
         "HUB_STORE_NAME",
         "main",
         "HUB_STORE_TOKEN",
@@ -127,6 +127,19 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
         "MEM_REMOTE",
         "workflow cloud-setup",
         "Network secrets: none for example.test",
+        "claude /login",
+        "connect GitHub",
+        "*.githubusercontent.com",
+        "*.tailscale.com, log.tailscale.io",
+        "TS_AUTHKEY",
+        "pass show workflow/tailscale-cloud-authkey",
+        "HUB_STORE_ACCESS_ID",
+        "pass show workflow/cloud-next-access-id",
+        "HUB_STORE_ACCESS_SECRET",
+        "pass show workflow/cloud-next-access-secret",
+        "/remote-env",
+        "https://example.test",
+        "cloud-<host>",
     ] {
         assert!(said.contains(want), "{want}\n{said}");
     }
