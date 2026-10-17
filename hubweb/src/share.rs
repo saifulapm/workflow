@@ -231,6 +231,19 @@ fn writer(bound: &Bound, hello: &str) -> Result<String, Fault> {
     }
 }
 
+/// Whether a replica could hold `path`, as mem's own check has it:
+/// `global/items/<name>` or `projects/<id>/...`, each part a plain name.
+fn held_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts
+        .iter()
+        .all(|part| !matches!(*part, "" | "." | "..") && !part.contains('\\'))
+        && matches!(
+            parts.as_slice(),
+            ["global", "items", _] | ["projects", _, _, ..]
+        )
+}
+
 /// The `machine` in an item's frontmatter.
 fn item_machine(text: &str) -> Option<String> {
     let (front, _) = crate::memview::split_item(text)?;
@@ -239,9 +252,9 @@ fn item_machine(text: &str) -> Option<String> {
 }
 
 /// Why a bound socket writing as `writer` may not make this write, if it
-/// may not: a global item through any token but the mini's, or an item
-/// that names a machine other than the writer, the item's author so far,
-/// or a cloud session.
+/// may not: a global item through any token but the mini's, an item that
+/// names a machine other than the writer, the item's author so far, or a
+/// cloud session, or the removal of an item another machine wrote.
 fn forged(
     log: &impl Log,
     bound: &Bound,
@@ -253,15 +266,21 @@ fn forged(
     if global && bound.runner != MINI {
         return Ok(Some("only the mini's token writes global items".into()));
     }
-    let (true, Some(body)) = (path.contains("/items/"), body) else {
+    if !path.contains("/items/") {
         return Ok(None);
+    }
+    let author = log
+        .head(path)?
+        .and_then(|head| head.body.as_deref().and_then(item_machine));
+    // mem removes no item but its own.
+    let Some(body) = body else {
+        return Ok(author.filter(|author| author != writer).map(|author| {
+            format!("this socket's token writes as {writer}; {author} wrote this item")
+        }));
     };
     let Some(named) = item_machine(body) else {
         return Ok(Some("an item names the machine that wrote it".into()));
     };
-    let author = log
-        .head(path)?
-        .and_then(|head| head.body.as_deref().and_then(item_machine));
     if named == writer
         || author.as_deref() == Some(named.as_str())
         || !global && names(CLOUD, &named)
@@ -287,6 +306,9 @@ fn write(
     let (Some(id), Some(path)) = (text("id")?, text("path")?) else {
         return Err(Fault::Broken("write needs id and path".into()));
     };
+    if !held_path(&path) {
+        return Err(Fault::Broken(format!("{path} is no path a replica holds")));
+    }
     let (base, body) = (text("base")?, text("body")?);
     let ack = |seq| json!({"t":"ack","id":id,"seq":seq}).to_string();
     if let Some(seq) = log.seq_of(&id)? {
@@ -1402,9 +1424,6 @@ mod tests {
             "the forger's replica takes the store's back"
         );
         assert_eq!(log.recs.len(), 2);
-        // Removing an item names no machine.
-        let gone = write_as(&mut log, Some(&nuc), "nuc", "01D", ITEM, Value::Null);
-        assert_eq!(parse(&gone.sender)[0]["t"], "ack");
     }
 
     #[test]
@@ -1514,5 +1533,56 @@ mod tests {
         );
         assert!(answer["why"].as_str().unwrap().contains("hub share mint"));
         assert!(log.recs.is_empty());
+    }
+
+    #[test]
+    fn a_path_no_replica_could_hold_is_refused_whoever_sends_it() {
+        let mut log = Memory::default();
+        let nuc = token("nuc", Some("nuc"));
+        for path in [
+            "projects/../global/items/01RULE.md",
+            "./global/items/01RULE.md",
+            "/global/items/01RULE.md",
+            "global//items/01RULE.md",
+            "Global/items/01RULE.md",
+            "global/items/x/01RULE.md",
+            "projects/P1/items/..",
+            "projects/P1",
+            "projects\\P1\\items\\01A.md",
+        ] {
+            for bound in [Some(&nuc), None] {
+                let refused = write_as(&mut log, bound, "nuc", "01A", path, json!(item_by("nuc")));
+                assert_eq!(parse(&refused.sender)[0]["t"], "error", "{path}");
+            }
+        }
+        assert!(log.recs.is_empty());
+    }
+
+    #[test]
+    fn a_device_token_removes_only_an_item_its_machine_wrote() {
+        let mut log = Memory::default();
+        write_as(
+            &mut log,
+            None,
+            "mac-mini-m2",
+            "01A",
+            ITEM,
+            json!(item_by("mac-mini-m2")),
+        );
+        let nuc = token("nuc", Some("nuc"));
+        let refused = write_as(&mut log, Some(&nuc), "nuc", "01B", ITEM, Value::Null);
+        assert_eq!(parse(&refused.sender)[0]["t"], "refused");
+        assert_eq!(log.recs.len(), 1);
+        const OWN: &str = "projects/P1/items/01OWN.md";
+        write_as(
+            &mut log,
+            Some(&nuc),
+            "nuc",
+            "01C",
+            OWN,
+            json!(item_by("nuc")),
+        );
+        let gone = write_as(&mut log, Some(&nuc), "nuc", "01D", OWN, Value::Null);
+        assert_eq!(parse(&gone.sender)[0]["t"], "ack");
     }
 }
