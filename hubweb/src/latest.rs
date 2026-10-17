@@ -111,12 +111,13 @@ mod tests {
     }
 
     #[test]
-    fn an_item_mem_reads_keeps_its_id_modified_supersedes_and_archived() {
+    fn an_item_mem_reads_keeps_its_id_modified_supersedes_archived_and_answers() {
         let id = "01M0C0PVT8TMV5YC3D884VNZNR";
         let body = format!(
             "+++\narchived = true\ncreated = \"2026-10-16T10:00:00Z\"\nid = \"{id}\"\n\
              kind = \"log\"\nmachine = \"mini\"\nmodified = \"2026-10-16T10:00:05Z\"\n\
-             supersedes = \"01M0C0PVT8TMV5YC3D884VNZNQ\"\ntitle = \"x\"\n+++\n\nx\n"
+             supersedes = \"01M0C0PVT8TMV5YC3D884VNZNQ\"\ntitle = \"x\"\n\
+             answers = \"01M0C0PVT8TMV5YC3D884VNZNP\"\n+++\n\nx\n"
         );
         let kept = change(&rec(1, &format!("projects/P1/items/{id}.md"), Some(&body)));
         let Some(Change::Keep { item, .. }) = kept else {
@@ -129,6 +130,7 @@ mod tests {
                 modified: 1_792_144_805,
                 supersedes: Some("01M0C0PVT8TMV5YC3D884VNZNQ".into()),
                 archived: true,
+                answers: Some("01M0C0PVT8TMV5YC3D884VNZNP".into()),
             })
         );
         // A file mem would skip, or one that is no item file, keeps none.

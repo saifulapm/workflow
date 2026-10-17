@@ -377,6 +377,18 @@ impl<F: Files> Files for After<'_, F> {
             false => self.files.by_id(id),
         }
     }
+    fn pending_questions(&self, project: &str) -> Vec<(String, String)> {
+        match self.wrote_items(project) {
+            true => memview::pending_by_reading(self, project),
+            false => self.files.pending_questions(project),
+        }
+    }
+    fn answers_to(&self, project: &str, ids: &[String]) -> Vec<(String, String)> {
+        match self.wrote_items(project) {
+            true => memview::answers_by_reading(self, project, ids),
+            false => self.files.answers_to(project, ids),
+        }
+    }
 }
 
 impl<F: Files> After<'_, F> {

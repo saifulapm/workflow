@@ -1427,6 +1427,32 @@ impl memview::Files for SqlFiles<'_> {
         )
     }
 
+    fn pending_questions(&self, project: &str) -> Vec<(String, String)> {
+        self.pairs(
+            "SELECT path, body FROM files f WHERE f.project = ? AND f.kind = 'question' \
+             AND f.answered = 0 AND f.item_id IS NOT NULL AND f.archived = 0 \
+             AND NOT EXISTS (SELECT 1 FROM files s WHERE s.project = f.project \
+             AND s.supersedes = f.item_id AND s.item_id <> f.item_id) ORDER BY f.path",
+            vec![project.into()],
+        )
+    }
+
+    fn answers_to(&self, project: &str, ids: &[String]) -> Vec<(String, String)> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let marks = vec!["?"; ids.len()].join(", ");
+        let mut bindings: Vec<SqlStorageValue> = vec![project.into()];
+        bindings.extend(ids.iter().map(|id| id.as_str().into()));
+        self.pairs(
+            &format!(
+                "SELECT path, body FROM files WHERE project = ? AND answers IN ({marks}) \
+                 AND kind IN ('question', 'answer') ORDER BY path"
+            ),
+            bindings,
+        )
+    }
+
     fn by_id(&self, id: &str) -> Vec<(String, String)> {
         // A short id is the last 8 characters, as the index has it.
         let column = if id.len() == 8 {
@@ -1706,19 +1732,26 @@ impl Log for SqlLog<'_> {
 }
 
 /// Puts `rec` in the files table: its body becomes the path's newest, or a
-/// removal drops the path. The project's item count follows.
+/// removal drops the path. The project's item count, and whether the
+/// question an answer answers is answered, follow.
 fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
     let Some(change) = latest::change(rec) else {
         return Ok(());
     };
-    let was_item = rec.path.contains("/items/")
-        && !sql
+    let old: Vec<Value> = match rec.path.contains("/items/") {
+        true => sql
             .exec(
-                "SELECT 1 FROM files WHERE path = ? AND item_id IS NOT NULL",
+                "SELECT answers FROM files WHERE path = ? AND item_id IS NOT NULL",
                 vec![rec.path.as_str().into()],
             )?
-            .to_array::<Value>()?
-            .is_empty();
+            .to_array()?,
+        false => Vec::new(),
+    };
+    let was_item = !old.is_empty();
+    let mut questions: Vec<String> = old
+        .iter()
+        .filter_map(|row| row["answers"].as_str().map(str::to_string))
+        .collect();
     let (project, is_item) = match change {
         Change::Keep {
             project,
@@ -1732,15 +1765,23 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
                 modified: 0,
                 supersedes: None,
                 archived: false,
+                answers: None,
             });
+            let is_question = is_item && kind.as_deref() == Some("question");
+            questions.extend(item.answers.clone());
+            if is_question {
+                questions.push(item.id.clone());
+            }
             counted(
                 sql,
                 "INSERT INTO files(path, project, kind, seq, body, item_id, modified, \
-                 supersedes, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 supersedes, archived, answers, answered) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                  ON CONFLICT(path) DO UPDATE SET project = excluded.project, \
                  kind = excluded.kind, seq = excluded.seq, body = excluded.body, \
                  item_id = excluded.item_id, modified = excluded.modified, \
-                 supersedes = excluded.supersedes, archived = excluded.archived",
+                 supersedes = excluded.supersedes, archived = excluded.archived, \
+                 answers = excluded.answers, answered = excluded.answered",
                 vec![
                     rec.path.as_str().into(),
                     project.as_str().into(),
@@ -1751,6 +1792,8 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
                     is_item.then_some(item.modified).into(),
                     item.supersedes.into(),
                     is_item.then_some(item.archived as i64).into(),
+                    item.answers.into(),
+                    is_question.then_some(0).into(),
                 ],
             )?;
             (project, is_item)
@@ -1767,6 +1810,15 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
             (project, false)
         }
     };
+    for question in questions {
+        counted(
+            sql,
+            &format!(
+                "UPDATE files SET {ANSWERED} WHERE project = ? AND item_id = ? AND answered IS NOT NULL"
+            ),
+            vec![project.as_str().into(), question.into()],
+        )?;
+    }
     let delta = is_item as i64 - was_item as i64;
     if delta != 0 {
         counted(
@@ -1779,27 +1831,40 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
     Ok(())
 }
 
-/// Gives the files table each item's id, modified, supersedes and archived,
-/// indexed so a page reads the newest items, the active ones and one id
-/// without reading every item; and keeps each project's item count. A store
-/// whose table predates them has them filled once from its rows.
+/// Sets a question's row answered while a question or an answer of its
+/// project answers it, as mem's pending listing has it.
+const ANSWERED: &str = "answered = EXISTS (SELECT 1 FROM files a \
+     WHERE a.project = files.project AND a.answers = files.item_id \
+     AND a.kind IN ('question', 'answer') AND a.item_id IS NOT NULL)";
+
+/// Gives the files table each item's id, modified, supersedes, archived and
+/// answers, and each question whether it is answered, indexed so a page
+/// reads the newest items, the active ones, one id and the pending
+/// questions without reading every item; and keeps each project's item
+/// count. A store whose table predates them has them filled once from its
+/// rows.
 fn add_item_columns(sql: &SqlStorage) -> Result<()> {
     sql.exec(
         "CREATE TABLE IF NOT EXISTS item_counts(project TEXT PRIMARY KEY, items INTEGER NOT NULL)",
         None,
     )?;
-    let added = sql
-        .exec("SELECT item_id FROM files LIMIT 0", None)
-        .and_then(|cursor| cursor.to_array::<Value>())
-        .is_err();
-    if added {
-        for column in [
-            "item_id TEXT",
-            "modified INTEGER",
-            "supersedes TEXT",
-            "archived INTEGER",
-        ] {
+    let mut added = false;
+    for column in [
+        "item_id TEXT",
+        "modified INTEGER",
+        "supersedes TEXT",
+        "archived INTEGER",
+        "answers TEXT",
+        "answered INTEGER",
+    ] {
+        let name = column.split(' ').next().unwrap_or_default();
+        let missing = sql
+            .exec(&format!("SELECT {name} FROM files LIMIT 0"), None)
+            .and_then(|cursor| cursor.to_array::<Value>())
+            .is_err();
+        if missing {
             sql.exec(&format!("ALTER TABLE files ADD COLUMN {column}"), None)?;
+            added = true;
         }
     }
     for index in [
@@ -1808,6 +1873,8 @@ fn add_item_columns(sql: &SqlStorage) -> Result<()> {
         "files_by_supersedes ON files(project, supersedes)",
         "files_by_item ON files(item_id)",
         "files_by_short_id ON files(substr(item_id, -8))",
+        "files_by_answers ON files(project, answers)",
+        "files_pending ON files(project) WHERE kind = 'question' AND answered = 0",
     ] {
         sql.exec(&format!("CREATE INDEX IF NOT EXISTS {index}"), None)?;
     }
@@ -1826,17 +1893,24 @@ fn add_item_columns(sql: &SqlStorage) -> Result<()> {
         };
         counted(
             sql,
-            "UPDATE files SET item_id = ?, modified = ?, supersedes = ?, archived = ? \
-             WHERE path = ?",
+            "UPDATE files SET item_id = ?, modified = ?, supersedes = ?, archived = ?, \
+             answers = ? WHERE path = ?",
             vec![
                 item.id.into(),
                 item.modified.into(),
                 item.supersedes.into(),
                 (item.archived as i64).into(),
+                item.answers.into(),
                 path.into(),
             ],
         )?;
     }
+    counted(
+        sql,
+        &format!("UPDATE files SET {ANSWERED} WHERE kind = 'question' AND item_id IS NOT NULL"),
+        None,
+    )?;
+    counted(sql, "DELETE FROM item_counts", None)?;
     counted(
         sql,
         "INSERT INTO item_counts(project, items) SELECT project, count(*) FROM files \

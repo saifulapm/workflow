@@ -74,6 +74,55 @@ pub trait Files {
     fn by_id(&self, id: &str) -> Vec<(String, String)> {
         by_id_by_reading(self, id)
     }
+    /// The project's active questions that no question or answer of it
+    /// answers, as (path, body).
+    fn pending_questions(&self, project: &str) -> Vec<(String, String)> {
+        pending_by_reading(self, project)
+    }
+    /// The project's questions and answers that answer one of `ids`, active
+    /// or not, as (path, body).
+    fn answers_to(&self, project: &str, ids: &[String]) -> Vec<(String, String)> {
+        answers_by_reading(self, project, ids)
+    }
+}
+
+/// `Files::pending_questions` from every question and answer of the project.
+pub fn pending_by_reading<F: Files + ?Sized>(files: &F, project: &str) -> Vec<(String, String)> {
+    let all = files.items(project, &["question", "answer"]);
+    let rows = item::rows(all.clone(), project, None);
+    let pending: Vec<&str> = rows
+        .iter()
+        .filter(|q| q.active && q.meta().kind == "question")
+        .filter(|q| {
+            !rows
+                .iter()
+                .any(|a| a.meta().answers.as_ref() == Some(&q.meta().id))
+        })
+        .map(|q| q.path.as_str())
+        .collect();
+    all.iter()
+        .filter(|(path, _)| pending.contains(&path.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// `Files::answers_to` from every question and answer of the project.
+pub fn answers_by_reading<F: Files + ?Sized>(
+    files: &F,
+    project: &str,
+    ids: &[String],
+) -> Vec<(String, String)> {
+    let all = files.items(project, &["question", "answer"]);
+    let rows = item::rows(all.clone(), project, None);
+    let wanted: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.meta().answers.as_ref().is_some_and(|q| ids.contains(q)))
+        .map(|r| r.path.as_str())
+        .collect();
+    all.iter()
+        .filter(|(path, _)| wanted.contains(&path.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// `Files::item_count` from every item of the project.
@@ -163,6 +212,8 @@ pub struct ItemColumns {
     pub modified: i64,
     pub supersedes: Option<String>,
     pub archived: bool,
+    /// The question it answers.
+    pub answers: Option<String>,
 }
 
 /// The columns of the file at store path `path` when mem reads it as an
@@ -178,6 +229,7 @@ pub fn item_columns(path: &str, body: &str) -> Option<ItemColumns> {
         modified: meta.modified,
         supersedes: meta.supersedes,
         archived: meta.archived,
+        answers: meta.answers,
     })
 }
 
@@ -823,17 +875,24 @@ impl<F: Files> View<'_, F> {
         let pending = args.flag("all-projects") || args.flag("pending");
         let mut out = Vec::new();
         for project in projects {
-            let rows = self.rows(project, &["question", "answer"]);
+            // A pending question has no answer, so its rows are its own; the
+            // listing's 50 newest bring every answer to them.
+            let rows = if pending {
+                self.rows_of(project, self.files.pending_questions(&project.id))
+            } else {
+                let mut files = self.files.newest(&project.id, &["question"], 50);
+                let ids: Vec<String> = item::rows(files.clone(), &project.id, None)
+                    .iter()
+                    .map(|q| q.meta().id.clone())
+                    .collect();
+                files.extend(self.files.answers_to(&project.id, &ids));
+                self.rows_of(project, files)
+            };
             let mut questions: Vec<&Row> = rows
                 .iter()
                 .filter(|r| r.active && r.meta().kind == "question")
                 .collect();
             if pending {
-                questions.retain(|q| {
-                    !rows
-                        .iter()
-                        .any(|a| a.meta().answers.as_ref() == Some(&q.meta().id))
-                });
                 questions.sort_by(|a, b| {
                     (a.meta().created, &a.meta().id).cmp(&(b.meta().created, &b.meta().id))
                 });

@@ -94,12 +94,14 @@ rows() {
 	curl -s -o /dev/null -D - -H "@$T_TMP/jwt.hdr" "$base$1" | tr -d '\r' |
 		sed -n 's/^[Ss]erver-[Tt]iming:.*rows;desc=\([0-9]*\).*/\1/p'
 }
-# A page reads the rows it shows and a few per project, never every item:
-# the questions and evidence pages list 300 items of big's each.
-BOUND=500
+# A page reads the rows it shows and a few per project, never every item,
+# which is at least ITEMS rows. An index lookup counts its index row and its
+# table row, so the evidence page, which lists big's 150 evidence items and
+# 150 findings, reads about 600.
+BOUND=1000
 item=01K0R0WSB00000000000000013 # a ruling of big's
-for page in /wiki /p/big/wiki /wiki/big/notes /p/big/roadmap /p/big/plan /p/big/plan/m2-two \
-	/p/big/decisions "/p/big/item/$item"; do
+for page in / /wiki /p/big /p/big/wiki /wiki/big/notes /p/big/roadmap /p/big/plan /p/big/plan/m2-two \
+	/p/big/questions /p/big/evidence /p/big/decisions "/p/big/item/$item" /p/small; do
 	read=$(rows "$page")
 	if [[ $read =~ ^[0-9]+$ ]] && [ "$read" -lt $BOUND ]; then
 		ok "$page reads $read rows, under $BOUND"
