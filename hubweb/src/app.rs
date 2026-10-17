@@ -1272,6 +1272,10 @@ struct SqlFiles<'a> {
     /// The rows its queries read, by each cursor's rowsRead: what Cloudflare
     /// bills.
     read: Cell<usize>,
+    /// The bodies and the project list it has read for this page, which one
+    /// page asks for many times (each mem read loads every project.toml).
+    kept: RefCell<HashMap<String, Option<String>>>,
+    projects: RefCell<Option<Vec<String>>>,
 }
 
 impl<'a> SqlFiles<'a> {
@@ -1280,6 +1284,8 @@ impl<'a> SqlFiles<'a> {
             sql,
             fault: RefCell::new(None),
             read: Cell::new(0),
+            kept: RefCell::default(),
+            projects: RefCell::default(),
         }
     }
 
@@ -1318,12 +1324,40 @@ impl memview::Files for SqlFiles<'_> {
     }
 
     fn read(&self, path: &str) -> Option<String> {
-        self.pairs(
-            "SELECT path, body FROM files WHERE path = ?",
-            vec![path.into()],
-        )
-        .pop()
-        .map(|(_, body)| body)
+        if let Some(body) = self.kept.borrow().get(path) {
+            return body.clone();
+        }
+        let body = self
+            .pairs(
+                "SELECT path, body FROM files WHERE path = ?",
+                vec![path.into()],
+            )
+            .pop()
+            .map(|(_, body)| body);
+        self.kept
+            .borrow_mut()
+            .insert(path.to_string(), body.clone());
+        body
+    }
+
+    fn heads(&self, prefix: &str) -> Vec<(String, String, usize)> {
+        // A page's title is its first line with text, which every page's
+        // first 256 bytes held on the real store; memview reads the whole
+        // page when they do not.
+        let rows = self.rows(
+            "SELECT path, substr(body, 1, 256) AS head, length(CAST(body AS BLOB)) AS bytes \
+             FROM files WHERE path >= ? AND path < ? ORDER BY path",
+            Some(vec![prefix.into(), format!("{prefix}\u{10FFFF}").into()]),
+        );
+        rows.iter()
+            .filter_map(|row| {
+                Some((
+                    row["path"].as_str()?.to_string(),
+                    row["head"].as_str()?.to_string(),
+                    row["bytes"].as_u64()? as usize,
+                ))
+            })
+            .collect()
     }
 
     fn list(&self, prefix: &str) -> Vec<(String, String)> {
@@ -1335,6 +1369,9 @@ impl memview::Files for SqlFiles<'_> {
     }
 
     fn projects(&self) -> Vec<String> {
+        if let Some(ids) = self.projects.borrow().as_ref() {
+            return ids.clone();
+        }
         let rows = self.rows(
             &format!(
                 "SELECT project FROM files WHERE kind = '{}' ORDER BY project",
@@ -1342,9 +1379,12 @@ impl memview::Files for SqlFiles<'_> {
             ),
             None,
         );
-        rows.iter()
+        let ids: Vec<String> = rows
+            .iter()
             .filter_map(|row| row["project"].as_str().map(str::to_string))
-            .collect()
+            .collect();
+        *self.projects.borrow_mut() = Some(ids.clone());
+        ids
     }
 
     fn reports(&self) -> Vec<(String, i64, String)> {
@@ -1429,7 +1469,10 @@ impl memview::Files for SqlFiles<'_> {
 
     fn pending_questions(&self, project: &str) -> Vec<(String, String)> {
         self.pairs(
-            "SELECT path, body FROM files f WHERE f.project = ? AND f.kind = 'question' \
+            // Without stats the planner would take the (project, kind) index
+            // and read every question.
+            "SELECT path, body FROM files f INDEXED BY files_pending WHERE f.project = ? \
+             AND f.kind = 'question' \
              AND f.answered = 0 AND f.item_id IS NOT NULL AND f.archived = 0 \
              AND NOT EXISTS (SELECT 1 FROM files s WHERE s.project = f.project \
              AND s.supersedes = f.item_id AND s.item_id <> f.item_id) ORDER BY f.path",

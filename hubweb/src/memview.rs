@@ -51,6 +51,18 @@ pub trait Files {
         }
         all
     }
+    /// Every (path, head, bytes) whose path starts with `prefix`, in path
+    /// order: the head is the start of the body, possibly all of it, and
+    /// bytes the body's whole length.
+    fn heads(&self, prefix: &str) -> Vec<(String, String, usize)> {
+        self.list(prefix)
+            .into_iter()
+            .map(|(path, body)| {
+                let bytes = body.len();
+                (path, body, bytes)
+            })
+            .collect()
+    }
     /// Every path that starts with `prefix`, in path order, without bodies.
     fn paths(&self, prefix: &str) -> Vec<String> {
         self.list(prefix)
@@ -241,16 +253,24 @@ pub fn split_item(text: &str) -> Option<(&str, &str)> {
 
 /// What `mem <argv>` prints for this read.
 pub fn read(files: &impl Files, argv: &[&str], now: jiff::Timestamp) -> Reply {
+    read_in(files, &Registry::load(files), argv, now)
+}
+
+/// `read`, with the projects as `registry` holds them: a caller that makes
+/// many reads of unchanged files loads it once.
+pub fn read_in(
+    files: &impl Files,
+    registry: &Registry,
+    argv: &[&str],
+    now: jiff::Timestamp,
+) -> Reply {
     let Some(args) = Args::parse(argv) else {
         return Reply::Unknown;
     };
     if !args.flag("json") {
         return Reply::Unknown;
     }
-    let view = View {
-        files,
-        registry: Registry::load(files),
-    };
+    let view = View { files, registry };
     let served = match args.words.as_slice() {
         ["projects"] => args.only(&[]).then(|| view.projects()),
         ["questions"] => args
@@ -372,12 +392,13 @@ impl Project {
 }
 
 /// Every project, sorted by name as mem's registry is.
-struct Registry {
+pub struct Registry {
     projects: Vec<Project>,
 }
 
 impl Registry {
-    fn load(files: &impl Files) -> Registry {
+    /// Every project.toml of `files`.
+    pub fn load(files: &impl Files) -> Registry {
         let mut ids = files.projects();
         ids.sort();
         let mut projects: Vec<Project> = ids
@@ -428,7 +449,7 @@ impl Registry {
 
 struct View<'f, F: Files> {
     files: &'f F,
-    registry: Registry,
+    registry: &'f Registry,
 }
 
 impl<F: Files> View<'_, F> {
@@ -504,16 +525,16 @@ impl<F: Files> View<'_, F> {
         };
         let last_activity = stamp(&[]);
         let handoff_at = stamp(&["handoff"]);
-        let prefix = format!("projects/{}/wiki/", p.id);
-        let slugs: Vec<String> = self
-            .files
-            .paths(&prefix)
-            .iter()
-            .filter_map(|path| path.strip_prefix(&prefix)?.strip_suffix(".md"))
-            .filter(|slug| is_valid_slug(slug))
-            .map(str::to_string)
-            .collect();
-        let has_page = |wanted: fn(&str) -> bool| slugs.iter().any(|slug| wanted(slug));
+        // Only pages whose slug starts with `start` are listed, so a summary
+        // never reads every page's path.
+        let has_page = |start: &str, wanted: fn(&str) -> bool| {
+            let prefix = format!("projects/{}/wiki/", p.id);
+            self.files
+                .paths(&format!("{prefix}{start}"))
+                .iter()
+                .filter_map(|path| path.strip_prefix(&prefix)?.strip_suffix(".md"))
+                .any(|slug| is_valid_slug(slug) && wanted(slug))
+        };
         let runner = match p
             .declared("runner")
             .as_deref()
@@ -551,13 +572,13 @@ impl<F: Files> View<'_, F> {
             ("handoff_at", json!(handoff_at)),
             (
                 "has_research",
-                json!(has_page(|s| s.starts_with("research"))),
+                json!(has_page("research", |s| s.starts_with("research"))),
             ),
             (
                 "has_research_summary",
-                json!(has_page(|s| s == "research-summary")),
+                json!(has_page("research-summary", |s| s == "research-summary")),
             ),
-            ("has_spec", json!(has_page(|s| s == "spec"))),
+            ("has_spec", json!(has_page("spec", |s| s == "spec"))),
         ]
     }
 
@@ -619,17 +640,34 @@ impl<F: Files> View<'_, F> {
             Ok(p) => p,
             Err(reply) => return reply,
         };
+        let prefix = format!("projects/{}/{dir}/", p.id);
         let rows: Vec<Value> = self
-            .pages(p, dir)
-            .iter()
-            .map(|page| {
-                json!({
-                    "slug": page.slug,
-                    "title": page_title(&page.text),
-                    "bytes": page.text.len(),
+            .files
+            .heads(&prefix)
+            .into_iter()
+            .filter_map(|(path, head, bytes)| {
+                let slug = path.strip_prefix(&prefix)?.strip_suffix(".md")?;
+                if !is_valid_slug(slug) {
+                    return None;
+                }
+                // The title is the first line with text, whole only when the
+                // head holds its end.
+                let whole = head.len() == bytes
+                    || head
+                        .split_inclusive('\n')
+                        .find(|line| !line.trim().is_empty())
+                        .is_some_and(|line| line.ends_with('\n'));
+                let title = match whole {
+                    true => page_title(&head),
+                    false => page_title(&self.files.read(&path).unwrap_or_default()),
+                };
+                Some(json!({
+                    "slug": slug,
+                    "title": title,
+                    "bytes": bytes,
                     "modified": null,
-                    "path": page.path,
-                })
+                    "path": path,
+                }))
             })
             .collect();
         Reply::Json(json!({ key: rows }))

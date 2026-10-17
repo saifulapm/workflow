@@ -203,3 +203,53 @@ fn a_replaced_or_archived_item_drops_out_as_it_does_from_mem() {
         .collect();
     assert_eq!(titles, ["Kept"]);
 }
+
+/// A store whose heads are each page's first 12 bytes, as a store that
+/// reads a page's head alone may hand back.
+struct Heads(Store);
+
+impl Files for Heads {
+    fn read(&self, path: &str) -> Option<String> {
+        self.0.read(path)
+    }
+    fn list(&self, prefix: &str) -> Vec<(String, String)> {
+        self.0.list(prefix)
+    }
+    fn projects(&self) -> Vec<String> {
+        self.0.projects()
+    }
+    fn heads(&self, prefix: &str) -> Vec<(String, String, usize)> {
+        self.0
+            .list(prefix)
+            .into_iter()
+            .map(|(path, body)| {
+                let head: String = body.chars().take(12).collect();
+                (path, head, body.len())
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn a_page_listing_from_heads_names_each_page_as_its_whole_text_does() {
+    let mut store = Store::default();
+    store.project(ALPHA, "alpha");
+    let pages = [
+        ("short", "# Short\n\nbody\n"),
+        (
+            "long",
+            "# A title far longer than any head the store hands back\n",
+        ),
+        ("blank", "\n\n\n\n\n\n\n\n\n\n\n\n\n\n# Below the head\n"),
+    ];
+    for (slug, text) in pages {
+        store
+            .0
+            .insert(format!("projects/{ALPHA}/wiki/{slug}.md"), text.to_string());
+    }
+    let argv = ["wiki", "--project=alpha", "--json"];
+    let whole = json(read(&store, &argv, now()));
+    let from_heads = json(read(&Heads(store), &argv, now()));
+    assert_eq!(from_heads, whole);
+    assert_eq!(whole["pages"][0]["title"], "Below the head");
+}

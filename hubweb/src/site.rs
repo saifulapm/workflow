@@ -82,6 +82,7 @@ pub fn page(
         files,
         shared: &shared,
         read: RefCell::new(HashMap::new()),
+        registry: RefCell::new(None),
     };
     let host = Web {
         route: saved(ask.route.as_ref()),
@@ -228,6 +229,9 @@ struct StoreMem<'a, 'c, F: Files> {
     files: &'a F,
     shared: &'a Shared<'c>,
     read: RefCell<HashMap<String, Arc<Outcome>>>,
+    /// The projects, loaded once for every read until the page writes,
+    /// with how many writes they were loaded after.
+    registry: RefCell<Option<(usize, Arc<memview::Registry>)>>,
 }
 
 impl<F: Files> Source for StoreMem<'_, '_, F> {
@@ -242,7 +246,12 @@ impl<F: Files> Source for StoreMem<'_, '_, F> {
             files: self.files,
             written: &written.files,
         };
-        let reply = memview::read(&view, argv, now);
+        let registry = match &*self.registry.borrow() {
+            Some((seen, registry)) if *seen == written.files.len() => Arc::clone(registry),
+            _ => Arc::new(memview::Registry::load(&view)),
+        };
+        *self.registry.borrow_mut() = Some((written.files.len(), Arc::clone(&registry)));
+        let reply = memview::read_in(&view, &registry, argv, now);
         let outcome = Arc::new(match (self.files.fault(), reply) {
             // A read that failed is no answer, never an empty one.
             (Some(why), _) => Outcome::Broken(format!("the store could not be read: {why}")),
