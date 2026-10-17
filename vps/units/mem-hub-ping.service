@@ -1,8 +1,0 @@
-[Unit]
-Description=Tell healthchecks.io the hub answers
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/mem/hub.env
-# The URL goes over stdin: its uuid lets anyone ping or /fail the check.
-ExecStart=/bin/sh -c 'curl -fsS -m 10 -o /dev/null http://127.0.0.1:8787/api/presence && printf "url = \"%%s\"\n" "$HUB_HC_PING_URL" | curl -fsS -m 10 --retry 3 -o /dev/null -K -'

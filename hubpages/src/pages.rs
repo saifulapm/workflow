@@ -72,7 +72,7 @@ pub fn pair_first(how: &str) -> String {
 
 /// How a browser pairs with the hub on `machine`.
 pub fn pair_how(machine: &str) -> String {
-    format!("from a workflow checkout run vps/pair, which runs hub pair on {machine}")
+    format!("run hub pair on {machine} and open the link it prints")
 }
 
 pub type Handler = fn(&PageCtx) -> Response;

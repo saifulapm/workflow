@@ -23,8 +23,8 @@ fn main() {
             println!("cargo::rerun-if-changed={path}");
         }
     }
-    // vps/deploy builds from a git archive, which has no .git to ask, so it
-    // names the commit itself.
+    // A build from a git archive, which has no .git to ask, names the commit
+    // itself, as the cloud binaries' cross build does.
     println!("cargo::rerun-if-env-changed=HUB_COMMIT");
     let commit = std::env::var("HUB_COMMIT")
         .ok()
