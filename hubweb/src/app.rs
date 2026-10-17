@@ -601,9 +601,8 @@ impl Store {
             stamp: self.stamp()?,
         };
         let mut random = || random().unwrap_or_default();
-        let Some((drawn, written, queued)) =
-            site::page(&SqlFiles::new(&self.sql), ask, &mut random)
-        else {
+        let files = SqlFiles::new(&self.sql);
+        let Some((drawn, written, queued)) = site::page(&files, ask, &mut random) else {
             return Response::error("Not Found", 404);
         };
         let took = Date::now().as_millis() - start;
@@ -619,7 +618,10 @@ impl Store {
         for (name, value) in &drawn.headers {
             headers.append(name, value)?;
         }
-        headers.set("Server-Timing", &format!("build;dur={took}"))?;
+        headers.set(
+            "Server-Timing",
+            &format!("build;dur={took}, rows;desc={}", files.read.get()),
+        )?;
         Ok(response)
     }
 
@@ -1266,6 +1268,9 @@ impl DurableObject for Store {
 struct SqlFiles<'a> {
     sql: &'a SqlStorage,
     fault: RefCell<Option<String>>,
+    /// The rows its queries read, by each cursor's rowsRead: what Cloudflare
+    /// bills.
+    read: Cell<usize>,
 }
 
 impl<'a> SqlFiles<'a> {
@@ -1273,15 +1278,18 @@ impl<'a> SqlFiles<'a> {
         SqlFiles {
             sql,
             fault: RefCell::new(None),
+            read: Cell::new(0),
         }
     }
 
     fn rows(&self, query: &str, bindings: Option<Vec<SqlStorageValue>>) -> Vec<Value> {
-        match self
-            .sql
-            .exec(query, bindings)
-            .and_then(|cursor| cursor.to_array())
-        {
+        let rows = self.sql.exec(query, bindings).and_then(|cursor| {
+            let rows = cursor.to_array()?;
+            // rowsRead grows only as the cursor is read.
+            self.read.set(self.read.get() + cursor.rows_read());
+            Ok(rows)
+        });
+        match rows {
             Ok(rows) => rows,
             Err(error) => {
                 self.fault.borrow_mut().get_or_insert(error.to_string());
