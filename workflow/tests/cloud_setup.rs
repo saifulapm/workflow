@@ -338,7 +338,12 @@ fn without_the_keys_the_shim_starts_nothing() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
-    assert!(!home.has(".local/state/hub"));
+    // The setup's list of the skills it wrote is all the hub's state holds.
+    let state: Vec<_> = fs::read_dir(home.at(".local/state/hub"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(state, ["skills.list"]);
 }
 
 /// The variables of an environment whose sessions keep a replica of the
@@ -744,6 +749,10 @@ fn the_first_mem_of_a_boot_takes_the_stores_skills() {
     setup_with(&home, &path, &STORE_ENV);
     let skill = home.at(".claude/skills/orchestrate/SKILL.md");
     assert!(fs::read_to_string(&skill).unwrap() != "# newer orchestrate\n");
+    home.put(
+        ".claude/skills/someone-else/SKILL.md",
+        "# not a workflow skill\n",
+    );
     store_skills(&home, "# newer orchestrate\n", "# newer implementer\n");
     fs::remove_file(&log).unwrap();
     run_store_shim(&home, &path, &["context"]);
@@ -753,9 +762,20 @@ fn the_first_mem_of_a_boot_takes_the_stores_skills() {
         fs::read_to_string(home.at(".claude/agents/implementer.md")).unwrap(),
         "# newer implementer\n"
     );
+    // The bundle is the whole set: a workflow skill or agent it leaves out
+    // was removed from the repo, and goes; a folder the setup did not write
+    // stays.
     assert!(
-        home.at(".claude/skills/tdd/SKILL.md").exists(),
-        "a skill the bundle leaves out stays"
+        !home.at(".claude/skills/tdd").exists(),
+        "a removed skill stayed"
+    );
+    assert!(
+        !home.at(".claude/agents/scout.md").exists(),
+        "a removed agent stayed"
+    );
+    assert!(
+        home.at(".claude/skills/someone-else/SKILL.md").exists(),
+        "a folder not ours went"
     );
     assert_eq!(
         curls(&log, "workflow-skills.tar.gz.sha256"),

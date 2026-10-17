@@ -405,6 +405,9 @@ pub fn setup_script(files: &[(&str, &[u8])]) -> String {
 # The cloud environment `workflow`'s setup script, printed by `workflow cloud-setup`.\n\
 set -euo pipefail\n",
     );
+    // Each skill folder and agent file written here, by the name the
+    // skills refresh deletes it by once the store's bundle leaves it out.
+    let mut names = std::collections::BTreeSet::new();
     for (rel, bytes) in files {
         if !(rel.starts_with("skills/") || rel.starts_with("agents/")) {
             continue;
@@ -413,7 +416,13 @@ set -euo pipefail\n",
         let dest = format!("\"$HOME/.claude/{rel}\"");
         out.push_str(&format!("mkdir -p \"$(dirname {dest})\"\n"));
         out.push_str(&format!("cat > {dest} <<'{END}'\n{text}{END}\n"));
+        names.insert(rel.splitn(3, '/').take(2).collect::<Vec<_>>().join("/"));
     }
+    let names: String = names.into_iter().map(|name| format!("{name}\n")).collect();
+    out.push_str(&format!(
+        "mkdir -p \"$HOME/.local/state/hub\"\n\
+cat > \"$HOME/.local/state/hub/skills.list\" <<'{END}'\n{names}{END}\n"
+    ));
     out.push_str(&format!(
         "bin=/usr/local/bin\n\
 mkdir -p \"$bin\"\n\
@@ -503,7 +512,7 @@ fetch() {
 # store holds (run_after_46c packs them) replace the folders of the same name
 # under ~/.claude, so a changed skill reaches cloud sessions with no new
 # setup; Claude Code picks up a changed SKILL.md in a running session. One
-# the bundle leaves out stays as the setup wrote it.
+# the setup or the last bundle wrote that this bundle leaves out goes.
 skills() {
   [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ] || return 0
   boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 0
@@ -523,6 +532,16 @@ skills() {
   [ "$(sha256sum "$state/skills.tar.gz" | cut -d' ' -f1)" = "$want" ] || return 0
   new="$state/skills.new"
   rm -rf "$new" && mkdir -p "$new" && tar -xzf "$state/skills.tar.gz" -C "$new" || return 0
+  # The bundle is the whole set: a name the last one had (or the setup wrote)
+  # that it lacks was removed from the repo. Only skills/<name> and
+  # agents/<file> lines are ever removed.
+  ( cd "$new" && for item in skills/* agents/*; do [ -e "$item" ] && echo "$item"; done ) >"$new.list"
+  while IFS= read -r name; do
+    case "$name" in
+      */*/* | *..* | "") continue ;;
+      skills/?* | agents/?*) grep -qxF "$name" "$new.list" || rm -rf "$HOME/.claude/$name" ;;
+    esac
+  done <"$state/skills.list" 2>/dev/null
   for kind in skills agents; do
     [ -d "$new/$kind" ] || continue
     mkdir -p "$HOME/.claude/$kind"
@@ -532,6 +551,7 @@ skills() {
       mv "$item" "$HOME/.claude/$kind/"
     done
   done
+  mv "$new.list" "$state/skills.list"
   rm -rf "$new" "$state/skills.tar.gz"
   printf '%s\n' "$want" >"$state/skills.sha256"
 }
