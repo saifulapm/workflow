@@ -189,7 +189,7 @@ pub fn date(epoch: i64) -> String {
 }
 
 /// `<ULID>.md` and nothing else, as mem's scan keeps them.
-fn is_item_file(name: &str) -> bool {
+pub fn is_item_file(name: &str) -> bool {
     name.strip_suffix(".md").is_some_and(is_ulid)
 }
 

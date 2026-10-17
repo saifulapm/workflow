@@ -77,6 +77,33 @@ pub fn project(files: &impl Files, name: &str) -> Option<(String, String)> {
     Some((p.id.clone(), p.name.clone()))
 }
 
+/// What the store keeps beside an item's body, so a page finds the newest
+/// items, the active ones and one id by index.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemColumns {
+    pub id: String,
+    /// Unix seconds.
+    pub modified: i64,
+    pub supersedes: Option<String>,
+    pub archived: bool,
+}
+
+/// The columns of the file at store path `path` when mem reads it as an
+/// item of its project; None for any other file.
+pub fn item_columns(path: &str, body: &str) -> Option<ItemColumns> {
+    let (_, name) = path.strip_prefix("projects/")?.split_once("/items/")?;
+    if !item::is_item_file(name) {
+        return None;
+    }
+    let meta = item::Item::parse(body)?.meta;
+    Some(ItemColumns {
+        id: meta.id,
+        modified: meta.modified,
+        supersedes: meta.supersedes,
+        archived: meta.archived,
+    })
+}
+
 /// An item file's frontmatter text and its body, split on the first fence
 /// pair as mem splits them.
 pub fn split_item(text: &str) -> Option<(&str, &str)> {

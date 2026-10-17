@@ -906,6 +906,7 @@ impl DurableObject for Store {
             None,
         )
         .expect("index the files by kind");
+        add_item_columns(&sql).expect("add the item columns to the files table");
         fill_files(&sql).expect("fill the files table from the log");
         sql.exec(
             "CREATE INDEX IF NOT EXISTS files_by_kind_alone ON files(kind)",
@@ -1634,33 +1635,143 @@ impl Log for SqlLog<'_> {
 }
 
 /// Puts `rec` in the files table: its body becomes the path's newest, or a
-/// removal drops the path.
+/// removal drops the path. The project's item count follows.
 fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
-    match latest::change(rec) {
-        Some(Change::Keep {
+    let Some(change) = latest::change(rec) else {
+        return Ok(());
+    };
+    let was_item = rec.path.contains("/items/")
+        && !sql
+            .exec(
+                "SELECT 1 FROM files WHERE path = ? AND item_id IS NOT NULL",
+                vec![rec.path.as_str().into()],
+            )?
+            .to_array::<Value>()?
+            .is_empty();
+    let (project, is_item) = match change {
+        Change::Keep {
             project,
             kind,
             body,
-        }) => counted(
-            sql,
-            "INSERT INTO files(path, project, kind, seq, body) VALUES (?, ?, ?, ?, ?) \
-             ON CONFLICT(path) DO UPDATE SET project = excluded.project, kind = excluded.kind, \
-             seq = excluded.seq, body = excluded.body",
-            vec![
-                rec.path.as_str().into(),
-                project.into(),
-                kind.into(),
-                rec.seq.into(),
-                body.into(),
-            ],
-        )?,
-        Some(Change::Drop) => counted(
-            sql,
-            "DELETE FROM files WHERE path = ?",
-            vec![rec.path.as_str().into()],
-        )?,
-        None => return Ok(()),
+            item,
+        } => {
+            let is_item = item.is_some();
+            let item = item.unwrap_or(memview::ItemColumns {
+                id: String::new(),
+                modified: 0,
+                supersedes: None,
+                archived: false,
+            });
+            counted(
+                sql,
+                "INSERT INTO files(path, project, kind, seq, body, item_id, modified, \
+                 supersedes, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(path) DO UPDATE SET project = excluded.project, \
+                 kind = excluded.kind, seq = excluded.seq, body = excluded.body, \
+                 item_id = excluded.item_id, modified = excluded.modified, \
+                 supersedes = excluded.supersedes, archived = excluded.archived",
+                vec![
+                    rec.path.as_str().into(),
+                    project.as_str().into(),
+                    kind.into(),
+                    rec.seq.into(),
+                    body.into(),
+                    is_item.then_some(item.id).into(),
+                    is_item.then_some(item.modified).into(),
+                    item.supersedes.into(),
+                    is_item.then_some(item.archived as i64).into(),
+                ],
+            )?;
+            (project, is_item)
+        }
+        Change::Drop => {
+            counted(
+                sql,
+                "DELETE FROM files WHERE path = ?",
+                vec![rec.path.as_str().into()],
+            )?;
+            let project = latest::project_of(&rec.path)
+                .unwrap_or_default()
+                .to_string();
+            (project, false)
+        }
     };
+    let delta = is_item as i64 - was_item as i64;
+    if delta != 0 {
+        counted(
+            sql,
+            "INSERT INTO item_counts(project, items) VALUES (?, ?) \
+             ON CONFLICT(project) DO UPDATE SET items = items + excluded.items",
+            vec![project.into(), delta.into()],
+        )?;
+    }
+    Ok(())
+}
+
+/// Gives the files table each item's id, modified, supersedes and archived,
+/// indexed so a page reads the newest items, the active ones and one id
+/// without reading every item; and keeps each project's item count. A store
+/// whose table predates them has them filled once from its rows.
+fn add_item_columns(sql: &SqlStorage) -> Result<()> {
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS item_counts(project TEXT PRIMARY KEY, items INTEGER NOT NULL)",
+        None,
+    )?;
+    let added = sql
+        .exec("SELECT item_id FROM files LIMIT 0", None)
+        .and_then(|cursor| cursor.to_array::<Value>())
+        .is_err();
+    if added {
+        for column in [
+            "item_id TEXT",
+            "modified INTEGER",
+            "supersedes TEXT",
+            "archived INTEGER",
+        ] {
+            sql.exec(&format!("ALTER TABLE files ADD COLUMN {column}"), None)?;
+        }
+    }
+    for index in [
+        "files_newest ON files(project, kind, modified, item_id)",
+        "files_newest_any ON files(project, modified, item_id)",
+        "files_by_supersedes ON files(project, supersedes)",
+        "files_by_item ON files(item_id)",
+        "files_by_short_id ON files(substr(item_id, -8))",
+    ] {
+        sql.exec(&format!("CREATE INDEX IF NOT EXISTS {index}"), None)?;
+    }
+    if !added {
+        return Ok(());
+    }
+    let rows: Vec<Value> = sql
+        .exec("SELECT path, body FROM files WHERE kind IS NOT NULL", None)?
+        .to_array()?;
+    for row in rows {
+        let (Some(path), Some(body)) = (row["path"].as_str(), row["body"].as_str()) else {
+            continue;
+        };
+        let Some(item) = memview::item_columns(path, body) else {
+            continue;
+        };
+        counted(
+            sql,
+            "UPDATE files SET item_id = ?, modified = ?, supersedes = ?, archived = ? \
+             WHERE path = ?",
+            vec![
+                item.id.into(),
+                item.modified.into(),
+                item.supersedes.into(),
+                (item.archived as i64).into(),
+                path.into(),
+            ],
+        )?;
+    }
+    counted(
+        sql,
+        "INSERT INTO item_counts(project, items) SELECT project, count(*) FROM files \
+         WHERE item_id IS NOT NULL GROUP BY project",
+        None,
+    )?;
     Ok(())
 }
 

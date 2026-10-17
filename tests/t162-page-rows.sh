@@ -49,7 +49,7 @@ store=$T_TMP/store
 python3 - "$store" "$BIG" "$SMALL" "$ITEMS" <<'PY'
 import os, sys
 root, big, small, n = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
-kinds = ["log"] * 12 + ["decision", "finding", "question", "answer", "handoff", "idea", "evidence", "brief"]
+kinds = ["log"] * 12 + ["ruling", "finding", "question", "answer", "handoff", "idea", "evidence", "brief"]
 
 def put(path, text):
     path = os.path.join(root, path)
@@ -94,7 +94,7 @@ rows() {
 	curl -s -o /dev/null -D - -H "@$T_TMP/jwt.hdr" "$base$1" | tr -d '\r' |
 		sed -n 's/^[Ss]erver-[Tt]iming:.*rows;desc=\([0-9]*\).*/\1/p'
 }
-item=01K0R0WSB00000000000000013 # a decision of big's
+item=01K0R0WSB00000000000000013 # a ruling of big's
 for page in / /wiki /p/big /p/big/wiki /wiki/big/notes /p/big/roadmap /p/big/plan /p/big/plan/m2-two \
 	/p/big/questions /p/big/evidence /p/big/decisions "/p/big/item/$item" /p/small; do
 	read=$(rows "$page")
