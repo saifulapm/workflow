@@ -116,6 +116,14 @@ pub fn remove_file(path: &Path) -> Result<()> {
 /// The atomic replace itself, with no sharing: what a write arriving from
 /// another machine lands through.
 pub fn write_replica(path: &Path, bytes: &[u8]) -> Result<()> {
+    let dir = replace_unsynced(path, bytes)?;
+    sync_dir(&dir)
+}
+
+/// `write_replica` but for its last step: the file is whole on disk and in
+/// place, and the rename is durable once `sync_dir` has run on the returned
+/// directory. A batch that lands many files in one directory syncs it once.
+pub fn replace_unsynced(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
     let dir = path
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;
@@ -138,17 +146,21 @@ pub fn write_replica(path: &Path, bytes: &[u8]) -> Result<()> {
             from: tmp.clone(),
             to: path.to_path_buf(),
         });
-        // Durability of the rename itself lives in the directory entry.
-        File::open(dir)
-            .and_then(|d| d.sync_all())
-            .with_context(|| format!("fsync {}", dir.display()))?;
-        record(Step::SyncDir(dir.to_path_buf()));
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    result
+    result.map(|()| dir.to_path_buf())
+}
+
+/// Makes the renames in `dir` durable: they live in its directory entry.
+pub fn sync_dir(dir: &Path) -> Result<()> {
+    File::open(dir)
+        .and_then(|d| d.sync_all())
+        .with_context(|| format!("fsync {}", dir.display()))?;
+    record(Step::SyncDir(dir.to_path_buf()));
+    Ok(())
 }
 
 /// Replaces a file only if it has not changed since it was read, the

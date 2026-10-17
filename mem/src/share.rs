@@ -10,6 +10,7 @@
 //! refuses one whose base is no longer the page's head. An item is never
 //! refused.
 
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -289,26 +290,45 @@ pub fn status(db: &Path) -> Result<Option<(u64, u64)>> {
 pub fn apply(db: &Path, root: &Path, messages: &[Value], all: bool) -> Result<()> {
     let mut conn = open(db)?;
     let mut tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Each folder a file landed in is synced once, before the commit that
+    // counts past its records.
+    let mut dirs = BTreeSet::new();
     for message in messages {
         // A savepoint dropped without a commit rolls back.
         let sp = tx.savepoint()?;
-        match apply_one(&sp, db, root, message, all) {
+        match apply_one(&sp, db, root, message, all, &mut dirs) {
             Ok(true) => sp.commit()?,
             Ok(false) => drop(sp),
             Err(e) => {
                 drop(sp);
+                sync_dirs(&dirs)?;
                 tx.commit()?;
                 return Err(e);
             }
         }
     }
+    sync_dirs(&dirs)?;
     tx.commit()?;
+    Ok(())
+}
+
+fn sync_dirs(dirs: &BTreeSet<PathBuf>) -> Result<()> {
+    for dir in dirs {
+        crate::atomic::sync_dir(dir)?;
+    }
     Ok(())
 }
 
 /// One message of `apply`'s batch: whether its changes are kept. A message
 /// that changes nothing it can use is rolled back.
-fn apply_one(tx: &Connection, db: &Path, root: &Path, message: &Value, all: bool) -> Result<bool> {
+fn apply_one(
+    tx: &Connection,
+    db: &Path,
+    root: &Path,
+    message: &Value,
+    all: bool,
+    dirs: &mut BTreeSet<PathBuf>,
+) -> Result<bool> {
     let text = |v: &Value| v.as_str().map(str::to_string);
     match message["t"].as_str() {
         Some("rec") => {
@@ -346,7 +366,7 @@ fn apply_one(tx: &Connection, db: &Path, root: &Path, message: &Value, all: bool
                 // record from holding back every record behind it.
                 eprintln!("mem: share apply: {rel} is a directory here; passing over it");
             } else {
-                land(&file, body)?;
+                land_deferred(&file, body, dirs)?;
                 set_head(tx, &rel, &id)?;
             }
             raise_seq(tx, seen)?;
@@ -367,7 +387,7 @@ fn apply_one(tx: &Connection, db: &Path, root: &Path, message: &Value, all: bool
                     // replayed to a replica that imported it and holds no
                     // head for it.
                     Some((theirs, seq, theirs_body)) if seq >= acked => {
-                        land(&file, theirs_body.as_deref())?;
+                        land_deferred(&file, theirs_body.as_deref(), dirs)?;
                         set_head(tx, &rel, &theirs)?;
                     }
                     // An imported write the store appended just now, past
@@ -375,7 +395,7 @@ fn apply_one(tx: &Connection, db: &Path, root: &Path, message: &Value, all: bool
                     // re-ack at or below that seq is a write this replica
                     // already passed, so nothing lands.
                     _ if acked > seq(tx)? as i64 && was_imported(tx, &id)? => {
-                        land(&file, body.as_deref())?;
+                        land_deferred(&file, body.as_deref(), dirs)?;
                         set_head(tx, &rel, &id)?;
                     }
                     // The replica missed this write when mem died between the
@@ -383,7 +403,7 @@ fn apply_one(tx: &Connection, db: &Path, root: &Path, message: &Value, all: bool
                     _ if head(tx, &rel)?.as_deref() == Some(id.as_str())
                         && std::fs::read_to_string(&file).ok() != body =>
                     {
-                        land(&file, body.as_deref())?;
+                        land_deferred(&file, body.as_deref(), dirs)?;
                     }
                     _ => {}
                 }
@@ -412,7 +432,7 @@ fn apply_one(tx: &Connection, db: &Path, root: &Path, message: &Value, all: bool
                 && let Some(theirs) = text(&head_msg["id"])
             {
                 take_skipped(tx, &rel)?;
-                land(&file, head_msg["body"].as_str())?;
+                land_deferred(&file, head_msg["body"].as_str(), dirs)?;
                 set_head(tx, &rel, &theirs)?;
             }
         }
@@ -503,6 +523,17 @@ fn replica_path(root: &Path, rel: &str) -> Option<PathBuf> {
 
 /// Writes or removes the replica's copy, never through the outbox: this is
 /// another machine's write arriving.
+/// `land` within `apply`'s batch: the folder's sync waits for the batch.
+fn land_deferred(file: &Path, body: Option<&str>, dirs: &mut BTreeSet<PathBuf>) -> Result<()> {
+    match body {
+        Some(body) => {
+            dirs.insert(crate::atomic::replace_unsynced(file, body.as_bytes())?);
+            Ok(())
+        }
+        None => land(file, None),
+    }
+}
+
 fn land(file: &Path, body: Option<&str>) -> Result<()> {
     match body {
         Some(body) => crate::atomic::write_replica(file, body.as_bytes()),
