@@ -333,6 +333,22 @@ impl<F: Files> Files for After<'_, F> {
     fn fault(&self) -> Option<String> {
         self.files.fault()
     }
+    fn items(&self, project: &str, kinds: &[&str]) -> Vec<(String, String)> {
+        let mut all: std::collections::BTreeMap<String, String> =
+            self.files.items(project, kinds).into_iter().collect();
+        let prefix = format!("projects/{project}/items/");
+        for (path, body) in self.written.iter().filter(|(p, _)| p.starts_with(&prefix)) {
+            let wanted = body.as_deref().filter(|body| {
+                kinds.is_empty()
+                    || memview::item_kind(body).is_some_and(|k| kinds.contains(&k.as_str()))
+            });
+            match wanted {
+                Some(body) => all.insert(path.clone(), body.to_string()),
+                None => all.remove(path),
+            };
+        }
+        all.into_iter().collect()
+    }
 }
 
 /// The `kind` of a JSON row, for tests.
@@ -388,7 +404,7 @@ mod tests {
         ]))
     }
 
-    fn write(files: &Mem, done: &mut Written, argv: &[&str]) -> Result<(), String> {
+    fn write(files: &impl Files, done: &mut Written, argv: &[&str]) -> Result<(), String> {
         let mut n = 0u8;
         let mut random = move || {
             n += 1;
@@ -611,5 +627,61 @@ mod tests {
             .collect();
         assert_eq!(kinds, ["idea", "brief", "log"]);
         assert!(write(&files, &mut done, &["idea", "--project=nope", "--", "x"]).is_err());
+    }
+
+    /// A store that reads items by kind, as the store's own index does, and
+    /// notes every prefix it is asked to list.
+    struct ByKind {
+        files: Mem,
+        listed: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Files for ByKind {
+        fn read(&self, path: &str) -> Option<String> {
+            self.files.read(path)
+        }
+        fn list(&self, prefix: &str) -> Vec<(String, String)> {
+            self.listed.borrow_mut().push(prefix.to_string());
+            self.files.list(prefix)
+        }
+        fn projects(&self) -> Vec<String> {
+            self.files.projects()
+        }
+        fn items(&self, project: &str, kinds: &[&str]) -> Vec<(String, String)> {
+            self.files.items(project, kinds)
+        }
+    }
+
+    #[test]
+    fn reads_by_kind_after_a_write_stay_reads_by_kind() {
+        let files = ByKind {
+            files: store(),
+            listed: Default::default(),
+        };
+        let mut done = Written::default();
+        write(
+            &files,
+            &mut done,
+            &["idea", "--project=walk", "--", "a dark theme"],
+        )
+        .unwrap();
+        let after = After {
+            files: &files,
+            written: &done.files,
+        };
+        files.listed.borrow_mut().clear();
+        let ideas: Vec<String> = after
+            .items(P, &["idea"])
+            .iter()
+            .map(|(_, body)| kind_of(body).unwrap())
+            .collect();
+        assert_eq!(ideas, ["idea"]);
+        assert_eq!(after.items(P, &["question"]).len(), 1);
+        assert_eq!(questions(&after).len(), 1);
+        let listed = files.listed.borrow();
+        assert!(
+            listed.iter().all(|prefix| !prefix.contains("/items/")),
+            "{listed:?}"
+        );
     }
 }
