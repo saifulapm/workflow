@@ -537,6 +537,80 @@ fn a_failed_apply_reconnects_and_later_frames_still_reach_mem() {
     );
 }
 
+/// A replay of the whole store arrives faster than mem applies it: each
+/// apply takes at most 500 frames, so none runs long on a slow disk.
+#[test]
+fn a_long_replay_reaches_mem_share_apply_in_batches_of_at_most_500() {
+    let dir = TempDir::new("share-batches");
+    let bin = dir.join("bin");
+    fixture_mem(
+        &bin,
+        &format!(
+            "case \"$1 $2\" in\n\
+             'share hello') echo '{HELLO}' ;;\n\
+             'share pending') ;;\n\
+             'share apply') wc -l >> '{sizes}' ;;\n\
+             esac",
+            sizes = dir.join("sizes").display(),
+        ),
+    );
+    let store = FakeStore::start();
+    let _hub = spawn_local(&dir, &bin, Some(&store));
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    for seq in 42..1242 {
+        store.send(&format!(
+            r#"{{"t":"rec","seq":{seq},"id":"01J0000000000000000000{seq:04}","path":"projects/P/wiki/r{seq}.md","body":"r","machine":"nuc"}}"#
+        ));
+    }
+    let sizes = || -> Vec<usize> {
+        std::fs::read_to_string(dir.join("sizes"))
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|n| n.parse().ok())
+            .collect()
+    };
+    wait_for("every frame applied", Duration::from_secs(10), || {
+        sizes().iter().sum::<usize>() == 1200
+    });
+    assert!(
+        sizes().iter().all(|&n| n <= 500),
+        "an apply took more than 500 frames: {:?}",
+        sizes()
+    );
+}
+
+/// mem's 5 s suits a quick call, not an apply on a slow disk: an apply that
+/// runs past it still lands, and the socket stays up.
+#[test]
+fn an_apply_slower_than_mems_timeout_still_lands_without_a_reconnect() {
+    let dir = TempDir::new("share-slow-apply");
+    let bin = dir.join("bin");
+    fixture_mem(
+        &bin,
+        &format!(
+            "case \"$1 $2\" in\n\
+             'share hello') echo '{HELLO}' ;;\n\
+             'share pending') ;;\n\
+             'share apply') sleep 1; cat >> '{applied}' ;;\n\
+             esac",
+            applied = dir.join("applied").display(),
+        ),
+    );
+    let store = FakeStore::start();
+    let _hub = spawn_local_env(&dir, &bin, Some(&store), &[("HUB_MEM_TIMEOUT_MS", "300")]);
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    let frame = r#"{"t":"ready","seq":42}"#;
+    store.send(frame);
+    wait_for("the slow apply", Duration::from_secs(5), || {
+        applied(&dir) == format!("{frame}\n")
+    });
+    assert!(store.texts_on(1).is_empty(), "the hub reconnected");
+}
+
 /// The runtime answers a protocol ping without waking the store, so an idle
 /// hub costs the store no requests.
 #[test]

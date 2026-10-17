@@ -54,9 +54,15 @@ fn ping_every() -> Duration {
 /// Two pings and more without a pong: the peer is gone, though the kernel has
 /// not said so yet (a laptop that slept, a dropped NAT entry).
 pub(crate) const QUIET: Duration = Duration::from_secs(75);
-/// Frames are handed to `mem share apply` once the socket goes quiet, or once
-/// they have waited this long.
+/// Frames are handed to `mem share apply` once the socket goes quiet, once
+/// they have waited this long, or once `BATCH` of them wait.
 const APPLY_WITHIN: Duration = Duration::from_millis(300);
+/// Frames handed to mem at once, so a long replay is not one stdin.
+const BATCH: usize = 500;
+/// How long `mem share apply` may take: it commits one message at a time,
+/// so a replay of the whole store on a slow disk (a cloud VM's) is slow but
+/// never stuck, and mem's 5 s for a quick call would kill it over and over.
+const APPLY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The next 00:00 UTC after `now`, which is 06:00 in Dhaka (UTC+6, no DST):
 /// when the store's day counters start again, and Cloudflare's if it is
@@ -391,8 +397,6 @@ pub(crate) fn connect(store: &Store) -> Result<Socket> {
 /// session's replica starts with no project to say it shares one. Nothing
 /// of the outbox is sent. Returns the frames applied.
 pub fn sync(store: &Store) -> Result<usize> {
-    /// Frames handed to mem at once, so a long replay is not one stdin.
-    const BATCH: usize = 500;
     let mut socket = connect(store)?;
     read_timeout(&mut socket, QUIET).context("timing store reads")?;
     let hello = mem(&["share", "hello"], None)?;
@@ -423,7 +427,11 @@ pub fn sync(store: &Store) -> Result<usize> {
         if what == "ready" || held.len() >= BATCH {
             let mut input = held.join("\n");
             input.push('\n');
-            mem(&["share", "apply", "--all"], Some(input.as_bytes()))?;
+            mem_within(
+                &["share", "apply", "--all"],
+                Some(input.as_bytes()),
+                APPLY_TIMEOUT,
+            )?;
             applied += held.len();
             held.clear();
         }
@@ -512,7 +520,9 @@ fn session(
             Err(tungstenite::Error::ConnectionClosed) => return closing(&held, Ok(())),
             Err(e) => return closing(&held, Err(e).context("reading the store")),
         };
-        if !held.is_empty() && (quiet || held_since.elapsed() >= APPLY_WITHIN) {
+        if !held.is_empty()
+            && (quiet || held.len() >= BATCH || held_since.elapsed() >= APPLY_WITHIN)
+        {
             let frames = std::mem::take(&mut held);
             let kinds: Vec<String> = frames.iter().map(|f| kind(f)).collect();
             // mem raised its `since` only for what it committed, so ending
@@ -694,7 +704,7 @@ pub fn when_applied(f: impl Fn() + Send + Sync + 'static) {
 fn apply(frames: &[String]) -> Result<()> {
     let mut input = frames.join("\n");
     input.push('\n');
-    mem(&["share", "apply"], Some(input.as_bytes()))?;
+    mem_within(&["share", "apply"], Some(input.as_bytes()), APPLY_TIMEOUT)?;
     if let Some(applied) = APPLIED.get() {
         applied();
     }
@@ -753,9 +763,14 @@ pub(crate) fn kind(frame: &str) -> String {
 
 /// Runs `mem <args>` and returns its stdout, or why it failed.
 pub(crate) fn mem(args: &[&str], input: Option<&[u8]>) -> Result<String> {
+    mem_within(args, input, crate::memcli::mem_timeout())
+}
+
+/// `mem`, killed after `timeout`.
+fn mem_within(args: &[&str], input: Option<&[u8]>, timeout: Duration) -> Result<String> {
     let mut command = Command::new("mem");
     command.args(args);
-    match proc::output_fed(&mut command, input, crate::memcli::mem_timeout()) {
+    match proc::output_fed(&mut command, input, timeout) {
         Ended::Exited(done) if done.code == Some(0) => {
             Ok(String::from_utf8_lossy(&done.stdout).into_owned())
         }
