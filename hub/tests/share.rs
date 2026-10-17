@@ -466,12 +466,13 @@ fn the_stores_error_and_the_why_of_a_refusal_reach_the_hubs_log() {
         !store.texts_on(0).is_empty()
     });
     store.send(r#"{"t":"error","why":"mint it again with `hub share mint nuc <machine>`"}"#);
-    store.send(r#"{"t":"refused","id":"01J00000000000000000000AAA","head":null,"why":"only the mini's token writes global items"}"#);
+    store.send(r#"{"t":"refused","id":"01J00000000000000000000AAA","head":null,"why":"a cloud session's token writes no global item"}"#);
     wait_for("both lines in the log", Duration::from_secs(2), || {
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         text.contains("mint it again with `hub share mint nuc <machine>`")
-            && text
-                .contains("01J00000000000000000000AAA: only the mini's token writes global items")
+            && text.contains(
+                "01J00000000000000000000AAA: a cloud session's token writes no global item",
+            )
     });
 }
 

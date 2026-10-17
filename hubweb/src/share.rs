@@ -206,10 +206,6 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
     })
 }
 
-/// The runner whose token alone writes global items, the standing rules
-/// every replica reads.
-const MINI: &str = "mini";
-
 /// The names a cloud session writes as, which a device's token may carry
 /// too: the device sends on the outbox a cloud session left on a branch.
 const CLOUD: &str = "cloud-*";
@@ -255,7 +251,7 @@ fn item_machine(text: &str) -> Option<String> {
 }
 
 /// Why a bound socket writing as `writer` may not make this write, if it
-/// may not: a global item through any token but the mini's, an item that
+/// may not: a global item through a cloud session's token, an item that
 /// names a machine other than the writer, the item's author so far, or a
 /// cloud session, or the removal of an item another machine wrote.
 fn forged(
@@ -266,8 +262,10 @@ fn forged(
     body: Option<&str>,
 ) -> Result<Option<String>, Fault> {
     let global = path.starts_with("global/");
-    if global && bound.runner != MINI {
-        return Ok(Some("only the mini's token writes global items".into()));
+    // Global items are the standing rules every replica reads: a device
+    // writes them as itself, a cloud session never.
+    if global && bound.machine.as_deref().is_none_or(|m| m.ends_with('*')) {
+        return Ok(Some("a cloud session's token writes no global item".into()));
     }
     if !path.contains("/items/") {
         return Ok(None);
@@ -1477,16 +1475,17 @@ mod tests {
     }
 
     #[test]
-    fn only_the_minis_token_or_the_shared_bearer_writes_a_global_item() {
+    fn a_devices_token_writes_a_global_item_as_itself_and_a_cloud_token_never() {
         let mut log = Memory::default();
         const RULE: &str = "global/items/01RULE.md";
         let nuc = token("nuc", Some("nuc"));
-        for (id, body) in [
-            ("01A", json!(item_by("nuc"))),
-            ("01B", json!(item_by("cloud-x"))),
-            ("01C", Value::Null),
+        let cloud = token("session_*", Some("cloud-*"));
+        for (id, bound, hello, body) in [
+            ("01A", &nuc, "nuc", json!(item_by("macbook-m2"))),
+            ("01B", &nuc, "nuc", json!(item_by("cloud-x"))),
+            ("01C", &cloud, "cloud-x", json!(item_by("cloud-x"))),
         ] {
-            let refused = write_as(&mut log, Some(&nuc), "nuc", id, RULE, body);
+            let refused = write_as(&mut log, Some(bound), hello, id, RULE, body);
             assert_eq!(parse(&refused.sender)[0]["t"], "refused", "{id}");
             assert_eq!(refused.others, None);
         }
@@ -1502,15 +1501,26 @@ mod tests {
         );
         assert_eq!(parse(&rule.sender)[0]["t"], "ack");
         assert!(rule.others.is_some());
-        // The nuc cannot archive it either.
+        // The nuc's prune archives it, keeping its author; it cannot remove it.
         let archived = item_by("mac-mini-m2").replace("kind", "archived = true\nkind");
-        let refused = write_as(&mut log, Some(&nuc), "nuc", "01E", RULE, json!(archived));
-        assert_eq!(parse(&refused.sender)[0]["t"], "refused");
+        let kept = write_as(&mut log, Some(&nuc), "nuc", "01E", RULE, json!(archived));
+        assert_eq!(parse(&kept.sender)[0]["t"], "ack");
+        let gone = write_as(&mut log, Some(&nuc), "nuc", "01F", RULE, Value::Null);
+        assert_eq!(parse(&gone.sender)[0]["t"], "refused");
+        let own = write_as(
+            &mut log,
+            Some(&nuc),
+            "nuc",
+            "01G",
+            "global/items/01NUC.md",
+            json!(item_by("nuc")),
+        );
+        assert_eq!(parse(&own.sender)[0]["t"], "ack");
         let shared = write_as(
             &mut log,
             None,
             "dulali",
-            "01F",
+            "01H",
             "global/items/01OLD.md",
             json!(item_by("dulali")),
         );

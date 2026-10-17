@@ -6,8 +6,8 @@
 #   - a token the build before machine names (9a7b41e) minted still reports
 #     as its runner on the new build over the same Durable Object, but its
 #     writes get an error naming `hub share mint` and nothing is stored;
-#   - the nuc's token cannot write a global rule, nor an item naming
-#     another machine: both are refused and never reach the mini;
+#   - the nuc's token cannot write a global rule naming the macbook, nor
+#     a project item naming it: both are refused and never reach the mini;
 #   - a global rule the mini writes with mem reaches the nuc within 2 s, and
 #     the store's record of it names mac-mini-m2;
 #   - the cloud's token writes as the cloud session its hello names, and
