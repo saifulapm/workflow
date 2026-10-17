@@ -47,9 +47,16 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 /// so a stream of made-up kids cannot turn into a stream of fetches.
 const REFETCH_EVERY_MS: u64 = 60_000;
 
+thread_local! {
+    /// Whether this isolate has served a request, so a page can say it was
+    /// the isolate's first: a cold start.
+    static SERVED: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Every request passes through here, so the Access JWT is checked in this
 /// one place.
 async fn handle(req: Request, env: Env) -> Result<Response> {
+    let cold = !SERVED.replace(true);
     // Since the switch, the next- names answer nothing.
     if retired(&req, &env)? {
         return Response::error("Not Found", 404);
@@ -139,10 +146,15 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         }
         return store(&env, object)?.fetch_with_request(req).await;
     }
-    if let Err(why) = guard(&req, &env).await {
-        console_log!("hubweb: refused {:?} {path}: {why}", req.method());
-        return Response::error("Unauthorized", 401);
-    }
+    let checking = Date::now().as_millis();
+    let jwks = match guard(&req, &env).await {
+        Ok(jwks) => jwks,
+        Err(why) => {
+            console_log!("hubweb: refused {:?} {path}: {why}", req.method());
+            return Response::error("Unauthorized", 401);
+        }
+    };
+    let timed = timing(Date::now().as_millis() - checking, jwks, cold);
     match (req.method(), path.as_str()) {
         // An open page's socket, which hears only that the store changed.
         (Method::Get, "/live") => store(&env, object)?.fetch_with_request(req).await,
@@ -168,15 +180,28 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             serve_mcp(req, &env, object).await
         }
         (_, "/mcp") => Response::error("Method Not Allowed", 405),
-        (Method::Get | Method::Post, _) => page(req, &env, object).await,
+        (Method::Get | Method::Post, _) => page(req, &env, object, &timed).await,
         _ => Response::error("Method Not Allowed", 405),
     }
 }
 
+/// The Worker's own parts of a page's Server-Timing: the Access check, the
+/// JWKS fetch within it when one ran, and whether the isolate started cold.
+fn timing(access: u64, jwks: Option<u64>, cold: bool) -> String {
+    let mut parts = format!("access;dur={access}");
+    if let Some(took) = jwks {
+        parts.push_str(&format!(", jwks;dur={took}"));
+    }
+    if cold {
+        parts.push_str(", isolate;desc=cold");
+    }
+    parts
+}
+
 /// `Ok` only for a token one of this Worker's Access apps would have issued,
-/// and never while ACCESS_AUD or ACCESS_TEAM is unset. The error says why,
-/// for the log.
-async fn guard(req: &Request, env: &Env) -> std::result::Result<(), &'static str> {
+/// and never while ACCESS_AUD or ACCESS_TEAM is unset; it holds how long a
+/// JWKS fetch took when the check ran one. The error says why, for the log.
+async fn guard(req: &Request, env: &Env) -> std::result::Result<Option<u64>, &'static str> {
     let setting = |name| env.secret(name).map(|value| value.to_string()).ok();
     let access = Access::new(
         setting("ACCESS_AUD").as_deref(),
@@ -185,12 +210,13 @@ async fn guard(req: &Request, env: &Env) -> std::result::Result<(), &'static str
     .ok_or("ACCESS_AUD or ACCESS_TEAM is unset")?;
     let token = req.headers().get("Cf-Access-Jwt-Assertion").ok().flatten();
     let jwt = access::parse(token.as_deref())?;
-    let jwk = key(&access, &jwt.kid).await.ok_or("unknown kid")?;
+    let (jwk, jwks) = key(&access, &jwt.kid).await;
+    let jwk = jwk.ok_or("unknown kid")?;
     if !verify(&jwk, &jwt).await.unwrap_or(false) {
         return Err("bad signature");
     }
     let now = (Date::now().as_millis() / 1000) as i64;
-    access.claims(&jwt, now)
+    access.claims(&jwt, now).map(|()| jwks)
 }
 
 /// The team's keys, kept for as long as the isolate lives.
@@ -205,10 +231,11 @@ thread_local! {
 }
 
 /// The JWK for `kid`, fetching the team's keys when none are cached yet or,
-/// at most once a minute, when `kid` is new (Access rotates keys).
-async fn key(access: &Access, kid: &str) -> Option<Value> {
+/// at most once a minute, when `kid` is new (Access rotates keys); and how
+/// long the fetch took, when one ran.
+async fn key(access: &Access, kid: &str) -> (Option<Value>, Option<u64>) {
     if let Some(jwk) = KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned()) {
-        return Some(jwk);
+        return (Some(jwk), None);
     }
     let now = Date::now().as_millis();
     let due = KEYS.with_borrow_mut(|keys| {
@@ -219,13 +246,17 @@ async fn key(access: &Access, kid: &str) -> Option<Value> {
         true
     });
     if !due {
-        return None;
+        return (None, None);
     }
     match fetch_keys(access).await {
         Ok(fresh) => KEYS.with_borrow_mut(|keys| keys.by_kid = fresh),
         Err(why) => console_error!("hubweb: fetching Access keys: {why}"),
     }
-    KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned())
+    let took = Date::now().as_millis() - now;
+    (
+        KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned()),
+        Some(took),
+    )
 }
 
 /// A Request, not a `Url`: `Url::parse` brings the url crate's IDNA tables,
@@ -404,8 +435,9 @@ fn object_response(found: &Object) -> Result<Response> {
 }
 
 /// A hub page, which the store draws from its files. Server-Timing carries
-/// the store's own build time and the whole round trip to it.
-async fn page(mut req: Request, env: &Env, object: &str) -> Result<Response> {
+/// the store's own build time, the whole round trip to it and the Worker's
+/// `timed` parts.
+async fn page(mut req: Request, env: &Env, object: &str, timed: &str) -> Result<Response> {
     let start = Date::now().as_millis();
     // The store sees the request under its own host, so whether the POST
     // came from the hub web's own pages is decided here, and any such
@@ -436,7 +468,7 @@ async fn page(mut req: Request, env: &Env, object: &str) -> Result<Response> {
     let mut page = Response::from_bytes(bytes)?.with_status(answer.status_code());
     for (name, value) in answer.headers().entries() {
         let value = match name.as_str() {
-            "server-timing" => format!("{value}, store;dur={took}"),
+            "server-timing" => format!("{value}, store;dur={took}, {timed}"),
             _ => value,
         };
         // A new response has a content type of its own: set replaces it,
@@ -555,6 +587,9 @@ pub struct Store {
     /// store's own cap, while the object is awake. Each open socket's
     /// attachment holds it through hibernation.
     limit_day: Cell<Option<(u64, bool)>>,
+    /// How long the object took to start, until the first request or
+    /// message it takes: that one woke it.
+    woke: Cell<Option<u64>>,
 }
 
 impl Store {
@@ -569,8 +604,8 @@ impl Store {
     }
 
     /// Draws the page the Worker forwarded as `/page<path>`, timing the
-    /// build in Server-Timing.
-    async fn page(&self, mut req: Request) -> Result<Response> {
+    /// build in Server-Timing, and the object's start when `woke` holds it.
+    async fn page(&self, mut req: Request, woke: Option<u64>) -> Result<Response> {
         let target = path_and_query(&req)["/page".len()..].to_string();
         let method = req.method().to_string();
         let headers: Vec<(String, String)> = req.headers().entries().collect();
@@ -618,9 +653,13 @@ impl Store {
         for (name, value) in &drawn.headers {
             headers.append(name, value)?;
         }
+        let wake = match woke {
+            Some(took) => format!(", wake;dur={took}"),
+            None => String::new(),
+        };
         headers.set(
             "Server-Timing",
-            &format!("build;dur={took}, rows;desc={}", files.read.get()),
+            &format!("build;dur={took}, rows;desc={}{wake}", files.read.get()),
         )?;
         Ok(response)
     }
@@ -862,6 +901,7 @@ fn attachment(socket: &WebSocket) -> Result<Value> {
 
 impl DurableObject for Store {
     fn new(state: State, env: Env) -> Self {
+        let started = Date::now().as_millis();
         let sql = state.storage().sql();
         // Rows written each UTC day, by the store's own count (`counted`).
         sql.exec(
@@ -967,10 +1007,12 @@ impl DurableObject for Store {
             env,
             sql,
             limit_day: Cell::new(None),
+            woke: Cell::new(Some(Date::now().as_millis() - started)),
         }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
+        let woke = self.woke.take();
         match (req.method(), req.path().as_str()) {
             (Method::Put, "/records") => {
                 let records: Vec<Value> = match req.json().await {
@@ -1059,7 +1101,7 @@ impl DurableObject for Store {
                     None => Response::error("Not Found", 404),
                 }
             }
-            (_, path) if path.starts_with("/page/") => self.page(req).await,
+            (_, path) if path.starts_with("/page/") => self.page(req, woke).await,
             (Method::Post, "/store/pair") => {
                 let code = pair::new_code(random()?);
                 counted(
@@ -1189,6 +1231,7 @@ impl DurableObject for Store {
         ws: WebSocket,
         message: WebSocketIncomingMessage,
     ) -> Result<()> {
+        self.woke.take();
         // A page only listens: nothing it sends is a machine's message.
         if self.state.get_tags(&ws).iter().any(|tag| tag == PAGE) {
             return Ok(());

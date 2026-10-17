@@ -145,8 +145,8 @@ like "$home_text" 'Route: Phone</p><p class="banner warn">Pair this device first
 
 is "$(tr -d '\r' <"$T_TMP/home.hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: //p')" 'text/html; charset=utf-8' \
 	"GET / is HTML and nothing else, so a phone shows it rather than offering a download"
-like "$(tr -d '\r' <"$T_TMP/home.hdr")" '^[Ss]erver-[Tt]iming: build;dur=[0-9.]+, rows;desc=[0-9]+, store;dur=[0-9.]+' \
-	"GET / carries the store's build time, the rows it read and the round trip in Server-Timing"
+like "$(tr -d '\r' <"$T_TMP/home.hdr")" '^[Ss]erver-[Tt]iming: build;dur=[0-9.]+, rows;desc=[0-9]+(, wake;dur=[0-9]+)?, store;dur=[0-9.]+, access;dur=[0-9]+$' \
+	"GET / carries the store's build time, the rows it read, the round trip and the Access check in Server-Timing"
 
 page_of() { # page_of <path> -- prints the status code, the page in $T_TMP/page.html
 	curl -s -H "@$T_TMP/jwt.hdr" -o "$T_TMP/page.html" -w '%{http_code}' "$base$1"
@@ -198,6 +198,8 @@ like "$(curl -s -o /dev/null -D - -H "@$T_TMP/jwt.hdr" "$base/api/ping" | tr -d 
 	'^HTTP/[0-9.]+ 204.*[Ss]erver-[Tt]iming: build;dur=0, store;dur=[0-9]+' "GET /api/ping times a bare store round trip"
 like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/?timing" | tr -d '\n')" "sendBeacon\('/api/timing'" \
 	"a page opened with ?timing reports its load"
+like "$(curl -s -H "@$T_TMP/jwt.hdr" "$base/?timing" | tr -d '\n')" "st:\(n.serverTiming\|\|\[\]\)" \
+	"its report carries the page's Server-Timing parts"
 beacon() { curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: same-origin' \
 	"$@" --data '{"path":"/","load":321}' "$base/api/timing"; }
 is "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H 'Sec-Fetch-Site: cross-site' \

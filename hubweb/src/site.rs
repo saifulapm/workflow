@@ -181,7 +181,8 @@ if(!document.hidden&&s&&s.readyState>1)open();}});open();}})();</script>\n"
 }
 
 /// Opened with `?timing`, a page reports how long its own load took to the
-/// store (`/api/timing`), so a load on the phone is a record, not a reading.
+/// store (`/api/timing`), with its Server-Timing parts, so a load on the
+/// phone is a record, not a reading.
 const TIMING: &str = "<script>if(/[?&]timing\\b/.test(location.search))\
 addEventListener('load',function(){setTimeout(function(){\
 var n=performance.getEntriesByType('navigation')[0];if(!n)return;\
@@ -189,6 +190,7 @@ navigator.sendBeacon('/api/timing',JSON.stringify({path:location.pathname,\
 load:Math.round(n.loadEventEnd),ttfb:Math.round(n.responseStart),\
 dns:Math.round(n.domainLookupEnd-n.domainLookupStart),\
 connect:Math.round(n.connectEnd-n.connectStart),size:n.transferSize,\
+st:(n.serverTiming||[]).map(function(e){return [e.name,e.duration,e.description];}),\
 ua:navigator.userAgent}));},0);});</script>\n";
 
 fn listening(html: &str, stamp: &str) -> Vec<u8> {
