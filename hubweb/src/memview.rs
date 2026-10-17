@@ -51,6 +51,83 @@ pub trait Files {
         }
         all
     }
+    /// Every path that starts with `prefix`, in path order, without bodies.
+    fn paths(&self, prefix: &str) -> Vec<String> {
+        self.list(prefix)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+    /// How many items of the project mem reads, active or not.
+    fn item_count(&self, project: &str) -> usize {
+        item_count_by_reading(self, project)
+    }
+    /// The newest `limit` active items of the project whose kind is one of
+    /// `kinds` (any kind when empty), newest first, as (path, body). Active
+    /// as mem has it: not archived, and superseded by no other item.
+    fn newest(&self, project: &str, kinds: &[&str], limit: usize) -> Vec<(String, String)> {
+        newest_by_reading(self, project, kinds, limit)
+    }
+    /// The items of any project whose id is `id`, or whose short id is when
+    /// `id` is 8 characters, each with every item that supersedes it, as
+    /// (path, body).
+    fn by_id(&self, id: &str) -> Vec<(String, String)> {
+        by_id_by_reading(self, id)
+    }
+}
+
+/// `Files::item_count` from every item of the project.
+pub fn item_count_by_reading<F: Files + ?Sized>(files: &F, project: &str) -> usize {
+    item::rows(files.items(project, &[]), project, None).len()
+}
+
+/// `Files::newest` from every item of the project.
+pub fn newest_by_reading<F: Files + ?Sized>(
+    files: &F,
+    project: &str,
+    kinds: &[&str],
+    limit: usize,
+) -> Vec<(String, String)> {
+    let all = files.items(project, &[]);
+    let mut rows = item::rows(all.clone(), project, None);
+    rows.retain(|r| r.active && (kinds.is_empty() || kinds.contains(&r.meta().kind.as_str())));
+    newest_first(&mut rows);
+    let bodies: BTreeMap<String, String> = all.into_iter().collect();
+    rows.into_iter()
+        .take(limit)
+        .filter_map(|r| Some((r.path.clone(), bodies.get(&r.path)?.clone())))
+        .collect()
+}
+
+/// `Files::by_id` from every item of every project.
+pub fn by_id_by_reading<F: Files + ?Sized>(files: &F, id: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for project in files.projects() {
+        let all = files.items(&project, &[]);
+        let rows = item::rows(all.clone(), &project, None);
+        let found: Vec<String> = rows
+            .iter()
+            .filter(|r| r.meta().id == id || (id.len() == 8 && r.short_id() == id))
+            .map(|r| r.meta().id.clone())
+            .collect();
+        let wanted = |r: &Row| {
+            found.contains(&r.meta().id)
+                || r.meta()
+                    .supersedes
+                    .as_ref()
+                    .is_some_and(|s| found.contains(s))
+        };
+        let paths: Vec<&str> = rows
+            .iter()
+            .filter(|r| wanted(r))
+            .map(|r| r.path.as_str())
+            .collect();
+        out.extend(
+            all.into_iter()
+                .filter(|(path, _)| paths.contains(&path.as_str())),
+        );
+    }
+    out
 }
 
 /// What `mem <argv>` prints for one read.
@@ -305,11 +382,12 @@ struct View<'f, F: Files> {
 impl<F: Files> View<'_, F> {
     /// The rows of one project's items of `kinds`, every item when empty.
     fn rows(&self, project: &Project, kinds: &[&str]) -> Vec<Row> {
-        item::rows(
-            self.files.items(&project.id, kinds),
-            &project.id,
-            Some(&project.name),
-        )
+        self.rows_of(project, self.files.items(&project.id, kinds))
+    }
+
+    /// The rows of some of one project's item files.
+    fn rows_of(&self, project: &Project, files: Vec<(String, String)>) -> Vec<Row> {
+        item::rows(files, &project.id, Some(&project.name))
     }
 
     /// The project `--project` names: Err(Unknown) without one, since mem
@@ -364,18 +442,26 @@ impl<F: Files> View<'_, F> {
             .lines()
             .next()
             .and_then(|first| header_slug(first, "plan"));
-        let mut rows = self.rows(p, &[]);
-        let count = rows.len();
-        rows.retain(|r| r.active);
-        newest_first(&mut rows);
-        let stamp = |row: Option<&Row>| {
-            row.and_then(|r| jiff::Timestamp::from_second(r.meta().modified).ok())
+        let count = self.files.item_count(&p.id);
+        let stamp = |kinds: &[&str]| {
+            let newest = item::rows(self.files.newest(&p.id, kinds, 1), &p.id, None);
+            newest
+                .first()
+                .and_then(|r| jiff::Timestamp::from_second(r.meta().modified).ok())
                 .map(|ts| ts.to_string())
         };
-        let last_activity = stamp(rows.first());
-        let handoff_at = stamp(rows.iter().find(|r| r.meta().kind == "handoff"));
-        let pages = self.pages(p, "wiki");
-        let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
+        let last_activity = stamp(&[]);
+        let handoff_at = stamp(&["handoff"]);
+        let prefix = format!("projects/{}/wiki/", p.id);
+        let slugs: Vec<String> = self
+            .files
+            .paths(&prefix)
+            .iter()
+            .filter_map(|path| path.strip_prefix(&prefix)?.strip_suffix(".md"))
+            .filter(|slug| is_valid_slug(slug))
+            .map(str::to_string)
+            .collect();
+        let has_page = |wanted: fn(&str) -> bool| slugs.iter().any(|slug| wanted(slug));
         let runner = match p
             .declared("runner")
             .as_deref()
@@ -444,7 +530,7 @@ impl<F: Files> View<'_, F> {
     /// `mem brief` and `mem handoff`: the newest active item of the kind,
     /// body and all.
     fn latest(&self, args: &Args, kind: &str) -> Reply {
-        let rows = match self.records(args, kind) {
+        let rows = match self.newest(args, kind, 1) {
             Ok(rows) => rows,
             Err(reply) => return reply,
         };
@@ -549,11 +635,10 @@ impl<F: Files> View<'_, F> {
             Some(Ok(n)) => n.max(1),
             Some(Err(_)) => return Reply::Absent,
         };
-        let mut rows = match self.records(args, args.value("kind").unwrap_or("log")) {
+        let rows = match self.newest(args, args.value("kind").unwrap_or("log"), limit) {
             Ok(rows) => rows,
             Err(reply) => return reply,
         };
-        rows.truncate(limit);
         let items: Vec<Value> = rows
             .iter()
             .map(|row| {
@@ -613,6 +698,19 @@ impl<F: Files> View<'_, F> {
         };
         let hits = search::search(&corpus, query, limit, now.as_second());
         Reply::Json(json!({ "hits": hits }))
+    }
+
+    /// The newest `limit` active items of one kind in the project
+    /// `--project` names, newest first.
+    fn newest(&self, args: &Args, kind: &str, limit: usize) -> Result<Vec<Row>, Reply> {
+        let p = self.project(args)?;
+        let mut rows = item::rows(
+            self.files.newest(&p.id, &[kind], limit),
+            &p.id,
+            Some(&p.name),
+        );
+        newest_first(&mut rows);
+        Ok(rows)
     }
 
     /// The active items of one kind in the project `--project` names,
@@ -679,8 +777,15 @@ impl<F: Files> View<'_, F> {
             return Reply::Absent;
         }
         let mut found: Vec<Row> = Vec::new();
+        let candidates = self.files.by_id(&wanted);
         for p in &self.registry.projects {
-            found.extend(self.rows(p, &[]).into_iter().filter(|r| {
+            let prefix = format!("projects/{}/items/", p.id);
+            let ours: Vec<(String, String)> = candidates
+                .iter()
+                .filter(|(path, _)| path.starts_with(&prefix))
+                .cloned()
+                .collect();
+            found.extend(self.rows_of(p, ours).into_iter().filter(|r| {
                 if full {
                     r.meta().id == wanted
                 } else {

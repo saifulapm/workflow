@@ -9,15 +9,7 @@ use crate::memview::{self, Files, Reply};
 /// item is unknown, or the item names no stored file.
 pub fn store_path(store: &impl Files, project: &str, id: &str) -> Option<String> {
     let now = jiff::Timestamp::UNIX_EPOCH;
-    let Reply::Json(projects) = memview::read(store, &["projects", "--json"], now) else {
-        return None;
-    };
-    let project_id = projects["projects"]
-        .as_array()?
-        .iter()
-        .find(|row| row["name"].as_str() == Some(project))?["id"]
-        .as_str()?
-        .to_string();
+    let (project_id, _) = memview::project(store, project).filter(|(_, name)| name == project)?;
     let flag = format!("--project={project}");
     let Reply::Json(list) = memview::read(store, &["evidence", "list", &flag, "--json"], now)
     else {

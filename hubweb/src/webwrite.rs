@@ -349,6 +349,43 @@ impl<F: Files> Files for After<'_, F> {
         }
         all.into_iter().collect()
     }
+    fn paths(&self, prefix: &str) -> Vec<String> {
+        match self.written.iter().any(|(p, _)| p.starts_with(prefix)) {
+            true => self
+                .list(prefix)
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect(),
+            false => self.files.paths(prefix),
+        }
+    }
+    fn item_count(&self, project: &str) -> usize {
+        match self.wrote_items(project) {
+            true => memview::item_count_by_reading(self, project),
+            false => self.files.item_count(project),
+        }
+    }
+    fn newest(&self, project: &str, kinds: &[&str], limit: usize) -> Vec<(String, String)> {
+        match self.wrote_items(project) {
+            true => memview::newest_by_reading(self, project, kinds, limit),
+            false => self.files.newest(project, kinds, limit),
+        }
+    }
+    fn by_id(&self, id: &str) -> Vec<(String, String)> {
+        match self.written.iter().any(|(p, _)| p.contains("/items/")) {
+            true => memview::by_id_by_reading(self, id),
+            false => self.files.by_id(id),
+        }
+    }
+}
+
+impl<F: Files> After<'_, F> {
+    /// Whether this request wrote an item of the project, which the store's
+    /// own answers do not know of yet.
+    fn wrote_items(&self, project: &str) -> bool {
+        let prefix = format!("projects/{project}/items/");
+        self.written.iter().any(|(p, _)| p.starts_with(&prefix))
+    }
 }
 
 /// The `kind` of a JSON row, for tests.
@@ -683,5 +720,48 @@ mod tests {
             listed.iter().all(|prefix| !prefix.contains("/items/")),
             "{listed:?}"
         );
+    }
+
+    /// A store whose answers know nothing of this request's writes.
+    struct Stale(Mem);
+
+    impl Files for Stale {
+        fn read(&self, path: &str) -> Option<String> {
+            self.0.read(path)
+        }
+        fn list(&self, prefix: &str) -> Vec<(String, String)> {
+            self.0.list(prefix)
+        }
+        fn projects(&self) -> Vec<String> {
+            self.0.projects()
+        }
+        fn newest(&self, _: &str, _: &[&str], _: usize) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn item_count(&self, _: &str) -> usize {
+            0
+        }
+    }
+
+    #[test]
+    fn a_log_written_by_the_page_is_the_newest_it_reads() {
+        let files = Stale(store());
+        let mut done = Written::default();
+        write(
+            &files,
+            &mut done,
+            &["log", "--project=walk", "--", "a note"],
+        )
+        .unwrap();
+        let after = After {
+            files: &files,
+            written: &done.files,
+        };
+        let argv = ["log", "--limit", "1", "--project=walk", "--json"];
+        let Reply::Json(doc) = memview::read(&after, &argv, jiff::Timestamp::UNIX_EPOCH) else {
+            panic!("no log");
+        };
+        assert_eq!(doc["items"][0]["title"], "a note", "{doc}");
+        assert_eq!(after.item_count(P), 2);
     }
 }

@@ -1386,6 +1386,77 @@ impl memview::Files for SqlFiles<'_> {
             bindings,
         )
     }
+
+    fn paths(&self, prefix: &str) -> Vec<String> {
+        let rows = self.rows(
+            "SELECT path FROM files WHERE path >= ? AND path < ? ORDER BY path",
+            Some(vec![prefix.into(), format!("{prefix}\u{10FFFF}").into()]),
+        );
+        rows.iter()
+            .filter_map(|row| row["path"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    fn item_count(&self, project: &str) -> usize {
+        let rows = self.rows(
+            "SELECT items FROM item_counts WHERE project = ?",
+            Some(vec![project.into()]),
+        );
+        rows.first()
+            .and_then(|row| row["items"].as_u64())
+            .unwrap_or(0) as usize
+    }
+
+    fn newest(&self, project: &str, kinds: &[&str], limit: usize) -> Vec<(String, String)> {
+        let mut bindings: Vec<SqlStorageValue> = vec![project.into()];
+        bindings.extend(kinds.iter().map(|kind| (*kind).into()));
+        bindings.push((limit as i64).into());
+        let kinds = match kinds.len() {
+            0 => String::new(),
+            n => format!("AND f.kind IN ({})", vec!["?"; n].join(", ")),
+        };
+        self.pairs(
+            &format!(
+                "SELECT path, body FROM files f WHERE f.project = ? AND f.item_id IS NOT NULL \
+                 {kinds} AND f.archived = 0 AND NOT EXISTS (SELECT 1 FROM files s \
+                 WHERE s.project = f.project AND s.supersedes = f.item_id \
+                 AND s.item_id <> f.item_id) \
+                 ORDER BY f.modified DESC, f.item_id DESC LIMIT ?"
+            ),
+            bindings,
+        )
+    }
+
+    fn by_id(&self, id: &str) -> Vec<(String, String)> {
+        // A short id is the last 8 characters, as the index has it.
+        let column = if id.len() == 8 {
+            "substr(item_id, -8)"
+        } else {
+            "item_id"
+        };
+        let found = self.rows(
+            &format!("SELECT path, body, project, item_id FROM files WHERE {column} = ?"),
+            Some(vec![id.into()]),
+        );
+        let mut out = Vec::new();
+        for row in &found {
+            let (Some(path), Some(body), Some(project), Some(item)) = (
+                row["path"].as_str(),
+                row["body"].as_str(),
+                row["project"].as_str(),
+                row["item_id"].as_str(),
+            ) else {
+                continue;
+            };
+            out.push((path.to_string(), body.to_string()));
+            out.extend(self.pairs(
+                "SELECT path, body FROM files WHERE project = ? AND supersedes = ? \
+                 AND item_id <> ?",
+                vec![project.into(), item.into(), item.into()],
+            ));
+        }
+        out
+    }
 }
 
 /// The write log in the store's SQLite.

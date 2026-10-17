@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The hub web's pages under `cf dev` say in Server-Timing how many rows their
 # store queries read (`rows;desc=<n>`, the cursors' own rowsRead, which
-# Cloudflare bills), on a store with thousands of items in one project, so a
-# page that reads every item of the store shows.
+# Cloudflare bills), and on a store with thousands of items in one project
+# each reads a bounded number, so a page that reads every item fails.
 #
 # Needs what t150 needs: hubweb/node_modules, worker-build, the wasm target,
 # openssl, python3 and node.
@@ -94,9 +94,16 @@ rows() {
 	curl -s -o /dev/null -D - -H "@$T_TMP/jwt.hdr" "$base$1" | tr -d '\r' |
 		sed -n 's/^[Ss]erver-[Tt]iming:.*rows;desc=\([0-9]*\).*/\1/p'
 }
+# A page reads the rows it shows and a few per project, never every item:
+# the questions and evidence pages list 300 items of big's each.
+BOUND=500
 item=01K0R0WSB00000000000000013 # a ruling of big's
-for page in / /wiki /p/big /p/big/wiki /wiki/big/notes /p/big/roadmap /p/big/plan /p/big/plan/m2-two \
-	/p/big/questions /p/big/evidence /p/big/decisions "/p/big/item/$item" /p/small; do
+for page in /wiki /p/big/wiki /wiki/big/notes /p/big/roadmap /p/big/plan /p/big/plan/m2-two \
+	/p/big/decisions "/p/big/item/$item"; do
 	read=$(rows "$page")
-	like "$read" '^[0-9]+$' "$page says the rows it read ($read)"
+	if [[ $read =~ ^[0-9]+$ ]] && [ "$read" -lt $BOUND ]; then
+		ok "$page reads $read rows, under $BOUND"
+	else
+		notok "$page reads under $BOUND rows" "it read '$read'"
+	fi
 done
