@@ -631,6 +631,11 @@ pub fn cmd_cloud_switch(store: &str) -> i32 {
         warn("cloud-switch: wait for it to land or end, then run this again");
         return exit::USAGE;
     }
+    // switch::store_url has checked it: a scheme, a host, then /store/share.
+    let host = store
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split('/').next())
+        .unwrap_or_default();
     println!(
         "In claude.ai, on the Code page, open Settings of the environment `workflow` and:
 
@@ -642,11 +647,13 @@ pub fn cmd_cloud_switch(store: &str) -> i32 {
 5. Set HUB_PEER_TOKEN_SHA256 to the output of: pass show workflow/hub-peer-token | head -n1 | tr -d '\\n' | sha256sum
    (the hex digest is the first field)
 6. Remove HUB_PEER_TOKEN
-7. Keep MEM_REMOTE for now: the binaries still come from it
+7. Keep MEM_REMOTE: the setup falls back to it only while the store variables are unset
 8. Set HUB_STORE_ACCESS_ID and HUB_STORE_ACCESS_SECRET, if not set yet, to the outputs of:
    pass show workflow/cloud-next-access-id and pass show workflow/cloud-next-access-secret
    (the store's names sit behind Cloudflare Access)
-9. Replace the setup script with the output of: workflow cloud-setup"
+9. Replace the setup script with the output of: workflow cloud-setup
+10. Under Network, choose Custom and have this among the allowed hosts: {host}
+    (the store and the binaries at /store/dl are reached there)"
     );
     exit::OK
 }

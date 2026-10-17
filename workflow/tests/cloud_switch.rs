@@ -112,6 +112,7 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
     for want in [
         "HUB_STORE_URL",
         STORE,
+        "among the allowed hosts: example.test",
         "HUB_STORE_NAME",
         "main",
         "HUB_STORE_TOKEN",
