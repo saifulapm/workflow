@@ -258,9 +258,10 @@ async fn key(access: &Access, kid: &str) -> (Option<Value>, Option<String>) {
         Err(why) => console_error!("hubweb: fetching Access keys: {why}"),
     }
     let took = Date::now().as_millis() - now;
-    let part = match cached {
-        true => format!("jwks;dur={took};desc=cache"),
-        false => format!("jwks;dur={took}"),
+    let part = if cached {
+        format!("jwks;dur={took};desc=cache")
+    } else {
+        format!("jwks;dur={took}")
     };
     (
         KEYS.with_borrow(|keys| keys.by_kid.get(kid).cloned()),
@@ -621,9 +622,9 @@ pub struct Store {
     /// store's own cap, while the object is awake. Each open socket's
     /// attachment holds it through hibernation.
     limit_day: Cell<Option<(u64, bool)>>,
-    /// How long the object took to start, until the first request or
-    /// message it takes: that one woke it.
-    woke: Cell<Option<u64>>,
+    /// Whether the object has taken a request or a message since it
+    /// started: the first one woke it.
+    woke: Cell<bool>,
 }
 
 impl Store {
@@ -638,8 +639,8 @@ impl Store {
     }
 
     /// Draws the page the Worker forwarded as `/page<path>`, timing the
-    /// build in Server-Timing, and the object's start when `woke` holds it.
-    async fn page(&self, mut req: Request, woke: Option<u64>) -> Result<Response> {
+    /// build in Server-Timing, and whether this page `woke` the object.
+    async fn page(&self, mut req: Request, woke: bool) -> Result<Response> {
         let target = path_and_query(&req)["/page".len()..].to_string();
         let method = req.method().to_string();
         let headers: Vec<(String, String)> = req.headers().entries().collect();
@@ -687,10 +688,7 @@ impl Store {
         for (name, value) in &drawn.headers {
             headers.append(name, value)?;
         }
-        let wake = match woke {
-            Some(took) => format!(", wake;dur={took}"),
-            None => String::new(),
-        };
+        let wake = if woke { ", wake;desc=cold" } else { "" };
         headers.set(
             "Server-Timing",
             &format!("build;dur={took}, rows;desc={}{wake}", files.read.get()),
@@ -935,7 +933,6 @@ fn attachment(socket: &WebSocket) -> Result<Value> {
 
 impl DurableObject for Store {
     fn new(state: State, env: Env) -> Self {
-        let started = Date::now().as_millis();
         let sql = state.storage().sql();
         // Rows written each UTC day, by the store's own count (`counted`).
         sql.exec(
@@ -1041,12 +1038,12 @@ impl DurableObject for Store {
             env,
             sql,
             limit_day: Cell::new(None),
-            woke: Cell::new(Some(Date::now().as_millis() - started)),
+            woke: Cell::new(true),
         }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
-        let woke = self.woke.take();
+        let woke = self.woke.replace(false);
         match (req.method(), req.path().as_str()) {
             (Method::Put, "/records") => {
                 let records: Vec<Value> = match req.json().await {
@@ -1265,7 +1262,7 @@ impl DurableObject for Store {
         ws: WebSocket,
         message: WebSocketIncomingMessage,
     ) -> Result<()> {
-        self.woke.take();
+        self.woke.set(false);
         // A page only listens: nothing it sends is a machine's message.
         if self.state.get_tags(&ws).iter().any(|tag| tag == PAGE) {
             return Ok(());

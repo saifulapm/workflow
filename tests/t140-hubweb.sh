@@ -145,7 +145,7 @@ like "$home_text" 'Route: Phone</p><p class="banner warn">Pair this device first
 
 is "$(tr -d '\r' <"$T_TMP/home.hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: //p')" 'text/html; charset=utf-8' \
 	"GET / is HTML and nothing else, so a phone shows it rather than offering a download"
-like "$(tr -d '\r' <"$T_TMP/home.hdr")" '^[Ss]erver-[Tt]iming: build;dur=[0-9.]+, rows;desc=[0-9]+(, wake;dur=[0-9]+)?, store;dur=[0-9.]+, access;dur=[0-9]+$' \
+like "$(tr -d '\r' <"$T_TMP/home.hdr")" '^[Ss]erver-[Tt]iming: build;dur=[0-9.]+, rows;desc=[0-9]+(, wake;desc=cold)?, store;dur=[0-9.]+, access;dur=[0-9]+$' \
 	"GET / carries the store's build time, the rows it read, the round trip and the Access check in Server-Timing"
 
 page_of() { # page_of <path> -- prints the status code, the page in $T_TMP/page.html
