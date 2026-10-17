@@ -250,6 +250,11 @@ fn a_stall_rung_before_a_restart_is_not_rung_again() {
     wait_for("the stall post", Duration::from_secs(5), || {
         !posts_saying(&posts, "stalled").is_empty()
     });
+    // The post reaches Slack before the hub saves that it rang.
+    let rung = dir.join("home/state/hub/rung");
+    wait_for("the rung stall on disk", Duration::from_secs(5), || {
+        std::fs::read_to_string(&rung).is_ok_and(|t| t.contains("stalled "))
+    });
     drop(hub);
     let (api, again) = fake_slack();
     let _hub = spawn(&dir, &dir.join("bin"), &api, "200");
