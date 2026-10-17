@@ -160,39 +160,20 @@ secret, only the pass entry names."
         /// The project, by mem's name.
         project: String,
     },
-    /// The device daemon: report this machine to the hub and run what it says.
+    /// Send questions to the phone or to this machine.
     #[command(
-        long_about = "The device daemon: report this machine to the hub and run what it says.
+        long_about = "Send questions to the phone or to this machine.
 
-Every 5 s it posts this machine's name, its amx agents and the mem projects
-checked out here to the paired hub, and runs the commands the hub hands back,
-one at a time and in order: sync (mem sync), start (workflow go <project> in a
-systemd scope of its own) and resume (mem sync, then amx resume, or a start
-when the session is gone). A start can ask for a cloud run (workflow go
-<project> --cloud), and a cloud answer is forwarded with claude --cloud. It refuses, exit 2, until `workflow agent pair
-<link>` has saved a token."
-    )]
-    Agent {
-        /// Poll once, run what came back, and exit.
-        #[arg(long)]
-        once: bool,
-        #[command(subcommand)]
-        action: Option<AgentAction>,
-    },
-    /// Send the hub's questions to the phone or to this machine.
-    #[command(
-        long_about = "Send the hub's questions to the phone or to this machine.
-
-`route phone` makes the hub push questions to the phone. `route device` makes
-it send them to this machine's agent as desktop notifications. With no
-argument it asks the hub where questions go now. Each form prints one line,
-`route: phone` or `route: device (<machine>)`, and saves the answer where
-qshell reads it. Exit 1 when the hub refuses or does not answer, 2 when this
-machine is not paired."
+`route phone` has questions ring on the phone. `route device` has them ring
+on this machine, as quickshell popups. With no argument it asks where they
+ring now. It talks to this machine's local hub, which sends a change on to
+every other local hub and writes the file qshell reads. Each form prints one
+line, `route: phone` or `route: device (<machine>)`. Exit 1 when the local hub
+refuses or does not answer."
     )]
     Route {
-        /// phone, device or dulali; leave out to read the current route.
-        #[arg(value_parser = ["phone", "device", "dulali"])]
+        /// phone or device; leave out to read the current route.
+        #[arg(value_parser = ["phone", "device"])]
         to: Option<String>,
     },
     /// Move this machine's memory from the VPS store onto the Cloudflare store.
@@ -226,15 +207,6 @@ restarts hub-local."
     },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum AgentAction {
-    /// Pair with the hub by a `hub pair` link and keep its token.
-    Pair {
-        /// The link `hub pair` printed.
-        link: String,
-    },
-}
-
 pub const USAGE: &str = "\
 usage: workflow <command> [options]
 
@@ -262,13 +234,8 @@ usage: workflow <command> [options]
   unpause <project>
       let go start its next milestone again; starts nothing
       0 done · 1 mem failed · 2 no such project
-  agent [--once] | agent pair <link>
-      the device daemon: every 5 s tell the hub this machine's amx agents and
-      checkouts, then run the sync, start and resume it hands back; pair
-      once with a link from `hub pair`
-      0 done · 1 the hub or a tool failed · 2 not paired
   route [phone|device]
-      send the hub's questions to the phone or to this machine; no argument
-      shows where they go now
-      0 done · 1 the hub refused or failed · 2 not paired
+      send questions to the phone or to this machine; no argument shows
+      where they go now
+      0 done · 1 the local hub refused or did not answer
 ";

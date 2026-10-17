@@ -178,7 +178,7 @@ impl Local {
             machine,
             known: Arc::new(Known::load(host.clone())),
             posted: Arc::new(Mutex::new(HashMap::new())),
-            route_now: LocalRoute::load(),
+            route_now: LocalRoute::load(host.clone()),
             host,
             token: tokens.send.clone(),
             tokens,

@@ -12,7 +12,6 @@
 //! Process state lives in mem, never in the repo. Everything here is driven by
 //! git and mem, so it works the same under any agent runtime.
 
-pub mod agent;
 pub mod cli;
 pub mod cloud;
 pub mod embedded;
@@ -138,9 +137,5 @@ pub fn run(cli: Cli) -> i32 {
         Command::Unpause { project } => pause::cmd_unpause(&project),
         Command::Route { to } => route::cmd_route(to.as_deref()),
         Command::Switch { store } => switch::cmd_switch(&store),
-        Command::Agent { once, action } => match action {
-            Some(cli::AgentAction::Pair { link }) => agent::cmd_pair(&link),
-            None => agent::cmd_run(once),
-        },
     }
 }

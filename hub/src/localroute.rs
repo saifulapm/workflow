@@ -2,6 +2,9 @@
 //! hub. Each hub keeps its copy in `state/hub/local-route.json`; a change
 //! made on one is stamped with its time and sent to every peer, and the
 //! newest stamp wins, so a hub that was away catches up from any peer.
+//!
+//! qshell's route panel reads it from `$XDG_RUNTIME_DIR/workflow-route.json`,
+//! with this hub's host as `self`, written at start and on every change.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -28,12 +31,15 @@ pub struct Stamped {
 
 pub struct LocalRoute {
     path: Option<PathBuf>,
+    /// This hub's host, which qshell reads as `self`.
+    host: String,
+    runtime: Option<PathBuf>,
     now: Mutex<Stamped>,
 }
 
 impl LocalRoute {
     /// The saved route, or Phone stamped at 0, which any real change beats.
-    pub fn load() -> LocalRoute {
+    pub fn load(host: String) -> LocalRoute {
         let path = crate::config::state_home()
             .ok()
             .map(|state| state.join("hub/local-route.json"));
@@ -42,10 +48,17 @@ impl LocalRoute {
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
-        LocalRoute {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .filter(|d| !d.is_empty())
+            .map(|d| PathBuf::from(d).join("workflow-route.json"));
+        let route = LocalRoute {
             path,
+            host,
+            runtime,
             now: Mutex::new(now),
-        }
+        };
+        route.show(&route.lock());
+        route
     }
 
     pub fn get(&self) -> Stamped {
@@ -83,10 +96,25 @@ impl LocalRoute {
     }
 
     fn save(&self, route: &Stamped) {
-        let Some(path) = &self.path else { return };
-        let text = serde_json::to_string(route).unwrap_or_default();
-        if let Err(e) = crate::pair::rewrite_private(path, &text) {
-            eprintln!("hub: local: saving {}: {e:#}", path.display());
+        if let Some(path) = &self.path {
+            let text = serde_json::to_string(route).unwrap_or_default();
+            if let Err(e) = crate::pair::rewrite_private(path, &text) {
+                eprintln!("hub: local: saving {}: {e:#}", path.display());
+            }
+        }
+        self.show(route);
+    }
+
+    /// Writes qshell's file: the route, its machine and this hub's host.
+    fn show(&self, route: &Stamped) {
+        let Some(path) = &self.runtime else { return };
+        let doc = serde_json::json!({
+            "route": route.route,
+            "machine": route.machine,
+            "self": self.host,
+        });
+        if let Err(e) = crate::pair::rewrite_private(path, &doc.to_string()) {
+            eprintln!("hub: local: writing {}: {e:#}", path.display());
         }
     }
 
