@@ -126,6 +126,7 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
         "HUB_PEER_TOKEN",
         "MEM_REMOTE",
         "workflow cloud-setup",
+        "Network secrets: none for example.test",
     ] {
         assert!(said.contains(want), "{want}\n{said}");
     }

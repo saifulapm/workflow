@@ -661,7 +661,10 @@ pub fn cmd_cloud_switch(store: &str) -> i32 {
    (the store's names sit behind Cloudflare Access)
 9. Replace the setup script with the output of: workflow cloud-setup
 10. Under Network, choose Custom and have this among the allowed hosts: {host}
-    (the store and the binaries at /store/dl are reached there)"
+    (the store and the binaries at /store/dl are reached there)
+11. Network secrets: none for {host}
+    (the proxy then sends its own Authorization over HUB_STORE_TOKEN, and its
+    interception drops the WebSocket upgrade: the store's socket gets 426)"
     );
     exit::OK
 }
