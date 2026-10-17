@@ -291,6 +291,9 @@ t_init() {
 	# peer keys would point every sandboxed hub and mem at the real store.
 	for v in $(compgen -e | grep -E '^HUB_' | grep -vx HUB_BIN); do unset "$v"; done
 	unset TS_AUTHKEY MEM_REMOTE
+	# Its Slack tokens would have every sandboxed hub post its questions to
+	# Saiful's real Slack DM, with buttons no hub can answer.
+	unset SLACK_BOT_TOKEN SLACK_APP_TOKEN SLACK_USER_ID
 
 	HOOKS="$WF_ROOT/hooks"
 	cd "$T_TMP" || exit 1
