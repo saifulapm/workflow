@@ -4,7 +4,8 @@
 //! It refuses while any session runs here, because a session's write landing
 //! between the last VPS round and the switch would reach neither store, and
 //! while qshell-sync would go on bisyncing memory after it. On a machine that
-//! already switched it only moves the store's URL. Every
+//! already switched it moves the store's URL and mints the machine's token
+//! again. Every
 //! program it runs is found on PATH (amx and mem also by `$WORKFLOW_AMX` and
 //! `$WORKFLOW_MEM`), so a test can put a script in each one's place.
 
@@ -62,12 +63,12 @@ fn switch(url: &str) -> Step<()> {
              update the dotfiles (chezmoi update) first",
         );
     }
-    if switched() {
-        return move_store(url);
-    }
     let Some(name) = machine::name() else {
         return fail("cannot tell this machine's name; set WORKFLOW_MACHINE");
     };
+    if switched() {
+        return move_store(url, &name);
+    }
 
     run("qshell-sync", &["--only", "memory"], &[]).map_err(|e| {
         (
@@ -170,31 +171,37 @@ fn switched() -> bool {
     base.join("mem/share/switched").exists()
 }
 
-/// A re-run after the switch: the memory is already in the store, so only
-/// the URL moves. The token and the cloud token stay as local.env has them.
-fn move_store(url: &str) -> Step<()> {
+/// A re-run after the switch: the memory is already in the store, so the
+/// URL moves and the machine's own token is minted again; the cloud token
+/// stays as local.env has it.
+fn move_store(url: &str, name: &str) -> Step<()> {
     let env = env_file()?;
-    let text = fs::read_to_string(&env).unwrap_or_default();
-    let has_token = text.lines().any(|l| {
-        l.strip_prefix("HUB_STORE_TOKEN=")
-            .is_some_and(|v| !v.is_empty())
-    });
-    if !has_token {
-        return refuse(format!(
-            "{} has no HUB_STORE_TOKEN to reuse; the machine switched but its token is gone",
-            env.display()
-        ));
-    }
+    // A token minted before tokens named a machine writes nothing, so the
+    // machine is minted again on the store it moves to.
+    let admin = pass("workflow/hubweb-store-token")?;
+    let access_id = pass("workflow/cloud-next-access-id")?;
+    let access_secret = pass("workflow/cloud-next-access-secret")?;
+    let access = [
+        ("HUB_STORE_ACCESS_ID", access_id.as_str()),
+        ("HUB_STORE_ACCESS_SECRET", access_secret.as_str()),
+    ];
+    let token = mint(url, name, &machine::mem_name(), &admin, &access)?;
     write_env(
         &env,
-        &[("HUB_STORE_URL", url), ("HUB_STORE_NAME", STORE_NAME)],
+        &[
+            ("HUB_STORE_URL", url),
+            ("HUB_STORE_NAME", STORE_NAME),
+            ("HUB_STORE_TOKEN", &token),
+            access[0],
+            access[1],
+        ],
     )
     .map_err(|e| (exit::FAILED, format!("cannot write {}: {e}", env.display())))?;
     run("systemctl", &["--user", "restart", "hub-local"], &[])
         .map_err(|e| (exit::FAILED, format!("restarting hub-local: {e}")))?;
     println!("moved this machine's store to {url}");
     println!(
-        "  wrote HUB_STORE_URL and HUB_STORE_NAME to {}",
+        "  wrote HUB_STORE_URL, HUB_STORE_NAME and a new HUB_STORE_TOKEN to {}",
         env.display()
     );
     println!("  restarted hub-local");

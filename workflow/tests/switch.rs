@@ -278,7 +278,7 @@ fn a_qshell_sync_that_still_bisyncs_memory_refuses_before_anything_runs() {
 }
 
 #[test]
-fn a_rerun_on_a_switched_machine_only_moves_the_store_url() {
+fn a_rerun_on_a_switched_machine_moves_the_store_url_and_mints_its_token_again() {
     let w = world("switch-rerun");
     w.put("state/mem/share/switched", "");
     w.put(
@@ -289,27 +289,41 @@ fn a_rerun_on_a_switched_machine_only_moves_the_store_url() {
     let new = "wss://new.test/store/share";
     let out = switch(&w, new);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
+    // A token minted before tokens named a machine writes nothing.
     assert_eq!(
         calls(&w),
-        "amx ls --json\npgrep -a -x claude\nsystemctl --user restart hub-local\n"
+        "amx ls --json\npgrep -a -x claude\n\
+         pass show workflow/hubweb-store-token\n\
+         pass show workflow/cloud-next-access-id\n\
+         pass show workflow/cloud-next-access-secret\n\
+         hub share mint mini mac-mini-m2\n\
+         systemctl --user restart hub-local\n"
+    );
+    assert_eq!(w.read("mint.stdin").trim(), ADMIN);
+    assert_eq!(
+        w.read("hub.env"),
+        format!("mint url={new} name=main token= access=setset\n")
     );
     assert_eq!(
         w.read("config/hub/local.env"),
         format!(
             "HUB_PORT=7777\nHUB_STORE_URL={new}\nHUB_STORE_NAME=main\n\
-             HUB_STORE_TOKEN=old-token\nHUB_CLOUD_TOKEN=old-cloud\n"
+             HUB_STORE_TOKEN={MINTED}\nHUB_CLOUD_TOKEN=old-cloud\n\
+             HUB_STORE_ACCESS_ID={ACCESS_ID}\nHUB_STORE_ACCESS_SECRET={ACCESS_SECRET}\n"
         )
     );
 }
 
 #[test]
-fn a_rerun_without_a_stored_token_refuses() {
-    let w = world("switch-rerun-bare");
+fn a_rerun_whose_mint_fails_changes_nothing() {
+    let w = world("switch-rerun-nomint");
     w.put("state/mem/share/switched", "");
-    w.put("config/hub/local.env", "HUB_PORT=7777\n");
+    let before = "HUB_PORT=7777\nHUB_STORE_URL=ws://old/store/share\nHUB_STORE_TOKEN=old-token\n";
+    w.put("config/hub/local.env", before);
+    w.script("bin/hub", "exit 1");
     let out = switch(&w, STORE);
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
-    assert!(text(&out).contains("HUB_STORE_TOKEN"), "{}", text(&out));
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(w.read("config/hub/local.env"), before);
     assert!(!calls(&w).contains("systemctl"));
 }
 

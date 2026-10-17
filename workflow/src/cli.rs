@@ -205,7 +205,8 @@ memory round with dulali, a store token minted for this machine, hub share
 seed, mem share switch, a second seed, the store keys written to the hub's
 local.env, and hub-local restarted. A first seed that runs out of today's
 import budget refuses, exit 2, before mem switches. Running it again on a
-switched machine does the same steps."
+switched machine moves the store's URL, mints the machine's token again and
+restarts hub-local."
     )]
     Switch {
         /// The store's socket, ws:// or wss://, ending in /store/share.
