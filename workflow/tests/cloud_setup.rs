@@ -34,6 +34,17 @@ fn command(program: impl AsRef<OsStr>) -> Command {
     cmd
 }
 
+/// A PATH whose curl fails, for a setup run that must bake nothing and stay
+/// off the network: the setup bakes from the public cloud-bins release.
+fn offline(home: &Scratch) -> String {
+    home.script("offline/curl", "#!/bin/sh\nexit 22\n");
+    format!(
+        "{}:{}",
+        home.at("offline").display(),
+        std::env::var("PATH").unwrap()
+    )
+}
+
 /// The printed script, its shim folder moved into the scratch directory.
 fn script(home: &Scratch) -> String {
     let out = command(env!("CARGO_BIN_EXE_workflow"))
@@ -58,6 +69,7 @@ fn the_script_writes_every_skill_and_agent_byte_for_byte() {
     let ran = command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
+        .env("PATH", offline(&home))
         .output()
         .unwrap();
     assert!(ran.status.success(), "{ran:?}");
@@ -95,6 +107,7 @@ fn the_mem_shim_fetches_the_binary_from_the_mem_server_once_then_runs_it() {
     let ran = command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
+        .env("PATH", offline(&home))
         .output()
         .unwrap();
     assert!(ran.status.success(), "{ran:?}");
@@ -148,6 +161,7 @@ fn cloud_home(tag: &str) -> (Scratch, PathBuf, String) {
     let ran = command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
+        .env("PATH", offline(&home))
         .output()
         .unwrap();
     assert!(ran.status.success(), "{ran:?}");
@@ -313,6 +327,7 @@ fn without_the_keys_the_shim_starts_nothing() {
     command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
+        .env("PATH", offline(&home))
         .output()
         .unwrap();
     home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");
@@ -670,6 +685,38 @@ fn without_the_stores_sum_the_binary_here_stays() {
     );
 }
 
+/// A fresh VM replays the whole store, about 25 s on a cloud VM, and the
+/// first mem waits for all of it, up to 120 s, so its first read is whole.
+#[test]
+fn the_first_mem_gives_the_catch_up_120_seconds() {
+    let home = Scratch::new("cloud-shim-catch-up");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.script(
+        "fake/timeout",
+        &format!(
+            "#!/bin/sh\necho \"timeout $1\" >> {}\nshift\nexec \"$@\"\n",
+            log.display()
+        ),
+    );
+    fs::remove_file(&log).unwrap();
+    let mut shim = command(home.at("usr-local-bin/mem"));
+    shim.args(["context"])
+        .env("HOME", home.path())
+        .env("PATH", &path);
+    for (k, v) in STORE_ENV {
+        shim.env(k, v);
+    }
+    let out = shim.env("HUB_PEER_TOKEN_SHA256", "ab12").output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        lines_of(&log, "timeout"),
+        ["timeout 120"],
+        "{}",
+        fs::read_to_string(&log).unwrap()
+    );
+}
+
 /// A store the session cannot reach leaves the replica as it was baked, and
 /// mem still reads it, never the mem server.
 #[test]
@@ -704,6 +751,7 @@ fn machine_file_after(tag: &str, host: &str, before: Option<&str>) -> Option<Str
     command("bash")
         .arg(home.at("setup.sh"))
         .env("HOME", home.path())
+        .env("PATH", offline(&home))
         .output()
         .unwrap();
     home.script(".local/bin/mem-x86_64", "#!/bin/sh\necho real mem \"$@\"\n");

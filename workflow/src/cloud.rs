@@ -575,9 +575,11 @@ else
   peer=
 fi
 if [ -n "$peer" ] && { [ -z "$alive" ] || ts_down; }; then
-  # The replica as the store has it now, before this mem reads it.
+  # The replica as the store has it now, before this mem reads it. A fresh
+  # VM replays the whole store, about 25 s on a cloud VM: the wait is long
+  # enough for all of it, so the first read is whole.
   if [ -n "$store" ] && [ -z "$alive" ]; then
-    flock "$state/sync.lock" "$helper" sync 20 >"$state/sync.log" 2>&1 ||
+    flock "$state/sync.lock" "$helper" sync 120 >"$state/sync.log" 2>&1 ||
       echo "mem: the store did not answer; reading the replica as it was" >&2
   fi
   # One start at a time; a later mem finds a dead hub and starts it again.
