@@ -395,11 +395,10 @@ const END: &str = "WORKFLOW_EOF";
 /// The setup script: every file of `skills/` and `agents/` under
 /// `~/.claude`, and a `mem` that fetches the real binary from the store
 /// (from the mem server without the store's variables) the first time it
-/// runs. The script runs before the session, where the proxy adds no Access
-/// token, so the binary comes with it only when the environment's variables
-/// hold one. With the store's variables, it fetches both binaries and bakes
-/// a replica into the cached environment, which a session starts from when
-/// the store cannot be reached.
+/// runs. claude.ai runs the script with none of the environment's
+/// variables, so it cannot reach the store: it bakes both binaries into the
+/// cached environment from the public release the mini publishes, and each
+/// session fills its replica from the store.
 pub fn setup_script(files: &[(&str, &[u8])]) -> String {
     let mut out = String::from(
         "#!/bin/bash\n\
@@ -422,12 +421,10 @@ cat > \"$bin/mem-cloud\" <<'{END}'\n{HELPER}{END}\n\
 chmod +x \"$bin/mem-cloud\"\n\
 cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
 chmod +x \"$bin/mem\"\n\
-if [ -n \"${{HUB_STORE_URL:-}}\" ] && [ -n \"${{HUB_STORE_TOKEN:-}}\" ]; then\n\
-  if PATH=\"$bin:$PATH\" \"$bin/mem-cloud\" sync 120; then\n\
-    echo \"setup: baked the replica up to the store\"\n\
-  else\n\
-    echo \"setup: no baked replica: the store did not answer; each session fills its own\"\n\
-  fi\n\
+if \"$bin/mem-cloud\" bake; then\n\
+  echo \"setup: baked mem and hub from the cloud-bins release\"\n\
+else\n\
+  echo \"setup: no baked binaries: the release did not answer; each session fetches its own\"\n\
 fi\n"
     ));
     out
@@ -445,7 +442,9 @@ fi\n"
 /// setup; a store that gives no sum keeps the binary here, and is not asked
 /// again that boot. `mem-cloud sync <seconds>`
 /// brings the replica up to the store with `hub share sync`, and fails when
-/// the store cannot be reached in time.
+/// the store cannot be reached in time. `mem-cloud bake` takes both binaries
+/// from the public `cloud-bins` release, which needs no secret: the setup
+/// has none.
 const HELPER: &str = r#"#!/bin/sh
 bin="$HOME/.local/bin"
 state="$HOME/.local/state/hub"
@@ -495,11 +494,24 @@ fetch() {
   chmod +x "$part"
   mv "$part" "$bin/$1-x86_64"
 }
+# The release the mini's run_after_46c-workflow-cloud-bins puts them in.
+release=https://github.com/saifulapm/workflow/releases/download/cloud-bins
+bake() {
+  mkdir -p "$bin"
+  for name in mem hub; do
+    [ -x "$bin/$name-x86_64" ] && continue
+    part="$bin/$name-x86_64.part.$$"
+    curl -fsSL --max-time 120 "$release/$name-x86_64" -o "$part" || { rm -f "$part"; return 1; }
+    chmod +x "$part"
+    mv "$part" "$bin/$name-x86_64"
+  done
+}
 case "${1:-}" in
   fetch) fetch "$2" ;;
+  bake) bake ;;
   # The binaries come from the store; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub> or sync <seconds>" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub>, sync <seconds> or bake" >&2; exit 2 ;;
 esac
 "#;
 

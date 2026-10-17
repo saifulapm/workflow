@@ -6,6 +6,7 @@ mod scratch;
 
 use std::ffi::OsStr;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -364,7 +365,7 @@ fn store_fakes(home: &Scratch, hub_sync_exit: u8) -> (PathBuf, String) {
              case \"$args\" in *.sha256*) for a; do u=$a; done; \
              f={sums}/$(basename \"${{u%.sha256}}\"); [ -f \"$f\" ] || exit 22; cat \"$f\"; exit;; esac\n\
              while [ \"$1\" != -o ]; do shift; done\n\
-             case \"$args\" in */dl/hub*) cp {hub} \"$2\";; *) cp {mem} \"$2\";; esac\n",
+             case \"$args\" in */dl/hub*|*/hub-x86_64*) cp {hub} \"$2\";; *) cp {mem} \"$2\";; esac\n",
             log = log.display(),
             state = home.at(".local/state/hub").display(),
             sums = home.at("sums").display(),
@@ -395,75 +396,50 @@ fn setup_with(home: &Scratch, path: &str, vars: &[(&str, &str)]) -> std::process
     ran
 }
 
-/// The setup script runs before the session, where no network secret is
-/// added, so it fetches the binaries with the Access token from the
-/// variables, off the command line, and bakes the replica into the cached
-/// environment with `hub share sync`.
+/// claude.ai runs the setup script with none of the environment's
+/// variables, so the setup bakes both binaries into the cached environment
+/// from the public release the mini publishes, with no secret on the way.
 #[test]
-fn with_the_store_variables_the_setup_bakes_a_replica() {
+fn the_setup_bakes_both_binaries_from_the_release_with_no_secret() {
     let home = Scratch::new("cloud-setup-bake");
     let (log, path) = store_fakes(&home, 0);
-    let ran = setup_with(&home, &path, &STORE_ENV);
-    let started = fs::read_to_string(&log).unwrap();
+    let ran = setup_with(&home, &path, &[]);
     let curls = lines_of(&log, "curl");
-    assert!(
-        curls
-            .iter()
-            .any(|c| c.contains("https://store.example.test/store/dl/mem-x86_64")),
-        "{started}"
-    );
-    assert!(
-        curls
-            .iter()
-            .any(|c| c.contains("https://store.example.test/store/dl/hub-x86_64")),
-        "{started}"
-    );
-    assert!(
-        started.contains("Authorization: Bearer store-secret"),
-        "{started}"
-    );
-    assert!(
-        started.contains("CF-Access-Client-Id: access-id.access"),
-        "{started}"
-    );
-    assert!(
-        curls
-            .iter()
-            .all(|c| !c.contains("access-secret") && !c.contains("store-secret")),
-        "{curls:?}"
-    );
-    let hub = lines_of(&log, "hub");
-    assert_eq!(
-        hub,
-        ["hub share sync url=wss://store.example.test/store/share remote="],
-        "{started}"
-    );
+    for name in ["mem", "hub"] {
+        let url = format!(
+            "https://github.com/saifulapm/workflow/releases/download/cloud-bins/{name}-x86_64"
+        );
+        assert!(curls.iter().any(|c| c.contains(&url)), "{curls:?}");
+        let baked = home.at(&format!(".local/bin/{name}-x86_64"));
+        assert!(
+            baked
+                .metadata()
+                .is_ok_and(|m| m.permissions().mode() & 0o111 != 0),
+            "{name}"
+        );
+    }
+    let started = fs::read_to_string(&log).unwrap();
+    assert!(!started.contains("Authorization"), "{started}");
+    assert!(lines_of(&log, "hub").is_empty(), "{started}");
     assert!(
         String::from_utf8_lossy(&ran.stdout).contains("baked"),
         "{ran:?}"
     );
 }
 
-/// A store the setup cannot reach leaves no baked replica, and the setup
-/// still succeeds: the session fills it.
+/// A release that does not answer leaves nothing baked, and the setup still
+/// succeeds: each session fetches its own.
 #[test]
 fn a_bake_that_fails_does_not_fail_the_setup() {
     let home = Scratch::new("cloud-setup-bake-fails");
-    let (_, path) = store_fakes(&home, 1);
-    let ran = setup_with(&home, &path, &STORE_ENV);
+    let (_, path) = store_fakes(&home, 0);
+    home.script("fake/curl", "#!/bin/sh\nexit 22\n");
+    let ran = setup_with(&home, &path, &[]);
     assert!(
-        String::from_utf8_lossy(&ran.stdout).contains("no baked replica"),
+        String::from_utf8_lossy(&ran.stdout).contains("no baked binaries"),
         "{ran:?}"
     );
-}
-
-#[test]
-fn without_the_store_variables_the_setup_bakes_nothing() {
-    let home = Scratch::new("cloud-setup-no-bake");
-    let (log, path) = store_fakes(&home, 0);
-    setup_with(&home, &path, &[("MEM_REMOTE", "https://mem.example.test")]);
-    assert!(lines_of(&log, "hub").is_empty());
-    assert!(lines_of(&log, "curl").is_empty());
+    assert!(!home.at(".local/bin/mem-x86_64").exists());
 }
 
 /// In a session with the store variables, the first mem brings the replica
