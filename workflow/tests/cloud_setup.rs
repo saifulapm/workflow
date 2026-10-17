@@ -380,10 +380,12 @@ fn store_fakes(home: &Scratch, hub_sync_exit: u8) -> (PathBuf, String) {
              case \"$args\" in *.sha256*) for a; do u=$a; done; \
              f={sums}/$(basename \"${{u%.sha256}}\"); [ -f \"$f\" ] || exit 22; cat \"$f\"; exit;; esac\n\
              while [ \"$1\" != -o ]; do shift; done\n\
-             case \"$args\" in */dl/hub*|*/hub-x86_64*) cp {hub} \"$2\";; *) cp {mem} \"$2\";; esac\n",
+             case \"$args\" in */workflow-skills.tar.gz*) cp {skills} \"$2\";; \
+             */dl/hub*|*/hub-x86_64*) cp {hub} \"$2\";; *) cp {mem} \"$2\";; esac\n",
             log = log.display(),
             state = home.at(".local/state/hub").display(),
             sums = home.at("sums").display(),
+            skills = home.at("fake-skills.tar.gz").display(),
             hub = home.at("fake-hub").display(),
             mem = home.at("fake-mem").display(),
         ),
@@ -714,6 +716,77 @@ fn the_first_mem_gives_the_catch_up_120_seconds() {
         ["timeout 120"],
         "{}",
         fs::read_to_string(&log).unwrap()
+    );
+}
+
+/// The store's bundle of the workflow skills and agents, as the mini's
+/// run_after_46c packs it: `skills/<name>/SKILL.md` and `agents/<name>.md`.
+fn store_skills(home: &Scratch, skill: &str, agent: &str) {
+    home.put("bundle/skills/orchestrate/SKILL.md", skill);
+    home.put("bundle/agents/implementer.md", agent);
+    let out = command("tar")
+        .args(["-C", home.at("bundle").to_str().unwrap(), "-czf"])
+        .arg(home.at("fake-skills.tar.gz"))
+        .args(["skills", "agents"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    store_sum(home, "workflow-skills.tar.gz", "fake-skills.tar.gz");
+}
+
+/// The setup wrote the skills it carries; the store holds newer ones. The
+/// first mem of a boot puts the store's in place, and later ones that boot
+/// ask nothing more.
+#[test]
+fn the_first_mem_of_a_boot_takes_the_stores_skills() {
+    let home = Scratch::new("cloud-shim-skills");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    let skill = home.at(".claude/skills/orchestrate/SKILL.md");
+    assert!(fs::read_to_string(&skill).unwrap() != "# newer orchestrate\n");
+    store_skills(&home, "# newer orchestrate\n", "# newer implementer\n");
+    fs::remove_file(&log).unwrap();
+    run_store_shim(&home, &path, &["context"]);
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(fs::read_to_string(&skill).unwrap(), "# newer orchestrate\n");
+    assert_eq!(
+        fs::read_to_string(home.at(".claude/agents/implementer.md")).unwrap(),
+        "# newer implementer\n"
+    );
+    assert!(
+        home.at(".claude/skills/tdd/SKILL.md").exists(),
+        "a skill the bundle leaves out stays"
+    );
+    assert_eq!(
+        curls(&log, "workflow-skills.tar.gz.sha256"),
+        1,
+        "{:?}",
+        lines_of(&log, "curl")
+    );
+    assert_eq!(
+        curls(&log, "workflow-skills.tar.gz -o"),
+        1,
+        "{:?}",
+        lines_of(&log, "curl")
+    );
+}
+
+/// A store with no bundle keeps the skills the setup wrote.
+#[test]
+fn without_the_stores_skills_the_setups_stay() {
+    let home = Scratch::new("cloud-shim-no-skills");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    let skill = home.at(".claude/skills/orchestrate/SKILL.md");
+    let before = fs::read_to_string(&skill).unwrap();
+    fs::remove_file(&log).unwrap();
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(fs::read_to_string(&skill).unwrap(), before);
+    assert_eq!(
+        curls(&log, "workflow-skills.tar.gz -o"),
+        0,
+        "{:?}",
+        lines_of(&log, "curl")
     );
 }
 

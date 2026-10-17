@@ -448,6 +448,16 @@ fi\n"
 const HELPER: &str = r#"#!/bin/sh
 bin="$HOME/.local/bin"
 state="$HOME/.local/state/hub"
+# headers <file> <store>: the request headers, in a file only this user
+# reads: the store's bearer when <store> is set, and the Access service token.
+headers() {
+  (umask 077 && : >"$1")
+  if [ -n "$2" ]; then printf 'Authorization: Bearer %s\n' "$HUB_STORE_TOKEN" >>"$1"; fi
+  if [ -n "${HUB_STORE_ACCESS_ID:-}" ] && [ -n "${HUB_STORE_ACCESS_SECRET:-}" ]; then
+    printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' \
+      "$HUB_STORE_ACCESS_ID" "$HUB_STORE_ACCESS_SECRET" >>"$1"
+  fi
+}
 fetch() {
   mark=
   if [ -x "$bin/$1-x86_64" ]; then
@@ -469,12 +479,7 @@ fetch() {
   else
     url="${MEM_REMOTE:?MEM_REMOTE is not set}/dl/$1"
   fi
-  (umask 077 && : >"$hdr")
-  if [ -n "$store" ]; then printf 'Authorization: Bearer %s\n' "$HUB_STORE_TOKEN" >>"$hdr"; fi
-  if [ -n "${HUB_STORE_ACCESS_ID:-}" ] && [ -n "${HUB_STORE_ACCESS_SECRET:-}" ]; then
-    printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' \
-      "$HUB_STORE_ACCESS_ID" "$HUB_STORE_ACCESS_SECRET" >>"$hdr"
-  fi
+  headers "$hdr" "$store"
   if [ -n "$mark" ]; then
     : >"$mark"
     want=$(curl -fsS --max-time 10 -H "@$hdr" "$url.sha256" 2>/dev/null) &&
@@ -494,6 +499,42 @@ fetch() {
   chmod +x "$part"
   mv "$part" "$bin/$1-x86_64"
 }
+# Once a boot, with the store's variables: the workflow skills and agents the
+# store holds (run_after_46c packs them) replace the folders of the same name
+# under ~/.claude, so a changed skill reaches cloud sessions with no new
+# setup; Claude Code picks up a changed SKILL.md in a running session. One
+# the bundle leaves out stays as the setup wrote it.
+skills() {
+  [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ] || return 0
+  boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 0
+  [ -e "$state/fresh-skills-$boot" ] && return 0
+  mkdir -p "$state" && : >"$state/fresh-skills-$boot"
+  case "$HUB_STORE_URL" in wss://*) url=https ;; *) url=http ;; esac
+  host="${HUB_STORE_URL#*://}"
+  url="$url://${host%%/*}/store/dl/workflow-skills.tar.gz"
+  hdr="$state/skills.hdr.$$"
+  headers "$hdr" 1
+  want=$(curl -fsS --max-time 10 -H "@$hdr" "$url.sha256" 2>/dev/null) &&
+    want=${want%% *} && [ "$want" != "$(cat "$state/skills.sha256" 2>/dev/null)" ] &&
+    curl -fsSL --max-time 60 -H "@$hdr" "$url" -o "$state/skills.tar.gz"
+  got=$?
+  rm -f "$hdr"
+  [ "$got" = 0 ] || return 0
+  [ "$(sha256sum "$state/skills.tar.gz" | cut -d' ' -f1)" = "$want" ] || return 0
+  new="$state/skills.new"
+  rm -rf "$new" && mkdir -p "$new" && tar -xzf "$state/skills.tar.gz" -C "$new" || return 0
+  for kind in skills agents; do
+    [ -d "$new/$kind" ] || continue
+    mkdir -p "$HOME/.claude/$kind"
+    for item in "$new/$kind"/*; do
+      [ -e "$item" ] || continue
+      rm -rf "$HOME/.claude/$kind/${item##*/}"
+      mv "$item" "$HOME/.claude/$kind/"
+    done
+  done
+  rm -rf "$new" "$state/skills.tar.gz"
+  printf '%s\n' "$want" >"$state/skills.sha256"
+}
 # The release the mini's run_after_46c-workflow-cloud-bins puts them in.
 release=https://github.com/saifulapm/workflow/releases/download/cloud-bins
 bake() {
@@ -509,9 +550,10 @@ bake() {
 case "${1:-}" in
   fetch) fetch "$2" ;;
   bake) bake ;;
+  skills) skills ;;
   # The binaries come from the store; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub>, sync <seconds> or bake" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub>, sync <seconds>, bake or skills" >&2; exit 2 ;;
 esac
 "#;
 
@@ -557,6 +599,7 @@ if [ -n "$store" ] && [ ! -e "$switched" ]; then
 fi
 # The local hub's own calls into the replica: never a sync or a hub of their own.
 if [ "${1:-}" = share ] && [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" "$@"; fi
+"$helper" skills
 state="$HOME/.local/state/hub"
 # Alive when the local hub answers on mem's socket.
 hub_alive() { curl -s -m 2 --unix-socket "$state/local.sock" http://local/ping >/dev/null 2>&1; }
