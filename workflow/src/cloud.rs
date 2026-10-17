@@ -438,14 +438,25 @@ fi\n"
 /// `HUB_STORE_URL` and the bearer from `HUB_STORE_TOKEN`; an environment
 /// without those two still fetches `$MEM_REMOTE/dl/<name>`. The bearer and
 /// the Access service token, when the variables hold one, go as headers
-/// read from a file, never on a command line. `mem-cloud sync <seconds>`
+/// read from a file, never on a command line. Once a boot, with the store's
+/// variables, a binary already here is checked against the store's
+/// `<name>-x86_64.sha256` and fetched again when the store holds another
+/// build, so a new build reaches the cached environment without a new
+/// setup; a store that gives no sum keeps the binary here, and is not asked
+/// again that boot. `mem-cloud sync <seconds>`
 /// brings the replica up to the store with `hub share sync`, and fails when
 /// the store cannot be reached in time.
 const HELPER: &str = r#"#!/bin/sh
 bin="$HOME/.local/bin"
 state="$HOME/.local/state/hub"
 fetch() {
-  [ -x "$bin/$1-x86_64" ] && return 0
+  mark=
+  if [ -x "$bin/$1-x86_64" ]; then
+    [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ] || return 0
+    boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 0
+    mark="$state/fresh-$1-$boot"
+    [ -e "$mark" ] && return 0
+  fi
   mkdir -p "$bin" "$state"
   part="$bin/$1-x86_64.part.$$"
   hdr="$state/fetch.hdr.$$"
@@ -465,11 +476,19 @@ fetch() {
     printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' \
       "$HUB_STORE_ACCESS_ID" "$HUB_STORE_ACCESS_SECRET" >>"$hdr"
   fi
+  if [ -n "$mark" ]; then
+    : >"$mark"
+    want=$(curl -fsS --max-time 10 -H "@$hdr" "$url.sha256" 2>/dev/null) &&
+      [ "${want%% *}" != "$(sha256sum "$bin/$1-x86_64" | cut -d' ' -f1)" ] ||
+      { rm -f "$hdr"; return 0; }
+  fi
   curl -fsSL --max-time 120 -H "@$hdr" "$url" -o "$part"
   got=$?
   rm -f "$hdr"
   if [ "$got" != 0 ]; then
     rm -f "$part"
+    # A new build that did not come keeps the one here working.
+    [ -n "$mark" ] && return 0
     echo "mem: cannot fetch the $1 binary from $url" >&2
     return 1
   fi

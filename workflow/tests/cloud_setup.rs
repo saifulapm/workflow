@@ -361,10 +361,13 @@ fn store_fakes(home: &Scratch, hub_sync_exit: u8) -> (PathBuf, String) {
             "#!/bin/sh\nargs=\"$*\"\necho \"curl $args\" >> {log}\n\
              prev=; for a in \"$@\"; do [ \"$prev\" = -H ] && case $a in @*) cat \"${{a#@}}\" >> {log};; esac; prev=$a; done\n\
              case \"$args\" in *--unix-socket*) [ -e {state}/local.sock ]; exit;; esac\n\
+             case \"$args\" in *.sha256*) for a; do u=$a; done; \
+             f={sums}/$(basename \"${{u%.sha256}}\"); [ -f \"$f\" ] || exit 22; cat \"$f\"; exit;; esac\n\
              while [ \"$1\" != -o ]; do shift; done\n\
              case \"$args\" in */dl/hub*) cp {hub} \"$2\";; *) cp {mem} \"$2\";; esac\n",
             log = log.display(),
             state = home.at(".local/state/hub").display(),
+            sums = home.at("sums").display(),
             hub = home.at("fake-hub").display(),
             mem = home.at("fake-mem").display(),
         ),
@@ -558,6 +561,136 @@ fn a_store_sessions_first_mem_switches_the_replica_once_before_it_writes() {
             "mem log two remote="
         ],
         "{ran:?}"
+    );
+}
+
+/// Runs the store session's shim with `args` and returns its stdout.
+fn run_store_shim(home: &Scratch, path: &str, args: &[&str]) -> String {
+    let mut shim = command(home.at("usr-local-bin/mem"));
+    shim.args(args).env("HOME", home.path()).env("PATH", path);
+    for (k, v) in STORE_ENV {
+        shim.env(k, v);
+    }
+    let out = shim.output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The store's sum file for `name`, as `hub share put-bin` leaves it.
+fn store_sum(home: &Scratch, name: &str, bytes_of: &str) {
+    let out = command("sha256sum")
+        .arg(home.at(bytes_of))
+        .output()
+        .unwrap();
+    let sum = String::from_utf8_lossy(&out.stdout);
+    let sum = sum.split_whitespace().next().unwrap();
+    home.put(&format!("sums/{name}"), &format!("{sum}  {name}\n"));
+}
+
+/// Lines of the fakes' log that are curl calls whose argv contains `what`.
+fn curls(log: &Path, what: &str) -> usize {
+    lines_of(log, "curl")
+        .iter()
+        .filter(|l| l.contains(what))
+        .count()
+}
+
+/// The setup baked one mem; the store has built a new one since. The first
+/// mem of a boot sees the store's sum differ and fetches it again, and the
+/// later ones that boot ask nothing more.
+#[test]
+fn a_binary_the_store_rebuilt_is_fetched_again_once_a_boot() {
+    let home = Scratch::new("cloud-shim-rebuilt");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.put("fake-mem", "#!/bin/sh\necho new mem \"$@\"\n");
+    store_sum(&home, "mem-x86_64", "fake-mem");
+    fs::remove_file(&log).unwrap();
+    assert_eq!(
+        run_store_shim(&home, &path, &["context"]),
+        "new mem context\n"
+    );
+    assert_eq!(
+        run_store_shim(&home, &path, &["context"]),
+        "new mem context\n"
+    );
+    assert_eq!(
+        curls(&log, "mem-x86_64.sha256"),
+        1,
+        "{:?}",
+        lines_of(&log, "curl")
+    );
+    assert_eq!(
+        curls(&log, "mem-x86_64 -o"),
+        1,
+        "{:?}",
+        lines_of(&log, "curl")
+    );
+}
+
+#[test]
+fn a_binary_the_store_holds_as_it_is_is_not_fetched_again() {
+    let home = Scratch::new("cloud-shim-current");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    store_sum(&home, "mem-x86_64", ".local/bin/mem-x86_64");
+    fs::remove_file(&log).unwrap();
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(
+        curls(&log, "mem-x86_64.sha256"),
+        1,
+        "{:?}",
+        lines_of(&log, "curl")
+    );
+    assert_eq!(
+        curls(&log, "mem-x86_64 -o"),
+        0,
+        "{:?}",
+        lines_of(&log, "curl")
+    );
+}
+
+/// A new build the store names but cannot hand over keeps the binary here.
+#[test]
+fn a_rebuilt_binary_that_does_not_come_keeps_the_one_here() {
+    let home = Scratch::new("cloud-shim-rebuilt-lost");
+    let (_log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.put(
+        "sums/mem-x86_64",
+        &format!("{}  mem-x86_64\n", "0".repeat(64)),
+    );
+    fs::remove_file(home.at("fake-mem")).unwrap();
+    assert_eq!(
+        run_store_shim(&home, &path, &["context"]),
+        "real mem context\n"
+    );
+}
+
+/// A store with no sum, or none it can give, keeps the binary here, and is
+/// not asked again that boot.
+#[test]
+fn without_the_stores_sum_the_binary_here_stays() {
+    let home = Scratch::new("cloud-shim-no-sum");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    fs::remove_file(&log).unwrap();
+    assert_eq!(
+        run_store_shim(&home, &path, &["context"]),
+        "real mem context\n"
+    );
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(
+        curls(&log, "mem-x86_64.sha256"),
+        1,
+        "{:?}",
+        lines_of(&log, "curl")
+    );
+    assert_eq!(
+        curls(&log, "mem-x86_64 -o"),
+        0,
+        "{:?}",
+        lines_of(&log, "curl")
     );
 }
 
