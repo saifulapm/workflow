@@ -18,7 +18,7 @@ use crate::memview::{self, Files, Reply};
 use crate::webwrite::{self, After, Clock, Written};
 
 /// The name the pages draw as the hub's own.
-pub const MACHINE: &str = "next-hub";
+pub const MACHINE: &str = "hub";
 
 /// The line the home shows when Cloudflare refuses the store.
 const LIMIT_LINE: &str = "Cloudflare limit reached, resets 06:00";
@@ -553,6 +553,14 @@ mod tests {
         assert!(page.contains("name=\"text\" value=\"yes\""), "{page}");
         assert!(page.contains("/live"), "{page}");
         assert!(!page.to_lowercase().contains("dulali"), "{page}");
+    }
+
+    #[test]
+    fn the_home_names_the_hub_and_never_next_hub() {
+        let page = html(draw(&store(), ask(&get("/"))).expect("home"));
+        assert!(page.contains("<title>hub — hub</title>"), "{page}");
+        assert!(page.contains(">hub</"), "{page}");
+        assert!(!page.contains("next-hub"), "{page}");
     }
 
     #[test]
