@@ -28,7 +28,8 @@
 real_cache=${XDG_CACHE_HOME:-$HOME/.cache}
 caller_home=$HOME
 caller_config=${XDG_CONFIG_HOME:-$HOME/.config}
-lock=${XDG_RUNTIME_DIR:-/tmp}/hub-browser.lock
+short_tmp=${XDG_RUNTIME_DIR:-/tmp}
+lock=$short_tmp/hub-browser.lock
 source "$(dirname -- "$0")/lib.sh"
 t_init
 
@@ -153,7 +154,7 @@ done
 job+=']}'
 
 # One browser at a time on this machine.
-pw() { HOME=$caller_home XDG_CONFIG_HOME=$caller_config XDG_CACHE_HOME=$real_cache TMPDIR=${XDG_RUNTIME_DIR:-/tmp} playwright-cli -s="parity-$$" "$@"; }
+pw() { HOME=$caller_home XDG_CONFIG_HOME=$caller_config XDG_CACHE_HOME=$real_cache TMPDIR=$short_tmp playwright-cli -s="parity-$$" "$@"; }
 shopt -u patsub_replacement 2>/dev/null
 js=$(<"$WF_ROOT/tests/parity-shot.js")
 printf '%s\n' "${js//JOB/$job}" >"$T_TMP/shot.js"
