@@ -145,9 +145,11 @@ pub fn handle(
                 )))
             }
             Some("hello") => hello(log, &message),
-            Some("write") => match machine {
-                Some(machine) => write(log, machine, &message),
-                None => Err(Fault::Broken("say hello before writing".into())),
+            Some("write") => match (machine, bound) {
+                (Some(machine), None) => write(log, machine, None, &message),
+                (Some(machine), Some(bound)) => writer(bound, machine)
+                    .and_then(|writer| write(log, &writer, Some(bound), &message)),
+                (None, _) => Err(Fault::Broken("say hello before writing".into())),
             },
             Some("route") => match machine {
                 Some(_) => route(log, &message),
@@ -204,7 +206,79 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
     })
 }
 
-fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, Fault> {
+/// The runner whose token alone writes global items, the standing rules
+/// every replica reads.
+const MINI: &str = "mini";
+
+/// The names a cloud session writes as, which a device's token may carry
+/// too: the device sends on the outbox a cloud session left on a branch.
+const CLOUD: &str = "cloud-*";
+
+/// The machine a bound socket's writes are made as: its token's, or for a
+/// token minted for every name a prefix begins, the one its hello said.
+fn writer(bound: &Bound, hello: &str) -> Result<String, Fault> {
+    match bound.machine.as_deref() {
+        None => Err(Fault::Broken(format!(
+            "this socket's token names no machine to write as: mint it again with \
+             `hub share mint {} <machine>`",
+            bound.runner
+        ))),
+        Some(pattern) if !pattern.ends_with('*') => Ok(pattern.to_string()),
+        Some(pattern) if names(pattern, hello) => Ok(hello.to_string()),
+        Some(pattern) => Err(Fault::Broken(format!(
+            "this socket's token writes as {pattern}: say hello as one of those"
+        ))),
+    }
+}
+
+/// The `machine` in an item's frontmatter.
+fn item_machine(text: &str) -> Option<String> {
+    let (front, _) = crate::memview::split_item(text)?;
+    let table: toml::Table = toml::from_str(front).ok()?;
+    table.get("machine")?.as_str().map(str::to_string)
+}
+
+/// Why a bound socket writing as `writer` may not make this write, if it
+/// may not: a global item through any token but the mini's, or an item
+/// that names a machine other than the writer, the item's author so far,
+/// or a cloud session.
+fn forged(
+    log: &impl Log,
+    bound: &Bound,
+    writer: &str,
+    path: &str,
+    body: Option<&str>,
+) -> Result<Option<String>, Fault> {
+    let global = path.starts_with("global/");
+    if global && bound.runner != MINI {
+        return Ok(Some("only the mini's token writes global items".into()));
+    }
+    let (true, Some(body)) = (path.contains("/items/"), body) else {
+        return Ok(None);
+    };
+    let Some(named) = item_machine(body) else {
+        return Ok(Some("an item names the machine that wrote it".into()));
+    };
+    let author = log
+        .head(path)?
+        .and_then(|head| head.body.as_deref().and_then(item_machine));
+    if named == writer
+        || author.as_deref() == Some(named.as_str())
+        || !global && names(CLOUD, &named)
+    {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "this socket's token writes as {writer}, not {named}"
+    )))
+}
+
+fn write(
+    log: &mut impl Log,
+    machine: &str,
+    bound: Option<&Bound>,
+    message: &Value,
+) -> Result<Outcome, Fault> {
     let text = |name: &str| match &message[name] {
         Value::Null => Ok(None),
         Value::String(text) => Ok(Some(text.clone())),
@@ -218,6 +292,17 @@ fn write(log: &mut impl Log, machine: &str, message: &Value) -> Result<Outcome, 
     if let Some(seq) = log.seq_of(&id)? {
         return Ok(Outcome {
             sender: vec![ack(seq)],
+            ..Outcome::default()
+        });
+    }
+    if let Some(bound) = bound
+        && let Some(why) = forged(log, bound, machine, &path, body.as_deref())?
+    {
+        let head = log
+            .head(&path)?
+            .map(|h| json!({"seq":h.seq,"id":h.id,"path":h.path,"body":h.body}));
+        return Ok(Outcome {
+            sender: vec![json!({"t":"refused","id":id,"head":head,"why":why}).to_string()],
             ..Outcome::default()
         });
     }
@@ -1207,5 +1292,227 @@ mod tests {
         assert!(log.reports.is_empty());
         send(&mut log, "session_01abc");
         assert!(log.reports.contains_key("session_01abc"));
+    }
+
+    fn token(runner: &str, machine: Option<&str>) -> Bound {
+        Bound {
+            runner: runner.into(),
+            machine: machine.map(str::to_string),
+        }
+    }
+
+    fn item_by(machine: &str) -> String {
+        format!("+++\nid = \"01ITEM\"\nkind = \"log\"\nmachine = \"{machine}\"\n+++\n\nsaid\n")
+    }
+
+    /// A write on a socket that said hello as `hello` with `bound`'s token.
+    fn write_as(
+        log: &mut Memory,
+        bound: Option<&Bound>,
+        hello: &str,
+        id: &str,
+        path: &str,
+        body: Value,
+    ) -> Outcome {
+        let message = json!({"t":"write","id":id,"path":path,"base":null,"body":body});
+        handle(log, Some(hello), bound, &message.to_string())
+    }
+
+    #[test]
+    fn a_machine_token_writes_as_its_machine_whatever_the_hello_said() {
+        let mut log = Memory::default();
+        let nuc = token("nuc", Some("nuc"));
+        let landed = write_as(
+            &mut log,
+            Some(&nuc),
+            "macbook-m2",
+            "01A",
+            ITEM,
+            json!(item_by("nuc")),
+        );
+        assert_eq!(parse(&landed.sender)[0]["t"], "ack");
+        assert_eq!(log.recs[0].machine.as_deref(), Some("nuc"));
+        let streamed: Value = serde_json::from_str(landed.others.as_deref().unwrap()).unwrap();
+        assert_eq!(streamed["machine"], "nuc");
+    }
+
+    #[test]
+    fn a_new_item_naming_another_machine_is_refused_and_stored_nowhere() {
+        let mut log = Memory::default();
+        let nuc = token("nuc", Some("nuc"));
+        for (id, body) in [
+            ("01A", item_by("macbook-m2")),
+            (
+                "01B",
+                "+++\nid = \"01ITEM\"\nkind = \"log\"\n+++\n\nno machine\n".into(),
+            ),
+            ("01C", "no frontmatter at all\n".into()),
+        ] {
+            let refused = write_as(&mut log, Some(&nuc), "nuc", id, ITEM, json!(body));
+            let answer = &parse(&refused.sender)[0];
+            assert_eq!(answer["t"], "refused", "{id}");
+            assert_eq!(answer["id"], id);
+            assert_eq!(refused.others, None, "{id}");
+        }
+        assert!(log.recs.is_empty());
+        // A page carries no machine.
+        let page = write_as(
+            &mut log,
+            Some(&nuc),
+            "nuc",
+            "01D",
+            PAGE,
+            json!("# Lessons\n"),
+        );
+        assert_eq!(parse(&page.sender)[0]["t"], "ack");
+    }
+
+    #[test]
+    fn an_edit_that_keeps_the_items_author_lands_and_one_that_changes_it_does_not() {
+        let mut log = Memory::default();
+        write_as(
+            &mut log,
+            None,
+            "macbook-m2",
+            "01A",
+            ITEM,
+            json!(item_by("macbook-m2")),
+        );
+        let nuc = token("nuc", Some("nuc"));
+        let archived = item_by("macbook-m2").replace("kind", "archived = true\nkind");
+        let kept = write_as(&mut log, Some(&nuc), "nuc", "01B", ITEM, json!(archived));
+        assert_eq!(parse(&kept.sender)[0]["t"], "ack");
+        assert_eq!(
+            log.recs[1].machine.as_deref(),
+            Some("nuc"),
+            "the store says who sent it"
+        );
+        let moved = write_as(
+            &mut log,
+            Some(&nuc),
+            "nuc",
+            "01C",
+            ITEM,
+            json!(item_by("mac-mini-m2")),
+        );
+        let answer = &parse(&moved.sender)[0];
+        assert_eq!(answer["t"], "refused");
+        assert_eq!(
+            answer["head"]["id"], "01B",
+            "the forger's replica takes the store's back"
+        );
+        assert_eq!(log.recs.len(), 2);
+        // Removing an item names no machine.
+        let gone = write_as(&mut log, Some(&nuc), "nuc", "01D", ITEM, Value::Null);
+        assert_eq!(parse(&gone.sender)[0]["t"], "ack");
+    }
+
+    #[test]
+    fn a_cloud_sessions_name_rides_its_own_token_and_a_devices_import() {
+        let mut log = Memory::default();
+        let cloud = token("session_*", Some("cloud-*"));
+        let own = write_as(
+            &mut log,
+            Some(&cloud),
+            "cloud-ab12",
+            "01A",
+            ITEM,
+            json!(item_by("cloud-ab12")),
+        );
+        assert_eq!(parse(&own.sender)[0]["t"], "ack");
+        assert_eq!(log.recs[0].machine.as_deref(), Some("cloud-ab12"));
+        let posed = write_as(
+            &mut log,
+            Some(&cloud),
+            "cloud-ab12",
+            "01B",
+            "projects/P1/items/01OTHER.md",
+            json!(item_by("nuc")),
+        );
+        assert_eq!(parse(&posed.sender)[0]["t"], "refused");
+        // A hello outside the token's names writes nothing.
+        let stranger = write_as(
+            &mut log,
+            Some(&cloud),
+            "nuc",
+            "01C",
+            "projects/P1/items/01THIRD.md",
+            json!(item_by("nuc")),
+        );
+        assert_eq!(parse(&stranger.sender)[0]["t"], "error");
+        // A cloud session's outbox, imported and sent by a device.
+        let nuc = token("nuc", Some("nuc"));
+        let imported = write_as(
+            &mut log,
+            Some(&nuc),
+            "nuc",
+            "01D",
+            "projects/P1/items/01FOURTH.md",
+            json!(item_by("cloud-cd34")),
+        );
+        assert_eq!(parse(&imported.sender)[0]["t"], "ack");
+        assert_eq!(log.recs.len(), 2);
+    }
+
+    #[test]
+    fn only_the_minis_token_or_the_shared_bearer_writes_a_global_item() {
+        let mut log = Memory::default();
+        const RULE: &str = "global/items/01RULE.md";
+        let nuc = token("nuc", Some("nuc"));
+        for (id, body) in [
+            ("01A", json!(item_by("nuc"))),
+            ("01B", json!(item_by("cloud-x"))),
+            ("01C", Value::Null),
+        ] {
+            let refused = write_as(&mut log, Some(&nuc), "nuc", id, RULE, body);
+            assert_eq!(parse(&refused.sender)[0]["t"], "refused", "{id}");
+            assert_eq!(refused.others, None);
+        }
+        assert!(log.recs.is_empty());
+        let mini = token("mini", Some("mac-mini-m2"));
+        let rule = write_as(
+            &mut log,
+            Some(&mini),
+            "mac-mini-m2",
+            "01D",
+            RULE,
+            json!(item_by("mac-mini-m2")),
+        );
+        assert_eq!(parse(&rule.sender)[0]["t"], "ack");
+        assert!(rule.others.is_some());
+        // The nuc cannot archive it either.
+        let archived = item_by("mac-mini-m2").replace("kind", "archived = true\nkind");
+        let refused = write_as(&mut log, Some(&nuc), "nuc", "01E", RULE, json!(archived));
+        assert_eq!(parse(&refused.sender)[0]["t"], "refused");
+        let shared = write_as(
+            &mut log,
+            None,
+            "dulali",
+            "01F",
+            "global/items/01OLD.md",
+            json!(item_by("dulali")),
+        );
+        assert_eq!(parse(&shared.sender)[0]["t"], "ack");
+    }
+
+    #[test]
+    fn a_token_minted_before_tokens_named_a_machine_writes_nothing_and_keeps_it_waiting() {
+        let mut log = Memory::default();
+        let old = token("nuc", None);
+        let waiting = write_as(
+            &mut log,
+            Some(&old),
+            "nuc",
+            "01A",
+            ITEM,
+            json!(item_by("nuc")),
+        );
+        let answer = &parse(&waiting.sender)[0];
+        assert_eq!(
+            answer["t"], "error",
+            "mem keeps a write the store answers with an error"
+        );
+        assert!(answer["why"].as_str().unwrap().contains("hub share mint"));
+        assert!(log.recs.is_empty());
     }
 }
