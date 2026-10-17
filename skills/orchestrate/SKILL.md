@@ -295,6 +295,10 @@ branch to cut it from. Everything above holds, with these changes:
   `parked: local-only <task>:` that names it and says what it needs. File
   no question: `workflow go` on a device reads that handoff, takes the
   branch and runs the rest. Then stop.
+- The dogfood walk drives here only what the dogfood skill says a cloud
+  session can. When its report names `local-only` steps, the walk is a
+  local-only task: land and push the rest, and park with `parked:
+  local-only dogfood <steps>:` as above, so a device walks them.
 - A question only Saiful can answer never parks a cloud run: nothing can
   wake a stopped cloud session. Ask with `mem ask --for saiful`, do what
   does not depend on the answer, then wait in the session with `mem

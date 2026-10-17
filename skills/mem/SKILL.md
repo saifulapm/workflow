@@ -17,8 +17,9 @@ in a project repo or CLAUDE.md.
     mem roadmap            # the milestones, ticked as they land
     mem plan <slug>        # a milestone's plan
 
-A hook runs `mem context` at session start; a staleness line at the top
-means the sync unit is behind, so say so before trusting it.
+On a device, a hook runs `mem context` at session start. A cloud session
+has no hooks, so run it yourself first. A staleness line at the top means
+the sync unit is behind, so say so before trusting it.
 
 ## The wiki
 
