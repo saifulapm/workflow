@@ -6,7 +6,7 @@
 # refused and changes nothing; the cloud's token reports as any session.
 # The shared bearer still speaks for any machine, a client cannot bind its
 # socket by sending the store's own header, mini's token works on
-# /store/files, and it cannot mint.
+# /store/files and /store/pair, and it cannot mint.
 #
 # Needs what t151 needs, and the hub's release binary, which tests/run.sh
 # builds.
@@ -118,6 +118,8 @@ status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Beare
 is "$status" 400 "a star ends a name or is not there"
 status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $mini" "$base/store/machines/x/x")
 is "$status" 401 "a machine token cannot mint"
+code=$(curl -s -X POST -H "Authorization: Bearer $mini" "$base/store/pair")
+like "$code" '^[0-9A-HJKMNP-TV-Z]{6}$' "a machine token gets a pairing code, as hub pair --web asks with it"
 status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/store/machines/x/x")
 is "$status" 401 "no bearer cannot mint"
 status=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer nope" "$base/store/share")

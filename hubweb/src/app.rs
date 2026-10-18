@@ -139,9 +139,9 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         }
         return file(req, &env, object).await;
     }
-    // A machine with the store token asks for a pairing code.
+    // A machine asks for a pairing code with either bearer.
     if req.method() == Method::Post && path == "/store/pair" {
-        if !bearer(&req, &env)? {
+        if holder(&req, &env, object).await?.is_none() {
             return Response::error("Unauthorized", 401);
         }
         return store(&env, object)?.fetch_with_request(req).await;
