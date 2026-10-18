@@ -143,6 +143,22 @@ fn a_question_asked_on_one_hub_reaches_its_peers_and_leaves_them_once_answered()
 }
 
 #[test]
+fn a_questions_recommended_option_reaches_its_peers_file_for_qshell() {
+    let dir = TempDir::new("peers-recommend");
+    let mini = spawn(&dir, "mini", &[], None);
+    let _nuc = spawn(&dir, "nuc", &[&mini], None);
+    ask(
+        &socket_of(&dir, "nuc"),
+        r#"{"id":"RECO0001","project":"walk","text":"which?","options":["Alpha","Beta"],"recommend":"Beta"}"#,
+    );
+    common::wait_for("the mini hears it", Duration::from_secs(2), || {
+        listed(&dir, "mini").len() == 1
+    });
+    assert_eq!(listed(&dir, "mini")[0]["recommend"], "Beta");
+    assert_eq!(listed(&dir, "nuc")[0]["recommend"], "Beta");
+}
+
+#[test]
 fn the_file_for_qshell_names_this_hub() {
     let dir = TempDir::new("peers-self");
     let mini = spawn(&dir, "mini", &[], None);

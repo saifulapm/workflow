@@ -243,6 +243,7 @@ impl Local {
                         machine: self.host.clone(),
                         text: asked.text.clone(),
                         options: asked.options.clone(),
+                        recommend: asked.recommend.clone(),
                         person: asked.audience.as_deref() != Some("orchestrator"),
                         ring: None,
                     };

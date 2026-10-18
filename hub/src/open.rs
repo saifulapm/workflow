@@ -22,6 +22,9 @@ pub struct Open {
     pub text: String,
     #[serde(default)]
     pub options: Vec<String>,
+    /// The option the asker recommends, which qshell marks.
+    #[serde(default)]
+    pub recommend: Option<String>,
     /// A question for Saiful; an orchestrator's is not one.
     pub person: bool,
     /// Where it rings, once the asking hub has decided: `phone`, or the host
