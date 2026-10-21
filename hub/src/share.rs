@@ -177,9 +177,10 @@ impl Store {
         Ok(format!("{scheme}://{host}"))
     }
 
-    /// A single-use link that pairs a device with the hub web, from a code
-    /// the store makes for the holder of its token.
-    pub fn pair_link(&self) -> Result<String> {
+    /// A single-use link on `web`, the hub web's address, that pairs a
+    /// device with it, from a code the store makes for the holder of its
+    /// token.
+    pub fn pair_link(&self, web: &str) -> Result<String> {
         let base = self.base()?;
         let mut request = self.agent.post(format!("{base}/store/pair"));
         for (name, value) in self.headers() {
@@ -193,7 +194,7 @@ impl Store {
         if status != 200 {
             bail!("the store answered {status} to /store/pair");
         }
-        Ok(format!("{base}/pair/{}", code.trim()))
+        Ok(format!("{}/pair/{}", web.trim_end_matches('/'), code.trim()))
     }
 
     /// The bytes the store holds at `path`, None when it holds none.

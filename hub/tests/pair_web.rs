@@ -1,5 +1,6 @@
 //! `hub pair --web` asks the store for a single-use code with the store
-//! token and prints the hub web's pairing link.
+//! token and prints the hub web's pairing link, on HUB_WEB_URL: the store's
+//! name admits only machines, so a browser cannot open a link on it.
 
 mod common;
 
@@ -64,6 +65,7 @@ fn pair_web_prints_the_hub_webs_link_for_a_code_the_store_made() {
             format!("ws://127.0.0.1:{port}/store/share"),
         )
         .env("HUB_STORE_TOKEN", STORE_TOKEN)
+        .env("HUB_WEB_URL", "https://hub.example/")
         .output()
         .unwrap();
     assert!(
@@ -73,7 +75,7 @@ fn pair_web_prints_the_hub_webs_link_for_a_code_the_store_made() {
     );
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
-        format!("http://127.0.0.1:{port}/pair/K7Q2ZD")
+        "https://hub.example/pair/K7Q2ZD"
     );
     let seen = seen.lock().unwrap();
     assert!(seen[0].starts_with("POST /store/pair "), "{}", seen[0]);
@@ -102,4 +104,31 @@ fn pair_web_without_the_store_settings_says_so() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn pair_web_without_the_hub_webs_address_says_so() {
+    let dir = TempDir::new("pair-web-no-web");
+    let (port, seen) = fake_store();
+    let out = Command::new(hub_bin())
+        .args(["pair", "--web"])
+        .env("HOME", dir.join("home"))
+        .env("XDG_CONFIG_HOME", dir.join("config"))
+        .env("XDG_STATE_HOME", dir.join("state"))
+        .env(
+            "HUB_STORE_URL",
+            format!("ws://127.0.0.1:{port}/store/share"),
+        )
+        .env("HUB_STORE_TOKEN", STORE_TOKEN)
+        .env_remove("HUB_WEB_URL")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("HUB_WEB_URL"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // No code is spent on a link that cannot be printed.
+    assert!(seen.lock().unwrap().is_empty());
 }

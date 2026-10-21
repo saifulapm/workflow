@@ -31,8 +31,8 @@ Usage: hub [OPTIONS]
 Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
                 wait for it to be opened; with --web, a single-use link that
-                pairs it with the hub web, from the store (HUB_STORE_URL and
-                HUB_STORE_TOKEN)
+                pairs it with the hub web at HUB_WEB_URL, from the store
+                (HUB_STORE_URL and HUB_STORE_TOKEN)
   local         Run this machine's local hub: the peer port (8789) for other
                 local hubs, and a socket for mem. A device needs
                 HUB_PEER_TOKEN, the device token, and takes HUB_CLOUD_TOKEN
@@ -193,7 +193,13 @@ fn run() -> Result<()> {
     if args.pair && args.web {
         let store = hub::share::from_env()
             .context("hub pair --web needs HUB_STORE_URL and HUB_STORE_TOKEN")?;
-        println!("{}", store.pair_link()?);
+        // The store's name admits only machines; a browser opens the link
+        // on the hub web's.
+        let web = std::env::var("HUB_WEB_URL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .context("hub pair --web needs HUB_WEB_URL, the hub web's address")?;
+        println!("{}", store.pair_link(web.trim())?);
         return Ok(());
     }
     let config_path = match args.config {
