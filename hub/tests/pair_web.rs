@@ -132,3 +132,51 @@ fn pair_web_without_the_hub_webs_address_says_so() {
     // No code is spent on a link that cannot be printed.
     assert!(seen.lock().unwrap().is_empty());
 }
+
+#[test]
+fn pair_web_reads_what_the_environment_lacks_from_local_env() {
+    let dir = TempDir::new("pair-web-env-file");
+    let (port, seen) = fake_store();
+    std::fs::create_dir_all(dir.join("config/hub")).unwrap();
+    std::fs::write(
+        dir.join("config/hub/local.env"),
+        format!(
+            "HUB_PEER_TOKEN=peer\n\
+             HUB_STORE_URL=ws://127.0.0.1:{port}/store/share\n\
+             HUB_STORE_TOKEN=machine-token\n\
+             HUB_WEB_URL=https://hub.example\n"
+        ),
+    )
+    .unwrap();
+    let run = |token: Option<&str>| {
+        let mut command = Command::new(hub_bin());
+        command
+            .args(["pair", "--web"])
+            .env("HOME", dir.join("home"))
+            .env("XDG_CONFIG_HOME", dir.join("config"))
+            .env("XDG_STATE_HOME", dir.join("state"))
+            .env_remove("HUB_STORE_URL")
+            .env_remove("HUB_STORE_TOKEN")
+            .env_remove("HUB_WEB_URL");
+        if let Some(token) = token {
+            command.env("HUB_STORE_TOKEN", token);
+        }
+        command.output().unwrap()
+    };
+
+    let out = run(None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "https://hub.example/pair/K7Q2ZD"
+    );
+    // A key the environment does set wins over the file's.
+    assert!(run(Some(STORE_TOKEN)).status.success());
+    let seen = seen.lock().unwrap();
+    assert!(seen[0].contains("Bearer machine-token"), "{}", seen[0]);
+    assert!(seen[1].contains(&format!("Bearer {STORE_TOKEN}")), "{}", seen[1]);
+}

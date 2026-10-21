@@ -32,7 +32,8 @@ Commands:
   pair          Print a link that pairs a phone or laptop with this hub, and
                 wait for it to be opened; with --web, a single-use link that
                 pairs it with the hub web at HUB_WEB_URL, from the store
-                (HUB_STORE_URL and HUB_STORE_TOKEN)
+                (HUB_STORE_URL and HUB_STORE_TOKEN); each one unset reads
+                from ~/.config/hub/local.env
   local         Run this machine's local hub: the peer port (8789) for other
                 local hubs, and a socket for mem. A device needs
                 HUB_PEER_TOKEN, the device token, and takes HUB_CLOUD_TOKEN
@@ -191,12 +192,15 @@ fn run() -> Result<()> {
         return run_local(args.port.unwrap_or(local::PORT));
     }
     if args.pair && args.web {
-        let store = hub::share::from_env()
+        // A shell has none of hub-local's settings: what the environment
+        // lacks comes from its env file.
+        let file = local_env(&config::config_home()?.join("hub/local.env"));
+        let lookup = |name: &str| std::env::var(name).ok().or_else(|| file.get(name).cloned());
+        let store = hub::share::from_lookup(lookup)
             .context("hub pair --web needs HUB_STORE_URL and HUB_STORE_TOKEN")?;
         // The store's name admits only machines; a browser opens the link
         // on the hub web's.
-        let web = std::env::var("HUB_WEB_URL")
-            .ok()
+        let web = lookup("HUB_WEB_URL")
             .filter(|v| !v.trim().is_empty())
             .context("hub pair --web needs HUB_WEB_URL, the hub web's address")?;
         println!("{}", store.pair_link(web.trim())?);
@@ -455,6 +459,17 @@ fn bind_socket(path: &std::path::Path) -> Result<UnixListener> {
 
 /// `hub pair`: writes a code, prints its link, and waits for a device to
 /// spend it or for it to expire.
+/// The `KEY=VALUE` lines of an env file such as hub-local's, none when it
+/// cannot be read.
+fn local_env(path: &std::path::Path) -> std::collections::HashMap<String, String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim().to_string(), value.to_string()))
+        .collect()
+}
+
 fn pair_device(config: &Config, port: u16) -> Result<()> {
     let code = pair::new_code()?;
     let expires_ms = jiff::Timestamp::now().as_millisecond() + pair::CODE_TTL.as_millis() as i64;

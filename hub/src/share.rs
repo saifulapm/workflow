@@ -120,9 +120,13 @@ pub struct Store {
 /// `HUB_STORE_ACCESS_ID` and `HUB_STORE_ACCESS_SECRET` when both of those
 /// are. From the environment only, so the secrets stay out of `ps`.
 pub fn from_env() -> Option<Store> {
+    from_lookup(|name| std::env::var(name).ok())
+}
+
+/// The same settings, each read through `lookup`.
+pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Option<Store> {
     let read = |name| {
-        std::env::var(name)
-            .ok()
+        lookup(name)
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
     };
