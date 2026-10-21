@@ -193,9 +193,16 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
         cli::Command::Ask {
             question,
             options,
+            option,
             recommend,
             audience,
-        } => verbs::ask(&app, question, options, recommend.as_deref(), *audience),
+        } => verbs::ask(
+            &app,
+            question,
+            &verbs::choices(options, option)?,
+            recommend.as_deref(),
+            *audience,
+        ),
         cli::Command::Questions {
             pending,
             all_projects,

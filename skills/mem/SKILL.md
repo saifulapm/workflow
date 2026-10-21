@@ -69,8 +69,8 @@ handoff's first hundred characters, so the next action leads.
 **A stop condition** → a question, on the right channel. An interactive
 session asks in the conversation. A subagent reports the stop to the
 orchestrator that sent it. An orchestrator asks Saiful with `mem ask --for
-human "<question>" --options "<a>,<b>" --recommend "<a>"`, which reaches the
-hub and the phone without waiting, and keeps working on what does not depend
+human "<question>" --option "<a>" --option "<b>" --recommend "<a>"`, which
+reaches the hub and the phone without waiting, and keeps working on what does not depend
 on the answer. Never resolve your own stop condition.
 
 **The workflow itself got in the way** → a lesson on the workflow

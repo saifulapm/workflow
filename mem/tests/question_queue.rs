@@ -57,6 +57,54 @@ fn ask_returns_immediately() {
 }
 
 #[test]
+fn an_option_holding_a_comma_is_kept_whole_with_option() {
+    let w = World::new("q-option");
+    let repo = w.repo("thing", None);
+    let out = ask_env(
+        &w,
+        &repo,
+        &[
+            "ask",
+            "may I fill it?",
+            "--option",
+            "Yes, fill it now",
+            "--option",
+            "No, I will paste it myself",
+            "--recommend",
+            "Yes, fill it now",
+            "--json",
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        v["options"],
+        serde_json::json!(["Yes, fill it now", "No, I will paste it myself"])
+    );
+}
+
+#[test]
+fn a_comma_inside_an_option_given_to_options_is_refused() {
+    let w = World::new("q-options-comma");
+    let repo = w.repo("thing", None);
+    let out = ask_env(
+        &w,
+        &repo,
+        &[
+            "ask",
+            "may I fill it?",
+            "--options",
+            "Yes, fill it now,No, I will paste it myself",
+        ],
+    );
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert!(stderr(&out).contains("--option"), "{}", stderr(&out));
+    // Nothing was asked.
+    let out = ask_env(&w, &repo, &["questions", "--pending"]);
+    assert!(!stdout(&out).contains("may I fill it?"), "{}", stdout(&out));
+}
+
+#[test]
 fn waiting_times_out_with_exit_four() {
     let w = World::new("q-timeout");
     let repo = w.repo("thing", None);

@@ -159,8 +159,13 @@ pub enum Command {
     /// Ask a blocking question. Never waits: it writes, notifies and returns.
     Ask {
         question: String,
+        /// The choices, comma-separated. An option holding a comma goes in
+        /// --option.
         #[arg(long, value_delimiter = ',')]
         options: Vec<String>,
+        /// One choice, kept whole, commas and all. Repeat it for each.
+        #[arg(long = "option", value_name = "TEXT")]
+        option: Vec<String>,
         /// The answer the asker would pick.
         #[arg(long, value_name = "TEXT")]
         recommend: Option<String>,

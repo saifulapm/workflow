@@ -101,7 +101,7 @@ reply, and the hub's `/api/presence` says `"watching": false`), post each open
 question so he can answer from his phone, then end the session with a
 handoff:
 
-    mem ask --for saiful "<question>" --options "<a>,<b>" --recommend "<a>"
+    mem ask --for saiful "<question>" --option "<a>" --option "<b>" --recommend "<a>"
     mem handoff --set "Next: resume with the grill skill. Grilling <topic>: round <n> posted as <ids>."
 
 When the frontier is empty, sweep for what the tree never held: failure and

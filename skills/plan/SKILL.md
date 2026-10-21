@@ -39,8 +39,8 @@ A fork is an open choice that changes what gets built. A plan holds none.
 Ask Saiful each fork the spec leaves open before you write a plan: in the
 chat, as one numbered round with your recommended answer for each (the
 grill skill's format), or, when he is not in the chat, with `mem ask --for
-saiful "<question>" --options "<a>,<b>" --recommend "<a>"`, which the hub
-shows with a button per option. Record each answer with `mem decide
+saiful "<question>" --option "<a>" --option "<b>" --recommend "<a>"`, which
+the hub shows with a button per option. Record each answer with `mem decide
 "<decision and why>" --by saiful`.
 
 A mechanical call, one with a right answer, is yours. Make it and record it

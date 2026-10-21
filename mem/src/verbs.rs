@@ -1754,6 +1754,20 @@ fn remedy(noun: &str) -> &'static str {
 ///
 /// A question is a person's, which is what the hub shows, unless `--for`
 /// gives it to the orchestrator.
+/// `--options`' comma list, then each `--option` whole. A listed choice
+/// that starts with a space was cut at a comma inside it, as "Yes, fill it
+/// now" would be, so it is refused rather than asked as two buttons.
+pub fn choices(listed: &[String], whole: &[String]) -> Result<Vec<String>> {
+    if let Some(cut) = listed.iter().find(|o| o.starts_with(char::is_whitespace)) {
+        return Err(exit::usage(format!(
+            "--options splits at every comma, and \"{}\" starts after one — pass each \
+             option that holds a comma as its own --option \"<text>\"",
+            cut.trim()
+        )));
+    }
+    Ok(listed.iter().chain(whole).cloned().collect())
+}
+
 pub fn ask(
     app: &App,
     question: &str,

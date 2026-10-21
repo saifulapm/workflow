@@ -169,7 +169,7 @@ more.
 
 Saiful's, asked without waiting, and only his to answer:
 
-    mem ask --for saiful "<question>" --options "<a>,<b>" --recommend "<a>"
+    mem ask --for saiful "<question>" --option "<a>" --option "<b>" --recommend "<a>"
 
 These are pushing, deploying or publishing anything; real money or a real
 payment; deleting data; a message to a person; a security call (auth,
