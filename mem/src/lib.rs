@@ -143,6 +143,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::Share => verbs::project_share(&app),
             },
             cli::ProjectCommand::Rename { name } => verbs::project_rename(&app, name),
+            cli::ProjectCommand::Delete { project, yes } => {
+                verbs::project_delete(&app, project, *yes)
+            }
             cli::ProjectCommand::Unset { key } => verbs::project_unset(&app, key.stored()),
             cli::ProjectCommand::Worktree { path, clear } => {
                 verbs::project_worktree(&app, path.as_deref(), *clear)

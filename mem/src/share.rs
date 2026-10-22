@@ -53,6 +53,28 @@ pub fn kick() {
 /// Puts the write of `path` in the outbox when its project shares, and
 /// returns the write's id; None when the path is not shared.
 pub fn queue(db: &Path, root: &Path, path: &Path, body: Option<&[u8]>) -> Result<Option<String>> {
+    queue_with(db, root, path, body, false)
+}
+
+/// Removes a file of a project being deleted, its removal marked drop so
+/// the store takes it whoever wrote the file. Returns whether the removal
+/// went to the outbox, for the caller to kick the hub once.
+pub fn drop_file(path: &Path) -> Result<bool> {
+    let queued = match CTX.get() {
+        Some(ctx) => queue_with(&ctx.db, &ctx.root, path, None, true)?.is_some(),
+        None => false,
+    };
+    std::fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+    Ok(queued)
+}
+
+fn queue_with(
+    db: &Path,
+    root: &Path,
+    path: &Path,
+    body: Option<&[u8]>,
+    drop: bool,
+) -> Result<Option<String>> {
     let Some((rel, false)) = shared(root, path, is_switched(db)) else {
         return Ok(None);
     };
@@ -74,6 +96,9 @@ pub fn queue(db: &Path, root: &Path, path: &Path, body: Option<&[u8]>) -> Result
         "INSERT INTO outbox(id, path, base, body) VALUES (?1, ?2, ?3, ?4)",
         params![id, rel, base, body],
     )?;
+    if drop {
+        tx.execute("INSERT INTO drops(id) VALUES (?1)", [&id])?;
+    }
     set_head(&tx, &rel, &id)?;
     tx.commit()?;
     Ok(Some(id))
@@ -173,6 +198,7 @@ fn open(db: &Path) -> Result<Connection> {
              path TEXT NOT NULL,
              base TEXT,
              body TEXT);
+         CREATE TABLE IF NOT EXISTS drops(id TEXT PRIMARY KEY);
          CREATE TABLE IF NOT EXISTS heads(path TEXT PRIMARY KEY, id TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS skipped(path TEXT PRIMARY KEY, id TEXT NOT NULL, seq INTEGER NOT NULL, body TEXT);
          CREATE TABLE IF NOT EXISTS files(n INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE);
@@ -248,15 +274,22 @@ pub fn pending(db: &Path, root: &Path, machine: &str) -> Result<Vec<Value>> {
     if resync {
         first.push(json!({"t": "hello", "machine": machine, "since": seq(&conn)?}));
     }
-    let mut stmt = conn.prepare("SELECT id, path, base, body FROM outbox ORDER BY n")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, path, base, body, EXISTS(SELECT 1 FROM drops WHERE drops.id = outbox.id) \
+         FROM outbox ORDER BY n",
+    )?;
     let rows = stmt.query_map([], |r| {
-        Ok(json!({
+        let mut write = json!({
             "t": "write",
             "id": r.get::<_, String>(0)?,
             "path": r.get::<_, String>(1)?,
             "base": r.get::<_, Option<String>>(2)?,
             "body": r.get::<_, Option<String>>(3)?,
-        }))
+        });
+        if r.get::<_, bool>(4)? {
+            write["drop"] = json!(true);
+        }
+        Ok(write)
     })?;
     let mut out = first;
     out.extend(rows.collect::<rusqlite::Result<Vec<Value>>>()?);
@@ -503,6 +536,7 @@ fn take(conn: &Connection, id: &str) -> Result<Option<(String, Option<String>)>>
         })
         .optional()?;
     conn.execute("DELETE FROM outbox WHERE id = ?1", [id])?;
+    conn.execute("DELETE FROM drops WHERE id = ?1", [id])?;
     Ok(row)
 }
 

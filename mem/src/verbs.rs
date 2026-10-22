@@ -639,6 +639,95 @@ pub fn project_rename(app: &App, name: &str) -> Result<i32> {
     Ok(exit::OK)
 }
 
+/// `mem project delete <id|name> [--yes]`: every file of the project goes,
+/// each removal marked drop so the store takes it whoever wrote the file,
+/// and project.toml last. Without `--yes` it only lists the files. A name
+/// must name one project; an id also finds a folder whose project.toml is
+/// already gone.
+pub fn project_delete(app: &App, target: &str, yes: bool) -> Result<i32> {
+    let registry = Registry::load(&app.store);
+    let named: Vec<_> = registry
+        .projects
+        .iter()
+        .filter(|p| p.id == target || p.matches_name(target))
+        .collect();
+    let (id, name) = match named.as_slice() {
+        [one] => (one.id.clone(), one.name.clone()),
+        [] if !target.contains('/') && app.store.project_dir(target).is_dir() => {
+            (target.to_string(), target.to_string())
+        }
+        [] => return Err(exit::usage(format!("no project is called {target}"))),
+        many => {
+            let ids: Vec<&str> = many.iter().map(|p| p.id.as_str()).collect();
+            return Err(exit::usage(format!(
+                "{} projects are called {target}: give the id of one ({})",
+                many.len(),
+                ids.join(", ")
+            )));
+        }
+    };
+    let dir = app.store.project_dir(&id);
+    let toml = dir.join("project.toml");
+    let mut files = Vec::new();
+    let mut dirs = vec![dir.clone()];
+    while let Some(next) = dirs.pop() {
+        for entry in std::fs::read_dir(&next)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path != toml {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    if toml.exists() {
+        files.push(toml);
+    }
+    let root = app.store.projects_dir();
+    let root = root.parent().unwrap_or(&root);
+    let rel = |path: &std::path::Path| {
+        path.strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    };
+    if !yes {
+        if !app.quiet {
+            println!("{name} ({id}): {} files would go", files.len());
+            for file in &files {
+                println!("  {}", rel(file));
+            }
+            println!("run again with --yes to delete them on every machine");
+        }
+        return Ok(exit::OK);
+    }
+    let mut queued = false;
+    for file in &files {
+        queued |= crate::share::drop_file(file)
+            .map_err(|e| exit::store_error(format!("removing {}: {e:#}", rel(file))))?;
+    }
+    if queued {
+        crate::share::kick();
+    }
+    std::fs::remove_dir_all(&dir)
+        .map_err(|e| exit::store_error(format!("removing {}: {e:#}", dir.display())))?;
+    let index = crate::index::Index::open(&app.dirs.index_db(), crate::index::Purpose::Write)?;
+    if index.reindex(&app.store, true)?.skipped {
+        eprintln!("mem: another process holds the index; run `mem reindex --full`");
+    }
+    crate::sync::trigger(&app.dirs.qshell_status_json());
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({"id": id, "name": name, "removed": files.len()}))?
+        );
+    } else if !app.quiet {
+        println!("{name} ({id}): {} files removed", files.len());
+    }
+    Ok(exit::OK)
+}
+
 /// `mem project set paused <who>`: mem stamps the time, so every pause reads
 /// "<rfc3339 UTC> by <who>", and a sync round carries it to the other machines.
 pub fn project_pause(app: &App, who: &str) -> Result<i32> {

@@ -1155,3 +1155,77 @@ fn a_record_that_cannot_land_keeps_the_ones_before_it() {
     assert!(!page("after").exists());
     assert_eq!(hello(&w)["since"], 201);
 }
+
+/// Every file of the project, as store paths, sorted.
+fn project_files(w: &World) -> Vec<String> {
+    let store = w.dirs().store();
+    let mut files = Vec::new();
+    let mut dirs = vec![store.join(format!("projects/{ID}"))];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let rel = path.strip_prefix(&store).unwrap();
+                files.push(rel.to_str().unwrap().to_string());
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn deleting_a_project_drops_every_file_whoever_wrote_it() {
+    let w = shared("share-delete");
+    walk(&w, &["project", "set", "verify", "true"]);
+    walk(&w, &["log", "mine"]);
+    wiki_set(&w, "lessons", "# Lessons\n");
+    let theirs = format!("projects/{ID}/items/01K0SHAREITEM000000000NUC.md");
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 7, "id": "01K0SHAREREC00000000000007", "path": theirs,
+                 "body": "+++\nid = \"01K0SHAREITEM000000000NUC\"\nkind = \"log\"\nmachine = \"nuc\"\n+++\n\ntheirs\n",
+                 "machine": "nuc"}),
+        ],
+    );
+    let files = project_files(&w);
+    assert_eq!(files.len(), 5, "{files:?}");
+    let before = pending(&w);
+
+    let dry = mem(&w, w.dir.path(), &["project", "delete", "walk"]);
+    assert_eq!(code(&dry), 0, "{}", stderr(&dry));
+    for file in &files {
+        assert!(stdout(&dry).contains(file.as_str()), "{}", stdout(&dry));
+    }
+    assert_eq!(project_files(&w), files);
+    assert_eq!(pending(&w), before);
+
+    let out = mem(&w, w.dir.path(), &["project", "delete", ID, "--yes"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(!w.dirs().store().join(format!("projects/{ID}")).exists());
+    let drops: Vec<Value> = pending(&w)
+        .into_iter()
+        .filter(|write| write["drop"] == true)
+        .collect();
+    let mut dropped: Vec<String> = drops
+        .iter()
+        .map(|write| write["path"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        dropped.last().unwrap(),
+        &format!("projects/{ID}/project.toml")
+    );
+    dropped.sort();
+    assert_eq!(dropped, files);
+    assert!(drops.iter().all(|write| write["body"] == Value::Null));
+    let toml = drops.last().unwrap();
+    let head = before
+        .iter()
+        .rev()
+        .find(|write| write["path"] == toml["path"])
+        .unwrap();
+    assert_eq!(toml["base"], head["id"]);
+}

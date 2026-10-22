@@ -428,6 +428,17 @@ pub enum ProjectCommand {
     /// resolves. Run again with the same name to relabel items a sync
     /// brought back under an old one.
     Rename { name: String },
+    /// Delete a project from the store and every machine: each of its files,
+    /// whoever wrote it, and project.toml last. Without --yes it only lists
+    /// the files. Evidence and raw files go from this machine only; the
+    /// store keeps their copies.
+    Delete {
+        /// The project's id, or a name only one project has.
+        project: String,
+        /// Delete; without it, list what would go.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Forget something `set` recorded, so the project is back on the
     /// default. `set` refuses an empty value, so this is the way back to
     /// absent.
