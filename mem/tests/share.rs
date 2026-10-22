@@ -1229,3 +1229,43 @@ fn deleting_a_project_drops_every_file_whoever_wrote_it() {
         .unwrap();
     assert_eq!(toml["base"], head["id"]);
 }
+
+#[test]
+fn a_project_whose_files_the_store_removes_leaves_no_empty_folder() {
+    let w = shared("share-tidy");
+    let theirs = format!("projects/{ID}/items/01K0SHAREITEM000000000NUC.md");
+    let body = "+++\nid = \"01K0SHAREITEM000000000NUC\"\nkind = \"log\"\nmachine = \"nuc\"\n+++\n\ntheirs\n";
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 7, "id": "01K0SHAREREC00000000000007", "path": theirs,
+                 "body": body, "machine": "nuc"}),
+            json!({"t": "rec", "seq": 8, "id": "01K0SHAREREC00000000000008", "path": page_path("gone"),
+                 "body": "# Gone\n", "machine": "nuc"}),
+        ],
+    );
+    let project = w.dirs().store().join(format!("projects/{ID}"));
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 9, "id": "01K0SHAREREC00000000000009", "path": page_path("gone"),
+                 "body": null, "machine": "nuc"}),
+        ],
+    );
+    assert!(
+        project.join("wiki").is_dir(),
+        "a live project keeps its folders"
+    );
+
+    let mut seq = 10;
+    let removals: Vec<Value> = project_files(&w)
+        .into_iter()
+        .map(|path| {
+            seq += 1;
+            json!({"t": "rec", "seq": seq, "id": format!("01K0SHAREREC0000000000{seq:04}"),
+                   "path": path, "body": null, "machine": "nuc"})
+        })
+        .collect();
+    apply(&w, &removals);
+    assert!(!project.exists(), "{:?}", project_files(&w));
+}

@@ -575,8 +575,39 @@ fn land(file: &Path, body: Option<&str>) -> Result<()> {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 Err(e).with_context(|| format!("removing {}", file.display()))
             }
-            _ => Ok(()),
+            _ => {
+                tidy_project(file);
+                Ok(())
+            }
         },
+    }
+}
+
+/// Removes the empty folders of the project `file` was in once its
+/// project.toml is gone too, as when another machine deleted the project. A
+/// live project keeps every folder. Best effort: a folder that still holds
+/// something stays.
+fn tidy_project(file: &Path) {
+    let Some(project) = file
+        .ancestors()
+        .find(|dir| dir.parent().and_then(Path::file_name) == Some("projects".as_ref()))
+    else {
+        return;
+    };
+    if project.join("project.toml").exists() {
+        return;
+    }
+    let mut dirs = vec![project.to_path_buf()];
+    let mut i = 0;
+    while i < dirs.len() {
+        if let Ok(entries) = std::fs::read_dir(&dirs[i]) {
+            dirs.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+        }
+        i += 1;
+    }
+    // Deepest first, so a folder is empty by the time its turn comes.
+    for dir in dirs.iter().rev() {
+        let _ = std::fs::remove_dir(dir);
     }
 }
 
