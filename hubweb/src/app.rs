@@ -1291,6 +1291,9 @@ impl DurableObject for Store {
         for reply in &outcome.sender {
             ws.send_with_str(reply)?;
         }
+        if outcome.close {
+            ws.close(Some(1000), Some("replay continues on the next hello"))?;
+        }
         if outcome.limit {
             let day = (utc_day(), outcome.cap);
             self.limit_day.set(Some(day));
@@ -1642,9 +1645,9 @@ impl Log for SqlLog<'_> {
         Ok(self.rows(&query, vec![path.into()])?.pop())
     }
 
-    fn after(&self, seq: i64) -> std::result::Result<Vec<Rec>, Fault> {
-        let query = format!("{COLUMNS} WHERE seq > ? ORDER BY seq");
-        self.rows(&query, vec![seq.into()])
+    fn after(&self, seq: i64, limit: i64) -> std::result::Result<Vec<Rec>, Fault> {
+        let query = format!("{COLUMNS} WHERE seq > ? ORDER BY seq LIMIT ?");
+        self.rows(&query, vec![seq.into(), limit.into()])
     }
 
     fn last(&self) -> std::result::Result<i64, Fault> {
@@ -2063,8 +2066,9 @@ fn fill_files(sql: &SqlStorage) -> Result<()> {
     if !kept.is_empty() {
         return Ok(());
     }
+    // LIMIT -1 is SQLite's no limit.
     let log = SqlLog(sql)
-        .after(0)
+        .after(0, -1)
         .map_err(|fault| Error::RustError(format!("{fault:?}")))?;
     for rec in latest::newest(log) {
         keep_file(sql, &rec)?;

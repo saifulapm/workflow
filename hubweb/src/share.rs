@@ -41,14 +41,20 @@ pub const DAY_ROWS: i64 = 1_000_000;
 /// and this cap keeps a month under a third of that.
 pub const R2_DAY_WRITES: i64 = 10_000;
 
+/// The frames a hello replays before the store stops and closes the socket:
+/// a fresh replica takes the store in parts this size, one per hello.
+pub const REPLAY_BYTES: usize = 16 * 1024 * 1024;
+/// Writes read from the log at a time while replaying.
+const REPLAY_PAGE: i64 = 200;
+
 /// The store's write log, oldest first, every write kept.
 pub trait Log {
     /// The seq of the write with this id, if it is stored.
     fn seq_of(&self, id: &str) -> Result<Option<i64>, Fault>;
     /// The newest write to this path.
     fn head(&self, path: &str) -> Result<Option<Rec>, Fault>;
-    /// Every write with a seq above `seq`, oldest first.
-    fn after(&self, seq: i64) -> Result<Vec<Rec>, Fault>;
+    /// The first `limit` writes with a seq above `seq`, oldest first.
+    fn after(&self, seq: i64, limit: i64) -> Result<Vec<Rec>, Fault>;
     /// The highest seq, 0 for an empty log.
     fn last(&self) -> Result<i64, Fault>;
     fn append(&mut self, rec: &Rec) -> Result<(), Fault>;
@@ -99,6 +105,9 @@ pub struct Outcome {
     pub cap: bool,
     /// What the pages show of the machines changed: open pages are told.
     pub changed: bool,
+    /// The replay stopped at its budget: the store closes the socket after
+    /// the sender's messages, and the machine's next hello asks for the rest.
+    pub close: bool,
 }
 
 /// The names a machine's own token was minted for: the runner its reports
@@ -189,7 +198,28 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
     else {
         return Err(Fault::Broken("hello needs machine and since".into()));
     };
-    let mut sender: Vec<String> = log.after(since)?.iter().map(rec).collect();
+    // The store holds every frame it sends until this message's handler
+    // returns, so a whole replay of a big store would not fit in its memory.
+    let mut sender = Vec::new();
+    let mut bytes = 0;
+    let mut sent = since;
+    let mut more = false;
+    'pages: loop {
+        let page = log.after(sent, REPLAY_PAGE)?;
+        for stored in &page {
+            if bytes >= REPLAY_BYTES {
+                more = true;
+                break 'pages;
+            }
+            let frame = rec(stored);
+            bytes += frame.len();
+            sender.push(frame);
+            sent = stored.seq;
+        }
+        if (page.len() as i64) < REPLAY_PAGE {
+            break;
+        }
+    }
     // A machine that was away takes the route chosen meanwhile; its own,
     // when newer, comes back as a route message of its own.
     sender.extend(log.route()?.map(|mut route| {
@@ -198,10 +228,18 @@ fn hello(log: &impl Log, message: &Value) -> Result<Outcome, Fault> {
         }
         route.to_string()
     }));
-    sender.push(json!({"t":"ready","seq":log.last()?,"rows":log.rows_today()?}).to_string());
+    let rows = log.rows_today()?;
+    // mem raises its seq to the ready's, so a ready that ends a part of the
+    // replay names the last rec sent.
+    let ready = match more {
+        true => json!({"t":"ready","seq":sent,"rows":rows,"more":true}),
+        false => json!({"t":"ready","seq":log.last()?,"rows":rows}),
+    };
+    sender.push(ready.to_string());
     Ok(Outcome {
         sender,
         hello: Some(machine.to_string()),
+        close: more,
         ..Outcome::default()
     })
 }
@@ -631,8 +669,14 @@ mod tests {
         fn head(&self, path: &str) -> Result<Option<Rec>, Fault> {
             Ok(self.recs.iter().rev().find(|r| r.path == path).cloned())
         }
-        fn after(&self, seq: i64) -> Result<Vec<Rec>, Fault> {
-            Ok(self.recs.iter().filter(|r| r.seq > seq).cloned().collect())
+        fn after(&self, seq: i64, limit: i64) -> Result<Vec<Rec>, Fault> {
+            Ok(self
+                .recs
+                .iter()
+                .filter(|r| r.seq > seq)
+                .take(limit as usize)
+                .cloned()
+                .collect())
         }
         fn last(&self) -> Result<i64, Fault> {
             Ok(self.recs.last().map_or(0, |r| r.seq))
@@ -929,6 +973,75 @@ mod tests {
             parse(&hello.sender),
             [json!({"t":"ready","seq":0,"rows":0})]
         );
+    }
+
+    #[test]
+    fn a_replay_past_its_budget_says_ready_at_the_last_rec_sent_and_closes() {
+        let mut log = Memory::default();
+        let body = "x".repeat(6 * 1024 * 1024);
+        for id in ["01A", "01B", "01C", "01D", "01E"] {
+            write(&mut log, id, ITEM, Value::Null, json!(body));
+        }
+        let first = handle(
+            &mut log,
+            None,
+            None,
+            r#"{"t":"hello","machine":"mac","since":0}"#,
+        );
+        // Each reply as its kind, seq and more flag, leaving out the 6 MB bodies.
+        let brief = |outcome: &Outcome| -> Vec<String> {
+            parse(&outcome.sender)
+                .iter()
+                .map(|r| format!("{} {} {}", r["t"], r["seq"], r["more"]))
+                .collect()
+        };
+        assert_eq!(
+            brief(&first),
+            [
+                r#""rec" 1 null"#,
+                r#""rec" 2 null"#,
+                r#""rec" 3 null"#,
+                r#""ready" 3 true"#
+            ]
+        );
+        assert!(first.close);
+
+        let rest = handle(
+            &mut log,
+            None,
+            None,
+            r#"{"t":"hello","machine":"mac","since":3}"#,
+        );
+        assert_eq!(
+            brief(&rest),
+            [r#""rec" 4 null"#, r#""rec" 5 null"#, r#""ready" 5 null"#]
+        );
+        assert!(!rest.close);
+    }
+
+    #[test]
+    fn a_replay_of_many_small_writes_sends_them_all_in_one_hello() {
+        let mut log = Memory::default();
+        for n in 0..450 {
+            write(
+                &mut log,
+                &format!("01A{n:03}"),
+                ITEM,
+                Value::Null,
+                json!("one"),
+            );
+        }
+        let hello = handle(
+            &mut log,
+            None,
+            None,
+            r#"{"t":"hello","machine":"mac","since":0}"#,
+        );
+        let replies = parse(&hello.sender);
+        assert_eq!(replies.len(), 451);
+        assert_eq!(replies[449]["seq"], 450);
+        assert_eq!(replies[450], json!({"t":"ready","seq":450,"rows":0}));
+        assert!(!hello.close);
     }
 
     #[test]
