@@ -291,13 +291,15 @@ fn item_machine(text: &str) -> Option<String> {
 /// Why a bound socket writing as `writer` may not make this write, if it
 /// may not: a global item through a cloud session's token, an item that
 /// names a machine other than the writer, the item's author so far, or a
-/// cloud session, or the removal of an item another machine wrote.
+/// cloud session, or the removal of an item another machine wrote that is
+/// no device's `drop` of a project item.
 fn forged(
     log: &impl Log,
     bound: &Bound,
     writer: &str,
     path: &str,
     body: Option<&str>,
+    drop: bool,
 ) -> Result<Option<String>, Fault> {
     let global = path.starts_with("global/");
     // Global items are the standing rules every replica reads: a device
@@ -311,8 +313,12 @@ fn forged(
     let author = log
         .head(path)?
         .and_then(|head| head.body.as_deref().and_then(item_machine));
-    // mem removes no item but its own.
+    // mem removes no item but its own, except when a device deletes a whole
+    // project: then it drops every item in it, whoever wrote it.
     let Some(body) = body else {
+        if drop && !global && bound.machine.as_deref().is_some_and(|m| !m.ends_with('*')) {
+            return Ok(None);
+        }
         return Ok(author.filter(|author| author != writer).map(|author| {
             format!("this socket's token writes as {writer}; {author} wrote this item")
         }));
@@ -357,7 +363,14 @@ fn write(
         });
     }
     if let Some(bound) = bound
-        && let Some(why) = forged(log, bound, machine, &path, body.as_deref())?
+        && let Some(why) = forged(
+            log,
+            bound,
+            machine,
+            &path,
+            body.as_deref(),
+            message["drop"] == true,
+        )?
     {
         let head = log
             .head(&path)?
@@ -1720,5 +1733,60 @@ mod tests {
         );
         let gone = write_as(&mut log, Some(&nuc), "nuc", "01D", OWN, Value::Null);
         assert_eq!(parse(&gone.sender)[0]["t"], "ack");
+    }
+
+    /// A removal marked drop, from deleting a whole project.
+    fn drop_as(log: &mut Memory, bound: &Bound, hello: &str, id: &str, path: &str) -> Outcome {
+        let message = json!({"t":"write","id":id,"path":path,"base":null,"body":null,"drop":true});
+        handle(log, Some(hello), Some(bound), &message.to_string())
+    }
+
+    #[test]
+    fn a_device_token_drops_an_item_another_machine_wrote() {
+        let mut log = Memory::default();
+        write_as(
+            &mut log,
+            None,
+            "cloud-vm",
+            "01A",
+            ITEM,
+            json!(item_by("cloud-vm")),
+        );
+        let mini = token("mini", Some("mac-mini-m2"));
+        let dropped = drop_as(&mut log, &mini, "mac-mini-m2", "01B", ITEM);
+        assert_eq!(
+            parse(&dropped.sender),
+            [json!({"t":"ack","id":"01B","seq":2})]
+        );
+        assert_eq!(log.recs[1].body, None);
+        assert!(dropped.others.is_some());
+    }
+
+    #[test]
+    fn a_cloud_token_drops_no_item_another_machine_wrote() {
+        let mut log = Memory::default();
+        write_as(
+            &mut log,
+            None,
+            "mac-mini-m2",
+            "01A",
+            ITEM,
+            json!(item_by("mac-mini-m2")),
+        );
+        let cloud = token("session_*", Some("cloud-*"));
+        let refused = drop_as(&mut log, &cloud, "cloud-vm", "01B", ITEM);
+        assert_eq!(parse(&refused.sender)[0]["t"], "refused");
+        assert_eq!(log.recs.len(), 1);
+    }
+
+    #[test]
+    fn a_drop_never_removes_a_global_item_another_machine_wrote() {
+        const RULE: &str = "global/items/01RULE.md";
+        let mut log = Memory::default();
+        write_as(&mut log, None, "nuc", "01A", RULE, json!(item_by("nuc")));
+        let mini = token("mini", Some("mac-mini-m2"));
+        let refused = drop_as(&mut log, &mini, "mac-mini-m2", "01B", RULE);
+        assert_eq!(parse(&refused.sender)[0]["t"], "refused");
+        assert_eq!(log.recs.len(), 1);
     }
 }
