@@ -120,7 +120,26 @@ for (let n = 0; n < 10; n++) {
 const e = open("pi", 1000);
 await e.ready;
 say("per-item", ((await e.next()).rows - before) / 10);
-for (const s of [a, b, c, d, e]) s.ws.close();
+
+// Past 16 MB of frames a hello replays one part and the store closes. A
+// hub sends its outbox right after its hello, so that write reaches a
+// socket the store is closing, and the other machines must still hear it.
+const big = "x".repeat(1900000);
+for (let n = 0; n < 9; n++) {
+  a.send({ t: "write", id: `01B${n}`, path: `projects/P1/wiki/big${n}.md`, base: null, body: big });
+  await a.next(5000);
+}
+a.send({ t: "write", id: "01AFTER", path: "projects/P1/items/01AFTER.md", base: null, body: "after" });
+await a.next();
+while (await b.next(500)) {}
+const f = open("vm", 0);
+await f.ready;
+f.send({ t: "write", id: "01LATE", path: "projects/P1/items/01LATE.md", base: null, body: "late" });
+let part = null;
+for (let m = await f.next(10000); m; m = await f.next(1000)) if (m.t === "ready") part = m.more ?? null;
+say("part-more", part);
+say("late-b", (await b.next(3000))?.id ?? null);
+for (const s of [a, b, c, d, e, f]) s.ws.close();
 JS
 ws_url=ws://127.0.0.1:$port/store/share
 node "$T_TMP/share.mjs" "$ws_url" "$token" >"$T_TMP/share.out" 2>&1
@@ -145,6 +164,8 @@ like "$(fact rows)" '^[1-9][0-9]*$' "ready counts the rows the store wrote today
 per_item=$(fact per-item)
 like "$per_item" '^[1-9][0-9]*(\.[0-9]+)?$' "each item write adds its rows to the count"
 echo "# rows written per item write: $per_item"
+is "$(fact part-more)" true "a hello past 16 MB of frames ends its part with a ready with more"
+is "$(fact late-b)" '"01LATE"' "a write sent on a socket the store is closing still reaches the other machines"
 unlike "$(grep -v '^[a-z-]* ' "$T_TMP/share.out")" . "the client printed only facts, no errors"
 
 records='[{"project":"walkone","kind":"handoff","key":"walkone","body":"Next: share."}]'

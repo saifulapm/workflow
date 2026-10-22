@@ -1288,8 +1288,10 @@ impl DurableObject for Store {
                 bound.as_ref(),
             ))?;
         }
+        // A socket the store is closing refuses its replies: its machine
+        // resends what was not acked, and the others below still hear the rec.
         for reply in &outcome.sender {
-            ws.send_with_str(reply)?;
+            let _ = ws.send_with_str(reply);
         }
         if outcome.close {
             ws.close(Some(1000), Some("replay continues on the next hello"))?;
