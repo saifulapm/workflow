@@ -397,11 +397,26 @@ pub(crate) fn connect(store: &Store) -> Result<Socket> {
     Ok(socket)
 }
 
-/// `hub share sync`: one connection that brings the replica up to the
-/// store's `ready` and ends, landing every project's writes, since a cloud
-/// session's replica starts with no project to say it shares one. Nothing
-/// of the outbox is sent. Returns the frames applied.
+/// `hub share sync`: brings the replica up to the store's last `ready` and
+/// ends, landing every project's writes, since a cloud session's replica
+/// starts with no project to say it shares one. The store replays a big log
+/// in parts, each ending in a ready with `more`, and closes after each: sync
+/// says hello again for the rest. Nothing of the outbox is sent. Returns the
+/// frames applied.
 pub fn sync(store: &Store) -> Result<usize> {
+    let mut applied = 0;
+    loop {
+        let (frames, more) = sync_part(store)?;
+        applied += frames;
+        if !more {
+            return Ok(applied);
+        }
+    }
+}
+
+/// One connection of `sync`, up to a ready: the frames applied, and whether
+/// that ready said the store has more.
+fn sync_part(store: &Store) -> Result<(usize, bool)> {
     let mut socket = connect(store)?;
     read_timeout(&mut socket, QUIET).context("timing store reads")?;
     let hello = mem(&["share", "hello"], None)?;
@@ -428,6 +443,8 @@ pub fn sync(store: &Store) -> Result<usize> {
         if what == "route" || what == "cmd" {
             continue;
         }
+        let more = what == "ready"
+            && serde_json::from_str::<Value>(&text).is_ok_and(|v| v["more"] == true);
         held.push(text);
         if what == "ready" || held.len() >= BATCH {
             let mut input = held.join("\n");
@@ -442,7 +459,7 @@ pub fn sync(store: &Store) -> Result<usize> {
         }
         if what == "ready" {
             let _ = socket.close(None);
-            return Ok(applied);
+            return Ok((applied, more));
         }
     }
 }

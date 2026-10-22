@@ -539,6 +539,58 @@ fn a_failed_apply_reconnects_and_later_frames_still_reach_mem() {
 
 /// A replay of the whole store arrives faster than mem applies it: each
 /// apply takes at most 500 frames, so none runs long on a slow disk.
+/// The store replays a big log in parts: a ready with more ends one part and
+/// the store closes, so sync says hello again for the rest.
+#[test]
+fn sync_says_hello_again_after_a_ready_with_more_until_the_last_ready() {
+    let dir = TempDir::new("share-sync-more");
+    let bin = share_mem(&dir);
+    let store = FakeStore::start();
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut sync = std::process::Command::new(common::hub_bin())
+        .args(["share", "sync"])
+        .env_clear()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_STATE_HOME", home.join("state"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("HUB_STORE_URL", &store.url)
+        .env("HUB_STORE_TOKEN", STORE_TOKEN)
+        .spawn()
+        .unwrap();
+    let first = r#"{"t":"rec","seq":42,"id":"01A","path":"projects/P/wiki/a.md","body":"a","machine":"mac"}"#;
+    let part = r#"{"t":"ready","seq":42,"rows":0,"more":true}"#;
+    let second = r#"{"t":"rec","seq":43,"id":"01B","path":"projects/P/wiki/b.md","body":"b","machine":"mac"}"#;
+    let last = r#"{"t":"ready","seq":43,"rows":0}"#;
+    wait_for("the first hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    store.send(first);
+    store.send(part);
+    store.drop_connection();
+    wait_for("the second hello", Duration::from_secs(5), || {
+        !store.texts_on(1).is_empty()
+    });
+    store.send(second);
+    store.send(last);
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = sync.try_wait().unwrap() {
+            break status;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "sync never ended");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success());
+    assert_eq!(store.texts_on(1), [HELLO]);
+    assert_eq!(
+        applied(&dir),
+        format!("{first}\n{part}\n{second}\n{last}\n")
+    );
+}
+
 #[test]
 fn a_long_replay_reaches_mem_share_apply_in_batches_of_at_most_500() {
     let dir = TempDir::new("share-batches");
