@@ -14,6 +14,20 @@ You build exactly one task, the one in your brief, with the tdd skill: the
 failing test first, the smallest code that passes it, the targeted tests and
 the typecheck, then atomic commits on your branch in a human voice.
 
+Your shell starts in your worktree, and Claude Code refuses any command it
+cannot prove stays inside it. Run commands the way it can check:
+
+- To work in a subfolder, run `cd <subfolder>` as a call of its own. The
+  folder holds for the calls after it.
+- Then one plain command per call, unpiped, so its result shows the exit
+  code. Nothing chained with `&&`, `;` or `|`, and no loop, `$( )` or
+  heredoc around it.
+- Edit files with Edit and Write, not with a python, sed or heredoc script.
+- Run git plainly from the worktree, with no `-C` and no `cd` before it.
+- node_modules is the main checkout's, linked in, and pnpm rewrites it, so
+  call tools by path (`node_modules/.bin/vitest run <file>`) and never run
+  pnpm here.
+
 Stay inside the brief's SCOPE. When the task needs a file outside it, or a
 fact in the brief turns out false, stop and report instead of improvising.
 

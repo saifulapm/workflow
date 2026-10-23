@@ -116,6 +116,10 @@ write it whole:
     VERIFY      the exact targeted test command and typecheck
     STOP        what sends it back to you instead of improvising
 
+Write VERIFY as plain commands, one per line, each run from the worktree
+root or a subfolder the brief names, with tools by path. The implementer
+runs each as a call of its own, and Claude Code refuses a chained one.
+
 Give pointers, not pasted files. Log each dispatch with its branch, so a
 fresh orchestrator can find it: `mem log "dispatched <task> on
 worktree-<name> from <sha>"`. The branch is `worktree-agent-<id>`, from the
