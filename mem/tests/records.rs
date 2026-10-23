@@ -15,6 +15,13 @@ fn item_at(v: &serde_json::Value) -> mem::item::Item {
     mem::store::read_item(Path::new(v["path"].as_str().unwrap())).unwrap()
 }
 
+/// A checkout mem knows, as a project's is once its first write registered
+/// it. A finding refuses to be that first write.
+fn registered(w: &World, repo: &Path) {
+    let out = mem(w, repo, &["log", "picking this up"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+}
+
 /// `projects/<id>/items/<file>` sits two levels under the project directory.
 fn project_dir(v: &serde_json::Value) -> PathBuf {
     Path::new(v["path"].as_str().unwrap())
@@ -198,9 +205,50 @@ fn evidence_add_refuses_a_task_that_climbs_out_of_the_records_directory() {
 }
 
 #[test]
+fn a_finding_in_a_checkout_mem_does_not_know_is_refused() {
+    let w = World::new("records-finding-stray");
+    let scratch = w.repo("walk-scratch", None);
+    let out = mem(
+        &w,
+        &scratch,
+        &[
+            "finding",
+            "add",
+            "--milestone",
+            "m3",
+            "--step",
+            "1",
+            "the price shows twice",
+        ],
+    );
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert!(stderr(&out).contains("--project"), "{}", stderr(&out));
+    // The scratch checkout did not become a project.
+    let out = mem(&w, &scratch, &["projects"]);
+    assert!(!stdout(&out).contains("walk-scratch"), "{}", stdout(&out));
+
+    // Named, it lands in the project it names.
+    let repo = w.repo("thing", None);
+    registered(&w, &repo);
+    let args = [
+        "--project",
+        "thing",
+        "finding",
+        "add",
+        "--milestone",
+        "m3",
+        "--step",
+        "1",
+        "x",
+    ];
+    assert_eq!(code(&mem(&w, &scratch, &args)), 0);
+}
+
+#[test]
 fn finding_close_records_the_fix_and_drops_it_from_the_open_list() {
     let w = World::new("records-finding");
     let repo = w.repo("thing", None);
+    registered(&w, &repo);
     let photo = w.dir.join("broken.png");
     std::fs::write(&photo, b"photo").unwrap();
 
@@ -317,6 +365,7 @@ fn refused(out: &std::process::Output) {
 fn evidence_cat_prints_the_stored_file_and_refuses_what_has_none() {
     let w = World::new("records-evidence-cat");
     let repo = w.repo("thing", None);
+    registered(&w, &repo);
     // A PNG signature and bytes that are not UTF-8: the copy must be raw.
     let png: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe\x00";
     let shot = w.dir.join("checkout.png");

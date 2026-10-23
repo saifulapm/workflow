@@ -96,6 +96,8 @@ One finding per defect, filed before cleanup (mem copies the file in):
     mem finding add --milestone <slug> --step <n> "<what happened>; expected <what the step says>; a test should assert <the check>" --evidence step-<n>.png
 
 The "a test should assert" part lets the orchestrator write the red test.
+Run it from the product's checkout, or pass `--project <name>`: mem refuses
+a finding from a checkout it does not know, such as a scratch repo of yours.
 A step you could not drive is a finding too, starting `undriveable: `
 and saying what stopped you. Never file taste as a defect. Name it in your
 report instead.

@@ -146,6 +146,14 @@ pub fn finding_add(
     text: &str,
     evidence: Option<&Path>,
 ) -> Result<i32> {
+    // A walker filing from its own scratch checkout would register that as a
+    // project, and the finding would sit where no orchestrator reads it.
+    if app.project.is_none() && matches!(app.identity(Mode::Read)?, Identity::UnknownRepo { .. }) {
+        return Err(exit::usage(
+            "a finding belongs to the product's project, and this checkout is none mem \
+             knows — run this in the product's checkout or pass --project",
+        ));
+    }
     let (identity, dir) = project(app, "a finding")?;
     let mut meta = new_meta(app, Kind::Finding, text);
     if let Some(file) = evidence {
