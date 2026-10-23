@@ -39,6 +39,12 @@ lowercased with hyphens; the text before the first heading is `top`. Read
 the section a search hit names, not the page, and rewrite the section you
 falsified, not the page. An answer worth keeping becomes a page.
 
+A page about a running system (a service, a machine's setup, what is
+deployed) cannot keep up with it, so date each claim about it and name the
+machine or commit it was true on: "On 2026-10-23 every machine runs
+hub-local and no hub.service." When it changes, add the new dated claim and
+mark the old one superseded.
+
 The note is the page's whole history: write it like a commit message. Pages
 link as `[name](name.md)` and list in `index`, kept by hand; a section over
 2 KB or a page over 8 KB splits, each part linked from index too.
