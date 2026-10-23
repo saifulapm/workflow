@@ -39,17 +39,23 @@ team_pid=$!
 
 aud=next-hub-aud
 now=$(date +%s)
-python3 - "$T_TMP/key.pem" "$aud" "$team" "$now" >"$T_TMP/jwt.hdr" <<'PY'
+# A person's token, or with `service` the service token every machine
+# holds: the Client ID in common_name, an empty sub and no email.
+cat >"$T_TMP/jwt.py" <<'PY'
 import base64, json, subprocess, sys
 key, aud, team, now = sys.argv[1:5]
 def b64(raw):
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 claims = {"aud": [aud], "iss": team, "exp": int(now) + 600, "iat": int(now), "email": "saiful@example.com"}
+if sys.argv[5:] == ["service"]:
+    claims = {"aud": [aud], "iss": team, "exp": int(now) + 600, "iat": int(now), "common_name": "e3678.access", "sub": ""}
 signed = b64(json.dumps({"alg": "RS256", "kid": "k1", "typ": "JWT"}).encode()) + "." + b64(json.dumps(claims).encode())
 sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=signed.encode(),
                      capture_output=True, check=True).stdout
 print("Cf-Access-Jwt-Assertion: " + signed + "." + b64(sig))
 PY
+python3 "$T_TMP/jwt.py" "$T_TMP/key.pem" "$aud" "$team" "$now" >"$T_TMP/jwt.hdr"
+python3 "$T_TMP/jwt.py" "$T_TMP/key.pem" "$aud" "$team" "$now" service >"$T_TMP/service.hdr"
 
 pids=()
 stop_all() {
@@ -111,6 +117,7 @@ hdr=$(tr -d '\r' <"$T_TMP/file.hdr")
 like "$hdr" '[Cc]ontent-[Tt]ype: image/png' "the type is image/png"
 like "$hdr" '[Cc]ache-[Cc]ontrol: private, max-age=3600' "the file is cached privately for an hour"
 like "$hdr" '[Xx]-[Cc]ontent-[Tt]ype-[Oo]ptions: nosniff' "the file is sent with nosniff"
+is "$(fetch "/p/gamma/file/$id" -H "@$T_TMP/service.hdr")" 403 "the same file with a service token is refused"
 
 # Safari plays a video only from a server that answers byte ranges.
 is "$(fetch "/p/gamma/file/$clip" -H "@$T_TMP/jwt.hdr")" 200 "GET the clip answers 200"
