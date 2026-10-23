@@ -198,7 +198,11 @@ impl Store {
         if status != 200 {
             bail!("the store answered {status} to /store/pair");
         }
-        Ok(format!("{}/pair/{}", web.trim_end_matches('/'), code.trim()))
+        Ok(format!(
+            "{}/pair/{}",
+            web.trim_end_matches('/'),
+            code.trim()
+        ))
     }
 
     /// The bytes the store holds at `path`, None when it holds none.

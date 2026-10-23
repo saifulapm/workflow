@@ -178,5 +178,9 @@ fn pair_web_reads_what_the_environment_lacks_from_local_env() {
     assert!(run(Some(STORE_TOKEN)).status.success());
     let seen = seen.lock().unwrap();
     assert!(seen[0].contains("Bearer machine-token"), "{}", seen[0]);
-    assert!(seen[1].contains(&format!("Bearer {STORE_TOKEN}")), "{}", seen[1]);
+    assert!(
+        seen[1].contains(&format!("Bearer {STORE_TOKEN}")),
+        "{}",
+        seen[1]
+    );
 }

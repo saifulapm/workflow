@@ -369,4 +369,3 @@ fn an_old_route_file_with_only_the_device_bool_still_reads() {
         assert_eq!(route(&hub), want, "{old}");
     }
 }
-

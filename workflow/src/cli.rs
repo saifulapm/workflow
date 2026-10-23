@@ -163,24 +163,21 @@ secret, only the pass entry names."
         project: String,
     },
     /// Send questions to the phone or to this machine.
-    #[command(
-        long_about = "Send questions to the phone or to this machine.
+    #[command(long_about = "Send questions to the phone or to this machine.
 
 `route phone` has questions ring on the phone. `route device` has them ring
 on this machine, as quickshell popups. With no argument it asks where they
 ring now. It talks to this machine's local hub, which sends a change on to
 every other local hub and writes the file qshell reads. Each form prints one
 line, `route: phone` or `route: device (<machine>)`. Exit 1 when the local hub
-refuses or does not answer."
-    )]
+refuses or does not answer.")]
     Route {
         /// phone or device; leave out to read the current route.
         #[arg(value_parser = ["phone", "device"])]
         to: Option<String>,
     },
     /// Join this machine's memory to the Cloudflare store.
-    #[command(
-        long_about = "Join this machine's memory to the Cloudflare store.
+    #[command(long_about = "Join this machine's memory to the Cloudflare store.
 
 chezmoi runs it on apply when the hub's local.env has no store token: a store
 token minted for this machine, hub share seed, mem share switch, a second
@@ -189,8 +186,7 @@ restarted. Running sessions do not stop it: the second seed carries what
 they write meanwhile. A first seed that runs out of today's import budget
 refuses, exit 2, before mem switches. Running it again on a switched machine
 moves the store's URL, mints the machine's token again and restarts
-hub-local."
-    )]
+hub-local.")]
     Switch {
         /// The store's socket, ws:// or wss://, ending in /store/share.
         #[arg(long, value_name = "URL")]

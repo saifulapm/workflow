@@ -60,12 +60,18 @@ pub fn cmd_route(to: Option<&str>) -> i32 {
     let (status, answer) = match reply {
         Ok(r) => r,
         Err(err) => {
-            say(format!("the local hub did not answer on {}: {err}", socket.display()));
+            say(format!(
+                "the local hub did not answer on {}: {err}",
+                socket.display()
+            ));
             return exit::FAILED;
         }
     };
     if status != "200" {
-        say(format!("the local hub refused: HTTP {status} {}", answer.trim()));
+        say(format!(
+            "the local hub refused: HTTP {status} {}",
+            answer.trim()
+        ));
         return exit::FAILED;
     }
     let Some(route) = serde_json::from_str::<Value>(&answer)

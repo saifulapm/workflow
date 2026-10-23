@@ -69,7 +69,9 @@ fn local_hub(work: &Scratch, status: &str, body: &str) -> JoinHandle<Option<Stri
             }
         };
         stream.set_nonblocking(false).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
         let mut got = Vec::new();
         let mut buf = [0u8; 4096];
         loop {
@@ -176,5 +178,8 @@ fn dulali_is_no_longer_a_route() {
     let out = route(&w, &["dulali"]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     let err = stderr(&out);
-    assert!(err.contains("phone, device") && !err.contains("dulali]"), "{err}");
+    assert!(
+        err.contains("phone, device") && !err.contains("dulali]"),
+        "{err}"
+    );
 }
