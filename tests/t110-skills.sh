@@ -22,6 +22,13 @@ for file in "$WF_ROOT"/skills/*/SKILL.md; do
 	is "$fits" yes "${file#"$WF_ROOT"/}: under 20,000 bytes"
 done
 
+# A cloud session reads its rules from the file the cloud prompt names, so
+# that file ships in the orchestrate skill's folder.
+named=$(grep -o 'the [^ ]* file in its folder' "$WF_ROOT/workflow/src/cloud-prompt.txt" | cut -d' ' -f2)
+isnt "$named" "" "cloud prompt: names the orchestrate file it follows"
+if [ -f "$WF_ROOT/skills/orchestrate/$named" ]; then shipped=yes; else shipped=missing; fi
+is "$shipped" yes "cloud prompt: skills/orchestrate/$named ships"
+
 # A question only Saiful may answer says so, so a route that lets another
 # answerer take a person's questions never takes these.
 skill() { cat "$WF_ROOT/skills/$1/SKILL.md"; }
