@@ -83,6 +83,19 @@ impl Access {
     }
 }
 
+/// Whether a checked token stands for a person. Access signs a person's
+/// token with their email; a service token carries its Client ID in
+/// `common_name`, an empty `sub` and no email. Every machine and cloud
+/// session holds the service token the mem app admits.
+pub fn person(jwt: &Jwt) -> bool {
+    json_part(jwt.payload).is_ok_and(|claims| {
+        claims
+            .get("email")
+            .and_then(Value::as_str)
+            .is_some_and(|email| !email.trim().is_empty())
+    })
+}
+
 /// Splits the token and checks its header. The error says why, for the
 /// log; the client only ever sees a 401.
 pub fn parse(token: Option<&str>) -> Result<Jwt<'_>, &'static str> {
@@ -285,6 +298,17 @@ mod tests {
             ),
             Err("not yet valid")
         );
+    }
+
+    #[test]
+    fn a_person_is_a_token_with_an_email_and_a_service_token_is_not() {
+        let person = token(r#"{"aud":["hub-aud"],"sub":"7335d417","email":"saiful@example.com"}"#);
+        assert!(super::person(&parse(Some(&person)).unwrap()));
+        // Access's service token: the Client ID in common_name, sub empty.
+        let service = token(r#"{"aud":["mem-aud"],"common_name":"e3678.access","sub":""}"#);
+        assert!(!super::person(&parse(Some(&service)).unwrap()));
+        let blank = token(r#"{"aud":["hub-aud"],"email":""}"#);
+        assert!(!super::person(&parse(Some(&blank)).unwrap()));
     }
 
     #[test]

@@ -147,8 +147,8 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
         return store(&env, object)?.fetch_with_request(req).await;
     }
     let checking = Date::now().as_millis();
-    let jwks = match guard(&req, &env).await {
-        Ok(jwks) => jwks,
+    let (jwks, person) = match guard(&req, &env).await {
+        Ok(checked) => checked,
         Err(why) => {
             console_log!("hubweb: refused {:?} {path}: {why}", req.method());
             return Response::error("Unauthorized", 401);
@@ -156,12 +156,6 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
     };
     let timed = timing(Date::now().as_millis() - checking, jwks, cold);
     match (req.method(), path.as_str()) {
-        // An open page's socket, which hears only that the store changed.
-        (Method::Get, "/live") => store(&env, object)?.fetch_with_request(req).await,
-        (Method::Get, _) if evidence_file(&path).is_some() => {
-            let (project, id) = evidence_file(&path).unwrap_or_default();
-            serve_evidence(&req, project, id, &env, object).await
-        }
         (Method::Post, "/" | "/mcp") => {
             // claude.ai calls the connector from its servers. A browser
             // says where its request comes from, and a form can send only
@@ -180,6 +174,19 @@ async fn handle(req: Request, env: Env) -> Result<Response> {
             serve_mcp(req, &env, object).await
         }
         (_, "/mcp") => Response::error("Method Not Allowed", 405),
+        // The mem app's Access admits the service token every machine and
+        // cloud session holds, and this Worker answers both names, so the
+        // pages and their buttons check for a person themselves.
+        _ if !person => {
+            console_log!("hubweb: refused {:?} {path}: a service token", req.method());
+            Response::error("the hub's pages are for a person, not a service token", 403)
+        }
+        // An open page's socket, which hears only that the store changed.
+        (Method::Get, "/live") => store(&env, object)?.fetch_with_request(req).await,
+        (Method::Get, _) if evidence_file(&path).is_some() => {
+            let (project, id) = evidence_file(&path).unwrap_or_default();
+            serve_evidence(&req, project, id, &env, object).await
+        }
         (Method::Get | Method::Post, _) => page(req, &env, object, &timed).await,
         _ => Response::error("Method Not Allowed", 405),
     }
@@ -200,9 +207,12 @@ fn timing(access: u64, jwks: Option<String>, cold: bool) -> String {
 
 /// `Ok` only for a token one of this Worker's Access apps would have issued,
 /// and never while ACCESS_AUD or ACCESS_TEAM is unset; it holds the JWKS
-/// fetch's Server-Timing part when the check ran one. The error says why,
-/// for the log.
-async fn guard(req: &Request, env: &Env) -> std::result::Result<Option<String>, &'static str> {
+/// fetch's Server-Timing part when the check ran one, and whether the token
+/// is a person's. The error says why, for the log.
+async fn guard(
+    req: &Request,
+    env: &Env,
+) -> std::result::Result<(Option<String>, bool), &'static str> {
     let setting = |name| env.secret(name).map(|value| value.to_string()).ok();
     let access = Access::new(
         setting("ACCESS_AUD").as_deref(),
@@ -217,7 +227,9 @@ async fn guard(req: &Request, env: &Env) -> std::result::Result<Option<String>, 
         return Err("bad signature");
     }
     let now = (Date::now().as_millis() / 1000) as i64;
-    access.claims(&jwt, now).map(|()| jwks)
+    access
+        .claims(&jwt, now)
+        .map(|()| (jwks, access::person(&jwt)))
 }
 
 /// The team's keys, kept for as long as the isolate lives.

@@ -114,6 +114,14 @@ is "$(get_home -H "$(with_jwt "$(mint key RS256 k1 "$(claims "$aud" "$team" $((n
 	"GET / with an expired JWT is refused"
 is "$(get_home -H "$(with_jwt "$(mint key RS256 k2 "$(claims "$aud" "$team" $fresh)")")")" 401 \
 	"GET / with a JWT naming an unknown kid is refused"
+# Access's service token, as the mem app admits it for every machine: the
+# Client ID in common_name, an empty sub and no email.
+service=$(mint key RS256 k1 "$(printf '{"aud":["%s"],"iss":"%s","exp":%s,"iat":%s,"common_name":"e3678.access","sub":""}' \
+	"$aud" "$team" $fresh "$now")")
+printf '%s\n' "$(with_jwt "$service")" >"$T_TMP/service.hdr"
+is "$(get_home -H "@$T_TMP/service.hdr")" 403 "GET / with a service token is refused: the pages are a person's"
+is "$(curl -s -o /dev/null -w '%{http_code}' -H "@$T_TMP/service.hdr" "$base/live")" 403 \
+	"GET /live with a service token is refused"
 
 # The hub sandbox's four projects, written by real mem and sent to the
 # store as a machine sends its writes: the pages draw from these files.
@@ -248,6 +256,8 @@ is "$(mcp /mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}' -H "@$T_
 	-o /dev/null -w '%{http_code}')" 202 "a notification gets 202 and no body"
 list=$(mcp /mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' -H "@$T_TMP/jwt.hdr")
 is "$(field 'len(r["result"]["tools"])' <<<"$list")" 20 "tools/list lists the connector's 20 tools"
+is "$(mcp /mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' -H "@$T_TMP/service.hdr" | field 'len(r["result"]["tools"])')" 20 \
+	"the connector still serves a service token"
 is "$(mcp /mcp "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"][0]["text"].strip(), r["result"]["isError"]')" \
 	"Nothing in flight; the last fix landed. False" "handoff answers delta's handoff from the store"
 is "$(mcp / "$handoff_call" -H "@$T_TMP/jwt.hdr" | field 'r["result"]["content"][0]["text"].strip()')" \
