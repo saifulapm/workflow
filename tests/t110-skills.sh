@@ -14,6 +14,14 @@ for file in "$WF_ROOT"/skills/*/SKILL.md "$WF_ROOT"/agents/*.md; do
 	is "$length" short "$name: its description is under 200 characters"
 done
 
+# After a compaction, Claude Code attaches each skill again cut at 20,000
+# characters, so a rule past that point is lost for the rest of the session.
+for file in "$WF_ROOT"/skills/*/SKILL.md; do
+	size=$(wc -c < "$file")
+	if [ "$size" -lt 20000 ]; then fits=yes; else fits="$size bytes"; fi
+	is "$fits" yes "${file#"$WF_ROOT"/}: under 20,000 bytes"
+done
+
 # A question only Saiful may answer says so, so a route that lets another
 # answerer take a person's questions never takes these.
 skill() { cat "$WF_ROOT/skills/$1/SKILL.md"; }
