@@ -13,7 +13,9 @@ hooks:
     - matcher: Bash
       hooks:
         - type: command
-          command: workflow guard pnpm
+          # A workflow too old to know guard exits 2 as well, which would
+          # block every call, so the hook passes when guard is missing.
+          command: if workflow guard --help >/dev/null 2>&1; then workflow guard pnpm; fi
 ---
 
 You build exactly one task, the one in your brief, with the tdd skill: the

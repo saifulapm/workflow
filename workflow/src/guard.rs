@@ -45,11 +45,13 @@ pub fn cmd_guard_pnpm() -> i32 {
 /// Whether any simple command in `command` runs pnpm, past the variable
 /// assignments and wrappers (`timeout 600`, `env`) in front of it.
 fn runs_pnpm(command: &str) -> bool {
-    command
+    unquoted(command)
         .split(['&', '|', ';', '(', ')', '`', '\n'])
         .any(|part| {
             let mut words = part.split_whitespace().peekable();
-            while let Some(word) = words.next_if(|w| is_assignment(w) || is_wrapper(w)) {
+            while let Some(word) =
+                words.next_if(|w| is_assignment(w) || is_wrapper(w) || is_keyword(w))
+            {
                 if is_wrapper(word) {
                     while words.next_if(|w| is_wrapper_arg(w)).is_some() {}
                 }
@@ -59,6 +61,69 @@ fn runs_pnpm(command: &str) -> bool {
                 .and_then(|word| Path::new(word).file_name())
                 .is_some_and(|name| name == "pnpm" || name == "pnpx")
         })
+}
+
+/// `command` with its quoted text blanked, so a commit message or a search
+/// pattern that names pnpm is no command. A backtick inside double quotes
+/// still runs its text, so that text stays. A heredoc's body is text as
+/// well, so everything from `<<` on is dropped.
+fn unquoted(command: &str) -> String {
+    enum Quote {
+        None,
+        Single,
+        Double,
+        Tick,
+    }
+    let mut out = String::with_capacity(command.len());
+    let mut quote = Quote::None;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Quote::None => match c {
+                '\'' => quote = Quote::Single,
+                '"' => quote = Quote::Double,
+                '\\' => {
+                    chars.next();
+                }
+                '<' if chars.peek() == Some(&'<') => break,
+                _ => {
+                    out.push(c);
+                    continue;
+                }
+            },
+            Quote::Single if c == '\'' => quote = Quote::None,
+            Quote::Double => match c {
+                '"' => quote = Quote::None,
+                '\\' => {
+                    chars.next();
+                }
+                '`' => {
+                    quote = Quote::Tick;
+                    out.push('\n');
+                }
+                _ => {}
+            },
+            Quote::Tick if c == '`' => {
+                quote = Quote::Double;
+                out.push('\n');
+            }
+            Quote::Tick => {
+                out.push(c);
+                continue;
+            }
+            Quote::Single => {}
+        }
+        out.push(' ');
+    }
+    out
+}
+
+/// Shell words that open or join a command rather than name one.
+fn is_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "{" | "}" | "!" | "if" | "then" | "else" | "elif" | "do" | "while" | "until"
+    )
 }
 
 fn is_assignment(word: &str) -> bool {
@@ -75,7 +140,17 @@ fn is_wrapper_arg(word: &str) -> bool {
 fn is_wrapper(word: &str) -> bool {
     matches!(
         word,
-        "env" | "command" | "exec" | "time" | "nice" | "timeout"
+        "env"
+            | "command"
+            | "exec"
+            | "time"
+            | "nice"
+            | "timeout"
+            | "nohup"
+            | "sudo"
+            | "xargs"
+            | "npx"
+            | "corepack"
     )
 }
 

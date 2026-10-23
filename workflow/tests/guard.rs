@@ -62,6 +62,17 @@ fn pnpm_in_a_linked_worktree_over_a_linked_node_modules_is_refused() {
         "FORCE_COLOR=0 pnpm i",
         "timeout 600 pnpm exec tsc -b",
         "/usr/bin/pnpm add zod",
+        "npx pnpm i",
+        "corepack pnpm install",
+        "nohup pnpm i",
+        "sudo pnpm i",
+        "ls | xargs pnpm i",
+        "{ pnpm i; }",
+        "if true; then pnpm i; fi",
+        "for d in a b; do pnpm i; done",
+        "! pnpm i",
+        // Backticks inside double quotes still run their command in bash.
+        "git commit -m \"Verified against `pnpm dev`\"",
     ] {
         let out = guard(&w.at("wt"), "Bash", command);
         assert!(refused(&out), "{command}: {out:?}");
@@ -81,6 +92,13 @@ fn tools_by_path_and_pnpm_as_a_word_pass() {
         "node_modules/.bin/vitest run app/cart.test.ts",
         "grep -n pnpm package.json",
         "git log --oneline -3",
+        // pnpm inside quoted text is a word, not a command.
+        r#"git commit -m "Fix the cart (pnpm test was red)""#,
+        r#"git commit -m "Speed up CI; pnpm cache""#,
+        "git commit -m \"Hold the bar\n\npnpm test passes again\"",
+        r#"rg -n "(pnpm|npm) install" README.md"#,
+        "echo 'a && pnpm i'",
+        "git commit -F - <<'EOF'\nKeep the cart\n\npnpm test is green\nEOF",
     ] {
         let out = guard(&w.at("wt"), "Bash", command);
         assert_eq!(out.status.code(), Some(0), "{command}: {out:?}");
