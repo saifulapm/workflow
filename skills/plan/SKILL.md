@@ -28,7 +28,10 @@ spec#<section>`), `verify`, the decisions
 artifacts Saiful made for this work (`mem search artifact`, and the links in
 the spec), the lessons past runs left (`mem wiki lessons` and `mem --project
 workflow wiki lessons`), which the acceptance lines and the review focus
-answer, and the repo's entry points. Any fact the plan relies on, such as a
+answer, and the repo's entry points. When the work comes from an audit, a
+review or an older list, `rg` each item it names in the code and record
+what is already there with `mem decide`: a built item is no behaviour to
+plan. Any fact the plan relies on, such as a
 crate version, an API parameter or a limit, gets checked this session (`npx
 ctx7@latest`, or measure it) and dated. Find the fast test command and note
 how long the suite takes.
