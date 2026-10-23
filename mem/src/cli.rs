@@ -166,7 +166,8 @@ pub enum Command {
         /// One choice, kept whole, commas and all. Repeat it for each.
         #[arg(long = "option", value_name = "TEXT")]
         option: Vec<String>,
-        /// The answer the asker would pick.
+        /// The answer the asker would pick: one of the options, word for
+        /// word, since the phone marks that button by its text.
         #[arg(long, value_name = "TEXT")]
         recommend: Option<String>,
         /// Who answers. A person unless this says otherwise, and a person's

@@ -105,6 +105,54 @@ fn a_comma_inside_an_option_given_to_options_is_refused() {
 }
 
 #[test]
+fn a_recommendation_that_is_not_an_option_is_refused() {
+    let w = World::new("q-recommend");
+    let repo = w.repo("thing", None);
+    let out = ask_env(
+        &w,
+        &repo,
+        &[
+            "ask",
+            "which page first?",
+            "--options",
+            "orders,products",
+            "--recommend",
+            "orders page",
+        ],
+    );
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    // The refusal names the options mem would have stored.
+    assert!(
+        stderr(&out).contains("orders · products"),
+        "{}",
+        stderr(&out)
+    );
+    let out = ask_env(&w, &repo, &["questions", "--pending"]);
+    assert!(
+        !stdout(&out).contains("which page first?"),
+        "{}",
+        stdout(&out)
+    );
+
+    // A recommendation that is one of them, or one with no options, is asked.
+    let out = ask_env(
+        &w,
+        &repo,
+        &[
+            "ask",
+            "which page first?",
+            "--options",
+            "orders,products",
+            "--recommend",
+            "orders",
+        ],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let out = ask_env(&w, &repo, &["ask", "what title?", "--recommend", "Orders"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+}
+
+#[test]
 fn waiting_times_out_with_exit_four() {
     let w = World::new("q-timeout");
     let repo = w.repo("thing", None);
@@ -567,17 +615,17 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
         &repo,
         &[
             "ask",
-            "ship on friday?",
+            "ship on friday? the gate is green",
             "--options",
             "yes,no",
             "--recommend",
-            "yes, the gate is green",
+            "yes",
             "--json",
         ],
     );
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let asked: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(asked["recommend"], "yes, the gate is green", "{asked}");
+    assert_eq!(asked["recommend"], "yes", "{asked}");
     let id = asked["short_id"].as_str().unwrap().to_string();
 
     let out = ask_env(&w, &repo, &["ask", "and this one?", "--json"]);
@@ -593,7 +641,7 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
         for row in rows {
             if row["short_id"] == serde_json::json!(id) {
                 assert_eq!(row["options"], serde_json::json!(["yes", "no"]), "{row}");
-                assert_eq!(row["recommend"], "yes, the gate is green", "{row}");
+                assert_eq!(row["recommend"], "yes", "{row}");
             } else {
                 assert_eq!(row["options"], serde_json::json!([]), "{row}");
                 assert!(row["recommend"].is_null(), "{row}");
@@ -610,11 +658,7 @@ fn a_recommendation_rides_with_the_options_in_both_listings() {
         .iter()
         .position(|l| l.contains(&format!("#{id}")))
         .unwrap();
-    assert_eq!(
-        lines[at + 1],
-        "    recommended: yes, the gate is green",
-        "{text}"
-    );
+    assert_eq!(lines[at + 1], "    recommended: yes", "{text}");
 
     // The field lives in the item file, so a rebuilt index loses nothing.
     let out = ask_env(&w, &repo, &["reindex"]);

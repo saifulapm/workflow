@@ -1870,6 +1870,19 @@ pub fn ask(
             "the question is empty — say what you are asking",
         ));
     }
+    // The phone marks the recommended button by its text, so a pick that is
+    // none of them marks nothing, and usually means the options came out
+    // other than the asker meant.
+    if let Some(pick) = recommend
+        && !options.is_empty()
+        && !options.iter().any(|option| option == pick)
+    {
+        return Err(exit::usage(format!(
+            "--recommend \"{pick}\" is not one of the options: {} — pass it exactly as \
+             one of them",
+            options.join(" · ")
+        )));
+    }
     let identity = app.identity(Mode::Write)?;
     let mut meta = crate::item::Meta::new(
         String::new(),
