@@ -393,12 +393,12 @@ fn session_of(said: &str) -> Option<String> {
 const END: &str = "WORKFLOW_EOF";
 
 /// The setup script: every file of `skills/` and `agents/` under
-/// `~/.claude`, and a `mem` that fetches the real binary from the store
-/// (from the mem server without the store's variables) the first time it
-/// runs. claude.ai runs the script with none of the environment's
+/// `~/.claude`, and a `mem` that fetches the real binary from the public
+/// release (from the mem server without the store's variables) the first
+/// time it runs. claude.ai runs the script with none of the environment's
 /// variables, so it cannot reach the store: it bakes both binaries into the
-/// cached environment from the public release the mini publishes, and each
-/// session fills its replica from the store.
+/// cached environment from the release the workflow repo's CI publishes, and
+/// each session fills its replica from the store.
 pub fn setup_script(files: &[(&str, &[u8])]) -> String {
     let mut out = String::from(
         "#!/bin/bash\n\
@@ -439,17 +439,17 @@ fi\n"
     out
 }
 
-/// `mem-cloud fetch <mem|hub>` puts the store's `/store/dl/<name>-x86_64`
-/// at `~/.local/bin/<name>-x86_64` once, the store's web address taken from
-/// `HUB_STORE_URL` and the bearer from `HUB_STORE_TOKEN`; an environment
-/// without those two still fetches `$MEM_REMOTE/dl/<name>`. The bearer and
-/// the Access service token, when the variables hold one, go as headers
-/// read from a file, never on a command line. Once a boot, with the store's
-/// variables, a binary already here is checked against the store's
-/// `<name>-x86_64.sha256` and fetched again when the store holds another
-/// build, so a new build reaches the cached environment without a new
-/// setup; a store that gives no sum keeps the binary here, and is not asked
-/// again that boot. `mem-cloud sync <seconds>`
+/// `mem-cloud fetch <mem|hub>` puts the public `cloud-bins` release's
+/// `<name>-x86_64` at `~/.local/bin/<name>-x86_64` once, when `HUB_STORE_URL`
+/// and `HUB_STORE_TOKEN` are set, with no header, since the release needs
+/// none; an environment without those two still fetches
+/// `$MEM_REMOTE/dl/<name>`, the Access service token, when the variables
+/// hold one, going as a header read from a file, never on a command line.
+/// Once a boot, with the store's variables, a binary already here is checked
+/// against the release's `<name>-x86_64.sha256` and fetched again when the
+/// release holds another build, so a new build reaches the cached
+/// environment without a new setup; a release that gives no sum keeps the
+/// binary here, and is not asked again that boot. `mem-cloud sync <seconds>`
 /// brings the replica up to the store with `hub share sync`, and fails when
 /// the store cannot be reached in time. `mem-cloud bake` takes both binaries
 /// from the public `cloud-bins` release, which needs no secret: the setup
@@ -457,11 +457,12 @@ fi\n"
 const HELPER: &str = r#"#!/bin/sh
 bin="$HOME/.local/bin"
 state="$HOME/.local/state/hub"
-# headers <file> <store>: the request headers, in a file only this user
-# reads: the store's bearer when <store> is set, and the Access service token.
+# The public release the workflow repo's CI puts each build, its sum and the
+# skills on.
+release=https://github.com/saifulapm/workflow/releases/download/cloud-bins
+# headers <file>: the Access service token, in a file only this user reads.
 headers() {
   (umask 077 && : >"$1")
-  if [ -n "$2" ]; then printf 'Authorization: Bearer %s\n' "$HUB_STORE_TOKEN" >>"$1"; fi
   if [ -n "${HUB_STORE_ACCESS_ID:-}" ] && [ -n "${HUB_STORE_ACCESS_SECRET:-}" ]; then
     printf 'CF-Access-Client-Id: %s\nCF-Access-Client-Secret: %s\n' \
       "$HUB_STORE_ACCESS_ID" "$HUB_STORE_ACCESS_SECRET" >>"$1"
@@ -478,24 +479,22 @@ fetch() {
   mkdir -p "$bin" "$state"
   part="$bin/$1-x86_64.part.$$"
   hdr="$state/fetch.hdr.$$"
-  store=
+  head=
   if [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ]; then
-    store=1
-    # The socket's URL, ws(s)://host/store/share, gives the web address.
-    case "$HUB_STORE_URL" in wss://*) url=https ;; *) url=http ;; esac
-    host="${HUB_STORE_URL#*://}"
-    url="$url://${host%%/*}/store/dl/$1-x86_64"
+    # The release is public: no header goes to GitHub.
+    url="$release/$1-x86_64"
   else
     url="${MEM_REMOTE:?MEM_REMOTE is not set}/dl/$1"
+    headers "$hdr"
+    head="@$hdr"
   fi
-  headers "$hdr" "$store"
   if [ -n "$mark" ]; then
     : >"$mark"
-    want=$(curl -fsS --max-time 10 -H "@$hdr" "$url.sha256" 2>/dev/null) &&
+    want=$(curl -fsSL --max-time 10 ${head:+-H "$head"} "$url.sha256" 2>/dev/null) &&
       [ "${want%% *}" != "$(sha256sum "$bin/$1-x86_64" | cut -d' ' -f1)" ] ||
       { rm -f "$hdr"; return 0; }
   fi
-  curl -fsSL --max-time 120 -H "@$hdr" "$url" -o "$part"
+  curl -fsSL --max-time 120 ${head:+-H "$head"} "$url" -o "$part"
   got=$?
   rm -f "$hdr"
   if [ "$got" != 0 ]; then
@@ -509,7 +508,7 @@ fetch() {
   mv "$part" "$bin/$1-x86_64"
 }
 # Once a boot, with the store's variables: the workflow skills and agents the
-# store holds (run_after_46c packs them) replace the folders of the same name
+# release holds (the workflow repo's CI packs them) replace the folders of the same name
 # under ~/.claude, so a changed skill reaches cloud sessions with no new
 # setup; Claude Code picks up a changed SKILL.md in a running session. One
 # the setup or the last bundle wrote that this bundle leaves out goes.
@@ -518,17 +517,10 @@ skills() {
   boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 0
   [ -e "$state/fresh-skills-$boot" ] && return 0
   mkdir -p "$state" && : >"$state/fresh-skills-$boot"
-  case "$HUB_STORE_URL" in wss://*) url=https ;; *) url=http ;; esac
-  host="${HUB_STORE_URL#*://}"
-  url="$url://${host%%/*}/store/dl/workflow-skills.tar.gz"
-  hdr="$state/skills.hdr.$$"
-  headers "$hdr" 1
-  want=$(curl -fsS --max-time 10 -H "@$hdr" "$url.sha256" 2>/dev/null) &&
+  url="$release/workflow-skills.tar.gz"
+  want=$(curl -fsSL --max-time 10 "$url.sha256" 2>/dev/null) &&
     want=${want%% *} && [ "$want" != "$(cat "$state/skills.sha256" 2>/dev/null)" ] &&
-    curl -fsSL --max-time 60 -H "@$hdr" "$url" -o "$state/skills.tar.gz"
-  got=$?
-  rm -f "$hdr"
-  [ "$got" = 0 ] || return 0
+    curl -fsSL --max-time 60 "$url" -o "$state/skills.tar.gz" || return 0
   [ "$(sha256sum "$state/skills.tar.gz" | cut -d' ' -f1)" = "$want" ] || return 0
   new="$state/skills.new"
   rm -rf "$new" && mkdir -p "$new" && tar -xzf "$state/skills.tar.gz" -C "$new" || return 0
@@ -555,8 +547,6 @@ skills() {
   rm -rf "$new" "$state/skills.tar.gz"
   printf '%s\n' "$want" >"$state/skills.sha256"
 }
-# The release the mini's run_after_46c-workflow-cloud-bins puts them in.
-release=https://github.com/saifulapm/workflow/releases/download/cloud-bins
 bake() {
   mkdir -p "$bin"
   for name in mem hub; do
@@ -571,14 +561,14 @@ case "${1:-}" in
   fetch) fetch "$2" ;;
   bake) bake ;;
   skills) skills ;;
-  # The binaries come from the store; the hub then works on the replica.
+  # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
   *) echo "mem-cloud: fetch <mem|hub>, sync <seconds>, bake or skills" >&2; exit 2 ;;
 esac
 "#;
 
 /// The `mem` a cloud session runs: the x86_64 binary `mem-cloud fetch mem`
-/// takes from the store, or from `$MEM_REMOTE/dl/mem` without the store's
+/// takes from the release, or from `$MEM_REMOTE/dl/mem` without the store's
 /// variables, fetched inside the session, where the proxy adds the Access
 /// token.
 ///
@@ -758,8 +748,8 @@ In claude.ai:
 3. Open the environment selector under the message box: New environment, named workflow
    (or, for one that exists, hover its row under Cloud and select the settings icon). Then:
    Network: Custom, with these allowed hosts:
-     {host}  (the store, and the binaries and their sums at /store/dl)
-     github.com, *.github.com, *.githubusercontent.com  (the repo, and the cloud-bins release the setup bakes from)
+     {host}  (the store)
+     github.com, *.github.com, *.githubusercontent.com  (the repo, and the cloud-bins release with the binaries, their sums and the skills)
      *.tailscale.com, log.tailscale.io  (Tailscale, which carries questions and answers)
    Network secrets: none for {host}
      (the proxy would send its own Authorization over HUB_STORE_TOKEN, and its

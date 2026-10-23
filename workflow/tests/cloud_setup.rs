@@ -420,7 +420,8 @@ fn setup_with(home: &Scratch, path: &str, vars: &[(&str, &str)]) -> std::process
 
 /// claude.ai runs the setup script with none of the environment's
 /// variables, so the setup bakes both binaries into the cached environment
-/// from the public release the mini publishes, with no secret on the way.
+/// from the public release the workflow repo's CI publishes, with no secret
+/// on the way.
 #[test]
 fn the_setup_bakes_both_binaries_from_the_release_with_no_secret() {
     let home = Scratch::new("cloud-setup-bake");
@@ -648,6 +649,42 @@ fn a_binary_the_store_holds_as_it_is_is_not_fetched_again() {
     );
 }
 
+/// The workflow repo's CI publishes each build, its sum and the skills on
+/// the public cloud-bins release, so the once-a-boot checks ask the release:
+/// through its redirect (`-L`), and with no header, since the store's bearer
+/// and the Access token are no business of GitHub's.
+#[test]
+fn the_checks_of_a_boot_ask_the_release_with_no_secret() {
+    let home = Scratch::new("cloud-shim-release");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.put("fake-mem", "#!/bin/sh\necho new mem \"$@\"\n");
+    store_sum(&home, "mem-x86_64", "fake-mem");
+    store_skills(&home, "# newer orchestrate\n", "# newer implementer\n");
+    fs::remove_file(&log).unwrap();
+    assert_eq!(
+        run_store_shim(&home, &path, &["context"]),
+        "new mem context\n"
+    );
+    let release = "https://github.com/saifulapm/workflow/releases/download/cloud-bins";
+    let calls = lines_of(&log, "curl");
+    for asked in [
+        "mem-x86_64.sha256",
+        "mem-x86_64 -o",
+        "workflow-skills.tar.gz.sha256",
+        "workflow-skills.tar.gz -o",
+    ] {
+        let call = calls
+            .iter()
+            .find(|c| c.contains(asked))
+            .unwrap_or_else(|| panic!("no curl for {asked}: {calls:?}"));
+        let file = asked.split(' ').next().unwrap();
+        assert!(call.contains(&format!("{release}/{file}")), "{call}");
+        assert!(call.contains("-fsSL"), "follows the redirect: {call}");
+        assert!(!call.contains(" -H "), "no header to GitHub: {call}");
+    }
+}
+
 /// A new build the store names but cannot hand over keeps the binary here.
 #[test]
 fn a_rebuilt_binary_that_does_not_come_keeps_the_one_here() {
@@ -724,8 +761,8 @@ fn the_first_mem_gives_the_catch_up_120_seconds() {
     );
 }
 
-/// The store's bundle of the workflow skills and agents, as the mini's
-/// run_after_46c packs it: `skills/<name>/SKILL.md` and `agents/<name>.md`.
+/// The release's bundle of the workflow skills and agents, as the workflow
+/// repo's CI packs it: `skills/<name>/SKILL.md` and `agents/<name>.md`.
 fn store_skills(home: &Scratch, skill: &str, agent: &str) {
     home.put("bundle/skills/orchestrate/SKILL.md", skill);
     home.put("bundle/agents/implementer.md", agent);
