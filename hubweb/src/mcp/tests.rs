@@ -487,6 +487,19 @@ fn ask_writes_a_pending_question_with_its_options() {
 }
 
 #[test]
+fn ask_refuses_a_recommendation_that_is_none_of_the_options() {
+    let mem = Mem::walk();
+    let (text, error, served) = tool(
+        &mem,
+        "ask",
+        json!({"project": "walk", "question": "Ford or bridge?", "options": "ford,bridge", "recommend": "ford, it is shorter"}),
+    );
+    assert!(error, "{text}");
+    assert!(text.contains("ford · bridge"), "{text}");
+    assert!(served.files.is_empty(), "nothing is written");
+}
+
+#[test]
 fn initialize_answers_the_version_asked_for_or_the_newest() {
     let mem = Mem::default();
     let (body, served) = call(

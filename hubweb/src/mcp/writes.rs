@@ -53,11 +53,24 @@ impl<F: memview::Files> Call<'_, F> {
             return Err("mem: the question is empty \u{2014} say what you are asking".into());
         }
         let mut keys = Vec::new();
-        if let Some(options) = optional(a, "options")?.filter(|o| !o.is_empty()) {
-            let options = options.split(',').map(|o| Toml::String(o.into())).collect();
-            keys.push(("options", Toml::Array(options)));
+        let options: Vec<&str> = optional(a, "options")?
+            .filter(|o| !o.is_empty())
+            .map(|o| o.split(',').collect())
+            .unwrap_or_default();
+        if !options.is_empty() {
+            let stored = options.iter().map(|o| Toml::String((*o).into())).collect();
+            keys.push(("options", Toml::Array(stored)));
         }
         if let Some(recommend) = optional(a, "recommend")? {
+            // The phone marks the recommended button by its text, as mem ask
+            // checks on a machine.
+            if !options.is_empty() && !options.contains(&recommend) {
+                return Err(format!(
+                    "mem: --recommend \"{recommend}\" is not one of the options: {} \u{2014} pass \
+                     it exactly as one of them",
+                    options.join(" · ")
+                ));
+            }
             keys.push(("recommend", Toml::String(recommend.into())));
         }
         // A person's question stores no audience; only the others are named.
