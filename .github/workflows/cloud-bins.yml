@@ -1,0 +1,70 @@
+# The x86_64 mem and hub that claude.ai cloud sessions run, and the workflow
+# skills and agents they take, rebuilt from every push to main onto the public
+# cloud-bins release. A cloud session's setup bakes the binaries from it, and
+# its mem checks each file's .sha256 there once a boot (workflow cloud-setup).
+name: cloud-bins
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One publisher at a time: a newer push waits, and the last build stands.
+concurrency:
+  group: cloud-bins
+  cancel-in-progress: false
+
+env:
+  TARGET: x86_64-unknown-linux-musl
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # A static binary runs on whatever the cloud VM is. mem builds SQLite
+      # and hub builds ring from C, so the musl link needs zig's C compiler.
+      - name: Toolchain
+        run: |
+          rustup target add "$TARGET"
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install -q ziglang==0.17.0
+          cargo install --quiet --locked cargo-zigbuild
+          echo "$RUNNER_TEMP/zig/bin" >>"$GITHUB_PATH"
+
+      - name: Build mem and hub
+        run: |
+          for crate in mem hub; do
+            (cd "$crate" && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/build" \
+              cargo zigbuild --release --quiet --target "$TARGET")
+          done
+
+      # The same bytes for the same skills, so the bundle's sum moves only
+      # when a skill or an agent does.
+      - name: Pack
+        run: |
+          mkdir out
+          for name in mem hub; do
+            cp "build/$TARGET/release/$name" "out/$name-x86_64"
+            (cd out && sha256sum "$name-x86_64" >"$name-x86_64.sha256")
+          done
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - skills agents |
+            gzip -n >out/workflow-skills.tar.gz
+          (cd out && sha256sum workflow-skills.tar.gz >workflow-skills.tar.gz.sha256)
+
+      # Each file goes up before its sum, so a cloud mem that sees a new sum
+      # finds the new file.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="The x86_64 mem and hub that cloud sessions run, and the workflow skills, rebuilt from every push to main."
+          gh release view cloud-bins >/dev/null 2>&1 ||
+            gh release create cloud-bins --prerelease --title "Cloud binaries" --notes "$notes"
+          gh release upload cloud-bins --clobber out/mem-x86_64 out/hub-x86_64 out/workflow-skills.tar.gz
+          gh release upload cloud-bins --clobber out/*.sha256
+          gh release edit cloud-bins --notes "$notes (${GITHUB_SHA::7})"
