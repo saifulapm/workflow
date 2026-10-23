@@ -73,6 +73,9 @@ defect.
 
 Capture each step: `playwright-cli screenshot --filename step-<n>.png` (a
 region, not the full screen), or `tmux capture-pane -p > step-<n>.txt`.
+When the brief names a progress file, append one line to it as each step
+ends: the step number, pass or fail, and the time. The orchestrator reads a
+silent file as a stalled walk.
 
 Then the edge pass, about 3 minutes. At each step that takes input, enter a
 300-character string with no spaces, an empty value, zero, and non-ASCII

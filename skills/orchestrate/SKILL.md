@@ -49,7 +49,10 @@ When the handoff or a ticked checklist says this milestone is half done,
 continue from the first open task. Never redo landed work. A `worktree-*`
 branch with commits and no tick is a dispatched task only when this
 project's `mem log` names it in a `dispatched ... on worktree-<name>` line:
-read it and land it as §2 says. Leave every other `worktree-*` branch
+read it and land it as §2 says. A `dispatching <task>` line with no
+`dispatched` line after it is a launch the last session never logged:
+look for its folder in `git worktree list`, and land what it holds or
+dispatch the task again. Leave every other `worktree-*` branch
 alone. The branches belong to the whole repo, and another orchestrator
 working on another app in another worktree owns it.
 
@@ -120,13 +123,22 @@ Write VERIFY as plain commands, one per line, each run from the worktree
 root or a subfolder the brief names, with tools by path. The implementer
 runs each as a call of its own, and Claude Code refuses a chained one.
 
-Give pointers, not pasted files. Log each dispatch with its branch, so a
-fresh orchestrator can find it: `mem log "dispatched <task> on
-worktree-<name> from <sha>"`. The branch is `worktree-agent-<id>`, from the
+Give pointers, not pasted files. Log each launch before it starts, `mem log
+"dispatching <task> from <sha>"`, and its branch once the launch returns, so
+a fresh orchestrator can find it: `mem log "dispatched <task> on
+worktree-<name>"`. The branch is `worktree-agent-<id>`, from the
 agent id the launch returns; if the launch does not name it, log the line
 when the subagent returns, before landing it. While subagents work, do the
 next solo task or write the next brief. A finished subagent is a queue
 event, not an interrupt.
+
+**Stalls.** Only a side effect is progress: a new commit or changed file in
+the subagent's worktree (`git -C <worktree> log -1 --format=%cr`, `git -C
+<worktree> status --short`), or a new line in its progress file. A subagent
+waiting on a question is not stuck, so answer it. Between tasks, check every
+running one. An implementer with nothing new for 20 minutes is stuck: stop it
+with TaskStop, then dispatch the task again with a better brief, or build it
+yourself.
 
 **Land each result yourself.** A worktree subagent commits on its own branch,
 `worktree-<name>`, cut from the trunk. Its folder is
@@ -218,6 +230,11 @@ a webhook, a message), for its forged-write check. It walks the real product
 on an isolated surface and files each defect with `mem finding add`. A UI-free milestone, such as a
 library or an internal refactor, has its walk replaced by running its
 examples or CLI once yourself.
+
+Brief the walker to append one line per step to
+`~/.cache/<project>-<milestone>/walk.log`, and watch that file with Monitor.
+A walk with no new line for 15 minutes has stalled: stop it and launch a
+fresh walker that starts from the last step the file shows.
 
 Fix each finding (`mem finding list --open`) with the diagnose skill. Its
 tight loop starts from the finding's evidence, and the fix closes it with
