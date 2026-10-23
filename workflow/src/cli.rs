@@ -223,10 +223,6 @@ usage: workflow <command> [options]
       0 clean (warnings included) · 1 hard fail
   hook <name> [--stub <path>] [-- <args>]
       the body of a git hook stub; the stub's exit code is the hook's
-  guard pnpm
-      a Claude Code PreToolUse hook: reads the hook's JSON on stdin and
-      refuses pnpm in a linked worktree whose node_modules is a symlink
-      0 allowed · 2 refused, the reason on stderr
   install
       write the embedded skills, agents and hook stubs where they are read,
       replacing symlinks with files and removing what older installs left
