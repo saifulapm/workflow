@@ -30,6 +30,13 @@ pages (`research-<topic>`) and a `research-summary` that ends with the
 questions only Saiful can answer. A small change in a known codebase skips
 this step.
 
+When the product must pass someone else's review to ship (the Theme Store,
+an app store, a marketplace), one subagent studies that gate before the
+first round: its written criteria, and what the products it accepted
+recently have in common. The spec answers it. Pawsome and Fine Print were
+each rejected at the Theme Store's design check before anyone studied the
+themes it accepts.
+
 Done when the research summary ends with those questions, or the change is
 small enough to skip.
 
@@ -66,6 +73,10 @@ state it in the round with its source. Ask a taste question with two or three
 small ASCII sketches rather than adjectives. When Saiful wants to see more, he
 makes a claude.ai artifact or asks you for one. Keep its link so the plan
 finds it: `mem save "<what it shows>: <url>" --title "artifact: <name>"`.
+
+Before the round goes out, check each recommended answer that touches the
+code against the code, the same way you check a fact: a pick the project
+already contradicts is a wrong recommendation.
 
 Done when the round holds every frontier decision with its recommended answer.
 
