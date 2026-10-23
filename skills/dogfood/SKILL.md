@@ -47,10 +47,14 @@ it.
 
 Launch the product the way `mem wiki verify#launch` (or the orchestrator's
 brief) says; the recipe for its kind of surface (web, mobile, cli, emacs,
-lib) is in `mem --project workflow wiki dogfood-playbooks`. Then run one
-read-only check that it is worth driving: a page
-that loads, a `--help` that prints, a health URL. Build or start what is at
-`HEAD`, and check that the binary or bundle is newer than the last commit.
+lib) is in `mem --project workflow wiki dogfood-playbooks`. Build or start
+what is at `HEAD`, and check that the binary or bundle is newer than the
+last commit. Then run one read-only check that it is ready to walk: the
+state step 1 needs is there and usable, such as the seeded record showing,
+the signed-in page listing its data, or a CLI's `--help` printing. A health
+URL proves a server started, not that its data did. When you walk a
+stand-in (a local copy, an emulator, a fake service), list in your report
+each thing it set up that the real target will not have.
 
 A product that does not start is one finding on step 0, with the output,
 and the walk ends there:
