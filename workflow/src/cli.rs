@@ -129,8 +129,9 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         long_about = "Print the setup script of the claude.ai cloud environment `workflow`.
 
 It writes this repository's skills and agents under ~/.claude, and a mem in
-/usr/local/bin that fetches the x86_64 mem from $MEM_REMOTE/dl/mem the first
-time it runs, inside the session, where the proxy adds the Access token."
+/usr/local/bin that takes the x86_64 mem and hub from the public cloud-bins
+release, and once a boot their newer builds and the skills, or without the
+store's variables from $MEM_REMOTE/dl, where the proxy adds the Access token."
     )]
     CloudSetup,
     /// Print the steps that set up the claude.ai cloud environment
