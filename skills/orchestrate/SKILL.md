@@ -119,9 +119,11 @@ write it whole:
     VERIFY      the exact targeted test command and typecheck
     STOP        what sends it back to you instead of improvising
 
-Write VERIFY as plain commands, one per line, each run from the worktree
-root or a subfolder the brief names, with tools by path. The implementer
-runs each as a call of its own, and Claude Code refuses a chained one.
+Write VERIFY as plain commands, one per line, with tools by path: each from
+the worktree root, or as `cd <subfolder> && <command>`. The implementer runs
+each as a call of its own, and Claude Code refuses most chained ones. A task
+that adds a dependency gets it installed in the main checkout before you
+dispatch it, since the implementer may not run pnpm, or you build it solo.
 
 Give pointers, not pasted files. Log each launch before it starts, `mem log
 "dispatching <task> from <sha>"`, and its branch once the launch returns, so

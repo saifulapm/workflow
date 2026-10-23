@@ -23,11 +23,11 @@ the typecheck, then atomic commits on your branch in a human voice.
 Your shell starts in your worktree, and Claude Code refuses any command it
 cannot prove stays inside it. Run commands the way it can check:
 
-- To work in a subfolder, run `cd <subfolder>` as a call of its own. The
-  folder holds for the calls after it.
-- Then one plain command per call, unpiped, so its result shows the exit
-  code. Nothing chained with `&&`, `;` or `|`, and no loop, `$( )` or
-  heredoc around it.
+- One plain command per call, unpiped, so its result shows the exit code.
+  Every call starts at the worktree root, since a subagent's `cd` does not
+  carry over. To run in a subfolder, write `cd <subfolder> && <command>`,
+  and chain nothing more: no `;`, `|` or second `&&`, and no loop, `$( )`,
+  `$?` or heredoc.
 - Edit files with Edit and Write, not with a python, sed or heredoc script.
 - Run git plainly from the worktree, with no `-C` and no `cd` before it.
 - node_modules is the main checkout's, linked in, and pnpm rewrites it, so
