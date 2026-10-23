@@ -18,6 +18,7 @@ pub mod embedded;
 pub mod exit;
 pub mod gitcmd;
 pub mod go;
+pub mod guard;
 pub mod hook;
 pub mod hygiene;
 pub mod install;
@@ -109,6 +110,7 @@ pub fn run(cli: Cli) -> i32 {
             json,
             fix,
         ),
+        Command::Guard { check: _ } => guard::cmd_guard_pnpm(),
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
         Command::CloudSetup => cloud::cmd_cloud_setup(),

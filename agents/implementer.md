@@ -8,6 +8,12 @@ disallowedTools: Agent
 color: green
 skills:
   - tdd
+hooks:
+  PreToolUse:
+    - matcher: Bash
+      hooks:
+        - type: command
+          command: workflow guard pnpm
 ---
 
 You build exactly one task, the one in your brief, with the tdd skill: the
