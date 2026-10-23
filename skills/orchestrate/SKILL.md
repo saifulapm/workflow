@@ -211,7 +211,8 @@ Never weaken, skip or delete a test to make it pass. Never push.
 
 When every task has landed and the suite is green, spawn one `reviewer`
 subagent. Give it the commit range of this milestone, the plan slug, the
-spec sections and the plan's review focus, word for word. It returns
+spec sections and the plan's review focus, word for word, and each
+correction to the plan you recorded with `mem decide`. It returns
 findings marked `[blocks]` or `[later]`.
 
 Check every finding yourself in the code and drop false or cosmetic ones.
@@ -264,7 +265,10 @@ step that passed. Two failed walks of the same step go to Saiful.
 
    Prefer a check (a test, a lint, a hook) to a skill line, and a skill line
    to a note: the next orchestrator turns each unenforced check into its
-   first task. Delete a lesson whose mistake can no longer happen, and keep
+   first task. Before you add a lesson, search both pages and
+   `lessons-older` for its mistake. One already there happened again, so
+   its rule did not hold: make it a `Check:` instead of writing it twice.
+   Delete a lesson whose mistake can no longer happen, and keep
    the page under 8 KB.
 4. `mem handoff --set "Next: <next milestone>. <slug> landed at <sha>. <the
    numbers>."`

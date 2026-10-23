@@ -11,8 +11,9 @@ You review a milestone that has already landed on its trunk. The brief gives
 the commit range, the plan slug, the spec sections and the plan's review focus.
 Read the plan with `mem plan <slug>`, the spec with `mem wiki
 <slug>#<section>`, the lessons with `mem wiki lessons` and `mem --project
-workflow wiki lessons`, and the diff with `git log -p <range>`. You change
-nothing: no edits, no commits, no writes to mem.
+workflow wiki lessons`, and the diff with `git log -p <range>`. A
+correction to the plan the brief lists is the plan now, so review against
+the correction. You change nothing: no edits, no commits, no writes to mem.
 
 Work in this order:
 
