@@ -303,3 +303,127 @@ fn the_last_milestone_landing_posts_too() {
         "walk01: w3 landed on mini"
     );
 }
+
+/// walk01 carried to the cloud by `carrier`, open on `open`, its cloud
+/// runner on `runner_milestone` since 08:00 and a handoff at `handoff_at`
+/// saying `handoff`. A fixture systemd-run logs what the hub starts.
+fn carried(
+    dir: &TempDir,
+    carrier: &str,
+    open: &str,
+    runner_milestone: &str,
+    handoff_at: Option<&str>,
+    handoff: &str,
+) -> PathBuf {
+    let bin = bins(dir);
+    fixture_bin(
+        &bin,
+        "systemd-run",
+        &format!("echo \"$*\" >>'{}'", dir.join("started.log").display()),
+    );
+    let since = jiff::Timestamp::now()
+        .checked_sub(jiff::SignedDuration::from_hours(2))
+        .unwrap();
+    let at = handoff_at.map(|_| {
+        jiff::Timestamp::now()
+            .checked_sub(jiff::SignedDuration::from_hours(1))
+            .unwrap()
+            .to_string()
+    });
+    let row = json!({
+        "name": "walk01", "checkouts": ["/x"], "roadmap_status": "approved",
+        "milestone": open, "milestones_done": 1, "milestones_total": 3,
+        "paused": null, "cloud": carrier, "handoff_at": at,
+        "runner": {"machine": "cloud", "id": "session_01Carried",
+                   "milestone": runner_milestone, "since": since.to_string()},
+    });
+    std::fs::write(
+        dir.join("projects.json"),
+        json!({ "projects": [row] }).to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("amx.json"), "[]").unwrap();
+    set_handoff(dir, handoff);
+    bin
+}
+
+fn started(dir: &TempDir) -> Vec<String> {
+    std::fs::read_to_string(dir.join("started.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn a_milestone_landed_in_the_cloud_starts_the_next_there_once() {
+    let dir = TempDir::new("carry-landed");
+    let bin = carried(&dir, "mini", "w2", "w1", Some("now"), "Next: w2.");
+    let (api, _posts) = fake_slack();
+    let _hub = spawn(&dir, &bin, &api, "60000");
+    wait_for("the cloud start", Duration::from_secs(5), || {
+        !started(&dir).is_empty()
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    let runs = started(&dir);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0].ends_with("workflow go walk01 --cloud"), "{runs:?}");
+}
+
+#[test]
+fn a_cloud_plan_that_ended_starts_the_first_milestone_in_the_cloud() {
+    let dir = TempDir::new("carry-plan");
+    let bin = carried(
+        &dir,
+        "mini",
+        "w1",
+        "plan",
+        Some("now"),
+        "Next: workflow go walk01 --cloud",
+    );
+    let (api, _posts) = fake_slack();
+    let _hub = spawn(&dir, &bin, &api, "60000");
+    wait_for("the cloud start", Duration::from_secs(5), || {
+        !started(&dir).is_empty()
+    });
+    assert!(started(&dir)[0].ends_with("workflow go walk01 --cloud"));
+}
+
+#[test]
+fn a_local_only_park_is_taken_here() {
+    let dir = TempDir::new("carry-local-only");
+    let bin = carried(
+        &dir,
+        "mini",
+        "w2",
+        "w2",
+        Some("now"),
+        "parked: local-only t5: needs cf",
+    );
+    let (api, _posts) = fake_slack();
+    let _hub = spawn(&dir, &bin, &api, "60000");
+    wait_for("the local start", Duration::from_secs(5), || {
+        !started(&dir).is_empty()
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    let runs = started(&dir);
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0].ends_with("workflow go walk01"), "{runs:?}");
+}
+
+#[test]
+fn only_the_carrier_starts_runs_and_never_over_a_live_one() {
+    let dir = TempDir::new("carry-not-mine");
+    let bin = carried(&dir, "nuc", "w2", "w1", Some("now"), "Next: w2.");
+    let (api, _posts) = fake_slack();
+    let _hub = spawn(&dir, &bin, &api, "60000");
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(started(&dir).is_empty(), "{:?}", started(&dir));
+
+    let dir = TempDir::new("carry-live");
+    let bin = carried(&dir, "mini", "w2", "w2", None, "");
+    let (api, _posts) = fake_slack();
+    let _hub = spawn(&dir, &bin, &api, "60000");
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(started(&dir).is_empty(), "{:?}", started(&dir));
+}

@@ -73,6 +73,9 @@ pub struct ProjectSummary {
     pub last_activity: Option<String>,
     /// When and by whom the project was paused, while it is.
     pub paused: Option<String>,
+    /// The machine whose local hub carries the project's milestones to the
+    /// cloud (`mem project set cloud`).
+    pub cloud: Option<String>,
     /// The machine and amx id `workflow go` last started it with.
     pub runner: Option<Runner>,
     /// RFC 3339, when the latest handoff was written.
@@ -125,6 +128,7 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
         tasks: (count(row, "plan_ticked"), count(row, "plan_total")),
         last_activity: text(row, "last_activity"),
         paused: text(row, "paused"),
+        cloud: text(row, "cloud"),
         runner: serde_json::from_value(row["runner"].clone()).ok(),
         handoff_at: text(row, "handoff_at"),
     }

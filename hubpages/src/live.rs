@@ -70,7 +70,7 @@ pub struct CloudRun {
 
 /// The milestone `workflow plan --cloud` records: a cloud plan names no
 /// roadmap milestone, so it never reads as landed.
-const PLAN: &str = "plan";
+pub const PLAN: &str = "plan";
 
 /// How long a cloud run that writes no handoff counts as live.
 const CLOUD_LAPSE: jiff::SignedDuration = jiff::SignedDuration::from_hours(7);
@@ -297,6 +297,7 @@ mod tests {
             tasks: (0, 0),
             last_activity: None,
             paused: None,
+            cloud: None,
             runner: None,
             handoff_at: None,
         }
