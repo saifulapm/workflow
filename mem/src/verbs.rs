@@ -377,6 +377,7 @@ fn project_summary(
     vec![
         ("roadmap_status", json!(declared(ROADMAP_STATUS))),
         ("paused", json!(declared("paused"))),
+        ("cloud", json!(declared("cloud"))),
         ("runner", runner_json(&app.store, id)),
         (
             "milestone",

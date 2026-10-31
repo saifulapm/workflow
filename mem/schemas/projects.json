@@ -26,6 +26,7 @@
           "worktree",
           "roadmap_status",
           "paused",
+          "cloud",
           "runner",
           "milestone",
           "milestones_done",
@@ -88,6 +89,13 @@
           },
           "paused": {
             "description": "\"<rfc3339 UTC> by <who>\" while the project is paused with `mem project set paused <who>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cloud": {
+            "description": "The machine whose local hub carries the project's milestones to the cloud, set with `mem project set cloud <machine>`; null when none does.",
             "type": [
               "string",
               "null"

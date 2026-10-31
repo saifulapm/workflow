@@ -456,6 +456,7 @@ pub enum ProjectKey {
     Paused,
     Runner,
     Share,
+    Cloud,
 }
 
 impl ProjectKey {
@@ -467,6 +468,7 @@ impl ProjectKey {
             ProjectKey::Paused => "paused",
             ProjectKey::Runner => "runner",
             ProjectKey::Share => "share",
+            ProjectKey::Cloud => "cloud",
         }
     }
 }
@@ -499,6 +501,11 @@ pub enum ProjectSetCommand {
     /// Share this project's writes with the other machines through the
     /// store, rather than through qshell-sync alone.
     Share,
+    /// The machine whose local hub carries this project's milestones to the
+    /// cloud: it starts the next one in a cloud session once one lands, and
+    /// takes a cloud run's local-only park itself. A plain `workflow go`
+    /// starts this project in the cloud too.
+    Cloud { machine: String },
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;
