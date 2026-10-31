@@ -268,6 +268,10 @@ fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
     assert!(prompt.contains("cloud/gamma-m2-next"), "{prompt}");
     assert!(prompt.contains("origin/main"), "cut from main: {prompt}");
     assert!(prompt.contains("orchestrate skill"), "{prompt}");
+    assert!(
+        prompt.contains("refreshes your skills"),
+        "skills read after the refresh: {prompt}"
+    );
     assert!(prompt.contains("mem project set runner cloud"), "{prompt}");
     assert!(prompt.contains("mem roadmap --tick m2-next"), "{prompt}");
     assert!(prompt.contains("parked:"), "{prompt}");

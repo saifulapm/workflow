@@ -118,6 +118,10 @@ fn print_shows_the_plan_prompt_on_its_branch_and_starts_nothing() {
         "{prompt}"
     );
     assert!(prompt.contains("the plan skill"), "{prompt}");
+    assert!(
+        prompt.contains("refreshes your skills"),
+        "skills read after the refresh: {prompt}"
+    );
     assert!(prompt.contains("cloud/gamma-plan"), "{prompt}");
     assert!(prompt.contains("--milestone plan"), "{prompt}");
     assert!(prompt.contains("mem questions --wait"), "{prompt}");
