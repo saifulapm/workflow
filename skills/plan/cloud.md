@@ -9,7 +9,8 @@ A cloud plan is the plan skill in a claude.ai cloud session
   this project from others in the same repo by that branch. Then record the
   run: `mem project set runner cloud <id> --milestone plan`, where `<id>` is
   `$CLAUDE_CODE_REMOTE_SESSION_ID` with `cse_` swapped for `session_`.
-- A plan changes no file of the repository. Write in a scratch directory and
+- A plan changes no file of the repository but the `.mem-outbox.json` that
+  `mem share export` stages. Write in a scratch directory and
   store everything with mem, as §4 and §5 say.
 - Saiful is never in this chat. Ask each fork of §2 and the roadmap review
   of §5 with `mem ask --for saiful`; the hub shows each with its buttons.
