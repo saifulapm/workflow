@@ -291,7 +291,10 @@ the open question with `mem ask --for human`, write `mem handoff --set
 "parked: <where you stopped, the question id, how to resume>"` and `mem log
 "parked: <why>"`, and say so. The handoff must start with `parked:`: that
 word is how the hub tells a parked milestone from a stalled one, and a
-stalled one rings his phone. Then end your own session with `amx stop
+stalled one rings his phone. Just before you stop, run `mem questions`
+once more: an answer that came in while you were parking is yours to act
+on now, because the hub saw this session live and left the answer to it.
+If one did, carry on instead of stopping. Otherwise end your own session with `amx stop
 --force "$AMX_ID"`: a session that only stops talking idles at its prompt,
 which the hub and `workflow go` read as a live orchestrator, so nothing
 could resume the milestone. The hub shows the question. Once he answers

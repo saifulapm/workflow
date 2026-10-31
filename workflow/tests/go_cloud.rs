@@ -801,3 +801,38 @@ fn a_local_only_park_stays_local_on_a_project_carried_to_the_cloud() {
     assert!(w.amx_started());
     assert_eq!(head(&w.checkout("gamma")), tip);
 }
+
+/// A project carried to the cloud pushes its own main before a cloud run,
+/// since the run starts from origin and a device just landed the milestone
+/// before it there.
+#[test]
+fn a_carried_project_pushes_its_main_before_the_cloud_run() {
+    let w = World::new("cloud-carried-push");
+    w.set("gamma", r#""cloud":"mini""#);
+    w.origin_with_cloud_branch_for("m1-first");
+    let checkout = w.checkout("gamma");
+    commit(&checkout, "landed on the device");
+    let local = head(&checkout);
+    let out = w.go_plain(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let origin = Command::new("git")
+        .args(["rev-parse", "origin/main"])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&origin.stdout).trim(), local);
+    assert!(w.claude_ran(), "{}", stderr(&out));
+}
+
+/// Without the cloud key, an unpushed main still refuses: pushing main is
+/// Saiful's call.
+#[test]
+fn an_uncarried_project_still_refuses_an_unpushed_main() {
+    let w = World::new("cloud-uncarried-push");
+    w.origin_with_cloud_branch_for("m1-first");
+    commit(&w.checkout("gamma"), "landed on the device");
+    let out = w.go_plain(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stderr(&out).contains("push main first"), "{}", stderr(&out));
+    assert!(!w.claude_ran());
+}

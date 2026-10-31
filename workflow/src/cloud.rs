@@ -125,6 +125,23 @@ pub fn state(
     Some(if within { State::Live } else { State::Ended })
 }
 
+/// `git push origin main` in `dir`, past the push hook, which lets a push
+/// through only with this variable: the project's cloud key is the yes.
+fn push_main(dir: &str) -> Result<(), String> {
+    let out = Command::new("git")
+        .args(["push", "-q", "origin", "main"])
+        .env("WORKFLOW_ALLOW_PUSH", "1")
+        .current_dir(dir)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 /// `workflow go <project> --cloud`, or with `print` only its prompt.
 pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     let Some(projects) = memcli::projects() else {
@@ -167,6 +184,17 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     if row.paused.is_some() {
         println!("{}: paused", start.project);
         return exit::USAGE;
+    }
+    // A project carried to the cloud pushes its own main: the run starts
+    // from origin, and a device has just landed the milestone before it
+    // there. Any other unpushed main stays Saiful's to push.
+    if row.cloud.as_deref().is_some_and(|m| !m.is_empty())
+        && unpushed(&start.dir).is_some_and(|n| n > 0)
+        && !print
+        && let Err(why) = push_main(&start.dir)
+    {
+        warn(format!("go: cannot push {}'s main: {why}", row.name));
+        return exit::FAILED;
     }
     if let Some(why) = refusal(row, &start.slug, &start.dir) {
         warn(format!("go: {why}"));
