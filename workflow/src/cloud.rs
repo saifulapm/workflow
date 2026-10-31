@@ -185,6 +185,32 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     start_session("go", &start.project, &start.dir, &text, &start.slug)
 }
 
+/// Whether a plain `workflow go` for `opts` starts in the cloud: the project
+/// names a machine that carries it there (`mem project set cloud`), and no
+/// cloud run of it is parked local-only, which a device takes itself.
+pub fn carried(opts: &Options) -> bool {
+    let Some(projects) = memcli::projects() else {
+        return false;
+    };
+    let name = match opts.project {
+        Some(project) => project.to_string(),
+        None => match memcli::project_current() {
+            Some(current) => current.name,
+            None => return false,
+        },
+    };
+    let Some(row) = projects.iter().find(|row| row.name == name) else {
+        return false;
+    };
+    if row.cloud.as_deref().is_none_or(str::is_empty) {
+        return false;
+    }
+    !matches!(
+        state(row, || memcli::handoff(&row.name), jiff::Timestamp::now()),
+        Some(State::LocalOnly)
+    )
+}
+
 /// `workflow plan <project> --cloud`, or with `print` only its prompt.
 pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
     let Some(projects) = memcli::projects() else {

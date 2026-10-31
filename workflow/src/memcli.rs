@@ -38,6 +38,10 @@ pub struct ProjectRow {
     /// "<when> by <who>" while the project is paused.
     #[serde(default)]
     pub paused: Option<String>,
+    /// The machine whose local hub carries this project's milestones to the
+    /// cloud (`mem project set cloud`).
+    #[serde(default)]
+    pub cloud: Option<String>,
     /// The machine and amx session running it, while one does.
     #[serde(default)]
     pub runner: Option<Runner>,

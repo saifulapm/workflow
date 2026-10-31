@@ -736,3 +736,68 @@ fn a_trunk_ahead_of_origin_main_refuses_until_main_is_pushed() {
     let out = w.go(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }
+
+impl World {
+    /// A plain `workflow go` with both claude and amx faked, so a run sent
+    /// the wrong way shows as the other one's log, never a real session.
+    fn go_plain(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_workflow"))
+            .arg("go")
+            .args(args)
+            .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_CLAUDE", self.work.at("claude"))
+            .env("WORKFLOW_AMX", self.work.at("amx"))
+            .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("WORKFLOW_MACHINE", "mini")
+            .env_remove("AMX_ID")
+            .current_dir(self.work.path())
+            .output()
+            .unwrap()
+    }
+}
+
+/// `mem project set cloud <machine>` sends the project's milestones to the
+/// cloud: a plain go, as an orchestrator runs when its milestone lands,
+/// starts the next one in a cloud session.
+#[test]
+fn a_project_carried_to_the_cloud_starts_there_on_a_plain_go() {
+    let w = World::new("cloud-carried");
+    w.set("gamma", r#""cloud":"mini""#);
+    let out = w.go_plain(&["gamma"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran(), "no cloud session: {}", stderr(&out));
+    assert!(!w.amx_started(), "a local orchestrator started");
+    assert!(
+        w.mem_calls()
+            .iter()
+            .any(|c| c.starts_with("project set runner cloud ")),
+        "{:?}",
+        w.mem_calls()
+    );
+}
+
+/// A local-only park is the one thing a device must do itself, cloud key
+/// or not: the plain go takes it here.
+#[test]
+fn a_local_only_park_stays_local_on_a_project_carried_to_the_cloud() {
+    let w = World::new("cloud-carried-local-only");
+    w.set("gamma", r#""cloud":"mini""#);
+    let tip = w.origin_with_cloud_branch_for("m2-next");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Parked","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(2)
+        ),
+    );
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put(
+        "handoff-gamma.md",
+        "parked: local-only t2: needs the desktop to walk the popup\n",
+    );
+    let out = w.go_plain(&["gamma"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(!w.claude_ran(), "it went to the cloud");
+    assert!(w.amx_started());
+    assert_eq!(head(&w.checkout("gamma")), tip);
+}

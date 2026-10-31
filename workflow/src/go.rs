@@ -748,6 +748,7 @@ The first stretch of a shop.
             roadmap_status: status.map(str::to_string),
             worktree: None,
             paused: None,
+            cloud: None,
             runner: None,
             remote: None,
             milestone: None,
