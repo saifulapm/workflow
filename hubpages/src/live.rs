@@ -68,11 +68,15 @@ pub struct CloudRun {
     pub state: CloudState,
 }
 
+/// The milestone `workflow plan --cloud` records: a cloud plan names no
+/// roadmap milestone, so it never reads as landed.
+const PLAN: &str = "plan";
+
 /// How long a cloud run that writes no handoff counts as live.
 const CLOUD_LAPSE: jiff::SignedDuration = jiff::SignedDuration::from_hours(7);
 
 /// The project's cloud run, or None when its runner is not one. Landed once
-/// its milestone is no longer the open one. Else a handoff written after it
+/// its milestone is no longer the open one, except a cloud plan's. Else a handoff written after it
 /// began parks it, when the handoff says `parked:`, or ends it; `handoff`
 /// reads that text and runs only then. Live or parked, it lasts seven hours
 /// from its start. A run with no readable start is neither.
@@ -92,7 +96,7 @@ pub fn cloud_run(
         .as_deref()
         .and_then(|at| at.parse::<jiff::Timestamp>().ok());
     let fresh = since.is_some_and(|since| now.duration_since(since) < CLOUD_LAPSE);
-    let state = if summary.milestone.as_deref() != Some(milestone.as_str()) {
+    let state = if milestone != PLAN && summary.milestone.as_deref() != Some(milestone.as_str()) {
         CloudState::Landed
     } else if handoff_at.is_some_and(|at| since.is_none_or(|since| at > since)) {
         // The 6-hour stop parks with no question, so a park lapses too, or
@@ -383,6 +387,22 @@ mod tests {
             at("2026-10-15T09:40:00Z"),
         );
         assert_eq!(state(run), CloudState::Landed);
+    }
+
+    #[test]
+    fn a_cloud_plan_is_live_until_its_handoff_never_landed() {
+        let planning = cloud_run(
+            &cloud("plan", Some("2026-10-15T08:00:00Z")),
+            unread,
+            at("2026-10-15T09:40:00Z"),
+        );
+        assert_eq!(state(planning), CloudState::Live);
+        let done = cloud_run(
+            &cloud("plan", Some("2026-10-15T09:30:00Z")),
+            || Some("Next: workflow go gamma --cloud".to_string()),
+            at("2026-10-15T09:40:00Z"),
+        );
+        assert_eq!(state(done), CloudState::Ended);
     }
 
     #[test]

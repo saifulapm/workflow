@@ -13,6 +13,14 @@ use crate::{embedded, exit, warn};
 /// the same file, so the two stay one text.
 const PROMPT: &str = include_str!("cloud-prompt.txt");
 
+/// The prompt a cloud plan starts on.
+const PLAN_PROMPT: &str = include_str!("cloud-plan-prompt.txt");
+
+/// The milestone a cloud plan records as its runner's: no roadmap names it,
+/// so the run is live until its handoff rather than landed at once, and the
+/// first cloud milestone after it is cut from its branch.
+pub const PLAN: &str = "plan";
+
 /// claude.ai's Code page, where a cloud session lives. Built with `concat!`,
 /// as the hygiene rule's own pattern is, so the rule keeps catching a pasted
 /// session link while the code that makes one can still name the page.
@@ -36,6 +44,14 @@ pub fn prompt(project: &str, slug: &str, base: &str) -> String {
         .replace("{project}", project)
         .replace("{slug}", slug)
         .replace("{base}", base)
+}
+
+/// The prompt for a cloud plan of `project`.
+pub fn plan_prompt(project: &str) -> String {
+    PLAN_PROMPT
+        .trim_end()
+        .replace("{branch}", &branch(project, PLAN))
+        .replace("{project}", project)
 }
 
 /// What the next cloud run is cut from: the branch of the cloud run that
@@ -83,7 +99,7 @@ pub fn state(
 ) -> Option<State> {
     let runner = row.runner.as_ref().filter(|r| r.machine == "cloud")?;
     let milestone = runner.milestone.as_ref()?;
-    if row.milestone.as_ref() != Some(milestone) {
+    if milestone != PLAN && row.milestone.as_ref() != Some(milestone) {
         return Some(State::Landed);
     }
     let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
@@ -156,23 +172,8 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
         warn(format!("go: {why}"));
         return exit::USAGE;
     }
-    // One cloud run at a time, across every project; a parked one still
-    // holds its session, which its answers go to.
-    let now = jiff::Timestamp::now();
-    let held = projects.iter().find(|row| {
-        matches!(
-            state(row, || memcli::handoff(&row.name), now),
-            Some(State::Live | State::Parked)
-        )
-    });
-    if let Some(other) = held {
-        let runner = other.runner.as_ref().expect("a cloud state has a runner");
-        warn(format!(
-            "go: a cloud run is live: {} ({}, {}); one runs at a time",
-            other.name,
-            runner.milestone.as_deref().unwrap_or("?"),
-            runner.id
-        ));
+    if let Some(why) = held_elsewhere(&projects) {
+        warn(format!("go: {why}"));
         return exit::USAGE;
     }
     let base = base(row);
@@ -181,19 +182,96 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
         println!("{text}");
         return exit::OK;
     }
-    let (ok, said) = match launch(&start.dir, &text) {
+    start_session("go", &start.project, &start.dir, &text, &start.slug)
+}
+
+/// `workflow plan <project> --cloud`, or with `print` only its prompt.
+pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
+    let Some(projects) = memcli::projects() else {
+        warn("plan: mem cannot list its projects");
+        return exit::FAILED;
+    };
+    let current = memcli::project_current();
+    let name = match project
+        .map(str::to_string)
+        .or_else(|| current.as_ref().map(|p| p.name.clone()))
+    {
+        Some(name) => name,
+        None => {
+            warn("plan: name a project, or run it in a project's checkout");
+            return exit::USAGE;
+        }
+    };
+    let Some(row) = projects.iter().find(|row| row.name == name) else {
+        warn(format!("plan: mem lists no {name}"));
+        return exit::USAGE;
+    };
+    let here = current.filter(|p| p.name == name).and_then(|p| p.root);
+    let listed = row
+        .checkouts
+        .iter()
+        .find(|dir| std::path::Path::new(dir).is_dir())
+        .cloned();
+    let Some(dir) = here.or(listed) else {
+        warn(format!("plan: {name} has no checkout on this machine"));
+        return exit::USAGE;
+    };
+    if row.paused.is_some() {
+        println!("{name}: paused");
+        return exit::USAGE;
+    }
+    if let Some(why) = repo_refusal(row, &dir) {
+        warn(format!("plan: {why}"));
+        return exit::USAGE;
+    }
+    if let Some(why) = held_elsewhere(&projects) {
+        warn(format!("plan: {why}"));
+        return exit::USAGE;
+    }
+    let text = plan_prompt(&name);
+    if print {
+        println!("{text}");
+        return exit::OK;
+    }
+    start_session("plan", &name, &dir, &text, PLAN)
+}
+
+/// The cloud run that holds the one cloud slot, if one does: one runs at a
+/// time across every project, and a parked one still holds its session,
+/// which its answers go to.
+fn held_elsewhere(projects: &[ProjectRow]) -> Option<String> {
+    let now = jiff::Timestamp::now();
+    let other = projects.iter().find(|row| {
+        matches!(
+            state(row, || memcli::handoff(&row.name), now),
+            Some(State::Live | State::Parked)
+        )
+    })?;
+    let runner = other.runner.as_ref().expect("a cloud state has a runner");
+    Some(format!(
+        "a cloud run is live: {} ({}, {}); one runs at a time",
+        other.name,
+        runner.milestone.as_deref().unwrap_or("?"),
+        runner.id
+    ))
+}
+
+/// Starts `text` in a cloud session from `dir`, records it as `project`'s
+/// cloud runner of `slug` and prints its link. `verb` names the command in
+/// what it says.
+fn start_session(verb: &str, project: &str, dir: &str, text: &str, slug: &str) -> i32 {
+    let (ok, said) = match launch(dir, text) {
         Launch::Ran(ok, said) => (ok, said),
         Launch::Untrusted => {
             warn(format!(
-                "go: claude asks whether to trust {dir} and starts nothing until it is; \
-run `claude` in {dir} once, answer Yes, I trust this folder, then go again",
-                dir = start.dir
+                "{verb}: claude asks whether to trust {dir} and starts nothing until it is; \
+run `claude` in {dir} once, answer Yes, I trust this folder, then {verb} again"
             ));
             return exit::FAILED;
         }
         Launch::Hung(said) => {
             warn(format!(
-                "go: claude --cloud started no session within 2 minutes:\n{}",
+                "{verb}: claude --cloud started no session within 2 minutes:\n{}",
                 said.trim()
             ));
             return exit::FAILED;
@@ -201,7 +279,7 @@ run `claude` in {dir} once, answer Yes, I trust this folder, then go again",
     };
     let Some(session) = session_of(&said) else {
         warn(format!(
-            "go: claude --cloud started no session{}:\n{}",
+            "{verb}: claude --cloud started no session{}:\n{}",
             if ok { "" } else { " and failed" },
             said.trim()
         ));
@@ -214,15 +292,16 @@ run `claude` in {dir} once, answer Yes, I trust this folder, then go again",
             warn(line);
         }
     }
-    if !memcli::set_cloud_runner(&start.project, &session, &start.slug) {
+    if !memcli::set_cloud_runner(project, &session, slug) {
         warn(format!(
-            "go: started {session}, but mem would not record it as the runner of {}",
-            start.project
+            "{verb}: started {session}, but mem would not record it as the runner of {project}"
         ));
     } else if !memcli::sync() {
         // The session records itself too, on the hub's store, within the
         // minute; a record still only here then forks into a conflict copy.
-        warn("go: no sync round carried the runner record to the hub; run `mem sync`");
+        warn(format!(
+            "{verb}: no sync round carried the runner record to the hub; run `mem sync`"
+        ));
     }
     println!("{CODE_PAGE}/{session}");
     exit::OK
@@ -280,22 +359,10 @@ enum Launch {
 /// the next milestone runs, since a later one would read as landed; and a
 /// device orchestrator keeps the project as a local go would.
 fn refusal(row: &ProjectRow, slug: &str, dir: &str) -> Option<String> {
+    if let Some(why) = repo_refusal(row, dir) {
+        return Some(why);
+    }
     let name = &row.name;
-    if row.worktree.is_some() {
-        return Some(format!(
-            "{name} works on a branch of its own; cloud runs take main"
-        ));
-    }
-    if row.remote.as_deref().is_none_or(str::is_empty) {
-        return Some(format!("{name} has no git remote"));
-    }
-    if let Some(n) = unpushed(dir).filter(|n| *n > 0) {
-        let commits = if n == 1 { "commit" } else { "commits" };
-        return Some(format!(
-            "{name}'s main is {n} {commits} ahead of origin/main; push main first: \
-a cloud run starts from origin"
-        ));
-    }
     if row.milestone.as_deref() != Some(slug) {
         return Some(format!(
             "a cloud run takes {name}'s next milestone, {}, not {slug}",
@@ -315,6 +382,28 @@ a cloud run starts from origin"
             .map(|id| format!("{name} already has an orchestrator running: {id}")),
         Err(why) => Some(why),
     }
+}
+
+/// Why `row` cannot run in the cloud at all, whatever it runs: a cloud
+/// session clones origin's main and finds the project by its remote.
+fn repo_refusal(row: &ProjectRow, dir: &str) -> Option<String> {
+    let name = &row.name;
+    if row.worktree.is_some() {
+        return Some(format!(
+            "{name} works on a branch of its own; cloud runs take main"
+        ));
+    }
+    if row.remote.as_deref().is_none_or(str::is_empty) {
+        return Some(format!("{name} has no git remote"));
+    }
+    if let Some(n) = unpushed(dir).filter(|n| *n > 0) {
+        let commits = if n == 1 { "commit" } else { "commits" };
+        return Some(format!(
+            "{name}'s main is {n} {commits} ahead of origin/main; push main first: \
+a cloud run starts from origin"
+        ));
+    }
+    None
 }
 
 /// `claude --cloud <prompt>` in `dir`, under a pty: claude refuses `--cloud`

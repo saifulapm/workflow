@@ -6,7 +6,9 @@ description: "Use when a spec is settled, or Saiful asks for a plan before build
 # plan
 
 One sitting writes the roadmap and every milestone's plan, and asks Saiful
-once. Work in a scratch directory, never the checkout: `d=$(mktemp -d)`.
+once. Work in a scratch directory, never the checkout: `d=$(mktemp -d)`. In
+a claude.ai cloud session, read `cloud.md` in this folder first: it changes
+how you ask and how you end.
 
 A plan is markdown for the agents that build the milestone. The
 orchestrator cuts its checklist from it, and the reviewer reads the landed

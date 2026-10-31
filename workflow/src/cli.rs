@@ -123,6 +123,24 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         #[arg(long, requires = "cloud")]
         print: bool,
     },
+    /// Start planning a project in a claude.ai cloud session.
+    #[command(long_about = "Start planning a project in a claude.ai cloud session.
+
+The session runs the plan skill and its cloud.md on the branch
+cloud/<project>-plan, asks Saiful through mem and waits there for his answers,
+and records itself as the project's cloud runner with the milestone `plan`. The
+first `workflow go <project> --cloud` after it is cut from that branch. Only
+--cloud exists: a device plans in the chat with the plan skill.")]
+    Plan {
+        /// The project, by mem's name; the current directory's when omitted.
+        project: Option<String>,
+        /// Start it in a claude.ai cloud session.
+        #[arg(long, required = true)]
+        cloud: bool,
+        /// Print the session's prompt and start nothing.
+        #[arg(long)]
+        print: bool,
+    },
     /// Print the setup script of the claude.ai cloud environment `workflow`.
     #[command(
         name = "cloud-setup",
@@ -234,6 +252,11 @@ usage: workflow <command> [options]
       0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
       the roadmap is not approved, the milestone already has an orchestrator,
       or the project is paused and its handoff does not start parked:
+  plan [<project>] --cloud [--print]
+      start planning the project in a claude.ai cloud session on the branch
+      cloud/<project>-plan and print its link; --print prints its prompt
+      0 started · 1 mem or claude failed · 2 refused: no remote, main not
+      pushed, or a cloud run is live
   pause <project> [--by <who>]
       hold the project once its current milestone lands; starts nothing
   unpause <project>

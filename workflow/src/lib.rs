@@ -135,6 +135,11 @@ pub fn run(cli: Cli) -> i32 {
             }
             go::cmd_go(&opts, dry_run)
         }
+        Command::Plan {
+            project,
+            cloud: _,
+            print,
+        } => cloud::cmd_plan_cloud(project.as_deref(), print),
         Command::Pause { project, by } => pause::cmd_pause(&project, by.as_deref()),
         Command::Unpause { project } => pause::cmd_unpause(&project),
         Command::Route { to } => route::cmd_route(to.as_deref()),
