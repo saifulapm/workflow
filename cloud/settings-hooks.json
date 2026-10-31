@@ -1,0 +1,32 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "mem context || true"
+        }
+      ]
+    }
+  ],
+  "PostToolBatch": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "mem context --brief --hook-json --session-id \"$CLAUDE_CODE_SESSION_ID\" || true"
+        }
+      ]
+    }
+  ],
+  "PreCompact": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "mem precompact --hook-json || true"
+        }
+      ]
+    }
+  ]
+}

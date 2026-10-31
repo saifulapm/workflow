@@ -1,4 +1,4 @@
-//! Embeds this repository's `skills/`, `agents/` and `hooks/` directories as a
+//! Embeds this repository's `skills/`, `agents/`, `hooks/` and `cloud/` directories as a
 //! static table of (path below the repository, bytes), which `workflow
 //! install` writes out. A file added to one of the directories is carried
 //! without any code change.
@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-const DIRS: [&str; 3] = ["skills", "agents", "hooks"];
+const DIRS: [&str; 4] = ["skills", "agents", "hooks", "cloud"];
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("cargo sets this"));

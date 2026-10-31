@@ -925,3 +925,70 @@ fn the_shim_leaves_a_machine_name_that_is_already_set() {
     let after = machine_file_after("cloud-machine-kept", "x", Some("mini\n"));
     assert_eq!(after.as_deref(), Some("mini\n"));
 }
+
+#[test]
+fn the_setup_gives_a_session_the_rules_and_the_mem_hooks() {
+    let home = Scratch::new("cloud-setup-kit");
+    // The image's own settings, which the merge keeps.
+    home.put(
+        ".claude/settings.json",
+        r#"{"permissions":{"allow":["Bash(ls)"]}}"#,
+    );
+    home.put("setup.sh", &script(&home));
+    let out = command("bash")
+        .arg(home.at("setup.sh"))
+        .env("HOME", home.path())
+        .env("PATH", offline(&home))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let rules = home.read(".claude/CLAUDE.md");
+    assert!(rules.contains("ctx7"), "{rules}");
+    let settings: serde_json::Value =
+        serde_json::from_str(&home.read(".claude/settings.json")).unwrap();
+    assert_eq!(
+        settings["permissions"]["allow"][0], "Bash(ls)",
+        "{settings}"
+    );
+    for event in ["SessionStart", "PostToolBatch", "PreCompact"] {
+        let command = settings["hooks"][event][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(command.starts_with("mem "), "{event}: {settings}");
+    }
+}
+
+/// The bundle's cloud kit: its skills join the others, its rules become the
+/// user's CLAUDE.md and its hooks merge into settings.json, on the first mem
+/// of a boot.
+#[test]
+fn the_first_mem_of_a_boot_takes_the_cloud_kit() {
+    let home = Scratch::new("cloud-shim-kit");
+    let (_log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.put("bundle/cloud/skills/vite/SKILL.md", "# vite\n");
+    home.put("bundle/cloud/CLAUDE.md", "# newer rules\n");
+    home.put(
+        "bundle/cloud/settings-hooks.json",
+        r#"{"PreCompact":[{"hooks":[{"type":"command","command":"mem precompact"}]}]}"#,
+    );
+    home.put("bundle/skills/orchestrate/SKILL.md", "# orchestrate\n");
+    home.put("bundle/agents/implementer.md", "# implementer\n");
+    let out = command("tar")
+        .args(["-C", home.at("bundle").to_str().unwrap(), "-czf"])
+        .arg(home.at("fake-skills.tar.gz"))
+        .args(["skills", "agents", "cloud"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    store_sum(&home, "workflow-skills.tar.gz", "fake-skills.tar.gz");
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(home.read(".claude/skills/vite/SKILL.md"), "# vite\n");
+    assert_eq!(home.read(".claude/CLAUDE.md"), "# newer rules\n");
+    let settings = home.read(".claude/settings.json");
+    assert!(settings.contains("mem precompact"), "{settings}");
+    assert!(
+        !home.at(".claude/skills/cloud").exists(),
+        "the kit's folder itself is no skill"
+    );
+}

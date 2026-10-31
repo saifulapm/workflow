@@ -631,9 +631,11 @@ mod tests {
         sorted.sort();
         assert_eq!(paths, sorted, "the table is in path order");
         assert!(
-            paths.iter().all(|p| ["skills/", "agents/", "hooks/"]
+            paths
                 .iter()
-                .any(|d| p.starts_with(d))),
+                .all(|p| ["skills/", "agents/", "hooks/", "cloud/"]
+                    .iter()
+                    .any(|d| p.starts_with(d))),
             "{paths:?}"
         );
         for hook in ["commit-msg", "pre-commit", "pre-push"] {

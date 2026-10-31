@@ -497,21 +497,45 @@ set -euo pipefail\n",
     // Each skill folder and agent file written here, by the name the
     // skills refresh deletes it by once the store's bundle leaves it out.
     let mut names = std::collections::BTreeSet::new();
+    // The cloud kit's hooks, merged once the helper that merges them exists.
+    let mut kit_hooks = None;
     for (rel, bytes) in files {
-        if !(rel.starts_with("skills/") || rel.starts_with("agents/")) {
-            continue;
-        }
         let text = String::from_utf8_lossy(bytes);
-        let dest = format!("\"$HOME/.claude/{rel}\"");
+        // The cloud kit: its rules are the user's CLAUDE.md, its hooks go
+        // into settings.json.
+        // Its skills are too big for the setup field and come with the
+        // skills refresh, which the SessionStart hook's mem call runs first.
+        let target = if *rel == "cloud/CLAUDE.md" {
+            "CLAUDE.md".to_string()
+        } else if *rel == "cloud/settings-hooks.json" {
+            kit_hooks = Some(text.into_owned());
+            continue;
+        } else if rel.starts_with("skills/") || rel.starts_with("agents/") {
+            rel.to_string()
+        } else {
+            continue;
+        };
+        let dest = format!("\"$HOME/.claude/{target}\"");
         out.push_str(&format!("mkdir -p \"$(dirname {dest})\"\n"));
         out.push_str(&format!("cat > {dest} <<'{END}'\n{text}{END}\n"));
-        names.insert(rel.splitn(3, '/').take(2).collect::<Vec<_>>().join("/"));
+        if target.contains('/') {
+            names.insert(target.splitn(3, '/').take(2).collect::<Vec<_>>().join("/"));
+        }
     }
     let names: String = names.into_iter().map(|name| format!("{name}\n")).collect();
     out.push_str(&format!(
         "mkdir -p \"$HOME/.local/state/hub\"\n\
 cat > \"$HOME/.local/state/hub/skills.list\" <<'{END}'\n{names}{END}\n"
     ));
+    let hooks = match kit_hooks {
+        Some(text) => format!(
+            "kit=$(mktemp)\n\
+cat > \"$kit\" <<'{END}'\n{text}{END}\n\
+\"$bin/mem-cloud\" hooks \"$kit\"\n\
+rm -f \"$kit\"\n"
+        ),
+        None => String::new(),
+    };
     out.push_str(&format!(
         "bin=/usr/local/bin\n\
 mkdir -p \"$bin\"\n\
@@ -519,7 +543,7 @@ cat > \"$bin/mem-cloud\" <<'{END}'\n{HELPER}{END}\n\
 chmod +x \"$bin/mem-cloud\"\n\
 cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
 chmod +x \"$bin/mem\"\n\
-if \"$bin/mem-cloud\" bake; then\n\
+{hooks}if \"$bin/mem-cloud\" bake; then\n\
   echo \"setup: baked mem and hub from the cloud-bins release\"\n\
 else\n\
   echo \"setup: no baked binaries: the release did not answer; each session fetches its own\"\n\
@@ -616,6 +640,16 @@ skills() {
   # The bundle is the whole set: a name the last one had (or the setup wrote)
   # that it lacks was removed from the repo. Only skills/<name> and
   # agents/<file> lines are ever removed.
+  # The cloud kit: its skills join the others, its rules and hooks go where
+  # Claude Code reads them.
+  if [ -d "$new/cloud/skills" ]; then
+    mkdir -p "$new/skills"
+    for item in "$new/cloud/skills"/*; do
+      [ -e "$item" ] && rm -rf "$new/skills/${item##*/}" && mv "$item" "$new/skills/"
+    done
+  fi
+  [ -s "$new/cloud/CLAUDE.md" ] && mkdir -p "$HOME/.claude" && cp "$new/cloud/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+  hooks "$new/cloud/settings-hooks.json"
   ( cd "$new" && for item in skills/* agents/*; do [ -e "$item" ] && echo "$item"; done ) >"$new.list"
   while IFS= read -r name; do
     case "$name" in
@@ -636,6 +670,25 @@ skills() {
   rm -rf "$new" "$state/skills.tar.gz"
   printf '%s\n' "$want" >"$state/skills.sha256"
 }
+# hooks <file>: merge the cloud kit's hooks into ~/.claude/settings.json,
+# keeping whatever else the image's settings hold.
+hooks() {
+  [ -s "$1" ] || return 0
+  mkdir -p "$HOME/.claude"
+  python3 - "$HOME/.claude/settings.json" "$1" <<'PY_EOF' || cp "$1" "$HOME/.claude/settings.json"
+import json, os, sys
+path, kit = sys.argv[1], sys.argv[2]
+settings = {}
+if os.path.exists(path):
+    try:
+        settings = json.load(open(path))
+    except ValueError:
+        settings = {}
+settings.setdefault("hooks", {}).update(json.load(open(kit)))
+with open(path, "w") as out:
+    json.dump(settings, out, indent=2)
+PY_EOF
+}
 bake() {
   mkdir -p "$bin"
   for name in mem hub; do
@@ -650,9 +703,10 @@ case "${1:-}" in
   fetch) fetch "$2" ;;
   bake) bake ;;
   skills) skills ;;
+  hooks) hooks "$2" ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub>, sync <seconds>, bake or skills" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub>, sync <seconds>, bake, skills or hooks <file>" >&2; exit 2 ;;
 esac
 "#;
 
@@ -930,6 +984,34 @@ mod tests {
     fn a_local_only_task_parks_for_a_device() {
         assert!(PROMPT.contains("`[local]`"), "{PROMPT}");
         assert!(PROMPT.contains("parked: local-only"), "{PROMPT}");
+    }
+
+    #[test]
+    fn the_cloud_kit_reaches_a_session_from_the_start() {
+        let script = setup_script(&[
+            ("cloud/CLAUDE.md", b"# rules\n"),
+            ("cloud/settings-hooks.json", b"{\"SessionStart\": []}\n"),
+            ("cloud/skills/vite/SKILL.md", b"vite\n"),
+        ]);
+        assert!(
+            script.contains("cat > \"$HOME/.claude/CLAUDE.md\""),
+            "{script}"
+        );
+        assert!(script.contains("# rules"), "{script}");
+        // The kit's skills are too big for the setup field: they come with
+        // the refresh the SessionStart hook's first mem call runs.
+        assert!(!script.contains("vite"), "{script}");
+        assert!(!script.contains(".claude/cloud/"), "{script}");
+        // The hooks merge into whatever settings the image holds.
+        assert!(script.contains("{\"SessionStart\": []}"), "{script}");
+        assert!(script.contains("mem-cloud\" hooks"), "{script}");
+    }
+
+    #[test]
+    fn the_skills_refresh_carries_the_cloud_kit_too() {
+        assert!(HELPER.contains("cloud/skills"), "{HELPER}");
+        assert!(HELPER.contains("cloud/CLAUDE.md"), "{HELPER}");
+        assert!(HELPER.contains("settings-hooks.json"), "{HELPER}");
     }
 
     #[test]
