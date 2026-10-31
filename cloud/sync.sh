@@ -9,7 +9,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 skills_src=${SKILLS_SRC:-$HOME/.local/src/skills/skills}
 kit_skills="frontend-design pnpm vite vitest"
 
-cp "$(readlink -f "$HOME/.claude/CLAUDE.md")" "$here/CLAUDE.md"
+cp "$(readlink -f "$HOME/.claude/CLAUDE.md")" "$here/rules.md"
 jq '.hooks' "$HOME/.claude/settings.json" >"$here/settings-hooks.json"
 rm -rf "$here/skills"
 mkdir -p "$here/skills"

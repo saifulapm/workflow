@@ -967,7 +967,7 @@ fn the_first_mem_of_a_boot_takes_the_cloud_kit() {
     let (_log, path) = store_fakes(&home, 0);
     setup_with(&home, &path, &STORE_ENV);
     home.put("bundle/cloud/skills/vite/SKILL.md", "# vite\n");
-    home.put("bundle/cloud/CLAUDE.md", "# newer rules\n");
+    home.put("bundle/cloud/rules.md", "# newer rules\n");
     home.put(
         "bundle/cloud/settings-hooks.json",
         r#"{"PreCompact":[{"hooks":[{"type":"command","command":"mem precompact"}]}]}"#,

@@ -505,7 +505,7 @@ set -euo pipefail\n",
         // into settings.json.
         // Its skills are too big for the setup field and come with the
         // skills refresh, which the SessionStart hook's mem call runs first.
-        let target = if *rel == "cloud/CLAUDE.md" {
+        let target = if *rel == "cloud/rules.md" {
             "CLAUDE.md".to_string()
         } else if *rel == "cloud/settings-hooks.json" {
             kit_hooks = Some(text.into_owned());
@@ -648,7 +648,7 @@ skills() {
       [ -e "$item" ] && rm -rf "$new/skills/${item##*/}" && mv "$item" "$new/skills/"
     done
   fi
-  [ -s "$new/cloud/CLAUDE.md" ] && mkdir -p "$HOME/.claude" && cp "$new/cloud/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+  [ -s "$new/cloud/rules.md" ] && mkdir -p "$HOME/.claude" && cp "$new/cloud/rules.md" "$HOME/.claude/CLAUDE.md"
   hooks "$new/cloud/settings-hooks.json"
   ( cd "$new" && for item in skills/* agents/*; do [ -e "$item" ] && echo "$item"; done ) >"$new.list"
   while IFS= read -r name; do
@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn the_cloud_kit_reaches_a_session_from_the_start() {
         let script = setup_script(&[
-            ("cloud/CLAUDE.md", b"# rules\n"),
+            ("cloud/rules.md", b"# rules\n"),
             ("cloud/settings-hooks.json", b"{\"SessionStart\": []}\n"),
             ("cloud/skills/vite/SKILL.md", b"vite\n"),
         ]);
@@ -1010,7 +1010,7 @@ mod tests {
     #[test]
     fn the_skills_refresh_carries_the_cloud_kit_too() {
         assert!(HELPER.contains("cloud/skills"), "{HELPER}");
-        assert!(HELPER.contains("cloud/CLAUDE.md"), "{HELPER}");
+        assert!(HELPER.contains("cloud/rules.md"), "{HELPER}");
         assert!(HELPER.contains("settings-hooks.json"), "{HELPER}");
     }
 
