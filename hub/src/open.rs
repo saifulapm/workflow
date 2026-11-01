@@ -123,14 +123,18 @@ impl Known {
     }
 
     /// The route device's side: rings `open` on `host` unless the asking hub
-    /// already sent it elsewhere. Whether it rings here now.
+    /// already sent it elsewhere. A copy that already names `host` is the
+    /// asking hub moving the question here after a route change, which
+    /// overrules where it rang. Whether it rings here now.
     pub fn take(&self, mut open: Open, host: &str) -> bool {
         let mut all = self.lock();
         let decided = all
             .iter()
             .find(|o| o.id == open.id)
             .and_then(|o| o.ring.clone());
-        if let Some(ring) = decided {
+        if let Some(ring) = decided
+            && open.ring.as_deref() != Some(host)
+        {
             return ring == host;
         }
         open.ring = Some(host.to_string());

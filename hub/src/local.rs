@@ -268,6 +268,7 @@ impl Local {
             ("POST", "/route") => match serde_json::from_slice::<Stamped>(&request.body) {
                 Ok(chosen) if chosen.at.is_none() => {
                     let chosen = self.route_now.choose(chosen, &self.host);
+                    self.reroute(&chosen);
                     let body = serde_json::to_vec(&chosen).unwrap_or_default();
                     self.tell_peers("/route", body.clone());
                     Response::new(200, "application/json", body)
@@ -357,7 +358,9 @@ impl Local {
             // A change made on this machine carries no stamp; a peer's does.
             ("POST", "/route") => match serde_json::from_slice::<Stamped>(&request.body) {
                 Ok(theirs) if theirs.at.is_some() => {
-                    self.route_now.offer(theirs);
+                    if self.route_now.offer(theirs.clone()) {
+                        self.reroute(&theirs);
+                    }
                     Response::text(200, "ok")
                 }
                 Ok(_) => Response::text(400, "a peer's route carries the time it was chosen"),
@@ -576,7 +579,11 @@ impl Local {
 
     /// A route from the store, taken only when it is newer than this hub's.
     pub fn offer_route(&self, theirs: Stamped) -> bool {
-        self.route_now.offer(theirs)
+        let taken = self.route_now.offer(theirs.clone());
+        if taken {
+            self.reroute(&theirs);
+        }
+        taken
     }
 
     /// Ends every wait early, so each mem waiting looks at its store again.
@@ -593,23 +600,46 @@ impl Local {
         if !open.person || asked.is_review() {
             return;
         }
-        let ringer = Ringer {
+        let ringer = self.ringer_for(&open);
+        let route = self.route_now.get();
+        std::thread::spawn(move || ringer.ring(&route, open));
+    }
+
+    fn ringer_for(&self, open: &Open) -> Ringer {
+        Ringer {
             slack: self.slack.clone(),
             known: Arc::clone(&self.known),
             posted: Arc::clone(&self.posted),
             host: self.host.clone(),
             token: self.token.clone(),
             question: Question {
-                id: asked.id.clone(),
-                project: asked.project.clone().unwrap_or_default(),
+                id: open.id.clone(),
+                project: open.project.clone().unwrap_or_default(),
                 machine: self.host.clone(),
-                text: asked.text.clone(),
-                options: asked.options.clone(),
-                recommend: asked.recommend.clone(),
+                text: open.text.clone(),
+                options: open.options.clone(),
+                recommend: open.recommend.clone(),
             },
+        }
+    }
+
+    /// A route this hub has just taken moves the person questions it asked
+    /// that ring somewhere else: each is rung again on the new route, on a
+    /// thread of its own. A question not yet rung, or one that never rings,
+    /// is left alone.
+    fn reroute(&self, route: &Stamped) {
+        let target = match (route.route, &route.machine) {
+            (Kind::Device, Some(machine)) => machine.as_str(),
+            _ => "phone",
         };
-        let route = self.route_now.get();
-        std::thread::spawn(move || ringer.ring(&route, open));
+        for open in self.known.asked_by(&self.host) {
+            if !open.person || open.ring.as_deref().is_none_or(|ring| ring == target) {
+                continue;
+            }
+            let ringer = self.ringer_for(&open);
+            let route = route.clone();
+            std::thread::spawn(move || ringer.ring(&route, open));
+        }
     }
 
     /// Saiful's tap: the answer goes to the hub that asked, this one or a
@@ -1036,7 +1066,9 @@ impl Local {
             match request(&peer, "GET", "/route", &self.token, b"") {
                 Ok((200, body)) => match serde_json::from_str::<Stamped>(&body) {
                     Ok(theirs) => {
-                        self.route_now.offer(theirs);
+                        if self.route_now.offer(theirs.clone()) {
+                            self.reroute(&theirs);
+                        }
                     }
                     Err(e) => say(format!("hub: local: {peer} sent no route: {e}")),
                 },
@@ -1289,7 +1321,13 @@ impl Ringer {
             serde_json::to_vec(&open).unwrap_or_default(),
             Some((Arc::clone(&self.known), open.id.clone())),
         );
-        if taken.is_none() {
+        // A question moved back to Phone keeps the message it already has.
+        let on_slack = self
+            .posted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&open.id);
+        if taken.is_none() && !on_slack {
             self.post_to_slack();
         }
     }
@@ -1304,7 +1342,12 @@ impl Ringer {
             eprintln!("hub: local: {machine} is offline");
             return false;
         }
-        let body = serde_json::to_vec(open).unwrap_or_default();
+        // A question already rung is being moved: say where to.
+        let mut offered = open.clone();
+        if offered.ring.is_some() {
+            offered.ring = Some(machine.to_string());
+        }
+        let body = serde_json::to_vec(&offered).unwrap_or_default();
         match request_within(machine, "POST", "/ring", &self.token, &body, ring_timeout()) {
             Ok((200, _)) => true,
             Ok((status, why)) => {

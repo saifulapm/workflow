@@ -841,3 +841,88 @@ fn a_long_question_loses_its_buttons_once_answered() {
     );
     assert!(section.ends_with("*Answered:* no"), "{section}");
 }
+
+fn route_phone(on: &Machine) {
+    post(&on.socket(), "/route", r#"{"route":"phone"}"#);
+}
+
+#[test]
+fn a_route_change_to_phone_moves_the_open_question_to_slack() {
+    let dir = TempDir::new("reroute-phone");
+    let slack = slack();
+    // The mini must know the nuc to tell it, so the nuc's port is fixed first.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mini = machine(
+        &dir,
+        "mini",
+        Seat::Watching,
+        &[&format!("127.0.0.1:{port}")],
+        None,
+        &[],
+    );
+    let nuc = machine_at(
+        &dir,
+        "nuc",
+        Seat::NoShell,
+        &[&mini.host()],
+        Some(&slack),
+        &[],
+        port,
+    );
+    route_device(&nuc, &mini.host());
+    ask(&nuc);
+    common::wait_for("the mini's popup", Duration::from_secs(2), || {
+        mini.popups() == 1
+    });
+
+    // Chosen on the mini: the nuc takes it as a peer's and re-rings.
+    route_phone(&mini);
+    common::wait_for("the popup to drop", Duration::from_secs(2), || {
+        mini.popups() == 0 && mini.listed().first().map(|q| q["ring"] == "phone") == Some(true)
+    });
+    common::wait_for("a Slack post", Duration::from_secs(2), || {
+        slack.posted() == 1
+    });
+    assert_eq!(nuc.listed()[0]["ring"], "phone");
+}
+
+#[test]
+fn a_route_change_to_a_device_moves_the_open_question_there_without_a_second_post() {
+    let dir = TempDir::new("reroute-device");
+    let slack = slack();
+    let mini = machine(&dir, "mini", Seat::Watching, &[], None, &[]);
+    let nuc = machine(
+        &dir,
+        "nuc",
+        Seat::NoShell,
+        &[&mini.host()],
+        Some(&slack),
+        &[],
+    );
+    ask(&nuc);
+    common::wait_for("a Slack post", Duration::from_secs(2), || {
+        slack.posted() == 1
+    });
+    assert_eq!(mini.popups(), 0);
+
+    // Chosen on the asking hub itself.
+    route_device(&nuc, &mini.host());
+    common::wait_for("the mini's popup", Duration::from_secs(2), || {
+        mini.popups() == 1
+    });
+    assert_eq!(nuc.listed()[0]["ring"], mini.host());
+
+    // Back to Phone: the Slack message is still there, so no second post.
+    route_phone(&nuc);
+    common::wait_for("the popup to drop", Duration::from_secs(2), || {
+        mini.popups() == 0
+    });
+    assert_eq!(nuc.listed()[0]["ring"], "phone");
+    quiet_for("no second Slack post", Duration::from_millis(500), || {
+        slack.posted() == 1
+    });
+}
