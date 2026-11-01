@@ -435,7 +435,7 @@ impl Local {
                 // forgot it must not read as taken.
                 Ok(answer) if !self.asks(&answer.question) => Response::not_found(),
                 Ok(answer) => {
-                    let shots = match answer.shots().iter().map(|s| s.bytes()).collect() {
+                    let shots = match answer.shots().iter().map(|s| s.attachment()).collect() {
                         Ok(shots) => shots,
                         Err(e) => return Response::text(400, &e),
                     };
@@ -507,7 +507,10 @@ impl Local {
         let mut shots = Vec::new();
         for path in given.screenshot.iter().chain(&given.screenshots) {
             match std::fs::read(path) {
-                Ok(bytes) => shots.push(bytes),
+                Ok(bytes) => {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                    shots.push((name, bytes));
+                }
                 Err(e) => return Response::text(400, &format!("reading {}: {e}", path.display())),
             }
         }
@@ -546,6 +549,14 @@ impl Local {
         });
         if !shots.is_empty() {
             body["screenshots"] = encoded(&shots);
+        }
+        // The asking machine refuses a body over this, which mem could only
+        // report as an unreachable machine.
+        if body.to_string().len() > crate::http::MAX_UPLOAD_BODY {
+            return Response::text(
+                413,
+                "the attachments are too large to send to the machine that asked (8 MiB at most)",
+            );
         }
         match request(
             &open.machine,
@@ -785,7 +796,7 @@ impl Local {
                     }
                     continue;
                 }
-                let Some(file) = save_shot(&id, 0, photo) else {
+                let Some(file) = save_shot(&id, 0, None, photo) else {
                     continue;
                 };
                 let task = format!("#{id}");
@@ -829,7 +840,7 @@ impl Local {
             .map(|a| a.text.clone())
             .or_else(|| self.known.get(&id).map(|o| o.text))
             .unwrap_or_else(|| format!("#{id}"));
-        let shots = reply.photos;
+        let shots: Vec<Attachment> = reply.photos.into_iter().map(|b| (None, b)).collect();
         let shown = if reply.machine == self.host {
             match self.deliver(&id, &reply.text, "slack", shots) {
                 Ok(()) => Some(reply.text.clone()),
@@ -918,7 +929,7 @@ impl Local {
         question: &str,
         answer: &str,
         by: &str,
-        shots: Vec<Vec<u8>>,
+        shots: Vec<Attachment>,
     ) -> Result<(), String> {
         let project = self
             .asked
@@ -959,7 +970,7 @@ impl Local {
             let files: Vec<PathBuf> = shots
                 .iter()
                 .enumerate()
-                .filter_map(|(n, bytes)| save_shot(question, n, bytes))
+                .filter_map(|(n, (name, bytes))| save_shot(question, n, name.as_deref(), bytes))
                 .collect();
             for file in &files {
                 argv.extend(["--screenshot".into(), file.display().to_string()]);
@@ -1438,32 +1449,70 @@ struct Given {
     screenshots: Vec<PathBuf>,
 }
 
-/// Images as they travel between hubs, in order.
-fn encoded(shots: &[Vec<u8>]) -> serde_json::Value {
+/// A file that goes with an answer: the name it had, when it had one, and
+/// its bytes.
+type Attachment = (Option<String>, Vec<u8>);
+
+/// Attachments as they travel between hubs, in order. An older hub reads
+/// the data and ignores the name.
+fn encoded(shots: &[Attachment]) -> serde_json::Value {
     let all: Vec<_> = shots
         .iter()
-        .map(|bytes| serde_json::json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}))
+        .map(|(name, bytes)| {
+            let mut shot =
+                serde_json::json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)});
+            if let Some(name) = name {
+                shot["name"] = serde_json::json!(name);
+            }
+            shot
+        })
         .collect();
     serde_json::Value::Array(all)
 }
 
-/// A screenshot as it travels between hubs.
+/// An attachment as it travels between hubs. `name` is missing from an
+/// older hub.
 #[derive(Debug, serde::Deserialize)]
 struct Shot {
     data: String,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 impl Shot {
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        base64::engine::general_purpose::STANDARD
+    fn attachment(&self) -> Result<Attachment, String> {
+        let bytes = base64::engine::general_purpose::STANDARD
             .decode(&self.data)
-            .map_err(|e| format!("the screenshot is not base64: {e}"))
+            .map_err(|e| format!("the screenshot is not base64: {e}"))?;
+        Ok((self.name.clone(), bytes))
     }
 }
 
-/// Keeps a screenshot where mem can file it, 0600 under the state
-/// directory, until mem has.
-fn save_shot(question: &str, n: usize, bytes: &[u8]) -> Option<PathBuf> {
+/// The part of an attachment's name that is safe in a file name: its last
+/// path component with anything but letters, digits, dot, dash and
+/// underscore made an underscore, no leading dot, the last 64 characters.
+/// None when nothing is left, or no name came.
+fn safe_name(name: Option<&str>) -> Option<String> {
+    let last = name?.rsplit(['/', '\\']).next()?;
+    let clean: String = last
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let clean = clean.trim_start_matches('.');
+    let start = clean.len().saturating_sub(64);
+    let clean = clean[start..].trim_start_matches('.');
+    (!clean.is_empty()).then(|| clean.to_string())
+}
+
+/// Keeps an attachment where mem can file it, 0600 under the state
+/// directory, until mem has. It keeps the name it came with, else is a png.
+fn save_shot(question: &str, n: usize, name: Option<&str>, bytes: &[u8]) -> Option<PathBuf> {
     use std::os::unix::fs::OpenOptionsExt;
     // A question id names the file, so it may name nothing else.
     if question.is_empty() || !question.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -1475,7 +1524,8 @@ fn save_shot(question: &str, n: usize, bytes: &[u8]) -> Option<PathBuf> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    let path = dir.join(format!("{question}-{nanos}-{n}.png"));
+    let tail = safe_name(name).map_or_else(|| ".png".to_string(), |name| format!("-{name}"));
+    let path = dir.join(format!("{question}-{nanos}-{n}{tail}"));
     let written = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

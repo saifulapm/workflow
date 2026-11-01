@@ -791,3 +791,110 @@ fn a_ring_for_a_question_this_hub_never_asked_in_its_name_is_refused() {
     std::thread::sleep(Duration::from_millis(200));
     assert!(listed(&dir, "nuc").is_empty(), "{:?}", listed(&dir, "nuc"));
 }
+
+/// The file argument after each `--screenshot` in a mem log.
+fn kept_files(log: &Path) -> Vec<String> {
+    let logged = std::fs::read_to_string(log).unwrap();
+    let lines: Vec<&str> = logged.lines().collect();
+    lines
+        .windows(2)
+        .filter(|w| w[0] == "--screenshot")
+        .map(|w| w[1].to_string())
+        .collect()
+}
+
+#[test]
+fn an_attachment_keeps_its_name_when_the_question_was_asked_here() {
+    let dir = TempDir::new("attach-here");
+    let (_nuc, _mini, nuc_log, _) = asked_on_the_nuc(&dir);
+    let pdf = dir.join("quarterly report.pdf");
+    std::fs::write(&pdf, b"%PDF-1.7 pretend").unwrap();
+    let body = serde_json::json!({
+        "question": "ABCD1234", "answer": "ok", "by": "popup",
+        "screenshots": [pdf.to_str().unwrap()],
+    })
+    .to_string();
+    let given = answer_on(&socket_of(&dir, "nuc"), &body);
+    assert_eq!(status_of(&given), 200, "{given}");
+    common::wait_for("the nuc records it", Duration::from_secs(5), || {
+        std::fs::read_to_string(&nuc_log).is_ok_and(|l| l.contains("ABCD1234"))
+    });
+    let kept = kept_files(&nuc_log);
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let name = Path::new(&kept[0]).file_name().unwrap().to_str().unwrap();
+    assert!(name.starts_with("ABCD1234-"), "{name}");
+    assert!(name.ends_with("-0-quarterly_report.pdf"), "{name}");
+}
+
+#[test]
+fn an_attachment_keeps_its_name_to_the_asking_machine() {
+    let dir = TempDir::new("attach-peer");
+    let (_nuc, _mini, nuc_log, _) = asked_on_the_nuc(&dir);
+    let zip = dir.join("logs.tar.gz");
+    std::fs::write(&zip, b"not really a zip").unwrap();
+    let body = serde_json::json!({
+        "question": "ABCD1234", "answer": "ok", "by": "popup",
+        "screenshots": [zip.to_str().unwrap()],
+    })
+    .to_string();
+    let given = answer_on(&socket_of(&dir, "mini"), &body);
+    assert_eq!(status_of(&given), 200, "{given}");
+    common::wait_for("the nuc records it", Duration::from_secs(5), || {
+        std::fs::read_to_string(&nuc_log).is_ok_and(|l| l.contains("ABCD1234"))
+    });
+    let kept = kept_files(&nuc_log);
+    assert!(kept[0].ends_with("-0-logs.tar.gz"), "{kept:?}");
+    assert_eq!(
+        std::fs::read(dir.join("nuc-shot-0.png")).unwrap(),
+        b"not really a zip"
+    );
+}
+
+#[test]
+fn a_peers_attachment_name_is_untrusted_and_a_missing_one_is_a_png() {
+    let dir = TempDir::new("attach-untrusted");
+    let (nuc, _mini, nuc_log, _) = asked_on_the_nuc(&dir);
+    let body = r#"{"question":"ABCD1234","answer":"ok","by":"popup","screenshots":[
+        {"data":"aGVsbG8=","name":"../../.ssh/x y.pdf"},
+        {"data":"aGVsbG8="},
+        {"data":"aGVsbG8=","name":"...","extra":1}]}"#;
+    let given = answer(&nuc, body);
+    assert_eq!(status_of(&given), 200, "{given}");
+    common::wait_for("the nuc records it", Duration::from_secs(5), || {
+        std::fs::read_to_string(&nuc_log).is_ok_and(|l| l.contains("ABCD1234"))
+    });
+    let kept = kept_files(&nuc_log);
+    let names: Vec<&str> = kept
+        .iter()
+        .map(|k| Path::new(k).file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert!(names[0].ends_with("-0-x_y.pdf"), "{names:?}");
+    assert!(names[1].ends_with("-1.png"), "{names:?}");
+    assert!(names[2].ends_with("-2.png"), "{names:?}");
+    for k in &kept {
+        assert_eq!(
+            Path::new(k).parent().unwrap().file_name().unwrap(),
+            "screenshots"
+        );
+    }
+}
+
+#[test]
+fn attachments_too_large_to_send_are_refused_with_a_clear_line() {
+    let dir = TempDir::new("attach-large");
+    let (_nuc, _mini, nuc_log, _) = asked_on_the_nuc(&dir);
+    let big = dir.join("disk.img");
+    std::fs::write(&big, vec![7u8; 7 * 1024 * 1024]).unwrap();
+    let body = serde_json::json!({
+        "question": "ABCD1234", "answer": "ok", "by": "popup",
+        "screenshots": [big.to_str().unwrap()],
+    })
+    .to_string();
+    let given = answer_on(&socket_of(&dir, "mini"), &body);
+    assert_eq!(status_of(&given), 413, "{given}");
+    assert_eq!(
+        common::body_of(&given).trim_end(),
+        "the attachments are too large to send to the machine that asked (8 MiB at most)"
+    );
+    assert!(!nuc_log.exists());
+}
