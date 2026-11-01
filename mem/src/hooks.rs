@@ -141,12 +141,18 @@ pub fn stop(app: &App) -> Result<i32> {
         .iter()
         .map(|s| format!("`mem questions --wait {s}`"))
         .collect();
+    let (noun, verb) = if named.len() > 1 {
+        ("questions", "are")
+    } else {
+        ("question", "is")
+    };
+    // The reason names no way out but the 6-hour stop, so a session that
+    // tires of waiting does not park on the question.
     let reason = format!(
-        "Your question {} is still unanswered. Do not end the turn: this cloud \
+        "Your {noun} {} {verb} still unanswered. Do not end the turn: this cloud \
          session's VM goes offline when it ends, and the answer could not reach it. \
-         Run {}, and run it again each time it returns without an answer. Only a \
-         deliberate park, a `mem handoff` starting `parked:` such as the 6-hour \
-         stop, ends the turn with a question open.",
+         Run {}, and run it again each time it returns without an answer. Do not \
+         park on it: only the 6-hour stop ends the turn with a question open.",
         named.join(", "),
         waits.join(", then ")
     );
