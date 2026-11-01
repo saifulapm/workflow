@@ -28,5 +28,15 @@
         }
       ]
     }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "mem stop-hook --session-id \"$CLAUDE_CODE_SESSION_ID\" || true"
+        }
+      ]
+    }
   ]
 }

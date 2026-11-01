@@ -950,12 +950,18 @@ fn the_setup_gives_a_session_the_rules_and_the_mem_hooks() {
         settings["permissions"]["allow"][0], "Bash(ls)",
         "{settings}"
     );
-    for event in ["SessionStart", "PostToolBatch", "PreCompact"] {
+    for event in ["SessionStart", "PostToolBatch", "PreCompact", "Stop"] {
         let command = settings["hooks"][event][0]["hooks"][0]["command"]
             .as_str()
             .unwrap_or_default();
         assert!(command.starts_with("mem "), "{event}: {settings}");
     }
+    // A cloud session waits in its turn for the answer to its own question.
+    assert_eq!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+        "mem stop-hook --session-id \"$CLAUDE_CODE_SESSION_ID\" || true",
+        "{settings}"
+    );
 }
 
 /// The bundle's cloud kit: its skills join the others, its rules become the
