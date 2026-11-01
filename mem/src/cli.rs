@@ -203,8 +203,8 @@ pub enum Command {
         /// An earlier answer to the same question that this one replaces.
         #[arg(long)]
         supersedes: Option<String>,
-        /// An image that goes with the answer, filed as evidence; given
-        /// once for each image.
+        /// A file that goes with the answer, filed as evidence; given
+        /// once for each file.
         #[arg(long)]
         screenshot: Vec<std::path::PathBuf>,
     },

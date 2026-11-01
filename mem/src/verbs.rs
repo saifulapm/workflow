@@ -2253,7 +2253,7 @@ pub fn answer(
     }
     let written = crate::write::write_item(app, &identity, meta, body)?;
     let task = format!("#{}", question.short_id);
-    let note = format!("screenshot with the answer to {task}");
+    let note = format!("file with the answer to {task}");
     for file in &screenshot {
         crate::records::file_evidence(app, &identity, &task, file, &note)?;
     }
