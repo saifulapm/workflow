@@ -262,7 +262,7 @@ pub fn show(app: &App, ids: &[String]) -> Result<i32> {
     Ok(exit::OK)
 }
 
-fn read_body(row: &Row) -> String {
+pub(crate) fn read_body(row: &Row) -> String {
     read_item(row)
         .map(|i| i.body_str().to_string())
         .unwrap_or_default()
@@ -1899,6 +1899,12 @@ pub fn ask(
     meta.audience = audience.map(str::to_string);
     meta.session = std::env::var("AMX_ID").ok().filter(|id| !id.is_empty());
     let written = crate::write::write_item(app, &identity, meta, question.to_string())?;
+    if let Some(session) = std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .and_then(|id| crate::session::nonempty(&id))
+    {
+        crate::session::record_ask(&app.dirs.sessions_dir(), &session, &written.id);
+    }
     // No bell here: hub's doorbell owns delivery, and it knows whether anyone
     // is watching. When mem rang its own notify-send too, every question
     // arrived twice — and this one carried the question text, which the

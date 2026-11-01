@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use common::{World, code, mem_env, stderr, stdout};
+use common::{World, code, mem, mem_env, stderr, stdout};
 
 /// One request as a fake hub saw it.
 struct Seen {
@@ -271,4 +271,115 @@ fn an_asks_json_names_its_project() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["project"], "thing");
+}
+
+/// The cloud VM's hub, `self` named as it is on the tailnet.
+const HOST: &str = "cloud-vm.taila27604.ts.net";
+
+/// A fake local hub whose `GET /questions` lists `open` as asked here.
+fn hub_holding(w: &World, open: &[&str]) {
+    let questions: Vec<serde_json::Value> = open
+        .iter()
+        .map(|id| serde_json::json!({"id": id, "project": "thing", "machine": HOST, "text": "probe?", "person": true}))
+        .collect();
+    let doc = serde_json::json!({"self": HOST, "questions": questions}).to_string();
+    let _ = fake_hub(&socket_of(w), move |_| ("200 OK".into(), doc.clone()));
+}
+
+/// `mem ask`, as session `session` asks it; the short id.
+fn ask_in(w: &World, repo: &Path, session: &str) -> String {
+    let out = mem_env(
+        w,
+        repo,
+        &["ask", "probe?"],
+        &[("CLAUDE_CODE_SESSION_ID", session), ("AMX_ID", "")],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    stdout(&out).trim().trim_start_matches('#').to_string()
+}
+
+fn stop_hook(w: &World, repo: &Path, session: &str) -> std::process::Output {
+    let out = mem_env(w, repo, &["stop-hook", "--session-id", session], &[]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    out
+}
+
+/// A cloud session's VM goes offline when its turn ends, so an answer sent
+/// to it then has nowhere to land: its stop is blocked while a question it
+/// asked is open, with the command that waits for the answer.
+#[test]
+fn a_stop_is_blocked_while_the_sessions_own_question_is_open() {
+    let w = World::new("lh-stop-open");
+    let repo = w.repo("thing", None);
+    let id = ask_in(&w, &repo, "sess-a");
+    hub_holding(&w, &[&id]);
+
+    let out = stop_hook(&w, &repo, "sess-a");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["decision"], "block", "{v}");
+    let reason = v["reason"].as_str().unwrap();
+    assert!(reason.contains(&format!("#{id}")), "{reason}");
+    assert!(
+        reason.contains(&format!("`mem questions --wait {id}`")),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_stop_goes_through_once_the_hub_no_longer_holds_the_question() {
+    let w = World::new("lh-stop-answered");
+    let repo = w.repo("thing", None);
+    ask_in(&w, &repo, "sess-a");
+    hub_holding(&w, &[]);
+
+    assert_eq!(stdout(&stop_hook(&w, &repo, "sess-a")), "");
+}
+
+#[test]
+fn another_sessions_open_question_does_not_block_the_stop() {
+    let w = World::new("lh-stop-other");
+    let repo = w.repo("thing", None);
+    let id = ask_in(&w, &repo, "sess-b");
+    hub_holding(&w, &[&id]);
+
+    assert_eq!(stdout(&stop_hook(&w, &repo, "sess-a")), "");
+}
+
+/// The 6-hour stop parks with a handoff, and that stop is meant.
+#[test]
+fn a_parked_handoff_after_the_question_lets_the_stop_through() {
+    let w = World::new("lh-stop-parked");
+    let repo = w.repo("thing", None);
+    let id = ask_in(&w, &repo, "sess-a");
+    let out = mem(&w, &repo, &["handoff", "--set", "parked: 6-hour stop"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    hub_holding(&w, &[&id]);
+
+    assert_eq!(stdout(&stop_hook(&w, &repo, "sess-a")), "");
+}
+
+/// An earlier run's park is no park of this question.
+#[test]
+fn a_parked_handoff_older_than_the_question_still_blocks() {
+    let w = World::new("lh-stop-old-park");
+    let repo = w.repo("thing", None);
+    let out = mem(&w, &repo, &["handoff", "--set", "parked: 6-hour stop"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let id = ask_in(&w, &repo, "sess-a");
+    hub_holding(&w, &[&id]);
+
+    let out = stop_hook(&w, &repo, "sess-a");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["decision"], "block", "{v}");
+}
+
+/// No hub means no answer can arrive either way, and a broken hook must
+/// never trap a session.
+#[test]
+fn without_a_local_hub_the_stop_goes_through() {
+    let w = World::new("lh-stop-nohub");
+    let repo = w.repo("thing", None);
+    ask_in(&w, &repo, "sess-a");
+
+    assert_eq!(stdout(&stop_hook(&w, &repo, "sess-a")), "");
 }

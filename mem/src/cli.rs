@@ -64,6 +64,12 @@ pub enum Command {
         #[arg(long)]
         hook_json: bool,
     },
+    /// The Stop hook: blocks the stop while a question this session asked
+    /// is open on this machine's local hub.
+    StopHook {
+        #[arg(long)]
+        session_id: Option<String>,
+    },
     /// Full-text search across this project and global scope.
     Search {
         /// The query. FTS5 syntax, including title:, body: and tags: filters.

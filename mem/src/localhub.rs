@@ -96,6 +96,25 @@ pub fn wait_until(socket: &Path, short_id: &str, timeout: Duration) -> Waited {
     }
 }
 
+/// The short ids of the open questions the local hub asked itself, from its
+/// `GET /questions`; none when there is no hub or it answers otherwise.
+pub fn open_here(socket: &Path) -> Option<Vec<String>> {
+    let (code, body) = call(socket, "GET", "/questions", b"", Duration::from_secs(5)).ok()?;
+    if code != 200 {
+        return None;
+    }
+    let doc: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let host = doc["self"].as_str()?;
+    Some(
+        doc["questions"]
+            .as_array()?
+            .iter()
+            .filter(|q| q["machine"] == host)
+            .filter_map(|q| q["id"].as_str().map(str::to_string))
+            .collect(),
+    )
+}
+
 /// Tells the hub the sharing outbox has a new write. Never waits long: the
 /// write is already safe in the outbox.
 pub fn kick(socket: &Path) {

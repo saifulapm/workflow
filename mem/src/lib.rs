@@ -92,6 +92,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
             verbs::context(&app, *full, *budget, *brief, *hook_json)
         }
         cli::Command::Precompact { hook_json: _ } => hooks::precompact(&app),
+        cli::Command::StopHook { session_id } => hooks::stop(&with_session(app, session_id)),
         cli::Command::Search {
             query,
             kind,

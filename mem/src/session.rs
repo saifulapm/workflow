@@ -23,6 +23,10 @@ pub struct Activity {
     pub brief: Option<String>,
     #[serde(default)]
     pub last: String,
+    /// The ULIDs of the questions this session asked, so the Stop hook
+    /// blocks on its own questions and no other session's.
+    #[serde(default)]
+    pub asked: Vec<String>,
 }
 
 pub fn nonempty(id: &str) -> Option<String> {
@@ -70,6 +74,14 @@ pub fn record_batch(sessions_dir: &Path, id: &str, brief: &str) -> Option<String
     let seen = activity.brief.replace(brief.to_string());
     let _ = write(sessions_dir, id, &activity);
     seen
+}
+
+/// Keeps `question` among the questions this session asked.
+pub fn record_ask(sessions_dir: &Path, id: &str, question: &str) {
+    let mut activity = read(sessions_dir, id);
+    activity.asked.push(question.to_string());
+    activity.last = Timestamp::now().to_string();
+    let _ = write(sessions_dir, id, &activity);
 }
 
 /// Removes session files older than a week. Called from doctor.
