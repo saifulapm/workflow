@@ -12,7 +12,12 @@ use std::process::{Output, Stdio};
 use scratch::Scratch;
 use serde_json::json;
 
+/// HOME is `cwd`, which holds no ~/.dotfiles unless a test puts one there.
 fn guard(cwd: &Path, command: &str) -> Output {
+    guard_home(cwd, cwd, command)
+}
+
+fn guard_home(cwd: &Path, home: &Path, command: &str) -> Output {
     let input = json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
@@ -21,6 +26,7 @@ fn guard(cwd: &Path, command: &str) -> Output {
     });
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .args(["guard", "bash"])
+        .env("HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -182,4 +188,38 @@ fn pkill_by_name_and_kill_by_group_run() {
         let out = guard(w.path(), command);
         assert!(passes(&out), "{command:?}: {out:?}");
     }
+}
+
+#[test]
+fn a_bare_playwright_cli_attach_is_refused_where_the_wrapper_exists() {
+    let w = Scratch::new("guard-bash-attach");
+    w.put(".dotfiles/bin/playwright-cli", "#!/bin/sh\n");
+    for command in [
+        "playwright-cli attach --extension=chromium",
+        "pnpm exec playwright-cli attach --extension=chromium",
+        "PATH=$HOME/.local/share/pnpm/bin:$PATH playwright-cli attach --extension=chromium",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(
+            refused(&out, "~/.dotfiles/bin/playwright-cli attach"),
+            "{command:?}: {out:?}"
+        );
+    }
+    for command in [
+        "~/.dotfiles/bin/playwright-cli attach --extension=chromium",
+        "$HOME/.dotfiles/bin/playwright-cli attach --extension=chromium",
+        "playwright-cli snapshot",
+        "playwright-cli open https://example.com",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+}
+
+#[test]
+fn a_bare_playwright_cli_attach_runs_where_there_is_no_wrapper() {
+    // A cloud session has no ~/.dotfiles.
+    let w = Scratch::new("guard-bash-attach-cloud");
+    let out = guard(w.path(), "playwright-cli attach --extension=chromium");
+    assert!(passes(&out), "{out:?}");
 }

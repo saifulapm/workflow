@@ -4,6 +4,7 @@
 //! Bash call too. Input it cannot read passes: a broken guard must not stop
 //! the agent.
 
+mod attach;
 mod chain;
 mod pkill;
 
@@ -27,7 +28,8 @@ pub struct Call<'a> {
 
 /// Each rule's refusal for a call, or None. The first refusal is the one
 /// the agent reads.
-const RULES: &[fn(&Call) -> Option<&'static str>] = &[chain::refusal, pkill::refusal];
+const RULES: &[fn(&Call) -> Option<&'static str>] =
+    &[chain::refusal, pkill::refusal, attach::refusal];
 
 pub fn cmd_guard_bash() -> i32 {
     let mut input = String::new();
