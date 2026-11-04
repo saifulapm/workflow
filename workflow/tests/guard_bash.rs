@@ -67,6 +67,8 @@ fn a_commit_or_deploy_chained_after_a_test_or_lint_is_refused() {
         "(cd apps/web && node_modules/.bin/tsc -b) && git commit -am x",
         "cargo clippy -- -D warnings && npx wrangler deploy",
         "pnpm run lint && pnpm run deploy",
+        "ruff check . && git commit -am x",
+        "biome ci && git commit -am x",
         // The commit after a heredoc's body still runs.
         "cat <<'EOF' >notes\ngit commit -am x\nEOF\ncargo test; git commit -am x",
     ] {
@@ -110,6 +112,10 @@ fn a_test_a_commit_or_a_merge_alone_runs() {
         "git add -A && git commit -m x",
         "pnpm exec wrangler deploy",
         "echo vitest; echo commit",
+        // A lookup and a formatter run no check.
+        "command -v vitest >/dev/null && git commit -am x",
+        "ruff format . && git commit -am fmt",
+        "npx biome format --write . && git commit -am fmt",
     ] {
         let out = guard(w.path(), command);
         assert!(passes(&out), "{command:?}: {out:?}");
@@ -124,6 +130,9 @@ fn input_the_guard_cannot_read_passes() {
         "cargo test; git commit -m \"x",
         "cargo test; git commit -am x)",
         "(cargo test; git commit -am x",
+        // A `)` inside backticks closes no subshell bash would open.
+        "echo `)`",
+        "echo `)` (cd /repo/.claude/worktrees/a && ls",
     ] {
         let out = guard(w.path(), command);
         assert!(passes(&out), "{command:?}: {out:?}");

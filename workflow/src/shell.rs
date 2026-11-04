@@ -152,7 +152,7 @@ pub fn commands(line: &str) -> Option<Vec<Simple>> {
             '`' => {
                 lexer.end(Op::Seq);
                 if lexer.in_tick {
-                    lexer.depth -= 1;
+                    lexer.depth = lexer.depth.checked_sub(1)?;
                 } else {
                     lexer.depth += 1;
                 }
@@ -238,6 +238,11 @@ pub fn argv(words: &[String]) -> &[String] {
         let name = program_name(word);
         at += if is_assignment(word) || is_keyword(word) {
             1
+        } else if name == "command"
+            && matches!(words.get(at + 1).map(String::as_str), Some("-v" | "-V"))
+        {
+            // `command -v vitest` looks vitest up and runs nothing.
+            return &[];
         } else if is_wrapper(name) {
             1 + words[at + 1..]
                 .iter()

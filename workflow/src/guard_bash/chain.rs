@@ -45,8 +45,10 @@ fn is_check(argv: &[String]) -> bool {
     };
     let sub = subcommand(argv);
     match program {
-        "vitest" | "jest" | "mocha" | "pytest" | "oxlint" | "eslint" | "biome" | "tsc" | "ruff"
-        | "shellcheck" => true,
+        "vitest" | "jest" | "mocha" | "pytest" | "oxlint" | "eslint" | "tsc" | "shellcheck" => true,
+        // Their formatters check nothing.
+        "ruff" => sub == Some("check"),
+        "biome" => matches!(sub, Some("check" | "lint" | "ci")),
         "playwright" => sub == Some("test"),
         "cargo" => matches!(sub, Some("test" | "clippy" | "nextest")),
         "go" => matches!(sub, Some("test" | "vet")),
