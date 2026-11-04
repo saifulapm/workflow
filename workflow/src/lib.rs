@@ -19,6 +19,7 @@ pub mod exit;
 pub mod gitcmd;
 pub mod go;
 pub mod guard;
+pub mod guard_bash;
 pub mod hook;
 pub mod hygiene;
 pub mod install;
@@ -30,6 +31,7 @@ pub mod pause;
 pub mod route;
 #[cfg(test)]
 mod scratch;
+pub mod shell;
 pub mod switch;
 
 use clap::Parser;
@@ -110,7 +112,10 @@ pub fn run(cli: Cli) -> i32 {
             json,
             fix,
         ),
-        Command::Guard { check: _ } => guard::cmd_guard_pnpm(),
+        Command::Guard { check } => match check.as_str() {
+            "bash" => guard_bash::cmd_guard_bash(),
+            _ => guard::cmd_guard_pnpm(),
+        },
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
         Command::CloudSetup => cloud::cmd_cloud_setup(),

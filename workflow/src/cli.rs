@@ -214,7 +214,9 @@ hub-local.")]
     /// A check a Claude Code PreToolUse hook runs before a tool call.
     Guard {
         /// pnpm: refuse pnpm in a linked worktree over a linked node_modules.
-        #[arg(value_parser = ["pnpm"])]
+        /// bash: refuse a command that repeats a lesson's mistake, for every
+        /// session.
+        #[arg(value_parser = ["pnpm", "bash"])]
         check: String,
     },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
