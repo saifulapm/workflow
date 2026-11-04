@@ -597,8 +597,10 @@ cat > \"$bin/mem-cloud\" <<'{END}'\n{HELPER}{END}\n\
 chmod +x \"$bin/mem-cloud\"\n\
 cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
 chmod +x \"$bin/mem\"\n\
+cat > \"$bin/workflow\" <<'{END}'\n{WORKFLOW_SHIM}{END}\n\
+chmod +x \"$bin/workflow\"\n\
 {hooks}if \"$bin/mem-cloud\" bake; then\n\
-  echo \"setup: baked mem and hub from the cloud-bins release\"\n\
+  echo \"setup: baked mem, hub and workflow from the cloud-bins release\"\n\
 else\n\
   echo \"setup: no baked binaries: the release did not answer; each session fetches its own\"\n\
 fi\n"
@@ -606,7 +608,7 @@ fi\n"
     out
 }
 
-/// `mem-cloud fetch <mem|hub>` puts the public `cloud-bins` release's
+/// `mem-cloud fetch <mem|hub|workflow>` puts the public `cloud-bins` release's
 /// `<name>-x86_64` at `~/.local/bin/<name>-x86_64` once, when `HUB_STORE_URL`
 /// and `HUB_STORE_TOKEN` are set, with no header, since the release needs
 /// none; an environment without those two still fetches
@@ -745,7 +747,7 @@ PY_EOF
 }
 bake() {
   mkdir -p "$bin"
-  for name in mem hub; do
+  for name in mem hub workflow; do
     [ -x "$bin/$name-x86_64" ] && continue
     part="$bin/$name-x86_64.part.$$"
     curl -fsSL --max-time 120 "$release/$name-x86_64" -o "$part" || { rm -f "$part"; return 1; }
@@ -760,8 +762,17 @@ case "${1:-}" in
   hooks) hooks "$2" ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub>, sync <seconds>, bake, skills or hooks <file>" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, skills or hooks <file>" >&2; exit 2 ;;
 esac
+"#;
+
+/// The `workflow` the guard hook calls by name: the binary the setup baked
+/// or a store session's mem fetched. With none, it fails, and the hook lets
+/// every call run.
+const WORKFLOW_SHIM: &str = r#"#!/bin/sh
+real="$HOME/.local/bin/workflow-x86_64"
+[ -x "$real" ] || exit 1
+exec "$real" "$@"
 "#;
 
 /// The `mem` a cloud session runs: the x86_64 binary `mem-cloud fetch mem`
@@ -795,6 +806,9 @@ fi
 "$helper" fetch mem || exit 1
 store=
 if [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ]; then store=1; fi
+# The guard hook's workflow, checked against the release once a boot as mem
+# is. A workflow that cannot be had leaves the hook passing every call.
+if [ -n "$store" ]; then "$helper" fetch workflow >/dev/null 2>&1 || true; fi
 # Every machine shares through the store since the switch, and mem queues a
 # write only on a switched replica: without the flag, nothing a session
 # saves would leave the VM. The hub's own mem calls come here too, so the

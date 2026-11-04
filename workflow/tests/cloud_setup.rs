@@ -428,7 +428,7 @@ fn the_setup_bakes_both_binaries_from_the_release_with_no_secret() {
     let (log, path) = store_fakes(&home, 0);
     let ran = setup_with(&home, &path, &[]);
     let curls = lines_of(&log, "curl");
-    for name in ["mem", "hub"] {
+    for name in ["mem", "hub", "workflow"] {
         let url = format!(
             "https://github.com/saifulapm/workflow/releases/download/cloud-bins/{name}-x86_64"
         );
@@ -447,6 +447,63 @@ fn the_setup_bakes_both_binaries_from_the_release_with_no_secret() {
     assert!(
         String::from_utf8_lossy(&ran.stdout).contains("baked"),
         "{ran:?}"
+    );
+}
+
+/// The guard hook calls `workflow` by name: the setup puts one on PATH that
+/// runs the baked binary, and fails quietly where none was baked, which the
+/// hook takes as no guard.
+#[test]
+fn the_setup_puts_the_baked_workflow_on_path() {
+    let home = Scratch::new("cloud-setup-workflow");
+    let (_, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &[]);
+    home.script(
+        ".local/bin/workflow-x86_64",
+        "#!/bin/sh\necho baked workflow \"$@\"\n",
+    );
+    let shim = home.at("usr-local-bin/workflow");
+    let ran = command(&shim)
+        .args(["guard", "--help"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        "baked workflow guard --help\n",
+        "{ran:?}"
+    );
+    fs::remove_file(home.at(".local/bin/workflow-x86_64")).unwrap();
+    let ran = command(&shim)
+        .args(["guard", "--help"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!ran.status.success() && ran.stdout.is_empty(), "{ran:?}");
+}
+
+/// The release rebuilt workflow since the setup baked it: a store session's
+/// first mem of a boot takes the new one, as it does mem.
+#[test]
+fn a_workflow_the_release_rebuilt_is_fetched_again_once_a_boot() {
+    let home = Scratch::new("cloud-shim-workflow");
+    let (log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.put("fake-workflow", "#!/bin/sh\necho new workflow \"$@\"\n");
+    store_sum(&home, "workflow-x86_64", "fake-workflow");
+    fs::copy(home.at("fake-workflow"), home.at("fake-mem")).unwrap();
+    fs::remove_file(&log).unwrap();
+    run_store_shim(&home, &path, &["context"]);
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(
+        home.read(".local/bin/workflow-x86_64"),
+        home.read("fake-workflow")
+    );
+    assert_eq!(
+        curls(&log, "workflow-x86_64.sha256"),
+        1,
+        "{:?}",
+        lines_of(&log, "curl")
     );
 }
 
@@ -956,6 +1013,15 @@ fn the_setup_gives_a_session_the_rules_and_the_mem_hooks() {
             .unwrap_or_default();
         assert!(command.starts_with("mem "), "{event}: {settings}");
     }
+    // Every Bash and Monitor call passes workflow's guard first.
+    let guard = &settings["hooks"]["PreToolUse"][0];
+    assert_eq!(guard["matcher"], "Bash", "{settings}");
+    assert!(
+        guard["hooks"][0]["command"]
+            .as_str()
+            .is_some_and(|c| c.contains("workflow guard bash")),
+        "{settings}"
+    );
     // A cloud session waits in its turn for the answer to its own question.
     assert_eq!(
         settings["hooks"]["Stop"][0]["hooks"][0]["command"],
