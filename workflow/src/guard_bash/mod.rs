@@ -5,6 +5,7 @@
 //! the agent.
 
 mod chain;
+mod pkill;
 
 use std::io::Read;
 use std::path::Path;
@@ -26,7 +27,7 @@ pub struct Call<'a> {
 
 /// Each rule's refusal for a call, or None. The first refusal is the one
 /// the agent reads.
-const RULES: &[fn(&Call) -> Option<&'static str>] = &[chain::refusal];
+const RULES: &[fn(&Call) -> Option<&'static str>] = &[chain::refusal, pkill::refusal];
 
 pub fn cmd_guard_bash() -> i32 {
     let mut input = String::new();

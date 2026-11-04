@@ -145,3 +145,41 @@ fn guard_help_lists_bash_among_its_checks() {
         "{help}"
     );
 }
+
+#[test]
+fn pkill_and_pgrep_by_full_command_line_are_refused() {
+    let w = Scratch::new("guard-bash-pkill");
+    for command in [
+        r#"pkill -f "wrangler tail eventsmith""#,
+        "pgrep -f vitest",
+        "pkill -9 -f vitest",
+        "pgrep -af 'cf dev'",
+        "pkill --full vitest",
+        "sudo pkill -f vitest",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(
+            refused(&out, "kill -TERM -- -<pgid>"),
+            "{command:?}: {out:?}"
+        );
+        assert!(
+            refused(&out, "ss -ltnp | grep :<port>"),
+            "{command:?}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn pkill_by_name_and_kill_by_group_run() {
+    let w = Scratch::new("guard-bash-kill");
+    for command in [
+        "pkill vitest",
+        "kill -TERM -- -1234",
+        "pgrep -l vitest",
+        "ss -ltnp | grep :8787",
+        r#"git commit -m "stop using pkill -f""#,
+    ] {
+        let out = guard(w.path(), command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+}
