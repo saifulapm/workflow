@@ -1,0 +1,18 @@
+{
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "transcript_path": "/home/u/.claude/projects/-repo/00000000-0000-0000-0000-000000000000.jsonl",
+  "cwd": "/repo",
+  "scratchpad_dir": "/tmp/claude-1000/-repo/00000000-0000-0000-0000-000000000000/scratchpad",
+  "prompt_id": "00000000-0000-0000-0000-000000000001",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo monitor-probe",
+    "description": "probe"
+  },
+  "tool_use_id": "toolu_00000000000000000000000000"
+}

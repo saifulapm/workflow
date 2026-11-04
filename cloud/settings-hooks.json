@@ -9,6 +9,17 @@
       ]
     }
   ],
+  "PreToolUse": [
+    {
+      "matcher": "Bash",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "if workflow guard --help 2>/dev/null | grep -q 'possible values:.*bash'; then workflow guard bash; fi"
+        }
+      ]
+    }
+  ],
   "PostToolBatch": [
     {
       "hooks": [
