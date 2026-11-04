@@ -223,3 +223,61 @@ fn a_bare_playwright_cli_attach_runs_where_there_is_no_wrapper() {
     let out = guard(w.path(), "playwright-cli attach --extension=chromium");
     assert!(passes(&out), "{out:?}");
 }
+
+#[test]
+fn a_top_level_cd_into_an_agent_worktree_is_refused() {
+    let repo = Path::new("/repo");
+    for command in [
+        "cd /repo/.claude/worktrees/agent-a1 && node_modules/.bin/vitest run",
+        "cd .claude/worktrees/agent-a1",
+        r#"cd "/repo/.claude/worktrees/agent-a1/apps/web"; ls"#,
+        "pushd /repo/.claude/worktrees/agent-a1",
+        "git status && cd /repo/.claude/worktrees/agent-a1",
+        "cd /repo && cd .claude/worktrees/agent-a1",
+    ] {
+        let out = guard(repo, command);
+        assert!(
+            refused(&out, "(cd <worktree> && <command>)"),
+            "{command:?}: {out:?}"
+        );
+        assert!(refused(&out, "git -C"), "{command:?}: {out:?}");
+    }
+}
+
+#[test]
+fn a_subshell_cd_and_a_cd_inside_the_own_worktree_run() {
+    let repo = Path::new("/repo");
+    for command in [
+        "(cd /repo/.claude/worktrees/agent-a1 && node_modules/.bin/vitest run)",
+        "echo $(cd /repo/.claude/worktrees/agent-a1 && pwd)",
+        "cd apps/web && node_modules/.bin/vitest run",
+        "git -C /repo/.claude/worktrees/agent-a1 log -1",
+        r#"cd "$w""#,
+        "cd -",
+        "cd",
+        "cd /repo/.claude",
+    ] {
+        let out = guard(repo, command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+    // An implementer moving inside its own worktree is never refused.
+    let own = Path::new("/repo/.claude/worktrees/agent-a1");
+    for command in [
+        "cd /repo/.claude/worktrees/agent-a1/apps/web && node_modules/.bin/vitest run",
+        "cd apps/web",
+        "cd /repo/.claude/worktrees/agent-a1",
+    ] {
+        let out = guard(own, command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+    let nested = Path::new("/repo/.claude/worktrees/agent-a1/apps/web");
+    let out = guard(nested, "cd ../../packages/ui");
+    assert!(passes(&out), "{out:?}");
+}
+
+#[test]
+fn a_cd_from_one_agent_worktree_into_another_is_refused() {
+    let own = Path::new("/repo/.claude/worktrees/agent-a1");
+    let out = guard(own, "cd /repo/.claude/worktrees/agent-b2");
+    assert!(refused(&out, "git -C"), "{out:?}");
+}
