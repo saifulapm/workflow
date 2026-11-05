@@ -45,15 +45,16 @@ pub fn refusal(call: &Call) -> Option<&'static str> {
                     Some("build" | "b" | "test" | "t" | "install")
                 ) =>
             {
+                // cargo builds in the target dir it is given, the flag over the
+                // variable, or else beside the manifest.
                 let inline = command.words.iter().find_map(|w| target_env(w));
-                let target = inline
+                let target = value(argv, "--target-dir")
+                    .or(inline)
                     .map(|dir| resolve(here, dir))
                     .or_else(|| target_dir.clone())
-                    .or_else(|| value(argv, "--target-dir").map(|dir| resolve(here, dir)));
-                let manifest = value(argv, "--manifest-path").map(|path| resolve(here, path));
-                under_tmp(here)
-                    || target.is_some_and(|dir| under_tmp(&dir))
-                    || manifest.is_some_and(|path| under_tmp(&path))
+                    .or_else(|| value(argv, "--manifest-path").map(|path| resolve(here, path)))
+                    .unwrap_or_else(|| here.clone());
+                under_tmp(&target)
             }
             _ => false,
         };
@@ -109,7 +110,7 @@ fn worktree_add(here: &Path, argv: &[String]) -> Option<PathBuf> {
     }
     while let Some(word) = words.next() {
         match word {
-            "-b" | "-B" | "--reason" | "--orphan" => {
+            "-b" | "-B" | "--reason" => {
                 words.next()?;
             }
             option if option.starts_with('-') => {}

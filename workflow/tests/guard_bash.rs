@@ -336,6 +336,13 @@ fn a_worktree_or_a_cargo_build_under_tmp_is_refused() {
         (repo, "cargo test --manifest-path /tmp/x/Cargo.toml"),
         (repo, "cd /tmp/x && cargo build"),
         (repo, "(cd /tmp/x && cargo test)"),
+        (repo, "git worktree add --orphan -b t /tmp/x/wt"),
+        (repo, "git worktree add --orphan /tmp/x/wt"),
+        // cargo takes the flag over the variable.
+        (
+            repo,
+            "CARGO_TARGET_DIR=/home/me/.cache/w/target cargo build --target-dir /tmp/t",
+        ),
     ] {
         let out = guard_home(cwd, Path::new("/home/me"), command);
         assert!(refused(&out, "~/.cache/"), "{cwd:?} {command:?}: {out:?}");
@@ -359,6 +366,16 @@ fn reads_copies_and_builds_outside_tmp_run() {
         (in_tmp, "ls && cat notes.md"),
         (in_tmp, "cargo --version"),
         (in_tmp, "cd ~/Sites/github/workflow && cargo test"),
+        // The build lands beside the manifest, or in the target dir given.
+        (
+            in_tmp,
+            "cargo test --manifest-path /home/me/Sites/github/workflow/workflow/Cargo.toml",
+        ),
+        (in_tmp, "cargo build --target-dir ~/.cache/w/target"),
+        (
+            repo,
+            "CARGO_TARGET_DIR=/tmp/t cargo build --target-dir /home/me/.cache/w/target",
+        ),
     ] {
         let out = guard_home(cwd, Path::new("/home/me"), command);
         assert!(passes(&out), "{cwd:?} {command:?}: {out:?}");
