@@ -429,3 +429,26 @@ fn a_refusal_that_is_not_uncommitted_work_is_not_called_that() {
         "{err}"
     );
 }
+
+/// `node_modules/` matches folders only, and the root link is a symlink.
+#[test]
+fn the_root_link_is_ignored_where_gitignore_names_node_modules_as_a_folder() {
+    let w = Scratch::new("wt-slash");
+    let main = repo(&w, "repo");
+    w.put("repo/.gitignore", "node_modules/\n");
+    w.put("repo/package.json", "{}\n");
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-qm", "Package"]);
+    w.put("repo/node_modules/.pnpm/react/index.js", "\n");
+    let dir = printed(&create(&main));
+    assert!(
+        std::fs::symlink_metadata(dir.join("node_modules"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+    assert_eq!(git(&main, &["status", "--porcelain"]), "");
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(main.join("node_modules/.pnpm/react/index.js").exists());
+}

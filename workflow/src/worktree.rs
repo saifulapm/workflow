@@ -115,6 +115,7 @@ fn bring_installs(trunk: &Path, dir: &Path) {
         if let Err(e) = std::os::unix::fs::symlink(trunk.join("node_modules"), &link) {
             warn(format!("worktree create: {}: {e}", link.display()));
         }
+        ignore_root_link(dir);
     }
     for package in package_dirs(dir) {
         // The root node_modules is the link above.
@@ -126,6 +127,35 @@ fn bring_installs(trunk: &Path, dir: &Path) {
                 &dir.join(&package).join(name),
             );
         }
+    }
+}
+
+/// A `.gitignore` line `node_modules/` matches folders only, and git sees
+/// the link as a file: untracked, it would block `git worktree remove` and
+/// ride along on a `git add -A`. The clone's own exclude file, which is never
+/// committed, then ignores it in every checkout.
+fn ignore_root_link(dir: &Path) {
+    let git = Git::at(dir);
+    if git.quiet(&["check-ignore", "-q", "node_modules"]) {
+        return;
+    }
+    let Some(info) = git.common_dir().map(|common| common.join("info")) else {
+        return;
+    };
+    let added = std::fs::create_dir_all(&info).and_then(|()| {
+        use std::io::Write;
+        let mut exclude = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(info.join("exclude"))?;
+        // The blank line first, in case the file ends without one.
+        writeln!(exclude, "\n/node_modules")
+    });
+    if let Err(e) = added {
+        warn(format!(
+            "worktree create: {}: {e}",
+            info.join("exclude").display()
+        ));
     }
 }
 
