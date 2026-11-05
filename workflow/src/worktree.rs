@@ -8,8 +8,9 @@
 //! when two apps of one monorepo each have one.
 //!
 //! The worktree then gets the trunk's installs: its root node_modules
-//! linked, and every nested node_modules and every vendor copied with
-//! `cp -a`. A linked nested node_modules resolves a workspace sibling to the
+//! linked, and every nested node_modules, every vendor and the generated
+//! types (`.react-router`, `worker-configuration.d.ts`, `.cloudflare/types`)
+//! copied with `cp -a`. A linked nested node_modules resolves a workspace sibling to the
 //! trunk's source through its relative links, and a linked vendor broke Pest.
 //! A copy that fails is reported and skipped: the worktree still comes up.
 
@@ -65,12 +66,10 @@ fn bring_installs(trunk: &Path, dir: &Path) {
         }
     }
     for package in package_dirs(dir) {
-        let nested = if package.as_os_str().is_empty() {
-            &["vendor"][..]
-        } else {
-            &["node_modules", "vendor"][..]
-        };
-        for name in nested {
+        // The root node_modules is the link above.
+        let root = package.as_os_str().is_empty();
+        let nested = ["node_modules"].iter().filter(|_| !root);
+        for name in nested.chain(COPIED) {
             copy(
                 &trunk.join(&package).join(name),
                 &dir.join(&package).join(name),
@@ -78,6 +77,16 @@ fn bring_installs(trunk: &Path, dir: &Path) {
         }
     }
 }
+
+/// What each package folder's copy gets from the trunk's besides its
+/// node_modules: vendor, and the generated types a typecheck reads before
+/// anything regenerates them.
+const COPIED: &[&str] = &[
+    "vendor",
+    ".react-router",
+    "worker-configuration.d.ts",
+    ".cloudflare/types",
+];
 
 /// The folders, relative to the worktree, of its tracked package.json and
 /// composer.json files; the root is the empty path.
@@ -94,10 +103,14 @@ fn package_dirs(dir: &Path) -> std::collections::BTreeSet<PathBuf> {
         .collect()
 }
 
-/// `cp -a from to`, when the trunk has `from` and the worktree has no `to`.
+/// `cp -a from to`, when the trunk has `from` and the worktree has no `to`,
+/// so a tracked file of the same name is never overwritten.
 fn copy(from: &Path, to: &Path) {
     if !from.exists() || std::fs::symlink_metadata(to).is_ok() {
         return;
+    }
+    if let Some(parent) = to.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
     let copied = std::process::Command::new("cp")
         .arg("-a")

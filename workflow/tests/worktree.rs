@@ -226,3 +226,40 @@ fn a_repo_with_no_installs_gets_none() {
     assert!(std::fs::symlink_metadata(dir.join("node_modules")).is_err());
     assert!(std::fs::symlink_metadata(dir.join("vendor")).is_err());
 }
+
+#[test]
+fn generated_types_come_with_the_trunks_bytes() {
+    let w = Scratch::new("wt-types");
+    let main = pnpm_repo(&w, "repo");
+    w.put("repo/apps/admin/package.json", "{}\n");
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-qm", "Admin"]);
+    w.put("repo/apps/web/.react-router/types/+routes.ts", "routes\n");
+    w.put("repo/apps/web/worker-configuration.d.ts", "worker\n");
+    w.put("repo/apps/admin/.cloudflare/types/env.d.ts", "env\n");
+    let out = create(&main);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let dir = printed(&out);
+    let read = |rel: &str| std::fs::read_to_string(dir.join(rel)).unwrap();
+    assert_eq!(read("apps/web/.react-router/types/+routes.ts"), "routes\n");
+    assert_eq!(read("apps/web/worker-configuration.d.ts"), "worker\n");
+    assert_eq!(read("apps/admin/.cloudflare/types/env.d.ts"), "env\n");
+}
+
+#[test]
+fn a_tracked_file_of_the_same_name_is_never_overwritten() {
+    let w = Scratch::new("wt-types-tracked");
+    let main = repo(&w, "repo");
+    w.put("repo/package.json", "{}\n");
+    w.put("repo/worker-configuration.d.ts", "tracked\n");
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-qm", "Worker types"]);
+    w.put("repo/worker-configuration.d.ts", "regenerated\n");
+    let out = create(&main);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let dir = printed(&out);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("worker-configuration.d.ts")).unwrap(),
+        "tracked\n"
+    );
+}
