@@ -353,9 +353,10 @@ fn cloud_runner(w: &World, project: &str, id: &str, hours: i64) {
     );
 }
 
-/// Two cloud runs live at once across every project (#RA9XKD8H).
+/// Cloud runs of other projects hold no start back: there is no cap across
+/// projects (#0W59FSK2, replacing #RA9XKD8H's two).
 #[test]
-fn one_live_cloud_run_elsewhere_leaves_the_second_slot() {
+fn a_live_cloud_run_elsewhere_holds_no_start_back() {
     let w = World::new("cloud-one-live");
     cloud_runner(&w, "delta", "session_01Other", 1);
     let out = w.go(&["gamma", "--cloud"]);
@@ -364,7 +365,7 @@ fn one_live_cloud_run_elsewhere_leaves_the_second_slot() {
 }
 
 #[test]
-fn two_live_or_parked_cloud_runs_refuse_a_third_naming_both() {
+fn live_or_parked_cloud_runs_elsewhere_hold_no_start_back() {
     let w = World::new("cloud-two-live");
     cloud_runner(&w, "delta", "session_01Other", 1);
     cloud_runner(&w, "shopify_apps", "session_01Parked", 2);
@@ -377,15 +378,8 @@ fn two_live_or_parked_cloud_runs_refuse_a_third_naming_both() {
         "parked: t2 waits, question #ABCD1234\n",
     );
     let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    let said = stderr(&out);
-    assert!(said.contains("two cloud runs are live: "), "{said}");
-    assert!(said.contains("delta (m2-next, session_01Other)"), "{said}");
-    assert!(
-        said.contains("shopify_apps (m2-next, session_01Parked)"),
-        "{said}"
-    );
-    assert!(!w.claude_ran());
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran());
 }
 
 #[test]
@@ -402,12 +396,11 @@ fn a_project_whose_own_cloud_run_is_live_starts_no_second() {
     assert!(!w.claude_ran());
 }
 
-/// Two starts in the same second, with one slot left: the second waits for
-/// the first to record its runner, then finds both slots taken.
+/// Two starts of one project in the same second: the second waits for the
+/// first to record its runner, then finds the project's own run.
 #[test]
-fn two_starts_at_once_cannot_both_take_the_last_slot() {
+fn two_starts_of_one_project_at_once_cannot_both_run() {
     let w = World::new("cloud-race");
-    cloud_runner(&w, "delta", "session_01Other", 1);
     // This mem records a cloud runner in the projects it lists, as the real
     // one does, and claude takes a second to start.
     w.work.script(
@@ -458,7 +451,7 @@ esac
         cmd.spawn().unwrap()
     };
     let one = start("gamma");
-    let two = start("shopify_apps");
+    let two = start("gamma");
     let outs = [
         one.wait_with_output().unwrap(),
         two.wait_with_output().unwrap(),
@@ -471,54 +464,48 @@ esac
     );
     let refused = outs.iter().find(|o| o.status.code() == Some(2)).unwrap();
     assert!(
-        stderr(refused).contains("two cloud runs are live: "),
+        stderr(refused).contains("gamma already has a cloud run: m2-next, "),
         "{}",
         stderr(refused)
     );
 }
 
+/// A run parked on a question still holds its session, which its answers
+/// go to, so its own project starts no second run.
 #[test]
-fn a_parked_cloud_run_still_holds_a_cloud_slot() {
+fn a_parked_cloud_run_holds_its_own_project_back() {
     let w = World::new("cloud-parked");
-    cloud_runner(&w, "delta", "session_01Other", 2);
-    w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(1)));
-    w.work.put(
-        "handoff-delta.md",
-        "parked: t2 is local-only, question #ABCD1234\n",
-    );
-    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
+    cloud_runner(&w, "gamma", "session_01Mine", 2);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work
+        .put("handoff-gamma.md", "parked: t2 waits, question #ABCD1234\n");
     let out = w.go(&["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(stderr(&out).contains("delta"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("gamma already has a cloud run: m2-next, session_01Mine"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!w.claude_ran());
 }
 
 #[test]
-fn a_run_that_landed_wrote_a_handoff_or_lapsed_frees_the_slot() {
-    // Landed: its milestone is ticked, so the row's next one differs.
-    let w = World::new("cloud-landed");
-    w.runner(
-        "delta",
-        &format!(
-            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m1-first"}}"#,
-            now_minus(1)
-        ),
-    );
-    // A second run fills the other slot, so only this one decides.
-    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
-    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
+fn its_own_run_that_ended_or_lapsed_holds_the_project_back_no_longer() {
+    // Ended: a handoff after its start that is no park.
+    let w = World::new("cloud-ended");
+    cloud_runner(&w, "gamma", "session_01Before", 2);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put("handoff-gamma.md", "Next: m2-next again\n");
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran());
 
     // Lapsed: no handoff and no tick for 7 hours.
     let w = World::new("cloud-lapsed");
-    w.runner(
-        "delta",
-        &format!(
-            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
-            now_minus(8)
-        ),
-    );
-    // A second run fills the other slot, so only this one decides.
-    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
-    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
+    cloud_runner(&w, "gamma", "session_01Before", 8);
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran());
 }
 
 #[test]
@@ -622,29 +609,6 @@ fn a_run_parked_local_only_is_taken_over_by_the_next_local_go() {
     assert!(w.amx_started());
 }
 
-/// Parked for a device, a run no longer holds a cloud slot.
-#[test]
-fn a_run_parked_local_only_frees_the_cloud_slot() {
-    let w = World::new("cloud-local-only-slot");
-    w.runner(
-        "delta",
-        &format!(
-            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
-            now_minus(2)
-        ),
-    );
-    w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(1)));
-    w.work.put(
-        "handoff-delta.md",
-        "parked: local-only t2: needs the desktop\n",
-    );
-    // A second run fills the other slot, so only this one decides.
-    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran());
-}
-
 #[test]
 fn a_trunk_that_moved_while_the_cloud_ran_refuses_and_starts_nothing() {
     let w = World::new("cloud-diverged");
@@ -714,22 +678,18 @@ fn an_untrusted_folder_is_refused_at_once_with_how_to_trust_it() {
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
 }
 
+/// A parked run counts as ended seven hours after its start, the 6-hour
+/// stop and an hour more, so its own project can start again.
 #[test]
-fn a_parked_run_frees_the_slot_after_seven_hours() {
+fn its_own_parked_run_holds_the_project_back_seven_hours_at_most() {
     let w = World::new("cloud-parked-lapsed");
-    w.runner(
-        "delta",
-        &format!(
-            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
-            now_minus(8)
-        ),
-    );
-    w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(2)));
+    cloud_runner(&w, "gamma", "session_01Before", 8);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(2)));
     w.work
-        .put("handoff-delta.md", "parked: 6-hour stop, t3 half done\n");
-    // A second run fills the other slot, so only this one decides.
-    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
-    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
+        .put("handoff-gamma.md", "parked: 6-hour stop, t3 half done\n");
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran());
 }
 
 #[test]
@@ -1025,15 +985,15 @@ fn a_plain_dry_run_of_a_carried_project_prints_the_cloud_prompt() {
     assert!(!w.amx_started());
 }
 
-/// A slot lock that cannot be had is said, and the start goes on.
+/// A start lock that cannot be had is said, and the start goes on.
 #[test]
-fn a_start_without_the_slot_lock_says_so() {
+fn a_start_without_the_start_lock_says_so() {
     let w = World::new("cloud-no-lock");
     w.work.put("state", "a file where the state folder goes\n");
     let out = w.go(&["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("cannot lock the cloud slots"),
+        stderr(&out).contains("cannot lock the cloud starts"),
         "{}",
         stderr(&out)
     );

@@ -275,7 +275,7 @@ usage: workflow <command> [options]
       start planning the project in a claude.ai cloud session on the branch
       cloud/<project>-plan and print its link; --print prints its prompt
       0 started · 1 mem or claude failed · 2 refused: no remote, main not
-      pushed, its own cloud run or two others are live
+      pushed, or its own cloud run is live
   pause <project> [--by <who>]
       hold the project once its current milestone lands; starts nothing
   unpause <project>

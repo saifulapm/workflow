@@ -413,10 +413,10 @@ pub fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
     live::cloud_run(s, handoff, ctx.site.now).map(|run| live::heard(run, ctx.site.host.fleet()))
 }
 
-/// Every cloud run that holds one of the two cloud slots, live or parked,
-/// each with its project's name, in the summaries' order. A handoff is read
-/// only for a cloud runner that wrote one since it began.
-pub fn cloud_slots(
+/// Every cloud run that is live or parked, each with its project's name, in
+/// the summaries' order. A handoff is read only for a cloud runner that
+/// wrote one since it began.
+pub fn cloud_runs(
     mem: &dyn Source,
     summaries: &[ProjectSummary],
     now: jiff::Timestamp,
@@ -437,8 +437,8 @@ pub fn cloud_slots(
 
 /// Why `s` may not start a cloud run, or `None` when it may: `workflow go
 /// --cloud` wants an approved milestone, no pause, a git remote, the trunk
-/// on main, no device orchestrator on it, no cloud run of its own, and one of
-/// the two cloud slots free.
+/// on main, no device orchestrator on it, and no cloud run of its own. Other
+/// projects' cloud runs hold nothing back.
 pub fn cloud_refusal(
     mem: &dyn Source,
     agents: &dyn Fleet,
@@ -478,18 +478,11 @@ pub fn cloud_refusal(
     {
         return Some(format!("{} is already running.", agent.id));
     }
-    let slots = cloud_slots(mem, summaries, now);
-    if let Some((_, run)) = slots.iter().find(|(project, _)| *project == s.name) {
+    let runs = cloud_runs(mem, summaries, now);
+    if let Some((_, run)) = runs.iter().find(|(project, _)| *project == s.name) {
         return Some(format!(
             "{} already has a cloud run: {}, {}.",
             s.name, run.milestone, run.id
-        ));
-    }
-    let mut others = slots.iter().filter(|(project, _)| *project != s.name);
-    if let (Some((a, run_a)), Some((b, run_b))) = (others.next(), others.next()) {
-        return Some(format!(
-            "two cloud runs are live: {a} ({}, {}) and {b} ({}, {}); two run at a time.",
-            run_a.milestone, run_a.id, run_b.milestone, run_b.id
         ));
     }
     unpushed(agents, &s.name)

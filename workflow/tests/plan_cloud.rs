@@ -173,9 +173,9 @@ fn a_project_with_no_remote_is_refused() {
 }
 
 #[test]
-fn two_live_cloud_runs_elsewhere_refuse_it_naming_both() {
+fn live_cloud_runs_elsewhere_hold_no_plan_back() {
     let work = world("plan-busy");
-    // A third project, so two others can hold both slots.
+    // A third project, so two others run in the cloud.
     let projects = work.read("projects.json");
     let rows = projects.trim_end().strip_suffix("]}").unwrap();
     work.put(
@@ -195,17 +195,12 @@ fn two_live_cloud_runs_elsewhere_refuse_it_naming_both() {
         );
     }
     let out = run(&work, "plan", &["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
-    let said = text(&out.stderr);
-    assert!(
-        said.contains("two cloud runs are live: delta (m2-next, session_01Other) and epsilon (m2-next, session_01More)"),
-        "{out:?}"
-    );
-    assert!(!work.has("claude.log"));
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(work.has("claude.log"));
 }
 
 #[test]
-fn a_running_cloud_plan_elsewhere_leaves_the_second_slot() {
+fn a_running_cloud_plan_elsewhere_holds_no_plan_back() {
     let work = world("plan-second-slot");
     set(
         &work,

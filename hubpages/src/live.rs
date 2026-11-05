@@ -100,7 +100,7 @@ pub fn cloud_run(
         CloudState::Landed
     } else if handoff_at.is_some_and(|at| since.is_none_or(|since| at > since)) {
         // The 6-hour stop parks with no question, so a park lapses too, or
-        // it would hold a cloud slot for ever.
+        // it would hold its project back for ever.
         let text = handoff().unwrap_or_default();
         let text = text.trim_start();
         if text.starts_with("parked: local-only") {

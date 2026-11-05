@@ -230,7 +230,7 @@ fn run_in_cloud_starts_beside_one_parked_run_and_a_local_only_park() {
 }
 
 #[test]
-fn run_in_cloud_is_refused_while_two_other_cloud_runs_are_live_or_parked() {
+fn run_in_cloud_starts_beside_two_other_cloud_runs_live_or_parked() {
     let world = World::new("cloud-run-two-others");
     world.add_project("epsilon");
     world.set("delta", "runner", cloud("m2-next", &ago(60)));
@@ -239,16 +239,13 @@ fn run_in_cloud_is_refused_while_two_other_cloud_runs_are_live_or_parked() {
     world.handoff("epsilon", "parked: t2 is waiting, question #ABCD1234\n");
     let hub = world.hub();
     poll(&hub);
-    assert!(!page(&hub).contains(RUN_IN_CLOUD));
+    assert!(page(&hub).contains(RUN_IN_CLOUD));
     let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(
-        body_of(&response).contains(
-            "two cloud runs are live: delta (m2-next, session_01Other) and epsilon (m2-next, session_01Other); two run at a time."
-        ),
-        "{response}"
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(
+        poll(&hub),
+        json!([{"kind": "start", "project": "gamma", "cloud": true}])
     );
-    assert_eq!(poll(&hub), json!([]));
 }
 
 #[test]
@@ -495,7 +492,7 @@ fn no_card_while_paused() {
 }
 
 #[test]
-fn the_card_shows_beside_one_other_cloud_run_and_not_beside_two() {
+fn the_card_shows_beside_other_cloud_runs_live_or_parked() {
     let world = World::new("cloud-card-live");
     world.add_project("epsilon");
     world.set("delta", "runner", cloud("m2-next", &ago(60)));
@@ -507,14 +504,14 @@ fn the_card_shows_beside_one_other_cloud_run_and_not_beside_two() {
     world.set("epsilon", "runner", cloud("m2-next", &ago(60)));
     let hub = world.hub();
     let body = page(&hub);
-    assert_eq!(card(&body), None, "two live: {body}");
+    assert!(card(&body).is_some(), "two live: {body}");
     drop(hub);
 
     world.set("epsilon", "handoff_at", json!(ago(30)));
     world.handoff("epsilon", "parked: t2 is waiting\n");
     let hub = world.hub();
     let body = page(&hub);
-    assert_eq!(card(&body), None, "one live, one parked: {body}");
+    assert!(card(&body).is_some(), "one live, one parked: {body}");
 }
 
 #[test]
