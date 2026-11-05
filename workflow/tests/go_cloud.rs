@@ -167,6 +167,7 @@ fn commit(dir: &std::path::Path, message: &str) {
 
 fn head(dir: &std::path::Path) -> String {
     let out = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(["rev-parse", "HEAD"])
         .current_dir(dir)
         .output()
@@ -299,6 +300,7 @@ fn an_underscore_project_keeps_its_name_in_the_branch() {
         stdout(&out)
     );
     let check = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(["check-ref-format", "--branch", "cloud/shopify_apps-m2-next"])
         .output()
         .unwrap();
@@ -820,6 +822,7 @@ fn a_carried_project_pushes_its_main_before_the_cloud_run() {
     let out = w.go_plain(&["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let origin = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(["rev-parse", "origin/main"])
         .current_dir(&checkout)
         .output()

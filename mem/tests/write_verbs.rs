@@ -450,6 +450,7 @@ fn a_write_verb_leaves_no_footprint_in_the_repository() {
     mem(&w, &repo, &["handoff", "--set", "fine"]);
 
     let out = std::process::Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .current_dir(&repo)
         .args(["status", "--porcelain"])
         .output()

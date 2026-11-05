@@ -208,6 +208,7 @@ esac
 
 fn git(dir: &std::path::Path, args: &[&str]) {
     let out = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .arg("-C")
         .arg(dir)
         .args(args)

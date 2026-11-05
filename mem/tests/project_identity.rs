@@ -54,6 +54,7 @@ impl World {
 
 fn run_git(cwd: &Path, args: &[&str]) {
     let out = std::process::Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .current_dir(cwd)
         .args(args)
         .output()

@@ -1176,6 +1176,7 @@ fn report_bins(dir: &TempDir) -> PathBuf {
 
 fn git(dir: &Path, args: &[&str]) {
     let done = std::process::Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
         .arg(dir)
         .args(args)

@@ -6,6 +6,7 @@ use std::process::Command;
 #[test]
 fn the_version_names_the_commit_it_was_built_from() {
     let head = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(["rev-parse", "--short=7", "HEAD"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()

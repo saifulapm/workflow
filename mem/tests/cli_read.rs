@@ -169,6 +169,7 @@ fn a_read_verb_leaves_no_footprint_in_the_repository() {
         mem(&w, &repo, &args);
     }
     let out = std::process::Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .current_dir(&repo)
         .args(["status", "--porcelain"])
         .output()

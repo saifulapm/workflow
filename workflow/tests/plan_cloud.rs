@@ -96,6 +96,7 @@ fn now_minus(hours: i64) -> String {
 
 fn git(dir: &std::path::Path, args: &[&str]) {
     let out = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
         .current_dir(dir)
         .output()

@@ -17,6 +17,7 @@ const NAME: &str = "agent-a248710c831042813";
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .current_dir(dir)
         .args([
             "-c",

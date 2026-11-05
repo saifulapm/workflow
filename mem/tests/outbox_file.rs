@@ -58,6 +58,7 @@ fn commit(repo: &Path, subject: &str) {
 
 fn git_out(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .current_dir(repo)
         .args(args)
         .output()
