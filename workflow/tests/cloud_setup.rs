@@ -1244,13 +1244,51 @@ fn runtime_fakes(home: &Scratch) -> (PathBuf, String) {
         "#!/bin/sh\necho 'ModuleNotFoundError: No module named apt_pkg' >&2\nexit 1\n",
     );
     home.put("root/etc/os-release", "ID=ubuntu\nVERSION_CODENAME=noble\n");
+    // tmux's release source: a configure that keeps its prefix and a make
+    // whose install leaves a tmux there, as the real build does.
+    home.script(
+        "tmux-src/tmux-3.7c/configure",
+        "#!/bin/sh\nfor a; do case \"$a\" in --prefix=*) echo \"${a#--prefix=}\" > prefix;; esac; done\n",
+    );
+    let tarball = home.at("tmux-3.7c.tar.gz");
+    assert!(
+        Command::new("tar")
+            .args(["-czf"])
+            .arg(&tarball)
+            .arg("-C")
+            .arg(home.at("tmux-src"))
+            .arg("tmux-3.7c")
+            .status()
+            .unwrap()
+            .success()
+    );
+    home.script(
+        "runtime-fakes/make",
+        &format!(
+            "#!/bin/sh\necho \"make $*\" >> {log}\n\
+             [ \"$1\" = install ] || exit 0\n\
+             p=$(cat prefix); mkdir -p \"$p/bin\"\n\
+             printf '#!/bin/sh\\necho tmux 3.7c\\n' > \"$p/bin/tmux\"; chmod +x \"$p/bin/tmux\"\n",
+            log = log.display()
+        ),
+    );
+    home.script(
+        "runtime-fakes/sha256sum",
+        &format!(
+            "#!/bin/sh\necho \"sha256sum $* $(cat)\" >> {log}\n",
+            log = log.display()
+        ),
+    );
     home.script(
         "runtime-fakes/curl",
         &format!(
             "#!/bin/sh\necho \"curl $*\" >> {log}\n\
+             case \"$*\" in *tmux-3.7c.tar.gz*) tmux=1;; esac\n\
              while [ \"$1\" != -o ]; do shift; done\n\
+             case \"$tmux\" in 1) cp {tarball} \"$2\"; exit;; esac\n\
              echo '-----BEGIN PGP PUBLIC KEY BLOCK-----' > \"$2\"\n",
-            log = log.display()
+            log = log.display(),
+            tarball = tarball.display()
         ),
     );
     home.script(
@@ -1279,7 +1317,7 @@ fn runtimes(home: &Scratch, path: &str) -> std::process::Output {
     out
 }
 
-/// The device's Node 24, pnpm 11, PHP 8.4 and playwright-cli go first on a
+/// The device's Node 24, pnpm 11, PHP 8.4, playwright-cli and tmux 3.7 go first on a
 /// session's PATH, through ~/.local/bin; a second run, as a cached
 /// environment's rebuild makes, installs nothing again.
 #[test]
@@ -1309,10 +1347,22 @@ fn the_runtimes_are_the_devices_and_install_once() {
     );
     assert!(home.at("root/etc/apt/keyrings/ondrej-php.asc").exists());
     assert!(first.contains("php8.4-intl"), "lathe needs intl: {first}");
+    // amx's tmux.conf sets extended-keys-format, which the image's tmux 3.4
+    // lacks: tmux 3.7c is built from its release source, checked by its sum.
+    assert!(
+        first.contains("https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz"),
+        "{first}"
+    );
+    assert!(
+        first.contains("7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf"),
+        "{first}"
+    );
+    assert!(first.contains("libevent-dev"), "{first}");
     for (tool, says) in [
         ("node", None),
         ("pnpm", Some("11.21.0")),
         ("php", Some("PHP 8.4.14")),
+        ("tmux", Some("tmux 3.7c")),
     ] {
         let link = home.at(&format!(".local/bin/{tool}"));
         assert!(link.exists(), "{tool}");
@@ -1380,7 +1430,7 @@ fn a_runtime_that_does_not_install_is_named() {
     assert!(!out.status.success(), "{out:?}");
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
-        said.contains("did not install: pnpm playwright-cli php8.4"),
+        said.contains("did not install: pnpm playwright-cli php8.4 tmux"),
         "{said}"
     );
     // A key that did not come leaves no source for apt to fail on.

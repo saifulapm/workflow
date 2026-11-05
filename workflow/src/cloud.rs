@@ -854,7 +854,7 @@ bake() {
     mv "$part" "$bin/$name-x86_64"
   done
 }
-# runtimes: the devices' Node 24, pnpm 11, PHP 8.4 and playwright-cli, linked
+# runtimes: the devices' Node 24, pnpm 11, PHP 8.4, playwright-cli and tmux 3.7, linked
 # into ~/.local/bin, which comes before the image's /opt/node22/bin on a
 # session's PATH. Each install is skipped when the cached environment already
 # has it.
@@ -903,6 +903,26 @@ runtimes() {
         php8.4-mysql php8.4-pgsql php8.4-bcmath php8.4-gd >&2; } || failed="$failed php8.4"
   fi
   php=$(command -v php8.4) && ln -sfn "$php" "$bin/php"
+  # tmux 3.7c, the devices': amx's tmux.conf sets extended-keys-format,
+  # which the image's tmux 3.4 lacks, and its tests read formats 3.5a
+  # expands otherwise (probe-amx2, 2026-11-05). Built from the release's
+  # source, checked by its sum; about a minute with its build tools.
+  tmux="${MEM_CLOUD_ROOT:-}/opt/tmux-3.7c"
+  if [ ! -x "$tmux/bin/tmux" ]; then
+    src=$(mktemp -d)
+    { apt-get update -q >&2 &&
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -q libevent-dev libncurses-dev \
+        bison pkg-config build-essential >&2 &&
+      curl -fsSL --max-time 120 https://github.com/tmux/tmux/releases/download/3.7c/tmux-3.7c.tar.gz \
+        -o "$src/tmux.tar.gz" &&
+      echo "7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf  $src/tmux.tar.gz" |
+        sha256sum -c - >&2 &&
+      tar -xzf "$src/tmux.tar.gz" -C "$src" &&
+      (cd "$src/tmux-3.7c" && ./configure --prefix="$tmux" >&2 && make -j4 >&2 && make install >&2); } ||
+      failed="$failed tmux"
+    rm -rf "$src"
+  fi
+  [ -x "$tmux/bin/tmux" ] && ln -sfn "$tmux/bin/tmux" "$bin/tmux"
   [ -z "$failed" ] || { echo "setup: did not install:$failed" >&2; return 1; }
 }
 case "${1:-}" in
