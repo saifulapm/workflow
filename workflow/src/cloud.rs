@@ -865,11 +865,12 @@ runtimes() {
   if [ -x "$node/node" ]; then
     case "$("$node/pnpm" -v 2>/dev/null)" in
       11.*) ;;
-      # npm trusts the system's CA store, which holds the network proxy's.
-      *) "$node/node" --use-system-ca "$node/npm" install -g --force pnpm@11 >&2 || failed="$failed pnpm" ;;
+      # The image's NODE_OPTIONS already trusts the system's CA store, which
+      # holds the network proxy's; a second CA flag makes node refuse to run.
+      *) "$node/node" "$node/npm" install -g --force pnpm@11 >&2 || failed="$failed pnpm" ;;
     esac
     [ "$("$node/playwright-cli" --version 2>/dev/null)" = 0.1.23 ] ||
-      "$node/node" --use-system-ca "$node/npm" install -g @playwright/cli@0.1.23 >&2 ||
+      "$node/node" "$node/npm" install -g @playwright/cli@0.1.23 >&2 ||
       failed="$failed playwright-cli"
     for tool in node npm npx pnpm pnpx; do
       [ -e "$node/$tool" ] && ln -sfn "$node/$tool" "$bin/$tool"
@@ -884,10 +885,19 @@ runtimes() {
     echo "setup: the image has no Node 24 at /opt/node24; Node stays the image's" >&2
   fi
   if ! command -v php8.4 >/dev/null 2>&1; then
-    apt-get update -q >&2
-    command -v add-apt-repository >/dev/null 2>&1 ||
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -q software-properties-common >&2
-    { add-apt-repository -y ppa:ondrej/php >&2 &&
+    # The ondrej PPA, written as a source: the image's add-apt-repository
+    # crashes, its python3 having no apt_pkg. The key is the one that signs
+    # the PPA's noble InRelease (checked 2026-11-05), fetched by its
+    # fingerprint.
+    apt="${MEM_CLOUD_ROOT:-}/etc/apt"
+    key=14AA40EC0831756756D7F66C4F4EA0AAE5267A6C
+    suite=$(. "${MEM_CLOUD_ROOT:-}/etc/os-release" 2>/dev/null; echo "${VERSION_CODENAME:-noble}")
+    mkdir -p "$apt/keyrings" "$apt/sources.list.d"
+    { curl -fsSL --max-time 60 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x$key" \
+        -o "$apt/keyrings/ondrej-php.asc" &&
+      printf 'Types: deb\nURIs: https://ppa.launchpadcontent.net/ondrej/php/ubuntu\nSuites: %s\nComponents: main\nSigned-By: /etc/apt/keyrings/ondrej-php.asc\n' \
+        "$suite" >"$apt/sources.list.d/ondrej-php.sources" &&
+      apt-get update -q >&2 &&
       DEBIAN_FRONTEND=noninteractive apt-get install -y -q php8.4-cli php8.4-intl \
         php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip php8.4-sqlite3 \
         php8.4-mysql php8.4-pgsql php8.4-bcmath php8.4-gd >&2; } || failed="$failed php8.4"

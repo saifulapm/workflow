@@ -1213,14 +1213,16 @@ fn a_release_without_workflow_still_bakes_mem_and_hub() {
 }
 
 /// A scratch root with the image's Node 24, its pnpm 10 and no
-/// playwright-cli, and a PATH whose npm, add-apt-repository and apt-get log
+/// playwright-cli, and a PATH whose npm, curl and apt-get log
 /// what they are asked and leave what they install, as the real ones do.
 fn runtime_fakes(home: &Scratch) -> (PathBuf, String) {
     let log = home.at("runtimes.log");
     let node = home.mkdir("root/opt/node24/bin");
     home.script(
         "root/opt/node24/bin/node",
-        "#!/bin/sh\n[ \"$1\" = --use-system-ca ] && shift\nexec /bin/sh \"$@\"\n",
+        // The image sets NODE_OPTIONS=--use-openssl-ca, so node refuses a
+        // second CA flag, as the image's does.
+        "#!/bin/sh\ncase \"$1\" in --use-*) echo 'either --use-openssl-ca or --use-system-ca can be used, not both' >&2; exit 9;; esac\nexec /bin/sh \"$@\"\n",
     );
     home.script("root/opt/node24/bin/pnpm", "#!/bin/sh\necho 10.28.0\n");
     home.script("root/opt/node24/bin/npx", "#!/bin/sh\n");
@@ -1236,11 +1238,19 @@ fn runtime_fakes(home: &Scratch) -> (PathBuf, String) {
         ),
     );
     let fakes = home.mkdir("runtime-fakes");
+    // The image's add-apt-repository crashes (its python3 has no apt_pkg).
     home.script(
         "runtime-fakes/add-apt-repository",
+        "#!/bin/sh\necho 'ModuleNotFoundError: No module named apt_pkg' >&2\nexit 1\n",
+    );
+    home.put("root/etc/os-release", "ID=ubuntu\nVERSION_CODENAME=noble\n");
+    home.script(
+        "runtime-fakes/curl",
         &format!(
-            "#!/bin/sh\necho \"add-apt-repository $*\" >> {}\n",
-            log.display()
+            "#!/bin/sh\necho \"curl $*\" >> {log}\n\
+             while [ \"$1\" != -o ]; do shift; done\n\
+             echo '-----BEGIN PGP PUBLIC KEY BLOCK-----' > \"$2\"\n",
+            log = log.display()
         ),
     );
     home.script(
@@ -1284,10 +1294,20 @@ fn the_runtimes_are_the_devices_and_install_once() {
         first.contains("npm install -g @playwright/cli@0.1.23"),
         "{first}"
     );
+    let sources =
+        fs::read_to_string(home.at("root/etc/apt/sources.list.d/ondrej-php.sources")).unwrap();
     assert!(
-        first.contains("add-apt-repository -y ppa:ondrej/php"),
+        sources.contains("URIs: https://ppa.launchpadcontent.net/ondrej/php/ubuntu")
+            && sources.contains("Suites: noble")
+            && sources.contains("Signed-By: /etc/apt/keyrings/ondrej-php.asc"),
+        "{sources}"
+    );
+    // The PPA's key, by the fingerprint that signs its InRelease.
+    assert!(
+        first.contains("search=0x14AA40EC0831756756D7F66C4F4EA0AAE5267A6C"),
         "{first}"
     );
+    assert!(home.at("root/etc/apt/keyrings/ondrej-php.asc").exists());
     assert!(first.contains("php8.4-intl"), "lathe needs intl: {first}");
     for (tool, says) in [
         ("node", None),
@@ -1349,7 +1369,7 @@ fn a_runtime_that_does_not_install_is_named() {
     setup_with(&home, &offline(&home), &[]);
     let (log, path) = runtime_fakes(&home);
     home.script("root/opt/node24/bin/npm", "#!/bin/sh\nexit 1\n");
-    home.script("runtime-fakes/add-apt-repository", "#!/bin/sh\nexit 1\n");
+    home.script("runtime-fakes/curl", "#!/bin/sh\nexit 22\n");
     let out = command(home.at("usr-local-bin/mem-cloud"))
         .arg("runtimes")
         .env("HOME", home.path())
@@ -1363,12 +1383,13 @@ fn a_runtime_that_does_not_install_is_named() {
         said.contains("did not install: pnpm playwright-cli php8.4"),
         "{said}"
     );
-    // The package lists are fresh before the PPA is added.
+    // A key that did not come leaves no source for apt to fail on.
     assert!(
-        fs::read_to_string(&log).unwrap().contains("apt-get update"),
-        "{:?}",
-        fs::read_to_string(&log)
+        !home
+            .at("root/etc/apt/sources.list.d/ondrej-php.sources")
+            .exists()
     );
+    let _ = log;
 }
 
 /// A merge that fails leaves the settings as they were: never the bare
