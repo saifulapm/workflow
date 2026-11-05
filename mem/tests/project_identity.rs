@@ -1168,3 +1168,31 @@ fn a_write_at_a_monorepo_root_is_refused_unless_a_project_is_named() {
         assert_eq!(common::code(&out), 0, "{read:?}: {}", common::stderr(&out));
     }
 }
+
+/// A cloud run's branch names its project, so a root's cloud run writes at
+/// the root even when the root has children: the VM's session has no
+/// MEM_PROJECT, and `workflow go ebdfy --cloud` works at ebdfy's root.
+#[test]
+fn a_cloud_branch_naming_a_root_with_children_writes_to_the_root() {
+    let w = common::World::new("ident-cloud-root");
+    project_on(&w, "01K2AAAAAAAAAAAAAAAAAAAAAA", "alpha", "github.com/o/r");
+    let store = w.store();
+    add_child(
+        &store,
+        "01K2AAAAAAAAAAAAAAAAAAAAAA",
+        "01K2BBBBBBBBBBBBBBBBBBBBBB",
+        "alpha-ui",
+        "packages/ui",
+    );
+
+    let repo = w.repo("vm", Some(PROXY));
+    common::run_git(&repo, &["checkout", "-q", "-b", "cloud/alpha-m3"]);
+    let out = common::mem(&w, &repo, &["log", "cloud root work"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert!(logged(&w, &repo, "alpha").contains("cloud root work"));
+
+    // A plain branch at the same root is the folder alone, and is refused.
+    common::run_git(&repo, &["checkout", "-q", "-b", "work"]);
+    let out = common::mem(&w, &repo, &["log", "lost"]);
+    assert_ne!(common::code(&out), 0);
+}

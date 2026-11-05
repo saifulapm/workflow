@@ -73,12 +73,21 @@ impl App {
     /// A write the directory alone files under a monorepo's root, when the
     /// root has child projects. `cd <worktree root> && mem log ...` from an
     /// app's session put 76 writes in 14 days into shopify_apps, which no
-    /// app reads; the root's own work names it with `--project`.
+    /// app reads; the root's own work names it with `--project`, and a cloud
+    /// run's `cloud/<root>-<milestone>` branch names it too.
     fn refuse_a_root_with_children(&self, identity: &Identity) -> Result<()> {
         let Identity::Known { id, name } = identity else {
             return Ok(());
         };
         let registry = Registry::load(&self.store);
+        if let Some(checkout) = crate::git::Checkout::detect(&self.cwd)
+            && let (Some(remote), Some(branch)) = (&checkout.remote, &checkout.branch)
+            && registry
+                .by_cloud_branch(remote, branch)
+                .is_some_and(|p| p.id == *id)
+        {
+            return Ok(());
+        }
         let children: Vec<&str> = registry
             .children_of(id)
             .iter()
