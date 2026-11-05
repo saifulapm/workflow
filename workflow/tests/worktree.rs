@@ -415,3 +415,17 @@ fn the_hook_entries_make_and_remove_a_worktree_with_any_workflow() {
         assert!(!dir.exists(), "{tag}");
     }
 }
+
+#[test]
+fn a_refusal_that_is_not_uncommitted_work_is_not_called_that() {
+    let w = Scratch::new("wt-remove-main");
+    let main = repo(&w, "repo");
+    let out = remove(&main);
+    assert_ne!(out.status.code(), Some(0), "{out:?}");
+    assert!(main.join("a.txt").exists());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("kept") && !err.contains("uncommitted"),
+        "{err}"
+    );
+}

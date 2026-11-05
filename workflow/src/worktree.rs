@@ -96,9 +96,7 @@ pub fn cmd_worktree_remove() -> i32 {
     let removed = main.capture(&["worktree", "remove", path]);
     if !removed.ok {
         eprint!("{}", String::from_utf8_lossy(&removed.stderr));
-        warn(format!(
-            "worktree remove: kept {path}, which holds uncommitted work"
-        ));
+        warn(format!("worktree remove: kept {path}; git says why above"));
         return exit::FAILED;
     }
     if !main.quiet(&["branch", "-d", &branch]) {
