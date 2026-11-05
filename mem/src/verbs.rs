@@ -49,7 +49,7 @@ pub fn context(
             crate::sync::staleness_line(&app.dirs.qshell_status_json(), jiff::Timestamp::now())
         })
         .flatten();
-    let sources = Sources::gather(&index, &app.store, identity.id(), staleness)?;
+    let mut sources = Sources::gather(&index, &app.store, identity.id(), staleness)?;
 
     if brief {
         let text = crate::digest::brief(&sources, jiff::Timestamp::now());
@@ -73,6 +73,8 @@ pub fn context(
     let digest = if full {
         crate::digest::build(&sources, &app.store, budget.unwrap_or(TARGET))
     } else {
+        sources.stale_findings =
+            crate::digest::stale_findings(&index, identity.id(), jiff::Timestamp::now())?;
         crate::digest::build_small(&sources, &app.store)
     };
     if app.json {

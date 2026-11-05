@@ -26,8 +26,10 @@ holds only work on the repo as a whole.
 
 Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
 spec#<section>`), `verify`, the decisions
-(`mem search --kind ruling --limit 100`), the
-artifacts Saiful made for this work (`mem search artifact`, and the links in
+(`mem search --kind ruling --limit 100`), the ideas filed for later
+(`mem search --kind idea --limit 100`; each one this work covers is a
+behaviour or an Out of scope line, since ideas are written and seldom read),
+the artifacts Saiful made for this work (`mem search artifact`, and the links in
 the spec), the lessons past runs left (`mem wiki lessons` and `mem --project
 workflow wiki lessons`), which the acceptance lines and the review focus
 answer, and the repo's entry points. When the work comes from an audit, a

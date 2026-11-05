@@ -77,6 +77,10 @@ pub struct Sources {
     pub rulings: Vec<Row>,
     pub facts: Vec<Row>,
     pub logs: Vec<Row>,
+    /// The line naming open findings older than two weeks. Left `None` by
+    /// `gather`: a finding's status is in its file, not the index, so only
+    /// the session-start digest reads them (`stale_findings`), never a batch.
+    pub stale_findings: Option<String>,
 }
 
 impl Sources {
@@ -119,6 +123,7 @@ impl Sources {
             rulings: index.recent("ruling", project_id, 5)?,
             facts: index.recent("fact", project_id, 40)?,
             logs: recent_non_run_logs(index, project_id, 5)?,
+            stale_findings: None,
         })
     }
 
@@ -372,6 +377,42 @@ pub fn build(sources: &Sources, store: &Store, budget: usize) -> Digest {
     }
 }
 
+/// How old an open finding is before the small digest names it.
+const STALE_FINDING_DAYS: i64 = 14;
+
+/// `42 open findings older than 14 days, oldest 2026-10-09`, or `None` when
+/// the project has none. 73 of 84 open findings were that old, and nothing a
+/// session reads said so (audit-mem-2026-11-05).
+pub fn stale_findings(
+    index: &Index,
+    project_id: Option<&str>,
+    now: Timestamp,
+) -> Result<Option<String>> {
+    let Some(id) = project_id else {
+        return Ok(None);
+    };
+    let cutoff = now.as_second() - STALE_FINDING_DAYS * 86_400;
+    let oldest: Vec<i64> = index
+        .recent_filtered(Some("finding"), None, Some(id), i64::MAX as usize)?
+        .into_iter()
+        .filter(|row| row.created_epoch < cutoff)
+        .filter(|row| {
+            crate::store::read_item(&row.path)
+                .is_ok_and(|item| item.meta.status.as_deref() == Some("open"))
+        })
+        .map(|row| row.created_epoch)
+        .collect();
+    let Some(first) = oldest.iter().min() else {
+        return Ok(None);
+    };
+    let n = oldest.len();
+    Ok(Some(format!(
+        "{n} open finding{} older than {STALE_FINDING_DAYS} days, oldest {}",
+        if n == 1 { "" } else { "s" },
+        date(*first)
+    )))
+}
+
 /// The small digest: the session-start text, one line per fact a session acts
 /// on, in a fixed order. What it leaves out (facts, logs, the plan's next task)
 /// is a `mem show`, a `mem search` or the full digest away, and the hint line
@@ -404,6 +445,7 @@ pub fn build_small(sources: &Sources, _store: &Store) -> Digest {
             handoff.title
         ));
     }
+    lines.extend(sources.stale_findings.iter().cloned());
     for r in &sources.rules {
         lines.push(format!("rule #{}  {}", r.short_id, r.title));
     }

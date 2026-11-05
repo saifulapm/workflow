@@ -838,3 +838,43 @@ fn a_global_ruling_opens_every_projects_digest() {
     let full = build(&s, &store, 6000).text;
     assert!(full.contains(&line), "{full}");
 }
+
+fn finding(w: &World, title: &str, created: &str, status: &str) {
+    let mut f = item(Kind::Finding, title, "what the walk saw");
+    f.meta.created = created.parse().unwrap();
+    f.meta.modified = f.meta.created;
+    f.meta.status = Some(status.to_string());
+    f.meta.milestone = Some("m1-walk".to_string());
+    put(&w.store(), Some(P), &f);
+}
+
+/// 73 of 84 open findings were older than 14 days, and no digest said so
+/// (audit-mem-2026-11-05).
+#[test]
+fn context_names_open_findings_older_than_two_weeks() {
+    let w = World::new("digest-stale-findings");
+    w.project(P, "thing");
+    let cwd = w.plain_dir("cwd");
+    let recent = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24);
+    finding(&w, "fresh and open", &recent.to_string(), "open");
+    finding(&w, "old but fixed", "2026-01-02T00:00:00Z", "fixed");
+    let out = mem(&w, &cwd, &["context", "thing"]);
+    assert_eq!(code(&out), 0);
+    assert!(!stdout(&out).contains("open finding"), "{}", stdout(&out));
+
+    finding(&w, "old and open", "2026-02-09T08:00:00Z", "open");
+    finding(&w, "older and open", "2026-01-05T08:00:00Z", "open");
+    let out = mem(&w, &cwd, &["context", "thing"]);
+    assert_eq!(code(&out), 0);
+    let lines: Vec<String> = stdout(&out)
+        .lines()
+        .filter(|l| l.contains("open finding"))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        lines,
+        ["2 open findings older than 14 days, oldest 2026-01-05"],
+        "{}",
+        stdout(&out)
+    );
+}
