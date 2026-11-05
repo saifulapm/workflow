@@ -41,14 +41,25 @@ fn guard_home(cwd: &Path, home: &Path, command: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-/// Exit 2 with `says` in the reason, which fits on two lines.
+/// Exit 2 with `says` in the reason, which fits on two lines and says the
+/// refusal is meant. The same reason goes out as a deny decision on stdout:
+/// Claude Code then shows it without the hook's command in front, and the
+/// exit 2 still blocks a Claude Code that cannot read the decision.
 fn refused(out: &Output, says: &str) -> bool {
     let reason = String::from_utf8_lossy(&out.stderr);
-    out.status.code() == Some(2) && reason.contains(says) && reason.trim_end().lines().count() <= 2
+    let decision: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    let output = &decision["hookSpecificOutput"];
+    out.status.code() == Some(2)
+        && reason.starts_with("workflow guard refused this on purpose: ")
+        && reason.contains(says)
+        && reason.trim_end().lines().count() <= 2
+        && output["hookEventName"] == "PreToolUse"
+        && output["permissionDecision"] == "deny"
+        && output["permissionDecisionReason"] == reason.trim_end()
 }
 
 fn passes(out: &Output) -> bool {
-    out.status.code() == Some(0) && out.stderr.is_empty()
+    out.status.code() == Some(0) && out.stderr.is_empty() && out.stdout.is_empty()
 }
 
 #[test]
@@ -142,6 +153,16 @@ fn input_the_guard_cannot_read_passes() {
         .stdin(Stdio::null())
         .output()
         .unwrap();
+    assert!(passes(&out), "{out:?}");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
+        .args(["guard", "bash"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"not json").unwrap();
+    let out = child.wait_with_output().unwrap();
     assert!(passes(&out), "{out:?}");
 }
 

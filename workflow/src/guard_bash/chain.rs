@@ -6,10 +6,10 @@
 use super::Call;
 use crate::shell::{Op, argv, program_name, subcommand};
 
-const AFTER_CHECK: &str = "workflow guard: a commit or deploy chained after a test or lint runs whatever the test said.\n\
+const AFTER_CHECK: &str = "workflow guard refused this on purpose: a commit or deploy chained after a test or lint runs whatever the test said.\n\
 Run tests in one call, commit in the next: read the result in between.";
 
-const AFTER_MERGE: &str = "workflow guard: a command chained after a piped git merge runs even when the merge failed.\n\
+const AFTER_MERGE: &str = "workflow guard refused this on purpose: a command chained after a piped git merge runs even when the merge failed.\n\
 Run git merge in one call, read its result, then the next command in its own call.";
 
 pub fn refusal(call: &Call) -> Option<&'static str> {

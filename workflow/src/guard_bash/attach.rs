@@ -7,7 +7,7 @@ use std::path::Path;
 use super::Call;
 use crate::shell::{argv, subcommand};
 
-const REFUSAL: &str = "workflow guard: a bare playwright-cli may be pnpm's, which cannot attach to the browser extension.\n\
+const REFUSAL: &str = "workflow guard refused this on purpose: a bare playwright-cli may be pnpm's, which cannot attach to the browser extension.\n\
 Call the wrapper by path: ~/.dotfiles/bin/playwright-cli attach --extension=chromium.";
 
 pub fn refusal(call: &Call) -> Option<&'static str> {

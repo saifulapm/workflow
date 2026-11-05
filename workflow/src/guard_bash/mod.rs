@@ -17,8 +17,12 @@ use serde_json::Value;
 use crate::exit;
 use crate::shell::{self, Simple};
 
-/// Claude Code blocks a tool call whose PreToolUse hook exits 2, and shows
-/// the agent what the hook wrote to stderr.
+/// Claude Code blocks a tool call whose PreToolUse hook exits 2. With a deny
+/// decision on stdout it shows the agent that decision's reason; one that
+/// cannot read the decision shows stderr, so both carry the reason. Every
+/// form of refusal reads "PreToolUse:Bash hook error: " in Claude Code
+/// 2.1.318, but the decision drops the hook's own command from in front of
+/// the reason. An exit 0 with a decision it rejected would run the call.
 const BLOCK: i32 = 2;
 
 /// A command line and the folder it runs in.
@@ -55,6 +59,14 @@ pub fn cmd_guard_bash() -> i32 {
     };
     match RULES.iter().find_map(|rule| rule(&call)) {
         Some(reason) => {
+            let decision = serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            });
+            println!("{decision}");
             eprintln!("{reason}");
             BLOCK
         }

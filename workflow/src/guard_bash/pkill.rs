@@ -5,7 +5,7 @@
 use super::Call;
 use crate::shell::{argv, program_name};
 
-const REFUSAL: &str = "workflow guard: pkill -f and pgrep -f match their own shell's command line and kill it.\n\
+const REFUSAL: &str = "workflow guard refused this on purpose: pkill -f and pgrep -f match their own shell's command line and kill it.\n\
 Find the process with ss -ltnp | grep :<port>, then kill -TERM -- -<pgid> in its own call.";
 
 pub fn refusal(call: &Call) -> Option<&'static str> {

@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use super::Call;
 use crate::shell::{argv, program_name};
 
-const REFUSAL: &str = "workflow guard: a top-level cd into an Agent worktree moves this session there for good.\n\
+const REFUSAL: &str = "workflow guard refused this on purpose: a top-level cd into an Agent worktree moves this session there for good.\n\
 Run the command in a (cd <worktree> && <command>) subshell, or use git -C <worktree>.";
 
 pub fn refusal(call: &Call) -> Option<&'static str> {
