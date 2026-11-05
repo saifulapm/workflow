@@ -1022,6 +1022,39 @@ fn mem_project_naming_a_stranger_to_the_directory_yields_to_the_directory() {
     );
 }
 
+/// `MEM_PROJECT=polaris mem log x` at the shopify_themes root said "acting on
+/// shopify_themes" and then refused the write. Only the refusal shows, and it
+/// says why the variable did not count.
+#[test]
+fn mem_project_set_aside_at_a_root_with_children_prints_only_the_refusal() {
+    let w = World::new("env-stranger-root");
+    let other = w.repo("polaris", Some("git@github.com:me/polaris.git"));
+    assert_eq!(code(&mem(&w, &other, &["log", "polaris starts"])), 0);
+    let themes = w.repo("themes", Some("git@github.com:me/themes.git"));
+    std::fs::create_dir_all(themes.join("apps/shop")).unwrap();
+    assert_eq!(code(&mem(&w, &themes, &["log", "themes starts"])), 0);
+    let out = mem(&w, &themes, &["project", "add", "apps/shop"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let out = common::mem_env(
+        &w,
+        &themes,
+        &["log", "stray"],
+        &[("MEM_PROJECT", "polaris")],
+    );
+    assert_ne!(code(&out), 0, "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(!err.contains("acting on"), "{err}");
+    assert!(
+        err.contains("MEM_PROJECT=polaris") && err.contains("--project"),
+        "{err}"
+    );
+    for project in ["themes", "polaris", "shop"] {
+        let log = stdout(&mem(&w, &other, &["log", "--project", project]));
+        assert!(!log.contains("stray"), "{project}: {log}");
+    }
+}
+
 #[test]
 fn a_write_through_the_test_helper_never_runs_the_real_sync() {
     // The real qshell-sync bisyncs the developer's own store, under a lock

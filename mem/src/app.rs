@@ -54,20 +54,38 @@ impl App {
 
     pub fn identity(&self, mode: Mode) -> Result<Identity> {
         let mut named = self.project.as_deref();
+        let mut set_aside = None;
         if self.project_from_env
             && let Some(env) = named
             && let Some(here) = self.overruled(env)
         {
             named = None;
             if mode == Mode::Read {
+                self.say_set_aside(env, &here);
                 return Ok(here);
             }
+            set_aside = Some(env);
         }
         let identity = resolve(&self.cwd, &self.store, &self.dirs, named, mode)?;
         if mode == Mode::Write && named.is_none() {
-            self.refuse_a_root_with_children(&identity)?;
+            self.refuse_a_root_with_children(&identity, set_aside)?;
+        }
+        if let Some(env) = set_aside {
+            self.say_set_aside(env, &identity);
         }
         Ok(identity)
+    }
+
+    /// The note that `MEM_PROJECT` yielded to the directory. A write the
+    /// root check refuses prints only the refusal, which names the variable.
+    fn say_set_aside(&self, named: &str, here: &Identity) {
+        if let Identity::Known { name, .. } = here
+            && !self.quiet
+        {
+            eprintln!(
+                "mem: MEM_PROJECT names {named}, but this directory is {name}'s -- acting on {name}; `--project {named}` acts on the other"
+            );
+        }
     }
 
     /// A write the directory alone files under a monorepo's root, when the
@@ -75,7 +93,11 @@ impl App {
     /// app's session put 76 writes in 14 days into shopify_apps, which no
     /// app reads; the root's own work names it with `--project`, and a cloud
     /// run's `cloud/<root>-<milestone>` branch names it too.
-    fn refuse_a_root_with_children(&self, identity: &Identity) -> Result<()> {
+    fn refuse_a_root_with_children(
+        &self,
+        identity: &Identity,
+        set_aside: Option<&str>,
+    ) -> Result<()> {
         let Identity::Known { id, name } = identity else {
             return Ok(());
         };
@@ -96,12 +118,20 @@ impl App {
         if children.is_empty() {
             return Ok(());
         }
-        Err(crate::exit::usage(format!(
-            "this folder is {name}'s root, and {name} has the child projects {}: \
-             run this in an app's folder or pass --project <name> \
-             (`--project {name}` writes to the root)",
-            children.join(", ")
-        )))
+        let children = children.join(", ");
+        Err(crate::exit::usage(match set_aside {
+            Some(env) => format!(
+                "MEM_PROJECT={env} was set aside: this folder is {name}'s root, \
+                 and {name} has the child projects {children}: run this in an app's \
+                 folder or pass --project <name> (`--project {env}` writes to {env}, \
+                 `--project {name}` to the root)"
+            ),
+            None => format!(
+                "this folder is {name}'s root, and {name} has the child projects {children}: \
+                 run this in an app's folder or pass --project <name> \
+                 (`--project {name}` writes to the root)"
+            ),
+        }))
     }
 
     /// The working directory's project, when `MEM_PROJECT` names another the
@@ -113,7 +143,7 @@ impl App {
     /// project, the named one, its parent or its child keeps the variable.
     fn overruled(&self, named: &str) -> Option<Identity> {
         let here = resolve(&self.cwd, &self.store, &self.dirs, None, Mode::Read).ok()?;
-        let Identity::Known { id, name } = &here else {
+        let Identity::Known { id, .. } = &here else {
             return None;
         };
         let registry = Registry::load(&self.store);
@@ -125,11 +155,6 @@ impl App {
                 .is_some_and(|p| p.parent.as_deref() == Some(wanted.id.as_str()));
         if related {
             return None;
-        }
-        if !self.quiet {
-            eprintln!(
-                "mem: MEM_PROJECT names {named}, but this directory is {name}'s -- acting on {name}; `--project {named}` acts on the other"
-            );
         }
         Some(here)
     }
