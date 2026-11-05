@@ -1132,3 +1132,33 @@ fn the_first_mem_of_a_boot_takes_the_kits_settings() {
         "the setup's hooks stay: {settings}"
     );
 }
+
+/// A release with mem and hub but no workflow build, as before main was
+/// pushed with it: the setup bakes the two it has and says which is missing,
+/// and the guard hook passes every call until a boot fetches one.
+#[test]
+fn a_release_without_workflow_still_bakes_mem_and_hub() {
+    let home = Scratch::new("cloud-setup-no-workflow");
+    let (log, path) = store_fakes(&home, 0);
+    let curl = home.read("fake/curl");
+    home.script(
+        "fake/curl",
+        &curl.replacen(
+            "args=\"$*\"\n",
+            "args=\"$*\"\ncase \"$args\" in */workflow-x86_64*) exit 22;; esac\n",
+            1,
+        ),
+    );
+    let ran = setup_with(&home, &path, &[]);
+    let said = String::from_utf8_lossy(&ran.stdout);
+    assert!(said.contains("no workflow build on cloud-bins"), "{said}");
+    assert!(!said.contains("no baked binaries"), "{said}");
+    for name in ["mem", "hub"] {
+        assert!(
+            home.at(&format!(".local/bin/{name}-x86_64")).exists(),
+            "{name}"
+        );
+    }
+    assert!(!home.at(".local/bin/workflow-x86_64").exists());
+    drop(log);
+}

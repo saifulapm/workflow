@@ -667,11 +667,13 @@ cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
 chmod +x \"$bin/mem\"\n\
 cat > \"$bin/workflow\" <<'{END}'\n{WORKFLOW_SHIM}{END}\n\
 chmod +x \"$bin/workflow\"\n\
-{hooks}if \"$bin/mem-cloud\" bake; then\n\
-  echo \"setup: baked mem, hub and workflow from the cloud-bins release\"\n\
-else\n\
-  echo \"setup: no baked binaries: the release did not answer; each session fetches its own\"\n\
-fi\n"
+{hooks}baked=0\n\
+\"$bin/mem-cloud\" bake || baked=$?\n\
+case $baked in\n\
+  0) echo \"setup: baked mem, hub and workflow from the cloud-bins release\" ;;\n\
+  3) echo \"setup: baked mem and hub; no workflow build on cloud-bins, so the guard and worktree hooks pass every call\" ;;\n\
+  *) echo \"setup: no baked binaries: the release did not answer; each session fetches its own\" ;;\n\
+esac\n"
     ));
     out
 }
@@ -688,9 +690,9 @@ fi\n"
 /// environment without a new setup; a release that gives no sum keeps the
 /// binary here, and is not asked again that boot. `mem-cloud sync <seconds>`
 /// brings the replica up to the store with `hub share sync`, and fails when
-/// the store cannot be reached in time. `mem-cloud bake` takes both binaries
-/// from the public `cloud-bins` release, which needs no secret: the setup
-/// has none.
+/// the store cannot be reached in time. `mem-cloud bake` takes mem, hub and
+/// workflow from the public `cloud-bins` release, which needs no secret: the
+/// setup has none. It exits 3 when only workflow did not come.
 const HELPER: &str = r#"#!/bin/sh
 bin="$HOME/.local/bin"
 state="$HOME/.local/state/hub"
@@ -823,7 +825,12 @@ bake() {
   for name in mem hub workflow; do
     [ -x "$bin/$name-x86_64" ] && continue
     part="$bin/$name-x86_64.part.$$"
-    curl -fsSL --max-time 120 "$release/$name-x86_64" -o "$part" || { rm -f "$part"; return 1; }
+    if ! curl -fsSL --max-time 120 "$release/$name-x86_64" -o "$part"; then
+      rm -f "$part"
+      # mem and hub are baked by now; without workflow the guard passes.
+      [ "$name" = workflow ] && return 3
+      return 1
+    fi
     chmod +x "$part"
     mv "$part" "$bin/$name-x86_64"
   done
