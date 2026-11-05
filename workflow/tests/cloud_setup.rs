@@ -62,17 +62,37 @@ fn script(home: &Scratch) -> String {
     )
 }
 
-#[test]
-fn the_script_writes_every_skill_and_agent_byte_for_byte() {
-    let home = Scratch::new("cloud-setup-files");
-    home.put("setup.sh", &script(&home));
-    let ran = command("bash")
-        .arg(home.at("setup.sh"))
-        .env("HOME", home.path())
-        .env("PATH", offline(&home))
+/// The release's bundle, packed from this repo's skills, agents and cloud
+/// kit as CI packs it, with its sum.
+fn repo_bundle(home: &Scratch) {
+    let out = command("tar")
+        .args(["-C", repo().to_str().unwrap(), "-czf"])
+        .arg(home.at("fake-skills.tar.gz"))
+        .args(["skills", "agents", "cloud"])
         .output()
         .unwrap();
-    assert!(ran.status.success(), "{ran:?}");
+    assert!(out.status.success(), "{out:?}");
+    store_sum(home, "workflow-skills.tar.gz", "fake-skills.tar.gz");
+}
+
+/// The skills and agents are too big for the environment's setup field: the
+/// setup takes them from the public release's bundle, as it takes the
+/// binaries, with no secret.
+#[test]
+fn the_setup_takes_every_skill_and_agent_from_the_release_byte_for_byte() {
+    let home = Scratch::new("cloud-setup-files");
+    let (log, path) = store_fakes(&home, 0);
+    repo_bundle(&home);
+    let ran = setup_with(&home, &path, &[]);
+    assert!(
+        String::from_utf8_lossy(&ran.stdout).contains("took the skills and agents"),
+        "{ran:?}"
+    );
+    let started = fs::read_to_string(&log).unwrap();
+    assert!(
+        started.contains("releases/download/cloud-bins/workflow-skills.tar.gz"),
+        "{started}"
+    );
 
     let mut seen = 0;
     for top in ["skills", "agents"] {
@@ -98,6 +118,27 @@ fn the_script_writes_every_skill_and_agent_byte_for_byte() {
     }
     assert!(seen > 5, "{seen} files");
     assert!(home.has(".claude/skills/orchestrate/SKILL.md"));
+}
+
+/// The setup fits the field: claude.ai takes a setup file of 64 KB at most,
+/// and an 86 KB paste did not reach the environment.
+#[test]
+fn the_setup_fits_the_environment_field() {
+    let home = Scratch::new("cloud-setup-size");
+    let size = script(&home).len();
+    assert!(size < 64 * 1024, "{size} bytes");
+}
+
+/// A release that does not answer leaves the skills to the first mem of a
+/// boot, and the setup says so.
+#[test]
+fn an_offline_setup_says_the_skills_come_later() {
+    let home = Scratch::new("cloud-setup-no-bundle");
+    let ran = setup_with(&home, &offline(&home), &[]);
+    assert!(
+        String::from_utf8_lossy(&ran.stdout).contains("no skills bundle"),
+        "{ran:?}"
+    );
 }
 
 #[test]
@@ -338,12 +379,17 @@ fn without_the_keys_the_shim_starts_nothing() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
-    // The setup's list of the skills it wrote is all the hub's state holds.
+    // Nothing of the hub's own is in its state: no hub, no tailnet.
     let state: Vec<_> = fs::read_dir(home.at(".local/state/hub"))
-        .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
-        .collect();
-    assert_eq!(state, ["skills.list"]);
+        .map(|dir| {
+            dir.map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        state.iter().all(|name| name.starts_with("skills")),
+        "{state:?}"
+    );
 }
 
 /// The variables of an environment whose sessions keep a replica of the
@@ -840,6 +886,7 @@ fn store_skills(home: &Scratch, skill: &str, agent: &str) {
 fn the_first_mem_of_a_boot_takes_the_stores_skills() {
     let home = Scratch::new("cloud-shim-skills");
     let (log, path) = store_fakes(&home, 0);
+    repo_bundle(&home);
     setup_with(&home, &path, &STORE_ENV);
     let skill = home.at(".claude/skills/orchestrate/SKILL.md");
     assert!(fs::read_to_string(&skill).unwrap() != "# newer orchestrate\n");
@@ -885,12 +932,14 @@ fn the_first_mem_of_a_boot_takes_the_stores_skills() {
     );
 }
 
-/// A store with no bundle keeps the skills the setup wrote.
+/// A store with no bundle keeps the skills the setup took.
 #[test]
 fn without_the_stores_skills_the_setups_stay() {
     let home = Scratch::new("cloud-shim-no-skills");
     let (log, path) = store_fakes(&home, 0);
+    repo_bundle(&home);
     setup_with(&home, &path, &STORE_ENV);
+    fs::remove_file(home.at("sums/workflow-skills.tar.gz")).unwrap();
     let skill = home.at(".claude/skills/orchestrate/SKILL.md");
     let before = fs::read_to_string(&skill).unwrap();
     fs::remove_file(&log).unwrap();

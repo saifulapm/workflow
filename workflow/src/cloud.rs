@@ -604,10 +604,11 @@ fn session_of(said: &str) -> Option<String> {
 /// The heredoc delimiter; no embedded file may hold it as a line of its own.
 const END: &str = "WORKFLOW_EOF";
 
-/// The setup script: every file of `skills/` and `agents/` under
-/// `~/.claude`, and a `mem` that fetches the real binary from the public
-/// release (from the mem server without the store's variables) the first
-/// time it runs. claude.ai runs the script with none of the environment's
+/// The setup script: the cloud kit's rules and settings, the skills and
+/// agents from the public release's bundle (too big for the setup field
+/// inline), and a `mem` that fetches the real binary from the public release
+/// (from the mem server without the store's variables) the first time it
+/// runs. claude.ai runs the script with none of the environment's
 /// variables, so it cannot reach the store: it bakes both binaries into the
 /// cached environment from the release the workflow repo's CI publishes, and
 /// each session fills its replica from the store.
@@ -617,19 +618,15 @@ pub fn setup_script(files: &[(&str, &[u8])]) -> String {
 # The cloud environment `workflow`'s setup script, printed by `workflow cloud-setup`.\n\
 set -euo pipefail\n",
     );
-    // Each skill folder and agent file written here, by the name the
-    // skills refresh deletes it by once the store's bundle leaves it out.
-    let mut names = std::collections::BTreeSet::new();
     // The cloud kit's hooks and settings, merged once the helper that merges
     // them exists.
     let mut kit_hooks = None;
     let mut kit_keys = None;
     for (rel, bytes) in files {
         let text = String::from_utf8_lossy(bytes);
-        // The cloud kit: its rules are the user's CLAUDE.md, its hooks go
-        // into settings.json.
-        // Its skills are too big for the setup field and come with the
-        // skills refresh, which the SessionStart hook's mem call runs first.
+        // The cloud kit: its rules are the user's CLAUDE.md, its hooks and
+        // settings go into settings.json. Skills and agents come with the
+        // release's bundle.
         let target = if *rel == "cloud/rules.md" {
             "CLAUDE.md".to_string()
         } else if *rel == "cloud/settings-hooks.json" {
@@ -638,23 +635,13 @@ set -euo pipefail\n",
         } else if *rel == "cloud/settings-keys.json" {
             kit_keys = Some(text.into_owned());
             continue;
-        } else if rel.starts_with("skills/") || rel.starts_with("agents/") {
-            rel.to_string()
         } else {
             continue;
         };
         let dest = format!("\"$HOME/.claude/{target}\"");
         out.push_str(&format!("mkdir -p \"$(dirname {dest})\"\n"));
         out.push_str(&format!("cat > {dest} <<'{END}'\n{text}{END}\n"));
-        if target.contains('/') {
-            names.insert(target.splitn(3, '/').take(2).collect::<Vec<_>>().join("/"));
-        }
     }
-    let names: String = names.into_iter().map(|name| format!("{name}\n")).collect();
-    out.push_str(&format!(
-        "mkdir -p \"$HOME/.local/state/hub\"\n\
-cat > \"$HOME/.local/state/hub/skills.list\" <<'{END}'\n{names}{END}\n"
-    ));
     let hooks = match kit_hooks {
         Some(text) => format!(
             "kit=$(mktemp)\n\
@@ -676,7 +663,13 @@ cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
 chmod +x \"$bin/mem\"\n\
 cat > \"$bin/workflow\" <<'{END}'\n{WORKFLOW_SHIM}{END}\n\
 chmod +x \"$bin/workflow\"\n\
-{hooks}# The image runs the setup as root; elsewhere the runtimes are the machine's.\n\
+{hooks}\"$bin/mem-cloud\" bundle\n\
+if [ -s \"$HOME/.local/state/hub/skills.sha256\" ]; then\n\
+  echo \"setup: took the skills and agents from the cloud-bins release\"\n\
+else\n\
+  echo \"setup: no skills bundle from the release; the first mem of a boot fetches it\"\n\
+fi\n\
+# The image runs the setup as root; elsewhere the runtimes are the machine's.\n\
 if [ \"$(id -u)\" = 0 ]; then\n\
   \"$bin/mem-cloud\" runtimes || echo \"setup: a runtime did not install; see above\"\n\
 fi\n\
@@ -769,6 +762,12 @@ skills() {
   boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 0
   [ -e "$state/fresh-skills-$boot" ] && return 0
   mkdir -p "$state" && : >"$state/fresh-skills-$boot"
+  bundle
+}
+# bundle: the release's skills bundle, put in place when its sum differs
+# from the one here. The setup runs it with no secret; the release is public.
+bundle() {
+  mkdir -p "$state"
   url="$release/workflow-skills.tar.gz"
   want=$(curl -fsSL --max-time 10 "$url.sha256" 2>/dev/null) &&
     want=${want%% *} && [ "$want" != "$(cat "$state/skills.sha256" 2>/dev/null)" ] &&
@@ -901,10 +900,11 @@ case "${1:-}" in
   runtimes) runtimes ;;
   bake) bake ;;
   skills) skills ;;
+  bundle) bundle ;;
   hooks) hooks "$2" "${3:-}" ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills or hooks <file> [<keys>]" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills, bundle or hooks <file> [<keys>]" >&2; exit 2 ;;
 esac
 "#;
 
@@ -1228,6 +1228,7 @@ mod tests {
     fn hooks_stay_out_of_the_cloud() {
         let script = setup_script(&[("hooks/pre-commit", b"x\n"), ("skills/a/SKILL.md", b"a\n")]);
         assert!(!script.contains("pre-commit"), "{script}");
-        assert!(script.contains(".claude/skills/a/SKILL.md"), "{script}");
+        // The skills come from the release's bundle, never inline.
+        assert!(!script.contains(".claude/skills/a/SKILL.md"), "{script}");
     }
 }
