@@ -342,6 +342,67 @@ fn a_branch_with_commits_no_other_branch_has_stays_and_says_so() {
     assert!(err.contains(&branch), "{err}");
 }
 
+/// An app worktree on its own branch, 3 commits ahead of main.
+fn app_ahead(w: &Scratch, main: &Path) -> PathBuf {
+    let app = w.at("app");
+    git(
+        main,
+        &["worktree", "add", "-q", "-b", "app", app.to_str().unwrap()],
+    );
+    for file in ["b.txt", "c.txt", "d.txt"] {
+        w.put(&format!("app/{file}"), "x\n");
+        git(&app, &["add", file]);
+        git(&app, &["commit", "-qm", &format!("Add {file}")]);
+    }
+    app
+}
+
+#[test]
+fn a_branch_cut_from_an_app_ahead_of_main_with_no_commit_of_its_own_goes() {
+    let w = Scratch::new("wt-remove-app");
+    let main = repo(&w, "repo");
+    let app = app_ahead(&w, &main);
+    let dir = printed(&create(&app));
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!dir.exists());
+    assert!(!has_branch(&main, &format!("worktree-{NAME}")));
+}
+
+#[test]
+fn a_branch_cut_from_an_app_with_a_commit_of_its_own_stays_and_says_so() {
+    let w = Scratch::new("wt-remove-app-commit");
+    let main = repo(&w, "repo");
+    let app = app_ahead(&w, &main);
+    let dir = printed(&create(&app));
+    std::fs::write(dir.join("e.txt"), "e\n").unwrap();
+    git(&dir, &["add", "e.txt"]);
+    git(&dir, &["commit", "-qm", "Add e.txt"]);
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let branch = format!("worktree-{NAME}");
+    assert!(has_branch(&main, &branch));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("kept the branch") && err.contains(&branch),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_branch_rebased_onto_a_newer_trunk_with_no_commit_of_its_own_goes() {
+    let w = Scratch::new("wt-remove-rebased");
+    let main = repo(&w, "repo");
+    let dir = printed(&create(&main));
+    w.put("repo/b.txt", "b\n");
+    git(&main, &["add", "b.txt"]);
+    git(&main, &["commit", "-qm", "Second file"]);
+    git(&dir, &["rebase", "-q", "main"]);
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!has_branch(&main, &format!("worktree-{NAME}")));
+}
+
 /// The command of the cloud kit's one entry for a worktree hook event.
 fn entry(event: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cloud/settings-hooks.json");

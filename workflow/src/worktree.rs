@@ -15,7 +15,8 @@
 //! A copy that fails is reported and skipped: the worktree still comes up.
 //!
 //! Removing one keeps any work: git refuses a worktree with uncommitted or
-//! untracked files, and `branch -d` a branch that is not merged.
+//! untracked files, and the branch stays when it holds a commit no other
+//! local branch has.
 //! Claude Code calls it for a `claude -w` session's worktree, never for a
 //! subagent's, which the orchestrator removes once it has landed.
 
@@ -99,9 +100,22 @@ pub fn cmd_worktree_remove() -> i32 {
         warn(format!("worktree remove: kept {path}; git says why above"));
         return exit::FAILED;
     }
-    if !main.quiet(&["branch", "-d", &branch]) {
+    // `branch -d` judges "merged" against the main clone's HEAD, which a branch
+    // cut from an app checkout ahead of main never is. A branch is spare when
+    // every commit on it is also on another local branch.
+    let own = main.capture(&[
+        "rev-list",
+        &branch,
+        "--not",
+        // Under `--branches` the pattern is relative to refs/heads.
+        &format!("--exclude={branch}"),
+        "--branches",
+    ]);
+    if own.ok && own.stdout.iter().all(u8::is_ascii_whitespace) {
+        main.quiet(&["branch", "-D", &branch]);
+    } else {
         warn(format!(
-            "worktree remove: kept the branch {branch}, which is not merged"
+            "worktree remove: kept the branch {branch}, which holds commits no other branch has"
         ));
     }
     exit::OK
