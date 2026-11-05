@@ -75,6 +75,7 @@ fn write(sessions_dir: &Path, id: &str, activity: &Activity) -> Result<()> {
 /// the brief differs from the one this session last saw in that project,
 /// a project it had not seen before included.
 pub fn record_batch(sessions_dir: &Path, id: &str, project: &str, brief: &str) -> bool {
+    let _lock = lock(sessions_dir, id);
     let mut activity = read(sessions_dir, id);
     let started = activity.batches > 0;
     activity.batches += 1;
@@ -88,10 +89,28 @@ pub fn record_batch(sessions_dir: &Path, id: &str, project: &str, brief: &str) -
 
 /// Keeps `question` among the questions this session asked.
 pub fn record_ask(sessions_dir: &Path, id: &str, question: &str) {
+    let _lock = lock(sessions_dir, id);
     let mut activity = read(sessions_dir, id);
     activity.asked.push(question.to_string());
     activity.last = Timestamp::now().to_string();
     let _ = write(sessions_dir, id, &activity);
+}
+
+/// Holds an exclusive flock on `<id>.lock` until the returned file drops, so
+/// two hooks of one session do not overwrite each other's read-modify-write.
+/// The kernel frees the lock when its holder dies. If the lock file cannot be
+/// made or locked, the caller goes on without it: a hook must not fail on
+/// bookkeeping.
+fn lock(sessions_dir: &Path, id: &str) -> Option<std::fs::File> {
+    std::fs::create_dir_all(sessions_dir).ok()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(sessions_dir.join(format!("{}.lock", safe(id))))
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
 }
 
 /// Removes session files older than a week. Called from doctor.
