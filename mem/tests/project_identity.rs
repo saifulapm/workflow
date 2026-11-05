@@ -1109,3 +1109,62 @@ fn a_plain_branch_behind_a_proxy_origin_finds_the_one_project_and_never_register
     assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
     assert_eq!(Registry::load(&w.store()).projects.len(), 1);
 }
+
+fn logged(w: &common::World, cwd: &Path, project: &str) -> String {
+    let out = common::mem(w, cwd, &["log", "--project", project]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    common::stdout(&out)
+}
+
+/// `cd <worktree root> && mem log ...` from an app's session put 76 writes in
+/// 14 days into shopify_apps, the root no app reads (audit-mem-2026-11-05).
+#[test]
+fn a_write_at_a_monorepo_root_is_refused_unless_a_project_is_named() {
+    let w = common::World::new("ident-root-write");
+    let root = w.repo("mono", Some("git@github.com:me/mono.git"));
+    let out = common::mem(&w, &root, &["log", "before the apps"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    for app in ["polaris", "eventsmith"] {
+        std::fs::create_dir_all(root.join("apps").join(app)).unwrap();
+        let out = common::mem(&w, &root, &["project", "add", &format!("apps/{app}")]);
+        assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    }
+
+    let out = common::mem(&w, &root, &["log", "lost at the root"]);
+    assert_ne!(common::code(&out), 0);
+    let err = common::stderr(&out);
+    for name in ["polaris", "eventsmith", "--project"] {
+        assert!(err.contains(name), "{name} missing from: {err}");
+    }
+    assert!(!logged(&w, &root, "mono").contains("lost at the root"));
+
+    let out = common::mem(&w, &root, &["log", "repo-wide", "--project", "mono"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert!(logged(&w, &root, "mono").contains("repo-wide"));
+
+    let app = root.join("apps/polaris");
+    let out = common::mem(&w, &app, &["log", "from the app"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert!(logged(&w, &root, "polaris").contains("from the app"));
+
+    // A session started for an app names it in MEM_PROJECT.
+    let out = common::mem_env(
+        &w,
+        &root,
+        &["log", "named by the session"],
+        &[("MEM_PROJECT", "polaris")],
+    );
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert!(logged(&w, &root, "polaris").contains("named by the session"));
+
+    let out = common::mem(
+        &w,
+        &root,
+        &["handoff", "--set", "root work", "--project", "mono"],
+    );
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    for read in [&["log"][..], &["handoff"], &["context"]] {
+        let out = common::mem(&w, &root, read);
+        assert_eq!(common::code(&out), 0, "{read:?}: {}", common::stderr(&out));
+    }
+}

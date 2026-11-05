@@ -838,7 +838,8 @@ fn project_add_registers_a_child_the_subdir_then_owns() {
         serde_json::json!(mem::git::canonical(&repo).to_string_lossy())
     );
 
-    // A write from the subdir lands on the child, one from the root on the root.
+    // A write from the subdir lands on the child, one that names the root on
+    // the root.
     let v = json(&mem(
         &w,
         &repo.join("apps/x"),
@@ -846,7 +847,11 @@ fn project_add_registers_a_child_the_subdir_then_owns() {
     ));
     let item = mem::store::read_item(std::path::Path::new(v["path"].as_str().unwrap())).unwrap();
     assert_eq!(item.meta.project.as_deref(), Some("x"));
-    let v = json(&mem(&w, &repo, &["log", "root work", "--json"]));
+    let v = json(&mem(
+        &w,
+        &repo,
+        &["log", "root work", "--project", "mono", "--json"],
+    ));
     let item = mem::store::read_item(std::path::Path::new(v["path"].as_str().unwrap())).unwrap();
     assert_eq!(item.meta.project.as_deref(), Some("mono"));
 }

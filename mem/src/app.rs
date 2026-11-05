@@ -53,19 +53,46 @@ impl App {
     }
 
     pub fn identity(&self, mode: Mode) -> Result<Identity> {
+        let mut named = self.project.as_deref();
         if self.project_from_env
-            && let Some(named) = self.project.as_deref()
-            && let Some(here) = self.overruled(named)
+            && let Some(env) = named
+            && let Some(here) = self.overruled(env)
         {
-            return Ok(here);
+            named = None;
+            if mode == Mode::Read {
+                return Ok(here);
+            }
         }
-        resolve(
-            &self.cwd,
-            &self.store,
-            &self.dirs,
-            self.project.as_deref(),
-            mode,
-        )
+        let identity = resolve(&self.cwd, &self.store, &self.dirs, named, mode)?;
+        if mode == Mode::Write && named.is_none() {
+            self.refuse_a_root_with_children(&identity)?;
+        }
+        Ok(identity)
+    }
+
+    /// A write the directory alone files under a monorepo's root, when the
+    /// root has child projects. `cd <worktree root> && mem log ...` from an
+    /// app's session put 76 writes in 14 days into shopify_apps, which no
+    /// app reads; the root's own work names it with `--project`.
+    fn refuse_a_root_with_children(&self, identity: &Identity) -> Result<()> {
+        let Identity::Known { id, name } = identity else {
+            return Ok(());
+        };
+        let registry = Registry::load(&self.store);
+        let children: Vec<&str> = registry
+            .children_of(id)
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        if children.is_empty() {
+            return Ok(());
+        }
+        Err(crate::exit::usage(format!(
+            "this folder is {name}'s root, and {name} has the child projects {}: \
+             run this in an app's folder or pass --project <name> \
+             (`--project {name}` writes to the root)",
+            children.join(", ")
+        )))
     }
 
     /// The working directory's project, when `MEM_PROJECT` names another the

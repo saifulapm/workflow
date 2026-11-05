@@ -1065,7 +1065,12 @@ fn doctor_flags_broken_child_projects_and_context_stays_separated() {
 
     // The healthy pair draws no child finding, and each side's write lands in
     // its own context.
-    assert_eq!(code(&mem(&w, &repo, &["log", "root work"])), 0);
+    // The root's own work names it: a write the folder alone files under a
+    // root with children is refused.
+    assert_eq!(
+        code(&mem(&w, &repo, &["log", "root work", "--project", "mono"])),
+        0
+    );
     assert_eq!(
         code(&mem(&w, &repo.join("apps/x"), &["log", "child work"])),
         0
