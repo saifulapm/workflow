@@ -667,7 +667,11 @@ cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
 chmod +x \"$bin/mem\"\n\
 cat > \"$bin/workflow\" <<'{END}'\n{WORKFLOW_SHIM}{END}\n\
 chmod +x \"$bin/workflow\"\n\
-{hooks}baked=0\n\
+{hooks}# The image runs the setup as root; elsewhere the runtimes are the machine's.\n\
+if [ \"$(id -u)\" = 0 ]; then\n\
+  \"$bin/mem-cloud\" runtimes || echo \"setup: a runtime did not install; see above\"\n\
+fi\n\
+baked=0\n\
 \"$bin/mem-cloud\" bake || baked=$?\n\
 case $baked in\n\
   0) echo \"setup: baked mem, hub and workflow from the cloud-bins release\" ;;\n\
@@ -835,14 +839,52 @@ bake() {
     mv "$part" "$bin/$name-x86_64"
   done
 }
+# runtimes: the devices' Node 24, pnpm 11, PHP 8.4 and playwright-cli, linked
+# into ~/.local/bin, which comes before the image's /opt/node22/bin on a
+# session's PATH. Each install is skipped when the cached environment already
+# has it.
+runtimes() {
+  node="${MEM_CLOUD_ROOT:-}/opt/node24/bin"
+  mkdir -p "$bin"
+  if [ -x "$node/node" ]; then
+    case "$("$node/pnpm" -v 2>/dev/null)" in
+      11.*) ;;
+      *) "$node/node" "$node/npm" install -g --force pnpm@11 >&2 ;;
+    esac
+    [ "$("$node/playwright-cli" --version 2>/dev/null)" = 0.1.23 ] ||
+      "$node/node" "$node/npm" install -g @playwright/cli@0.1.23 >&2
+    for tool in node npm npx pnpm pnpx; do
+      [ -e "$node/$tool" ] && ln -sfn "$node/$tool" "$bin/$tool"
+    done
+    # Headless on the image's Chrome, with no sandbox: the session is root.
+    printf '%s\n' '#!/bin/sh' \
+      'export PLAYWRIGHT_MCP_EXECUTABLE_PATH="${PLAYWRIGHT_MCP_EXECUTABLE_PATH:-${CHROME_PATH:-/usr/bin/google-chrome}}"' \
+      'export PLAYWRIGHT_MCP_SANDBOX="${PLAYWRIGHT_MCP_SANDBOX:-false}"' \
+      "exec \"$node/playwright-cli\" \"\$@\"" >"$bin/playwright-cli"
+    chmod +x "$bin/playwright-cli"
+  else
+    echo "setup: the image has no Node 24 at /opt/node24; Node stays the image's" >&2
+  fi
+  if ! command -v php8.4 >/dev/null 2>&1; then
+    command -v add-apt-repository >/dev/null 2>&1 ||
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -q software-properties-common >&2
+    add-apt-repository -y ppa:ondrej/php >&2 &&
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -q php8.4-cli php8.4-intl \
+        php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip php8.4-sqlite3 \
+        php8.4-mysql php8.4-pgsql php8.4-bcmath php8.4-gd >&2
+  fi
+  php=$(command -v php8.4) && ln -sfn "$php" "$bin/php"
+  return 0
+}
 case "${1:-}" in
   fetch) fetch "$2" ;;
+  runtimes) runtimes ;;
   bake) bake ;;
   skills) skills ;;
   hooks) hooks "$2" "${3:-}" ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, skills or hooks <file> [<keys>]" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills or hooks <file> [<keys>]" >&2; exit 2 ;;
 esac
 "#;
 

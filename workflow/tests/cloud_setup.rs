@@ -1162,3 +1162,132 @@ fn a_release_without_workflow_still_bakes_mem_and_hub() {
     assert!(!home.at(".local/bin/workflow-x86_64").exists());
     drop(log);
 }
+
+/// A scratch root with the image's Node 24, its pnpm 10 and no
+/// playwright-cli, and a PATH whose npm, add-apt-repository and apt-get log
+/// what they are asked and leave what they install, as the real ones do.
+fn runtime_fakes(home: &Scratch) -> (PathBuf, String) {
+    let log = home.at("runtimes.log");
+    let node = home.mkdir("root/opt/node24/bin");
+    home.script(
+        "root/opt/node24/bin/node",
+        "#!/bin/sh\nexec /bin/sh \"$@\"\n",
+    );
+    home.script("root/opt/node24/bin/pnpm", "#!/bin/sh\necho 10.28.0\n");
+    home.script("root/opt/node24/bin/npx", "#!/bin/sh\n");
+    home.script(
+        "root/opt/node24/bin/npm",
+        &format!(
+            "#!/bin/sh\necho \"npm $*\" >> {log}\ndir=$(dirname \"$0\")\n\
+             case \"$*\" in\n\
+             *pnpm@11*) printf '#!/bin/sh\\necho 11.21.0\\n' > \"$dir/pnpm\";;\n\
+             *@playwright/cli@0.1.23*) printf '#!/bin/sh\\n[ \"$1\" = --version ] && exec echo 0.1.23\\necho real playwright-cli \"$PLAYWRIGHT_MCP_EXECUTABLE_PATH\" \"$PLAYWRIGHT_MCP_SANDBOX\" \"$@\"\\n' > \"$dir/playwright-cli\"; chmod +x \"$dir/playwright-cli\";;\n\
+             esac\n",
+            log = log.display()
+        ),
+    );
+    let fakes = home.mkdir("runtime-fakes");
+    home.script(
+        "runtime-fakes/add-apt-repository",
+        &format!(
+            "#!/bin/sh\necho \"add-apt-repository $*\" >> {}\n",
+            log.display()
+        ),
+    );
+    home.script(
+        "runtime-fakes/apt-get",
+        &format!(
+            "#!/bin/sh\necho \"apt-get $*\" >> {log}\n\
+             case \"$*\" in *php8.4-cli*) printf '#!/bin/sh\\necho PHP 8.4.14\\n' > {fakes}/php8.4; chmod +x {fakes}/php8.4;; esac\n",
+            log = log.display(),
+            fakes = fakes.display()
+        ),
+    );
+    let _ = node;
+    let path = format!("{}:{}", fakes.display(), std::env::var("PATH").unwrap());
+    (log, path)
+}
+
+fn runtimes(home: &Scratch, path: &str) -> std::process::Output {
+    let out = command(home.at("usr-local-bin/mem-cloud"))
+        .arg("runtimes")
+        .env("HOME", home.path())
+        .env("MEM_CLOUD_ROOT", home.at("root"))
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    out
+}
+
+/// The device's Node 24, pnpm 11, PHP 8.4 and playwright-cli go first on a
+/// session's PATH, through ~/.local/bin; a second run, as a cached
+/// environment's rebuild makes, installs nothing again.
+#[test]
+fn the_runtimes_are_the_devices_and_install_once() {
+    let home = Scratch::new("cloud-runtimes");
+    setup_with(&home, &offline(&home), &[]);
+    let (log, path) = runtime_fakes(&home);
+    runtimes(&home, &path);
+    let first = fs::read_to_string(&log).unwrap();
+    assert!(first.contains("npm install -g --force pnpm@11"), "{first}");
+    assert!(
+        first.contains("npm install -g @playwright/cli@0.1.23"),
+        "{first}"
+    );
+    assert!(
+        first.contains("add-apt-repository -y ppa:ondrej/php"),
+        "{first}"
+    );
+    assert!(first.contains("php8.4-intl"), "lathe needs intl: {first}");
+    for (tool, says) in [
+        ("node", None),
+        ("pnpm", Some("11.21.0")),
+        ("php", Some("PHP 8.4.14")),
+    ] {
+        let link = home.at(&format!(".local/bin/{tool}"));
+        assert!(link.exists(), "{tool}");
+        if let Some(says) = says {
+            let ran = command(&link).arg("-v").output().unwrap();
+            assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), says, "{tool}");
+        }
+    }
+    // playwright-cli runs headless on the image's Chrome, with no sandbox,
+    // since the session is root.
+    let ran = command(home.at(".local/bin/playwright-cli"))
+        .args(["open", "https://example.com"])
+        .env("CHROME_PATH", "/usr/bin/google-chrome")
+        .env_remove("PLAYWRIGHT_MCP_EXECUTABLE_PATH")
+        .env_remove("PLAYWRIGHT_MCP_SANDBOX")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "real playwright-cli /usr/bin/google-chrome false open https://example.com",
+        "{ran:?}"
+    );
+    fs::remove_file(&log).unwrap();
+    runtimes(&home, &path);
+    assert!(
+        !log.exists(),
+        "{}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
+}
+
+/// An image with no Node 24 keeps its own Node and says so; the rest goes
+/// on.
+#[test]
+fn an_image_without_node_24_keeps_its_node() {
+    let home = Scratch::new("cloud-runtimes-no-node");
+    setup_with(&home, &offline(&home), &[]);
+    let (log, path) = runtime_fakes(&home);
+    fs::remove_dir_all(home.at("root/opt/node24")).unwrap();
+    let out = runtimes(&home, &path);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no Node 24"),
+        "{out:?}"
+    );
+    assert!(!home.at(".local/bin/node").exists());
+    assert!(fs::read_to_string(&log).unwrap().contains("php8.4-cli"));
+}
