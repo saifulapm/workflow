@@ -124,6 +124,20 @@ fn a_failed_git_worktree_add_fails_with_gits_message_and_no_folder() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("already exists"), "{err}");
     assert!(!main.join(".claude/worktrees").join(NAME).exists());
+    assert!(
+        has_branch(&main, &format!("worktree-{NAME}")),
+        "a branch it found stays"
+    );
+}
+
+#[test]
+fn a_failed_add_takes_back_the_branch_it_made() {
+    let w = Scratch::new("wt-create-stray");
+    let main = repo(&w, "repo");
+    w.put(&format!("repo/.claude/worktrees/{NAME}/stray.txt"), "x\n");
+    let out = create(&main);
+    assert_ne!(out.status.code(), Some(0), "{out:?}");
+    assert!(!has_branch(&main, &format!("worktree-{NAME}")));
 }
 
 /// A pnpm monorepo's trunk checkout with its installs: the root

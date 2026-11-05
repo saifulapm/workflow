@@ -47,7 +47,14 @@ pub fn cmd_worktree_create() -> i32 {
     };
     let dir = main.join(".claude/worktrees").join(name);
     let branch = format!("worktree-{name}");
-    let add = Git::at(&trunk).capture(&[
+    let git = Git::at(&trunk);
+    let found = git.quiet(&[
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("refs/heads/{branch}"),
+    ]);
+    let add = git.capture(&[
         "worktree",
         "add",
         "-b",
@@ -56,8 +63,12 @@ pub fn cmd_worktree_create() -> i32 {
         "HEAD",
     ]);
     if !add.ok {
-        // git removes a folder it made for an add that failed.
+        // git removes a folder it made for an add that failed, but not the
+        // branch, which would fail the next add of this name.
         eprint!("{}", String::from_utf8_lossy(&add.stderr));
+        if !found {
+            git.quiet(&["branch", "-D", &branch]);
+        }
         return exit::FAILED;
     }
     bring_installs(&trunk, &dir);
