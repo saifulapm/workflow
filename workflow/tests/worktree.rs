@@ -403,6 +403,19 @@ fn a_branch_rebased_onto_a_newer_trunk_with_no_commit_of_its_own_goes() {
     assert!(!has_branch(&main, &format!("worktree-{NAME}")));
 }
 
+/// An amend with no commit of its own still writes a new commit, which no
+/// other branch has, so the branch stays (#0EA9WRXV).
+#[test]
+fn a_branch_amended_with_no_commit_of_its_own_stays() {
+    let w = Scratch::new("wt-remove-amended");
+    let main = repo(&w, "repo");
+    let dir = printed(&create(&main));
+    git(&dir, &["commit", "-q", "--amend", "-m", "Reworded"]);
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(has_branch(&main, &format!("worktree-{NAME}")));
+}
+
 /// The command of the cloud kit's one entry for a worktree hook event.
 fn entry(event: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cloud/settings-hooks.json");
