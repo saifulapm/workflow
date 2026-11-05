@@ -1123,7 +1123,7 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
     let home = Scratch::new("cloud-setup-advisor");
     home.put(
         ".claude/settings.json",
-        r#"{"permissions":{"allow":["Bash(ls)"]},"model":"image-model","hooks":{"Notification":[{"hooks":[{"type":"command","command":"image-note"}]}]}}"#,
+        r#"{"permissions":{"allow":["Bash(ls)"]},"model":"image-model","env":{"IMAGE_VAR":"1"},"hooks":{"Notification":[{"hooks":[{"type":"command","command":"image-note"}]}]}}"#,
     );
     home.put("setup.sh", &script(&home));
     for round in 0..2 {
@@ -1138,6 +1138,11 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
     let settings: serde_json::Value =
         serde_json::from_str(&home.read(".claude/settings.json")).unwrap();
     assert_eq!(settings["advisorModel"], "fable", "{settings}");
+    // The image sets no locale, so tmux clients draw UTF-8 as ASCII
+    // (probe-amx3): the kit's own variables join the image's.
+    assert_eq!(settings["env"]["LANG"], "C.UTF-8", "{settings}");
+    assert_eq!(settings["env"]["LC_ALL"], "C.UTF-8", "{settings}");
+    assert_eq!(settings["env"]["IMAGE_VAR"], "1", "{settings}");
     assert_eq!(
         settings["permissions"]["allow"][0], "Bash(ls)",
         "{settings}"

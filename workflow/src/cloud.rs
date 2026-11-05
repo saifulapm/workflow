@@ -810,8 +810,8 @@ bundle() {
 }
 # hooks <file> [<keys>]: merge the cloud kit's hooks into
 # ~/.claude/settings.json, each event the kit names taking the kit's entries,
-# and its settings (the advisor) at the top, keeping whatever else the
-# image's settings hold. A second merge changes nothing.
+# and its settings (the advisor, the locale) at the top, keeping whatever
+# else the image's settings hold. A second merge changes nothing.
 hooks() {
   [ -s "$1" ] || [ -s "${2:-}" ] || return 0
   mkdir -p "$HOME/.claude"
@@ -834,7 +834,10 @@ if keys and os.path.exists(keys):
     except ValueError:
         extra = {}
 if isinstance(extra, dict):
-    settings.update({k: v for k, v in extra.items() if k != "hooks"})
+    # The kit's variables join the image's rather than replace them.
+    if isinstance(extra.get("env"), dict):
+        settings["env"] = {**(settings.get("env") or {}), **extra["env"]}
+    settings.update({k: v for k, v in extra.items() if k not in ("hooks", "env")})
 with open(path, "w") as out:
     json.dump(settings, out, indent=2)
 PY_EOF

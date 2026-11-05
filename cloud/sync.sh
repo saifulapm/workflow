@@ -3,7 +3,7 @@
 # dotfiles' ~/.claude/CLAUDE.md), the mem hooks of ~/.claude/settings.json
 # with the cloud's own Stop hook, and the skills a cloud build needs beyond this repo's own. Run it after any
 # of those change, then commit: CI ships cloud/ in the skills bundle, and
-# `workflow cloud-setup` embeds it. settings-keys.json (the advisor) is kept
+# `workflow cloud-setup` embeds it. settings-keys.json (the advisor, the locale) is kept
 # by hand: the cloud's advisor may differ from this machine's.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
