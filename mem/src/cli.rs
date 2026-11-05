@@ -381,6 +381,9 @@ pub enum FindingCommand {
         /// Only the findings nothing has fixed yet.
         #[arg(long)]
         open: bool,
+        /// Only the findings filed against this milestone's slug.
+        #[arg(long)]
+        milestone: Option<String>,
     },
     /// Mark a finding fixed by a commit, in place.
     Close {

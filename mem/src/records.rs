@@ -172,11 +172,14 @@ pub fn finding_add(
     report(app, &written, Kind::Finding)
 }
 
-/// `mem finding list [--open]`, newest first.
-pub fn finding_list(app: &App, open: bool) -> Result<i32> {
+/// `mem finding list [--open] [--milestone <slug>]`, newest first.
+pub fn finding_list(app: &App, open: bool, milestone: Option<&str>) -> Result<i32> {
     let mut rows = rows_of(app, Kind::Finding)?;
     if open {
         rows.retain(|(_, item)| item.meta.status.as_deref() == Some("open"));
+    }
+    if let Some(milestone) = milestone {
+        rows.retain(|(_, item)| item.meta.milestone.as_deref() == Some(milestone));
     }
     let print = |row: &Row, item: &Item| {
         format!(

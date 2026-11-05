@@ -102,7 +102,8 @@ task makes sure the change ships.
 
 **A milestone check turned something up** → `mem finding add --milestone
 <slug> --step "<step>" "<what>"`, `--evidence <file>` for a screenshot;
-`mem finding close <id> --by <commit>` once fixed.
+`mem finding close <id> --by <commit>` once fixed; `mem finding list --open
+--milestone <slug>` lists one milestone's.
 
 **A source to keep as it was** → `mem raw add <file|url>`, never replaced.
 
@@ -131,3 +132,17 @@ a memory that records everything is one nobody reads.
 Nobody waits idle. `mem questions` lists what is open, and `mem questions
 --wait <id> --timeout 5m` waits for one answer (exit 4 is a timeout). Any
 machine answers: `mem answer <id> "<text>"`, or the hub.
+
+## Commands that do not exist
+
+Each of these was guessed and failed (audit-mem-2026-11-05). Use the right
+column.
+
+| Guessed | Use |
+|---|---|
+| `mem finding show <id>` | `mem show <id>` |
+| `mem plan show` | `mem plan` (the checklist), `mem plan <slug>` (a milestone's plan) |
+| `mem list` | `mem log` (recent items; `--kind <kind>` narrows) |
+| `mem show handoff` | `mem handoff` |
+| `mem handoff --show` | `mem handoff` |
+| `mem questions --all` | `mem questions` (all of them), `--pending` (open only), `--all-projects` |

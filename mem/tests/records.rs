@@ -560,3 +560,49 @@ fn idea_records_an_idea() {
         stdout(&out)
     );
 }
+
+/// 25 calls in 14 days guessed `mem finding list --milestone <slug>` and
+/// failed (audit-mem-2026-11-05).
+#[test]
+fn finding_list_narrows_to_one_milestone() {
+    let w = World::new("records-finding-milestone");
+    let repo = w.repo("thing", None);
+    registered(&w, &repo);
+    for (milestone, text) in [
+        ("m44-buyer-gates", "the gate lets a guest through"),
+        ("m45-other", "the other milestone's defect"),
+        ("m44-buyer-gates-2", "a slug that only starts the same"),
+    ] {
+        let out = mem(
+            &w,
+            &repo,
+            &[
+                "finding",
+                "add",
+                "--milestone",
+                milestone,
+                "--step",
+                "1",
+                text,
+            ],
+        );
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+    }
+
+    let out = mem(
+        &w,
+        &repo,
+        &["finding", "list", "--milestone", "m44-buyer-gates"],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let listed = stdout(&out);
+    assert_eq!(listed.lines().count(), 1, "{listed}");
+    assert!(listed.contains("the gate lets a guest through"), "{listed}");
+
+    let out = mem(
+        &w,
+        &repo,
+        &["finding", "list", "--open", "--milestone", "m45-other"],
+    );
+    assert_eq!(stdout(&out).lines().count(), 1, "{}", stdout(&out));
+}

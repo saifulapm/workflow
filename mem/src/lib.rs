@@ -257,7 +257,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 text,
                 evidence,
             } => records::finding_add(&app, milestone, step, text, evidence.as_deref()),
-            cli::FindingCommand::List { open } => records::finding_list(&app, *open),
+            cli::FindingCommand::List { open, milestone } => {
+                records::finding_list(&app, *open, milestone.as_deref())
+            }
             cli::FindingCommand::Close { id, by } => records::finding_close(&app, id, by),
         },
         cli::Command::Raw { command } => match command {
