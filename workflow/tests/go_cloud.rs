@@ -503,6 +503,8 @@ fn a_run_that_landed_wrote_a_handoff_or_lapsed_frees_the_slot() {
             now_minus(1)
         ),
     );
+    // A second run fills the other slot, so only this one decides.
+    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
     assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
 
     // Lapsed: no handoff and no tick for 7 hours.
@@ -514,6 +516,8 @@ fn a_run_that_landed_wrote_a_handoff_or_lapsed_frees_the_slot() {
             now_minus(8)
         ),
     );
+    // A second run fills the other slot, so only this one decides.
+    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
     assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
 }
 
@@ -618,7 +622,7 @@ fn a_run_parked_local_only_is_taken_over_by_the_next_local_go() {
     assert!(w.amx_started());
 }
 
-/// Parked for a device, a run no longer holds the one cloud slot.
+/// Parked for a device, a run no longer holds a cloud slot.
 #[test]
 fn a_run_parked_local_only_frees_the_cloud_slot() {
     let w = World::new("cloud-local-only-slot");
@@ -634,6 +638,8 @@ fn a_run_parked_local_only_frees_the_cloud_slot() {
         "handoff-delta.md",
         "parked: local-only t2: needs the desktop\n",
     );
+    // A second run fills the other slot, so only this one decides.
+    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
     let out = w.go(&["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(w.claude_ran());
@@ -721,6 +727,8 @@ fn a_parked_run_frees_the_slot_after_seven_hours() {
     w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(2)));
     w.work
         .put("handoff-delta.md", "parked: 6-hour stop, t3 half done\n");
+    // A second run fills the other slot, so only this one decides.
+    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
     assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
 }
 
