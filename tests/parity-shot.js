@@ -31,6 +31,10 @@ async (page) => {
           }
         }
       });
+      // A field drawn in the fallback font before the web font lands sits a
+      // pixel off, and the whole page below it moves: /p/gamma/new's
+      // select came out 1 px taller on one side in 1.89% of its pixels.
+      await page.evaluate(() => document.fonts.ready.then(() => true));
       await page.screenshot({ path: `${job.out}/${entry.name}.${side}.png` });
     }
   }
