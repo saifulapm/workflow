@@ -37,3 +37,14 @@ like "$(skill plan | grep 'Review the <name> roadmap')" 'mem ask --for saiful' \
 like "$(skill grill | grep 'mem ask')" 'mem ask --for saiful' "grill: its questions are Saiful's"
 like "$(skill orchestrate | sed -n '/^Saiful.s, asked without waiting/,/^These are/p')" \
 	'mem ask --for saiful' "orchestrate: push, spend, secrets and taste are Saiful's"
+
+# Agents guessed these mem commands 100 times in two weeks
+# (audit-mem-2026-11-05); the mem skill names the command to use for each.
+for guess in 'mem finding show' 'mem plan show' 'mem list' 'mem show handoff' \
+	'mem handoff --show' 'mem questions --all'; do
+	like "$(skill mem | grep -F "| \`$guess")" '| `mem ' "mem: names the command for $guess"
+done
+
+# 607 ideas were written in two weeks and about 26 read: planning reads them.
+like "$(skill plan | sed -n '/^## 1. Read/,/^## 2/p')" 'mem search --kind idea' \
+	"plan: the Read step lists the project's ideas"

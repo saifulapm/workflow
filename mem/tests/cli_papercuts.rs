@@ -156,6 +156,7 @@ fn the_engine_surface_is_gone() {
         (&[][..], &["status.md", "  status ", "  skill "][..]),
         (&["questions"][..], &["--asked-by"][..]),
         (&["ask"][..], &["WORKFLOW_TASK", "worktree"][..]),
+        (&["sync"][..], &["qshell"][..]),
     ] {
         let help = stdout(&mem(&w, &dir, &[verb, &["--help"]].concat()));
         for word in gone {
