@@ -87,6 +87,7 @@ esac
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_AMX", self.work.at("amx"))
             .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("XDG_STATE_HOME", self.work.at("state"))
             .env("WORKFLOW_MACHINE", "mini")
             .env_remove("AMX_ID")
             .current_dir(self.work.path())
@@ -184,6 +185,7 @@ impl World {
             .env("WORKFLOW_CLAUDE", self.work.at("claude"))
             .env("WORKFLOW_AMX", self.work.at("no-amx"))
             .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("XDG_STATE_HOME", self.work.at("state"))
             .env("WORKFLOW_MACHINE", "mini")
             .env_remove("AMX_ID")
             .current_dir(self.work.path())
@@ -340,37 +342,151 @@ fn a_start_runs_claude_cloud_in_the_checkout_records_the_runner_and_prints_the_u
     );
 }
 
-#[test]
-fn a_live_cloud_run_anywhere_refuses_a_second_naming_its_project() {
-    let w = World::new("cloud-one-live");
+/// A cloud runner record for `project`, started `hours` ago.
+fn cloud_runner(w: &World, project: &str, id: &str, hours: i64) {
     w.runner(
-        "delta",
+        project,
         &format!(
-            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
-            now_minus(1)
+            r#"{{"machine":"cloud","id":"{id}","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(hours)
         ),
+    );
+}
+
+/// Two cloud runs live at once across every project (#RA9XKD8H).
+#[test]
+fn one_live_cloud_run_elsewhere_leaves_the_second_slot() {
+    let w = World::new("cloud-one-live");
+    cloud_runner(&w, "delta", "session_01Other", 1);
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran());
+}
+
+#[test]
+fn two_live_or_parked_cloud_runs_refuse_a_third_naming_both() {
+    let w = World::new("cloud-two-live");
+    cloud_runner(&w, "delta", "session_01Other", 1);
+    cloud_runner(&w, "shopify_apps", "session_01Parked", 2);
+    w.set(
+        "shopify_apps",
+        &format!(r#""handoff_at":"{}""#, now_minus(1)),
+    );
+    w.work.put(
+        "handoff-shopify_apps.md",
+        "parked: t2 waits, question #ABCD1234\n",
     );
     let out = w.go(&["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(stderr(&out).contains("delta"), "{}", stderr(&out));
+    let said = stderr(&out);
+    assert!(said.contains("two cloud runs are live: "), "{said}");
+    assert!(said.contains("delta (m2-next, session_01Other)"), "{said}");
+    assert!(
+        said.contains("shopify_apps (m2-next, session_01Parked)"),
+        "{said}"
+    );
     assert!(!w.claude_ran());
 }
 
 #[test]
-fn a_parked_cloud_run_still_holds_the_one_cloud_slot() {
-    let w = World::new("cloud-parked");
-    w.runner(
-        "delta",
-        &format!(
-            r#"{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
-            now_minus(2)
-        ),
+fn a_project_whose_own_cloud_run_is_live_starts_no_second() {
+    let w = World::new("cloud-own-live");
+    cloud_runner(&w, "gamma", "session_01Mine", 1);
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("gamma already has a cloud run: m2-next, session_01Mine"),
+        "{}",
+        stderr(&out)
     );
+    assert!(!w.claude_ran());
+}
+
+/// Two starts in the same second, with one slot left: the second waits for
+/// the first to record its runner, then finds both slots taken.
+#[test]
+fn two_starts_at_once_cannot_both_take_the_last_slot() {
+    let w = World::new("cloud-race");
+    cloud_runner(&w, "delta", "session_01Other", 1);
+    // This mem records a cloud runner in the projects it lists, as the real
+    // one does, and claude takes a second to start.
+    w.work.script(
+        "mem",
+        r#"
+dir=$(dirname "$0")
+echo "$*" >>"$dir/mem.log"
+case "$1" in
+projects) cat "$dir/projects.json" ;;
+project)
+  [ "$2" = current ] && exit 1
+  if [ "$2 $3 $4" = "set runner cloud" ]; then
+    python3 - "$dir/projects.json" "$5" "$7" "$9" <<'PY_EOF'
+import json, sys, datetime
+path, id, slug, project = sys.argv[1:5]
+doc = json.load(open(path))
+since = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+for row in doc["projects"]:
+    if row["name"] == project:
+        row["runner"] = {"machine": "cloud", "id": id, "since": since, "milestone": slug}
+json.dump(doc, open(path, "w"))
+PY_EOF
+  fi
+  exit 0 ;;
+roadmap) cat "$dir/roadmap-$3.md" ;;
+handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
+esac
+"#,
+    );
+    let claude = w.work.read("claude");
+    w.work.script(
+        "claude",
+        &claude.replacen("dir=$(dirname", "sleep 1\ndir=$(dirname", 1),
+    );
+    let start = |project: &'static str| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_workflow"));
+        cmd.args(["go", project, "--cloud"])
+            .env("WORKFLOW_MEM", w.work.at("mem"))
+            .env("WORKFLOW_CLAUDE", w.work.at("claude"))
+            .env("WORKFLOW_AMX", w.work.at("no-amx"))
+            .env("XDG_CONFIG_HOME", w.work.at("config"))
+            .env("XDG_STATE_HOME", w.work.at("state"))
+            .env("WORKFLOW_MACHINE", "mini")
+            .env_remove("AMX_ID")
+            .current_dir(w.work.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        cmd.spawn().unwrap()
+    };
+    let one = start("gamma");
+    let two = start("shopify_apps");
+    let outs = [
+        one.wait_with_output().unwrap(),
+        two.wait_with_output().unwrap(),
+    ];
+    let codes: Vec<_> = outs.iter().map(|o| o.status.code()).collect();
+    assert!(
+        codes.contains(&Some(0)) && codes.contains(&Some(2)),
+        "{codes:?}: {}",
+        outs.iter().map(stderr).collect::<Vec<_>>().join(" | ")
+    );
+    let refused = outs.iter().find(|o| o.status.code() == Some(2)).unwrap();
+    assert!(
+        stderr(refused).contains("two cloud runs are live: "),
+        "{}",
+        stderr(refused)
+    );
+}
+
+#[test]
+fn a_parked_cloud_run_still_holds_a_cloud_slot() {
+    let w = World::new("cloud-parked");
+    cloud_runner(&w, "delta", "session_01Other", 2);
     w.set("delta", &format!(r#""handoff_at":"{}""#, now_minus(1)));
     w.work.put(
         "handoff-delta.md",
         "parked: t2 is local-only, question #ABCD1234\n",
     );
+    cloud_runner(&w, "shopify_apps", "session_01Live", 1);
     let out = w.go(&["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(stderr(&out).contains("delta"), "{}", stderr(&out));
@@ -754,6 +870,7 @@ impl World {
             .env("WORKFLOW_CLAUDE", self.work.at("claude"))
             .env("WORKFLOW_AMX", self.work.at("amx"))
             .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("XDG_STATE_HOME", self.work.at("state"))
             .env("WORKFLOW_MACHINE", "mini")
             .env_remove("AMX_ID")
             .current_dir(self.work.path())

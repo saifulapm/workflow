@@ -105,7 +105,7 @@ pub fn state(
     let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
     let since = time(&runner.since);
     // Seven hours from the start end it whatever it said: a 6-hour stop
-    // parks with no question, and must not hold the one slot for ever.
+    // parks with no question, and must not hold a cloud slot for ever.
     let within = since.is_some_and(|since| {
         now.duration_since(since) < jiff::SignedDuration::from_hours(LIVE_HOURS)
     });
@@ -144,6 +144,7 @@ fn push_main(dir: &str) -> Result<(), String> {
 
 /// `workflow go <project> --cloud`, or with `print` only its prompt.
 pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
+    let _slot = if print { None } else { slot_lock() };
     let Some(projects) = memcli::projects() else {
         warn("go: mem cannot list its projects");
         return exit::FAILED;
@@ -208,7 +209,7 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
         warn(format!("go: {why}"));
         return exit::USAGE;
     }
-    if let Some(why) = held_elsewhere(&projects) {
+    if let Some(why) = held_elsewhere(&projects, &start.project) {
         warn(format!("go: {why}"));
         return exit::USAGE;
     }
@@ -249,6 +250,7 @@ pub fn carried(opts: &Options) -> bool {
 
 /// `workflow plan <project> --cloud`, or with `print` only its prompt.
 pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
+    let _slot = if print { None } else { slot_lock() };
     let Some(projects) = memcli::projects() else {
         warn("plan: mem cannot list its projects");
         return exit::FAILED;
@@ -286,7 +288,7 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
         warn(format!("plan: {why}"));
         return exit::USAGE;
     }
-    if let Some(why) = held_elsewhere(&projects) {
+    if let Some(why) = held_elsewhere(&projects, &name) {
         warn(format!("plan: {why}"));
         return exit::USAGE;
     }
@@ -298,24 +300,72 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
     start_session("plan", &name, &dir, &text, PLAN)
 }
 
-/// The cloud run that holds the one cloud slot, if one does: one runs at a
-/// time across every project, and a parked one still holds its session,
-/// which its answers go to.
-fn held_elsewhere(projects: &[ProjectRow]) -> Option<String> {
+/// How many cloud runs may be live or parked at once, across every
+/// project, as Saiful set it on 2026-11-05.
+const SLOTS: usize = 2;
+
+/// Why `project` may not take a cloud slot, if it may not: its own cloud
+/// run is live or parked, or two others are. A parked run still holds its
+/// session, which its answers go to.
+fn held_elsewhere(projects: &[ProjectRow], project: &str) -> Option<String> {
     let now = jiff::Timestamp::now();
-    let other = projects.iter().find(|row| {
-        matches!(
-            state(row, || memcli::handoff(&row.name), now),
-            Some(State::Live | State::Parked)
+    let held: Vec<&ProjectRow> = projects
+        .iter()
+        .filter(|row| {
+            matches!(
+                state(row, || memcli::handoff(&row.name), now),
+                Some(State::Live | State::Parked)
+            )
+        })
+        .collect();
+    let named = |row: &ProjectRow| {
+        let runner = row.runner.as_ref().expect("a cloud state has a runner");
+        (
+            runner.milestone.as_deref().unwrap_or("?").to_string(),
+            runner.id.clone(),
         )
-    })?;
-    let runner = other.runner.as_ref().expect("a cloud state has a runner");
+    };
+    if let Some(own) = held.iter().find(|row| row.name == project) {
+        let (milestone, id) = named(own);
+        return Some(format!(
+            "{project} already has a cloud run: {milestone}, {id}"
+        ));
+    }
+    if held.len() < SLOTS {
+        return None;
+    }
+    let runs: Vec<String> = held
+        .iter()
+        .map(|row| {
+            let (milestone, id) = named(row);
+            format!("{} ({milestone}, {id})", row.name)
+        })
+        .collect();
     Some(format!(
-        "a cloud run is live: {} ({}, {}); one runs at a time",
-        other.name,
-        runner.milestone.as_deref().unwrap_or("?"),
-        runner.id
+        "two cloud runs are live: {}; two run at a time",
+        runs.join(" and ")
     ))
+}
+
+/// Held from the slot check to the runner record, so two starts on this
+/// machine cannot both take the last slot: the second reads the projects
+/// once the first has recorded its run. `None` when the lock file cannot be
+/// had, and the start goes on unguarded.
+fn slot_lock() -> Option<std::fs::File> {
+    let state = match std::env::var_os("XDG_STATE_HOME") {
+        Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
+        _ => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/state"),
+    };
+    let dir = state.join("workflow");
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("cloud-slots.lock"))
+        .ok()?;
+    file.lock().ok()?;
+    Some(file)
 }
 
 /// Starts `text` in a cloud session from `dir`, records it as `project`'s

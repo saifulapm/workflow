@@ -74,6 +74,7 @@ fn run(work: &Scratch, cmd: &str, args: &[&str]) -> Output {
         .env("WORKFLOW_CLAUDE", work.at("claude"))
         .env("WORKFLOW_AMX", work.at("no-amx"))
         .env("XDG_CONFIG_HOME", work.at("config"))
+        .env("XDG_STATE_HOME", work.at("state"))
         .env("WORKFLOW_MACHINE", "mini")
         .env_remove("AMX_ID")
         .current_dir(work.path())
@@ -172,28 +173,40 @@ fn a_project_with_no_remote_is_refused() {
 }
 
 #[test]
-fn a_live_cloud_run_elsewhere_refuses_it() {
+fn two_live_cloud_runs_elsewhere_refuse_it_naming_both() {
     let work = world("plan-busy");
-    set(
-        &work,
-        "delta",
+    // A third project, so two others can hold both slots.
+    let projects = work.read("projects.json");
+    let rows = projects.trim_end().strip_suffix("]}").unwrap();
+    work.put(
+        "projects.json",
         &format!(
-            r#""milestone":"m2-next","runner":{{"machine":"cloud","id":"session_01Other","since":"{}","milestone":"m2-next"}}"#,
-            now_minus(1)
+            r#"{rows},{{"name":"epsilon","remote":"github.com/me/epsilon","checkouts":[]}}]}}"#
         ),
     );
+    for (project, id) in [("delta", "session_01Other"), ("epsilon", "session_01More")] {
+        set(
+            &work,
+            project,
+            &format!(
+                r#""milestone":"m2-next","runner":{{"machine":"cloud","id":"{id}","since":"{}","milestone":"m2-next"}}"#,
+                now_minus(1)
+            ),
+        );
+    }
     let out = run(&work, "plan", &["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let said = text(&out.stderr);
     assert!(
-        text(&out.stderr).contains("a cloud run is live: delta"),
+        said.contains("two cloud runs are live: delta (m2-next, session_01Other) and epsilon (m2-next, session_01More)"),
         "{out:?}"
     );
     assert!(!work.has("claude.log"));
 }
 
 #[test]
-fn a_running_cloud_plan_holds_the_one_cloud_slot() {
-    let work = world("plan-holds-slot");
+fn a_running_cloud_plan_elsewhere_leaves_the_second_slot() {
+    let work = world("plan-second-slot");
     set(
         &work,
         "delta",
@@ -203,11 +216,28 @@ fn a_running_cloud_plan_holds_the_one_cloud_slot() {
         ),
     );
     let out = run(&work, "plan", &["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(work.has("claude.log"));
+}
+
+#[test]
+fn a_project_whose_own_cloud_plan_runs_plans_no_second() {
+    let work = world("plan-own-live");
+    set(
+        &work,
+        "gamma",
+        &format!(
+            r#""runner":{{"machine":"cloud","id":"session_01Plan","since":"{}","milestone":"plan"}}"#,
+            now_minus(1)
+        ),
+    );
+    let out = run(&work, "plan", &["gamma", "--cloud"]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     assert!(
-        text(&out.stderr).contains("a cloud run is live: delta (plan"),
+        text(&out.stderr).contains("gamma already has a cloud run: plan, session_01Plan"),
         "{out:?}"
     );
+    assert!(!work.has("claude.log"));
 }
 
 #[test]
