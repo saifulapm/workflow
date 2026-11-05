@@ -1171,7 +1171,7 @@ fn runtime_fakes(home: &Scratch) -> (PathBuf, String) {
     let node = home.mkdir("root/opt/node24/bin");
     home.script(
         "root/opt/node24/bin/node",
-        "#!/bin/sh\nexec /bin/sh \"$@\"\n",
+        "#!/bin/sh\n[ \"$1\" = --use-system-ca ] && shift\nexec /bin/sh \"$@\"\n",
     );
     home.script("root/opt/node24/bin/pnpm", "#!/bin/sh\necho 10.28.0\n");
     home.script("root/opt/node24/bin/npx", "#!/bin/sh\n");
@@ -1290,4 +1290,57 @@ fn an_image_without_node_24_keeps_its_node() {
     );
     assert!(!home.at(".local/bin/node").exists());
     assert!(fs::read_to_string(&log).unwrap().contains("php8.4-cli"));
+}
+
+/// A runtime that does not install fails the step and names itself, so
+/// the setup's output says which one stays the image's.
+#[test]
+fn a_runtime_that_does_not_install_is_named() {
+    let home = Scratch::new("cloud-runtimes-fail");
+    setup_with(&home, &offline(&home), &[]);
+    let (log, path) = runtime_fakes(&home);
+    home.script("root/opt/node24/bin/npm", "#!/bin/sh\nexit 1\n");
+    home.script("runtime-fakes/add-apt-repository", "#!/bin/sh\nexit 1\n");
+    let out = command(home.at("usr-local-bin/mem-cloud"))
+        .arg("runtimes")
+        .env("HOME", home.path())
+        .env("MEM_CLOUD_ROOT", home.at("root"))
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("did not install: pnpm playwright-cli php8.4"),
+        "{said}"
+    );
+    // The package lists are fresh before the PPA is added.
+    assert!(
+        fs::read_to_string(&log).unwrap().contains("apt-get update"),
+        "{:?}",
+        fs::read_to_string(&log)
+    );
+}
+
+/// A merge that fails leaves the settings as they were: never the bare
+/// hooks map in their place.
+#[test]
+fn a_merge_that_fails_keeps_the_settings() {
+    let home = Scratch::new("cloud-setup-merge-fails");
+    home.put(".claude/settings.json", r#"{"model":"image-model"}"#);
+    home.put("setup.sh", &script(&home));
+    // A python3 that fails, as a missing one would.
+    home.script("nopython/python3", "#!/bin/sh\nexit 1\n");
+    let path = format!("{}:{}", home.at("nopython").display(), offline(&home));
+    let out = command("bash")
+        .arg(home.at("setup.sh"))
+        .env("HOME", home.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        home.read(".claude/settings.json"),
+        r#"{"model":"image-model"}"#
+    );
 }

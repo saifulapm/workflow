@@ -1024,3 +1024,18 @@ fn a_plain_dry_run_of_a_carried_project_prints_the_cloud_prompt() {
     assert!(!w.claude_ran());
     assert!(!w.amx_started());
 }
+
+/// A slot lock that cannot be had is said, and the start goes on.
+#[test]
+fn a_start_without_the_slot_lock_says_so() {
+    let w = World::new("cloud-no-lock");
+    w.work.put("state", "a file where the state folder goes\n");
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cannot lock the cloud slots"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(w.claude_ran());
+}

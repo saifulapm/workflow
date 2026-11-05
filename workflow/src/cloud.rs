@@ -349,23 +349,32 @@ fn held_elsewhere(projects: &[ProjectRow], project: &str) -> Option<String> {
 
 /// Held from the slot check to the runner record, so two starts on this
 /// machine cannot both take the last slot: the second reads the projects
-/// once the first has recorded its run. `None` when the lock file cannot be
-/// had, and the start goes on unguarded.
+/// once the first has recorded its run. `None`, said on stderr, when the lock
+/// file cannot be had, and the start goes on unguarded.
 fn slot_lock() -> Option<std::fs::File> {
-    let state = match std::env::var_os("XDG_STATE_HOME") {
-        Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
-        _ => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/state"),
+    let lock = || {
+        let state = match std::env::var_os("XDG_STATE_HOME") {
+            Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
+            _ => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/state"),
+        };
+        let dir = state.join("workflow");
+        std::fs::create_dir_all(&dir).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join("cloud-slots.lock"))
+            .ok()?;
+        file.lock().ok()?;
+        Some(file)
     };
-    let dir = state.join("workflow");
-    std::fs::create_dir_all(&dir).ok()?;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join("cloud-slots.lock"))
-        .ok()?;
-    file.lock().ok()?;
-    Some(file)
+    let file = lock();
+    if file.is_none() {
+        warn(
+            "go: cannot lock the cloud slots; a start at the same moment could take the last one too",
+        );
+    }
+    file
 }
 
 /// Starts `text` in a cloud session from `dir`, records it as `project`'s
@@ -807,7 +816,7 @@ skills() {
 hooks() {
   [ -s "$1" ] || [ -s "${2:-}" ] || return 0
   mkdir -p "$HOME/.claude"
-  python3 - "$HOME/.claude/settings.json" "$1" "${2:-}" <<'PY_EOF' || cp "$1" "$HOME/.claude/settings.json"
+  python3 - "$HOME/.claude/settings.json" "$1" "${2:-}" <<'PY_EOF' || echo "mem-cloud: could not merge the cloud kit into settings.json" >&2
 import json, os, sys
 path, kit, keys = sys.argv[1], sys.argv[2], sys.argv[3]
 settings = {}
@@ -845,14 +854,17 @@ bake() {
 # has it.
 runtimes() {
   node="${MEM_CLOUD_ROOT:-}/opt/node24/bin"
+  failed=
   mkdir -p "$bin"
   if [ -x "$node/node" ]; then
     case "$("$node/pnpm" -v 2>/dev/null)" in
       11.*) ;;
-      *) "$node/node" "$node/npm" install -g --force pnpm@11 >&2 ;;
+      # npm trusts the system's CA store, which holds the network proxy's.
+      *) "$node/node" --use-system-ca "$node/npm" install -g --force pnpm@11 >&2 || failed="$failed pnpm" ;;
     esac
     [ "$("$node/playwright-cli" --version 2>/dev/null)" = 0.1.23 ] ||
-      "$node/node" "$node/npm" install -g @playwright/cli@0.1.23 >&2
+      "$node/node" --use-system-ca "$node/npm" install -g @playwright/cli@0.1.23 >&2 ||
+      failed="$failed playwright-cli"
     for tool in node npm npx pnpm pnpx; do
       [ -e "$node/$tool" ] && ln -sfn "$node/$tool" "$bin/$tool"
     done
@@ -866,15 +878,16 @@ runtimes() {
     echo "setup: the image has no Node 24 at /opt/node24; Node stays the image's" >&2
   fi
   if ! command -v php8.4 >/dev/null 2>&1; then
+    apt-get update -q >&2
     command -v add-apt-repository >/dev/null 2>&1 ||
       DEBIAN_FRONTEND=noninteractive apt-get install -y -q software-properties-common >&2
-    add-apt-repository -y ppa:ondrej/php >&2 &&
+    { add-apt-repository -y ppa:ondrej/php >&2 &&
       DEBIAN_FRONTEND=noninteractive apt-get install -y -q php8.4-cli php8.4-intl \
         php8.4-mbstring php8.4-xml php8.4-curl php8.4-zip php8.4-sqlite3 \
-        php8.4-mysql php8.4-pgsql php8.4-bcmath php8.4-gd >&2
+        php8.4-mysql php8.4-pgsql php8.4-bcmath php8.4-gd >&2; } || failed="$failed php8.4"
   fi
   php=$(command -v php8.4) && ln -sfn "$php" "$bin/php"
-  return 0
+  [ -z "$failed" ] || { echo "setup: did not install:$failed" >&2; return 1; }
 }
 case "${1:-}" in
   fetch) fetch "$2" ;;
