@@ -36,12 +36,14 @@ The `desktop` skill holds the tools and their rules (text before pixels,
 region screenshots, OCR before reading an image). Load it before the walk.
 
 In a cloud session (`CLAUDE_CODE_REMOTE_SESSION_ID` is set) there is no
-browser, no `playwright-cli`, no desktop and no `desktop` skill. A CLI or TUI
-walks as above, in tmux when the VM has it (`command -v tmux`), else through
-plain commands and their output. A web app's server can answer `curl`, which
-shows no page. A step that needs a browser, a phone or the desktop is not
-walked: report it as `local-only` with its number, and file no finding for
-it.
+desktop, no phone, no `desktop` skill and no logged-in browser. A web page
+walks headless through `playwright-cli`, which the cloud setup points at the
+image's Chrome: open, snapshot, click, fill and screenshot work as above, with
+no `--headed` and no `attach`. A CLI or TUI walks as above, in tmux when the
+VM has it (`command -v tmux`), else through plain commands and their output. A
+step that needs the desktop, a phone, a headed window or Saiful's logged-in
+Chromium is not walked: report it as `local-only` with its number, and file no
+finding for it.
 
 ## 2. Launch
 
