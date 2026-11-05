@@ -224,10 +224,14 @@ hub-local.")]
 
 create, the WorktreeCreate hook, adds the worktree <main checkout>/.claude/worktrees/<name>
 on a new branch worktree-<name> at the HEAD of the session's own checkout, and
-prints its path. A git failure exits 1 with git's message and leaves no folder.")]
+prints its path. A git failure exits 1 with git's message and leaves no folder.
+
+remove, the WorktreeRemove hook, removes the worktree at worktree_path and its
+branch. A worktree with uncommitted or untracked files stays, exit 1; a branch
+that is not merged stays. Each says what it kept on stderr.")]
     Worktree {
-        /// create: the WorktreeCreate hook.
-        #[arg(value_parser = ["create"])]
+        /// create: the WorktreeCreate hook. remove: the WorktreeRemove hook.
+        #[arg(value_parser = ["create", "remove"])]
         action: String,
     },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.

@@ -13,6 +13,11 @@
 //! copied with `cp -a`. A linked nested node_modules resolves a workspace sibling to the
 //! trunk's source through its relative links, and a linked vendor broke Pest.
 //! A copy that fails is reported and skipped: the worktree still comes up.
+//!
+//! Removing one keeps any work: git refuses a worktree with uncommitted or
+//! untracked files, and `branch -d` a branch that is not merged.
+//! Claude Code calls it for a `claude -w` session's worktree, never for a
+//! subagent's, which the orchestrator removes once it has landed.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -23,10 +28,14 @@ use crate::exit;
 use crate::gitcmd::Git;
 use crate::warn;
 
-pub fn cmd_worktree_create() -> i32 {
+fn hook_input() -> Value {
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
-    let hook: Value = serde_json::from_str(&input).unwrap_or_default();
+    serde_json::from_str(&input).unwrap_or_default()
+}
+
+pub fn cmd_worktree_create() -> i32 {
+    let hook = hook_input();
     let (Some(name), Some(cwd)) = (hook["name"].as_str(), hook["cwd"].as_str()) else {
         warn("worktree create: the hook input has no name or cwd");
         return exit::FAILED;
@@ -53,6 +62,39 @@ pub fn cmd_worktree_create() -> i32 {
     }
     bring_installs(&trunk, &dir);
     println!("{}", dir.display());
+    exit::OK
+}
+
+pub fn cmd_worktree_remove() -> i32 {
+    let hook = hook_input();
+    let Some(path) = hook["worktree_path"].as_str() else {
+        warn("worktree remove: the hook input has no worktree_path");
+        return exit::FAILED;
+    };
+    let worktree = Git::at(path);
+    let (Some(branch), Some(main)) = (
+        worktree.out(&["branch", "--show-current"]),
+        main_checkout(&worktree),
+    ) else {
+        warn(format!(
+            "worktree remove: {path} is not a worktree on a branch"
+        ));
+        return exit::FAILED;
+    };
+    let main = Git::at(main);
+    let removed = main.capture(&["worktree", "remove", path]);
+    if !removed.ok {
+        eprint!("{}", String::from_utf8_lossy(&removed.stderr));
+        warn(format!(
+            "worktree remove: kept {path}, which holds uncommitted work"
+        ));
+        return exit::FAILED;
+    }
+    if !main.quiet(&["branch", "-d", &branch]) {
+        warn(format!(
+            "worktree remove: kept the branch {branch}, which is not merged"
+        ));
+    }
     exit::OK
 }
 

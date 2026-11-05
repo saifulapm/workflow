@@ -117,7 +117,10 @@ pub fn run(cli: Cli) -> i32 {
             "bash" => guard_bash::cmd_guard_bash(),
             _ => guard::cmd_guard_pnpm(),
         },
-        Command::Worktree { action: _ } => worktree::cmd_worktree_create(),
+        Command::Worktree { action } => match action.as_str() {
+            "remove" => worktree::cmd_worktree_remove(),
+            _ => worktree::cmd_worktree_create(),
+        },
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
         Command::CloudSetup => cloud::cmd_cloud_setup(),

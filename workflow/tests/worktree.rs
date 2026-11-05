@@ -263,3 +263,67 @@ fn a_tracked_file_of_the_same_name_is_never_overwritten() {
         "tracked\n"
     );
 }
+
+fn remove(dir: &Path) -> Output {
+    let input = serde_json::json!({
+        "hook_event_name": "WorktreeRemove",
+        "cwd": dir,
+        "worktree_path": dir,
+    });
+    hook("remove", &input.to_string())
+}
+
+fn has_branch(repo: &Path, name: &str) -> bool {
+    !git(repo, &["branch", "--list", name]).is_empty()
+}
+
+#[test]
+fn a_worktree_holding_no_work_goes_with_its_branch_and_the_trunk_keeps_its_installs() {
+    let w = Scratch::new("wt-remove");
+    let main = pnpm_repo(&w, "repo");
+    let dir = printed(&create(&main));
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!dir.exists());
+    assert!(!has_branch(&main, &format!("worktree-{NAME}")));
+    assert!(main.join("node_modules/.pnpm/react/index.js").exists());
+}
+
+#[test]
+fn a_worktree_with_uncommitted_work_stays_and_says_so() {
+    for (tag, rel, text) in [
+        ("untracked", "new.txt", "wip\n"),
+        ("modified", "a.txt", "changed\n"),
+    ] {
+        let w = Scratch::new(&format!("wt-remove-{tag}"));
+        let main = repo(&w, "repo");
+        let dir = printed(&create(&main));
+        std::fs::write(dir.join(rel), text).unwrap();
+        let out = remove(&dir);
+        assert_ne!(out.status.code(), Some(0), "{tag}: {out:?}");
+        assert!(dir.join(rel).exists(), "{tag}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("kept") && err.contains(&*dir.to_string_lossy()),
+            "{tag}: {err}"
+        );
+        assert!(has_branch(&main, &format!("worktree-{NAME}")), "{tag}");
+    }
+}
+
+#[test]
+fn a_branch_with_commits_no_other_branch_has_stays_and_says_so() {
+    let w = Scratch::new("wt-remove-commit");
+    let main = repo(&w, "repo");
+    let dir = printed(&create(&main));
+    std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+    git(&dir, &["add", "b.txt"]);
+    git(&dir, &["commit", "-qm", "Second file"]);
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!dir.exists());
+    let branch = format!("worktree-{NAME}");
+    assert!(has_branch(&main, &branch));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(&branch), "{err}");
+}
