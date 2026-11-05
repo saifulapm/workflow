@@ -109,6 +109,8 @@ fn a_command_after_a_piped_git_merge_is_refused() {
 #[test]
 fn a_test_a_commit_or_a_merge_alone_runs() {
     let w = Scratch::new("guard-bash-alone");
+    // The scratch folder is under /tmp, where a cargo build is refused.
+    let guard = |_: &Path, command: &str| guard_home(Path::new("/repo"), w.path(), command);
     for command in [
         "git commit -am x",
         "cargo test",
@@ -310,4 +312,55 @@ fn a_cd_from_one_agent_worktree_into_another_is_refused() {
     let own = Path::new("/repo/.claude/worktrees/agent-a1");
     let out = guard(own, "cd /repo/.claude/worktrees/agent-b2");
     assert!(refused(&out, "git -C"), "{out:?}");
+}
+
+/// A worktree or its build under /tmp filled the tmpfs quota and died on
+/// EDQUOT, ten times, the last workflow m3-mem-fixes linking serde_derive.
+#[test]
+fn a_worktree_or_a_cargo_build_under_tmp_is_refused() {
+    let repo = Path::new("/home/me/Sites/github/workflow");
+    let in_tmp = Path::new("/tmp/claude-1000/x/repo");
+    for (cwd, command) in [
+        (repo, "git worktree add /tmp/claude-1000/x/wt HEAD"),
+        (repo, "git worktree add -b t1 /tmp/claude-1000/x/wt HEAD"),
+        (repo, "git -C /tmp/claude-1000/x worktree add wt HEAD"),
+        (in_tmp, "git worktree add ../wt HEAD"),
+        (in_tmp, "cargo test"),
+        (in_tmp, "cargo +nightly build --release"),
+        (repo, "CARGO_TARGET_DIR=/tmp/t cargo build"),
+        (repo, "env CARGO_TARGET_DIR=/tmp/t cargo test -q"),
+        (repo, "export CARGO_TARGET_DIR=/tmp/t; cargo build"),
+        (repo, "cargo build --target-dir /tmp/t"),
+        (repo, "cargo build --target-dir=/tmp/t"),
+        (in_tmp, "cargo install --path . --root ~/.local"),
+        (repo, "cargo test --manifest-path /tmp/x/Cargo.toml"),
+        (repo, "cd /tmp/x && cargo build"),
+        (repo, "(cd /tmp/x && cargo test)"),
+    ] {
+        let out = guard_home(cwd, Path::new("/home/me"), command);
+        assert!(refused(&out, "~/.cache/"), "{cwd:?} {command:?}: {out:?}");
+    }
+}
+
+#[test]
+fn reads_copies_and_builds_outside_tmp_run() {
+    let repo = Path::new("/home/me/Sites/github/workflow");
+    let in_tmp = Path::new("/tmp/claude-1000/x");
+    for (cwd, command) in [
+        (repo, "git worktree add ~/.cache/workflow-m1/wt HEAD"),
+        (repo, "git worktree add .claude/worktrees/a HEAD"),
+        (repo, "git worktree remove /tmp/x/wt"),
+        (repo, "cargo test"),
+        (repo, "cargo build --target-dir ~/.cache/workflow-m1/target"),
+        (repo, "ls /tmp"),
+        (repo, "cp a /tmp/b"),
+        (repo, "cargo test > /tmp/x/log 2>&1"),
+        (repo, "(cd /tmp/x && ls); cargo build"),
+        (in_tmp, "ls && cat notes.md"),
+        (in_tmp, "cargo --version"),
+        (in_tmp, "cd ~/Sites/github/workflow && cargo test"),
+    ] {
+        let out = guard_home(cwd, Path::new("/home/me"), command);
+        assert!(passes(&out), "{cwd:?} {command:?}: {out:?}");
+    }
 }

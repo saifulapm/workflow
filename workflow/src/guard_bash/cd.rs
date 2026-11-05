@@ -37,7 +37,7 @@ pub fn refusal(call: &Call) -> Option<&'static str> {
 }
 
 /// `target` against `here`, `..` and `~` taken by their words alone.
-fn resolve(here: &Path, target: &str) -> PathBuf {
+pub(super) fn resolve(here: &Path, target: &str) -> PathBuf {
     let joined = match target.strip_prefix('~') {
         Some(rest) => {
             let home = std::env::var_os("HOME").unwrap_or_default();
