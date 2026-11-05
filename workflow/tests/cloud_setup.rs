@@ -1344,3 +1344,36 @@ fn a_merge_that_fails_keeps_the_settings() {
         r#"{"model":"image-model"}"#
     );
 }
+
+/// A keys file that is no JSON object is passed over: the kit's hooks
+/// still go in.
+#[test]
+fn a_keys_file_that_is_no_object_still_lets_the_hooks_in() {
+    let home = Scratch::new("cloud-setup-bad-keys");
+    home.put("setup.sh", &script(&home));
+    let out = command("bash")
+        .arg(home.at("setup.sh"))
+        .env("HOME", home.path())
+        .env("PATH", offline(&home))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    fs::remove_file(home.at(".claude/settings.json")).unwrap();
+    home.put(
+        "kit-hooks.json",
+        r#"{"Stop":[{"hooks":[{"type":"command","command":"mem stop"}]}]}"#,
+    );
+    home.put("kit-keys.json", r#"["x"]"#);
+    let out = command(home.at("usr-local-bin/mem-cloud"))
+        .args([
+            "hooks",
+            home.at("kit-hooks.json").to_str().unwrap(),
+            home.at("kit-keys.json").to_str().unwrap(),
+        ])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let settings = home.read(".claude/settings.json");
+    assert!(settings.contains("mem stop"), "{settings}");
+}

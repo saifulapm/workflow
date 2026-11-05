@@ -827,8 +827,15 @@ if os.path.exists(path):
         settings = {}
 if os.path.exists(kit):
     settings.setdefault("hooks", {}).update(json.load(open(kit)))
+# Keys that are no JSON object are passed over: the hooks still go in.
+extra = {}
 if keys and os.path.exists(keys):
-    settings.update({k: v for k, v in json.load(open(keys)).items() if k != "hooks"})
+    try:
+        extra = json.load(open(keys))
+    except ValueError:
+        extra = {}
+if isinstance(extra, dict):
+    settings.update({k: v for k, v in extra.items() if k != "hooks"})
 with open(path, "w") as out:
     json.dump(settings, out, indent=2)
 PY_EOF
