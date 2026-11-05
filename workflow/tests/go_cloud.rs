@@ -229,8 +229,12 @@ impl World {
     }
 }
 
+/// The fixture's own git, with no hooks: from inside an agent session the
+/// global ones would refuse the push that seeds origin and the task-shaped
+/// commit messages.
 fn git(dir: &std::path::Path, args: &[&str]) {
     let out = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
         .current_dir(dir)
         .output()
