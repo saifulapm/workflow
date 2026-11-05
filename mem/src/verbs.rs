@@ -2461,21 +2461,46 @@ pub fn prune(app: &App, apply: &[String]) -> Result<i32> {
     Ok(exit::OK)
 }
 
-/// `mem sync` — asks qshell-sync for a round and verifies that one happened.
+/// `mem sync` — the hub has carried the store since 2026-10-17, so this asks
+/// the local hub to send the outbox now, waits a little for it to empty, and
+/// says where sharing stands: the writes still waiting and the last sequence
+/// the store acknowledged. Performed means nothing waits.
 pub fn sync(app: &App) -> Result<i32> {
-    let outcome = crate::sync::verified(
-        &app.dirs.qshell_status_json(),
-        std::time::Duration::from_secs(15),
-    )?;
-    let (state, detail) = match &outcome {
-        crate::sync::Outcome::Performed { detail } => ("performed", detail.clone()),
-        crate::sync::Outcome::NotPerformed { reason } => ("not performed", reason.clone()),
-        crate::sync::Outcome::Deferred { reason } => ("deferred", reason.clone()),
+    let db = app.dirs.share_db();
+    let wait = std::env::var("MEM_SYNC_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10_000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait);
+    let mut status = crate::share::status(&db)?;
+    if status.is_some_and(|(_, waiting)| waiting > 0) {
+        crate::share::kick();
+        while status.is_some_and(|(_, waiting)| waiting > 0) && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            status = crate::share::status(&db)?;
+        }
+    }
+    let (state, detail) = match status {
+        None => (
+            "not performed",
+            "this machine never shared through a hub".to_string(),
+        ),
+        Some((seq, 0)) => ("performed", format!("outbox 0, last share sequence {seq}")),
+        Some((seq, waiting)) => (
+            "not performed",
+            format!("outbox {waiting}, which the hub has not taken yet; last share sequence {seq}"),
+        ),
     };
     if app.json {
         println!(
             "{}",
-            serde_json::to_string(&json!({ "sync": state, "detail": detail }))?
+            serde_json::to_string(&json!({
+                "sync": state,
+                "detail": detail,
+                "outbox": status.map(|(_, waiting)| waiting),
+                "seq": status.map(|(seq, _)| seq),
+            }))?
         );
     } else if !app.quiet {
         println!("sync {state}: {detail}");

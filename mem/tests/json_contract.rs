@@ -308,43 +308,10 @@ fn the_maintenance_verbs_match_theirs_too() {
     );
     assert_eq!(applied["archived"][0], serde_json::json!(short));
 
-    // The sync seam moves the status file, which is how `mem sync` tells a real
-    // round from qshell-sync's zero exit while its flock is held.
-    let status = w.dirs().qshell_status_json();
-    std::fs::create_dir_all(status.parent().unwrap()).unwrap();
-    std::fs::write(
-        &status,
-        br#"{"version":2,"lastRun":"2026-08-18T10:00:00Z","running":false,
-            "units":[{"id":"memory","ok":true,"lastRun":"2026-08-18T10:00:00Z",
-                      "lastOk":"2026-08-18T10:00:00Z","error":"","errorKind":""}]}"#,
-    )
-    .unwrap();
-    let script = w.dir.join("fake-sync");
-    std::fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\ncat > {} <<'JSON'\n{{\"version\":2,\"lastRun\":\"2026-08-18T11:00:00Z\",\
-             \"running\":false,\"units\":[{{\"id\":\"memory\",\"ok\":true,\
-             \"lastRun\":\"2026-08-18T11:00:00Z\",\"lastOk\":\"2026-08-18T11:00:00Z\",\
-             \"error\":\"\",\"errorKind\":\"\"}}]}}\nJSON\n",
-            status.display()
-        ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let out = mem_env(
-        &w,
-        &cwd,
-        &["sync", "--json"],
-        &[("MEM_SYNC_CMD", script.to_str().unwrap())],
-    );
+    let out = mem(&w, &cwd, &["sync", "--json"]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let synced = validate("sync.json", &out);
-    assert_eq!(synced["sync"], serde_json::json!("performed"));
+    assert_eq!(synced["sync"], serde_json::json!("not performed"));
 }
 
 #[test]

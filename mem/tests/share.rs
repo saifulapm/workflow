@@ -1269,3 +1269,32 @@ fn a_project_whose_files_the_store_removes_leaves_no_empty_folder() {
     apply(&w, &removals);
     assert!(!project.exists(), "{:?}", project_files(&w));
 }
+
+/// The hub has carried the store since 2026-10-17, and `mem sync` still asked
+/// qshell-sync for a round, which no machine runs any more: 7 calls failed
+/// with "could not run qshell-sync" (audit-mem-2026-11-05).
+#[test]
+fn sync_reports_the_outbox_and_the_sequence_without_qshell_sync() {
+    let w = shared("share-sync");
+    walk(&w, &["log", "offline"]);
+    let env = [
+        ("MEM_SYNC_CMD", "mem-test-no-such-sync-command"),
+        ("MEM_SYNC_WAIT_MS", "300"),
+    ];
+
+    let out = mem_env(&w, w.dir.path(), &["sync", "--json"], &env);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["sync"], json!("not performed"), "{v}");
+    assert_eq!(v["outbox"], json!(1), "{v}");
+    assert_eq!(v["seq"], json!(0), "{v}");
+
+    let id = pending(&w)[0]["id"].clone();
+    apply(&w, &[json!({"t": "ack", "id": id, "seq": 7})]);
+    let out = mem_env(&w, w.dir.path(), &["sync"], &env);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(said.contains("outbox 0"), "{said}");
+    assert!(said.contains("last share sequence 7"), "{said}");
+    assert!(said.starts_with("sync performed"), "{said}");
+}

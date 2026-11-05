@@ -605,43 +605,6 @@ fn the_outbox_holds_a_write_the_store_could_not_take_and_doctor_replays_it() {
 }
 
 #[test]
-fn sync_verifies_against_the_status_file_rather_than_the_exit_code() {
-    // The seam stands in for qshell-sync, which is not installed everywhere and
-    // has no memory unit until the dotfiles change lands.
-    unsafe { std::env::set_var("MEM_SYNC_CMD", "true") };
-    let w = World::new("maint-sync");
-    let status = w.dirs().qshell_status_json();
-    std::fs::create_dir_all(status.parent().unwrap()).unwrap();
-
-    // qshell-sync exits 0 when its flock is held, so a round that never ran
-    // looks like success unless the status file is compared.
-    std::fs::write(
-        &status,
-        br#"{"version":2,"lastRun":"2026-08-18T10:00:00+06:00","running":false,
-            "units":[{"id":"memory","ok":true,"lastRun":"2026-08-18T10:00:00+06:00",
-                      "lastOk":"2026-08-18T10:00:00+06:00","error":"","errorKind":""}]}"#,
-    )
-    .unwrap();
-    let outcome = mem::sync::verified(&status, std::time::Duration::from_millis(1)).unwrap();
-    assert!(
-        matches!(outcome, mem::sync::Outcome::Deferred { .. }),
-        "an unchanged status file means the round did not happen: {outcome:?}"
-    );
-
-    // A round already in progress is reported as such, not as success.
-    std::fs::write(
-        &status,
-        br#"{"version":2,"lastRun":"2026-08-18T10:00:00+06:00","running":true,"units":[]}"#,
-    )
-    .unwrap();
-    let outcome = mem::sync::verified(&status, std::time::Duration::from_millis(1)).unwrap();
-    assert!(
-        matches!(outcome, mem::sync::Outcome::NotPerformed { .. }),
-        "{outcome:?}"
-    );
-}
-
-#[test]
 fn asking_a_question_does_not_wait_for_the_sync_round_it_asks_for() {
     let w = World::new("sync-detached");
     let repo = w.repo("thing", None);
@@ -728,40 +691,22 @@ fn a_trigger_stands_down_while_a_round_is_already_in_progress() {
 }
 
 #[test]
-fn a_round_qshell_sync_ran_and_failed_is_a_report_not_an_error() {
-    let w = World::new("sync-unit-failed");
+fn sync_on_a_machine_that_never_shared_says_so_and_exits_0() {
+    let w = World::new("sync-never-shared");
     let cwd = w.plain_dir("cwd");
-    let failing = script(
-        &w,
-        "failing-sync.sh",
-        "#!/bin/sh\necho 'memory: no such unit' >&2\nexit 1\n",
-    );
-
-    // qshell-sync WAS invoked and the round failed. Exit 3 is reserved for
-    // "could not invoke it at all" — and a failing unit is the state of every
-    // machine that has not wired `memory` up yet, including this one.
     let out = mem_env(
         &w,
         &cwd,
         &["sync", "--json"],
-        &[("MEM_SYNC_CMD", failing.to_str().unwrap())],
+        &[("MEM_SYNC_CMD", "mem-test-no-such-sync-command")],
     );
     assert_eq!(code(&out), 0, "{}", common::stderr(&out));
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["sync"], serde_json::json!("not performed"));
     assert!(
-        v["detail"].as_str().unwrap().contains("no such unit"),
-        "the report says what went wrong: {v}"
+        v["detail"].as_str().unwrap().contains("never shared"),
+        "{v}"
     );
-
-    // A qshell-sync that is not on this machine at all is still exit 3.
-    let out = mem_env(
-        &w,
-        &cwd,
-        &["sync"],
-        &[("MEM_SYNC_CMD", "mem-test-no-such-sync-command")],
-    );
-    assert_eq!(code(&out), 3, "{}", common::stderr(&out));
 }
 
 #[test]

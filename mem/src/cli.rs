@@ -150,7 +150,7 @@ pub enum Command {
         #[arg(long, num_args = 1.., value_name = "ID")]
         apply: Vec<String>,
     },
-    /// Ask qshell-sync for a round and verify that one happened.
+    /// Ask the local hub to send the share outbox, and say what still waits.
     Sync,
     /// The sharing outbox, for the local hub that carries it to the store.
     Share {

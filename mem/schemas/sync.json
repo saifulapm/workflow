@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mem sync --json",
-  "description": "The verdict of one verified round, read from qshell-sync's status file rather than its exit code. Exit 0 with a report; exit 3 only when qshell-sync cannot be invoked.",
+  "description": "Where sharing stands after asking the local hub to send the outbox: performed when nothing waits. outbox and seq are null on a machine that never shared. Always exit 0.",
   "type": "object",
   "required": [
     "sync",
@@ -11,12 +11,17 @@
     "sync": {
       "enum": [
         "performed",
-        "not performed",
-        "deferred"
+        "not performed"
       ]
     },
     "detail": {
       "type": "string"
+    },
+    "outbox": {
+      "type": ["integer", "null"]
+    },
+    "seq": {
+      "type": ["integer", "null"]
     }
   },
   "additionalProperties": false
