@@ -25,7 +25,8 @@ holds only work on the repo as a whole.
 ## 1. Read
 
 Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
-spec#<section>`), `verify`, the decisions
+spec#<section>`), `verify` (in a project carried to the cloud, its `Cloud`
+section too: what a cloud session runs there), the decisions
 (`mem search --kind ruling --limit 100`), the ideas filed for later
 (`mem search --kind idea --limit 100`; each one this work covers is a
 behaviour or an Out of scope line, since ideas are written and seldom read),
@@ -134,6 +135,17 @@ The rules:
    orchestrator hands this list to the reviewer.
 8. Write short sentences in the active voice. Quote Saiful's words; do not
    reword them.
+9. In a project carried to the cloud (its `cloud` in `mem projects --json`),
+   say where the milestone runs, in a line under `Show`: `Runs on: cloud`, or
+   `Runs on: cloud, then device: <what needs the device>`. A cloud session
+   runs what verify's `Cloud` section says it can, with the deploy tokens
+   its environment holds. Device work is what it cannot: Saiful's desktop
+   or phone, a headed or logged-in browser, a login or key the environment
+   lacks. Give that work the milestone's last behaviour, and write every
+   other behaviour's acceptance and the Show path's steps before it for a
+   cloud session to check: a headless browser, a CLI or TUI in tmux, a
+   local server. Each milestone carries its own device work, so production
+   moves, and is walked, in the milestone that changed it.
 
 Store each plan as written. mem refuses one whose first line is not
 `# plan: <slug>`.

@@ -19,16 +19,19 @@ branch to cut it from. Everything in the skill holds, with these changes:
   session that ends, so writes the store has not taken yet travel on the
   branch, and the next machine to read the project sends them.
 - A task that needs a device, Saiful's desktop, or a login the cloud cannot
-  reach is local-only, and its checklist line ends `[local]` (mark it when
-  you cut the checklist). Land every task before it that does not wait on
-  it, commit nothing for it, push the branch, and write a handoff starting
-  `parked: local-only <task>:` that names it and says what it needs. File
-  no question: `workflow go` on a device reads that handoff, takes the
-  branch and runs the rest. Then stop.
-- The dogfood walk drives here only what the dogfood skill says a cloud
-  session can. When its report names `local-only` steps, the walk is a
-  local-only task: land and push the rest, and park with `parked:
-  local-only dogfood <steps>:` as above, so a device walks them.
+  reach is local-only, and its checklist line ends `[local]`: the device
+  work the plan's `Runs on: cloud, then device:` line names, cut as the
+  last tasks. Land every other task, then run the review (§5) and the
+  dogfood walk (§6) here, the walk driving only what the dogfood skill says
+  a cloud session can, and land their fixes. Push the branch and write a
+  handoff starting `parked: local-only <task>: review and walk done at
+  <sha>; left:` that names the `[local]` tasks, the walk steps the dogfood
+  report marked `local-only`, and what they need. File no question:
+  `workflow go` on a device reads that handoff, takes the branch and runs
+  what is left. Then stop.
+- A device need the plan did not name, in a `Runs on: cloud` milestone or a
+  step its line left out, parks the same way and gets `mem finding add
+  --milestone <slug> --step plan` naming it, so the next plan names it.
 - A question only Saiful can answer never parks a cloud run: nothing can
   wake a stopped cloud session. Ask with `mem ask --for saiful`, do what
   does not depend on the answer, then wait in the session with `mem
