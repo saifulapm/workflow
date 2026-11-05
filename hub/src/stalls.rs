@@ -201,7 +201,7 @@ impl Bell {
     /// in the cloud once a cloud run landed or a cloud plan ended, and a
     /// local-only park taken on this machine, whose orchestrator sends the
     /// milestone after it back to the cloud. Each start is kept once it
-    /// succeeded; one refused (the cloud slot is busy) is tried again.
+    /// succeeded; one refused (both cloud slots are busy) is tried again.
     fn carry(&mut self, s: &hubpages::page_home::ProjectSummary) {
         if s.cloud.as_deref() != Some(self.machine.as_str())
             || s.paused.is_some()

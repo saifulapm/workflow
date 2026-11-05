@@ -92,6 +92,17 @@ impl World {
         self.put("projects.json", &doc.to_string());
     }
 
+    /// A third project like gamma and delta.
+    fn add_project(&self, name: &str) {
+        let path = self.data.join("projects.json");
+        let mut doc: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut row = doc["projects"][0].clone();
+        row["name"] = json!(name);
+        row["remote"] = json!(format!("git@github.com:saiful/{name}.git"));
+        doc["projects"].as_array_mut().unwrap().push(row);
+        self.put("projects.json", &doc.to_string());
+    }
+
     /// `project`'s latest handoff, as both forms of `mem handoff` print it.
     fn handoff(&self, project: &str, body: &str) {
         self.put(
@@ -187,32 +198,73 @@ fn run_in_cloud_is_refused_on_a_paused_project() {
 }
 
 #[test]
-fn run_in_cloud_is_refused_while_another_cloud_run_holds_the_slot() {
-    let world = World::new("cloud-run-held");
+fn run_in_cloud_starts_beside_one_other_live_cloud_run() {
+    let world = World::new("cloud-run-one-other");
     world.set("delta", "runner", cloud("m2-next", &ago(60)));
+    let hub = world.hub();
+    poll(&hub);
+    assert!(page(&hub).contains(RUN_IN_CLOUD));
+    let response = hub.post_form("/p/gamma/control", "do=cloud");
+    assert_eq!(status_of(&response), 303, "{response}");
+    assert_eq!(
+        poll(&hub),
+        json!([{"kind": "start", "project": "gamma", "cloud": true}])
+    );
+}
+
+#[test]
+fn run_in_cloud_starts_beside_one_parked_run_and_a_local_only_park() {
+    let world = World::new("cloud-run-parked-one");
+    world.add_project("epsilon");
+    world.set("delta", "runner", cloud("m2-next", &ago(120)));
+    world.set("delta", "handoff_at", json!(ago(60)));
+    world.handoff("delta", "parked: t2 is waiting, question #ABCD1234\n");
+    world.set("epsilon", "runner", cloud("m2-next", &ago(120)));
+    world.set("epsilon", "handoff_at", json!(ago(60)));
+    world.handoff("epsilon", "parked: local-only t2: needs the desktop\n");
+    let hub = world.hub();
+    poll(&hub);
+    assert!(page(&hub).contains(RUN_IN_CLOUD));
+    let response = hub.post_form("/p/gamma/control", "do=cloud");
+    assert_eq!(status_of(&response), 303, "{response}");
+}
+
+#[test]
+fn run_in_cloud_is_refused_while_two_other_cloud_runs_are_live_or_parked() {
+    let world = World::new("cloud-run-two-others");
+    world.add_project("epsilon");
+    world.set("delta", "runner", cloud("m2-next", &ago(60)));
+    world.set("epsilon", "runner", cloud("m2-next", &ago(120)));
+    world.set("epsilon", "handoff_at", json!(ago(60)));
+    world.handoff("epsilon", "parked: t2 is waiting, question #ABCD1234\n");
     let hub = world.hub();
     poll(&hub);
     assert!(!page(&hub).contains(RUN_IN_CLOUD));
     let response = hub.post_form("/p/gamma/control", "do=cloud");
     assert_eq!(status_of(&response), 409, "{response}");
     assert!(
-        body_of(&response).contains("a cloud run is live: delta"),
+        body_of(&response).contains(
+            "two cloud runs are live: delta (m2-next, session_01Other) and epsilon (m2-next, session_01Other); two run at a time."
+        ),
         "{response}"
     );
     assert_eq!(poll(&hub), json!([]));
 }
 
 #[test]
-fn a_parked_cloud_run_still_holds_the_slot() {
-    let world = World::new("cloud-run-parked");
-    world.set("delta", "runner", cloud("m2-next", &ago(120)));
-    world.set("delta", "handoff_at", json!(ago(60)));
-    world.handoff("delta", "parked: t2 is local-only, question #ABCD1234\n");
+fn run_in_cloud_is_refused_while_the_project_has_its_own_live_cloud_run() {
+    let world = World::new("cloud-run-own");
+    world.set("gamma", "runner", cloud("m2-next", &ago(60)));
     let hub = world.hub();
     poll(&hub);
     assert!(!page(&hub).contains(RUN_IN_CLOUD));
     let response = hub.post_form("/p/gamma/control", "do=cloud");
     assert_eq!(status_of(&response), 409, "{response}");
+    assert!(
+        body_of(&response).contains("gamma already has a cloud run: m2-next, session_01Other."),
+        "{response}"
+    );
+    assert_eq!(poll(&hub), json!([]));
 }
 
 #[test]
@@ -443,19 +495,35 @@ fn no_card_while_paused() {
 }
 
 #[test]
-fn no_card_while_any_cloud_run_is_live_or_parked() {
+fn the_card_shows_beside_one_other_cloud_run_and_not_beside_two() {
     let world = World::new("cloud-card-live");
+    world.add_project("epsilon");
     world.set("delta", "runner", cloud("m2-next", &ago(60)));
     let hub = world.hub();
     let body = page(&hub);
-    assert_eq!(card(&body), None, "live: {body}");
+    assert!(card(&body).is_some(), "one live: {body}");
     drop(hub);
 
-    world.set("delta", "handoff_at", json!(ago(30)));
-    world.handoff("delta", "parked: t2 is local-only\n");
+    world.set("epsilon", "runner", cloud("m2-next", &ago(60)));
     let hub = world.hub();
     let body = page(&hub);
-    assert_eq!(card(&body), None, "parked: {body}");
+    assert_eq!(card(&body), None, "two live: {body}");
+    drop(hub);
+
+    world.set("epsilon", "handoff_at", json!(ago(30)));
+    world.handoff("epsilon", "parked: t2 is waiting\n");
+    let hub = world.hub();
+    let body = page(&hub);
+    assert_eq!(card(&body), None, "one live, one parked: {body}");
+}
+
+#[test]
+fn no_card_while_the_project_has_its_own_live_cloud_run() {
+    let world = World::new("cloud-card-own");
+    world.set("gamma", "runner", cloud("m2-next", &ago(60)));
+    let hub = world.hub();
+    let body = page(&hub);
+    assert_eq!(card(&body), None, "{body}");
 }
 
 #[test]
