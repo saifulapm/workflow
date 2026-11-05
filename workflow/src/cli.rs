@@ -219,6 +219,17 @@ hub-local.")]
         #[arg(value_parser = ["pnpm", "bash"])]
         check: String,
     },
+    /// A Claude Code worktree hook, given its JSON on stdin.
+    #[command(long_about = "A Claude Code worktree hook, given its JSON on stdin.
+
+create, the WorktreeCreate hook, adds the worktree <main checkout>/.claude/worktrees/<name>
+on a new branch worktree-<name> at the HEAD of the session's own checkout, and
+prints its path. A git failure exits 1 with git's message and leaves no folder.")]
+    Worktree {
+        /// create: the WorktreeCreate hook.
+        #[arg(value_parser = ["create"])]
+        action: String,
+    },
     /// The body of a git hook stub: fire condition, depth guard, check, chain.
     Hook {
         /// pre-commit, commit-msg or pre-push.
