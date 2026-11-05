@@ -231,7 +231,8 @@ fn mint(
         .spawn()
         .or_else(|e| fail(format!("cannot run hub: {e}")))?;
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = writeln!(stdin, "{admin}");
+        // A hub that failed before reading gives no token, said below.
+        let _ = crate::exit::with_sigpipe_ignored(|| writeln!(stdin, "{admin}"));
     }
     let out = child
         .wait_with_output()

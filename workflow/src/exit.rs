@@ -23,11 +23,27 @@ pub const USAGE: i32 = 2;
 /// None of the codes above apply to that ending -- it is a signal, not an exit
 /// code -- which is the honest answer and the one `head` expects.
 pub fn end_where_the_reader_did() {
-    // SIGPIPE is 13 and SIG_DFL is 0 on Linux and on macOS, the two platforms
-    // this is built for. Declared here rather than pulled in with libc: it is
-    // one call, made once, before the first write.
-    unsafe extern "C" {
-        fn signal(signum: i32, handler: usize) -> usize;
-    }
-    unsafe { signal(13, 0) };
+    unsafe { signal(SIGPIPE, SIG_DFL) };
+}
+
+/// Runs `write` with SIGPIPE ignored, so a write to a child that has already
+/// exited comes back as EPIPE instead of ending this command with no word:
+/// `workflow switch` died that way when `hub share mint` failed before it
+/// read its stdin.
+pub fn with_sigpipe_ignored<T>(write: impl FnOnce() -> T) -> T {
+    let before = unsafe { signal(SIGPIPE, SIG_IGN) };
+    let out = write();
+    unsafe { signal(SIGPIPE, before) };
+    out
+}
+
+// SIGPIPE is 13, SIG_DFL 0 and SIG_IGN 1 on Linux and on macOS, the two
+// platforms this is built for. Declared here rather than pulled in with libc:
+// it is one call.
+const SIGPIPE: i32 = 13;
+const SIG_DFL: usize = 0;
+const SIG_IGN: usize = 1;
+
+unsafe extern "C" {
+    fn signal(signum: i32, handler: usize) -> usize;
 }
