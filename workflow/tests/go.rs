@@ -198,7 +198,8 @@ esac
     fn new_line(&self, name: &str) -> String {
         format!(
             "new --name {name} --model opus --effort high --permission bypassPermissions \
-             --no-worktree --dir {} {} -- --remote-control {name}",
+             --no-worktree --dir {} {} -- --settings {{\"env\":{{\"MEM_PROJECT\":\"alpha\"}}}} \
+             --remote-control {name}",
             self.checkout.display(),
             task_of("alpha", "winners"),
         )
@@ -251,7 +252,8 @@ fn a_dry_run_prints_the_command_line_and_starts_nothing() {
     assert_eq!(out.status.code(), Some(0), "{}", complained(&out));
     let want = format!(
         "{} new --name alpha-winners --model opus --effort high --permission bypassPermissions \
-         --no-worktree --dir {} '{}' -- --remote-control alpha-winners\n",
+         --no-worktree --dir {} '{}' -- --settings '{{\"env\":{{\"MEM_PROJECT\":\"alpha\"}}}}' \
+         --remote-control alpha-winners\n",
         world.work.at("amx").display(),
         world.checkout.display(),
         // The goal has an apostrophe in it, which a shell needs spelled out.

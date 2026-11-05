@@ -87,7 +87,11 @@ pub struct Start {
 impl Start {
     /// The `amx` arguments that start it under `name`. Claude runs it under
     /// Remote Control by the same name, so the Code tab lists it as amx does.
+    /// The session's environment names its project in `MEM_PROJECT`: mem
+    /// refuses a write it would file under a root with child projects, and
+    /// an orchestrator of ebdfy or shopify_themes works at that root.
     pub fn args(&self, name: &str) -> Vec<String> {
+        let settings = serde_json::json!({ "env": { "MEM_PROJECT": self.project } }).to_string();
         [
             "new",
             "--name",
@@ -103,6 +107,8 @@ impl Start {
             &self.dir,
             &self.task,
             "--",
+            "--settings",
+            &settings,
             "--remote-control",
             name,
         ]
@@ -923,6 +929,8 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
                 &dir.display().to_string(),
                 &task("alpha", "catalog"),
                 "--",
+                "--settings",
+                r#"{"env":{"MEM_PROJECT":"alpha"}}"#,
                 "--remote-control",
                 "alpha-catalog",
             ]
@@ -939,12 +947,16 @@ write a handoff starting `parked: 6-hour stop, <where you stopped>` and end the 
             panic!("not a start");
         };
 
-        assert!(start.args(&start.name).ends_with(
-            &["--", "--remote-control", "shopify-apps-m5-checkout"].map(str::to_string)
-        ));
-        assert!(start.args("shopify-apps-m5-checkout-2").ends_with(
-            &["--", "--remote-control", "shopify-apps-m5-checkout-2"].map(str::to_string)
-        ));
+        assert!(
+            start
+                .args(&start.name)
+                .ends_with(&["--remote-control", "shopify-apps-m5-checkout"].map(str::to_string))
+        );
+        assert!(
+            start
+                .args("shopify-apps-m5-checkout-2")
+                .ends_with(&["--remote-control", "shopify-apps-m5-checkout-2"].map(str::to_string))
+        );
     }
 
     #[test]
