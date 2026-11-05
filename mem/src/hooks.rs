@@ -40,18 +40,18 @@ pub fn envelope(event: &str, context: &str) -> serde_json::Value {
 }
 
 /// The PostToolBatch half of `mem context --brief`: emit the brief only when it
-/// differs from the one this session last saw. The session start's digest
-/// already carried the first, so the first batch only records it. The last
-/// brief lives in the machine-local session file because the hook input
-/// carries none.
+/// differs from the one this session last saw in `project`. The session
+/// start's digest already carried the first, so the first batch only records
+/// it. The last brief lives in the machine-local session file because the hook
+/// input carries none.
 ///
 /// Without a session id there is nothing to compare with, so every batch
 /// emits — the hook wiring always passes one.
-pub fn post_tool_batch(app: &App, brief: &str) -> Result<i32> {
+pub fn post_tool_batch(app: &App, project: &str, brief: &str) -> Result<i32> {
     if let Some(session) = &app.session_id {
         let settled = settled(brief);
-        let seen = crate::session::record_batch(&app.dirs.sessions_dir(), session, &settled);
-        if seen.is_none_or(|seen| seen == settled) {
+        let sessions = app.dirs.sessions_dir();
+        if !crate::session::record_batch(&sessions, session, project, &settled) {
             return Ok(exit::OK);
         }
     }

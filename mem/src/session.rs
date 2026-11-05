@@ -1,8 +1,9 @@
 //! Machine-local session activity. Session ids have no meaning on
 //! another machine, so none of this is ever synced. It exists to answer what a
 //! hook cannot answer for itself: how many tool batches this session has run,
-//! and which brief it last saw.
+//! and which brief it last saw in each project.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -18,9 +19,13 @@ const KEEP_DAYS: i64 = 7;
 pub struct Activity {
     #[serde(default)]
     pub batches: u64,
-    /// The brief this session last saw; `None` until its first tool batch.
+    /// The brief this session last saw, by project id. A session in a
+    /// monorepo app and its subagent in an Agent worktree at the repo's root
+    /// share one session id and resolve to two projects; one brief between
+    /// them was overwritten on every batch. A file from before this map kept
+    /// a single `brief`, which serde now skips.
     #[serde(default)]
-    pub brief: Option<String>,
+    pub briefs: BTreeMap<String, String>,
     #[serde(default)]
     pub last: String,
     /// The ULIDs of the questions this session asked, so the Stop hook
@@ -64,16 +69,21 @@ fn write(sessions_dir: &Path, id: &str, activity: &Activity) -> Result<()> {
     write_atomic(&path(sessions_dir, id), text.as_bytes())
 }
 
-/// Counts a tool batch and keeps the brief it computed, returning the brief
-/// this session saw before, or `None` on its first batch. The PostToolBatch
-/// hook fires on every batch and speaks only when the two differ.
-pub fn record_batch(sessions_dir: &Path, id: &str, brief: &str) -> Option<String> {
+/// Counts a tool batch and keeps the brief it computed for `project`,
+/// returning whether the session should hear it: not on its first batch,
+/// whose brief the session start's digest carried, and after that whenever
+/// the brief differs from the one this session last saw in that project,
+/// a project it had not seen before included.
+pub fn record_batch(sessions_dir: &Path, id: &str, project: &str, brief: &str) -> bool {
     let mut activity = read(sessions_dir, id);
+    let started = activity.batches > 0;
     activity.batches += 1;
     activity.last = Timestamp::now().to_string();
-    let seen = activity.brief.replace(brief.to_string());
+    let seen = activity
+        .briefs
+        .insert(project.to_string(), brief.to_string());
     let _ = write(sessions_dir, id, &activity);
-    seen
+    started && seen.as_deref() != Some(brief)
 }
 
 /// Keeps `question` among the questions this session asked.

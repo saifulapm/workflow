@@ -55,7 +55,8 @@ pub fn context(
         let text = crate::digest::brief(&sources, jiff::Timestamp::now());
         if hook_json {
             // The PostToolBatch hook: the envelope, when the brief changed.
-            return crate::hooks::post_tool_batch(app, &text);
+            let project = identity.id().unwrap_or_default();
+            return crate::hooks::post_tool_batch(app, project, &text);
         }
         if app.json {
             return Err(exit::usage(

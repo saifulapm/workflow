@@ -270,3 +270,100 @@ fn the_hook_verbs_never_fail_on_a_fresh_machine() {
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
     }
 }
+
+/// A session in a monorepo app and its subagent in an Agent worktree at the
+/// repo's root share one session id but resolve to two projects. With one
+/// cursor between them, each batch overwrote the other's brief, and the
+/// hook spoke on 266 of 266 batches in one session.
+#[test]
+fn a_session_in_two_projects_hears_each_brief_once() {
+    const Q: &str = "01K2BBBBBBBBBBBBBBBBBBBBBB";
+    let w = World::new("hook-two-projects");
+    w.project(P, "app");
+    w.project(Q, "root");
+    put(
+        &w.store(),
+        Some(P),
+        &item(Kind::Handoff, "app handoff", "next: app"),
+    );
+    put(
+        &w.store(),
+        Some(Q),
+        &item(Kind::Handoff, "root handoff", "next: root"),
+    );
+    let repo = w.plain_dir("cwd");
+    let hook = |name: &'static str| {
+        [
+            "context",
+            name,
+            "--brief",
+            "--hook-json",
+            "--session-id",
+            "two-s1",
+        ]
+    };
+
+    // The session start carried the app's brief; the root's reaches it once.
+    let mut spoke = Vec::new();
+    for batch in 0..10 {
+        let name = if batch % 2 == 0 { "app" } else { "root" };
+        let out = mem(&w, &repo, &hook(name));
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        if !stdout(&out).is_empty() {
+            spoke.push((
+                batch,
+                json(&out)["hookSpecificOutput"]["additionalContext"].to_string(),
+            ));
+        }
+    }
+    assert_eq!(spoke.len(), 1, "{spoke:?}");
+    assert!(spoke[0].1.contains("root handoff"), "{spoke:?}");
+
+    // The app's handoff changes: its next batch says so, once.
+    put(
+        &w.store(),
+        Some(P),
+        &item(Kind::Handoff, "app moved on", "next: app 2"),
+    );
+    let out = mem(&w, &repo, &hook("app"));
+    assert!(stdout(&out).contains("app moved on"), "{}", stdout(&out));
+    assert!(stdout(&mem(&w, &repo, &hook("root"))).is_empty());
+    assert!(stdout(&mem(&w, &repo, &hook("app"))).is_empty());
+}
+
+/// A session file written before the cursor was kept per project still
+/// reads, and its session is not taken for a new one.
+#[test]
+fn a_cursor_from_before_projects_still_reads() {
+    let w = World::new("hook-old-cursor");
+    w.project(P, "thing");
+    put(
+        &w.store(),
+        Some(P),
+        &item(Kind::Handoff, "steady", "next: same"),
+    );
+    let sessions = w.dirs().sessions_dir();
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("old-s1"),
+        r#"{"batches":40,"brief":"handoff: something older","last":"2026-11-04T00:00:00Z","asked":["01K2CCCCCCCCCCCCCCCCCCCCCC"]}"#,
+    )
+    .unwrap();
+    let repo = w.plain_dir("cwd");
+    let hook = [
+        "context",
+        "thing",
+        "--brief",
+        "--hook-json",
+        "--session-id",
+        "old-s1",
+    ];
+
+    let out = mem(&w, &repo, &hook);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(stdout(&out).contains("steady"), "{}", stdout(&out));
+    assert!(stdout(&mem(&w, &repo, &hook)).is_empty());
+    let activity = mem::session::read(&sessions, "old-s1");
+    assert_eq!(activity.batches, 42);
+    assert_eq!(activity.asked, vec!["01K2CCCCCCCCCCCCCCCCCCCCCC"]);
+}
