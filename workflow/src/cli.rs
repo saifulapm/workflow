@@ -112,7 +112,8 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         /// How much reasoning effort it spends.
         #[arg(long, value_name = "LEVEL")]
         effort: Option<String>,
-        /// Print the amx command line instead of running it.
+        /// Print the amx command line instead of running it; a cloud start
+        /// prints its prompt and pushes, records and starts nothing.
         #[arg(long)]
         dry_run: bool,
         /// Start the milestone in a claude.ai cloud session on the branch
@@ -265,7 +266,8 @@ usage: workflow <command> [options]
       0 installed · 1 something could not be written or removed
   go [<project>] [--milestone <slug>] [--model <m>] [--effort <l>] [--dry-run]
       start the orchestrator for the project's next milestone as an amx agent
-      and print its name; --dry-run prints the amx command line instead
+      and print its name; --dry-run prints the amx command line instead, or
+      for a cloud start the prompt, and pushes and starts nothing
       0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
       the roadmap is not approved, the milestone already has an orchestrator,
       or the project is paused and its handoff does not start parked:

@@ -843,3 +843,59 @@ fn an_uncarried_project_still_refuses_an_unpushed_main() {
     assert!(stderr(&out).contains("push main first"), "{}", stderr(&out));
     assert!(!w.claude_ran());
 }
+
+/// A dry run of a carried project prints the prompt and says what it would
+/// push, and pushes, records and starts nothing (#6CWMTDXX: it pushed main
+/// and started a real session).
+#[test]
+fn a_cloud_dry_run_pushes_records_and_starts_nothing() {
+    let w = World::new("cloud-dry-run");
+    w.set("gamma", r#""cloud":"mini""#);
+    w.origin_with_cloud_branch_for("m1-first");
+    let checkout = w.checkout("gamma");
+    let pushed = head(&checkout);
+    commit(&checkout, "landed on the device");
+    let out = w.go_plain(&["gamma", "--cloud", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("cloud/gamma-m2-next"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("would push 1 commit"),
+        "{}",
+        stderr(&out)
+    );
+    let origin = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(["rev-parse", "origin/main"])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&origin.stdout).trim(), pushed);
+    assert!(!w.claude_ran());
+    assert!(!w.amx_started());
+    assert!(
+        !w.mem_calls().iter().any(|c| c.contains("set runner")),
+        "{:?}",
+        w.mem_calls()
+    );
+}
+
+/// A plain dry run of a carried project shows the cloud start a plain go
+/// would make, not a local one.
+#[test]
+fn a_plain_dry_run_of_a_carried_project_prints_the_cloud_prompt() {
+    let w = World::new("cloud-dry-run-plain");
+    w.set("gamma", r#""cloud":"mini""#);
+    let out = w.go_plain(&["gamma", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("cloud/gamma-m2-next"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!w.claude_ran());
+    assert!(!w.amx_started());
+}

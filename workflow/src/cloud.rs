@@ -188,15 +188,23 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     // A project carried to the cloud pushes its own main: the run starts
     // from origin, and a device has just landed the milestone before it
     // there. Any other unpushed main stays Saiful's to push.
-    if row.cloud.as_deref().is_some_and(|m| !m.is_empty())
-        && unpushed(&start.dir).is_some_and(|n| n > 0)
-        && !print
-        && let Err(why) = push_main(&start.dir)
-    {
-        warn(format!("go: cannot push {}'s main: {why}", row.name));
-        return exit::FAILED;
+    let ahead = unpushed(&start.dir).filter(|n| *n > 0);
+    let carried = row.cloud.as_deref().is_some_and(|m| !m.is_empty());
+    if let (true, Some(n)) = (carried, ahead) {
+        if print {
+            let commits = if n == 1 { "commit" } else { "commits" };
+            warn(format!(
+                "go: would push {n} {commits} of {}'s main first",
+                row.name
+            ));
+        } else if let Err(why) = push_main(&start.dir) {
+            warn(format!("go: cannot push {}'s main: {why}", row.name));
+            return exit::FAILED;
+        }
     }
-    if let Some(why) = refusal(row, &start.slug, &start.dir) {
+    // Printing for a carried project, the push it would make stands in for
+    // the unpushed main a start refuses.
+    if let Some(why) = refusal(row, &start.slug, &start.dir, print && carried) {
         warn(format!("go: {why}"));
         return exit::USAGE;
     }
@@ -274,7 +282,7 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
         println!("{name}: paused");
         return exit::USAGE;
     }
-    if let Some(why) = repo_refusal(row, &dir) {
+    if let Some(why) = repo_refusal(row, &dir, false) {
         warn(format!("plan: {why}"));
         return exit::USAGE;
     }
@@ -412,8 +420,8 @@ enum Launch {
 /// work in `dir` that origin/main lacks waits for Saiful to push main; only
 /// the next milestone runs, since a later one would read as landed; and a
 /// device orchestrator keeps the project as a local go would.
-fn refusal(row: &ProjectRow, slug: &str, dir: &str) -> Option<String> {
-    if let Some(why) = repo_refusal(row, dir) {
+fn refusal(row: &ProjectRow, slug: &str, dir: &str, pushes: bool) -> Option<String> {
+    if let Some(why) = repo_refusal(row, dir, pushes) {
         return Some(why);
     }
     let name = &row.name;
@@ -440,7 +448,9 @@ fn refusal(row: &ProjectRow, slug: &str, dir: &str) -> Option<String> {
 
 /// Why `row` cannot run in the cloud at all, whatever it runs: a cloud
 /// session clones origin's main and finds the project by its remote.
-fn repo_refusal(row: &ProjectRow, dir: &str) -> Option<String> {
+/// `pushes` says the caller pushes main itself, so an unpushed main is no
+/// reason.
+fn repo_refusal(row: &ProjectRow, dir: &str, pushes: bool) -> Option<String> {
     let name = &row.name;
     if row.worktree.is_some() {
         return Some(format!(
@@ -450,7 +460,7 @@ fn repo_refusal(row: &ProjectRow, dir: &str) -> Option<String> {
     if row.remote.as_deref().is_none_or(str::is_empty) {
         return Some(format!("{name} has no git remote"));
     }
-    if let Some(n) = unpushed(dir).filter(|n| *n > 0) {
+    if let Some(n) = unpushed(dir).filter(|n| *n > 0 && !pushes) {
         let commits = if n == 1 { "commit" } else { "commits" };
         return Some(format!(
             "{name}'s main is {n} {commits} ahead of origin/main; push main first: \
