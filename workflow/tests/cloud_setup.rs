@@ -1064,3 +1064,71 @@ fn the_first_mem_of_a_boot_takes_the_cloud_kit() {
         "the kit's folder itself is no skill"
     );
 }
+
+/// The kit carries settings beside its hooks, the advisor first: they go
+/// in at the top of settings.json, whatever else the image's settings hold
+/// stays, and a second setup on the same disk, as a cached environment's
+/// rebuild runs it, leaves one copy of each hook.
+#[test]
+fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
+    let home = Scratch::new("cloud-setup-advisor");
+    home.put(
+        ".claude/settings.json",
+        r#"{"permissions":{"allow":["Bash(ls)"]},"model":"image-model","hooks":{"Notification":[{"hooks":[{"type":"command","command":"image-note"}]}]}}"#,
+    );
+    home.put("setup.sh", &script(&home));
+    for round in 0..2 {
+        let out = command("bash")
+            .arg(home.at("setup.sh"))
+            .env("HOME", home.path())
+            .env("PATH", offline(&home))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "round {round}: {out:?}");
+    }
+    let settings: serde_json::Value =
+        serde_json::from_str(&home.read(".claude/settings.json")).unwrap();
+    assert_eq!(settings["advisorModel"], "fable", "{settings}");
+    assert_eq!(
+        settings["permissions"]["allow"][0], "Bash(ls)",
+        "{settings}"
+    );
+    assert_eq!(settings["model"], "image-model", "{settings}");
+    assert_eq!(
+        settings["hooks"]["Notification"][0]["hooks"][0]["command"], "image-note",
+        "{settings}"
+    );
+    for (event, entries) in settings["hooks"].as_object().unwrap() {
+        assert_eq!(entries.as_array().unwrap().len(), 1, "{event}: {settings}");
+    }
+}
+
+/// A kit that moves the advisor reaches a cached environment with the
+/// skills refresh, as its hooks do.
+#[test]
+fn the_first_mem_of_a_boot_takes_the_kits_settings() {
+    let home = Scratch::new("cloud-shim-kit-keys");
+    let (_log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.put(
+        "bundle/cloud/settings-keys.json",
+        r#"{"advisorModel":"opus"}"#,
+    );
+    home.put("bundle/skills/orchestrate/SKILL.md", "# orchestrate\n");
+    let out = command("tar")
+        .args(["-C", home.at("bundle").to_str().unwrap(), "-czf"])
+        .arg(home.at("fake-skills.tar.gz"))
+        .args(["skills", "cloud"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    store_sum(&home, "workflow-skills.tar.gz", "fake-skills.tar.gz");
+    run_store_shim(&home, &path, &["context"]);
+    let settings: serde_json::Value =
+        serde_json::from_str(&home.read(".claude/settings.json")).unwrap();
+    assert_eq!(settings["advisorModel"], "opus", "{settings}");
+    assert!(
+        settings["hooks"]["SessionStart"].is_array(),
+        "the setup's hooks stay: {settings}"
+    );
+}

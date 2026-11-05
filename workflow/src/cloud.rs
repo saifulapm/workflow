@@ -611,8 +611,10 @@ set -euo pipefail\n",
     // Each skill folder and agent file written here, by the name the
     // skills refresh deletes it by once the store's bundle leaves it out.
     let mut names = std::collections::BTreeSet::new();
-    // The cloud kit's hooks, merged once the helper that merges them exists.
+    // The cloud kit's hooks and settings, merged once the helper that merges
+    // them exists.
     let mut kit_hooks = None;
+    let mut kit_keys = None;
     for (rel, bytes) in files {
         let text = String::from_utf8_lossy(bytes);
         // The cloud kit: its rules are the user's CLAUDE.md, its hooks go
@@ -623,6 +625,9 @@ set -euo pipefail\n",
             "CLAUDE.md".to_string()
         } else if *rel == "cloud/settings-hooks.json" {
             kit_hooks = Some(text.into_owned());
+            continue;
+        } else if *rel == "cloud/settings-keys.json" {
+            kit_keys = Some(text.into_owned());
             continue;
         } else if rel.starts_with("skills/") || rel.starts_with("agents/") {
             rel.to_string()
@@ -644,9 +649,12 @@ cat > \"$HOME/.local/state/hub/skills.list\" <<'{END}'\n{names}{END}\n"
     let hooks = match kit_hooks {
         Some(text) => format!(
             "kit=$(mktemp)\n\
+keys=$(mktemp)\n\
 cat > \"$kit\" <<'{END}'\n{text}{END}\n\
-\"$bin/mem-cloud\" hooks \"$kit\"\n\
-rm -f \"$kit\"\n"
+cat > \"$keys\" <<'{END}'\n{}{END}\n\
+\"$bin/mem-cloud\" hooks \"$kit\" \"$keys\"\n\
+rm -f \"$kit\" \"$keys\"\n",
+            kit_keys.as_deref().unwrap_or("{}\n")
         ),
         None => String::new(),
     };
@@ -765,7 +773,7 @@ skills() {
     done
   fi
   [ -s "$new/cloud/rules.md" ] && mkdir -p "$HOME/.claude" && cp "$new/cloud/rules.md" "$HOME/.claude/CLAUDE.md"
-  hooks "$new/cloud/settings-hooks.json"
+  hooks "$new/cloud/settings-hooks.json" "$new/cloud/settings-keys.json"
   ( cd "$new" && for item in skills/* agents/*; do [ -e "$item" ] && echo "$item"; done ) >"$new.list"
   while IFS= read -r name; do
     case "$name" in
@@ -786,21 +794,26 @@ skills() {
   rm -rf "$new" "$state/skills.tar.gz"
   printf '%s\n' "$want" >"$state/skills.sha256"
 }
-# hooks <file>: merge the cloud kit's hooks into ~/.claude/settings.json,
-# keeping whatever else the image's settings hold.
+# hooks <file> [<keys>]: merge the cloud kit's hooks into
+# ~/.claude/settings.json, each event the kit names taking the kit's entries,
+# and its settings (the advisor) at the top, keeping whatever else the
+# image's settings hold. A second merge changes nothing.
 hooks() {
-  [ -s "$1" ] || return 0
+  [ -s "$1" ] || [ -s "${2:-}" ] || return 0
   mkdir -p "$HOME/.claude"
-  python3 - "$HOME/.claude/settings.json" "$1" <<'PY_EOF' || cp "$1" "$HOME/.claude/settings.json"
+  python3 - "$HOME/.claude/settings.json" "$1" "${2:-}" <<'PY_EOF' || cp "$1" "$HOME/.claude/settings.json"
 import json, os, sys
-path, kit = sys.argv[1], sys.argv[2]
+path, kit, keys = sys.argv[1], sys.argv[2], sys.argv[3]
 settings = {}
 if os.path.exists(path):
     try:
         settings = json.load(open(path))
     except ValueError:
         settings = {}
-settings.setdefault("hooks", {}).update(json.load(open(kit)))
+if os.path.exists(kit):
+    settings.setdefault("hooks", {}).update(json.load(open(kit)))
+if keys and os.path.exists(keys):
+    settings.update({k: v for k, v in json.load(open(keys)).items() if k != "hooks"})
 with open(path, "w") as out:
     json.dump(settings, out, indent=2)
 PY_EOF
@@ -819,10 +832,10 @@ case "${1:-}" in
   fetch) fetch "$2" ;;
   bake) bake ;;
   skills) skills ;;
-  hooks) hooks "$2" ;;
+  hooks) hooks "$2" "${3:-}" ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, skills or hooks <file>" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, skills or hooks <file> [<keys>]" >&2; exit 2 ;;
 esac
 "#;
 
