@@ -6,9 +6,15 @@
 //! orchestrator finds a subagent's branch. The branch starts at the HEAD of
 //! the session's own checkout, the trunk, which is a linked worktree itself
 //! when two apps of one monorepo each have one.
+//!
+//! The worktree then gets the trunk's installs: its root node_modules
+//! linked, and every nested node_modules and every vendor copied with
+//! `cp -a`. A linked nested node_modules resolves a workspace sibling to the
+//! trunk's source through its relative links, and a linked vendor broke Pest.
+//! A copy that fails is reported and skipped: the worktree still comes up.
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -44,8 +50,67 @@ pub fn cmd_worktree_create() -> i32 {
         eprint!("{}", String::from_utf8_lossy(&add.stderr));
         return exit::FAILED;
     }
+    bring_installs(&trunk, &dir);
     println!("{}", dir.display());
     exit::OK
+}
+
+/// Link the trunk's root node_modules into `dir` and copy the rest: each
+/// folder with a tracked package.json or composer.json may hold its own.
+fn bring_installs(trunk: &Path, dir: &Path) {
+    if trunk.join("node_modules").exists() {
+        let link = dir.join("node_modules");
+        if let Err(e) = std::os::unix::fs::symlink(trunk.join("node_modules"), &link) {
+            warn(format!("worktree create: {}: {e}", link.display()));
+        }
+    }
+    for package in package_dirs(dir) {
+        let nested = if package.as_os_str().is_empty() {
+            &["vendor"][..]
+        } else {
+            &["node_modules", "vendor"][..]
+        };
+        for name in nested {
+            copy(
+                &trunk.join(&package).join(name),
+                &dir.join(&package).join(name),
+            );
+        }
+    }
+}
+
+/// The folders, relative to the worktree, of its tracked package.json and
+/// composer.json files; the root is the empty path.
+fn package_dirs(dir: &Path) -> std::collections::BTreeSet<PathBuf> {
+    let listed = Git::at(dir).bytes(&["ls-files", "-z"]);
+    listed
+        .split(|&b| b == 0)
+        .map(|path| Path::new(std::str::from_utf8(path).unwrap_or_default()))
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "package.json" || name == "composer.json")
+        })
+        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .collect()
+}
+
+/// `cp -a from to`, when the trunk has `from` and the worktree has no `to`.
+fn copy(from: &Path, to: &Path) {
+    if !from.exists() || std::fs::symlink_metadata(to).is_ok() {
+        return;
+    }
+    let copied = std::process::Command::new("cp")
+        .arg("-a")
+        .arg(from)
+        .arg(to)
+        .status()
+        .is_ok_and(|status| status.success());
+    if !copied {
+        warn(format!(
+            "worktree create: could not copy {}",
+            from.display()
+        ));
+    }
 }
 
 /// The main checkout, the folder that holds the common git dir, with no

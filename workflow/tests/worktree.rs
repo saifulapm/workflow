@@ -125,3 +125,104 @@ fn a_failed_git_worktree_add_fails_with_gits_message_and_no_folder() {
     assert!(err.contains("already exists"), "{err}");
     assert!(!main.join(".claude/worktrees").join(NAME).exists());
 }
+
+/// A pnpm monorepo's trunk checkout with its installs: the root
+/// node_modules holds the store, and each workspace package's own
+/// node_modules links its siblings by relative links, as pnpm makes them.
+fn pnpm_repo(w: &Scratch, rel: &str) -> PathBuf {
+    let dir = repo(w, rel);
+    w.put(&format!("{rel}/.gitignore"), "node_modules\nvendor\n");
+    w.put(&format!("{rel}/package.json"), "{}\n");
+    w.put(&format!("{rel}/apps/web/package.json"), "{}\n");
+    w.put(&format!("{rel}/packages/ui/package.json"), "{}\n");
+    w.put(&format!("{rel}/packages/ui/index.js"), "export {}\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "Workspace"]);
+    w.put(&format!("{rel}/node_modules/.pnpm/react/index.js"), "\n");
+    w.put(&format!("{rel}/packages/ui/node_modules/.bin/tool"), "\n");
+    w.mkdir(&format!("{rel}/apps/web/node_modules/@scope"));
+    std::os::unix::fs::symlink(
+        "../../../../packages/ui",
+        dir.join("apps/web/node_modules/@scope/ui"),
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn the_root_node_modules_links_the_trunks_and_nested_ones_are_copied() {
+    let w = Scratch::new("wt-pnpm");
+    let main = pnpm_repo(&w, "repo");
+    let out = create(&main);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let dir = printed(&out);
+
+    assert_eq!(
+        std::fs::read_link(dir.join("node_modules")).unwrap(),
+        main.join("node_modules")
+    );
+    for nested in ["apps/web/node_modules", "packages/ui/node_modules"] {
+        let meta = std::fs::symlink_metadata(dir.join(nested)).unwrap();
+        assert!(meta.is_dir(), "{nested} is a real folder");
+    }
+    assert!(dir.join("packages/ui/node_modules/.bin/tool").exists());
+    assert_eq!(
+        dir.join("apps/web/node_modules/@scope/ui")
+            .canonicalize()
+            .unwrap(),
+        dir.join("packages/ui")
+    );
+}
+
+#[test]
+fn a_session_in_another_apps_worktree_links_that_checkouts_node_modules() {
+    let w = Scratch::new("wt-pnpm-app");
+    let main = pnpm_repo(&w, "repo");
+    let app = w.at("app");
+    git(
+        &main,
+        &["worktree", "add", "-q", "-b", "app", app.to_str().unwrap()],
+    );
+    w.put("app/node_modules/.pnpm/react/index.js", "\n");
+    let out = create(&app);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        std::fs::read_link(printed(&out).join("node_modules")).unwrap(),
+        app.join("node_modules")
+    );
+}
+
+#[test]
+fn vendor_is_a_real_folder() {
+    let w = Scratch::new("wt-composer");
+    let main = repo(&w, "repo");
+    w.put("repo/.gitignore", "vendor\n");
+    w.put("repo/composer.json", "{}\n");
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-qm", "Composer"]);
+    w.put("repo/vendor/autoload.php", "<?php\n");
+    let out = create(&main);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let dir = printed(&out);
+    assert!(
+        std::fs::symlink_metadata(dir.join("vendor"))
+            .unwrap()
+            .is_dir()
+    );
+    assert!(dir.join("vendor/autoload.php").exists());
+}
+
+#[test]
+fn a_repo_with_no_installs_gets_none() {
+    let w = Scratch::new("wt-bare");
+    let main = repo(&w, "repo");
+    w.put("repo/package.json", "{}\n");
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-qm", "Package"]);
+    let out = create(&main);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(out.stderr.is_empty(), "{out:?}");
+    let dir = printed(&out);
+    assert!(std::fs::symlink_metadata(dir.join("node_modules")).is_err());
+    assert!(std::fs::symlink_metadata(dir.join("vendor")).is_err());
+}
