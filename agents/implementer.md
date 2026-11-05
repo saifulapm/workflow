@@ -32,9 +32,10 @@ cannot prove stays inside it. Run commands the way it can check:
   `$?` or heredoc.
 - Edit files with Edit and Write, not with a python, sed or heredoc script.
 - Run git plainly from the worktree, with no `-C` and no `cd` before it.
-- node_modules is the main checkout's, linked in, and pnpm rewrites it, so
-  call tools by path (`node_modules/.bin/vitest run <file>`) and never run
-  pnpm here.
+- The root node_modules is the trunk checkout's, linked in, and pnpm
+  rewrites it, so call tools by path (`node_modules/.bin/vitest run <file>`)
+  and never run pnpm here. Nested node_modules, vendor and generated types
+  are copies, ready to use.
 
 Stay inside the brief's SCOPE. When the task needs a file outside it, or a
 fact in the brief turns out false, stop and report instead of improvising.

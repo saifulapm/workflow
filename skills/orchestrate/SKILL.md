@@ -158,6 +158,13 @@ implementation. Rerun its targeted test. Then:
     mem plan --tick <id>
     mem log "<what landed, in one line>"
 
+The WorktreeCreate hook, `workflow worktree create`, makes that worktree
+ready to build: its root node_modules links the trunk checkout's, and each
+nested node_modules, vendor and generated type folder is a copy. A brief
+needs no SETUP step. Claude Code removes no worktree the hook made, so a
+subagent that returns with no commit leaves its folder and branch: remove
+both the same way once you are done with it.
+
 Implementers run at medium effort, which suits a precise slice. A subagent
 that fails, or returns something you would not merge, gets one fresh
 attempt with a better brief at `effort: high`. After that, do the task

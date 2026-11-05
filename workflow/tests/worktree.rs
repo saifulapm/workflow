@@ -327,3 +327,77 @@ fn a_branch_with_commits_no_other_branch_has_stays_and_says_so() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains(&branch), "{err}");
 }
+
+/// The command of the cloud kit's one entry for a worktree hook event.
+fn entry(event: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cloud/settings-hooks.json");
+    let hooks: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let entries = hooks[event].as_array().expect("an entry list");
+    assert_eq!(entries.len(), 1, "{hooks}");
+    entries[0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The entry run by sh in `cwd`, with `bin` first on a PATH that has no
+/// workflow of its own.
+fn run_entry(event: &str, bin: &Path, cwd: &Path, input: &str) -> Output {
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", &entry(event)])
+        .current_dir(cwd)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn the_hook_entries_make_and_remove_a_worktree_with_any_workflow() {
+    assert!(
+        !Path::new("/usr/bin/workflow").exists() && !Path::new("/bin/workflow").exists(),
+        "the test's PATH must hold no workflow"
+    );
+    let w = Scratch::new("wt-entry");
+    let real = w.mkdir("real");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_workflow"), real.join("workflow")).unwrap();
+    let missing = w.mkdir("missing");
+    // A workflow from before the worktree command: clap refuses it, exit 2.
+    let old = w.mkdir("old");
+    w.script(
+        "old/workflow",
+        "echo \"error: unrecognized subcommand '$1'\" >&2; exit 2",
+    );
+    for (tag, bin) in [("real", &real), ("missing", &missing), ("old", &old)] {
+        let main = pnpm_repo(&w, &format!("{tag}-repo"));
+        let mut input: Value =
+            serde_json::from_str(include_str!("fixtures/worktree-create.json")).unwrap();
+        input["cwd"] = main.to_str().unwrap().into();
+        let out = run_entry("WorktreeCreate", bin, &main, &input.to_string());
+        assert_eq!(out.status.code(), Some(0), "{tag}: {out:?}");
+        let dir = printed(&out);
+        assert_eq!(dir, main.join(".claude/worktrees").join(NAME), "{tag}");
+        assert_eq!(
+            git(&dir, &["branch", "--show-current"]),
+            format!("worktree-{NAME}")
+        );
+
+        let input = serde_json::json!({
+            "hook_event_name": "WorktreeRemove",
+            "cwd": main,
+            "worktree_path": dir,
+        });
+        let out = run_entry("WorktreeRemove", bin, &main, &input.to_string());
+        assert_eq!(out.status.code(), Some(0), "{tag}: {out:?}");
+        assert!(!dir.exists(), "{tag}");
+    }
+}

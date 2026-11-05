@@ -49,5 +49,25 @@
         }
       ]
     }
+  ],
+  "WorktreeCreate": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "if workflow worktree --help 2>/dev/null | grep -q 'possible values: create, remove'; then workflow worktree create; else n=$(sed -n 's/.*\"name\" *: *\"\\([^\"]*\\)\".*/\\1/p'); d=\"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/worktrees/$n\"; git worktree add -q -b \"worktree-$n\" \"$d\" HEAD >&2 && cd \"$d\" && pwd -P; fi"
+        }
+      ]
+    }
+  ],
+  "WorktreeRemove": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "if workflow worktree --help 2>/dev/null | grep -q 'possible values: create, remove'; then workflow worktree remove; else git worktree remove \"$(sed -n 's/.*\"worktree_path\" *: *\"\\([^\"]*\\)\".*/\\1/p')\"; fi"
+        }
+      ]
+    }
   ]
 }

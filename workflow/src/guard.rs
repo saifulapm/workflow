@@ -1,7 +1,7 @@
 //! `workflow guard pnpm`, a Claude Code PreToolUse hook for worktree agents.
-//! Claude Code links a worktree's node_modules to the main checkout's
-//! (`worktree.symlinkDirectories`), so a pnpm install there, or any pnpm
-//! command that installs before it runs, rewrites the main checkout's
+//! The WorktreeCreate hook (`workflow worktree create`) links a worktree's
+//! root node_modules to the trunk checkout's, so a pnpm install there, or
+//! any pnpm command that installs before it runs, rewrites the trunk's
 //! packages. The hook refuses such a command and says what to run instead.
 //! Input it cannot read passes: a broken guard must not stop the agent.
 
@@ -17,7 +17,7 @@ use crate::exit;
 const BLOCK: i32 = 2;
 
 const REFUSAL: &str = "workflow guard: pnpm refused. This worktree's node_modules is the \
-main checkout's, linked in, and pnpm would rewrite it. Call the tool by path instead, \
+trunk checkout's, linked in, and pnpm would rewrite it. Call the tool by path instead, \
 as in node_modules/.bin/vitest run <file>.";
 
 pub fn cmd_guard_pnpm() -> i32 {
