@@ -1340,10 +1340,7 @@ fn the_runtimes_are_the_devices_and_install_once() {
     );
     // Cloudflare's own CLI, which the network secret for api.cloudflare.com
     // serves (probe-cf, 2026-11-06).
-    assert!(
-        first.contains("npm install -g cf@1.0.0-beta.28"),
-        "{first}"
-    );
+    assert!(first.contains("npm install -g cf@1.0.0-beta.28"), "{first}");
     let sources =
         fs::read_to_string(home.at("root/etc/apt/sources.list.d/ondrej-php.sources")).unwrap();
     assert!(
