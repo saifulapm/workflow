@@ -729,6 +729,85 @@ fn a_device_orchestrator_on_another_machine_keeps_the_cloud_out() {
     assert!(!w.claude_ran());
 }
 
+/// A device orchestrator that parked on a question has stopped its own
+/// session, so amx shows nothing running, but the hub resumes that session
+/// when Saiful answers: a cloud start would run the milestone twice.
+#[test]
+fn a_milestone_parked_on_this_machine_starts_no_cloud_run() {
+    let w = World::new("cloud-device-parked");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"mini","id":"gamma-m2-next","since":"{}"}}"#,
+            now_minus(3)
+        ),
+    );
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put(
+        "handoff-gamma.md",
+        "parked: m2-next t3 waits on question #ABCD1234\n",
+    );
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("gamma's m2-next is parked on mini (gamma-m2-next)"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!w.claude_ran());
+
+    // A park from before this runner started is an older run's.
+    let w = World::new("cloud-device-old-park");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"mini","id":"gamma-m2-next","since":"{}"}}"#,
+            now_minus(1)
+        ),
+    );
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(3)));
+    w.work.put("handoff-gamma.md", "parked: an older run\n");
+    let out = w.go(&["gamma", "--cloud"]);
+    assert!(!stderr(&out).contains("is parked on"), "{}", stderr(&out));
+}
+
+/// Another project of `w`'s gamma repo, its remote spelled the other way.
+fn gamma_sibling(w: &World, carried: bool) {
+    let projects = w.work.read("projects.json");
+    let rows = projects.trim_end().strip_suffix("]}").unwrap();
+    let cloud = if carried { r#","cloud":"mini""# } else { "" };
+    w.work.put(
+        "projects.json",
+        &format!(
+            r#"{rows},{{"name":"gamma-web","remote":"git@github.com:me/gamma.git","checkouts":[]{cloud}}}]}}"#
+        ),
+    );
+}
+
+/// Two carried projects of one repo would chain cloud runs on branches that
+/// never hold each other's work, and the shared trunk cannot take both.
+#[test]
+fn a_second_carried_project_of_one_repo_starts_no_cloud_run() {
+    let w = World::new("cloud-repo-sibling-local");
+    w.set("gamma", r#""cloud":"mini""#);
+    gamma_sibling(&w, false);
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claude_ran());
+
+    let w = World::new("cloud-repo-sibling-carried");
+    w.set("gamma", r#""cloud":"mini""#);
+    gamma_sibling(&w, true);
+    let out = w.go(&["gamma", "--cloud"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("gamma shares me/gamma with gamma-web, which is also carried"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!w.claude_ran());
+}
+
 #[test]
 fn a_cloud_run_takes_the_next_milestone_only() {
     let w = World::new("cloud-later-milestone");

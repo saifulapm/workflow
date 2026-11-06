@@ -205,7 +205,7 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     }
     // Printing for a carried project, the push it would make stands in for
     // the unpushed main a start refuses.
-    if let Some(why) = refusal(row, &start.slug, &start.dir, print && carried) {
+    if let Some(why) = refusal(&projects, row, &start.slug, &start.dir, print && carried) {
         warn(format!("go: {why}"));
         return exit::USAGE;
     }
@@ -284,7 +284,7 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
         println!("{name}: paused");
         return exit::USAGE;
     }
-    if let Some(why) = repo_refusal(row, &dir, false) {
+    if let Some(why) = repo_refusal(&projects, row, &dir, false) {
         warn(format!("plan: {why}"));
         return exit::USAGE;
     }
@@ -453,8 +453,14 @@ enum Launch {
 /// work in `dir` that origin/main lacks waits for Saiful to push main; only
 /// the next milestone runs, since a later one would read as landed; and a
 /// device orchestrator keeps the project as a local go would.
-fn refusal(row: &ProjectRow, slug: &str, dir: &str, pushes: bool) -> Option<String> {
-    if let Some(why) = repo_refusal(row, dir, pushes) {
+fn refusal(
+    projects: &[ProjectRow],
+    row: &ProjectRow,
+    slug: &str,
+    dir: &str,
+    pushes: bool,
+) -> Option<String> {
+    if let Some(why) = repo_refusal(projects, row, dir, pushes) {
         return Some(why);
     }
     let name = &row.name;
@@ -472,6 +478,19 @@ fn refusal(row: &ProjectRow, slug: &str, dir: &str, pushes: bool) -> Option<Stri
             runner.machine, runner.id
         ));
     }
+    // A device orchestrator parked on a question has stopped its own session,
+    // so amx shows nothing running, but the hub resumes it on the answer.
+    let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
+    if let (Some(since), Some(at)) = (time(&runner.since), time(&row.handoff_at))
+        && at > since
+        && memcli::handoff(name).is_some_and(|text| text.trim_start().starts_with("parked:"))
+    {
+        return Some(format!(
+            "{name}'s {slug} is parked on {} ({}), waiting for an answer; \
+answer it and the hub resumes it there",
+            runner.machine, runner.id
+        ));
+    }
     match go::amx_agents() {
         Ok(rows) => go::running(&rows, name, slug, None)
             .map(|id| format!("{name} already has an orchestrator running: {id}")),
@@ -482,9 +501,30 @@ fn refusal(row: &ProjectRow, slug: &str, dir: &str, pushes: bool) -> Option<Stri
 /// Why `row` cannot run in the cloud at all, whatever it runs: a cloud
 /// session clones origin's main and finds the project by its remote.
 /// `pushes` says the caller pushes main itself, so an unpushed main is no
-/// reason.
-fn repo_refusal(row: &ProjectRow, dir: &str, pushes: bool) -> Option<String> {
+/// reason. One carried project per repo: two would chain cloud runs on
+/// branches that never hold each other's work, and the shared trunk could
+/// fast-forward to only one.
+fn repo_refusal(
+    projects: &[ProjectRow],
+    row: &ProjectRow,
+    dir: &str,
+    pushes: bool,
+) -> Option<String> {
     let name = &row.name;
+    let repo = row.remote.as_deref().and_then(owner_repo);
+    if let Some(sibling) = projects.iter().find(|other| {
+        other.name != *name
+            && other.cloud.as_deref().is_some_and(|m| !m.is_empty())
+            && repo.is_some()
+            && other.remote.as_deref().and_then(owner_repo) == repo
+    }) {
+        return Some(format!(
+            "{name} shares {} with {}, which is also carried to the cloud; one project \
+of a repo runs there: unset one with `mem --project <name> project unset cloud`",
+            repo.unwrap_or_default(),
+            sibling.name
+        ));
+    }
     if row.worktree.is_some() {
         return Some(format!(
             "{name} works on a branch of its own; cloud runs take main"
@@ -501,6 +541,18 @@ a cloud run starts from origin"
         ));
     }
     None
+}
+
+/// The last two segments of a remote, lowercased, without `.git`:
+/// `git@github.com:o/r.git` and `github.com/o/r` are both `o/r`, as mem and
+/// the hub read them.
+fn owner_repo(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let mut parts = url.rsplit(['/', ':']).filter(|p| !p.is_empty());
+    let repo = parts.next()?;
+    let owner = parts.next()?;
+    Some(format!("{owner}/{repo}").to_ascii_lowercase())
 }
 
 /// `claude --cloud <prompt>` in `dir`, under a pty: claude refuses `--cloud`
@@ -1215,6 +1267,31 @@ mod tests {
     fn a_local_only_task_parks_for_a_device() {
         assert!(PROMPT.contains("`[local]`"), "{PROMPT}");
         assert!(PROMPT.contains("parked: local-only"), "{PROMPT}");
+    }
+
+    /// A first mem that misses the store reads the replica the environment
+    /// baked, which can lack a newer project; a cloud branch then resolves by
+    /// its prefix to a sibling (`cloud/ebdfy-ui-m1` to ebdfy), and the runner
+    /// record and every later write land there.
+    #[test]
+    fn a_session_checks_its_project_before_its_first_write() {
+        for text in [PROMPT, PLAN_PROMPT] {
+            let check = text.find("mem project current").expect(text);
+            let write = text.find("mem project set runner").expect(text);
+            assert!(check < write, "{text}");
+            assert!(text.contains("mem sync"), "{text}");
+            assert!(
+                text.contains("mem project set runner cloud <id> --project {project}"),
+                "{text}"
+            );
+        }
+    }
+
+    /// The cloud rules park for a device only after the review and the
+    /// walk, so the prompt's local-only done says the same.
+    #[test]
+    fn a_local_only_park_comes_after_the_review_and_walk() {
+        assert!(PROMPT.contains("review and walk done at"), "{PROMPT}");
     }
 
     #[test]

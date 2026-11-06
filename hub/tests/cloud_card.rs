@@ -264,6 +264,56 @@ fn run_in_cloud_is_refused_while_the_project_has_its_own_live_cloud_run() {
     assert_eq!(poll(&hub), json!([]));
 }
 
+/// A device orchestrator parked on a question shows nothing running, but the
+/// hub resumes it when Saiful answers: Run in cloud would run it twice.
+#[test]
+fn run_in_cloud_is_refused_while_a_device_orchestrator_is_parked_on_a_question() {
+    let world = World::new("cloud-run-device-parked");
+    world.set(
+        "gamma",
+        "runner",
+        json!({"machine": "mini", "id": "gamma-m2-next", "since": ago(180)}),
+    );
+    world.set("gamma", "handoff_at", json!(ago(60)));
+    world.handoff("gamma", "parked: m2-next t3 waits on question #ABCD1234\n");
+    let hub = world.hub();
+    poll(&hub);
+    assert!(!page(&hub).contains(RUN_IN_CLOUD));
+    let response = hub.post_form("/p/gamma/control", "do=cloud");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(
+        body_of(&response).contains("gamma&#39;s m2-next is parked on mini (gamma-m2-next)"),
+        "{response}"
+    );
+    assert_eq!(poll(&hub), json!([]));
+}
+
+/// Two carried projects of one repo would chain cloud runs that never hold
+/// each other's work; one carried project per repo runs there.
+#[test]
+fn run_in_cloud_is_refused_while_another_project_of_the_repo_is_carried() {
+    let world = World::new("cloud-run-repo-sibling");
+    world.add_project("epsilon");
+    world.set(
+        "epsilon",
+        "remote",
+        json!("https://github.com/saiful/gamma"),
+    );
+    world.set("gamma", "cloud", json!("mini"));
+    world.set("epsilon", "cloud", json!("mini"));
+    let hub = world.hub();
+    poll(&hub);
+    assert!(!page(&hub).contains(RUN_IN_CLOUD));
+    let response = hub.post_form("/p/gamma/control", "do=cloud");
+    assert_eq!(status_of(&response), 409, "{response}");
+    assert!(
+        body_of(&response)
+            .contains("gamma shares saiful/gamma with epsilon, which is also carried"),
+        "{response}"
+    );
+    assert_eq!(poll(&hub), json!([]));
+}
+
 #[test]
 fn run_in_cloud_is_refused_while_a_device_orchestrator_runs_the_project() {
     let world = World::new("cloud-run-device-live");

@@ -453,15 +453,30 @@ pub fn cloud_refusal(
     if s.paused.is_some() {
         return Some(format!("{} is paused.", s.name));
     }
-    let row = mem
-        .projects()
-        .rows("projects")
-        .into_iter()
+    let rows = mem.projects().rows("projects");
+    let row = rows
+        .iter()
         .find(|row| row["name"] == s.name.as_str())
+        .cloned()
         .unwrap_or_default();
     // The cloud session clones the remote and cuts from main.
     if row["remote"].as_str().is_none_or(str::is_empty) {
         return Some(format!("{} has no git remote", s.name));
+    }
+    // One carried project per repo, as `workflow go --cloud` refuses: two
+    // would chain cloud runs that never hold each other's work.
+    let repo = row["remote"].as_str().and_then(owner_repo);
+    if let Some(sibling) = rows.iter().find(|other| {
+        other["name"] != s.name.as_str()
+            && other["cloud"].as_str().is_some_and(|m| !m.is_empty())
+            && other["remote"].as_str().and_then(owner_repo) == repo
+    }) {
+        return Some(format!(
+            "{} shares {} with {}, which is also carried to the cloud; one project of a repo runs there.",
+            s.name,
+            repo.unwrap_or_default(),
+            sibling["name"].as_str().unwrap_or_default()
+        ));
     }
     // Its trunk is a branch the cloud cannot see yet. The mini knows, since
     // mem keeps a worktree per machine; this store knows only its own.
@@ -478,6 +493,25 @@ pub fn cloud_refusal(
     {
         return Some(format!("{} is already running.", agent.id));
     }
+    // A device orchestrator parked on a question has stopped its own session,
+    // but the hub resumes it when Saiful answers, as `workflow go` refuses.
+    let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
+    if let Some(runner) = s.runner.as_ref().filter(|r| r.machine != "cloud")
+        && let (Some(since), Some(at)) = (time(&runner.since), time(&s.handoff_at))
+        && at > since
+        && let Outcome::Json(doc) = &*mem.handoff(&s.name)
+        && doc["body"]
+            .as_str()
+            .is_some_and(|text| text.trim_start().starts_with("parked:"))
+    {
+        return Some(format!(
+            "{}'s {} is parked on {} ({}), waiting for an answer; answer it and the hub resumes it there.",
+            s.name,
+            s.milestone.as_deref().unwrap_or("milestone"),
+            runner.machine,
+            runner.id
+        ));
+    }
     let runs = cloud_runs(mem, summaries, now);
     if let Some((_, run)) = runs.iter().find(|(project, _)| *project == s.name) {
         return Some(format!(
@@ -486,6 +520,18 @@ pub fn cloud_refusal(
         ));
     }
     unpushed(agents, &s.name)
+}
+
+/// The last two segments of a remote, lowercased, without `.git`:
+/// `git@github.com:o/r.git` and `https://github.com/o/r` are both `o/r`, as
+/// mem and the hub server read them.
+fn owner_repo(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let mut parts = url.rsplit(['/', ':']).filter(|p| !p.is_empty());
+    let repo = parts.next()?;
+    let owner = parts.next()?;
+    Some(format!("{owner}/{repo}").to_ascii_lowercase())
 }
 
 /// Why a cloud run of `project` must wait for Saiful to push main: the
