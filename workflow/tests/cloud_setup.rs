@@ -1238,6 +1238,7 @@ fn runtime_fakes(home: &Scratch) -> (PathBuf, String) {
              case \"$*\" in\n\
              *pnpm@11*) printf '#!/bin/sh\\necho 11.21.0\\n' > \"$dir/pnpm\";;\n\
              *@playwright/cli@0.1.23*) printf '#!/bin/sh\\n[ \"$1\" = --version ] && exec echo 0.1.23\\necho real playwright-cli \"$PLAYWRIGHT_MCP_EXECUTABLE_PATH\" \"$PLAYWRIGHT_MCP_SANDBOX\" \"$@\"\\n' > \"$dir/playwright-cli\"; chmod +x \"$dir/playwright-cli\";;\n\
+             *cf@1.0.0-beta.28*) printf '#!/bin/sh\\n[ \"$1\" = --version ] && exec echo 1.0.0-beta.28\\necho real cf \"$NODE_USE_ENV_PROXY\" \"$CLOUDFLARE_API_TOKEN\" \"$@\"\\n' > \"$dir/cf\"; chmod +x \"$dir/cf\";;\n\
              esac\n",
             log = log.display()
         ),
@@ -1337,6 +1338,12 @@ fn the_runtimes_are_the_devices_and_install_once() {
         first.contains("npm install -g @playwright/cli@0.1.23"),
         "{first}"
     );
+    // Cloudflare's own CLI, which the network secret for api.cloudflare.com
+    // serves (probe-cf, 2026-11-06).
+    assert!(
+        first.contains("npm install -g cf@1.0.0-beta.28"),
+        "{first}"
+    );
     let sources =
         fs::read_to_string(home.at("root/etc/apt/sources.list.d/ondrej-php.sources")).unwrap();
     assert!(
@@ -1390,6 +1397,30 @@ fn the_runtimes_are_the_devices_and_install_once() {
         "real playwright-cli /usr/bin/google-chrome false open https://example.com",
         "{ran:?}"
     );
+    // cf reaches the proxy, which adds the network secret's token, only
+    // with Node's proxy support on and a token variable to replace; a
+    // global NODE_USE_ENV_PROXY hangs pnpm (probe-proxy, 2026-11-06).
+    let ran = command(home.at(".local/bin/cf"))
+        .args(["zones", "list"])
+        .env_remove("CLOUDFLARE_API_TOKEN")
+        .env_remove("NODE_USE_ENV_PROXY")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "real cf 1 proxy-injected zones list",
+        "{ran:?}"
+    );
+    let ran = command(home.at(".local/bin/cf"))
+        .arg("whoami")
+        .env("CLOUDFLARE_API_TOKEN", "a-real-one")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "real cf 1 a-real-one whoami",
+        "{ran:?}"
+    );
     fs::remove_file(&log).unwrap();
     runtimes(&home, &path);
     assert!(
@@ -1435,7 +1466,7 @@ fn a_runtime_that_does_not_install_is_named() {
     assert!(!out.status.success(), "{out:?}");
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
-        said.contains("did not install: pnpm playwright-cli php8.4 tmux"),
+        said.contains("did not install: pnpm playwright-cli cf php8.4 tmux"),
         "{said}"
     );
     // A key that did not come leaves no source for apt to fail on.

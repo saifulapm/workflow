@@ -831,7 +831,7 @@ bake() {
     mv "$part" "$bin/$name-x86_64"
   done
 }
-# runtimes: the devices' Node 24, pnpm 11, PHP 8.4, playwright-cli and tmux 3.7, linked
+# runtimes: the devices' Node 24, pnpm 11, PHP 8.4, playwright-cli, cf and tmux 3.7, linked
 # into ~/.local/bin, which comes before the image's /opt/node22/bin on a
 # session's PATH. Each install is skipped when the cached environment already
 # has it.
@@ -849,6 +849,20 @@ runtimes() {
     [ "$("$node/playwright-cli" --version 2>/dev/null)" = 0.1.23 ] ||
       "$node/node" "$node/npm" install -g @playwright/cli@0.1.23 >&2 ||
       failed="$failed playwright-cli"
+    # Cloudflare's CLI; the environment's network secret for
+    # api.cloudflare.com carries the token, so the session holds none.
+    case "$("$node/cf" --version 2>/dev/null)" in
+      *1.0.0-beta.28*) ;;
+      *) "$node/node" "$node/npm" install -g cf@1.0.0-beta.28 >&2 || failed="$failed cf" ;;
+    esac
+    # Node's fetch reaches the proxy, which adds that token, only with
+    # NODE_USE_ENV_PROXY on, and cf sends nothing without a token variable to
+    # replace. Here alone: a global NODE_USE_ENV_PROXY hangs pnpm.
+    printf '%s\n' '#!/bin/sh' \
+      'export NODE_USE_ENV_PROXY=1' \
+      'export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-proxy-injected}"' \
+      "exec \"$node/cf\" \"\$@\"" >"$bin/cf"
+    chmod +x "$bin/cf"
     for tool in node npm npx pnpm pnpx; do
       [ -e "$node/$tool" ] && ln -sfn "$node/$tool" "$bin/$tool"
     done
