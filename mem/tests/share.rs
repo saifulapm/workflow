@@ -656,6 +656,31 @@ fn applied_with_all_a_project_this_replica_has_never_seen_lands() {
 }
 
 #[test]
+fn a_replay_that_makes_and_deletes_a_project_in_one_batch_lands() {
+    let w = World::new("share-gone");
+    let project = "projects/01K0SHARE0G0NE00000000000P";
+    let toml = "created = \"2026-10-16T00:00:00Z\"\nid = \"01K0SHARE0G0NE00000000000P\"\nname = \"gone\"\nshare = \"true\"\n";
+    let input: String = [
+        json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC00000000000041",
+               "path": format!("{project}/project.toml"), "body": toml, "machine": "mini"}),
+        json!({"t": "rec", "seq": 2, "id": "01K0SHAREREC00000000000042",
+               "path": format!("{project}/wiki/notes.md"), "body": "# Notes\n", "machine": "mini"}),
+        json!({"t": "rec", "seq": 3, "id": "01K0SHAREREC00000000000043",
+               "path": format!("{project}/wiki/notes.md"), "body": null, "machine": "mini"}),
+        json!({"t": "rec", "seq": 4, "id": "01K0SHAREREC00000000000044",
+               "path": format!("{project}/project.toml"), "body": null, "machine": "mini"}),
+        json!({"t": "ready", "seq": 4}),
+    ]
+    .iter()
+    .map(|m| format!("{m}\n"))
+    .collect();
+    let out = mem_in(&w, &["share", "apply", "--all"], &input);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(hello(&w)["since"], 4);
+    assert!(!w.dirs().store().join(project).exists());
+}
+
+#[test]
 fn sharing_a_project_late_asks_the_store_for_everything_again() {
     let w = World::new("share-late");
     w.project(ID, "walk");

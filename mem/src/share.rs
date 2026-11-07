@@ -346,7 +346,9 @@ pub fn apply(db: &Path, root: &Path, messages: &[Value], all: bool) -> Result<()
 }
 
 fn sync_dirs(dirs: &BTreeSet<PathBuf>) -> Result<()> {
-    for dir in dirs {
+    // A later removal in the batch can delete a project and its folders, so
+    // a folder written earlier may be gone: nothing in it is left to sync.
+    for dir in dirs.iter().filter(|dir| dir.exists()) {
         crate::atomic::sync_dir(dir)?;
     }
     Ok(())
