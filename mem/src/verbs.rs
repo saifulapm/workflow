@@ -2466,7 +2466,8 @@ pub fn prune(app: &App, apply: &[String]) -> Result<i32> {
 /// `mem sync` — the hub has carried the store since 2026-10-17, so this asks
 /// the local hub to send the outbox now, waits a little for it to empty, and
 /// says where sharing stands: the writes still waiting and the last sequence
-/// the store acknowledged. Performed means nothing waits.
+/// the store acknowledged. Performed means nothing waits and the store's
+/// writes land here; a batch that failed to land says why.
 pub fn sync(app: &App) -> Result<i32> {
     let db = app.dirs.share_db();
     let wait = std::env::var("MEM_SYNC_WAIT_MS")
@@ -2483,10 +2484,15 @@ pub fn sync(app: &App) -> Result<i32> {
             status = crate::share::status(&db)?;
         }
     }
+    let stuck = crate::share::apply_failure(&db);
     let (state, detail) = match status {
         None => (
             "not performed",
             "this machine never shared through a hub".to_string(),
+        ),
+        Some((seq, _)) if let Some(why) = stuck => (
+            "not performed",
+            format!("the store's writes stopped landing here after sequence {seq}: {why}"),
         ),
         Some((seq, 0)) => ("performed", format!("outbox 0, last share sequence {seq}")),
         Some((seq, waiting)) => (
@@ -2956,6 +2962,12 @@ pub fn doctor(app: &App, fix: bool) -> Result<i32> {
 
     if let Some((seq, waiting)) = crate::share::status(&app.dirs.share_db())? {
         findings.push(finding("sharing", format!("seq {seq}, outbox {waiting}")));
+        if let Some(why) = crate::share::apply_failure(&app.dirs.share_db()) {
+            findings.push(finding(
+                "sharing",
+                format!("the store's writes stopped landing after seq {seq}: {why}"),
+            ));
+        }
     }
 
     let cleaned = crate::session::cleanup(&app.dirs.sessions_dir());

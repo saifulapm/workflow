@@ -321,6 +321,31 @@ pub fn status(db: &Path) -> Result<Option<(u64, u64)>> {
 /// here. A message that fails ends the batch with its error, and the ones
 /// before it stay applied, as when each committed on its own.
 pub fn apply(db: &Path, root: &Path, messages: &[Value], all: bool) -> Result<()> {
+    // The hub retries a failed batch for ever and only logs it, so the reason
+    // stays beside the database for `mem sync` and `mem doctor` to say.
+    let result = apply_batch(db, root, messages, all);
+    let failed = db.with_file_name(APPLY_FAILED);
+    match &result {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&failed);
+        }
+        Err(e) => {
+            let _ = std::fs::write(&failed, format!("{e:#}"));
+        }
+    }
+    result
+}
+
+/// The file beside the share database that holds why the last batch failed.
+const APPLY_FAILED: &str = "apply-failed";
+
+/// Why the store's writes stopped landing here: the last batch's error, until
+/// a batch lands.
+pub fn apply_failure(db: &Path) -> Option<String> {
+    std::fs::read_to_string(db.with_file_name(APPLY_FAILED)).ok()
+}
+
+fn apply_batch(db: &Path, root: &Path, messages: &[Value], all: bool) -> Result<()> {
     let mut conn = open(db)?;
     let mut tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Each folder a file landed in is synced once, before the commit that

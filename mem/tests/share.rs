@@ -681,6 +681,52 @@ fn a_replay_that_makes_and_deletes_a_project_in_one_batch_lands() {
 }
 
 #[test]
+fn sync_says_when_the_stores_writes_stopped_landing_and_why() {
+    let w = shared("share-stuck");
+    let blocked = [
+        json!({"t": "rec", "seq": 7, "id": "01K0SHAREREC00000000000051", "path": page_path("notes"),
+               "body": "# Notes\n", "machine": "nuc"}),
+        json!({"t": "rec", "seq": 8, "id": "01K0SHAREREC00000000000052",
+               "path": format!("projects/{ID}/wiki/notes.md/inner.md"), "body": "x", "machine": "nuc"}),
+    ];
+    let input: String = blocked.iter().map(|m| format!("{m}\n")).collect();
+    let out = mem_in(&w, &["share", "apply"], &input);
+    assert_ne!(code(&out), 0);
+
+    let out = mem(&w, w.dir.path(), &["sync"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(
+        said.starts_with(
+            "sync not performed: the store's writes stopped landing here after sequence 7: "
+        ),
+        "{said}"
+    );
+    assert!(
+        said.ends_with("notes.md: File exists (os error 17)\n"),
+        "{said}"
+    );
+    let doctor = stdout(&mem(&w, w.dir.path(), &["doctor"]));
+    assert!(
+        doctor.contains("the store's writes stopped landing after seq 7: creating "),
+        "{doctor}"
+    );
+
+    apply(
+        &w,
+        &[
+            json!({"t": "rec", "seq": 9, "id": "01K0SHAREREC00000000000053", "path": page_path("later"),
+                 "body": "# Later\n", "machine": "nuc"}),
+        ],
+    );
+    let out = mem(&w, w.dir.path(), &["sync"]);
+    assert_eq!(
+        stdout(&out),
+        "sync performed: outbox 0, last share sequence 9\n"
+    );
+}
+
+#[test]
 fn sharing_a_project_late_asks_the_store_for_everything_again() {
     let w = World::new("share-late");
     w.project(ID, "walk");
