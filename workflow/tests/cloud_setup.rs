@@ -1142,6 +1142,12 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
     // (probe-amx3): the kit's own variables join the image's.
     assert_eq!(settings["env"]["LANG"], "C.UTF-8", "{settings}");
     assert_eq!(settings["env"]["LC_ALL"], "C.UTF-8", "{settings}");
+    // The session runs as root, and Composer then loads no plugins, so
+    // pest has no --parallel (probe-lathe-3).
+    assert_eq!(
+        settings["env"]["COMPOSER_ALLOW_SUPERUSER"], "1",
+        "{settings}"
+    );
     assert_eq!(settings["env"]["IMAGE_VAR"], "1", "{settings}");
     assert_eq!(
         settings["permissions"]["allow"][0], "Bash(ls)",
