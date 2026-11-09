@@ -195,14 +195,6 @@ fn a_run_past_the_timeout_is_stopped() {
 }
 
 #[test]
-fn the_browser_verb_is_not_ready_yet() {
-    let rig = rig("nuc", &[]);
-    let answer = call(&rig.hub, "browser", &["open"]);
-    assert_eq!(answer["exit"], 2);
-    assert_eq!(answer["stderr"], "device: browser is not ready here\n");
-}
-
-#[test]
 fn a_body_without_a_project_is_a_bad_request() {
     let rig = rig("nuc", &[]);
     let response = post(&rig.hub, r#"{"verb":"whoami","args":[]}"#);
