@@ -126,7 +126,7 @@ fn run(args: &[String]) -> Outcome {
     }
 }
 
-fn timeout() -> Duration {
+pub fn timeout() -> Duration {
     std::env::var("HUB_DEVICE_TIMEOUT_MS")
         .ok()
         .and_then(|ms| ms.parse().ok())
@@ -183,4 +183,30 @@ fn log(machine: &str, call: &Call, outcome: &Outcome) {
         Ended::TimedOut => eprintln!("hub: device: mem log took too long"),
         Ended::Failed(e) => eprintln!("hub: device: mem log did not start: {e}"),
     }
+}
+
+/// The answer when no machine can take the call: exit 3 with `why`, logged
+/// under the machine `none`.
+pub fn unserved(request: &Request, why: &str) -> Response {
+    let call: Call = match serde_json::from_slice(&request.body) {
+        Ok(call) => call,
+        Err(e) => return Response::text(400, &format!("expected verb, args and project: {e}")),
+    };
+    let outcome = Outcome {
+        exit: 3,
+        ..Outcome::refuse(why.to_string())
+    };
+    log("none", &call, &outcome);
+    Response::new(
+        200,
+        "application/json",
+        json!({
+            "machine": null,
+            "stdout": outcome.stdout,
+            "stderr": outcome.stderr,
+            "exit": outcome.exit,
+            "files": {},
+        })
+        .to_string(),
+    )
 }

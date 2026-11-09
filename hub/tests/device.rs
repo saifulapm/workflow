@@ -1,4 +1,5 @@
-//! `POST /device` on the local hub's peer port.
+//! `POST /device/here` on the local hub's peer port: a call served on this
+//! machine, as a hub sends it on when the route names this one.
 
 mod common;
 
@@ -57,7 +58,7 @@ fn rig(machine: &str, env: &[(&str, &str)]) -> Rig {
 
 fn post(hub: &Hub, body: &str) -> String {
     hub.raw(&format!(
-        "POST /device HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
+        "POST /device/here HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\
          Authorization: Bearer {TOKEN}\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\n\r\n{body}",
         body.len()

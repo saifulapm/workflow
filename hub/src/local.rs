@@ -310,7 +310,9 @@ impl Local {
         match (method, request.path.as_str()) {
             ("GET", "/ping") => Response::text(200, &self.machine),
             (_, "/ping") => Response::method_not_allowed("GET"),
-            ("POST", "/device") => crate::device::serve(&self.machine, request),
+            ("POST", "/device") => self.device(request),
+            // A call another hub sent on because the route names this one.
+            ("POST", "/device/here") => crate::device::serve(&self.machine, request),
             // The asking hub offers its question to this, the route device.
             ("POST", "/ring") => match serde_json::from_slice::<Open>(&request.body) {
                 Ok(open) if !plain_id(&open.id) => Response::text(400, "not a question id"),
@@ -468,6 +470,42 @@ impl Local {
 
     /// Whether `question`, asked here, is a roadmap review: answering it
     /// starts work, so it is answered on the hub and never by a tap.
+    /// A device call goes to the machine the route names: served here when
+    /// that is this hub, sent on to its hub when it is a peer the tailnet
+    /// lists, and answered "no device online" otherwise. A peer serves what
+    /// it is sent without reading its own route, so a stale copy there
+    /// cannot send the call back.
+    fn device(&self, request: &Request) -> Response {
+        let route = self.route_now.get();
+        let machine = match (route.route, route.machine) {
+            (Kind::Device, Some(machine)) => machine,
+            _ => return crate::device::unserved(request, "no device online (route: phone)"),
+        };
+        if machine == self.host {
+            return crate::device::serve(&self.machine, request);
+        }
+        let offline = format!("no device online (route: {machine})");
+        if !crate::tailnet_peers().contains(&machine) {
+            return crate::device::unserved(request, &offline);
+        }
+        // The device stops a call at its own timeout; wait a little past it.
+        let within = crate::device::timeout() + Duration::from_secs(15);
+        match request_within(
+            &machine,
+            "POST",
+            "/device/here",
+            &self.token,
+            &request.body,
+            within,
+        ) {
+            Ok((status, body)) => Response::new(status, "application/json", body),
+            Err(e) => {
+                eprintln!("hub: local: device call to {machine}: {e:#}");
+                crate::device::unserved(request, &offline)
+            }
+        }
+    }
+
     fn is_review(&self, question: &str) -> bool {
         if let Some(asked) = self
             .asked
