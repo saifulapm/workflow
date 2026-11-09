@@ -10,6 +10,8 @@ use std::process::{Command, Output};
 
 use scratch::Scratch;
 
+/// What every fake `mem sync --json` prints through (tests/fake_mem_sync.rs).
+const SYNC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mem-sync.sh");
 const BRANCH: &str = "cloud/gamma-m2-next";
 
 /// An origin whose main holds `start`, and the thread's clone of it on the
@@ -90,9 +92,7 @@ case "$1 $2" in
 "sync --json")
   n=0
   [ -f "$dir/outbox" ] && n=$(cat "$dir/outbox")
-  state=performed
-  [ "$n" -gt 0 ] && state="not performed"
-  echo "{{\"sync\":\"$state\",\"outbox\":$n}}" ;;
+  sh {sync} "$n" ;;
 "share export")
   if [ -f "$dir/outbox" ]; then
     echo '{{"writes":2}}' >.mem-outbox.json
@@ -100,7 +100,8 @@ case "$1 $2" in
   fi ;;
 esac
 "#,
-                root = clone.display()
+                root = clone.display(),
+                sync = SYNC,
             ),
         );
         w

@@ -17,6 +17,8 @@ struct World {
     work: Scratch,
 }
 
+/// What every fake `mem sync --json` prints through (tests/fake_mem_sync.rs).
+const SYNC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mem-sync.sh");
 const SESSION: &str = "session_01TestCloudRun";
 
 impl World {
@@ -41,7 +43,7 @@ impl World {
         );
         work.script(
             "mem",
-            r#"
+            &r#"
 dir=$(dirname "$0")
 echo "$*" >>"$dir/mem.log"
 case "$1" in
@@ -75,14 +77,14 @@ sync)
     [ -f "$dir/synced-once" ] && n=$(cat "$dir/outbox-later")
     touch "$dir/synced-once"
   fi
-  state=performed
-  [ "$n" -gt 0 ] && state="not performed"
-  [ -f "$dir/not-performed" ] && state="not performed"
-  echo "{\"sync\":\"$state\",\"outbox\":$n}" ;;
+  stuck=
+  [ -f "$dir/not-performed" ] && stuck=stuck
+  sh @SYNC@ "$n" $stuck ;;
 roadmap) cat "$dir/roadmap-$3.md" ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
 esac
-"#,
+"#
+            .replace("@SYNC@", SYNC),
         );
         work.script(
             "claude",
