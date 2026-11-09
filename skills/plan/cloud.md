@@ -21,9 +21,9 @@ A cloud plan is the plan skill in a claude.ai cloud session
   and full network access.
 - §6 changes: when Saiful approves, set `mem roadmap --status approved` and
   start nothing. There is no amx here, and `workflow go` never runs in the
-  cloud. Write a handoff whose first line is `Next: workflow go <project>
-  --cloud`, so the hub's Run in cloud or the mini starts the first milestone,
-  cut from this branch.
+  cloud. Write a handoff whose first line is `Next: type "Run the next
+  milestone of <project>." in its Claude Project`: that thread runs the
+  first milestone, cut from this branch.
 - Then run `mem share export`, commit the `.mem-outbox.json` it stages when
   it stages one, and `git push origin cloud/<project>-plan`, even with no new
   commit: no signal reaches a session that ends, so writes the store has not

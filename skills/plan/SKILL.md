@@ -25,8 +25,8 @@ holds only work on the repo as a whole.
 ## 1. Read
 
 Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
-spec#<section>`), `verify` (in a project carried to the cloud, its `Cloud`
-section too: what a cloud session runs there), the decisions
+spec#<section>`), `verify` (in a project that runs in its Claude Project, its
+`Cloud` section too: what a cloud session runs there), the decisions
 (`mem search --kind ruling --limit 100`), the ideas filed for later
 (`mem search --kind idea --limit 100`; each one this work covers is a
 behaviour or an Out of scope line, since ideas are written and seldom read),
@@ -135,8 +135,8 @@ The rules:
    orchestrator hands this list to the reviewer.
 8. Write short sentences in the active voice. Quote Saiful's words; do not
    reword them.
-9. In a project carried to the cloud (its `cloud` in `mem projects --json`),
-   say where the milestone runs, in a line under `Show`: `Runs on: cloud`, or
+9. In a project that runs in its Claude Project (its `verify` page has a
+   `Cloud` section), say where the milestone runs, in a line under `Show`: `Runs on: cloud`, or
    `Runs on: cloud, then device: <what needs the device>`. A cloud session
    runs what verify's `Cloud` section says it can, with the deploy tokens
    its environment holds. Device work is what it cannot: Saiful's desktop

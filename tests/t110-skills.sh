@@ -49,11 +49,11 @@ done
 like "$(skill plan | sed -n '/^## 1. Read/,/^## 2/p')" 'mem search --kind idea' \
 	"plan: the Read step lists the project's ideas"
 
-# A carried project's milestone runs in the cloud up to its device work, which
+# A Claude Project's milestone runs in the cloud up to its device work, which
 # comes last, so a cloud run parks once, and only after its review and walk:
 # the device leg starts from reviewed, walked work and checks only what is left.
 rules=$(skill plan | sed -n '/^## 4/,/^## 5/p')
-like "$rules" 'Runs on:' "plan: a carried project's plan says where it runs"
+like "$rules" 'Runs on:' "plan: a Claude Project's plan says where it runs"
 like "$rules" 'last behaviour' "plan: device work is the milestone's last behaviour"
 like "$(cat "$WF_ROOT/skills/orchestrate/cloud.md")" 'review and walk done at' \
 	"orchestrate cloud: it reviews and walks before it parks for a device"
