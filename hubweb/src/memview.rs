@@ -490,6 +490,7 @@ impl<F: Files> View<'_, F> {
                     "created": p.created.to_string(),
                     "current": false,
                     "checkouts": [],
+                    "subdir": p.declared("subdir"),
                     "worktree": null,
                 });
                 for (key, value) in self.summary(p) {
