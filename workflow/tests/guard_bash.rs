@@ -478,3 +478,54 @@ fn a_dogfooders_dev_server_on_a_branch_checkout_is_refused() {
     // The orchestrator's own call carries no agent_type.
     assert!(passes(&guard(&trunk, "pnpm dev")));
 }
+
+/// The dev server's folder is the one its package manager or tmux is
+/// pointed at, and a command handed to a shell or to tmux is judged as if
+/// typed (#YPXPMQHY): the dogfood skill launches servers in tmux.
+#[test]
+fn a_dogfooders_dev_server_reached_through_a_flag_a_shell_or_tmux_is_judged_too() {
+    let w = Scratch::new("guard-bash-dev-routes");
+    w.put("trunk/.git/HEAD", "ref: refs/heads/main\n");
+    w.put(
+        "walk/.git",
+        &format!("gitdir: {}\n", w.at("gitdir").display()),
+    );
+    w.put("gitdir/HEAD", "0123456789abcdef0123456789abcdef01234567\n");
+    let (trunk, walk) = (w.at("trunk"), w.at("walk"));
+    let (t, k) = (trunk.display(), walk.display());
+    for (dir, command) in [
+        (&walk, format!("pnpm -C {t} dev")),
+        (&walk, format!("pnpm --dir {t} dev")),
+        (&walk, format!("pnpm --dir={t} dev")),
+        (&walk, format!("npm --prefix {t} run dev")),
+        (&trunk, "bash -c 'pnpm dev'".to_string()),
+        (&trunk, "sh -c \"cd sub && npx astro dev\"".to_string()),
+        (&trunk, "tmux new -d 'pnpm dev'".to_string()),
+        (
+            &trunk,
+            "tmux new-session -d -s walk -x 120 -y 40 pnpm dev".to_string(),
+        ),
+        (&walk, format!("tmux new -d -c {t} 'pnpm dev'")),
+        // Back out of the subshell, the line is in the trunk again.
+        (&trunk, format!("(cd {k} && ls); pnpm dev")),
+    ] {
+        let out = guard_as(dir, "dogfooder", &command);
+        assert!(refused(&out, "git worktree add"), "{command}: {out:?}");
+    }
+    for (dir, command) in [
+        (&trunk, format!("pnpm -C {k} dev")),
+        (&trunk, format!("tmux new -d -c {k} 'pnpm dev'")),
+        (&trunk, format!("bash -c 'cd {k} && pnpm dev'")),
+        // A subshell's cd moves only the subshell, as the cd rule advises.
+        (&trunk, format!("(cd {k} && setsid pnpm dev &)")),
+        // A pane's folder is not on the line, so keys sent to it pass.
+        (
+            &trunk,
+            "tmux send-keys -t walk 'pnpm dev' Enter".to_string(),
+        ),
+        (&trunk, "tmux new -d -s walk".to_string()),
+    ] {
+        let out = guard_as(dir, "dogfooder", &command);
+        assert!(passes(&out), "{command}: {out:?}");
+    }
+}
