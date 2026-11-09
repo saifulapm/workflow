@@ -1010,10 +1010,10 @@ bake() {
     mv "$part" "$bin/$name-x86_64"
   done
 }
-# runtimes: the devices' Node 24, pnpm 11, PHP 8.4, playwright-cli, cf and tmux 3.7, linked
-# into ~/.local/bin, which comes before the image's /opt/node22/bin on a
-# session's PATH. Each install is skipped when the cached environment already
-# has it.
+# runtimes: the devices' Node 24, pnpm 11, PHP 8.4, playwright-cli, cf, Shopify
+# CLI 5 and tmux 3.7, linked into ~/.local/bin, which comes before the image's
+# /opt/node22/bin on a session's PATH. Each install is skipped when the cached
+# environment already has it.
 runtimes() {
   node="${MEM_CLOUD_ROOT:-}/opt/node24/bin"
   failed=
@@ -1042,6 +1042,19 @@ runtimes() {
       'export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-proxy-injected}"' \
       "exec \"$node/cf\" \"\$@\"" >"$bin/cf"
     chmod +x "$bin/cf"
+    # Shopify CLI 5, the first that takes a service account token. Its own
+    # agent reads the proxy only from SHOPIFY_-named variables; Node's
+    # NODE_USE_ENV_PROXY would reach the pnpm it runs and hang it.
+    case "$("$node/shopify" version 2>/dev/null)" in
+      *5.0.1*) ;;
+      *) "$node/node" "$node/npm" install -g @shopify/cli@5.0.1 >&2 || failed="$failed shopify" ;;
+    esac
+    printf '%s\n' '#!/bin/sh' \
+      'export SHOPIFY_HTTPS_PROXY="${SHOPIFY_HTTPS_PROXY:-${HTTPS_PROXY:-${https_proxy:-}}}"' \
+      'export SHOPIFY_HTTP_PROXY="${SHOPIFY_HTTP_PROXY:-${HTTP_PROXY:-${http_proxy:-}}}"' \
+      'export SHOPIFY_NO_PROXY="${SHOPIFY_NO_PROXY:-${NO_PROXY:-${no_proxy:-}}}"' \
+      "exec \"$node/shopify\" \"\$@\"" >"$bin/shopify"
+    chmod +x "$bin/shopify"
     for tool in node npm npx pnpm pnpx; do
       [ -e "$node/$tool" ] && ln -sfn "$node/$tool" "$bin/$tool"
     done

@@ -1318,6 +1318,7 @@ fn runtime_fakes(home: &Scratch) -> (PathBuf, String) {
              *pnpm@11*) printf '#!/bin/sh\\necho 11.21.0\\n' > \"$dir/pnpm\";;\n\
              *@playwright/cli@0.1.23*) printf '#!/bin/sh\\n[ \"$1\" = --version ] && exec echo 0.1.23\\necho real playwright-cli \"$PLAYWRIGHT_MCP_EXECUTABLE_PATH\" \"$PLAYWRIGHT_MCP_SANDBOX\" \"$@\"\\n' > \"$dir/playwright-cli\"; chmod +x \"$dir/playwright-cli\";;\n\
              *cf@1.0.0-beta.28*) printf '#!/bin/sh\\n[ \"$1\" = --version ] && exec echo 1.0.0-beta.28\\necho real cf \"$NODE_USE_ENV_PROXY\" \"$CLOUDFLARE_API_TOKEN\" \"$@\"\\n' > \"$dir/cf\"; chmod +x \"$dir/cf\";;\n\
+             *@shopify/cli@5.0.1*) printf '#!/bin/sh\\n[ \"$1\" = version ] && exec printf \"\\\\n5.0.1\\\\n\"\\necho real shopify \"$SHOPIFY_HTTPS_PROXY\" \"$SHOPIFY_HTTP_PROXY\" \"$SHOPIFY_NO_PROXY\" \"$@\"\\n' > \"$dir/shopify\"; chmod +x \"$dir/shopify\";;\n\
              esac\n",
             log = log.display()
         ),
@@ -1402,7 +1403,7 @@ fn runtimes(home: &Scratch, path: &str) -> std::process::Output {
     out
 }
 
-/// The device's Node 24, pnpm 11, PHP 8.4, playwright-cli and tmux 3.7 go first on a
+/// The device's Node 24, pnpm 11, PHP 8.4, playwright-cli, Shopify CLI 5 and tmux 3.7 go first on a
 /// session's PATH, through ~/.local/bin; a second run, as a cached
 /// environment's rebuild makes, installs nothing again.
 #[test]
@@ -1420,6 +1421,11 @@ fn the_runtimes_are_the_devices_and_install_once() {
     // Cloudflare's own CLI, which the network secret for api.cloudflare.com
     // serves (probe-cf, 2026-11-06).
     assert!(first.contains("npm install -g cf@1.0.0-beta.28"), "{first}");
+    // Shopify CLI 5: the first that takes a service account token.
+    assert!(
+        first.contains("npm install -g @shopify/cli@5.0.1"),
+        "{first}"
+    );
     let sources =
         fs::read_to_string(home.at("root/etc/apt/sources.list.d/ondrej-php.sources")).unwrap();
     assert!(
@@ -1497,6 +1503,32 @@ fn the_runtimes_are_the_devices_and_install_once() {
         "real cf 1 a-real-one whoami",
         "{ran:?}"
     );
+    // The CLI's own agent takes the proxy only from SHOPIFY_-named
+    // variables; Node's NODE_USE_ENV_PROXY would reach the pnpm it runs.
+    let ran = command(home.at(".local/bin/shopify"))
+        .args(["theme", "list"])
+        .env("HTTPS_PROXY", "http://proxy:3128")
+        .env("HTTP_PROXY", "http://proxy:3129")
+        .env("NO_PROXY", "localhost,127.0.0.1")
+        .env_remove("SHOPIFY_HTTPS_PROXY")
+        .env_remove("SHOPIFY_HTTP_PROXY")
+        .env_remove("SHOPIFY_NO_PROXY")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "real shopify http://proxy:3128 http://proxy:3129 localhost,127.0.0.1 theme list",
+        "{ran:?}"
+    );
+    let ran = command(home.at(".local/bin/shopify"))
+        .arg("version")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout).trim(),
+        "5.0.1",
+        "{ran:?}"
+    );
     fs::remove_file(&log).unwrap();
     runtimes(&home, &path);
     assert!(
@@ -1542,7 +1574,7 @@ fn a_runtime_that_does_not_install_is_named() {
     assert!(!out.status.success(), "{out:?}");
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
-        said.contains("did not install: pnpm playwright-cli cf php8.4 tmux"),
+        said.contains("did not install: pnpm playwright-cli cf shopify php8.4 tmux"),
         "{said}"
     );
     // A key that did not come leaves no source for apt to fail on.
