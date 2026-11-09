@@ -1478,7 +1478,7 @@ In claude.ai:
      HUB_STORE_ACCESS_SECRET: pass show workflow/cloud-next-access-secret
      TS_AUTHKEY: pass show workflow/tailscale-cloud-authkey
        (a Tailscale auth key lasts 90 days at most: renew it when cloud sessions stop joining the tailnet)
-     CONTEXT7_API_KEY: pass show AI/context7
+     CONTEXT7_API_KEY: pass show AI/context7/clt
        (the ctx7 docs lookups the user CLAUDE.md asks for)
    No MEM_REMOTE, HUB_PEER_TOKEN or Slack variables: the mem server is gone, the peer
    token stays on the devices, and a cloud session opens no Slack socket.
