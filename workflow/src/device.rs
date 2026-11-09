@@ -11,8 +11,10 @@ use crate::exit;
 
 const VERBS: [&str; 3] = ["whoami", "run", "browser"];
 const DEFAULT_URL: &str = "https://device.on-rexa.com";
-/// The device stops a call at 120 s, so the client waits a little longer.
-const DEFAULT_TIMEOUT_S: u64 = 150;
+/// Cloudflare's edge gives the device 100 s and then answers 524; the
+/// device stops a call at 90 s, so a stopped call still gets back.
+const DEFAULT_TIMEOUT_S: u64 = 110;
+const EDGE_TIMEOUT_S: u64 = 100;
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -94,9 +96,11 @@ fn post(body: &str, timeout_s: u64) -> Reply {
     Reply::Answer(status, String::from_utf8_lossy(&answer).to_string())
 }
 
+/// A path under `.playwright-cli/`, where playwright-cli writes, and nowhere
+/// else: the folder is a checkout, and its settings are not the device's.
 fn safe(rel: &str) -> bool {
     let path = Path::new(rel);
-    !rel.is_empty()
+    path.starts_with(".playwright-cli")
         && path
             .components()
             .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
@@ -176,6 +180,10 @@ pub fn cmd_device(args: &[String]) -> i32 {
         401 | 403 | 302 => {
             say("refused by Access");
             return 4;
+        }
+        524 => {
+            say(&format!("the device did not answer in {EDGE_TIMEOUT_S} s"));
+            return 124;
         }
         502 | 503 | 504 | 530 => {
             say("no device online");

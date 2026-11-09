@@ -194,7 +194,7 @@ fn a_curl_timeout_exits_124() {
     let work = world("device-timeout");
     answer(&work, 0, 28, "");
     let out = device(&work, &["whoami"]);
-    assert_eq!(stderr(&out), "device: the device did not answer in 150 s\n");
+    assert_eq!(stderr(&out), "device: the device did not answer in 110 s\n");
     assert_eq!(out.status.code(), Some(124));
 }
 
@@ -231,6 +231,17 @@ fn a_change_of_machine_says_so_but_the_first_call_does_not() {
     assert_eq!(stderr(&out), "");
 }
 
+/// Cloudflare's edge gives an origin 100 s and then answers 524 itself
+/// (review of m2-device): that is a timeout too, not a strange answer.
+#[test]
+fn the_edge_s_timeout_exits_124() {
+    let work = world("device-edge-timeout");
+    answer(&work, 524, 0, "<!DOCTYPE html>error code: 524");
+    let out = device(&work, &["browser", "goto", "https://x.test"]);
+    assert_eq!(stderr(&out), "device: the device did not answer in 100 s\n");
+    assert_eq!(out.status.code(), Some(124));
+}
+
 #[test]
 fn a_file_outside_the_folder_is_skipped() {
     let work = world("device-escape");
@@ -243,17 +254,28 @@ fn a_file_outside_the_folder_is_skipped() {
             "",
             "",
             0,
-            json!({"../x": "a", "/tmp/workflow-device-test-x": "b", "ok/y": "c"}),
+            json!({
+                "../x": "a",
+                "/tmp/workflow-device-test-x": "b",
+                ".claude/settings.json": "d",
+                ".playwright-cli/y": "c",
+            }),
         ),
     );
     let out = device(&work, &["whoami"]);
     assert!(!work.has("x"));
     assert!(!std::path::Path::new("/tmp/workflow-device-test-x").exists());
-    assert_eq!(work.read("cwd/ok/y"), "c");
+    assert_eq!(work.read("cwd/.playwright-cli/y"), "c");
+    // Only playwright-cli's own folder: an answer never writes the checkout.
+    assert!(!work.has("cwd/.claude/settings.json"));
     let err = stderr(&out);
     assert!(err.contains("device: skipped ../x\n"), "{err}");
     assert!(
         err.contains("device: skipped /tmp/workflow-device-test-x\n"),
+        "{err}"
+    );
+    assert!(
+        err.contains("device: skipped .claude/settings.json\n"),
         "{err}"
     );
 }

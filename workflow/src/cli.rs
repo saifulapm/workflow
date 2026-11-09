@@ -252,12 +252,13 @@ The first argument is the verb: whoami, run or browser. The rest go to the
 device exactly as given, quotes and spaces unchanged, hyphens included. The
 call goes to the device's hub, which answers with the program's stdout,
 stderr and exit code, and the files it wrote. They land here: stdout and
-stderr as given, each file at its relative path under the current folder (a
-path that is absolute or climbs with .. is skipped and named), then the exit
+stderr as given, each file at its relative path under .playwright-cli/ in
+the current folder (any other path is skipped and named), then the exit
 code. When the machine answering differs from the last one, a line says so.
 The client decides four exits: 2 for a wrong verb or no project (set
 MEM_PROJECT), 3 when no device is online, 4 when Access refuses the call, and
-124 when the device does not answer in 150 s (WORKFLOW_DEVICE_TIMEOUT_S).
+124 when the device does not answer: Cloudflare's 100 s, or this command's
+110 s (WORKFLOW_DEVICE_TIMEOUT_S). The device stops a call at 90 s.
 WORKFLOW_DEVICE_URL moves the hub's address. Exit 1 for any other answer."
     )]
     Device {
