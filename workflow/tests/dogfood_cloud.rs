@@ -20,3 +20,36 @@ fn the_dogfood_skill_walks_cloud_web_pages_with_playwright_cli() {
     assert!(!paragraph.contains("no browser"), "{paragraph}");
     assert!(!paragraph.contains("no `playwright-cli`"), "{paragraph}");
 }
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// m2-device: a cloud walk reaches Saiful's logged-in Chromium through
+/// `device browser`, under the browser-operator rules, and a run that finds
+/// no device parks its task local-only.
+#[test]
+fn a_cloud_walk_reaches_the_logged_in_browser_through_device() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let skill = one_line(&fs::read_to_string(repo.join("skills/dogfood/SKILL.md")).unwrap());
+    assert!(
+        !skill.contains("no logged-in browser"),
+        "the dogfood skill still says the cloud has no logged-in browser"
+    );
+    for said in [
+        "`device browser <playwright-cli args>`",
+        "`device browser detach`",
+        "the brief names",
+        "exits 3",
+    ] {
+        assert!(skill.contains(said), "the dogfood skill says {said}");
+    }
+
+    let cloud = one_line(&fs::read_to_string(repo.join("skills/orchestrate/cloud.md")).unwrap());
+    for said in [
+        "`device whoami`",
+        "parked: local-only <task>: no device online",
+    ] {
+        assert!(cloud.contains(said), "cloud.md says {said}");
+    }
+}

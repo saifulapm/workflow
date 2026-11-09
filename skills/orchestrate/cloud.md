@@ -36,6 +36,13 @@ the skill holds, with these changes:
   report marked `local-only`, and what they need. File no question: a
   device's `workflow go` reads that handoff, takes the branch and runs
   what is left. End the report with `parked: local-only <task>`.
+- Saiful's logged-in browser and the programs `device run` allows (adb,
+  podman, shopify) are reached from here with `device`, on the machine the
+  route names; the dogfood skill's cloud paragraph has its rules. Run
+  `device whoami` before a task that needs them. When it exits 3 (no
+  device online), build what does not need the device, then hand off
+  `parked: local-only <task>: no device online` and end the report with
+  that line.
 - A device need the plan did not name, in a `Runs on: cloud` milestone or a
   step its line left out, parks the same way and gets `mem finding add
   --milestone <slug> --step plan` naming it, so the next plan names it.
