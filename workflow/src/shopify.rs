@@ -1,9 +1,11 @@
-//! `workflow shopify theme-dev <theme>`: Shopify CLI on a cloud thread, with
-//! the theme's own variables from the Project's environment.
+//! `workflow shopify theme-dev <theme>` and `workflow shopify deploy <app>`:
+//! Shopify CLI on a cloud thread, with the theme's or app's own variables
+//! from the Project's environment.
 //!
-//! One environment holds every theme's secrets, so each is named after its
-//! theme: `<THEME>_SHOPIFY_CLI_THEME_TOKEN`, `<THEME>_SHOPIFY_FLAG_STORE` and
-//! `<THEME>_STORE_PASSWORD`, `<THEME>` in capitals with `-` as `_`. This
+//! One environment holds every theme's and app's secrets, so each is named
+//! after its theme or app: `<THEME>_SHOPIFY_CLI_THEME_TOKEN`,
+//! `<THEME>_SHOPIFY_FLAG_STORE`, `<THEME>_STORE_PASSWORD` and
+//! `<APP>_SHOPIFY_SERVICE_ACCOUNT_TOKEN`, in capitals with `-` as `_`. This
 //! command hands them to the CLI under its own names. A name that is not set,
 //! or a token Shopify refuses, exits 3: only Saiful can make a token, so the
 //! task parks on it.
@@ -65,9 +67,32 @@ fn named(theme: &str, what: &str) -> Result<String, i32> {
     })
 }
 
+/// A string value from an app config: `key` at the top when `section` is
+/// None, else under `[section]`. App configs keep these on one line each.
+fn toml_value(text: &str, section: Option<&str>, key: &str) -> Option<String> {
+    let mut here: Option<&str> = None;
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            here = Some(name.trim());
+            continue;
+        }
+        if here != section {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if k.trim() == key {
+            return Some(v.trim().trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
 pub fn cmd_shopify(verb: &str, name: &str) -> i32 {
     match verb {
         "theme-dev" => theme_dev(name),
+        "deploy" => deploy(name),
         _ => {
             say(&format!("unknown verb {verb}"));
             exit::USAGE
@@ -173,7 +198,7 @@ fn run(mut cmd: Command) -> Result<String, String> {
     match cmd.output() {
         Ok(out) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
         Ok(out) => Err(format!(
-            "{}{}",
+            "{}\n{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         )),
@@ -191,10 +216,109 @@ fn find(listed: &str, name: &str) -> Option<String> {
     })
 }
 
-/// A `--json` error's message, else the output as it came.
+/// A `--json` error's message, else the output as it came. The error is one
+/// line of stdout; stderr, after it, may add a line of its own.
 fn error_message(out: &str) -> String {
-    serde_json::from_str::<Value>(out.trim())
-        .ok()
-        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+    out.lines()
+        .find_map(|line| {
+            serde_json::from_str::<Value>(line.trim())
+                .ok()
+                .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+        })
         .unwrap_or_else(|| out.trim().to_string())
+}
+
+/// The one config a cloud thread deploys. Production stays Saiful's
+/// go-ahead, so no other is ever named.
+const STAGING: &str = "staging";
+
+fn deploy(app: &str) -> i32 {
+    let Some(dir) = folder("apps", app) else {
+        say(&format!(
+            "no apps/{app} in this folder or one above it: run this in the apps repo"
+        ));
+        return exit::USAGE;
+    };
+    let config = dir.join(format!("shopify.app.{STAGING}.toml"));
+    let Ok(staging) = std::fs::read_to_string(&config) else {
+        say(&format!(
+            "{} does not exist: {app}'s staging app is Saiful's to make and link (shopify app config link --config {STAGING})",
+            config.display()
+        ));
+        return NEEDS_SAIFUL;
+    };
+    let production = std::fs::read_to_string(dir.join("shopify.app.toml")).unwrap_or_default();
+    let id = toml_value(&staging, None, "client_id");
+    if id.is_some() && id == toml_value(&production, None, "client_id") {
+        say(&format!(
+            "{} has production's client_id: a staging deploy would deploy production, which stays Saiful's go-ahead",
+            config.display()
+        ));
+        return NEEDS_SAIFUL;
+    }
+    let name = format!("{}_SHOPIFY_SERVICE_ACCOUNT_TOKEN", prefix(app));
+    let Some(token) = var(&name) else {
+        say(&format!(
+            "{name} is not set: add it to the Project's environment"
+        ));
+        return NEEDS_SAIFUL;
+    };
+    let out = Command::new("shopify")
+        .args([
+            "app",
+            "deploy",
+            "--config",
+            STAGING,
+            "--allow-updates",
+            "--no-input",
+        ])
+        .arg("--path")
+        .arg(&dir)
+        .env("SHOPIFY_SERVICE_ACCOUNT_TOKEN", &token)
+        // The CLI fails when either is set beside a service account token.
+        .env_remove("SHOPIFY_APP_AUTOMATION_TOKEN")
+        .env_remove("SHOPIFY_CLI_PARTNERS_TOKEN")
+        .output();
+    let out = match out {
+        Ok(out) => out,
+        Err(e) => {
+            say(&format!("cannot run shopify: {e}"));
+            return exit::FAILED;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The walk line stands on a line of its own.
+    if stdout.is_empty() || stdout.ends_with('\n') {
+        print!("{stdout}");
+    } else {
+        println!("{stdout}");
+    }
+    eprint!("{stderr}");
+    if !out.status.success() {
+        if format!("{stdout}{stderr}").contains("SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected") {
+            say(&format!(
+                "{name} was rejected: it was revoked, has expired (1, 3 or 6 months) or is not valid; make a new token for {app}'s service account"
+            ));
+            return NEEDS_SAIFUL;
+        }
+        say(&format!("shopify app deploy failed for {app}"));
+        return exit::FAILED;
+    }
+    let store = toml_value(&staging, Some("build"), "dev_store_url");
+    let handle = toml_value(&staging, None, "handle");
+    match (store, handle) {
+        (Some(store), Some(handle)) => {
+            let store = store
+                .trim_start_matches("https://")
+                .trim_end_matches('/')
+                .trim_end_matches(".myshopify.com");
+            println!("walk: https://admin.shopify.com/store/{store}/apps/{handle}");
+        }
+        _ => say(&format!(
+            "no handle or [build] dev_store_url in {}: no admin page to walk",
+            config.display()
+        )),
+    }
+    exit::OK
 }

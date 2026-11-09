@@ -32,7 +32,7 @@ fn world(tag: &str) -> Scratch {
         &format!(
             "echo \"$* | token=$SHOPIFY_CLI_THEME_TOKEN store=$SHOPIFY_FLAG_STORE password=$SHOPIFY_FLAG_STORE_PASSWORD\" >> {calls}\n\
              case \"$1 $2\" in\n\
-             'theme list') cat {list}; exit $(cat {code});;\n\
+             'theme list') cat {list}; echo '<claude-code-hint v=\"1\" type=\"plugin\" />' >&2; exit $(cat {code});;\n\
              'theme push') echo '{{\"status\":\"success\",\"changed\":true,\"theme\":{{\"id\":\"777\",\"name\":\"pawsome (cloud)\",\"role\":\"unpublished\",\"storeDomain\":\"pawsome-theme.myshopify.com\",\"previewUrl\":null,\"editorUrl\":null}},\"issues\":[]}}';;\n\
              'theme dev') echo serving;;\n\
              esac",
@@ -185,7 +185,7 @@ fn a_rejected_theme_token_names_the_variable() {
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
         said.contains("PAWSOME_SHOPIFY_CLI_THEME_TOKEN was rejected")
-            && said.contains("pawsome-theme.myshopify.com"),
+            && said.contains("(The Theme Access password was rejected for the store pawsome-theme.myshopify.com.)"),
         "{said}"
     );
     assert_eq!(calls(&work).len(), 1);
@@ -201,4 +201,162 @@ fn a_theme_with_no_folder_is_refused() {
         "{out:?}"
     );
     assert!(calls(&work).is_empty());
+}
+
+/// Shopify CLI 5.0.1's real output for a service account token it refuses
+/// (a made-up token, 2026-11-09).
+const SA_REJECTED: &str =
+    "╭─ error ──────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│  The token in SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected: it has been        │
+│  revoked, has expired, or isn't a valid token.                               │
+│                                                                              │
+│  Check the value, or generate a new token in the Shopify admin under         │
+│  Settings > Users > Security.                                                │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯";
+
+const PRODUCTION: &str = "client_id = \"e3cc0000000000000000000000000000\"\nname = \"EventSmith\"\nhandle = \"eventsmith\"\napplication_url = \"https://eventsmith.lareys.dev\"\n";
+
+const STAGING: &str = "client_id = \"57a90000000000000000000000000000\"\nname = \"EventSmith staging\"\nhandle = \"eventsmith-staging\"\napplication_url = \"https://eventsmith.lareys.dev\"\nembedded = true\n\n[build]\nautomatically_update_urls_on_dev = false\ndev_store_url = \"lareys-development.myshopify.com\"\n\n[access_scopes]\nscopes = \"read_products\"\n";
+
+/// An apps repo with apps/eventsmith's production and staging configs, and a
+/// fake shopify whose `app deploy` prints `deploy.out` and exits
+/// `deploy.code`.
+fn apps(tag: &str) -> Scratch {
+    let work = Scratch::new(tag);
+    let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
+    work.put("repo/apps/eventsmith/shopify.app.toml", PRODUCTION);
+    work.put("repo/apps/eventsmith/shopify.app.staging.toml", STAGING);
+    work.put("deploy.out", "New version released to users.");
+    work.put("deploy.code", "0");
+    let at = |rel: &str| work.at(rel).display().to_string();
+    work.script(
+        "bin/shopify",
+        &format!(
+            "echo \"$* | token=$SHOPIFY_SERVICE_ACCOUNT_TOKEN automation=$SHOPIFY_APP_AUTOMATION_TOKEN partners=$SHOPIFY_CLI_PARTNERS_TOKEN\" >> {calls}\n\
+             cat {out}\nexit $(cat {code})",
+            calls = at("calls"),
+            out = at("deploy.out"),
+            code = at("deploy.code"),
+        ),
+    );
+    work
+}
+
+const EVENTSMITH: (&str, &str) = ("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN", "shpsa_abc");
+
+/// The staging deploy takes the app's own token, never production's
+/// config, and says where in the admin to walk it.
+#[test]
+fn an_app_deploys_its_staging_config_with_its_own_token() {
+    let work = apps("shopify-deploy");
+    let out = shopify(
+        &work,
+        "repo",
+        &["deploy", "eventsmith"],
+        &[
+            EVENTSMITH,
+            // The CLI fails when either is set beside a service account token.
+            ("SHOPIFY_APP_AUTOMATION_TOKEN", "old"),
+            ("SHOPIFY_CLI_PARTNERS_TOKEN", "older"),
+        ],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let dir = work.at("repo/apps/eventsmith").display().to_string();
+    assert_eq!(
+        calls(&work),
+        [format!(
+            "app deploy --config staging --allow-updates --no-input --path {dir} | token=shpsa_abc automation= partners="
+        )]
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("New version released to users."), "{said}");
+    assert_eq!(
+        said.trim_end().lines().last(),
+        Some("walk: https://admin.shopify.com/store/lareys-development/apps/eventsmith-staging"),
+        "{said}"
+    );
+}
+
+#[test]
+fn an_app_with_no_token_deploys_nothing() {
+    let work = apps("shopify-deploy-no-token");
+    let out = shopify(
+        &work,
+        "repo/apps/eventsmith",
+        &["deploy", "eventsmith"],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN is not set"),
+        "{out:?}"
+    );
+    assert!(calls(&work).is_empty());
+}
+
+/// No staging config yet: only Saiful can make the staging app.
+#[test]
+fn an_app_with_no_staging_config_deploys_nothing() {
+    let work = apps("shopify-deploy-no-staging");
+    std::fs::remove_file(work.at("repo/apps/eventsmith/shopify.app.staging.toml")).unwrap();
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("shopify.app.staging.toml"),
+        "{out:?}"
+    );
+    assert!(calls(&work).is_empty());
+}
+
+/// A staging config linked to the production app would deploy production.
+#[test]
+fn a_staging_config_of_the_production_app_is_refused() {
+    let work = apps("shopify-deploy-production");
+    work.put(
+        "repo/apps/eventsmith/shopify.app.staging.toml",
+        &STAGING.replace(
+            "57a90000000000000000000000000000",
+            "e3cc0000000000000000000000000000",
+        ),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("production"),
+        "{out:?}"
+    );
+    assert!(calls(&work).is_empty());
+}
+
+/// A token past its 1, 3 or 6 months names the app's variable and parks,
+/// rather than failing like a bug.
+#[test]
+fn a_rejected_service_account_token_names_the_variable() {
+    let work = apps("shopify-deploy-rejected");
+    work.put("deploy.out", SA_REJECTED);
+    work.put("deploy.code", "1");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected")
+            && said.contains("expired"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_deploy_that_fails_otherwise_exits_1() {
+    let work = apps("shopify-deploy-fails");
+    work.put("deploy.out", "Build failed: extensions/foo");
+    work.put("deploy.code", "1");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("Build failed"),
+        "{out:?}"
+    );
 }

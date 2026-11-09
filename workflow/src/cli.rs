@@ -280,23 +280,29 @@ WORKFLOW_DEVICE_URL moves the hub's address. Exit 1 for any other answer."
 
 One cloud environment holds every theme's and app's secrets, each named after
 it: <THEME>_SHOPIFY_CLI_THEME_TOKEN, <THEME>_SHOPIFY_FLAG_STORE and
-<THEME>_STORE_PASSWORD, with <THEME> in capitals and - as _. They go to the
-CLI under its own names.
+<THEME>_STORE_PASSWORD, and <APP>_SHOPIFY_SERVICE_ACCOUNT_TOKEN, in capitals
+with - as _. They go to the CLI under its own names.
 
 theme-dev <theme> runs shopify theme dev on themes/<theme> (in this folder or
 one above it), served at http://127.0.0.1:9292, on the store's unpublished
 theme '<theme> (cloud)', made the first time and synced whole from the
 checkout at each start, so no VM leaves a development theme behind.
 
-Exit 3 when a variable is not set or Shopify rejects the token, naming it:
-only Saiful makes tokens, so the task parks. Exit 2 when the folder is not
+deploy <app> runs shopify app deploy --config staging --allow-updates on
+apps/<app>, never another config: production stays Saiful's go-ahead. It
+refuses a staging config with production's client_id. Once deployed, its
+last line is 'walk: <the app's page in the dev store's admin>', from the
+staging config's handle and [build] dev_store_url.
+
+Exit 3 when a variable or the staging config is missing, or Shopify rejects
+the token, naming it: only Saiful makes those, so the task parks. Exit 2 when the folder is not
 there, 1 when the CLI fails otherwise."
     )]
     Shopify {
-        /// theme-dev.
-        #[arg(value_parser = ["theme-dev"])]
+        /// theme-dev or deploy.
+        #[arg(value_parser = ["theme-dev", "deploy"])]
         verb: String,
-        /// The theme, as its folder under themes/ is named.
+        /// The theme or app, as its folder under themes/ or apps/ is named.
         name: String,
     },
     /// Join this machine's memory to the Cloudflare store.
