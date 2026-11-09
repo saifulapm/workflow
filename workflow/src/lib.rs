@@ -34,6 +34,7 @@ pub mod route;
 #[cfg(test)]
 mod scratch;
 pub mod shell;
+pub mod shopify;
 pub mod switch;
 pub mod worktree;
 
@@ -159,6 +160,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Unpause { project } => pause::cmd_unpause(&project),
         Command::Route { to } => route::cmd_route(to.as_deref()),
         Command::Device { args } => device::cmd_device(&args),
+        Command::Shopify { verb, name } => shopify::cmd_shopify(&verb, &name),
         Command::Switch { store } => switch::cmd_switch(&store),
     }
 }

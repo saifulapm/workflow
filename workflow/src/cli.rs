@@ -274,6 +274,31 @@ WORKFLOW_DEVICE_URL moves the hub's address. Exit 1 for any other answer."
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Run Shopify CLI with a theme's or an app's own variables.
+    #[command(
+        long_about = "Run Shopify CLI with a theme's or an app's own variables.
+
+One cloud environment holds every theme's and app's secrets, each named after
+it: <THEME>_SHOPIFY_CLI_THEME_TOKEN, <THEME>_SHOPIFY_FLAG_STORE and
+<THEME>_STORE_PASSWORD, with <THEME> in capitals and - as _. They go to the
+CLI under its own names.
+
+theme-dev <theme> runs shopify theme dev on themes/<theme> (in this folder or
+one above it), served at http://127.0.0.1:9292, on the store's unpublished
+theme '<theme> (cloud)', made the first time and synced whole from the
+checkout at each start, so no VM leaves a development theme behind.
+
+Exit 3 when a variable is not set or Shopify rejects the token, naming it:
+only Saiful makes tokens, so the task parks. Exit 2 when the folder is not
+there, 1 when the CLI fails otherwise."
+    )]
+    Shopify {
+        /// theme-dev.
+        #[arg(value_parser = ["theme-dev"])]
+        verb: String,
+        /// The theme, as its folder under themes/ is named.
+        name: String,
+    },
     /// Join this machine's memory to the Cloudflare store.
     #[command(long_about = "Join this machine's memory to the Cloudflare store.
 
