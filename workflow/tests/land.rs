@@ -23,6 +23,17 @@ struct World {
 
 impl World {
     fn new(tag: &str) -> World {
+        World::build(tag, None)
+    }
+
+    /// An app of a monorepo, gamma in apps/gamma, whose trunk is origin's
+    /// app/gamma, cut from main: the milestone's `work.txt` is in its
+    /// folder, where the test command runs.
+    fn app(tag: &str) -> World {
+        World::build(tag, Some("apps/gamma"))
+    }
+
+    fn build(tag: &str, subdir: Option<&str>) -> World {
         let work = Scratch::new(tag);
         work.put(
             "gitconfig",
@@ -55,6 +66,10 @@ impl World {
         w.git(&seed, &["add", "."]);
         w.git(&seed, &["commit", "-q", "-m", "start"]);
         w.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+        if let Some(sub) = subdir {
+            w.git(&seed, &["push", "-q", "origin", "HEAD:app/gamma"]);
+            w.work.put("subdir", sub);
+        }
         let clone = w.clone_dir();
         w.git(
             w.work.path(),
@@ -66,7 +81,8 @@ impl World {
             ],
         );
         w.git(&clone, &["checkout", "-q", "-b", BRANCH]);
-        w.work.put("thread/work.txt", "the milestone\n");
+        let folder = subdir.map_or("thread".to_string(), |sub| format!("thread/{sub}"));
+        w.work.put(&format!("{folder}/work.txt"), "the milestone\n");
         w.git(&clone, &["add", "."]);
         w.git(&clone, &["commit", "-q", "-m", "Build the milestone"]);
         w.work.put(
@@ -85,7 +101,10 @@ impl World {
 dir=$(dirname "$0")
 echo "$*" >>"$dir/mem.log"
 case "$1 $2" in
-"project current") printf '{{"id":"01G","name":"gamma","root":"{root}","verify":%s}}\n' "$(cat "$dir/verify.json")" ;;
+"project current")
+  sub=""
+  [ -f "$dir/subdir" ] && sub=",\"subdir\":\"$(cat "$dir/subdir")\""
+  printf '{{"id":"01G","name":"gamma","root":"{root}"%s,"verify":%s}}\n' "$sub" "$(cat "$dir/verify.json")" ;;
 "projects --json") cat "$dir/projects.json" ;;
 "roadmap --tick") sed -i "s/- \[ \] $3 /- [x] $3 /" "$dir/roadmap.md" ;;
 "roadmap --project") cat "$dir/roadmap.md" ;;
@@ -143,7 +162,15 @@ esac
     }
 
     fn origin_main(&self) -> String {
-        self.git(&self.work.at("origin.git"), &["rev-parse", "main"])
+        self.origin_ref("main")
+    }
+
+    fn origin_ref(&self, name: &str) -> String {
+        self.git(&self.work.at("origin.git"), &["rev-parse", name])
+    }
+
+    fn origin_log(&self, name: &str) -> String {
+        self.git(&self.work.at("origin.git"), &["log", "--format=%s", name])
     }
 
     fn land(&self) -> Output {
@@ -433,4 +460,144 @@ fn a_branch_with_commits_the_thread_lacks_is_not_overwritten() {
     );
     assert_eq!(w.git(&origin, &["rev-parse", BRANCH]), theirs);
     assert_eq!(w.origin_main(), before);
+}
+
+/// An app lands on its own trunk, app/gamma, and then moves onto main:
+/// both end on the one commit that holds the milestone.
+#[test]
+fn an_app_lands_on_its_own_trunk_then_moves_onto_main() {
+    let w = World::app("land-app");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    let head = w.git(&w.clone_dir(), &["rev-parse", "HEAD"]);
+    assert_eq!(w.origin_ref("app/gamma"), head);
+    assert_eq!(w.origin_main(), head);
+    assert!(w.origin_log("main").contains("Build the milestone"));
+    assert!(w.ticked(), "{}", w.work.read("mem.log"));
+}
+
+/// Another app moved main since app/gamma was cut: gamma's work moves onto
+/// that main, and app/gamma follows it.
+#[test]
+fn an_app_moves_onto_a_main_another_app_moved() {
+    let w = World::app("land-app-moved");
+    w.trunk_moves("apps/delta/other.txt", "another app\n");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let log = w.origin_log("main");
+    assert!(log.contains("Change apps/delta/other.txt"), "{log}");
+    assert!(log.contains("Build the milestone"), "{log}");
+    assert_eq!(w.origin_ref("app/gamma"), w.origin_main());
+}
+
+/// A sibling app landed first, on its own trunk and on main: gamma's landing
+/// keeps all of it on main and leaves the sibling's trunk alone.
+#[test]
+fn an_app_landing_after_a_sibling_loses_nothing_of_it() {
+    let w = World::app("land-app-sibling");
+    w.trunk_moves("apps/delta/one.txt", "delta's first\n");
+    w.trunk_moves("apps/delta/two.txt", "delta's second\n");
+    let seed = w.work.at("seed");
+    w.git(&seed, &["push", "-q", "origin", "HEAD:app/delta"]);
+    let sibling = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let origin = w.work.at("origin.git");
+    w.git(&origin, &["merge-base", "--is-ancestor", &sibling, "main"]);
+    let files = w.git(&origin, &["ls-tree", "-r", "--name-only", "main"]);
+    for file in [
+        "apps/delta/one.txt",
+        "apps/delta/two.txt",
+        "apps/gamma/work.txt",
+    ] {
+        assert!(files.contains(file), "{file}: {files}");
+    }
+    assert_eq!(w.origin_ref("app/delta"), sibling);
+}
+
+#[test]
+fn a_conflict_moving_onto_main_leaves_main_untouched_and_parks() {
+    let w = World::app("land-app-conflict");
+    let clone = w.clone_dir();
+    w.work.put("thread/shared.txt", "gamma's\n");
+    w.git(
+        &clone,
+        &["commit", "-q", "-am", "Change shared.txt in gamma"],
+    );
+    w.trunk_moves("shared.txt", "main's\n");
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let line = last_line(&out);
+    assert!(line.starts_with("parked: main moved: gamma"), "{line}");
+    assert_eq!(w.origin_main(), before);
+    assert!(w.origin_log("app/gamma").contains("Build the milestone"));
+}
+
+/// Main moves while the tests of gamma rebased onto main run: the push is
+/// refused, never forced, and the move starts over on the new main.
+#[test]
+fn a_main_that_moves_during_the_tests_of_the_move_is_rebased_onto_again() {
+    let w = World::app("land-app-race");
+    w.trunk_moves("apps/delta/other.txt", "another app\n");
+    let seed = w.work.at("seed");
+    // The first run counts as the landing on app/gamma; the second, the
+    // first of the move onto main, pushes another app's commit to main.
+    w.work.script(
+        "move-second",
+        &format!(
+            r#"
+echo run >>"{runs}"
+[ "$(wc -l <"{runs}")" -eq 2 ] || exit 0
+cd "{seed}" || exit 1
+git pull -q origin main
+echo raced >raced.txt
+git add raced.txt
+git commit -q -m "Race the move"
+git push -q origin HEAD:main
+"#,
+            runs = w.work.at("runs").display(),
+            seed = seed.display()
+        ),
+    );
+    w.verify(&format!(
+        "test -f work.txt && {}",
+        w.work.at("move-second").display()
+    ));
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let log = w.origin_log("main");
+    assert!(log.contains("Race the move"), "{log}");
+    assert!(log.contains("Change apps/delta/other.txt"), "{log}");
+    assert!(log.contains("Build the milestone"), "{log}");
+    assert_eq!(w.origin_ref("app/gamma"), w.origin_main());
+}
+
+/// The test command runs in the app's own folder, as a local run does.
+#[test]
+fn the_test_command_of_an_app_runs_in_its_folder() {
+    let w = World::app("land-app-folder");
+    let clone = w.clone_dir();
+    w.work.put("thread/apps/gamma/here.txt", "gamma's\n");
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "Add here.txt"]);
+    w.verify("test -f here.txt");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+}
+
+#[test]
+fn a_root_project_lands_on_main_and_makes_no_app_branch() {
+    let w = World::new("land-root");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        w.origin_main(),
+        w.git(&w.clone_dir(), &["rev-parse", "HEAD"])
+    );
+    let origin = w.work.at("origin.git");
+    let apps = w.git(&origin, &["for-each-ref", "refs/heads/app"]);
+    assert_eq!(apps, "");
 }

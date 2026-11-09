@@ -1,8 +1,9 @@
 //! `workflow land`: a thread of a Claude Project lands its milestone on the
-//! trunk itself. It rebases the milestone branch on origin's main, runs the
-//! project's test command, pushes the branch to main as a fast-forward,
-//! never forced, ticks the milestone, and prints the line the thread ends
-//! its report on, which its coordinator reads to start the next thread.
+//! trunk itself. It rebases the milestone branch on the project's trunk on
+//! origin, main or an app's own app/<app>, runs the project's test command,
+//! pushes the branch to the trunk as a fast-forward, never forced, ticks the
+//! milestone, moves an app's trunk onto main, and prints the line the thread
+//! ends its report on, which its coordinator reads to start the next thread.
 
 use std::process::{Command, Stdio};
 
@@ -11,8 +12,8 @@ use crate::gitcmd::Git;
 use crate::memcli;
 use crate::{exit, go, warn};
 
-/// The trunk a cloud run lands on.
-const TRUNK: &str = "main";
+/// The repo's trunk, which a project with a trunk of its own moves onto.
+const MAIN: &str = "main";
 
 /// How many times a push the trunk refused, because it moved while the
 /// tests ran, starts the landing over before the run parks.
@@ -60,18 +61,36 @@ pub fn cmd_land() -> i32 {
         return exit::USAGE;
     };
 
+    // An app's folder, where a local run of its tests runs too.
+    let folder = match (&current.root, &current.subdir) {
+        (Some(root), Some(subdir)) => std::path::Path::new(root).join(subdir),
+        _ => dir.clone(),
+    };
+
+    // The trunk is read from origin's refs as last fetched, so all of them
+    // are fetched first.
+    let fetched = git.capture(&["fetch", "-q", "origin"]);
+    if !fetched.ok {
+        warn(format!(
+            "land: cannot fetch origin: {}",
+            String::from_utf8_lossy(&fetched.stderr).trim()
+        ));
+        return exit::FAILED;
+    }
+    let trunk_name = cloud::trunk(&project, &dir.to_string_lossy());
+    let trunk_name = trunk_name.as_str();
     let mut tries = 0;
     loop {
         tries += 1;
-        let fetched = git.capture(&["fetch", "-q", "origin", TRUNK]);
+        let fetched = git.capture(&["fetch", "-q", "origin", trunk_name]);
         if !fetched.ok {
             warn(format!(
-                "land: cannot fetch origin's {TRUNK}: {}",
+                "land: cannot fetch origin's {trunk_name}: {}",
                 String::from_utf8_lossy(&fetched.stderr).trim()
             ));
             return exit::FAILED;
         }
-        let trunk = format!("origin/{TRUNK}");
+        let trunk = format!("origin/{trunk_name}");
         let base = git.out(&["rev-parse", &trunk]).unwrap_or_default();
         let before = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
         if !git.capture(&["rebase", "-q", &trunk]).ok {
@@ -99,41 +118,35 @@ pub fn cmd_land() -> i32 {
             && let Err(why) = push_branch(&git, &dir, &branch, &before)
         {
             warn(format!(
-                "land: cannot push {branch} rebased onto {trunk}: {why}; nothing was pushed to {TRUNK}"
+                "land: cannot push {branch} rebased onto {trunk}: {why}; nothing was pushed to {trunk_name}"
             ));
             return exit::FAILED;
         }
-        let ran = Command::new("bash")
-            .args(["-c", &verify])
-            .current_dir(&dir)
-            .stdin(Stdio::null())
-            .stdout(std::io::stderr())
-            .status();
-        if !ran.is_ok_and(|status| status.success()) {
+        if !passes(&verify, &folder) {
             warn(format!(
-                "land: the tests failed on {branch} rebased onto {trunk}; nothing was pushed to {TRUNK}. \
+                "land: the tests failed on {branch} rebased onto {trunk}; nothing was pushed to {trunk_name}. \
 Fix it on {branch} and land again"
             ));
             return exit::FAILED;
         }
-        let why = match push(&dir, &format!("HEAD:{TRUNK}"), None) {
+        let why = match push(&dir, &format!("HEAD:{trunk_name}"), None) {
             Ok(()) => break,
             Err(why) => why,
         };
         // Refused because the trunk moved while the tests ran, the landing
         // starts over; for any other reason it stops here, saying why.
-        let moved = git.quiet(&["fetch", "-q", "origin", TRUNK])
+        let moved = git.quiet(&["fetch", "-q", "origin", trunk_name])
             && git.out(&["rev-parse", &trunk]).unwrap_or_default() != base;
         if !moved {
             warn(format!(
-                "land: cannot push {branch} to origin's {TRUNK}: {why}; nothing was pushed to {TRUNK}"
+                "land: cannot push {branch} to origin's {trunk_name}: {why}; nothing was pushed to {trunk_name}"
             ));
             return exit::FAILED;
         }
         if tries == TRIES {
             println!(
-                "parked: trunk moved: origin's {TRUNK} kept moving while {slug} was tested; \
-nothing was pushed to {TRUNK}"
+                "parked: trunk moved: origin's {trunk_name} kept moving while {slug} was tested; \
+nothing was pushed to {trunk_name}"
             );
             return exit::USAGE;
         }
@@ -141,13 +154,121 @@ nothing was pushed to {TRUNK}"
 
     if !memcli::tick(&project, &slug) {
         warn(format!(
-            "land: {slug} is on origin's {TRUNK}, but mem would not tick it; run `mem roadmap --tick {slug}`"
+            "land: {slug} is on origin's {trunk_name}, but mem would not tick it; run `mem roadmap --tick {slug}`"
         ));
         return exit::FAILED;
     }
-    carry_outbox(&git, &dir);
+    let mut landed = vec![trunk_name];
+    if trunk_name != MAIN {
+        if let Err(code) = move_onto_main(&git, &dir, &folder, &verify, &project, &slug) {
+            carry_outbox(&git, &dir, &landed);
+            return code;
+        }
+        landed.push(MAIN);
+    }
+    carry_outbox(&git, &dir, &landed);
     println!("{}", next_line(&project));
     exit::OK
+}
+
+/// Does the project's test command pass, run in `folder`? Its output goes
+/// to stderr, where the thread reads why it failed.
+fn passes(verify: &str, folder: &std::path::Path) -> bool {
+    Command::new("bash")
+        .args(["-c", verify])
+        .current_dir(folder)
+        .stdin(Stdio::null())
+        .stdout(std::io::stderr())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Move an app, its milestone landed on app/<project>, onto main: rebase it
+/// on origin's main, test it there and fast-forward main, never forced,
+/// starting over when main moved meanwhile; then app/<project> follows,
+/// leased on the tip the landing pushed, since the rebase rewrote it. A
+/// conflict or a red run parks with main untouched and the branch as it
+/// was pushed, so the thread's own push of it stays a fast-forward.
+fn move_onto_main(
+    git: &Git,
+    dir: &std::path::Path,
+    folder: &std::path::Path,
+    verify: &str,
+    project: &str,
+    slug: &str,
+) -> Result<(), i32> {
+    let app = format!("app/{project}");
+    let pushed = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
+    let main = format!("origin/{MAIN}");
+    let park = |why: String| {
+        git.quiet(&["reset", "-q", "--hard", &pushed]);
+        println!(
+            "parked: main moved: {project}: {why}; {slug} is on origin's {app}, main is untouched"
+        );
+        exit::USAGE
+    };
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        if !git.quiet(&["fetch", "-q", "origin", MAIN]) {
+            git.quiet(&["reset", "-q", "--hard", &pushed]);
+            warn(format!(
+                "land: {slug} is on origin's {app}, but origin's main cannot be fetched; land again"
+            ));
+            return Err(exit::FAILED);
+        }
+        let base = git.out(&["rev-parse", &main]).unwrap_or_default();
+        // A main that has not moved since app/<project> was cut takes it as
+        // it is, tested already.
+        if !git.quiet(&["merge-base", "--is-ancestor", &main, "HEAD"]) {
+            if !git.capture(&["rebase", "-q", &main]).ok {
+                let files = git
+                    .out(&["diff", "--name-only", "--diff-filter=U"])
+                    .unwrap_or_default()
+                    .lines()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                git.quiet(&["rebase", "--abort"]);
+                let files = if files.is_empty() {
+                    "its commits".to_string()
+                } else {
+                    files
+                };
+                return Err(park(format!("{files} conflict with main")));
+            }
+            if !passes(verify, folder) {
+                return Err(park(format!("the tests fail on {app} rebased onto main")));
+            }
+        }
+        let why = match push(dir, &format!("HEAD:{MAIN}"), None) {
+            Ok(()) => break,
+            Err(why) => why,
+        };
+        let moved = git.quiet(&["fetch", "-q", "origin", MAIN])
+            && git.out(&["rev-parse", &main]).unwrap_or_default() != base;
+        if !moved {
+            git.quiet(&["reset", "-q", "--hard", &pushed]);
+            warn(format!(
+                "land: {slug} is on origin's {app}, but cannot push it to main: {why}; main is untouched"
+            ));
+            return Err(exit::FAILED);
+        }
+        if tries == TRIES {
+            return Err(park(format!(
+                "origin's main kept moving while {app} was tested on it"
+            )));
+        }
+    }
+    if git.out(&["rev-parse", "HEAD"]).unwrap_or_default() != pushed {
+        let lease = format!("--force-with-lease=refs/heads/{app}:{pushed}");
+        if let Err(why) = push(dir, &format!("HEAD:refs/heads/{app}"), Some(&lease)) {
+            warn(format!(
+                "land: {slug} is on origin's main, but {app} cannot follow it: {why}"
+            ));
+            return Err(exit::FAILED);
+        }
+    }
+    Ok(())
 }
 
 /// `git push origin <refspec>`, never forced but by `lease`, a
@@ -198,9 +319,9 @@ fn push_branch(git: &Git, dir: &std::path::Path, branch: &str, before: &str) -> 
 
 /// The tick and the writes before it may not have reached the store: a
 /// cloud machine that ends takes them with it. They go into the outbox file
-/// and onto the trunk, where the next machine to read the project sends
-/// them.
-fn carry_outbox(git: &Git, dir: &std::path::Path) {
+/// and onto each trunk that took the landing, where the next machine to
+/// read the project sends them.
+fn carry_outbox(git: &Git, dir: &std::path::Path, trunks: &[&str]) {
     if memcli::sync_outbox() == Some(0) {
         return;
     }
@@ -213,10 +334,12 @@ fn carry_outbox(git: &Git, dir: &std::path::Path) {
         "-m",
         "Carry the writes the store has not taken yet",
     ]);
-    if !committed || push(dir, &format!("HEAD:{TRUNK}"), None).is_err() {
-        warn(format!(
-            "land: the writes the store has not taken are committed here but not on origin's {TRUNK}"
-        ));
+    for trunk in trunks {
+        if !committed || push(dir, &format!("HEAD:{trunk}"), None).is_err() {
+            warn(format!(
+                "land: the writes the store has not taken are committed here but not on origin's {trunk}"
+            ));
+        }
     }
 }
 
