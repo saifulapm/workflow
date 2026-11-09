@@ -1306,9 +1306,13 @@ In claude.ai:
      {host}  (the store)
      github.com, *.github.com, *.githubusercontent.com  (the repo, and the cloud-bins release with the binaries, their sums and the skills)
      *.tailscale.com, log.tailscale.io  (Tailscale, which carries questions and answers)
+     device.on-rexa.com  (the device tunnel: device browser and device run on the routed machine)
    Network secrets: none for {host}
      (the proxy would send its own Authorization over HUB_STORE_TOKEN, and its
      interception drops the WebSocket upgrade: the store's socket gets 426)
+   Network secret device.on-rexa.com: type Bearer, header Authorization, the value the output of:
+     jq -nc --arg i \"$(pass show workflow/device-access-id)\" --arg s \"$(pass show workflow/device-access-secret)\" '{{\"cf-access-client-id\":$i,\"cf-access-client-secret\":$s}}'
+     (the workflow device Access app reads its service token from that one header)
    Environment variables, one KEY=value line each, the value being the output of the command:
      HUB_STORE_URL={store}
      HUB_STORE_NAME=main
