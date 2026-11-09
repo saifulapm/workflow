@@ -120,6 +120,33 @@ fn the_setup_takes_every_skill_and_agent_from_the_release_byte_for_byte() {
     assert!(home.has(".claude/skills/orchestrate/SKILL.md"));
 }
 
+/// The setup leaves `device` in the shim folder, running `workflow device`.
+#[test]
+fn the_setup_leaves_a_device_command_that_runs_workflow_device() {
+    let home = Scratch::new("cloud-setup-device");
+    setup_with(&home, &offline(&home), &[]);
+    let device = home.at("usr-local-bin/device");
+    assert_ne!(
+        fs::metadata(&device).unwrap().permissions().mode() & 0o111,
+        0
+    );
+    home.script("fake/workflow", "echo \"workflow $*\"");
+    let path = format!(
+        "{}:{}",
+        home.at("fake").display(),
+        std::env::var("PATH").unwrap()
+    );
+    let out = command(&device)
+        .args(["run", "adb", "devices"])
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "workflow device run adb devices\n"
+    );
+}
+
 /// The setup fits the field: claude.ai takes a setup file of 64 KB at most,
 /// and an 86 KB paste did not reach the environment.
 #[test]

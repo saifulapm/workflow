@@ -783,6 +783,8 @@ cat > \"$bin/mem\" <<'{END}'\n{SHIM}{END}\n\
 chmod +x \"$bin/mem\"\n\
 cat > \"$bin/workflow\" <<'{END}'\n{WORKFLOW_SHIM}{END}\n\
 chmod +x \"$bin/workflow\"\n\
+cat > \"$bin/device\" <<'{END}'\n{DEVICE_SHIM}{END}\n\
+chmod +x \"$bin/device\"\n\
 {hooks}\"$bin/mem-cloud\" bundle\n\
 if [ -s \"$HOME/.local/state/hub/skills.sha256\" ]; then\n\
   echo \"setup: took the skills and agents from the cloud-bins release\"\n\
@@ -1082,6 +1084,11 @@ const WORKFLOW_SHIM: &str = r#"#!/bin/sh
 real="$HOME/.local/bin/workflow-x86_64"
 [ -x "$real" ] || exit 1
 exec "$real" "$@"
+"#;
+
+/// `device <verb> ...` for a session: the same as `workflow device <verb> ...`.
+const DEVICE_SHIM: &str = r#"#!/bin/sh
+exec workflow device "$@"
 "#;
 
 /// The `mem` a cloud session runs: the x86_64 binary `mem-cloud fetch mem`
