@@ -147,6 +147,52 @@ fn the_setup_leaves_a_device_command_that_runs_workflow_device() {
     );
 }
 
+/// claude.ai snapshots an environment's setup and runs it again only when the
+/// script or its hosts change, or after about seven days, so a file only the
+/// setup writes is missing from threads until then: m2-device's new `device`
+/// shim was. The per-boot refresh lays down the binaries, the skills, the
+/// agents, CLAUDE.md and settings.json; these are the files nothing but the
+/// setup writes.
+#[test]
+fn only_the_known_shims_are_written_by_the_setup_alone() {
+    let home = Scratch::new("cloud-setup-only");
+    setup_with(&home, &offline(&home), &[]);
+    let refreshed = [".claude/CLAUDE.md", ".claude/settings.json", "setup.sh"];
+    let mut left = Vec::new();
+    let mut stack = vec![home.path().to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path
+                .strip_prefix(home.path())
+                .unwrap()
+                .display()
+                .to_string();
+            if rel == "offline" {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if !refreshed.contains(&rel.as_str()) {
+                left.push(rel);
+            }
+        }
+    }
+    left.sort();
+    assert_eq!(
+        left,
+        [
+            "usr-local-bin/device",
+            "usr-local-bin/mem",
+            "usr-local-bin/mem-cloud",
+            "usr-local-bin/workflow",
+        ],
+        "a file only the setup writes reaches a thread only once claude.ai runs the setup \
+again: lay it down from the per-boot refresh (the mem shim's first run of a boot), or \
+pin it here knowing a walk must change the setup to see it"
+    );
+}
+
 /// The setup fits the field: claude.ai takes a setup file of 64 KB at most,
 /// and an 86 KB paste did not reach the environment.
 #[test]
