@@ -602,6 +602,20 @@ fn a_thread_records_its_account_and_a_start_from_the_other_parks_naming_it() {
     );
 }
 
+/// An environment whose WORKFLOW_ACCOUNT is neither account parks the
+/// thread naming the variable, before it writes any record.
+#[test]
+fn a_thread_with_an_unknown_account_parks_naming_the_variable() {
+    let w = World::new("cloud-thread-bad-account");
+    let out = w.thread_as("personal", &["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: this environment's WORKFLOW_ACCOUNT is \"personal\"; set it to work or main in the Project's environment"
+    );
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
+
 /// Both accounts' threads start the same milestone in the same minute: the
 /// store keeps one claim, and the other's thread parks naming its account.
 #[test]

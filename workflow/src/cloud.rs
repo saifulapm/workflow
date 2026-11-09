@@ -371,6 +371,18 @@ environment's old copy; run `mem sync` until it says performed, then start again
     if let Some(why) = held(row, me.as_deref(), jiff::Timestamp::now()) {
         return refuse(why, exit::USAGE);
     }
+    // mem records only these two, and a claim it refused would park on a
+    // line that names neither the variable nor its fix.
+    let account = std::env::var("WORKFLOW_ACCOUNT").unwrap_or_default();
+    if me.is_some() && !matches!(account.trim(), "" | "work" | "main") {
+        return refuse(
+            format!(
+                "this environment's WORKFLOW_ACCOUNT is \"{}\"; set it to work or main in the Project's environment",
+                account.trim()
+            ),
+            exit::USAGE,
+        );
+    }
     if let Some(me) = me.as_deref().filter(|_| !dry_run)
         && let Err(why) = claim(&start.project, &start.slug, me)
     {
