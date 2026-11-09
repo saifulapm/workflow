@@ -262,7 +262,7 @@ fn a_red_test_run_after_the_rebase_pushes_nothing() {
         stderr(&out)
     );
     assert!(
-        stderr(&out).contains("nothing was pushed"),
+        stderr(&out).contains("nothing was pushed to main"),
         "{}",
         stderr(&out)
     );
@@ -386,4 +386,50 @@ fn a_push_refused_on_a_trunk_that_did_not_move_fails_at_once() {
     assert_eq!(w.work.read("runs").lines().count(), 1);
     assert_eq!(w.origin_main(), before);
     assert!(!w.ticked());
+}
+
+/// The rebased branch goes over origin's copy only when that copy holds
+/// nothing the thread lacks: another account's commits there are kept.
+#[test]
+fn a_branch_with_commits_the_thread_lacks_is_not_overwritten() {
+    let w = World::new("land-branch-ahead");
+    let clone = w.clone_dir();
+    w.git(&clone, &["push", "-q", "origin", BRANCH]);
+    let other = w.work.at("other");
+    let origin = w.work.at("origin.git");
+    w.git(
+        w.work.path(),
+        &[
+            "clone",
+            "-q",
+            "-b",
+            BRANCH,
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    w.work.put("other/theirs.txt", "the other account's\n");
+    w.git(&other, &["add", "."]);
+    w.git(
+        &other,
+        &["commit", "-q", "-m", "Work from the other account"],
+    );
+    w.git(&other, &["push", "-q", "origin", BRANCH]);
+    let theirs = w.git(&origin, &["rev-parse", BRANCH]);
+    w.trunk_moves("other.txt", "another thread\n");
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("commits this checkout lacks"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("nothing was pushed to main"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(w.git(&origin, &["rev-parse", BRANCH]), theirs);
+    assert_eq!(w.origin_main(), before);
 }

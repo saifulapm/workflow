@@ -141,7 +141,10 @@ ticks the milestone, commits and pushes the writes the store has not taken,
 and prints the line the thread ends its report on: `next: Run the next
 milestone of <project>.`, `done: <project>'s roadmap is done`, or `parked:
 <project> is paused`. A rebase conflict pushes nothing and prints `parked:
-trunk moved: ...`, exit 2; a red test run pushes nothing, exit 1."
+trunk moved: ...`, exit 2; a red test run pushes nothing to main, exit 1. The
+rebased branch itself goes over origin's copy, leased, so the thread's next
+push of it is a fast-forward; a copy with commits the checkout lacks is kept
+and land refuses, exit 1."
     )]
     Land,
     /// Print the text for a project's Claude Project instructions field.

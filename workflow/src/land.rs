@@ -96,7 +96,7 @@ pub fn cmd_land() -> i32 {
         // copy follows, with a lease on the tip it last had, so the thread's
         // next push of the branch is a fast-forward whatever comes next.
         if git.out(&["rev-parse", "HEAD"]).unwrap_or_default() != before
-            && let Err(why) = push_branch(&git, &dir, &branch)
+            && let Err(why) = push_branch(&git, &dir, &branch, &before)
         {
             warn(format!(
                 "land: cannot push {branch} rebased onto {trunk}: {why}; nothing was pushed to {TRUNK}"
@@ -111,7 +111,7 @@ pub fn cmd_land() -> i32 {
             .status();
         if !ran.is_ok_and(|status| status.success()) {
             warn(format!(
-                "land: the tests failed on {branch} rebased onto {trunk}; nothing was pushed. \
+                "land: the tests failed on {branch} rebased onto {trunk}; nothing was pushed to {TRUNK}. \
 Fix it on {branch} and land again"
             ));
             return exit::FAILED;
@@ -126,14 +126,14 @@ Fix it on {branch} and land again"
             && git.out(&["rev-parse", &trunk]).unwrap_or_default() != base;
         if !moved {
             warn(format!(
-                "land: cannot push {branch} to origin's {TRUNK}: {why}; nothing was pushed"
+                "land: cannot push {branch} to origin's {TRUNK}: {why}; nothing was pushed to {TRUNK}"
             ));
             return exit::FAILED;
         }
         if tries == TRIES {
             println!(
                 "parked: trunk moved: origin's {TRUNK} kept moving while {slug} was tested; \
-nothing was pushed"
+nothing was pushed to {TRUNK}"
             );
             return exit::USAGE;
         }
@@ -174,8 +174,10 @@ fn push(dir: &std::path::Path, refspec: &str, lease: Option<&str>) -> Result<(),
 }
 
 /// Push the rebased milestone `branch` over origin's copy, leased on the
-/// tip origin holds now, or on its having none.
-fn push_branch(git: &Git, dir: &std::path::Path, branch: &str) -> Result<(), String> {
+/// tip origin holds now, or on its having none. A copy holding commits that
+/// `before`, the branch as it was before the rebase, lacks, as the other
+/// account's would, is kept.
+fn push_branch(git: &Git, dir: &std::path::Path, branch: &str, before: &str) -> Result<(), String> {
     let refname = format!("refs/heads/{branch}");
     let listed = git.capture(&["ls-remote", "origin", &refname]);
     if !listed.ok {
@@ -183,6 +185,13 @@ fn push_branch(git: &Git, dir: &std::path::Path, branch: &str) -> Result<(), Str
     }
     let tip = listed.text();
     let tip = tip.split_whitespace().next().unwrap_or("");
+    if !tip.is_empty() && !git.quiet(&["merge-base", "--is-ancestor", tip, before]) {
+        // Rewind to the branch as it was: the fix is to merge origin's copy.
+        git.quiet(&["reset", "-q", "--hard", before]);
+        return Err(format!(
+            "origin's {branch} holds commits this checkout lacks; `git pull --rebase origin {branch}` first"
+        ));
+    }
     let lease = format!("--force-with-lease={refname}:{tip}");
     push(dir, &format!("HEAD:{refname}"), Some(&lease))
 }
