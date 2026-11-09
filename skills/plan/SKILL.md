@@ -146,6 +146,12 @@ The rules:
    cloud session to check: a headless browser, a CLI or TUI in tmux, a
    local server. Each milestone carries its own device work, so production
    moves, and is walked, in the milestone that changed it.
+10. Run each command the Show path and the acceptance lines name once, from
+   a scratch copy in `$d`, before you store the plan, and drive the flow
+   the Show path walks on today's product. A command that fails for any
+   reason but the missing behaviour is wrong as written: dactyl m29's
+   `node --test sdk/test` cannot run in Node 24, and palmshop m9's journey
+   tapped cards that do not tap. Fix the line, and record what you ran.
 
 Store each plan as written. mem refuses one whose first line is not
 `# plan: <slug>`.
@@ -153,7 +159,8 @@ Store each plan as written. mem refuses one whose first line is not
     mem plan <slug> --stdin < "$d/<slug>.md"
 
 Done when every milestone on the roadmap has a stored plan with a review
-focus, and every behaviour has an acceptance line with a literal value.
+focus, every behaviour has an acceptance line with a literal value, and
+every command a plan names has run once as written.
 
 ## 5. Store the roadmap and ask once
 
