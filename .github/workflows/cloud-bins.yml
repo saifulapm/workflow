@@ -55,6 +55,9 @@ jobs:
           tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - skills agents cloud |
             gzip -n >out/workflow-skills.tar.gz
           (cd out && sha256sum workflow-skills.tar.gz >workflow-skills.tar.gz.sha256)
+          # The full setup a Project environment's bootstrap fetches and runs.
+          out/workflow-x86_64 cloud-setup >out/cloud-setup.sh
+          (cd out && sha256sum cloud-setup.sh >cloud-setup.sh.sha256)
 
       # Each file goes up before its sum, so a cloud mem that sees a new sum
       # finds the new file.
@@ -65,6 +68,6 @@ jobs:
           notes="The x86_64 mem, hub and workflow that cloud sessions run, and the workflow skills, rebuilt from every push to main."
           gh release view cloud-bins >/dev/null 2>&1 ||
             gh release create cloud-bins --prerelease --title "Cloud binaries" --notes "$notes"
-          gh release upload cloud-bins --clobber out/mem-x86_64 out/hub-x86_64 out/workflow-x86_64 out/workflow-skills.tar.gz
+          gh release upload cloud-bins --clobber out/mem-x86_64 out/hub-x86_64 out/workflow-x86_64 out/workflow-skills.tar.gz out/cloud-setup.sh
           gh release upload cloud-bins --clobber out/*.sha256
           gh release edit cloud-bins --notes "$notes (${GITHUB_SHA::7})"

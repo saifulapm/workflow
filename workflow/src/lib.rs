@@ -126,7 +126,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Install => install::cmd_install(),
         Command::Land => land::cmd_land(),
         Command::ProjectText { project } => cloud::cmd_project_text(project.as_deref()),
-        Command::CloudSetup => cloud::cmd_cloud_setup(),
+        Command::CloudSetup { bootstrap } => cloud::cmd_cloud_setup(bootstrap),
         Command::CloudSwitch { store } => cloud::cmd_cloud_switch(&store),
         Command::Go {
             project,

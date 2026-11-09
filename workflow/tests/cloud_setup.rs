@@ -1536,3 +1536,116 @@ fn a_keys_file_that_is_no_object_still_lets_the_hooks_in() {
     let settings = home.read(".claude/settings.json");
     assert!(settings.contains("mem stop"), "{settings}");
 }
+
+/// The printed bootstrap: what a Project's environment holds in its setup
+/// field.
+fn bootstrap() -> String {
+    let out = command(env!("CARGO_BIN_EXE_workflow"))
+        .args(["cloud-setup", "--bootstrap"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// Each Project's environment holds a short bootstrap, pasted once, that
+/// fetches the full setup CI publishes on the release: a kit change then
+/// needs no paste in any environment.
+#[test]
+fn the_bootstrap_is_short_and_fetches_the_full_setup_from_the_release() {
+    let text = bootstrap();
+    assert!(text.starts_with("#!/bin/bash\n"), "{text}");
+    assert!(text.len() < 2048, "{} bytes", text.len());
+    assert!(
+        text.contains("https://github.com/saifulapm/workflow/releases/download/cloud-bins"),
+        "{text}"
+    );
+    assert!(text.contains("cloud-setup.sh"), "{text}");
+}
+
+/// A fake release serving `setup` as the full setup with `sum` as its sum,
+/// and a PATH whose curl reads from it.
+fn release_with(home: &Scratch, setup: &str, sum: &str) -> String {
+    home.put("release/cloud-setup.sh", setup);
+    home.put(
+        "release/cloud-setup.sh.sha256",
+        &format!("{sum}  cloud-setup.sh\n"),
+    );
+    home.script(
+        "fake/curl",
+        &format!(
+            "#!/bin/sh\nout=\nurl=\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) out=$2; shift ;; http*) url=$1 ;; esac; shift; done\n\
+             cp \"{}/${{url##*/}}\" \"${{out:-/dev/stdout}}\"\n",
+            home.at("release").display()
+        ),
+    );
+    format!(
+        "{}:{}",
+        home.at("fake").display(),
+        std::env::var("PATH").unwrap()
+    )
+}
+
+fn sha256(text: &str) -> String {
+    let mut child = command("sha256sum")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn the_bootstrap_runs_the_full_setup_it_fetched() {
+    let home = Scratch::new("cloud-bootstrap");
+    let full = format!("#!/bin/bash\ntouch {}\n", home.at("ran").display());
+    let path = release_with(&home, &full, &sha256(&full));
+    home.put("bootstrap.sh", &bootstrap());
+    let ran = command("bash")
+        .arg(home.at("bootstrap.sh"))
+        .env("HOME", home.path())
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(ran.status.success(), "{ran:?}");
+    assert!(home.has("ran"), "{ran:?}");
+}
+
+/// A setup cut short on the way, or one the release replaced between the
+/// two fetches, is not run: the environment would hold half a kit.
+#[test]
+fn the_bootstrap_runs_no_setup_whose_sum_differs() {
+    let home = Scratch::new("cloud-bootstrap-sum");
+    let full = format!("#!/bin/bash\ntouch {}\n", home.at("ran").display());
+    let path = release_with(&home, &full, &sha256("another setup"));
+    home.put("bootstrap.sh", &bootstrap());
+    let ran = command("bash")
+        .arg(home.at("bootstrap.sh"))
+        .env("HOME", home.path())
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(!ran.status.success(), "{ran:?}");
+    assert!(!home.has("ran"), "{ran:?}");
+}
+
+/// CI publishes the full setup the bootstrap fetches, with its sum.
+#[test]
+fn ci_publishes_the_full_setup_on_the_release() {
+    let ci = fs::read_to_string(repo().join(".github/workflows/cloud-bins.yml")).unwrap();
+    assert!(ci.contains("cloud-setup >out/cloud-setup.sh"), "{ci}");
+    assert!(ci.contains("out/cloud-setup.sh"), "{ci}");
+    assert!(ci.contains("cloud-setup.sh.sha256"), "{ci}");
+}

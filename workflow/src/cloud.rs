@@ -1196,8 +1196,30 @@ if [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" "$@"; fi
 exec "$real" "$@"
 "#;
 
-pub fn cmd_cloud_setup() -> i32 {
-    print!("{}", setup_script(embedded::FILES));
+/// The setup script a Claude Project's environment holds: it runs the full
+/// setup, [`setup_script`], which CI publishes on the release with its sum,
+/// so a change to the kit reaches every environment with no paste.
+const BOOTSTRAP: &str = r#"#!/bin/bash
+# The setup script of a Claude Project's cloud environment, printed by
+# `workflow cloud-setup --bootstrap`. It runs the full setup the workflow
+# repo's CI publishes on every push to main.
+set -euo pipefail
+release=https://github.com/saifulapm/workflow/releases/download/cloud-bins
+dir=$(mktemp -d)
+cd "$dir"
+curl -fsSL --retry 3 --max-time 120 "$release/cloud-setup.sh" -o cloud-setup.sh
+curl -fsSL --retry 3 --max-time 60 "$release/cloud-setup.sh.sha256" -o cloud-setup.sh.sha256
+sha256sum -c --quiet cloud-setup.sh.sha256
+cd /
+exec bash "$dir/cloud-setup.sh"
+"#;
+
+pub fn cmd_cloud_setup(bootstrap: bool) -> i32 {
+    if bootstrap {
+        print!("{BOOTSTRAP}");
+    } else {
+        print!("{}", setup_script(embedded::FILES));
+    }
     exit::OK
 }
 

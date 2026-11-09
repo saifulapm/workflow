@@ -181,9 +181,17 @@ first `workflow go <project> --cloud` after it is cut from that branch. Only
 It writes this repository's skills and agents under ~/.claude, and a mem in
 /usr/local/bin that takes the x86_64 mem and hub from the public cloud-bins
 release, and once a boot their newer builds and the skills, or without the
-store's variables from $MEM_REMOTE/dl, where the proxy adds the Access token."
+store's variables from $MEM_REMOTE/dl, where the proxy adds the Access token.
+
+With --bootstrap it prints the short script a Claude Project's environment
+holds instead: it fetches that full setup from the release, where CI puts it
+with its sum on every push to main, checks the sum and runs it."
     )]
-    CloudSetup,
+    CloudSetup {
+        /// Print the bootstrap that fetches and runs the full setup.
+        #[arg(long)]
+        bootstrap: bool,
+    },
     /// Print the steps that set up the claude.ai cloud environment
     /// `workflow` on the Cloudflare store.
     #[command(
