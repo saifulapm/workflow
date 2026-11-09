@@ -142,9 +142,11 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     milestone,
                 } => verbs::project_runner(&app, machine, id, milestone.as_deref()),
                 cli::ProjectSetCommand::Share => verbs::project_share(&app),
-                cli::ProjectSetCommand::Cloud { machine } => {
-                    verbs::project_set(&app, "cloud", machine)
-                }
+                cli::ProjectSetCommand::Cloud { .. } => Err(exit::usage(
+                    "the Claude Project carries every cloud run: type \"Run the next milestone \
+of <project>.\" in the project's Claude Project; `mem project unset cloud` clears an old setting"
+                        .to_string(),
+                )),
             },
             cli::ProjectCommand::Rename { name } => verbs::project_rename(&app, name),
             cli::ProjectCommand::Delete { project, yes } => {

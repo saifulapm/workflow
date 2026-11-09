@@ -472,13 +472,22 @@ fn projects_carry_the_summary_a_project_page_reads() {
     let p = row(&w);
     assert_eq!(p.get("paused"), Some(&serde_json::Value::Null), "{p}");
 
-    // The machine that carries the project's milestones to the cloud.
+    // No machine carries a project to the cloud any more: its Claude Project
+    // does. The key still reads null, and unset still clears an old one.
     assert_eq!(p.get("cloud"), Some(&serde_json::Value::Null), "{p}");
-    quiet(&["project", "set", "cloud", "mac-mini-m2"]);
-    assert_eq!(row(&w)["cloud"], "mac-mini-m2");
+    let out = mem_env(
+        &w,
+        &repo,
+        &["project", "set", "cloud", "mac-mini-m2"],
+        &[("MEM_SYNC_CMD", "true")],
+    );
+    assert_eq!(code(&out), 2, "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("the Claude Project carries every cloud run"),
+        "{out:?}"
+    );
+    assert_eq!(row(&w).get("cloud"), Some(&serde_json::Value::Null));
     quiet(&["project", "unset", "cloud"]);
-    let p = row(&w);
-    assert_eq!(p.get("cloud"), Some(&serde_json::Value::Null), "{p}");
 }
 
 #[test]
