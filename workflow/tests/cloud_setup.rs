@@ -1649,3 +1649,20 @@ fn ci_publishes_the_full_setup_on_the_release() {
     assert!(ci.contains("out/cloud-setup.sh"), "{ci}");
     assert!(ci.contains("cloud-setup.sh.sha256"), "{ci}");
 }
+
+/// One 504 from GitHub's release downloads broke an environment's build
+/// (cloud_walk w4): every fetch from the release retries.
+#[test]
+fn every_fetch_from_the_release_retries() {
+    let home = Scratch::new("cloud-setup-retry");
+    for text in [script(&home), bootstrap()] {
+        let fetches: Vec<_> = text
+            .lines()
+            .filter(|l| l.contains("curl ") && (l.contains("$url") || l.contains("$release")))
+            .collect();
+        assert!(!fetches.is_empty(), "{text}");
+        for line in fetches {
+            assert!(line.contains("--retry"), "{line}");
+        }
+    }
+}

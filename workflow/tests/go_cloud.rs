@@ -69,8 +69,15 @@ PY_EOF
 sync)
   n=0
   [ -f "$dir/outbox" ] && n=$(cat "$dir/outbox")
+  # With `outbox-later`, the first sync, a thread's check before it
+  # decides, finds nothing waiting, and the later ones find that many.
+  if [ -f "$dir/outbox-later" ]; then
+    [ -f "$dir/synced-once" ] && n=$(cat "$dir/outbox-later")
+    touch "$dir/synced-once"
+  fi
   state=performed
   [ "$n" -gt 0 ] && state="not performed"
+  [ -f "$dir/not-performed" ] && state="not performed"
   echo "{\"sync\":\"$state\",\"outbox\":$n}" ;;
 roadmap) cat "$dir/roadmap-$3.md" ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
@@ -453,7 +460,7 @@ fn a_thread_the_store_took_another_claim_over_parks_naming_it() {
 #[test]
 fn a_thread_whose_claim_never_reached_the_store_parks() {
     let w = World::new("cloud-thread-offline");
-    w.work.put("outbox", "3");
+    w.work.put("outbox-later", "3");
     let out = w.thread(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     let said = stdout(&out);
@@ -552,7 +559,7 @@ fn a_thread_takes_up_a_milestone_whose_thread_parked() {
 fn a_thread_whose_own_record_never_reached_the_store_parks_again() {
     let w = World::new("cloud-thread-own-unsent");
     cloud_runner(&w, "gamma", THREAD_SESSION, 0);
-    w.work.put("outbox", "2");
+    w.work.put("outbox-later", "2");
     let out = w.thread(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(
@@ -1058,4 +1065,26 @@ fn a_cloud_dry_run_records_and_starts_nothing() {
         "{:?}",
         w.mem_calls()
     );
+}
+
+/// A thread's replica can be the copy its environment baked, when the
+/// first mem's store sync failed: a stale roadmap there read as done once
+/// (cloud_walk w5). A thread decides nothing until a sync has performed.
+#[test]
+fn a_thread_whose_replica_never_reached_the_store_decides_nothing() {
+    let w = World::new("cloud-thread-stale");
+    w.work.put(
+        "roadmap-gamma.md",
+        "# roadmap: gamma\n\n- [x] m1-first One\n",
+    );
+    w.work.put("not-performed", "");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    let said = stdout(&out);
+    assert!(
+        said.starts_with("parked: mem in this thread has not reached the store"),
+        "{said}"
+    );
+    assert!(!said.contains("done:"), "{said}");
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
 }

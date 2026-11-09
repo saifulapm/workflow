@@ -225,6 +225,18 @@ pub fn cmd_go_cloud(opts: &Options, print: bool, dry_run: bool) -> i32 {
         ));
         return exit::USAGE;
     }
+    // A thread's replica is the copy its environment baked until a sync
+    // reaches the store, and a first mem whose sync failed reads it as it
+    // was: a stale roadmap there once read as done. So a thread decides
+    // nothing until a sync has performed.
+    if me.is_some() && !dry_run && !(0..3).any(|_| memcli::sync_outbox() == Some(0)) {
+        return refuse(
+            "mem in this thread has not reached the store, so what it reads may be the \
+environment's old copy; run `mem sync` until it says performed, then start again"
+                .into(),
+            exit::USAGE,
+        );
+    }
     let Some(projects) = memcli::projects() else {
         return refuse("mem cannot list its projects".into(), exit::FAILED);
     };
@@ -843,11 +855,11 @@ fetch() {
   fi
   if [ -n "$mark" ]; then
     : >"$mark"
-    want=$(curl -fsSL --max-time 10 ${head:+-H "$head"} "$url.sha256" 2>/dev/null) &&
+    want=$(curl -fsSL --retry 5 --retry-delay 2 --max-time 10 ${head:+-H "$head"} "$url.sha256" 2>/dev/null) &&
       [ "${want%% *}" != "$(sha256sum "$bin/$1-x86_64" | cut -d' ' -f1)" ] ||
       { rm -f "$hdr"; return 0; }
   fi
-  curl -fsSL --max-time 120 ${head:+-H "$head"} "$url" -o "$part"
+  curl -fsSL --retry 5 --retry-delay 2 --max-time 120 ${head:+-H "$head"} "$url" -o "$part"
   got=$?
   rm -f "$hdr"
   if [ "$got" != 0 ]; then
@@ -877,9 +889,9 @@ skills() {
 bundle() {
   mkdir -p "$state"
   url="$release/workflow-skills.tar.gz"
-  want=$(curl -fsSL --max-time 10 "$url.sha256" 2>/dev/null) &&
+  want=$(curl -fsSL --retry 5 --retry-delay 2 --max-time 10 "$url.sha256" 2>/dev/null) &&
     want=${want%% *} && [ "$want" != "$(cat "$state/skills.sha256" 2>/dev/null)" ] &&
-    curl -fsSL --max-time 60 "$url" -o "$state/skills.tar.gz" || return 0
+    curl -fsSL --retry 5 --retry-delay 2 --max-time 60 "$url" -o "$state/skills.tar.gz" || return 0
   [ "$(sha256sum "$state/skills.tar.gz" | cut -d' ' -f1)" = "$want" ] || return 0
   new="$state/skills.new"
   rm -rf "$new" && mkdir -p "$new" && tar -xzf "$state/skills.tar.gz" -C "$new" || return 0
@@ -955,7 +967,7 @@ bake() {
   for name in mem hub workflow; do
     [ -x "$bin/$name-x86_64" ] && continue
     part="$bin/$name-x86_64.part.$$"
-    if ! curl -fsSL --max-time 120 "$release/$name-x86_64" -o "$part"; then
+    if ! curl -fsSL --retry 5 --retry-delay 2 --max-time 120 "$release/$name-x86_64" -o "$part"; then
       rm -f "$part"
       # mem and hub are baked by now; without workflow the guard passes.
       [ "$name" = workflow ] && return 3
@@ -1215,8 +1227,8 @@ cd "$dir"
 # CI puts up the file, then its sum: a fetch between the two sees a new
 # file and an old sum, so a mismatch is fetched once more.
 for try in 1 2; do
-  curl -fsSL --retry 3 --max-time 120 "$release/cloud-setup.sh" -o cloud-setup.sh
-  curl -fsSL --retry 3 --max-time 60 "$release/cloud-setup.sh.sha256" -o cloud-setup.sh.sha256
+  curl -fsSL --retry 5 --retry-delay 2 --max-time 120 "$release/cloud-setup.sh" -o cloud-setup.sh
+  curl -fsSL --retry 5 --retry-delay 2 --max-time 60 "$release/cloud-setup.sh.sha256" -o cloud-setup.sh.sha256
   if sha256sum -c --quiet cloud-setup.sh.sha256; then break; fi
   [ "$try" = 2 ] && exit 1
   sleep 5
