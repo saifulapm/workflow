@@ -292,14 +292,27 @@ pub fn decide(
                 ));
             };
             // The caller's own checkout first: an orchestrator naming its
-            // project is standing in the clone it works in.
+            // project is standing in the clone it works in. A thread stands
+            // in its repo's clone, which a cloud VM records for no project,
+            // so last comes this clone's folder for a project of its repo.
+            let sibling = current.as_ref().and_then(|c| {
+                let theirs = projects.iter().find(|r| r.name == c.name)?.remote.as_ref();
+                if theirs.is_none() || theirs != row.remote.as_ref() {
+                    return None;
+                }
+                let root = Path::new(c.root.as_ref()?);
+                Some(match &row.subdir {
+                    Some(subdir) => root.join(subdir).display().to_string(),
+                    None => root.display().to_string(),
+                })
+            });
             let here = current.filter(|c| c.name == name).and_then(folder);
             let listed = row
                 .checkouts
                 .iter()
                 .find(|dir| Path::new(dir).is_dir())
                 .cloned();
-            let Some(dir) = here.or(listed) else {
+            let Some(dir) = here.or(listed).or(sibling) else {
                 return Decision::Refuse(format!("{name} has no checkout on this machine"));
             };
             (name.to_string(), dir)
@@ -759,6 +772,7 @@ The first stretch of a shop.
                 .map(|dir| dir.display().to_string())
                 .collect(),
             roadmap_status: status.map(str::to_string),
+            subdir: None,
             worktree: None,
             paused: None,
             cloud: None,

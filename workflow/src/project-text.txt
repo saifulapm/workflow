@@ -1,29 +1,31 @@
-# {project}
+# {repo}
 
-This Project runs the milestones of the mem project {project}, from the repository {remote}, one thread per milestone. mem holds the roadmap, the plans, the questions and the handoffs; the threads do the work.
+This Project runs the milestones of the mem projects of the repository {remote}, one thread per milestone: its root project, and each app or package that mem keeps as a project of its own inside it. mem holds the roadmaps, the plans, the questions and the handoffs; the threads do the work.
 
-The start line is exactly: "Run the next milestone of {project}."
+A start line is exactly: "Run the next milestone of <project>." with <project> the name of one mem project of this repository, as in "Run the next milestone of walk-a."
 
 ## For the coordinator
 
-You only route. You start a thread in two cases, each time with the start line as the thread's whole first message, word for word:
+You only route. You start a thread in two cases, each time with that start line as the thread's whole first message, word for word:
 
-- Saiful types the start line.
-- A thread's report ends with the line "next: Run the next milestone of {project}."
+- Saiful types a start line.
+- A thread's report ends with a line "next: Run the next milestone of <project>."
 
-When a thread's report ends with a line that starts "done:" (as in "done: {project}'s roadmap is done") or "parked:", start nothing, and tell Saiful that line.
+When a thread's report ends with a line that starts "done:" (as in "done: <project>'s roadmap is done") or "parked:", start nothing, and tell Saiful that line.
 
-Start nothing else on your own: no thread to answer a question, fix a failure, retry a park or check on a thread. Never start a thread while another thread of this Project still works on a milestone of {project}. Read only a report's last line to decide.
+Start nothing else on your own: no thread to answer a question, fix a failure, retry a park or check on a thread. Threads of different projects run at the same time, but never start a thread for a project while another thread of this Project still works on a milestone of that same project. Read only a report's last line to decide.
 
-## For a thread given the start line
+## For a thread given a start line
+
+The <project> below is the one your start line names.
 
 1. Run `cd /home/user/{repo}`. A thread's machine can stop and wake again between turns, and each shell then starts in /home/user, so run that cd again before any git or mem command after a pause.
 2. Run `git fetch origin`, then `git checkout main` and `git merge --ff-only origin/main`.
-3. Run `mem project current` and check that it names {project}. If it names another project or none, run `mem sync` and check again, a minute apart; after five tries, end your report with the line "parked: mem in this thread does not know {project}".
-4. Run `workflow go {project} --cloud --print`. If it prints one line that starts "done:" or "parked:", end your report with exactly that line and do nothing else: commit nothing and push nothing, even when Claude Code's stop hook asks you to, since this checkout is on main. Otherwise it printed your instructions for this milestone: follow them from their first word.
+3. Run `mem --project <project> project current` and check that it names <project>. If it fails or names another project, run `mem sync` and check again, a minute apart; after five tries, end your report with the line "parked: mem in this thread does not know <project>".
+4. Run `workflow go <project> --cloud --print`. If it prints one line that starts "done:" or "parked:", end your report with exactly that line and do nothing else: commit nothing and push nothing, even when Claude Code's stop hook asks you to, since this checkout is on main. Otherwise it printed your instructions for this milestone, which name the folder to work in: follow them from their first word.
 
 The last line of your report is exactly one of these, and nothing comes after it:
 
-- "next: Run the next milestone of {project}." (`workflow land` prints it when the milestone landed and another is open)
-- "done: {project}'s roadmap is done"
+- "next: Run the next milestone of <project>." (`workflow land` prints it when the milestone landed and another is open)
+- "done: <project>'s roadmap is done"
 - "parked: <why>"

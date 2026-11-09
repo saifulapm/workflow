@@ -147,20 +147,23 @@ push of it is a fast-forward; a copy with commits the checkout lacks is kept
 and land refuses, exit 1."
     )]
     Land,
-    /// Print the text for a project's Claude Project instructions field.
+    /// Print the text for the Claude Project instructions field of a project's repository.
     #[command(
         name = "project-text",
-        long_about = "Print the text for a project's Claude Project instructions field.
+        long_about = "Print the text for the Claude Project instructions field of a project's repository.
 
+One Claude Project serves a repository: its root project and every app mem
+keeps as a project inside it, so any of them prints the same text.
 claude.ai has no API for Projects, so the text is pasted once, into Settings >
 Memory > Project instructions, which every new thread and the coordinator
 read. It names the start line, \"Run the next milestone of <project>.\", tells
 the coordinator to start a thread only on that line or a report ending
-`next: ...`, and tells a thread to cd into its clone, check mem knows the
-project, run `workflow go <project> --cloud --print` and follow it."
+`next: ...`, and never a second thread of one project, and tells a thread to
+cd into its clone, check mem knows the project, run `workflow go <project>
+--cloud --print` and follow it."
     )]
     ProjectText {
-        /// The project, by mem's name; the current directory's when omitted.
+        /// A project of the repository, by mem's name; the current directory's when omitted.
         project: Option<String>,
     },
     /// Start planning a project in a claude.ai cloud session.

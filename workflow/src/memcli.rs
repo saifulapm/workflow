@@ -32,6 +32,9 @@ pub struct ProjectRow {
     pub checkouts: Vec<String>,
     #[serde(default)]
     pub roadmap_status: Option<String>,
+    /// Where a child project lives under its root's checkout.
+    #[serde(default)]
+    pub subdir: Option<String>,
     /// The linked worktree recorded for it on this machine.
     #[serde(default)]
     pub worktree: Option<String>,

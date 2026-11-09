@@ -49,7 +49,13 @@ echo "$*" >>"$dir/mem.log"
 case "$1" in
 projects) cat "$dir/projects.json" ;;
 project)
-  [ "$2" = current ] && exit 1
+  # The checkout the caller stands in, by its folder's name, as a VM's
+  # mem knows it: a root project with no subdir.
+  if [ "$2" = current ]; then
+    [ -f "$dir/current-${PWD##*/}.json" ] || exit 1
+    cat "$dir/current-${PWD##*/}.json"
+    exit 0
+  fi
   # A cloud runner lands in the projects as the real mem's replica holds
   # it: the session's own, or with a file `winner`, the record of a run the
   # store took first.
@@ -331,6 +337,70 @@ impl World {
             .current_dir(self.work.path())
             .output()
             .unwrap()
+    }
+
+    /// `workflow go <args>` in a thread standing in `dir`.
+    fn thread_in(&self, dir: &std::path::Path, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_workflow"))
+            .arg("go")
+            .args(args)
+            .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_CLAUDE", self.work.at("claude"))
+            .env("WORKFLOW_AMX", self.work.at("no-amx"))
+            .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("XDG_STATE_HOME", self.work.at("state"))
+            .env("CLAUDE_CODE_REMOTE_SESSION_ID", THREAD)
+            .env_remove("WORKFLOW_MACHINE")
+            .env_remove("AMX_ID")
+            .current_dir(dir)
+            .output()
+            .unwrap()
+    }
+
+    /// A monorepo `root` cloned as a thread clones it, which mem knows
+    /// by its remote alone, with child projects at `children` (name, subdir)
+    /// that record no checkout, as on a cloud VM. Returns the clone.
+    fn monorepo(&self, root: &str, children: &[(&str, &str)]) -> PathBuf {
+        let clone = self.work.mkdir(root);
+        git(&clone, &["init", "-q", "-b", "main"]);
+        self.work.put(
+            &format!("current-{root}.json"),
+            &format!(
+                r#"{{"id":"01R{root}","name":"{root}","root":"{}"}}"#,
+                clone.display()
+            ),
+        );
+        let mut rows = vec![format!(
+            r#"{{"name":"{root}","remote":"github.com/me/{root}","checkouts":[],"subdir":null,"roadmap_status":"approved","milestone":"m2-next"}}"#
+        )];
+        for (name, subdir) in children {
+            rows.push(format!(
+                r#"{{"name":"{name}","remote":"github.com/me/{root}","checkouts":[],"subdir":"{subdir}","roadmap_status":"approved","milestone":"m2-next"}}"#
+            ));
+            self.work.put(
+                &format!("roadmap-{name}.md"),
+                &format!("# roadmap: {name}\n\n- [x] m1-first One\n- [ ] m2-next Two\n"),
+            );
+        }
+        self.work.put(
+            &format!("roadmap-{root}.md"),
+            &format!("# roadmap: {root}\n\n- [x] m1-first One\n- [ ] m2-next Two\n"),
+        );
+        let projects = self.work.read("projects.json").replacen(
+            r#"{"projects":["#,
+            &format!(r#"{{"projects":[{},"#, rows.join(",")),
+            1,
+        );
+        self.work.put("projects.json", &projects);
+        clone
+    }
+
+    fn claimed_for(&self, project: &str) -> bool {
+        self.mem_calls().iter().any(|c| {
+            c == &format!(
+                "project set runner cloud {THREAD_SESSION} --milestone m2-next --project {project}"
+            )
+        })
     }
 
     fn claimed(&self) -> bool {
@@ -853,6 +923,82 @@ fn an_app_with_a_trunk_of_its_own_is_cut_from_it() {
         assert!(prompt.contains("from origin/app/gamma"), "{prompt}");
         assert!(!prompt.contains("origin/main."), "{prompt}");
     }
+}
+
+/// A thread stands in its repo's clone, which mem files under the root
+/// project, and names the project of its start line: a root and its child,
+/// as ebdfy and ebdfy-ui are, both start from one Project, each in its own
+/// folder.
+#[test]
+fn a_root_and_its_child_both_start_from_the_repos_clone() {
+    let w = World::new("cloud-root-and-child");
+    let clone = w.monorepo("ebdfy", &[("ebdfy-ui", "packages/ui")]);
+    let out = w.thread_in(&clone, &["ebdfy-ui", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    let prompt = stdout(&out);
+    assert!(prompt.contains("cloud/ebdfy-ui-m2-next"), "{prompt}");
+    assert!(
+        prompt.contains(&format!("`cd {}/packages/ui`", clone.display())),
+        "{prompt}"
+    );
+    assert!(w.claimed_for("ebdfy-ui"), "{:?}", w.mem_calls());
+
+    let out = w.thread_in(&clone, &["ebdfy", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains(&format!("`cd {}`", clone.display())),
+        "{}",
+        stdout(&out)
+    );
+    assert!(w.claimed_for("ebdfy"), "{:?}", w.mem_calls());
+}
+
+/// Two apps of one repo run at once; one app still never runs twice.
+#[test]
+fn two_apps_of_one_repo_run_at_once_but_each_only_once() {
+    let w = World::new("cloud-two-apps");
+    let clone = w.monorepo(
+        "cloud_walk",
+        &[("walk-a", "apps/walk-a"), ("walk-b", "apps/walk-b")],
+    );
+    w.runner(
+        "walk-a",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01First","since":"{}","milestone":"m2-next"}}"#,
+            now_minus(1)
+        ),
+    );
+    let out = w.thread_in(&clone, &["walk-b", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains(&format!("`cd {}/apps/walk-b`", clone.display())),
+        "{}",
+        stdout(&out)
+    );
+    assert!(w.claimed_for("walk-b"), "{:?}", w.mem_calls());
+
+    let out = w.thread_in(&clone, &["walk-a", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: walk-a already runs m2-next in https://claude.ai/code/session_01First"
+    );
+    assert!(!w.claimed_for("walk-a"), "{:?}", w.mem_calls());
+}
+
+/// Another repo's clone is no folder for an app: its subdir means nothing
+/// there.
+#[test]
+fn an_app_of_another_repo_finds_no_folder_in_this_clone() {
+    let w = World::new("cloud-other-repo");
+    w.monorepo("cloud_walk", &[("walk-a", "apps/walk-a")]);
+    let other = w.monorepo("lathe", &[]);
+    let out = w.thread_in(&other, &["walk-a", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: walk-a has no checkout on this machine"
+    );
 }
 
 #[test]

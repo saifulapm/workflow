@@ -13,7 +13,7 @@ use crate::{embedded, exit, warn};
 /// prints in a thread of the project's Claude Project.
 const PROMPT: &str = include_str!("cloud-prompt.txt");
 
-/// The standing text of a project's Claude Project, pasted once into its
+/// The standing text of a repository's Claude Project, pasted once into its
 /// Project instructions field: what its coordinator and its threads do.
 const PROJECT_TEXT: &str = include_str!("project-text.txt");
 
@@ -89,15 +89,14 @@ pub fn start_line(project: &str) -> String {
     format!("Run the next milestone of {project}.")
 }
 
-/// The Project instructions text for `project`, whose repository is
-/// `remote`: a thread finds its clone at /home/user/<the remote's last
-/// segment>.
-pub fn project_text(project: &str, remote: &str) -> String {
+/// The Project instructions text for the repository `remote`, one Project
+/// for its root and every project mem keeps inside it: a thread finds its
+/// clone at /home/user/<the remote's last segment>.
+pub fn project_text(remote: &str) -> String {
     let remote = remote.trim().trim_end_matches('/');
     let remote = remote.strip_suffix(".git").unwrap_or(remote);
     let repo = remote.rsplit(['/', ':']).next().unwrap_or(remote);
     PROJECT_TEXT
-        .replace("{project}", project)
         .replace("{remote}", remote)
         .replace("{repo}", repo)
 }
@@ -125,7 +124,7 @@ pub fn cmd_project_text(project: Option<&str>) -> i32 {
         ));
         return exit::USAGE;
     };
-    print!("{}", project_text(&name, remote));
+    print!("{}", project_text(remote));
     exit::OK
 }
 
@@ -1441,10 +1440,10 @@ mod tests {
         // A thread's run is recorded by `workflow go --cloud --print`, which
         // the Project instructions run only once mem names the project.
         let check = PROJECT_TEXT
-            .find("mem project current")
+            .find("mem --project <project> project current")
             .expect(PROJECT_TEXT);
         let claim = PROJECT_TEXT
-            .find("workflow go {project} --cloud --print")
+            .find("workflow go <project> --cloud --print")
             .expect(PROJECT_TEXT);
         assert!(check < claim, "{PROJECT_TEXT}");
         assert!(PROJECT_TEXT.contains("mem sync"), "{PROJECT_TEXT}");
