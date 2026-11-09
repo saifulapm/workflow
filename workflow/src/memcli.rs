@@ -85,6 +85,10 @@ struct Items {
     items: Vec<Item>,
 }
 
+/// The file at the top of a checkout that carries the writes mem's store has
+/// not taken yet, `mem share export`'s.
+pub const OUTBOX_FILE: &str = ".mem-outbox.json";
+
 pub fn bin() -> String {
     match std::env::var("WORKFLOW_MEM") {
         Ok(v) if !v.is_empty() => v,

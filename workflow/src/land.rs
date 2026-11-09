@@ -93,21 +93,9 @@ pub fn cmd_land() -> i32 {
         let trunk = format!("origin/{trunk_name}");
         let base = git.out(&["rev-parse", &trunk]).unwrap_or_default();
         let before = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
-        if !git.capture(&["rebase", "-q", &trunk]).ok {
-            let files = git
-                .out(&["diff", "--name-only", "--diff-filter=U"])
-                .unwrap_or_default()
-                .lines()
-                .collect::<Vec<_>>()
-                .join(", ");
-            git.quiet(&["rebase", "--abort"]);
+        if let Err(files) = rebase(&git, &trunk) {
             println!(
-                "parked: trunk moved: {} conflict with {slug}'s commits on {branch}; nothing was pushed",
-                if files.is_empty() {
-                    "its commits"
-                } else {
-                    &files
-                }
+                "parked: trunk moved: {files} conflict with {slug}'s commits on {branch}; nothing was pushed"
             );
             return exit::USAGE;
         }
@@ -221,19 +209,7 @@ fn move_onto_main(
         // A main that has not moved since app/<project> was cut takes it as
         // it is, tested already.
         if !git.quiet(&["merge-base", "--is-ancestor", &main, "HEAD"]) {
-            if !git.capture(&["rebase", "-q", &main]).ok {
-                let files = git
-                    .out(&["diff", "--name-only", "--diff-filter=U"])
-                    .unwrap_or_default()
-                    .lines()
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                git.quiet(&["rebase", "--abort"]);
-                let files = if files.is_empty() {
-                    "its commits".to_string()
-                } else {
-                    files
-                };
+            if let Err(files) = rebase(git, &main) {
                 return Err(park(format!("{files} conflict with main")));
             }
             if !passes(verify, folder) {
@@ -269,6 +245,49 @@ fn move_onto_main(
         }
     }
     Ok(())
+}
+
+/// Rebase HEAD on `onto`. Every thread commits its unsent mem writes to the
+/// one outbox file at the top of the checkout, so two projects of a repo
+/// clash there: the trunk's copy stays, for the next mem here to import,
+/// and this thread's own writes still wait in its outbox for the export
+/// after the landing. Any other conflict aborts the rebase and names its
+/// files.
+fn rebase(git: &Git, onto: &str) -> Result<(), String> {
+    if git.capture(&["rebase", "-q", onto]).ok {
+        return Ok(());
+    }
+    loop {
+        let files = git
+            .out(&["diff", "--name-only", "--diff-filter=U"])
+            .unwrap_or_default();
+        let files: Vec<&str> = files.lines().collect();
+        if files != [memcli::OUTBOX_FILE] {
+            git.quiet(&["rebase", "--abort"]);
+            return Err(if files.is_empty() {
+                "its commits".to_string()
+            } else {
+                files.join(", ")
+            });
+        }
+        // During a rebase, ours is the trunk being rebased onto.
+        if !git.quiet(&["checkout", "--ours", "--", memcli::OUTBOX_FILE]) {
+            git.quiet(&["rm", "-q", "--", memcli::OUTBOX_FILE]);
+        }
+        git.quiet(&["add", "--", memcli::OUTBOX_FILE]);
+        let next = if git.quiet(&["diff", "--cached", "--quiet"]) {
+            "--skip"
+        } else {
+            "--continue"
+        };
+        if git.capture(&["-c", "core.editor=true", "rebase", next]).ok {
+            return Ok(());
+        }
+        if !git.quiet(&["rev-parse", "-q", "--verify", "REBASE_HEAD"]) {
+            git.quiet(&["rebase", "--abort"]);
+            return Err("its commits".to_string());
+        }
+    }
 }
 
 /// `git push origin <refspec>`, never forced but by `lease`, a

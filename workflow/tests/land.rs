@@ -368,6 +368,84 @@ fn writes_the_store_has_not_taken_land_on_the_trunk_too() {
     assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
 }
 
+/// The outbox file at the top of the checkout, as `mem share export` writes
+/// it for `machine`.
+fn outbox_of(machine: &str) -> String {
+    format!("{{\n  \"machine\": \"{machine}\",\n  \"writes\": []\n}}\n")
+}
+
+/// Every thread commits its unsent writes to the one outbox file, so two
+/// projects of one repo both carry one. A clash there is no reason to park:
+/// the trunk's copy stays, for the next mem to import, and the thread's own
+/// writes wait in its outbox for the export after the landing.
+#[test]
+fn another_threads_outbox_on_main_never_stops_a_landing() {
+    let w = World::new("land-outbox-clash");
+    let clone = w.clone_dir();
+    w.work.put("thread/.mem-outbox.json", &outbox_of("vm-b"));
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "share outbox"]);
+    w.trunk_moves(".mem-outbox.json", &outbox_of("vm-a"));
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.origin_log("main").contains("Build the milestone"));
+    let origin = w.work.at("origin.git");
+    assert_eq!(
+        w.git(&origin, &["show", "main:.mem-outbox.json"]),
+        outbox_of("vm-a").trim_end()
+    );
+}
+
+/// A sibling's import took the outbox file off main while this thread's
+/// branch changed it: the landing goes on without it.
+#[test]
+fn an_outbox_main_took_out_never_stops_a_landing() {
+    let w = World::new("land-outbox-gone");
+    let clone = w.clone_dir();
+    w.trunk_moves(".mem-outbox.json", &outbox_of("vm-a"));
+    w.git(&clone, &["pull", "-q", "--rebase", "origin", "main"]);
+    w.work.put("thread/.mem-outbox.json", &outbox_of("vm-b"));
+    w.git(&clone, &["commit", "-q", "-am", "share outbox"]);
+    let seed = w.work.at("seed");
+    w.git(&seed, &["rm", "-q", ".mem-outbox.json"]);
+    w.git(&seed, &["commit", "-q", "-m", "Import the outbox"]);
+    w.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.origin_log("main").contains("Build the milestone"));
+}
+
+/// The same clash when an app moves onto a main a sibling's thread left
+/// its outbox on.
+#[test]
+fn a_siblings_outbox_never_stops_an_app_moving_onto_main() {
+    let w = World::app("land-app-outbox-clash");
+    let clone = w.clone_dir();
+    w.work.put("thread/.mem-outbox.json", &outbox_of("vm-b"));
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "share outbox"]);
+    w.trunk_moves(".mem-outbox.json", &outbox_of("vm-a"));
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.origin_log("main").contains("Build the milestone"));
+    assert_eq!(w.origin_ref("app/gamma"), w.origin_main());
+}
+
+/// The writes an app's landing carries go to both trunks that took it.
+#[test]
+fn an_apps_unsent_writes_land_on_its_trunk_and_on_main() {
+    let w = World::app("land-app-carry");
+    w.work.put("outbox", "2");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let origin = w.work.at("origin.git");
+    for trunk in ["main", "app/gamma"] {
+        let files = w.git(&origin, &["ls-tree", "--name-only", trunk]);
+        assert!(files.contains(".mem-outbox.json"), "{trunk}: {files}");
+    }
+    assert_eq!(w.origin_ref("app/gamma"), w.origin_main());
+}
+
 /// A rebase rewrites the milestone branch, which every task already pushed:
 /// after a red run there, the thread's next push of the branch, its fix or
 /// its park, must still go through without a force.
