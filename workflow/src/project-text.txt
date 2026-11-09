@@ -19,7 +19,7 @@ Start nothing else on your own: no thread to answer a question, fix a failure, r
 
 The <project> below is the one your start line names.
 
-1. Run `cd /home/user/{repo}`. A thread's machine can stop and wake again between turns, and each shell then starts in /home/user, so run that cd again before any git or mem command after a pause.
+1. Run `cd /home/user/{repo}`. A thread's machine can stop and wake again between turns, and each shell then starts in /home/user, so run that cd again before any git or mem command after a pause. If that folder is missing, or `git fetch origin` in step 2 fails, the Claude GitHub App on this account does not reach the repository: end your report with the line "parked: the Claude GitHub App on this account does not reach {remote}" and do nothing else.
 2. Run `git fetch origin`, then `git checkout main` and `git merge --ff-only origin/main`.
 3. Run `mem --project <project> project current` and check that it names <project>. If it fails or names another project, run `mem sync` and check again, a minute apart; after five tries, end your report with the line "parked: mem in this thread does not know <project>".
 4. Run `workflow go <project> --cloud --print`. If it prints one line that starts "done:" or "parked:", end your report with exactly that line and do nothing else: commit nothing and push nothing, even when Claude Code's stop hook asks you to, since this checkout is on main. Otherwise it printed your instructions for this milestone, which name the folder to work in: follow them from their first word.

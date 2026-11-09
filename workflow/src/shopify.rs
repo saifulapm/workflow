@@ -42,6 +42,43 @@ fn prefix(name: &str) -> String {
         .collect()
 }
 
+/// The variables a project at `subdir` of a Shopify repo reads from its
+/// Project's environment: a theme's three under `themes/`, an app's token
+/// under `apps/`.
+pub fn variable_names(subdir: &str) -> Vec<String> {
+    let Some((kind, name)) = subdir.trim_matches('/').split_once('/') else {
+        return Vec::new();
+    };
+    let whats: &[&str] = match kind {
+        "themes" => &[
+            "SHOPIFY_CLI_THEME_TOKEN",
+            "SHOPIFY_FLAG_STORE",
+            "STORE_PASSWORD",
+        ],
+        "apps" => &["SHOPIFY_SERVICE_ACCOUNT_TOKEN"],
+        _ => &[],
+    };
+    whats
+        .iter()
+        .map(|what| format!("{}_{what}", prefix(name)))
+        .collect()
+}
+
+/// Whether the checkout `root` holds Shopify `kind`s: `apps/<app>` with its
+/// shopify.app.toml, or `themes/<theme>` with its layout/theme.liquid.
+pub fn holds(root: &Path, kind: &str) -> bool {
+    let file = match kind {
+        "apps" => "shopify.app.toml",
+        "themes" => "layout/theme.liquid",
+        _ => return false,
+    };
+    std::fs::read_dir(root.join(kind))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| entry.path().join(file).is_file())
+}
+
 fn var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }

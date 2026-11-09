@@ -107,6 +107,74 @@ pub fn project_text(remote: &str) -> String {
         .replace("{repo}", repo)
 }
 
+/// The variables every Project's environment holds for the kit, by name:
+/// the ones `workflow cloud-switch` tells Saiful how to fill.
+const KIT_VARIABLES: &[&str] = &[
+    "HUB_STORE_URL",
+    "HUB_STORE_NAME",
+    "HUB_STORE_TOKEN",
+    "HUB_CLOUD_TOKEN",
+    "HUB_PEER_TOKEN_SHA256",
+    "HUB_STORE_ACCESS_ID",
+    "HUB_STORE_ACCESS_SECRET",
+    "TS_AUTHKEY",
+];
+
+/// The network secrets every Project's environment holds for the kit.
+const KIT_SECRETS: &[&str] = &["device.on-rexa.com"];
+
+/// What the Claude Project of the repository `remote` needs besides its
+/// instructions: its name and repository, a start line for each mem project
+/// in `repo` (the projects of that repository), and its environment's
+/// variables by name, each with the project it belongs to.
+fn sheet(repo: &[&ProjectRow], remote: &str) -> String {
+    let remote = remote.trim().trim_end_matches('/');
+    let remote = remote.strip_suffix(".git").unwrap_or(remote);
+    let mut segments = remote.rsplit(['/', ':']);
+    let last = segments.next().unwrap_or(remote);
+    let owner = segments.next().unwrap_or_default();
+    let root = repo.iter().find(|row| row.subdir.is_none());
+    let name = root.map_or(last, |row| row.name.as_str());
+    let mut out = format!("Claude Project {name}, repository {owner}/{last}\n");
+    out.push_str("Start lines, one for each mem project of the repository:\n");
+    for row in repo {
+        out.push_str(&format!("  {}\n", start_line(&row.name)));
+    }
+    out.push_str(&format!(
+        "Environment {name}, one on each account. Its variables by name, with the project each \
+belongs to; each value comes from Saiful's pass, never from here:\n"
+    ));
+    for variable in KIT_VARIABLES {
+        out.push_str(&format!("  {variable}  every Project\n"));
+    }
+    out.push_str(
+        "  WORKFLOW_ACCOUNT  every Project: work on the work account, main on the main account\n",
+    );
+    let checkout = root.and_then(|row| {
+        row.checkouts
+            .iter()
+            .map(std::path::Path::new)
+            .find(|dir| dir.is_dir())
+    });
+    for row in repo {
+        let Some(subdir) = row.subdir.as_deref() else {
+            continue;
+        };
+        let kind = subdir.split('/').next().unwrap_or_default();
+        if !checkout.is_some_and(|dir| crate::shopify::holds(dir, kind)) {
+            continue;
+        }
+        for variable in crate::shopify::variable_names(subdir) {
+            out.push_str(&format!("  {variable}  {}\n", row.name));
+        }
+    }
+    out.push_str("Network secrets by host:\n");
+    for host in KIT_SECRETS {
+        out.push_str(&format!("  {host}  every Project\n"));
+    }
+    out
+}
+
 /// `workflow project-text [<project>]`.
 pub fn cmd_project_text(project: Option<&str>) -> i32 {
     let Some(projects) = memcli::projects() else {
@@ -130,6 +198,12 @@ pub fn cmd_project_text(project: Option<&str>) -> i32 {
         ));
         return exit::USAGE;
     };
+    let repo: Vec<&ProjectRow> = projects
+        .iter()
+        .filter(|other| other.remote.as_deref().map(str::trim) == Some(remote.trim()))
+        .collect();
+    print!("{}", sheet(&repo, remote));
+    println!("--- Project instructions (Settings > Memory): everything after this line");
     print!("{}", project_text(remote));
     exit::OK
 }
