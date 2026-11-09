@@ -193,14 +193,20 @@ pub fn sync() -> bool {
     })
 }
 
-/// `mem sync`, and how many writes still wait in the outbox after it;
-/// `None` when mem fails or says nothing of the outbox.
+/// `mem sync`, and how many writes still wait in the outbox after it: 0
+/// once it says performed, which it says only with none waiting. `None`
+/// when mem fails, or the store's writes stopped landing here, so that what
+/// this replica reads cannot be trusted either.
 pub fn sync_outbox() -> Option<u64> {
     let (ok, out) = capture(&["sync", "--json"])?;
     let doc: serde_json::Value = serde_json::from_str(&out).ok()?;
-    (ok && doc["sync"] == "performed")
-        .then(|| doc["outbox"].as_u64())
-        .flatten()
+    if !ok {
+        return None;
+    }
+    if doc["sync"] == "performed" {
+        return Some(0);
+    }
+    doc["outbox"].as_u64().filter(|n| *n > 0)
 }
 
 /// `mem roadmap --tick <slug>`.

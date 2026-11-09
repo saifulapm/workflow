@@ -112,15 +112,20 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         /// How much reasoning effort it spends.
         #[arg(long, value_name = "LEVEL")]
         effort: Option<String>,
-        /// Print the amx command line instead of running it; a cloud start
-        /// prints its prompt and pushes, records and starts nothing.
+        /// Print the amx command line instead of running it; with --cloud,
+        /// print the prompt, and record and start nothing, in a thread too.
         #[arg(long)]
         dry_run: bool,
-        /// Start the milestone in a claude.ai cloud session on the branch
-        /// cloud/<project>-<milestone>, and record it as the cloud runner.
+        /// The cloud run of the milestone, on the branch
+        /// cloud/<project>-<milestone>. A machine starts none: the project's
+        /// Claude Project does, and --cloud alone refuses, naming its start
+        /// line.
         #[arg(long)]
         cloud: bool,
-        /// With --cloud: print the session's prompt and start nothing.
+        /// With --cloud: print the run's prompt. In a cloud session, a thread
+        /// of the Claude Project, it first claims the run in mem as the
+        /// session's own, and prints a done: or parked: line instead when
+        /// there is nothing to run or another run holds the project.
         #[arg(long, requires = "cloud")]
         print: bool,
     },
@@ -161,7 +166,8 @@ project, run `workflow go <project> --cloud --print` and follow it."
 The session runs the plan skill and its cloud.md on the branch
 cloud/<project>-plan, asks Saiful through mem and waits there for his answers,
 and records itself as the project's cloud runner with the milestone `plan`. The
-first `workflow go <project> --cloud` after it is cut from that branch. Only
+first milestone's thread in the project's Claude Project is cut from that
+branch. Only
 --cloud exists: a device plans in the chat with the plan skill.")]
     Plan {
         /// The project, by mem's name; the current directory's when omitted.
@@ -306,7 +312,8 @@ usage: workflow <command> [options]
   go [<project>] [--milestone <slug>] [--model <m>] [--effort <l>] [--dry-run]
       start the orchestrator for the project's next milestone as an amx agent
       and print its name; --dry-run prints the amx command line instead, or
-      for a cloud start the prompt, and pushes and starts nothing
+      for --cloud the prompt; --cloud --print in a thread of a Claude Project
+      claims the run first; --cloud alone refuses, naming the start line
       0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
       the roadmap is not approved, the milestone already has an orchestrator,
       or the project is paused and its handoff does not start parked:

@@ -45,7 +45,7 @@ the skill holds, with these changes:
   thread with `mem questions --wait <id>`, run again each time it returns
   without one. The answer reaches this session's local hub over Tailscale.
 - Land as §7 says, with these changes. Write the handoff first, starting
-  `Next: <the next milestone>. <milestone> landed on main.`, then export
+  `Next: <the next milestone, or none>. <milestone> landed on main.`, then export
   and commit the outbox, then run `workflow land`. It rebases the branch
   on origin/main, runs the test command, pushes main as a fast-forward and
   never forced, ticks the milestone, carries the writes the store has not

@@ -201,7 +201,7 @@ pub fn state(
 /// session, a thread of that Project, it first claims the run as the
 /// session's own, and says each outcome but a start as the one line the
 /// thread ends its report on: `done: ...` or `parked: ...`.
-pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
+pub fn cmd_go_cloud(opts: &Options, print: bool, dry_run: bool) -> i32 {
     let me = this_session();
     // In a thread a refusal is the report's last line; on a machine it is
     // said on stderr, as every go refusal is.
@@ -213,7 +213,7 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
         }
         code
     };
-    if !print {
+    if !print && !dry_run {
         let name = opts
             .project
             .map(str::to_string)
@@ -264,7 +264,7 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     if let Some(why) = held(row, me.as_deref(), jiff::Timestamp::now()) {
         return refuse(why, exit::USAGE);
     }
-    if let Some(me) = &me
+    if let Some(me) = me.as_deref().filter(|_| !dry_run)
         && let Err(why) = claim(&start.project, &start.slug, me)
     {
         return refuse(why, exit::USAGE);
@@ -299,10 +299,11 @@ fn claim(project: &str, slug: &str, me: &str) -> Result<(), String> {
             .and_then(|row| row.runner.as_ref())
             .is_some_and(|r| r.machine == "cloud" && r.id == me)
     };
-    if memcli::projects().is_some_and(|rows| mine(&rows)) {
-        return Ok(());
-    }
-    if !memcli::set_cloud_runner(project, me, slug) {
+    // A record of its own already in the replica may never have reached
+    // the store, so it is written only when missing and checked either way.
+    if !memcli::projects().is_some_and(|rows| mine(&rows))
+        && !memcli::set_cloud_runner(project, me, slug)
+    {
         return Err(format!("mem would not record this run as {project}'s"));
     }
     let mut waiting = None;
@@ -390,9 +391,11 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
 /// or parked. A parked run still holds its session, which its answers go
 /// to. Other projects' runs hold nothing back: there is no cap across
 /// projects. `me`, a thread's own session, is never held back by its own
-/// run, which it may be resuming; a thread is also held back by a run
-/// parked local-only, which a device takes from its branch, and by a
-/// device's run under 7 hours that has written no handoff since, or a park.
+/// run, which it may be resuming. A thread waits for its answers inside
+/// its turn, so for a thread a cloud run's park means it ended, but one
+/// parked local-only holds it back, since a device takes that from its
+/// branch, and so does a device's run under 7 hours that has written no
+/// handoff since, or a park.
 fn held(row: &ProjectRow, me: Option<&str>, now: jiff::Timestamp) -> Option<String> {
     let project = &row.name;
     let runner = row.runner.as_ref()?;
@@ -403,10 +406,12 @@ fn held(row: &ProjectRow, me: Option<&str>, now: jiff::Timestamp) -> Option<Stri
     if runner.machine == "cloud" {
         let link = format!("{CODE_PAGE}/{}", runner.id);
         return match state(row, || memcli::handoff(project), now)? {
-            State::Live | State::Parked if me.is_some() => {
+            // A thread waits for an answer inside its turn and never parks
+            // for one: a thread's park means it ended.
+            State::Live if me.is_some() => {
                 Some(format!("{project} already runs {milestone} in {link}"))
             }
-            State::Live | State::Parked => Some(format!(
+            State::Live | State::Parked if me.is_none() => Some(format!(
                 "{project} already has a cloud run: {milestone}, {}",
                 runner.id
             )),
@@ -1207,9 +1212,15 @@ set -euo pipefail
 release=https://github.com/saifulapm/workflow/releases/download/cloud-bins
 dir=$(mktemp -d)
 cd "$dir"
-curl -fsSL --retry 3 --max-time 120 "$release/cloud-setup.sh" -o cloud-setup.sh
-curl -fsSL --retry 3 --max-time 60 "$release/cloud-setup.sh.sha256" -o cloud-setup.sh.sha256
-sha256sum -c --quiet cloud-setup.sh.sha256
+# CI puts up the file, then its sum: a fetch between the two sees a new
+# file and an old sum, so a mismatch is fetched once more.
+for try in 1 2; do
+  curl -fsSL --retry 3 --max-time 120 "$release/cloud-setup.sh" -o cloud-setup.sh
+  curl -fsSL --retry 3 --max-time 60 "$release/cloud-setup.sh.sha256" -o cloud-setup.sh.sha256
+  if sha256sum -c --quiet cloud-setup.sh.sha256; then break; fi
+  [ "$try" = 2 ] && exit 1
+  sleep 5
+done
 cd /
 exec bash "$dir/cloud-setup.sh"
 "#;

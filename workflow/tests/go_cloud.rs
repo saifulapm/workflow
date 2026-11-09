@@ -69,7 +69,9 @@ PY_EOF
 sync)
   n=0
   [ -f "$dir/outbox" ] && n=$(cat "$dir/outbox")
-  echo "{\"sync\":\"performed\",\"outbox\":$n}" ;;
+  state=performed
+  [ "$n" -gt 0 ] && state="not performed"
+  echo "{\"sync\":\"$state\",\"outbox\":$n}" ;;
 roadmap) cat "$dir/roadmap-$3.md" ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
 esac
@@ -516,21 +518,67 @@ fn a_project_whose_own_run_is_live_starts_no_second() {
     );
 }
 
-/// A run parked on a question still holds its session, which its answers
-/// go to, so its own project starts no second run.
+/// A thread waits for an answer inside its turn and never parks for one,
+/// so a thread's park, its 6-hour stop or a moved trunk, means it ended:
+/// the next thread takes the milestone up from its handoff. On a machine a
+/// parked cloud run still holds its project, as a cloud plan's does.
 #[test]
-fn a_parked_cloud_run_holds_its_own_project_back() {
+fn a_thread_takes_up_a_milestone_whose_thread_parked() {
     let w = World::new("cloud-parked");
     cloud_runner(&w, "gamma", "session_01Mine", 2);
     w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
     w.work
-        .put("handoff-gamma.md", "parked: t2 waits, question #ABCD1234\n");
+        .put("handoff-gamma.md", "parked: 6-hour stop, t3 half done\n");
     let out = w.thread(&["gamma", "--cloud", "--print"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed(), "{:?}", w.mem_calls());
+
+    let w = World::new("cloud-parked-machine");
+    cloud_runner(&w, "gamma", "session_01Mine", 2);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put("handoff-gamma.md", "parked: t2 waits\n");
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(
-        stdout(&out).starts_with("parked: gamma already runs m2-next in "),
+        stderr(&out).contains("gamma already has a cloud run: m2-next, session_01Mine"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// A thread's own record in its replica is no claim until the store has
+/// it: a claim that did not reach the store, run again, parks again.
+#[test]
+fn a_thread_whose_own_record_never_reached_the_store_parks_again() {
+    let w = World::new("cloud-thread-own-unsent");
+    cloud_runner(&w, "gamma", THREAD_SESSION, 0);
+    w.work.put("outbox", "2");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stdout(&out).starts_with("parked: the store has not taken"),
         "{}",
         stdout(&out)
+    );
+}
+
+/// A dry run claims nothing, in a thread too.
+#[test]
+fn a_dry_run_in_a_thread_claims_nothing() {
+    let w = World::new("cloud-thread-dry-run");
+    let out = w.thread(&["gamma", "--cloud", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("cloud/gamma-m2-next"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        !w.mem_calls()
+            .iter()
+            .any(|c| c.contains("set runner") || c.starts_with("sync")),
+        "{:?}",
+        w.mem_calls()
     );
 }
 

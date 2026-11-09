@@ -20,7 +20,7 @@ Start nothing else on your own: no thread to answer a question, fix a failure, r
 1. Run `cd /home/user/{repo}`. A thread's machine can stop and wake again between turns, and each shell then starts in /home/user, so run that cd again before any git or mem command after a pause.
 2. Run `git fetch origin`, then `git checkout main` and `git merge --ff-only origin/main`.
 3. Run `mem project current` and check that it names {project}. If it names another project or none, run `mem sync` and check again, a minute apart; after five tries, end your report with the line "parked: mem in this thread does not know {project}".
-4. Run `workflow go {project} --cloud --print`. If it prints one line that starts "done:" or "parked:", end your report with exactly that line and do nothing else. Otherwise it printed your instructions for this milestone: follow them from their first word.
+4. Run `workflow go {project} --cloud --print`. If it prints one line that starts "done:" or "parked:", end your report with exactly that line and do nothing else: commit nothing and push nothing, even when Claude Code's stop hook asks you to, since this checkout is on main. Otherwise it printed your instructions for this milestone: follow them from their first word.
 
 The last line of your report is exactly one of these, and nothing comes after it:
 

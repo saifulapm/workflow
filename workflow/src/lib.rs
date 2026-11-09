@@ -145,7 +145,7 @@ pub fn run(cli: Cli) -> i32 {
             };
             // A dry run of a cloud start prints its prompt and starts nothing.
             if cloud {
-                return cloud::cmd_go_cloud(&opts, print || dry_run);
+                return cloud::cmd_go_cloud(&opts, print, dry_run);
             }
             go::cmd_go(&opts, dry_run)
         }

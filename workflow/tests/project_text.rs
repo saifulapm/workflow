@@ -65,6 +65,9 @@ fn the_text_fits_the_field_and_names_the_start_line_and_both_parts() {
         said.contains("workflow go cloud_walk --cloud --print"),
         "{said}"
     );
+    // A thread that runs nothing is on main, where the stop hook's commit
+    // and push would land untested.
+    assert!(said.contains("commit nothing and push nothing"), "{said}");
     assert!(
         !said.contains("{project}") && !said.contains("{repo}"),
         "{said}"
