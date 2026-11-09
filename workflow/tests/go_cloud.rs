@@ -585,8 +585,18 @@ fn a_thread_records_its_account_and_a_start_from_the_other_parks_naming_it() {
     );
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
 
-    // Once that run wrote its handoff, the main account starts the next.
+    // Once that run landed and wrote its handoff, the main account starts
+    // the next milestone.
     w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(0)));
+    let projects = w
+        .work
+        .read("projects.json")
+        .replace(r#""milestone":"m2-next"}"#, r#""milestone":"m3-last"}"#);
+    w.work.put("projects.json", &projects);
+    w.work.put(
+        "roadmap-gamma.md",
+        "# roadmap: gamma\n\n- [x] m1-first One\n- [x] m2-next Two\n- [ ] m3-last Three\n",
+    );
     w.work.put(
         "handoff-gamma.md",
         "Next: m3-last. m2-next landed at abc1234.\n",
@@ -596,7 +606,7 @@ fn a_thread_records_its_account_and_a_start_from_the_other_parks_naming_it() {
     assert!(
         w.mem_calls()
             .iter()
-            .any(|c| c.ends_with("--project gamma --account main")),
+            .any(|c| c.ends_with("--milestone m3-last --project gamma --account main")),
         "{:?}",
         w.mem_calls()
     );

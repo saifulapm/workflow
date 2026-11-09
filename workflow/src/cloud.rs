@@ -123,6 +123,11 @@ const KIT_VARIABLES: &[&str] = &[
 /// The network secrets every Project's environment holds for the kit.
 const KIT_SECRETS: &[&str] = &["device.on-rexa.com"];
 
+/// The network secrets one mem project's work needs, by host: ebdfy's
+/// deploys run through the proxy's Cloudflare token (its verify page's
+/// Cloud section).
+const PROJECT_SECRETS: &[(&str, &str)] = &[("ebdfy", "api.cloudflare.com")];
+
 /// What the Claude Project of the repository `remote` needs besides its
 /// instructions: its name and repository, a start line for each mem project
 /// in `repo` (the projects of that repository), and its environment's
@@ -156,6 +161,16 @@ belongs to; each value comes from Saiful's pass, never from here:\n"
             .map(std::path::Path::new)
             .find(|dir| dir.is_dir())
     });
+    let shopify = |row: &&&ProjectRow| {
+        row.subdir
+            .as_deref()
+            .is_some_and(|s| s.starts_with("apps/") || s.starts_with("themes/"))
+    };
+    if checkout.is_none() && repo.iter().any(|row| shopify(&row)) {
+        out.push_str(&format!(
+            "  (no checkout of {owner}/{last} here, so its apps' and themes' Shopify variables are left out: run this where it is checked out)\n"
+        ));
+    }
     for row in repo {
         let Some(subdir) = row.subdir.as_deref() else {
             continue;
@@ -171,6 +186,11 @@ belongs to; each value comes from Saiful's pass, never from here:\n"
     out.push_str("Network secrets by host:\n");
     for host in KIT_SECRETS {
         out.push_str(&format!("  {host}  every Project\n"));
+    }
+    for (project, host) in PROJECT_SECRETS {
+        if repo.iter().any(|row| row.name == *project) {
+            out.push_str(&format!("  {host}  {project}\n"));
+        }
     }
     out
 }

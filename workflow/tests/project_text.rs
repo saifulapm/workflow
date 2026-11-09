@@ -298,9 +298,29 @@ fn the_sheet_names_the_repo_each_start_line_and_every_variable_with_its_project(
     }
     assert!(!sheet.contains("SERVICE_ACCOUNT"), "{sheet}");
 
-    // A repo with no Shopify files lists only the kit's.
+    // A repo with no Shopify files lists only the kit's, and its own
+    // network secret: ebdfy deploys through the proxy's Cloudflare token.
     let (sheet, _) = parts(&text(&work, &["ebdfy"]));
     assert!(!sheet.contains("SHOPIFY"), "{sheet}");
+    assert!(sheet.contains("\n  api.cloudflare.com  ebdfy\n"), "{sheet}");
+    let (sheet, _) = parts(&text(&work, &["amx"]));
+    assert!(!sheet.contains("api.cloudflare.com"), "{sheet}");
+}
+
+/// Without the repo's checkout here, project-text cannot tell an app from
+/// a theme, and says it left their variables out rather than look whole.
+#[test]
+fn with_no_checkout_the_sheet_says_it_left_the_shopify_variables_out() {
+    let work = world(
+        "project-text-nocheckout",
+        r#"{"name":"shopify_apps","remote":"github.com/lareysbd/shopify_apps","checkouts":["/nowhere/shopify_apps"],"subdir":null},{"name":"shortcart","remote":"github.com/lareysbd/shopify_apps","checkouts":[],"subdir":"apps/shortcart"}"#,
+    );
+    let (sheet, _) = parts(&text(&work, &["shopify_apps"]));
+    assert!(!sheet.contains("SHORTCART_"), "{sheet}");
+    assert!(
+        sheet.contains("no checkout of lareysbd/shopify_apps here"),
+        "{sheet}"
+    );
 }
 
 /// The six repos the plan moves to Projects each print a text that fits
