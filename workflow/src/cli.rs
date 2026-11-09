@@ -244,6 +244,27 @@ refuses or does not answer.")]
         #[arg(value_parser = ["phone", "device"])]
         to: Option<String>,
     },
+    /// Run one call on the routed device, as if the program ran here.
+    #[command(
+        long_about = "Run one call on the routed device, as if the program ran here.
+
+The first argument is the verb: whoami, run or browser. The rest go to the
+device exactly as given, quotes and spaces unchanged, hyphens included. The
+call goes to the device's hub, which answers with the program's stdout,
+stderr and exit code, and the files it wrote. They land here: stdout and
+stderr as given, each file at its relative path under the current folder (a
+path that is absolute or climbs with .. is skipped and named), then the exit
+code. When the machine answering differs from the last one, a line says so.
+The client decides four exits: 2 for a wrong verb or no project (set
+MEM_PROJECT), 3 when no device is online, 4 when Access refuses the call, and
+124 when the device does not answer in 150 s (WORKFLOW_DEVICE_TIMEOUT_S).
+WORKFLOW_DEVICE_URL moves the hub's address. Exit 1 for any other answer."
+    )]
+    Device {
+        /// verb (whoami, run or browser), then its arguments.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Join this machine's memory to the Cloudflare store.
     #[command(long_about = "Join this machine's memory to the Cloudflare store.
 

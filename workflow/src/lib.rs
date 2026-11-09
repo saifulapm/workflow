@@ -14,6 +14,7 @@
 
 pub mod cli;
 pub mod cloud;
+pub mod device;
 pub mod embedded;
 pub mod exit;
 pub mod gitcmd;
@@ -157,6 +158,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Pause { project, by } => pause::cmd_pause(&project, by.as_deref()),
         Command::Unpause { project } => pause::cmd_unpause(&project),
         Command::Route { to } => route::cmd_route(to.as_deref()),
+        Command::Device { args } => device::cmd_device(&args),
         Command::Switch { store } => switch::cmd_switch(&store),
     }
 }
