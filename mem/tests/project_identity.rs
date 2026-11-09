@@ -452,6 +452,43 @@ fn project_identity_json_names_a_childs_checkout_through_its_parents_root() {
 }
 
 #[test]
+fn projects_json_names_a_childs_subdir_and_null_for_a_root() {
+    // A cloud VM records no checkout, so `workflow go <app>` from the repo's
+    // root finds the app's folder only from its subdir.
+    let w = common::World::new("ident-subdir-json");
+    let store = w.store();
+    let dirs = w.dirs();
+    let repo = w.repo("mono", Some("git@github.com:me/mono.git"));
+    let root_id = resolve(&repo, &store, &dirs, None, Mode::Write)
+        .unwrap()
+        .id()
+        .unwrap()
+        .to_string();
+    add_child(
+        &store,
+        &root_id,
+        "01K2FFFFFFFFFFFFFFFFFFFFFF",
+        "walk-a",
+        "apps/walk-a",
+    );
+
+    let out = common::mem(&w, &repo, &["projects", "--json"]);
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let subdir_of = |id: &str| {
+        json["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .expect("row present")["subdir"]
+            .clone()
+    };
+    assert_eq!(subdir_of("01K2FFFFFFFFFFFFFFFFFFFFFF"), "apps/walk-a");
+    assert_eq!(subdir_of(&root_id), serde_json::Value::Null);
+}
+
+#[test]
 fn a_recorded_worktree_is_the_first_checkout_of_its_project() {
     // Two apps of one monorepo run at once, each in its own worktree. A
     // worktree shares the main checkout's common dir, so only `project

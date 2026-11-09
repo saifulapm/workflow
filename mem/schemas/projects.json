@@ -23,6 +23,7 @@
           "items",
           "current",
           "checkouts",
+          "subdir",
           "worktree",
           "roadmap_status",
           "paused",
@@ -73,6 +74,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "subdir": {
+            "description": "Where a child project lives under its root's checkout, `/`-separated; null for a root project.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "worktree": {
             "description": "The linked worktree recorded with `mem project worktree` on this machine, while it is on disk; also the first of `checkouts`.",

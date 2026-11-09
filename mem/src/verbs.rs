@@ -310,6 +310,7 @@ pub fn projects(app: &App) -> Result<i32> {
                     "items": index.count_for_project(&p.id).unwrap_or(0),
                     "current": current == Some(p.id.as_str()),
                     "checkouts": checkouts,
+                    "subdir": p.subdir,
                     "worktree": path_map.worktree(&p.id).map(|w| w.to_string_lossy().to_string()),
                 });
                 for (key, value) in project_summary(app, &index, &p.id) {
