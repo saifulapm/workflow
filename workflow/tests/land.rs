@@ -535,6 +535,24 @@ fn a_conflict_moving_onto_main_leaves_main_untouched_and_parks() {
     assert!(w.origin_log("app/gamma").contains("Build the milestone"));
 }
 
+/// Main took something that breaks gamma's tests only once gamma sits on
+/// it: the milestone stays on app/gamma, and main is left as it was.
+#[test]
+fn red_tests_moving_onto_main_leave_main_untouched_and_park() {
+    let w = World::app("land-app-red-move");
+    w.verify("test -f work.txt && test ! -f ../../breaks-gamma.txt");
+    w.trunk_moves("breaks-gamma.txt", "x\n");
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let line = last_line(&out);
+    assert!(line.starts_with("parked: main moved: gamma"), "{line}");
+    assert!(line.contains("the tests fail"), "{line}");
+    assert_eq!(w.origin_main(), before);
+    assert!(w.origin_log("app/gamma").contains("Build the milestone"));
+    assert!(w.ticked(), "{}", w.work.read("mem.log"));
+}
+
 /// Main moves while the tests of gamma rebased onto main run: the push is
 /// refused, never forced, and the move starts over on the new main.
 #[test]

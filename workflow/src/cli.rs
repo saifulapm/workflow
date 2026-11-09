@@ -129,19 +129,24 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         #[arg(long, requires = "cloud")]
         print: bool,
     },
-    /// Land a cloud run's milestone on main, from a thread of its Claude Project.
+    /// Land a cloud run's milestone on its trunk, from a thread of its Claude Project.
     #[command(
-        long_about = "Land a cloud run's milestone on main, from a thread of its Claude Project.
+        long_about = "Land a cloud run's milestone on its trunk, from a thread of its Claude Project.
 
 Run in the project's checkout on the milestone branch cloud/<project>-<milestone>,
-clean. It rebases the branch on origin/main, runs the project's test command
-(mem's verify key), and pushes it to origin's main, never forced; a trunk that
-moved while the tests ran is rebased onto again, up to three times. Then it
-ticks the milestone, commits and pushes the writes the store has not taken,
-and prints the line the thread ends its report on: `next: Run the next
+clean. The trunk is origin's app/<project> when origin has it, an app's own
+branch in a monorepo, or else main. It rebases the branch on the trunk, runs
+the project's test command (mem's verify key) in the project's folder, and
+pushes it to the trunk, never forced; a trunk that moved while the tests ran
+is rebased onto again, up to three times. Then it ticks the milestone. An app
+then moves onto main the same way: rebased on origin/main, tested, main
+fast-forwarded, and app/<project> moved to match with a lease; a conflict or
+a red run there leaves main untouched and prints `parked: main moved:
+<project>: ...`, exit 2. It commits and pushes the writes the store has not
+taken, and prints the line the thread ends its report on: `next: Run the next
 milestone of <project>.`, `done: <project>'s roadmap is done`, or `parked:
-<project> is paused`. A rebase conflict pushes nothing and prints `parked:
-trunk moved: ...`, exit 2; a red test run pushes nothing to main, exit 1. The
+<project> is paused`. A rebase conflict on the trunk pushes nothing and prints
+`parked: trunk moved: ...`, exit 2; a red test run pushes nothing, exit 1. The
 rebased branch itself goes over origin's copy, leased, so the thread's next
 push of it is a fast-forward; a copy with commits the checkout lacks is kept
 and land refuses, exit 1."
