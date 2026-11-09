@@ -18,20 +18,63 @@ use crate::proc::{Ended, output_within};
 /// The only programs `run` starts.
 const ALLOWED: [&str; 3] = ["adb", "podman", "shopify"];
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Under Cloudflare's 100 s for an origin, so a stopped call still reaches
+/// the caller through the tunnel.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// How long `systemctl` and `mem` get; both answer in milliseconds.
 const HELPER_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// playwright-cli subcommands that would close the browser, wipe its data or
-/// take a session the device does not own.
-const BROWSER_REFUSED: [&str; 6] = [
-    "close",
-    "close-all",
-    "kill-all",
-    "delete-data",
-    "open",
-    "attach",
+/// The playwright-cli commands a walk drives a page with, and nothing else:
+/// no run-code (node, as this user), no file it names (upload, state-save,
+/// screenshot, response-body), no cookies or storage, no dashboard, and
+/// nothing that opens, closes or takes a browser session.
+const BROWSER_ALLOWED: [&str; 32] = [
+    "goto",
+    "snapshot",
+    "find",
+    "click",
+    "dblclick",
+    "fill",
+    "type",
+    "hover",
+    "select",
+    "check",
+    "uncheck",
+    "drag",
+    "press",
+    "keydown",
+    "keyup",
+    "mousemove",
+    "mousedown",
+    "mouseup",
+    "mousewheel",
+    "go-back",
+    "go-forward",
+    "reload",
+    "tab-list",
+    "tab-new",
+    "tab-select",
+    "tab-close",
+    "resize",
+    "dialog-accept",
+    "dialog-dismiss",
+    "eval",
+    "console",
+    "detach",
+];
+
+/// Flags that name another session or browser, or a file to write.
+const BROWSER_FLAGS_REFUSED: [&str; 9] = [
+    "-s",
+    "--session",
+    "--extension",
+    "--config",
+    "--browser",
+    "--cdp",
+    "--profile",
+    "--filename",
+    "--host",
 ];
 
 /// How long a Chromium the device started gets to put its lock down.
@@ -160,20 +203,16 @@ fn browser(session: Option<&str>, args: &[String]) -> Outcome {
     if args.is_empty() {
         return Outcome::refuse("browser needs a command".to_string());
     }
-    // The device owns the session and the browser, so no flag may name
-    // another of either.
-    if let Some(arg) = args.iter().find(|a| {
-        *a == "-s"
-            || ["-s=", "--session", "--extension", "--config"]
-                .iter()
-                .any(|flag| a.starts_with(flag))
+    // The command comes first, so no flag before it can turn it into another.
+    if !BROWSER_ALLOWED.contains(&args[0].as_str()) {
+        return Outcome::refuse(format!("browser {} is not allowed here", args[0]));
+    }
+    // The device owns the session, the browser and where files go.
+    if let Some(arg) = args[1..].iter().find(|a| {
+        let name = a.split('=').next().unwrap_or_default();
+        BROWSER_FLAGS_REFUSED.contains(&name)
     }) {
         return Outcome::refuse(format!("browser {arg} is not allowed here"));
-    }
-    if let Some(sub) = args.iter().find(|a| !a.starts_with('-'))
-        && BROWSER_REFUSED.contains(&sub.as_str())
-    {
-        return Outcome::refuse(format!("browser {sub} is not allowed here"));
     }
     let timeout = timeout();
     let cli = Cli {

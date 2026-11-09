@@ -119,6 +119,18 @@ fn run_uses_the_user_managers_path_and_passes_the_exit_code_through() {
     );
 }
 
+/// The allowlist at start is adb, podman and shopify, each of them.
+#[test]
+fn adb_podman_and_shopify_each_run() {
+    let rig = rig("nuc", &[]);
+    for program in ["adb", "podman", "shopify"] {
+        fixture_bin(&rig.tools, program, &format!("echo {program} ran"));
+        let answer = call(&rig.hub, "run", &[program, "--version"]);
+        assert_eq!(answer["exit"], 0, "{program}: {answer}");
+        assert_eq!(answer["stdout"], format!("{program} ran\n"), "{program}");
+    }
+}
+
 #[test]
 fn a_program_off_the_allowlist_never_runs() {
     let rig = rig("nuc", &[]);

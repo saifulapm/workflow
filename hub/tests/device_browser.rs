@@ -272,6 +272,66 @@ fn commands_that_end_the_browser_or_take_its_session_never_run() {
     assert_eq!(rig.calls(), Vec::<Vec<String>>::new());
 }
 
+/// Only the walk's own commands run: nothing that runs code in node, writes
+/// or reads a file of the device's choosing, hands back the profile's
+/// cookies, or serves a dashboard (review of m2-device). The command must
+/// come first, so a flag cannot hide an open or attach behind it.
+#[test]
+fn only_a_walk_s_commands_run() {
+    let rig = rig(SNAPSHOT_GOTO, &[]);
+    for (args, reason) in [
+        (
+            &["run-code", "async page => 1"][..],
+            "browser run-code is not allowed here",
+        ),
+        (
+            &["upload", "/home/x/.ssh/id"][..],
+            "browser upload is not allowed here",
+        ),
+        (
+            &["state-save", "/tmp/s.json"][..],
+            "browser state-save is not allowed here",
+        ),
+        (
+            &["cookie-list"][..],
+            "browser cookie-list is not allowed here",
+        ),
+        (
+            &["show", "--port", "9"][..],
+            "browser show is not allowed here",
+        ),
+        (
+            &["screenshot"][..],
+            "browser screenshot is not allowed here",
+        ),
+        (
+            &["response-body", "1"][..],
+            "browser response-body is not allowed here",
+        ),
+        (
+            &["--browser", "x", "open"][..],
+            "browser --browser is not allowed here",
+        ),
+        (
+            &["snapshot", "--filename=/home/x/.config/a"][..],
+            "browser --filename=/home/x/.config/a is not allowed here",
+        ),
+    ] {
+        let answer = browser(&rig.hub, Some("s1"), args);
+        assert_eq!(answer["exit"], 2, "{args:?}: {answer}");
+        assert_eq!(answer["stderr"], format!("device: {reason}\n"), "{args:?}");
+    }
+    assert_eq!(rig.calls(), Vec::<Vec<String>>::new());
+    for args in [
+        &["goto", "https://x.test"][..],
+        &["find", "Save"],
+        &["detach"],
+    ] {
+        let answer = browser(&rig.hub, Some("s1"), args);
+        assert_eq!(answer["exit"], 0, "{args:?}: {answer}");
+    }
+}
+
 #[test]
 fn an_argument_with_quotes_and_spaces_arrives_whole() {
     let rig = rig(SNAPSHOT_GOTO, &[]);
