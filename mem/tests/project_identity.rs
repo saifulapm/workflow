@@ -1229,6 +1229,24 @@ fn a_cloud_branch_naming_a_root_with_children_writes_to_the_root() {
     assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
     assert!(logged(&w, &repo, "alpha").contains("cloud root work"));
 
+    // Inside a child's folder the branch still names the root: two runs of
+    // one repo go at once, and the child may have its own.
+    std::fs::create_dir_all(repo.join("packages/ui")).unwrap();
+    let ui = repo.join("packages/ui");
+    let out = common::mem(&w, &ui, &["log", "root work in ui"]);
+    assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    assert!(logged(&w, &repo, "alpha").contains("root work in ui"));
+    let ui_log = common::mem(&w, &repo, &["log", "--project", "alpha-ui"]);
+    assert!(!common::stdout(&ui_log).contains("root work in ui"));
+
+    // A child's own branch names the child, wherever in the clone it writes.
+    common::run_git(&repo, &["checkout", "-q", "-b", "cloud/alpha-ui-m1"]);
+    for dir in [&repo, &ui] {
+        let out = common::mem(&w, dir, &["log", "child work"]);
+        assert_eq!(common::code(&out), 0, "{}", common::stderr(&out));
+    }
+    assert!(!logged(&w, &repo, "alpha").contains("child work"));
+
     // A plain branch at the same root is the folder alone, and is refused.
     common::run_git(&repo, &["checkout", "-q", "-b", "work"]);
     let out = common::mem(&w, &repo, &["log", "lost"]);

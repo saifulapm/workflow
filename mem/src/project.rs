@@ -332,11 +332,12 @@ pub fn resolve(
     };
 
     // A cloud VM has no paths.toml and several projects may share its repo, so
-    // the run's branch decides before the path map and pins nothing.
+    // the run's branch decides before the path map and pins nothing. It names
+    // its project outright: a root's run writing in a child's folder is still
+    // the root's, since the child may have a run of its own.
     if let (Some(remote), Some(branch)) = (&checkout.remote, &checkout.branch)
         && let Some(p) = registry.by_cloud_branch(remote, branch)
     {
-        let p = child_for(&registry, p, &checkout, cwd).unwrap_or(p);
         return Ok(Identity::Known {
             id: p.id.clone(),
             name: p.name.clone(),
