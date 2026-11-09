@@ -312,7 +312,10 @@ pub fn decide(
                 .iter()
                 .find(|dir| Path::new(dir).is_dir())
                 .cloned();
-            let Some(dir) = here.or(listed).or(sibling) else {
+            // A recorded worktree is where the project works on this machine;
+            // without one, the clone the caller stands in beats any other.
+            let worktree = listed.clone().filter(|_| row.worktree.is_some());
+            let Some(dir) = here.or(worktree).or(sibling).or(listed) else {
                 return Decision::Refuse(format!("{name} has no checkout on this machine"));
             };
             (name.to_string(), dir)

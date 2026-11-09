@@ -987,6 +987,84 @@ fn two_apps_of_one_repo_run_at_once_but_each_only_once() {
     assert!(!w.claimed_for("walk-a"), "{:?}", w.mem_calls());
 }
 
+/// A clone mem once recorded elsewhere on this machine is not the clone the
+/// thread stands in: the thread's own folder wins over a listed one.
+#[test]
+fn the_clone_a_thread_stands_in_beats_a_checkout_mem_listed() {
+    let w = World::new("cloud-own-clone");
+    let clone = w.monorepo("cloud_walk", &[("walk-a", "apps/walk-a")]);
+    let stale = w.work.mkdir("old-clone/apps/walk-a");
+    let projects = w.work.read("projects.json").replacen(
+        r#""checkouts":[],"subdir":"apps/walk-a""#,
+        &format!(
+            r#""checkouts":["{}"],"subdir":"apps/walk-a""#,
+            stale.display()
+        ),
+        1,
+    );
+    w.work.put("projects.json", &projects);
+    let out = w.thread_in(&clone, &["walk-a", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains(&format!("`cd {}/apps/walk-a`", clone.display())),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// A new app's folder may exist only on its own branch, not on the main the
+/// thread stands on: its trunk is still app/<app>.
+#[test]
+fn a_new_apps_trunk_is_found_before_its_folder_exists() {
+    let w = World::new("cloud-new-app");
+    let clone = w.monorepo("cloud_walk", &[("walk-a", "apps/walk-a")]);
+    let origin = w.work.at("mono-origin.git");
+    git(
+        w.work.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        &clone,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    commit(&clone, "start");
+    git(&clone, &["push", "-q", "origin", "main", "main:app/walk-a"]);
+    git(&clone, &["fetch", "-q", "origin"]);
+    assert!(!clone.join("apps/walk-a").exists());
+    let out = w.thread_in(&clone, &["walk-a", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("from origin/app/walk-a"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// On a machine, an app worktree on an app/<app> origin lacks holds work a
+/// cloud run would never see.
+#[test]
+fn an_app_branch_origin_lacks_keeps_the_cloud_out() {
+    let w = World::new("cloud-app-unpushed");
+    w.origin_with_cloud_branch();
+    let dir = w.checkout("gamma");
+    git(&dir, &["checkout", "-q", "-b", "app/gamma"]);
+    w.set("gamma", &format!(r#""worktree":"{}""#, dir.display()));
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("push app/gamma first"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// Another repo's clone is no folder for an app: its subdir means nothing
 /// there.
 #[test]

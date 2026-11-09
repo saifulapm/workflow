@@ -58,6 +58,12 @@ pub fn prompt(project: &str, slug: &str, base: &str, dir: &str) -> String {
 /// pushed still says main; a thread fetches before it asks.
 pub fn trunk(project: &str, dir: &str) -> String {
     let app = format!("app/{project}");
+    // A new app's folder may exist only on its own branch: git asks from the
+    // nearest folder that is there.
+    let dir = std::path::Path::new(dir)
+        .ancestors()
+        .find(|d| d.is_dir())
+        .unwrap_or(std::path::Path::new(dir));
     let known = Git::at(dir).quiet(&[
         "rev-parse",
         "--verify",
@@ -655,6 +661,15 @@ fn repo_refusal(row: &ProjectRow, dir: &str, thread: bool) -> Option<String> {
         return Some(format!("{name} has no git remote"));
     }
     let trunk = trunk(name, dir);
+    let app = format!("app/{name}");
+    if !thread
+        && trunk != app
+        && Git::at(dir).out(&["branch", "--show-current"]).as_deref() == Some(app.as_str())
+    {
+        return Some(format!(
+            "{name} works on {app}, which origin lacks; push {app} first: a cloud run starts from origin"
+        ));
+    }
     if let Some(n) = unpushed(dir, &trunk).filter(|n| *n > 0 && !thread) {
         let commits = if n == 1 { "commit" } else { "commits" };
         return Some(format!(
