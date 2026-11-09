@@ -576,13 +576,13 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
         me.as_deref(),
     ) {
         Decision::Done(project) => {
-            // The last milestone may have landed in the cloud: its work is
-            // still on its branch, and the trunk takes it now.
+            // The last milestone may have landed in the cloud, which pushed
+            // it to origin's main: the trunk here takes it now.
             let row = projects.iter().find(|row| row.name == project);
             let landed = row.and_then(|row| {
-                let run = row.runner.as_ref().filter(|r| r.machine == "cloud")?;
+                row.runner.as_ref().filter(|r| r.machine == "cloud")?;
                 let dir = row.checkouts.iter().find(|dir| Path::new(dir).is_dir())?;
-                Some((cloud::branch(&project, run.milestone.as_deref()?), dir))
+                Some(("main", dir))
             });
             if let Some((from, dir)) = landed.filter(|_| !dry_run) {
                 let branch = branch_of(dir);
@@ -591,7 +591,7 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
                     warn(format!("go: {why}"));
                     return exit::USAGE;
                 }
-                if let Err(why) = fast_forward(dir, &from, true) {
+                if let Err(why) = fast_forward(dir, from, true) {
                     warn(format!(
                         "go: cannot fast-forward {} to {from}: {why}",
                         branch.as_deref().unwrap_or("the trunk")
@@ -653,8 +653,14 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
                 return exit::USAGE;
             }
             if let Some(slug) = landed_from.filter(|_| !dry_run) {
-                let from = cloud::branch(&start.project, &slug);
+                // A landed run pushed origin's main; one parked local-only
+                // or ended left its work on its branch.
                 let landed = matches!(cloud, Some((cloud::State::Landed, _)));
+                let from = if landed {
+                    "main".to_string()
+                } else {
+                    cloud::branch(&start.project, &slug)
+                };
                 if let Err(why) = fast_forward(&start.dir, &from, landed) {
                     warn(format!(
                         "go: cannot fast-forward {} to {from}: {why}",

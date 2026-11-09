@@ -46,7 +46,30 @@ dir=$(dirname "$0")
 echo "$*" >>"$dir/mem.log"
 case "$1" in
 projects) cat "$dir/projects.json" ;;
-project) [ "$2" = current ] && exit 1; exit 0 ;;
+project)
+  [ "$2" = current ] && exit 1
+  # A cloud runner lands in the projects as the real mem's replica holds
+  # it: the session's own, or with a file `winner`, the record of a run the
+  # store took first.
+  if [ "$2 $3 $4" = "set runner cloud" ]; then
+    id=$5
+    [ -f "$dir/winner" ] && id=$(cat "$dir/winner")
+    python3 - "$dir/projects.json" "$id" "$7" "$9" <<'PY_EOF'
+import json, sys, datetime
+path, id, slug, project = sys.argv[1:5]
+doc = json.load(open(path))
+since = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+for row in doc["projects"]:
+    if row["name"] == project:
+        row["runner"] = {"machine": "cloud", "id": id, "since": since, "milestone": slug}
+json.dump(doc, open(path, "w"))
+PY_EOF
+  fi
+  exit 0 ;;
+sync)
+  n=0
+  [ -f "$dir/outbox" ] && n=$(cat "$dir/outbox")
+  echo "{\"sync\":\"performed\",\"outbox\":$n}" ;;
 roadmap) cat "$dir/roadmap-$3.md" ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
 esac
@@ -146,6 +169,15 @@ esac
         commit(&cloud, "Land t1 in the cloud");
         git(&cloud, &["push", "-q", "origin", &branch]);
         head(&cloud)
+    }
+
+    /// The same, with the cloud run landed: its thread pushed the branch's
+    /// work to origin's main, as `workflow land` does.
+    fn origin_with_landed_main(&self) -> String {
+        let tip = self.origin_with_cloud_branch();
+        let cloud = self.work.at("cloud-clone");
+        git(&cloud, &["push", "-q", "origin", "HEAD:main"]);
+        tip
     }
 }
 
@@ -266,6 +298,39 @@ fn now_minus(hours: i64) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// The session a thread of a Claude Project runs as, as claude.ai names it
+/// in `CLAUDE_CODE_REMOTE_SESSION_ID`, and as its links name it.
+const THREAD: &str = "cse_01Thread";
+const THREAD_SESSION: &str = "session_01Thread";
+
+impl World {
+    /// `workflow go <args>` in a thread of a Claude Project.
+    fn thread(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_workflow"))
+            .arg("go")
+            .args(args)
+            .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_CLAUDE", self.work.at("claude"))
+            .env("WORKFLOW_AMX", self.work.at("no-amx"))
+            .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("XDG_STATE_HOME", self.work.at("state"))
+            .env("CLAUDE_CODE_REMOTE_SESSION_ID", THREAD)
+            .env_remove("WORKFLOW_MACHINE")
+            .env_remove("AMX_ID")
+            .current_dir(self.work.path())
+            .output()
+            .unwrap()
+    }
+
+    fn claimed(&self) -> bool {
+        self.mem_calls().iter().any(|c| {
+            c == &format!(
+                "project set runner cloud {THREAD_SESSION} --milestone m2-next --project gamma"
+            )
+        })
+    }
+}
+
 #[test]
 fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
     let w = World::new("cloud-print");
@@ -276,11 +341,9 @@ fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
     assert!(prompt.contains("origin/main"), "cut from main: {prompt}");
     assert!(prompt.contains("orchestrate skill"), "{prompt}");
     assert!(
-        prompt.contains("refreshes your skills"),
-        "skills read after the refresh: {prompt}"
+        prompt.contains("mem roadmap --tick m2-next") || prompt.contains("workflow land"),
+        "{prompt}"
     );
-    assert!(prompt.contains("mem project set runner cloud"), "{prompt}");
-    assert!(prompt.contains("mem roadmap --tick m2-next"), "{prompt}");
     assert!(prompt.contains("parked:"), "{prompt}");
     assert!(!prompt.contains("/goal"), "no slash command: {prompt}");
     assert!(!w.claude_ran());
@@ -309,37 +372,80 @@ fn an_underscore_project_keeps_its_name_in_the_branch() {
     assert!(check.status.success(), "{check:?}");
 }
 
+/// The Claude Project starts every cloud run: a machine starts none, and
+/// says what to type there instead.
 #[test]
-fn a_start_runs_claude_cloud_in_the_checkout_records_the_runner_and_prints_the_url() {
-    let w = World::new("cloud-start");
+fn a_cloud_start_from_a_machine_refuses_naming_the_start_line() {
+    let w = World::new("cloud-start-refused");
     let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert_eq!(
-        stdout(&out).trim(),
-        format!("https://claude.ai/code/{SESSION}")
-    );
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(
-        stderr(&out).contains("3 commits ahead"),
-        "claude's notice passes on: {}",
+        stderr(&out).contains(r#""Run the next milestone of gamma." in gamma's Claude Project"#),
+        "{}",
         stderr(&out)
     );
+    assert!(!w.claude_ran());
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
 
-    let log = w.work.read("claude.log");
-    let mut lines = log.lines();
-    assert_eq!(lines.next(), Some(w.checkout("gamma").to_str().unwrap()));
-    assert_eq!(lines.next(), Some("--cloud"));
-    let printed = stdout(&w.go(&["gamma", "--cloud", "--print"]));
-    assert_eq!(
-        lines.collect::<Vec<_>>().join("\n"),
-        printed.trim_end(),
-        "the prompt is the one --print shows"
-    );
+/// A thread's start claims the run before it prints the prompt: the
+/// runner record, then a sync the store has taken all of, then the record
+/// read back.
+#[test]
+fn a_thread_claims_the_run_then_prints_the_prompt() {
+    let w = World::new("cloud-thread-start");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        w.mem_calls().iter().any(|c| c
-            == &format!("project set runner cloud {SESSION} --milestone m2-next --project gamma")),
-        "{:?}",
-        w.mem_calls()
+        stdout(&out).contains("cloud/gamma-m2-next"),
+        "{}",
+        stdout(&out)
     );
+    assert!(w.claimed(), "{:?}", w.mem_calls());
+    let calls = w.mem_calls();
+    let set = calls
+        .iter()
+        .position(|c| c.starts_with("project set runner cloud"));
+    let sync = calls.iter().rposition(|c| c.starts_with("sync"));
+    let reread = calls.iter().rposition(|c| c.starts_with("projects"));
+    assert!(set.is_some() && sync > set && reread > sync, "{calls:?}");
+    assert!(!w.claude_ran());
+
+    // A woken or resumed thread finds its own run and carries on.
+    let again = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(again.status.code(), Some(0), "{}", stdout(&again));
+    assert_eq!(stdout(&again), stdout(&out));
+}
+
+/// Two threads that claim at once both write the runner; the store keeps
+/// the first and the second's replica takes it, so the second parks.
+#[test]
+fn a_thread_the_store_took_another_claim_over_parks_naming_it() {
+    let w = World::new("cloud-thread-race");
+    w.work.put("winner", "session_01First");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: gamma already runs m2-next in https://claude.ai/code/session_01First"
+    );
+}
+
+/// A claim the store has not taken could still lose to another: the
+/// thread parks rather than run twice.
+#[test]
+fn a_thread_whose_claim_never_reached_the_store_parks() {
+    let w = World::new("cloud-thread-offline");
+    w.work.put("outbox", "3");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(
+        said.starts_with("parked: the store has not taken"),
+        "{said}"
+    );
+    assert!(said.contains("3 writes still wait"), "{said}");
+    assert!(!said.contains("cloud/gamma-m2-next"), "{said}");
 }
 
 /// A cloud runner record for `project`, started `hours` ago.
@@ -356,15 +462,6 @@ fn cloud_runner(w: &World, project: &str, id: &str, hours: i64) {
 /// Cloud runs of other projects hold no start back: there is no cap across
 /// projects (#0W59FSK2, replacing #RA9XKD8H's two).
 #[test]
-fn a_live_cloud_run_elsewhere_holds_no_start_back() {
-    let w = World::new("cloud-one-live");
-    cloud_runner(&w, "delta", "session_01Other", 1);
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran());
-}
-
-#[test]
 fn live_or_parked_cloud_runs_elsewhere_hold_no_start_back() {
     let w = World::new("cloud-two-live");
     cloud_runner(&w, "delta", "session_01Other", 1);
@@ -377,96 +474,30 @@ fn live_or_parked_cloud_runs_elsewhere_hold_no_start_back() {
         "handoff-shopify_apps.md",
         "parked: t2 waits, question #ABCD1234\n",
     );
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran());
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed());
 }
 
 #[test]
-fn a_project_whose_own_cloud_run_is_live_starts_no_second() {
+fn a_project_whose_own_run_is_live_starts_no_second() {
     let w = World::new("cloud-own-live");
     cloud_runner(&w, "gamma", "session_01Mine", 1);
-    let out = w.go(&["gamma", "--cloud"]);
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: gamma already runs m2-next in https://claude.ai/code/session_01Mine"
+    );
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+
+    // On a machine the print says so on stderr.
+    let out = w.go(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(
         stderr(&out).contains("gamma already has a cloud run: m2-next, session_01Mine"),
         "{}",
         stderr(&out)
-    );
-    assert!(!w.claude_ran());
-}
-
-/// Two starts of one project in the same second: the second waits for the
-/// first to record its runner, then finds the project's own run.
-#[test]
-fn two_starts_of_one_project_at_once_cannot_both_run() {
-    let w = World::new("cloud-race");
-    // This mem records a cloud runner in the projects it lists, as the real
-    // one does, and claude takes a second to start.
-    w.work.script(
-        "mem",
-        r#"
-dir=$(dirname "$0")
-echo "$*" >>"$dir/mem.log"
-case "$1" in
-projects) cat "$dir/projects.json" ;;
-project)
-  [ "$2" = current ] && exit 1
-  if [ "$2 $3 $4" = "set runner cloud" ]; then
-    python3 - "$dir/projects.json" "$5" "$7" "$9" <<'PY_EOF'
-import json, sys, datetime
-path, id, slug, project = sys.argv[1:5]
-doc = json.load(open(path))
-since = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-for row in doc["projects"]:
-    if row["name"] == project:
-        row["runner"] = {"machine": "cloud", "id": id, "since": since, "milestone": slug}
-json.dump(doc, open(path, "w"))
-PY_EOF
-  fi
-  exit 0 ;;
-roadmap) cat "$dir/roadmap-$3.md" ;;
-handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
-esac
-"#,
-    );
-    let claude = w.work.read("claude");
-    w.work.script(
-        "claude",
-        &claude.replacen("dir=$(dirname", "sleep 1\ndir=$(dirname", 1),
-    );
-    let start = |project: &'static str| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_workflow"));
-        cmd.args(["go", project, "--cloud"])
-            .env("WORKFLOW_MEM", w.work.at("mem"))
-            .env("WORKFLOW_CLAUDE", w.work.at("claude"))
-            .env("WORKFLOW_AMX", w.work.at("no-amx"))
-            .env("XDG_CONFIG_HOME", w.work.at("config"))
-            .env("XDG_STATE_HOME", w.work.at("state"))
-            .env("WORKFLOW_MACHINE", "mini")
-            .env_remove("AMX_ID")
-            .current_dir(w.work.path())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        cmd.spawn().unwrap()
-    };
-    let one = start("gamma");
-    let two = start("gamma");
-    let outs = [
-        one.wait_with_output().unwrap(),
-        two.wait_with_output().unwrap(),
-    ];
-    let codes: Vec<_> = outs.iter().map(|o| o.status.code()).collect();
-    assert!(
-        codes.contains(&Some(0)) && codes.contains(&Some(2)),
-        "{codes:?}: {}",
-        outs.iter().map(stderr).collect::<Vec<_>>().join(" | ")
-    );
-    let refused = outs.iter().find(|o| o.status.code() == Some(2)).unwrap();
-    assert!(
-        stderr(refused).contains("gamma already has a cloud run: m2-next, "),
-        "{}",
-        stderr(refused)
     );
 }
 
@@ -479,37 +510,79 @@ fn a_parked_cloud_run_holds_its_own_project_back() {
     w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
     w.work
         .put("handoff-gamma.md", "parked: t2 waits, question #ABCD1234\n");
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("gamma already has a cloud run: m2-next, session_01Mine"),
+        stdout(&out).starts_with("parked: gamma already runs m2-next in "),
         "{}",
-        stderr(&out)
+        stdout(&out)
     );
-    assert!(!w.claude_ran());
+}
+
+/// A run parked local-only waits for a device to take its branch: a
+/// thread starting the milestone again would build it twice.
+#[test]
+fn a_run_parked_local_only_holds_a_thread_back() {
+    let w = World::new("cloud-thread-local-only");
+    cloud_runner(&w, "gamma", "session_01Parked", 2);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work.put(
+        "handoff-gamma.md",
+        "parked: local-only t2: needs the desktop\n",
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(
+        stdout(&out).starts_with("parked: gamma's m2-next is parked local-only in "),
+        "{}",
+        stdout(&out)
+    );
 }
 
 #[test]
-fn its_own_run_that_ended_or_lapsed_holds_the_project_back_no_longer() {
+fn a_run_that_ended_landed_or_lapsed_holds_the_project_back_no_longer() {
     // Ended: a handoff after its start that is no park.
     let w = World::new("cloud-ended");
     cloud_runner(&w, "gamma", "session_01Before", 2);
     w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
     w.work.put("handoff-gamma.md", "Next: m2-next again\n");
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran());
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed());
 
     // Lapsed: no handoff and no tick for 7 hours.
     let w = World::new("cloud-lapsed");
     cloud_runner(&w, "gamma", "session_01Before", 8);
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran());
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed());
+
+    // Parked, but 8 hours ago: the 6-hour stop and an hour more.
+    let w = World::new("cloud-parked-lapsed");
+    cloud_runner(&w, "gamma", "session_01Before", 8);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(2)));
+    w.work
+        .put("handoff-gamma.md", "parked: 6-hour stop, t3 half done\n");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+
+    // Landed: its milestone is ticked.
+    let w = World::new("cloud-landed");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Before","since":"{}","milestone":"m1-first"}}"#,
+            now_minus(1)
+        ),
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed());
 }
 
+/// Every run is cut from main: a landed run pushed its work there.
 #[test]
-fn a_next_run_after_a_landed_cloud_run_is_cut_from_its_branch() {
+fn a_next_run_after_a_landed_cloud_run_is_cut_from_main() {
     let w = World::new("cloud-base");
     w.runner(
         "gamma",
@@ -519,37 +592,45 @@ fn a_next_run_after_a_landed_cloud_run_is_cut_from_its_branch() {
         ),
     );
     let prompt = stdout(&w.go(&["gamma", "--cloud", "--print"]));
-    assert!(prompt.contains("origin/cloud/gamma-m1-first"), "{prompt}");
-    assert!(prompt.contains("cloud/gamma-m2-next"), "{prompt}");
+    assert!(!prompt.contains("cloud/gamma-m1-first"), "{prompt}");
+    assert!(prompt.contains("origin/main"), "{prompt}");
 }
 
 #[test]
-fn a_paused_project_refuses_even_with_a_parked_handoff() {
+fn a_paused_project_parks_a_thread_even_with_a_parked_handoff() {
     let w = World::new("cloud-paused");
     w.set("gamma", r#""paused":"2026-10-15T09:00:00Z by saiful""#);
     w.work
         .put("handoff-gamma.md", "parked: waiting on #ABCD1234\n");
-    let out = w.go(&["gamma", "--cloud"]);
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(stdout(&out).trim(), "parked: gamma is paused");
+    let out = w.go(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(stdout(&out).trim(), "gamma: paused");
-    assert!(!w.claude_ran());
-}
-
-#[test]
-fn claude_printing_no_session_fails_and_records_nothing() {
-    let w = World::new("cloud-no-session");
-    w.work
-        .script("claude", "echo 'Error: not logged in' >&2; exit 1");
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
-    assert!(stderr(&out).contains("not logged in"), "{}", stderr(&out));
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
 }
 
+/// The line a thread that finds nothing left to run ends its report on.
 #[test]
-fn the_next_local_go_fast_forwards_the_trunk_to_a_landed_cloud_runs_branch() {
+fn a_thread_on_a_done_roadmap_says_done() {
+    let w = World::new("cloud-thread-done");
+    w.work.put(
+        "roadmap-gamma.md",
+        "# roadmap: gamma\n\n- [x] m1-first One\n",
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "done: gamma's roadmap is done");
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
+
+/// A landed cloud run pushed its work to origin's main, so the next local
+/// go fast-forwards the trunk from there.
+#[test]
+fn the_next_local_go_fast_forwards_the_trunk_to_origin_main_after_a_landed_cloud_run() {
     let w = World::new("cloud-ff");
-    let tip = w.origin_with_cloud_branch();
+    let tip = w.origin_with_landed_main();
     w.runner(
         "gamma",
         &format!(
@@ -562,7 +643,7 @@ fn the_next_local_go_fast_forwards_the_trunk_to_a_landed_cloud_runs_branch() {
     assert_eq!(
         head(&w.checkout("gamma")),
         tip,
-        "the trunk's tip is the cloud branch's"
+        "the trunk's tip is origin main's"
     );
     assert!(
         w.mem_calls()
@@ -612,7 +693,7 @@ fn a_run_parked_local_only_is_taken_over_by_the_next_local_go() {
 #[test]
 fn a_trunk_that_moved_while_the_cloud_ran_refuses_and_starts_nothing() {
     let w = World::new("cloud-diverged");
-    w.origin_with_cloud_branch();
+    w.origin_with_landed_main();
     let checkout = w.checkout("gamma");
     commit(&checkout, "A local commit the cloud never saw");
     let before = head(&checkout);
@@ -653,46 +734,6 @@ fn a_live_or_parked_cloud_run_keeps_the_mini_out_of_its_project() {
 }
 
 #[test]
-fn an_untrusted_folder_is_refused_at_once_with_how_to_trust_it() {
-    let w = World::new("cloud-untrusted");
-    // claude's trust prompt, drawn word by word as the TUI does, then a wait
-    // for a key that never comes.
-    w.work.script(
-        "claude",
-        "printf 'Quick safety check:\\033[1CIs\\033[1Cthis\\033[1Ca\\033[1Cproject\\r\\n\\033[1CYes,\\033[1CI\\033[1Ctrust\\033[1Cthis\\033[1Cfolder\\r\\n'; sleep 30",
-    );
-    let started = std::time::Instant::now();
-    let out = w.go(&["gamma", "--cloud"]);
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "{:?}",
-        started.elapsed()
-    );
-    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
-    let said = stderr(&out);
-    assert!(said.contains("trust"), "{said}");
-    assert!(
-        said.contains(w.checkout("gamma").to_str().unwrap()),
-        "{said}"
-    );
-    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
-}
-
-/// A parked run counts as ended seven hours after its start, the 6-hour
-/// stop and an hour more, so its own project can start again.
-#[test]
-fn its_own_parked_run_holds_the_project_back_seven_hours_at_most() {
-    let w = World::new("cloud-parked-lapsed");
-    cloud_runner(&w, "gamma", "session_01Before", 8);
-    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(2)));
-    w.work
-        .put("handoff-gamma.md", "parked: 6-hour stop, t3 half done\n");
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran());
-}
-
-#[test]
 fn a_project_on_a_branch_of_its_own_or_with_no_remote_stays_off_the_cloud() {
     let w = World::new("cloud-worktree");
     let dir = w.checkout("gamma");
@@ -711,11 +752,12 @@ fn a_project_on_a_branch_of_its_own_or_with_no_remote_stays_off_the_cloud() {
             .read("projects.json")
             .replacen(r#","remote":"github.com/me/gamma""#, "", 1);
     w.work.put("projects.json", &projects);
-    let out = w.go(&["gamma", "--cloud", "--print"]);
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(stderr(&out).contains("no git remote"), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "parked: gamma has no git remote");
 }
 
+/// On a machine a device's runner keeps the cloud out as a local go would.
 #[test]
 fn a_device_orchestrator_on_another_machine_keeps_the_cloud_out() {
     let w = World::new("cloud-device-runner");
@@ -723,10 +765,55 @@ fn a_device_orchestrator_on_another_machine_keeps_the_cloud_out() {
         "gamma",
         r#"{"machine":"nuc","id":"gamma-m2-next","since":"2026-10-15T07:00:00Z"}"#,
     );
-    let out = w.go(&["gamma", "--cloud"]);
+    let out = w.go(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(stderr(&out).contains("nuc"), "{}", stderr(&out));
-    assert!(!w.claude_ran());
+}
+
+/// A thread cannot ask a device's amx, so it weighs a device's run by its
+/// record: under 7 hours with no handoff since, or a park, it is live.
+#[test]
+fn a_thread_weighs_a_device_run_by_its_record() {
+    let device = |w: &World, hours: i64| {
+        w.runner(
+            "gamma",
+            &format!(
+                r#"{{"machine":"nuc","id":"gamma-m2-next","since":"{}"}}"#,
+                now_minus(hours)
+            ),
+        );
+    };
+    let w = World::new("cloud-thread-device-live");
+    device(&w, 2);
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: gamma already runs on nuc (gamma-m2-next)"
+    );
+
+    let w = World::new("cloud-thread-device-parked");
+    device(&w, 3);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work
+        .put("handoff-gamma.md", "parked: t3 waits on #ABCD1234\n");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+
+    let w = World::new("cloud-thread-device-landed");
+    device(&w, 3);
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
+    w.work
+        .put("handoff-gamma.md", "Next: m2-next. m1-first landed.\n");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed());
+
+    let w = World::new("cloud-thread-device-old");
+    device(&w, 8);
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed());
 }
 
 /// A device orchestrator that parked on a question has stopped its own
@@ -747,14 +834,13 @@ fn a_milestone_parked_on_this_machine_starts_no_cloud_run() {
         "handoff-gamma.md",
         "parked: m2-next t3 waits on question #ABCD1234\n",
     );
-    let out = w.go(&["gamma", "--cloud"]);
+    let out = w.go(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
     assert!(
         stderr(&out).contains("gamma's m2-next is parked on mini (gamma-m2-next)"),
         "{}",
         stderr(&out)
     );
-    assert!(!w.claude_ran());
 
     // A park from before this runner started is an older run's.
     let w = World::new("cloud-device-old-park");
@@ -767,60 +853,24 @@ fn a_milestone_parked_on_this_machine_starts_no_cloud_run() {
     );
     w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(3)));
     w.work.put("handoff-gamma.md", "parked: an older run\n");
-    let out = w.go(&["gamma", "--cloud"]);
+    let out = w.go(&["gamma", "--cloud", "--print"]);
     assert!(!stderr(&out).contains("is parked on"), "{}", stderr(&out));
-}
-
-/// Another project of `w`'s gamma repo, its remote spelled the other way.
-fn gamma_sibling(w: &World, carried: bool) {
-    let projects = w.work.read("projects.json");
-    let rows = projects.trim_end().strip_suffix("]}").unwrap();
-    let cloud = if carried { r#","cloud":"mini""# } else { "" };
-    w.work.put(
-        "projects.json",
-        &format!(
-            r#"{rows},{{"name":"gamma-web","remote":"git@github.com:me/gamma.git","checkouts":[]{cloud}}}]}}"#
-        ),
-    );
-}
-
-/// Two carried projects of one repo would chain cloud runs on branches that
-/// never hold each other's work, and the shared trunk cannot take both.
-#[test]
-fn a_second_carried_project_of_one_repo_starts_no_cloud_run() {
-    let w = World::new("cloud-repo-sibling-local");
-    w.set("gamma", r#""cloud":"mini""#);
-    gamma_sibling(&w, false);
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran());
-
-    let w = World::new("cloud-repo-sibling-carried");
-    w.set("gamma", r#""cloud":"mini""#);
-    gamma_sibling(&w, true);
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(
-        stderr(&out).contains("gamma shares me/gamma with gamma-web, which is also carried"),
-        "{}",
-        stderr(&out)
-    );
-    assert!(!w.claude_ran());
 }
 
 #[test]
 fn a_cloud_run_takes_the_next_milestone_only() {
     let w = World::new("cloud-later-milestone");
-    let out = w.go(&["gamma", "--cloud", "--milestone", "m3-last"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(stderr(&out).contains("m2-next"), "{}", stderr(&out));
-    assert!(!w.claude_ran());
+    let out = w.thread(&["gamma", "--cloud", "--print", "--milestone", "m3-last"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stdout(&out).starts_with("parked: "), "{}", stdout(&out));
+    assert!(stdout(&out).contains("m2-next"), "{}", stdout(&out));
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
 }
 
 #[test]
 fn a_cloud_run_that_landed_the_last_milestone_still_reaches_the_trunk() {
     let w = World::new("cloud-ff-last");
-    let tip = w.origin_with_cloud_branch();
+    let tip = w.origin_with_landed_main();
     w.work.put(
         "roadmap-gamma.md",
         "# roadmap: gamma\n\n- [x] m1-first One\n",
@@ -848,43 +898,8 @@ fn a_cloud_run_that_landed_the_last_milestone_still_reaches_the_trunk() {
     assert!(!w.amx_started());
 }
 
-#[test]
-fn a_landed_run_whose_branch_is_missing_refuses_and_keeps_its_record() {
-    let w = World::new("cloud-ff-missing");
-    w.origin_with_cloud_branch();
-    w.runner(
-        "gamma",
-        &format!(
-            r#"{{"machine":"cloud","id":"session_01Gone","since":"{}","milestone":"m0-gone"}}"#,
-            now_minus(3)
-        ),
-    );
-    let out = w.go_local(&["gamma"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(
-        stderr(&out).contains("cloud/gamma-m0-gone"),
-        "{}",
-        stderr(&out)
-    );
-    assert!(!w.mem_calls().iter().any(|c| c.contains("unset runner")));
-    assert!(!w.amx_started());
-}
-
-#[test]
-fn the_runner_record_reaches_the_hub_before_the_session_writes_its_own() {
-    let w = World::new("cloud-sync-after-record");
-    assert_eq!(w.go(&["gamma", "--cloud"]).status.code(), Some(0));
-    let calls = w.mem_calls();
-    let set = calls
-        .iter()
-        .position(|c| c.starts_with("project set runner cloud"));
-    let sync = calls.iter().rposition(|c| c.starts_with("sync"));
-    assert!(set.is_some() && sync > set, "{calls:?}");
-}
-
-/// A cloud run clones origin, so work the trunk holds and origin/main lacks,
-/// a fast-forwarded cloud branch or a milestone the mini landed, would be
-/// missing from it. Pushing main is Saiful's, so the run waits for that.
+/// On a machine the print still checks that origin holds what the trunk
+/// does, since the thread clones origin.
 #[test]
 fn a_trunk_ahead_of_origin_main_refuses_until_main_is_pushed() {
     let w = World::new("cloud-unpushed");
@@ -899,7 +914,6 @@ fn a_trunk_ahead_of_origin_main_refuses_until_main_is_pushed() {
         "{}",
         stderr(&out)
     );
-    assert!(!w.claude_ran());
 
     git(&checkout, &["push", "-q", "origin", "main"]);
     let out = w.go(&["gamma", "--cloud", "--print"]);
@@ -926,99 +940,47 @@ impl World {
     }
 }
 
-/// `mem project set cloud <machine>` sends the project's milestones to the
-/// cloud: a plain go, as an orchestrator runs when its milestone lands,
-/// starts the next one in a cloud session.
+/// An old `cloud` key carries nothing any more: a plain go starts the
+/// orchestrator here and pushes nothing.
 #[test]
-fn a_project_carried_to_the_cloud_starts_there_on_a_plain_go() {
-    let w = World::new("cloud-carried");
-    w.set("gamma", r#""cloud":"mini""#);
-    let out = w.go_plain(&["gamma"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(w.claude_ran(), "no cloud session: {}", stderr(&out));
-    assert!(!w.amx_started(), "a local orchestrator started");
-    assert!(
-        w.mem_calls()
-            .iter()
-            .any(|c| c.starts_with("project set runner cloud ")),
-        "{:?}",
-        w.mem_calls()
-    );
-}
-
-/// A local-only park is the one thing a device must do itself, cloud key
-/// or not: the plain go takes it here.
-#[test]
-fn a_local_only_park_stays_local_on_a_project_carried_to_the_cloud() {
-    let w = World::new("cloud-carried-local-only");
-    w.set("gamma", r#""cloud":"mini""#);
-    let tip = w.origin_with_cloud_branch_for("m2-next");
-    w.runner(
-        "gamma",
-        &format!(
-            r#"{{"machine":"cloud","id":"session_01Parked","since":"{}","milestone":"m2-next"}}"#,
-            now_minus(2)
-        ),
-    );
-    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(1)));
-    w.work.put(
-        "handoff-gamma.md",
-        "parked: local-only t2: needs the desktop to walk the popup\n",
-    );
-    let out = w.go_plain(&["gamma"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(!w.claude_ran(), "it went to the cloud");
-    assert!(w.amx_started());
-    assert_eq!(head(&w.checkout("gamma")), tip);
-}
-
-/// A project carried to the cloud pushes its own main before a cloud run,
-/// since the run starts from origin and a device just landed the milestone
-/// before it there.
-#[test]
-fn a_carried_project_pushes_its_main_before_the_cloud_run() {
-    let w = World::new("cloud-carried-push");
+fn a_plain_go_of_a_project_with_an_old_cloud_key_stays_local() {
+    let w = World::new("cloud-old-key");
     w.set("gamma", r#""cloud":"mini""#);
     w.origin_with_cloud_branch_for("m1-first");
     let checkout = w.checkout("gamma");
     commit(&checkout, "landed on the device");
-    let local = head(&checkout);
-    let out = w.go_plain(&["gamma", "--cloud"]);
+    let out = w.go_plain(&["gamma"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.amx_started(), "{}", stderr(&out));
+    assert!(!w.claude_ran(), "it went to the cloud");
     let origin = Command::new("git")
         .args(["-c", "core.hooksPath=/dev/null"])
         .args(["rev-parse", "origin/main"])
         .current_dir(&checkout)
         .output()
         .unwrap();
-    assert_eq!(String::from_utf8_lossy(&origin.stdout).trim(), local);
-    assert!(w.claude_ran(), "{}", stderr(&out));
-}
+    assert_ne!(
+        String::from_utf8_lossy(&origin.stdout).trim(),
+        head(&checkout)
+    );
 
-/// Without the cloud key, an unpushed main still refuses: pushing main is
-/// Saiful's call.
-#[test]
-fn an_uncarried_project_still_refuses_an_unpushed_main() {
-    let w = World::new("cloud-uncarried-push");
-    w.origin_with_cloud_branch_for("m1-first");
-    commit(&w.checkout("gamma"), "landed on the device");
-    let out = w.go_plain(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    assert!(stderr(&out).contains("push main first"), "{}", stderr(&out));
-    assert!(!w.claude_ran());
-}
-
-/// A dry run of a carried project prints the prompt and says what it would
-/// push, and pushes, records and starts nothing (#6CWMTDXX: it pushed main
-/// and started a real session).
-#[test]
-fn a_cloud_dry_run_pushes_records_and_starts_nothing() {
-    let w = World::new("cloud-dry-run");
+    let w = World::new("cloud-old-key-dry");
     w.set("gamma", r#""cloud":"mini""#);
-    w.origin_with_cloud_branch_for("m1-first");
-    let checkout = w.checkout("gamma");
-    let pushed = head(&checkout);
-    commit(&checkout, "landed on the device");
+    let out = w.go_plain(&["gamma", "--dry-run"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(stdout(&out).contains("amx"), "{}", stdout(&out));
+    assert!(
+        !stdout(&out).contains("cloud/gamma-m2-next"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// A cloud dry run prints the prompt and records and starts nothing
+/// (#6CWMTDXX: it once pushed main and started a real session).
+#[test]
+fn a_cloud_dry_run_records_and_starts_nothing() {
+    let w = World::new("cloud-dry-run");
     let out = w.go_plain(&["gamma", "--cloud", "--dry-run"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
@@ -1026,18 +988,6 @@ fn a_cloud_dry_run_pushes_records_and_starts_nothing() {
         "{}",
         stdout(&out)
     );
-    assert!(
-        stderr(&out).contains("would push 1 commit"),
-        "{}",
-        stderr(&out)
-    );
-    let origin = Command::new("git")
-        .args(["-c", "core.hooksPath=/dev/null"])
-        .args(["rev-parse", "origin/main"])
-        .current_dir(&checkout)
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8_lossy(&origin.stdout).trim(), pushed);
     assert!(!w.claude_ran());
     assert!(!w.amx_started());
     assert!(
@@ -1045,36 +995,4 @@ fn a_cloud_dry_run_pushes_records_and_starts_nothing() {
         "{:?}",
         w.mem_calls()
     );
-}
-
-/// A plain dry run of a carried project shows the cloud start a plain go
-/// would make, not a local one.
-#[test]
-fn a_plain_dry_run_of_a_carried_project_prints_the_cloud_prompt() {
-    let w = World::new("cloud-dry-run-plain");
-    w.set("gamma", r#""cloud":"mini""#);
-    let out = w.go_plain(&["gamma", "--dry-run"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(
-        stdout(&out).contains("cloud/gamma-m2-next"),
-        "{}",
-        stdout(&out)
-    );
-    assert!(!w.claude_ran());
-    assert!(!w.amx_started());
-}
-
-/// A start lock that cannot be had is said, and the start goes on.
-#[test]
-fn a_start_without_the_start_lock_says_so() {
-    let w = World::new("cloud-no-lock");
-    w.work.put("state", "a file where the state folder goes\n");
-    let out = w.go(&["gamma", "--cloud"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(
-        stderr(&out).contains("cannot lock the cloud starts"),
-        "{}",
-        stderr(&out)
-    );
-    assert!(w.claude_ran());
 }

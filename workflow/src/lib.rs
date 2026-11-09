@@ -140,10 +140,8 @@ pub fn run(cli: Cli) -> i32 {
                 model: model.as_deref().unwrap_or(go::DEFAULT_MODEL),
                 effort: effort.as_deref().unwrap_or(go::DEFAULT_EFFORT),
             };
-            // A project carried to the cloud starts there on a plain go
-            // too, as an orchestrator runs one when its milestone lands. A
-            // dry run of a cloud start prints its prompt and starts nothing.
-            if cloud || cloud::carried(&opts) {
+            // A dry run of a cloud start prints its prompt and starts nothing.
+            if cloud {
                 return cloud::cmd_go_cloud(&opts, print || dry_run);
             }
             go::cmd_go(&opts, dry_run)

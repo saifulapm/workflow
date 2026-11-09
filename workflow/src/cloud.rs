@@ -46,24 +46,48 @@ pub fn prompt(project: &str, slug: &str, base: &str) -> String {
         .replace("{base}", base)
 }
 
+/// What the next cloud run is cut from: main, which a landed run pushed
+/// its work to, or the branch of a cloud plan that ended, whose writes the
+/// store may not have taken yet.
+pub fn base(row: &ProjectRow) -> String {
+    match &row.runner {
+        Some(runner)
+            if runner.machine == "cloud"
+                && runner.milestone.as_deref() == Some(PLAN)
+                && row.milestone.as_deref() != Some(PLAN) =>
+        {
+            branch(&row.name, PLAN)
+        }
+        _ => "main".to_string(),
+    }
+}
+
+/// What a coordinator types to start `project`'s next milestone in a thread
+/// of its Claude Project, and the one thing it passes on.
+pub fn start_line(project: &str) -> String {
+    format!("Run the next milestone of {project}.")
+}
+
+/// This cloud session as claude.ai's links name it, `session_...`, when this
+/// runs in one: `CLAUDE_CODE_REMOTE_SESSION_ID` says `cse_...`.
+pub fn this_session() -> Option<String> {
+    let id = std::env::var("CLAUDE_CODE_REMOTE_SESSION_ID").ok()?;
+    let id = id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(match id.strip_prefix("cse_") {
+        Some(rest) => format!("session_{rest}"),
+        None => id.to_string(),
+    })
+}
+
 /// The prompt for a cloud plan of `project`.
 pub fn plan_prompt(project: &str) -> String {
     PLAN_PROMPT
         .trim_end()
         .replace("{branch}", &branch(project, PLAN))
         .replace("{project}", project)
-}
-
-/// What the next cloud run is cut from: the branch of the cloud run that
-/// landed last, which main may not hold yet, or main.
-pub fn base(row: &ProjectRow) -> String {
-    match &row.runner {
-        Some(runner) if runner.machine == "cloud" => match &runner.milestone {
-            Some(done) if row.milestone.as_ref() != Some(done) => branch(&row.name, done),
-            _ => "main".to_string(),
-        },
-        _ => "main".to_string(),
-    }
 }
 
 /// How many commits `dir`'s main holds that origin/main, as last fetched,
@@ -125,29 +149,38 @@ pub fn state(
     Some(if within { State::Live } else { State::Ended })
 }
 
-/// `git push origin main` in `dir`, past the push hook, which lets a push
-/// through only with this variable: the project's cloud key is the yes.
-fn push_main(dir: &str) -> Result<(), String> {
-    let out = Command::new("git")
-        .args(["push", "-q", "origin", "main"])
-        .env("WORKFLOW_ALLOW_PUSH", "1")
-        .current_dir(dir)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
-}
-
-/// `workflow go <project> --cloud`, or with `print` only its prompt.
+/// `workflow go <project> --cloud --print`. On a machine it prints the
+/// prompt and starts nothing: the project's Claude Project starts every
+/// cloud run, and `--cloud` alone refuses, naming the start line. In a cloud
+/// session, a thread of that Project, it first claims the run as the
+/// session's own, and says each outcome but a start as the one line the
+/// thread ends its report on: `done: ...` or `parked: ...`.
 pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
-    let _lock = if print { None } else { start_lock() };
+    let me = this_session();
+    // In a thread a refusal is the report's last line; on a machine it is
+    // said on stderr, as every go refusal is.
+    let refuse = |why: String, code: i32| {
+        if me.is_some() {
+            println!("parked: {why}");
+        } else {
+            warn(format!("go: {why}"));
+        }
+        code
+    };
+    if !print {
+        let name = opts
+            .project
+            .map(str::to_string)
+            .or_else(|| memcli::project_current().map(|p| p.name))
+            .unwrap_or_else(|| "<project>".to_string());
+        warn(format!(
+            "go: the Claude Project carries every cloud run: type \"{}\" in {name}'s Claude Project",
+            start_line(&name)
+        ));
+        return exit::USAGE;
+    }
     let Some(projects) = memcli::projects() else {
-        warn("go: mem cannot list its projects");
-        return exit::FAILED;
+        return refuse("mem cannot list its projects".into(), exit::FAILED);
     };
     let start = match go::decide(
         opts,
@@ -160,92 +193,96 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     ) {
         Decision::Start(start) => start,
         Decision::Done(project) => {
-            println!("{project}: the roadmap is done");
+            if me.is_some() {
+                println!("done: {project}'s roadmap is done");
+            } else {
+                println!("{project}: the roadmap is done");
+            }
             return exit::OK;
         }
-        Decision::Paused(project) => {
-            println!("{project}: paused");
-            return exit::USAGE;
-        }
-        Decision::Refuse(why) => {
-            warn(format!("go: {why}"));
-            return exit::USAGE;
-        }
-        Decision::Fail(why) => {
-            warn(format!("go: {why}"));
-            return exit::FAILED;
-        }
+        Decision::Paused(project) => return paused(&project, me.is_some()),
+        Decision::Refuse(why) => return refuse(why, exit::USAGE),
+        Decision::Fail(why) => return refuse(why, exit::FAILED),
     };
     let Some(row) = projects.iter().find(|row| row.name == start.project) else {
-        warn(format!("go: mem lists no {}", start.project));
-        return exit::FAILED;
+        return refuse(format!("mem lists no {}", start.project), exit::FAILED);
     };
     // A parked milestone may carry on locally while paused; a cloud run
     // never starts on a paused project.
     if row.paused.is_some() {
-        println!("{}: paused", start.project);
-        return exit::USAGE;
+        return paused(&start.project, me.is_some());
     }
-    // A project carried to the cloud pushes its own main: the run starts
-    // from origin, and a device has just landed the milestone before it
-    // there. Any other unpushed main stays Saiful's to push.
-    let ahead = unpushed(&start.dir).filter(|n| *n > 0);
-    let carried = row.cloud.as_deref().is_some_and(|m| !m.is_empty());
-    if let (true, Some(n)) = (carried, ahead) {
-        if print {
-            let commits = if n == 1 { "commit" } else { "commits" };
-            warn(format!(
-                "go: would push {n} {commits} of {}'s main first",
-                row.name
-            ));
-        } else if let Err(why) = push_main(&start.dir) {
-            warn(format!("go: cannot push {}'s main: {why}", row.name));
-            return exit::FAILED;
-        }
+    if let Some(why) = refusal(row, &start.slug, &start.dir, me.is_some()) {
+        return refuse(why, exit::USAGE);
     }
-    // Printing for a carried project, the push it would make stands in for
-    // the unpushed main a start refuses.
-    if let Some(why) = refusal(&projects, row, &start.slug, &start.dir, print && carried) {
-        warn(format!("go: {why}"));
-        return exit::USAGE;
+    if let Some(why) = held(row, me.as_deref(), jiff::Timestamp::now()) {
+        return refuse(why, exit::USAGE);
     }
-    if let Some(why) = held_elsewhere(&projects, &start.project) {
-        warn(format!("go: {why}"));
-        return exit::USAGE;
+    if let Some(me) = &me
+        && let Err(why) = claim(&start.project, &start.slug, me)
+    {
+        return refuse(why, exit::USAGE);
     }
-    let base = base(row);
-    let text = prompt(&start.project, &start.slug, &base);
-    if print {
-        println!("{text}");
-        return exit::OK;
-    }
-    start_session("go", &start.project, &start.dir, &text, &start.slug)
+    println!("{}", prompt(&start.project, &start.slug, &base(row)));
+    exit::OK
 }
 
-/// Whether a plain `workflow go` for `opts` starts in the cloud: the project
-/// names a machine that carries it there (`mem project set cloud`), and no
-/// cloud run of it is parked local-only, which a device takes itself.
-pub fn carried(opts: &Options) -> bool {
-    let Some(projects) = memcli::projects() else {
-        return false;
-    };
-    let name = match opts.project {
-        Some(project) => project.to_string(),
-        None => match memcli::project_current() {
-            Some(current) => current.name,
-            None => return false,
-        },
-    };
-    let Some(row) = projects.iter().find(|row| row.name == name) else {
-        return false;
-    };
-    if row.cloud.as_deref().is_none_or(str::is_empty) {
-        return false;
+/// A paused project's start: it says so on stdout and exits 2.
+fn paused(project: &str, thread: bool) -> i32 {
+    if thread {
+        println!("parked: {project} is paused");
+    } else {
+        println!("{project}: paused");
     }
-    !matches!(
-        state(row, || memcli::handoff(&row.name), jiff::Timestamp::now()),
-        Some(State::LocalOnly)
-    )
+    exit::USAGE
+}
+
+/// Record the run of `slug` as session `me`'s, and make sure the store took
+/// it: two threads that claim at once both write, the store keeps the first
+/// and refuses the second, whose replica then holds the first's record. So
+/// the claim stands once nothing waits in the outbox and the runner read
+/// back is `me`.
+fn claim(project: &str, slug: &str, me: &str) -> Result<(), String> {
+    let mine = |projects: &[ProjectRow]| {
+        projects
+            .iter()
+            .find(|row| row.name == project)
+            .and_then(|row| row.runner.as_ref())
+            .is_some_and(|r| r.machine == "cloud" && r.id == me)
+    };
+    if memcli::projects().is_some_and(|rows| mine(&rows)) {
+        return Ok(());
+    }
+    if !memcli::set_cloud_runner(project, me, slug) {
+        return Err(format!("mem would not record this run as {project}'s"));
+    }
+    let mut waiting = None;
+    for _ in 0..3 {
+        waiting = memcli::sync_outbox();
+        if waiting == Some(0) {
+            break;
+        }
+    }
+    if waiting != Some(0) {
+        return Err(format!(
+            "the store has not taken this run's record of {project} ({}), so another \
+run could hold it; run `mem sync` and start again",
+            match waiting {
+                Some(n) => format!("{n} writes still wait"),
+                None => "mem sync failed".to_string(),
+            }
+        ));
+    }
+    let Some(projects) = memcli::projects() else {
+        return Err("mem cannot list its projects".to_string());
+    };
+    if mine(&projects) {
+        return Ok(());
+    }
+    let row = projects.iter().find(|row| row.name == project);
+    Err(row
+        .and_then(|row| held(row, Some(me), jiff::Timestamp::now()))
+        .unwrap_or_else(|| format!("another run took {project} first")))
 }
 
 /// `workflow plan <project> --cloud`, or with `print` only its prompt.
@@ -284,11 +321,11 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
         println!("{name}: paused");
         return exit::USAGE;
     }
-    if let Some(why) = repo_refusal(&projects, row, &dir, false) {
+    if let Some(why) = repo_refusal(row, &dir, false) {
         warn(format!("plan: {why}"));
         return exit::USAGE;
     }
-    if let Some(why) = held_elsewhere(&projects, &name) {
+    if let Some(why) = held(row, None, jiff::Timestamp::now()) {
         warn(format!("plan: {why}"));
         return exit::USAGE;
     }
@@ -300,24 +337,50 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
     start_session("plan", &name, &dir, &text, PLAN)
 }
 
-/// Why `project` may not start a cloud run, if it may not: its own cloud run
-/// is live or parked. A parked run still holds its session, which its
-/// answers go to. Other projects' runs hold nothing back: there is no cap
-/// across projects.
-fn held_elsewhere(projects: &[ProjectRow], project: &str) -> Option<String> {
-    let row = projects.iter().find(|row| row.name == project)?;
-    let now = jiff::Timestamp::now();
-    if !matches!(
-        state(row, || memcli::handoff(&row.name), now),
-        Some(State::Live | State::Parked)
-    ) {
+/// Why `row` may not start a cloud run, if it may not: its own run is live
+/// or parked. A parked run still holds its session, which its answers go
+/// to. Other projects' runs hold nothing back: there is no cap across
+/// projects. `me`, a thread's own session, is never held back by its own
+/// run, which it may be resuming; a thread is also held back by a run
+/// parked local-only, which a device takes from its branch, and by a
+/// device's run under 7 hours that has written no handoff since, or a park.
+fn held(row: &ProjectRow, me: Option<&str>, now: jiff::Timestamp) -> Option<String> {
+    let project = &row.name;
+    let runner = row.runner.as_ref()?;
+    if me == Some(runner.id.as_str()) {
         return None;
     }
-    let runner = row.runner.as_ref().expect("a cloud state has a runner");
+    let milestone = runner.milestone.as_deref().unwrap_or("?");
+    if runner.machine == "cloud" {
+        let link = format!("{CODE_PAGE}/{}", runner.id);
+        return match state(row, || memcli::handoff(project), now)? {
+            State::Live | State::Parked if me.is_some() => {
+                Some(format!("{project} already runs {milestone} in {link}"))
+            }
+            State::Live | State::Parked => Some(format!(
+                "{project} already has a cloud run: {milestone}, {}",
+                runner.id
+            )),
+            State::LocalOnly if me.is_some() => Some(format!(
+                "{project}'s {milestone} is parked local-only in {link}; a device takes it from its branch"
+            )),
+            _ => None,
+        };
+    }
+    me?;
+    let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
+    let since = time(&runner.since)?;
+    if now.duration_since(since) >= jiff::SignedDuration::from_hours(LIVE_HOURS) {
+        return None;
+    }
+    if time(&row.handoff_at).is_some_and(|at| at > since)
+        && !memcli::handoff(project).is_some_and(|text| text.trim_start().starts_with("parked:"))
+    {
+        return None;
+    }
     Some(format!(
-        "{project} already has a cloud run: {}, {}",
-        runner.milestone.as_deref().unwrap_or("?"),
-        runner.id
+        "{project} already runs on {} ({})",
+        runner.machine, runner.id
     ))
 }
 
@@ -453,14 +516,8 @@ enum Launch {
 /// work in `dir` that origin/main lacks waits for Saiful to push main; only
 /// the next milestone runs, since a later one would read as landed; and a
 /// device orchestrator keeps the project as a local go would.
-fn refusal(
-    projects: &[ProjectRow],
-    row: &ProjectRow,
-    slug: &str,
-    dir: &str,
-    pushes: bool,
-) -> Option<String> {
-    if let Some(why) = repo_refusal(projects, row, dir, pushes) {
+fn refusal(row: &ProjectRow, slug: &str, dir: &str, thread: bool) -> Option<String> {
+    if let Some(why) = repo_refusal(row, dir, thread) {
         return Some(why);
     }
     let name = &row.name;
@@ -469,6 +526,11 @@ fn refusal(
             "a cloud run takes {name}'s next milestone, {}, not {slug}",
             row.milestone.as_deref().unwrap_or("none")
         ));
+    }
+    // A thread has no amx and is no device: `held` weighs a device's run
+    // by its record alone.
+    if thread {
+        return None;
     }
     let runner = row.runner.as_ref().filter(|r| r.machine != "cloud")?;
     if crate::machine::name().as_deref() != Some(runner.machine.as_str()) {
@@ -499,32 +561,10 @@ answer it and the hub resumes it there",
 }
 
 /// Why `row` cannot run in the cloud at all, whatever it runs: a cloud
-/// session clones origin's main and finds the project by its remote.
-/// `pushes` says the caller pushes main itself, so an unpushed main is no
-/// reason. One carried project per repo: two would chain cloud runs on
-/// branches that never hold each other's work, and the shared trunk could
-/// fast-forward to only one.
-fn repo_refusal(
-    projects: &[ProjectRow],
-    row: &ProjectRow,
-    dir: &str,
-    pushes: bool,
-) -> Option<String> {
+/// session clones origin's main and finds the project by its remote. In a
+/// `thread` the checkout is that clone, so an unpushed main is no reason.
+fn repo_refusal(row: &ProjectRow, dir: &str, thread: bool) -> Option<String> {
     let name = &row.name;
-    let repo = row.remote.as_deref().and_then(owner_repo);
-    if let Some(sibling) = projects.iter().find(|other| {
-        other.name != *name
-            && other.cloud.as_deref().is_some_and(|m| !m.is_empty())
-            && repo.is_some()
-            && other.remote.as_deref().and_then(owner_repo) == repo
-    }) {
-        return Some(format!(
-            "{name} shares {} with {}, which is also carried to the cloud; one project \
-of a repo runs there: unset one with `mem --project <name> project unset cloud`",
-            repo.unwrap_or_default(),
-            sibling.name
-        ));
-    }
     if row.worktree.is_some() {
         return Some(format!(
             "{name} works on a branch of its own; cloud runs take main"
@@ -533,7 +573,7 @@ of a repo runs there: unset one with `mem --project <name> project unset cloud`"
     if row.remote.as_deref().is_none_or(str::is_empty) {
         return Some(format!("{name} has no git remote"));
     }
-    if let Some(n) = unpushed(dir).filter(|n| *n > 0 && !pushes) {
+    if let Some(n) = unpushed(dir).filter(|n| *n > 0 && !thread) {
         let commits = if n == 1 { "commit" } else { "commits" };
         return Some(format!(
             "{name}'s main is {n} {commits} ahead of origin/main; push main first: \
@@ -541,18 +581,6 @@ a cloud run starts from origin"
         ));
     }
     None
-}
-
-/// The last two segments of a remote, lowercased, without `.git`:
-/// `git@github.com:o/r.git` and `github.com/o/r` are both `o/r`, as mem and
-/// the hub read them.
-fn owner_repo(url: &str) -> Option<String> {
-    let url = url.trim().trim_end_matches('/');
-    let url = url.strip_suffix(".git").unwrap_or(url);
-    let mut parts = url.rsplit(['/', ':']).filter(|p| !p.is_empty());
-    let repo = parts.next()?;
-    let owner = parts.next()?;
-    Some(format!("{owner}/{repo}").to_ascii_lowercase())
 }
 
 /// `claude --cloud <prompt>` in `dir`, under a pty: claude refuses `--cloud`
