@@ -3,8 +3,8 @@
 # pressed on a project is kept in the store and sent at once as a cmd frame
 # to a listening machine, the project reads `waiting for mini` while its
 # machine is away with the command waiting, and a done from the machine
-# clears it. Run in cloud goes to the one online device that has the
-# project when the mini is away, and pressing it twice queues one start.
+# clears it. The project page names the Claude Project start line in place
+# of a Run in cloud button.
 #
 # Needs what t147 needs: hubweb/node_modules, worker-build, the wasm
 # target, openssl, python3 and node.
@@ -132,13 +132,8 @@ for _ in $(seq 50); do
 done
 unlike "$(get /p/gamma)" 'waiting for mini' "once mini is done the project no longer waits"
 
-# Only nuc is online now: Run in cloud goes to it, once.
-agent nuc
-is "$?" 0 "nuc says hello and reports"
-like "$(paired_get /p/gamma)" 'name="do" value="cloud"' "with the mini away the page still offers Run in cloud"
-status=$(control --data-urlencode do=cloud)
-is "$status" 303 "Run in cloud is taken"
-control --data-urlencode do=cloud >/dev/null
-sleep 1
-cloud_frames=$(frames nuc | grep -c '"command":{"cloud":true,"kind":"start","project":"gamma"},"id":"[^"]*","machine":"nuc"')
-is "$cloud_frames" 1 "two presses queue one cloud start, for nuc"
+# Every cloud run starts in the project's Claude Project: the page names the
+# start line and offers no cloud button.
+like "$(paired_get /p/gamma)" 'Run the next milestone of gamma\.' "the page names the Claude Project start line"
+unlike "$(paired_get /p/gamma)" 'value="cloud"' "the page offers no Run in cloud"
+

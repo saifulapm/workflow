@@ -1430,22 +1430,43 @@ fn a_start_for_this_machine_runs_workflow_go_in_a_scope_of_its_own_then_says_don
 }
 
 #[test]
-fn run_in_cloud_runs_workflow_go_cloud() {
+fn a_start_frame_asking_for_the_cloud_starts_nothing_and_logs_the_refusal() {
     let dir = TempDir::new("share-cmd-cloud");
     let store = FakeStore::start();
-    let _hub = commanded_hub(&dir, "[]", &store);
+    let bin = command_bins(&dir);
+    seed_machine(&dir, "[]");
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), "testbox\n").unwrap();
+    let log = dir.join("hub.log");
+    let socket = dir.join("local.sock");
+    let _hub = Hub::spawn_with_stderr(
+        &home,
+        &[&bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", PEER_TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("HUB_STORE_URL", store.url.as_str()),
+            ("HUB_STORE_TOKEN", STORE_TOKEN),
+            ("WORKFLOW_MACHINE", "mini"),
+        ],
+        std::fs::File::create(&log).unwrap(),
+    );
+    wait_for("a report", Duration::from_secs(5), || {
+        !reports_on(&store, 0).is_empty()
+    });
     store.send(&cmd(
         "01CMDC",
         "mini",
         serde_json::json!({"kind":"start","project":"walk01","cloud":true}),
     ));
-    wait_for("the done", Duration::from_secs(5), || {
-        !dones_on(&store, 0).is_empty()
+    wait_for("the refusal in the log", Duration::from_secs(5), || {
+        std::fs::read_to_string(&log).unwrap_or_default().contains(
+            "hub: commands: start walk01: refused, the Claude Project carries every cloud run",
+        )
     });
-    assert_eq!(
-        ran(&dir),
-        ["systemd-run --user --scope --quiet workflow go walk01 --cloud"]
-    );
+    assert_eq!(ran(&dir), Vec::<String>::new());
 }
 
 /// The store sends a command again with each report until it hears done;

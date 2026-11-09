@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 
-use crate::host::{CLOUD_MACHINE, Command, Fleet};
+use crate::host::Command;
 use crate::html::{esc, project_url};
 use crate::http::Response;
 use crate::live::{self, CloudState};
@@ -27,10 +27,7 @@ pub fn control_post(ctx: &PageCtx) -> Response {
     let form = ctx.request.form();
     let verb = form.get("do").unwrap_or("");
     let text = form.get("text").unwrap_or("").trim();
-    if !matches!(
-        verb,
-        "approve" | "changes" | "go" | "cloud" | "pause" | "unpause"
-    ) {
+    if !matches!(verb, "approve" | "changes" | "go" | "pause" | "unpause") {
         return Response::text(400, "unknown control");
     }
     let roadmap = format!("{}/roadmap", project_url(project));
@@ -91,7 +88,6 @@ pub fn control_post(ctx: &PageCtx) -> Response {
             Response::see_other(&roadmap)
         }
         "pause" | "unpause" => pause(ctx, project, verb),
-        "cloud" => cloud(ctx, project),
         _ => go(ctx, project, form.get("machine").unwrap_or("")),
     }
 }
@@ -171,73 +167,6 @@ fn go(ctx: &PageCtx, project: &str, machine: &str) -> Response {
     Response::see_other(&project_url(project))
 }
 
-/// Run in cloud: one cloud `start` queued for the mini, whose agent runs
-/// `workflow go <project> --cloud` there, once the projects are read again
-/// as they are now. Called with the control lock held.
-fn cloud(ctx: &PageCtx, project: &str) -> Response {
-    let mem = ctx.site.mem;
-    mem.invalidate();
-    let summaries: Vec<_> = mem
-        .refresh(&["projects", "--json"])
-        .rows("projects")
-        .iter()
-        .map(summary_of)
-        .collect();
-    let Some(summary) = summaries.iter().find(|s| s.name == project) else {
-        return Response::not_found();
-    };
-    let agents = ctx.site.host.fleet();
-    if let Some(why) = page_project::cloud_refusal(mem, agents, &summaries, summary, ctx.site.now) {
-        return conflict(ctx, &why);
-    }
-    match cloud_machine(agents, project) {
-        Err(why) => return conflict(ctx, &why),
-        // One cloud start per project, however often the button is pressed.
-        Ok(None) => {}
-        Ok(Some(machine)) => ctx.site.host.queue(
-            &machine,
-            Command::Start {
-                project: project.to_string(),
-                cloud: true,
-            },
-        ),
-    }
-    Response::see_other(&project_url(project))
-}
-
-/// Where a cloud start for `project` goes: the mini when it is online, else
-/// the first online device by name, never a cloud session, that has the project
-/// checked out. Ok(None) when any machine already holds the start.
-pub(crate) fn cloud_machine(agents: &dyn Fleet, project: &str) -> Result<Option<String>, String> {
-    let queued = Command::Start {
-        project: project.to_string(),
-        cloud: true,
-    };
-    if agents
-        .machines()
-        .iter()
-        .any(|m| agents.pending(m).contains(&queued))
-    {
-        return Ok(None);
-    }
-    if agents.online(CLOUD_MACHINE) {
-        return Ok(Some(CLOUD_MACHINE.to_string()));
-    }
-    let mut names = agents.machines();
-    names.sort();
-    names
-        .into_iter()
-        .find(|m| {
-            agents.online(m)
-                && agents.report(m).is_some_and(|r| {
-                    // A cloud session is no device: it reports its session.
-                    r.cloud.is_none() && r.checkouts.iter().any(|c| c == project)
-                })
-        })
-        .map(Some)
-        .ok_or_else(|| "no device is online to start it.".to_string())
-}
-
 /// The project's pending approval question, found by its project and the
 /// first words of its body.
 pub fn pending_approval(ctx: &PageCtx, project: &str) -> Option<Value> {
@@ -279,114 +208,6 @@ pub fn or_unset(status: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::{Fleet, Polled};
-
-    /// Machines by name: (name, online, checkouts, pending).
-    struct Fake(Vec<(&'static str, bool, Vec<&'static str>, Vec<Command>)>);
-
-    impl Fleet for Fake {
-        fn online(&self, machine: &str) -> bool {
-            self.0.iter().any(|m| m.0 == machine && m.1)
-        }
-        fn report(&self, machine: &str) -> Option<Polled> {
-            let m = self.0.iter().find(|m| m.0 == machine)?;
-            Some(Polled {
-                checkouts: m.2.iter().map(|c| c.to_string()).collect(),
-                ..Polled::default()
-            })
-        }
-        fn machines(&self) -> Vec<String> {
-            self.0.iter().map(|m| m.0.to_string()).collect()
-        }
-        fn pending(&self, machine: &str) -> Vec<Command> {
-            self.0
-                .iter()
-                .find(|m| m.0 == machine)
-                .map(|m| m.3.clone())
-                .unwrap_or_default()
-        }
-    }
-
-    fn cloud_start() -> Command {
-        Command::Start {
-            project: "gamma".into(),
-            cloud: true,
-        }
-    }
-
-    #[test]
-    fn a_cloud_run_goes_to_the_mini_when_it_is_online() {
-        let fleet = Fake(vec![
-            ("mini", true, vec![], vec![]),
-            ("nuc", true, vec!["gamma"], vec![]),
-        ]);
-        assert_eq!(cloud_machine(&fleet, "gamma"), Ok(Some("mini".into())));
-    }
-
-    #[test]
-    fn a_cloud_run_goes_to_another_online_device_with_the_checkout() {
-        let fleet = Fake(vec![
-            ("mini", false, vec!["gamma"], vec![]),
-            ("air", true, vec!["other"], vec![]),
-            ("nuc", true, vec!["gamma"], vec![]),
-        ]);
-        assert_eq!(cloud_machine(&fleet, "gamma"), Ok(Some("nuc".into())));
-    }
-
-    /// A cloud session reports as its session id, never as `cloud`; it is
-    /// no device, and cannot start a cloud run from inside its VM.
-    #[test]
-    fn a_cloud_run_never_goes_to_a_cloud_session() {
-        struct WithCloud(Fake);
-        impl Fleet for WithCloud {
-            fn online(&self, machine: &str) -> bool {
-                self.0.online(machine)
-            }
-            fn report(&self, machine: &str) -> Option<Polled> {
-                let mut report = self.0.report(machine)?;
-                if machine.starts_with("session_") {
-                    report.cloud = Some(machine.to_string());
-                }
-                Some(report)
-            }
-            fn machines(&self) -> Vec<String> {
-                self.0.machines()
-            }
-            fn pending(&self, machine: &str) -> Vec<Command> {
-                self.0.pending(machine)
-            }
-        }
-        let fleet = WithCloud(Fake(vec![
-            ("mini", false, vec!["gamma"], vec![]),
-            ("session_01ABC", true, vec!["gamma"], vec![]),
-        ]));
-        assert_eq!(
-            cloud_machine(&fleet, "gamma"),
-            Err("no device is online to start it.".to_string())
-        );
-    }
-
-    #[test]
-    fn a_cloud_run_with_no_online_device_is_refused() {
-        let fleet = Fake(vec![
-            ("mini", false, vec!["gamma"], vec![]),
-            ("nuc", true, vec![], vec![]),
-        ]);
-        assert_eq!(
-            cloud_machine(&fleet, "gamma"),
-            Err("no device is online to start it.".to_string())
-        );
-    }
-
-    #[test]
-    fn a_cloud_start_pending_on_any_machine_queues_nothing_more() {
-        let fleet = Fake(vec![
-            ("mini", true, vec![], vec![]),
-            ("nuc", true, vec!["gamma"], vec![cloud_start()]),
-        ]);
-        assert_eq!(cloud_machine(&fleet, "gamma"), Ok(None));
-    }
-
     #[test]
     fn only_the_roadmap_review_is_an_approval() {
         assert!(is_approval("Review the beta roadmap"));

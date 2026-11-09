@@ -158,7 +158,6 @@ impl Bell {
             let s = summary_of(row);
             self.landings(&s);
             self.stall(&s, &here);
-            self.carry(&s);
         }
         if self.rung != before {
             write_rung(&self.rung);
@@ -193,45 +192,6 @@ impl Bell {
         let mine = s.runner.as_ref().is_some_and(|r| r.machine == self.machine);
         if let (true, Some(open)) = (mine, s.milestone.as_deref()) {
             self.rung.insert(format!("{prefix}{open}"));
-        }
-    }
-
-    /// A project this machine carries to the cloud (`mem project set cloud
-    /// <this machine>`) gets its next run started here: the next milestone
-    /// in the cloud once a cloud run landed or a cloud plan ended, and a
-    /// local-only park taken on this machine, whose orchestrator sends the
-    /// milestone after it back to the cloud. Each start is kept once it
-    /// succeeded; one refused is tried again next round.
-    fn carry(&mut self, s: &hubpages::page_home::ProjectSummary) {
-        if s.cloud.as_deref() != Some(self.machine.as_str())
-            || s.paused.is_some()
-            || s.roadmap_status.as_deref() != Some("approved")
-        {
-            return;
-        }
-        let Some(open) = s.milestone.as_deref() else {
-            return;
-        };
-        let handoff = || {
-            mem_json(&["handoff", "--project", &s.name, "--json"])
-                .and_then(|doc| doc["body"].as_str().map(str::to_string))
-        };
-        let Some(run) = live::cloud_run(s, handoff, jiff::Timestamp::now()) else {
-            return;
-        };
-        let (key, cloud) = match run.state {
-            live::CloudState::Landed => (format!("carried {} {open}", s.name), true),
-            live::CloudState::Ended if run.milestone == live::PLAN => {
-                (format!("carried {} {open}", s.name), true)
-            }
-            live::CloudState::LocalOnly => (format!("took {} {}", s.name, run.id), false),
-            _ => return,
-        };
-        if self.rung.contains(&key) {
-            return;
-        }
-        if crate::runs::start_project(&s.name, cloud) {
-            self.rung.insert(key);
         }
     }
 

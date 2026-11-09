@@ -151,11 +151,8 @@ fn succeeds(program: &str, args: &[&str]) -> bool {
 
 /// `workflow go` in a scope of its own, so stopping the hub's unit never
 /// stops the orchestrator it started.
-pub fn start_project(project: &str, cloud: bool) -> bool {
-    let mut args = vec!["--user", "--scope", "--quiet", "workflow", "go", project];
-    if cloud {
-        args.push("--cloud");
-    }
+pub fn start_project(project: &str) -> bool {
+    let args = ["--user", "--scope", "--quiet", "workflow", "go", project];
     let ok = succeeds(&bin("WORKFLOW_SYSTEMD_RUN", "systemd-run"), &args);
     eprintln!(
         "hub: commands: start {project}: {}",
@@ -209,12 +206,12 @@ pub fn resume(project: &str, id: &str, message: &str) -> bool {
                 eprintln!("hub: commands: resume {id}: resumed");
             } else {
                 eprintln!("hub: commands: resume {id}: amx failed, start {project}");
-                start_project(project, false);
+                start_project(project);
             }
         }
         Session::Gone => {
             eprintln!("hub: commands: resume {id}: session gone, start {project}");
-            start_project(project, false);
+            start_project(project);
         }
         Session::Unknown => {
             eprintln!("hub: commands: resume {id}: amx cannot say, trying later");
@@ -228,8 +225,18 @@ fn run(job: &Job) {
     match job {
         // The replica is the store's own copy now: nothing to sync.
         Job::Sync => {}
-        Job::Start { project, cloud } => {
-            start_project(project, *cloud);
+        // An older hub web may still send `cloud`; the Claude Project starts
+        // every cloud run, so no device does.
+        Job::Start {
+            project,
+            cloud: true,
+        } => {
+            eprintln!(
+                "hub: commands: start {project}: refused, the Claude Project carries every cloud run"
+            );
+        }
+        Job::Start { project, .. } => {
+            start_project(project);
         }
         Job::Resume {
             project,
@@ -297,7 +304,7 @@ pub fn resume_stalled(project: &str) -> u16 {
     if resumed.iter().any(|(p, _)| p == project) {
         return 409;
     }
-    if !start_project(project, false) {
+    if !start_project(project) {
         return 502;
     }
     resumed.push((project.to_string(), std::time::Instant::now()));

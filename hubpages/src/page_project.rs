@@ -9,7 +9,6 @@
 use serde_json::Value;
 
 use crate::form::encode_component;
-use crate::host::{CLOUD_MACHINE, Fleet};
 use crate::html::{
     self, degraded_banner, esc, item_list_section, markdown_article, outside_link, page_url,
     project_url,
@@ -42,10 +41,14 @@ pub fn get(ctx: &PageCtx) -> Response {
         return Response::not_found();
     };
     let mut body = stage_header(&summary);
+    // Every cloud run starts in the project's Claude Project, not here.
+    body.push_str(&format!(
+        "<p class=\"meta\">Claude Project start line: Run the next milestone of {}.</p>\n",
+        esc(&summary.name)
+    ));
     let running = matches!(summary.stage, "execution" | "dogfooding");
     if running {
         body.push_str(&orchestrator_line(ctx, &summary));
-        body.push_str(&cloud_section(ctx, &summary));
     }
     if summary.stage == "execution" {
         body.push_str(&run_summary(ctx, project));
@@ -413,230 +416,9 @@ pub fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
     live::cloud_run(s, handoff, ctx.site.now).map(|run| live::heard(run, ctx.site.host.fleet()))
 }
 
-/// Every cloud run that is live or parked, each with its project's name, in
-/// the summaries' order. A handoff is read only for a cloud runner that
-/// wrote one since it began.
-pub fn cloud_runs(
-    mem: &dyn Source,
-    summaries: &[ProjectSummary],
-    now: jiff::Timestamp,
-) -> Vec<(String, CloudRun)> {
-    summaries
-        .iter()
-        .filter_map(|s| {
-            let handoff = || match &*mem.handoff(&s.name) {
-                Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
-                _ => None,
-            };
-            live::cloud_run(s, handoff, now)
-                .filter(|run| matches!(run.state, CloudState::Live | CloudState::Parked))
-                .map(|run| (s.name.clone(), run))
-        })
-        .collect()
-}
-
-/// Why `s` may not start a cloud run, or `None` when it may: `workflow go
-/// --cloud` wants an approved milestone, no pause, a git remote, the trunk
-/// on main, no device orchestrator on it, and no cloud run of its own. Other
-/// projects' cloud runs hold nothing back.
-pub fn cloud_refusal(
-    mem: &dyn Source,
-    agents: &dyn Fleet,
-    summaries: &[ProjectSummary],
-    s: &ProjectSummary,
-    now: jiff::Timestamp,
-) -> Option<String> {
-    let (done, total) = s.milestones;
-    if s.roadmap_status.as_deref() != Some("approved") || done >= total || s.milestone.is_none() {
-        return Some("There is no approved milestone to start.".to_string());
-    }
-    if s.paused.is_some() {
-        return Some(format!("{} is paused.", s.name));
-    }
-    let rows = mem.projects().rows("projects");
-    let row = rows
-        .iter()
-        .find(|row| row["name"] == s.name.as_str())
-        .cloned()
-        .unwrap_or_default();
-    // The cloud session clones the remote and cuts from main.
-    if row["remote"].as_str().is_none_or(str::is_empty) {
-        return Some(format!("{} has no git remote", s.name));
-    }
-    // One carried project per repo, as `workflow go --cloud` refuses: two
-    // would chain cloud runs that never hold each other's work.
-    let repo = row["remote"].as_str().and_then(owner_repo);
-    if let Some(sibling) = rows.iter().find(|other| {
-        other["name"] != s.name.as_str()
-            && other["cloud"].as_str().is_some_and(|m| !m.is_empty())
-            && other["remote"].as_str().and_then(owner_repo) == repo
-    }) {
-        return Some(format!(
-            "{} shares {} with {}, which is also carried to the cloud; one project of a repo runs there.",
-            s.name,
-            repo.unwrap_or_default(),
-            sibling["name"].as_str().unwrap_or_default()
-        ));
-    }
-    // Its trunk is a branch the cloud cannot see yet. The mini knows, since
-    // mem keeps a worktree per machine; this store knows only its own.
-    let reported = agents
-        .report(CLOUD_MACHINE)
-        .is_some_and(|report| report.worktrees.contains(&s.name));
-    if reported || row["worktree"].is_string() {
-        return Some(format!(
-            "{} works on a branch of its own; cloud runs take main",
-            s.name
-        ));
-    }
-    if let Run::Live(agent) = live::run(s.runner.as_ref(), &s.name, s.milestone.as_deref(), agents)
-    {
-        return Some(format!("{} is already running.", agent.id));
-    }
-    // A device orchestrator parked on a question has stopped its own session,
-    // but the hub resumes it when Saiful answers, as `workflow go` refuses.
-    let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
-    if let Some(runner) = s.runner.as_ref().filter(|r| r.machine != "cloud")
-        && let (Some(since), Some(at)) = (time(&runner.since), time(&s.handoff_at))
-        && at > since
-        && let Outcome::Json(doc) = &*mem.handoff(&s.name)
-        && doc["body"]
-            .as_str()
-            .is_some_and(|text| text.trim_start().starts_with("parked:"))
-    {
-        return Some(format!(
-            "{}'s {} is parked on {} ({}), waiting for an answer; answer it and the hub resumes it there.",
-            s.name,
-            s.milestone.as_deref().unwrap_or("milestone"),
-            runner.machine,
-            runner.id
-        ));
-    }
-    let runs = cloud_runs(mem, summaries, now);
-    if let Some((_, run)) = runs.iter().find(|(project, _)| *project == s.name) {
-        return Some(format!(
-            "{} already has a cloud run: {}, {}.",
-            s.name, run.milestone, run.id
-        ));
-    }
-    unpushed(agents, &s.name)
-}
-
-/// The last two segments of a remote, lowercased, without `.git`:
-/// `git@github.com:o/r.git` and `https://github.com/o/r` are both `o/r`, as
-/// mem and the hub server read them.
-fn owner_repo(url: &str) -> Option<String> {
-    let url = url.trim().trim_end_matches('/');
-    let url = url.strip_suffix(".git").unwrap_or(url);
-    let mut parts = url.rsplit(['/', ':']).filter(|p| !p.is_empty());
-    let repo = parts.next()?;
-    let owner = parts.next()?;
-    Some(format!("{owner}/{repo}").to_ascii_lowercase())
-}
-
-/// Why a cloud run of `project` must wait for Saiful to push main: the
-/// mini's main holds commits origin/main lacks, and the run clones origin.
-fn unpushed(agents: &dyn Fleet, project: &str) -> Option<String> {
-    let report = agents.report(CLOUD_MACHINE)?;
-    let n = *report.unpushed.get(project).filter(|n| **n > 0)?;
-    let commits = if n == 1 { "commit" } else { "commits" };
-    Some(format!(
-        "{project}'s main is {n} {commits} ahead of origin/main on {CLOUD_MACHINE}; \
-push main first: a cloud run starts from origin"
-    ))
-}
-
-/// The prompt a cloud run starts on, the file `workflow go --cloud` renders,
-/// so the card and the command stay one text.
-const CLOUD_PROMPT: &str = include_str!("../../workflow/src/cloud-prompt.txt");
-
 /// claude.ai's Code page, where a cloud session lives. Built with `concat!`,
 /// as workflow builds it, so the hygiene rule still catches a pasted link.
 pub const CODE_PAGE: &str = concat!("https://claude.ai", "/code");
-
-/// The branch a cloud run of `slug` works on.
-fn cloud_branch(project: &str, slug: &str) -> String {
-    format!("cloud/{project}-{slug}")
-}
-
-/// What the next cloud run is cut from: the branch of the cloud run that
-/// landed last, which main may not hold yet, or main.
-fn cloud_base(s: &ProjectSummary) -> String {
-    match &s.runner {
-        Some(runner) if runner.machine == "cloud" => match &runner.milestone {
-            Some(done) if s.milestone.as_ref() != Some(done) => cloud_branch(&s.name, done),
-            _ => "main".to_string(),
-        },
-        _ => "main".to_string(),
-    }
-}
-
-/// The prompt for `slug` of `project`, its branch cut from `base`, filled in
-/// as workflow fills it.
-fn cloud_prompt(project: &str, slug: &str, base: &str) -> String {
-    CLOUD_PROMPT
-        .trim_end()
-        .replace("{branch}", &cloud_branch(project, slug))
-        .replace("{project}", project)
-        .replace("{slug}", slug)
-        .replace("{base}", base)
-}
-
-/// The way into a cloud run: Run in cloud, which the mini starts, while the
-/// mini is online, and the Start in cloud card for starting one by hand in
-/// the Claude app.
-fn cloud_section(ctx: &PageCtx, s: &ProjectSummary) -> String {
-    let summaries = project_summaries(ctx.site.mem);
-    let site = ctx.site;
-    if let Some(why) = cloud_refusal(site.mem, site.host.fleet(), &summaries, s, site.now) {
-        // Only a missing push gets a card: it is the one Saiful can clear.
-        if unpushed(ctx.site.host.fleet(), &s.name).is_some_and(|wait| wait == why) {
-            return format!(
-                "<h2>Cloud run</h2>\n<div class=\"card\">\n<p>{}</p>\n</div>\n",
-                esc(&why)
-            );
-        }
-        return String::new();
-    }
-    let slug = s.milestone.as_deref().unwrap_or_default();
-    let remote = ctx
-        .site
-        .mem
-        .projects()
-        .rows("projects")
-        .into_iter()
-        .find(|row| row["name"] == s.name.as_str())
-        .and_then(|row| row["remote"].as_str().map(str::to_string))
-        .unwrap_or_default();
-    let prompt = cloud_prompt(&s.name, slug, &cloud_base(s));
-    let mut out = format!(
-        "<h2>Cloud run</h2>\n<div class=\"card\">\n\
-         <p class=\"meta\">{} · {} · Environment: workflow</p>\n\
-         <textarea id=\"cloud-prompt\" rows=\"8\" readonly>{}</textarea>\n\
-         <p><button type=\"button\" onclick=\"navigator.clipboard.writeText(\
-         document.getElementById('cloud-prompt').value)\">Copy prompt</button> {}</p>\n\
-         </div>\n",
-        esc(slug),
-        esc(&remote),
-        esc(&prompt),
-        outside_link(CODE_PAGE, "Open Claude"),
-    );
-    // The mini first, else another online device with the project; one
-    // already queued still shows the button, which then adds nothing.
-    if crate::page_control::cloud_machine(ctx.site.host.fleet(), &s.name).is_ok() {
-        out.push_str(&controls(
-            ctx,
-            format!(
-                "<form method=\"post\" action=\"{}/control\">\n\
-                 <input type=\"hidden\" name=\"do\" value=\"cloud\">\n\
-                 <button type=\"submit\">Run in cloud</button>\n\
-                 </form>\n",
-                esc(&project_url(&s.name))
-            ),
-        ));
-    }
-    out
-}
 
 /// The forms, or for a browser that never paired the line saying how.
 fn controls(ctx: &PageCtx, forms: String) -> String {

@@ -355,75 +355,14 @@ fn started(dir: &TempDir) -> Vec<String> {
         .collect()
 }
 
+/// The Claude Project carries every cloud run now: a project naming this
+/// machine as its carrier, with a cloud run landed, starts nothing here.
 #[test]
-fn a_milestone_landed_in_the_cloud_starts_the_next_there_once() {
-    let dir = TempDir::new("carry-landed");
+fn a_milestone_landed_in_the_cloud_starts_nothing_here() {
+    let dir = TempDir::new("carry-gone");
     let bin = carried(&dir, "mini", "w2", "w1", Some("now"), "Next: w2.");
     let (api, _posts) = fake_slack();
     let _hub = spawn(&dir, &bin, &api, "60000");
-    wait_for("the cloud start", Duration::from_secs(5), || {
-        !started(&dir).is_empty()
-    });
-    std::thread::sleep(Duration::from_millis(800));
-    let runs = started(&dir);
-    assert_eq!(runs.len(), 1, "{runs:?}");
-    assert!(runs[0].ends_with("workflow go walk01 --cloud"), "{runs:?}");
-}
-
-#[test]
-fn a_cloud_plan_that_ended_starts_the_first_milestone_in_the_cloud() {
-    let dir = TempDir::new("carry-plan");
-    let bin = carried(
-        &dir,
-        "mini",
-        "w1",
-        "plan",
-        Some("now"),
-        "Next: workflow go walk01 --cloud",
-    );
-    let (api, _posts) = fake_slack();
-    let _hub = spawn(&dir, &bin, &api, "60000");
-    wait_for("the cloud start", Duration::from_secs(5), || {
-        !started(&dir).is_empty()
-    });
-    assert!(started(&dir)[0].ends_with("workflow go walk01 --cloud"));
-}
-
-#[test]
-fn a_local_only_park_is_taken_here() {
-    let dir = TempDir::new("carry-local-only");
-    let bin = carried(
-        &dir,
-        "mini",
-        "w2",
-        "w2",
-        Some("now"),
-        "parked: local-only t5: needs cf",
-    );
-    let (api, _posts) = fake_slack();
-    let _hub = spawn(&dir, &bin, &api, "60000");
-    wait_for("the local start", Duration::from_secs(5), || {
-        !started(&dir).is_empty()
-    });
-    std::thread::sleep(Duration::from_millis(800));
-    let runs = started(&dir);
-    assert_eq!(runs.len(), 1, "{runs:?}");
-    assert!(runs[0].ends_with("workflow go walk01"), "{runs:?}");
-}
-
-#[test]
-fn only_the_carrier_starts_runs_and_never_over_a_live_one() {
-    let dir = TempDir::new("carry-not-mine");
-    let bin = carried(&dir, "nuc", "w2", "w1", Some("now"), "Next: w2.");
-    let (api, _posts) = fake_slack();
-    let _hub = spawn(&dir, &bin, &api, "60000");
-    std::thread::sleep(Duration::from_millis(1200));
-    assert!(started(&dir).is_empty(), "{:?}", started(&dir));
-
-    let dir = TempDir::new("carry-live");
-    let bin = carried(&dir, "mini", "w2", "w2", None, "");
-    let (api, _posts) = fake_slack();
-    let _hub = spawn(&dir, &bin, &api, "60000");
-    std::thread::sleep(Duration::from_millis(1200));
+    std::thread::sleep(Duration::from_millis(1500));
     assert!(started(&dir).is_empty(), "{:?}", started(&dir));
 }

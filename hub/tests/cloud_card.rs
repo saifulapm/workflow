@@ -1,13 +1,13 @@
-//! The project page's way into a cloud run: the Run in cloud button, which
-//! queues a cloud start for the mini, and the Start in cloud card, whose
-//! prompt is the one `workflow go --cloud --print` prints. Over a fake `mem`
-//! that answers the hub's `--json` reads and workflow's plain ones alike.
+//! The project page and cloud runs: the Claude Project start line in place
+//! of a Run in cloud card, and what a cloud run's runner record still does
+//! to the device Start and Resume. Over a fake `mem` that answers the hub's
+//! `--json` reads and workflow's plain ones alike.
 
 mod common;
 
 use std::path::PathBuf;
 
-use common::{Hub, TempDir, body_of, fixture_bin, header_of, status_of};
+use common::{Hub, TempDir, body_of, fixture_bin, status_of};
 use serde_json::{Value, json};
 
 struct World {
@@ -92,17 +92,6 @@ impl World {
         self.put("projects.json", &doc.to_string());
     }
 
-    /// A third project like gamma and delta.
-    fn add_project(&self, name: &str) {
-        let path = self.data.join("projects.json");
-        let mut doc: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let mut row = doc["projects"][0].clone();
-        row["name"] = json!(name);
-        row["remote"] = json!(format!("git@github.com:saiful/{name}.git"));
-        doc["projects"].as_array_mut().unwrap().push(row);
-        self.put("projects.json", &doc.to_string());
-    }
-
     /// `project`'s latest handoff, as both forms of `mem handoff` print it.
     fn handoff(&self, project: &str, body: &str) {
         self.put(
@@ -138,238 +127,26 @@ fn cloud(milestone: &str, since: &str) -> Value {
         "milestone": milestone})
 }
 
-/// The mini's poll, and the commands it was handed.
-fn poll(hub: &Hub) -> Value {
-    let report = json!({"machine": "mini", "agents": [], "checkouts": []});
-    serde_json::from_str::<Value>(&hub.poll_agent(&report.to_string())).unwrap()["commands"].clone()
-}
-
 fn page(hub: &Hub) -> String {
     let response = hub.get("/p/gamma");
     assert_eq!(status_of(&response), 200, "{response}");
     body_of(&response).to_string()
 }
 
-const RUN_IN_CLOUD: &str = "<input type=\"hidden\" name=\"do\" value=\"cloud\">";
-
+/// Every cloud run starts from the project's Claude Project, so the page
+/// names the line to type there and offers no cloud start of its own.
 #[test]
-fn run_in_cloud_queues_a_cloud_start_for_the_mini() {
-    let world = World::new("cloud-run-button");
+fn the_page_names_the_claude_project_start_line_and_offers_no_cloud_run() {
+    let world = World::new("cloud-start-line");
     let hub = world.hub();
-    assert_eq!(poll(&hub), json!([]));
-
     let body = page(&hub);
-    assert!(body.contains(RUN_IN_CLOUD), "{body}");
-    assert!(body.contains(">Run in cloud</button>"), "{body}");
-
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(header_of(&response, "location"), Some("/p/gamma"));
-    assert_eq!(
-        poll(&hub),
-        json!([{"kind": "start", "project": "gamma", "cloud": true}])
-    );
-}
-
-#[test]
-fn run_in_cloud_is_refused_while_no_device_is_online() {
-    let world = World::new("cloud-run-offline");
-    let hub = world.hub();
-    assert!(!page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
     assert!(
-        body_of(&response).contains("no device is online to start it"),
-        "{response}"
+        body.contains("Claude Project start line: Run the next milestone of gamma."),
+        "{body}"
     );
-}
-
-#[test]
-fn run_in_cloud_is_refused_on_a_paused_project() {
-    let world = World::new("cloud-run-paused");
-    world.set("gamma", "paused", json!("2026-10-15T09:00:00Z by saiful"));
-    let hub = world.hub();
-    poll(&hub);
-    assert!(!page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(body_of(&response).contains("gamma is paused"), "{response}");
-    assert_eq!(poll(&hub), json!([]));
-}
-
-#[test]
-fn run_in_cloud_starts_beside_one_other_live_cloud_run() {
-    let world = World::new("cloud-run-one-other");
-    world.set("delta", "runner", cloud("m2-next", &ago(60)));
-    let hub = world.hub();
-    poll(&hub);
-    assert!(page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(
-        poll(&hub),
-        json!([{"kind": "start", "project": "gamma", "cloud": true}])
-    );
-}
-
-#[test]
-fn run_in_cloud_starts_beside_one_parked_run_and_a_local_only_park() {
-    let world = World::new("cloud-run-parked-one");
-    world.add_project("epsilon");
-    world.set("delta", "runner", cloud("m2-next", &ago(120)));
-    world.set("delta", "handoff_at", json!(ago(60)));
-    world.handoff("delta", "parked: t2 is waiting, question #ABCD1234\n");
-    world.set("epsilon", "runner", cloud("m2-next", &ago(120)));
-    world.set("epsilon", "handoff_at", json!(ago(60)));
-    world.handoff("epsilon", "parked: local-only t2: needs the desktop\n");
-    let hub = world.hub();
-    poll(&hub);
-    assert!(page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 303, "{response}");
-}
-
-#[test]
-fn run_in_cloud_starts_beside_two_other_cloud_runs_live_or_parked() {
-    let world = World::new("cloud-run-two-others");
-    world.add_project("epsilon");
-    world.set("delta", "runner", cloud("m2-next", &ago(60)));
-    world.set("epsilon", "runner", cloud("m2-next", &ago(120)));
-    world.set("epsilon", "handoff_at", json!(ago(60)));
-    world.handoff("epsilon", "parked: t2 is waiting, question #ABCD1234\n");
-    let hub = world.hub();
-    poll(&hub);
-    assert!(page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 303, "{response}");
-    assert_eq!(
-        poll(&hub),
-        json!([{"kind": "start", "project": "gamma", "cloud": true}])
-    );
-}
-
-#[test]
-fn run_in_cloud_is_refused_while_the_project_has_its_own_live_cloud_run() {
-    let world = World::new("cloud-run-own");
-    world.set("gamma", "runner", cloud("m2-next", &ago(60)));
-    let hub = world.hub();
-    poll(&hub);
-    assert!(!page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(
-        body_of(&response).contains("gamma already has a cloud run: m2-next, session_01Other."),
-        "{response}"
-    );
-    assert_eq!(poll(&hub), json!([]));
-}
-
-/// A device orchestrator parked on a question shows nothing running, but the
-/// hub resumes it when Saiful answers: Run in cloud would run it twice.
-#[test]
-fn run_in_cloud_is_refused_while_a_device_orchestrator_is_parked_on_a_question() {
-    let world = World::new("cloud-run-device-parked");
-    world.set(
-        "gamma",
-        "runner",
-        json!({"machine": "mini", "id": "gamma-m2-next", "since": ago(180)}),
-    );
-    world.set("gamma", "handoff_at", json!(ago(60)));
-    world.handoff("gamma", "parked: m2-next t3 waits on question #ABCD1234\n");
-    let hub = world.hub();
-    poll(&hub);
-    assert!(!page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(
-        body_of(&response).contains("gamma&#39;s m2-next is parked on mini (gamma-m2-next)"),
-        "{response}"
-    );
-    assert_eq!(poll(&hub), json!([]));
-}
-
-/// Two carried projects of one repo would chain cloud runs that never hold
-/// each other's work; one carried project per repo runs there.
-#[test]
-fn run_in_cloud_is_refused_while_another_project_of_the_repo_is_carried() {
-    let world = World::new("cloud-run-repo-sibling");
-    world.add_project("epsilon");
-    world.set(
-        "epsilon",
-        "remote",
-        json!("https://github.com/saiful/gamma"),
-    );
-    world.set("gamma", "cloud", json!("mini"));
-    world.set("epsilon", "cloud", json!("mini"));
-    let hub = world.hub();
-    poll(&hub);
-    assert!(!page(&hub).contains(RUN_IN_CLOUD));
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(
-        body_of(&response)
-            .contains("gamma shares saiful/gamma with epsilon, which is also carried"),
-        "{response}"
-    );
-    assert_eq!(poll(&hub), json!([]));
-}
-
-#[test]
-fn run_in_cloud_is_refused_while_a_device_orchestrator_runs_the_project() {
-    let world = World::new("cloud-run-device-live");
-    world.set(
-        "gamma",
-        "runner",
-        json!({"machine": "mini", "id": "gamma-m2-next"}),
-    );
-    let hub = world.hub();
-    let report = json!({"machine": "mini", "checkouts": ["gamma"],
-        "agents": [{"id": "gamma-m2-next", "state": "working", "ended": 0}]});
-    hub.poll_agent(&report.to_string());
-    let body = page(&hub);
-    assert!(body.contains("gamma-m2-next · working"), "{body}");
-    assert_eq!(card(&body), None, "{body}");
-    assert!(!body.contains(RUN_IN_CLOUD), "{body}");
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(
-        body_of(&response).contains("gamma-m2-next is already running"),
-        "{response}"
-    );
-    assert_eq!(poll(&hub), json!([]));
-}
-
-/// A cloud run clones the project from its remote and cuts from main, so a
-/// project with no remote, or one whose trunk is a worktree branch, gets no
-/// card and no cloud start.
-#[test]
-fn run_in_cloud_is_refused_without_a_remote_or_on_a_worktree() {
-    for (tag, key, value, why) in [
-        (
-            "cloud-run-no-remote",
-            "remote",
-            Value::Null,
-            "gamma has no git remote",
-        ),
-        (
-            "cloud-run-worktree",
-            "worktree",
-            json!("/home/saiful/Sites/gamma-wt"),
-            "gamma works on a branch of its own; cloud runs take main",
-        ),
-    ] {
-        let world = World::new(tag);
-        world.set("gamma", key, value);
-        let hub = world.hub();
-        poll(&hub);
-        let body = page(&hub);
-        assert_eq!(card(&body), None, "{key}: {body}");
-        assert!(!body.contains(RUN_IN_CLOUD), "{key}: {body}");
-        let response = hub.post_form("/p/gamma/control", "do=cloud");
-        assert_eq!(status_of(&response), 409, "{response}");
-        assert!(body_of(&response).contains(why), "{response}");
-        assert_eq!(poll(&hub), json!([]));
-    }
+    assert!(!body.contains("value=\"cloud\""), "{body}");
+    assert!(!body.contains("Run in cloud"), "{body}");
+    assert!(!body.contains("Cloud run"), "{body}");
 }
 
 const GO: &str = "<input type=\"hidden\" name=\"do\" value=\"go\">";
@@ -452,138 +229,6 @@ fn a_live_or_parked_cloud_run_offers_no_device_start() {
     assert_eq!(status_of(&response), 409, "{response}");
 }
 
-/// The Start in cloud card's section of the page, or `None` without one.
-fn card(body: &str) -> Option<String> {
-    let at = body.find("<h2>Cloud run</h2>")?;
-    let rest = &body[at..];
-    let end = rest[4..].find("<h2>").map_or(rest.len(), |e| e + 4);
-    Some(rest[..end].to_string())
-}
-
-/// The card's prompt, as the textarea holds it once unescaped.
-fn prompt(card: &str) -> String {
-    let open = card.find("<textarea").expect(card);
-    let start = open + card[open..].find('>').unwrap() + 1;
-    let end = card.find("</textarea>").expect(card);
-    common::unescape(&card[start..end])
-}
-
-/// What `workflow go gamma --cloud --print` prints over the same fake mem.
-fn printed(world: &World) -> String {
-    let out = std::process::Command::new(common::workflow_bin())
-        .args(["go", "gamma", "--cloud", "--print"])
-        .env("WORKFLOW_MEM", world.bin.join("mem"))
-        .env("WORKFLOW_CLAUDE", world.dir.join("no-claude"))
-        .env("WORKFLOW_AMX", world.dir.join("no-amx"))
-        .env("XDG_CONFIG_HOME", world.dir.join("config"))
-        .env("WORKFLOW_MACHINE", "mini")
-        .env_remove("AMX_ID")
-        .current_dir(world.dir.path())
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{out:?}");
-    String::from_utf8(out.stdout).unwrap()
-}
-
-#[test]
-fn the_card_shows_the_milestone_the_repo_and_the_prompt_to_copy() {
-    let world = World::new("cloud-card");
-    let hub = world.hub();
-    let body = page(&hub);
-    let card = card(&body).expect(&body);
-    for part in [
-        "m2-next",
-        "git@github.com:saiful/gamma.git",
-        "Environment: workflow",
-        ">Copy prompt</button>",
-        "<a href=\"https://claude.ai/code\" target=\"_blank\" rel=\"noopener\">Open Claude</a>",
-    ] {
-        assert!(card.contains(part), "{part:?} missing from {card}");
-    }
-    assert!(card.contains("<textarea"), "{card}");
-    assert!(
-        card[card.find("<textarea").unwrap()..].contains(" readonly"),
-        "{card}"
-    );
-    assert!(
-        prompt(&card).starts_with("Land milestone m2-next of gamma in this cloud session."),
-        "{card}"
-    );
-}
-
-#[test]
-fn the_cards_prompt_is_the_one_workflow_prints_byte_for_byte() {
-    let world = World::new("cloud-card-bytes");
-    let hub = world.hub();
-    let card = card(&page(&hub)).expect("a card");
-    let printed = printed(&world);
-    assert!(printed.contains("origin/main"), "{printed}");
-    assert_eq!(prompt(&card), printed.strip_suffix('\n').unwrap());
-}
-
-#[test]
-fn after_a_landed_cloud_run_the_card_cuts_from_its_branch_as_workflow_does() {
-    let world = World::new("cloud-card-landed");
-    world.set("gamma", "runner", cloud("m1-first", &ago(180)));
-    let hub = world.hub();
-    let card = card(&page(&hub)).expect("a card");
-    let printed = printed(&world);
-    assert!(printed.contains("origin/cloud/gamma-m1-first"), "{printed}");
-    assert_eq!(prompt(&card), printed.strip_suffix('\n').unwrap());
-}
-
-#[test]
-fn no_card_while_paused() {
-    let world = World::new("cloud-card-paused");
-    world.set("gamma", "paused", json!("2026-10-15T09:00:00Z by saiful"));
-    let hub = world.hub();
-    let body = page(&hub);
-    assert_eq!(card(&body), None, "{body}");
-}
-
-#[test]
-fn the_card_shows_beside_other_cloud_runs_live_or_parked() {
-    let world = World::new("cloud-card-live");
-    world.add_project("epsilon");
-    world.set("delta", "runner", cloud("m2-next", &ago(60)));
-    let hub = world.hub();
-    let body = page(&hub);
-    assert!(card(&body).is_some(), "one live: {body}");
-    drop(hub);
-
-    world.set("epsilon", "runner", cloud("m2-next", &ago(60)));
-    let hub = world.hub();
-    let body = page(&hub);
-    assert!(card(&body).is_some(), "two live: {body}");
-    drop(hub);
-
-    world.set("epsilon", "handoff_at", json!(ago(30)));
-    world.handoff("epsilon", "parked: t2 is waiting\n");
-    let hub = world.hub();
-    let body = page(&hub);
-    assert!(card(&body).is_some(), "one live, one parked: {body}");
-}
-
-#[test]
-fn no_card_while_the_project_has_its_own_live_cloud_run() {
-    let world = World::new("cloud-card-own");
-    world.set("gamma", "runner", cloud("m2-next", &ago(60)));
-    let hub = world.hub();
-    let body = page(&hub);
-    assert_eq!(card(&body), None, "{body}");
-}
-
-#[test]
-fn a_cloud_run_silent_for_eight_hours_frees_the_card() {
-    let world = World::new("cloud-card-lapsed");
-    world.set("gamma", "runner", cloud("m2-next", &ago(8 * 60)));
-    let hub = world.hub();
-    poll(&hub);
-    let body = page(&hub);
-    assert!(card(&body).is_some(), "{body}");
-    assert!(body.contains(RUN_IN_CLOUD), "{body}");
-}
-
 #[test]
 fn the_run_line_shows_a_cloud_runner_by_its_state_and_session() {
     let world = World::new("cloud-run-line");
@@ -609,45 +254,4 @@ fn the_run_line_shows_a_cloud_runner_by_its_state_and_session() {
         body.contains("<span class=\"meta\">cloud · m2-next · parked</span>"),
         "{body}"
     );
-}
-
-/// mem keeps a worktree per machine, so the one hub's store never holds
-/// palmshop's: the mini's agent reports it, and that is what hides the card.
-#[test]
-fn a_worktree_the_mini_reports_keeps_the_project_off_the_cloud() {
-    let world = World::new("cloud-run-reported-worktree");
-    let hub = world.hub();
-    let report = json!({"machine": "mini", "agents": [], "checkouts": ["gamma"],
-        "worktrees": ["gamma"]});
-    hub.poll_agent(&report.to_string());
-    let body = page(&hub);
-    assert_eq!(card(&body), None, "{body}");
-    assert!(!body.contains(RUN_IN_CLOUD), "{body}");
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(
-        body_of(&response).contains("gamma works on a branch of its own; cloud runs take main"),
-        "{response}"
-    );
-}
-
-/// A cloud run clones origin, so work the mini's main holds and origin/main
-/// lacks would be missing from it. Pushing main is Saiful's: the card says
-/// so in place of the prompt, and Run in cloud waits for it.
-#[test]
-fn a_trunk_the_mini_has_not_pushed_asks_for_a_push_in_place_of_the_prompt() {
-    let world = World::new("cloud-run-unpushed");
-    let hub = world.hub();
-    let report = json!({"machine": "mini", "agents": [], "checkouts": ["gamma"],
-        "unpushed": {"gamma": 3}});
-    hub.poll_agent(&report.to_string());
-    let body = page(&hub);
-    let card = card(&body).expect(&body);
-    let why = "gamma&#39;s main is 3 commits ahead of origin/main on mini; push main first";
-    assert!(card.contains(why), "{card}");
-    assert!(!card.contains("<textarea"), "{card}");
-    assert!(!body.contains(RUN_IN_CLOUD), "{body}");
-    let response = hub.post_form("/p/gamma/control", "do=cloud");
-    assert_eq!(status_of(&response), 409, "{response}");
-    assert!(body_of(&response).contains(why), "{response}");
 }
