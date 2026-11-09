@@ -198,12 +198,10 @@ fn move_onto_main(
     let mut tries = 0;
     loop {
         tries += 1;
+        // Each stop from here on parks with a line the thread ends its report
+        // on: the milestone is ticked, so a second land would find the next.
         if !git.quiet(&["fetch", "-q", "origin", MAIN]) {
-            git.quiet(&["reset", "-q", "--hard", &pushed]);
-            warn(format!(
-                "land: {slug} is on origin's {app}, but origin's main cannot be fetched; land again"
-            ));
-            return Err(exit::FAILED);
+            return Err(park("origin's main cannot be fetched".to_string()));
         }
         let base = git.out(&["rev-parse", &main]).unwrap_or_default();
         // A main that has not moved since app/<project> was cut takes it as
@@ -223,11 +221,8 @@ fn move_onto_main(
         let moved = git.quiet(&["fetch", "-q", "origin", MAIN])
             && git.out(&["rev-parse", &main]).unwrap_or_default() != base;
         if !moved {
-            git.quiet(&["reset", "-q", "--hard", &pushed]);
-            warn(format!(
-                "land: {slug} is on origin's {app}, but cannot push it to main: {why}; main is untouched"
-            ));
-            return Err(exit::FAILED);
+            warn(format!("land: origin refused main: {why}"));
+            return Err(park("origin refused the push to main".to_string()));
         }
         if tries == TRIES {
             return Err(park(format!(
@@ -238,10 +233,11 @@ fn move_onto_main(
     if git.out(&["rev-parse", "HEAD"]).unwrap_or_default() != pushed {
         let lease = format!("--force-with-lease=refs/heads/{app}:{pushed}");
         if let Err(why) = push(dir, &format!("HEAD:refs/heads/{app}"), Some(&lease)) {
-            warn(format!(
-                "land: {slug} is on origin's main, but {app} cannot follow it: {why}"
-            ));
-            return Err(exit::FAILED);
+            warn(format!("land: origin refused {app}: {why}"));
+            println!(
+                "parked: {app} did not follow main: {slug} is on origin's main, but {app} could not move to it"
+            );
+            return Err(exit::USAGE);
         }
     }
     Ok(())

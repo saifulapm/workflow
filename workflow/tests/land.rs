@@ -431,6 +431,28 @@ fn a_siblings_outbox_never_stops_an_app_moving_onto_main() {
     assert_eq!(w.origin_ref("app/gamma"), w.origin_main());
 }
 
+/// Origin refuses main for a reason of its own, a protected branch: the
+/// milestone stays on app/gamma and the thread still gets its last line.
+#[test]
+fn a_main_origin_refuses_parks_the_move_with_a_line_to_end_on() {
+    let w = World::app("land-app-refused");
+    w.trunk_moves("apps/delta/other.txt", "another app\n");
+    let hook = w.work.at("origin.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nwhile read old new ref; do [ \"$ref\" = refs/heads/main ] && exit 1; done\nexit 0\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let line = last_line(&out);
+    assert!(line.starts_with("parked: main moved: gamma"), "{line}");
+    assert!(w.origin_log("app/gamma").contains("Build the milestone"));
+    assert!(!w.origin_log("main").contains("Build the milestone"));
+}
+
 /// The writes an app's landing carries go to both trunks that took it.
 #[test]
 fn an_apps_unsent_writes_land_on_its_trunk_and_on_main() {
