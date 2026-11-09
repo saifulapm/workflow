@@ -169,6 +169,9 @@ pub struct Local {
     kick: Arc<AtomicBool>,
     /// The store, while sharing is on; mem's file fetches go there.
     store: Option<Store>,
+    /// The device tunnel's Access app, with HUB_DEVICE_ACCESS_AUD and
+    /// HUB_DEVICE_ACCESS_TEAM set: its token opens `POST /device` alone.
+    device_access: Option<crate::access::Access>,
 }
 
 impl Local {
@@ -190,6 +193,15 @@ impl Local {
             nudged: AtomicU64::new(0),
             kick: Arc::new(AtomicBool::new(false)),
             store: None,
+            device_access: match (
+                std::env::var("HUB_DEVICE_ACCESS_AUD"),
+                std::env::var("HUB_DEVICE_ACCESS_TEAM"),
+            ) {
+                (Ok(aud), Ok(team)) if !aud.is_empty() && !team.is_empty() => {
+                    Some(crate::access::Access::new(&aud, &team))
+                }
+                _ => None,
+            },
         }
     }
 
@@ -205,6 +217,22 @@ impl Local {
 
     /// A request on the peer port.
     pub fn peer(&self, request: &Request) -> Response {
+        // A cloud session's device call, through the device tunnel: Access
+        // let it in and signed what it saw, and that opens this one path.
+        if let Some(access) = &self.device_access
+            && let Some(jwt) = request.header("cf-access-jwt-assertion")
+            && request.method == "POST"
+            && request.path == "/device"
+        {
+            let now = jiff::Timestamp::now().as_second();
+            return match access.check(Some(jwt), now) {
+                Ok(()) => self.device(request),
+                Err(why) => {
+                    eprintln!("hub: local: device call refused: {why}");
+                    Response::text(401, "refused by Access")
+                }
+            };
+        }
         if self.tokens.is_device(request) {
             return self.route(request);
         }
