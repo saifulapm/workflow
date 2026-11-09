@@ -681,6 +681,53 @@ fn a_cloud_runner_carries_its_milestone_and_the_list_says_when_the_handoff_was_w
     );
 }
 
+/// Both claude.ai accounts run the same Projects, so a run's record says
+/// which one runs it, and a run started without the account names none.
+#[test]
+fn a_cloud_runner_names_the_account_it_runs_from() {
+    let w = World::new("write-runner-account");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    let ok = |args: &[&str]| {
+        let out = mem(&w, &repo, args);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+    };
+    let runner =
+        |w: &World| json(&mem(w, &repo, &["projects", "--json"]))["projects"][0]["runner"].clone();
+    fn cloud<'a>(id: &'a str, account: Option<&'a str>) -> Vec<&'a str> {
+        let mut args = vec!["project", "set", "runner", "cloud", id, "--milestone", "m5"];
+        if let Some(account) = account {
+            args.extend(["--account", account]);
+        }
+        args
+    }
+    ok(&["log", "first write"]);
+    ok(&cloud("session_01W", Some("work")));
+    assert_eq!(runner(&w)["account"], "work", "{}", runner(&w));
+    ok(&cloud("session_01M", Some("main")));
+    assert_eq!(runner(&w)["account"], "main", "{}", runner(&w));
+    // A new record without the account does not inherit the last one's.
+    ok(&cloud("session_02", None));
+    assert!(runner(&w)["account"].is_null(), "{}", runner(&w));
+    ok(&["project", "set", "runner", "mini", "thing-m5"]);
+    assert!(runner(&w)["account"].is_null(), "{}", runner(&w));
+
+    let out = mem(&w, &repo, &cloud("session_03", Some("personal")));
+    assert_eq!(code(&out), 2, "{}", stderr(&out));
+    assert!(stderr(&out).contains("work"), "{}", stderr(&out));
+
+    ok(&cloud("session_04", Some("work")));
+    ok(&["project", "unset", "runner"]);
+    let toml = std::fs::read_to_string(
+        w.store()
+            .project_toml(&mem::project::Registry::load(&w.store()).projects[0].id),
+    )
+    .unwrap();
+    assert!(
+        !toml.contains("runner"),
+        "unset takes the account too: {toml}"
+    );
+}
+
 #[test]
 fn a_cloud_runner_outlives_the_last_milestone_so_its_branch_can_still_land() {
     let w = World::new("write-cloud-last");

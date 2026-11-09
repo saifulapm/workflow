@@ -140,7 +140,14 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                     machine,
                     id,
                     milestone,
-                } => verbs::project_runner(&app, machine, id, milestone.as_deref()),
+                    account,
+                } => verbs::project_runner(
+                    &app,
+                    machine,
+                    id,
+                    milestone.as_deref(),
+                    account.as_deref(),
+                ),
                 cli::ProjectSetCommand::Share => verbs::project_share(&app),
                 cli::ProjectSetCommand::Cloud { .. } => Err(exit::usage(
                     "the Claude Project carries every cloud run: type \"Run the next milestone \

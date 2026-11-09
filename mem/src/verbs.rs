@@ -749,8 +749,15 @@ pub fn project_pause(app: &App, who: &str) -> Result<i32> {
 
 /// `mem project set runner <machine> <id>`: one word each, so the stored
 /// "<machine> <id>" splits back apart, and mem stamps `runner_since`. The
-/// milestone, a cloud run's, is replaced or cleared with the rest.
-pub fn project_runner(app: &App, machine: &str, id: &str, milestone: Option<&str>) -> Result<i32> {
+/// milestone and the claude.ai account, a cloud run's, are replaced or
+/// cleared with the rest.
+pub fn project_runner(
+    app: &App,
+    machine: &str,
+    id: &str,
+    milestone: Option<&str>,
+    account: Option<&str>,
+) -> Result<i32> {
     let (machine, id) = (machine.trim(), id.trim());
     if machine.is_empty() || id.is_empty() || machine.contains(' ') || id.contains(' ') {
         return Err(exit::usage(
@@ -769,6 +776,14 @@ pub fn project_runner(app: &App, machine: &str, id: &str, milestone: Option<&str
         }
         None => {
             crate::project::unset_key(&app.store, project, "runner_milestone")?;
+        }
+    }
+    match account {
+        Some(account) => {
+            crate::project::set_key(&app.store, project, "runner_account", account)?;
+        }
+        None => {
+            crate::project::unset_key(&app.store, project, "runner_account")?;
         }
     }
     let code = project_set(app, "runner", &format!("{machine} {id}"))?;
@@ -790,6 +805,7 @@ fn runner_json(store: &crate::store::Store, id: &str) -> serde_json::Value {
             "id": run,
             "since": declared("runner_since"),
             "milestone": declared("runner_milestone"),
+            "account": declared("runner_account"),
         }),
         None => serde_json::Value::Null,
     }
@@ -807,6 +823,7 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     if key == "runner" {
         crate::project::unset_key(&app.store, id, "runner_since")?;
         crate::project::unset_key(&app.store, id, "runner_milestone")?;
+        crate::project::unset_key(&app.store, id, "runner_account")?;
     }
     // An unpause, or a cleared runner, has to reach the other machines as a
     // pause does.

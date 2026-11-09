@@ -548,6 +548,7 @@ impl<F: Files> View<'_, F> {
                 "id": run,
                 "since": p.declared("runner_since"),
                 "milestone": p.declared("runner_milestone"),
+                "account": p.declared("runner_account"),
             }),
             None => Value::Null,
         };

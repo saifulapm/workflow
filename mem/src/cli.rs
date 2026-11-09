@@ -500,12 +500,15 @@ pub enum ProjectSetCommand {
     Paused { who: String },
     /// The machine and the amx id of this project's orchestrator, written by
     /// `workflow go`. mem stamps when it was set. A cloud run is machine
-    /// `cloud`, its session id and the milestone it runs.
+    /// `cloud`, its session id and the milestone it runs, with the claude.ai
+    /// account its Project runs on.
     Runner {
         machine: String,
         id: String,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long, value_parser = ["work", "main"])]
+        account: Option<String>,
     },
     /// Share this project's writes with the other machines through the
     /// store, rather than through qshell-sync alone.

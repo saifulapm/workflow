@@ -119,7 +119,8 @@
               "machine",
               "id",
               "since",
-              "milestone"
+              "milestone",
+              "account"
             ],
             "additionalProperties": false,
             "properties": {
@@ -140,6 +141,14 @@
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "account": {
+                "description": "The claude.ai account a cloud run's Project runs on, from its environment's WORKFLOW_ACCOUNT; null when none was recorded, and for a device's runner.",
+                "enum": [
+                  "work",
+                  "main",
+                  null
                 ]
               }
             }
