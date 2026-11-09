@@ -340,10 +340,25 @@ fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
     assert!(prompt.contains("cloud/gamma-m2-next"), "{prompt}");
     assert!(prompt.contains("origin/main"), "cut from main: {prompt}");
     assert!(prompt.contains("orchestrate skill"), "{prompt}");
+    // It lands through workflow land, never by a push of its own, and ends
+    // on the line the coordinator reads.
+    for said in [
+        "`workflow land`",
+        "never force a push",
+        "never on main",
+        "parked: local-only <task>",
+        "parked: trunk moved:",
+        "parked: 6-hour stop",
+        "never start the milestone over",
+    ] {
+        assert!(prompt.contains(said), "{said}: {prompt}");
+    }
+    let dir = w.checkout("gamma");
     assert!(
-        prompt.contains("mem roadmap --tick m2-next") || prompt.contains("workflow land"),
-        "{prompt}"
+        prompt.contains(&format!("cd {}", dir.display())),
+        "a woken thread goes back to its checkout: {prompt}"
     );
+    assert!(!prompt.contains('{'), "a placeholder left: {prompt}");
     assert!(prompt.contains("parked:"), "{prompt}");
     assert!(!prompt.contains("/goal"), "no slash command: {prompt}");
     assert!(!w.claude_ran());

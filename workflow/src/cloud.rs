@@ -9,8 +9,8 @@ use crate::go::{self, Decision, Options};
 use crate::memcli::{self, ProjectRow};
 use crate::{embedded, exit, warn};
 
-/// The prompt a cloud run starts on. The hub's Start in cloud card renders
-/// the same file, so the two stay one text.
+/// The prompt a cloud run follows, which `workflow go --cloud --print`
+/// prints in a thread of the project's Claude Project.
 const PROMPT: &str = include_str!("cloud-prompt.txt");
 
 /// The standing text of a project's Claude Project, pasted once into its
@@ -40,10 +40,12 @@ pub fn branch(project: &str, slug: &str) -> String {
     format!("cloud/{project}-{slug}")
 }
 
-/// The prompt for `slug` of `project`, its branch cut from `base`.
-pub fn prompt(project: &str, slug: &str, base: &str) -> String {
+/// The prompt for `slug` of `project` in its checkout `dir`, its branch cut
+/// from `base`.
+pub fn prompt(project: &str, slug: &str, base: &str, dir: &str) -> String {
     PROMPT
         .trim_end()
+        .replace("{dir}", dir)
         .replace("{branch}", &branch(project, slug))
         .replace("{project}", project)
         .replace("{slug}", slug)
@@ -267,7 +269,10 @@ pub fn cmd_go_cloud(opts: &Options, print: bool) -> i32 {
     {
         return refuse(why, exit::USAGE);
     }
-    println!("{}", prompt(&start.project, &start.slug, &base(row)));
+    println!(
+        "{}",
+        prompt(&start.project, &start.slug, &base(row), &start.dir)
+    );
     exit::OK
 }
 
@@ -1318,9 +1323,12 @@ mod tests {
     fn every_push_carries_the_unsent_outbox() {
         assert!(PROMPT.contains("mem share export"), "{PROMPT}");
         assert!(PROMPT.contains("before every push"), "{PROMPT}");
-        // The tick and the last handoff come after the last task's push.
+        // The handoff leaves with the landing, and `workflow land` carries
+        // the tick it makes after the push.
         assert!(
-            PROMPT.contains("after the handoff, run `mem share export` once more"),
+            PROMPT.contains(
+                "then `mem share export` run and the file it stages committed; then `workflow land` run"
+            ),
             "{PROMPT}"
         );
     }
@@ -1347,16 +1355,26 @@ mod tests {
     /// record and every later write land there.
     #[test]
     fn a_session_checks_its_project_before_its_first_write() {
-        for text in [PROMPT, PLAN_PROMPT] {
-            let check = text.find("mem project current").expect(text);
-            let write = text.find("mem project set runner").expect(text);
-            assert!(check < write, "{text}");
-            assert!(text.contains("mem sync"), "{text}");
-            assert!(
-                text.contains("mem project set runner cloud <id> --project {project}"),
-                "{text}"
-            );
-        }
+        let check = PLAN_PROMPT.find("mem project current").expect(PLAN_PROMPT);
+        let write = PLAN_PROMPT
+            .find("mem project set runner")
+            .expect(PLAN_PROMPT);
+        assert!(check < write, "{PLAN_PROMPT}");
+        assert!(PLAN_PROMPT.contains("mem sync"), "{PLAN_PROMPT}");
+        assert!(
+            PLAN_PROMPT.contains("mem project set runner cloud <id> --project {project}"),
+            "{PLAN_PROMPT}"
+        );
+        // A thread's run is recorded by `workflow go --cloud --print`, which
+        // the Project instructions run only once mem names the project.
+        let check = PROJECT_TEXT
+            .find("mem project current")
+            .expect(PROJECT_TEXT);
+        let claim = PROJECT_TEXT
+            .find("workflow go {project} --cloud --print")
+            .expect(PROJECT_TEXT);
+        assert!(check < claim, "{PROJECT_TEXT}");
+        assert!(PROJECT_TEXT.contains("mem sync"), "{PROJECT_TEXT}");
     }
 
     /// The cloud rules park for a device only after the review and the
