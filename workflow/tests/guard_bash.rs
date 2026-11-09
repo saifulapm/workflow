@@ -208,12 +208,34 @@ fn pkill_and_pgrep_by_full_command_line_are_refused() {
 }
 
 #[test]
+fn pkill_by_exact_name_and_killall_are_refused() {
+    // A walker's cleanup, `pkill -x chromium-browser`, ran on the host and
+    // would have closed Saiful's own chromium with the walk's.
+    let w = Scratch::new("guard-bash-exact");
+    for command in [
+        "pkill -x chromium-browser",
+        "pkill -9 -x niri",
+        "pkill --exact chromium-browser",
+        "killall chromium-browser",
+        "sudo killall -9 niri",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(refused(&out, "by the pid"), "{command:?}: {out:?}");
+        assert!(
+            refused(&out, "kill -TERM -- -<pgid>"),
+            "{command:?}: {out:?}"
+        );
+    }
+}
+
+#[test]
 fn pkill_by_name_and_kill_by_group_run() {
     let w = Scratch::new("guard-bash-kill");
     for command in [
         "pkill vitest",
         "kill -TERM -- -1234",
         "pgrep -l vitest",
+        "pgrep -x chromium-browser",
         "ss -ltnp | grep :8787",
         r#"git commit -m "stop using pkill -f""#,
     ] {
