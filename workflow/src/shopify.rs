@@ -115,6 +115,15 @@ fn theme_dev(theme: &str) -> i32 {
         ));
         return exit::USAGE;
     };
+    // theme dev syncs the cloud theme whole, deletes included: before the
+    // build it would strip the store's copy of every built asset.
+    let built = std::fs::read_dir(dir.join("assets")).is_ok_and(|mut d| d.next().is_some());
+    if !built {
+        say(&format!(
+            "themes/{theme}/assets is missing or empty: build the theme first"
+        ));
+        return exit::USAGE;
+    }
     let token = match named(theme, "SHOPIFY_CLI_THEME_TOKEN") {
         Ok(v) => v,
         Err(code) => return code,
@@ -123,7 +132,11 @@ fn theme_dev(theme: &str) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
-    let password = var(&format!("{}_STORE_PASSWORD", prefix(theme)));
+    // Development stores keep a password page, which a walk would judge.
+    let password = match named(theme, "STORE_PASSWORD") {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
     let cli = |args: &[&str]| {
         let mut cmd = Command::new("shopify");
         cmd.args(args)
@@ -131,11 +144,8 @@ fn theme_dev(theme: &str) -> i32 {
             .arg("--path")
             .arg(&dir)
             .env("SHOPIFY_CLI_THEME_TOKEN", &token)
-            .env("SHOPIFY_FLAG_STORE", &store);
-        match &password {
-            Some(p) => cmd.env("SHOPIFY_FLAG_STORE_PASSWORD", p),
-            None => cmd.env_remove("SHOPIFY_FLAG_STORE_PASSWORD"),
-        };
+            .env("SHOPIFY_FLAG_STORE", &store)
+            .env("SHOPIFY_FLAG_STORE_PASSWORD", &password);
         cmd
     };
     let name = cloud_theme(theme);
@@ -256,6 +266,15 @@ fn deploy(app: &str) -> i32 {
         ));
         return NEEDS_SAIFUL;
     }
+    let store = toml_value(&staging, Some("build"), "dev_store_url");
+    let handle = toml_value(&staging, None, "handle");
+    let (Some(store), Some(handle)) = (store, handle) else {
+        say(&format!(
+            "{} needs handle and [build] dev_store_url (the dev store it is installed on): no admin page to walk",
+            config.display()
+        ));
+        return NEEDS_SAIFUL;
+    };
     let name = format!("{}_SHOPIFY_SERVICE_ACCOUNT_TOKEN", prefix(app));
     let Some(token) = var(&name) else {
         say(&format!(
@@ -296,7 +315,9 @@ fn deploy(app: &str) -> i32 {
     }
     eprint!("{stderr}");
     if !out.status.success() {
-        if format!("{stdout}{stderr}").contains("SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected") {
+        if words(&format!("{stdout}{stderr}"))
+            .contains("SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected")
+        {
             say(&format!(
                 "{name} was rejected: it was revoked, has expired (1, 3 or 6 months) or is not valid; make a new token for {app}'s service account"
             ));
@@ -305,20 +326,19 @@ fn deploy(app: &str) -> i32 {
         say(&format!("shopify app deploy failed for {app}"));
         return exit::FAILED;
     }
-    let store = toml_value(&staging, Some("build"), "dev_store_url");
-    let handle = toml_value(&staging, None, "handle");
-    match (store, handle) {
-        (Some(store), Some(handle)) => {
-            let store = store
-                .trim_start_matches("https://")
-                .trim_end_matches('/')
-                .trim_end_matches(".myshopify.com");
-            println!("walk: https://admin.shopify.com/store/{store}/apps/{handle}");
-        }
-        _ => say(&format!(
-            "no handle or [build] dev_store_url in {}: no admin page to walk",
-            config.display()
-        )),
-    }
+    let store = store
+        .trim_start_matches("https://")
+        .trim_end_matches('/')
+        .trim_end_matches(".myshopify.com");
+    println!("walk: https://admin.shopify.com/store/{store}/apps/{handle}");
     exit::OK
+}
+
+/// The words of the CLI's error box on one line: it wraps to the
+/// terminal's width, so a phrase may span its lines.
+fn words(out: &str) -> String {
+    out.split(|c: char| c.is_whitespace() || "│╭╮╰╯─".contains(c))
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }

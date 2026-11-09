@@ -286,13 +286,15 @@ with - as _. They go to the CLI under its own names.
 theme-dev <theme> runs shopify theme dev on themes/<theme> (in this folder or
 one above it), served at http://127.0.0.1:9292, on the store's unpublished
 theme '<theme> (cloud)', made the first time and synced whole from the
-checkout at each start, so no VM leaves a development theme behind.
+checkout at each start, so no VM leaves a development theme behind. A theme
+whose assets/ is missing or empty is refused, exit 2: build it first, since
+the sync deletes what the checkout lacks.
 
 deploy <app> runs shopify app deploy --config staging --allow-updates on
 apps/<app>, never another config: production stays Saiful's go-ahead. It
-refuses a staging config with production's client_id. Once deployed, its
-last line is 'walk: <the app's page in the dev store's admin>', from the
-staging config's handle and [build] dev_store_url.
+refuses a staging config with production's client_id, or with no handle or
+[build] dev_store_url. Once deployed, its last line is 'walk: <the app's page
+in the dev store's admin>', from those two.
 
 Exit 3 when a variable or the staging config is missing, or Shopify rejects
 the token, naming it: only Saiful makes those, so the task parks. Exit 2 when the folder is not

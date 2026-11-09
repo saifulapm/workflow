@@ -24,6 +24,8 @@ fn world(tag: &str) -> Scratch {
     let work = Scratch::new(tag);
     let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
     work.mkdir("repo/themes/pawsome/layout");
+    // Built: pawsome's assets come from its build and are not in git.
+    work.put("repo/themes/pawsome/assets/base.css", "body {}\n");
     work.put("list.json", r#"{"themes":[]}"#);
     work.put("list.code", "0");
     let at = |rel: &str| work.at(rel).display().to_string();
@@ -114,6 +116,35 @@ fn a_theme_with_no_store_says_so_and_starts_nothing() {
         said.contains("SHOPIFY_FLAG_STORE is not set for pawsome")
             && said.contains("PAWSOME_SHOPIFY_FLAG_STORE"),
         "{said}"
+    );
+    assert!(calls(&work).is_empty());
+}
+
+/// Development stores keep a password page, so a walk without the password
+/// would judge that page; only Saiful can give it.
+#[test]
+fn a_theme_with_no_store_password_says_so_and_starts_nothing() {
+    let work = world("shopify-theme-no-password");
+    let out = shopify(&work, "repo", &["theme-dev", "pawsome"], &PAWSOME[..2]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("PAWSOME_STORE_PASSWORD"),
+        "{out:?}"
+    );
+    assert!(calls(&work).is_empty());
+}
+
+/// theme dev syncs the cloud theme whole, deletes included: started before
+/// the build, it would strip the store's copy of every built asset.
+#[test]
+fn an_unbuilt_theme_is_refused_before_it_reaches_the_store() {
+    let work = world("shopify-theme-unbuilt");
+    std::fs::remove_dir_all(work.at("repo/themes/pawsome/assets")).unwrap();
+    let out = shopify(&work, "repo", &["theme-dev", "pawsome"], &PAWSOME);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("build"),
+        "{out:?}"
     );
     assert!(calls(&work).is_empty());
 }
@@ -357,6 +388,43 @@ fn a_deploy_that_fails_otherwise_exits_1() {
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("Build failed"),
+        "{out:?}"
+    );
+}
+
+/// With no dev store or handle there is no admin page to walk, so nothing
+/// is deployed and the line says what to add.
+#[test]
+fn a_staging_config_with_no_dev_store_deploys_nothing() {
+    let work = apps("shopify-deploy-no-store");
+    work.put(
+        "repo/apps/eventsmith/shopify.app.staging.toml",
+        &STAGING.replace("dev_store_url = \"lareys-development.myshopify.com\"\n", ""),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("dev_store_url"),
+        "{out:?}"
+    );
+    assert!(calls(&work).is_empty());
+}
+
+/// The CLI wraps its error box to the terminal's width: narrower, the
+/// variable and "was rejected" fall on different lines.
+#[test]
+fn a_rejected_token_in_a_narrow_box_still_names_the_variable() {
+    let work = apps("shopify-deploy-rejected-narrow");
+    work.put(
+        "deploy.out",
+        "╭─ error ──────────────────────────────╮\n│  The token in                        │\n│  SHOPIFY_SERVICE_ACCOUNT_TOKEN was   │\n│  rejected: it has been revoked, has  │\n│  expired, or isn't a valid token.    │\n╰──────────────────────────────────────╯",
+    );
+    work.put("deploy.code", "1");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected"),
         "{out:?}"
     );
 }
