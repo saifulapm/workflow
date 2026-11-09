@@ -58,9 +58,9 @@ the skill holds, with these changes:
   branch of its own), runs the test command in the project's folder,
   pushes the trunk as a fast-forward and never forced, and ticks the
   milestone. For an app it then rebases app/<app> onto origin's main,
-  runs the tests again, fast-forwards main and moves app/<app> to match
-  with a lease, the one push that is not a fast-forward and only `workflow
-  land` makes it. It carries the writes the store has not taken to each
+  runs the tests again, fast-forwards main and moves app/<app> to match.
+  That move is the one push not a fast-forward: `workflow land` makes it
+  with a lease, never the thread. It carries the writes the store has not taken to each
   trunk that took the landing, and prints the report's last line. Never
   push main or app/<app>, never tick the roadmap and never run `workflow
   go` yourself: the coordinator starts the next thread from that line.
