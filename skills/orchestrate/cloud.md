@@ -54,16 +54,22 @@ the skill holds, with these changes:
 - Land as §7 says, with these changes. Write the handoff first, starting
   `Next: <the next milestone, or none>. <milestone> landed on main.`, then export
   and commit the outbox, then run `workflow land`. It rebases the branch
-  on origin/main, runs the test command, pushes main as a fast-forward and
-  never forced, ticks the milestone, carries the writes the store has not
-  taken, and prints the report's last line. Never push main, never tick
-  the roadmap and never run `workflow go` yourself: the coordinator starts
-  the next thread from that line.
+  on the project's trunk on origin (main, or app/<app> for an app with a
+  branch of its own), runs the test command in the project's folder,
+  pushes the trunk as a fast-forward and never forced, and ticks the
+  milestone. For an app it then rebases app/<app> onto origin's main,
+  runs the tests again, fast-forwards main and moves app/<app> to match
+  with a lease, the one push that is not a fast-forward and only `workflow
+  land` makes it. It carries the writes the store has not taken to each
+  trunk that took the landing, and prints the report's last line. Never
+  push main or app/<app>, never tick the roadmap and never run `workflow
+  go` yourself: the coordinator starts the next thread from that line.
   - Tests red after the rebase: fix them on the branch test-first and run
     `workflow land` again. After two failed fixes, hand off `parked: tests
     red after rebasing on main: <what fails>` and push the branch.
-  - `parked: trunk moved: ...`: hand off with that line and push the
-    branch.
+  - `parked: trunk moved: ...` or `parked: main moved: ...`: hand off with
+    that line and push the branch. On `main moved` the milestone is on
+    app/<app> already and main is untouched.
 - After a landing, as the very last command, log the machine off the
   tailnet as the prompt says; not when parked.
 - When usage limits reset and the thread continues, carry on from `mem
