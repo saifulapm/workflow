@@ -11,7 +11,9 @@
 #   - a machine that was off gets every write it missed;
 #   - two offline edits of one page leave exactly one conflict file, on the
 #     machine that reached the store second;
-#   - two items written at once on two machines both arrive.
+#   - two items written at once on two machines both arrive;
+#   - two runner records written at once leave the first to arrive on every
+#     machine, as a thread's claim of a cloud run reads it.
 #
 # Needs what t141 needs (hubweb/node_modules, worker-build, the wasm target,
 # python3) and the hub's release binary, which tests/run.sh builds.
@@ -248,6 +250,31 @@ if within 2000 lessons_agree >/dev/null; then
 	ok "every machine reads the mini's lessons page"
 else
 	notok "every machine reads the mini's lessons" "$(walk nuc wiki lessons; walk macbook wiki lessons)"
+fi
+
+# Two threads claim one project at once (workflow go --cloud --print): both
+# write the runner, the store keeps the first to arrive, and the second's
+# replica takes the first's record, so the second reads the first's run and
+# parks while the first reads its own.
+block mini
+block nuc
+walk mini project set runner cloud session_01First --milestone m2 >/dev/null
+walk nuc project set runner cloud session_01Second --milestone m2 >/dev/null
+unblock mini
+within 10000 outbox_is mini 0 >/dev/null || notok "the mini's outbox empties" "$(on mini mem doctor)"
+unblock nuc
+within 10000 outbox_is nuc 0 >/dev/null || notok "the nuc's outbox empties" "$(on nuc mem doctor)"
+runner_of() {
+	walk "$1" projects --json | python3 -c 'import json,sys
+for p in json.load(sys.stdin)["projects"]:
+    if p["name"] == "walk": print((p.get("runner") or {}).get("id"), (p.get("runner") or {}).get("milestone"))'
+}
+is "$(runner_of mini)" "session_01First m2" "the first claim to reach the store holds the runner"
+claims_agree() { [ "$(runner_of nuc)" = "session_01First m2" ] && [ "$(runner_of macbook)" = "session_01First m2" ]; }
+if within 2000 claims_agree >/dev/null; then
+	ok "the second claimer and a third machine read the first claim's runner"
+else
+	notok "every machine reads the first claim" "nuc: $(runner_of nuc); macbook: $(runner_of macbook)"
 fi
 
 # Two items written at the same moment on two machines both arrive.
