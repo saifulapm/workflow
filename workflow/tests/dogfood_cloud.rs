@@ -53,3 +53,23 @@ fn a_cloud_walk_reaches_the_logged_in_browser_through_device() {
         assert!(cloud.contains(said), "cloud.md says {said}");
     }
 }
+
+/// m4-shopify: a theme walks headless on `workflow shopify theme-dev`, an app
+/// on its staging deploy in the admin through `device browser`, and a token
+/// only Saiful can make is asked for, never filed as a finding.
+#[test]
+fn a_cloud_walk_says_how_shopify_themes_and_apps_are_walked() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let skill = one_line(&fs::read_to_string(repo.join("skills/dogfood/SKILL.md")).unwrap());
+    for said in [
+        "`workflow shopify theme-dev <theme>`",
+        "http://127.0.0.1:9292",
+        "`workflow shopify deploy <app>`",
+        "`walk: <url>`",
+        "`device browser goto <url>`",
+        "never production",
+        "`mem ask --for saiful`",
+    ] {
+        assert!(skill.contains(said), "the dogfood skill says {said}");
+    }
+}
