@@ -310,6 +310,7 @@ impl Local {
         match (method, request.path.as_str()) {
             ("GET", "/ping") => Response::text(200, &self.machine),
             (_, "/ping") => Response::method_not_allowed("GET"),
+            ("POST", "/device") => crate::device::serve(&self.machine, request),
             // The asking hub offers its question to this, the route device.
             ("POST", "/ring") => match serde_json::from_slice::<Open>(&request.body) {
                 Ok(open) if !plain_id(&open.id) => Response::text(400, "not a question id"),
