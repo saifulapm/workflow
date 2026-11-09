@@ -30,7 +30,13 @@ fn refused(commands: &[Simple], cwd: &Path) -> bool {
         if command.depth == 0 {
             here = top.clone();
         }
-        let mut argv = argv(&command.words);
+        let mut words = command.words.as_slice();
+        let mut base = here.clone();
+        if let Some((dir, rest)) = env_chdir(words) {
+            base = super::cd::resolve(&here, dir);
+            words = rest;
+        }
+        let mut argv = argv(words);
         while argv.first().is_some_and(|w| program_name(w) == "setsid") {
             argv = &argv[1..];
         }
@@ -66,7 +72,7 @@ fn refused(commands: &[Simple], cwd: &Path) -> bool {
             _ => {
                 if starts_dev_server(argv) {
                     let dir =
-                        folder_flag(argv).map_or(here.clone(), |d| super::cd::resolve(&here, d));
+                        folder_flag(argv).map_or(base.clone(), |d| super::cd::resolve(&base, d));
                     if on_a_branch(&dir) {
                         return true;
                     }
@@ -110,19 +116,37 @@ fn tmux_window(argv: &[String], here: &Path) -> Option<(PathBuf, String)> {
     (!line.is_empty()).then(|| (dir, line.join(" ")))
 }
 
-/// The folder a package manager is pointed at: `-C`, `--dir` or
-/// `--prefix`, with its value apart or after `=`.
+/// The folder a package manager is pointed at: `-C`, `--dir`, `--prefix`
+/// or `--cwd`, with its value apart, after `=`, or run on to `-C`.
 fn folder_flag(argv: &[String]) -> Option<&str> {
     argv.iter().enumerate().find_map(|(at, word)| {
-        for flag in ["--dir", "--prefix"] {
+        for flag in ["--dir", "--prefix", "--cwd"] {
             if let Some(value) = word.strip_prefix(flag).and_then(|r| r.strip_prefix('=')) {
                 return Some(value);
             }
         }
-        matches!(word.as_str(), "-C" | "--dir" | "--prefix")
+        if let Some(value) = word.strip_prefix("-C").filter(|v| !v.is_empty()) {
+            return Some(value);
+        }
+        matches!(word.as_str(), "-C" | "--dir" | "--prefix" | "--cwd")
             .then(|| argv.get(at + 1).map(String::as_str))
             .flatten()
     })
+}
+
+/// `env -C <dir>` or `env --chdir[=]<dir>` in front of a command: the
+/// folder it runs in, and the words after it. argv() steps over env's
+/// flags but would take the folder for the program.
+fn env_chdir(words: &[String]) -> Option<(&str, &[String])> {
+    let at = words.iter().position(|w| program_name(w) == "env")?;
+    let rest = &words[at + 1..];
+    match rest.first()?.as_str() {
+        "-C" | "--chdir" => Some((rest.get(1)?.as_str(), &rest[2..])),
+        flag => {
+            let dir = flag.strip_prefix("--chdir=")?;
+            Some((dir, &rest[1..]))
+        }
+    }
 }
 
 /// `astro dev`, `wrangler dev` and `cf dev`, however they are reached, or a

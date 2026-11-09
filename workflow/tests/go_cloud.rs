@@ -624,6 +624,16 @@ fn a_thread_with_an_unknown_account_parks_naming_the_variable() {
         "parked: this environment's WORKFLOW_ACCOUNT is \"personal\"; set it to work or main in the Project's environment"
     );
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+
+    // The variable is this Project's to fix whatever else holds the
+    // project, so it is said first.
+    cloud_runner(&w, "gamma", "session_01Work", 1);
+    let out = w.thread_as("personal", &["gamma", "--cloud", "--print"]);
+    assert!(
+        stdout(&out).contains("WORKFLOW_ACCOUNT is \"personal\""),
+        "{}",
+        stdout(&out)
+    );
 }
 
 /// Both accounts' threads start the same milestone in the same minute: the

@@ -498,6 +498,11 @@ fn a_dogfooders_dev_server_reached_through_a_flag_a_shell_or_tmux_is_judged_too(
         (&walk, format!("pnpm --dir {t} dev")),
         (&walk, format!("pnpm --dir={t} dev")),
         (&walk, format!("npm --prefix {t} run dev")),
+        (&walk, format!("yarn --cwd {t} dev")),
+        (&walk, format!("bun --cwd={t} dev")),
+        (&walk, format!("pnpm -C{t} dev")),
+        (&walk, format!("env -C {t} pnpm dev")),
+        (&walk, format!("env --chdir={t} pnpm dev")),
         (&trunk, "bash -c 'pnpm dev'".to_string()),
         (&trunk, "sh -c \"cd sub && npx astro dev\"".to_string()),
         (&trunk, "tmux new -d 'pnpm dev'".to_string()),
@@ -514,6 +519,7 @@ fn a_dogfooders_dev_server_reached_through_a_flag_a_shell_or_tmux_is_judged_too(
     }
     for (dir, command) in [
         (&trunk, format!("pnpm -C {k} dev")),
+        (&trunk, format!("env -C {k} pnpm dev")),
         (&trunk, format!("tmux new -d -c {k} 'pnpm dev'")),
         (&trunk, format!("bash -c 'cd {k} && pnpm dev'")),
         // A subshell's cd moves only the subshell, as the cd rule advises.
