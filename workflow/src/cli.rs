@@ -139,6 +139,22 @@ milestone of <project>.`, `done: <project>'s roadmap is done`, or `parked:
 trunk moved: ...`, exit 2; a red test run pushes nothing, exit 1."
     )]
     Land,
+    /// Print the text for a project's Claude Project instructions field.
+    #[command(
+        name = "project-text",
+        long_about = "Print the text for a project's Claude Project instructions field.
+
+claude.ai has no API for Projects, so the text is pasted once, into Settings >
+Memory > Project instructions, which every new thread and the coordinator
+read. It names the start line, \"Run the next milestone of <project>.\", tells
+the coordinator to start a thread only on that line or a report ending
+`next: ...`, and tells a thread to cd into its clone, check mem knows the
+project, run `workflow go <project> --cloud --print` and follow it."
+    )]
+    ProjectText {
+        /// The project, by mem's name; the current directory's when omitted.
+        project: Option<String>,
+    },
     /// Start planning a project in a claude.ai cloud session.
     #[command(long_about = "Start planning a project in a claude.ai cloud session.
 

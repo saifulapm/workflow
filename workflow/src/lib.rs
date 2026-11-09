@@ -125,6 +125,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
         Command::Land => land::cmd_land(),
+        Command::ProjectText { project } => cloud::cmd_project_text(project.as_deref()),
         Command::CloudSetup => cloud::cmd_cloud_setup(),
         Command::CloudSwitch { store } => cloud::cmd_cloud_switch(&store),
         Command::Go {

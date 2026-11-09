@@ -13,6 +13,10 @@ use crate::{embedded, exit, warn};
 /// the same file, so the two stay one text.
 const PROMPT: &str = include_str!("cloud-prompt.txt");
 
+/// The standing text of a project's Claude Project, pasted once into its
+/// Project instructions field: what its coordinator and its threads do.
+const PROJECT_TEXT: &str = include_str!("project-text.txt");
+
 /// The prompt a cloud plan starts on.
 const PLAN_PROMPT: &str = include_str!("cloud-plan-prompt.txt");
 
@@ -66,6 +70,46 @@ pub fn base(row: &ProjectRow) -> String {
 /// of its Claude Project, and the one thing it passes on.
 pub fn start_line(project: &str) -> String {
     format!("Run the next milestone of {project}.")
+}
+
+/// The Project instructions text for `project`, whose repository is
+/// `remote`: a thread finds its clone at /home/user/<the remote's last
+/// segment>.
+pub fn project_text(project: &str, remote: &str) -> String {
+    let remote = remote.trim().trim_end_matches('/');
+    let remote = remote.strip_suffix(".git").unwrap_or(remote);
+    let repo = remote.rsplit(['/', ':']).next().unwrap_or(remote);
+    PROJECT_TEXT
+        .replace("{project}", project)
+        .replace("{remote}", remote)
+        .replace("{repo}", repo)
+}
+
+/// `workflow project-text [<project>]`.
+pub fn cmd_project_text(project: Option<&str>) -> i32 {
+    let Some(projects) = memcli::projects() else {
+        warn("project-text: mem cannot list its projects");
+        return exit::FAILED;
+    };
+    let Some(name) = project
+        .map(str::to_string)
+        .or_else(|| memcli::project_current().map(|p| p.name))
+    else {
+        warn("project-text: name a project, or run it in a project's checkout");
+        return exit::USAGE;
+    };
+    let Some(row) = projects.iter().find(|row| row.name == name) else {
+        warn(format!("project-text: mem lists no {name}"));
+        return exit::USAGE;
+    };
+    let Some(remote) = row.remote.as_deref().filter(|r| !r.trim().is_empty()) else {
+        warn(format!(
+            "project-text: {name} has no git remote, so no Claude Project can clone it"
+        ));
+        return exit::USAGE;
+    };
+    print!("{}", project_text(&name, remote));
+    exit::OK
 }
 
 /// This cloud session as claude.ai's links name it, `session_...`, when this
