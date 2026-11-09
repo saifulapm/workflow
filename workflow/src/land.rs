@@ -72,6 +72,8 @@ pub fn cmd_land() -> i32 {
             return exit::FAILED;
         }
         let trunk = format!("origin/{TRUNK}");
+        let base = git.out(&["rev-parse", &trunk]).unwrap_or_default();
+        let before = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
         if !git.capture(&["rebase", "-q", &trunk]).ok {
             let files = git
                 .out(&["diff", "--name-only", "--diff-filter=U"])
@@ -90,6 +92,17 @@ pub fn cmd_land() -> i32 {
             );
             return exit::USAGE;
         }
+        // Each task pushed the branch before the rebase rewrote it; origin's
+        // copy follows, with a lease on the tip it last had, so the thread's
+        // next push of the branch is a fast-forward whatever comes next.
+        if git.out(&["rev-parse", "HEAD"]).unwrap_or_default() != before
+            && let Err(why) = push_branch(&git, &dir, &branch)
+        {
+            warn(format!(
+                "land: cannot push {branch} rebased onto {trunk}: {why}; nothing was pushed to {TRUNK}"
+            ));
+            return exit::FAILED;
+        }
         let ran = Command::new("bash")
             .args(["-c", &verify])
             .current_dir(&dir)
@@ -103,11 +116,20 @@ Fix it on {branch} and land again"
             ));
             return exit::FAILED;
         }
-        if push(&dir, TRUNK) {
-            break;
+        let why = match push(&dir, &format!("HEAD:{TRUNK}"), None) {
+            Ok(()) => break,
+            Err(why) => why,
+        };
+        // Refused because the trunk moved while the tests ran, the landing
+        // starts over; for any other reason it stops here, saying why.
+        let moved = git.quiet(&["fetch", "-q", "origin", TRUNK])
+            && git.out(&["rev-parse", &trunk]).unwrap_or_default() != base;
+        if !moved {
+            warn(format!(
+                "land: cannot push {branch} to origin's {TRUNK}: {why}; nothing was pushed"
+            ));
+            return exit::FAILED;
         }
-        // Refused: the trunk moved while the tests ran, or the push failed
-        // for another reason, which the next fetch shows.
         if tries == TRIES {
             println!(
                 "parked: trunk moved: origin's {TRUNK} kept moving while {slug} was tested; \
@@ -128,18 +150,41 @@ nothing was pushed"
     exit::OK
 }
 
-/// `git push origin HEAD:<trunk>`, never forced. The push hook lets an
-/// agent's push through only with this variable: the green test run is the
-/// yes.
-fn push(dir: &std::path::Path, trunk: &str) -> bool {
-    Command::new("git")
-        .args(["push", "-q", "origin", &format!("HEAD:{trunk}")])
+/// `git push origin <refspec>`, never forced but by `lease`, a
+/// `--force-with-lease` that holds only while origin's ref is what it last
+/// was. The push hook lets an agent's push through only with this variable:
+/// a green test run, or a branch of the thread's own, is the yes. On a
+/// refusal it says git's reason.
+fn push(dir: &std::path::Path, refspec: &str, lease: Option<&str>) -> Result<(), String> {
+    let mut args = vec!["push".to_string(), "-q".to_string()];
+    args.extend(lease.map(str::to_string));
+    args.extend(["origin".to_string(), refspec.to_string()]);
+    let out = Command::new("git")
+        .args(&args)
         .env("WORKFLOW_ALLOW_PUSH", "1")
         .current_dir(dir)
         .stdin(Stdio::null())
-        .stdout(std::io::stderr())
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+        .map_err(|err| format!("cannot run git: {err}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// Push the rebased milestone `branch` over origin's copy, leased on the
+/// tip origin holds now, or on its having none.
+fn push_branch(git: &Git, dir: &std::path::Path, branch: &str) -> Result<(), String> {
+    let refname = format!("refs/heads/{branch}");
+    let listed = git.capture(&["ls-remote", "origin", &refname]);
+    if !listed.ok {
+        return Err(String::from_utf8_lossy(&listed.stderr).trim().to_string());
+    }
+    let tip = listed.text();
+    let tip = tip.split_whitespace().next().unwrap_or("");
+    let lease = format!("--force-with-lease={refname}:{tip}");
+    push(dir, &format!("HEAD:{refname}"), Some(&lease))
 }
 
 /// The tick and the writes before it may not have reached the store: a
@@ -159,7 +204,7 @@ fn carry_outbox(git: &Git, dir: &std::path::Path) {
         "-m",
         "Carry the writes the store has not taken yet",
     ]);
-    if !committed || !push(dir, TRUNK) {
+    if !committed || push(dir, &format!("HEAD:{TRUNK}"), None).is_err() {
         warn(format!(
             "land: the writes the store has not taken are committed here but not on origin's {TRUNK}"
         ));

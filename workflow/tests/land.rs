@@ -90,7 +90,9 @@ case "$1 $2" in
 "sync --json")
   n=0
   [ -f "$dir/outbox" ] && n=$(cat "$dir/outbox")
-  echo "{{\"sync\":\"performed\",\"outbox\":$n}}" ;;
+  state=performed
+  [ "$n" -gt 0 ] && state="not performed"
+  echo "{{\"sync\":\"$state\",\"outbox\":$n}}" ;;
 "share export")
   if [ -f "$dir/outbox" ]; then
     echo '{{"writes":2}}' >.mem-outbox.json
@@ -336,4 +338,52 @@ fn writes_the_store_has_not_taken_land_on_the_trunk_too() {
     let files = w.git(&origin, &["ls-tree", "--name-only", "main"]);
     assert!(files.contains(".mem-outbox.json"), "{files}");
     assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+}
+
+/// A rebase rewrites the milestone branch, which every task already pushed:
+/// after a red run there, the thread's next push of the branch, its fix or
+/// its park, must still go through without a force.
+#[test]
+fn a_red_run_after_a_rebase_leaves_the_branch_pushable() {
+    let w = World::new("land-red-moved");
+    let clone = w.clone_dir();
+    w.git(&clone, &["push", "-q", "origin", BRANCH]);
+    w.trunk_moves("other.txt", "another thread\n");
+    w.verify("exit 1");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    w.work.put("thread/fix.txt", "the fix\n");
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "Fix the tests"]);
+    w.git(&clone, &["push", "-q", "origin", BRANCH]);
+    let origin = w.work.at("origin.git");
+    assert_eq!(
+        w.git(&origin, &["rev-parse", BRANCH]),
+        w.git(&clone, &["rev-parse", "HEAD"])
+    );
+}
+
+/// A push refused for any reason but a moved trunk fails at once, saying
+/// why, rather than running the tests three times and blaming the trunk.
+#[test]
+fn a_push_refused_on_a_trunk_that_did_not_move_fails_at_once() {
+    let w = World::new("land-refused");
+    w.work.script(
+        "origin.git/hooks/pre-receive",
+        "#!/bin/sh\necho 'main is protected' >&2\nexit 1\n",
+    );
+    w.work.put("runs", "");
+    w.verify(&format!("echo run >>{}", w.work.at("runs").display()));
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("main is protected"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stdout(&out).contains("trunk moved"), "{}", stdout(&out));
+    assert_eq!(w.work.read("runs").lines().count(), 1);
+    assert_eq!(w.origin_main(), before);
+    assert!(!w.ticked());
 }
