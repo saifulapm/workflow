@@ -52,10 +52,25 @@ pub fn prompt(project: &str, slug: &str, base: &str, dir: &str) -> String {
         .replace("{base}", base)
 }
 
-/// What the next cloud run is cut from: main, which a landed run pushed
-/// its work to, or the branch of a cloud plan that ended, whose writes the
-/// store may not have taken yet.
-pub fn base(row: &ProjectRow) -> String {
+/// The branch `project` lands on: `app/<project>`, an app's own trunk in a
+/// monorepo, once origin has it, or else main. It reads `dir`'s refs as
+/// last fetched, so a machine that has not fetched since the branch was
+/// pushed still says main; a thread fetches before it asks.
+pub fn trunk(project: &str, dir: &str) -> String {
+    let app = format!("app/{project}");
+    let known = Git::at(dir).quiet(&[
+        "rev-parse",
+        "--verify",
+        "-q",
+        &format!("refs/remotes/origin/{app}"),
+    ]);
+    if known { app } else { "main".to_string() }
+}
+
+/// What the next cloud run of `row`, checked out in `dir`, is cut from: its
+/// trunk, which a landed run pushed its work to, or the branch of a cloud
+/// plan that ended, whose writes the store may not have taken yet.
+pub fn base(row: &ProjectRow, dir: &str) -> String {
     match &row.runner {
         Some(runner)
             if runner.machine == "cloud"
@@ -64,7 +79,7 @@ pub fn base(row: &ProjectRow) -> String {
         {
             branch(&row.name, PLAN)
         }
-        _ => "main".to_string(),
+        _ => trunk(&row.name, dir),
     }
 }
 
@@ -136,11 +151,12 @@ pub fn plan_prompt(project: &str) -> String {
         .replace("{project}", project)
 }
 
-/// How many commits `dir`'s main holds that origin/main, as last fetched,
+/// How many commits `dir`'s `trunk` holds that origin's, as last fetched,
 /// lacks: a cloud run clones origin, so it would start without them. `None`
-/// when git cannot tell, as with no origin or no main.
-pub fn unpushed(dir: &str) -> Option<u64> {
-    let out = Git::at(dir).capture(&["rev-list", "--count", "origin/main..main"]);
+/// when git cannot tell, as with no origin or no such branch here.
+pub fn unpushed(dir: &str, trunk: &str) -> Option<u64> {
+    let range = format!("origin/{trunk}..{trunk}");
+    let out = Git::at(dir).capture(&["rev-list", "--count", &range]);
     out.ok.then(|| out.text().trim().parse().ok()).flatten()
 }
 
@@ -283,7 +299,12 @@ environment's old copy; run `mem sync` until it says performed, then start again
     }
     println!(
         "{}",
-        prompt(&start.project, &start.slug, &base(row), &start.dir)
+        prompt(
+            &start.project,
+            &start.slug,
+            &base(row, &start.dir),
+            &start.dir
+        )
     );
     exit::OK
 }
@@ -577,9 +598,9 @@ enum Launch {
 }
 
 /// Why `row`'s milestone `slug` cannot run in the cloud, if it cannot. The
-/// session clones the repo's main and finds its project by the remote, so a
-/// project working on a branch of its own, or with no remote, stays local;
-/// work in `dir` that origin/main lacks waits for Saiful to push main; only
+/// session clones the repo and finds its project by the remote, so a
+/// project with no remote stays local; work on `dir`'s trunk that origin's
+/// lacks waits for Saiful to push it; only
 /// the next milestone runs, since a later one would read as landed; and a
 /// device orchestrator keeps the project as a local go would.
 fn refusal(row: &ProjectRow, slug: &str, dir: &str, thread: bool) -> Option<String> {
@@ -627,22 +648,18 @@ answer it and the hub resumes it there",
 }
 
 /// Why `row` cannot run in the cloud at all, whatever it runs: a cloud
-/// session clones origin's main and finds the project by its remote. In a
+/// session clones origin and finds the project by its remote. In a
 /// `thread` the checkout is that clone, so an unpushed main is no reason.
 fn repo_refusal(row: &ProjectRow, dir: &str, thread: bool) -> Option<String> {
     let name = &row.name;
-    if row.worktree.is_some() {
-        return Some(format!(
-            "{name} works on a branch of its own; cloud runs take main"
-        ));
-    }
     if row.remote.as_deref().is_none_or(str::is_empty) {
         return Some(format!("{name} has no git remote"));
     }
-    if let Some(n) = unpushed(dir).filter(|n| *n > 0 && !thread) {
+    let trunk = trunk(name, dir);
+    if let Some(n) = unpushed(dir, &trunk).filter(|n| *n > 0 && !thread) {
         let commits = if n == 1 { "commit" } else { "commits" };
         return Some(format!(
-            "{name}'s main is {n} {commits} ahead of origin/main; push main first: \
+            "{name}'s {trunk} is {n} {commits} ahead of origin/{trunk}; push {trunk} first: \
 a cloud run starts from origin"
         ));
     }

@@ -727,6 +727,34 @@ fn the_next_local_go_fast_forwards_the_trunk_to_origin_main_after_a_landed_cloud
     assert!(w.amx_started());
 }
 
+/// An app's cloud run lands on its own trunk first: the next local go in the
+/// app's worktree takes origin's app/<app>, even when main never got it.
+#[test]
+fn the_next_local_go_of_an_app_fast_forwards_its_own_trunk() {
+    let w = World::new("cloud-ff-app");
+    w.origin_with_cloud_branch();
+    let dir = w.checkout("gamma");
+    git(&dir, &["checkout", "-q", "-b", "app/gamma"]);
+    git(&dir, &["push", "-q", "origin", "app/gamma"]);
+    w.set("gamma", &format!(r#""worktree":"{}""#, dir.display()));
+    let cloud = w.work.at("cloud-clone");
+    git(&cloud, &["push", "-q", "origin", "HEAD:app/gamma"]);
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Before","since":"{}","milestone":"m1-first"}}"#,
+            now_minus(3)
+        ),
+    );
+    let out = w.go_local(&["gamma"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        head(&dir),
+        head(&cloud),
+        "the trunk's tip is origin app/gamma's"
+    );
+}
+
 /// A cloud run that met a local-only task parks for a device with no
 /// question: the next local go takes its branch and runs the rest.
 #[test]
@@ -805,19 +833,30 @@ fn a_live_or_parked_cloud_run_keeps_the_mini_out_of_its_project() {
     assert!(!w.amx_started());
 }
 
+/// An app of a monorepo works on its own trunk, app/<app>: once origin has
+/// that branch, its cloud milestone is cut from there, and the worktree a
+/// machine records for it refuses nothing.
 #[test]
-fn a_project_on_a_branch_of_its_own_or_with_no_remote_stays_off_the_cloud() {
-    let w = World::new("cloud-worktree");
+fn an_app_with_a_trunk_of_its_own_is_cut_from_it() {
+    let w = World::new("cloud-app-trunk");
+    w.origin_with_cloud_branch();
     let dir = w.checkout("gamma");
+    git(&dir, &["push", "-q", "origin", "main:app/gamma"]);
+    git(&dir, &["fetch", "-q", "origin"]);
     w.set("gamma", &format!(r#""worktree":"{}""#, dir.display()));
-    let out = w.go(&["gamma", "--cloud", "--print"]);
-    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
-    assert!(
-        stderr(&out).contains("branch of its own"),
-        "{}",
-        stderr(&out)
-    );
+    for out in [
+        w.go(&["gamma", "--cloud", "--print"]),
+        w.thread(&["gamma", "--cloud", "--print"]),
+    ] {
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        let prompt = stdout(&out);
+        assert!(prompt.contains("from origin/app/gamma"), "{prompt}");
+        assert!(!prompt.contains("origin/main."), "{prompt}");
+    }
+}
 
+#[test]
+fn a_project_with_no_remote_stays_off_the_cloud() {
     let w = World::new("cloud-no-remote");
     let projects =
         w.work

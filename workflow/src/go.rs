@@ -577,14 +577,15 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
     ) {
         Decision::Done(project) => {
             // The last milestone may have landed in the cloud, which pushed
-            // it to origin's main: the trunk here takes it now.
+            // it to origin's trunk: the trunk here takes it now.
             let row = projects.iter().find(|row| row.name == project);
             let landed = row.and_then(|row| {
                 row.runner.as_ref().filter(|r| r.machine == "cloud")?;
                 let dir = row.checkouts.iter().find(|dir| Path::new(dir).is_dir())?;
-                Some(("main", dir))
+                Some((cloud::trunk(&project, dir), dir))
             });
             if let Some((from, dir)) = landed.filter(|_| !dry_run) {
+                let from = from.as_str();
                 let branch = branch_of(dir);
                 let worktree = row.and_then(|row| row.worktree.as_deref());
                 if let Some(why) = trunk_refusal(dir, branch.as_deref(), worktree) {
@@ -653,11 +654,11 @@ pub fn cmd_go(opts: &Options, dry_run: bool) -> i32 {
                 return exit::USAGE;
             }
             if let Some(slug) = landed_from.filter(|_| !dry_run) {
-                // A landed run pushed origin's main; one parked local-only
+                // A landed run pushed origin's trunk; one parked local-only
                 // or ended left its work on its branch.
                 let landed = matches!(cloud, Some((cloud::State::Landed, _)));
                 let from = if landed {
-                    "main".to_string()
+                    cloud::trunk(&start.project, &start.dir)
                 } else {
                     cloud::branch(&start.project, &slug)
                 };
