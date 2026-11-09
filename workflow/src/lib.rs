@@ -23,6 +23,7 @@ pub mod guard_bash;
 pub mod hook;
 pub mod hygiene;
 pub mod install;
+pub mod land;
 pub mod lint;
 pub mod machine;
 pub mod memcli;
@@ -123,6 +124,7 @@ pub fn run(cli: Cli) -> i32 {
         },
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
+        Command::Land => land::cmd_land(),
         Command::CloudSetup => cloud::cmd_cloud_setup(),
         Command::CloudSwitch { store } => cloud::cmd_cloud_switch(&store),
         Command::Go {

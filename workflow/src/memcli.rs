@@ -203,6 +203,17 @@ pub fn sync_outbox() -> Option<u64> {
         .flatten()
 }
 
+/// `mem roadmap --tick <slug>`.
+pub fn tick(project: &str, slug: &str) -> bool {
+    silent(&["roadmap", "--tick", slug, "--project", project])
+}
+
+/// `mem share export`: the writes the store has not taken, staged in the
+/// checkout's outbox file.
+pub fn share_export() -> bool {
+    silent(&["share", "export"])
+}
+
 pub fn unset_runner(project: &str) -> bool {
     silent(&["project", "unset", "runner", "--project", project])
 }

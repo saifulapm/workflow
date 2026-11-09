@@ -124,6 +124,21 @@ by the same name, so the Claude app's Code tab lists it. Prints the agent's name
         #[arg(long, requires = "cloud")]
         print: bool,
     },
+    /// Land a cloud run's milestone on main, from a thread of its Claude Project.
+    #[command(
+        long_about = "Land a cloud run's milestone on main, from a thread of its Claude Project.
+
+Run in the project's checkout on the milestone branch cloud/<project>-<milestone>,
+clean. It rebases the branch on origin/main, runs the project's test command
+(mem's verify key), and pushes it to origin's main, never forced; a trunk that
+moved while the tests ran is rebased onto again, up to three times. Then it
+ticks the milestone, commits and pushes the writes the store has not taken,
+and prints the line the thread ends its report on: `next: Run the next
+milestone of <project>.`, `done: <project>'s roadmap is done`, or `parked:
+<project> is paused`. A rebase conflict pushes nothing and prints `parked:
+trunk moved: ...`, exit 2; a red test run pushes nothing, exit 1."
+    )]
+    Land,
     /// Start planning a project in a claude.ai cloud session.
     #[command(long_about = "Start planning a project in a claude.ai cloud session.
 
@@ -271,6 +286,11 @@ usage: workflow <command> [options]
       0 started, or the roadmap is done · 1 mem or amx failed · 2 refused:
       the roadmap is not approved, the milestone already has an orchestrator,
       or the project is paused and its handoff does not start parked:
+  land
+      land a cloud run's milestone branch on origin's main: rebase, test,
+      push without force, tick, and print the report's last line
+      0 landed · 1 tests red or mem failed · 2 trunk moved, or not on a
+      clean milestone branch
   plan [<project>] --cloud [--print]
       start planning the project in a claude.ai cloud session on the branch
       cloud/<project>-plan and print its link; --print prints its prompt
