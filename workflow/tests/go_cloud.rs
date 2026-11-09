@@ -61,15 +61,17 @@ project)
   # store took first.
   if [ "$2 $3 $4" = "set runner cloud" ]; then
     id=$5
-    [ -f "$dir/winner" ] && id=$(cat "$dir/winner")
-    python3 - "$dir/projects.json" "$id" "$7" "$9" <<'PY_EOF'
+    account=
+    [ "${10:-}" = --account ] && account=${11}
+    [ -f "$dir/winner" ] && id=$(cat "$dir/winner") && account=$(cat "$dir/winner-account" 2>/dev/null)
+    python3 - "$dir/projects.json" "$id" "$7" "$9" "$account" <<'PY_EOF'
 import json, sys, datetime
-path, id, slug, project = sys.argv[1:5]
+path, id, slug, project, account = sys.argv[1:6]
 doc = json.load(open(path))
 since = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 for row in doc["projects"]:
     if row["name"] == project:
-        row["runner"] = {"machine": "cloud", "id": id, "since": since, "milestone": slug}
+        row["runner"] = {"machine": "cloud", "id": id, "since": since, "milestone": slug, "account": account or None}
 json.dump(doc, open(path, "w"))
 PY_EOF
   fi
@@ -333,6 +335,7 @@ impl World {
             .env("XDG_STATE_HOME", self.work.at("state"))
             .env("CLAUDE_CODE_REMOTE_SESSION_ID", THREAD)
             .env_remove("WORKFLOW_MACHINE")
+            .env_remove("WORKFLOW_ACCOUNT")
             .env_remove("AMX_ID")
             .current_dir(self.work.path())
             .output()
@@ -340,6 +343,26 @@ impl World {
     }
 
     /// `workflow go <args>` in a thread standing in `dir`.
+    /// A thread of the Project on claude.ai account `account`, whose
+    /// environment says which in `WORKFLOW_ACCOUNT`.
+    fn thread_as(&self, account: &str, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_workflow"))
+            .arg("go")
+            .args(args)
+            .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_CLAUDE", self.work.at("claude"))
+            .env("WORKFLOW_AMX", self.work.at("no-amx"))
+            .env("XDG_CONFIG_HOME", self.work.at("config"))
+            .env("XDG_STATE_HOME", self.work.at("state"))
+            .env("CLAUDE_CODE_REMOTE_SESSION_ID", THREAD)
+            .env("WORKFLOW_ACCOUNT", account)
+            .env_remove("WORKFLOW_MACHINE")
+            .env_remove("AMX_ID")
+            .current_dir(self.work.path())
+            .output()
+            .unwrap()
+    }
+
     fn thread_in(&self, dir: &std::path::Path, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_workflow"))
             .arg("go")
@@ -351,6 +374,7 @@ impl World {
             .env("XDG_STATE_HOME", self.work.at("state"))
             .env("CLAUDE_CODE_REMOTE_SESSION_ID", THREAD)
             .env_remove("WORKFLOW_MACHINE")
+            .env_remove("WORKFLOW_ACCOUNT")
             .env_remove("AMX_ID")
             .current_dir(dir)
             .output()
@@ -525,6 +549,71 @@ fn a_thread_the_store_took_another_claim_over_parks_naming_it() {
     assert_eq!(
         stdout(&out).trim(),
         "parked: gamma already runs m2-next in https://claude.ai/code/session_01First"
+    );
+}
+
+/// Both claude.ai accounts hold the same Projects: a thread records the
+/// account its environment names, so the other account's start can say
+/// whose run holds the project.
+#[test]
+fn a_thread_records_its_account_and_a_start_from_the_other_parks_naming_it() {
+    let w = World::new("cloud-thread-account");
+    let out = w.thread_as("work", &["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        w.mem_calls().iter().any(|c| c
+            == &format!(
+                "project set runner cloud {THREAD_SESSION} --milestone m2-next --project gamma --account work"
+            )),
+        "{:?}",
+        w.mem_calls()
+    );
+
+    let w = World::new("cloud-thread-other-account");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Work","since":"{}","milestone":"m2-next","account":"work"}}"#,
+            now_minus(1)
+        ),
+    );
+    let out = w.thread_as("main", &["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: gamma already runs m2-next from the work account: https://claude.ai/code/session_01Work"
+    );
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+
+    // Once that run wrote its handoff, the main account starts the next.
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(0)));
+    w.work.put(
+        "handoff-gamma.md",
+        "Next: m3-last. m2-next landed at abc1234.\n",
+    );
+    let out = w.thread_as("main", &["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        w.mem_calls()
+            .iter()
+            .any(|c| c.ends_with("--project gamma --account main")),
+        "{:?}",
+        w.mem_calls()
+    );
+}
+
+/// Both accounts' threads start the same milestone in the same minute: the
+/// store keeps one claim, and the other's thread parks naming its account.
+#[test]
+fn the_thread_that_loses_a_race_with_the_other_account_names_it() {
+    let w = World::new("cloud-thread-account-race");
+    w.work.put("winner", "session_01Work");
+    w.work.put("winner-account", "work");
+    let out = w.thread_as("main", &["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: gamma already runs m2-next from the work account: https://claude.ai/code/session_01Work"
     );
 }
 

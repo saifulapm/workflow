@@ -68,6 +68,9 @@ pub struct Runner {
     /// A cloud run's milestone.
     #[serde(default)]
     pub milestone: Option<String>,
+    /// The claude.ai account a cloud run's Project runs on, "work" or "main".
+    #[serde(default)]
+    pub account: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,9 +180,13 @@ pub fn set_runner(project: &str, machine: &str, id: &str) -> bool {
     ])
 }
 
-/// `mem project set runner cloud <session> --milestone <slug>`.
+/// `mem project set runner cloud <session> --milestone <slug>`, with the
+/// claude.ai account the environment's `WORKFLOW_ACCOUNT` names, when it
+/// names one.
 pub fn set_cloud_runner(project: &str, session: &str, slug: &str) -> bool {
-    silent(&[
+    let account = std::env::var("WORKFLOW_ACCOUNT").unwrap_or_default();
+    let account = account.trim();
+    let mut args = vec![
         "project",
         "set",
         "runner",
@@ -189,7 +196,11 @@ pub fn set_cloud_runner(project: &str, session: &str, slug: &str) -> bool {
         slug,
         "--project",
         project,
-    ])
+    ];
+    if !account.is_empty() {
+        args.extend(["--account", account]);
+    }
+    silent(&args)
 }
 
 /// `mem sync`: one round with the hub's store, done when it says performed.

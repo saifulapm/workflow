@@ -446,9 +446,12 @@ fn held(row: &ProjectRow, me: Option<&str>, now: jiff::Timestamp) -> Option<Stri
         return match state(row, || memcli::handoff(project), now)? {
             // A thread waits for an answer inside its turn and never parks
             // for one: a thread's park means it ended.
-            State::Live if me.is_some() => {
-                Some(format!("{project} already runs {milestone} in {link}"))
-            }
+            State::Live if me.is_some() => Some(match runner.account.as_deref() {
+                Some(account) => {
+                    format!("{project} already runs {milestone} from the {account} account: {link}")
+                }
+                None => format!("{project} already runs {milestone} in {link}"),
+            }),
             State::Live | State::Parked if me.is_none() => Some(format!(
                 "{project} already has a cloud run: {milestone}, {}",
                 runner.id
