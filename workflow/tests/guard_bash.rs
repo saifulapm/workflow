@@ -403,3 +403,78 @@ fn reads_copies_and_builds_outside_tmp_run() {
         assert!(passes(&out), "{cwd:?} {command:?}: {out:?}");
     }
 }
+
+/// The hook's input as a subagent's call carries it: `agent_type` names
+/// the subagent.
+fn guard_as(cwd: &Path, agent: &str, command: &str) -> Output {
+    let input = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+        "cwd": cwd,
+        "agent_id": "agent-a1",
+        "agent_type": agent,
+    });
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
+        .args(["guard", "bash"])
+        .env("HOME", cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// A walker's dev server on the trunk reloaded the orchestrator's review
+/// fixes mid-walk (lareys-trendsi m3-bf-bag, ebdfy m26), so a dogfooder
+/// starts one only where HEAD is detached: a worktree at the green sha.
+#[test]
+fn a_dogfooders_dev_server_on_a_branch_checkout_is_refused() {
+    let w = Scratch::new("guard-bash-dev");
+    w.put("trunk/.git/HEAD", "ref: refs/heads/main\n");
+    w.mkdir("trunk/apps/web");
+    w.put(
+        "walk/.git",
+        &format!("gitdir: {}\n", w.at("gitdir").display()),
+    );
+    w.put("gitdir/HEAD", "0123456789abcdef0123456789abcdef01234567\n");
+    let trunk = w.at("trunk");
+    for command in [
+        "pnpm dev",
+        "setsid pnpm dev > ~/.cache/dev.log 2>&1 &",
+        "cd apps/web && pnpm exec astro dev --port 4321",
+        "npx wrangler dev",
+        "cf dev",
+        "npm run dev",
+        "pnpm --filter web dev",
+        "nohup node_modules/.bin/astro dev &",
+    ] {
+        let out = guard_as(&trunk, "dogfooder", command);
+        assert!(refused(&out, "git worktree add"), "{command}: {out:?}");
+    }
+    // A detached worktree, another agent, or no dev server pass.
+    for (dir, agent, command) in [
+        (w.at("walk"), "dogfooder", "setsid pnpm dev &"),
+        (
+            w.at("walk"),
+            "dogfooder",
+            "cd /x && ls; pnpm exec wrangler dev",
+        ),
+        (trunk.clone(), "implementer", "pnpm dev"),
+        (trunk.clone(), "dogfooder", "pnpm dev:store --name Demo"),
+        (trunk.clone(), "dogfooder", "pnpm test"),
+        (w.at("nogit"), "dogfooder", "pnpm dev"),
+    ] {
+        let out = guard_as(&dir, agent, command);
+        assert!(passes(&out), "{command} in {dir:?}: {out:?}");
+    }
+    // The orchestrator's own call carries no agent_type.
+    assert!(passes(&guard(&trunk, "pnpm dev")));
+}

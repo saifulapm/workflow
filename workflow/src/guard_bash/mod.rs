@@ -7,6 +7,7 @@
 mod attach;
 mod cd;
 mod chain;
+mod devserver;
 mod pkill;
 mod tmp;
 
@@ -30,6 +31,9 @@ const BLOCK: i32 = 2;
 pub struct Call<'a> {
     pub commands: &'a [Simple],
     pub cwd: &'a Path,
+    /// The subagent the call runs in, as the hook's `agent_type` names it;
+    /// None in the session's own agent.
+    pub agent: Option<&'a str>,
 }
 
 /// Each rule's refusal for a call, or None. The first refusal is the one
@@ -40,6 +44,7 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     attach::refusal,
     cd::refusal,
     tmp::refusal,
+    devserver::refusal,
 ];
 
 pub fn cmd_guard_bash() -> i32 {
@@ -62,6 +67,7 @@ pub fn cmd_guard_bash() -> i32 {
     let call = Call {
         commands: &commands,
         cwd: Path::new(hook["cwd"].as_str().unwrap_or_default()),
+        agent: hook["agent_type"].as_str(),
     };
     match RULES.iter().find_map(|rule| rule(&call)) {
         Some(reason) => {
