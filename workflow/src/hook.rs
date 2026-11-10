@@ -72,15 +72,14 @@ fn check(name: &str, args: &[String], fed: &mut Option<Vec<u8>>) -> i32 {
 
 /// Does every line git fed pre-push send to a `cloud/` branch? A thread's
 /// agent owns those and nothing else. The destination is the third field, so
-/// `git push origin HEAD:main` from a cloud/ branch still counts as main.
+/// `git push origin HEAD:main` from a cloud/ branch still counts as main. No
+/// line at all is a push with nothing to send, which moves no branch.
 fn only_cloud_refs(input: &str) -> bool {
-    let mut lines = input.lines().filter(|l| !l.trim().is_empty()).peekable();
-    lines.peek().is_some()
-        && lines.all(|l| {
-            l.split_whitespace()
-                .nth(2)
-                .is_some_and(|r| r.starts_with("refs/heads/cloud/"))
-        })
+    input.lines().filter(|l| !l.trim().is_empty()).all(|l| {
+        l.split_whitespace()
+            .nth(2)
+            .is_some_and(|r| r.starts_with("refs/heads/cloud/"))
+    })
 }
 
 /// The hygiene check: the staged diff before the commit, the message after it

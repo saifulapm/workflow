@@ -213,6 +213,11 @@ is "$RC" 0 'pre-push: a thread cloud/ push chains to the repo hook'
 like "$(cat "$T_TMP/fed")" 'refs/heads/cloud/acme-m1-z' 'pre-push: the repo hook gets the ref lines git fed'
 rm .git/hooks/pre-push
 
+# A cloud/ branch already up to date feeds no line: nothing is pushed, so
+# nothing is refused (a thread pushes its branch after every task).
+run env "${THREAD[@]}" git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/cloud/acme-m1-z
+is "$RC" 0 'pre-push: a thread push with nothing to send passes'
+
 # A bare repo has no work tree: step 1 lets it straight through.
 git clone -q --bare "$T_TMP/pusher" "$T_TMP/bare.git"
 cd "$T_TMP/bare.git" || exit 1
