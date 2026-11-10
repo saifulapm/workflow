@@ -166,14 +166,29 @@ nothing was pushed to {trunk_name}"
 /// The lines Claude Code adds to a commit, which no trunk takes.
 const CLAUDE_LINES: [&str; 2] = [concat!("Co-Authored", "-By"), "Claude-Session"];
 
-/// The parked line for the first commit of `range` whose message has a
-/// line Claude Code adds: one that got past the hooks stops here, before
-/// anything is pushed.
+/// The identity Claude Code commits under where the kit has not set
+/// Saiful's yet, as in an environment set up before the kit did.
+const CLAUDE_EMAIL: &str = "noreply@anthropic.com";
+
+/// The parked line for the first commit of `range` made under Claude's
+/// identity, or whose message has a line Claude Code adds: one that got
+/// past the hooks stops here, before anything is pushed.
 fn claude_line(git: &Git, range: &str) -> Option<String> {
-    let log = git.out(&["log", "--reverse", "--format=%h%n%B%x00", range])?;
+    let log = git.out(&[
+        "log",
+        "--reverse",
+        "--format=%h%n%an <%ae>%n%cn <%ce>%n%B%x00",
+        range,
+    ])?;
     log.split('\0').find_map(|commit| {
         let mut lines = commit.trim_start_matches('\n').lines();
         let sha = lines.next()?;
+        for role in ["authored", "committed"] {
+            let who = lines.next()?;
+            if who.ends_with(&format!("<{CLAUDE_EMAIL}>")) {
+                return Some(format!("parked: commit {sha} is {role} by {who}"));
+            }
+        }
         lines.find_map(|line| {
             CLAUDE_LINES
                 .iter()

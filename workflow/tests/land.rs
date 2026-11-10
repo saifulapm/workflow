@@ -394,6 +394,42 @@ fn a_commit_with_a_claude_line_parks_the_landing() {
     }
 }
 
+/// A thread whose environment predates the kit's identity commits as
+/// Claude with no trailer at all: such a commit never reaches a trunk
+/// either, whether Claude wrote it or only committed it.
+#[test]
+fn a_commit_by_claudes_identity_parks_the_landing() {
+    for (tag, who, role) in [
+        ("land-claude-author", "AUTHOR", "authored"),
+        ("land-claude-committer", "COMMITTER", "committed"),
+    ] {
+        let w = World::new(tag);
+        let clone = w.clone_dir();
+        w.work.put("thread/more.txt", "more\n");
+        w.git(&clone, &["add", "."]);
+        let out = Command::new("git")
+            .args(["commit", "-q", "-m", "Add more"])
+            .env("GIT_CONFIG_GLOBAL", w.work.at("gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(format!("GIT_{who}_NAME"), "Claude")
+            .env(format!("GIT_{who}_EMAIL"), "noreply@anthropic.com")
+            .current_dir(&clone)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let sha = w.git(&clone, &["rev-parse", "--short", "HEAD"]);
+        let before = w.origin_main();
+        let out = w.land();
+        assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+        assert_eq!(
+            last_line(&out),
+            format!("parked: commit {sha} is {role} by Claude <noreply@anthropic.com>")
+        );
+        assert_eq!(w.origin_main(), before);
+        assert!(!w.ticked());
+    }
+}
+
 /// Writes the store has not taken leave with the trunk: the next machine
 /// that reads the project sends them.
 #[test]
