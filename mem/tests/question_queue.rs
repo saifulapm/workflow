@@ -422,6 +422,55 @@ fn the_listing_json_carries_the_answered_flag() {
     assert_eq!(rows[0]["answered"], serde_json::json!(false), "{v}");
 }
 
+/// An agent waiting on a question reads `show` to see the answer, so show
+/// carries it in both modes and says plainly when there is none.
+#[test]
+fn show_prints_a_questions_answer_or_says_unanswered() {
+    let w = World::new("q-show-answer");
+    let repo = w.repo("thing", None);
+
+    let ask = |text: &str| -> String {
+        let v: serde_json::Value =
+            serde_json::from_slice(&ask_env(&w, &repo, &["ask", text, "--json"]).stdout).unwrap();
+        v["short_id"].as_str().unwrap().to_string()
+    };
+    let answered = ask("is this answered?");
+    let open = ask("and this one?");
+
+    let out = ask_env(&w, &repo, &["answer", &answered, "yes it is"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let out = ask_env(&w, &repo, &["show", &answered]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("answer (") && l.ends_with("): yes it is") && l.contains(", #")),
+        "{text}"
+    );
+    assert!(!text.contains("unanswered"), "{text}");
+
+    let out = ask_env(&w, &repo, &["show", &answered, "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let item = &v["items"][0];
+    assert_eq!(item["answered"], serde_json::json!(true), "{v}");
+    assert_eq!(item["answer"], serde_json::json!("yes it is"), "{v}");
+    assert!(item["answer_id"].is_string(), "{v}");
+
+    let out = ask_env(&w, &repo, &["show", &open]);
+    assert!(
+        stdout(&out).trim_end().ends_with("unanswered"),
+        "{}",
+        stdout(&out)
+    );
+
+    let out = ask_env(&w, &repo, &["show", &open, "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let item = &v["items"][0];
+    assert_eq!(item["answered"], serde_json::json!(false), "{v}");
+    assert_eq!(item["answer"], serde_json::Value::Null, "{v}");
+}
+
 /// An orchestrator's question carries its amx session, so the hub can
 /// resume that very session once its questions are answered.
 #[test]

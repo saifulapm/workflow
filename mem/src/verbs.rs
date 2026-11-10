@@ -247,6 +247,15 @@ pub fn show(app: &App, ids: &[String]) -> Result<i32> {
         for row in &found {
             let mut v = row_json(row);
             v["body"] = json!(read_body(row));
+            // Same names as `questions --json`: the answer is a separate item
+            // linked to the question, so a reader waiting on it needs it here.
+            if row.kind == "question" {
+                let answer = index.answer_to(&row.id)?;
+                v["answered"] = json!(answer.is_some());
+                v["answer"] = json!(answer.as_ref().map(|a| read_body(a).trim().to_string()));
+                v["answer_id"] = json!(answer.as_ref().map(|a| a.id.clone()));
+                v["answer_by"] = json!(answer.as_ref().and_then(read_item).and_then(|i| i.meta.by));
+            }
             items.push(v);
         }
         println!("{}", serde_json::to_string(&json!({ "items": items }))?);
@@ -259,6 +268,15 @@ pub fn show(app: &App, ids: &[String]) -> Result<i32> {
             match std::fs::read(&row.path) {
                 Ok(bytes) => print!("{}", String::from_utf8_lossy(&bytes)),
                 Err(_) => println!("#{}  {}  (file unreadable)", row.short_id, row.title),
+            }
+            if row.kind == "question" {
+                match index.answer_to(&row.id)? {
+                    Some(a) => {
+                        let by = read_item(&a).and_then(|i| i.meta.by).unwrap_or_default();
+                        println!("answer ({by}, #{}): {}", a.short_id, read_body(&a).trim());
+                    }
+                    None => println!("unanswered"),
+                }
             }
         }
     }
