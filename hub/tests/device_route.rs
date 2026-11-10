@@ -267,3 +267,65 @@ fn only_this_machine_or_a_device_peer_chooses_the_device() {
     }
     assert_eq!(chosen(&socket_of(&dir, "mac-mini-m2")), "mac-mini-m2");
 }
+
+#[test]
+fn a_device_chosen_on_one_hub_reaches_every_peer_and_leaves_the_route() {
+    let dir = TempDir::new("device-spread");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let macbook = spawn(&dir, "macbook-m2", &[]);
+    let _mini = spawn(&dir, "mac-mini-m2", &[&nuc, &macbook]);
+    let route_before = route_machine(&socket_of(&dir, "nuc"));
+
+    choose(&socket_of(&dir, "mac-mini-m2"), "nuc");
+    for peer in ["nuc", "macbook-m2"] {
+        common::wait_for(
+            &format!("{peer} hears the choice"),
+            Duration::from_secs(2),
+            || chosen(&socket_of(&dir, peer)) == "nuc",
+        );
+    }
+    assert_eq!(route_machine(&socket_of(&dir, "nuc")), route_before);
+}
+
+#[test]
+fn an_older_choice_from_a_peer_loses_to_the_newer_one_here() {
+    let dir = TempDir::new("device-older");
+    let mini = spawn(&dir, "mac-mini-m2", &[]);
+    choose(&socket_of(&dir, "mac-mini-m2"), "nuc");
+
+    let stale = on_peer_port(
+        &mini,
+        Some(TOKEN),
+        "POST /device/choice HTTP/1.1",
+        r#"{"device":"macbook-m2","at":1}"#,
+    );
+    assert_eq!(status_of(&stale), 200, "{stale}");
+    assert_eq!(chosen(&socket_of(&dir, "mac-mini-m2")), "nuc");
+
+    let newer = on_peer_port(
+        &mini,
+        Some(TOKEN),
+        "POST /device/choice HTTP/1.1",
+        r#"{"device":"macbook-m2","at":99999999999999}"#,
+    );
+    assert_eq!(status_of(&newer), 200, "{newer}");
+    assert_eq!(chosen(&socket_of(&dir, "mac-mini-m2")), "macbook-m2");
+}
+
+#[test]
+fn a_hub_keeps_its_choice_across_a_restart_and_a_late_one_learns_the_newest() {
+    let dir = TempDir::new("device-late");
+    let nuc = spawn(&dir, "nuc", &[]);
+    choose(&socket_of(&dir, "nuc"), "macbook-m2");
+    drop(nuc);
+    let nuc = spawn(&dir, "nuc", &[]);
+    assert_eq!(chosen(&socket_of(&dir, "nuc")), "macbook-m2");
+
+    // The mini was away when the choice was made; it catches up at start.
+    let _mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    common::wait_for(
+        "the late mini learns the choice",
+        Duration::from_secs(2),
+        || chosen(&socket_of(&dir, "mac-mini-m2")) == "macbook-m2",
+    );
+}

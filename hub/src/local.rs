@@ -312,11 +312,9 @@ impl Local {
             ("POST", "/device/choice") => match serde_json::from_slice::<Chosen>(&request.body) {
                 Ok(chosen) if chosen.at.is_none() && chosen.is_name() => {
                     let chosen = self.device_now.choose(&chosen.device);
-                    Response::new(
-                        200,
-                        "application/json",
-                        serde_json::to_vec(&chosen).unwrap_or_default(),
-                    )
+                    let body = serde_json::to_vec(&chosen).unwrap_or_default();
+                    self.tell_peers("/device/choice", body.clone());
+                    Response::new(200, "application/json", body)
                 }
                 Ok(chosen) if chosen.at.is_some() => self.route(request),
                 Ok(_) => Response::text(400, "a device is a machine name"),
@@ -1194,7 +1192,8 @@ impl Local {
         self.catch_up(false);
     }
 
-    /// Takes the newest route and the open questions from every online peer.
+    /// Takes the newest route, the newest device choice and the open
+    /// questions from every online peer.
     /// At start a peer's news of every question is taken, for an asker that
     /// is away; in a sweep only the questions each peer asked itself, so a
     /// peer that missed a close cannot pass the question on again. A sweep
@@ -1223,6 +1222,22 @@ impl Local {
                     say(format!("hub: local: /route did not reach {peer}: {e:#}"));
                     continue;
                 }
+            }
+            match request(&peer, "GET", "/device/choice", &self.token, b"") {
+                Ok((200, body)) => match serde_json::from_str::<Chosen>(&body) {
+                    Ok(theirs) if theirs.is_name() => {
+                        self.device_now.offer(theirs);
+                    }
+                    _ => say(format!("hub: local: {peer} sent no device choice")),
+                },
+                // A peer from before the device choice has none to give.
+                Ok((404, _)) => {}
+                Ok((status, _)) => say(format!(
+                    "hub: local: {peer} answered {status} to /device/choice"
+                )),
+                Err(e) => say(format!(
+                    "hub: local: /device/choice did not reach {peer}: {e:#}"
+                )),
             }
             match request(&peer, "GET", "/questions", &self.token, b"") {
                 Ok((200, body)) => match serde_json::from_str::<Listed>(&body) {
