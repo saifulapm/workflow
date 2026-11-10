@@ -6,7 +6,7 @@
 mod scratch;
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
 use scratch::Scratch;
@@ -639,4 +639,106 @@ fn a_dogfooders_dev_server_reached_through_a_flag_a_shell_or_tmux_is_judged_too(
         let out = guard_as(dir, "dogfooder", &command);
         assert!(passes(&out), "{command}: {out:?}");
     }
+}
+
+/// A process whose argv holds `words` and whose cwd is `cwd`, the way a
+/// running test suite looks from /proc. It dies with the test, panic or not.
+struct Suite(std::process::Child);
+
+impl Suite {
+    fn run(cwd: &Path, words: &str) -> Suite {
+        let child = std::process::Command::new("sh")
+            .args(["-c", &format!("sleep 30; : {words}")])
+            .current_dir(cwd)
+            .spawn()
+            .unwrap();
+        Suite(child)
+    }
+}
+
+impl Drop for Suite {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn git(cwd: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
+fn repo(w: &Scratch) -> PathBuf {
+    let repo = w.mkdir("repo");
+    git(&repo, &["init", "-q"]);
+    repo
+}
+
+const HELD: &str = "moves HEAD under the tests";
+
+#[test]
+fn a_commit_or_merge_while_the_checkouts_suite_runs_is_refused() {
+    for words in ["cargo test -q", "bash tests/run.sh"] {
+        let w = Scratch::new("guard-bash-suite");
+        let repo = repo(&w);
+        let elsewhere = w.mkdir("elsewhere");
+        let _suite = Suite::run(&repo, words);
+        for command in ["git commit -am x", "git merge --ff-only b"] {
+            let out = guard(&repo, command);
+            assert!(refused(&out, HELD), "{words} {command:?}: {out:?}");
+        }
+        let by_dir = format!("git -C {} commit -m x", repo.display());
+        let out = guard(&elsewhere, &by_dir);
+        assert!(refused(&out, HELD), "{words} {by_dir:?}: {out:?}");
+        for command in ["git status", "git log"] {
+            let out = guard(&repo, command);
+            assert!(passes(&out), "{words} {command:?}: {out:?}");
+        }
+    }
+}
+
+#[test]
+fn a_suite_in_one_worktree_does_not_hold_back_a_commit_in_the_other() {
+    let w = Scratch::new("guard-bash-suite-worktree");
+    let repo = repo(&w);
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    );
+    let linked = repo.join(".claude/worktrees/w");
+    git(
+        &repo,
+        &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "w"],
+    );
+    {
+        let _suite = Suite::run(&repo, "cargo test -q");
+        let out = guard(&linked, "git commit -am x");
+        assert!(passes(&out), "{out:?}");
+    }
+    let _suite = Suite::run(&linked, "cargo test -q");
+    let out = guard(&repo, "git commit -am x");
+    assert!(passes(&out), "{out:?}");
+}
+
+#[test]
+fn a_commit_passes_when_no_suite_runs() {
+    let w = Scratch::new("guard-bash-suite-idle");
+    let repo = repo(&w);
+    let out = guard(&repo, "git commit -am x");
+    assert!(passes(&out), "{out:?}");
 }

@@ -11,6 +11,7 @@ mod devserver;
 mod pkill;
 mod playwright;
 mod snapshot;
+mod suite;
 mod tmp;
 
 use std::io::Read;
@@ -49,6 +50,7 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     cd::refusal,
     tmp::refusal,
     devserver::refusal,
+    suite::refusal,
 ];
 
 pub fn cmd_guard_bash() -> i32 {
