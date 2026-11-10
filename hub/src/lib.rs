@@ -104,6 +104,13 @@ pub fn tailnet_name() -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// Whether a tailnet peer is a cloud thread's VM, `cloud-<name>`: it holds
+/// no device, so a device hub takes no device choice from it and sends it
+/// no device call.
+pub fn cloud_peer(host: &str) -> bool {
+    host.starts_with("cloud-")
+}
+
 /// The local hubs this one tells about its questions: `HUB_PEERS` (a comma
 /// list of `host[:port]`, empty for none) when set, else every online peer
 /// `tailscale status --json` lists, phones aside, by MagicDNS name. A peer

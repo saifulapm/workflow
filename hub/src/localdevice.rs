@@ -78,7 +78,7 @@ impl LocalDevice {
             .map_or(0, |d| d.as_millis() as i64);
         let next = Chosen {
             device: device.to_string(),
-            at: Some(at.max(now.at.unwrap_or(0) + 1)),
+            at: Some(at.max(now.at.unwrap_or(0).saturating_add(1))),
         };
         *now = next.clone();
         self.save(&now);

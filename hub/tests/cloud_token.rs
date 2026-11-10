@@ -306,3 +306,40 @@ fn a_hub_with_the_cloud_token_alone_will_not_start() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("HUB_PEER_TOKEN_SHA256"), "{stderr}");
 }
+
+/// A cloud session's hub holds no choice of device worth sharing: a thread
+/// there cannot choose the device every hub would then take up.
+#[test]
+fn a_cloud_session_cannot_choose_the_device() {
+    let dir = TempDir::new("cloud-device-choice");
+    let _hub = spawn(&dir, "cloud-vm-1", &cloud_env());
+    let body = r#"{"device":"nuc"}"#;
+    let mut stream = UnixStream::connect(dir.join("local.sock")).unwrap();
+    write!(
+        stream,
+        "POST /device/choice HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert_eq!(status_of(&response), 403, "{response}");
+    assert!(!dir.join("home/state/hub/local-device.json").exists());
+}
+
+/// A cloud thread's VM is `cloud-<name>` on the tailnet; a device hub takes
+/// no device choice from one and sends it no device call.
+#[test]
+fn a_cloud_vm_is_known_by_its_tailnet_name() {
+    for host in ["cloud-vm-1.taila27604.ts.net", "cloud-vm", "cloud-x:8790"] {
+        assert!(hub::cloud_peer(host), "{host}");
+    }
+    for host in [
+        "mini.taila27604.ts.net",
+        "nuc",
+        "127.0.0.1:8790",
+        "cloudy.ts.net",
+    ] {
+        assert!(!hub::cloud_peer(host), "{host}");
+    }
+}

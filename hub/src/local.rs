@@ -309,6 +309,10 @@ impl Local {
                 Err(e) => Response::text(400, &format!("route to phone or device: {e}")),
             },
             // A device chosen on this machine; a peer's comes stamped.
+            // A cloud session's choice would reach every device hub.
+            ("POST", "/device/choice") if self.tokens.cloud() => {
+                Response::text(403, "a cloud session cannot choose the device")
+            }
             ("POST", "/device/choice") => match serde_json::from_slice::<Chosen>(&request.body) {
                 Ok(chosen) if chosen.at.is_none() && chosen.is_name() => {
                     let chosen = self.device_now.choose(&chosen.device);
@@ -568,7 +572,7 @@ impl Local {
     fn peer_named(&self, machine: &str) -> Option<String> {
         crate::tailnet_peers()
             .into_iter()
-            .filter(|peer| *peer != self.host)
+            .filter(|peer| *peer != self.host && !crate::cloud_peer(peer))
             .find(|peer| {
                 matches!(
                     request_within(peer, "GET", "/ping", &self.token, b"", PING_WITHIN),
@@ -1223,19 +1227,24 @@ impl Local {
                     continue;
                 }
             }
-            match request(&peer, "GET", "/device/choice", &self.token, b"") {
-                Ok((200, body)) => match serde_json::from_str::<Chosen>(&body) {
+            // A cloud VM is never asked: what it says of the device is a
+            // thread's word.
+            let choice = (!crate::cloud_peer(&peer))
+                .then(|| request(&peer, "GET", "/device/choice", &self.token, b""));
+            match choice {
+                None => {}
+                Some(Ok((200, body))) => match serde_json::from_str::<Chosen>(&body) {
                     Ok(theirs) if theirs.is_name() => {
                         self.device_now.offer(theirs);
                     }
                     _ => say(format!("hub: local: {peer} sent no device choice")),
                 },
                 // A peer from before the device choice has none to give.
-                Ok((404, _)) => {}
-                Ok((status, _)) => say(format!(
+                Some(Ok((404, _))) => {}
+                Some(Ok((status, _))) => say(format!(
                     "hub: local: {peer} answered {status} to /device/choice"
                 )),
-                Err(e) => say(format!(
+                Some(Err(e)) => say(format!(
                     "hub: local: /device/choice did not reach {peer}: {e:#}"
                 )),
             }
