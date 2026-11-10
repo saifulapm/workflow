@@ -871,7 +871,7 @@ impl<F: Files> View<'_, F> {
         if !full && !(wanted.len() == 8 && wanted.chars().all(item::is_ulid_char)) {
             return Reply::Absent;
         }
-        let mut found: Vec<Row> = Vec::new();
+        let mut found: Vec<(&Project, Row)> = Vec::new();
         let candidates = self.files.by_id(&wanted);
         for p in &self.registry.projects {
             let prefix = format!("projects/{}/items/", p.id);
@@ -880,19 +880,34 @@ impl<F: Files> View<'_, F> {
                 .filter(|(path, _)| path.starts_with(&prefix))
                 .cloned()
                 .collect();
-            found.extend(self.rows_of(p, ours).into_iter().filter(|r| {
-                if full {
-                    r.meta().id == wanted
-                } else {
-                    r.short_id() == wanted
-                }
-            }));
+            found.extend(
+                self.rows_of(p, ours)
+                    .into_iter()
+                    .filter(|r| {
+                        if full {
+                            r.meta().id == wanted
+                        } else {
+                            r.short_id() == wanted
+                        }
+                    })
+                    .map(|r| (p, r)),
+            );
         }
-        let [row] = found.as_slice() else {
+        let [(project, row)] = found.as_slice() else {
             return Reply::Absent;
         };
         let mut v = row_json(row);
         v["body"] = json!(row.item.body);
+        // mem's show names a question's answer as its questions does.
+        if row.meta().kind == "question" {
+            let id = row.meta().id.clone();
+            let rows = self.rows_of(project, self.files.answers_to(&project.id, &[id]));
+            let answer = answer_of(row, &rows);
+            v["answered"] = json!(answer.is_some());
+            v["answer"] = json!(answer.map(|a| a.item.body.trim().to_string()));
+            v["answer_id"] = json!(answer.map(|a| a.meta().id.clone()));
+            v["answer_by"] = json!(answer.and_then(|a| a.meta().by.clone()));
+        }
         Reply::Json(json!({ "items": [v] }))
     }
 
@@ -967,14 +982,18 @@ fn is_for(audience: Option<&str>, question: &Row) -> bool {
     }
 }
 
-/// A question's row with its body, options and answer. The answer is the
-/// newest active item that answers it, else the newest replaced one.
-fn question_json(question: &Row, rows: &[Row]) -> Value {
+/// The item in `rows` that answers `question`: the newest active one, else
+/// the newest replaced one.
+fn answer_of<'a>(question: &Row, rows: &'a [Row]) -> Option<&'a Row> {
     let id = &question.meta().id;
-    let answer = rows
-        .iter()
+    rows.iter()
         .filter(|r| r.meta().answers.as_ref() == Some(id))
-        .max_by(|a, b| (a.active, &a.meta().id).cmp(&(b.active, &b.meta().id)));
+        .max_by(|a, b| (a.active, &a.meta().id).cmp(&(b.active, &b.meta().id)))
+}
+
+/// A question's row with its body, options and answer.
+fn question_json(question: &Row, rows: &[Row]) -> Value {
+    let answer = answer_of(question, rows);
     let m = question.meta();
     let mut v = row_json(question);
     v["answered"] = json!(answer.is_some());
