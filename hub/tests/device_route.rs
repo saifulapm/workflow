@@ -18,6 +18,16 @@ const CLOUD: &str = "cloud-token-for-tests-0123456789abcdef";
 /// A local hub named `machine`, reachable by peers at 127.0.0.1, with
 /// `peers` as its tailnet and a mem that records each call.
 fn spawn(dir: &TempDir, machine: &str, peers: &[&Hub]) -> Hub {
+    let peers = peers
+        .iter()
+        .map(|p| format!("127.0.0.1:{}", p.port))
+        .collect::<Vec<_>>()
+        .join(",");
+    spawn_with_peers(dir, machine, &peers)
+}
+
+/// The same with `peers` as its `HUB_PEERS` list.
+fn spawn_with_peers(dir: &TempDir, machine: &str, peers: &str) -> Hub {
     let home = dir.join(machine);
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::create_dir_all(home.join("run")).unwrap();
@@ -31,11 +41,6 @@ fn spawn(dir: &TempDir, machine: &str, peers: &[&Hub]) -> Hub {
     );
     let socket = home.join("local.sock");
     let runtime = home.join("run");
-    let peers = peers
-        .iter()
-        .map(|p| format!("127.0.0.1:{}", p.port))
-        .collect::<Vec<_>>()
-        .join(",");
     Hub::spawn_env(
         &home,
         &[&bin],
@@ -45,7 +50,7 @@ fn spawn(dir: &TempDir, machine: &str, peers: &[&Hub]) -> Hub {
             ("HUB_CLOUD_TOKEN", CLOUD),
             ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
             ("HUB_HOST", "127.0.0.1"),
-            ("HUB_PEERS", &peers),
+            ("HUB_PEERS", peers),
             ("XDG_RUNTIME_DIR", runtime.to_str().unwrap()),
         ],
     )
@@ -327,5 +332,45 @@ fn a_hub_keeps_its_choice_across_a_restart_and_a_late_one_learns_the_newest() {
         "the late mini learns the choice",
         Duration::from_secs(2),
         || chosen(&socket_of(&dir, "mac-mini-m2")) == "macbook-m2",
+    );
+}
+
+/// A peer whose hub predates device calls: it answers `/ping` with `name`
+/// and 404 to everything else.
+fn old_hub(name: &'static str) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut head = [0u8; 4096];
+            let n = stream.read(&mut head).unwrap_or(0);
+            let ping = head[..n].starts_with(b"GET /ping ");
+            let (status, body) = if ping {
+                ("200 OK", name)
+            } else {
+                ("404 Not Found", "not found")
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    port
+}
+
+#[test]
+fn a_chosen_device_whose_hub_cannot_serve_calls_is_not_online() {
+    let dir = TempDir::new("device-old-peer");
+    let port = old_hub("nuc");
+    let mini = spawn_with_peers(&dir, "mac-mini-m2", &format!("127.0.0.1:{port}"));
+    choose(&socket_of(&dir, "mac-mini-m2"), "nuc");
+
+    let answer = device(&mini, "whoami");
+    assert_eq!(answer["exit"], 3, "{answer}");
+    assert_eq!(
+        answer["stderr"], "device: no device online (device: nuc)\n",
+        "{answer}"
     );
 }

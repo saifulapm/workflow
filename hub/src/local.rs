@@ -559,6 +559,11 @@ impl Local {
             &request.body,
             within,
         ) {
+            // A hub from before device calls cannot serve one.
+            Ok((404, _)) => {
+                eprintln!("hub: local: {device} on {peer} has no device calls; update its hub");
+                crate::device::unserved(request, &offline)
+            }
             Ok((status, body)) => Response::new(status, "application/json", body),
             Err(e) => {
                 eprintln!("hub: local: device call to {device} on {peer}: {e:#}");
