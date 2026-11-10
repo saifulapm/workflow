@@ -414,3 +414,63 @@ fn a_link_outside_the_session_folder_is_not_sent() {
     assert_eq!(answer["exit"], 0, "{answer}");
     assert_eq!(answer["files"], serde_json::json!({}));
 }
+
+/// dotfiles v2 keeps its bin at ~/Codes/dotfiles/bin, not ~/.dotfiles/bin:
+/// the wrapper on the user manager's PATH is the one that runs.
+#[test]
+fn the_wrapper_on_the_user_path_runs_when_there_is_no_dotfiles_folder() {
+    let rig = rig(SNAPSHOT_GOTO, &[]);
+    std::fs::rename(
+        rig.home.join(".dotfiles/bin/playwright-cli"),
+        rig.tools.join("playwright-cli"),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(rig.home.join(".dotfiles")).unwrap();
+    let answer = browser(&rig.hub, Some("s1"), &["goto", "https://claude.ai/code"]);
+    assert_eq!(answer["exit"], 0, "{answer}");
+    let calls = rig.calls();
+    assert!(
+        calls.iter().any(|c| c.get(3).is_some_and(|a| a == "goto")),
+        "{calls:?}"
+    );
+}
+
+/// dotfiles v2 has no app-run: Chromium starts as its own user unit, the way
+/// v2's playwright-cli wrapper starts it over ssh.
+#[test]
+fn with_no_app_run_chromium_starts_through_systemd_run() {
+    let rig = rig(SNAPSHOT_GOTO, &[("HUB_DEVICE_CHROMIUM_WAIT_MS", "3000")]);
+    let lock = rig.home.join("config/chromium/SingletonLock");
+    std::fs::remove_file(&lock).unwrap();
+    std::os::unix::fs::symlink("testhost-999999999", &lock).unwrap();
+    fixture_bin(
+        &rig.tools,
+        "systemd-run",
+        &format!(
+            "printf 'systemd-run\\t%s\\n' \"$*\" >> '{record}'\n\
+             rm -f '{lock}'\n\
+             ln -s 'testhost-{pid}' '{lock}'",
+            record = rig.record.display(),
+            lock = lock.display(),
+            pid = std::process::id(),
+        ),
+    );
+    let answer = browser(&rig.hub, Some("s1"), &["goto", "https://claude.ai/code"]);
+    assert_eq!(answer["exit"], 0, "{answer}");
+    let calls = rig.calls();
+    let started = calls
+        .iter()
+        .position(|c| {
+            c[..]
+                == [
+                    "systemd-run",
+                    "--user --quiet --collect --property=ExitType=cgroup -- chromium-browser",
+                ]
+        })
+        .unwrap_or_else(|| panic!("systemd-run never ran: {calls:?}"));
+    let attached = calls
+        .iter()
+        .position(|c| c.get(3).is_some_and(|a| a == "attach"))
+        .unwrap_or_else(|| panic!("never attached: {calls:?}"));
+    assert!(started < attached, "{calls:?}");
+}

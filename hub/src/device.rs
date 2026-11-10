@@ -319,10 +319,14 @@ impl Cli<'_> {
     }
 
     fn run(&self, args: &[&str], token: Option<&str>) -> Result<crate::proc::Finished, Stop> {
-        // By full path: the hub's own PATH, pinned by its unit, does not
-        // have the dotfiles' bin.
-        let home = std::env::var_os("HOME").unwrap_or_default();
-        let mut command = Command::new(Path::new(&home).join(".dotfiles/bin/playwright-cli"));
+        // The dotfiles' wrapper, found on the user manager's PATH since the
+        // hub's own, pinned by its unit, does not have the dotfiles' bin
+        // (~/Codes/dotfiles/bin in v2); v1's ~/.dotfiles/bin when it is not.
+        let wrapper = find_in(&self.path, "playwright-cli").unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").unwrap_or_default();
+            Path::new(&home).join(".dotfiles/bin/playwright-cli")
+        });
+        let mut command = Command::new(wrapper);
         command
             .args(args)
             .env("PATH", &self.path)
@@ -351,17 +355,34 @@ fn ensure_chromium(path: &str, deadline: Instant) {
     if chromium_up(&lock) {
         return;
     }
-    let Some(app_run) = find_in(path, "app-run") else {
+    // dotfiles v1's app-run, else its own user unit, as v2's playwright-cli
+    // wrapper starts it over ssh.
+    let mut command = if let Some(app_run) = find_in(path, "app-run") {
+        let mut command = Command::new(app_run);
+        command.arg("chromium-browser");
+        command
+    } else if let Some(systemd_run) = find_in(path, "systemd-run") {
+        let mut command = Command::new(systemd_run);
+        command.args([
+            "--user",
+            "--quiet",
+            "--collect",
+            "--property=ExitType=cgroup",
+            "--",
+            "chromium-browser",
+        ]);
+        command
+    } else {
         return;
     };
-    let spawned = Command::new(app_run)
-        .arg("chromium-browser")
+    let spawned = command
         .env("PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
-    // app-run daemonizes, so this only reaps it.
+    // app-run daemonizes and systemd-run returns once the unit runs, so this
+    // only reaps it.
     if let Ok(mut child) = spawned {
         std::thread::spawn(move || child.wait());
     }
