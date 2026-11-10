@@ -331,6 +331,9 @@ hub-local.")]
         #[arg(value_parser = ["pnpm", "bash"])]
         check: String,
     },
+    /// Copy stdin to stdout with secret tokens (shpss_, shpat_, cfut_, tskey-)
+    /// cut to their prefix and `***`. Pipe a page snapshot through it.
+    Mask,
     /// A Claude Code worktree hook, given its JSON on stdin.
     #[command(long_about = "A Claude Code worktree hook, given its JSON on stdin.
 

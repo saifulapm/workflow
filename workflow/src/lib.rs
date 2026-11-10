@@ -27,6 +27,7 @@ pub mod install;
 pub mod land;
 pub mod lint;
 pub mod machine;
+pub mod mask;
 pub mod memcli;
 pub mod paths;
 pub mod pause;
@@ -120,6 +121,7 @@ pub fn run(cli: Cli) -> i32 {
             "bash" => guard_bash::cmd_guard_bash(),
             _ => guard::cmd_guard_pnpm(),
         },
+        Command::Mask => mask::cmd_mask(),
         Command::Worktree { action } => match action.as_str() {
             "remove" => worktree::cmd_worktree_remove(),
             _ => worktree::cmd_worktree_create(),
