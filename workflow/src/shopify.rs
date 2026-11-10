@@ -303,6 +303,16 @@ fn deploy(app: &str) -> i32 {
         ));
         return NEEDS_SAIFUL;
     }
+    let url = toml_value(&staging, None, "application_url");
+    if url.is_some() && url == toml_value(&production, None, "application_url") {
+        say(&format!(
+            "{} has the application_url of {}, {}: the staging app's admin frame, webhooks and pixel would reach production's Worker",
+            config.display(),
+            dir.join("shopify.app.toml").display(),
+            url.unwrap_or_default()
+        ));
+        return NEEDS_SAIFUL;
+    }
     let store = toml_value(&staging, Some("build"), "dev_store_url");
     let handle = toml_value(&staging, None, "handle");
     let (Some(store), Some(handle)) = (store, handle) else {
@@ -323,6 +333,9 @@ fn deploy(app: &str) -> i32 {
         Ok(worker) => worker,
         Err(code) => return code,
     };
+    if let Err(code) = cloudflare_token(&dir) {
+        return code;
+    }
     if let Err(code) = deploy_worker(&dir, app, &worker) {
         return code;
     }
@@ -473,6 +486,28 @@ fn staging_worker(dir: &Path, app: &str) -> Result<Worker, i32> {
         ));
         return Err(NEEDS_SAIFUL);
     };
+    let ids = |of: &Value| -> Vec<String> {
+        of["d1_databases"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|db| db["database_id"].as_str().map(str::to_string))
+            .collect()
+    };
+    let production = config["name"].as_str();
+    if production == Some(name) {
+        say(&format!(
+            "env.{STAGING} in {app}'s wrangler.jsonc names the Worker {name}, production's: give staging a Worker of its own"
+        ));
+        return Err(NEEDS_SAIFUL);
+    }
+    let theirs = ids(&config);
+    if let Some(id) = ids(env).into_iter().find(|id| theirs.contains(id)) {
+        say(&format!(
+            "env.{STAGING} in {app}'s wrangler.jsonc binds production's D1 database {id}: give staging a database of its own"
+        ));
+        return Err(NEEDS_SAIFUL);
+    }
     let databases = env["d1_databases"]
         .as_array()
         .into_iter()
@@ -499,6 +534,30 @@ fn wrangler(dir: &Path, args: &[&str]) -> Command {
             var("CLOUDFLARE_API_TOKEN").unwrap_or_else(|| "proxy-injected".to_string()),
         );
     cmd
+}
+
+/// Whether a Cloudflare token reaches wrangler. In a thread it is the
+/// environment's network secret for api.cloudflare.com, which only Saiful
+/// can add; without it the proxy adds nothing and every call is refused.
+fn cloudflare_token(dir: &Path) -> Result<(), i32> {
+    let mut whoami = wrangler(dir, &["whoami"]);
+    match whoami.output() {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => {
+            eprint!("{}", String::from_utf8_lossy(&out.stdout));
+            eprint!("{}", String::from_utf8_lossy(&out.stderr));
+            say(
+                "no Cloudflare token reaches wrangler: add api.cloudflare.com as a network secret of the shopify_apps environment",
+            );
+            Err(NEEDS_SAIFUL)
+        }
+        Err(e) => {
+            say(&format!(
+                "wrangler could not start ({e}): run pnpm install first"
+            ));
+            Err(exit::FAILED)
+        }
+    }
 }
 
 /// pnpm without the proxy switch, which hangs it.

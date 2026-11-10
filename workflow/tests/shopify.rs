@@ -302,6 +302,7 @@ fn apps(tag: &str) -> Scratch {
     work.put("deploy.code", "0");
     work.put("migrate.code", "0");
     work.put("worker.code", "0");
+    work.put("whoami.code", "0");
     work.put("built.name", "eventsmith-staging");
     let at = |rel: &str| work.at(rel).display().to_string();
     work.script(
@@ -311,10 +312,12 @@ fn apps(tag: &str) -> Scratch {
              case \"$1\" in\n\
              d1) echo 'Migrations to be applied: 0001_init.sql'; exit $(cat {migrate});;\n\
              deploy) echo 'Deployed eventsmith-staging triggers'; exit $(cat {worker});;\n\
+             whoami) exit $(cat {whoami});;\n\
              esac",
             calls = at("calls"),
             migrate = at("migrate.code"),
             worker = at("worker.code"),
+            whoami = at("whoami.code"),
         ),
     );
     work.script(
@@ -510,8 +513,9 @@ fn an_app_deploys_its_staging_worker_before_its_shopify_config() {
     assert!(out.status.success(), "{out:?}");
     let made = calls(&work);
     assert_eq!(
-        made[..4],
+        made[..5],
         [
+            "wrangler whoami | token=proxy-injected proxy=1",
             "wrangler d1 migrations apply eventsmith-staging --remote --env staging --config wrangler.jsonc | token=proxy-injected proxy=1",
             "pnpm turbo run build --filter=eventsmith^... | env= proxy= in=repo",
             "pnpm run build | env=staging proxy= in=eventsmith",
@@ -520,10 +524,10 @@ fn an_app_deploys_its_staging_worker_before_its_shopify_config() {
         "{made:?}"
     );
     assert!(
-        made[4].starts_with("app deploy --config staging "),
+        made[5].starts_with("app deploy --config staging "),
         "{made:?}"
     );
-    assert_eq!(made.len(), 5, "{made:?}");
+    assert_eq!(made.len(), 6, "{made:?}");
     assert!(
         made.iter().all(|call| !call.contains("eventsmith-na")),
         "{made:?}"
@@ -552,7 +556,7 @@ fn a_failed_migration_deploys_nothing() {
             .contains("the staging D1 migrations of eventsmith-staging failed"),
         "{out:?}"
     );
-    assert_eq!(calls(&work).len(), 1, "{:?}", calls(&work));
+    assert_eq!(calls(&work).len(), 2, "{:?}", calls(&work));
 }
 
 #[test]
@@ -595,4 +599,105 @@ fn a_build_for_another_worker_is_not_deployed() {
         "{:?}",
         calls(&work)
     );
+}
+
+/// Calls past the read-only `wrangler whoami`: what a refusal must not reach.
+fn deploys(work: &Scratch) -> Vec<String> {
+    calls(work)
+        .into_iter()
+        .filter(|call| !call.starts_with("wrangler whoami"))
+        .collect()
+}
+
+#[test]
+fn an_app_with_no_staging_worker_deploys_nothing() {
+    let work = apps("shopify-deploy-no-env");
+    work.put(
+        "repo/apps/eventsmith/wrangler.jsonc",
+        r#"{ "name": "eventsmith", }"#,
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(
+            "eventsmith has no env.staging in wrangler.jsonc: its staging Worker is not set up"
+        ),
+        "{out:?}"
+    );
+    assert!(calls(&work).is_empty(), "{:?}", calls(&work));
+}
+
+/// A staging app on production's URL sends its admin frame, webhooks and
+/// pixel to production's Worker.
+#[test]
+fn a_staging_config_on_production_s_url_is_refused() {
+    let work = apps("shopify-deploy-production-url");
+    work.put(
+        "repo/apps/eventsmith/shopify.app.staging.toml",
+        &STAGING.replace("eventsmith-staging.lareys.dev", "eventsmith.lareys.dev"),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("shopify.app.staging.toml")
+            && said.contains("shopify.app.toml")
+            && said.contains("https://eventsmith.lareys.dev"),
+        "{said}"
+    );
+    assert!(calls(&work).is_empty(), "{:?}", calls(&work));
+}
+
+#[test]
+fn a_staging_worker_on_production_s_database_is_refused() {
+    let work = apps("shopify-deploy-production-db");
+    work.put(
+        "repo/apps/eventsmith/wrangler.jsonc",
+        &WRANGLER.replace(
+            "bbbb0000-0000-0000-0000-000000000000",
+            "aaaa0000-0000-0000-0000-000000000000",
+        ),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("aaaa0000-0000-0000-0000-000000000000"),
+        "{out:?}"
+    );
+    assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
+}
+
+#[test]
+fn a_staging_worker_named_as_production_s_is_refused() {
+    let work = apps("shopify-deploy-production-worker");
+    work.put(
+        "repo/apps/eventsmith/wrangler.jsonc",
+        &WRANGLER.replace(
+            "\"name\": \"eventsmith-staging\"",
+            "\"name\": \"eventsmith\"",
+        ),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("the Worker eventsmith"),
+        "{out:?}"
+    );
+    assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
+}
+
+/// With no network secret for api.cloudflare.com, the proxy adds no token
+/// and wrangler is refused: only Saiful can add one.
+#[test]
+fn no_cloudflare_token_deploys_nothing() {
+    let work = apps("shopify-deploy-no-cloudflare");
+    work.put("whoami.code", "1");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("add api.cloudflare.com as a network secret of the shopify_apps environment"),
+        "{out:?}"
+    );
+    assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
 }
