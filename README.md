@@ -101,7 +101,13 @@ fixtures with `mem project set hygiene-exempt "tests/**"`.
 
 The hooks check only checkouts mem knows. pre-push refuses an agent's push
 (`WORKFLOW_AGENT`, or pi's `PI_CODING_AGENT`) unless `WORKFLOW_ALLOW_PUSH=1`
-is set, which a person sets when they say yes.
+is set, which a person sets when they say yes. In a claude.ai cloud thread
+an agent may push its own `cloud/` branches; a trunk takes only
+`workflow land`'s push, which sets the variable after the tests pass.
+
+A thread gets the same hooks, the same ignore list and Saiful's git identity
+from the cloud kit: the skills bundle carries the stubs and
+`cloud/gitignore`, and each boot sets git's global config again.
 
 The global ignore list comes from the dotfiles through `core.excludesFile`:
 `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.agents/`,
