@@ -355,7 +355,7 @@ impl Local {
             ("GET", "/ping") => Response::text(200, &self.machine),
             (_, "/ping") => Response::method_not_allowed("GET"),
             ("POST", "/device") => self.device(request),
-            // A call another hub sent on because the route names this one.
+            // A call another hub sent on because this one is the chosen device.
             ("POST", "/device/here") => crate::device::serve(&self.machine, request),
             // The asking hub offers its question to this, the route device.
             ("POST", "/ring") => match serde_json::from_slice::<Open>(&request.body) {

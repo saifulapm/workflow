@@ -1,4 +1,4 @@
-//! `workflow device <verb> [args...]`: one call to the routed device's hub,
+//! `workflow device <verb> [args...]`: one call to the chosen device's hub,
 //! played back here as if the program had run on this machine. `use` and the
 //! bare form choose and read the machine, on this machine's local hub.
 

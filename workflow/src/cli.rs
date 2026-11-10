@@ -284,9 +284,9 @@ refuses or does not answer.")]
         #[arg(value_parser = ["phone", "device"])]
         to: Option<String>,
     },
-    /// Run one call on the routed device, as if the program ran here.
+    /// Run one call on the chosen device, as if the program ran here.
     #[command(
-        long_about = "Run one call on the routed device, as if the program ran here.
+        long_about = "Run one call on the chosen device, as if the program ran here.
 
 The first argument is the verb: whoami, run or browser. The rest go to the
 device exactly as given, quotes and spaces unchanged, hyphens included. The

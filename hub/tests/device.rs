@@ -1,5 +1,5 @@
 //! `POST /device/here` on the local hub's peer port: a call served on this
-//! machine, as a hub sends it on when the route names this one.
+//! machine, as a hub sends it on when this one is the chosen device.
 
 mod common;
 
