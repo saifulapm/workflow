@@ -376,6 +376,23 @@ fn a_run_code_fill_inside_a_try_or_a_string_or_no_fill_runs() {
 }
 
 #[test]
+fn a_bare_playwright_cli_attach_is_refused_where_v2_keeps_the_wrapper() {
+    // dotfiles v2 keeps its bin at ~/Codes/dotfiles/bin.
+    let w = Scratch::new("guard-bash-attach-v2");
+    w.put("Codes/dotfiles/bin/playwright-cli", "#!/bin/sh\n");
+    let out = guard(w.path(), "playwright-cli attach --extension=chromium");
+    assert!(
+        refused(&out, "~/Codes/dotfiles/bin/playwright-cli attach"),
+        "{out:?}"
+    );
+    let out = guard(
+        w.path(),
+        "~/Codes/dotfiles/bin/playwright-cli attach --extension=chromium",
+    );
+    assert!(passes(&out), "{out:?}");
+}
+
+#[test]
 fn a_bare_playwright_cli_attach_runs_where_there_is_no_wrapper() {
     // A cloud session has no ~/.dotfiles.
     let w = Scratch::new("guard-bash-attach-cloud");

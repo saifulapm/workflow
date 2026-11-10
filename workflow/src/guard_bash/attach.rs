@@ -7,7 +7,16 @@ use std::path::Path;
 use super::Call;
 use crate::shell::{argv, subcommand};
 
-const REFUSAL: &str = "workflow guard refused this on purpose: a bare playwright-cli may be pnpm's, which cannot attach to the browser extension.\n\
+/// Where the dotfiles keep the wrapper: v2's bin first, then v1's.
+const WRAPPERS: [(&str, &str); 2] = [
+    ("Codes/dotfiles/bin/playwright-cli", V2_REFUSAL),
+    (".dotfiles/bin/playwright-cli", V1_REFUSAL),
+];
+
+const V2_REFUSAL: &str = "workflow guard refused this on purpose: a bare playwright-cli may be pnpm's, which cannot attach to the browser extension.\n\
+Call the wrapper by path: ~/Codes/dotfiles/bin/playwright-cli attach --extension=chromium.";
+
+const V1_REFUSAL: &str = "workflow guard refused this on purpose: a bare playwright-cli may be pnpm's, which cannot attach to the browser extension.\n\
 Call the wrapper by path: ~/.dotfiles/bin/playwright-cli attach --extension=chromium.";
 
 pub fn refusal(call: &Call) -> Option<&'static str> {
@@ -15,14 +24,18 @@ pub fn refusal(call: &Call) -> Option<&'static str> {
         let argv = argv(&command.words);
         argv.first().is_some_and(|w| w == "playwright-cli") && subcommand(argv) == Some("attach")
     });
-    (bare_attach && wrapper_exists()).then_some(REFUSAL)
+    if !bare_attach {
+        return None;
+    }
+    wrapper_refusal()
 }
 
-/// Whether this machine has the dotfiles' wrapper; a cloud session has not.
-fn wrapper_exists() -> bool {
-    std::env::var_os("HOME").is_some_and(|home| {
-        Path::new(&home)
-            .join(".dotfiles/bin/playwright-cli")
-            .is_file()
-    })
+/// The refusal naming this machine's wrapper; none in a cloud session, which
+/// has no dotfiles.
+fn wrapper_refusal() -> Option<&'static str> {
+    let home = std::env::var_os("HOME")?;
+    WRAPPERS
+        .iter()
+        .find(|(path, _)| Path::new(&home).join(path).is_file())
+        .map(|(_, refusal)| *refusal)
 }
