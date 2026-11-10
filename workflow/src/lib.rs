@@ -37,6 +37,7 @@ mod scratch;
 pub mod shell;
 pub mod shopify;
 pub mod switch;
+pub mod wait;
 pub mod worktree;
 
 use clap::Parser;
@@ -129,6 +130,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Hook { name, stub, args } => hook::cmd_hook(&name, stub.as_deref(), &args),
         Command::Install => install::cmd_install(),
         Command::Land => land::cmd_land(),
+        Command::WaitAnswer { ids } => wait::cmd_wait(&ids),
         Command::ProjectText { project } => cloud::cmd_project_text(project.as_deref()),
         Command::CloudSetup { bootstrap } => cloud::cmd_cloud_setup(bootstrap),
         Command::CloudSwitch { store } => cloud::cmd_cloud_switch(&store),

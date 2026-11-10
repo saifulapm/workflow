@@ -88,6 +88,50 @@ struct Items {
     items: Vec<Item>,
 }
 
+/// A question as `mem show <id> --json` and `mem questions --json` print it:
+/// only what a thread's wait and its start read of it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Question {
+    pub id: String,
+    pub short_id: String,
+    #[serde(default)]
+    pub answered: bool,
+    #[serde(default)]
+    pub answer: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+impl Question {
+    /// When it was asked, read from its ULID: mem's `created` is a date.
+    pub fn asked(&self) -> Option<jiff::Timestamp> {
+        const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        let mut ms: i64 = 0;
+        for c in self.id.get(..10)?.bytes() {
+            let digit = CROCKFORD
+                .iter()
+                .position(|&d| d == c.to_ascii_uppercase())?;
+            ms = ms * 32 + digit as i64;
+        }
+        jiff::Timestamp::from_millisecond(ms).ok()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct Questions {
+    items: Vec<Question>,
+}
+
+/// The question `id` names, `None` when mem knows none.
+pub fn question(id: &str) -> Option<Question> {
+    let (ok, out) = capture(&["show", id, "--json"])?;
+    if !ok {
+        return None;
+    }
+    let mut items = serde_json::from_str::<Questions>(&out).ok()?.items;
+    (items.len() == 1).then(|| items.remove(0))
+}
+
 /// The file at the top of a checkout that carries the writes mem's store has
 /// not taken yet, `mem share export`'s.
 pub const OUTBOX_FILE: &str = ".mem-outbox.json";

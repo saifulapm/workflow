@@ -166,6 +166,24 @@ workflow land again`, exit 3. Run again on that sha, it neither pushes nor tests
 again and reads the same run."
     )]
     Land,
+    /// Wait on questions to Saiful from a thread of a Claude Project: 30 minutes from the ask, then park.
+    #[command(
+        long_about = "Wait on questions to Saiful from a thread of a Claude Project: 30 minutes from the ask, then park.
+
+Give the ids `mem ask` printed. An answered one prints `answered: question
+#<id>: <answer>`, exit 0, at once or as soon as it comes. Otherwise one call
+runs one `mem questions --wait` of at most 5 minutes and prints `again:
+question #<id> is open; run workflow wait-answer <ids> again`, exit 3, until 30
+minutes have passed since the newest of them was asked (its id's time); then
+it prints `parked: question #<id> waits on Saiful`, or `parked: questions #<a>
+and #<b> wait on Saiful`, exit 2. From the ask that is at most six calls."
+    )]
+    #[command(name = "wait-answer")]
+    WaitAnswer {
+        /// The questions' ids, with or without their #.
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Print the text for the Claude Project instructions field of a project's repository.
     #[command(
         name = "project-text",
@@ -419,4 +437,9 @@ usage: workflow <command> [options]
       send questions to the phone or to this machine; no argument shows
       where they go now
       0 done · 1 the local hub refused or did not answer
+  wait-answer <id>...
+      in a thread, wait on questions to Saiful at most 5 minutes a call,
+      until 30 minutes from the ask
+      0 answered · 1 mem failed · 2 parked, or no such question · 3 still
+      open: run it again
 ";
