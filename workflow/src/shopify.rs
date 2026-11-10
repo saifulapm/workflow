@@ -303,13 +303,15 @@ fn deploy(app: &str) -> i32 {
         ));
         return NEEDS_SAIFUL;
     }
-    let url = toml_value(&staging, None, "application_url");
-    if url.is_some() && url == toml_value(&production, None, "application_url") {
+    // Its application_url, redirect, proxy and pixel URLs alike: any left on
+    // production's host sends the staging app's traffic to production.
+    if let Some(url) = toml_value(&production, None, "application_url")
+        .filter(|url| !url.is_empty() && staging.contains(url.as_str()))
+    {
         say(&format!(
-            "{} has the application_url of {}, {}: the staging app's admin frame, webhooks and pixel would reach production's Worker",
+            "{} holds the application_url of {}, {url}: the staging app's admin frame, webhooks and pixel would reach production's Worker",
             config.display(),
             dir.join("shopify.app.toml").display(),
-            url.unwrap_or_default()
         ));
         return NEEDS_SAIFUL;
     }
@@ -524,6 +526,15 @@ fn staging_worker(dir: &Path, app: &str) -> Result<Worker, i32> {
         ));
         return Err(NEEDS_SAIFUL);
     }
+    // Each app's thread touches only its own `<app>-staging`, so two may
+    // deploy at once, and an env.staging copied from another app is caught.
+    let own = format!("{app}-{STAGING}");
+    if name != own {
+        say(&format!(
+            "env.{STAGING} in {app}'s wrangler.jsonc names the Worker {name}: {app}'s staging Worker is {own}"
+        ));
+        return Err(NEEDS_SAIFUL);
+    }
     let theirs = ids(&config);
     if let Some(id) = ids(env).into_iter().find(|id| theirs.contains(id)) {
         say(&format!(
@@ -531,12 +542,19 @@ fn staging_worker(dir: &Path, app: &str) -> Result<Worker, i32> {
         ));
         return Err(NEEDS_SAIFUL);
     }
-    let databases = env["d1_databases"]
+    let databases: Vec<String> = env["d1_databases"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|db| db["database_name"].as_str().map(str::to_string))
         .collect();
+    // wrangler finds a binding with no id by its name.
+    if let Some(db) = databases.iter().find(|db| **db != own) {
+        say(&format!(
+            "env.{STAGING} in {app}'s wrangler.jsonc binds the D1 database {db}: {app}'s staging database is {own}"
+        ));
+        return Err(NEEDS_SAIFUL);
+    }
     Ok(Worker {
         name: name.to_string(),
         databases,

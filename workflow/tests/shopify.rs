@@ -509,7 +509,12 @@ fn a_rejected_token_in_a_narrow_box_still_names_the_variable() {
 #[test]
 fn an_app_deploys_its_staging_worker_before_its_shopify_config() {
     let work = apps("shopify-deploy-worker");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(
+        &work,
+        "repo",
+        &["deploy", "eventsmith"],
+        &[EVENTSMITH, ("NODE_USE_ENV_PROXY", "1")],
+    );
     assert!(out.status.success(), "{out:?}");
     let made = calls(&work);
     assert_eq!(
@@ -700,4 +705,73 @@ fn no_cloudflare_token_deploys_nothing() {
         "{out:?}"
     );
     assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
+}
+
+/// wrangler finds a D1 binding with no id by its name, so a staging
+/// database named as production's is production's, id or none.
+#[test]
+fn a_staging_database_named_as_production_s_is_refused() {
+    let work = apps("shopify-deploy-production-db-name");
+    work.put(
+        "repo/apps/eventsmith/wrangler.jsonc",
+        &WRANGLER
+            .replace(
+                "\"database_name\": \"eventsmith-staging\"",
+                "\"database_name\": \"eventsmith-na\"",
+            )
+            .replace(
+                "\"database_id\": \"bbbb0000-0000-0000-0000-000000000000\",",
+                "",
+            ),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("eventsmith-na"),
+        "{out:?}"
+    );
+    assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
+}
+
+/// Two apps' threads may deploy at once: each touches only its own
+/// `<app>-staging`, so an env.staging copied from another app is refused.
+#[test]
+fn a_staging_worker_named_for_another_app_is_refused() {
+    let work = apps("shopify-deploy-other-app");
+    work.put(
+        "repo/apps/eventsmith/wrangler.jsonc",
+        &WRANGLER.replace(
+            "\"name\": \"eventsmith-staging\"",
+            "\"name\": \"shortcart-staging\"",
+        ),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("shortcart-staging") && said.contains("eventsmith-staging"),
+        "{said}"
+    );
+    assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
+}
+
+/// The staging app's redirect, proxy and pixel URLs must leave production's
+/// host too, not only its application_url.
+#[test]
+fn a_staging_config_with_any_production_url_is_refused() {
+    let work = apps("shopify-deploy-production-redirect");
+    work.put(
+        "repo/apps/eventsmith/shopify.app.staging.toml",
+        &format!(
+            "{STAGING}\n[auth]\nredirect_urls = [\"https://eventsmith.lareys.dev/auth/callback\"]\n"
+        ),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("shopify.app.staging.toml") && said.contains("https://eventsmith.lareys.dev"),
+        "{said}"
+    );
+    assert!(calls(&work).is_empty(), "{:?}", calls(&work));
 }
