@@ -300,6 +300,39 @@ fn playwright_cli_closes_one_session_and_echo_may_say_close_all() {
 }
 
 #[test]
+fn a_run_code_fill_type_or_insert_text_outside_a_try_is_refused() {
+    let w = Scratch::new("guard-bash-fill");
+    w.put("fill.js", "async page => { await page.fill('#a', 'x') }");
+    for command in [
+        r#"playwright-cli -s=w run-code 'async page => { await page.getByRole("textbox").fill(process.env.X) }'"#,
+        r#"playwright-cli run-code --raw 'async page => { await page.keyboard.insertText("x") }'"#,
+        r#"playwright-cli run-code 'async page => { try { await a.fill("x") } catch (e) {} await b.type("y") }'"#,
+        "playwright-cli run-code --filename fill.js",
+        "playwright-cli run-code --filename=fill.js",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(
+            refused(&out, "try { ... } catch (e) { return e.name }"),
+            "{command:?}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn a_run_code_fill_inside_a_try_or_a_string_or_no_fill_runs() {
+    let w = Scratch::new("guard-bash-fill-safe");
+    for command in [
+        r##"playwright-cli run-code 'async page => { try { await page.locator("#a").fill("x") } catch (e) { return e.name } }'"##,
+        r#"playwright-cli run-code 'async page => { return await page.title() }'"#,
+        r#"playwright-cli run-code 'async page => { await page.click("text=fill(") }'"#,
+        "playwright-cli run-code --filename missing.js",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+}
+
+#[test]
 fn a_bare_playwright_cli_attach_runs_where_there_is_no_wrapper() {
     // A cloud session has no ~/.dotfiles.
     let w = Scratch::new("guard-bash-attach-cloud");
