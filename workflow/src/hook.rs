@@ -16,9 +16,10 @@
 //! Nothing here runs a project's tests: pre-commit reads the staged diff for
 //! hygiene and commit-msg reads the message, for humans and agents alike.
 
+use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::gitcmd::{self, Git};
 use crate::{exit, hygiene, memcli, paths, warn};
@@ -40,24 +41,46 @@ pub fn agent_marked() -> bool {
         .any(|key| std::env::var(key).is_ok_and(|v| !v.is_empty()))
 }
 
-/// Step 3, the check itself.
-fn check(name: &str, args: &[String]) -> i32 {
+/// Step 3, the check itself. A pre-push check in a cloud thread reads the ref
+/// lines git feeds on stdin and leaves them in `fed`, for step 4 to hand on.
+fn check(name: &str, args: &[String], fed: &mut Option<Vec<u8>>) -> i32 {
     match name {
         "pre-commit" | "commit-msg" => words(name, args),
         "pre-push" => {
             if std::env::var("WORKFLOW_ALLOW_PUSH").unwrap_or_default() == "1" {
-                exit::OK
-            } else {
-                warn("push requires explicit approval.");
-                warn("with a human present and their yes: WORKFLOW_ALLOW_PUSH=1 git push");
-                exit::FAILED
+                return exit::OK;
             }
+            if crate::cloud::this_session().is_some() {
+                let mut input = Vec::new();
+                let _ = std::io::stdin().read_to_end(&mut input);
+                let cloud_only = only_cloud_refs(&String::from_utf8_lossy(&input));
+                *fed = Some(input);
+                if cloud_only {
+                    return exit::OK;
+                }
+            }
+            warn("push requires explicit approval.");
+            warn("with a human present and their yes: WORKFLOW_ALLOW_PUSH=1 git push");
+            exit::FAILED
         }
         other => {
             warn(format!("hook: nothing to check for '{other}'"));
             exit::OK
         }
     }
+}
+
+/// Does every line git fed pre-push send to a `cloud/` branch? A thread's
+/// agent owns those and nothing else. The destination is the third field, so
+/// `git push origin HEAD:main` from a cloud/ branch still counts as main.
+fn only_cloud_refs(input: &str) -> bool {
+    let mut lines = input.lines().filter(|l| !l.trim().is_empty()).peekable();
+    lines.peek().is_some()
+        && lines.all(|l| {
+            l.split_whitespace()
+                .nth(2)
+                .is_some_and(|r| r.starts_with("refs/heads/cloud/"))
+        })
 }
 
 /// The hygiene check: the staged diff before the commit, the message after it
@@ -80,7 +103,9 @@ fn words(name: &str, args: &[String]) -> i32 {
 
 /// Step 4: chain to the repo's own hook. The stub's path decides whether that
 /// hook *is* this stub, which would exec in a circle.
-fn chain(name: &str, hd: &Path, stub: Option<&Path>, args: &[String]) -> i32 {
+/// When step 3 read stdin, `fed` holds those bytes and the repo's hook gets
+/// them on its own stdin, so a husky pre-push still sees the refs.
+fn chain(name: &str, hd: &Path, stub: Option<&Path>, args: &[String], fed: Option<Vec<u8>>) -> i32 {
     let own = hd.join("hooks").join(name);
     if !gitcmd::exists_x(&own) {
         return exit::OK;
@@ -93,9 +118,34 @@ fn chain(name: &str, hd: &Path, stub: Option<&Path>, args: &[String]) -> i32 {
         return exit::OK;
     }
 
+    if let Some(input) = fed {
+        return feed(&own, args, &input);
+    }
     let err = Command::new(&own).args(args).exec();
     warn(format!("cannot run {}: {err}", own.display()));
     exit::FAILED
+}
+
+/// Run the repo's hook with `input` on its stdin and return its exit code. A
+/// hook that never reads stdin closes the pipe; that write error is not ours.
+fn feed(own: &Path, args: &[String], input: &[u8]) -> i32 {
+    let mut child = match Command::new(own).args(args).stdin(Stdio::piped()).spawn() {
+        Ok(c) => c,
+        Err(err) => {
+            warn(format!("cannot run {}: {err}", own.display()));
+            return exit::FAILED;
+        }
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(input);
+    }
+    match child.wait() {
+        Ok(status) => status.code().unwrap_or(exit::FAILED),
+        Err(err) => {
+            warn(format!("cannot run {}: {err}", own.display()));
+            exit::FAILED
+        }
+    }
 }
 
 pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
@@ -111,8 +161,9 @@ pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
     };
 
     // 2 and 3.
+    let mut fed = None;
     if fires() {
-        let rc = check(name, args);
+        let rc = check(name, args, &mut fed);
         if rc != exit::OK {
             return rc;
         }
@@ -133,5 +184,5 @@ pub fn cmd_hook(name: &str, stub: Option<&Path>, args: &[String]) -> i32 {
     }
 
     // 4.
-    chain(name, &hd, stub, args)
+    chain(name, &hd, stub, args, fed)
 }

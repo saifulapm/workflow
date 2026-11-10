@@ -178,6 +178,41 @@ is "$RC" 0 'pre-push: WORKFLOW_ALLOW_PUSH=1 releases it'
 run env -u WORKFLOW_AGENT git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/human
 is "$RC" 0 'pre-push: a human push is untouched'
 
+# In a claude.ai cloud thread an agent may push its own cloud/ branches; the
+# hook judges the destination ref git feeds on stdin, not the current branch.
+# A new commit puts origin's main behind, so git feeds a main line to judge.
+git -c core.hooksPath=/dev/null commit -q --allow-empty -m 'Move on'
+THREAD=(WORKFLOW_AGENT=1 CLAUDE_CODE_REMOTE_SESSION_ID=cse_01Thread)
+run env "${THREAD[@]}" git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/cloud/acme-m1-x
+is "$RC" 0 'pre-push: a thread pushes a cloud/ branch without the flag'
+
+run env "${THREAD[@]}" git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/main
+isnt "$RC" 0 'pre-push: a thread push to main is refused'
+like "$OUT" 'requires explicit approval' 'pre-push: a thread push to main says what it wants'
+
+run env "${THREAD[@]}" git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/app/acme
+isnt "$RC" 0 'pre-push: a thread push to app/ is refused'
+like "$OUT" 'requires explicit approval' 'pre-push: a thread push to app/ says what it wants'
+
+git -c core.hooksPath=/dev/null commit -q --allow-empty -m 'Move on again'
+run env "${THREAD[@]}" git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/cloud/acme-m1-x HEAD:refs/heads/main
+isnt "$RC" 0 'pre-push: a thread push of cloud/ and main together is refused'
+
+run env "${THREAD[@]}" WORKFLOW_ALLOW_PUSH=1 git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/main
+is "$RC" 0 'pre-push: WORKFLOW_ALLOW_PUSH=1 releases a thread push to main'
+
+run env -u CLAUDE_CODE_REMOTE_SESSION_ID WORKFLOW_AGENT=1 git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/cloud/acme-m1-y
+isnt "$RC" 0 'pre-push: outside a thread a cloud/ push is still refused'
+
+# The hook read stdin to judge the refs, so the repo's own hook must get the
+# same lines.
+printf '#!/bin/sh\ncat >"%s"\n' "$T_TMP/fed" >.git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+run env "${THREAD[@]}" git -c core.hooksPath="$HOOKS" push -q origin HEAD:refs/heads/cloud/acme-m1-z
+is "$RC" 0 'pre-push: a thread cloud/ push chains to the repo hook'
+like "$(cat "$T_TMP/fed")" 'refs/heads/cloud/acme-m1-z' 'pre-push: the repo hook gets the ref lines git fed'
+rm .git/hooks/pre-push
+
 # A bare repo has no work tree: step 1 lets it straight through.
 git clone -q --bare "$T_TMP/pusher" "$T_TMP/bare.git"
 cd "$T_TMP/bare.git" || exit 1
