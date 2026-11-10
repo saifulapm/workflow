@@ -1309,6 +1309,16 @@ fn singleton(
             "a plan starts with `# plan: <slug>` or `# roadmap: <slug>`; to empty it use --clear",
         ));
     }
+    // A milestone's plan has acceptance boxes that a thread would read as
+    // tasks, so the current checklist must carry real `t<n>` task lines.
+    if which.noun == "plan"
+        && header_slug(first, "plan").is_some()
+        && !text.lines().any(is_task_line)
+    {
+        return Err(exit::usage(
+            "a checklist needs at least one task line, `- [ ] t1 <task>`; a milestone's plan goes in with `mem plan <slug> --stdin`",
+        ));
+    }
     let current = std::fs::read_to_string(&path).unwrap_or_default();
     let (text, kept) = crate::write::carry_ticks(&current, &text);
     if !kept.is_empty() {
@@ -1319,6 +1329,26 @@ fn singleton(
         );
     }
     land(&path, &text, seen, which.file)
+}
+
+/// Whether a line is a checklist task: `- [ ] t<n>` or `* [x] t<n>`, with the
+/// id ending at whitespace or the end of the line.
+fn is_task_line(line: &str) -> bool {
+    let rest = line.trim_start_matches(' ');
+    let Some(rest) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* ")) else {
+        return false;
+    };
+    let Some(rest) = ["[ ] ", "[x] ", "[X] "]
+        .iter()
+        .find_map(|b| rest.strip_prefix(b))
+    else {
+        return false;
+    };
+    let Some(digits) = rest.strip_prefix('t') else {
+        return false;
+    };
+    let n = digits.bytes().take_while(u8::is_ascii_digit).count();
+    n > 0 && digits[n..].chars().next().is_none_or(char::is_whitespace)
 }
 
 /// `mem plan <slug>` — one milestone's plan, filed under `plans/<slug>.md`.

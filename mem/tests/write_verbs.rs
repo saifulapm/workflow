@@ -234,7 +234,7 @@ fn plan_sets_prints_and_clears() {
     assert_eq!(code(&mem(&w, &repo, &["plan"])), 1);
 
     let file = w.dir.join("plan.md");
-    std::fs::write(&file, "# plan: migrate-sessions\n- [ ] run it\n").unwrap();
+    std::fs::write(&file, "# plan: migrate-sessions\n- [ ] t1 run it\n").unwrap();
     assert_eq!(
         code(&mem(
             &w,
@@ -244,7 +244,7 @@ fn plan_sets_prints_and_clears() {
         0
     );
     let out = mem(&w, &repo, &["plan"]);
-    assert_eq!(stdout(&out), "# plan: migrate-sessions\n- [ ] run it\n");
+    assert_eq!(stdout(&out), "# plan: migrate-sessions\n- [ ] t1 run it\n");
     assert_eq!(code(&out), 0);
 
     assert_eq!(code(&mem(&w, &repo, &["plan", "--clear"])), 0);
@@ -1151,4 +1151,45 @@ fn a_write_through_the_test_helper_never_runs_the_real_sync() {
     // The trigger is detached, so give a stray one time to land.
     std::thread::sleep(std::time::Duration::from_millis(500));
     assert!(!mark.exists(), "a test write ran qshell-sync");
+}
+
+#[test]
+fn a_checklist_without_a_task_line_is_refused() {
+    let w = World::new("write-taskless");
+    let repo = w.repo("thing", None);
+    let file = w.dir.join("plan.md");
+    let store = |args: &[&str], text: &str| {
+        std::fs::write(&file, text).unwrap();
+        let mut argv = args.to_vec();
+        argv.extend(["--set-file", file.to_str().unwrap()]);
+        mem(&w, &repo, &argv)
+    };
+
+    assert_eq!(
+        code(&store(&["plan"], "# plan: keep-me\n- [ ] t1 keep it\n")),
+        0
+    );
+
+    let taskless = "# plan: m5\n\nGoal: x\n\n- [ ] with the route on Phone, whoami prints mini\n";
+    let out = store(&["plan"], taskless);
+    assert_eq!(code(&out), mem::exit::USAGE, "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains(
+            "a checklist needs at least one task line, `- [ ] t1 <task>`; a milestone's plan goes in with `mem plan <slug> --stdin`"
+        ),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        stdout(&mem(&w, &repo, &["plan"])),
+        "# plan: keep-me\n- [ ] t1 keep it\n",
+        "the refused write left the checklist untouched"
+    );
+
+    assert_eq!(code(&store(&["plan"], "# plan: m5\n\n- [ ] t1 one\n")), 0);
+    assert_eq!(code(&store(&["plan"], "# plan: m5\n- [x] t3 done\n")), 0);
+
+    // A milestone's stored plan keeps its free form.
+    let out = store(&["plan", "m5"], taskless);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
 }

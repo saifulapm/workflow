@@ -238,7 +238,7 @@ fn five_is_a_singleton_that_changed_under_the_writer() {
         .expect("open fifo");
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(&plan_path, b"# plan: someone else got here first\n").unwrap();
-    writer.write_all(b"# plan: mine\n").unwrap();
+    writer.write_all(b"# plan: mine\n- [ ] t1 mine\n").unwrap();
     drop(writer);
 
     let out = child.wait_with_output().expect("wait");
