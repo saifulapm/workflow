@@ -650,6 +650,27 @@ impl Local {
         }
     }
 
+    /// A cloud thread's VM, `cloud-<name>` on the tailnet, is gone once the
+    /// thread parks or ends, and one that still runs reads the store as it
+    /// waits: an answer that cannot reach it is written to the store from
+    /// here, as the hub web writes one, rather than dropped. A device that
+    /// asked is left alone, since its own hub records the answer it takes.
+    fn record_for_gone_cloud(&self, machine: &str, question: &str, answer: &str, by: &str) -> bool {
+        if !self.records || !machine.starts_with("cloud-") {
+            return false;
+        }
+        let written = std::process::Command::new("mem")
+            .args(["answer", "--by", by, "--", question, answer])
+            .env("MEM_ANSWER_DIRECT", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| out.status.success());
+        if written {
+            eprintln!("hub: local: #{question} answered in the store, since {machine} is gone");
+        }
+        written
+    }
+
     /// The route this hub holds.
     pub fn route_now(&self) -> Stamped {
         self.route_now.get()
@@ -762,7 +783,8 @@ impl Local {
                         "hub: local: the answer to #{} did not reach {}: {e:#}",
                         tap.question, tap.machine
                     );
-                    None
+                    self.record_for_gone_cloud(&tap.machine, &tap.question, &tap.answer, "slack")
+                        .then(|| tap.answer.clone())
                 }
             }
         };

@@ -1180,3 +1180,48 @@ fn a_resume_tap_starts_a_stall_with_no_handoff_at_all() {
     wait_until("the start", || !ran(&dir).is_empty());
     assert_eq!(ran(&dir), ["--user --scope --quiet workflow go walk01"]);
 }
+
+/// A cloud thread that parked has stopped its VM, whose hub asked the
+/// question: a tap on it cannot reach that hub, so it goes to the store
+/// from here, where the next thread reads it, and the post shows it answered.
+#[test]
+fn a_tap_on_a_gone_cloud_vms_question_is_written_to_the_store() {
+    let dir = TempDir::new("ls-gone-cloud");
+    let slack = fake();
+    let log = dir.join("stderr.log");
+    let _hub = spawn_local(&dir, "mini", &slack, &log);
+    thread::sleep(Duration::from_millis(300));
+    let value = json!({"q": "ABCD1234", "o": "0", "m": "cloud-vm.gone.invalid"}).to_string();
+    slack.tap(SAIFUL, &value);
+    wait_until("the answer written to the store", || {
+        mem_log(&dir)
+            .iter()
+            .any(|l| l == "answer --by slack -- ABCD1234 0")
+    });
+    wait_until("the message marked answered", || {
+        !slack.calls_to("chat.update").is_empty()
+    });
+}
+
+/// A device that asked and is away keeps its question: its own hub records
+/// the answer when the tap reaches it, and two would answer once it did.
+#[test]
+fn a_tap_on_an_away_devices_question_is_not_written_here() {
+    let dir = TempDir::new("ls-gone-device");
+    let slack = fake();
+    let log = dir.join("stderr.log");
+    let _hub = spawn_local(&dir, "mini", &slack, &log);
+    thread::sleep(Duration::from_millis(300));
+    let value = json!({"q": "ABCD1234", "o": "0", "m": "nuc.gone.invalid"}).to_string();
+    slack.tap(SAIFUL, &value);
+    wait_until("the tap logged as not delivered", || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("did not reach nuc.gone.invalid")
+    });
+    assert!(
+        !mem_log(&dir).iter().any(|l| l.starts_with("answer")),
+        "{:?}",
+        mem_log(&dir)
+    );
+}
