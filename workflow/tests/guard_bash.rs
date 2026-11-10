@@ -280,6 +280,12 @@ fn a_snapshot_read_into_the_transcript_is_refused() {
         "grep -i secret .playwright-cli/page-2026.yml",
         "cat saved-snapshot.yml",
         "head -n 20 .playwright-cli/page-1.yaml",
+        "grep -rn secret .playwright-cli",
+        "rg -i \"client secret\" .playwright-cli/",
+        "cd .playwright-cli && grep secret page-1.yml",
+        "playwright-cli -s=x find \"Client secret\"",
+        "more .playwright-cli/page-3.yml",
+        "jq . .playwright-cli/page-3.yml",
     ] {
         let out = guard(w.path(), command);
         assert!(refused(&out, "workflow mask"), "{command:?}: {out:?}");
@@ -298,6 +304,9 @@ fn a_snapshot_through_workflow_mask_or_to_a_file_passes() {
         "cat config.yml",
         "echo snapshot",
         "git log -- .playwright-cli/x.yml",
+        "playwright-cli --raw snapshot > before.yml",
+        "playwright-cli -s=x find \"Client secret\" | workflow mask",
+        "ls .playwright-cli",
     ] {
         let out = guard(w.path(), command);
         assert!(passes(&out), "{command:?}: {out:?}");

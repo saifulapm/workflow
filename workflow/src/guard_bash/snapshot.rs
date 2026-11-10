@@ -9,8 +9,8 @@ use crate::shell::{Simple, argv, program_name, subcommand};
 const SNAPSHOT_READ: &str = "workflow guard refused this on purpose: a page snapshot holds textbox values, a secret too, and this prints it.\n\
 Pipe it through workflow mask, or read the page with run-code returning labels or lengths only.";
 
-const READERS: [&str; 9] = [
-    "cat", "grep", "rg", "sed", "head", "tail", "less", "bat", "awk",
+const READERS: [&str; 11] = [
+    "cat", "grep", "rg", "sed", "head", "tail", "less", "more", "bat", "awk", "jq",
 ];
 
 pub fn refusal(call: &Call) -> Option<&'static str> {
@@ -20,35 +20,44 @@ pub fn refusal(call: &Call) -> Option<&'static str> {
     unmasked.then_some(SNAPSHOT_READ)
 }
 
-/// A `playwright-cli snapshot` with no `--filename`, or a reader given a
-/// snapshot file.
+/// A `playwright-cli snapshot` or `find` (which prints snapshot nodes)
+/// whose output is neither saved by `--filename` nor redirected to a file,
+/// or a reader given a snapshot file or the `.playwright-cli` folder.
 fn prints_snapshot(command: &Simple) -> bool {
     let argv = argv(&command.words);
     let Some(program) = argv.first().map(|w| program_name(w)) else {
         return false;
     };
     if program == "playwright-cli" {
-        return subcommand(argv) == Some("snapshot")
+        return matches!(subcommand(argv), Some("snapshot" | "find"))
             && !argv
                 .iter()
-                .any(|w| w == "--filename" || w.starts_with("--filename="));
+                .any(|w| w == "--filename" || w.starts_with("--filename=") || to_a_file(w));
     }
     READERS.contains(&program) && argv.iter().skip(1).any(|w| is_snapshot_path(w))
 }
 
-/// A yml or yaml path inside a `.playwright-cli` folder, or one whose file
-/// name says snapshot.
+/// A redirection of stdout to a file: `>`, `>>` or `>file`, not `>&2`.
+fn to_a_file(word: &str) -> bool {
+    let word = word.strip_prefix('1').unwrap_or(word);
+    word.starts_with('>') && !word.starts_with(">&")
+}
+
+/// The `.playwright-cli` folder or anything in it, a yml or yaml file whose
+/// name says snapshot, or one named as playwright-cli names its snapshots,
+/// `page-<time>.yml`.
 fn is_snapshot_path(word: &str) -> bool {
-    if word.starts_with('-') || !(word.ends_with(".yml") || word.ends_with(".yaml")) {
+    if word.starts_with('-') {
+        return false;
+    }
+    if word.split('/').any(|part| part == ".playwright-cli") {
+        return true;
+    }
+    if !(word.ends_with(".yml") || word.ends_with(".yaml")) {
         return false;
     }
     let name = word.rsplit('/').next().unwrap_or(word);
-    name.contains("snapshot")
-        || word
-            .split('/')
-            .rev()
-            .skip(1)
-            .any(|d| d == ".playwright-cli")
+    name.contains("snapshot") || name.starts_with("page-")
 }
 
 /// Whether `command`'s stdout goes straight into `workflow mask`.
