@@ -343,3 +343,29 @@ fn a_cloud_vm_is_known_by_its_tailnet_name() {
         assert!(!hub::cloud_peer(host), "{host}");
     }
 }
+
+/// An answer given here to a question a cloud thread asked is never sent to
+/// its VM, which would take the device token: the 404 has mem write it to the
+/// store, where the thread reads it.
+#[test]
+fn an_answer_to_a_cloud_question_goes_to_the_store_not_the_vm() {
+    let dir = TempDir::new("cloud-answer-store");
+    let hub = device_hub(&dir);
+    let open = r#"{"id":"CLOUDQ01","project":"walk","machine":"cloud-gone1","text":"probe?","options":["yes"],"person":true,"ring":null}"#;
+    let told = send(&hub, "POST", "/question", DEVICE, open);
+    assert_eq!(status_of(&told), 200, "{told}");
+    let given = r#"{"question":"CLOUDQ01","answer":"yes","by":"cli"}"#;
+    let mut stream = UnixStream::connect(dir.join("local.sock")).unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST /answer HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{given}",
+                given.len()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert_eq!(status_of(&response), 404, "{response}");
+}

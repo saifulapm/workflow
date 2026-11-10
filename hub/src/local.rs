@@ -46,6 +46,7 @@ pub fn token_from_env() -> Result<Tokens> {
     };
     let cloud = var("HUB_CLOUD_TOKEN");
     if let Some(device) = var("HUB_PEER_TOKEN") {
+        let _ = HELD.set((Some(device.clone()), cloud.clone()));
         return Ok(Tokens {
             send: device.clone(),
             device: Device::Token(device),
@@ -64,6 +65,49 @@ pub fn token_from_env() -> Result<Tokens> {
         ),
     }
 }
+
+/// The device and cloud tokens a device hub holds, for `request_within`,
+/// which must never send the device token to a cloud VM.
+static HELD: std::sync::OnceLock<(Option<String>, Option<String>)> = std::sync::OnceLock::new();
+
+/// What a cloud token may ask of a hub: ping, read the route, ring, and tell
+/// of a question or its close. Never answer one, choose the route or device.
+fn cloud_may(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("GET", "/ping" | "/route") | ("POST", "/ring" | "/question" | "/closed")
+    )
+}
+
+/// The bearer a peer request to `host` carries. A cloud VM (`cloud-<name>`)
+/// never gets the device token: anything listening on its peer port would
+/// then act as a device. It gets the cloud token for what a cloud token may
+/// ask, and nothing otherwise; the store carries the rest.
+fn peer_bearer<'a>(
+    host: &str,
+    method: &str,
+    path: &str,
+    token: &'a str,
+    device: Option<&str>,
+    cloud: Option<&'a str>,
+) -> Option<&'a str> {
+    if !crate::cloud_peer(host) || device != Some(token) {
+        return Some(token);
+    }
+    cloud.filter(|_| cloud_may(method, path))
+}
+
+/// A request a device hub does not send to a cloud VM.
+#[derive(Debug)]
+struct NotForCloud;
+
+impl std::fmt::Display for NotForCloud {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("not sent to a cloud VM with the device token")
+    }
+}
+
+impl std::error::Error for NotForCloud {}
 
 /// The tokens this hub sends and takes on the peer port.
 pub struct Tokens {
@@ -245,11 +289,10 @@ impl Local {
         }
         // A cloud session's agent holds the cloud token, so it may ring and
         // tell of its own questions but never answer one.
-        match (request.method.as_str(), request.path.as_str()) {
-            ("GET", "/ping" | "/route") | ("POST", "/ring" | "/question" | "/closed") => {
-                self.route(request)
-            }
-            _ => Response::text(403, "a cloud session may only ask"),
+        if cloud_may(&request.method, &request.path) {
+            self.route(request)
+        } else {
+            Response::text(403, "a cloud session may only ask")
         }
     }
 
@@ -692,6 +735,9 @@ impl Local {
                 );
                 Response::text(502, "the asking machine refused the answer")
             }
+            // A cloud VM asked: mem writes the answer to the store, which
+            // the thread reads, rather than this hub sending it the device token.
+            Err(e) if e.is::<NotForCloud>() => Response::not_found(),
             Err(e) => {
                 eprintln!(
                     "hub: local: the answer to #{} did not reach {}: {e:#}",
@@ -1268,6 +1314,9 @@ impl Local {
                         "hub: local: {peer} answered {status} to /questions"
                     ));
                 }
+                // A cloud VM's list is not asked for with the device token;
+                // its questions reach this hub when it tells of them.
+                Err(e) if e.is::<NotForCloud>() => {}
                 Err(e) => say(format!(
                     "hub: local: /questions did not reach {peer}: {e:#}"
                 )),
@@ -1441,9 +1490,10 @@ fn unreachable(e: &anyhow::Error) -> bool {
 /// Whether a connection was refused: the machine is there, its hub is not.
 fn refused(e: &anyhow::Error) -> bool {
     e.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
+        cause.is::<NotForCloud>()
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
     })
 }
 
@@ -1799,6 +1849,10 @@ pub fn request_within(
     within: Duration,
 ) -> Result<(u16, String)> {
     let (host, port) = split_target(target)?;
+    let (device, cloud) = HELD
+        .get()
+        .map_or((None, None), |(d, c)| (d.as_deref(), c.as_deref()));
+    let token = peer_bearer(&host, method, path, token, device, cloud).ok_or(NotForCloud)?;
     let mut stream = match std::env::var("HUB_SOCKS5").ok().filter(|v| !v.is_empty()) {
         Some(proxy) => socks5_connect(&proxy, &host, port)?,
         None => {
@@ -1900,4 +1954,54 @@ fn socks5_connect(proxy: &str, host: &str, port: u16) -> Result<TcpStream> {
     let mut skip = vec![0u8; rest];
     stream.read_exact(&mut skip)?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peer_bearer;
+
+    const DEVICE: &str = "device-token";
+    const CLOUD: &str = "cloud-token";
+
+    #[test]
+    fn a_device_peer_gets_the_device_token() {
+        let bearer = peer_bearer("nuc", "POST", "/route", DEVICE, Some(DEVICE), Some(CLOUD));
+        assert_eq!(bearer, Some(DEVICE));
+    }
+
+    #[test]
+    fn a_cloud_peer_gets_the_cloud_token_for_what_it_may_ask() {
+        for (method, path) in [
+            ("GET", "/ping"),
+            ("GET", "/route"),
+            ("POST", "/ring"),
+            ("POST", "/question"),
+            ("POST", "/closed"),
+        ] {
+            let bearer = peer_bearer("cloud-1", method, path, DEVICE, Some(DEVICE), Some(CLOUD));
+            assert_eq!(bearer, Some(CLOUD), "{method} {path}");
+        }
+    }
+
+    #[test]
+    fn a_cloud_peer_never_gets_the_device_token() {
+        for (method, path) in [
+            ("POST", "/route"),
+            ("POST", "/answer"),
+            ("POST", "/device/choice"),
+            ("GET", "/questions"),
+            ("GET", "/device/choice"),
+        ] {
+            let bearer = peer_bearer("cloud-1", method, path, DEVICE, Some(DEVICE), Some(CLOUD));
+            assert_eq!(bearer, None, "{method} {path}");
+        }
+        let bearer = peer_bearer("cloud-1", "GET", "/route", DEVICE, Some(DEVICE), None);
+        assert_eq!(bearer, None, "a device hub with no cloud token");
+    }
+
+    #[test]
+    fn a_cloud_hub_sends_its_cloud_token_anywhere() {
+        let bearer = peer_bearer("cloud-2", "GET", "/questions", CLOUD, None, Some(CLOUD));
+        assert_eq!(bearer, Some(CLOUD));
+    }
 }
