@@ -10,6 +10,7 @@ mod chain;
 mod devserver;
 mod pkill;
 mod playwright;
+mod snapshot;
 mod tmp;
 
 use std::io::Read;
@@ -44,6 +45,7 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     pkill::refusal,
     attach::refusal,
     playwright::refusal,
+    snapshot::refusal,
     cd::refusal,
     tmp::refusal,
     devserver::refusal,

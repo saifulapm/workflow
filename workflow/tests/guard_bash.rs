@@ -262,8 +262,42 @@ fn a_bare_playwright_cli_attach_is_refused_where_the_wrapper_exists() {
     for command in [
         "~/.dotfiles/bin/playwright-cli attach --extension=chromium",
         "$HOME/.dotfiles/bin/playwright-cli attach --extension=chromium",
-        "playwright-cli snapshot",
+        "playwright-cli snapshot --filename=page.yml",
         "playwright-cli open https://example.com",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+}
+
+#[test]
+fn a_snapshot_read_into_the_transcript_is_refused() {
+    let w = Scratch::new("guard-bash-snapshot-refused");
+    for command in [
+        "playwright-cli snapshot",
+        "playwright-cli -s=x snapshot",
+        "~/.dotfiles/bin/playwright-cli -s=x snapshot",
+        "grep -i secret .playwright-cli/page-2026.yml",
+        "cat saved-snapshot.yml",
+        "head -n 20 .playwright-cli/page-1.yaml",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(refused(&out, "workflow mask"), "{command:?}: {out:?}");
+    }
+}
+
+#[test]
+fn a_snapshot_through_workflow_mask_or_to_a_file_passes() {
+    let w = Scratch::new("guard-bash-snapshot-passes");
+    for command in [
+        "playwright-cli -s=x snapshot --filename=/some/file.yml",
+        "playwright-cli -s=x snapshot --filename /some/file.yml",
+        "playwright-cli -s=x snapshot | workflow mask",
+        "grep -n Secret .playwright-cli/page-1.yml | workflow mask",
+        "cat saved-snapshot.yml | workflow mask",
+        "cat config.yml",
+        "echo snapshot",
+        "git log -- .playwright-cli/x.yml",
     ] {
         let out = guard(w.path(), command);
         assert!(passes(&out), "{command:?}: {out:?}");
