@@ -9,6 +9,7 @@ mod cd;
 mod chain;
 mod devserver;
 mod pkill;
+mod playwright;
 mod tmp;
 
 use std::io::Read;
@@ -42,6 +43,7 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     chain::refusal,
     pkill::refusal,
     attach::refusal,
+    playwright::refusal,
     cd::refusal,
     tmp::refusal,
     devserver::refusal,

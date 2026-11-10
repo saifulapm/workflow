@@ -271,6 +271,35 @@ fn a_bare_playwright_cli_attach_is_refused_where_the_wrapper_exists() {
 }
 
 #[test]
+fn playwright_cli_close_all_is_refused() {
+    let w = Scratch::new("guard-bash-close-all");
+    for command in [
+        "playwright-cli close-all",
+        "~/.dotfiles/bin/playwright-cli close-all",
+        "playwright-cli -s=walk close-all",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(
+            refused(&out, "playwright-cli -s=<name> close"),
+            "{command:?}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn playwright_cli_closes_one_session_and_echo_may_say_close_all() {
+    let w = Scratch::new("guard-bash-close-one");
+    for command in [
+        "playwright-cli -s=walk close",
+        "playwright-cli close",
+        "echo close-all",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+}
+
+#[test]
 fn a_bare_playwright_cli_attach_runs_where_there_is_no_wrapper() {
     // A cloud session has no ~/.dotfiles.
     let w = Scratch::new("guard-bash-attach-cloud");
