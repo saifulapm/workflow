@@ -23,6 +23,7 @@ const MAIN: &str = "main";
 const TRIES: usize = 3;
 
 pub fn cmd_land() -> i32 {
+    let started = Instant::now();
     let Some(current) = memcli::project_current() else {
         warn("land: this directory is in no project mem knows");
         return exit::USAGE;
@@ -138,7 +139,13 @@ pub fn cmd_land() -> i32 {
             ));
             return exit::FAILED;
         }
-        if !passes(&verify, &folder) {
+        // The ci/ ref takes a sha only once the tests passed on it, so a
+        // landing run again while CI runs on that sha does not test it again.
+        let head = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
+        let tested = ci
+            .as_ref()
+            .is_some_and(|ci| remote_tip(&git, &ci.branch).as_deref() == Some(head.as_str()));
+        if !tested && !passes(&verify, &folder) {
             warn(format!(
                 "land: the tests failed on {branch} rebased onto {trunk}; nothing was pushed to {trunk_name}. \
 Fix it on {branch} and land again"
@@ -148,7 +155,7 @@ Fix it on {branch} and land again"
         // Only this sha's own run counts: a trunk that moves while it runs
         // refuses the push below, and the next try's new sha runs again.
         if let Some(ci) = &ci
-            && let Err(code) = wait_for_ci(&git, &dir, ci)
+            && let Err(code) = wait_for_ci(&git, &dir, ci, started)
         {
             return code;
         }
@@ -203,9 +210,12 @@ struct Ci {
 }
 
 /// How many minutes GitHub may take to start a run for the pushed sha, and
-/// how many the run may take, before the landing parks.
+/// how many the run may take, before the landing parks. One call of land
+/// waits at most CALL_MINUTES, under the 10 minutes a thread's Bash call
+/// may run, and then says to run it again.
 const CI_START_MINUTES: u32 = 10;
 const CI_RUN_MINUTES: u32 = 90;
+const CALL_MINUTES: u32 = 9;
 
 /// A minute; `WORKFLOW_CI_MINUTE_MS` shortens it for the tests.
 fn minute() -> Duration {
@@ -216,28 +226,81 @@ fn minute() -> Duration {
     Duration::from_millis(ms)
 }
 
+/// The sha origin's `branch` holds: empty when it has none, None when
+/// origin cannot be asked.
+fn remote_tip(git: &Git, branch: &str) -> Option<String> {
+    let listed = git.capture(&["ls-remote", "origin", &format!("refs/heads/{branch}")]);
+    listed.ok.then(|| {
+        let text = listed.text();
+        text.split_whitespace().next().unwrap_or("").to_string()
+    })
+}
+
+/// When HEAD's sha went to the CI ref, as land noted it in the git dir:
+/// the 10 minutes GitHub has to start a run count from there, across calls.
+/// A sha with no note, pushed by a call that never wrote one, counts from now.
+fn pushed_at(git: &Git, sha: &str, pushed: bool) -> jiff::Timestamp {
+    let now = jiff::Timestamp::now();
+    let Some(note) = git
+        .out(&["rev-parse", "--git-path", "workflow-ci-pushed"])
+        .map(|p| git_path(git, &p))
+    else {
+        return now;
+    };
+    if !pushed {
+        let noted = std::fs::read_to_string(&note).ok().and_then(|text| {
+            let (noted, at) = text.trim().split_once(' ')?;
+            (noted == sha).then(|| at.parse().ok())?
+        });
+        if let Some(at) = noted {
+            return at;
+        }
+    }
+    let _ = std::fs::write(&note, format!("{sha} {now}\n"));
+    now
+}
+
+/// A path `git rev-parse --git-path` printed, which is relative to the
+/// checkout's top when it is not absolute.
+fn git_path(git: &Git, path: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(path);
+    if path.is_absolute() {
+        return path;
+    }
+    git.toplevel().map_or(path.clone(), |top| top.join(&path))
+}
+
 /// Push HEAD to the CI ref, leased on the tip origin holds there now (an
 /// earlier try's sha, or none), then wait for the workflow's run of HEAD's
 /// sha on that ref. Ok once it passed; otherwise the line said why and the
-/// code to exit with. A landing run again on the same sha pushes nothing
-/// new and reads the same run.
-fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci) -> Result<(), i32> {
+/// code to exit with. A call told to run again finds its sha on the ref
+/// already, pushes nothing and reads the same run.
+fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci, started: Instant) -> Result<(), i32> {
     let sha = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
     let short = git
         .out(&["rev-parse", "--short", "HEAD"])
         .unwrap_or_default();
     let refname = format!("refs/heads/{}", ci.branch);
-    let listed = git.capture(&["ls-remote", "origin", &refname]);
-    let tip = listed.text();
-    let tip = tip.split_whitespace().next().unwrap_or("");
-    let lease = format!("--force-with-lease={refname}:{tip}");
-    if !listed.ok || push(dir, &format!("HEAD:{refname}"), Some(&lease)).is_err() {
+    let Some(tip) = remote_tip(git, &ci.branch) else {
         warn(format!(
-            "land: cannot push {short} to origin's {}; nothing was pushed to the trunk",
+            "land: cannot read origin's {}; nothing was pushed to the trunk",
             ci.branch
         ));
         return Err(exit::FAILED);
+    };
+    let pushed = tip != sha;
+    if pushed {
+        let lease = format!("--force-with-lease={refname}:{tip}");
+        if let Err(why) = push(dir, &format!("HEAD:{refname}"), Some(&lease)) {
+            let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
+            println!(
+                "parked: origin refused {}: {why}; nothing was pushed to the trunk",
+                ci.branch
+            );
+            return Err(exit::USAGE);
+        }
     }
+    let pushed_at = pushed_at(git, &sha, pushed);
     println!("land: waiting on {} for {short}", ci.file);
     let refused = |why: String| {
         println!(
@@ -246,7 +309,11 @@ fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci) -> Result<(), i32> {
         );
         exit::USAGE
     };
-    let started = Instant::now();
+    // Minutes since `at`, by the clock land runs on.
+    let since = |at: jiff::Timestamp| {
+        let ms = jiff::Timestamp::now().duration_since(at).as_millis().max(0);
+        Duration::from_millis(u64::try_from(ms).unwrap_or(u64::MAX))
+    };
     loop {
         let path = format!(
             "repos/{}/actions/workflows/{}/runs?head_sha={sha}&per_page=100",
@@ -261,7 +328,6 @@ fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci) -> Result<(), i32> {
                 run["head_sha"] == sha.as_str() && run["head_branch"] == ci.branch.as_str()
             })
             .max_by_key(|run| run["id"].as_u64());
-        let waited = started.elapsed();
         match run {
             Some(run) if run["status"] == "completed" => {
                 if run["conclusion"] == "success" {
@@ -296,16 +362,27 @@ fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci) -> Result<(), i32> {
                 println!("parked: CI red on {short}: {why}");
                 return Err(exit::USAGE);
             }
-            None if waited >= minute() * CI_START_MINUTES => {
+            Some(run) => {
+                let created = run["created_at"].as_str().and_then(|t| t.parse().ok());
+                if created.is_some_and(|at| since(at) >= minute() * CI_RUN_MINUTES) {
+                    println!("parked: {} still running on {short}", ci.file);
+                    return Err(exit::USAGE);
+                }
+            }
+            None if since(pushed_at) >= minute() * CI_START_MINUTES => {
                 println!("parked: no {} run for {short}", ci.file);
                 return Err(exit::USAGE);
             }
-            Some(_) if waited >= minute() * CI_RUN_MINUTES => {
-                println!("parked: {} still running on {short}", ci.file);
-                return Err(exit::USAGE);
-            }
-            _ => std::thread::sleep(minute() / 2),
+            None => {}
         }
+        if started.elapsed() >= minute() * CALL_MINUTES {
+            println!(
+                "again: waiting on {} for {short}; run workflow land again",
+                ci.file
+            );
+            return Err(exit::AGAIN);
+        }
+        std::thread::sleep(minute() / 2);
     }
 }
 

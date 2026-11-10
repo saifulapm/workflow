@@ -149,13 +149,16 @@ repos/me/gamma/actions/workflows/ci.yml/runs\?*)
   fi
   mode=none
   [ -f "$dir/runs/$sha" ] && mode=$(cat "$dir/runs/$sha")
+  age=0
+  [ -f "$dir/run-age" ] && age=$(cat "$dir/run-age")
+  at=$(date -u -d "-$age seconds" +%Y-%m-%dT%H:%M:%SZ)
   # A pull request's green run of the same sha, on another branch, is newer.
   other='{{"id":90,"head_sha":"'$sha'","head_branch":"cloud/gamma-m2-next","event":"pull_request","status":"completed","conclusion":"success"}}'
   case "$mode" in
   none) echo '{{"total_count":0,"workflow_runs":[]}}' ;;
   green) echo '{{"total_count":2,"workflow_runs":['$other',{{"id":7,"head_sha":"'$sha'","head_branch":"ci/gamma-m2-next","event":"push","status":"completed","conclusion":"success"}}]}}' ;;
   red) echo '{{"total_count":2,"workflow_runs":['$other',{{"id":8,"head_sha":"'$sha'","head_branch":"ci/gamma-m2-next","event":"push","status":"completed","conclusion":"failure"}}]}}' ;;
-  running) echo '{{"total_count":1,"workflow_runs":[{{"id":9,"head_sha":"'$sha'","head_branch":"ci/gamma-m2-next","event":"push","status":"in_progress","conclusion":null}}]}}' ;;
+  running) echo '{{"total_count":1,"workflow_runs":[{{"id":9,"head_sha":"'$sha'","head_branch":"ci/gamma-m2-next","event":"push","status":"in_progress","conclusion":null,"created_at":"'$at'"}}]}}' ;;
   esac ;;
 repos/me/gamma/actions/runs/8/jobs*)
   echo '{{"total_count":3,"jobs":[{{"name":"php 8.4 sqlite","status":"completed","conclusion":"success"}},{{"name":"php 8.4 postgres:15","status":"completed","conclusion":"failure"}},{{"name":"audit","status":"completed","conclusion":"skipped"}}]}}' ;;
@@ -232,11 +235,16 @@ esac
     }
 
     fn land(&self) -> Output {
+        self.land_minute("20")
+    }
+
+    /// land with a minute of `ms` milliseconds.
+    fn land_minute(&self, ms: &str) -> Output {
         Command::new(env!("CARGO_BIN_EXE_workflow"))
             .arg("land")
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_GH", self.work.at("gh"))
-            .env("WORKFLOW_CI_MINUTE_MS", "20")
+            .env("WORKFLOW_CI_MINUTE_MS", ms)
             .env("GIT_CONFIG_GLOBAL", self.work.at("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Thread")
@@ -914,11 +922,23 @@ fn a_red_ci_run_parks_naming_its_failed_jobs_and_pushes_nothing_to_main() {
     assert!(!w.ticked());
 }
 
+/// One call waits at most 9 minutes, under a Bash call's 10: with no run
+/// yet it says to run land again, and the 10 minutes count from the push,
+/// across calls.
 #[test]
-fn no_ci_run_for_the_sha_parks_after_ten_minutes() {
+fn no_ci_run_for_the_sha_parks_ten_minutes_after_the_push() {
     let w = World::new("land-ci-none");
     w.land_ci("none");
     let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert_eq!(
+        last_line(&out),
+        format!(
+            "again: waiting on ci.yml for {}; run workflow land again",
+            w.short_head()
+        )
+    );
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(
@@ -929,16 +949,52 @@ fn no_ci_run_for_the_sha_parks_after_ten_minutes() {
 }
 
 #[test]
-fn a_ci_run_still_going_after_ninety_minutes_parks() {
+fn a_ci_run_younger_than_ninety_minutes_is_waited_on_again() {
+    let w = World::new("land-ci-young");
+    w.land_ci("running");
+    // A minute of 200 ms: the run started 15 s ago, 75 minutes, and one call
+    // waits 9 minutes, so it is 84 minutes old when land says to run again.
+    w.work.put("run-age", "15");
+    let out = w.land_minute("200");
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(last_line(&out).starts_with("again: "), "{}", stdout(&out));
+}
+
+#[test]
+fn a_ci_run_still_going_ninety_minutes_after_it_started_parks() {
     let w = World::new("land-ci-running");
     w.land_ci("running");
+    // 19 s at a minute of 200 ms: 95 minutes.
+    w.work.put("run-age", "19");
     let before = w.origin_main();
-    let out = w.land();
+    let out = w.land_minute("200");
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(
         last_line(&out),
         format!("parked: ci.yml still running on {}", w.short_head())
     );
+    assert_eq!(w.origin_main(), before);
+}
+
+#[test]
+fn an_origin_that_refuses_the_ci_ref_parks_with_its_reason() {
+    let w = World::new("land-ci-push-refused");
+    w.land_ci("green");
+    let hook = w.work.at("origin.git/hooks/pre-receive");
+    w.work.script(
+        "origin.git/hooks/pre-receive",
+        "echo 'ci refs are not allowed here' >&2\nexit 1\n",
+    );
+    assert!(hook.exists());
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let line = last_line(&out);
+    assert!(
+        line.starts_with("parked: origin refused ci/gamma-m2-next:"),
+        "{line}"
+    );
+    assert!(line.contains("ci refs are not allowed here"), "{line}");
     assert_eq!(w.origin_main(), before);
 }
 
@@ -979,19 +1035,25 @@ fn a_new_sha_after_a_red_run_needs_its_own_green_run() {
     assert_eq!(w.origin_main(), head);
 }
 
-/// A landing stopped mid-wait, as a thread's 6-hour stop does, starts again
-/// on the same sha: the ci/ ref already holds it, and its run is read.
+/// A landing told to run again finds the ci/ ref on its sha: the tests
+/// passed on it already, so they do not run again, and its run is read.
 #[test]
-fn a_landing_run_again_on_the_same_sha_reads_its_run() {
+fn a_landing_run_again_on_the_same_sha_reads_its_run_without_testing_again() {
     let w = World::new("land-ci-same");
     w.land_ci("running");
+    let count = w.work.at("verified");
+    w.verify(&format!(
+        "test -f work.txt && echo run >>{}",
+        count.display()
+    ));
     let out = w.land();
-    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
     let sha = w.origin_ref("ci/gamma-m2-next");
     w.work.put(&format!("runs/{sha}"), "green");
     let out = w.land();
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(w.origin_main(), sha);
+    assert_eq!(w.work.read("verified").lines().count(), 1, "tested once");
 }
 
 /// The trunk moves while CI runs: main refuses the green sha, land rebases

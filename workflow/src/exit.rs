@@ -7,10 +7,14 @@
 //!   go             0 started or the roadmap is done · 1 mem or amx failed · 2 refused
 //!   pause, unpause 0 done · 1 mem failed · 2 no such project
 //!   switch         0 switched · 1 a step failed · 2 refused
+//!   land           0 landed or done · 1 failed · 2 parked · 3 CI still runs: run it again
 
 pub const OK: i32 = 0;
 pub const FAILED: i32 = 1;
 pub const USAGE: i32 = 2;
+/// `workflow land` waited as long as one call may on a CI run that has not
+/// finished: the thread runs it again.
+pub const AGAIN: i32 = 3;
 
 /// Put the default SIGPIPE handler back, before anything is printed.
 ///

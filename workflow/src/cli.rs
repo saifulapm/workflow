@@ -157,9 +157,13 @@ pushes the rebased sha to ci/<project>-<milestone>, leased, prints `land:
 waiting on <file> for <sha>`, and reads the workflow's run of that sha on that
 ref with `gh api`. A green run lets the push go; otherwise it pushes nothing to
 the trunk, exit 2, and prints `parked: CI red on <sha>: <failed jobs>`,
-`parked: no <file> run for <sha>` (none in 10 minutes), `parked: <file> still
-running on <sha>` (after 90 minutes) or `parked: GitHub refused the Actions API
-for <owner/repo>: <why>`. Run again on the same sha, it reads the same run."
+`parked: no <file> run for <sha>` (none 10 minutes after the push), `parked:
+<file> still running on <sha>` (90 minutes after the run started), `parked:
+origin refused ci/...: <why>` or `parked: GitHub refused the Actions API for
+<owner/repo>: <why>`. One call waits at most 9 minutes, under a thread's
+10-minute Bash call, then prints `again: waiting on <file> for <sha>; run
+workflow land again`, exit 3. Run again on that sha, it neither pushes nor tests
+again and reads the same run."
     )]
     Land,
     /// Print the text for the Claude Project instructions field of a project's repository.
