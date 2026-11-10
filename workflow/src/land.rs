@@ -4,8 +4,11 @@
 //! pushes the branch to the trunk as a fast-forward, never forced, ticks the
 //! milestone, moves an app's trunk onto main, and prints the line the thread
 //! ends its report on, which its coordinator reads to start the next thread.
+//! A project that names a CI workflow (`mem project set land-ci ci.yml`)
+//! pushes the trunk only once that workflow's run on the rebased sha passed.
 
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::cloud;
 use crate::gitcmd::Git;
@@ -59,6 +62,27 @@ pub fn cmd_land() -> i32 {
             "land: {project} has no test command; `mem project set verify \"<command>\"`"
         ));
         return exit::USAGE;
+    };
+
+    let ci = match memcli::project_choice("land_ci") {
+        None => None,
+        Some(file) => match row
+            .remote
+            .as_deref()
+            .and_then(|r| r.strip_prefix("github.com/"))
+        {
+            Some(repo) => Some(Ci {
+                file,
+                repo: repo.to_string(),
+                branch: format!("ci/{project}-{slug}"),
+            }),
+            None => {
+                warn(format!(
+                    "land: {project} waits on {file}, but its remote is no GitHub repository"
+                ));
+                return exit::USAGE;
+            }
+        },
     };
 
     // An app's folder, where a local run of its tests runs too.
@@ -121,6 +145,13 @@ Fix it on {branch} and land again"
             ));
             return exit::FAILED;
         }
+        // Only this sha's own run counts: a trunk that moves while it runs
+        // refuses the push below, and the next try's new sha runs again.
+        if let Some(ci) = &ci
+            && let Err(code) = wait_for_ci(&git, &dir, ci)
+        {
+            return code;
+        }
         let why = match push(&dir, &format!("HEAD:{trunk_name}"), None) {
             Ok(()) => break,
             Err(why) => why,
@@ -161,6 +192,146 @@ nothing was pushed to {trunk_name}"
     carry_outbox(&git, &dir, &landed);
     println!("{}", next_line(&project));
     exit::OK
+}
+
+/// The GitHub Actions workflow a landing waits on: its file, the repository
+/// as owner/name, and the ref only land pushes, which the workflow runs on.
+struct Ci {
+    file: String,
+    repo: String,
+    branch: String,
+}
+
+/// How many minutes GitHub may take to start a run for the pushed sha, and
+/// how many the run may take, before the landing parks.
+const CI_START_MINUTES: u32 = 10;
+const CI_RUN_MINUTES: u32 = 90;
+
+/// A minute; `WORKFLOW_CI_MINUTE_MS` shortens it for the tests.
+fn minute() -> Duration {
+    let ms = std::env::var("WORKFLOW_CI_MINUTE_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60_000);
+    Duration::from_millis(ms)
+}
+
+/// Push HEAD to the CI ref, leased on the tip origin holds there now (an
+/// earlier try's sha, or none), then wait for the workflow's run of HEAD's
+/// sha on that ref. Ok once it passed; otherwise the line said why and the
+/// code to exit with. A landing run again on the same sha pushes nothing
+/// new and reads the same run.
+fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci) -> Result<(), i32> {
+    let sha = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
+    let short = git
+        .out(&["rev-parse", "--short", "HEAD"])
+        .unwrap_or_default();
+    let refname = format!("refs/heads/{}", ci.branch);
+    let listed = git.capture(&["ls-remote", "origin", &refname]);
+    let tip = listed.text();
+    let tip = tip.split_whitespace().next().unwrap_or("");
+    let lease = format!("--force-with-lease={refname}:{tip}");
+    if !listed.ok || push(dir, &format!("HEAD:{refname}"), Some(&lease)).is_err() {
+        warn(format!(
+            "land: cannot push {short} to origin's {}; nothing was pushed to the trunk",
+            ci.branch
+        ));
+        return Err(exit::FAILED);
+    }
+    println!("land: waiting on {} for {short}", ci.file);
+    let refused = |why: String| {
+        println!(
+            "parked: GitHub refused the Actions API for {}: {why}",
+            ci.repo
+        );
+        exit::USAGE
+    };
+    let started = Instant::now();
+    loop {
+        let path = format!(
+            "repos/{}/actions/workflows/{}/runs?head_sha={sha}&per_page=100",
+            ci.repo, ci.file
+        );
+        let runs = gh(&path).map_err(refused)?;
+        let run = runs["workflow_runs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|run| {
+                run["head_sha"] == sha.as_str() && run["head_branch"] == ci.branch.as_str()
+            })
+            .max_by_key(|run| run["id"].as_u64());
+        let waited = started.elapsed();
+        match run {
+            Some(run) if run["status"] == "completed" => {
+                if run["conclusion"] == "success" {
+                    return Ok(());
+                }
+                let id = run["id"].as_u64().unwrap_or_default();
+                let jobs = gh(&format!(
+                    "repos/{}/actions/runs/{id}/jobs?per_page=100",
+                    ci.repo
+                ))
+                .map_err(refused)?;
+                let failed: Vec<&str> = jobs["jobs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|job| {
+                        !matches!(
+                            job["conclusion"].as_str(),
+                            Some("success" | "skipped" | "neutral")
+                        )
+                    })
+                    .filter_map(|job| job["name"].as_str())
+                    .collect();
+                let why = if failed.is_empty() {
+                    format!(
+                        "the run ended {}",
+                        run["conclusion"].as_str().unwrap_or("unknown")
+                    )
+                } else {
+                    failed.join(", ")
+                };
+                println!("parked: CI red on {short}: {why}");
+                return Err(exit::USAGE);
+            }
+            None if waited >= minute() * CI_START_MINUTES => {
+                println!("parked: no {} run for {short}", ci.file);
+                return Err(exit::USAGE);
+            }
+            Some(_) if waited >= minute() * CI_RUN_MINUTES => {
+                println!("parked: {} still running on {short}", ci.file);
+                return Err(exit::USAGE);
+            }
+            _ => std::thread::sleep(minute() / 2),
+        }
+    }
+}
+
+/// `gh api <path>`'s JSON, or gh's own words for why not. `WORKFLOW_GH`
+/// replaces gh in the tests.
+fn gh(path: &str) -> Result<serde_json::Value, String> {
+    let bin = std::env::var("WORKFLOW_GH")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "gh".to_string());
+    let out = Command::new(&bin)
+        .args(["api", path])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| format!("cannot run {bin}: {err}"))?;
+    if !out.status.success() {
+        let said = String::from_utf8_lossy(&out.stderr);
+        let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
+        return Err(if said.is_empty() {
+            format!("gh api {path} failed")
+        } else {
+            said
+        });
+    }
+    serde_json::from_slice(&out.stdout)
+        .map_err(|err| format!("gh api {path} printed no JSON: {err}"))
 }
 
 /// The lines Claude Code adds to a commit, which no trunk takes.

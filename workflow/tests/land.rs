@@ -104,7 +104,9 @@ case "$1 $2" in
 "project current")
   sub=""
   [ -f "$dir/subdir" ] && sub=",\"subdir\":\"$(cat "$dir/subdir")\""
-  printf '{{"id":"01G","name":"gamma","root":"{root}"%s,"verify":%s}}\n' "$sub" "$(cat "$dir/verify.json")" ;;
+  ci=""
+  [ -f "$dir/land_ci" ] && ci=",\"land_ci\":\"$(cat "$dir/land_ci")\""
+  printf '{{"id":"01G","name":"gamma","root":"{root}"%s%s,"verify":%s}}\n' "$sub" "$ci" "$(cat "$dir/verify.json")" ;;
 "projects --json") cat "$dir/projects.json" ;;
 "roadmap --tick") sed -i "s/- \[ \] $3 /- [x] $3 /" "$dir/roadmap.md" ;;
 "roadmap --project") cat "$dir/roadmap.md" ;;
@@ -123,7 +125,63 @@ esac
                 sync = SYNC,
             ),
         );
+        w.work.script("gh", &format!(r#"
+dir=$(dirname "$0")
+echo "$*" >>"$dir/gh.log"
+if [ -f "$dir/gh-refused" ]; then
+  echo "gh: Resource not accessible by integration (HTTP 403)" >&2
+  exit 1
+fi
+[ "$1" = api ] || exit 1
+case "$2" in
+repos/me/gamma/actions/workflows/ci.yml/runs\?*)
+  sha=${{2#*head_sha=}}; sha=${{sha%%&*}}
+  if [ -f "$dir/move-during-ci" ]; then
+    rm "$dir/move-during-ci"
+    (cd "$dir/seed" && git pull -q origin main && echo moved >moved.txt && git add moved.txt \
+      && git commit -q -m "Move during CI" && git push -q origin HEAD:main) >&2
+  fi
+  # GitHub starts a run for a sha pushed to the ci/ ref, in the mode the
+  # test chose, and keeps the result it ran with.
+  tip=$(git -C "{origin}" rev-parse -q --verify refs/heads/ci/gamma-m2-next)
+  if [ ! -f "$dir/runs/$sha" ] && [ "$tip" = "$sha" ]; then
+    mkdir -p "$dir/runs" && cp "$dir/ci-mode" "$dir/runs/$sha"
+  fi
+  mode=none
+  [ -f "$dir/runs/$sha" ] && mode=$(cat "$dir/runs/$sha")
+  # A pull request's green run of the same sha, on another branch, is newer.
+  other='{{"id":90,"head_sha":"'$sha'","head_branch":"cloud/gamma-m2-next","event":"pull_request","status":"completed","conclusion":"success"}}'
+  case "$mode" in
+  none) echo '{{"total_count":0,"workflow_runs":[]}}' ;;
+  green) echo '{{"total_count":2,"workflow_runs":['$other',{{"id":7,"head_sha":"'$sha'","head_branch":"ci/gamma-m2-next","event":"push","status":"completed","conclusion":"success"}}]}}' ;;
+  red) echo '{{"total_count":2,"workflow_runs":['$other',{{"id":8,"head_sha":"'$sha'","head_branch":"ci/gamma-m2-next","event":"push","status":"completed","conclusion":"failure"}}]}}' ;;
+  running) echo '{{"total_count":1,"workflow_runs":[{{"id":9,"head_sha":"'$sha'","head_branch":"ci/gamma-m2-next","event":"push","status":"in_progress","conclusion":null}}]}}' ;;
+  esac ;;
+repos/me/gamma/actions/runs/8/jobs*)
+  echo '{{"total_count":3,"jobs":[{{"name":"php 8.4 sqlite","status":"completed","conclusion":"success"}},{{"name":"php 8.4 postgres:15","status":"completed","conclusion":"failure"}},{{"name":"audit","status":"completed","conclusion":"skipped"}}]}}' ;;
+*) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+esac
+"#, origin = origin.display()));
         w
+    }
+
+    /// The project waits on ci.yml, whose run on the ci/ ref ends `mode`:
+    /// green, red, running, or none for no run at all.
+    fn land_ci(&self, mode: &str) {
+        self.work.put("land_ci", "ci.yml");
+        self.work.put("ci-mode", mode);
+    }
+
+    fn gh_log(&self) -> String {
+        if self.work.has("gh.log") {
+            self.work.read("gh.log")
+        } else {
+            String::new()
+        }
+    }
+
+    fn short_head(&self) -> String {
+        self.git(&self.clone_dir(), &["rev-parse", "--short", "HEAD"])
     }
 
     fn clone_dir(&self) -> PathBuf {
@@ -177,6 +235,8 @@ esac
         Command::new(env!("CARGO_BIN_EXE_workflow"))
             .arg("land")
             .env("WORKFLOW_MEM", self.work.at("mem"))
+            .env("WORKFLOW_GH", self.work.at("gh"))
+            .env("WORKFLOW_CI_MINUTE_MS", "20")
             .env("GIT_CONFIG_GLOBAL", self.work.at("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Thread")
@@ -794,4 +854,162 @@ fn a_root_project_lands_on_main_and_makes_no_app_branch() {
     let origin = w.work.at("origin.git");
     let apps = w.git(&origin, &["for-each-ref", "refs/heads/app"]);
     assert_eq!(apps, "");
+}
+
+#[test]
+fn a_project_without_land_ci_never_asks_github() {
+    let w = World::new("land-no-ci");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(w.gh_log(), "", "gh was called");
+    assert!(!stdout(&out).contains("waiting on"), "{}", stdout(&out));
+    let refs = w.git(
+        &w.work.at("origin.git"),
+        &["for-each-ref", "--format=%(refname)"],
+    );
+    assert!(!refs.contains("refs/heads/ci/"), "{refs}");
+}
+
+#[test]
+fn a_green_ci_run_on_the_rebased_sha_lands_it() {
+    let w = World::new("land-ci-green");
+    w.land_ci("green");
+    w.trunk_moves("other.txt", "another thread\n");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let head = w.git(&w.clone_dir(), &["rev-parse", "HEAD"]);
+    assert!(
+        stdout(&out).contains(&format!("land: waiting on ci.yml for {}\n", w.short_head())),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(
+        w.origin_ref("ci/gamma-m2-next"),
+        head,
+        "CI ran on the rebased sha"
+    );
+    assert_eq!(w.origin_main(), head);
+    assert!(
+        w.gh_log().contains(&format!("head_sha={head}")),
+        "{}",
+        w.gh_log()
+    );
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert!(w.ticked());
+}
+
+#[test]
+fn a_red_ci_run_parks_naming_its_failed_jobs_and_pushes_nothing_to_main() {
+    let w = World::new("land-ci-red");
+    w.land_ci("red");
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        last_line(&out),
+        format!("parked: CI red on {}: php 8.4 postgres:15", w.short_head()),
+        "the pull request's green run on another branch never counts"
+    );
+    assert_eq!(w.origin_main(), before);
+    assert!(!w.ticked());
+}
+
+#[test]
+fn no_ci_run_for_the_sha_parks_after_ten_minutes() {
+    let w = World::new("land-ci-none");
+    w.land_ci("none");
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        last_line(&out),
+        format!("parked: no ci.yml run for {}", w.short_head())
+    );
+    assert_eq!(w.origin_main(), before);
+}
+
+#[test]
+fn a_ci_run_still_going_after_ninety_minutes_parks() {
+    let w = World::new("land-ci-running");
+    w.land_ci("running");
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        last_line(&out),
+        format!("parked: ci.yml still running on {}", w.short_head())
+    );
+    assert_eq!(w.origin_main(), before);
+}
+
+#[test]
+fn a_github_that_refuses_the_actions_api_parks_saying_so() {
+    let w = World::new("land-ci-refused");
+    w.land_ci("green");
+    w.work.put("gh-refused", "");
+    let before = w.origin_main();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let line = last_line(&out);
+    assert!(
+        line.starts_with("parked: GitHub refused the Actions API for me/gamma:"),
+        "{line}"
+    );
+    assert!(line.contains("HTTP 403"), "{line}");
+    assert_eq!(w.origin_main(), before);
+}
+
+/// A second landing after a red run: the trunk moved, so the rebase makes a
+/// new sha, which goes to the same ci/ ref over the old one with a lease,
+/// and only its own run counts.
+#[test]
+fn a_new_sha_after_a_red_run_needs_its_own_green_run() {
+    let w = World::new("land-ci-again");
+    w.land_ci("red");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let red = w.origin_ref("ci/gamma-m2-next");
+    w.trunk_moves("other.txt", "another thread\n");
+    w.work.put("ci-mode", "green");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let head = w.git(&w.clone_dir(), &["rev-parse", "HEAD"]);
+    assert_ne!(head, red);
+    assert_eq!(w.origin_ref("ci/gamma-m2-next"), head);
+    assert_eq!(w.origin_main(), head);
+}
+
+/// A landing stopped mid-wait, as a thread's 6-hour stop does, starts again
+/// on the same sha: the ci/ ref already holds it, and its run is read.
+#[test]
+fn a_landing_run_again_on_the_same_sha_reads_its_run() {
+    let w = World::new("land-ci-same");
+    w.land_ci("running");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let sha = w.origin_ref("ci/gamma-m2-next");
+    w.work.put(&format!("runs/{sha}"), "green");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(w.origin_main(), sha);
+}
+
+/// The trunk moves while CI runs: main refuses the green sha, land rebases
+/// again, and main takes only the new sha once its own run passed.
+#[test]
+fn a_trunk_that_moves_while_ci_runs_gets_a_new_run_before_main_moves() {
+    let w = World::new("land-ci-race");
+    w.land_ci("green");
+    w.work.put("move-during-ci", "");
+    let first = w.git(&w.clone_dir(), &["rev-parse", "HEAD"]);
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let head = w.git(&w.clone_dir(), &["rev-parse", "HEAD"]);
+    assert_ne!(head, first);
+    assert!(w.origin_log("main").contains("Move during CI"));
+    assert_eq!(w.origin_main(), head);
+    assert_eq!(w.origin_ref("ci/gamma-m2-next"), head);
+    let log = w.gh_log();
+    assert!(log.contains(&format!("head_sha={first}")), "{log}");
+    assert!(log.contains(&format!("head_sha={head}")), "{log}");
 }

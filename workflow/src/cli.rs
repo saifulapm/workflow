@@ -149,7 +149,17 @@ milestone of <project>.`, `done: <project>'s roadmap is done`, or `parked:
 `parked: trunk moved: ...`, exit 2; a red test run pushes nothing, exit 1. The
 rebased branch itself goes over origin's copy, leased, so the thread's next
 push of it is a fast-forward; a copy with commits the checkout lacks is kept
-and land refuses, exit 1."
+and land refuses, exit 1.
+
+A project that names a GitHub Actions workflow (`mem project set land-ci ci.yml`)
+waits on it before each push of the trunk: after the local tests pass, land
+pushes the rebased sha to ci/<project>-<milestone>, leased, prints `land:
+waiting on <file> for <sha>`, and reads the workflow's run of that sha on that
+ref with `gh api`. A green run lets the push go; otherwise it pushes nothing to
+the trunk, exit 2, and prints `parked: CI red on <sha>: <failed jobs>`,
+`parked: no <file> run for <sha>` (none in 10 minutes), `parked: <file> still
+running on <sha>` (after 90 minutes) or `parked: GitHub refused the Actions API
+for <owner/repo>: <why>`. Run again on the same sha, it reads the same run."
     )]
     Land,
     /// Print the text for the Claude Project instructions field of a project's repository.
