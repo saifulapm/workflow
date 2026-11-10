@@ -1245,7 +1245,9 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
 /// hold them, then the claude.ai connectors a thread must not load: a
 /// Project thread gets them whatever disableClaudeAiConnectors says, and a
 /// deny rule naming a server takes its tools out of the thread's context.
-const DENY: [&str; 15] = [
+/// Never hearthbot or claude-code-remote: a thread reports to its
+/// coordinator and wakes through them.
+const DENY: [&str; 14] = [
     "Read(**/.env)",
     "Read(**/.env.*)",
     "Read(**/*.pem)",
@@ -1259,7 +1261,6 @@ const DENY: [&str; 15] = [
     "Read(~/.netrc)",
     "mcp__Slack",
     "mcp__Mem",
-    "mcp__hearthbot",
     "mcp__Claude_Docs",
 ];
 
@@ -1324,6 +1325,16 @@ fn the_setup_carries_the_thread_settings() {
         serde_json::json!({"allow": ["Bash(ls)"], "deny": deny, "defaultMode": "bypassPermissions"}),
         "{settings}"
     );
+}
+
+/// A thread reports to its coordinator through hearthbot and wakes through
+/// claude-code-remote: a deny rule on either cuts it off from its Project.
+#[test]
+fn the_kit_never_denies_a_threads_own_tools() {
+    let deny = fs::read_to_string(repo().join("cloud/settings-deny.json")).unwrap();
+    for own in ["hearthbot", "claude-code-remote", "Claude_Code_Remote"] {
+        assert!(!deny.contains(own), "{own}: {deny}");
+    }
 }
 
 /// The deny rules reach a cached environment with the skills refresh, as
