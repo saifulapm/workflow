@@ -6,8 +6,14 @@
 mod scratch;
 
 use std::process::{Command, Output};
+use std::sync::RwLock;
 
 use scratch::Scratch;
+
+/// A child forked while another test's fake mem is still open for writing
+/// holds that file open, and its exec then fails with "Text file busy". So
+/// a fake is written under the write lock and every spawn waits for it.
+static FORKS: RwLock<()> = RwLock::new(());
 
 /// The fake mem: `show <id> --json` prints `q-<id>.json`, as the real one
 /// prints a question (copied from `mem show <id> --json`, 2026-11-10);
@@ -15,6 +21,7 @@ use scratch::Scratch;
 /// `answer-on-wait`, answers the question while it waits.
 fn world(tag: &str) -> Scratch {
     let w = Scratch::new(tag);
+    let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
     w.script(
         "mem",
         r#"
@@ -83,6 +90,7 @@ fn put(w: &Scratch, id: &str, answer: Option<&str>) {
 }
 
 fn wait(w: &Scratch, args: &[&str]) -> Output {
+    let _forking = FORKS.read().unwrap_or_else(|e| e.into_inner());
     Command::new(env!("CARGO_BIN_EXE_workflow"))
         .arg("wait-answer")
         .args(args)
@@ -118,6 +126,7 @@ fn thread_wait(
         ),
     );
     w.put("handoff.md", handoff);
+    let _forking = FORKS.read().unwrap_or_else(|e| e.into_inner());
     Command::new(env!("CARGO_BIN_EXE_workflow"))
         .arg("wait-answer")
         .args(args)
