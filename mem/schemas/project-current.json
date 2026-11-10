@@ -34,6 +34,10 @@
     "hygiene_exempt": {
       "description": "Present only when the project declared globs with `mem project set hygiene-exempt`.",
       "type": "string"
+    },
+    "land_ci": {
+      "description": "Present only when the project named, with `mem project set land-ci`, the GitHub Actions workflow file `workflow land` waits on.",
+      "type": "string"
     }
   },
   "additionalProperties": false

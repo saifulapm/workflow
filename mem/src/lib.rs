@@ -134,6 +134,9 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::HygieneExempt { globs } => {
                     verbs::project_set(&app, "hygiene_exempt", globs)
                 }
+                cli::ProjectSetCommand::LandCi { file } => {
+                    verbs::project_set(&app, "land_ci", file)
+                }
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
                 cli::ProjectSetCommand::Paused { who } => verbs::project_pause(&app, who),
                 cli::ProjectSetCommand::Runner {

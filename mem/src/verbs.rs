@@ -470,6 +470,7 @@ pub fn project_current(app: &App) -> Result<i32> {
     let declared = Registry::load(&app.store).by_id(id).cloned();
     let verify = declared.as_ref().and_then(|p| p.verify.clone());
     let hygiene_exempt = crate::project::declared(&app.store, id, "hygiene_exempt");
+    let land_ci = crate::project::declared(&app.store, id, "land_ci");
     // A child project keeps the checkout as its root and says where inside
     // it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
@@ -494,6 +495,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(globs) = &hygiene_exempt {
             doc["hygiene_exempt"] = json!(globs);
         }
+        if let Some(file) = &land_ci {
+            doc["land_ci"] = json!(file);
+        }
         println!("{}", serde_json::to_string(&doc)?);
     } else {
         println!("id    {id}");
@@ -512,6 +516,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(globs) = &hygiene_exempt {
             println!("hygiene-exempt  {globs}");
+        }
+        if let Some(file) = &land_ci {
+            println!("land-ci  {file}");
         }
     }
     Ok(exit::OK)

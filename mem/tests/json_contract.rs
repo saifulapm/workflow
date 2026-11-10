@@ -197,6 +197,15 @@ fn every_verb_matches_its_committed_schema() {
         &mem(&w, &repo, &["project", "current", "--json"]),
     );
     assert_eq!(current["hygiene_exempt"], serde_json::json!("tests/**"));
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "land-ci", "ci.yml"])),
+        0
+    );
+    let current = validate(
+        "project-current.json",
+        &mem(&w, &repo, &["project", "current", "--json"]),
+    );
+    assert_eq!(current["land_ci"], serde_json::json!("ci.yml"));
     validate("plan.json", &mem(&w, &repo, &["plan", "--json"]));
     // The roadmap prints through the same shape, with its status beside it.
     let roadmap = w.dir.join("roadmap.md");

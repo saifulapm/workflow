@@ -462,6 +462,7 @@ pub enum ProjectCommand {
 pub enum ProjectKey {
     Verify,
     HygieneExempt,
+    LandCi,
     Paused,
     Runner,
     Share,
@@ -474,6 +475,7 @@ impl ProjectKey {
         match self {
             ProjectKey::Verify => "verify",
             ProjectKey::HygieneExempt => "hygiene_exempt",
+            ProjectKey::LandCi => "land_ci",
             ProjectKey::Paused => "paused",
             ProjectKey::Runner => "runner",
             ProjectKey::Share => "share",
@@ -492,6 +494,10 @@ pub enum ProjectSetCommand {
     /// the check refuses elsewhere.
     #[command(name = "hygiene-exempt")]
     HygieneExempt { globs: String },
+    /// The GitHub Actions workflow file (`ci.yml`) whose run on the rebased
+    /// milestone must pass before `workflow land` pushes the trunk.
+    #[command(name = "land-ci")]
+    LandCi { file: String },
     /// This project's origin remote, for one registered before the remote
     /// existed. Normalized exactly as registration normalizes `origin`.
     Remote { url: String },

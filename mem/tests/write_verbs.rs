@@ -594,6 +594,28 @@ fn project_set_hygiene_exempt_records_the_globs_and_project_current_reports_them
 }
 
 #[test]
+fn project_set_land_ci_names_the_workflow_a_landing_waits_on() {
+    let w = World::new("write-land-ci");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("land_ci").is_none(), "{v}");
+
+    let out = mem(&w, &repo, &["project", "set", "land-ci", "ci.yml"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["land_ci"], serde_json::json!("ci.yml"));
+    assert!(
+        stdout(&mem(&w, &repo, &["project", "current"])).contains("land-ci  ci.yml"),
+        "the plain rendering names it too"
+    );
+
+    assert_eq!(code(&mem(&w, &repo, &["project", "unset", "land-ci"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v.get("land_ci").is_none(), "unset is the way back: {v}");
+}
+
+#[test]
 fn project_set_refuses_the_keys_nothing_reads() {
     let w = World::new("write-no-reader");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
