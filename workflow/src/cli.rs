@@ -299,7 +299,13 @@ The client decides four exits: 2 for a wrong verb or no project (set
 MEM_PROJECT), 3 when no device is online, 4 when Access refuses the call, and
 124 when the device does not answer: Cloudflare's 100 s, or this command's
 110 s (WORKFLOW_DEVICE_TIMEOUT_S). The device stops a call at 90 s.
-WORKFLOW_DEVICE_URL moves the hub's address. Exit 1 for any other answer."
+WORKFLOW_DEVICE_URL moves the hub's address. Exit 1 for any other answer.
+
+`device use mini|nuc|macbook` chooses which machine a cloud thread's device
+calls reach (mini is mac-mini-m2, nuc is nuc, macbook is macbook-m2). With no
+argument, `device` asks which is chosen now. Both talk to this machine's local
+hub, need no project, and print one line, `device: <machine>`. Exit 2 for any
+other name or extra arguments, 1 when the local hub refuses or does not answer."
     )]
     Device {
         /// verb (whoami, run or browser), then its arguments.

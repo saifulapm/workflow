@@ -149,12 +149,12 @@ fn the_device_decides_stderr_and_exit() {
 }
 
 #[test]
-fn no_args_or_a_wrong_verb_exit_2() {
+fn no_args_asks_the_local_hub_and_a_wrong_verb_exits_2() {
     let work = world("device-verb");
     let out = device(&work, &[]);
-    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(
-        stderr(&out).starts_with("usage: workflow device"),
+        stderr(&out).starts_with("workflow device: the local hub did not answer"),
         "{out:?}"
     );
     let out = device(&work, &["rm", "x"]);

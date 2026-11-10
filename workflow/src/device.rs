@@ -1,15 +1,24 @@
 //! `workflow device <verb> [args...]`: one call to the routed device's hub,
-//! played back here as if the program had run on this machine.
+//! played back here as if the program had run on this machine. `use` and the
+//! bare form choose and read the machine, on this machine's local hub.
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use crate::exit;
 
 const VERBS: [&str; 3] = ["whoami", "run", "browser"];
+/// What `device use` takes, and the machine name each stands for.
+const MACHINES: [(&str, &str); 3] = [
+    ("mini", "mac-mini-m2"),
+    ("nuc", "nuc"),
+    ("macbook", "macbook-m2"),
+];
 const DEFAULT_URL: &str = "https://device.on-rexa.com";
 /// Cloudflare's edge gives the device 100 s and then answers 524; the
 /// device stops a call at 90 s, so a stopped call still gets back.
@@ -141,12 +150,96 @@ fn note_machine(machine: &str) {
     let _ = std::fs::write(&file, machine);
 }
 
-/// `workflow device <verb> [args...]`.
+fn say_choice(msg: impl AsRef<str>) {
+    eprintln!("workflow device: {}", msg.as_ref());
+}
+
+/// This machine's local hub's socket: `HUB_LOCAL_SOCKET`, else `hub/local.sock`
+/// under the state directory, the hub's own rule.
+fn local_socket() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("HUB_LOCAL_SOCKET").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    let state = env("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| crate::paths::home().map(|h| h.join(".local/state")))?;
+    Some(state.join("hub/local.sock"))
+}
+
+/// One request to the local hub on its socket: its status and body.
+fn ask(socket: &Path, method: &str, body: &str) -> std::io::Result<(String, String)> {
+    let mut stream = UnixStream::connect(socket)?;
+    let timeout = Some(Duration::from_secs(5));
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(timeout)?;
+    let request = format!(
+        "{method} /device/choice HTTP/1.1\r\nHost: local\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes())?;
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply)?;
+    let (head, answer) = reply.split_once("\r\n\r\n").unwrap_or((&reply, ""));
+    let status = head.split_whitespace().nth(1).unwrap_or("").to_string();
+    Ok((status, answer.to_string()))
+}
+
+/// `workflow device use mini|nuc|macbook` and bare `workflow device`: set or
+/// read which machine this machine's local hub sends device calls to.
+fn cmd_choice(name: Option<&str>) -> i32 {
+    let Some(socket) = local_socket() else {
+        say_choice("cannot find this machine's state directory; set HOME");
+        return exit::FAILED;
+    };
+    let reply = match name {
+        None => ask(&socket, "GET", ""),
+        Some(machine) => ask(&socket, "POST", &json!({ "device": machine }).to_string()),
+    };
+    let (status, answer) = match reply {
+        Ok(r) => r,
+        Err(err) => {
+            say_choice(format!(
+                "the local hub did not answer on {}: {err}",
+                socket.display()
+            ));
+            return exit::FAILED;
+        }
+    };
+    if status != "200" {
+        say_choice(format!(
+            "the local hub refused: HTTP {status} {}",
+            answer.trim()
+        ));
+        return exit::FAILED;
+    }
+    let chosen = serde_json::from_str::<Value>(&answer)
+        .ok()
+        .and_then(|a| a["device"].as_str().map(str::to_string));
+    let Some(chosen) = chosen else {
+        say_choice("the local hub's answer is not a device");
+        return exit::FAILED;
+    };
+    println!("device: {chosen}");
+    exit::OK
+}
+
+/// `workflow device [use mini|nuc|macbook | <verb> [args...]]`.
 pub fn cmd_device(args: &[String]) -> i32 {
     let Some((verb, rest)) = args.split_first() else {
-        eprintln!("usage: workflow device <whoami|run|browser> [args...]");
-        return exit::USAGE;
+        return cmd_choice(None);
     };
+    if verb == "use" {
+        let machine = match rest {
+            [name] => MACHINES.iter().find(|(short, _)| short == name),
+            _ => None,
+        };
+        let Some((_, machine)) = machine else {
+            eprintln!("usage: workflow device use mini|nuc|macbook");
+            return exit::USAGE;
+        };
+        return cmd_choice(Some(machine));
+    }
     if !VERBS.contains(&verb.as_str()) {
         say(&format!("{verb} is not a verb (whoami, run, browser)"));
         return exit::USAGE;
