@@ -439,6 +439,16 @@ environment's old copy; run `mem sync` until it says performed, then start again
     if let Some(why) = held(row, me.as_deref(), jiff::Timestamp::now()) {
         return refuse(why, exit::USAGE);
     }
+    // A run parked on Saiful's questions waits for every answer: the start
+    // line he types after answering is the one that carries on.
+    let asked = parked_questions(row).unwrap_or_default();
+    if asked.iter().any(|q| !q.answered) {
+        println!(
+            "parked: {} on Saiful",
+            crate::wait::named(&asked, "still waits", "still wait")
+        );
+        return exit::OK;
+    }
     if let Some(me) = me.as_deref().filter(|_| !dry_run)
         && let Err(why) = claim(&start.project, &start.slug, me)
     {
@@ -454,6 +464,31 @@ environment's old copy; run `mem sync` until it says performed, then start again
         )
     );
     exit::OK
+}
+
+/// The questions `row`'s cloud run asked before it parked: those of its
+/// project asked since the run started, when its handoff since says
+/// `parked:` and its milestone is still the open one. Read past the 7 hours
+/// that end a run, since a question may wait overnight.
+fn parked_questions(row: &ProjectRow) -> Option<Vec<memcli::Question>> {
+    let runner = row.runner.as_ref().filter(|r| r.machine == "cloud")?;
+    if runner.milestone.is_none() || runner.milestone != row.milestone {
+        return None;
+    }
+    let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
+    let since = time(&runner.since)?;
+    if time(&row.handoff_at).is_none_or(|at| at <= since)
+        || !memcli::handoff(&row.name).is_some_and(|text| text.trim_start().starts_with("parked:"))
+    {
+        return None;
+    }
+    let asked = memcli::questions(&row.name)?;
+    Some(
+        asked
+            .into_iter()
+            .filter(|q| q.asked().is_some_and(|at| at > since))
+            .collect(),
+    )
 }
 
 /// A paused project's start: it says so on stdout and exits 2.

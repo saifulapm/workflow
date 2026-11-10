@@ -96,7 +96,7 @@ fn answered(asked: &[memcli::Question]) -> bool {
 }
 
 /// "question #a waits" or "questions #a and #b wait", of the open ones.
-fn named(asked: &[memcli::Question], one: &str, many: &str) -> String {
+pub fn named(asked: &[memcli::Question], one: &str, many: &str) -> String {
     let open: Vec<String> = asked
         .iter()
         .filter(|q| !q.answered)

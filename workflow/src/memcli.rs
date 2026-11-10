@@ -100,6 +100,12 @@ pub struct Question {
     pub answer: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
+    /// The project it was asked in; none for a global question.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// The question that replaced it, which is the one to answer.
+    #[serde(default)]
+    pub superseded_by: Option<String>,
 }
 
 impl Question {
@@ -120,6 +126,28 @@ impl Question {
 #[derive(Debug, Deserialize)]
 struct Questions {
     items: Vec<Question>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectQuestions {
+    questions: Vec<Question>,
+}
+
+/// `project`'s own questions, answered or not, newest first; `None` when
+/// mem cannot say.
+pub fn questions(project: &str) -> Option<Vec<Question>> {
+    let (ok, out) = capture(&["questions", "--json", "--project", project])?;
+    if !ok {
+        return None;
+    }
+    let all = serde_json::from_str::<ProjectQuestions>(&out)
+        .ok()?
+        .questions;
+    Some(
+        all.into_iter()
+            .filter(|q| q.project.as_deref() == Some(project) && q.superseded_by.is_none())
+            .collect(),
+    )
 }
 
 /// The question `id` names, `None` when mem knows none.

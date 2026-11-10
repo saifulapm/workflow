@@ -90,6 +90,8 @@ sync)
   sh @SYNC@ "$n" $stuck ;;
 roadmap) cat "$dir/roadmap-$3.md" ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
+# `questions --json --project <p>`, as the real one prints them.
+questions) [ -f "$dir/questions-$4.json" ] && cat "$dir/questions-$4.json" || echo '{"questions":[]}' ;;
 esac
 "#
             .replace("@SYNC@", SYNC),
@@ -1478,4 +1480,163 @@ fn a_thread_whose_replica_never_reached_the_store_decides_nothing() {
     );
     assert!(!said.contains("done:"), "{said}");
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
+
+const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// A question id whose ULID time is `minutes` ago, ending in `short`.
+fn asked(minutes: i64, short: &str) -> String {
+    let ms = (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(minutes)).as_millisecond();
+    let mut time = String::new();
+    for i in (0..10).rev() {
+        time.push(CROCKFORD[((ms >> (5 * i)) & 31) as usize] as char);
+    }
+    format!("{time}00000000{short}")
+}
+
+/// One question of `mem questions --json`, as the real one prints it
+/// (copied 2026-11-10), of `project`, asked `minutes` ago.
+fn question(project: &str, minutes: i64, short: &str, answer: Option<&str>) -> String {
+    let id = asked(minutes, short);
+    let answered = answer.is_some();
+    let answer = answer.map_or("null".to_string(), |a| format!("{a:?}"));
+    format!(
+        r#"{{"active":true,"answer":{answer},"answer_by":null,"answer_id":null,"answered":{answered},"answers":null,"archived":false,"audience":"saiful","body":"Which word?","by":null,"created":"2026-11-10","id":"{id}","kind":"question","machine":"cloud","modified":"2026-11-10","options":[],"path":"/x/{id}.md","project":"{project}","recommend":null,"replaces":null,"session":null,"short_id":"{short}","superseded_by":null,"supersedes":null,"tags":[],"task":null,"title":"m2-next: which word should --help print?","type":null}}"#
+    )
+}
+
+impl World {
+    /// gamma's cloud run, started `hours` ago, parked `parked_hours` ago
+    /// with `handoff`, and the questions of gamma's.
+    fn parked(&self, hours: i64, parked_hours: i64, handoff: &str, questions: &[String]) {
+        cloud_runner(self, "gamma", "session_01Mine", hours);
+        self.set(
+            "gamma",
+            &format!(r#""handoff_at":"{}""#, now_minus(parked_hours)),
+        );
+        self.work.put("handoff-gamma.md", handoff);
+        self.work.put(
+            "questions-gamma.json",
+            &format!(r#"{{"questions":[{}]}}"#, questions.join(",")),
+        );
+    }
+
+    fn runner_is(&self, id: &str) -> bool {
+        self.work
+            .read("projects.json")
+            .contains(&format!(r#""id":"{id}""#))
+    }
+}
+
+/// A start line while the question a parked thread asked is open parks at
+/// once, exit 0, and claims nothing: the record still names the parked
+/// thread.
+#[test]
+fn a_start_line_parks_while_the_parked_runs_question_is_open() {
+    let w = World::new("cloud-question-open");
+    w.parked(
+        2,
+        1,
+        "parked: question #QSTN0001 waits on Saiful: which word; branch cloud/gamma-m2-next\n",
+        &[question("gamma", 90, "QSTN0001", None)],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #QSTN0001 still waits on Saiful"
+    );
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+    assert!(w.runner_is("session_01Mine"));
+}
+
+/// A question left overnight still holds the start back, past the 7 hours
+/// that end a run that said nothing; so does a 6-hour stop's park.
+#[test]
+fn an_open_question_holds_the_start_after_7_hours_and_after_a_6_hour_stop() {
+    let w = World::new("cloud-question-overnight");
+    w.parked(
+        14,
+        13,
+        "parked: question #QSTN0001 waits on Saiful: which word\n",
+        &[question("gamma", 13 * 60 + 30, "QSTN0001", None)],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #QSTN0001 still waits on Saiful"
+    );
+    assert!(!w.claimed());
+
+    let w = World::new("cloud-question-six");
+    w.parked(
+        6,
+        0,
+        "parked: 6-hour stop, t3 half done; question #QSTN0001 open\n",
+        &[question("gamma", 20, "QSTN0001", None)],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #QSTN0001 still waits on Saiful"
+    );
+    assert!(!w.claimed());
+}
+
+/// Two open questions: the park names each, and one answered of the two
+/// still parks naming the other.
+#[test]
+fn a_start_line_waits_until_every_question_is_answered() {
+    let w = World::new("cloud-question-two");
+    w.parked(
+        3,
+        1,
+        "parked: questions #QSTN0001 and #QSTN0002 wait on Saiful: two\n",
+        &[
+            question("gamma", 70, "QSTN0002", None),
+            question("gamma", 100, "QSTN0001", None),
+        ],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: questions #QSTN0002 and #QSTN0001 still wait on Saiful"
+    );
+
+    let w = World::new("cloud-question-one-of-two");
+    w.parked(
+        3,
+        1,
+        "parked: questions #QSTN0001 and #QSTN0002 wait on Saiful: two\n",
+        &[
+            question("gamma", 70, "QSTN0002", Some("yes")),
+            question("gamma", 100, "QSTN0001", None),
+        ],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #QSTN0001 still waits on Saiful"
+    );
+    assert!(!w.claimed());
+}
+
+/// Only the parked run's own questions hold it: one asked before it
+/// started, another project's, or one its thread has not parked on yet
+/// hold nothing back.
+#[test]
+fn questions_the_parked_run_did_not_ask_hold_nothing() {
+    let w = World::new("cloud-question-older");
+    w.parked(
+        2,
+        1,
+        "parked: 6-hour stop, t3 half done\n",
+        &[
+            question("gamma", 3 * 60, "QSTN0001", None),
+            question("delta", 30, "QSTN0002", None),
+        ],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed(), "{}", stdout(&out));
 }
