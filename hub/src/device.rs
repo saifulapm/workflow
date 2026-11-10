@@ -444,7 +444,7 @@ pub fn timeout() -> Duration {
 /// The user manager's PATH, which has what the user's shell has (adb, mise's
 /// node); the hub's own is pinned by its unit to a short list. Falls back to
 /// the hub's own when systemctl cannot say.
-fn user_path() -> String {
+pub(crate) fn user_path() -> String {
     let own = std::env::var("PATH").unwrap_or_default();
     let mut command = Command::new("systemctl");
     command.args(["--user", "show-environment"]);
