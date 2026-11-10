@@ -268,6 +268,7 @@ const WRANGLER: &str = r#"{
   "env": {
     "staging": {
       "name": "eventsmith-staging",
+      "account_id": "7d330000000000000000000000000000",
       "vars": { "SHOPIFY_APP_URL": "https://eventsmith-staging.lareys.dev" },
       "d1_databases": [
         {
@@ -302,7 +303,7 @@ fn apps(tag: &str) -> Scratch {
     work.put("deploy.code", "0");
     work.put("migrate.code", "0");
     work.put("worker.code", "0");
-    work.put("whoami.code", "0");
+    work.put("token.code", "0");
     work.put("built.name", "eventsmith-staging");
     let at = |rel: &str| work.at(rel).display().to_string();
     work.script(
@@ -310,14 +311,13 @@ fn apps(tag: &str) -> Scratch {
         &format!(
             "echo \"wrangler $* | token=$CLOUDFLARE_API_TOKEN proxy=$NODE_USE_ENV_PROXY\" >> {calls}\n\
              case \"$1\" in\n\
-             d1) echo 'Migrations to be applied: 0001_init.sql'; exit $(cat {migrate});;\n\
+             d1) [ \"$2\" = list ] && exit $(cat {token}); echo 'Migrations to be applied: 0001_init.sql'; exit $(cat {migrate});;\n\
              deploy) echo 'Deployed eventsmith-staging triggers'; exit $(cat {worker});;\n\
-             whoami) exit $(cat {whoami});;\n\
              esac",
             calls = at("calls"),
             migrate = at("migrate.code"),
             worker = at("worker.code"),
-            whoami = at("whoami.code"),
+            token = at("token.code"),
         ),
     );
     work.script(
@@ -520,7 +520,7 @@ fn an_app_deploys_its_staging_worker_before_its_shopify_config() {
     assert_eq!(
         made[..5],
         [
-            "wrangler whoami | token=proxy-injected proxy=1",
+            "wrangler d1 list --json --env staging --config wrangler.jsonc | token=proxy-injected proxy=1",
             "wrangler d1 migrations apply eventsmith-staging --remote --env staging --config wrangler.jsonc | token=proxy-injected proxy=1",
             "pnpm turbo run build --filter=eventsmith^... | env= proxy= in=repo",
             "pnpm run build | env=staging proxy= in=eventsmith",
@@ -606,11 +606,11 @@ fn a_build_for_another_worker_is_not_deployed() {
     );
 }
 
-/// Calls past the read-only `wrangler whoami`: what a refusal must not reach.
+/// Calls past the read-only `wrangler d1 list`: what a refusal must not reach.
 fn deploys(work: &Scratch) -> Vec<String> {
     calls(work)
         .into_iter()
-        .filter(|call| !call.starts_with("wrangler whoami"))
+        .filter(|call| !call.starts_with("wrangler d1 list"))
         .collect()
 }
 
@@ -696,7 +696,7 @@ fn a_staging_worker_named_as_production_s_is_refused() {
 #[test]
 fn no_cloudflare_token_deploys_nothing() {
     let work = apps("shopify-deploy-no-cloudflare");
-    work.put("whoami.code", "1");
+    work.put("token.code", "1");
     let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
@@ -772,6 +772,25 @@ fn a_staging_config_with_any_production_url_is_refused() {
     assert!(
         said.contains("shopify.app.staging.toml") && said.contains("https://eventsmith.lareys.dev"),
         "{said}"
+    );
+    assert!(calls(&work).is_empty(), "{:?}", calls(&work));
+}
+
+/// Without an account, wrangler lists the token's accounts, and stops when
+/// it reaches more than one; the thread's token reaches only the paths of
+/// one account.
+#[test]
+fn a_staging_worker_with_no_account_is_refused() {
+    let work = apps("shopify-deploy-no-account");
+    work.put(
+        "repo/apps/eventsmith/wrangler.jsonc",
+        &WRANGLER.replace("\"account_id\": \"7d330000000000000000000000000000\",", ""),
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("account_id"),
+        "{out:?}"
     );
     assert!(calls(&work).is_empty(), "{:?}", calls(&work));
 }

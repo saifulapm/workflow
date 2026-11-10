@@ -519,6 +519,14 @@ fn staging_worker(dir: &Path, app: &str) -> Result<Worker, i32> {
             .filter_map(|db| db["database_id"].as_str().map(str::to_string))
             .collect()
     };
+    // With no account wrangler lists the token's, and the thread's token
+    // reaches only one account's paths.
+    if env["account_id"].as_str().is_none_or(str::is_empty) {
+        say(&format!(
+            "env.{STAGING} in {app}'s wrangler.jsonc names no account_id: give it the Cloudflare account the staging Worker lives in"
+        ));
+        return Err(NEEDS_SAIFUL);
+    }
     let production = config["name"].as_str();
     if production == Some(name) {
         say(&format!(
@@ -580,9 +588,22 @@ fn wrangler(dir: &Path, args: &[&str]) -> Command {
 /// Whether a Cloudflare token reaches wrangler. In a thread it is the
 /// environment's network secret for api.cloudflare.com, which only Saiful
 /// can add; without it the proxy adds nothing and every call is refused.
+/// Listing the account's D1 databases stays inside the paths the secret is
+/// given; whoami would list every account.
 fn cloudflare_token(dir: &Path) -> Result<(), i32> {
-    let mut whoami = wrangler(dir, &["whoami"]);
-    match whoami.output() {
+    let mut list = wrangler(
+        dir,
+        &[
+            "d1",
+            "list",
+            "--json",
+            "--env",
+            STAGING,
+            "--config",
+            "wrangler.jsonc",
+        ],
+    );
+    match list.output() {
         Ok(out) if out.status.success() => Ok(()),
         Ok(out) => {
             eprint!("{}", String::from_utf8_lossy(&out.stdout));
