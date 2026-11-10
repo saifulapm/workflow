@@ -354,6 +354,46 @@ fn it_lands_only_a_clean_milestone_branch() {
     assert!(!w.ticked());
 }
 
+/// A commit that got past the hooks with a Claude line never reaches a
+/// trunk: the branch parks naming it, and nothing is pushed.
+#[test]
+fn a_commit_with_a_claude_line_parks_the_landing() {
+    for (tag, line) in [
+        (
+            "land-coauthor",
+            "Co-Authored-By: Claude <noreply@anthropic.com>",
+        ),
+        (
+            "land-session",
+            "Claude-Session: https://claude.ai/code/session_01x",
+        ),
+    ] {
+        let w = World::new(tag);
+        let clone = w.clone_dir();
+        w.work.put("thread/more.txt", "more\n");
+        w.git(&clone, &["add", "."]);
+        w.git(
+            &clone,
+            &["commit", "-q", "-m", &format!("Add more\n\n{line}")],
+        );
+        let sha = w.git(&clone, &["rev-parse", "--short", "HEAD"]);
+        w.work.put("thread/last.txt", "last\n");
+        w.git(&clone, &["add", "."]);
+        w.git(&clone, &["commit", "-q", "-m", "Add the last"]);
+        let before = w.origin_main();
+        let out = w.land();
+        assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+        let field = line.split(':').next().unwrap();
+        assert_eq!(
+            last_line(&out),
+            format!("parked: commit {sha} carries a {field} line")
+        );
+        assert_eq!(w.origin_main(), before);
+        assert!(w.git(&clone, &["ls-remote", "origin", BRANCH]).is_empty());
+        assert!(!w.ticked());
+    }
+}
+
 /// Writes the store has not taken leave with the trunk: the next machine
 /// that reads the project sends them.
 #[test]

@@ -79,6 +79,10 @@ pub fn cmd_land() -> i32 {
     }
     let trunk_name = cloud::trunk(&project, &dir.to_string_lossy());
     let trunk_name = trunk_name.as_str();
+    if let Some(line) = claude_line(&git, &format!("origin/{trunk_name}..HEAD")) {
+        println!("{line}");
+        return exit::USAGE;
+    }
     let mut tries = 0;
     loop {
         tries += 1;
@@ -157,6 +161,29 @@ nothing was pushed to {trunk_name}"
     carry_outbox(&git, &dir, &landed);
     println!("{}", next_line(&project));
     exit::OK
+}
+
+/// The lines Claude Code adds to a commit, which no trunk takes.
+const CLAUDE_LINES: [&str; 2] = [concat!("Co-Authored", "-By"), "Claude-Session"];
+
+/// The parked line for the first commit of `range` whose message has a
+/// line Claude Code adds: one that got past the hooks stops here, before
+/// anything is pushed.
+fn claude_line(git: &Git, range: &str) -> Option<String> {
+    let log = git.out(&["log", "--reverse", "--format=%h%n%B%x00", range])?;
+    log.split('\0').find_map(|commit| {
+        let mut lines = commit.trim_start_matches('\n').lines();
+        let sha = lines.next()?;
+        lines.find_map(|line| {
+            CLAUDE_LINES
+                .iter()
+                .find(|field| {
+                    line.get(..=field.len())
+                        .is_some_and(|head| head.eq_ignore_ascii_case(&format!("{field}:")))
+                })
+                .map(|field| format!("parked: commit {sha} carries a {field} line"))
+        })
+    })
 }
 
 /// Does the project's test command pass, run in `folder`? Its output goes
