@@ -321,6 +321,10 @@ fn apps(tag: &str) -> Scratch {
         ),
     );
     work.script(
+        "bin/rustup",
+        &format!("echo \"rustup $*\" >> {calls}", calls = at("calls")),
+    );
+    work.script(
         "bin/pnpm",
         &format!(
             "echo \"pnpm $* | env=$CLOUDFLARE_ENV proxy=$NODE_USE_ENV_PROXY in=$(basename $(pwd))\" >> {calls}\n\
@@ -793,4 +797,27 @@ fn a_staging_worker_with_no_account_is_refused() {
         "{out:?}"
     );
     assert!(calls(&work).is_empty(), "{:?}", calls(&work));
+}
+
+/// shopify app deploy builds each Rust Function for wasm, and a fresh
+/// thread's toolchain has no wasm target, as the release adds it too.
+#[test]
+fn an_app_with_rust_functions_gets_the_wasm_target_before_its_shopify_config() {
+    let work = apps("shopify-deploy-wasm");
+    work.put(
+        "repo/apps/eventsmith/extensions/gate/Cargo.toml",
+        "[package]\nname = \"gate\"\n",
+    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert!(out.status.success(), "{out:?}");
+    let made = calls(&work);
+    let wasm = made
+        .iter()
+        .position(|c| c == "rustup target add wasm32-unknown-unknown")
+        .unwrap_or_else(|| panic!("{made:?}"));
+    let shopify = made
+        .iter()
+        .position(|c| c.starts_with("app deploy"))
+        .unwrap_or_else(|| panic!("{made:?}"));
+    assert!(wasm < shopify, "{made:?}");
 }

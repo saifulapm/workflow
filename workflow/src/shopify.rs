@@ -341,6 +341,20 @@ fn deploy(app: &str) -> i32 {
     if let Err(code) = deploy_worker(&dir, app, &worker) {
         return code;
     }
+    // shopify app deploy builds each Rust Function for wasm, a target a
+    // fresh thread's toolchain lacks; the release adds it the same way.
+    let rust = std::fs::read_dir(dir.join("extensions"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| entry.path().join("Cargo.toml").is_file());
+    if rust {
+        let mut target = Command::new("rustup");
+        target.args(["target", "add", "wasm32-unknown-unknown"]);
+        if let Err(code) = step(target, "adding the wasm target for Rust Functions") {
+            return code;
+        }
+    }
     let out = Command::new("shopify")
         .args([
             "app",
