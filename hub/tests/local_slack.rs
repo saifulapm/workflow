@@ -1225,3 +1225,30 @@ fn a_tap_on_an_away_devices_question_is_not_written_here() {
         mem_log(&dir)
     );
 }
+
+/// The same for an answer typed in the question's Slack thread.
+#[test]
+fn a_thread_reply_to_a_gone_cloud_vms_question_is_written_to_the_store() {
+    let dir = TempDir::new("ls-gone-cloud-reply");
+    let slack = fake();
+    slack.dm.lock().unwrap().messages.push(json!({
+        "text": "w11-first: what should --first print for an empty file?",
+        "metadata": {
+            "event_type": "workflow_question",
+            "event_payload": {"q": "ABCD1234", "m": "cloud-vm.gone.invalid"},
+        },
+        "ts": "1700000000.000100",
+    }));
+    let log = dir.join("stderr.log");
+    let _hub = spawn_local(&dir, "mini", &slack, &log);
+    thread::sleep(Duration::from_millis(300));
+    slack.event(reply_by(SAIFUL, "zero"));
+    wait_until("the answer written to the store", || {
+        mem_log(&dir)
+            .iter()
+            .any(|l| l == "answer --by slack -- ABCD1234 zero")
+    });
+    wait_until("the message marked answered", || {
+        !slack.calls_to("chat.update").is_empty()
+    });
+}

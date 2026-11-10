@@ -965,7 +965,8 @@ impl Local {
                         "hub: local: the answer to #{id} did not reach {}: {e:#}",
                         reply.machine
                     );
-                    None
+                    self.record_for_gone_cloud(&reply.machine, &id, &reply.text, "slack")
+                        .then(|| reply.text.clone())
                 }
             }
         };
