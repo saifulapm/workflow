@@ -91,7 +91,8 @@ sync)
 roadmap) cat "$dir/roadmap-$3.md" ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
 # `questions --json --project <p>`, as the real one prints them.
-questions) [ -f "$dir/questions-$4.json" ] && cat "$dir/questions-$4.json" || echo '{"questions":[]}' ;;
+# A project with none prints an empty list and exits 1, as the real one.
+questions) [ -f "$dir/questions-$4.json" ] && cat "$dir/questions-$4.json" || { echo '{"questions":[]}'; exit 1; } ;;
 esac
 "#
             .replace("@SYNC@", SYNC),
@@ -1678,8 +1679,29 @@ fn after_the_answers_the_next_thread_carries_on_with_them() {
     w.parked(2, 1, "parked: 6-hour stop, t3 half done\n", &[]);
     let out = w.thread(&["gamma", "--cloud", "--print"]);
     assert!(
-        !stdout(&out).contains("parked on Saiful's questions"),
+        !stdout(&out).contains("answered the questions it asked"),
         "{}",
         stdout(&out)
     );
+}
+
+/// mem failing to list the questions parks the start: it cannot tell
+/// whether one is open, and a claim would start a second run if one were.
+#[test]
+fn a_start_line_parks_when_mem_cannot_list_the_questions() {
+    let w = World::new("cloud-question-unread");
+    w.parked(
+        2,
+        1,
+        "parked: question #QSTN0001 waits on Saiful: which word\n",
+        &[],
+    );
+    w.work.put("questions-gamma.json", "mem: index locked\n");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: mem cannot list gamma's questions; run `mem sync` and start again"
+    );
+    assert!(!w.claimed());
 }

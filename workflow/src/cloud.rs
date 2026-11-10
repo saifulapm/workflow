@@ -441,7 +441,15 @@ environment's old copy; run `mem sync` until it says performed, then start again
     }
     // A run parked on Saiful's questions waits for every answer: the start
     // line he types after answering is the one that carries on.
-    let asked = parked_questions(row).unwrap_or_default();
+    let Some(asked) = parked_questions(row) else {
+        return refuse(
+            format!(
+                "mem cannot list {}'s questions; run `mem sync` and start again",
+                row.name
+            ),
+            exit::FAILED,
+        );
+    };
     if asked.iter().any(|q| !q.answered) {
         println!(
             "parked: {} on Saiful",
@@ -483,28 +491,75 @@ fn answered(asked: &[memcli::Question], branch: &str) -> String {
         })
         .collect();
     format!(
-        " The thread before you parked on Saiful's questions, which he has now answered: {}. \
-Act on those answers. {branch} on origin holds that thread's landed tasks: keep its commits \
-and start from the first open task in `mem plan`.",
+        " The thread before you parked, and Saiful has answered the questions it asked: {}. \
+Act on any answer its work has not used yet. {branch} on origin holds that thread's landed \
+tasks: keep its commits and start from the first open task in `mem plan`.",
         each.join("; ")
     )
 }
 
-/// The questions `row`'s cloud run asked before it parked: those of its
-/// project asked since the run started, when its handoff since says
-/// `parked:` and its milestone is still the open one. Read past the 7 hours
-/// that end a run, since a question may wait overnight.
-fn parked_questions(row: &ProjectRow) -> Option<Vec<memcli::Question>> {
-    let runner = row.runner.as_ref().filter(|r| r.machine == "cloud")?;
-    if runner.milestone.is_none() || runner.milestone != row.milestone {
-        return None;
+/// A thread that got its answer carries on. When it parked first, its run
+/// is recorded again, so a start line now reads it live, not parked, and
+/// starts no thread beside it. `Err` with the line to end on when another
+/// thread has taken the run up since. Outside a thread, nothing to do.
+pub fn carry_on() -> Result<(), String> {
+    let Some(me) = this_session() else {
+        return Ok(());
+    };
+    let Some(current) = memcli::project_current() else {
+        return Ok(());
+    };
+    let Some(projects) = memcli::projects() else {
+        return Ok(());
+    };
+    let Some(row) = projects.iter().find(|row| row.name == current.name) else {
+        return Ok(());
+    };
+    let Some(runner) = row.runner.as_ref().filter(|r| r.machine == "cloud") else {
+        return Ok(());
+    };
+    let Some(slug) = runner.milestone.as_deref() else {
+        return Ok(());
+    };
+    let project = &current.name;
+    if runner.id != me {
+        return Err(format!(
+            "parked: another thread took up {slug} of {project}: {CODE_PAGE}/{}",
+            runner.id
+        ));
     }
     let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
-    let since = time(&runner.since)?;
+    let parked = matches!((time(&runner.since), time(&row.handoff_at)), (Some(since), Some(at)) if at > since)
+        && memcli::handoff(project).is_some_and(|text| text.trim_start().starts_with("parked:"));
+    if parked
+        && !(memcli::set_cloud_runner(project, &me, slug)
+            && (0..3).any(|_| memcli::sync_outbox() == Some(0)))
+    {
+        warn("wait-answer: the store has not taken this run's record again; run `mem sync`");
+    }
+    Ok(())
+}
+
+/// The questions `row`'s cloud run asked before it parked: those of its
+/// project asked since the run started, when its handoff since says
+/// `parked:` and its milestone is still the open one; none for any other
+/// run. Read past the 7 hours that end a run, since a question may wait
+/// overnight. `None` when mem cannot list them.
+fn parked_questions(row: &ProjectRow) -> Option<Vec<memcli::Question>> {
+    let Some(runner) = row.runner.as_ref().filter(|r| r.machine == "cloud") else {
+        return Some(Vec::new());
+    };
+    if runner.milestone.is_none() || runner.milestone != row.milestone {
+        return Some(Vec::new());
+    }
+    let time = |text: &Option<String>| text.as_deref()?.parse::<jiff::Timestamp>().ok();
+    let Some(since) = time(&runner.since) else {
+        return Some(Vec::new());
+    };
     if time(&row.handoff_at).is_none_or(|at| at <= since)
         || !memcli::handoff(&row.name).is_some_and(|text| text.trim_start().starts_with("parked:"))
     {
-        return None;
+        return Some(Vec::new());
     }
     let asked = memcli::questions(&row.name)?;
     Some(
@@ -1707,6 +1762,20 @@ mod tests {
             "{PROMPT}"
         );
         assert!(PROMPT.contains("names the question, {branch}"), "{PROMPT}");
+        // The park pushes the branch with its landed tasks, and the report
+        // ends on the parked line; an answer is acted on in the same turn.
+        assert!(
+            PROMPT.contains("then that export and a push of {branch}; then run `workflow wait-answer <id>` once more"),
+            "{PROMPT}"
+        );
+        assert!(
+            PROMPT.contains("otherwise end your report with the line it printed"),
+            "{PROMPT}"
+        );
+        assert!(
+            PROMPT.contains("On a line starting `answered:`, carry on with that answer"),
+            "{PROMPT}"
+        );
     }
 
     /// An answer that came while the thread wrote its park is acted on, and

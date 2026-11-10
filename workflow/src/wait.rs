@@ -6,7 +6,7 @@
 
 use std::process::{Command, Stdio};
 
-use crate::{exit, memcli, warn};
+use crate::{cloud, exit, memcli, warn};
 
 /// How long a thread waits on a question from the moment it was asked.
 const PARK_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_mins(30);
@@ -22,8 +22,8 @@ pub fn cmd_wait(ids: &[String]) -> i32 {
     let Some(asked) = read(&ids) else {
         return exit::USAGE;
     };
-    if answered(&asked) {
-        return exit::OK;
+    if let Some(code) = answered(&asked) {
+        return code;
     }
     let newest = asked.iter().filter_map(|q| q.asked()).max();
     let Some(deadline) = newest.map(|at| at + PARK_AFTER) else {
@@ -38,21 +38,35 @@ pub fn cmd_wait(ids: &[String]) -> i32 {
             .iter()
             .find(|q| !q.answered)
             .map(|q| q.short_id.as_str());
-        let status = Command::new(memcli::bin())
-            .args(["questions", "--wait", open.unwrap_or_default()])
+        let open = open.unwrap_or_default().to_string();
+        let out = Command::new(memcli::bin())
+            .args(["questions", "--wait", &open])
             .args(["--timeout", &format!("{secs}s")])
-            .stdout(Stdio::null())
+            .stdin(Stdio::null())
             .stderr(Stdio::null())
-            .status();
-        if !matches!(status.map(|s| s.code()), Ok(Some(0 | MEM_WAIT_TIMEOUT))) {
+            .output();
+        let code = out.as_ref().ok().and_then(|o| o.status.code());
+        if !matches!(code, Some(0 | MEM_WAIT_TIMEOUT)) {
             warn("wait-answer: mem questions --wait failed; run workflow wait-answer again");
             return exit::FAILED;
         }
-        let Some(asked) = read(&ids) else {
+        let Some(mut asked) = read(&ids) else {
             return exit::USAGE;
         };
-        if answered(&asked) {
-            return exit::OK;
+        // The local hub hands the wait its answer before its own `mem
+        // answer` reaches the store, so what the wait printed is the answer.
+        let said = out
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if code == Some(0)
+            && !said.is_empty()
+            && let Some(q) = asked.iter_mut().find(|q| q.short_id == open && !q.answered)
+        {
+            q.answered = true;
+            q.answer = Some(said);
+        }
+        if let Some(code) = answered(&asked) {
+            return code;
         }
         if !last {
             println!(
@@ -81,18 +95,25 @@ fn read(ids: &[&str]) -> Option<Vec<memcli::Question>> {
         .collect()
 }
 
-/// Print each answer and say whether there was one.
-fn answered(asked: &[memcli::Question]) -> bool {
-    let mut any = false;
+/// With an answer, the exit code to end on: each answer printed, once the
+/// thread's run is its own again, or the line a run another thread took up
+/// parks on.
+fn answered(asked: &[memcli::Question]) -> Option<i32> {
+    if !asked.iter().any(|q| q.answered) {
+        return None;
+    }
+    if let Err(line) = cloud::carry_on() {
+        println!("{line}");
+        return Some(exit::USAGE);
+    }
     for q in asked.iter().filter(|q| q.answered) {
         println!(
             "answered: question #{}: {}",
             q.short_id,
             q.answer.as_deref().unwrap_or_default().trim()
         );
-        any = true;
     }
-    any
+    Some(exit::OK)
 }
 
 /// "question #a waits" or "questions #a and #b wait", of the open ones.

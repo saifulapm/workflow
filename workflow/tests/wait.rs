@@ -29,12 +29,32 @@ questions)
     cp "$dir/q-$3.answered" "$dir/q-$3.json"
     exit 0
   fi
+  # The local hub hands mem's wait the answer before its own `mem answer`
+  # reaches the store (hub/src/local.rs deliver).
+  if [ -f "$dir/deliver-on-wait" ]; then
+    cat "$dir/deliver-on-wait"
+    exit 0
+  fi
   exit 4 ;;
+project)
+  if [ "$2" = current ]; then
+    [ -f "$dir/current.json" ] || exit 1
+    cat "$dir/current.json"
+  fi
+  exit 0 ;;
+projects) cat "$dir/projects.json" ;;
+handoff) cat "$dir/handoff.md" ;;
+sync) sh @SYNC@ 0 ;;
 esac
-"#,
+"#
+        .replace("@SYNC@", SYNC)
+        .as_str(),
     );
     w
 }
+
+/// What every fake `mem sync --json` prints through (tests/fake_mem_sync.rs).
+const SYNC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mem-sync.sh");
 
 const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -67,9 +87,53 @@ fn wait(w: &Scratch, args: &[&str]) -> Output {
         .arg("wait-answer")
         .args(args)
         .env("WORKFLOW_MEM", w.at("mem"))
+        .env_remove("CLAUDE_CODE_REMOTE_SESSION_ID")
         .current_dir(w.path())
         .output()
         .unwrap()
+}
+
+/// The same in a thread of a Claude Project, session `session_01Thread`,
+/// whose project `cloud_walk` has the cloud runner `runner` since an hour
+/// ago, and a handoff written `handoff_mins` ago.
+fn thread_wait(
+    w: &Scratch,
+    runner: &str,
+    handoff: &str,
+    handoff_mins: i64,
+    args: &[&str],
+) -> Output {
+    let ago =
+        |mins: i64| (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(mins)).to_string();
+    w.put(
+        "current.json",
+        r#"{"id":"01CW","name":"cloud_walk","root":"/x"}"#,
+    );
+    w.put(
+        "projects.json",
+        &format!(
+            r#"{{"projects":[{{"name":"cloud_walk","milestone":"w11-first","handoff_at":"{}","runner":{{"machine":"cloud","id":"{runner}","since":"{}","milestone":"w11-first"}}}}]}}"#,
+            ago(handoff_mins),
+            ago(60)
+        ),
+    );
+    w.put("handoff.md", handoff);
+    Command::new(env!("CARGO_BIN_EXE_workflow"))
+        .arg("wait-answer")
+        .args(args)
+        .env("WORKFLOW_MEM", w.at("mem"))
+        .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Thread")
+        .env_remove("WORKFLOW_ACCOUNT")
+        .current_dir(w.path())
+        .output()
+        .unwrap()
+}
+
+fn mem_calls(w: &Scratch) -> Vec<String> {
+    if !w.has("mem.log") {
+        return Vec::new();
+    }
+    w.read("mem.log").lines().map(str::to_string).collect()
 }
 
 fn stdout(out: &Output) -> String {
@@ -214,4 +278,78 @@ fn a_question_mem_does_not_know_is_refused() {
         "{out:?}"
     );
     assert!(stdout(&out).is_empty());
+}
+
+/// An answer the local hub hands mem's wait before the store has it is
+/// the answer: the thread does not wait again, nor park on it.
+#[test]
+fn an_answer_the_hub_hands_the_wait_first_is_printed() {
+    let w = world("wait-delivered");
+    put(&w, &asked(27, "QSTN0001"), None);
+    w.put("deliver-on-wait", "nothing, and exit 1\n");
+    let out = wait(&w, &["QSTN0001"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        stdout(&out).trim(),
+        "answered: question #QSTN0001: nothing, and exit 1"
+    );
+}
+
+/// A thread that parked and then found its answer records its run again,
+/// so a start line typed now finds it live, not parked, and starts no
+/// second thread beside it.
+#[test]
+fn an_answer_after_the_park_records_the_run_again() {
+    let w = world("wait-after-park");
+    put(&w, &asked(31, "QSTN0001"), Some("0"));
+    let out = thread_wait(
+        &w,
+        "session_01Thread",
+        "parked: question #QSTN0001 waits on Saiful: empty file\n",
+        0,
+        &["QSTN0001"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(stdout(&out).trim(), "answered: question #QSTN0001: 0");
+    let calls = mem_calls(&w);
+    assert!(
+        calls.iter().any(|c| c
+            == "project set runner cloud session_01Thread --milestone w11-first --project cloud_walk"),
+        "{calls:?}"
+    );
+    assert!(calls.iter().any(|c| c.starts_with("sync")), "{calls:?}");
+
+    // Before any park the run is live already: nothing is written.
+    let w = world("wait-before-park");
+    put(&w, &asked(10, "QSTN0001"), Some("0"));
+    let out = thread_wait(
+        &w,
+        "session_01Thread",
+        "Next: w11-first. old\n",
+        90,
+        &["QSTN0001"],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!mem_calls(&w).iter().any(|c| c.contains("set runner")));
+}
+
+/// A parked thread something woke, once another thread has taken its run
+/// up, is told so instead of the answer, and carries on with nothing.
+#[test]
+fn a_parked_thread_whose_run_another_took_up_parks_again() {
+    let w = world("wait-taken");
+    put(&w, &asked(40, "QSTN0001"), Some("0"));
+    let out = thread_wait(
+        &w,
+        "session_01Other",
+        "parked: question #QSTN0001 waits on Saiful: empty file\n",
+        5,
+        &["QSTN0001"],
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: another thread took up w11-first of cloud_walk: https://claude.ai/code/session_01Other"
+    );
+    assert!(!mem_calls(&w).iter().any(|c| c.contains("set runner")));
 }

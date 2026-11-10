@@ -134,12 +134,10 @@ struct ProjectQuestions {
 }
 
 /// `project`'s own questions, answered or not, newest first; `None` when
-/// mem cannot say.
+/// mem cannot say. A project with none exits 1 with an empty list, so the
+/// list is the answer and the exit code is not.
 pub fn questions(project: &str) -> Option<Vec<Question>> {
-    let (ok, out) = capture(&["questions", "--json", "--project", project])?;
-    if !ok {
-        return None;
-    }
+    let (_, out) = capture(&["questions", "--json", "--project", project])?;
     let all = serde_json::from_str::<ProjectQuestions>(&out)
         .ok()?
         .questions;
