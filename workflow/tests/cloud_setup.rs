@@ -1242,8 +1242,10 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
 }
 
 /// The local Read rules a thread takes, word for word as Saiful's settings
-/// hold them.
-const DENY: [&str; 11] = [
+/// hold them, then the claude.ai connectors a thread must not load: a
+/// Project thread gets them whatever disableClaudeAiConnectors says, and a
+/// deny rule naming a server takes its tools out of the thread's context.
+const DENY: [&str; 15] = [
     "Read(**/.env)",
     "Read(**/.env.*)",
     "Read(**/*.pem)",
@@ -1255,6 +1257,10 @@ const DENY: [&str; 11] = [
     "Read(~/.config/cloudflare/**)",
     "Read(~/.npmrc)",
     "Read(~/.netrc)",
+    "mcp__Slack",
+    "mcp__Mem",
+    "mcp__hearthbot",
+    "mcp__Claude_Docs",
 ];
 
 /// A thread takes the local settings that fit it: Claude Code adds nothing

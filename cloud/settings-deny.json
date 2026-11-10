@@ -9,5 +9,9 @@
   "Read(~/.config/.wrangler/**)",
   "Read(~/.config/cloudflare/**)",
   "Read(~/.npmrc)",
-  "Read(~/.netrc)"
+  "Read(~/.netrc)",
+  "mcp__Slack",
+  "mcp__Mem",
+  "mcp__hearthbot",
+  "mcp__Claude_Docs"
 ]

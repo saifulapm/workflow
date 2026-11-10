@@ -4,7 +4,8 @@
 # with the cloud's own Stop hook, and the skills a cloud build needs beyond this repo's own. Run it after any
 # of those change, then commit: CI ships cloud/ in the skills bundle, and
 # `workflow cloud-setup` embeds it. settings-keys.json (the advisor, the locale, Composer as root,
-# and the local settings that fit a thread) and settings-deny.json (the local Read rules, merged into
+# and the local settings that fit a thread) and settings-deny.json (the local Read rules and the
+# claude.ai connectors a thread must not load, which disableClaudeAiConnectors leaves; merged into
 # the image's own) are kept by hand: the cloud's advisor may differ from this machine's.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
