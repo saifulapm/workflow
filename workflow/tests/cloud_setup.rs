@@ -157,7 +157,12 @@ fn the_setup_leaves_a_device_command_that_runs_workflow_device() {
 fn only_the_known_shims_are_written_by_the_setup_alone() {
     let home = Scratch::new("cloud-setup-only");
     setup_with(&home, &offline(&home), &[]);
-    let refreshed = [".claude/CLAUDE.md", ".claude/settings.json", "setup.sh"];
+    let refreshed = [
+        ".claude/CLAUDE.md",
+        ".claude/settings.json",
+        ".gitconfig",
+        "setup.sh",
+    ];
     let mut left = Vec::new();
     let mut stack = vec![home.path().to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -1343,6 +1348,115 @@ fn the_first_mem_of_a_boot_takes_the_kits_deny_rules() {
     );
 }
 
+/// git's global config in `home`, as `git config --global` wrote it.
+fn global_git(home: &Scratch, key: &str) -> String {
+    let out = command("git")
+        .args(["config", "--file"])
+        .arg(home.at(".gitconfig"))
+        .args(["--get", key])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A bundle holding the hook stubs and the global ignore list, put where
+/// the fake release serves it.
+fn git_kit_bundle(home: &Scratch) {
+    home.put("bundle/skills/orchestrate/SKILL.md", "# orchestrate\n");
+    home.script("bundle/hooks/pre-commit", "#!/bin/sh\nexit 0\n");
+    home.script("bundle/hooks/commit-msg", "#!/bin/sh\nexit 0\n");
+    home.put("bundle/cloud/gitignore", ".claude/\nCLAUDE.md\n");
+    let out = command("tar")
+        .args(["-C", home.at("bundle").to_str().unwrap(), "-czf"])
+        .arg(home.at("fake-skills.tar.gz"))
+        .args(["skills", "cloud", "hooks"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    store_sum(home, "workflow-skills.tar.gz", "fake-skills.tar.gz");
+}
+
+/// A thread's commits are Saiful's and pass the hygiene hooks: the bundle
+/// lays the hook stubs and the ignore list, and git's global config points
+/// at them with Saiful's identity.
+#[test]
+fn the_first_mem_of_a_boot_lays_the_git_kit() {
+    let home = Scratch::new("cloud-shim-git-kit");
+    let (_log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    git_kit_bundle(&home);
+    run_store_shim(&home, &path, &["context"]);
+    let hooks = home.at(".config/git/hooks");
+    for name in ["pre-commit", "commit-msg"] {
+        let mode = hooks.join(name).metadata().unwrap().permissions().mode();
+        assert_eq!(mode & 0o755, 0o755, "{name}");
+    }
+    assert_eq!(home.read(".config/git/ignore"), ".claude/\nCLAUDE.md\n");
+    assert_eq!(
+        global_git(&home, "core.hooksPath"),
+        hooks.display().to_string()
+    );
+    assert_eq!(
+        global_git(&home, "core.excludesFile"),
+        home.at(".config/git/ignore").display().to_string()
+    );
+    assert_eq!(global_git(&home, "user.name"), "Saiful Islam");
+    assert_eq!(global_git(&home, "user.email"), "saiful.apm@gmail.com");
+}
+
+/// claude.ai may write its own identity after the snapshot: every boot
+/// sets Saiful's again, though the bundle did not change.
+#[test]
+fn every_boot_sets_the_identity_again() {
+    let home = Scratch::new("cloud-shim-git-boot");
+    let (_log, path) = store_fakes(&home, 0);
+    git_kit_bundle(&home);
+    setup_with(&home, &path, &STORE_ENV);
+    assert_eq!(global_git(&home, "user.name"), "Saiful Islam");
+    home.put(
+        ".gitconfig",
+        "[user]\n\tname = Claude\n\temail = noreply@anthropic.com\n",
+    );
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(global_git(&home, "user.name"), "Saiful Islam");
+    assert_eq!(global_git(&home, "user.email"), "saiful.apm@gmail.com");
+    assert_eq!(
+        global_git(&home, "core.hooksPath"),
+        home.at(".config/git/hooks").display().to_string()
+    );
+}
+
+/// With no hook stubs laid, git keeps each repo's own hooks: a hooksPath
+/// at an empty folder would turn them off.
+#[test]
+fn no_stubs_leave_the_hooks_path_alone() {
+    let home = Scratch::new("cloud-setup-no-stubs");
+    setup_with(&home, &offline(&home), &[]);
+    assert_eq!(global_git(&home, "core.hooksPath"), "");
+    assert_eq!(global_git(&home, "user.name"), "Saiful Islam");
+}
+
+/// A hook stub finds the shim on PATH though no workflow is baked: the
+/// commit goes through, as the stub's own fail-open would let it.
+#[test]
+fn a_hook_passes_when_no_workflow_is_baked() {
+    let home = Scratch::new("cloud-setup-hook-open");
+    setup_with(&home, &offline(&home), &[]);
+    let shim = home.at("usr-local-bin/workflow");
+    let ran = command(&shim)
+        .args(["hook", "--stub", "x", "pre-commit"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(ran.status.success(), "{ran:?}");
+    let ran = command(&shim)
+        .args(["guard", "--help"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!ran.status.success(), "the guard hook still sees none");
+}
+
 /// A kit that moves the advisor reaches a cached environment with the
 /// skills refresh, as its hooks do.
 #[test]
@@ -1860,6 +1974,39 @@ fn ci_publishes_the_full_setup_on_the_release() {
     assert!(ci.contains("cloud-setup >out/cloud-setup.sh"), "{ci}");
     assert!(ci.contains("out/cloud-setup.sh"), "{ci}");
     assert!(ci.contains("cloud-setup.sh.sha256"), "{ci}");
+}
+
+/// The bundle carries the git hook stubs, which a thread's git runs.
+#[test]
+fn ci_packs_the_hook_stubs_in_the_bundle() {
+    let ci = fs::read_to_string(repo().join(".github/workflows/cloud-bins.yml")).unwrap();
+    assert!(ci.contains("-cf - skills agents cloud hooks |"), "{ci}");
+}
+
+/// The kit's ignore list keeps an agent's files out of a thread's
+/// checkout, as the local one does.
+#[test]
+fn the_kits_ignore_list_keeps_agent_notes_untracked() {
+    let home = Scratch::new("cloud-kit-ignore");
+    let git = |args: &[&str]| {
+        let out = command("git")
+            .args(["-c", "core.hooksPath=/dev/null", "-c"])
+            .arg(format!(
+                "core.excludesFile={}",
+                repo().join("cloud/gitignore").display()
+            ))
+            .args(args)
+            .current_dir(home.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    git(&["init", "-q"]);
+    home.put(".claude/notes.md", "a note\n");
+    home.put("app.rs", "fn main() {}\n");
+    assert_eq!(git(&["status", "--short"]), "?? app.rs\n");
 }
 
 /// One 504 from GitHub's release downloads broke an environment's build

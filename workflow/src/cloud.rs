@@ -934,6 +934,7 @@ chmod +x \"$bin/workflow\"\n\
 cat > \"$bin/device\" <<'{END}'\n{DEVICE_SHIM}{END}\n\
 chmod +x \"$bin/device\"\n\
 {hooks}\"$bin/mem-cloud\" bundle\n\
+\"$bin/mem-cloud\" git\n\
 if [ -s \"$HOME/.local/state/hub/skills.sha256\" ]; then\n\
   echo \"setup: took the skills and agents from the cloud-bins release\"\n\
 else\n\
@@ -1033,6 +1034,7 @@ skills() {
   [ -e "$state/fresh-skills-$boot" ] && return 0
   mkdir -p "$state" && : >"$state/fresh-skills-$boot"
   bundle
+  gitkit
 }
 # bundle: the release's skills bundle, put in place when its sum differs
 # from the one here. The setup runs it with no secret; the release is public.
@@ -1057,6 +1059,17 @@ bundle() {
     done
   fi
   [ -s "$new/cloud/rules.md" ] && mkdir -p "$HOME/.claude" && cp "$new/cloud/rules.md" "$HOME/.claude/CLAUDE.md"
+  # The git hook stubs and the global ignore list, which gitkit points git at.
+  if [ -d "$new/hooks" ]; then
+    mkdir -p "$HOME/.config/git/hooks"
+    for item in "$new/hooks"/*; do
+      [ -f "$item" ] || continue
+      cp "$item" "$HOME/.config/git/hooks/" && chmod 755 "$HOME/.config/git/hooks/${item##*/}"
+    done
+  fi
+  if [ -s "$new/cloud/gitignore" ]; then
+    mkdir -p "$HOME/.config/git" && cp "$new/cloud/gitignore" "$HOME/.config/git/ignore"
+  fi
   hooks "$new/cloud/settings-hooks.json" "$new/cloud/settings-keys.json" "$new/cloud/settings-deny.json"
   ( cd "$new" && for item in skills/* agents/*; do [ -e "$item" ] && echo "$item"; done ) >"$new.list"
   while IFS= read -r name; do
@@ -1126,6 +1139,22 @@ if isinstance(rules, list) and rules:
 with open(path, "w") as out:
     json.dump(settings, out, indent=2)
 PY_EOF
+}
+# gitkit: Saiful's identity, and the hook stubs and ignore list the bundle
+# laid, in git's global config. Every boot, not only with a new bundle:
+# claude.ai may write an identity of its own after the snapshot. With no
+# stubs, git keeps each repo's own hooks.
+gitkit() {
+  command -v git >/dev/null 2>&1 || return 0
+  git config --global user.name "Saiful Islam"
+  git config --global user.email saiful.apm@gmail.com
+  if [ -x "$HOME/.config/git/hooks/pre-commit" ]; then
+    git config --global core.hooksPath "$HOME/.config/git/hooks"
+  fi
+  if [ -s "$HOME/.config/git/ignore" ]; then
+    git config --global core.excludesFile "$HOME/.config/git/ignore"
+  fi
+  return 0
 }
 bake() {
   mkdir -p "$bin"
@@ -1247,18 +1276,23 @@ case "${1:-}" in
   skills) skills ;;
   bundle) bundle ;;
   hooks) hooks "$2" "${3:-}" "${4:-}" ;;
+  git) gitkit ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills, bundle or hooks <file> [<keys>] [<deny>]" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills, bundle, git or hooks <file> [<keys>] [<deny>]" >&2; exit 2 ;;
 esac
 "#;
 
 /// The `workflow` the guard hook calls by name: the binary the setup baked
 /// or a store session's mem fetched. With none, it fails, and the hook lets
-/// every call run.
+/// every call run; a git hook stub's call passes, as the stub's own
+/// fail-open would let a commit through.
 const WORKFLOW_SHIM: &str = r#"#!/bin/sh
 real="$HOME/.local/bin/workflow-x86_64"
-[ -x "$real" ] || exit 1
+if [ ! -x "$real" ]; then
+  [ "${1:-}" = hook ] && exit 0
+  exit 1
+fi
 exec "$real" "$@"
 "#;
 
@@ -1646,10 +1680,16 @@ mod tests {
         assert!(HELPER.contains("settings-hooks.json"), "{HELPER}");
     }
 
+    /// The hook stubs reach a thread with the release's bundle, which the
+    /// per-boot refresh lays down again; the setup never inlines them.
     #[test]
-    fn hooks_stay_out_of_the_cloud() {
-        let script = setup_script(&[("hooks/pre-commit", b"x\n"), ("skills/a/SKILL.md", b"a\n")]);
-        assert!(!script.contains("pre-commit"), "{script}");
+    fn hook_stubs_come_with_the_bundle_never_inline() {
+        let script = setup_script(&[
+            ("hooks/pre-commit", b"the stub's own text\n"),
+            ("skills/a/SKILL.md", b"a\n"),
+        ]);
+        assert!(!script.contains("the stub's own text"), "{script}");
+        assert!(HELPER.contains("$new/hooks"), "{HELPER}");
         // The skills come from the release's bundle, never inline.
         assert!(!script.contains(".claude/skills/a/SKILL.md"), "{script}");
     }

@@ -52,7 +52,7 @@ jobs:
             cp "build/$TARGET/release/$name" "out/$name-x86_64"
             (cd out && sha256sum "$name-x86_64" >"$name-x86_64.sha256")
           done
-          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - skills agents cloud |
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - skills agents cloud hooks |
             gzip -n >out/workflow-skills.tar.gz
           (cd out && sha256sum workflow-skills.tar.gz >workflow-skills.tar.gz.sha256)
           # The full setup a Project environment's bootstrap fetches and runs.
