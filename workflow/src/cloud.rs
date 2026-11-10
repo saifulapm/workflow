@@ -197,20 +197,32 @@ belongs to; each value comes from Saiful's pass, never from here:\n"
             out.push_str(&format!("  {host}  {project}\n"));
         }
     }
-    let workers: Vec<(&str, String, Vec<String>)> = repo
+    let workers: Vec<(&str, String, Option<String>, Vec<String>)> = repo
         .iter()
         .filter_map(|row| {
             let app = row.subdir.as_deref()?.strip_prefix("apps/")?;
-            let (worker, secrets) =
-                crate::shopify::staging_secrets(&checkout?.join("apps").join(app))?;
-            Some((row.name.as_str(), worker, secrets))
+            let (worker, account, secrets) =
+                crate::shopify::staging_worker_of(&checkout?.join("apps").join(app))?;
+            Some((row.name.as_str(), worker, account, secrets))
         })
         .collect();
+    let mut accounts: Vec<&str> = workers
+        .iter()
+        .filter_map(|(_, _, account, _)| account.as_deref())
+        .collect();
+    accounts.sort_unstable();
+    accounts.dedup();
+    for account in accounts {
+        out.push_str(&format!(
+            "  api.cloudflare.com path prefixes for the staging deploys, every one of them and no other (the assets upload carries its own token, which the secret would replace): {}\n",
+            crate::shopify::staging_api_paths(account).join(", ")
+        ));
+    }
     if !workers.is_empty() {
         out.push_str(
             "Secrets of each staging Worker by name, with the project each belongs to; each value comes from Saiful's pass, put on the Worker with `wrangler secret put <name> --env staging` in the app's folder before its first deploy:\n",
         );
-        for (project, worker, secrets) in workers {
+        for (project, worker, _, secrets) in workers {
             for secret in secrets {
                 out.push_str(&format!("  {secret}  {project}, on {worker}\n"));
             }

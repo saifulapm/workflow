@@ -68,6 +68,7 @@ fn six(tag: &str) -> Scratch {
     // the staging app's Worker
     "staging": {
       "name": "shortcart-staging",
+      "account_id": "7d330000000000000000000000000000",
       "vars": { "SHOPIFY_APP_URL": "https://shortcart-staging.lareys.dev" },
     },
   },
@@ -345,6 +346,22 @@ fn the_sheet_names_what_each_staging_worker_needs() {
         sheet.contains("\n  api.cloudflare.com  shopify_apps\n"),
         "{sheet}"
     );
+    // The secret replaces every Authorization header on the paths it is
+    // given, and the assets upload carries a token of its own.
+    let prefixes = sheet
+        .lines()
+        .find(|line| line.contains("path prefixes"))
+        .unwrap_or_else(|| panic!("{sheet}"));
+    for path in [
+        "/client/v4/user",
+        "/client/v4/zones",
+        "/client/v4/accounts/7d330000000000000000000000000000/d1",
+        "/client/v4/accounts/7d330000000000000000000000000000/workers/scripts",
+    ] {
+        assert!(prefixes.contains(path), "{path}: {prefixes}");
+    }
+    assert!(!prefixes.contains("/workers/assets/upload,"), "{prefixes}");
+    assert!(!prefixes.contains("/accounts,"), "{prefixes}");
     let (heading, secrets) = sheet
         .split_once("Secrets of each staging Worker")
         .unwrap_or_else(|| panic!("{sheet}"));

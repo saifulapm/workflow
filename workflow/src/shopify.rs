@@ -484,12 +484,40 @@ fn strip_comments_ahead(rest: &str) -> &str {
     }
 }
 
-/// The staging Worker of the app at `dir` and the secrets it needs, when the
-/// app has a staging config: the names its .dev.vars.example lists that
-/// env.staging does not set as vars. Wrangler's own `secrets.required`
-/// would say it, but in one environment it changes the types wrangler
-/// generates for all of them.
-pub fn staging_secrets(dir: &Path) -> Option<(String, Vec<String>)> {
+/// The paths of the Cloudflare API a staging deploy of `account` calls,
+/// for the network secret that carries its token. The secret replaces the
+/// Authorization header of every request on its paths, so the assets
+/// upload, which carries its own upload token, must not be among them, nor
+/// the bare /accounts, which is a prefix of it.
+pub fn staging_api_paths(account: &str) -> Vec<String> {
+    let mut paths: Vec<String> = [
+        "/client/v4/user",
+        "/client/v4/memberships",
+        "/client/v4/zones",
+    ]
+    .map(str::to_string)
+    .to_vec();
+    for under in [
+        "d1",
+        "queues",
+        "workflows",
+        "workers/scripts",
+        "workers/services",
+        "workers/subdomain",
+        "workers/workers",
+        "workers/durable_objects",
+    ] {
+        paths.push(format!("/client/v4/accounts/{account}/{under}"));
+    }
+    paths
+}
+
+/// The staging Worker of the app at `dir`, when the app has a staging
+/// config: its name, its account, and the secrets it needs, which are the
+/// names its .dev.vars.example lists that env.staging does not set as vars.
+/// Wrangler's own `secrets.required` would say them, but in one environment
+/// it changes the types wrangler generates for all of them.
+pub fn staging_worker_of(dir: &Path) -> Option<(String, Option<String>, Vec<String>)> {
     if !dir.join(format!("shopify.app.{STAGING}.toml")).is_file() {
         return None;
     }
@@ -504,7 +532,11 @@ pub fn staging_secrets(dir: &Path) -> Option<(String, Vec<String>)> {
         })
         .map(str::to_string)
         .collect();
-    Some((env["name"].as_str()?.to_string(), secrets))
+    Some((
+        env["name"].as_str()?.to_string(),
+        env["account_id"].as_str().map(str::to_string),
+        secrets,
+    ))
 }
 
 /// The app's staging Worker, as its wrangler.jsonc's `env.staging` names it.
