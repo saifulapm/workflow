@@ -1331,8 +1331,9 @@ fn singleton(
     land(&path, &text, seen, which.file)
 }
 
-/// Whether a line is a checklist task: `- [ ] t<n>` or `* [x] t<n>`, with the
-/// id ending at whitespace or the end of the line.
+/// Whether a line is a checklist task: `- [ ] t<n>` or `* [x] t<n>`, the id
+/// perhaps behind a milestone's prefix (`g2-t1`), ending at whitespace or the
+/// end of the line.
 fn is_task_line(line: &str) -> bool {
     let rest = line.trim_start_matches(' ');
     let Some(rest) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* ")) else {
@@ -1344,6 +1345,9 @@ fn is_task_line(line: &str) -> bool {
     else {
         return false;
     };
+    let id = rest.split_whitespace().next().unwrap_or_default();
+    let last = id.rsplit('-').next().unwrap_or_default();
+    let rest = &rest[id.len() - last.len()..];
     let Some(digits) = rest.strip_prefix('t') else {
         return false;
     };

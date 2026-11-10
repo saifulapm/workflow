@@ -1188,6 +1188,11 @@ fn a_checklist_without_a_task_line_is_refused() {
 
     assert_eq!(code(&store(&["plan"], "# plan: m5\n\n- [ ] t1 one\n")), 0);
     assert_eq!(code(&store(&["plan"], "# plan: m5\n- [x] t3 done\n")), 0);
+    // A milestone's prefix on the id, as a seeded project has.
+    assert_eq!(
+        code(&store(&["plan"], "# plan: g2\n- [ ] g2-t2 Send it\n")),
+        0
+    );
 
     // A milestone's stored plan keeps its free form.
     let out = store(&["plan", "m5"], taskless);
