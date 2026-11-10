@@ -53,7 +53,9 @@ the skill holds, with these changes:
   without one. The answer reaches this session's local hub over Tailscale.
 - Land as §7 says, with these changes. Write the handoff first, starting
   `Next: <the next milestone, or none>. <milestone> landed on main.`, then export
-  and commit the outbox, then run `workflow land`. It rebases the branch
+  and commit the outbox, then run `workflow land` in the background
+  (`run_in_background`): a project with land-ci waits on its CI, which
+  can outlast a 10-minute Bash call. It rebases the branch
   on the project's trunk on origin (main, or app/<app> for an app with a
   branch of its own), runs the test command in the project's folder,
   pushes the trunk as a fast-forward and never forced, and ticks the
@@ -70,13 +72,21 @@ the skill holds, with these changes:
   - `parked: trunk moved: ...` or `parked: main moved: ...`: hand off with
     that line and push the branch. On `main moved` the milestone is on
     app/<app> already and main is untouched.
+  - A project with land-ci (`mem project set land-ci ci.yml`): land pushes
+    the rebased sha to ci/<project>-<milestone> and waits on that
+    workflow's run of it before it pushes the trunk. `parked: CI red on
+    <sha>: <jobs>`, `parked: no <file> run for <sha>`, `parked: <file>
+    still running on <sha>` or `parked: GitHub refused the Actions API
+    ...`: hand off with that line and push the branch; nothing reached
+    the trunk.
 - After a landing, as the very last command, log the machine off the
   tailnet as the prompt says; not when parked.
 - When usage limits reset and the thread continues, carry on from `mem
   plan` and the handoff; never start the milestone over.
 - Stop after 6 hours with a handoff starting `parked: 6-hour stop`, an
-  export and a push of the branch. There is no amx here, so end by saying
-  so.
+  export and a push of the branch. A `workflow land` still waiting on CI
+  then is stopped: run again on the same sha, it reads the same run.
+  There is no amx here, so end by saying so.
 - The report's last line is exactly one of `next: Run the next milestone
   of <project>.`, `done: <project>'s roadmap is done`, or `parked: <why>`,
   with nothing after it: the coordinator reads only that line.

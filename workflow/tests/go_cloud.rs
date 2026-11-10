@@ -454,6 +454,8 @@ fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
         "parked: local-only <task>",
         "parked: trunk moved:",
         "parked: main moved:",
+        "parked: CI red on",
+        "run_in_background",
         "parked: 6-hour stop",
         "never start the milestone over",
     ] {
