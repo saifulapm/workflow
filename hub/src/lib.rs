@@ -20,6 +20,7 @@ pub mod html;
 pub mod http;
 pub mod live;
 pub mod local;
+pub mod localdevice;
 pub mod localroute;
 pub mod mcp;
 pub mod memcli;

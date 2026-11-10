@@ -19,6 +19,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 
 use crate::http::{Request, Response};
+use crate::localdevice::{Chosen, LocalDevice};
 use crate::localroute::{Kind, LocalRoute, Stamped};
 use crate::open::{Known, Open};
 use crate::share::Store;
@@ -159,6 +160,8 @@ pub struct Local {
     posted: Arc<Mutex<HashMap<String, (String, String)>>>,
     /// Where this machine's person questions ring.
     route_now: LocalRoute,
+    /// Where a cloud thread's device calls go.
+    device_now: LocalDevice,
     /// Answers by question short id, kept for a wait that comes later.
     answers: Mutex<HashMap<String, String>>,
     answered: Condvar,
@@ -182,6 +185,7 @@ impl Local {
             known: Arc::new(Known::load(host.clone())),
             posted: Arc::new(Mutex::new(HashMap::new())),
             route_now: LocalRoute::load(host.clone()),
+            device_now: LocalDevice::load(),
             host,
             token: tokens.send.clone(),
             tokens,
@@ -304,6 +308,20 @@ impl Local {
                 Ok(_) => self.route(request),
                 Err(e) => Response::text(400, &format!("route to phone or device: {e}")),
             },
+            // A device chosen on this machine; a peer's comes stamped.
+            ("POST", "/device/choice") => match serde_json::from_slice::<Chosen>(&request.body) {
+                Ok(chosen) if chosen.at.is_none() && chosen.is_name() => {
+                    let chosen = self.device_now.choose(&chosen.device);
+                    Response::new(
+                        200,
+                        "application/json",
+                        serde_json::to_vec(&chosen).unwrap_or_default(),
+                    )
+                }
+                Ok(chosen) if chosen.at.is_some() => self.route(request),
+                Ok(_) => Response::text(400, "a device is a machine name"),
+                Err(e) => Response::text(400, &format!("choose a device by its name: {e}")),
+            },
             ("GET", "/share/file") => self.file(request),
             _ => self.route(request),
         }
@@ -396,6 +414,23 @@ impl Local {
                 }
                 Ok(_) => Response::text(400, "a peer's route carries the time it was chosen"),
                 Err(e) => Response::text(400, &format!("route to phone or device: {e}")),
+            },
+            ("GET", "/device/choice") => Response::new(
+                200,
+                "application/json",
+                serde_json::to_string(&self.device_now.get()).unwrap_or_default(),
+            ),
+            // A change made on this machine carries no stamp; a peer's does.
+            ("POST", "/device/choice") => match serde_json::from_slice::<Chosen>(&request.body) {
+                Ok(theirs) if theirs.at.is_some() && theirs.is_name() => {
+                    self.device_now.offer(theirs);
+                    Response::text(200, "ok")
+                }
+                Ok(theirs) if theirs.at.is_none() => {
+                    Response::text(400, "a peer's device carries the time it was chosen")
+                }
+                Ok(_) => Response::text(400, "a device is a machine name"),
+                Err(e) => Response::text(400, &format!("choose a device by its name: {e}")),
             },
             ("GET", "/questions") => {
                 Response::new(200, "application/json", self.known.doc().to_string())
@@ -498,28 +533,24 @@ impl Local {
 
     /// Whether `question`, asked here, is a roadmap review: answering it
     /// starts work, so it is answered on the hub and never by a tap.
-    /// A device call goes to the machine the route names: served here when
-    /// that is this hub, sent on to its hub when it is a peer the tailnet
-    /// lists, and answered "no device online" otherwise. A peer serves what
-    /// it is sent without reading its own route, so a stale copy there
-    /// cannot send the call back.
+    /// A device call goes to the chosen device: served here when that is
+    /// this machine, sent on to the peer whose hub answers to its name, and
+    /// answered "no device online" otherwise. The route plays no part. A
+    /// peer serves what it is sent without reading its own choice, so a
+    /// stale copy there cannot send the call back.
     fn device(&self, request: &Request) -> Response {
-        let route = self.route_now.get();
-        let machine = match (route.route, route.machine) {
-            (Kind::Device, Some(machine)) => machine,
-            _ => return crate::device::unserved(request, "no device online (route: phone)"),
-        };
-        if machine == self.host {
+        let device = self.device_now.get().device;
+        if device == self.machine {
             return crate::device::serve(&self.machine, request);
         }
-        let offline = format!("no device online (route: {machine})");
-        if !crate::tailnet_peers().contains(&machine) {
+        let offline = format!("no device online (device: {device})");
+        let Some(peer) = self.peer_named(&device) else {
             return crate::device::unserved(request, &offline);
-        }
+        };
         // The device stops a call at its own timeout; wait a little past it.
         let within = crate::device::timeout() + Duration::from_secs(15);
         match request_within(
-            &machine,
+            &peer,
             "POST",
             "/device/here",
             &self.token,
@@ -528,10 +559,24 @@ impl Local {
         ) {
             Ok((status, body)) => Response::new(status, "application/json", body),
             Err(e) => {
-                eprintln!("hub: local: device call to {machine}: {e:#}");
+                eprintln!("hub: local: device call to {device} on {peer}: {e:#}");
                 crate::device::unserved(request, &offline)
             }
         }
+    }
+
+    /// The online peer whose hub answers `/ping` with `machine`: a peer is
+    /// known by its tailnet host, a device by its machine name.
+    fn peer_named(&self, machine: &str) -> Option<String> {
+        crate::tailnet_peers()
+            .into_iter()
+            .filter(|peer| *peer != self.host)
+            .find(|peer| {
+                matches!(
+                    request_within(peer, "GET", "/ping", &self.token, b"", PING_WITHIN),
+                    Ok((200, name)) if name.trim() == machine
+                )
+            })
     }
 
     fn is_review(&self, question: &str) -> bool {
@@ -1372,6 +1417,9 @@ fn refused(e: &anyhow::Error) -> bool {
             .is_some_and(|io| io.kind() == std::io::ErrorKind::ConnectionRefused)
     })
 }
+
+/// How long a peer has to say its machine name.
+const PING_WITHIN: Duration = Duration::from_secs(3);
 
 /// How long the route device has to take a question before it goes to
 /// Phone: 10 s, or `HUB_RING_MS`.

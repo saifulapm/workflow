@@ -1,5 +1,6 @@
-//! `POST /device` goes to the machine the route names, whichever local hub
-//! takes the call, and says so when no device is online.
+//! `POST /device` goes to the device chosen apart from the route, the mini
+//! until one is chosen, whichever local hub takes the call, and names the
+//! chosen device when it is not online.
 
 mod common;
 
@@ -12,6 +13,7 @@ use common::{Hub, TempDir, body_of, fixture_bin, status_of};
 use serde_json::Value;
 
 const TOKEN: &str = "peer-token-for-tests-0123456789abcdef";
+const CLOUD: &str = "cloud-token-for-tests-0123456789abcdef";
 
 /// A local hub named `machine`, reachable by peers at 127.0.0.1, with
 /// `peers` as its tailnet and a mem that records each call.
@@ -40,6 +42,7 @@ fn spawn(dir: &TempDir, machine: &str, peers: &[&Hub]) -> Hub {
         &["local", "--port", "0"],
         &[
             ("HUB_PEER_TOKEN", TOKEN),
+            ("HUB_CLOUD_TOKEN", CLOUD),
             ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
             ("HUB_HOST", "127.0.0.1"),
             ("HUB_PEERS", &peers),
@@ -95,41 +98,75 @@ fn device(hub: &Hub, verb: &str) -> Value {
     serde_json::from_str(body_of(&response)).unwrap()
 }
 
-#[test]
-fn on_the_phone_route_no_device_is_online() {
-    let dir = TempDir::new("device-phone");
-    let mini = spawn(&dir, "mini", &[]);
+fn on_socket(socket: &Path, request: &str) -> String {
+    let mut stream = UnixStream::connect(socket).unwrap();
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
 
-    let answer = device(&mini, "whoami");
-    assert_eq!(answer["exit"], 3, "{answer}");
-    assert_eq!(
-        answer["stderr"], "device: no device online (route: phone)\n",
-        "{answer}"
-    );
-    assert_eq!(answer["stdout"], "", "{answer}");
-    assert_eq!(answer["machine"], Value::Null, "{answer}");
-    assert!(
-        mem_calls(&dir, "mini").contains(
-            "--project=alpha log -- device none whoami exit 3 refused: no device online (route: phone)"
+/// Chooses the device on this machine, as `workflow device use` does.
+fn choose(socket: &Path, device: &str) -> Value {
+    let body = format!(r#"{{"device":"{device}"}}"#);
+    let response = on_socket(
+        socket,
+        &format!(
+            "POST /device/choice HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
         ),
-        "{}",
-        mem_calls(&dir, "mini")
     );
+    assert_eq!(status_of(&response), 200, "{response}");
+    serde_json::from_str(body_of(&response)).unwrap()
+}
+
+fn chosen(socket: &Path) -> Value {
+    let response = on_socket(socket, "GET /device/choice HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert_eq!(status_of(&response), 200, "{response}");
+    serde_json::from_str::<Value>(body_of(&response)).unwrap()["device"].clone()
+}
+
+/// A request on `hub`'s peer port with `bearer`, if any: its whole response.
+fn on_peer_port(hub: &Hub, bearer: Option<&str>, request_line: &str, body: &str) -> String {
+    let auth = bearer
+        .map(|b| format!("Authorization: Bearer {b}\r\n"))
+        .unwrap_or_default();
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", hub.port)).unwrap();
+    write!(
+        stream,
+        "{request_line}\r\nHost: x\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
 }
 
 #[test]
-fn a_call_goes_to_the_route_device_and_follows_the_route_when_it_moves() {
+fn a_hub_that_never_had_a_device_chosen_serves_calls_on_the_mini() {
+    let dir = TempDir::new("device-default");
+    let mini = spawn(&dir, "mac-mini-m2", &[]);
+    assert_eq!(chosen(&socket_of(&dir, "mac-mini-m2")), "mac-mini-m2");
+
+    let answer = device(&mini, "whoami");
+    assert_eq!(answer["stdout"], "mac-mini-m2\n", "{answer}");
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+    assert_eq!(answer["exit"], 0, "{answer}");
+}
+
+#[test]
+fn on_the_phone_route_a_call_goes_to_the_chosen_device_and_follows_it() {
     let dir = TempDir::new("device-follow");
     let nuc = spawn(&dir, "nuc", &[]);
-    let mini = spawn(&dir, "mini", &[&nuc]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    let socket = socket_of(&dir, "mac-mini-m2");
+    assert_eq!(route_machine(&socket), Value::Null, "the route is Phone");
 
-    // Chosen on the mini, naming the nuc: the mini tells its peer at once.
-    let nuc_host = format!("127.0.0.1:{}", nuc.port);
-    route_on(
-        &socket_of(&dir, "mini"),
-        &format!(r#"{{"route":"device","machine":"{nuc_host}"}}"#),
-    );
-    assert_eq!(route_machine(&socket_of(&dir, "mini")), nuc_host.as_str());
+    let set = choose(&socket, "nuc");
+    assert_eq!(set["device"], "nuc", "{set}");
+    assert!(set["at"].as_i64().unwrap() > 0, "{set}");
+    assert_eq!(chosen(&socket), "nuc");
 
     let answer = device(&mini, "whoami");
     assert_eq!(answer["stdout"], "nuc\n", "{answer}");
@@ -142,41 +179,91 @@ fn a_call_goes_to_the_route_device_and_follows_the_route_when_it_moves() {
         mem_calls(&dir, "nuc")
     );
     assert!(
-        !mem_calls(&dir, "mini").contains("log --"),
+        !mem_calls(&dir, "mac-mini-m2").contains("log --"),
         "{}",
-        mem_calls(&dir, "mini")
+        mem_calls(&dir, "mac-mini-m2")
     );
 
-    route_on(&socket_of(&dir, "mini"), r#"{"route":"device"}"#);
-    let mini_host = route_machine(&socket_of(&dir, "mini"));
-    common::wait_for("the nuc hears the move", Duration::from_secs(2), || {
-        route_machine(&socket_of(&dir, "nuc")) == mini_host
-    });
+    choose(&socket, "mac-mini-m2");
     let answer = device(&mini, "whoami");
-    assert_eq!(answer["stdout"], "mini\n", "{answer}");
-    assert_eq!(answer["machine"], "mini", "{answer}");
-    assert!(
-        mem_calls(&dir, "mini").contains("log -- device mini whoami exit 0"),
-        "{}",
-        mem_calls(&dir, "mini")
+    assert_eq!(answer["stdout"], "mac-mini-m2\n", "{answer}");
+    assert_eq!(
+        route_machine(&socket),
+        Value::Null,
+        "the route stayed Phone"
     );
 }
 
 #[test]
-fn a_route_device_that_is_not_on_the_tailnet_is_not_online() {
+fn a_route_on_another_machine_does_not_move_the_device() {
+    let dir = TempDir::new("device-route-elsewhere");
+    let mini = spawn(&dir, "mac-mini-m2", &[]);
+    let macbook = spawn(&dir, "macbook-m2", &[&mini]);
+    // Device on the macbook, as an old route file holds it.
+    route_on(&socket_of(&dir, "macbook-m2"), r#"{"route":"device"}"#);
+    assert_ne!(route_machine(&socket_of(&dir, "macbook-m2")), Value::Null);
+
+    let answer = device(&macbook, "whoami");
+    assert_eq!(answer["stdout"], "mac-mini-m2\n", "{answer}");
+    assert_eq!(answer["exit"], 0, "{answer}");
+
+    choose(&socket_of(&dir, "macbook-m2"), "mac-mini-m2");
+    let answer = device(&macbook, "whoami");
+    assert_eq!(answer["stdout"], "mac-mini-m2\n", "{answer}");
+}
+
+#[test]
+fn a_chosen_device_that_is_offline_says_so_by_its_name() {
     let dir = TempDir::new("device-offline");
-    let mini = spawn(&dir, "mini", &[]);
-    route_on(
-        &socket_of(&dir, "mini"),
-        r#"{"route":"device","machine":"127.0.0.1:9"}"#,
-    );
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    choose(&socket_of(&dir, "mac-mini-m2"), "nuc");
+    drop(nuc);
 
     let started = std::time::Instant::now();
     let answer = device(&mini, "whoami");
     assert_eq!(answer["exit"], 3, "{answer}");
     assert_eq!(
-        answer["stderr"], "device: no device online (route: 127.0.0.1:9)\n",
+        answer["stderr"], "device: no device online (device: nuc)\n",
         "{answer}"
     );
+    assert_eq!(answer["stdout"], "", "{answer}");
+    assert_eq!(answer["machine"], Value::Null, "{answer}");
     assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(
+        mem_calls(&dir, "mac-mini-m2").contains(
+            "--project=alpha log -- device none whoami exit 3 refused: no device online (device: nuc)"
+        ),
+        "{}",
+        mem_calls(&dir, "mac-mini-m2")
+    );
+}
+
+#[test]
+fn only_this_machine_or_a_device_peer_chooses_the_device() {
+    let dir = TempDir::new("device-who-chooses");
+    let mini = spawn(&dir, "mac-mini-m2", &[]);
+    let line = "POST /device/choice HTTP/1.1";
+    let stamped = r#"{"device":"nuc","at":99999999999999}"#;
+
+    let cloud = on_peer_port(&mini, Some(CLOUD), line, stamped);
+    assert_eq!(status_of(&cloud), 403, "{cloud}");
+    let nobody = on_peer_port(&mini, None, line, stamped);
+    assert_eq!(status_of(&nobody), 401, "{nobody}");
+    // A peer's choice carries the time it was made.
+    let unstamped = on_peer_port(&mini, Some(TOKEN), line, r#"{"device":"nuc"}"#);
+    assert_eq!(status_of(&unstamped), 400, "{unstamped}");
+    assert_eq!(chosen(&socket_of(&dir, "mac-mini-m2")), "mac-mini-m2");
+
+    for body in [r#"{"device":""}"#, r#"{"route":"phone"}"#, "nonsense"] {
+        let response = on_socket(
+            &socket_of(&dir, "mac-mini-m2"),
+            &format!(
+                "{line}\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ),
+        );
+        assert_eq!(status_of(&response), 400, "{body}: {response}");
+    }
+    assert_eq!(chosen(&socket_of(&dir, "mac-mini-m2")), "mac-mini-m2");
 }

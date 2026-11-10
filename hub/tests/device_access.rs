@@ -140,16 +140,17 @@ fn spawn(dir: &TempDir) -> Hub {
             ("HUB_DEVICE_ACCESS_TEAM", TEAM),
         ],
     );
-    route_here(&socket);
+    choose_here(&socket);
     hub
 }
 
-fn route_here(socket: &Path) {
-    let body = r#"{"route":"device"}"#;
+/// Chooses this machine, the mini, as the device.
+fn choose_here(socket: &Path) {
+    let body = r#"{"device":"mini"}"#;
     let mut stream = UnixStream::connect(socket).unwrap();
     write!(
         stream,
-        "POST /route HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST /device/choice HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     )
     .unwrap();
