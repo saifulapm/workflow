@@ -62,7 +62,12 @@ fn shopify(work: &Scratch, cwd: &str, args: &[&str], vars: &[(&str, &str)]) -> O
         )
         .env("HOME", work.at("home"));
     for (key, _) in std::env::vars() {
-        if key.starts_with("SHOPIFY_") || key.contains("_SHOPIFY_") || key.ends_with("_PASSWORD") {
+        if key.starts_with("SHOPIFY_")
+            || key.contains("_SHOPIFY_")
+            || key.ends_with("_PASSWORD")
+            || key.starts_with("CLOUDFLARE_")
+            || key == "NODE_USE_ENV_PROXY"
+        {
             cmd.env_remove(key);
         }
     }
@@ -249,19 +254,82 @@ const SA_REJECTED: &str =
 
 const PRODUCTION: &str = "client_id = \"e3cc0000000000000000000000000000\"\nname = \"EventSmith\"\nhandle = \"eventsmith\"\napplication_url = \"https://eventsmith.lareys.dev\"\n";
 
-const STAGING: &str = "client_id = \"57a90000000000000000000000000000\"\nname = \"EventSmith staging\"\nhandle = \"eventsmith-staging\"\napplication_url = \"https://eventsmith.lareys.dev\"\nembedded = true\n\n[build]\nautomatically_update_urls_on_dev = false\ndev_store_url = \"lareys-development.myshopify.com\"\n\n[access_scopes]\nscopes = \"read_products\"\n";
+const STAGING: &str = "client_id = \"57a90000000000000000000000000000\"\nname = \"EventSmith staging\"\nhandle = \"eventsmith-staging\"\napplication_url = \"https://eventsmith-staging.lareys.dev\"\nembedded = true\n\n[build]\nautomatically_update_urls_on_dev = false\ndev_store_url = \"lareys-development.myshopify.com\"\n\n[access_scopes]\nscopes = \"read_products\"\n";
 
-/// An apps repo with apps/eventsmith's production and staging configs, and a
-/// fake shopify whose `app deploy` prints `deploy.out` and exits
-/// `deploy.code`.
+/// EventSmith's wrangler.jsonc: production's Worker and D1 at the top, and
+/// staging's own under `env.staging`, in JSONC as wrangler reads it.
+const WRANGLER: &str = r#"{
+  // Production: a GitHub Release deploys it.
+  "name": "eventsmith",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "eventsmith-na", "database_id": "aaaa0000-0000-0000-0000-000000000000" },
+  ],
+  /* The staging app's Worker, "its own". */
+  "env": {
+    "staging": {
+      "name": "eventsmith-staging",
+      "vars": { "SHOPIFY_APP_URL": "https://eventsmith-staging.lareys.dev" },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "eventsmith-staging", // its own
+          "database_id": "bbbb0000-0000-0000-0000-000000000000",
+          "migrations_dir": "./db/migrations",
+        },
+      ],
+    },
+  },
+}
+"#;
+
+/// An apps repo with apps/eventsmith's production and staging configs and
+/// its wrangler.jsonc, and fakes that each append their call to `calls`: a
+/// shopify whose `app deploy` prints `deploy.out` and exits `deploy.code`;
+/// the app's own wrangler, whose d1 call exits `migrate.code` and whose
+/// deploy exits `worker.code`; and a pnpm whose `run build` writes the
+/// Vite plugin's redirected config for the Worker named in `built.name`.
 fn apps(tag: &str) -> Scratch {
     let work = Scratch::new(tag);
     let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
     work.put("repo/apps/eventsmith/shopify.app.toml", PRODUCTION);
     work.put("repo/apps/eventsmith/shopify.app.staging.toml", STAGING);
+    work.put("repo/apps/eventsmith/wrangler.jsonc", WRANGLER);
+    work.put(
+        "repo/apps/eventsmith/package.json",
+        r#"{"name":"eventsmith"}"#,
+    );
     work.put("deploy.out", "New version released to users.");
     work.put("deploy.code", "0");
+    work.put("migrate.code", "0");
+    work.put("worker.code", "0");
+    work.put("built.name", "eventsmith-staging");
     let at = |rel: &str| work.at(rel).display().to_string();
+    work.script(
+        "repo/apps/eventsmith/node_modules/.bin/wrangler",
+        &format!(
+            "echo \"wrangler $* | token=$CLOUDFLARE_API_TOKEN proxy=$NODE_USE_ENV_PROXY\" >> {calls}\n\
+             case \"$1\" in\n\
+             d1) echo 'Migrations to be applied: 0001_init.sql'; exit $(cat {migrate});;\n\
+             deploy) echo 'Deployed eventsmith-staging triggers'; exit $(cat {worker});;\n\
+             esac",
+            calls = at("calls"),
+            migrate = at("migrate.code"),
+            worker = at("worker.code"),
+        ),
+    );
+    work.script(
+        "bin/pnpm",
+        &format!(
+            "echo \"pnpm $* | env=$CLOUDFLARE_ENV proxy=$NODE_USE_ENV_PROXY in=$(basename $(pwd))\" >> {calls}\n\
+             if [ \"$1 $2\" = 'run build' ]; then\n\
+             mkdir -p build/server .wrangler/deploy\n\
+             printf '{{\"name\":\"%s\",\"targetEnvironment\":\"staging\"}}' \"$(cat {built})\" > build/server/wrangler.json\n\
+             echo '{{\"configPath\":\"../../build/server/wrangler.json\"}}' > .wrangler/deploy/config.json\n\
+             fi",
+            calls = at("calls"),
+            built = at("built.name"),
+        ),
+    );
     work.script(
         "bin/shopify",
         &format!(
@@ -296,10 +364,10 @@ fn an_app_deploys_its_staging_config_with_its_own_token() {
     assert!(out.status.success(), "{out:?}");
     let dir = work.at("repo/apps/eventsmith").display().to_string();
     assert_eq!(
-        calls(&work),
-        [format!(
+        calls(&work).last().map(String::as_str),
+        Some(format!(
             "app deploy --config staging --allow-updates --no-input --path {dir} | token=shpsa_abc automation= partners="
-        )]
+        ).as_str())
     );
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("New version released to users."), "{said}");
@@ -426,5 +494,105 @@ fn a_rejected_token_in_a_narrow_box_still_names_the_variable() {
         String::from_utf8_lossy(&out.stderr)
             .contains("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected"),
         "{out:?}"
+    );
+}
+
+/// The release's order, for staging: the D1 migrations, then the build and
+/// the Worker, then the Shopify app version, so the webhooks and extensions
+/// it publishes point at a Worker already live. Wrangler reaches the proxy,
+/// which adds the Cloudflare token, only with NODE_USE_ENV_PROXY and a token
+/// variable; pnpm hangs with NODE_USE_ENV_PROXY, so it gets neither. The
+/// build runs outside turbo, whose cache would hand back production's.
+#[test]
+fn an_app_deploys_its_staging_worker_before_its_shopify_config() {
+    let work = apps("shopify-deploy-worker");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert!(out.status.success(), "{out:?}");
+    let made = calls(&work);
+    assert_eq!(
+        made[..4],
+        [
+            "wrangler d1 migrations apply eventsmith-staging --remote --env staging --config wrangler.jsonc | token=proxy-injected proxy=1",
+            "pnpm turbo run build --filter=eventsmith^... | env= proxy= in=repo",
+            "pnpm run build | env=staging proxy= in=eventsmith",
+            "wrangler deploy --env staging | token=proxy-injected proxy=1",
+        ],
+        "{made:?}"
+    );
+    assert!(
+        made[4].starts_with("app deploy --config staging "),
+        "{made:?}"
+    );
+    assert_eq!(made.len(), 5, "{made:?}");
+    assert!(
+        made.iter().all(|call| !call.contains("eventsmith-na")),
+        "{made:?}"
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("Migrations to be applied: 0001_init.sql"),
+        "{said}"
+    );
+    assert_eq!(
+        said.trim_end().lines().last(),
+        Some("walk: https://admin.shopify.com/store/lareys-development/apps/eventsmith-staging"),
+        "{said}"
+    );
+}
+
+/// A failed migration leaves the Worker and the app as they were.
+#[test]
+fn a_failed_migration_deploys_nothing() {
+    let work = apps("shopify-deploy-migration-fails");
+    work.put("migrate.code", "1");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("the staging D1 migrations of eventsmith-staging failed"),
+        "{out:?}"
+    );
+    assert_eq!(calls(&work).len(), 1, "{:?}", calls(&work));
+}
+
+#[test]
+fn a_failed_worker_deploy_leaves_the_shopify_config() {
+    let work = apps("shopify-deploy-worker-fails");
+    work.put("worker.code", "1");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("the staging Worker deploy failed"),
+        "{out:?}"
+    );
+    assert!(
+        calls(&work)
+            .iter()
+            .all(|call| !call.starts_with("app deploy")),
+        "{:?}",
+        calls(&work)
+    );
+}
+
+/// A build that came out for another Worker, as production's would, is
+/// never deployed: `wrangler deploy --env staging` refuses a mismatch only
+/// when the build names an environment.
+#[test]
+fn a_build_for_another_worker_is_not_deployed() {
+    let work = apps("shopify-deploy-wrong-build");
+    work.put("built.name", "eventsmith");
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("the build is for the Worker eventsmith, not eventsmith-staging"),
+        "{out:?}"
+    );
+    assert!(
+        calls(&work)
+            .iter()
+            .all(|call| !call.starts_with("wrangler deploy") && !call.starts_with("app deploy")),
+        "{:?}",
+        calls(&work)
     );
 }

@@ -319,6 +319,13 @@ fn deploy(app: &str) -> i32 {
         ));
         return NEEDS_SAIFUL;
     };
+    let worker = match staging_worker(&dir, app) {
+        Ok(worker) => worker,
+        Err(code) => return code,
+    };
+    if let Err(code) = deploy_worker(&dir, app, &worker) {
+        return code;
+    }
     let out = Command::new("shopify")
         .args([
             "app",
@@ -378,4 +385,242 @@ fn words(out: &str) -> String {
         .filter(|w| !w.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// wrangler.jsonc read as JSON: its comments and trailing commas dropped,
+/// the only ways wrangler's JSONC differs.
+pub fn jsonc(text: &str) -> Option<Value> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut plain = String::with_capacity(text.len());
+    let mut i = 0;
+    let mut quoted = false;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if quoted {
+            plain.push(c);
+            if c == '\\' {
+                if let Some(n) = next {
+                    plain.push(n);
+                }
+                i += 2;
+                continue;
+            }
+            quoted = c != '"';
+            i += 1;
+            continue;
+        }
+        match (c, next) {
+            ('/', Some('/')) => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            ('/', Some('*')) => {
+                i += 2;
+                while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                    i += 1;
+                }
+                i += 2;
+            }
+            (',', _) => {
+                let rest = chars[i + 1..].iter().collect::<String>();
+                if !strip_comments_ahead(&rest).starts_with([']', '}']) {
+                    plain.push(c);
+                }
+                i += 1;
+            }
+            _ => {
+                quoted = c == '"';
+                plain.push(c);
+                i += 1;
+            }
+        }
+    }
+    serde_json::from_str(&plain).ok()
+}
+
+/// What follows a comma once blanks and comments are skipped, enough to see
+/// whether it closes a list or an object.
+fn strip_comments_ahead(rest: &str) -> &str {
+    let mut rest = rest.trim_start();
+    loop {
+        if let Some(after) = rest.strip_prefix("//") {
+            rest = after.split_once('\n').map_or("", |(_, r)| r).trim_start();
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.split_once("*/").map_or("", |(_, r)| r).trim_start();
+        } else {
+            return rest;
+        }
+    }
+}
+
+/// The app's staging Worker, as its wrangler.jsonc's `env.staging` names it.
+struct Worker {
+    name: String,
+    databases: Vec<String>,
+}
+
+fn staging_worker(dir: &Path, app: &str) -> Result<Worker, i32> {
+    let config = std::fs::read_to_string(dir.join("wrangler.jsonc"))
+        .ok()
+        .and_then(|text| jsonc(&text))
+        .unwrap_or_default();
+    let env = &config["env"][STAGING];
+    let Some(name) = env["name"].as_str() else {
+        say(&format!(
+            "{app} has no env.{STAGING} in wrangler.jsonc: its staging Worker is not set up"
+        ));
+        return Err(NEEDS_SAIFUL);
+    };
+    let databases = env["d1_databases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|db| db["database_name"].as_str().map(str::to_string))
+        .collect();
+    Ok(Worker {
+        name: name.to_string(),
+        databases,
+    })
+}
+
+/// The app's own wrangler with the proxy's Cloudflare token: wrangler's
+/// fetch reaches the proxy only with NODE_USE_ENV_PROXY, and sends nothing
+/// for it to replace without a token variable. A token already set, as on
+/// Saiful's machine, is used as it is.
+fn wrangler(dir: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new(dir.join("node_modules/.bin/wrangler"));
+    cmd.args(args)
+        .current_dir(dir)
+        .env("NODE_USE_ENV_PROXY", "1")
+        .env(
+            "CLOUDFLARE_API_TOKEN",
+            var("CLOUDFLARE_API_TOKEN").unwrap_or_else(|| "proxy-injected".to_string()),
+        );
+    cmd
+}
+
+/// pnpm without the proxy switch, which hangs it.
+fn pnpm(dir: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new("pnpm");
+    cmd.args(args)
+        .current_dir(dir)
+        .env_remove("NODE_USE_ENV_PROXY");
+    cmd
+}
+
+/// Runs `cmd` with its output shown; a failure stops the deploy there.
+fn step(mut cmd: Command, what: &str) -> Result<(), i32> {
+    match cmd.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => {
+            say(&format!("{what} failed: nothing after it was deployed"));
+            Err(exit::FAILED)
+        }
+        Err(e) => {
+            say(&format!(
+                "{what} could not start ({e}): run pnpm install first"
+            ));
+            Err(exit::FAILED)
+        }
+    }
+}
+
+/// The release's order for staging: the D1 migrations, then the build, then
+/// the Worker.
+fn deploy_worker(dir: &Path, app: &str, worker: &Worker) -> Result<(), i32> {
+    for db in &worker.databases {
+        // The source config, not a build's: a production build left in the
+        // folder holds no staging database.
+        step(
+            wrangler(
+                dir,
+                &[
+                    "d1",
+                    "migrations",
+                    "apply",
+                    db,
+                    "--remote",
+                    "--env",
+                    STAGING,
+                    "--config",
+                    "wrangler.jsonc",
+                ],
+            ),
+            &format!("the staging D1 migrations of {db}"),
+        )?;
+    }
+    let package = std::fs::read_to_string(dir.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|v| v["name"].as_str().map(str::to_string))
+        .unwrap_or_else(|| app.to_string());
+    let root = dir.parent().and_then(Path::parent).unwrap_or(dir);
+    step(
+        pnpm(
+            root,
+            &["turbo", "run", "build", &format!("--filter={package}^...")],
+        ),
+        &format!("the build of {app}'s packages"),
+    )?;
+    // Outside turbo: its cache keys no environment, so it would hand back
+    // production's build. The Vite plugin picks the environment here.
+    let mut build = pnpm(dir, &["run", "build"]);
+    build.env("CLOUDFLARE_ENV", STAGING);
+    step(build, &format!("the staging build of {app}"))?;
+    if let Some(built) = built_worker(dir)
+        && built != worker.name
+    {
+        say(&format!(
+            "the build is for the Worker {built}, not {}: nothing was deployed",
+            worker.name
+        ));
+        return Err(exit::FAILED);
+    }
+    step(
+        wrangler(dir, &["deploy", "--env", STAGING]),
+        "the staging Worker deploy",
+    )
+}
+
+/// The Worker a Vite build is for, from the config it hands wrangler, when
+/// the app builds with the Cloudflare plugin; one for no environment is
+/// production's whatever it is called.
+fn built_worker(dir: &Path) -> Option<String> {
+    let deploy = dir.join(".wrangler/deploy");
+    let pointer: Value =
+        serde_json::from_str(&std::fs::read_to_string(deploy.join("config.json")).ok()?).ok()?;
+    let built: Value = serde_json::from_str(
+        &std::fs::read_to_string(deploy.join(pointer["configPath"].as_str()?)).ok()?,
+    )
+    .ok()?;
+    let name = built["name"].as_str().unwrap_or_default();
+    Some(if built["targetEnvironment"].as_str() == Some(STAGING) {
+        name.to_string()
+    } else {
+        format!("{name} (built for no environment)")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jsonc;
+
+    /// Wrangler's JSONC as apps write it: comments with quotes in them,
+    /// `//` inside strings, and trailing commas, some before a comment.
+    #[test]
+    fn jsonc_drops_comments_and_trailing_commas_only() {
+        let text = r#"{
+  // the app's "handle" lives here
+  "url": "https://a.lareys.dev/a/sc", /* a "block" */
+  "list": [1, 2, ],
+  "vars": { "Q": "say \"hi\" // not a comment", // after
+  },
+}"#;
+        let v = jsonc(text).unwrap();
+        assert_eq!(v["url"], "https://a.lareys.dev/a/sc");
+        assert_eq!(v["list"], serde_json::json!([1, 2]));
+        assert_eq!(v["vars"]["Q"], "say \"hi\" // not a comment");
+    }
 }
