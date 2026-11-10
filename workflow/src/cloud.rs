@@ -126,8 +126,12 @@ const KIT_SECRETS: &[&str] = &["device.on-rexa.com"];
 
 /// The network secrets one mem project's work needs, by host: ebdfy's
 /// deploys run through the proxy's Cloudflare token (its verify page's
-/// Cloud section).
-const PROJECT_SECRETS: &[(&str, &str)] = &[("ebdfy", "api.cloudflare.com")];
+/// Cloud section), and shopify_apps' staging deploys put each app's staging
+/// Worker up with wrangler.
+const PROJECT_SECRETS: &[(&str, &str)] = &[
+    ("ebdfy", "api.cloudflare.com"),
+    ("shopify_apps", "api.cloudflare.com"),
+];
 
 /// What the Claude Project of the repository `remote` needs besides its
 /// instructions: its name and repository, a start line for each mem project
@@ -191,6 +195,25 @@ belongs to; each value comes from Saiful's pass, never from here:\n"
     for (project, host) in PROJECT_SECRETS {
         if repo.iter().any(|row| row.name == *project) {
             out.push_str(&format!("  {host}  {project}\n"));
+        }
+    }
+    let workers: Vec<(&str, String, Vec<String>)> = repo
+        .iter()
+        .filter_map(|row| {
+            let app = row.subdir.as_deref()?.strip_prefix("apps/")?;
+            let (worker, secrets) =
+                crate::shopify::staging_secrets(&checkout?.join("apps").join(app))?;
+            Some((row.name.as_str(), worker, secrets))
+        })
+        .collect();
+    if !workers.is_empty() {
+        out.push_str(
+            "Secrets of each staging Worker by name, with the project each belongs to; each value comes from Saiful's pass, put on the Worker with `wrangler secret put <name> --env staging` in the app's folder before its first deploy:\n",
+        );
+        for (project, worker, secrets) in workers {
+            for secret in secrets {
+                out.push_str(&format!("  {secret}  {project}, on {worker}\n"));
+            }
         }
     }
     out

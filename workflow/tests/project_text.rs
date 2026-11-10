@@ -51,6 +51,28 @@ fn six(tag: &str) -> Scratch {
         "shopify_apps/apps/eventsmith/shopify.app.toml",
         "name = \"x\"\n",
     );
+    // ShortCart has a staging app and Worker; EventSmith has neither.
+    work.put(
+        "shopify_apps/apps/shortcart/shopify.app.toml",
+        "name = \"x\"\n",
+    );
+    work.put(
+        "shopify_apps/apps/shortcart/shopify.app.staging.toml",
+        "name = \"x\"\n",
+    );
+    work.put(
+        "shopify_apps/apps/shortcart/wrangler.jsonc",
+        r#"{
+  "name": "shortcart",
+  "env": {
+    // the staging app's Worker
+    "staging": {
+      "name": "shortcart-staging",
+      "secrets": { "required": ["SHOPIFY_API_KEY", "SHOPIFY_API_SECRET"] },
+    },
+  },
+}"#,
+    );
     let themes = work.mkdir("shopify_themes");
     work.put(
         "shopify_themes/themes/pawsome/layout/theme.liquid",
@@ -305,6 +327,41 @@ fn the_sheet_names_the_repo_each_start_line_and_every_variable_with_its_project(
     assert!(sheet.contains("\n  api.cloudflare.com  ebdfy\n"), "{sheet}");
     let (sheet, _) = parts(&text(&work, &["amx"]));
     assert!(!sheet.contains("api.cloudflare.com"), "{sheet}");
+}
+
+/// A staging deploy runs wrangler through the proxy's Cloudflare token, and
+/// the staging Worker needs its own secrets before its first deploy, so the
+/// sheet names both; an app with no staging config needs neither.
+#[test]
+fn the_sheet_names_what_each_staging_worker_needs() {
+    let work = six("project-text-staging");
+    let (sheet, _) = parts(&text(&work, &["shopify_apps"]));
+    assert!(
+        sheet.contains("\n  api.cloudflare.com  shopify_apps\n"),
+        "{sheet}"
+    );
+    let (heading, secrets) = sheet
+        .split_once("Secrets of each staging Worker")
+        .unwrap_or_else(|| panic!("{sheet}"));
+    assert!(heading.contains("Network secrets by host:"), "{sheet}");
+    let listed: Vec<(String, String)> = variables(secrets);
+    assert_eq!(
+        listed,
+        [
+            (
+                "SHOPIFY_API_KEY".to_string(),
+                "shortcart, on shortcart-staging".to_string()
+            ),
+            (
+                "SHOPIFY_API_SECRET".to_string(),
+                "shortcart, on shortcart-staging".to_string()
+            ),
+        ],
+        "{sheet}"
+    );
+    assert!(!sheet.contains('='), "{sheet}");
+    let (sheet, _) = parts(&text(&work, &["shopify_themes"]));
+    assert!(!sheet.contains("staging Worker"), "{sheet}");
 }
 
 /// Without the repo's checkout here, project-text cannot tell an app from

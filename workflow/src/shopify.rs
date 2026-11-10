@@ -468,6 +468,23 @@ fn strip_comments_ahead(rest: &str) -> &str {
     }
 }
 
+/// The staging Worker of the app at `dir` and the secrets its
+/// wrangler.jsonc says it needs, when the app has a staging config.
+pub fn staging_secrets(dir: &Path) -> Option<(String, Vec<String>)> {
+    if !dir.join(format!("shopify.app.{STAGING}.toml")).is_file() {
+        return None;
+    }
+    let config = jsonc(&std::fs::read_to_string(dir.join("wrangler.jsonc")).ok()?)?;
+    let env = &config["env"][STAGING];
+    let secrets = env["secrets"]["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s.as_str().map(str::to_string))
+        .collect();
+    Some((env["name"].as_str()?.to_string(), secrets))
+}
+
 /// The app's staging Worker, as its wrangler.jsonc's `env.staging` names it.
 struct Worker {
     name: String,
