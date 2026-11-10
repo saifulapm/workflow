@@ -468,19 +468,25 @@ fn strip_comments_ahead(rest: &str) -> &str {
     }
 }
 
-/// The staging Worker of the app at `dir` and the secrets its
-/// wrangler.jsonc says it needs, when the app has a staging config.
+/// The staging Worker of the app at `dir` and the secrets it needs, when the
+/// app has a staging config: the names its .dev.vars.example lists that
+/// env.staging does not set as vars. Wrangler's own `secrets.required`
+/// would say it, but in one environment it changes the types wrangler
+/// generates for all of them.
 pub fn staging_secrets(dir: &Path) -> Option<(String, Vec<String>)> {
     if !dir.join(format!("shopify.app.{STAGING}.toml")).is_file() {
         return None;
     }
     let config = jsonc(&std::fs::read_to_string(dir.join("wrangler.jsonc")).ok()?)?;
     let env = &config["env"][STAGING];
-    let secrets = env["secrets"]["required"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|s| s.as_str().map(str::to_string))
+    let example = std::fs::read_to_string(dir.join(".dev.vars.example")).unwrap_or_default();
+    let secrets = example
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
+        .filter(|name| {
+            !name.is_empty() && !name.starts_with('#') && env["vars"].get(name).is_none()
+        })
+        .map(str::to_string)
         .collect();
     Some((env["name"].as_str()?.to_string(), secrets))
 }

@@ -68,10 +68,14 @@ fn six(tag: &str) -> Scratch {
     // the staging app's Worker
     "staging": {
       "name": "shortcart-staging",
-      "secrets": { "required": ["SHOPIFY_API_KEY", "SHOPIFY_API_SECRET"] },
+      "vars": { "SHOPIFY_APP_URL": "https://shortcart-staging.lareys.dev" },
     },
   },
 }"#,
+    );
+    work.put(
+        "shopify_apps/apps/shortcart/.dev.vars.example",
+        "# Shopify App Credentials\nSHOPIFY_API_KEY=\nSHOPIFY_API_SECRET=\nSHOPIFY_APP_URL=https://your-app.example.com\n\n# any long random string\nSC_MASTER_KEY=\n",
     );
     let themes = work.mkdir("shopify_themes");
     work.put(
@@ -330,8 +334,9 @@ fn the_sheet_names_the_repo_each_start_line_and_every_variable_with_its_project(
 }
 
 /// A staging deploy runs wrangler through the proxy's Cloudflare token, and
-/// the staging Worker needs its own secrets before its first deploy, so the
-/// sheet names both; an app with no staging config needs neither.
+/// the staging Worker needs its own secrets: the app's .dev.vars.example
+/// names but the ones env.staging sets as vars. The sheet names both; an
+/// app with no staging config needs neither.
 #[test]
 fn the_sheet_names_what_each_staging_worker_needs() {
     let work = six("project-text-staging");
@@ -354,6 +359,10 @@ fn the_sheet_names_what_each_staging_worker_needs() {
             ),
             (
                 "SHOPIFY_API_SECRET".to_string(),
+                "shortcart, on shortcart-staging".to_string()
+            ),
+            (
+                "SC_MASTER_KEY".to_string(),
                 "shortcart, on shortcart-staging".to_string()
             ),
         ],
