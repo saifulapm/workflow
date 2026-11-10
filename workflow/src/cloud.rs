@@ -454,16 +454,40 @@ environment's old copy; run `mem sync` until it says performed, then start again
     {
         return refuse(why, exit::USAGE);
     }
-    println!(
-        "{}",
-        prompt(
-            &start.project,
-            &start.slug,
-            &base(row, &start.dir),
-            &start.dir
-        )
+    let mut text = prompt(
+        &start.project,
+        &start.slug,
+        &base(row, &start.dir),
+        &start.dir,
     );
+    if !asked.is_empty() {
+        text.push_str(&answered(&asked, &branch(&start.project, &start.slug)));
+    }
+    println!("{text}");
     exit::OK
+}
+
+/// What a thread taking up a run that parked on Saiful's `asked` questions
+/// reads after its prompt: each question with his answer.
+fn answered(asked: &[memcli::Question], branch: &str) -> String {
+    let each: Vec<String> = asked
+        .iter()
+        .rev()
+        .map(|q| {
+            format!(
+                "question #{} ({}), answered: {}",
+                q.short_id,
+                q.title.as_deref().unwrap_or("untitled").trim(),
+                q.answer.as_deref().unwrap_or_default().trim()
+            )
+        })
+        .collect();
+    format!(
+        " The thread before you parked on Saiful's questions, which he has now answered: {}. \
+Act on those answers. {branch} on origin holds that thread's landed tasks: keep its commits \
+and start from the first open task in `mem plan`.",
+        each.join("; ")
+    )
 }
 
 /// The questions `row`'s cloud run asked before it parked: those of its

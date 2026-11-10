@@ -1640,3 +1640,46 @@ fn questions_the_parked_run_did_not_ask_hold_nothing() {
     assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
     assert!(w.claimed(), "{}", stdout(&out));
 }
+
+/// Once every question is answered, the start line's thread claims the run
+/// and its prompt names each question with its answer, and takes the
+/// parked branch up from its first open task.
+#[test]
+fn after_the_answers_the_next_thread_carries_on_with_them() {
+    let w = World::new("cloud-question-answered");
+    w.parked(
+        2,
+        1,
+        "parked: question #QSTN0001 waits on Saiful: which word\n",
+        &[question(
+            "gamma",
+            90,
+            "QSTN0001",
+            Some("Print 'count lines'"),
+        )],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claimed(), "{:?}", w.mem_calls());
+    let said = stdout(&out);
+    assert!(
+        said.contains(
+            "question #QSTN0001 (m2-next: which word should --help print?), answered: Print 'count lines'"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("keep its commits and start from the first open task in `mem plan`"),
+        "{said}"
+    );
+
+    // A run that parked asking nothing gets no such sentence.
+    let w = World::new("cloud-parked-no-question");
+    w.parked(2, 1, "parked: 6-hour stop, t3 half done\n", &[]);
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert!(
+        !stdout(&out).contains("parked on Saiful's questions"),
+        "{}",
+        stdout(&out)
+    );
+}
