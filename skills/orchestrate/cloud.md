@@ -46,11 +46,25 @@ the skill holds, with these changes:
 - A device need the plan did not name, in a `Runs on: cloud` milestone or a
   step its line left out, parks the same way and gets `mem finding add
   --milestone <slug> --step plan` naming it, so the next plan names it.
-- A question only Saiful can answer never parks a cloud run: a thread
-  that stopped wakes only when someone types in it. Ask with `mem ask
-  --for saiful`, do what does not depend on the answer, then wait in the
-  thread with `mem questions --wait <id>`, run again each time it returns
-  without one. The answer reaches this session's local hub over Tailscale.
+- A question only Saiful can answer is waited for in the thread, 30
+  minutes from the ask, then parks the run. Ask with `mem ask --for
+  saiful`, do what does not depend on the answer, then run `workflow
+  wait-answer <id>` (every open question's id), again at once on each
+  `again:` line. The answer reaches this session's local hub over
+  Tailscale and comes back as `answered: question #<id>: <answer>`: carry
+  on with it.
+  - On `parked: question #<id> waits on Saiful`, write a handoff starting
+    with that line and a colon that names the question, the branch and the
+    first open task, export, commit and push the branch, then run
+    `workflow wait-answer <id>` once more: an `answered:` line means the
+    answer came while you parked, so carry on. Otherwise end the report
+    with the parked line. His start line, typed after he answers, parks
+    again while any question is open, and once all are answered starts a
+    thread that takes up the branch with the answers in its prompt.
+  - That parked line ends this thread's run. If anything wakes the thread
+    again, a comment on an artifact or a typed message, do no more work
+    and end the reply with the same parked line: the next start line's
+    thread is the one that carries on.
 - Land as §7 says, with these changes. Write the handoff first, starting
   `Next: <the next milestone, or none>. <milestone> landed on main.`, then export
   and commit the outbox, then run `workflow land`. It rebases the branch
@@ -85,9 +99,10 @@ the skill holds, with these changes:
   tailnet as the prompt says; not when parked.
 - When usage limits reset and the thread continues, carry on from `mem
   plan` and the handoff; never start the milestone over.
-- Stop after 6 hours with a handoff starting `parked: 6-hour stop`, an
-  export and a push of the branch. Check the time before each `workflow
-  land` run again: once 6 hours have passed, run it no more.
+- Stop after 6 hours with a handoff starting `parked: 6-hour stop` that
+  names any question still open, an export and a push of the branch.
+  Check the time before each `workflow land` or `workflow wait-answer` run
+  again: once 6 hours have passed, run it no more.
   There is no amx here, so end by saying so.
 - The report's last line is exactly one of `next: Run the next milestone
   of <project>.`, `done: <project>'s roadmap is done`, or `parked: <why>`,

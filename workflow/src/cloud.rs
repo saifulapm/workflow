@@ -1636,12 +1636,38 @@ mod tests {
         );
     }
 
-    /// Nothing can wake a stopped cloud session, so a person's answer is
-    /// waited for inside it.
+    /// A thread waits on Saiful's answer 30 minutes from the ask, then
+    /// parks with a handoff naming the question and the branch (#26D44388).
     #[test]
-    fn a_question_is_waited_for_in_the_session() {
-        assert!(PROMPT.contains("mem questions --wait"), "{PROMPT}");
-        assert!(PROMPT.contains("never stop to wait"), "{PROMPT}");
+    fn a_question_is_waited_for_30_minutes_then_parks() {
+        assert!(PROMPT.contains("workflow wait-answer <id>"), "{PROMPT}");
+        assert!(PROMPT.contains("30 minutes from the ask"), "{PROMPT}");
+        assert!(PROMPT.contains("again:"), "{PROMPT}");
+        assert!(
+            PROMPT.contains("a handoff starting `parked: question #<id> waits on Saiful:`"),
+            "{PROMPT}"
+        );
+        assert!(PROMPT.contains("names the question, {branch}"), "{PROMPT}");
+    }
+
+    /// An answer that came while the thread wrote its park is acted on, and
+    /// a parked thread something wakes again never runs beside the thread
+    /// the next start line starts.
+    #[test]
+    fn a_parked_thread_checks_once_more_and_never_runs_again() {
+        assert!(
+            PROMPT.contains("run `workflow wait-answer <id>` once more"),
+            "{PROMPT}"
+        );
+        assert!(
+            PROMPT.contains("do no more work and end your reply with that same parked line"),
+            "{PROMPT}"
+        );
+        // The 6-hour stop is checked before each wait too.
+        assert!(
+            PROMPT.contains("before each `workflow land` or `workflow wait-answer` run again"),
+            "{PROMPT}"
+        );
     }
 
     /// A local-only task parks the run for a device with no question, which
