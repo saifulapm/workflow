@@ -883,6 +883,7 @@ set -euo pipefail\n",
     // them exists.
     let mut kit_hooks = None;
     let mut kit_keys = None;
+    let mut kit_deny = None;
     for (rel, bytes) in files {
         let text = String::from_utf8_lossy(bytes);
         // The cloud kit: its rules are the user's CLAUDE.md, its hooks and
@@ -896,6 +897,9 @@ set -euo pipefail\n",
         } else if *rel == "cloud/settings-keys.json" {
             kit_keys = Some(text.into_owned());
             continue;
+        } else if *rel == "cloud/settings-deny.json" {
+            kit_deny = Some(text.into_owned());
+            continue;
         } else {
             continue;
         };
@@ -907,11 +911,14 @@ set -euo pipefail\n",
         Some(text) => format!(
             "kit=$(mktemp)\n\
 keys=$(mktemp)\n\
+deny=$(mktemp)\n\
 cat > \"$kit\" <<'{END}'\n{text}{END}\n\
 cat > \"$keys\" <<'{END}'\n{}{END}\n\
-\"$bin/mem-cloud\" hooks \"$kit\" \"$keys\"\n\
-rm -f \"$kit\" \"$keys\"\n",
-            kit_keys.as_deref().unwrap_or("{}\n")
+cat > \"$deny\" <<'{END}'\n{}{END}\n\
+\"$bin/mem-cloud\" hooks \"$kit\" \"$keys\" \"$deny\"\n\
+rm -f \"$kit\" \"$keys\" \"$deny\"\n",
+            kit_keys.as_deref().unwrap_or("{}\n"),
+            kit_deny.as_deref().unwrap_or("[]\n")
         ),
         None => String::new(),
     };
@@ -1050,7 +1057,7 @@ bundle() {
     done
   fi
   [ -s "$new/cloud/rules.md" ] && mkdir -p "$HOME/.claude" && cp "$new/cloud/rules.md" "$HOME/.claude/CLAUDE.md"
-  hooks "$new/cloud/settings-hooks.json" "$new/cloud/settings-keys.json"
+  hooks "$new/cloud/settings-hooks.json" "$new/cloud/settings-keys.json" "$new/cloud/settings-deny.json"
   ( cd "$new" && for item in skills/* agents/*; do [ -e "$item" ] && echo "$item"; done ) >"$new.list"
   while IFS= read -r name; do
     case "$name" in
@@ -1071,16 +1078,17 @@ bundle() {
   rm -rf "$new" "$state/skills.tar.gz"
   printf '%s\n' "$want" >"$state/skills.sha256"
 }
-# hooks <file> [<keys>]: merge the cloud kit's hooks into
+# hooks <file> [<keys>] [<deny>]: merge the cloud kit's hooks into
 # ~/.claude/settings.json, each event the kit names taking the kit's entries,
-# and its settings (the advisor, the locale) at the top, keeping whatever
-# else the image's settings hold. A second merge changes nothing.
+# its settings (the advisor, the locale) at the top, and its deny rules
+# beside the image's own, keeping whatever else the image's settings hold.
+# A second merge changes nothing.
 hooks() {
-  [ -s "$1" ] || [ -s "${2:-}" ] || return 0
+  [ -s "$1" ] || [ -s "${2:-}" ] || [ -s "${3:-}" ] || return 0
   mkdir -p "$HOME/.claude"
-  python3 - "$HOME/.claude/settings.json" "$1" "${2:-}" <<'PY_EOF' || echo "mem-cloud: could not merge the cloud kit into settings.json" >&2
+  python3 - "$HOME/.claude/settings.json" "$1" "${2:-}" "${3:-}" <<'PY_EOF' || echo "mem-cloud: could not merge the cloud kit into settings.json" >&2
 import json, os, sys
-path, kit, keys = sys.argv[1], sys.argv[2], sys.argv[3]
+path, kit, keys, deny = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 settings = {}
 if os.path.exists(path):
     try:
@@ -1101,6 +1109,20 @@ if isinstance(extra, dict):
     if isinstance(extra.get("env"), dict):
         settings["env"] = {**(settings.get("env") or {}), **extra["env"]}
     settings.update({k: v for k, v in extra.items() if k not in ("hooks", "env")})
+# The deny rules join the image's: a permissions key among the settings
+# above would replace its whole block.
+rules = []
+if deny and os.path.exists(deny):
+    try:
+        rules = json.load(open(deny))
+    except ValueError:
+        rules = []
+if isinstance(rules, list) and rules:
+    perms = settings.get("permissions")
+    if not isinstance(perms, dict):
+        perms = settings["permissions"] = {}
+    have = perms.get("deny") if isinstance(perms.get("deny"), list) else []
+    perms["deny"] = have + [r for r in rules if r not in have]
 with open(path, "w") as out:
     json.dump(settings, out, indent=2)
 PY_EOF
@@ -1224,10 +1246,10 @@ case "${1:-}" in
   bake) bake ;;
   skills) skills ;;
   bundle) bundle ;;
-  hooks) hooks "$2" "${3:-}" ;;
+  hooks) hooks "$2" "${3:-}" "${4:-}" ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills, bundle or hooks <file> [<keys>]" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills, bundle or hooks <file> [<keys>] [<deny>]" >&2; exit 2 ;;
 esac
 "#;
 

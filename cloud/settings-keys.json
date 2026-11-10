@@ -1,8 +1,36 @@
 {
   "advisorModel": "fable",
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false,
+    "commitTrailers": false
+  },
+  "skillOverrides": {
+    "schedule": "off",
+    "init": "off",
+    "dataviz": "off",
+    "claude-in-chrome": "off",
+    "keybindings-help": "off",
+    "fewer-permission-prompts": "off",
+    "plugin-authoring": "off",
+    "artifact-diagramming": "off",
+    "code-review": "user-invocable-only",
+    "security-review": "user-invocable-only",
+    "simplify": "user-invocable-only",
+    "update-config": "user-invocable-only",
+    "run": "user-invocable-only",
+    "claude-api": "user-invocable-only"
+  },
+  "disableClaudeAiConnectors": true,
+  "syncClaudeAiSkills": false,
+  "includeGitInstructions": false,
+  "promptCacheTtl": "1h",
+  "skillListingBudgetFraction": 0.02,
   "env": {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
-    "COMPOSER_ALLOW_SUPERUSER": "1"
+    "COMPOSER_ALLOW_SUPERUSER": "1",
+    "WORKFLOW_AGENT": "1"
   }
 }

@@ -1236,6 +1236,113 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
     }
 }
 
+/// The local Read rules a thread takes, word for word as Saiful's settings
+/// hold them.
+const DENY: [&str; 11] = [
+    "Read(**/.env)",
+    "Read(**/.env.*)",
+    "Read(**/*.pem)",
+    "Read(~/.ssh/**)",
+    "Read(~/.gnupg/**)",
+    "Read(~/.config/gh/hosts.yml)",
+    "Read(~/.config/rclone/rclone.conf)",
+    "Read(~/.config/.wrangler/**)",
+    "Read(~/.config/cloudflare/**)",
+    "Read(~/.npmrc)",
+    "Read(~/.netrc)",
+];
+
+/// A thread takes the local settings that fit it: Claude Code adds nothing
+/// to a commit, the hooks treat it as an agent, only the workflow's skills
+/// and no claude.ai connector load, and the local Read rules join whatever
+/// the image denies, once however often the setup runs.
+#[test]
+fn the_setup_carries_the_thread_settings() {
+    let home = Scratch::new("cloud-setup-thread-keys");
+    home.put(
+        ".claude/settings.json",
+        r#"{"permissions":{"allow":["Bash(ls)"],"deny":["Read(/image)"],"defaultMode":"bypassPermissions"}}"#,
+    );
+    home.put("setup.sh", &script(&home));
+    for round in 0..2 {
+        let out = command("bash")
+            .arg(home.at("setup.sh"))
+            .env("HOME", home.path())
+            .env("PATH", offline(&home))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "round {round}: {out:?}");
+    }
+    let settings: serde_json::Value =
+        serde_json::from_str(&home.read(".claude/settings.json")).unwrap();
+    assert_eq!(
+        settings["attribution"],
+        serde_json::json!({"commit": "", "pr": "", "sessionUrl": false, "commitTrailers": false}),
+        "{settings}"
+    );
+    assert_eq!(settings["env"]["WORKFLOW_AGENT"], "1", "{settings}");
+    assert_eq!(
+        settings["skillOverrides"],
+        serde_json::json!({
+            "schedule": "off",
+            "init": "off",
+            "dataviz": "off",
+            "claude-in-chrome": "off",
+            "keybindings-help": "off",
+            "fewer-permission-prompts": "off",
+            "plugin-authoring": "off",
+            "artifact-diagramming": "off",
+            "code-review": "user-invocable-only",
+            "security-review": "user-invocable-only",
+            "simplify": "user-invocable-only",
+            "update-config": "user-invocable-only",
+            "run": "user-invocable-only",
+            "claude-api": "user-invocable-only"
+        }),
+        "{settings}"
+    );
+    assert_eq!(settings["disableClaudeAiConnectors"], true, "{settings}");
+    assert_eq!(settings["syncClaudeAiSkills"], false, "{settings}");
+    assert_eq!(settings["includeGitInstructions"], false, "{settings}");
+    assert_eq!(settings["promptCacheTtl"], "1h", "{settings}");
+    assert_eq!(settings["skillListingBudgetFraction"], 0.02, "{settings}");
+    let mut deny = vec!["Read(/image)"];
+    deny.extend(DENY);
+    assert_eq!(
+        settings["permissions"],
+        serde_json::json!({"allow": ["Bash(ls)"], "deny": deny, "defaultMode": "bypassPermissions"}),
+        "{settings}"
+    );
+}
+
+/// The deny rules reach a cached environment with the skills refresh, as
+/// the kit's other settings do.
+#[test]
+fn the_first_mem_of_a_boot_takes_the_kits_deny_rules() {
+    let home = Scratch::new("cloud-shim-kit-deny");
+    let (_log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    home.put("bundle/cloud/settings-deny.json", r#"["Read(/new)"]"#);
+    home.put("bundle/skills/orchestrate/SKILL.md", "# orchestrate\n");
+    let out = command("tar")
+        .args(["-C", home.at("bundle").to_str().unwrap(), "-czf"])
+        .arg(home.at("fake-skills.tar.gz"))
+        .args(["skills", "cloud"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    store_sum(&home, "workflow-skills.tar.gz", "fake-skills.tar.gz");
+    run_store_shim(&home, &path, &["context"]);
+    let settings: serde_json::Value =
+        serde_json::from_str(&home.read(".claude/settings.json")).unwrap();
+    let deny = settings["permissions"]["deny"].as_array().unwrap();
+    assert!(deny.contains(&"Read(/new)".into()), "{settings}");
+    assert!(
+        deny.contains(&DENY[0].into()),
+        "the setup's stay: {settings}"
+    );
+}
+
 /// A kit that moves the advisor reaches a cached environment with the
 /// skills refresh, as its hooks do.
 #[test]

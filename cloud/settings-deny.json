@@ -1,0 +1,13 @@
+[
+  "Read(**/.env)",
+  "Read(**/.env.*)",
+  "Read(**/*.pem)",
+  "Read(~/.ssh/**)",
+  "Read(~/.gnupg/**)",
+  "Read(~/.config/gh/hosts.yml)",
+  "Read(~/.config/rclone/rclone.conf)",
+  "Read(~/.config/.wrangler/**)",
+  "Read(~/.config/cloudflare/**)",
+  "Read(~/.npmrc)",
+  "Read(~/.netrc)"
+]
