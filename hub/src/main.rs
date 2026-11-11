@@ -411,10 +411,13 @@ fn run_local(port: u16) -> Result<()> {
                     eprintln!("hub: starting the machine report: {e}");
                 }
             }
+            // The stall bell watches amx, and a cloud session has none:
+            // the thread is its run.
             let stalls = name.clone();
-            if let Err(e) = std::thread::Builder::new()
-                .name("hub-stalls".to_string())
-                .spawn(move || hub::stalls::run(stalls, hub_host, bell))
+            if hub::fleet::cloud_session().is_none()
+                && let Err(e) = std::thread::Builder::new()
+                    .name("hub-stalls".to_string())
+                    .spawn(move || hub::stalls::run(stalls, hub_host, bell))
             {
                 eprintln!("hub: starting the stall bell: {e}");
             }

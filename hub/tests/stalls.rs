@@ -200,6 +200,50 @@ fn a_stall_that_lasts_posts_once_with_a_resume_button() {
     );
 }
 
+/// A cloud session has no amx: the thread is its run. Its hub runs no stall
+/// bell, so it never asks amx, and never says every round that it cannot.
+#[test]
+fn a_cloud_session_runs_no_stall_bell() {
+    let dir = TempDir::new("stall-cloud");
+    let bin = bins(&dir);
+    let calls = dir.join("amx.calls");
+    fixture_bin(
+        &bin,
+        "amx",
+        &format!("echo \"$*\" >> '{}'", calls.display()),
+    );
+    set_project(&dir, "mini", Some("w2"), 1, false);
+    set_handoff(&dir, "Next: w2.");
+    let (api, posts) = fake_slack();
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let socket = dir.join("local.sock");
+    let _hub = Hub::spawn_env(
+        &home,
+        &[&bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", PEER_TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("WORKFLOW_MACHINE", "mini"),
+            ("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_walk"),
+            ("HUB_STALL_CHECK_MS", "100"),
+            ("HUB_STALL_AFTER_MS", "0"),
+            ("SLACK_BOT_TOKEN", "xoxb-test"),
+            ("SLACK_APP_TOKEN", "xapp-test"),
+            ("SLACK_USER_ID", "U0SAIFUL"),
+            ("SLACK_API_URL", &api),
+        ],
+    );
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        !calls.exists(),
+        "amx was asked: {:?}",
+        std::fs::read_to_string(&calls)
+    );
+    assert!(posts_saying(&posts, "stalled").is_empty());
+}
+
 #[test]
 fn a_stall_waits_its_grace_before_ringing() {
     let dir = TempDir::new("stall-grace");
