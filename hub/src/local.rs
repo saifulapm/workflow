@@ -79,19 +79,20 @@ fn cloud_may(method: &str, path: &str) -> bool {
     )
 }
 
-/// The bearer a peer request to `host` carries. A cloud VM (`cloud-<name>`)
-/// never gets the device token: anything listening on its peer port would
-/// then act as a device. It gets the cloud token for what a cloud token may
-/// ask, and nothing otherwise; the store carries the rest.
+/// The bearer a peer request carries. A cloud VM (`cloud_vm`, asked only
+/// when the device token would go) never gets the device token: anything
+/// listening on its peer port would then act as a device. It gets the cloud
+/// token for what a cloud token may ask, and nothing otherwise; the store
+/// carries the rest.
 fn peer_bearer<'a>(
-    host: &str,
+    cloud_vm: impl FnOnce() -> bool,
     method: &str,
     path: &str,
     token: &'a str,
     device: Option<&str>,
     cloud: Option<&'a str>,
 ) -> Option<&'a str> {
-    if !crate::cloud_peer(host) || device != Some(token) {
+    if device != Some(token) || !cloud_vm() {
         return Some(token);
     }
     cloud.filter(|_| cloud_may(method, path))
@@ -1852,7 +1853,15 @@ pub fn request_within(
     let (device, cloud) = HELD
         .get()
         .map_or((None, None), |(d, c)| (d.as_deref(), c.as_deref()));
-    let token = peer_bearer(&host, method, path, token, device, cloud).ok_or(NotForCloud)?;
+    let token = peer_bearer(
+        || crate::cloud_peer(&host),
+        method,
+        path,
+        token,
+        device,
+        cloud,
+    )
+    .ok_or(NotForCloud)?;
     let mut stream = match std::env::var("HUB_SOCKS5").ok().filter(|v| !v.is_empty()) {
         Some(proxy) => socks5_connect(&proxy, &host, port)?,
         None => {
@@ -1965,7 +1974,14 @@ mod tests {
 
     #[test]
     fn a_device_peer_gets_the_device_token() {
-        let bearer = peer_bearer("nuc", "POST", "/route", DEVICE, Some(DEVICE), Some(CLOUD));
+        let bearer = peer_bearer(
+            || false,
+            "POST",
+            "/route",
+            DEVICE,
+            Some(DEVICE),
+            Some(CLOUD),
+        );
         assert_eq!(bearer, Some(DEVICE));
     }
 
@@ -1978,7 +1994,7 @@ mod tests {
             ("POST", "/question"),
             ("POST", "/closed"),
         ] {
-            let bearer = peer_bearer("cloud-1", method, path, DEVICE, Some(DEVICE), Some(CLOUD));
+            let bearer = peer_bearer(|| true, method, path, DEVICE, Some(DEVICE), Some(CLOUD));
             assert_eq!(bearer, Some(CLOUD), "{method} {path}");
         }
     }
@@ -1992,16 +2008,16 @@ mod tests {
             ("GET", "/questions"),
             ("GET", "/device/choice"),
         ] {
-            let bearer = peer_bearer("cloud-1", method, path, DEVICE, Some(DEVICE), Some(CLOUD));
+            let bearer = peer_bearer(|| true, method, path, DEVICE, Some(DEVICE), Some(CLOUD));
             assert_eq!(bearer, None, "{method} {path}");
         }
-        let bearer = peer_bearer("cloud-1", "GET", "/route", DEVICE, Some(DEVICE), None);
+        let bearer = peer_bearer(|| true, "GET", "/route", DEVICE, Some(DEVICE), None);
         assert_eq!(bearer, None, "a device hub with no cloud token");
     }
 
     #[test]
     fn a_cloud_hub_sends_its_cloud_token_anywhere() {
-        let bearer = peer_bearer("cloud-2", "GET", "/questions", CLOUD, None, Some(CLOUD));
+        let bearer = peer_bearer(|| true, "GET", "/questions", CLOUD, None, Some(CLOUD));
         assert_eq!(bearer, Some(CLOUD));
     }
 }

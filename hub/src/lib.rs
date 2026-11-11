@@ -104,11 +104,79 @@ pub fn tailnet_name() -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Whether a tailnet peer is a cloud thread's VM, `cloud-<name>`: it holds
-/// no device, so a device hub takes no device choice from it and sends it
-/// no device call.
+/// Whether a tailnet peer is a cloud thread's VM: it holds no device, so a
+/// device hub takes no device choice from it and sends it no device call.
+/// A VM names itself `cloud-<name>`, but a thread can rename it, so the
+/// `tag:cloud` its auth key gives it decides too (`cloud_in_status`). An
+/// explicit `HUB_PEERS` list, the suite's seam, is known by name only, and
+/// loopback is this machine.
 pub fn cloud_peer(host: &str) -> bool {
-    host.starts_with("cloud-")
+    let host = bare_host(host);
+    if host.starts_with("cloud-") {
+        return true;
+    }
+    if std::env::var_os("HUB_PEERS").is_some()
+        || matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1")
+    {
+        return false;
+    }
+    tailscale_status().is_none_or(|status| cloud_in_status(&host, &status))
+}
+
+/// Whether `tailscale status --json` shows `host` (its MagicDNS name, the
+/// name's first label, or one of its tailnet IPs, with or without a port) as
+/// a node tagged `tag:cloud`. A host it does not list at all counts as cloud
+/// too: only a node the tailnet vouches for gets the device token.
+pub fn cloud_in_status(host: &str, status: &serde_json::Value) -> bool {
+    let host = bare_host(host);
+    let nodes: Vec<&serde_json::Value> = std::iter::once(&status["Self"])
+        .chain(
+            status["Peer"]
+                .as_object()
+                .into_iter()
+                .flat_map(|peers| peers.values()),
+        )
+        .filter(|node| {
+            let name = node["DNSName"].as_str().unwrap_or_default();
+            let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
+            let ips = node["TailscaleIPs"].as_array().into_iter().flatten();
+            (!name.is_empty() && (name == host || name.split('.').next() == Some(host.as_str())))
+                || ips.filter_map(|ip| ip.as_str()).any(|ip| ip == host)
+        })
+        .collect();
+    nodes.is_empty()
+        || nodes.iter().any(|node| {
+            let tags = node["Tags"].as_array().into_iter().flatten();
+            tags.filter_map(|tag| tag.as_str())
+                .any(|tag| tag == "tag:cloud")
+        })
+}
+
+/// `host`, `host:port` or an IP, lowercased, without its port or a trailing dot.
+fn bare_host(target: &str) -> String {
+    let target = target.trim();
+    let host = if target.parse::<std::net::IpAddr>().is_ok() {
+        target
+    } else {
+        match target.rsplit_once(':') {
+            Some((host, port)) if port.parse::<u16>().is_ok() => host,
+            _ => target,
+        }
+    };
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// `tailscale status --json`, or `None` when there is no tailnet to ask.
+fn tailscale_status() -> Option<serde_json::Value> {
+    let mut command = std::process::Command::new("tailscale");
+    command.args(["status", "--json"]);
+    let proc::Ended::Exited(done) = proc::output_within(&mut command, TAILSCALE_TIMEOUT) else {
+        return None;
+    };
+    if done.code != Some(0) {
+        return None;
+    }
+    serde_json::from_slice(&done.stdout).ok()
 }
 
 /// The local hubs this one tells about its questions: `HUB_PEERS` (a comma
@@ -125,15 +193,7 @@ pub fn tailnet_peers() -> Vec<String> {
             .map(str::to_string)
             .collect();
     }
-    let mut command = std::process::Command::new("tailscale");
-    command.args(["status", "--json"]);
-    let proc::Ended::Exited(done) = proc::output_within(&mut command, TAILSCALE_TIMEOUT) else {
-        return Vec::new();
-    };
-    if done.code != Some(0) {
-        return Vec::new();
-    }
-    let Ok(status) = serde_json::from_slice::<serde_json::Value>(&done.stdout) else {
+    let Some(status) = tailscale_status() else {
         return Vec::new();
     };
     status["Peer"]

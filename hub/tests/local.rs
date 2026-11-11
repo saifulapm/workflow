@@ -43,6 +43,8 @@ fn ping(home: &Path, target: &str, env: &[(&str, &str)]) -> std::process::Output
         .env("PATH", "/usr/bin:/bin")
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_STATE_HOME", home.join("state"))
+        // Peers by name only: no test asks this machine's real tailnet.
+        .env("HUB_PEERS", "")
         .stdin(Stdio::null());
     for (name, value) in env {
         command.env(name, value);

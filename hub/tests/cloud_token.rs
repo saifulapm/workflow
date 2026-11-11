@@ -334,14 +334,72 @@ fn a_cloud_vm_is_known_by_its_tailnet_name() {
     for host in ["cloud-vm-1.taila27604.ts.net", "cloud-vm", "cloud-x:8790"] {
         assert!(hub::cloud_peer(host), "{host}");
     }
+    for host in ["127.0.0.1:8790", "localhost:8789"] {
+        assert!(!hub::cloud_peer(host), "{host}");
+    }
+}
+
+/// `tailscale status --json` as a device sees the tailnet: its own node, two
+/// devices, a server under another tag, and a cloud VM that renamed itself.
+fn tailnet_status() -> serde_json::Value {
+    serde_json::json!({
+        "Self": {
+            "DNSName": "mini.taila27604.ts.net.",
+            "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"]
+        },
+        "Peer": {
+            "nodekey:a": {
+                "DNSName": "nuc.taila27604.ts.net.",
+                "TailscaleIPs": ["100.64.0.2"]
+            },
+            "nodekey:b": {
+                "DNSName": "dulali.taila27604.ts.net.",
+                "TailscaleIPs": ["100.64.0.3"],
+                "Tags": ["tag:dulali"]
+            },
+            "nodekey:c": {
+                "DNSName": "nuc2.taila27604.ts.net.",
+                "TailscaleIPs": ["100.64.0.4"],
+                "Tags": ["tag:cloud"]
+            }
+        }
+    })
+}
+
+/// A VM's name is its own to set, but its tag comes with the cloud auth key:
+/// a VM tagged `tag:cloud` is a cloud VM whatever it calls itself.
+#[test]
+fn a_cloud_vm_is_known_by_its_tag_whatever_its_name() {
+    let status = tailnet_status();
+    for host in [
+        "nuc2.taila27604.ts.net",
+        "nuc2",
+        "NUC2.taila27604.ts.net.",
+        "nuc2:8789",
+        "100.64.0.4",
+    ] {
+        assert!(hub::cloud_in_status(host, &status), "{host}");
+    }
     for host in [
         "mini.taila27604.ts.net",
         "nuc",
-        "127.0.0.1:8790",
-        "cloudy.ts.net",
+        "nuc.taila27604.ts.net:8789",
+        "100.64.0.2",
+        "dulali",
     ] {
-        assert!(!hub::cloud_peer(host), "{host}");
+        assert!(!hub::cloud_in_status(host, &status), "{host}");
     }
+}
+
+/// A host the tailnet does not list could be anything: it is taken for a
+/// cloud VM, so it never gets the device token.
+#[test]
+fn a_host_the_tailnet_does_not_list_is_taken_for_a_cloud_vm() {
+    let status = tailnet_status();
+    for host in ["nuc3", "cloudy.ts.net", "100.64.0.9"] {
+        assert!(hub::cloud_in_status(host, &status), "{host}");
+    }
+    assert!(hub::cloud_in_status("nuc", &serde_json::json!({})));
 }
 
 /// An answer given here to a question a cloud thread asked is never sent to
