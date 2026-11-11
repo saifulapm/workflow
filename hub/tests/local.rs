@@ -127,6 +127,78 @@ fn mem_reaches_the_local_hub_on_its_socket_without_a_token() {
 
 /// A cloud VM runs Tailscale in userspace, where a tailnet address is reached
 /// only through tailscaled's SOCKS5 listener.
+/// `hub ping` with the device token, against the tailnet a stand-in
+/// `tailscale` on PATH reports, and no `HUB_PEERS` list.
+fn ping_on_tailnet(dir: &TempDir, target: &str) -> std::process::Output {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let status = serde_json::json!({
+        "Self": {"DNSName": "mini.tailnet.", "TailscaleIPs": ["100.64.0.1"]},
+        "Peer": {
+            "nodekey:a": {"DNSName": "nuc.tailnet.", "TailscaleIPs": ["100.64.0.2"]},
+            "nodekey:b": {
+                "DNSName": "nuc2.tailnet.",
+                "TailscaleIPs": ["100.64.0.4"],
+                "Tags": ["tag:cloud"]
+            }
+        }
+    });
+    let script = bin.join("tailscale");
+    std::fs::write(&script, format!("#!/bin/sh\ncat <<'EOF'\n{status}\nEOF\n")).unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let home = dir.join("home");
+    Command::new(hub_bin())
+        .args(["ping", target])
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_STATE_HOME", home.join("state"))
+        .env("HUB_PEER_TOKEN", TOKEN)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run hub ping")
+}
+
+/// A VM tagged `tag:cloud` that renamed itself, or a host the tailnet does
+/// not list, gets no device token, and the hub says so: a device the lookup
+/// missed would otherwise lose the send without a word.
+#[test]
+fn hub_ping_refuses_a_renamed_cloud_vm_and_says_why() {
+    for target in ["nuc2.tailnet:8789", "100.64.0.4:8789", "nuc3:8789"] {
+        let dir = TempDir::new("local-tagged");
+        let out = ping_on_tailnet(&dir, target);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{target}: {stderr}");
+        assert!(
+            stderr.contains("not sent to a cloud VM with the device token"),
+            "{target}: {stderr}"
+        );
+        let host = target.split(':').next().unwrap();
+        assert!(
+            stderr.contains(&format!("{host} is not a device the tailnet lists")),
+            "{target}: {stderr}"
+        );
+    }
+}
+
+/// A `cloud-<name>` VM is refused the device token as it always was, with no
+/// note: that is what a cloud VM is.
+#[test]
+fn hub_ping_refuses_a_cloud_named_vm_quietly() {
+    let dir = TempDir::new("local-cloud-named");
+    let out = ping_on_tailnet(&dir, "cloud-vm.tailnet:8789");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not sent to a cloud VM with the device token"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("is not a device the tailnet lists"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn hub_ping_goes_through_a_socks5_proxy_when_one_is_named() {
     let dir = TempDir::new("local-socks");

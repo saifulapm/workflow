@@ -1853,15 +1853,25 @@ pub fn request_within(
     let (device, cloud) = HELD
         .get()
         .map_or((None, None), |(d, c)| (d.as_deref(), c.as_deref()));
-    let token = peer_bearer(
+    let Some(token) = peer_bearer(
         || crate::cloud_peer(&host),
         method,
         path,
         token,
         device,
         cloud,
-    )
-    .ok_or(NotForCloud)?;
+    ) else {
+        // Every caller takes this as a cloud VM's and goes on quietly; a
+        // host not named so was refused by the tailnet's word, a renamed
+        // VM or a device the lookup missed, and either should show.
+        if !host.starts_with("cloud-") {
+            eprintln!(
+                "hub: local: {host} is not a device the tailnet lists untagged; \
+                 {method} {path} not sent with the device token"
+            );
+        }
+        return Err(NotForCloud.into());
+    };
     let mut stream = match std::env::var("HUB_SOCKS5").ok().filter(|v| !v.is_empty()) {
         Some(proxy) => socks5_connect(&proxy, &host, port)?,
         None => {
