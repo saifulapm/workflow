@@ -77,6 +77,18 @@ const BROWSER_FLAGS_REFUSED: [&str; 9] = [
     "--host",
 ];
 
+/// Marks the session's current page as one it opened. The session's
+/// playwright-cli daemon keeps its Page objects from call to call, so the mark
+/// lasts as long as the session. The extension also hands a session any tab
+/// Saiful drags into its group, and that one carries no mark.
+const TAG_CURRENT: &str = "async page => { page.__hubTab = true; }";
+
+/// Closes every page the session opened. Closing the last one ends the
+/// extension's connection, and the session with it.
+const CLOSE_TAGGED: &str = "async page => { let closed = 0; \
+     for (const p of page.context().pages()) if (p.__hubTab) { await p.close(); closed++; } \
+     return closed; }";
+
 /// How long a Chromium the device started gets to put its lock down.
 const DEFAULT_CHROMIUM_WAIT: Duration = Duration::from_secs(10);
 
@@ -263,7 +275,13 @@ struct Cli<'a> {
 
 impl Cli<'_> {
     fn call(&self, args: &[String]) -> Result<Outcome, Stop> {
-        if !self.attached()? {
+        let detach = args[0] == "detach";
+        let mut closing = None;
+        if self.attached()? {
+            if detach {
+                closing = Some(self.run_code(CLOSE_TAGGED)?);
+            }
+        } else if !detach {
             ensure_chromium(&self.path, self.deadline);
             let flag = format!("-s={}", self.session);
             let token = self.token();
@@ -277,13 +295,25 @@ impl Cli<'_> {
                     ),
                 ));
             }
+            // The extension's connect tab, where the session works until it
+            // opens another.
+            self.run_code(TAG_CURRENT)?;
         }
         let mut argv = vec![format!("-s={}", self.session)];
         argv.extend(args.iter().cloned());
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let done = self.run(&argv, None)?;
+        if args[0] == "tab-new" && done.code == Some(0) {
+            self.run_code(TAG_CURRENT)?;
+        }
         let stdout = String::from_utf8_lossy(&done.stdout).into_owned();
         let mut stderr = String::from_utf8_lossy(&done.stderr).into_owned();
+        if let Some(closing) = closing.filter(|c| c.code != Some(0)) {
+            stderr.push_str(&format!(
+                "device: closing the session's tabs failed: {}",
+                String::from_utf8_lossy(&closing.stderr)
+            ));
+        }
         let files = linked_files(&stdout, &self.dir, &mut stderr);
         Ok(Outcome {
             stdout,
@@ -292,6 +322,12 @@ impl Cli<'_> {
             refused: None,
             files,
         })
+    }
+
+    /// The hub's own code, never a caller's, run in the session's page.
+    fn run_code(&self, code: &str) -> Result<crate::proc::Finished, Stop> {
+        let flag = format!("-s={}", self.session);
+        self.run(&[&flag, "run-code", code], None)
     }
 
     /// Whether `playwright-cli list` names this session.

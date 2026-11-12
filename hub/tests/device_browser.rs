@@ -178,6 +178,15 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
                 "fake-token-123",
                 &["-s=s1", "attach", "--extension=chromium"]
             ),
+            fields(
+                &cwd,
+                "",
+                &[
+                    "-s=s1",
+                    "run-code",
+                    "async page => { page.__hubTab = true; }"
+                ]
+            ),
             fields(&cwd, "", &["-s=s1", "goto", "https://claude.ai/code"]),
         ]
     );
@@ -191,7 +200,7 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     assert_eq!(answer["stdout"], "ran snapshot\n");
     let calls = rig.calls();
     assert_eq!(
-        calls[3..],
+        calls[4..],
         [
             fields(&cwd, "", &["list"]),
             fields(&cwd, "", &["-s=s1", "snapshot"]),
