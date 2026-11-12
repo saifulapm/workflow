@@ -25,10 +25,12 @@ the skill holds, with these changes:
   `.mem-outbox.json` it stages, when it stages one: no signal reaches a
   session that ends, so writes the store has not taken yet travel on the
   branch, and the next machine to read the project sends them.
-- A task that needs a device, Saiful's desktop, or a login the cloud cannot
-  reach is local-only, and its checklist line ends `[local]`: the device
-  work the plan's `Runs on: cloud, then device:` line names, cut as the
-  last tasks. Land every other task, then run the review (§5) and the
+- A task only a device can do, which the `device` command, `gh` and
+  `workflow land` do not reach (a phone in hand, a Mac for iOS, hardware),
+  is local-only, and its checklist line ends `[local]`: the device work
+  the plan's `Runs on: cloud, then device:` line names, cut as the last
+  tasks. Saiful's approval or choice is a question: ask it with `mem ask
+  --for saiful` and wait for it as the start prompt says, so it rings him. Land every other task, then run the review (§5) and the
   dogfood walk (§6) here, the walk driving only what the dogfood skill says
   a cloud session can, and land their fixes. Push the branch and write a
   handoff starting `parked: local-only <task>: review and walk done at
