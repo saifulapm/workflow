@@ -2,10 +2,13 @@
 //! questions to Saiful for 30 minutes from the ask, then parks (#26D44388).
 //! One call runs one `mem questions --wait` of at most 5 minutes, under a
 //! thread's 10-minute Bash call, and the clock is the question's own ULID
-//! time, so it outlasts the call: the thread runs it again on `again:`.
+//! time, so it outlasts the call: the thread runs it again on `again:`. A
+//! thread woken since the ask waits 30 minutes again, from a note in the
+//! git dir.
 
 use std::process::{Command, Stdio};
 
+use crate::gitcmd::Git;
 use crate::{cloud, exit, memcli, warn};
 
 /// How long a thread waits on a question from the moment it was asked.
@@ -26,7 +29,13 @@ pub fn cmd_wait(ids: &[String]) -> i32 {
         return code;
     }
     let newest = asked.iter().filter_map(|q| q.asked()).max();
-    let Some(deadline) = newest.map(|at| at + PARK_AFTER) else {
+    // A thread woken since the ask waits 30 minutes again, from its first
+    // wait after the wake.
+    let from = match (newest, cloud::own_since()) {
+        (Some(ask), Some(woke)) if woke > ask => Some(wait_began(woke)),
+        _ => newest,
+    };
+    let Some(deadline) = from.map(|at| at + PARK_AFTER) else {
         warn("wait-answer: mem gave no time for these questions");
         return exit::FAILED;
     };
@@ -79,6 +88,30 @@ pub fn cmd_wait(ids: &[String]) -> i32 {
     }
     println!("parked: {} on Saiful", named(&asked, "waits", "wait"));
     exit::USAGE
+}
+
+/// When this thread began to wait after its wake at `woke`: noted in the
+/// git dir by the first wait since, so the 30 minutes outlast each call, as
+/// land notes its CI push. With no git dir, from the wake itself.
+fn wait_began(woke: jiff::Timestamp) -> jiff::Timestamp {
+    let git = Git::at(".");
+    let Some(note) = git
+        .out(&["rev-parse", "--git-path", "workflow-wait-began"])
+        .map(|p| crate::land::git_path(&git, &p))
+    else {
+        return woke;
+    };
+    let noted = std::fs::read_to_string(&note)
+        .ok()
+        .and_then(|text| text.trim().parse::<jiff::Timestamp>().ok());
+    if let Some(at) = noted.filter(|at| *at >= woke) {
+        return at;
+    }
+    let now = jiff::Timestamp::now();
+    match std::fs::write(&note, format!("{now}\n")) {
+        Ok(()) => now,
+        Err(_) => woke,
+    }
 }
 
 /// The questions `ids` names, as mem reads them now; `None`, said on

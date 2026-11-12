@@ -362,3 +362,63 @@ fn a_parked_thread_whose_run_another_took_up_parks_again() {
     );
     assert!(!mem_calls(&w).iter().any(|c| c.contains("set runner")));
 }
+
+/// His message woke the thread but did not answer its question: the thread
+/// does that work, then waits on the question 30 minutes again, counted
+/// from its first wait after the wake and kept in the git dir across calls.
+#[test]
+fn a_woken_thread_waits_30_minutes_again_from_its_next_wait() {
+    let w = world("wait-woken");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(w.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+    git(&["init", "-q"]);
+    // Asked 90 minutes ago; the run was recorded again an hour ago.
+    put(&w, &asked(90, "QSTN0001"), None);
+    let parked = "parked: question #QSTN0001 waits on Saiful: which word\n";
+    let out = thread_wait(&w, "session_01Thread", parked, 70, &["QSTN0001"]);
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(
+        stdout(&out).starts_with("again: question #QSTN0001 is open"),
+        "{out:?}"
+    );
+    assert_eq!(waits(&w), vec![300]);
+
+    // The next call goes on with that clock: 28 minutes into it, the last
+    // wait is what is left of the 30.
+    let began = (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(28)).to_string();
+    w.put(".git/workflow-wait-began", &format!("{began}\n"));
+    let _ = std::fs::remove_file(w.at("mem.log"));
+    let out = thread_wait(&w, "session_01Thread", parked, 70, &["QSTN0001"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let [secs] = waits(&w)[..] else {
+        panic!("{:?}", waits(&w))
+    };
+    assert!((115..=121).contains(&secs), "{secs}");
+
+    // Past it, the once-more call after the park parks at once.
+    let began = (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(31)).to_string();
+    w.put(".git/workflow-wait-began", &format!("{began}\n"));
+    let _ = std::fs::remove_file(w.at("mem.log"));
+    let out = thread_wait(&w, "session_01Thread", parked, 70, &["QSTN0001"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #QSTN0001 waits on Saiful"
+    );
+    assert!(waits(&w).is_empty());
+
+    // Another session's run is not this thread's wake: 30 minutes from
+    // the ask have passed.
+    let _ = std::fs::remove_file(w.at(".git/workflow-wait-began"));
+    let out = thread_wait(&w, "session_01Other", parked, 70, &["QSTN0001"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #QSTN0001 waits on Saiful"
+    );
+    assert!(waits(&w).is_empty());
+}

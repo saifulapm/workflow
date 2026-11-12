@@ -262,7 +262,7 @@ fn pushed_at(git: &Git, sha: &str, pushed: bool) -> jiff::Timestamp {
 
 /// A path `git rev-parse --git-path` printed, which is relative to the
 /// checkout's top when it is not absolute.
-fn git_path(git: &Git, path: &str) -> std::path::PathBuf {
+pub fn git_path(git: &Git, path: &str) -> std::path::PathBuf {
     let path = std::path::PathBuf::from(path);
     if path.is_absolute() {
         return path;

@@ -564,6 +564,20 @@ your landed tasks: fetch it, keep its commits and carry on from the first open t
     )
 }
 
+/// When this thread's own cloud run was last recorded, as a start or a
+/// wake; `None` outside a thread, or when the run is another session's.
+pub fn own_since() -> Option<jiff::Timestamp> {
+    let me = this_session()?;
+    let current = memcli::project_current()?;
+    let projects = memcli::projects()?;
+    let row = projects.iter().find(|row| row.name == current.name)?;
+    let runner = row
+        .runner
+        .as_ref()
+        .filter(|r| r.machine == "cloud" && r.id == me)?;
+    runner.since.as_deref()?.parse().ok()
+}
+
 /// A thread that got its answer carries on. When it parked first, its run
 /// is recorded again, so a start line now reads it live, not parked, and
 /// starts no thread beside it. `Err` with the line to end on when another
