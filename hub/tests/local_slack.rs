@@ -1252,3 +1252,32 @@ fn a_thread_reply_to_a_gone_cloud_vms_question_is_written_to_the_store() {
         !slack.calls_to("chat.update").is_empty()
     });
 }
+
+/// A hub with no Slack bot token cannot post a question that rings Phone,
+/// and says so: a cloud thread's question that never reached the phone left
+/// no word in its hub's log.
+#[test]
+fn a_hub_with_no_slack_token_says_it_cannot_post() {
+    let dir = TempDir::new("slack-none");
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let socket = dir.join("local.sock");
+    let log = dir.join("hub.log");
+    let _hub = Hub::spawn_with_stderr(
+        &home,
+        &[],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+        ],
+        std::fs::File::create(&log).unwrap(),
+    );
+    common::wait_for("the socket", Duration::from_secs(5), || socket.exists());
+    ask(&socket, "saiful");
+    common::wait_for("the log line", Duration::from_secs(5), || {
+        std::fs::read_to_string(&log).unwrap_or_default().contains(
+            "#ABCD1234 not posted to Slack: this hub has no SLACK_BOT_TOKEN and SLACK_USER_ID",
+        )
+    });
+}

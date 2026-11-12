@@ -1596,8 +1596,13 @@ impl Ringer {
     /// Posts the question, trying again while it is open and Slack cannot
     /// be reached: asked with no network, it goes out once there is one.
     fn post_to_slack(&self) {
-        let Some(slack) = &self.slack else { return };
         let id = &self.question.id;
+        let Some(slack) = &self.slack else {
+            eprintln!(
+                "hub: local: #{id} not posted to Slack: this hub has no SLACK_BOT_TOKEN and SLACK_USER_ID"
+            );
+            return;
+        };
         loop {
             match slack.post_question(&self.question) {
                 Ok(posted) => {
