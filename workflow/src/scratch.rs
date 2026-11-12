@@ -4,8 +4,8 @@
 #![allow(dead_code)]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Scratch(PathBuf);
@@ -42,11 +42,20 @@ impl Scratch {
         fs::write(path, text).unwrap();
     }
 
-    /// A shell script, executable.
+    /// A shell script, executable. A child process writes it: a sibling
+    /// test's child forked while this process held it open for writing would
+    /// keep that handle until its exec, and running the script would then
+    /// fail with "Text file busy".
     pub fn script(&self, rel: &str, body: &str) -> PathBuf {
-        self.put(rel, &format!("#!/bin/sh\n{body}\n"));
         let path = self.at(rel);
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let written = Command::new("sh")
+            .args(["-c", r#"printf '%s\n' "$2" >"$1" && chmod 755 "$1""#, "sh"])
+            .arg(&path)
+            .arg(format!("#!/bin/sh\n{body}"))
+            .status()
+            .unwrap();
+        assert!(written.success(), "could not write {}", path.display());
         path
     }
 
