@@ -499,6 +499,7 @@ pub fn staging_api_paths(account: &str) -> Vec<String> {
     .to_vec();
     for under in [
         "d1",
+        "r2",
         "queues",
         "workflows",
         "workers/scripts",
@@ -506,6 +507,7 @@ pub fn staging_api_paths(account: &str) -> Vec<String> {
         "workers/subdomain",
         "workers/workers",
         "workers/durable_objects",
+        "workers/domains",
     ] {
         paths.push(format!("/client/v4/accounts/{account}/{under}"));
     }

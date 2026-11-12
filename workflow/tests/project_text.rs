@@ -359,6 +359,9 @@ fn the_sheet_names_what_each_staging_worker_needs() {
         "/client/v4/zones",
         "/client/v4/accounts/7d330000000000000000000000000000/d1",
         "/client/v4/accounts/7d330000000000000000000000000000/workers/scripts",
+        // PalmShop's staging bucket and its custom domain, staging.palmshop.app.
+        "/client/v4/accounts/7d330000000000000000000000000000/r2",
+        "/client/v4/accounts/7d330000000000000000000000000000/workers/domains",
     ] {
         assert!(prefixes.contains(path), "{path}: {prefixes}");
     }
