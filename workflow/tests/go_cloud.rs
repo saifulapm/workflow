@@ -1510,7 +1510,19 @@ impl World {
     /// gamma's cloud run, started `hours` ago, parked `parked_hours` ago
     /// with `handoff`, and the questions of gamma's.
     fn parked(&self, hours: i64, parked_hours: i64, handoff: &str, questions: &[String]) {
-        cloud_runner(self, "gamma", "session_01Mine", hours);
+        self.parked_as("session_01Mine", hours, parked_hours, handoff, questions);
+    }
+
+    /// The same, with the run recorded as session `id`'s.
+    fn parked_as(
+        &self,
+        id: &str,
+        hours: i64,
+        parked_hours: i64,
+        handoff: &str,
+        questions: &[String],
+    ) {
+        cloud_runner(self, "gamma", id, hours);
         self.set(
             "gamma",
             &format!(r#""handoff_at":"{}""#, now_minus(parked_hours)),
@@ -1523,8 +1535,10 @@ impl World {
     }
 
     fn runner_is(&self, id: &str) -> bool {
+        // The fake's own writes space their JSON out.
         self.work
             .read("projects.json")
+            .replace(": ", ":")
             .contains(&format!(r#""id":"{id}""#))
     }
 }
@@ -1704,4 +1718,130 @@ fn a_start_line_parks_when_mem_cannot_list_the_questions() {
         "parked: mem cannot list gamma's questions; run `mem sync` and start again"
     );
     assert!(!w.claimed());
+}
+
+/// A message typed into a parked thread wakes it: its own start prints the
+/// milestone's instructions with the questions so far, an open one named
+/// as open, and claims the run again, so a start line now reads it live.
+#[test]
+fn a_parked_threads_own_start_carries_on_past_its_open_question() {
+    let w = World::new("cloud-wake-open");
+    w.parked_as(
+        THREAD_SESSION,
+        2,
+        1,
+        "parked: question #AAAA1111 waits on Saiful: which word; branch cloud/gamma-m2-next\n",
+        &[question("gamma", 90, "AAAA1111", None)],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(
+        said.starts_with("Land milestone m2-next of gamma"),
+        "{said}"
+    );
+    assert!(
+        said.contains("question #AAAA1111 (m2-next: which word should --help print?), still open"),
+        "{said}"
+    );
+    assert!(
+        said.contains("This is a new turn of your own run"),
+        "{said}"
+    );
+    assert!(w.claimed(), "{:?}", w.mem_calls());
+    assert!(w.runner_is(THREAD_SESSION));
+
+    // The same park, from a start line's thread: it still parks, and the
+    // record still names the parked thread.
+    let w = World::new("cloud-wake-other");
+    w.parked(
+        2,
+        1,
+        "parked: question #AAAA1111 waits on Saiful: which word\n",
+        &[question("gamma", 90, "AAAA1111", None)],
+    );
+    let before = w.work.read("projects.json");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #AAAA1111 still waits on Saiful"
+    );
+    assert_eq!(w.work.read("projects.json"), before);
+}
+
+/// The questions so far: one answered and one open, each named so.
+#[test]
+fn a_woken_thread_reads_each_answer_so_far() {
+    let w = World::new("cloud-wake-answers");
+    w.parked_as(
+        THREAD_SESSION,
+        3,
+        1,
+        "parked: question #BBBB2222 waits on Saiful: two\n",
+        &[
+            question("gamma", 70, "BBBB2222", None),
+            question("gamma", 100, "AAAA1111", Some("yes")),
+        ],
+    );
+    let said = stdout(&w.thread(&["gamma", "--cloud", "--print"]));
+    assert!(
+        said.contains(
+            "question #AAAA1111 (m2-next: which word should --help print?), answered: yes"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("#BBBB2222 (m2-next: which word should --help print?), still open"),
+        "{said}"
+    );
+    assert!(said.contains("cloud/gamma-m2-next"), "{said}");
+}
+
+/// The woken thread's claim is read back like any other: a record the store
+/// has not taken parks it, naming `mem sync`, and prints no instructions.
+#[test]
+fn a_woken_threads_claim_that_never_reached_the_store_parks() {
+    let w = World::new("cloud-wake-offline");
+    w.parked_as(
+        THREAD_SESSION,
+        2,
+        1,
+        "parked: question #AAAA1111 waits on Saiful: which word\n",
+        &[question("gamma", 90, "AAAA1111", None)],
+    );
+    w.work.put("outbox-later", "1");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(said.starts_with("parked: "), "{said}");
+    assert!(said.contains("1 write still waits"), "{said}");
+    assert!(said.contains("`mem sync`"), "{said}");
+    assert!(!said.contains("Land milestone"), "{said}");
+}
+
+/// A message after the 6-hour stop carries the run on too, from origin's
+/// copy of its branch, since the woken machine may be a fresh clone.
+#[test]
+fn a_woken_thread_carries_on_after_its_6_hour_stop() {
+    let w = World::new("cloud-wake-six");
+    w.parked_as(
+        THREAD_SESSION,
+        9,
+        3,
+        "parked: 6-hour stop, t3 half done\n",
+        &[],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(
+        said.starts_with("Land milestone m2-next of gamma"),
+        "{said}"
+    );
+    assert!(said.contains("run `git fetch origin`"), "{said}");
+    assert!(
+        said.contains("check cloud/gamma-m2-next out from origin"),
+        "{said}"
+    );
+    assert!(w.claimed(), "{:?}", w.mem_calls());
 }

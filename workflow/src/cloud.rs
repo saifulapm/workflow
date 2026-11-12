@@ -452,15 +452,25 @@ environment's old copy; run `mem sync` until it says performed, then start again
             exit::FAILED,
         );
     };
-    if asked.iter().any(|q| !q.answered) {
+    // The record's own thread, woken by a message after it parked, carries
+    // on past its open questions: only a start line waits for every answer.
+    let own = me.as_deref().is_some_and(|me| {
+        row.runner
+            .as_ref()
+            .is_some_and(|r| r.machine == "cloud" && r.id == me)
+    });
+    if !own && asked.iter().any(|q| !q.answered) {
         println!(
             "parked: {} on Saiful",
             crate::wait::named(&asked, "still waits", "still wait")
         );
         return exit::OK;
     }
+    // A woken run is recorded again, so a start line reads it live.
+    let again = own
+        && state(row, || memcli::handoff(&row.name), jiff::Timestamp::now()) != Some(State::Live);
     if let Some(me) = me.as_deref().filter(|_| !dry_run)
-        && let Err(why) = claim(&start.project, &start.slug, me)
+        && let Err(why) = claim(&start.project, &start.slug, me, again)
     {
         return refuse(why, exit::USAGE);
     }
@@ -470,8 +480,11 @@ environment's old copy; run `mem sync` until it says performed, then start again
         &base(row, &start.dir),
         &start.dir,
     );
-    if !asked.is_empty() {
-        text.push_str(&answered(&asked, &branch(&start.project, &start.slug)));
+    let branch = branch(&start.project, &start.slug);
+    if again {
+        text.push_str(&so_far(&asked, &branch));
+    } else if !asked.is_empty() {
+        text.push_str(&answered(&asked, &branch));
     }
     println!("{text}");
     exit::OK
@@ -497,6 +510,36 @@ fn answered(asked: &[memcli::Question], branch: &str) -> String {
 Act on any answer its work has not used yet. {branch} on origin holds that thread's landed \
 tasks: keep its commits and start from the first open task in `mem plan`.",
         each.join("; ")
+    )
+}
+
+/// What this run's own thread, woken after it parked, reads after its
+/// prompt: each question it asked with his answer so far, or as still open.
+fn so_far(asked: &[memcli::Question], branch: &str) -> String {
+    let each: Vec<String> = asked
+        .iter()
+        .rev()
+        .map(|q| {
+            let title = q.title.as_deref().unwrap_or("untitled").trim();
+            match q.answer.as_deref().filter(|_| q.answered) {
+                Some(answer) => format!(
+                    "question #{} ({title}), answered: {}",
+                    q.short_id,
+                    answer.trim()
+                ),
+                None => format!("question #{} ({title}), still open", q.short_id),
+            }
+        })
+        .collect();
+    let asked = if each.is_empty() {
+        String::new()
+    } else {
+        format!(" The questions you asked: {}.", each.join("; "))
+    };
+    format!(
+        " This is a new turn of your own run, which parked.{asked} {branch} on origin holds \
+your landed tasks: fetch it, keep its commits and carry on from the first open task in \
+`mem plan`."
     )
 }
 
@@ -586,8 +629,8 @@ fn paused(project: &str, thread: bool) -> i32 {
 /// it: two threads that claim at once both write, the store keeps the first
 /// and refuses the second, whose replica then holds the first's record. So
 /// the claim stands once nothing waits in the outbox and the runner read
-/// back is `me`.
-fn claim(project: &str, slug: &str, me: &str) -> Result<(), String> {
+/// back is `me`. `again` records a run of `me`'s own once more, a woken one.
+fn claim(project: &str, slug: &str, me: &str, again: bool) -> Result<(), String> {
     let mine = |projects: &[ProjectRow]| {
         projects
             .iter()
@@ -597,7 +640,7 @@ fn claim(project: &str, slug: &str, me: &str) -> Result<(), String> {
     };
     // A record of its own already in the replica may never have reached
     // the store, so it is written only when missing and checked either way.
-    if !memcli::projects().is_some_and(|rows| mine(&rows))
+    if (again || !memcli::projects().is_some_and(|rows| mine(&rows)))
         && !memcli::set_cloud_runner(project, me, slug)
     {
         return Err(format!("mem would not record this run as {project}'s"));
@@ -614,6 +657,7 @@ fn claim(project: &str, slug: &str, me: &str) -> Result<(), String> {
             "the store has not taken this run's record of {project} ({}), so another \
 run could hold it; run `mem sync` and start again",
             match waiting {
+                Some(1) => "1 write still waits".to_string(),
                 Some(n) => format!("{n} writes still wait"),
                 None => "mem sync failed".to_string(),
             }
