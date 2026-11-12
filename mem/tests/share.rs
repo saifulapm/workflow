@@ -173,15 +173,65 @@ fn an_ack_takes_the_write_out_of_the_outbox_and_raises_the_sequence() {
     let writes = pending(&w);
     assert_eq!(hello(&w)["since"], 0);
 
-    apply(&w, &[json!({"t": "ack", "id": writes[0]["id"], "seq": 7})]);
+    apply(&w, &[json!({"t": "ack", "id": writes[0]["id"], "seq": 1})]);
 
     let left = pending(&w);
     assert_eq!(left.len(), 1);
     assert_eq!(left[0]["id"], writes[1]["id"]);
     let said = hello(&w);
     assert_eq!(said["t"], "hello");
-    assert_eq!(said["since"], 7);
+    assert_eq!(said["since"], 1);
     assert!(said["machine"].as_str().is_some_and(|m| !m.is_empty()));
+}
+
+/// The store broadcasts a write made while a replay runs, and it can reach
+/// the replica before the replay does (a cloud VM, 2026-11-12: recs 72368
+/// and 72369, then 1..16724 and a ready with more). The live record lands,
+/// but the replica's sequence stays where the replay is, so the next hello
+/// asks for everything after 16724 rather than skipping to 72369.
+#[test]
+fn a_live_write_ahead_of_the_replay_does_not_skip_the_rest() {
+    let w = shared("share-gap");
+    let rec = |seq: u64, id: &str, slug: &str| {
+        json!({"t": "rec", "seq": seq, "id": id, "path": page_path(slug),
+               "body": format!("# {slug}\n\nat {seq}\n"), "machine": "nuc"})
+    };
+    apply(
+        &w,
+        &[
+            rec(9, "01K0SHAREGAP00000000000009", "live"),
+            rec(1, "01K0SHAREGAP00000000000001", "one"),
+            rec(2, "01K0SHAREGAP00000000000002", "two"),
+            json!({"t": "ready", "seq": 2, "more": true}),
+        ],
+    );
+
+    assert_eq!(wiki(&w, "live"), "# live\n\nat 9\n");
+    assert_eq!(hello(&w)["since"], 2);
+}
+
+/// Each record and ack moves the sequence on only from the one before it:
+/// a seq past a gap says nothing of what the gap holds.
+#[test]
+fn the_sequence_moves_on_only_through_records_without_a_gap() {
+    let w = shared("share-run");
+    let rec = |seq: u64, id: &str| {
+        json!({"t": "rec", "seq": seq, "id": id, "path": page_path(&format!("p{seq}")),
+               "body": "x\n", "machine": "nuc"})
+    };
+    apply(
+        &w,
+        &[
+            rec(1, "01K0SHARERUN00000000000001"),
+            rec(3, "01K0SHARERUN00000000000003"),
+        ],
+    );
+    assert_eq!(hello(&w)["since"], 1);
+    apply(&w, &[rec(2, "01K0SHARERUN00000000000002")]);
+    assert_eq!(hello(&w)["since"], 2);
+    // The replay sends 3 again; now it is the next one.
+    apply(&w, &[rec(3, "01K0SHARERUN00000000000003")]);
+    assert_eq!(hello(&w)["since"], 3);
 }
 
 #[test]
@@ -623,14 +673,14 @@ fn a_streamed_write_that_cannot_land_is_passed_over_and_the_rest_land() {
     apply(
         &w,
         &[
-            json!({"t": "rec", "seq": 12, "id": "01K0SHAREREC00000000000023",
+            json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC00000000000023",
                    "path": format!("projects/{ID}/items"), "body": "x", "machine": "nuc"}),
-            json!({"t": "rec", "seq": 13, "id": "01K0SHAREREC00000000000024", "path": page_path("after"),
+            json!({"t": "rec", "seq": 2, "id": "01K0SHAREREC00000000000024", "path": page_path("after"),
                    "body": "# After\n", "machine": "nuc"}),
         ],
     );
     assert_eq!(wiki(&w, "after"), "# After\n");
-    assert_eq!(hello(&w)["since"], 13);
+    assert_eq!(hello(&w)["since"], 2);
 }
 
 #[test]
@@ -684,9 +734,9 @@ fn a_replay_that_makes_and_deletes_a_project_in_one_batch_lands() {
 fn sync_says_when_the_stores_writes_stopped_landing_and_why() {
     let w = shared("share-stuck");
     let blocked = [
-        json!({"t": "rec", "seq": 7, "id": "01K0SHAREREC00000000000051", "path": page_path("notes"),
+        json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC00000000000051", "path": page_path("notes"),
                "body": "# Notes\n", "machine": "nuc"}),
-        json!({"t": "rec", "seq": 8, "id": "01K0SHAREREC00000000000052",
+        json!({"t": "rec", "seq": 2, "id": "01K0SHAREREC00000000000052",
                "path": format!("projects/{ID}/wiki/notes.md/inner.md"), "body": "x", "machine": "nuc"}),
     ];
     let input: String = blocked.iter().map(|m| format!("{m}\n")).collect();
@@ -698,7 +748,7 @@ fn sync_says_when_the_stores_writes_stopped_landing_and_why() {
     let said = stdout(&out);
     assert!(
         said.starts_with(
-            "sync not performed: the store's writes stopped landing here after sequence 7: "
+            "sync not performed: the store's writes stopped landing here after sequence 1: "
         ),
         "{said}"
     );
@@ -708,7 +758,7 @@ fn sync_says_when_the_stores_writes_stopped_landing_and_why() {
     );
     let doctor = stdout(&mem(&w, w.dir.path(), &["doctor"]));
     assert!(
-        doctor.contains("the store's writes stopped landing after seq 7: creating "),
+        doctor.contains("the store's writes stopped landing after seq 1: creating "),
         "{doctor}"
     );
 
@@ -722,7 +772,8 @@ fn sync_says_when_the_stores_writes_stopped_landing_and_why() {
     let out = mem(&w, w.dir.path(), &["sync"]);
     assert_eq!(
         stdout(&out),
-        "sync performed: outbox 0, last share sequence 9\n"
+        // The record that could not land still holds the sequence back.
+        "sync performed: outbox 0, last share sequence 1\n"
     );
 }
 
@@ -733,11 +784,11 @@ fn sharing_a_project_late_asks_the_store_for_everything_again() {
     apply(
         &w,
         &[
-            json!({"t": "rec", "seq": 5, "id": "01K0SHAREREC00000000000025", "path": page_path("early"),
+            json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC00000000000025", "path": page_path("early"),
                  "body": "# Early\n", "machine": "nuc"}),
         ],
     );
-    assert_eq!(hello(&w)["since"], 5);
+    assert_eq!(hello(&w)["since"], 1);
     walk(&w, &["project", "set", "share"]);
 
     let lines = pending(&w);
@@ -746,9 +797,9 @@ fn sharing_a_project_late_asks_the_store_for_everything_again() {
     apply(
         &w,
         &[
-            json!({"t": "rec", "seq": 5, "id": "01K0SHAREREC00000000000025", "path": page_path("early"),
+            json!({"t": "rec", "seq": 1, "id": "01K0SHAREREC00000000000025", "path": page_path("early"),
                    "body": "# Early\n", "machine": "nuc"}),
-            json!({"t": "ready", "seq": 5}),
+            json!({"t": "ready", "seq": 1}),
         ],
     );
     assert_eq!(wiki(&w, "early"), "# Early\n");
@@ -1185,7 +1236,7 @@ fn a_batch_of_records_lands_whole_and_raises_since_to_its_last() {
     let w = shared("share-batch");
     let recs: Vec<Value> = (1..=50)
         .map(|n| {
-            json!({"t": "rec", "seq": 100 + n, "id": format!("01K0BATCH00000000000000{n:03}"),
+            json!({"t": "rec", "seq": n, "id": format!("01K0BATCH00000000000000{n:03}"),
                    "path": page_path(&format!("b{n}")), "body": format!("# b{n}\n"), "machine": "nuc"})
         })
         .collect();
@@ -1193,7 +1244,7 @@ fn a_batch_of_records_lands_whole_and_raises_since_to_its_last() {
     for n in [1, 25, 50] {
         assert_eq!(wiki(&w, &format!("b{n}")), format!("# b{n}\n"));
     }
-    assert_eq!(hello(&w)["since"], 150);
+    assert_eq!(hello(&w)["since"], 50);
 }
 
 /// A record that cannot land fails the apply, so the hub asks again; the
@@ -1206,11 +1257,11 @@ fn a_record_that_cannot_land_keeps_the_ones_before_it() {
     std::fs::remove_dir_all(&items).unwrap();
     std::fs::write(&items, "not a folder").unwrap();
     let input: String = [
-        json!({"t": "rec", "seq": 201, "id": "01K0BLOCK0000000000000001", "path": page_path("before"),
+        json!({"t": "rec", "seq": 1, "id": "01K0BLOCK0000000000000001", "path": page_path("before"),
                "body": "# before\n", "machine": "nuc"}),
-        json!({"t": "rec", "seq": 202, "id": "01K0BLOCK0000000000000002",
+        json!({"t": "rec", "seq": 2, "id": "01K0BLOCK0000000000000002",
                "path": format!("projects/{ID}/items/01K0BLOCK0000000000000002.md"), "body": "x", "machine": "nuc"}),
-        json!({"t": "rec", "seq": 203, "id": "01K0BLOCK0000000000000003", "path": page_path("after"),
+        json!({"t": "rec", "seq": 3, "id": "01K0BLOCK0000000000000003", "path": page_path("after"),
                "body": "# after\n", "machine": "nuc"}),
     ]
     .iter()
@@ -1224,7 +1275,7 @@ fn a_record_that_cannot_land_keeps_the_ones_before_it() {
         "# before\n"
     );
     assert!(!page("after").exists());
-    assert_eq!(hello(&w)["since"], 201);
+    assert_eq!(hello(&w)["since"], 1);
 }
 
 /// Every file of the project, as store paths, sorted.
@@ -1361,11 +1412,11 @@ fn sync_reports_the_outbox_and_the_sequence_without_qshell_sync() {
     assert_eq!(v["seq"], json!(0), "{v}");
 
     let id = pending(&w)[0]["id"].clone();
-    apply(&w, &[json!({"t": "ack", "id": id, "seq": 7})]);
+    apply(&w, &[json!({"t": "ack", "id": id, "seq": 1})]);
     let out = mem_env(&w, w.dir.path(), &["sync"], &env);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let said = stdout(&out);
     assert!(said.contains("outbox 0"), "{said}");
-    assert!(said.contains("last share sequence 7"), "{said}");
+    assert!(said.contains("last share sequence 1"), "{said}");
     assert!(said.starts_with("sync performed"), "{said}");
 }

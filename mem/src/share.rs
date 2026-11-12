@@ -233,6 +233,36 @@ fn seq(conn: &Connection) -> Result<u64> {
         .unwrap_or(0) as u64)
 }
 
+/// Moves the sequence on to `seen` only when it is the next one. The store
+/// numbers its writes without a gap, so a record or ack past a gap says
+/// nothing of what the gap holds: a write broadcast while a replay runs can
+/// arrive before the records the replay has yet to send, and raising past
+/// them would make the next hello skip them for good.
+fn advance_seq(conn: &Connection, seen: u64) -> Result<()> {
+    if seen == seq(conn)? + 1 {
+        raise_seq(conn, seen)?;
+    }
+    raise_top(conn, seen)
+}
+
+/// The highest seq this replica has seen, gap or not: what tells a late
+/// ack's write from one the replica already holds something newer than.
+fn top(conn: &Connection) -> Result<u64> {
+    let top: Option<i64> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'top'", [], |r| r.get(0))
+        .optional()?;
+    Ok(seq(conn)?.max(top.unwrap_or(0) as u64))
+}
+
+fn raise_top(conn: &Connection, seen: u64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES ('top', ?1) \
+         ON CONFLICT(key) DO UPDATE SET value = max(value, excluded.value)",
+        [seen as i64],
+    )?;
+    Ok(())
+}
+
 fn raise_seq(conn: &Connection, seen: u64) -> Result<()> {
     conn.execute(
         "INSERT INTO meta(key, value) VALUES ('seq', ?1) \
@@ -405,7 +435,7 @@ fn apply_one(
             // The store carries every machine's shared projects; this
             // replica lands only the ones it shares too.
             if !all && shared(root, &file, is_switched(db)).is_none() {
-                raise_seq(tx, seen)?;
+                advance_seq(tx, seen)?;
                 return Ok(true);
             }
             let body = message["body"].as_str();
@@ -429,7 +459,7 @@ fn apply_one(
                 land_deferred(&file, body, dirs)?;
                 set_head(tx, &rel, &id)?;
             }
-            raise_seq(tx, seen)?;
+            advance_seq(tx, seen)?;
         }
         Some("ack") => {
             let Some(id) = text(&message["id"]) else {
@@ -454,7 +484,7 @@ fn apply_one(
                     // every record this replica has seen, is the newest. A
                     // re-ack at or below that seq is a write this replica
                     // already passed, so nothing lands.
-                    _ if acked > seq(tx)? as i64 && was_imported(tx, &id)? => {
+                    _ if acked > top(tx)? as i64 && was_imported(tx, &id)? => {
                         land_deferred(&file, body.as_deref(), dirs)?;
                         set_head(tx, &rel, &id)?;
                     }
@@ -469,7 +499,7 @@ fn apply_one(
                 }
             }
             if let Some(seen) = message["seq"].as_u64() {
-                raise_seq(tx, seen)?;
+                advance_seq(tx, seen)?;
             }
         }
         Some("refused") => {
