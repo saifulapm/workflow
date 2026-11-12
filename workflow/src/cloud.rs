@@ -1868,16 +1868,18 @@ mod tests {
     }
 
     /// An answer that came while the thread wrote its park is acted on, and
-    /// a parked thread something wakes again never runs beside the thread
-    /// the next start line starts.
+    /// a parked thread something wakes again asks its start command whether
+    /// the run is still its own before it works.
     #[test]
-    fn a_parked_thread_checks_once_more_and_never_runs_again() {
+    fn a_parked_thread_checks_once_more_and_asks_again_when_woken() {
         assert!(
             PROMPT.contains("run `workflow wait-answer <id>` once more"),
             "{PROMPT}"
         );
         assert!(
-            PROMPT.contains("do no more work and end your reply with that same parked line"),
+            PROMPT.contains(
+                "On every new turn after a park, a message Saiful typed here or a comment on an artifact, run `cd {dir}`, then `workflow go {project} --cloud --print` and follow what it prints"
+            ),
             "{PROMPT}"
         );
         // The 6-hour stop is checked before each wait too.
