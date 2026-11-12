@@ -1845,3 +1845,97 @@ fn a_woken_thread_carries_on_after_its_6_hour_stop() {
     );
     assert!(w.claimed(), "{:?}", w.mem_calls());
 }
+
+/// mem's calls that write: a woken thread that lost its run makes none.
+fn writes(w: &World) -> Vec<String> {
+    w.mem_calls()
+        .into_iter()
+        .filter(|c| !c.starts_with("projects") && !c.starts_with("sync"))
+        .filter(|c| !c.starts_with("roadmap") && !c.starts_with("questions"))
+        .filter(|c| !c.starts_with("project current") && c != "handoff --project gamma")
+        .filter(|c| !c.starts_with("handoff gamma") && !c.starts_with("handoff --get"))
+        .collect()
+}
+
+/// He typed into a parked thread while a start line's thread already ran
+/// the milestone: the old thread ends on one line and writes nothing.
+#[test]
+fn a_woken_thread_whose_run_was_taken_up_stops_on_one_line() {
+    for (tag, parked) in [("live", false), ("parked", true)] {
+        let w = World::new(&format!("cloud-wake-lost-{tag}"));
+        w.runner(
+            "gamma",
+            &format!(
+                r#"{{"machine":"cloud","id":"session_B","since":"{}","first":"{}","earlier":["{THREAD_SESSION}"],"milestone":"m2-next"}}"#,
+                now_minus(1),
+                now_minus(1)
+            ),
+        );
+        if parked {
+            w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(0)));
+            w.work.put(
+                "handoff-gamma.md",
+                "parked: question #CCCC3333 waits on Saiful: which\n",
+            );
+            w.work.put(
+                "questions-gamma.json",
+                &format!(
+                    r#"{{"questions":[{}]}}"#,
+                    question("gamma", 20, "CCCC3333", None)
+                ),
+            );
+        }
+        let out = w.thread(&["gamma", "--cloud", "--print"]);
+        assert_eq!(out.status.code(), Some(2), "{tag}: {}", stdout(&out));
+        assert_eq!(
+            stdout(&out).trim(),
+            "parked: another thread took up m2-next of gamma: https://claude.ai/code/session_B",
+            "{tag}"
+        );
+        assert_eq!(writes(&w), Vec::<String>::new(), "{tag}");
+    }
+}
+
+/// The milestone landed since the park: the woken thread says what comes
+/// next, as `workflow land` would have, and starts nothing.
+#[test]
+fn a_woken_thread_whose_milestone_landed_says_what_is_next() {
+    let w = World::new("cloud-wake-landed");
+    w.parked_as(
+        THREAD_SESSION,
+        3,
+        2,
+        "parked: question #AAAA1111 waits on Saiful: which word\n",
+        &[question("gamma", 150, "AAAA1111", None)],
+    );
+    let projects = w
+        .work
+        .read("projects.json")
+        // gamma's row, not its runner's.
+        .replacen(
+            r#""milestone":"m2-next"},{"#,
+            r#""milestone":"m3-last"},{"#,
+            1,
+        );
+    w.work.put("projects.json", &projects);
+    w.work.put(
+        "roadmap-gamma.md",
+        "# roadmap: gamma\n\n- [x] m1-first One\n- [x] m2-next Two\n- [ ] m3-last Three\n",
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "next: Run the next milestone of gamma."
+    );
+    assert_eq!(writes(&w), Vec::<String>::new());
+
+    // With none left, the roadmap is done.
+    w.work.put(
+        "roadmap-gamma.md",
+        "# roadmap: gamma\n\n- [x] m1-first One\n- [x] m2-next Two\n- [x] m3-last Three\n",
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(stdout(&out).trim(), "done: gamma's roadmap is done");
+    assert_eq!(writes(&w), Vec::<String>::new());
+}

@@ -430,6 +430,27 @@ environment's old copy; run `mem sync` until it says performed, then start again
     let Some(row) = projects.iter().find(|row| row.name == start.project) else {
         return refuse(format!("mem lists no {}", start.project), exit::FAILED);
     };
+    // A thread woken after its park whose milestone has landed, or that
+    // another thread took up since, ends on one line and writes nothing.
+    if let Some(me) = me.as_deref()
+        && let Some(runner) = row.runner.as_ref().filter(|r| r.machine == "cloud")
+        && let Some(slug) = runner.milestone.as_deref()
+        && (runner.id == me || runner.earlier.iter().any(|s| s == me))
+    {
+        if slug != start.slug {
+            println!("next: {}", start_line(&start.project));
+            return exit::OK;
+        }
+        if runner.id != me {
+            return refuse(
+                format!(
+                    "another thread took up {slug} of {}: {CODE_PAGE}/{}",
+                    start.project, runner.id
+                ),
+                exit::USAGE,
+            );
+        }
+    }
     // A parked milestone may carry on locally while paused; a cloud run
     // never starts on a paused project.
     if row.paused.is_some() {

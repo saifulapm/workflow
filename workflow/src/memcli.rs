@@ -65,6 +65,9 @@ pub struct Runner {
     pub id: String,
     #[serde(default)]
     pub since: Option<String>,
+    /// The cloud sessions that ran this milestone before the one recorded.
+    #[serde(default)]
+    pub earlier: Vec<String>,
     /// A cloud run's milestone.
     #[serde(default)]
     pub milestone: Option<String>,
