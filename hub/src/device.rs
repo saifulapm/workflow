@@ -3,13 +3,14 @@
 //! `browser` drives the logged-in Chromium through playwright-cli, and every
 //! call leaves one line in the project's mem log.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::http::{Request, Response};
@@ -89,6 +90,13 @@ const CLOSE_TAGGED: &str = "async page => { let closed = 0; \
      for (const p of page.context().pages()) if (p.__hubTab) { await p.close(); closed++; } \
      return closed; }";
 
+/// How long a session may go without a call before the hub closes its tabs.
+const DEFAULT_IDLE: Duration = Duration::from_secs(15 * 60);
+
+/// The file in a session's folder that says when its last call ended, and
+/// for which project.
+const LAST_CALL: &str = "last-call.json";
+
 /// How long a Chromium the device started gets to put its lock down.
 const DEFAULT_CHROMIUM_WAIT: Duration = Duration::from_secs(10);
 
@@ -151,7 +159,7 @@ pub fn serve(machine: &str, request: &Request) -> Response {
             files: BTreeMap::new(),
         },
         "run" => run(&call.args),
-        "browser" => browser(call.session.as_deref(), &call.args),
+        "browser" => browser(call.session.as_deref(), &call.project, &call.args),
         other => return Response::text(400, &format!("not a device verb: {other}")),
     };
     log(machine, &call, &outcome);
@@ -204,7 +212,7 @@ fn run(args: &[String]) -> Outcome {
     }
 }
 
-fn browser(session: Option<&str>, args: &[String]) -> Outcome {
+fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
     let Some(session) = session.filter(|s| {
         (1..=64).contains(&s.len())
             && s.bytes()
@@ -236,7 +244,22 @@ fn browser(session: Option<&str>, args: &[String]) -> Outcome {
             Err(e) => return Outcome::fail(126, format!("device: {e:#}\n")),
         },
     };
-    match cli.call(args) {
+    let held = session_lock(session);
+    let _held = held.lock().unwrap_or_else(|e| e.into_inner());
+    let called = cli.call(args);
+    let record = cli.dir.join(LAST_CALL);
+    if args[0] == "detach" {
+        let _ = std::fs::remove_file(&record);
+    } else {
+        let last = LastCall {
+            project: project.to_string(),
+            at: unix_now(),
+        };
+        if let Err(e) = std::fs::write(&record, serde_json::to_vec(&last).unwrap_or_default()) {
+            eprintln!("hub: device: cannot write {}: {e}", record.display());
+        }
+    }
+    match called {
         Ok(outcome) => outcome,
         Err(Stop::TimedOut) => Outcome::fail(
             124,
@@ -257,6 +280,95 @@ fn session_dir(session: &str) -> anyhow::Result<PathBuf> {
         .join(session);
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// When a session's last call ended, and for which project.
+#[derive(Serialize, Deserialize)]
+struct LastCall {
+    project: String,
+    /// Unix milliseconds.
+    at: u64,
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// One lock per session, so the sweep never ends a session while a call of
+/// it runs.
+fn session_lock(session: &str) -> Arc<Mutex<()>> {
+    static LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+        LazyLock::new(Default::default);
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    Arc::clone(locks.entry(session.to_string()).or_default())
+}
+
+/// `HUB_DEVICE_IDLE_MS`, else 15 minutes.
+fn idle_limit(ms: Option<&str>) -> Duration {
+    ms.and_then(|ms| ms.parse().ok())
+        .map_or(DEFAULT_IDLE, Duration::from_millis)
+}
+
+/// Runs until the process ends: closes the tabs of each session whose last
+/// call ended longer than the idle limit ago, and detaches it.
+pub fn sweep_sessions() -> ! {
+    let limit = idle_limit(std::env::var("HUB_DEVICE_IDLE_MS").ok().as_deref());
+    let every = (limit / 2).min(Duration::from_secs(15));
+    loop {
+        std::thread::sleep(every);
+        let Ok(root) = crate::config::state_home().map(|h| h.join("hub/device")) else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            end_when(&name, &entry.path(), |last| {
+                Duration::from_millis(unix_now().saturating_sub(last.at)) >= limit
+            });
+        }
+    }
+}
+
+/// Ends `session` when `due` holds for its last call: closes the tabs it
+/// opened while Chromium is up, then detaches it. A Chromium that is down
+/// stays down, since only attach starts it.
+fn end_when(session: &str, dir: &Path, due: impl Fn(&LastCall) -> bool) {
+    let held = session_lock(session);
+    let _held = held.lock().unwrap_or_else(|e| e.into_inner());
+    let record = dir.join(LAST_CALL);
+    let Some(last) = std::fs::read(&record)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LastCall>(&bytes).ok())
+    else {
+        return;
+    };
+    if !due(&last) {
+        return;
+    }
+    let cli = Cli {
+        deadline: Instant::now() + timeout(),
+        path: user_path(),
+        session,
+        dir: dir.to_path_buf(),
+    };
+    if cli.attached().unwrap_or(false) {
+        let up = crate::config::config_home()
+            .is_ok_and(|home| chromium_up(&home.join("chromium/SingletonLock")));
+        if up {
+            let _ = cli.run_code(CLOSE_TAGGED);
+        }
+        let flag = format!("-s={session}");
+        let _ = cli.run(&[&flag, "detach"], None);
+    }
+    let _ = std::fs::remove_file(&record);
+    eprintln!(
+        "hub: device: ended browser session {session} of {}",
+        last.project
+    );
 }
 
 /// Why a browser call ended before playwright-cli answered it.
@@ -573,4 +685,16 @@ pub fn unserved(request: &Request, why: &str) -> Response {
         })
         .to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_idle_limit_is_15_minutes_unless_set() {
+        assert_eq!(idle_limit(None), Duration::from_secs(900));
+        assert_eq!(idle_limit(Some("not a number")), Duration::from_secs(900));
+        assert_eq!(idle_limit(Some("1000")), Duration::from_secs(1));
+    }
 }

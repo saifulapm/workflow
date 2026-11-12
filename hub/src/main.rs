@@ -338,6 +338,10 @@ fn run_local(port: u16) -> Result<()> {
             .spawn(move || local.sweep())
             .context("starting the answered-question sweep")?;
     }
+    std::thread::Builder::new()
+        .name("hub-tabs".to_string())
+        .spawn(|| hub::device::sweep_sessions())
+        .context("starting the browser session sweep")?;
     let notice = slack.clone();
     // The stall bell posts to Slack too, store or none.
     let bell = slack.clone();

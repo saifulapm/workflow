@@ -6,6 +6,7 @@
 mod common;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use common::{Hub, TempDir, body_of, fixture_bin, status_of};
 
@@ -13,6 +14,7 @@ const TOKEN: &str = "peer-token-for-tests-0123456789abcdef";
 
 struct Rig {
     hub: Hub,
+    home: PathBuf,
     /// One line per tab, in strip order: id, the session whose group holds
     /// it (`saiful` for none), 1 when the hub tagged it, its URL.
     tabs: PathBuf,
@@ -22,6 +24,10 @@ struct Rig {
 }
 
 fn rig() -> Rig {
+    rig_env(&[])
+}
+
+fn rig_env(env: &[(&str, &str)]) -> Rig {
     let dir = TempDir::new("device-tabs");
     let home = dir.join("home");
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
@@ -47,6 +53,13 @@ fn rig() -> Rig {
     );
     fixture_bin(&bin, "mem", "exit 0");
     fixture_bin(&tools, "playwright-extension-token", "echo fake-token");
+    for starter in ["app-run", "systemd-run"] {
+        fixture_bin(
+            &tools,
+            starter,
+            &format!("echo {starter} >> '{}'", record.display()),
+        );
+    }
     fixture_bin(
         &tools,
         "playwright-cli",
@@ -93,17 +106,15 @@ fn rig() -> Rig {
         ),
     );
     let socket = dir.join("local.sock");
-    let hub = Hub::spawn_env(
-        &home,
-        &[&bin],
-        &["local", "--port", "0"],
-        &[
-            ("HUB_PEER_TOKEN", TOKEN),
-            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
-        ],
-    );
+    let mut all = vec![
+        ("HUB_PEER_TOKEN", TOKEN),
+        ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+    ];
+    all.extend_from_slice(env);
+    let hub = Hub::spawn_env(&home, &[&bin], &["local", "--port", "0"], &all);
     Rig {
         hub,
+        home,
         tabs,
         record,
         _dir: dir,
@@ -157,6 +168,14 @@ impl Rig {
             .map(|line| format!("{line}\n"))
             .collect();
         std::fs::write(&self.tabs, kept).unwrap();
+    }
+
+    /// Points Chromium's lock at a pid that is not running, as after Saiful
+    /// quit it.
+    fn quit_chromium(&self) {
+        let lock = self.home.join("config/chromium/SingletonLock");
+        std::fs::remove_file(&lock).unwrap();
+        std::os::unix::fs::symlink("testhost-999999999", &lock).unwrap();
     }
 
     fn calls(&self) -> Vec<String> {
@@ -251,4 +270,44 @@ fn detach_of_a_session_that_never_attached_opens_nothing() {
     rig.browser("s1", &["detach"]);
     assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
     assert_eq!(rig.calls(), vec!["list", "-s=s1 detach"]);
+}
+
+#[test]
+fn a_session_idle_past_the_limit_loses_its_tabs() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1000")]);
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.browser("s1", &["tab-new", "https://b.test"]);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(rig.strip().len(), 3, "{:?}", rig.strip());
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+    assert_eq!(rig.calls().last().unwrap(), "-s=s1 detach");
+}
+
+#[test]
+fn a_session_that_keeps_calling_keeps_its_tab() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1500")]);
+    rig.browser("s1", &["goto", "https://a.test"]);
+    for _ in 0..6 {
+        std::thread::sleep(Duration::from_millis(500));
+        rig.browser("s1", &["snapshot"]);
+    }
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://a.test")
+        ]
+    );
+}
+
+#[test]
+fn the_idle_sweep_starts_no_browser_when_chromium_is_down() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1000")]);
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.quit_chromium();
+    let before = rig.calls().len();
+    std::thread::sleep(Duration::from_secs(3));
+    let calls = rig.calls();
+    assert_eq!(calls[before..], ["list", "-s=s1 detach"], "{calls:?}");
 }
