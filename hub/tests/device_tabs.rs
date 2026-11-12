@@ -15,6 +15,7 @@ const TOKEN: &str = "peer-token-for-tests-0123456789abcdef";
 struct Rig {
     hub: Hub,
     home: PathBuf,
+    state: PathBuf,
     /// One line per tab, in strip order: id, the session whose group holds
     /// it (`saiful` for none), 1 when the hub tagged it, its URL.
     tabs: PathBuf,
@@ -51,7 +52,18 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
         "systemctl",
         &format!("echo 'PATH={}:/usr/bin:/bin'", tools.display()),
     );
-    fixture_bin(&bin, "mem", "exit 0");
+    fixture_bin(
+        &bin,
+        "mem",
+        &format!(
+            "S='{state}'\n\
+             case \"$1\" in\n\
+             projects) cat \"$S/projects.json\" 2>/dev/null || echo '{{\"projects\":[]}}' ;;\n\
+             handoff) cat \"$S/handoff.json\" 2>/dev/null || echo '{{}}' ;;\n\
+             esac",
+            state = state.display(),
+        ),
+    );
     fixture_bin(&tools, "playwright-extension-token", "echo fake-token");
     for starter in ["app-run", "systemd-run"] {
         fixture_bin(
@@ -115,6 +127,7 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
     Rig {
         hub,
         home,
+        state,
         tabs,
         record,
         _dir: dir,
@@ -176,6 +189,25 @@ impl Rig {
         let lock = self.home.join("config/chromium/SingletonLock");
         std::fs::remove_file(&lock).unwrap();
         std::os::unix::fs::symlink("testhost-999999999", &lock).unwrap();
+    }
+
+    /// Project demo, building `milestone`, run in the cloud on m2 by
+    /// session_01Abc since a minute ago; its latest handoff, `handoff`, was
+    /// written now, or never when it is None.
+    fn cloud_run(&self, milestone: &str, handoff: Option<&str>) {
+        let now = jiff::Timestamp::now();
+        let since = now - jiff::SignedDuration::from_secs(60);
+        let handoff_at = handoff.map_or(serde_json::Value::Null, |_| now.to_string().into());
+        let projects = serde_json::json!({"projects": [
+            {"name": "demo", "roadmap_status": "approved", "checkouts": [],
+             "milestone": milestone, "milestones_done": 1, "milestones_total": 3,
+             "handoff_at": handoff_at,
+             "runner": {"machine": "cloud", "id": "session_01Abc",
+                        "since": since.to_string(), "milestone": "m2"}},
+        ]});
+        std::fs::write(self.state.join("projects.json"), projects.to_string()).unwrap();
+        let body = serde_json::json!({ "body": handoff.unwrap_or_default() });
+        std::fs::write(self.state.join("handoff.json"), body.to_string()).unwrap();
     }
 
     fn calls(&self) -> Vec<String> {
@@ -310,4 +342,45 @@ fn the_idle_sweep_starts_no_browser_when_chromium_is_down() {
     std::thread::sleep(Duration::from_secs(3));
     let calls = rig.calls();
     assert_eq!(calls[before..], ["list", "-s=s1 detach"], "{calls:?}");
+}
+
+/// The sweep runs every 200 ms, and no session goes idle in these tests.
+const SWEEP: [(&str, &str); 1] = [("HUB_DEVICE_SWEEP_MS", "200")];
+
+#[test]
+fn a_cloud_run_s_tabs_close_once_it_writes_a_handoff() {
+    let rig = rig_env(&SWEEP);
+    rig.cloud_run("m2", None);
+    rig.browser("cse_01Abc", &["goto", "https://a.test"]);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(rig.strip().len(), 2, "{:?}", rig.strip());
+    rig.cloud_run("m2", Some("parked: waiting on q1"));
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+#[test]
+fn a_cloud_run_s_tabs_close_once_its_milestone_is_ticked() {
+    let rig = rig_env(&SWEEP);
+    rig.cloud_run("m2", None);
+    rig.browser("cse_01Abc", &["goto", "https://a.test"]);
+    rig.cloud_run("m3", None);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+#[test]
+fn a_local_walk_s_tabs_outlast_the_run_s_handoff() {
+    let rig = rig_env(&SWEEP);
+    rig.cloud_run("m2", None);
+    rig.browser("local-mini", &["goto", "https://a.test"]);
+    rig.cloud_run("m3", Some("parked: waiting on q1"));
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("local-mini", "https://a.test")
+        ]
+    );
 }

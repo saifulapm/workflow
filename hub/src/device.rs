@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::http::{Request, Response};
+use crate::memcli::MemCli;
 use crate::proc::{Ended, output_within};
 
 /// The only programs `run` starts.
@@ -311,13 +312,23 @@ fn idle_limit(ms: Option<&str>) -> Duration {
         .map_or(DEFAULT_IDLE, Duration::from_millis)
 }
 
-/// Runs until the process ends: closes the tabs of each session whose last
-/// call ended longer than the idle limit ago, and detaches it.
+/// Runs until the process ends: every `HUB_DEVICE_SWEEP_MS` (at most 15 s)
+/// closes the tabs of each session whose last call ended longer than the
+/// idle limit ago, or whose cloud run has landed or parked, and detaches it.
 pub fn sweep_sessions() -> ! {
     let limit = idle_limit(std::env::var("HUB_DEVICE_IDLE_MS").ok().as_deref());
-    let every = (limit / 2).min(Duration::from_secs(15));
+    let every = std::env::var("HUB_DEVICE_SWEEP_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(
+            (limit / 2).min(Duration::from_secs(15)),
+            Duration::from_millis,
+        );
+    let mem = MemCli::new();
     loop {
         std::thread::sleep(every);
+        // Read once a round, and only when a session is there to judge.
+        let projects = std::cell::OnceCell::new();
         let Ok(root) = crate::config::state_home().map(|h| h.join("hub/device")) else {
             continue;
         };
@@ -328,9 +339,39 @@ pub fn sweep_sessions() -> ! {
             let name = entry.file_name().to_string_lossy().into_owned();
             end_when(&name, &entry.path(), |last| {
                 Duration::from_millis(unix_now().saturating_sub(last.at)) >= limit
+                    || run_over(&name, &last.project, &mem, &projects)
             });
         }
     }
+}
+
+/// Whether `session` is the cloud run of `project` and that run has landed,
+/// parked or ended. A session that is no cloud run's, such as a local walk's
+/// `local-<host>`, never is.
+fn run_over(
+    session: &str,
+    project: &str,
+    mem: &MemCli,
+    projects: &std::cell::OnceCell<Vec<serde_json::Value>>,
+) -> bool {
+    // A thread sends CLAUDE_CODE_REMOTE_SESSION_ID, and the runner record
+    // names the same session with `session_` for `cse_`, as fleet reads it.
+    let runner = match session.strip_prefix("cse_") {
+        Some(rest) => format!("session_{rest}"),
+        None => session.to_string(),
+    };
+    let rows = projects.get_or_init(|| mem.refresh(&["projects", "--json"]).rows("projects"));
+    rows.iter()
+        .filter(|row| row["name"].as_str() == Some(project))
+        .any(|row| {
+            let summary = crate::page_home::summary_of(row);
+            crate::live::cloud_run(
+                &summary,
+                || crate::doorbell::handoff_body(mem, project),
+                jiff::Timestamp::now(),
+            )
+            .is_some_and(|run| run.id == runner && run.state != crate::live::CloudState::Live)
+        })
 }
 
 /// Ends `session` when `due` holds for its last call: closes the tabs it

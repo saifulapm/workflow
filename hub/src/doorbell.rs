@@ -338,7 +338,7 @@ pub fn push(ntfy_url: &str, body: &str) {
 }
 
 /// The text of `project`'s latest handoff, read fresh, when mem gave it.
-fn handoff_body(mem: &MemCli, project: &str) -> Option<String> {
+pub(crate) fn handoff_body(mem: &MemCli, project: &str) -> Option<String> {
     match &*mem.refresh(&["handoff", &format!("--project={project}"), "--json"]) {
         Outcome::Json(doc) => doc["body"].as_str().map(str::to_string),
         _ => None,
