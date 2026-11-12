@@ -750,6 +750,86 @@ fn a_cloud_runner_names_the_account_it_runs_from() {
     );
 }
 
+/// A parked thread that is woken records its run again: `since` moves on, so
+/// the run reads live, while `first` keeps the start its questions count
+/// from. A thread that takes the milestone up from another leaves that one
+/// in `earlier`, so a woken loser can tell its run was taken.
+#[test]
+fn a_cloud_run_set_again_keeps_its_first_start_and_who_ran_it_before() {
+    let w = World::new("write-runner-first");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    let ok = |args: &[&str]| {
+        let out = mem(&w, &repo, args);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+    };
+    let runner =
+        |w: &World| json(&mem(w, &repo, &["projects", "--json"]))["projects"][0]["runner"].clone();
+    let cloud = |id: &str, milestone: &str| {
+        ok(&[
+            "project",
+            "set",
+            "runner",
+            "cloud",
+            id,
+            "--milestone",
+            milestone,
+        ])
+    };
+    ok(&["log", "first write"]);
+    cloud("session_A", "m1");
+    let first = runner(&w)["since"].clone();
+    assert!(first.is_string(), "{}", runner(&w));
+    assert_eq!(runner(&w)["first"], first, "{}", runner(&w));
+    assert_eq!(
+        runner(&w)["earlier"],
+        serde_json::json!([]),
+        "{}",
+        runner(&w)
+    );
+
+    // mem stamps whole seconds.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    cloud("session_A", "m1");
+    assert_ne!(runner(&w)["since"], first, "{}", runner(&w));
+    assert_eq!(runner(&w)["first"], first, "{}", runner(&w));
+
+    cloud("session_B", "m1");
+    let r = runner(&w);
+    assert_eq!(r["first"], r["since"], "{r}");
+    assert_ne!(r["first"], first, "{r}");
+    assert_eq!(r["earlier"], serde_json::json!(["session_A"]), "{r}");
+    cloud("session_C", "m1");
+    assert_eq!(
+        runner(&w)["earlier"],
+        serde_json::json!(["session_A", "session_B"]),
+        "{}",
+        runner(&w)
+    );
+
+    // Another milestone, or a device, is a run of its own.
+    cloud("session_D", "m2");
+    assert_eq!(
+        runner(&w)["earlier"],
+        serde_json::json!([]),
+        "{}",
+        runner(&w)
+    );
+    ok(&["project", "set", "runner", "mini", "thing-m2"]);
+    let r = runner(&w);
+    assert_eq!(r["earlier"], serde_json::json!([]), "{r}");
+    assert_eq!(r["first"], r["since"], "{r}");
+
+    cloud("session_E", "m2");
+    cloud("session_F", "m2");
+    ok(&["project", "unset", "runner"]);
+    let toml = std::fs::read_to_string(
+        w.store()
+            .project_toml(&mem::project::Registry::load(&w.store()).projects[0].id),
+    )
+    .unwrap();
+    assert!(!toml.contains("runner"), "unset takes them too: {toml}");
+}
+
 #[test]
 fn a_cloud_runner_outlives_the_last_milestone_so_its_branch_can_still_land() {
     let w = World::new("write-cloud-last");

@@ -119,6 +119,8 @@
               "machine",
               "id",
               "since",
+              "first",
+              "earlier",
               "milestone",
               "account"
             ],
@@ -135,6 +137,20 @@
                   "string",
                   "null"
                 ]
+              },
+              "first": {
+                "description": "The run's first start: a cloud session that records its own milestone again keeps it, while since moves on.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "earlier": {
+                "description": "The cloud sessions that ran this milestone before the one recorded, oldest first; empty for a device's runner.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               },
               "milestone": {
                 "description": "The milestone a cloud run (machine `cloud`, its session id) works on; null for a device's runner.",

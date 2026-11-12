@@ -775,7 +775,10 @@ pub fn project_pause(app: &App, who: &str) -> Result<i32> {
 /// `mem project set runner <machine> <id>`: one word each, so the stored
 /// "<machine> <id>" splits back apart, and mem stamps `runner_since`. The
 /// milestone and the claude.ai account, a cloud run's, are replaced or
-/// cleared with the rest.
+/// cleared with the rest. `runner_first` is the run's first start: a cloud
+/// session that sets its own milestone again, a parked thread woken, keeps
+/// it. `runner_earlier` lists the cloud sessions that ran that milestone
+/// before the one recorded, so a woken thread can tell its run was taken.
 pub fn project_runner(
     app: &App,
     machine: &str,
@@ -794,8 +797,45 @@ pub fn project_runner(
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let now = jiff::Timestamp::now().round(jiff::Unit::Second)?;
+    let milestone = milestone.map(str::trim).filter(|m| !m.is_empty());
+    let declared = |key| crate::project::declared(&app.store, project, key);
+    // The cloud session recorded now, when it ran this same milestone.
+    let before = declared("runner")
+        .and_then(|r| r.strip_prefix("cloud ").map(str::to_string))
+        .filter(|_| machine == "cloud" && milestone.is_some())
+        .filter(|_| declared("runner_milestone").as_deref() == milestone);
+    let first = match &before {
+        Some(session) if session == id => declared("runner_first"),
+        _ => None,
+    };
+    let earlier: Vec<String> = match &before {
+        Some(session) => declared("runner_earlier")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .chain(std::iter::once(session.clone()))
+            .filter(|s| s != id)
+            .fold(Vec::new(), |mut all, s| {
+                if !all.contains(&s) {
+                    all.push(s);
+                }
+                all
+            }),
+        None => Vec::new(),
+    };
     crate::project::set_key(&app.store, project, "runner_since", &now.to_string())?;
-    match milestone.map(str::trim).filter(|m| !m.is_empty()) {
+    crate::project::set_key(
+        &app.store,
+        project,
+        "runner_first",
+        &first.unwrap_or_else(|| now.to_string()),
+    )?;
+    if earlier.is_empty() {
+        crate::project::unset_key(&app.store, project, "runner_earlier")?;
+    } else {
+        crate::project::set_key(&app.store, project, "runner_earlier", &earlier.join(" "))?;
+    }
+    match milestone {
         Some(milestone) => {
             crate::project::set_key(&app.store, project, "runner_milestone", milestone)?;
         }
@@ -829,6 +869,11 @@ fn runner_json(store: &crate::store::Store, id: &str) -> serde_json::Value {
             "machine": machine,
             "id": run,
             "since": declared("runner_since"),
+            "first": declared("runner_first"),
+            "earlier": declared("runner_earlier")
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>(),
             "milestone": declared("runner_milestone"),
             "account": declared("runner_account"),
         }),
@@ -847,6 +892,8 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     let (path, had) = crate::project::unset_key(&app.store, id, key)?;
     if key == "runner" {
         crate::project::unset_key(&app.store, id, "runner_since")?;
+        crate::project::unset_key(&app.store, id, "runner_first")?;
+        crate::project::unset_key(&app.store, id, "runner_earlier")?;
         crate::project::unset_key(&app.store, id, "runner_milestone")?;
         crate::project::unset_key(&app.store, id, "runner_account")?;
     }
@@ -1466,6 +1513,8 @@ fn tick_singleton(app: &App, which: Singleton, task: &str) -> Result<i32> {
         if !cloud && checkboxes(&text, false).iter().all(|(_, done)| *done) {
             crate::project::unset_key(&app.store, id, "runner")?;
             crate::project::unset_key(&app.store, id, "runner_since")?;
+            crate::project::unset_key(&app.store, id, "runner_first")?;
+            crate::project::unset_key(&app.store, id, "runner_earlier")?;
             crate::project::unset_key(&app.store, id, "runner_milestone")?;
         }
     }
