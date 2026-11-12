@@ -119,6 +119,8 @@ const KIT_VARIABLES: &[&str] = &[
     "HUB_STORE_ACCESS_SECRET",
     "TS_AUTHKEY",
     "CONTEXT7_API_KEY",
+    "SLACK_BOT_TOKEN",
+    "SLACK_USER_ID",
 ];
 
 /// The network secrets every Project's environment holds for the kit.
@@ -1685,8 +1687,12 @@ In claude.ai:
        (a Tailscale auth key lasts 90 days at most: renew it when cloud sessions stop joining the tailnet)
      CONTEXT7_API_KEY: pass show AI/context7/clt
        (the ctx7 docs lookups the user CLAUDE.md asks for)
-   No MEM_REMOTE, HUB_PEER_TOKEN or Slack variables: the mem server is gone, the peer
-   token stays on the devices, and a cloud session opens no Slack socket.
+     SLACK_BOT_TOKEN: pass show workflow/slack-bot-token
+     SLACK_USER_ID: pass show workflow/slack-user-id
+       (the thread's hub posts its questions to Slack; it is the only hub that does)
+   No MEM_REMOTE, HUB_PEER_TOKEN or Slack app token: the mem server is gone, the peer
+   token stays on the devices, and a cloud session opens no Slack socket (the devices
+   take the taps).
    Setup script: the output of workflow cloud-setup (workflow cloud-setup | wl-copy)
 4. Add a custom connector: https://{host}, and log in with the Access PIN mailed to you
 

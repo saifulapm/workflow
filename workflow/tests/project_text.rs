@@ -282,6 +282,8 @@ fn the_sheet_names_the_repo_each_start_line_and_every_variable_with_its_project(
         "HUB_STORE_TOKEN",
         "TS_AUTHKEY",
         "WORKFLOW_ACCOUNT",
+        "SLACK_BOT_TOKEN",
+        "SLACK_USER_ID",
     ] {
         assert!(names.contains(&kit), "{kit}: {sheet}");
     }

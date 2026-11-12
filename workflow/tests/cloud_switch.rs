@@ -141,6 +141,8 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
         "pass show workflow/cloud-next-access-id",
         "HUB_STORE_ACCESS_SECRET",
         "pass show workflow/cloud-next-access-secret",
+        "SLACK_BOT_TOKEN: pass show workflow/slack-bot-token",
+        "SLACK_USER_ID: pass show workflow/slack-user-id",
         "/remote-env",
         "https://example.test",
         "cloud-<host>",
@@ -151,6 +153,9 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
         !said.contains("HUB_STORE_TOKEN to the output of: pass show workflow/hubweb-store-token"),
         "{said}"
     );
+    // The bot token posts a thread's question; the app token, which opens
+    // the socket that takes Saiful's taps, stays on the devices.
+    assert!(!said.contains("SLACK_APP_TOKEN"), "{said}");
     assert!(!said.contains(SECRET));
     assert!(!text(&out.stderr).contains(SECRET));
     assert!(!w.has("pass.log"), "pass ran");
