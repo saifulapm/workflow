@@ -96,8 +96,19 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
              attach) echo \"$session\" >> \"$S/sessions\"; new_tab about:blank; echo attached ;;\n\
              tab-new) new_tab \"${{2:-about:blank}}\"; echo opened ;;\n\
              goto) edit '$1 == c {{ $4 = u }} 1' \"$2\"; echo \"- Page URL: $2\" ;;\n\
+             tab-select) awk -F'\\t' -v s=\"$session\" -v i=\"$2\" '$2 == s && n++ == i {{ print $1 }}' \"$S/tabs\" > \"$S/current-$session\"; echo selected ;;\n\
+             tab-close)\n\
+               if [ -n \"$2\" ]; then awk -F'\\t' -v s=\"$session\" -v i=\"$2\" '$2 == s && n++ == i {{ print $1 }}' \"$S/tabs\" > \"$S/current-$session\"; fi\n\
+               edit '$1 != c'; echo closed ;;\n\
              run-code)\n\
                case \"$2\" in\n\
+               *'pages()['*)\n\
+                 i=$(printf '%s' \"$2\" | sed 's/.*pages()\\[\\([0-9]*\\)\\].*/\\1/')\n\
+                 t=$(awk -F'\\t' -v s=\"$session\" -v i=\"$i\" '$2 == s && n++ == i {{ print $3 }}' \"$S/tabs\")\n\
+                 echo '### Result'; [ \"$t\" = 1 ] && echo true || echo false ;;\n\
+               *'!!page.__hubTab'*)\n\
+                 t=$(awk -F'\\t' -v c=\"$(cat \"$S/current-$session\")\" '$1 == c {{ print $3 }}' \"$S/tabs\")\n\
+                 echo '### Result'; [ \"$t\" = 1 ] && echo true || echo false ;;\n\
                *'__hubTab = true'*) edit '$1 == c {{ $3 = 1 }} 1' ;;\n\
                *'.close()'*)\n\
                  edit '!($2 == s && $3 == 1)'\n\
@@ -136,6 +147,12 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
 
 impl Rig {
     fn browser(&self, session: &str, args: &[&str]) -> serde_json::Value {
+        let answer = self.call(session, args);
+        assert_eq!(answer["exit"], 0, "{args:?}: {answer}");
+        answer
+    }
+
+    fn call(&self, session: &str, args: &[&str]) -> serde_json::Value {
         let body = serde_json::json!({
             "verb": "browser", "args": args, "project": "demo", "session": session,
         })
@@ -147,9 +164,7 @@ impl Rig {
             body.len()
         ));
         assert_eq!(status_of(&response), 200, "{response}");
-        let answer: serde_json::Value = serde_json::from_str(body_of(&response)).unwrap();
-        assert_eq!(answer["exit"], 0, "{args:?}: {answer}");
-        answer
+        serde_json::from_str(body_of(&response)).unwrap()
     }
 
     /// The tab strip, as (group, URL) in order.
@@ -382,5 +397,65 @@ fn a_local_walk_s_tabs_outlast_the_run_s_handoff() {
             tab("saiful", "https://his.test/"),
             tab("local-mini", "https://a.test")
         ]
+    );
+}
+
+/// s1's own tab at 0, a tab Saiful dragged into its group at 1, and s1's
+/// second tab, current, at 2.
+fn with_a_dragged_tab() -> Rig {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.his_tab("s1", "https://dragged.test/");
+    rig.browser("s1", &["tab-new", "https://b.test"]);
+    rig
+}
+
+#[test]
+fn tab_select_of_a_tab_the_session_did_not_open_is_refused() {
+    let rig = with_a_dragged_tab();
+    let answer = rig.call("s1", &["tab-select", "1"]);
+    assert_eq!(answer["exit"], 2, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: tab 1 is not one this session opened\n"
+    );
+    assert!(!rig.calls().iter().any(|c| c == "-s=s1 tab-select 1"));
+    rig.browser("s1", &["tab-select", "0"]);
+    rig.browser("s1", &["goto", "https://c.test"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://c.test"),
+            tab("s1", "https://dragged.test/"),
+            tab("s1", "https://b.test"),
+        ]
+    );
+}
+
+#[test]
+fn tab_close_of_a_tab_the_session_did_not_open_is_refused() {
+    let rig = with_a_dragged_tab();
+    let answer = rig.call("s1", &["tab-close", "1"]);
+    assert_eq!(answer["exit"], 2, "{answer}");
+    rig.browser("s1", &["tab-close"]);
+    rig.browser("s1", &["tab-close", "0"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://dragged.test/"),
+        ]
+    );
+}
+
+#[test]
+fn a_tab_number_that_is_not_one_is_refused() {
+    let rig = with_a_dragged_tab();
+    let answer = rig.call("s1", &["tab-select", "1; process.exit()"]);
+    assert_eq!(answer["exit"], 2, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: tab-select needs a tab number, not 1; process.exit()\n"
     );
 }

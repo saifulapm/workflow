@@ -452,6 +452,9 @@ impl Cli<'_> {
             // opens another.
             self.run_code(TAG_CURRENT)?;
         }
+        if let Some(refused) = self.not_its_tab(args)? {
+            return Ok(refused);
+        }
         let mut argv = vec![format!("-s={}", self.session)];
         argv.extend(args.iter().cloned());
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -475,6 +478,43 @@ impl Cli<'_> {
             refused: None,
             files,
         })
+    }
+
+    /// The refusal of a tab-select or tab-close whose tab the session did not
+    /// open, such as one Saiful dragged into its group. playwright-cli numbers
+    /// its tabs in the order of the context's pages.
+    fn not_its_tab(&self, args: &[String]) -> Result<Option<Outcome>, Stop> {
+        if !matches!(args[0].as_str(), "tab-select" | "tab-close") {
+            return Ok(None);
+        }
+        let (code, which) = match args.get(1) {
+            None => (
+                "async page => !!page.__hubTab".to_string(),
+                "the current tab".to_string(),
+            ),
+            Some(index) => match index.parse::<usize>() {
+                // Only a number the hub parsed goes into the code.
+                Ok(i) => (
+                    format!("async page => !!page.context().pages()[{i}]?.__hubTab"),
+                    format!("tab {i}"),
+                ),
+                Err(_) => {
+                    return Ok(Some(Outcome::refuse(format!(
+                        "{} needs a tab number, not {index}",
+                        args[0]
+                    ))));
+                }
+            },
+        };
+        let done = self.run_code(&code)?;
+        let stdout = String::from_utf8_lossy(&done.stdout);
+        let mut lines = stdout.lines().skip_while(|line| *line != "### Result");
+        if lines.nth(1) == Some("true") {
+            return Ok(None);
+        }
+        Ok(Some(Outcome::refuse(format!(
+            "{which} is not one this session opened"
+        ))))
     }
 
     /// The hub's own code, never a caller's, run in the session's page.
