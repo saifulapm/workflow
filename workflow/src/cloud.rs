@@ -607,9 +607,11 @@ pub fn carry_on() -> Result<(), String> {
 }
 
 /// The questions `row`'s cloud run asked before it parked: those of its
-/// project asked since the run started, when its handoff since says
-/// `parked:` and its milestone is still the open one; none for any other
-/// run. Read past the 7 hours that end a run, since a question may wait
+/// project asked since the run first started, when its handoff since its
+/// latest start says `parked:` and its milestone is still the open one;
+/// none for any other run. A thread has no amx session, and it asks
+/// Saiful, never an orchestrator, so a question with either is another's.
+/// Read past the 7 hours that end a run, since a question may wait
 /// overnight. `None` when mem cannot list them.
 fn parked_questions(row: &ProjectRow) -> Option<Vec<memcli::Question>> {
     let Some(runner) = row.runner.as_ref().filter(|r| r.machine == "cloud") else {
@@ -627,11 +629,13 @@ fn parked_questions(row: &ProjectRow) -> Option<Vec<memcli::Question>> {
     {
         return Some(Vec::new());
     }
+    let first = time(&runner.first).unwrap_or(since);
     let asked = memcli::questions(&row.name)?;
     Some(
         asked
             .into_iter()
-            .filter(|q| q.asked().is_some_and(|at| at > since))
+            .filter(|q| q.asked().is_some_and(|at| at > first))
+            .filter(|q| q.session.is_none() && q.audience.as_deref() != Some("orchestrator"))
             .collect(),
     )
 }

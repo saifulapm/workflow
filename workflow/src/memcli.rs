@@ -65,6 +65,10 @@ pub struct Runner {
     pub id: String,
     #[serde(default)]
     pub since: Option<String>,
+    /// The run's first start: a woken run recorded again keeps it, while
+    /// `since` moves on.
+    #[serde(default)]
+    pub first: Option<String>,
     /// The cloud sessions that ran this milestone before the one recorded.
     #[serde(default)]
     pub earlier: Vec<String>,
@@ -109,6 +113,12 @@ pub struct Question {
     /// The question that replaced it, which is the one to answer.
     #[serde(default)]
     pub superseded_by: Option<String>,
+    /// Who it is for: saiful, human or orchestrator.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// The amx session that asked it; none for a cloud thread's.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 impl Question {

@@ -1498,11 +1498,24 @@ fn asked(minutes: i64, short: &str) -> String {
 /// One question of `mem questions --json`, as the real one prints it
 /// (copied 2026-11-10), of `project`, asked `minutes` ago.
 fn question(project: &str, minutes: i64, short: &str, answer: Option<&str>) -> String {
+    question_by(project, minutes, short, answer, "saiful", None)
+}
+
+/// The same, asked for `audience` from amx session `session`, when one.
+fn question_by(
+    project: &str,
+    minutes: i64,
+    short: &str,
+    answer: Option<&str>,
+    audience: &str,
+    session: Option<&str>,
+) -> String {
+    let session = session.map_or("null".to_string(), |s| format!("{s:?}"));
     let id = asked(minutes, short);
     let answered = answer.is_some();
     let answer = answer.map_or("null".to_string(), |a| format!("{a:?}"));
     format!(
-        r#"{{"active":true,"answer":{answer},"answer_by":null,"answer_id":null,"answered":{answered},"answers":null,"archived":false,"audience":"saiful","body":"Which word?","by":null,"created":"2026-11-10","id":"{id}","kind":"question","machine":"cloud","modified":"2026-11-10","options":[],"path":"/x/{id}.md","project":"{project}","recommend":null,"replaces":null,"session":null,"short_id":"{short}","superseded_by":null,"supersedes":null,"tags":[],"task":null,"title":"m2-next: which word should --help print?","type":null}}"#
+        r#"{{"active":true,"answer":{answer},"answer_by":null,"answer_id":null,"answered":{answered},"answers":null,"archived":false,"audience":"{audience}","body":"Which word?","by":null,"created":"2026-11-10","id":"{id}","kind":"question","machine":"cloud","modified":"2026-11-10","options":[],"path":"/x/{id}.md","project":"{project}","recommend":null,"replaces":null,"session":{session},"short_id":"{short}","superseded_by":null,"supersedes":null,"tags":[],"task":null,"title":"m2-next: which word should --help print?","type":null}}"#
     )
 }
 
@@ -1938,4 +1951,66 @@ fn a_woken_thread_whose_milestone_landed_says_what_is_next() {
     let out = w.thread(&["gamma", "--cloud", "--print"]);
     assert_eq!(stdout(&out).trim(), "done: gamma's roadmap is done");
     assert_eq!(writes(&w), Vec::<String>::new());
+}
+
+/// Two questions in one run: one answered, the thread woken, then parked
+/// again on the other. Waking recorded the run again, but it keeps its
+/// first start, so a start line still finds the open one.
+#[test]
+fn a_runs_questions_survive_a_second_park() {
+    let w = World::new("cloud-second-park");
+    w.runner(
+        "gamma",
+        &format!(
+            r#"{{"machine":"cloud","id":"session_01Mine","since":"{}","first":"{}","milestone":"m2-next"}}"#,
+            now_minus(1),
+            now_minus(3)
+        ),
+    );
+    w.set("gamma", &format!(r#""handoff_at":"{}""#, now_minus(0)));
+    w.work.put(
+        "handoff-gamma.md",
+        "parked: question #BBBB2222 waits on Saiful: the other\n",
+    );
+    w.work.put(
+        "questions-gamma.json",
+        &format!(
+            r#"{{"questions":[{},{}]}}"#,
+            question("gamma", 140, "BBBB2222", None),
+            question("gamma", 150, "AAAA1111", Some("yes"))
+        ),
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: question #BBBB2222 still waits on Saiful"
+    );
+    assert!(!w.claimed());
+}
+
+/// A question an amx session asked, or one for an orchestrator, is not
+/// the cloud run's (idea #QBA72KD6): a thread has no amx session.
+#[test]
+fn only_the_runs_own_questions_hold_a_start() {
+    let w = World::new("cloud-not-its-questions");
+    w.parked(
+        2,
+        1,
+        "parked: 6-hour stop, t3 half done\n",
+        &[
+            question_by(
+                "gamma",
+                30,
+                "DDDD4444",
+                None,
+                "saiful",
+                Some("gamma-m2-next"),
+            ),
+            question_by("gamma", 40, "EEEE5555", None, "orchestrator", None),
+        ],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(w.claimed(), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("DDDD4444"), "{}", stdout(&out));
 }
