@@ -371,6 +371,7 @@ fn a_woken_thread_waits_30_minutes_again_from_its_next_wait() {
     let w = world("wait-woken");
     let git = |args: &[&str]| {
         let out = Command::new("git")
+            .args(["-c", "core.hooksPath=/dev/null"])
             .args(args)
             .current_dir(w.path())
             .output()
