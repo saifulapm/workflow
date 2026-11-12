@@ -1246,8 +1246,9 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
 /// Project thread gets them whatever disableClaudeAiConnectors says, and a
 /// deny rule naming a server takes its tools out of the thread's context.
 /// Never hearthbot or claude-code-remote: a thread reports to its
-/// coordinator and wakes through them.
-const DENY: [&str; 14] = [
+/// coordinator and wakes through them. Last, the question dialog: a thread
+/// asks Saiful only with `mem ask`, which reaches the hub (#2TE3HPG6).
+const DENY: [&str; 15] = [
     "Read(**/.env)",
     "Read(**/.env.*)",
     "Read(**/*.pem)",
@@ -1262,6 +1263,7 @@ const DENY: [&str; 14] = [
     "mcp__Slack",
     "mcp__Mem",
     "mcp__Claude_Docs",
+    "AskUserQuestion",
 ];
 
 /// A thread takes the local settings that fit it: Claude Code adds nothing
