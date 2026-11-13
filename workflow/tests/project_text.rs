@@ -287,22 +287,9 @@ fn the_sheet_names_the_repo_each_start_line_and_every_variable_with_its_project(
     ] {
         assert!(names.contains(&kit), "{kit}: {sheet}");
     }
-    // Each app's own token, named for the project it belongs to, so a value
-    // pasted into the wrong environment shows up against this list.
-    for app in [
-        "eventsmith",
-        "palmshop",
-        "polaris",
-        "shortcart",
-        "splitroute",
-    ] {
-        let name = format!("{}_SHOPIFY_SERVICE_ACCOUNT_TOKEN", app.to_uppercase());
-        let (_, owner) = vars
-            .iter()
-            .find(|(n, _)| *n == name)
-            .unwrap_or_else(|| panic!("{name}: {sheet}"));
-        assert_eq!(owner, app, "{sheet}");
-    }
+    // An app deploys on the device with its own Shopify login, so no app
+    // has a token here.
+    assert!(!sheet.contains("SERVICE_ACCOUNT"), "{sheet}");
     assert!(!names.iter().any(|n| n.contains("THEME")), "{sheet}");
     assert!(sheet.contains("device.on-rexa.com"), "{sheet}");
     // Names only: the sheet holds no value and no command that prints one.

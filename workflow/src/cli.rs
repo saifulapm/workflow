@@ -322,10 +322,10 @@ asks nothing."
     #[command(
         long_about = "Run Shopify CLI with a theme's or an app's own variables.
 
-One cloud environment holds every theme's and app's secrets, each named after
-it: <THEME>_SHOPIFY_CLI_THEME_TOKEN, <THEME>_SHOPIFY_FLAG_STORE and
-<THEME>_STORE_PASSWORD, and <APP>_SHOPIFY_SERVICE_ACCOUNT_TOKEN, in capitals
-with - as _. They go to the CLI under its own names.
+One cloud environment holds every theme's secrets, each named after it:
+<THEME>_SHOPIFY_CLI_THEME_TOKEN, <THEME>_SHOPIFY_FLAG_STORE and
+<THEME>_STORE_PASSWORD, in capitals with - as _. They go to the CLI under its
+own names.
 
 theme-dev <theme> runs shopify theme dev on themes/<theme> (in this folder or
 one above it), served at http://127.0.0.1:9292, on the store's unpublished
@@ -334,14 +334,17 @@ checkout at each start, so no VM leaves a development theme behind. A theme
 whose assets/ is missing or empty is refused, exit 2: build it first, since
 the sync deletes what the checkout lacks.
 
-deploy <app> runs shopify app deploy --config staging --allow-updates on
-apps/<app>, never another config: production stays Saiful's go-ahead. It
+deploy <app> runs on a device, with its own Shopify and Cloudflare logins: the
+staging D1 migrations, the build and the staging Worker, then shopify app
+deploy --config staging --allow-updates on apps/<app>, never another config:
+production stays Saiful's go-ahead. In a cloud session it deploys nothing,
+says to send it through device tmux, and exits 2. It
 refuses a staging config with production's client_id, or with no handle or
 [build] dev_store_url. Once deployed, its last line is 'walk: <the app's page
 in the dev store's admin>', from those two.
 
 Exit 3 when a variable or the staging config is missing, or Shopify rejects
-the token, naming it: only Saiful makes those, so the task parks. Exit 2 when the folder is not
+the theme token, naming it: only Saiful makes those, so the task parks. Exit 2 when the folder is not
 there, 1 when the CLI fails otherwise."
     )]
     Shopify {
