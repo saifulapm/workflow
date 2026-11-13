@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::exit;
 
+/// `run` still goes to the device, which says it is gone and to use tmux.
 const VERBS: [&str; 6] = ["whoami", "run", "browser", "tmux", "amx", "with-secrets"];
 /// What `device use` takes, and the machine name each stands for.
 const MACHINES: [(&str, &str); 3] = [
@@ -253,7 +254,7 @@ pub fn cmd_device(args: &[String]) -> i32 {
     }
     if verb != "ask" && !VERBS.contains(&verb.as_str()) {
         say(&format!(
-            "{verb} is not a verb (whoami, run, browser, tmux, amx, with-secrets)"
+            "{verb} is not a verb (whoami, browser, tmux, amx, with-secrets)"
         ));
         return exit::USAGE;
     }

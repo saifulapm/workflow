@@ -137,13 +137,13 @@ fn the_setup_leaves_a_device_command_that_runs_workflow_device() {
         std::env::var("PATH").unwrap()
     );
     let out = command(&device)
-        .args(["run", "adb", "devices"])
+        .args(["tmux", "read"])
         .env("PATH", path)
         .output()
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "workflow device run adb devices\n"
+        "workflow device tmux read\n"
     );
 }
 

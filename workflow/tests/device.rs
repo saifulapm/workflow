@@ -141,8 +141,8 @@ fn a_browser_call_posts_the_request_and_plays_back_the_answer() {
 fn arguments_arrive_unjoined() {
     let work = world("device-args");
     answer(&work, 200, 0, &hub_says(None, "", "", 0, json!({})));
-    device(&work, &["run", "adb", "shell", "echo \"a b\""]);
-    assert_eq!(sent(&work)["args"], json!(["adb", "shell", "echo \"a b\""]));
+    device(&work, &["tmux", "send", "echo \"a b\""]);
+    assert_eq!(sent(&work)["args"], json!(["send", "echo \"a b\""]));
     device(&work, &["browser", "-s=x", "goto"]);
     assert_eq!(sent(&work)["args"], json!(["-s=x", "goto"]));
 }
@@ -154,10 +154,16 @@ fn the_device_decides_stderr_and_exit() {
         &work,
         200,
         0,
-        &hub_says(None, "", "device: rm is not allowed here\n", 2, json!({})),
+        &hub_says(
+            None,
+            "",
+            "device: run is gone; use device tmux\n",
+            2,
+            json!({}),
+        ),
     );
-    let out = device(&work, &["run", "rm", "x"]);
-    assert_eq!(stderr(&out), "device: rm is not allowed here\n");
+    let out = device(&work, &["run", "adb", "devices"]);
+    assert_eq!(stderr(&out), "device: run is gone; use device tmux\n");
     assert_eq!(out.status.code(), Some(2));
 }
 
@@ -174,7 +180,7 @@ fn no_args_asks_the_local_hub_and_a_wrong_verb_exits_2() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stderr(&out),
-        "device: rm is not a verb (whoami, run, browser, tmux, amx, with-secrets)\n"
+        "device: rm is not a verb (whoami, browser, tmux, amx, with-secrets)\n"
     );
 }
 

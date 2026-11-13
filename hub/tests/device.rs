@@ -4,7 +4,7 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{Hub, TempDir, body_of, fixture_bin, status_of, wait_for};
 
@@ -96,113 +96,23 @@ fn whoami_answers_the_machine_name() {
     );
 }
 
+/// adb, podman, gh, cf and deploys go through `device tmux`, where Saiful can
+/// watch them and the hub holds a destructive line for his yes.
 #[test]
-fn run_uses_the_user_managers_path_and_passes_the_exit_code_through() {
+fn run_is_gone_and_runs_nothing() {
     let rig = rig("nuc", &[]);
-    let seen = rig.tools.join("adb.argv");
-    fixture_bin(
-        &rig.tools,
-        "adb",
-        &format!(
-            "echo \"$*\" > '{}'; echo fake-adb-out; echo fake-adb-err >&2; exit 3",
-            seen.display()
-        ),
-    );
+    let marker = rig.tools.join("adb.ran");
+    fixture_bin(&rig.tools, "adb", &format!("touch '{}'", marker.display()));
     let answer = call(&rig.hub, "run", &["adb", "devices"]);
-    assert_eq!(answer["stdout"], "fake-adb-out\n");
-    assert_eq!(answer["stderr"], "fake-adb-err\n");
-    assert_eq!(answer["exit"], 3);
-    assert_eq!(std::fs::read_to_string(&seen).unwrap(), "devices\n");
-    assert_eq!(
-        mem_lines(&rig.mem_log),
-        vec!["--project=demo log -- device nuc run adb devices exit 3"]
-    );
-}
-
-/// The allowlist at start is adb, podman and shopify, each of them.
-#[test]
-fn adb_podman_and_shopify_each_run() {
-    let rig = rig("nuc", &[]);
-    for program in ["adb", "podman", "shopify"] {
-        fixture_bin(&rig.tools, program, &format!("echo {program} ran"));
-        let answer = call(&rig.hub, "run", &[program, "--version"]);
-        assert_eq!(answer["exit"], 0, "{program}: {answer}");
-        assert_eq!(answer["stdout"], format!("{program} ran\n"), "{program}");
-    }
-}
-
-#[test]
-fn a_program_off_the_allowlist_never_runs() {
-    let rig = rig("nuc", &[]);
-    let marker = rig.tools.join("rm.ran");
-    fixture_bin(&rig.tools, "rm", &format!("touch '{}'", marker.display()));
-    let answer = call(&rig.hub, "run", &["rm", "-rf", "/tmp/x"]);
-    assert_eq!(answer["exit"], 2);
-    assert_eq!(answer["stderr"], "device: rm is not allowed here\n");
+    assert_eq!(answer["exit"], 2, "{answer}");
+    assert_eq!(answer["stderr"], "device: run is gone; use device tmux\n");
     assert_eq!(answer["stdout"], "");
     assert!(!marker.exists());
     assert_eq!(
         mem_lines(&rig.mem_log),
         vec![
-            "--project=demo log -- device nuc run rm -rf /tmp/x exit 2 refused: rm is not allowed here"
+            "--project=demo log -- device nuc run adb devices exit 2 refused: run is gone; use device tmux"
         ]
-    );
-}
-
-#[test]
-fn a_program_given_as_a_path_is_refused() {
-    let rig = rig("nuc", &[]);
-    let answer = call(&rig.hub, "run", &["/usr/bin/adb", "devices"]);
-    assert_eq!(answer["exit"], 2);
-    assert_eq!(
-        answer["stderr"],
-        "device: /usr/bin/adb is not allowed here\n"
-    );
-}
-
-#[test]
-fn run_without_a_program_is_refused() {
-    let rig = rig("nuc", &[]);
-    let answer = call(&rig.hub, "run", &[]);
-    assert_eq!(answer["exit"], 2);
-    assert_eq!(answer["stderr"], "device: run needs a program\n");
-    assert_eq!(
-        mem_lines(&rig.mem_log),
-        vec!["--project=demo log -- device nuc run exit 2 refused: run needs a program"]
-    );
-}
-
-#[test]
-fn arguments_with_spaces_and_quotes_arrive_whole() {
-    let rig = rig("nuc", &[]);
-    let seen = rig.tools.join("adb.argv");
-    fixture_bin(
-        &rig.tools,
-        "adb",
-        &format!(
-            "for a in \"$@\"; do printf '[%s]\\n' \"$a\"; done > '{}'",
-            seen.display()
-        ),
-    );
-    let answer = call(&rig.hub, "run", &["adb", "shell", "echo \"a b\""]);
-    assert_eq!(answer["exit"], 0);
-    assert_eq!(
-        std::fs::read_to_string(&seen).unwrap(),
-        "[shell]\n[echo \"a b\"]\n"
-    );
-}
-
-#[test]
-fn a_run_past_the_timeout_is_stopped() {
-    let rig = rig("nuc", &[("HUB_DEVICE_TIMEOUT_MS", "300")]);
-    fixture_bin(&rig.tools, "adb", "exec sleep 5");
-    let started = Instant::now();
-    let answer = call(&rig.hub, "run", &["adb", "devices"]);
-    assert!(started.elapsed() < Duration::from_secs(3));
-    assert_eq!(answer["exit"], 124);
-    assert_eq!(
-        answer["stderr"],
-        "device: adb ran past 0.3 s and was stopped\n"
     );
 }
 

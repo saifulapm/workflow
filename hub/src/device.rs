@@ -1,9 +1,10 @@
 //! `POST /device`: what this machine does for a session that is somewhere
-//! else. `whoami` names the machine, `run` runs one of a few programs,
-//! `browser` drives the logged-in Chromium through playwright-cli, `tmux`
-//! drives the session's own tmux session (device_tmux), `amx` drives the one
-//! amx agent the thread started (device_amx), and every call leaves one line
-//! in the project's mem log.
+//! else. `whoami` names the machine, `browser` drives the logged-in Chromium
+//! through playwright-cli, `tmux` drives the session's own tmux session
+//! (device_tmux), `amx` drives the one amx agent the thread started
+//! (device_amx), `with-secrets` reads a project's pass entries for one cloud
+//! command (device_secrets), and every call leaves one line in the project's
+//! mem log. `run` is gone: its programs go through tmux.
 
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::fs::PermissionsExt;
@@ -18,9 +19,6 @@ use serde_json::json;
 use crate::http::{Request, Response};
 use crate::memcli::MemCli;
 use crate::proc::{Ended, output_within};
-
-/// The only programs `run` starts.
-const ALLOWED: [&str; 3] = ["adb", "podman", "shopify"];
 
 /// The machines that serve device calls. A project's own device counts only
 /// when one of them set it, so a cloud thread's mem cannot move its calls.
@@ -218,7 +216,9 @@ pub fn serve(machine: &str, request: &Request) -> Response {
             refused: None,
             files: BTreeMap::new(),
         },
-        "run" => run(&call.args),
+        // adb, podman, gh, cf and deploys go through tmux, where Saiful can
+        // watch them and a destructive line waits for his yes.
+        "run" => Outcome::refuse("run is gone; use device tmux".to_string()),
         "browser" => browser(call.session.as_deref(), &call.project, &call.args),
         "tmux" => crate::device_tmux::call(call.session.as_deref(), &call.project, &call.args),
         "amx" => crate::device_amx::call(call.session.as_deref(), &call.project, &call.args),
@@ -242,41 +242,6 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         })
         .to_string(),
     )
-}
-
-fn run(args: &[String]) -> Outcome {
-    let Some((program, rest)) = args.split_first() else {
-        return Outcome::refuse("run needs a program".to_string());
-    };
-    if !ALLOWED.contains(&program.as_str()) {
-        return Outcome::refuse(format!("{program} is not allowed here"));
-    }
-    let path = user_path();
-    let Some(found) = find_in(&path, program) else {
-        return Outcome::fail(127, format!("device: {program} was not found\n"));
-    };
-    let timeout = timeout();
-    let mut command = Command::new(found);
-    command.args(rest).env("PATH", &path);
-    match output_within(&mut command, timeout) {
-        Ended::Exited(done) => Outcome {
-            stdout: String::from_utf8_lossy(&done.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&done.stderr).into_owned(),
-            // A child killed by a signal has no code, and proc does not keep
-            // the signal, so this is 128 alone.
-            exit: done.code.unwrap_or(128),
-            refused: None,
-            files: BTreeMap::new(),
-        },
-        Ended::TimedOut => Outcome::fail(
-            124,
-            format!(
-                "device: {program} ran past {} s and was stopped\n",
-                timeout.as_secs_f64()
-            ),
-        ),
-        Ended::Failed(e) => Outcome::fail(126, format!("device: {program} did not start: {e}\n")),
-    }
 }
 
 fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
