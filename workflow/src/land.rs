@@ -39,18 +39,28 @@ pub fn cmd_land() -> i32 {
         warn(format!("land: mem lists no {project}"));
         return exit::FAILED;
     };
-    let Some(slug) = row.milestone.clone() else {
-        println!("done: {project}'s roadmap is done");
-        return exit::OK;
-    };
     let git = Git::here();
     let Some(dir) = git.toplevel() else {
         warn("land: this directory is no git checkout");
         return exit::USAGE;
     };
     let git = Git::at(&dir);
+    let on = git.out(&["branch", "--show-current"]).unwrap_or_default();
+    // A milestone ticked by a landing that asked once it was on the app's
+    // trunk, because main moved or the app's branch could not follow, lands
+    // again from its own branch: what is left is the move onto main.
+    let again = memcli::roadmap(&project).and_then(|text| ticked_on(&text, &project, &on));
+    let slug = match (again, row.milestone.clone()) {
+        (Some(slug), _) => slug,
+        (None, Some(slug)) => slug,
+        (None, None) => {
+            println!("done: {project}'s roadmap is done");
+            return exit::OK;
+        }
+    };
+    let ticked = slug != row.milestone.clone().unwrap_or_default();
     let branch = cloud::branch(&project, &slug);
-    if git.out(&["branch", "--show-current"]).as_deref() != Some(branch.as_str()) {
+    if on != branch {
         warn(format!(
             "land: a milestone lands from its branch {branch}; check it out first"
         ));
@@ -106,6 +116,31 @@ pub fn cmd_land() -> i32 {
     }
     let trunk_name = cloud::trunk(&project, &dir.to_string_lossy());
     let trunk_name = trunk_name.as_str();
+    if ticked && trunk_name == MAIN {
+        let next = row.milestone.clone().unwrap_or_default();
+        warn(format!(
+            "land: {slug} is landed; a milestone lands from its branch {}; check it out first",
+            cloud::branch(&project, &next)
+        ));
+        return exit::USAGE;
+    }
+    // The milestone on main already, its app's branch left behind: only
+    // that branch moves.
+    if ticked
+        && git.quiet(&[
+            "merge-base",
+            "--is-ancestor",
+            "HEAD",
+            &format!("origin/{MAIN}"),
+        ])
+    {
+        if let Err(code) = follow_main(&git, &dir, &project, &slug, None) {
+            return code;
+        }
+        carry_outbox(&git, &dir, &[trunk_name, MAIN]);
+        println!("{}", next_line(&project));
+        return exit::OK;
+    }
     if let Some(line) = claude_line(&git, &format!("origin/{trunk_name}..HEAD")) {
         println!("{line}");
         return exit::USAGE;
@@ -184,7 +219,7 @@ nothing was pushed to {trunk_name}"
         }
     }
 
-    if !memcli::tick(&project, &slug) {
+    if !ticked && !memcli::tick(&project, &slug) {
         warn(format!(
             "land: {slug} is on origin's {trunk_name}, but mem would not tick it; run `mem roadmap --tick {slug}`"
         ));
@@ -535,16 +570,56 @@ fn move_onto_main(
         }
     }
     if git.out(&["rev-parse", "HEAD"]).unwrap_or_default() != pushed {
-        let lease = format!("--force-with-lease=refs/heads/{app}:{pushed}");
-        if let Err(why) = push(dir, &format!("HEAD:refs/heads/{app}"), Some(&lease)) {
-            warn(format!("land: origin refused {app}: {why}"));
-            println!(
-                "ask: {app} did not follow main: {slug} is on origin's main, but {app} could not move to it"
-            );
-            return Err(exit::USAGE);
-        }
+        follow_main(git, dir, project, slug, Some(&pushed))?;
     }
     Ok(())
+}
+
+/// app/<project> moved to HEAD, which main holds: the rebase onto main
+/// rewrote it, so the push is leased on `pushed`, the tip this landing left
+/// there. A landing run again leases on origin's tip instead, once each of
+/// its commits is on HEAD, so nothing pushed there since is lost.
+fn follow_main(
+    git: &Git,
+    dir: &std::path::Path,
+    project: &str,
+    slug: &str,
+    pushed: Option<&str>,
+) -> Result<(), i32> {
+    let app = format!("app/{project}");
+    let tip = match pushed {
+        Some(tip) => Some(tip.to_string()),
+        None => remote_tip(git, &app).filter(|tip| {
+            let cherry = git.capture(&["cherry", "HEAD", tip]);
+            cherry.ok && cherry.text().lines().all(|l| l.starts_with('-'))
+        }),
+    };
+    let moved = match tip {
+        Some(tip) => {
+            let lease = format!("--force-with-lease=refs/heads/{app}:{tip}");
+            push(dir, &format!("HEAD:refs/heads/{app}"), Some(&lease))
+        }
+        None => Err(format!("origin's {app} holds commits main lacks")),
+    };
+    if let Err(why) = moved {
+        warn(format!("land: origin refused {app}: {why}"));
+        println!(
+            "ask: {app} did not follow main: {slug} is on origin's main, but {app} could not move to it"
+        );
+        return Err(exit::USAGE);
+    }
+    Ok(())
+}
+
+/// The milestone `branch` lands, when the roadmap shows it ticked:
+/// `cloud/<project>-<slug>` for a `- [x] <slug>` line.
+fn ticked_on(roadmap: &str, project: &str, branch: &str) -> Option<String> {
+    let slug = branch.strip_prefix(&format!("cloud/{project}-"))?;
+    roadmap
+        .lines()
+        .filter_map(|line| line.strip_prefix("- [x] "))
+        .any(|rest| rest.split_whitespace().next() == Some(slug))
+        .then(|| slug.to_string())
 }
 
 /// Rebase HEAD on `onto`. Every thread commits its unsent mem writes to the

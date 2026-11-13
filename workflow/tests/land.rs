@@ -108,7 +108,10 @@ case "$1 $2" in
   [ -f "$dir/land_ci" ] && ci=",\"land_ci\":\"$(cat "$dir/land_ci")\""
   printf '{{"id":"01G","name":"gamma","root":"{root}"%s%s,"verify":%s}}\n' "$sub" "$ci" "$(cat "$dir/verify.json")" ;;
 "projects --json") cat "$dir/projects.json" ;;
-"roadmap --tick") sed -i "s/- \[ \] $3 /- [x] $3 /" "$dir/roadmap.md" ;;
+"roadmap --tick")
+  sed -i "s/- \[ \] $3 /- [x] $3 /" "$dir/roadmap.md"
+  next=$(sed -n 's/^- \[ \] \([^ ]*\) .*/\1/p' "$dir/roadmap.md" | head -n 1)
+  sed -i "s/\"milestone\":\"$3\"/\"milestone\":\"$next\"/" "$dir/projects.json" ;;
 "roadmap --project") cat "$dir/roadmap.md" ;;
 "sync --json")
   n=0
@@ -886,6 +889,120 @@ fn an_app_branch_that_cannot_follow_main_asks() {
     );
     assert!(w.origin_log("main").contains("Build the milestone"));
     assert_ne!(w.origin_ref("app/gamma"), w.origin_main());
+}
+
+/// After `ask: main moved`, Saiful's `fix and try again`: main no longer
+/// breaks gamma, and land run again on the ticked milestone's branch moves
+/// it onto main without ticking it twice.
+#[test]
+fn land_run_again_after_main_moved_moves_the_ticked_milestone_onto_main() {
+    let w = World::app("land-app-again");
+    w.verify("test -f work.txt && test ! -f ../../breaks-gamma.txt");
+    w.trunk_moves("breaks-gamma.txt", "x\n");
+    let out = w.land();
+    assert!(ask_line(&out).starts_with("ask: main moved: gamma"));
+    let seed = w.work.at("seed");
+    w.git(&seed, &["rm", "-q", "breaks-gamma.txt"]);
+    w.git(&seed, &["commit", "-q", "-m", "Stop breaking gamma"]);
+    w.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert!(w.origin_log("main").contains("Build the milestone"));
+    assert_eq!(w.origin_ref("app/gamma"), w.origin_main());
+    let ticks = w.work.read("mem.log");
+    assert_eq!(
+        ticks
+            .lines()
+            .filter(|l| l.starts_with("roadmap --tick"))
+            .count(),
+        1,
+        "{ticks}"
+    );
+}
+
+/// After `ask: app/gamma did not follow main`, land run again once origin
+/// takes the move: app/gamma follows main, nothing else changes.
+#[test]
+fn land_run_again_after_the_app_branch_stuck_moves_it_to_main() {
+    let w = World::app("land-app-stuck-again");
+    w.trunk_moves("apps/delta/other.txt", "another app\n");
+    let hook = w.work.at("origin.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/app/gamma ] || continue\n  git merge-base --is-ancestor \"$old\" \"$new\" || exit 1\ndone\nexit 0\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = w.land();
+    assert!(ask_line(&out).starts_with("ask: app/gamma did not follow main:"));
+    let main = w.origin_main();
+    std::fs::remove_file(&hook).unwrap();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert_eq!(w.origin_main(), main, "main as the first landing left it");
+    assert_eq!(w.origin_ref("app/gamma"), main);
+    let ticks = w.work.read("mem.log");
+    assert_eq!(
+        ticks
+            .lines()
+            .filter(|l| l.starts_with("roadmap --tick"))
+            .count(),
+        1,
+        "{ticks}"
+    );
+}
+
+/// Run again after the app's branch stuck, with a commit pushed there since
+/// that main lacks: the move would lose it, so land asks again.
+#[test]
+fn land_run_again_keeps_a_commit_the_app_branch_gained_since() {
+    let w = World::app("land-app-stuck-gained");
+    w.trunk_moves("apps/delta/other.txt", "another app\n");
+    let hook = w.work.at("origin.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/app/gamma ] || continue\n  git merge-base --is-ancestor \"$old\" \"$new\" || exit 1\ndone\nexit 0\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = w.land();
+    assert!(ask_line(&out).starts_with("ask: app/gamma did not follow main:"));
+    std::fs::remove_file(&hook).unwrap();
+    let seed = w.work.at("seed");
+    w.git(&seed, &["fetch", "-q", "origin"]);
+    w.git(
+        &seed,
+        &["checkout", "-q", "-b", "gained", "origin/app/gamma"],
+    );
+    w.work.put("seed/apps/gamma/late.txt", "late\n");
+    w.git(&seed, &["add", "."]);
+    w.git(&seed, &["commit", "-q", "-m", "A late gamma fix"]);
+    w.git(&seed, &["push", "-q", "origin", "HEAD:app/gamma"]);
+    let gained = w.origin_ref("app/gamma");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(ask_line(&out).starts_with("ask: app/gamma did not follow main:"));
+    assert_eq!(w.origin_ref("app/gamma"), gained);
+}
+
+/// A root project's ticked milestone has nothing left to move: its branch
+/// lands no second time.
+#[test]
+fn a_root_projects_ticked_milestone_does_not_land_again() {
+    let w = World::new("land-root-again");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("cloud/gamma-m3-last"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// Main moves while the tests of gamma rebased onto main run: the push is
