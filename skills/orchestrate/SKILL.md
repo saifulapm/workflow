@@ -47,7 +47,8 @@ module does, send a `scout` subagent and read the lines it cites.
 
 When the handoff or a ticked checklist says this milestone is half done,
 continue from the first open task. Never redo landed work. A `parked:
-local-only` handoff that says `review and walk done at <sha>` leaves only
+local-only` handoff, which a thread wrote before threads asked Saiful
+instead, says `review and walk done at <sha>` and leaves only
 what it lists: build its `[local]` tasks, review the commits after that
 sha, walk the steps it names, then land as §7 says. A `worktree-*`
 branch with commits and no tick is a dispatched task only when this

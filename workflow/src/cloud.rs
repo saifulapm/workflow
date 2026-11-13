@@ -1836,8 +1836,6 @@ mod tests {
     fn a_landed_run_logs_out_of_the_tailnet_last() {
         assert!(PROMPT.contains("tailscaled.sock\" logout"), "{PROMPT}");
         assert!(PROMPT.contains("not when parked"), "{PROMPT}");
-        // A local-only park still takes messages, as the m6 walk showed.
-        assert!(PROMPT.contains("a local-only park included"), "{PROMPT}");
     }
 
     /// No end signal reaches a cloud session, so its unsent writes go on
@@ -1923,12 +1921,20 @@ mod tests {
         );
     }
 
-    /// A local-only task parks the run for a device with no question, which
-    /// `workflow go` there reads off the handoff.
+    /// A task for Saiful's hands is a question with done and hold, never a
+    /// park for a device; hold parks naming the question.
     #[test]
-    fn a_local_only_task_parks_for_a_device() {
-        assert!(PROMPT.contains("`[local]`"), "{PROMPT}");
-        assert!(PROMPT.contains("parked: local-only"), "{PROMPT}");
+    fn a_task_for_his_hands_is_a_question_with_done_and_hold() {
+        assert!(
+            PROMPT.contains("then answer done\" --option done --option hold`"),
+            "{PROMPT}"
+        );
+        assert!(
+            PROMPT.contains("a handoff starting `parked: Saiful holds {slug} (#<id>)`"),
+            "{PROMPT}"
+        );
+        assert!(!PROMPT.contains("local-only"), "{PROMPT}");
+        assert!(!PROMPT.contains("[local]"), "{PROMPT}");
     }
 
     /// A first mem that misses the store reads the replica the environment
@@ -1957,13 +1963,6 @@ mod tests {
             .expect(PROJECT_TEXT);
         assert!(check < claim, "{PROJECT_TEXT}");
         assert!(PROJECT_TEXT.contains("mem sync"), "{PROJECT_TEXT}");
-    }
-
-    /// The cloud rules park for a device only after the review and the
-    /// walk, so the prompt's local-only done says the same.
-    #[test]
-    fn a_local_only_park_comes_after_the_review_and_walk() {
-        assert!(PROMPT.contains("review and walk done at"), "{PROMPT}");
     }
 
     #[test]

@@ -27,7 +27,7 @@ fn one_line(text: &str) -> String {
 
 /// m2-device: a cloud walk reaches Saiful's logged-in Chromium through
 /// `device browser`, under the browser-operator rules, and a run that finds
-/// no device parks its task local-only.
+/// no device asks Saiful which device to use.
 #[test]
 fn a_cloud_walk_reaches_the_logged_in_browser_through_device() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -48,10 +48,49 @@ fn a_cloud_walk_reaches_the_logged_in_browser_through_device() {
     let cloud = one_line(&fs::read_to_string(repo.join("skills/orchestrate/cloud.md")).unwrap());
     for said in [
         "`device whoami`",
-        "parked: local-only <task>: no device online",
+        "run `device ask`",
+        "`I will turn it on` as options",
+        "Never park for a device",
     ] {
         assert!(cloud.contains(said), "cloud.md says {said}");
     }
+}
+
+/// m3-ask-not-park: a task for Saiful's hands is a hub question with done
+/// and hold, in the cloud page, the plan skill and the dogfood skill; no
+/// run parks local-only for it.
+#[test]
+fn a_task_for_his_hands_is_a_question_never_a_park() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let read = |path: &str| one_line(&fs::read_to_string(repo.join(path)).unwrap());
+    let cloud = read("skills/orchestrate/cloud.md");
+    assert!(!cloud.contains("local-only"), "cloud.md says local-only");
+    assert!(!cloud.contains("[local]"), "cloud.md says [local]");
+    for said in [
+        "--option done --option hold",
+        "it parks after 30 minutes like any other question",
+        "a handoff starting `parked: Saiful holds <milestone> (#<id>)`",
+    ] {
+        assert!(cloud.contains(said), "cloud.md says {said}");
+    }
+    let plan = read("skills/plan/SKILL.md");
+    assert!(
+        !plan.contains("then device:"),
+        "the plan skill says then device:"
+    );
+    assert!(
+        plan.contains("a task for Saiful's hands: a question whose options are `done` and `hold`"),
+        "the plan skill's rule 9"
+    );
+    let dogfood = read("skills/dogfood/SKILL.md");
+    assert!(
+        !dogfood.contains("local-only"),
+        "the dogfood skill says local-only"
+    );
+    assert!(
+        dogfood.contains("needs Saiful's hands: ask it with `mem ask --for saiful"),
+        "the dogfood skill"
+    );
 }
 
 /// m4-shopify: a theme walks headless on `workflow shopify theme-dev`, an app

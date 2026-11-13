@@ -27,31 +27,31 @@ the skill holds, with these changes:
   commit nothing. No signal reaches a session that ends, so writes the
   store has not taken yet travel on the branch, and the next machine to
   read the project sends them.
-- A task only a device can do, which the `device` command, `gh` and
-  `workflow land` do not reach (a phone in hand, a Mac for iOS, hardware),
-  is local-only, and its checklist line ends `[local]`: the device work
-  the plan's `Runs on: cloud, then device:` line names, cut as the last
-  tasks. Saiful's approval or choice is a question: ask it with `mem ask
-  --for saiful` and wait for it as the start prompt says, so it rings him. Land every other task, then run the review (§5) and the
-  dogfood walk (§6) here, the walk driving only what the dogfood skill says
-  a cloud session can, and land their fixes. Push the branch and write a
-  handoff starting `parked: local-only <task>: review and walk done at
-  <sha>; left:` that names the `[local]` tasks, the walk steps the dogfood
-  report marked `local-only`, and what they need. File no question: a
-  device's `workflow go` reads that handoff, takes the branch and runs
-  what is left. End the report with `parked: local-only <task>`.
+- A task for Saiful's hands, which the `device` command, `gh` and
+  `workflow land` do not reach (a phone in hand, a Mac for iOS, hardware,
+  a login no device holds), is a question like any other: `mem ask --for
+  saiful "<what to do>, then answer done" --option done --option hold`,
+  waited for as below. On `done`, carry on. With no answer, it parks after
+  30 minutes like any other question. Saiful's approval or choice is a
+  question too. No run parks for a device and no checklist line is cut for
+  one: the review (§5) and the walk (§6) run here as for any milestone.
 - Saiful's logged-in browser and the programs `device run` allows (adb,
-  podman, shopify) are reached from here with `device`, on the device
-  Saiful chose with `workflow device use` (the mini unless he chose
-  another), whatever the question route; the dogfood skill's cloud
-  paragraph has its rules. Run
-  `device whoami` before a task that needs them. When it exits 3 (no
-  device online), build what does not need the device, then hand off
-  `parked: local-only <task>: no device online` and end the report with
-  that line.
-- A device need the plan did not name, in a `Runs on: cloud` milestone or a
-  step its line left out, parks the same way and gets `mem finding add
-  --milestone <slug> --step plan` naming it, so the next plan names it.
+  podman, shopify) are reached from here with `device`, on the project's
+  own device when it has one (`mem project set device <machine>`), else on
+  the device Saiful chose with `workflow device use` (the mini unless he
+  chose another), whatever the question route; the dogfood skill's cloud
+  paragraph has its rules. Run `device whoami` before a task that needs
+  them. When a call exits 3 (`no device online (device: <name>); online:
+  <names>`), run `device ask`: it asks Saiful on the hub which device this
+  run uses, with the online devices and `I will turn it on` as options, and
+  prints the question's id. Do what does not need the device, then wait on
+  it with `workflow wait-answer <id>` as below. Once he names a device,
+  this run's device calls go there until it lands or parks; on `I will
+  turn it on`, call again. A device he names that is offline too exits 3
+  again: run `device ask` again. Never park for a device.
+- A device need the plan did not name gets `mem finding add --milestone
+  <slug> --step plan` naming it, so the next plan names it, and is asked
+  the same way.
 - A thread has no question dialog of its own: it asks Saiful only with
   `mem ask --for saiful`, and the cloud kit denies `AskUserQuestion`.
 - A question only Saiful can answer is waited for in the thread, 30
@@ -66,7 +66,11 @@ the skill holds, with these changes:
     first open task, export, commit and push the branch, then run
     `workflow wait-answer <id>` once more: an `answered:` line means the
     answer came while you parked, so carry on. Otherwise end the report
-    with the parked line. His start line, typed after he answers, parks
+    with the parked line.
+  - On the answer `hold`, write a handoff starting `parked: Saiful holds
+    <milestone> (#<id>)` that names the branch and the first open task,
+    export, commit and push the branch, and end the report with that
+    line. His start line, typed after he answers, parks
     again while any question is open, and once all are answered starts a
     thread that takes up the branch with the answers in its prompt.
   - A park ends the turn, not the run. On every new turn after a park, a

@@ -136,21 +136,22 @@ The rules:
 8. Write short sentences in the active voice. Quote Saiful's words; do not
    reword them.
 9. In a project that runs in its Claude Project (its `verify` page has a
-   `Cloud` section), say where the milestone runs, in a line under `Show`: `Runs on: cloud`, or
-   `Runs on: cloud, then device: <what needs the device>`. A cloud session
-   runs what verify's `Cloud` section says it can, with the deploy tokens
-   its environment holds, Saiful's logged-in Chromium and the programs
-   `device run` allows through the `device` command, and GitHub's runs,
-   job summaries and workflow dispatches through `gh` and `workflow land`.
-   Device work is what none of those reach: a phone or tablet in hand, a
-   Mac for iOS, hardware, a login no device or environment holds. Saiful's
-   approval or choice is a question, not device work: the behaviour says
-   what the thread asks him, and its acceptance names the ruling his answer
-   records. Give device work the milestone's last behaviour, and write every
-   other behaviour's acceptance and the Show path's steps before it for a
-   cloud session to check: a headless browser, a CLI or TUI in tmux, a
-   local server. Each milestone carries its own device work, so production
-   moves, and is walked, in the milestone that changed it.
+   `Cloud` section), say so in a line under `Show`: `Runs on: cloud`. A
+   cloud session runs what verify's `Cloud` section says it can, with the
+   deploy tokens its environment holds, Saiful's logged-in Chromium and the
+   programs `device run` allows through the `device` command, and GitHub's
+   runs, job summaries and workflow dispatches through `gh` and `workflow
+   land`. What none of those reach (a phone or tablet in hand, a Mac for
+   iOS, hardware, a login no device or environment holds) is a task for
+   Saiful's hands: a question whose options are `done` and `hold`. The
+   behaviour says what the thread asks him to do, and its acceptance what
+   the thread checks after his `done`. His approval or choice is a question
+   too: the behaviour says what the thread asks him, and its acceptance
+   names the ruling his answer records. Write every acceptance line and the
+   Show path's steps for a cloud session to check: a headless browser, a
+   CLI or TUI in tmux, a local server. Each milestone carries its own
+   device work, so production moves, and is walked, in the milestone that
+   changed it.
 10. Run each command the Show path and the acceptance lines name once, from
    a scratch copy in `$d`, before you store the plan, and drive the flow
    the Show path walks on today's product. A command that fails for any
