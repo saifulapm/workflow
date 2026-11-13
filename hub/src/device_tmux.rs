@@ -36,6 +36,9 @@ const JOB: &str = "hub/device-tmux.json";
 /// The session whose job the cap ended, so its next call can say so.
 const CAPPED: &str = "hub/device-tmux-capped";
 
+/// The ids of the questions whose yes already sent its line, one a line.
+const SPENT: &str = "hub/device-tmux-yes";
+
 /// Held across a job's read, change and write.
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -94,7 +97,7 @@ pub(crate) fn call(session: Option<&str>, project: &str, args: &[String]) -> Out
         },
     };
     let outcome = match verb.as_str() {
-        "send" => send(&tmux, &name, rest),
+        "send" => send(&tmux, &name, project, rest),
         "read" => read(&tmux, &name),
         _ => end(&tmux, &name),
     };
@@ -223,11 +226,26 @@ pub(crate) fn job_name(project: &str) -> Result<String, Outcome> {
     Ok(format!("cloud-{project}-{milestone}"))
 }
 
-fn send(tmux: &Tmux, name: &str, rest: &[String]) -> Outcome {
+fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
+    let (yes, rest) = match rest {
+        [flag, id, rest @ ..] if flag == "--yes" => (Some(id.trim_start_matches('#')), rest),
+        _ => (None, rest),
+    };
     if rest.is_empty() {
         return Outcome::refuse("tmux send needs a line".to_string());
     }
     let line = rest.join(" ");
+    if crate::held::held(&line) {
+        let Some(id) = yes else {
+            return Outcome {
+                stdout: format!("ask: {line}\n"),
+                ..Outcome::fail(6, String::new())
+            };
+        };
+        if let Err(refused) = released(project, id, &line) {
+            return refused;
+        }
+    }
     if !tmux.has(name) {
         let folder = match folder(name) {
             Ok(folder) => folder.to_string_lossy().into_owned(),
@@ -275,6 +293,64 @@ fn send(tmux: &Tmux, name: &str, rest: &[String]) -> Outcome {
         Ok(()) => Outcome::done(String::new()),
         Err(failed) => failed,
     }
+}
+
+/// Ok when question `id` of `project` asks for `line` and Saiful answered
+/// yes on one of the devices, never a cloud thread's own `mem answer`, and
+/// no earlier line went out on it. Its id is then spent.
+fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
+    let spent = state(SPENT)
+        .ok_or_else(|| Outcome::fail(126, "device: cannot find the state folder\n".to_string()))?;
+    if std::fs::read_to_string(&spent).is_ok_and(|ids| ids.lines().any(|used| used == id)) {
+        return Err(Outcome::refuse(format!(
+            "#{id} already sent its line; ask again"
+        )));
+    }
+    let mem = MemCli::new();
+    let rows = mem
+        .refresh(&["--project", project, "questions", "--json"])
+        .rows("questions");
+    let Some(question) = rows
+        .iter()
+        .find(|q| q["short_id"].as_str() == Some(id) && q["project"].as_str() == Some(project))
+    else {
+        return Err(Outcome::refuse(format!(
+            "#{id} is not a question of {project}"
+        )));
+    };
+    let body = question["body"].as_str().unwrap_or_default();
+    let asks = body.lines().any(|l| l.trim() == line) || body.contains(&format!("`{line}`"));
+    if !asks {
+        return Err(Outcome::refuse(format!("#{id} does not ask for {line}")));
+    }
+    let answer = question["answer"].as_str().unwrap_or_default();
+    if question["answered"].as_bool() != Some(true) {
+        return Err(Outcome::refuse(format!("#{id} has no answer yet")));
+    }
+    let first = answer
+        .split(|c: char| !c.is_alphanumeric())
+        .find(|w| !w.is_empty())
+        .unwrap_or_default();
+    if !first.eq_ignore_ascii_case("yes") {
+        return Err(Outcome::refuse(format!(
+            "the answer to #{id} is {answer}, not yes"
+        )));
+    }
+    let machine = question["answer_id"]
+        .as_str()
+        .map(|answer| mem.refresh(&["show", answer, "--json"]).rows("items"))
+        .and_then(|items| items.first()?["machine"].as_str().map(str::to_string));
+    if !machine.is_some_and(|m| crate::device::DEVICES.contains(&m.as_str())) {
+        return Err(Outcome::refuse(format!(
+            "the yes for #{id} came from a cloud machine"
+        )));
+    }
+    let mut ids = std::fs::read_to_string(&spent).unwrap_or_default();
+    ids.push_str(id);
+    ids.push('\n');
+    std::fs::write(&spent, ids)
+        .map_err(|e| Outcome::fail(126, format!("device: cannot keep #{id} as spent: {e}\n")))?;
+    Ok(())
 }
 
 /// The job's folder, `~/.cache/workflow-cloud/<name>`, made when it is not

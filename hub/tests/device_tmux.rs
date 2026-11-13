@@ -54,6 +54,8 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
              case \"$*\" in\n\
              *' log -- '*) printf '%s %s\\n' \"$1\" \"$last\" >> \"$S/log\" ;;\n\
              projects*) cat \"$S/projects.json\" 2>/dev/null || echo '{{\"projects\":[]}}' ;;\n\
+             *' questions --json'*) cat \"$S/questions.json\" 2>/dev/null || echo '{{\"questions\":[]}}' ;;\n\
+             'show '*) cat \"$S/show-$2.json\" 2>/dev/null || echo '{{\"items\":[]}}' ;;\n\
              *handoff*) cat \"$S/handoff.json\" 2>/dev/null || echo '{{}}' ;;\n\
              esac",
             state.display()
@@ -111,6 +113,19 @@ impl Rig {
         std::fs::write(self.state.join("projects.json"), projects.to_string()).unwrap();
         let body = serde_json::json!({ "body": handoff.unwrap_or_default() });
         std::fs::write(self.state.join("handoff.json"), body.to_string()).unwrap();
+    }
+
+    /// cloud_walk's question #AAAA1111 asking for `line`, answered
+    /// `answer` from `machine`.
+    fn asked(&self, line: &str, answer: &str, machine: &str) {
+        let questions = serde_json::json!({"questions": [
+            {"short_id": "AAAA1111", "project": "cloud_walk",
+             "body": format!("May I run this on the mini?\n\n    {line}\n"),
+             "answered": true, "answer": answer, "answer_id": "01ANSWER"},
+        ]});
+        std::fs::write(self.state.join("questions.json"), questions.to_string()).unwrap();
+        let show = serde_json::json!({"items": [{"kind": "answer", "machine": machine}]});
+        std::fs::write(self.state.join("show-01ANSWER.json"), show.to_string()).unwrap();
     }
 
     fn call(&self, project: &str, session: &str, args: &[&str]) -> serde_json::Value {
@@ -335,4 +350,106 @@ fn wait_until(within: Duration, done: impl Fn() -> bool) {
         assert!(Instant::now() < until, "not done in {within:?}");
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+const HELD: [&str; 10] = [
+    "rm -r scratch",
+    "git push --force",
+    "git push -f",
+    "gh repo delete x",
+    "cf dns records delete 1",
+    "wrangler delete",
+    "wrangler deploy",
+    "shopify app release",
+    "echo 'rm -r x'",
+    "true && rm -r x",
+];
+
+#[test]
+fn a_listed_line_is_held_and_never_reaches_the_pane() {
+    let rig = rig();
+    rig.walk(&["send", "echo ready"]);
+    rig.read_until("ready");
+    for line in HELD {
+        let answer = rig.walk(&["send", line]);
+        assert_eq!(answer["exit"], 6, "{line}: {answer}");
+        assert_eq!(answer["stdout"], format!("ask: {line}\n"), "{line}");
+    }
+    rig.walk(&["send", "echo after"]);
+    let pane = rig.read_until("after");
+    assert!(!pane.contains("rm -r"), "{pane}");
+    assert!(!pane.contains("git push"), "{pane}");
+}
+
+#[test]
+fn a_line_off_the_list_is_sent() {
+    let rig = rig();
+    for line in [
+        "wrangler deploy --env staging",
+        "workflow shopify deploy shortcart",
+        "gh repo view x",
+        "C-c",
+    ] {
+        let answer = rig.walk(&["send", line]);
+        assert_eq!(answer["exit"], 0, "{line}: {answer}");
+    }
+}
+
+/// A scratch folder in the job's folder, made through the session.
+fn scratch(rig: &Rig) -> PathBuf {
+    rig.walk(&["send", "mkdir -p scratch && echo made"]);
+    rig.read_until("made");
+    let folder = rig
+        .home
+        .join(".cache/workflow-cloud/cloud-cloud_walk-w14/scratch");
+    assert!(folder.is_dir());
+    folder
+}
+
+#[test]
+fn a_device_written_yes_sends_the_held_line_once() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    rig.asked("rm -r scratch", "yes", "mac-mini-m2");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    rig.walk(&["send", "echo removed"]);
+    rig.read_until("removed");
+    assert!(!folder.exists());
+    let again = rig.walk(&["send", "--yes", "#AAAA1111", "rm -r scratch"]);
+    assert_eq!(again["exit"], 2, "{again}");
+}
+
+#[test]
+fn a_yes_written_by_a_cloud_machine_is_refused() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    rig.asked("rm -r scratch", "yes", "cloud-abc");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 2, "{sent}");
+    assert_eq!(
+        sent["stderr"],
+        "device: the yes for #AAAA1111 came from a cloud machine\n"
+    );
+    assert!(folder.is_dir());
+}
+
+#[test]
+fn a_no_keeps_the_line_held() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    rig.asked("rm -r scratch", "No", "mac-mini-m2");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 2, "{sent}");
+    assert!(folder.is_dir());
+}
+
+#[test]
+fn a_yes_releases_only_the_line_it_asked_for() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    rig.asked("rm -r other", "yes", "mac-mini-m2");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 2, "{sent}");
+    assert!(folder.is_dir());
 }
