@@ -52,8 +52,9 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
             "S='{}'\n\
              for a in \"$@\"; do last=\"$a\"; done\n\
              case \"$*\" in\n\
-             projects*) cat \"$S/projects.json\" 2>/dev/null || echo '{{\"projects\":[]}}' ;;\n\
              *' log -- '*) printf '%s %s\\n' \"$1\" \"$last\" >> \"$S/log\" ;;\n\
+             projects*) cat \"$S/projects.json\" 2>/dev/null || echo '{{\"projects\":[]}}' ;;\n\
+             *handoff*) cat \"$S/handoff.json\" 2>/dev/null || echo '{{}}' ;;\n\
              esac",
             state.display()
         ),
@@ -90,6 +91,26 @@ impl Rig {
             serde_json::json!({ "projects": rows }).to_string(),
         )
         .unwrap();
+    }
+
+    /// cloud_walk building `milestone`, run in the cloud by session_01Walk
+    /// (the thread cse_01Walk) since a minute ago; its latest handoff,
+    /// `handoff`, was written now, or never when it is None.
+    fn cloud_run(&self, milestone: &str, handoff: Option<&str>) {
+        let now = jiff::Timestamp::now();
+        let since = now - jiff::SignedDuration::from_secs(60);
+        let handoff_at = handoff.map_or(serde_json::Value::Null, |_| now.to_string().into());
+        let projects = serde_json::json!({"projects": [
+            {"name": "cloud_walk", "roadmap_status": "approved", "checkouts": [],
+             "milestone": milestone, "milestones_done": 1, "milestones_total": 3,
+             "handoff_at": handoff_at,
+             "runner": {"machine": "cloud", "id": "session_01Walk",
+                        "since": since.to_string(), "milestone": "w14"}},
+            {"name": "shop", "milestone": "m2"},
+        ]});
+        std::fs::write(self.state.join("projects.json"), projects.to_string()).unwrap();
+        let body = serde_json::json!({ "body": handoff.unwrap_or_default() });
+        std::fs::write(self.state.join("handoff.json"), body.to_string()).unwrap();
     }
 
     fn call(&self, project: &str, session: &str, args: &[&str]) -> serde_json::Value {
@@ -196,9 +217,13 @@ fn the_session_runs_bash() {
 #[test]
 fn a_session_does_not_match_another_by_its_prefix() {
     let rig = rig();
-    rig.milestones(&[("cloud_walk", "w1")]);
-    rig.walk(&["send", "true"]);
-    rig.milestones(&[("cloud_walk", "w14")]);
+    let made = Command::new("tmux")
+        .arg("-S")
+        .arg(&rig.socket)
+        .args(["new-session", "-d", "-s", "cloud-cloud_walk-w1"])
+        .status()
+        .unwrap();
+    assert!(made.success());
     let read = rig.walk(&["read"]);
     assert_eq!(read["exit"], 2, "{read}");
     assert_eq!(rig.sessions(), ["cloud-cloud_walk-w1"]);
@@ -222,4 +247,92 @@ fn a_project_with_no_open_milestone_is_refused() {
     let answer = rig.call("nothing", "cse_01Other", &["send", "true"]);
     assert_eq!(answer["exit"], 2, "{answer}");
     assert!(rig.sessions().is_empty());
+}
+
+#[test]
+fn a_second_project_finds_the_device_busy_until_the_first_job_ends() {
+    let rig = rig();
+    assert_eq!(rig.walk(&["send", "true"])["exit"], 0);
+    let busy = rig.call("shop", "cse_01Shop", &["send", "true"]);
+    assert_eq!(busy["exit"], 5, "{busy}");
+    assert_eq!(busy["stdout"], "busy: cloud_walk\n");
+    assert_eq!(rig.sessions(), ["cloud-cloud_walk-w14"]);
+    rig.walk(&["end"]);
+    let sent = rig.call("shop", "cse_01Shop", &["send", "true"]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    assert_eq!(rig.sessions(), ["cloud-shop-m2"]);
+}
+
+#[test]
+fn an_idle_job_is_ended() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1000")]);
+    rig.walk(&["send", "true"]);
+    wait_until(Duration::from_secs(5), || rig.sessions().is_empty());
+    let sent = rig.call("shop", "cse_01Shop", &["send", "true"]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+}
+
+#[test]
+fn a_job_in_use_ends_at_the_cap_and_the_thread_is_told_once() {
+    let rig = rig_env(&[("HUB_DEVICE_JOB_CAP_MS", "2000")]);
+    let until = Instant::now() + Duration::from_secs(6);
+    let told = loop {
+        let answer = rig.walk(&["send", "true"]);
+        if answer["exit"] != 0 {
+            break answer;
+        }
+        assert!(Instant::now() < until, "the job never hit its cap");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(told["exit"], 2, "{told}");
+    assert_eq!(
+        told["stderr"],
+        "device: the job ended at the 20-minute cap\n"
+    );
+    assert!(rig.sessions().is_empty(), "{:?}", rig.sessions());
+    let again = rig.walk(&["send", "true"]);
+    assert_eq!(again["exit"], 0, "{again}");
+}
+
+#[test]
+fn the_cap_ends_a_job_with_no_call_coming() {
+    let rig = rig_env(&[
+        ("HUB_DEVICE_JOB_CAP_MS", "1000"),
+        ("HUB_DEVICE_SWEEP_MS", "200"),
+    ]);
+    rig.walk(&["send", "true"]);
+    wait_until(Duration::from_secs(5), || rig.sessions().is_empty());
+    let told = rig.walk(&["read"]);
+    assert_eq!(
+        told["stderr"], "device: the job ended at the 20-minute cap\n",
+        "{told}"
+    );
+}
+
+#[test]
+fn a_parked_run_s_job_is_ended() {
+    let rig = rig_env(&[("HUB_DEVICE_SWEEP_MS", "200")]);
+    rig.cloud_run("w14", None);
+    rig.walk(&["send", "true"]);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(rig.sessions(), ["cloud-cloud_walk-w14"]);
+    rig.cloud_run("w14", Some("parked: waiting on q1"));
+    wait_until(Duration::from_secs(5), || rig.sessions().is_empty());
+}
+
+#[test]
+fn a_landed_run_s_job_is_ended() {
+    let rig = rig_env(&[("HUB_DEVICE_SWEEP_MS", "200")]);
+    rig.cloud_run("w14", None);
+    rig.walk(&["send", "true"]);
+    rig.cloud_run("w15", None);
+    wait_until(Duration::from_secs(5), || rig.sessions().is_empty());
+}
+
+fn wait_until(within: Duration, done: impl Fn() -> bool) {
+    let until = Instant::now() + within;
+    while !done() {
+        assert!(Instant::now() < until, "not done in {within:?}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }

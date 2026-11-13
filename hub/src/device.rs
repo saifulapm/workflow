@@ -201,7 +201,7 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         },
         "run" => run(&call.args),
         "browser" => browser(call.session.as_deref(), &call.project, &call.args),
-        "tmux" => crate::device_tmux::call(&call.project, &call.args),
+        "tmux" => crate::device_tmux::call(call.session.as_deref(), &call.project, &call.args),
         other => return Response::text(400, &format!("not a device verb: {other}")),
     };
     log(machine, &call, &outcome);
@@ -334,7 +334,7 @@ struct LastCall {
     at: u64,
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
@@ -350,14 +350,15 @@ fn session_lock(session: &str) -> Arc<Mutex<()>> {
 }
 
 /// `HUB_DEVICE_IDLE_MS`, else 15 minutes.
-fn idle_limit(ms: Option<&str>) -> Duration {
+pub(crate) fn idle_limit(ms: Option<&str>) -> Duration {
     ms.and_then(|ms| ms.parse().ok())
         .map_or(DEFAULT_IDLE, Duration::from_millis)
 }
 
 /// Runs until the process ends: every `HUB_DEVICE_SWEEP_MS` (at most 15 s)
 /// closes the tabs of each session whose last call ended longer than the
-/// idle limit ago, or whose cloud run has landed or parked, and detaches it.
+/// idle limit ago, or whose cloud run has landed or parked, and detaches it,
+/// and ends the tmux job when it is due (device_tmux).
 pub fn sweep_sessions() -> ! {
     let limit = idle_limit(std::env::var("HUB_DEVICE_IDLE_MS").ok().as_deref());
     let every = std::env::var("HUB_DEVICE_SWEEP_MS")
@@ -372,6 +373,7 @@ pub fn sweep_sessions() -> ! {
         std::thread::sleep(every);
         // Read once a round, and only when a session is there to judge.
         let projects = std::cell::OnceCell::new();
+        crate::device_tmux::sweep(&mem, &projects);
         let Ok(root) = crate::config::state_home().map(|h| h.join("hub/device")) else {
             continue;
         };

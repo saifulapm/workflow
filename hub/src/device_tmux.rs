@@ -1,11 +1,18 @@
 //! `device tmux send|read|end`: one tmux session on this device for a
 //! thread, named `cloud-<project>-<milestone>` so Saiful can attach to it and
 //! watch, and working in its own folder under `~/.cache/workflow-cloud/`.
+//! A device runs one such job at a time; it ends on `end`, after the idle
+//! limit, at its 20-minute cap, and when its cloud run lands or parks.
 
+use std::cell::OnceCell;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::Duration;
 
-use crate::device::{HELPER_TIMEOUT, Outcome, find_in, user_path};
+use serde::{Deserialize, Serialize};
+
+use crate::device::{HELPER_TIMEOUT, Outcome, find_in, unix_now, user_path};
 use crate::memcli::MemCli;
 use crate::proc::{Ended, Finished, output_within};
 
@@ -18,26 +25,184 @@ const KEYS: [&str; 10] = [
 /// How far above the visible pane a read reaches.
 const HISTORY: &str = "-200";
 
-pub(crate) fn call(project: &str, args: &[String]) -> Outcome {
+/// How long a job may last, in use or not.
+const DEFAULT_CAP: Duration = Duration::from_secs(20 * 60);
+
+/// The device's one job, under the state folder: whose it is, and when it
+/// started and was last called. Not under hub/device/, whose folders are
+/// browser sessions.
+const JOB: &str = "hub/device-tmux.json";
+
+/// The session whose job the cap ended, so its next call can say so.
+const CAPPED: &str = "hub/device-tmux-capped";
+
+/// Held across a job's read, change and write.
+static LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Serialize, Deserialize)]
+struct Job {
+    project: String,
+    session: String,
+    name: String,
+    /// Unix milliseconds.
+    started: u64,
+    last: u64,
+}
+
+/// Why a job ends without its thread's `end`.
+#[derive(PartialEq)]
+enum Over {
+    Cap,
+    Idle,
+    Run,
+}
+
+pub(crate) fn call(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
     let Some((verb, rest)) = args.split_first() else {
         return Outcome::refuse("tmux needs send, read or end".to_string());
     };
     if !matches!(verb.as_str(), "send" | "read" | "end") {
         return Outcome::refuse(format!("tmux {verb} is not a verb (send, read, end)"));
     }
-    let name = match job_name(project) {
-        Ok(name) => name,
-        Err(refused) => return refused,
+    let Some(session) = session.filter(|s| plain(s)) else {
+        return Outcome::refuse("tmux needs a session".to_string());
     };
     let tmux = match Tmux::here() {
         Ok(tmux) => tmux,
         Err(failed) => return failed,
     };
-    match verb.as_str() {
+    let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let now = unix_now();
+    let mut job = read_job();
+    if let Some(over) = job.as_ref().and_then(|job| due(job, now)) {
+        end_job(&tmux, job.take().as_ref(), over);
+    }
+    if take_capped(session) {
+        return Outcome::refuse("the job ended at the 20-minute cap".to_string());
+    }
+    let (name, started) = match &job {
+        Some(job) if job.session != session => {
+            return Outcome {
+                stdout: format!("busy: {}\n", job.project),
+                ..Outcome::fail(5, String::new())
+            };
+        }
+        Some(job) => (job.name.clone(), job.started),
+        None => match job_name(project) {
+            Ok(name) => (name, now),
+            Err(refused) => return refused,
+        },
+    };
+    let outcome = match verb.as_str() {
         "send" => send(&tmux, &name, rest),
         "read" => read(&tmux, &name),
         _ => end(&tmux, &name),
+    };
+    if verb == "end" {
+        end_job(&tmux, None, Over::Run);
+    } else if job.is_some() || (verb == "send" && outcome.exit == 0) {
+        write_job(&Job {
+            project: project.to_string(),
+            session: session.to_string(),
+            name,
+            started,
+            last: now,
+        });
     }
+    outcome
+}
+
+/// Ends the job when it is past its cap or idle limit, or its cloud run has
+/// landed or parked. Called by the device's sweep.
+pub(crate) fn sweep(mem: &MemCli, projects: &OnceCell<Vec<serde_json::Value>>) {
+    let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(job) = read_job() else {
+        return;
+    };
+    let over = due(&job, unix_now()).or_else(|| {
+        crate::device::run_over(&job.session, &job.project, mem, projects).then_some(Over::Run)
+    });
+    if let Some(over) = over
+        && let Ok(tmux) = Tmux::here()
+    {
+        end_job(&tmux, Some(&job), over);
+        eprintln!(
+            "hub: device: ended tmux job {} of {}",
+            job.name, job.project
+        );
+    }
+}
+
+fn due(job: &Job, now: u64) -> Option<Over> {
+    let cap = std::env::var("HUB_DEVICE_JOB_CAP_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(DEFAULT_CAP, Duration::from_millis);
+    let idle = crate::device::idle_limit(std::env::var("HUB_DEVICE_IDLE_MS").ok().as_deref());
+    let since = |at: u64| Duration::from_millis(now.saturating_sub(at));
+    if since(job.started) >= cap {
+        Some(Over::Cap)
+    } else if since(job.last) >= idle {
+        Some(Over::Idle)
+    } else {
+        None
+    }
+}
+
+/// Kills `job`'s session and forgets the job, and keeps the session that the
+/// cap ended. With no `job`, only the record goes.
+fn end_job(tmux: &Tmux, job: Option<&Job>, over: Over) {
+    if let Some(job) = job {
+        let _ = tmux.run(&["kill-session", "-t", &format!("={}", job.name)]);
+        if over == Over::Cap
+            && let Some(capped) = state(CAPPED)
+        {
+            let _ = std::fs::write(capped, &job.session);
+        }
+    }
+    if let Some(file) = state(JOB) {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// Whether the cap ended `session`'s job since its last call; forgets it.
+fn take_capped(session: &str) -> bool {
+    let Some(file) = state(CAPPED) else {
+        return false;
+    };
+    let capped = std::fs::read_to_string(&file).is_ok_and(|s| s == session);
+    if capped {
+        let _ = std::fs::remove_file(file);
+    }
+    capped
+}
+
+fn read_job() -> Option<Job> {
+    let bytes = std::fs::read(state(JOB)?).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_job(job: &Job) {
+    let Some(file) = state(JOB) else {
+        return;
+    };
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&file, serde_json::to_vec(job).unwrap_or_default()) {
+        eprintln!("hub: device: cannot write {}: {e}", file.display());
+    }
+}
+
+fn state(rel: &str) -> Option<PathBuf> {
+    crate::config::state_home().ok().map(|home| home.join(rel))
+}
+
+/// 1 to 64 of [A-Za-z0-9_-], fit for a session name and a path.
+fn plain(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// `cloud-<project>-<milestone>`, from the project's open milestone in mem.
@@ -49,11 +214,6 @@ pub(crate) fn job_name(project: &str) -> Result<String, Outcome> {
         .and_then(|row| row["milestone"].as_str());
     let Some(milestone) = milestone else {
         return Err(Outcome::refuse(format!("{project} has no open milestone")));
-    };
-    let plain = |s: &str| {
-        (1..=64).contains(&s.len())
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
     };
     if !plain(project) || !plain(milestone) {
         return Err(Outcome::refuse(format!(
