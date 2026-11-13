@@ -801,3 +801,53 @@ fn a_plan_tick_on_a_commits_command_line_is_refused() {
         assert!(passes(&guard(w.path(), command)), "{command:?}");
     }
 }
+
+#[test]
+fn pnpm_where_node_modules_links_out_of_the_worktree_is_refused() {
+    let trunk = Scratch::new("guard-bash-pnpm-trunk");
+    std::fs::create_dir_all(trunk.path().join("node_modules")).unwrap();
+    let w = Scratch::new("guard-bash-pnpm");
+    std::fs::write(w.path().join(".git"), "gitdir: /elsewhere\n").unwrap();
+    std::fs::create_dir_all(w.path().join("apps/web")).unwrap();
+    std::os::unix::fs::symlink(
+        trunk.path().join("node_modules"),
+        w.path().join("node_modules"),
+    )
+    .unwrap();
+    for command in [
+        "pnpm test",
+        "pnpm exec vitest run",
+        "(cd apps/web && pnpm test)",
+        "cd apps/web; pnpm run verify",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(
+            refused(&out, "node_modules/.bin/vitest"),
+            "{command:?}: {out:?}"
+        );
+    }
+    for command in [
+        "node_modules/.bin/vitest run",
+        "npm_config_verify_deps_before_run=false node scripts/verify.mjs",
+    ] {
+        assert!(passes(&guard(w.path(), command)), "{command:?}");
+    }
+
+    // A main checkout's node_modules, even a linked one, passes.
+    let own = Scratch::new("guard-bash-pnpm-own");
+    std::fs::create_dir(own.path().join(".git")).unwrap();
+    std::fs::create_dir_all(own.path().join("node_modules")).unwrap();
+    std::fs::create_dir_all(own.path().join("apps/web")).unwrap();
+    std::os::unix::fs::symlink(
+        own.path().join("node_modules"),
+        own.path().join("apps/web/node_modules"),
+    )
+    .unwrap();
+    for command in ["pnpm test", "pnpm -C apps/web test", "pnpm install"] {
+        assert!(passes(&guard(own.path(), command)), "{command:?}");
+    }
+    assert!(refused(
+        &guard(own.path(), &format!("pnpm -C {} test", w.path().display())),
+        "node_modules/.bin/vitest"
+    ));
+}

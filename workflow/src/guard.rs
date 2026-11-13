@@ -156,7 +156,7 @@ fn is_wrapper(word: &str) -> bool {
 
 /// Whether `cwd` sits in a linked worktree (its `.git` is a file) whose
 /// node_modules is a symlink. A main checkout's `.git` is a folder.
-fn over_linked_node_modules(cwd: &Path) -> bool {
+pub(crate) fn over_linked_node_modules(cwd: &Path) -> bool {
     cwd.ancestors()
         .find(|dir| dir.join(".git").exists())
         .is_some_and(|top| top.join(".git").is_file() && top.join("node_modules").is_symlink())

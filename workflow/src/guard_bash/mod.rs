@@ -10,6 +10,7 @@ mod chain;
 mod devserver;
 mod pkill;
 mod playwright;
+mod pnpm;
 mod rm;
 mod snapshot;
 mod suite;
@@ -55,6 +56,7 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     devserver::refusal,
     suite::refusal,
     tick::refusal,
+    pnpm::refusal,
 ];
 
 pub fn cmd_guard_bash() -> i32 {
