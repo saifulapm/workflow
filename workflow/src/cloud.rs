@@ -1374,14 +1374,18 @@ with open(path, "w") as out:
     json.dump(settings, out, indent=2)
 PY_EOF
 }
-# gitkit: Saiful's identity, and the hook stubs and ignore list the bundle
-# laid, in git's global config. Every boot, not only with a new bundle:
-# claude.ai may write an identity of its own after the snapshot. With no
+# gitkit: Saiful's identity, no signing, and the hook stubs and ignore list
+# the bundle laid, in git's global config. Every boot, not only with a new
+# bundle: claude.ai may write an identity of its own after the snapshot, and
+# writes commit.gpgsign with an ssh key GitHub does not know into the same
+# file at boot, so GitHub marked every thread commit Unverified. With no
 # stubs, git keeps each repo's own hooks.
 gitkit() {
   command -v git >/dev/null 2>&1 || return 0
   git config --global user.name "Saiful Islam"
   git config --global user.email saiful.apm@gmail.com
+  git config --global commit.gpgsign false
+  git config --global tag.gpgsign false
   if [ -x "$HOME/.config/git/hooks/pre-commit" ]; then
     git config --global core.hooksPath "$HOME/.config/git/hooks"
   fi

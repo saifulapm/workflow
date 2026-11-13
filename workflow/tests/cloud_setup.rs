@@ -1445,6 +1445,67 @@ fn every_boot_sets_the_identity_again() {
     );
 }
 
+/// claude.ai's threads signed their commits with a key GitHub does not
+/// know (GitHub's reason: unknown_key), so their commits showed Unverified.
+/// claude.ai writes commit.gpgsign, gpg.format ssh, gpg.ssh.program and a
+/// signingkey into the global config at boot (fact #F4G67D93). Every boot turns commit and tag signing off beside the identity, though
+/// the global config said to sign, and a commit made then carries no
+/// signature even with a signing program that fails.
+#[test]
+fn every_boot_turns_signing_off() {
+    let home = Scratch::new("cloud-shim-git-sign");
+    let (_log, path) = store_fakes(&home, 0);
+    git_kit_bundle(&home);
+    setup_with(&home, &path, &STORE_ENV);
+    home.script("sign-fails", "#!/bin/sh\nexit 1\n");
+    home.put(
+        ".gitconfig",
+        &format!(
+            "[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n\
+             [gpg \"ssh\"]\n\tprogram = {}\n[user]\n\tsigningkey = /nonexistent.pub\n",
+            home.at("sign-fails").display()
+        ),
+    );
+    run_store_shim(&home, &path, &["context"]);
+    assert_eq!(global_git(&home, "commit.gpgsign"), "false");
+    assert_eq!(global_git(&home, "tag.gpgsign"), "false");
+
+    let repo = home.at("repo");
+    let git = |args: &[&str]| {
+        command("git")
+            .current_dir(&repo)
+            .env("HOME", home.path())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_AUTHOR_NAME")
+            .env_remove("GIT_AUTHOR_EMAIL")
+            .env_remove("GIT_COMMITTER_NAME")
+            .env_remove("GIT_COMMITTER_EMAIL")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    fs::create_dir_all(&repo).unwrap();
+    assert!(git(&["init", "-q"]).status.success());
+    let made = git(&[
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    ]);
+    assert!(made.status.success(), "{made:?}");
+    let object = String::from_utf8(git(&["cat-file", "commit", "HEAD"]).stdout).unwrap();
+    assert!(!object.contains("\ngpgsig "), "{object}");
+    for who in ["author", "committer"] {
+        assert!(
+            object.contains(&format!("\n{who} Saiful Islam <saiful.apm@gmail.com> ")),
+            "{object}"
+        );
+    }
+}
+
 /// With no hook stubs laid, git keeps each repo's own hooks: a hooksPath
 /// at an empty folder would turn them off.
 #[test]
