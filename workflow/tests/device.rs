@@ -174,7 +174,7 @@ fn no_args_asks_the_local_hub_and_a_wrong_verb_exits_2() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stderr(&out),
-        "device: rm is not a verb (whoami, run, browser, tmux, amx)\n"
+        "device: rm is not a verb (whoami, run, browser, tmux, amx, with-secrets)\n"
     );
 }
 
@@ -410,4 +410,89 @@ fn ask_fails_as_a_call_would_when_the_hub_cannot_be_reached() {
     assert_eq!(stderr(&out), "device: no device online\n");
     assert_eq!(out.status.code(), Some(3));
     assert!(!work.has("mem.argv"));
+}
+
+/// A theme token's shape, 38 characters, built here so no literal of it is
+/// committed.
+fn theme_token() -> String {
+    format!("shpat_{}", "0123456789abcdef".repeat(2))
+}
+
+#[test]
+fn with_secrets_runs_the_command_here_with_the_device_s_entries_set() {
+    let work = world("device-with-secrets");
+    let mut said: Value =
+        serde_json::from_str(&hub_says(Some("mac-mini-m2"), "", "", 0, json!({}))).unwrap();
+    said["secrets"] = json!({"SHOPIFY_CLI_THEME_TOKEN": theme_token()});
+    answer(&work, 200, 0, &said.to_string());
+    let out = device(
+        &work,
+        &[
+            "with-secrets",
+            "pawsome",
+            "--",
+            "sh",
+            "-c",
+            "echo ${#SHOPIFY_CLI_THEME_TOKEN} $WORKFLOW_WITH_SECRETS",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(stdout(&out), "38 pawsome\n");
+    assert!(!stderr(&out).contains(&theme_token()), "{out:?}");
+    let sent = sent(&work);
+    assert_eq!(sent["verb"], "with-secrets");
+    assert_eq!(sent["project"], "pawsome");
+    assert_eq!(
+        sent["args"],
+        json!([
+            "--",
+            "sh",
+            "-c",
+            "echo ${#SHOPIFY_CLI_THEME_TOKEN} $WORKFLOW_WITH_SECRETS"
+        ])
+    );
+}
+
+#[test]
+fn with_secrets_keeps_the_command_s_exit_and_the_device_s_refusal() {
+    let work = world("device-with-secrets-exit");
+    answer(&work, 200, 0, &hub_says(None, "", "", 0, json!({})));
+    let out = device(
+        &work,
+        &["with-secrets", "pawsome", "--", "sh", "-c", "exit 4"],
+    );
+    assert_eq!(out.status.code(), Some(4), "{out:?}");
+    answer(
+        &work,
+        200,
+        0,
+        &hub_says(
+            None,
+            "",
+            "device: pass is locked on mac-mini-m2\n",
+            7,
+            json!({}),
+        ),
+    );
+    let out = device(&work, &["with-secrets", "pawsome", "--", "true"]);
+    assert_eq!(out.status.code(), Some(7), "{out:?}");
+    assert_eq!(stderr(&out), "device: pass is locked on mac-mini-m2\n");
+}
+
+#[test]
+fn with_secrets_needs_a_project_and_a_command() {
+    let work = world("device-with-secrets-usage");
+    for args in [
+        &["with-secrets"][..],
+        &["with-secrets", "pawsome"],
+        &["with-secrets", "pawsome", "--"],
+        &["with-secrets", "pawsome", "true"],
+    ] {
+        let out = device(&work, args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        assert_eq!(
+            stderr(&out),
+            "usage: device with-secrets <project> -- <command>\n"
+        );
+    }
 }

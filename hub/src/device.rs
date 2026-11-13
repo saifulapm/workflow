@@ -192,6 +192,24 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         Ok(call) => call,
         Err(e) => return Response::text(400, &format!("expected verb, args and project: {e}")),
     };
+    if call.verb == "with-secrets" {
+        // The values go back beside the answer, never in it or the log.
+        let (outcome, secrets) = crate::device_secrets::call(machine, &call.project);
+        log(machine, &call, &outcome);
+        return Response::new(
+            200,
+            "application/json",
+            json!({
+                "machine": machine,
+                "stdout": outcome.stdout,
+                "stderr": outcome.stderr,
+                "exit": outcome.exit,
+                "files": {},
+                "secrets": secrets,
+            })
+            .to_string(),
+        );
+    }
     let mut outcome = match call.verb.as_str() {
         "whoami" => Outcome {
             stdout: format!("{machine}\n"),

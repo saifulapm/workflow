@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::exit;
 
-const VERBS: [&str; 5] = ["whoami", "run", "browser", "tmux", "amx"];
+const VERBS: [&str; 6] = ["whoami", "run", "browser", "tmux", "amx", "with-secrets"];
 /// What `device use` takes, and the machine name each stands for.
 const MACHINES: [(&str, &str); 3] = [
     ("mini", "mac-mini-m2"),
@@ -253,9 +253,12 @@ pub fn cmd_device(args: &[String]) -> i32 {
     }
     if verb != "ask" && !VERBS.contains(&verb.as_str()) {
         say(&format!(
-            "{verb} is not a verb (whoami, run, browser, tmux, amx)"
+            "{verb} is not a verb (whoami, run, browser, tmux, amx, with-secrets)"
         ));
         return exit::USAGE;
+    }
+    if verb == "with-secrets" {
+        return cmd_with_secrets(rest);
     }
     let Some(project) =
         env("MEM_PROJECT").or_else(|| crate::memcli::project_current().map(|p| p.name))
@@ -325,6 +328,50 @@ fn call(verb: &str, args: &[String], project: &str) -> Result<Value, i32> {
         say(&format!("unexpected answer {status}: {start}"));
         exit::FAILED
     })
+}
+
+/// `device with-secrets <project> -- <command>`: runs `command` here with
+/// the pass entries the device reads for `project` set in its environment,
+/// and `WORKFLOW_WITH_SECRETS` naming the project. Exits as the command
+/// does. No value is printed.
+fn cmd_with_secrets(args: &[String]) -> i32 {
+    let (project, command) = match args {
+        [project, dashes, command @ ..] if dashes == "--" && !command.is_empty() => {
+            (project, command)
+        }
+        _ => {
+            eprintln!("usage: device with-secrets <project> -- <command>");
+            return exit::USAGE;
+        }
+    };
+    let mut logged = vec!["--".to_string()];
+    logged.extend(command.iter().cloned());
+    let answer = match call("with-secrets", &logged, project) {
+        Ok(answer) => answer,
+        Err(code) => return code,
+    };
+    if answer["exit"].as_i64() != Some(0) {
+        return play_back(&answer);
+    }
+    if let Some(machine) = answer["machine"].as_str() {
+        note_machine(machine);
+    }
+    let mut child = Command::new(&command[0]);
+    child
+        .args(&command[1..])
+        .env("WORKFLOW_WITH_SECRETS", project);
+    if let Some(secrets) = answer["secrets"].as_object() {
+        for (name, value) in secrets {
+            child.env(name, value.as_str().unwrap_or_default());
+        }
+    }
+    match child.status() {
+        Ok(status) => status.code().unwrap_or(128),
+        Err(err) => {
+            say(&format!("{} did not start: {err}", command[0]));
+            127
+        }
+    }
 }
 
 /// `device ask`: when the device is offline, ask Saiful which online device
