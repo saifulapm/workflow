@@ -531,9 +531,9 @@ fn a_chosen_device_whose_hub_cannot_serve_calls_is_not_online() {
 
     let answer = device(&mini, "whoami");
     assert_eq!(answer["exit"], 3, "{answer}");
-    // Its ping answers to the name, so it counts as online.
+    // Its ping answers to the name, but it served nothing: not online.
     assert_eq!(
-        answer["stderr"], "device: no device online (device: nuc); online: mac-mini-m2, nuc\n",
+        answer["stderr"], "device: no device online (device: nuc); online: mac-mini-m2\n",
         "{answer}"
     );
 }

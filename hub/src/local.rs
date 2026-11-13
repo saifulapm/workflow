@@ -593,7 +593,15 @@ impl Local {
         if device == self.machine {
             return crate::device::serve(&self.machine, request);
         }
-        let offline = || crate::device::unserved(request, &device, &self.devices_online());
+        // The device that just failed is not online, whatever its ping says.
+        let offline = || {
+            let online: Vec<String> = self
+                .devices_online()
+                .into_iter()
+                .filter(|name| *name != device)
+                .collect();
+            crate::device::unserved(request, &device, &online)
+        };
         let Some(peer) = self.peer_named(&device) else {
             return offline();
         };
