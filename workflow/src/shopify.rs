@@ -1,15 +1,16 @@
 //! `workflow shopify theme-dev <theme>` and `workflow shopify deploy <app>`:
-//! `theme-dev` runs Shopify CLI on a cloud thread with the theme's own
-//! variables from the Project's environment. `deploy` runs on the device, with
-//! its own Shopify and Cloudflare logins; in a cloud session it deploys
-//! nothing and names the command to type into the device.
+//! `theme-dev` runs Shopify CLI with the theme's own variables. `deploy` runs
+//! on the device, with its own Shopify and Cloudflare logins; in a cloud
+//! session it deploys nothing and names the command to type into the device.
 //!
-//! One environment holds every theme's secrets, so each is named after its
-//! theme: `<THEME>_SHOPIFY_CLI_THEME_TOKEN`, `<THEME>_SHOPIFY_FLAG_STORE` and
-//! `<THEME>_STORE_PASSWORD`, in capitals with `-` as `_`. This command hands
-//! them to the CLI under its own names. A name that is not set, or a token
-//! Shopify refuses, exits 3: only Saiful can make a token, so the task parks
-//! on it.
+//! A theme's variables are named after it: `<THEME>_SHOPIFY_CLI_THEME_TOKEN`,
+//! `<THEME>_SHOPIFY_FLAG_STORE` and `<THEME>_STORE_PASSWORD`, in capitals
+//! with `-` as `_`, or the CLI's own names as `device with-secrets` sets them.
+//! A cloud session holds no theme token: theme-dev runs again under `device
+//! with-secrets <theme>`, which sets the entries the theme's `cloud-secrets`
+//! names from the device's pass for that one run. This command hands them to
+//! the CLI under its own names. A name that is not set, or a token Shopify
+//! refuses, exits 3: only Saiful can make a token, so the task parks on it.
 
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -93,16 +94,26 @@ fn folder(kind: &str, name: &str) -> Option<PathBuf> {
         .find_map(|dir| Some(dir.join(&rel)).filter(|p| p.is_dir()))
 }
 
-/// The value of `<prefix>_<what>`, or the line that says it is missing.
+/// The value of `<prefix>_<what>`, else of `<what>` as `device
+/// with-secrets` sets it, or the line that says it is missing.
 fn named(theme: &str, what: &str) -> Result<String, i32> {
     let name = format!("{}_{what}", prefix(theme));
-    var(&name).ok_or_else(|| {
-        say(&format!(
-            "{what} is not set for {theme}: add {name} to the Project's environment"
-        ));
+    var(&name).or_else(|| var(what)).ok_or_else(|| {
+        if std::env::var_os(WITH_SECRETS).is_some() {
+            say(&format!(
+                "{what} is not set for {theme}: name its pass entry in {theme}'s cloud-secrets, set from a device"
+            ));
+        } else {
+            say(&format!(
+                "{what} is not set for {theme}: add {name} to the Project's environment"
+            ));
+        }
         NEEDS_SAIFUL
     })
 }
+
+/// What `device with-secrets` sets, naming the project, in the command it runs.
+const WITH_SECRETS: &str = "WORKFLOW_WITH_SECRETS";
 
 /// A string value from an app config: `key` at the top when `section` is
 /// None, else under `[section]`. App configs keep these on one line each.
@@ -160,6 +171,21 @@ fn theme_dev(theme: &str) -> i32 {
             "themes/{theme}/assets is missing or empty: build the theme first"
         ));
         return exit::USAGE;
+    }
+    // A thread holds no theme token: the device reads the theme's from pass
+    // for this one run, and this runs again under it.
+    if crate::cloud::this_session().is_some()
+        && var(&format!("{}_SHOPIFY_CLI_THEME_TOKEN", prefix(theme))).is_none()
+        && std::env::var_os(WITH_SECRETS).is_none()
+    {
+        let me = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("workflow"));
+        let err = Command::new(&me)
+            .args(["device", "with-secrets", theme, "--"])
+            .arg(&me)
+            .args(["shopify", "theme-dev", theme])
+            .exec();
+        say(&format!("cannot run workflow device with-secrets: {err}"));
+        return exit::FAILED;
     }
     let token = match named(theme, "SHOPIFY_CLI_THEME_TOKEN") {
         Ok(v) => v,

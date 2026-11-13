@@ -775,3 +775,48 @@ fn an_app_with_rust_functions_gets_the_wasm_target_before_its_shopify_config() {
         .unwrap_or_else(|| panic!("{made:?}"));
     assert!(wasm < shopify, "{made:?}");
 }
+
+/// A thread holds no theme token: in a cloud session theme dev runs again
+/// under `device with-secrets pawsome`, and the device's pass entries reach
+/// the CLI for that one run. The fake curl answers as the device's hub does.
+#[test]
+fn a_cloud_theme_dev_gets_its_token_and_password_from_the_device() {
+    let work = world("shopify-theme-cloud");
+    let at = |rel: &str| work.at(rel).display().to_string();
+    {
+        let _writing = FORKS.write().unwrap_or_else(|e| e.into_inner());
+        work.put(
+            "hub.json",
+            r#"{"machine":"mac-mini-m2","stdout":"","stderr":"","exit":0,"files":{},
+                "secrets":{"SHOPIFY_CLI_THEME_TOKEN":"from-pass","STORE_PASSWORD":"pass-pw"}}"#,
+        );
+        work.script(
+            "bin/curl",
+            &format!(
+                "cat > {stdin}\n\
+                 while [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\n\
+                 cp {body} \"$out\"\n\
+                 printf 200",
+                stdin = at("curl.stdin"),
+                body = at("hub.json"),
+            ),
+        );
+    }
+    let out = shopify(
+        &work,
+        "repo",
+        &["theme-dev", "pawsome"],
+        &[("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Theme"), PAWSOME[1]],
+    );
+    assert!(out.status.success(), "{out:?}");
+    let sent: serde_json::Value = serde_json::from_str(&work.read("curl.stdin")).unwrap();
+    assert_eq!(sent["verb"], "with-secrets", "{sent}");
+    assert_eq!(sent["project"], "pawsome", "{sent}");
+    let calls = calls(&work);
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    assert!(
+        calls.iter().all(|call| call
+            .ends_with("| token=from-pass store=pawsome-theme.myshopify.com password=pass-pw")),
+        "{calls:?}"
+    );
+}
