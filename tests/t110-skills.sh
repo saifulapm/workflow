@@ -60,3 +60,8 @@ like "$(cat "$WF_ROOT/skills/orchestrate/cloud.md")" 'Never park for a device' \
 	"orchestrate cloud: it never parks for a device"
 like "$(skill orchestrate | sed -n '/half done/,/^$/p')" 'review and walk done at' \
 	"orchestrate: a device leg starts from the reviewed, walked work"
+
+# A plan's acceptance line that already held on the base built nothing, twice
+# (workflow m2b-clean-commits and m3-ask-not-park): rule 10 drops such a line.
+like "$(skill plan | sed -n '/^10\. /,/^Store each plan/p')" 'already passes on the base names nothing' \
+	"plan: rule 10 drops an acceptance line the base already passes"

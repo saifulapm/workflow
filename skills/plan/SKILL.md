@@ -158,6 +158,10 @@ The rules:
    reason but the missing behaviour is wrong as written: dactyl m29's
    `node --test sdk/test` cannot run in Node 24, and palmshop m9's journey
    tapped cards that do not tap. Fix the line, and record what you ran.
+   An acceptance line that already passes on the base names nothing to
+   build: drop it, or rewrite the behaviour as what is still missing
+   (workflow m2b-clean-commits' outbox log, on main since e31789d;
+   m3-ask-not-park's `--blank`, on main since w9).
 
 Store each plan as written. mem refuses one whose first line is not
 `# plan: <slug>`.
