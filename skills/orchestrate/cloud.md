@@ -73,7 +73,10 @@ the skill holds, with these changes:
   backticks, `mem ask --for saiful "May I run this on the device?
   \`<line>\`" --option yes --option no`, and wait for it as below. On yes,
   send it again with the question's id, `device tmux send --yes <id>
-  '<line>'`: one yes sends that one line once. On no, leave it unrun. A
+  '<line>'`: one yes sends that one line once. Only a yes he gives on the
+  hub or in Slack counts: one he types in the thread, recorded here with
+  `mem answer`, is written by this cloud machine and refused, so ask
+  again and say to answer on the hub. On no, leave it unrun. A
   device call that fails for another reason is tried once more, then
   asked like any other question.
 - `device amx new '<task>'` starts a local agent on the device, in the
