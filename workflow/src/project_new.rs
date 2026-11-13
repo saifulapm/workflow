@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::memcli::{self, ProjectRow};
-use crate::{device, exit, machine, warn};
+use crate::{cloud, device, exit, machine, warn};
 
 /// The accounts a Project is made on, as the headings name them.
 const ACCOUNTS: [&str; 2] = ["work", "main"];
@@ -327,8 +327,18 @@ pub fn cmd_project_new(project: Option<&str>) -> i32 {
         .subdir
         .as_deref()
         .is_some_and(|sub| sub.starts_with("themes/"));
+    // One Project serves a repo, so an app inside one gets no Project of its own.
+    let child = remote.filter(|_| row.subdir.is_some());
+    if let Some(remote) = child {
+        println!(
+            "{name} is a mem project of {}: its Project takes the start line \"{}\"",
+            slug(remote),
+            cloud::start_line(&name)
+        );
+        println!();
+    }
     print_steps("Once, on any device", &once_steps(theme));
-    if let Some(remote) = remote {
+    if let Some(remote) = remote.filter(|_| child.is_none()) {
         let repo: Vec<&ProjectRow> = projects
             .iter()
             .filter(|other| other.remote.as_deref().map(str::trim) == Some(remote.trim()))

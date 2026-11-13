@@ -490,3 +490,31 @@ fn a_checkout_of_the_repo_counts_for_an_app_whose_folder_is_on_its_own_branch() 
         said(&out)
     );
 }
+
+#[test]
+fn an_app_inside_a_repo_is_served_by_the_repos_project() {
+    let work = world(
+        "child",
+        r#"{"name":"shopify_apps","remote":"github.com/lareysbd/shopify_apps","checkouts":["{root}/shopify_apps"],"subdir":null},{"name":"palmshop","remote":"github.com/lareysbd/shopify_apps","checkouts":["{root}/shopify_apps/apps/palmshop"],"subdir":"apps/palmshop","device":"mac-mini-m2","device_by":"mac-mini-m2"}"#,
+    );
+    work.mkdir("shopify_apps/apps/palmshop");
+    let out = run(&work, "palmshop");
+    let text = said(&out);
+    assert!(
+        text.lines().any(|l| l
+            == r#"palmshop is a mem project of lareysbd/shopify_apps: its Project takes the start line "Run the next milestone of palmshop.""#),
+        "{text}"
+    );
+    assert!(!text.contains("On the work account"), "{text}");
+    assert!(!text.contains("On the main account"), "{text}");
+    assert!(!text.contains("New Project"), "{text}");
+    assert_eq!(
+        checks(&out),
+        [
+            "ok: remote lareysbd/shopify_apps",
+            "ok: checkout on mac-mini-m2"
+        ],
+        "{text}"
+    );
+    assert_eq!(code(&out), Some(0));
+}
