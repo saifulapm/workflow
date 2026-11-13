@@ -256,7 +256,7 @@ fn the_sheet_names_the_repo_each_start_line_and_the_one_environment() {
     let work = six("project-text-apps");
     let out = text(&work, &["shopify_apps"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
-    let (sheet, _) = parts(&out);
+    let (sheet, instructions) = parts(&out);
     assert!(
         sheet.starts_with("Claude Project shopify_apps, repository lareysbd/shopify_apps\n"),
         "{sheet}"
@@ -290,19 +290,25 @@ fn the_sheet_names_the_repo_each_start_line_and_the_one_environment() {
         "SHORTCART_",
     ] {
         assert!(!sheet.contains(gone), "{gone}: {sheet}");
+        assert!(!instructions.contains(gone), "{gone}: {instructions}");
     }
     assert!(!sheet.contains('='), "{sheet}");
 
-    let (sheet, _) = parts(&text(&work, &["pawsome"]));
+    let (sheet, instructions) = parts(&text(&work, &["pawsome"]));
     assert!(sheet.contains("Environment workflow"), "{sheet}");
     for gone in ["THEME_TOKEN", "STORE_PASSWORD", "SHOPIFY_FLAG_STORE"] {
         assert!(!sheet.contains(gone), "{gone}: {sheet}");
+        assert!(!instructions.contains(gone), "{gone}: {instructions}");
     }
 
     for project in ["ebdfy", "amx"] {
-        let (sheet, _) = parts(&text(&work, &[project]));
+        let (sheet, instructions) = parts(&text(&work, &[project]));
         assert!(sheet.contains("Environment workflow"), "{sheet}");
         assert!(!sheet.contains("api.cloudflare.com"), "{project}: {sheet}");
+        assert!(
+            !instructions.contains("api.cloudflare.com"),
+            "{project}: {instructions}"
+        );
     }
 }
 
@@ -359,6 +365,7 @@ fn cloud_switch_names_the_kit_variables_and_the_one_network_secret() {
         "CONTEXT7_API_KEY",
         "SLACK_BOT_TOKEN",
         "SLACK_USER_ID",
+        "WORKFLOW_ACCOUNT",
     ] {
         assert!(block.contains(name), "{name}: {steps}");
     }
