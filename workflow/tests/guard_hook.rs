@@ -148,7 +148,7 @@ fn the_edit_entry_refuses_an_edit_while_the_suite_runs_and_passes_an_old_workflo
     let w = Scratch::new("guard-hook-edit");
     let repo = w.mkdir("repo");
     let init = Command::new("git")
-        .args(["init", "-q"])
+        .args(["-c", "core.hooksPath=/dev/null", "init", "-q"])
         .current_dir(&repo)
         .status();
     assert!(init.unwrap().success());
