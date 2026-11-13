@@ -851,3 +851,59 @@ fn pnpm_where_node_modules_links_out_of_the_worktree_is_refused() {
         "node_modules/.bin/vitest"
     ));
 }
+
+fn guard_edit(tool: &str, path: &Path) -> Output {
+    let key = if tool == "NotebookEdit" {
+        "notebook_path"
+    } else {
+        "file_path"
+    };
+    let input = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": { key: path },
+        "cwd": "/",
+    });
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
+        .args(["guard", "edit"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+const EDIT_HELD: &str = "an edit while this checkout's suite runs";
+
+#[test]
+fn an_edit_or_write_while_the_checkouts_suite_runs_is_refused() {
+    for words in ["cargo test -q", "bash tests/run.sh"] {
+        let w = Scratch::new("guard-edit-suite");
+        let repo = repo(&w);
+        let elsewhere = w.mkdir("elsewhere");
+        let _suite = Suite::run(&repo, words);
+        for (tool, path) in [
+            ("Edit", repo.join("src/lib.rs")),
+            ("Write", repo.join("new/file.rs")),
+            ("NotebookEdit", repo.join("a.ipynb")),
+        ] {
+            let out = guard_edit(tool, &path);
+            assert!(refused(&out, EDIT_HELD), "{words} {tool}: {out:?}");
+        }
+        assert!(passes(&guard_edit("Write", &elsewhere.join("notes.md"))));
+    }
+}
+
+#[test]
+fn an_edit_passes_when_no_suite_runs() {
+    let w = Scratch::new("guard-edit-idle");
+    let repo = repo(&w);
+    assert!(passes(&guard_edit("Edit", &repo.join("src/lib.rs"))));
+}

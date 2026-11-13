@@ -121,6 +121,7 @@ pub fn run(cli: Cli) -> i32 {
         ),
         Command::Guard { check } => match check.as_str() {
             "bash" => guard_bash::cmd_guard_bash(),
+            "edit" => guard_bash::cmd_guard_edit(),
             _ => guard::cmd_guard_pnpm(),
         },
         Command::Mask => mask::cmd_mask(),

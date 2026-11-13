@@ -82,18 +82,46 @@ pub fn cmd_guard_bash() -> i32 {
         agent: hook["agent_type"].as_str(),
     };
     match RULES.iter().find_map(|rule| rule(&call)) {
-        Some(reason) => {
-            let decision = serde_json::json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
-                }
-            });
-            println!("{decision}");
-            eprintln!("{reason}");
-            BLOCK
-        }
+        Some(reason) => deny(reason),
         None => exit::OK,
     }
+}
+
+/// `workflow guard edit`, the PreToolUse hook on Edit, Write and
+/// NotebookEdit: a file changed in a checkout while its suite runs turns
+/// the suite red on a change the tests never meant to see (m4 tripped a
+/// stale-binary guard, m6 turned 15 shell tests red).
+pub fn cmd_guard_edit() -> i32 {
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        return exit::OK;
+    }
+    let Ok(hook) = serde_json::from_str::<Value>(&input) else {
+        return exit::OK;
+    };
+    let tool = &hook["tool_input"];
+    let Some(path) = tool["file_path"]
+        .as_str()
+        .or(tool["notebook_path"].as_str())
+    else {
+        return exit::OK;
+    };
+    match suite::edit_refusal(Path::new(path)) {
+        Some(reason) => deny(reason),
+        None => exit::OK,
+    }
+}
+
+/// Refuse the call with `reason`, as a deny decision and on stderr.
+fn deny(reason: &str) -> i32 {
+    let decision = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    });
+    println!("{decision}");
+    eprintln!("{reason}");
+    BLOCK
 }

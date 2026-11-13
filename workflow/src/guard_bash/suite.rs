@@ -12,6 +12,16 @@ use crate::shell::{argv, program_name};
 const REFUSAL: &str = "workflow guard refused this on purpose: a commit or merge while this checkout's suite runs moves HEAD under the tests.\n\
 Wait for the suite's exit line, then commit in a call of its own.";
 
+const EDIT_REFUSAL: &str = "workflow guard refused this on purpose: an edit while this checkout's suite runs turns it red on a change it never meant to test.\n\
+Wait for the suite's exit line; write the next change in a scratch file meanwhile.";
+
+/// An edit of `file` while its checkout's suite runs. A file not made yet
+/// is judged by the nearest folder that is there.
+pub fn edit_refusal(file: &Path) -> Option<&'static str> {
+    let dir = file.ancestors().skip(1).find(|d| d.is_dir())?;
+    suite_running_in(dir).then_some(EDIT_REFUSAL)
+}
+
 pub fn refusal(call: &Call) -> Option<&'static str> {
     // The folder each subshell depth is in, as the line's `cd`s move it.
     let mut dirs = vec![call.cwd.to_path_buf()];
