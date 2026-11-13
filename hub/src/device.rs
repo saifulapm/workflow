@@ -98,7 +98,7 @@ macro_rules! own {
 /// Closes every page the session opened, each judged before any closes, so
 /// a popup still has its opener. Closing the last one ends the extension's
 /// connection and the session with it, which playwright-cli reports as
-/// "Session closed" with exit 1.
+/// "Session closed" on stderr with exit 1.
 const CLOSE_OWN: &str = concat!(
     "async page => { ",
     own!(),
@@ -645,7 +645,7 @@ fn result_of(done: &crate::proc::Finished) -> Option<String> {
 /// Whether CLOSE_OWN closed the session's tabs: it answered, or closing the
 /// last one ended the session.
 fn closed(done: &crate::proc::Finished) -> bool {
-    done.code == Some(0) || String::from_utf8_lossy(&done.stdout).contains("Session closed")
+    done.code == Some(0) || String::from_utf8_lossy(&done.stderr).contains("Session closed")
 }
 
 /// Starts Chromium when its lock names no live process, and waits for the

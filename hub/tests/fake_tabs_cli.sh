@@ -46,7 +46,7 @@ result() { echo '### Result'; echo "$1"; }
 end_session() {
   grep -vx "$session" "$S/sessions" > "$S/t"
   mv "$S/t" "$S/sessions"
-  echo 'Session closed'
+  echo 'Session closed' >&2
   exit 1
 }
 new_tab() {
