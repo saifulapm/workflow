@@ -1,8 +1,9 @@
 //! `POST /device`: what this machine does for a session that is somewhere
 //! else. `whoami` names the machine, `run` runs one of a few programs,
 //! `browser` drives the logged-in Chromium through playwright-cli, `tmux`
-//! drives the session's own tmux session (device_tmux), and every call leaves
-//! one line in the project's mem log.
+//! drives the session's own tmux session (device_tmux), `amx` drives the one
+//! amx agent the thread started (device_amx), and every call leaves one line
+//! in the project's mem log.
 
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::fs::PermissionsExt;
@@ -202,6 +203,7 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         "run" => run(&call.args),
         "browser" => browser(call.session.as_deref(), &call.project, &call.args),
         "tmux" => crate::device_tmux::call(call.session.as_deref(), &call.project, &call.args),
+        "amx" => crate::device_amx::call(call.session.as_deref(), &call.project, &call.args),
         other => return Response::text(400, &format!("not a device verb: {other}")),
     };
     // What a terminal or an agent printed may hold a token.
@@ -379,6 +381,7 @@ pub fn sweep_sessions() -> ! {
         // Read once a round, and only when a session is there to judge.
         let projects = std::cell::OnceCell::new();
         crate::device_tmux::sweep(&mem, &projects);
+        crate::device_amx::sweep(&mem, &projects);
         let Ok(root) = crate::config::state_home().map(|h| h.join("hub/device")) else {
             continue;
         };

@@ -13,6 +13,7 @@ pub mod assets;
 pub mod bin_upload;
 pub mod config;
 pub mod device;
+pub mod device_amx;
 pub mod device_tmux;
 pub mod doorbell;
 pub mod fleet;
