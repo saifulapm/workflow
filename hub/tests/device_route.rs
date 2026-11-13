@@ -629,7 +629,14 @@ fn a_run_s_device_answered_after_the_park_it_caused_is_followed() {
     let nuc = spawn(&dir, "nuc", &[]);
     let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
     // Between the ask (22:14:30) and the answer (22:14:58).
-    asked_run(&dir, "palmshop", "palmshop", "nuc", "nuc", "2026-08-18T22:14:45Z");
+    asked_run(
+        &dir,
+        "palmshop",
+        "palmshop",
+        "nuc",
+        "nuc",
+        "2026-08-18T22:14:45Z",
+    );
 
     let answer = device_asked(&mini, "palmshop", QUESTION);
     assert_eq!(answer["machine"], "nuc", "{answer}");
