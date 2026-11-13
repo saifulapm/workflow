@@ -212,15 +212,37 @@ fn has_checkout(on: &Device, row: &ProjectRow, here: &[ProjectRow]) -> Result<bo
     }
 }
 
-/// A pass entry's name as `cloud-secrets` may hold one, which can go on an
-/// ssh command line unquoted.
-fn entry_name(entry: &str) -> bool {
-    !entry.is_empty()
-        && !entry.starts_with(['/', '.', '-'])
-        && !entry.split('/').any(|part| part.is_empty() || part == "..")
-        && entry
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+/// `<name>.myshopify.com`: the store a theme's line names in place of a
+/// pass entry, as `device with-secrets` takes it.
+fn store_name(entry: &str) -> bool {
+    entry.strip_suffix(".myshopify.com").is_some_and(|name| {
+        !name.is_empty()
+            && !name.starts_with('-')
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    })
+}
+
+/// Where theme tokens and store passwords live in pass, and the only
+/// entries `device with-secrets` hands out: `Shopify/theme-access/<name>`
+/// and `Shopify/<name>-password`. Such a name can go on an ssh command line
+/// unquoted.
+fn theme_secret(entry: &str) -> bool {
+    let plain = |name: &str| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            && !name.starts_with('.')
+    };
+    match entry.strip_prefix("Shopify/") {
+        Some(rest) => match rest.strip_prefix("theme-access/") {
+            Some(name) => plain(name),
+            None => rest.strip_suffix("-password").is_some_and(plain),
+        },
+        None => false,
+    }
 }
 
 /// Whether the device's pass has `entry`, by its file: `Err` when it did not
@@ -258,15 +280,17 @@ fn checks(
         Some(remote) => format!("ok: remote {}", slug(remote)),
         None => "missing: remote".to_string(),
     }];
-    let Some(machine) = device_of(row) else {
-        lines.push("missing: checkout (this machine's local hub names no device)".to_string());
-        return lines;
-    };
-    let on = Device::of(&machine);
-    lines.push(match has_checkout(&on, row, projects) {
-        Ok(true) => format!("ok: checkout on {machine}"),
-        Ok(false) => format!("missing: checkout on {machine}"),
-        Err(()) => format!("missing: checkout on {machine} ({machine} did not answer)"),
+    let device = device_of(row).map(|machine| {
+        let on = Device::of(&machine);
+        (machine, on)
+    });
+    lines.push(match &device {
+        None => "missing: checkout (this machine's local hub names no device)".to_string(),
+        Some((machine, on)) => match has_checkout(on, row, projects) {
+            Ok(true) => format!("ok: checkout on {machine}"),
+            Ok(false) => format!("missing: checkout on {machine}"),
+            Err(()) => format!("missing: checkout on {machine} ({machine} did not answer)"),
+        },
     });
     if !theme {
         return lines;
@@ -275,32 +299,49 @@ fn checks(
         lines.push("missing: cloud-secrets".to_string());
         return lines;
     };
+    let mut entries = 0;
     for (n, line) in secrets.lines().map(str::trim).enumerate() {
+        if line.is_empty() {
+            continue;
+        }
         let Some((name, entry)) = line.split_once('=') else {
-            if !line.is_empty() {
+            lines.push(format!(
+                "missing: cloud-secrets line {} is not NAME=<pass entry>",
+                n + 1
+            ));
+            continue;
+        };
+        let entry = entry.trim();
+        if name.trim() == STORE {
+            if !store_name(entry) {
                 lines.push(format!(
-                    "missing: cloud-secrets line {} is not NAME=<pass entry>",
+                    "missing: cloud-secrets line {}: {STORE} is not <store>.myshopify.com",
                     n + 1
                 ));
             }
             continue;
-        };
-        if name.trim() == STORE {
-            continue;
         }
-        let entry = entry.trim();
-        if !entry_name(entry) {
+        if !theme_secret(entry) {
             lines.push(format!(
-                "missing: cloud-secrets line {} names no pass entry",
+                "missing: cloud-secrets line {} names no theme token or store password",
                 n + 1
             ));
             continue;
         }
-        lines.push(match has_entry(&on, entry) {
-            Ok(true) => format!("ok: pass entry {entry}"),
-            Ok(false) => format!("missing: pass entry {entry}"),
-            Err(()) => format!("missing: pass entry {entry} ({machine} did not answer)"),
+        entries += 1;
+        lines.push(match &device {
+            None => {
+                format!("missing: pass entry {entry} (this machine's local hub names no device)")
+            }
+            Some((machine, on)) => match has_entry(on, entry) {
+                Ok(true) => format!("ok: pass entry {entry}"),
+                Ok(false) => format!("missing: pass entry {entry}"),
+                Err(()) => format!("missing: pass entry {entry} ({machine} did not answer)"),
+            },
         });
+    }
+    if entries == 0 {
+        lines.push("missing: cloud-secrets names no pass entry".to_string());
     }
     lines
 }

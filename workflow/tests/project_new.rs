@@ -542,3 +542,63 @@ fn submodules_it_could_not_read_are_a_missing_line() {
     );
     assert_eq!(code(&out), Some(1));
 }
+
+#[test]
+fn a_missing_cloud_secrets_key_is_said_even_when_no_device_is_named() {
+    let work = world(
+        "no-secrets-no-hub",
+        r#"{"name":"tambour","remote":"github.com/lareysbd/shopify_themes","checkouts":[],"subdir":"themes/tambour","device":null,"device_by":null,"cloud_secrets":null}"#,
+    );
+    let out = run(&work, "tambour");
+    assert!(
+        checks(&out).contains(&"missing: cloud-secrets".to_string()),
+        "{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn a_line_the_hub_would_refuse_is_missing_not_ok() {
+    let row = |secrets: &str| {
+        format!(
+            r#"{{"name":"pawsome","remote":"github.com/lareysbd/shopify_themes","checkouts":["{{root}}/t"],"subdir":"themes/pawsome","device":"mac-mini-m2","device_by":"mac-mini-m2","cloud_secrets":"{secrets}"}}"#
+        )
+    };
+    // Not where theme tokens and store passwords live, and a store with no
+    // .myshopify.com: device with-secrets refuses both.
+    let work = world(
+        "refused",
+        &row(r"STORE_PASSWORD=Shopify/pawsome-store-pass\nSHOPIFY_FLAG_STORE=pawsome"),
+    );
+    work.mkdir("t");
+    work.put("pass/Shopify/pawsome-store-pass.gpg", "x");
+    let out = run(&work, "pawsome");
+    let lines = checks(&out);
+    assert!(
+        !lines.iter().any(|l| l.starts_with("ok: pass entry")),
+        "{lines:?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("missing: cloud-secrets line"))
+            .count(),
+        2,
+        "{lines:?}"
+    );
+    assert_eq!(code(&out), Some(1));
+
+    // A key with only its store names no secret at all.
+    let work = world(
+        "store-only",
+        &row("SHOPIFY_FLAG_STORE=pawsome-theme.myshopify.com"),
+    );
+    work.mkdir("t");
+    let out = run(&work, "pawsome");
+    assert!(
+        checks(&out).contains(&"missing: cloud-secrets names no pass entry".to_string()),
+        "{}",
+        said(&out)
+    );
+    assert_eq!(code(&out), Some(1));
+}
