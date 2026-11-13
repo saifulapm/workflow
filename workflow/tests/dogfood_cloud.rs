@@ -99,7 +99,8 @@ fn a_task_for_his_hands_is_a_question_never_a_park() {
 }
 
 /// m4-shopify: a theme walks headless on `workflow shopify theme-dev`, an app
-/// on its staging deploy in the admin through `device browser`, and a token
+/// on its staging deploy, typed into `device tmux` since m5-device-deploy, in
+/// the admin through `device browser`, and a token
 /// only Saiful can make is asked for, never filed as a finding.
 #[test]
 fn a_cloud_walk_says_how_shopify_themes_and_apps_are_walked() {
@@ -108,7 +109,7 @@ fn a_cloud_walk_says_how_shopify_themes_and_apps_are_walked() {
     for said in [
         "`workflow shopify theme-dev <theme>`",
         "http://127.0.0.1:9292",
-        "`workflow shopify deploy <app>`",
+        "`device tmux send 'workflow shopify deploy <app>'`",
         "`walk: <url>`",
         "`device browser goto <url>`",
         "never production",
