@@ -304,8 +304,10 @@ pub enum State {
     Live,
     /// Its handoff says `parked:`: it waits for an answer.
     Parked,
-    /// Its handoff says `parked: local-only`: a task only a device can do
-    /// waits, and `workflow go` there takes the run over from its branch.
+    /// Its handoff says `parked: local-only`, as a thread wrote before
+    /// threads asked Saiful instead: a task only a device can do waits, and
+    /// `workflow go` there takes the run over from its branch. No thread
+    /// writes one now.
     LocalOnly,
     /// Its milestone is ticked.
     Landed,
@@ -795,8 +797,8 @@ pub fn cmd_plan_cloud(project: Option<&str>, print: bool) -> i32 {
 /// to. Other projects' runs hold nothing back: there is no cap across
 /// projects. `me`, a thread's own session, is never held back by its own
 /// run, which it may be resuming. A thread waits for its answers inside
-/// its turn, so for a thread a cloud run's park means it ended, but one
-/// parked local-only holds it back, since a device takes that from its
+/// its turn, so for a thread a cloud run's park means it ended, but an old
+/// one parked local-only holds it back, since a device takes that from its
 /// branch, and so does a device's run under 7 hours that has written no
 /// handoff since, or a park.
 fn held(row: &ProjectRow, me: Option<&str>, now: jiff::Timestamp) -> Option<String> {

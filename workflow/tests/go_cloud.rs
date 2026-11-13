@@ -799,8 +799,39 @@ fn a_dry_run_in_a_thread_claims_nothing() {
     );
 }
 
-/// A run parked local-only waits for a device to take its branch: a
-/// thread starting the milestone again would build it twice.
+/// A run parked local-only, by a thread from before threads asked instead,
+/// waits for a device to take its branch: a thread starting the milestone
+/// again would build it twice.
+/// The parks a thread writes now (no answer in 30 minutes, hold, the
+/// 6-hour stop) never read as local-only: a start line takes each up.
+#[test]
+fn no_park_a_thread_writes_now_is_local_only() {
+    for (tag, handoff) in [
+        (
+            "cloud-park-question",
+            "parked: question #QSTN0001 waits on Saiful: which word\n",
+        ),
+        (
+            "cloud-park-hold",
+            "parked: Saiful holds m2-next (#QSTN0001)\n",
+        ),
+        ("cloud-park-stop", "parked: 6-hour stop, t3 half done\n"),
+    ] {
+        let w = World::new(tag);
+        w.parked(
+            2,
+            1,
+            handoff,
+            &[question("gamma", 90, "QSTN0001", Some("hold"))],
+        );
+        let out = w.thread(&["gamma", "--cloud", "--print"]);
+        assert_eq!(out.status.code(), Some(0), "{tag}: {}", stderr(&out));
+        let said = stdout(&out);
+        assert!(!said.contains("local-only"), "{tag}: {said}");
+        assert!(w.claimed(), "{tag}: {:?}", w.mem_calls());
+    }
+}
+
 #[test]
 fn a_run_parked_local_only_holds_a_thread_back() {
     let w = World::new("cloud-thread-local-only");
