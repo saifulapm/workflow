@@ -921,6 +921,66 @@ fn land_run_again_after_main_moved_moves_the_ticked_milestone_onto_main() {
     );
 }
 
+/// A conflict with main no new commit on the branch clears: land run again
+/// asks the same, and leaves main, app/gamma and the tick as they were.
+#[test]
+fn land_run_again_on_an_unchanged_conflict_with_main_changes_nothing() {
+    let w = World::app("land-app-conflict-again");
+    let clone = w.clone_dir();
+    w.work.put("thread/shared.txt", "gamma's\n");
+    w.git(
+        &clone,
+        &["commit", "-q", "-am", "Change shared.txt in gamma"],
+    );
+    w.trunk_moves("shared.txt", "main's\n");
+    let first = ask_line(&w.land());
+    assert!(first.starts_with("ask: main moved: gamma"), "{first}");
+    let (main, app) = (w.origin_main(), w.origin_ref("app/gamma"));
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(ask_line(&out), first);
+    assert_eq!(w.origin_main(), main);
+    assert_eq!(w.origin_ref("app/gamma"), app);
+    let ticks = w.work.read("mem.log");
+    assert_eq!(
+        ticks
+            .lines()
+            .filter(|l| l.starts_with("roadmap --tick"))
+            .count(),
+        1,
+        "{ticks}"
+    );
+}
+
+/// Red tests on gamma moved onto main, then Saiful's `fix and try again`:
+/// a fix commit on the branch, and land run again lands it on app/gamma
+/// and on main.
+#[test]
+fn a_fix_commit_after_red_tests_on_main_lands_with_land_run_again() {
+    let w = World::app("land-app-red-fix");
+    w.verify("test -f work.txt && { test ! -f ../../breaks-gamma.txt || test -f fixed.txt; }");
+    w.trunk_moves("breaks-gamma.txt", "x\n");
+    assert!(ask_line(&w.land()).starts_with("ask: main moved: gamma"));
+    let clone = w.clone_dir();
+    w.work.put("thread/apps/gamma/fixed.txt", "fixed\n");
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "Fix gamma on main"]);
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert!(w.origin_log("main").contains("Fix gamma on main"));
+    assert_eq!(w.origin_ref("app/gamma"), w.origin_main());
+    let ticks = w.work.read("mem.log");
+    assert_eq!(
+        ticks
+            .lines()
+            .filter(|l| l.starts_with("roadmap --tick"))
+            .count(),
+        1,
+        "{ticks}"
+    );
+}
+
 /// After `ask: app/gamma did not follow main`, land run again once origin
 /// takes the move: app/gamma follows main, nothing else changes.
 #[test]

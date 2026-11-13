@@ -51,6 +51,7 @@ fn a_cloud_walk_reaches_the_logged_in_browser_through_device() {
         "run `device ask`",
         "`I will turn it on` as options",
         "Never park for a device",
+        "When `device ask` itself exits 3",
     ] {
         assert!(cloud.contains(said), "cloud.md says {said}");
     }
@@ -65,6 +66,10 @@ fn a_task_for_his_hands_is_a_question_never_a_park() {
     let read = |path: &str| one_line(&fs::read_to_string(repo.join(path)).unwrap());
     let cloud = read("skills/orchestrate/cloud.md");
     assert!(!cloud.contains("local-only"), "cloud.md says local-only");
+    assert!(
+        !cloud.contains("mem project set device"),
+        "cloud.md hands a thread the command that moves the device"
+    );
     assert!(!cloud.contains("[local]"), "cloud.md says [local]");
     for said in [
         "--option done --option hold",

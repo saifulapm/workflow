@@ -611,7 +611,7 @@ fn a_run_s_answer_given_in_a_cloud_thread_is_not_followed() {
 }
 
 #[test]
-fn a_run_s_device_lapses_at_a_handoff_after_the_question() {
+fn a_run_s_device_lapses_at_a_handoff_after_the_answer() {
     let dir = TempDir::new("device-run-handoff");
     let nuc = spawn(&dir, "nuc", &[]);
     let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
@@ -619,6 +619,20 @@ fn a_run_s_device_lapses_at_a_handoff_after_the_question() {
 
     let answer = device_asked(&mini, "palmshop", QUESTION);
     assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+/// The question parked the run (its handoff came between the ask and the
+/// answer), and Saiful answered after: the answer is followed.
+#[test]
+fn a_run_s_device_answered_after_the_park_it_caused_is_followed() {
+    let dir = TempDir::new("device-run-late-answer");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    // Between the ask (22:14:30) and the answer (22:14:58).
+    asked_run(&dir, "palmshop", "palmshop", "nuc", "nuc", "2026-08-18T22:14:45Z");
+
+    let answer = device_asked(&mini, "palmshop", QUESTION);
+    assert_eq!(answer["machine"], "nuc", "{answer}");
 }
 
 #[test]

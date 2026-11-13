@@ -37,7 +37,7 @@ the skill holds, with these changes:
   one: the review (§5) and the walk (§6) run here as for any milestone.
 - Saiful's logged-in browser and the programs `device run` allows (adb,
   podman, shopify) are reached from here with `device`, on the project's
-  own device when it has one (`mem project set device <machine>`), else on
+  own device when Saiful gave it one (never set it from here), else on
   the device Saiful chose with `workflow device use` (the mini unless he
   chose another), whatever the question route; the dogfood skill's cloud
   paragraph has its rules. Run `device whoami` before a task that needs
@@ -48,7 +48,10 @@ the skill holds, with these changes:
   it with `workflow wait-answer <id>` as below. Once he names a device,
   this run's device calls go there until it lands or parks; on `I will
   turn it on`, call again. A device he names that is offline too exits 3
-  again: run `device ask` again. Never park for a device.
+  again: run `device ask` again. When `device ask` itself exits 3, no
+  device answers at all: ask with `mem ask --for saiful "no device answers
+  <project>'s calls; turn one on, then answer done" --option done --option
+  hold`. Never park for a device.
 - A device need the plan did not name gets `mem finding add --milestone
   <slug> --step plan` naming it, so the next plan names it, and is asked
   the same way.
@@ -108,14 +111,21 @@ the skill holds, with these changes:
     --option "fix and try again" --option hold --recommend "fix and try
     again"` and wait for it as above. On `fix and try again`, fix what it
     names on the branch and run `workflow land` again; on `hold`, park as
-    above. Never hand off a landing's line as a park.
+    above. Never hand off a landing's line as a park. A line no new
+    commit on the branch clears (`ask: main moved: <files> conflict with
+    main`, `ask: commit ...`) gets a question that says what Saiful must
+    change; `fix and try again` then means he changed it.
   - Tests red after the rebase: fix them on the branch test-first and run
     `workflow land` again. After two failed fixes, ask as for an `ask:`
     line, with `ask: tests red after rebasing on main: <what fails>`.
   - `ask: trunk moved: ...` or `ask: main moved: ...`: on `main moved` the
     milestone is on app/<app> and ticked already, and main is untouched;
     `workflow land` run again from the same branch moves it onto main, as
-    it does after `ask: app/<app> did not follow main: ...`.
+    it does after `ask: app/<app> did not follow main: ...`, where the
+    branch is on main already, so push nothing. Both come after the tick:
+    on a new turn after a park on one, `workflow go --cloud --print` prints
+    `next:`, so when his answer or message says to try again, run
+    `workflow land` on the branch first and end the reply on its line.
   - A project with land-ci (`mem project set land-ci ci.yml`): land pushes
     the rebased sha to ci/<project>-<milestone> and waits on that
     workflow's run of it before it pushes the trunk. One call waits at

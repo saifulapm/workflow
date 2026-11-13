@@ -839,8 +839,8 @@ pub fn project_device(request: &Request) -> Option<String> {
 /// The device Saiful named for this run, in answer to the call's question.
 /// It counts only when the question is the call's project's, its answer is
 /// one of `DEVICES` and was given on one of them (never a thread's own
-/// `mem answer`), and no handoff came after it: a park or a landing ends the
-/// run. None when anything cannot be read.
+/// `mem answer`), and no handoff came after the answer: a park or a landing
+/// ends the run. None when anything cannot be read.
 pub fn run_device(request: &Request) -> Option<String> {
     let call: Call = serde_json::from_slice(&request.body).ok()?;
     let short_id = call.question?;
@@ -866,7 +866,9 @@ pub fn run_device(request: &Request) -> Option<String> {
     if !DEVICES.contains(&given.first()?["machine"].as_str()?) {
         return None;
     }
-    let asked = hubpages::model::ulid_millis(question["id"].as_str()?)?;
+    // The answer's own time counts, not the ask's: a question with no answer
+    // in 30 minutes parks the run, and his later answer carries it on.
+    let answered = hubpages::model::ulid_millis(question["answer_id"].as_str()?)?;
     let projects = mem.read(&["projects", "--json"]).rows("projects");
     let row = projects
         .iter()
@@ -881,7 +883,7 @@ pub fn run_device(request: &Request) -> Option<String> {
         ),
     };
     handed_off
-        .is_none_or(|at| asked > at)
+        .is_none_or(|at| answered > at)
         .then(|| device.to_string())
 }
 
