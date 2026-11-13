@@ -33,6 +33,16 @@ pub(crate) fn prepare(machine: &str, project: &str, name: &str) -> Result<Worktr
     };
     let slug = remote.split_once('/').map_or(remote, |(_, path)| path);
     let repo = remote.rsplit('/').next().unwrap_or(remote);
+    // The folder's name, so never one that leaves ~/.cache/workflow-cloud.
+    let named = !repo.is_empty()
+        && repo != "."
+        && repo != ".."
+        && repo
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+    if !named {
+        return Err(Outcome::refuse(format!("{remote} cannot name a folder")));
+    }
     let git = Git::here()?;
     // The project's own checkouts first, then any of a project of the same repo.
     let owners = row
@@ -89,13 +99,88 @@ pub(crate) fn prepare(machine: &str, project: &str, name: &str) -> Result<Worktr
     if folder.join(".git").exists() {
         git.ok(&folder, &["checkout", "-q", "--force", "--detach", &sha])?;
     } else {
+        // A folder deleted by hand is still on the checkout's list, and
+        // git refuses to add it again until the list is pruned.
+        git.ok(&top, &["worktree", "prune"])?;
         let to = folder.to_string_lossy();
         git.ok(&top, &["worktree", "add", "-q", "--detach", &to, &sha])?;
     }
+    used(repo, &top);
     Ok(Worktree {
         submodules: folder.join(".gitmodules").exists(),
         folder,
     })
+}
+
+/// Under the state folder, one file a worktree, named for it: the checkout
+/// it was made from, written each time a session starts in it.
+const USED: &str = "hub/device-worktrees";
+
+/// How long a worktree no session starts in is kept.
+const DEFAULT_UNUSED: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
+fn used(repo: &str, top: &Path) {
+    let Ok(dir) = crate::config::state_home().map(|home| home.join(USED)) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    if let Err(e) = std::fs::write(dir.join(repo), top.to_string_lossy().as_bytes()) {
+        eprintln!("hub: device: cannot mark the worktree {repo} used: {e}");
+    }
+}
+
+/// Removes each worktree no session has started in for the limit
+/// (`HUB_DEVICE_WORKTREE_UNUSED_MS`, 14 days by default), and takes it off
+/// its checkout's list. Called by the tmux sweep only while no job runs, so
+/// never under a live session.
+pub(crate) fn sweep() {
+    let limit = std::env::var("HUB_DEVICE_WORKTREE_UNUSED_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(DEFAULT_UNUSED, Duration::from_millis);
+    let Ok(dir) = crate::config::state_home().map(|home| home.join(USED)) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let unused = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age >= limit);
+        if !unused {
+            continue;
+        }
+        let repo = entry.file_name();
+        let folder = PathBuf::from(&home)
+            .join(".cache/workflow-cloud")
+            .join(&repo);
+        // Only a linked worktree, whose .git is a file, never a checkout.
+        if folder.join(".git").is_file()
+            && let Err(e) = std::fs::remove_dir_all(&folder)
+        {
+            eprintln!("hub: device: cannot remove {}: {e}", folder.display());
+            continue;
+        }
+        if let (Ok(top), Ok(git)) = (std::fs::read_to_string(entry.path()), Git::here()) {
+            let _ = git.run(
+                Path::new(top.trim()),
+                &["worktree", "prune"],
+                HELPER_TIMEOUT,
+            );
+        }
+        let _ = std::fs::remove_file(entry.path());
+        eprintln!(
+            "hub: device: removed the unused worktree {}",
+            folder.display()
+        );
+    }
 }
 
 /// git on the user manager's PATH, with its env, which holds the user's

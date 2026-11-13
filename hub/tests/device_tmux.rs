@@ -712,3 +712,55 @@ fn a_job_ends_once_another_session_runs_the_project() {
     rig.cloud_run_by("session_01Next", "w14", None);
     wait_until(Duration::from_secs(5), || rig.sessions().is_empty());
 }
+
+/// The checkout's own list of its worktrees, by path.
+fn worktrees_of(checkout: &Path) -> String {
+    git(checkout, &["worktree", "list", "--porcelain"])
+}
+
+#[test]
+fn a_worktree_unused_past_the_limit_is_removed() {
+    let rig = rig_env(&[
+        ("HUB_DEVICE_WORKTREE_UNUSED_MS", "1000"),
+        ("HUB_DEVICE_SWEEP_MS", "200"),
+    ]);
+    rig.walk(&["send", "echo made"]);
+    rig.read_until("made");
+    let folder = rig.worktree();
+    // In use: a job holds it, past the limit too.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(folder.is_dir(), "a live job's worktree stays");
+    assert_eq!(rig.walk(&["end"])["exit"], 0);
+    wait_until(Duration::from_secs(5), || !folder.exists());
+    assert!(
+        !worktrees_of(&rig.checkout).contains(folder.to_str().unwrap()),
+        "{}",
+        worktrees_of(&rig.checkout)
+    );
+    // The next session makes it again.
+    rig.walk(&["send", "echo again"]);
+    rig.read_until("again");
+    assert!(folder.is_dir());
+}
+
+#[test]
+fn a_worktree_kept_in_use_stays_by_default() {
+    let rig = rig_env(&[("HUB_DEVICE_SWEEP_MS", "200")]);
+    rig.walk(&["send", "echo made"]);
+    rig.read_until("made");
+    assert_eq!(rig.walk(&["end"])["exit"], 0);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert!(rig.worktree().is_dir(), "14 days by default");
+}
+
+#[test]
+fn a_worktree_folder_deleted_by_hand_is_made_again() {
+    let rig = rig();
+    rig.walk(&["send", "echo made"]);
+    rig.read_until("made");
+    assert_eq!(rig.walk(&["end"])["exit"], 0);
+    std::fs::remove_dir_all(rig.worktree()).unwrap();
+    let sent = rig.walk(&["send", "echo again"]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    rig.read_until("again");
+}

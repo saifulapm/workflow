@@ -125,6 +125,7 @@ pub(crate) fn call(
 pub(crate) fn sweep(mem: &MemCli, projects: &OnceCell<Vec<serde_json::Value>>) {
     let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let Some(job) = read_job() else {
+        crate::device_worktree::sweep();
         return;
     };
     let over = due(&job, unix_now()).or_else(|| {
