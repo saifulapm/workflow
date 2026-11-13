@@ -76,13 +76,17 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
     std::fs::write(seed.join("apps/README"), "walk\n").unwrap();
     git(&seed, &["add", "."]);
     git(&seed, &["commit", "-q", "-m", "first"]);
+    git(&seed, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    // The cloud branches are a commit ahead of main.
+    std::fs::write(seed.join("cloud"), "built\n").unwrap();
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-q", "-m", "cloud"]);
     git(
         &seed,
         &[
             "push",
             "-q",
             "origin",
-            "HEAD:refs/heads/main",
             "HEAD:refs/heads/cloud/cloud_walk-w14",
             "HEAD:refs/heads/cloud/shop-m2",
         ],
