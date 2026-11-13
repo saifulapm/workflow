@@ -84,3 +84,25 @@ like "$held" 'tried once more, then' "orchestrate cloud: another failure is trie
 like "$held" 'Only a yes he gives on the' "orchestrate cloud: a yes typed in the thread does not release a held line"
 like "$cloud" 'never for builds, tests or' "orchestrate cloud: a local agent is never for builds, tests or code"
 like "$cloud" 'a phone on adb, or iOS on the Mac' "orchestrate cloud: a local agent only for the screen, adb or iOS"
+
+# device run is gone (m5-device-deploy): the device's programs and an app's
+# staging deploy go through device tmux, in the deploy worktree, and a
+# locked pass is asked of Saiful.
+dogfood=$(skill dogfood)
+for page in "$dogfood" "$cloud" "$(skill plan)"; do
+	unlike "$page" '`device run[` ]' "skills: no page names device run"
+done
+for tool in adb podman gh cf; do
+	like "$(sed -n '/^- Terminal work on the device/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" "$tool" \
+		"orchestrate cloud: $tool goes through device tmux"
+	like "$dogfood" "$tool" "dogfood: $tool goes through device tmux"
+done
+like "$dogfood" "device tmux send 'workflow shopify deploy <app>'" \
+	"dogfood: an app's staging deploy is typed into device tmux"
+like "$dogfood" 'device browser goto <url>' "dogfood: the walk opens the walk line's url"
+like "$cloud" "device tmux send 'workflow shopify deploy <app>'" \
+	"orchestrate cloud: an app's staging deploy is typed into device tmux"
+like "$cloud" '~/.cache/workflow-cloud/<repo>' "orchestrate cloud: tmux works in the deploy worktree"
+like "$cloud" 'device with-secrets <project> -- <command>' "orchestrate cloud: a theme's secrets come through with-secrets"
+like "$(sed -n '/pass is locked on/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" 'unlock' \
+	"orchestrate cloud: a locked pass is asked of Saiful"

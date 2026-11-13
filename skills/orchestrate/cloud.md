@@ -35,8 +35,8 @@ the skill holds, with these changes:
   30 minutes like any other question. Saiful's approval or choice is a
   question too. No run parks for a device and no checklist line is cut for
   one: the review (§5) and the walk (§6) run here as for any milestone.
-- Saiful's logged-in browser and the programs `device run` allows (adb,
-  podman, shopify) are reached from here with `device`, on the project's
+- Saiful's logged-in browser and the device's terminal are reached from
+  here with `device`, on the project's
   own device when Saiful gave it one (never set it from here), else on
   the device Saiful chose with `workflow device use` (the mini unless he
   chose another), whatever the question route; the dogfood skill's cloud
@@ -53,9 +53,17 @@ the skill holds, with these changes:
   <project>'s calls; turn one on, then answer done" --option done --option
   hold`. Never park for a device.
 - Terminal work on the device goes through `device tmux send '<line>'`,
-  `device tmux read` and `device tmux end`: one tmux session per run,
-  `cloud-<project>-<milestone>`, working in its own folder under
-  `~/.cache/workflow-cloud/`, which Saiful can attach to and watch. A send
+  `device tmux read` and `device tmux end`: adb, podman, gh, cf and every
+  deploy, with the device's own logins; the cloud holds no Cloudflare or
+  Shopify app login. One tmux session per run, `cloud-<project>-<milestone>`,
+  which Saiful can attach to and watch. It works in the deploy worktree,
+  `~/.cache/workflow-cloud/<repo>`, at this run's cloud branch
+  `cloud/<project>-<milestone>` as origin has it, so push the branch before
+  the first send; its first line updates the submodules, and the worktree
+  keeps its node_modules between sessions. An app's staging deploy is
+  `device tmux send 'workflow shopify deploy <app>'` (`pnpm install` first
+  when node_modules is missing); in the VM that command deploys nothing.
+  A send
   is one line and its Enter, or one key such as `C-c`; read again until the
   output is there. `busy: <project>` (exit 5) means another run holds the
   device: do other work, then try again. A job ends after 15 idle minutes
@@ -79,8 +87,8 @@ the skill holds, with these changes:
   again and say to answer on the hub. On no, leave it unrun. A
   device call that fails for another reason is tried once more, then
   asked like any other question.
-- `device amx new '<task>'` starts a local agent on the device, in the
-  run's tmux folder, and prints its name; `device amx result <name>`
+- `device amx new '<task>'` starts a local agent on the device, in a
+  folder of its own under `~/.cache/workflow-cloud/`, and prints its name; `device amx result <name>`
   prints its answer, and on `again:` (exit 9) runs again at once. `ls`,
   `status`, `send`, `answer`, `logs` and `stop` reach only the agent this
   run started. Start one only for what the cloud cannot do: the desktop's
@@ -88,6 +96,16 @@ the skill holds, with these changes:
   code. A device runs one at a time (`busy:`, exit 5); stop it with
   `device amx stop <name>` when its work is done. The hub stops it when
   the run lands or parks.
+- A theme's token and store password are the only project secrets a cloud
+  command gets, through `device with-secrets <project> -- <command>`: the
+  device reads the pass entries the project's `cloud-secrets` names and
+  sets them for that one command (`workflow shopify theme-dev` does it
+  itself). Never print one. `device: cloud-secrets of <project> was not set
+  from a device` (exit 2) is a question for Saiful to set it on a device.
+  `device: pass is locked on <machine>` (exit 7) is a question too: `mem ask
+  --for saiful "pass is locked on <machine>: unlock it there (pass show any
+  entry once), then answer done" --option done --option hold`; on done, run
+  the call again.
 - A device need the plan did not name gets `mem finding add --milestone
   <slug> --step plan` naming it, so the next plan names it, and is asked
   the same way.

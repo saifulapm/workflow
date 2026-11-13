@@ -1792,7 +1792,7 @@ In claude.ai:
      {host}  (the store)
      github.com, *.github.com, *.githubusercontent.com  (the repo, and the cloud-bins release with the binaries, their sums and the skills)
      *.tailscale.com, log.tailscale.io  (Tailscale, which carries questions and answers)
-     device.on-rexa.com  (the device tunnel: device browser and device run on the routed machine)
+     device.on-rexa.com  (the device tunnel: device browser, tmux and with-secrets on the routed machine)
    Network secrets: none for {host}
      (the proxy would send its own Authorization over HUB_STORE_TOKEN, and its
      interception drops the WebSocket upgrade: the store's socket gets 426)
