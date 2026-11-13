@@ -469,6 +469,7 @@ pub enum ProjectKey {
     Runner,
     Share,
     Cloud,
+    Device,
 }
 
 impl ProjectKey {
@@ -482,6 +483,7 @@ impl ProjectKey {
             ProjectKey::Runner => "runner",
             ProjectKey::Share => "share",
             ProjectKey::Cloud => "cloud",
+            ProjectKey::Device => "device",
         }
     }
 }
@@ -524,6 +526,9 @@ pub enum ProjectSetCommand {
     /// Refused: the project's Claude Project carries every cloud run, and no
     /// machine does. `mem project unset cloud` clears an old setting.
     Cloud { machine: String },
+    /// The device this project runs on: mac-mini-m2, nuc or macbook-m2. mem
+    /// also records which machine wrote it, as `device_by`.
+    Device { device: String },
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;

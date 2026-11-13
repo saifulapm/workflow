@@ -615,6 +615,78 @@ fn project_set_land_ci_names_the_workflow_a_landing_waits_on() {
     assert!(v.get("land_ci").is_none(), "unset is the way back: {v}");
 }
 
+fn name_this_machine(w: &World, name: &str) {
+    let file = w.dirs().qshell_machine();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, name).unwrap();
+}
+
+#[test]
+fn project_set_device_takes_the_three_devices_and_records_who_wrote_it() {
+    let w = World::new("write-device");
+    name_this_machine(&w, "box-1");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v["device"].is_null() && v["device_by"].is_null(), "{v}");
+
+    for device in ["mac-mini-m2", "nuc", "macbook-m2"] {
+        let out = mem(&w, &repo, &["project", "set", "device", device]);
+        assert_eq!(code(&out), 0, "{device}: {}", stderr(&out));
+        let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+        assert_eq!(v["device"], serde_json::json!(device));
+        assert_eq!(v["device_by"], serde_json::json!("box-1"));
+    }
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(v["projects"][0]["device"], serde_json::json!("macbook-m2"));
+    assert_eq!(v["projects"][0]["device_by"], serde_json::json!("box-1"));
+
+    assert_eq!(code(&mem(&w, &repo, &["project", "unset", "device"])), 0);
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert!(v["device"].is_null() && v["device_by"].is_null(), "{v}");
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert!(v["projects"][0]["device_by"].is_null(), "{v}");
+    let toml = std::fs::read_to_string(
+        w.store()
+            .project_toml(v["projects"][0]["id"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert!(!toml.contains("device"), "{toml}");
+}
+
+#[test]
+fn project_set_device_refuses_any_other_name_and_leaves_project_toml_alone() {
+    let w = World::new("write-device-bad");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let id = json(&mem(&w, &repo, &["project", "current", "--json"]))["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let before = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    let out = mem(&w, &repo, &["project", "set", "device", "foo"]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    for name in ["mac-mini-m2", "nuc", "macbook-m2"] {
+        assert!(stderr(&out).contains(name), "{}", stderr(&out));
+    }
+    let after = std::fs::read_to_string(w.store().project_toml(&id)).unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn project_set_device_records_a_cloud_machine_truthfully() {
+    let w = World::new("write-device-cloud");
+    name_this_machine(&w, "cloud-abc");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "device", "nuc"])),
+        0
+    );
+    let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
+    assert_eq!(v["device_by"], serde_json::json!("cloud-abc"));
+}
+
 #[test]
 fn project_set_refuses_the_keys_nothing_reads() {
     let w = World::new("write-no-reader");

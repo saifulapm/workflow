@@ -587,6 +587,23 @@ pub fn set_key(store: &Store, project_id: &str, key: &str, value: &str) -> Resul
     Ok(path)
 }
 
+/// Insert several keys in one write of project.toml, so a sync never carries
+/// one without the others.
+pub fn set_keys(store: &Store, project_id: &str, pairs: &[(&str, &str)]) -> Result<PathBuf> {
+    let path = store.project_toml(project_id);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))
+        .map_err(|e| exit::store_error(format!("{e:#}")))?;
+    let mut doc: toml::Table = toml::from_str(&text)
+        .map_err(|e| exit::store_error(format!("{} is not valid toml: {e}", path.display())))?;
+    for (key, value) in pairs {
+        doc.insert(key.to_string(), toml::Value::String(value.to_string()));
+    }
+    let out = toml::to_string(&doc).context("serializing project.toml")?;
+    write_atomic(&path, out.as_bytes())?;
+    Ok(path)
+}
+
 /// Name `project_id` `new`, its old names kept as aliases. Through the
 /// parsed document, as `set_key` writes, so a key this mem does not know
 /// survives.

@@ -28,6 +28,8 @@
           "roadmap_status",
           "paused",
           "cloud",
+          "device",
+          "device_by",
           "runner",
           "milestone",
           "milestones_done",
@@ -97,6 +99,20 @@
           },
           "paused": {
             "description": "\"<rfc3339 UTC> by <who>\" while the project is paused with `mem project set paused <who>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device": {
+            "description": "The device recorded with `mem project set device`: mac-mini-m2, nuc or macbook-m2; null when none is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_by": {
+            "description": "The machine that wrote `device`; null when no device is set.",
             "type": [
               "string",
               "null"

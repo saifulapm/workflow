@@ -400,6 +400,8 @@ fn project_summary(
         ("roadmap_status", json!(declared(ROADMAP_STATUS))),
         ("paused", json!(declared("paused"))),
         ("cloud", json!(declared("cloud"))),
+        ("device", json!(declared("device"))),
+        ("device_by", json!(declared("device_by"))),
         ("runner", runner_json(&app.store, id)),
         (
             "milestone",
@@ -471,6 +473,8 @@ pub fn project_current(app: &App) -> Result<i32> {
     let verify = declared.as_ref().and_then(|p| p.verify.clone());
     let hygiene_exempt = crate::project::declared(&app.store, id, "hygiene_exempt");
     let land_ci = crate::project::declared(&app.store, id, "land_ci");
+    let device = crate::project::declared(&app.store, id, "device");
+    let device_by = crate::project::declared(&app.store, id, "device_by");
     // A child project keeps the checkout as its root and says where inside
     // it the child lives.
     let subdir = declared.as_ref().and_then(|p| p.subdir.clone());
@@ -498,6 +502,8 @@ pub fn project_current(app: &App) -> Result<i32> {
         if let Some(file) = &land_ci {
             doc["land_ci"] = json!(file);
         }
+        doc["device"] = json!(device);
+        doc["device_by"] = json!(device_by);
         println!("{}", serde_json::to_string(&doc)?);
     } else {
         println!("id    {id}");
@@ -519,6 +525,9 @@ pub fn project_current(app: &App) -> Result<i32> {
         }
         if let Some(file) = &land_ci {
             println!("land-ci  {file}");
+        }
+        if let Some(device) = &device {
+            println!("device  {device}");
         }
     }
     Ok(exit::OK)
@@ -613,6 +622,40 @@ pub fn project_set(app: &App, key: &str, value: &str) -> Result<i32> {
         );
     } else if !app.quiet {
         println!("{shown} for {}: {value}", identity.name().unwrap_or(id));
+    }
+    Ok(exit::OK)
+}
+
+/// `mem project set device <name>`: the device this project has, with the
+/// machine that wrote it, so the hub can follow it only when a device did.
+pub fn project_device(app: &App, device: &str) -> Result<i32> {
+    const DEVICES: [&str; 3] = ["mac-mini-m2", "nuc", "macbook-m2"];
+    let device = device.trim();
+    if !DEVICES.contains(&device) {
+        return Err(exit::usage(format!(
+            "a device is one of {}",
+            DEVICES.join(", ")
+        )));
+    }
+    let identity = writable_project_identity(app)?;
+    let Some(id) = identity.id() else {
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
+    };
+    let by = crate::paths::machine_name(&app.dirs);
+    let path = crate::project::set_keys(&app.store, id, &[("device", device), ("device_by", &by)])?;
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "id": id,
+                "name": identity.name(),
+                "device": device,
+                "device_by": by,
+                "path": path.to_string_lossy(),
+            }))?
+        );
+    } else if !app.quiet {
+        println!("device for {}: {device}", identity.name().unwrap_or(id));
     }
     Ok(exit::OK)
 }
@@ -896,6 +939,9 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
         crate::project::unset_key(&app.store, id, "runner_earlier")?;
         crate::project::unset_key(&app.store, id, "runner_milestone")?;
         crate::project::unset_key(&app.store, id, "runner_account")?;
+    }
+    if key == "device" {
+        crate::project::unset_key(&app.store, id, "device_by")?;
     }
     // An unpause, or a cleared runner, has to reach the other machines as a
     // pause does.

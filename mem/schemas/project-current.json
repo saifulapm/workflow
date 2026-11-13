@@ -38,6 +38,14 @@
     "land_ci": {
       "description": "Present only when the project named, with `mem project set land-ci`, the GitHub Actions workflow file `workflow land` waits on.",
       "type": "string"
+    },
+    "device": {
+      "description": "The device recorded with `mem project set device`: mac-mini-m2, nuc or macbook-m2; null when none is.",
+      "type": ["string", "null"]
+    },
+    "device_by": {
+      "description": "The machine that wrote `device`; null when no device is set.",
+      "type": ["string", "null"]
     }
   },
   "additionalProperties": false
