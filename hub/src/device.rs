@@ -407,24 +407,50 @@ pub(crate) fn run_over(
     mem: &MemCli,
     projects: &std::cell::OnceCell<Vec<serde_json::Value>>,
 ) -> bool {
-    // A thread sends CLAUDE_CODE_REMOTE_SESSION_ID, and the runner record
-    // names the same session with `session_` for `cse_`, as fleet reads it.
-    let runner = match session.strip_prefix("cse_") {
+    cloud_run_of(project, mem, projects).is_some_and(|run| {
+        run.id == runner_of(session) && run.state != crate::live::CloudState::Live
+    })
+}
+
+/// run_over, or the project's cloud run is now another session's: a job or
+/// agent of a run that a later one replaced before any sweep saw it end
+/// would otherwise hold the device for good.
+pub(crate) fn run_ended(
+    session: &str,
+    project: &str,
+    mem: &MemCli,
+    projects: &std::cell::OnceCell<Vec<serde_json::Value>>,
+) -> bool {
+    cloud_run_of(project, mem, projects).is_some_and(|run| {
+        run.id != runner_of(session) || run.state != crate::live::CloudState::Live
+    })
+}
+
+/// A thread sends CLAUDE_CODE_REMOTE_SESSION_ID, and the runner record names
+/// the same session with `session_` for `cse_`, as fleet reads it.
+fn runner_of(session: &str) -> String {
+    match session.strip_prefix("cse_") {
         Some(rest) => format!("session_{rest}"),
         None => session.to_string(),
-    };
+    }
+}
+
+/// `project`'s cloud run as the home page reads it, if it has one.
+fn cloud_run_of(
+    project: &str,
+    mem: &MemCli,
+    projects: &std::cell::OnceCell<Vec<serde_json::Value>>,
+) -> Option<crate::live::CloudRun> {
     let rows = projects.get_or_init(|| mem.refresh(&["projects", "--json"]).rows("projects"));
-    rows.iter()
-        .filter(|row| row["name"].as_str() == Some(project))
-        .any(|row| {
-            let summary = crate::page_home::summary_of(row);
-            crate::live::cloud_run(
-                &summary,
-                || crate::doorbell::handoff_body(mem, project),
-                jiff::Timestamp::now(),
-            )
-            .is_some_and(|run| run.id == runner && run.state != crate::live::CloudState::Live)
-        })
+    let row = rows
+        .iter()
+        .find(|row| row["name"].as_str() == Some(project))?;
+    let summary = crate::page_home::summary_of(row);
+    crate::live::cloud_run(
+        &summary,
+        || crate::doorbell::handoff_body(mem, project),
+        jiff::Timestamp::now(),
+    )
 }
 
 /// Ends `session` when `due` holds for its last call: closes the tabs it
@@ -789,6 +815,54 @@ pub fn timeout() -> Duration {
         .and_then(|ms| ms.parse().ok())
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_TIMEOUT)
+}
+
+/// The user manager's environment, what the user's own programs get, and
+/// not the hub's, which holds its tokens. HOME and PATH fall back to the
+/// hub's own when systemctl does not say.
+pub(crate) fn user_env() -> Vec<(String, String)> {
+    let mut command = Command::new("systemctl");
+    command.args(["--user", "show-environment"]);
+    let mut env: Vec<(String, String)> = match output_within(&mut command, HELPER_TIMEOUT) {
+        Ended::Exited(done) if done.code == Some(0) => String::from_utf8_lossy(&done.stdout)
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    };
+    for key in ["HOME", "PATH"] {
+        if !env.iter().any(|(k, _)| k == key)
+            && let Ok(value) = std::env::var(key)
+        {
+            env.push((key.to_string(), value));
+        }
+    }
+    env
+}
+
+/// `bin` with `env` and nothing of the hub's. `scoped` runs it in a systemd
+/// scope of its own when the user manager can make one, so a server it
+/// starts, such as tmux's, is not in the hub's cgroup and outlives a restart
+/// of the hub.
+pub(crate) fn user_command(bin: &Path, env: &[(String, String)], scoped: bool) -> Command {
+    let var = |key: &str| env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+    let systemd_run = var("XDG_RUNTIME_DIR")
+        .and(var("PATH"))
+        .filter(|_| scoped)
+        .and_then(|path| find_in(path, "systemd-run"));
+    let mut command = match systemd_run {
+        Some(systemd_run) => {
+            let mut command = Command::new(systemd_run);
+            command
+                .args(["--user", "--scope", "--quiet", "--collect", "--"])
+                .arg(bin);
+            command
+        }
+        None => Command::new(bin),
+    };
+    command.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
+    command
 }
 
 /// The user manager's PATH, which has what the user's shell has (adb, mise's

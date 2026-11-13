@@ -6,13 +6,12 @@
 
 use std::cell::OnceCell;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::device::{HELPER_TIMEOUT, Outcome, find_in, unix_now, user_path};
+use crate::device::{HELPER_TIMEOUT, Outcome, find_in, unix_now, user_command, user_env};
 use crate::memcli::MemCli;
 use crate::proc::{Ended, Finished, output_within};
 
@@ -123,7 +122,7 @@ pub(crate) fn sweep(mem: &MemCli, projects: &OnceCell<Vec<serde_json::Value>>) {
         return;
     };
     let over = due(&job, unix_now()).or_else(|| {
-        crate::device::run_over(&job.session, &job.project, mem, projects).then_some(Over::Run)
+        crate::device::run_ended(&job.session, &job.project, mem, projects).then_some(Over::Run)
     });
     if let Some(over) = over
         && let Ok(tmux) = Tmux::here()
@@ -235,6 +234,12 @@ fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
         return Outcome::refuse("tmux send needs a line".to_string());
     }
     let line = rest.join(" ");
+    if line.ends_with('\\') {
+        return Outcome::refuse(
+            "a line may not end with \\: send the whole command as one line".to_string(),
+        );
+    }
+    let mut spend_id = None;
     if crate::held::held(&line) {
         let Some(id) = yes else {
             return Outcome {
@@ -245,6 +250,7 @@ fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
         if let Err(refused) = released(project, id, &line) {
             return refused;
         }
+        spend_id = Some(id);
     }
     if !tmux.has(name) {
         let folder = match folder(name) {
@@ -265,12 +271,18 @@ fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
             "50",
             "-e",
             &path,
+            // No history, so no key brings a released line back.
+            "-e",
+            "HISTFILE=/dev/null",
+            "-e",
+            "HISTSIZE=0",
         ];
-        // A thread writes bash, and the user's own shell may be fish. Two
-        // words, so tmux runs bash itself rather than through that shell.
+        // A thread writes bash, and the user's own shell may be fish. Several
+        // words, so tmux runs bash itself rather than through that shell;
+        // no rc file, which may turn history back on, and no `!` expansion.
         let bash = find_in(&tmux.path, "bash").map(|b| b.to_string_lossy().into_owned());
         if let Some(bash) = &bash {
-            new.extend([bash.as_str(), "-i"]);
+            new.extend([bash.as_str(), "--noprofile", "--norc", "+H", "-i"]);
         }
         let made = tmux.run(&new);
         if let Err(failed) = ok(made, "new-session") {
@@ -290,14 +302,19 @@ fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
         }
     };
     match ok(sent, "send-keys") {
-        Ok(()) => Outcome::done(String::new()),
+        Ok(()) => {
+            if let Some(id) = spend_id {
+                spend(id);
+            }
+            Outcome::done(String::new())
+        }
         Err(failed) => failed,
     }
 }
 
 /// Ok when question `id` of `project` asks for `line` and Saiful answered
 /// yes on one of the devices, never a cloud thread's own `mem answer`, and
-/// no earlier line went out on it. Its id is then spent.
+/// no earlier line went out on it.
 fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
     let spent = state(SPENT)
         .ok_or_else(|| Outcome::fail(126, "device: cannot find the state folder\n".to_string()))?;
@@ -345,12 +362,20 @@ fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
             "the yes for #{id} came from a cloud machine"
         )));
     }
+    Ok(())
+}
+
+/// Keeps `id` as spent once its line went out, so its yes sends no other.
+fn spend(id: &str) {
+    let Some(spent) = state(SPENT) else {
+        return;
+    };
     let mut ids = std::fs::read_to_string(&spent).unwrap_or_default();
     ids.push_str(id);
     ids.push('\n');
-    std::fs::write(&spent, ids)
-        .map_err(|e| Outcome::fail(126, format!("device: cannot keep #{id} as spent: {e}\n")))?;
-    Ok(())
+    if let Err(e) = std::fs::write(&spent, ids) {
+        eprintln!("hub: device: cannot keep #{id} as spent: {e}");
+    }
 }
 
 /// The job's folder, `~/.cache/workflow-cloud/<name>`, made when it is not
@@ -425,18 +450,24 @@ fn ok(done: Result<Finished, Outcome>, what: &str) -> Result<(), Outcome> {
 pub(crate) struct Tmux {
     bin: PathBuf,
     path: String,
+    env: Vec<(String, String)>,
 }
 
 impl Tmux {
     pub(crate) fn here() -> Result<Tmux, Outcome> {
-        let path = user_path();
+        let env = user_env();
+        let path = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
         let Some(bin) = find_in(&path, "tmux") else {
             return Err(Outcome::fail(
                 127,
                 "device: tmux was not found\n".to_string(),
             ));
         };
-        Ok(Tmux { bin, path })
+        Ok(Tmux { bin, path, env })
     }
 
     pub(crate) fn has(&self, name: &str) -> bool {
@@ -447,14 +478,12 @@ impl Tmux {
     }
 
     pub(crate) fn run(&self, args: &[&str]) -> Result<Finished, Outcome> {
-        let mut command = Command::new(&self.bin);
+        // The command that may start the server runs in a scope of its own.
+        let mut command = user_command(&self.bin, &self.env, args[0] == "new-session");
         if let Some(socket) = std::env::var_os("HUB_DEVICE_TMUX_SOCKET").filter(|s| !s.is_empty()) {
             command.arg("-S").arg(socket);
         }
-        command
-            .args(args)
-            .env("PATH", &self.path)
-            .env_remove("TMUX");
+        command.args(args);
         match output_within(&mut command, HELPER_TIMEOUT) {
             Ended::Exited(done) => Ok(done),
             Ended::TimedOut => Err(Outcome::fail(

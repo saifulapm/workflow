@@ -99,6 +99,11 @@ impl Rig {
     /// (the thread cse_01Walk) since a minute ago; its latest handoff,
     /// `handoff`, was written now, or never when it is None.
     fn cloud_run(&self, milestone: &str, handoff: Option<&str>) {
+        self.cloud_run_by("session_01Walk", milestone, handoff);
+    }
+
+    /// cloud_run, with the run's runner id `runner`.
+    fn cloud_run_by(&self, runner: &str, milestone: &str, handoff: Option<&str>) {
         let now = jiff::Timestamp::now();
         let since = now - jiff::SignedDuration::from_secs(60);
         let handoff_at = handoff.map_or(serde_json::Value::Null, |_| now.to_string().into());
@@ -106,7 +111,7 @@ impl Rig {
             {"name": "cloud_walk", "roadmap_status": "approved", "checkouts": [],
              "milestone": milestone, "milestones_done": 1, "milestones_total": 3,
              "handoff_at": handoff_at,
-             "runner": {"machine": "cloud", "id": "session_01Walk",
+             "runner": {"machine": "cloud", "id": runner,
                         "since": since.to_string(), "milestone": "w14"}},
             {"name": "shop", "milestone": "m2"},
         ]});
@@ -482,4 +487,41 @@ fn a_sent_token_is_cut_in_the_log() {
         rig.log(),
         ["--project=cloud_walk device mac-mini-m2 tmux send echo shpat_*** exit 0"]
     );
+}
+
+#[test]
+fn a_line_that_continues_onto_the_next_send_is_refused() {
+    let rig = rig();
+    let answer = rig.walk(&["send", "rm \\"]);
+    assert_eq!(answer["exit"], 2, "{answer}");
+    assert!(rig.sessions().is_empty(), "{:?}", rig.sessions());
+}
+
+#[test]
+fn a_sent_line_cannot_be_run_again_from_the_shell_s_history() {
+    let rig = rig();
+    rig.walk(&["send", "echo once >> count"]);
+    rig.walk(&["send", "Up"]);
+    rig.walk(&["send", "Enter"]);
+    rig.walk(&["send", "!!"]);
+    rig.walk(&["send", "echo lines-$(wc -l < count)"]);
+    rig.read_until("lines-1");
+}
+
+#[test]
+fn the_session_holds_none_of_the_hub_s_secrets() {
+    let rig = rig();
+    rig.walk(&["send", "echo token-${HUB_PEER_TOKEN:-none}"]);
+    rig.read_until("token-none");
+}
+
+#[test]
+fn a_job_ends_once_another_session_runs_the_project() {
+    let rig = rig_env(&[("HUB_DEVICE_SWEEP_MS", "200")]);
+    rig.cloud_run("w14", None);
+    rig.walk(&["send", "true"]);
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(rig.sessions(), ["cloud-cloud_walk-w14"]);
+    rig.cloud_run_by("session_01Next", "w14", None);
+    wait_until(Duration::from_secs(5), || rig.sessions().is_empty());
 }

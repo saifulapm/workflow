@@ -82,6 +82,11 @@ impl Rig {
     /// ago; its latest handoff, `handoff`, was written now, or never when it
     /// is None.
     fn cloud_run(&self, milestone: &str, handoff: Option<&str>) {
+        self.cloud_run_by("session_01Walk", milestone, handoff);
+    }
+
+    /// cloud_run, with the run's runner id `runner`.
+    fn cloud_run_by(&self, runner: &str, milestone: &str, handoff: Option<&str>) {
         let now = jiff::Timestamp::now();
         let since = now - jiff::SignedDuration::from_secs(60);
         let handoff_at = handoff.map_or(serde_json::Value::Null, |_| now.to_string().into());
@@ -89,7 +94,7 @@ impl Rig {
             {"name": "cloud_walk", "roadmap_status": "approved", "checkouts": [],
              "milestone": milestone, "milestones_done": 1, "milestones_total": 3,
              "handoff_at": handoff_at,
-             "runner": {"machine": "cloud", "id": "session_01Walk",
+             "runner": {"machine": "cloud", "id": runner,
                         "since": since.to_string(), "milestone": "w14"}},
             {"name": "shop", "milestone": "m2"},
         ]});
@@ -326,4 +331,24 @@ fn a_stop_that_fails_is_tried_again_next_sweep() {
     std::fs::remove_file(rig.state.join("stop-fails")).unwrap();
     std::thread::sleep(Duration::from_secs(1));
     assert!(!rig.record().exists(), "{:?}", rig.calls());
+}
+
+#[test]
+fn an_agent_amx_no_longer_knows_is_forgotten_on_stop() {
+    let rig = rig();
+    rig.started();
+    std::fs::write(rig.state.join("stop-gone"), "").unwrap();
+    rig.walk(&["stop", "rec-t8a"]);
+    assert!(!rig.record().exists());
+    let again = rig.call("shop", "cse_01Shop", &["new", "look", "at", "the", "phone"]);
+    assert_eq!(again["exit"], 0, "{again}");
+}
+
+#[test]
+fn the_agent_is_stopped_once_another_session_runs_the_project() {
+    let rig = rig_env(&SWEEP);
+    rig.cloud_run("w14", None);
+    rig.started();
+    rig.cloud_run_by("session_01Next", "w14", None);
+    stopped_by_the_sweep(&rig);
 }

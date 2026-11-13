@@ -5,13 +5,12 @@
 
 use std::cell::OnceCell;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::device::{Outcome, find_in, timeout, user_path};
+use crate::device::{Outcome, find_in, timeout, user_command, user_env};
 use crate::memcli::MemCli;
 use crate::proc::{Ended, Finished, output_within};
 
@@ -71,7 +70,7 @@ pub(crate) fn call(session: Option<&str>, project: &str, args: &[String]) -> Out
         let mut stop = vec!["stop", "--force", name];
         stop.extend(words.iter().map(String::as_str));
         let stopped = amx.run(&stop);
-        if matches!(&stopped, Ok(done) if done.code == Some(0)) {
+        if stopped.as_ref().is_ok_and(gone) {
             forget();
         }
         return passed(stopped);
@@ -168,15 +167,13 @@ pub(crate) fn sweep(mem: &MemCli, projects: &OnceCell<Vec<Value>>) {
     let Some(agent) = load() else {
         return;
     };
-    if !crate::device::run_over(&agent.session, &agent.project, mem, projects) {
+    if !crate::device::run_ended(&agent.session, &agent.project, mem, projects) {
         return;
     }
     // A stop that failed keeps the record, so the next round tries again;
     // an agent amx no longer knows is gone already.
     let stopped = Amx::here().and_then(|amx| amx.run(&["stop", "--force", &agent.name]));
-    let gone = matches!(&stopped, Ok(done) if done.code == Some(0)
-        || String::from_utf8_lossy(&done.stderr).contains("no agent"));
-    if !gone {
+    if !stopped.as_ref().is_ok_and(gone) {
         eprintln!(
             "hub: device: could not stop amx agent {} of {}; trying again next round",
             agent.name, agent.project
@@ -188,6 +185,12 @@ pub(crate) fn sweep(mem: &MemCli, projects: &OnceCell<Vec<Value>>) {
         "hub: device: stopped amx agent {} of {}",
         agent.name, agent.project
     );
+}
+
+/// Whether a stop left no agent: it stopped it, or amx no longer knows it,
+/// as after Saiful's own `amx clear`.
+fn gone(done: &Finished) -> bool {
+    done.code == Some(0) || String::from_utf8_lossy(&done.stderr).contains("no agent")
 }
 
 /// Held across each read, change and write of the record.
@@ -239,28 +242,35 @@ fn passed(done: Result<Finished, Outcome>) -> Outcome {
     }
 }
 
-/// amx on the user manager's PATH.
+/// amx on the user manager's PATH, with the user manager's environment.
 struct Amx {
     bin: PathBuf,
-    path: String,
+    env: Vec<(String, String)>,
 }
 
 impl Amx {
     fn here() -> Result<Amx, Outcome> {
-        let path = user_path();
+        let env = user_env();
+        let path = env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
         let Some(bin) = find_in(&path, "amx") else {
             return Err(Outcome::fail(
                 127,
                 "device: amx was not found\n".to_string(),
             ));
         };
-        Ok(Amx { bin, path })
+        Ok(Amx { bin, env })
     }
 
     fn run(&self, args: &[&str]) -> Result<Finished, Outcome> {
         let timeout = timeout();
-        let mut command = Command::new(&self.bin);
-        command.args(args).env("PATH", &self.path);
+        // The user's environment, not the hub's tokens, and `new`, which may
+        // start the tmux server amx runs its agents in, in a scope of its own.
+        let mut command = user_command(&self.bin, &self.env, args[0] == "new");
+        command.args(args);
         match output_within(&mut command, timeout) {
             Ended::Exited(done) => Ok(done),
             Ended::TimedOut => Err(Outcome::fail(

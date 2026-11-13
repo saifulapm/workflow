@@ -4,7 +4,8 @@
 # fixtures/amx as <case>.out, .err and .code. Its one agent is rec-t8a; its
 # ls also lists rec-t8b, an agent of Saiful's own. While $S/result-times-out
 # is there, result answers as amx does when its --timeout runs out; while
-# $S/stop-fails is there, stop fails.
+# $S/stop-fails is there, stop fails; while $S/stop-gone is there, stop
+# answers as amx does for an agent it no longer knows.
 
 FX=$(dirname "$0")/fixtures/amx
 replay() {
@@ -17,6 +18,9 @@ printf '[%s]' "$@" >> "$S/record"
 echo >> "$S/record"
 case $1 in
 stop)
+  if [ -f "$S/stop-gone" ]; then
+    replay status-missing
+  fi
   if [ -f "$S/stop-fails" ]; then
     echo "amx: tmux did not answer" >&2
     exit 1
