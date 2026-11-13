@@ -103,23 +103,31 @@ the skill holds, with these changes:
   push main or app/<app>, never tick the roadmap and never run `workflow
   go` for the next milestone: the coordinator starts the next thread from
   that line.
+  - A line starting `ask:` is a landing that did not finish: push the
+    branch, then file the line with `mem ask --for saiful "<the line>"
+    --option "fix and try again" --option hold --recommend "fix and try
+    again"` and wait for it as above. On `fix and try again`, fix what it
+    names on the branch and run `workflow land` again; on `hold`, park as
+    above. Never hand off a landing's line as a park.
   - Tests red after the rebase: fix them on the branch test-first and run
-    `workflow land` again. After two failed fixes, hand off `parked: tests
-    red after rebasing on main: <what fails>` and push the branch.
-  - `parked: trunk moved: ...` or `parked: main moved: ...`: hand off with
-    that line and push the branch. On `main moved` the milestone is on
-    app/<app> already and main is untouched.
+    `workflow land` again. After two failed fixes, ask as for an `ask:`
+    line, with `ask: tests red after rebasing on main: <what fails>`.
+  - `ask: trunk moved: ...` or `ask: main moved: ...`: on `main moved` the
+    milestone is on app/<app> and ticked already, and main is untouched;
+    `workflow land` run again from the same branch moves it onto main, as
+    it does after `ask: app/<app> did not follow main: ...`.
   - A project with land-ci (`mem project set land-ci ci.yml`): land pushes
     the rebased sha to ci/<project>-<milestone> and waits on that
     workflow's run of it before it pushes the trunk. One call waits at
     most 9 minutes, under a Bash call's 10, then prints `again: waiting
     on <file> for <sha>; run workflow land again`: run it again at once,
     committing nothing in between (a new commit is a new sha and a new
-    run); it neither pushes nor tests again on that sha. `parked: CI red on
-    <sha>: <jobs>`, `parked: no <file> run for <sha>`, `parked: <file>
-    still running on <sha>`, `parked: origin refused ci/...` or `parked:
-    GitHub refused the Actions API ...`: hand off with that line and push the branch; nothing reached
-    the trunk.
+    run); it neither pushes nor tests again on that sha. A read of
+    GitHub's Actions API is tried three times. `ask: CI red on <sha>:
+    <jobs>`, `ask: no <file> run for <sha>`, `ask: <file> still running on
+    <sha>`, `ask: origin refused ci/...` or `ask: GitHub refused the
+    Actions API ...`: nothing reached the trunk; ask as for any `ask:`
+    line.
 - After a landing, as the very last command, log the machine off the
   tailnet as the prompt says; not when parked.
 - When usage limits reset and the thread continues, carry on from `mem
@@ -132,4 +140,6 @@ the skill holds, with these changes:
   There is no amx here, so end by saying so.
 - The report's last line is exactly one of `next: Run the next milestone
   of <project>.`, `done: <project>'s roadmap is done`, or `parked: <why>`,
-  with nothing after it: the coordinator reads only that line.
+  with nothing after it: the coordinator reads only that line. A run
+  parks only on a question with no answer after 30 minutes, on `hold`, and
+  at the 6-hour stop.

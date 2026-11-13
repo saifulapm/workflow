@@ -455,9 +455,10 @@ fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
         "never force a push",
         "never on main",
         "parked: Saiful holds m2-next (#<id>)",
-        "parked: trunk moved:",
-        "parked: main moved:",
-        "parked: CI red on",
+        "a line starting `ask:`",
+        "--option \"fix and try again\" --option hold",
+        "`ask: tests red after rebasing on main: <what fails>`",
+        "it lands what is left, from this same branch",
         "starting `again:`",
         "parked: 6-hour stop",
         "never start the milestone over",
@@ -471,6 +472,14 @@ fn print_shows_the_prompt_naming_the_cloud_branch_and_starts_nothing() {
     );
     assert!(!prompt.contains('{'), "a placeholder left: {prompt}");
     assert!(prompt.contains("parked:"), "{prompt}");
+    for gone in [
+        "parked: trunk moved",
+        "parked: main moved",
+        "parked: CI red",
+        "parked: tests red",
+    ] {
+        assert!(!prompt.contains(gone), "{gone}: {prompt}");
+    }
     assert!(!prompt.contains("/goal"), "no slash command: {prompt}");
     assert!(!w.claude_ran());
     assert!(
@@ -1709,6 +1718,49 @@ fn after_the_answers_the_next_thread_carries_on_with_them() {
         !stdout(&out).contains("answered the questions it asked"),
         "{}",
         stdout(&out)
+    );
+}
+
+/// He answered `hold`, and later typed the start line: the new thread takes
+/// the run up and is told the hold is over, so it does not park on it again.
+#[test]
+fn a_start_line_after_hold_carries_on() {
+    let w = World::new("cloud-hold-start");
+    w.parked(
+        2,
+        1,
+        "parked: Saiful holds m2-next (#HOLD0001)\n",
+        &[question("gamma", 90, "HOLD0001", Some("hold"))],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(w.claimed(), "{:?}", w.mem_calls());
+    let said = stdout(&out);
+    assert!(!said.starts_with("parked:"), "{said}");
+    assert!(said.contains("answered: hold"), "{said}");
+    assert!(
+        said.contains("His start line ends each `hold` above: carry on."),
+        "{said}"
+    );
+}
+
+/// His message after a `hold` wakes the thread's own run: it reads that the
+/// message, not the hold, is what it does now.
+#[test]
+fn a_message_after_hold_wakes_the_run_to_do_what_it_says() {
+    let w = World::new("cloud-hold-wake");
+    w.parked_as(
+        THREAD_SESSION,
+        3,
+        1,
+        "parked: Saiful holds m2-next (#HOLD0002)\n",
+        &[question("gamma", 90, "HOLD0002", Some("hold"))],
+    );
+    let said = stdout(&w.thread(&["gamma", "--cloud", "--print"]));
+    assert!(said.contains("answered: hold"), "{said}");
+    assert!(
+        said.contains("His message ends each `hold` above: do what it says."),
+        "{said}"
     );
 }
 

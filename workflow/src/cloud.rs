@@ -527,11 +527,28 @@ fn answered(asked: &[memcli::Question], branch: &str) -> String {
         })
         .collect();
     format!(
-        " The thread before you parked, and Saiful has answered the questions it asked: {}. \
+        " The thread before you parked, and Saiful has answered the questions it asked: {}.{} \
 Act on any answer its work has not used yet. {branch} on origin holds that thread's landed \
 tasks: keep its commits and start from the first open task in `mem plan`.",
-        each.join("; ")
+        each.join("; "),
+        held_over(asked, "His start line ends each `hold` above: carry on.")
     )
+}
+
+/// `said`, after a space, when Saiful answered one of `asked` with hold: the
+/// start line or message that came after it carries the run on.
+fn held_over(asked: &[memcli::Question], said: &str) -> String {
+    let held = asked.iter().any(|q| {
+        q.answered
+            && q.answer
+                .as_deref()
+                .is_some_and(|a| a.trim().eq_ignore_ascii_case("hold"))
+    });
+    if held {
+        format!(" {said}")
+    } else {
+        String::new()
+    }
 }
 
 /// What this run's own thread, woken after it parked, reads after its
@@ -555,7 +572,14 @@ fn so_far(asked: &[memcli::Question], branch: &str) -> String {
     let asked = if each.is_empty() {
         String::new()
     } else {
-        format!(" The questions you asked: {}.", each.join("; "))
+        format!(
+            " The questions you asked: {}.{}",
+            each.join("; "),
+            held_over(
+                asked,
+                "His message ends each `hold` above: do what it says."
+            )
+        )
     };
     format!(
         " This is a new turn of your own run, which parked.{asked} {branch} on origin holds \
