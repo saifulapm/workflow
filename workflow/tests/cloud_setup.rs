@@ -1237,8 +1237,16 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
         "{settings}"
     );
     for (event, entries) in settings["hooks"].as_object().unwrap() {
-        assert_eq!(entries.as_array().unwrap().len(), 1, "{event}: {settings}");
+        let entries = entries.as_array().unwrap();
+        let unique: std::collections::HashSet<String> =
+            entries.iter().map(serde_json::Value::to_string).collect();
+        assert_eq!(entries.len(), unique.len(), "{event}: {settings}");
     }
+    assert_eq!(
+        settings["hooks"]["PreToolUse"].as_array().unwrap().len(),
+        2,
+        "{settings}"
+    );
 }
 
 /// The local Read rules a thread takes, word for word as Saiful's settings

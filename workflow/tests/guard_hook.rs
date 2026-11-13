@@ -125,3 +125,68 @@ fn the_hook_entry_lets_every_call_run_with_no_workflow_or_an_old_one() {
     let out = run_entry(&old, &monitor_input("pkill -f x"));
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
+
+/// The command of the one PreToolUse entry that matches the edit tools.
+fn edit_entry() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cloud/settings-hooks.json");
+    let hooks: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let entries: Vec<&Value> = hooks["PreToolUse"]
+        .as_array()
+        .expect("a PreToolUse list")
+        .iter()
+        .filter(|e| e["matcher"] == "Edit|Write|NotebookEdit")
+        .collect();
+    assert_eq!(entries.len(), 1, "{hooks}");
+    entries[0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn the_edit_entry_refuses_an_edit_while_the_suite_runs_and_passes_an_old_workflow() {
+    let w = Scratch::new("guard-hook-edit");
+    let repo = w.mkdir("repo");
+    let init = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&repo)
+        .status();
+    assert!(init.unwrap().success());
+    let mut suite = Command::new("sh")
+        .args(["-c", "sleep 30; : cargo test -q"])
+        .current_dir(&repo)
+        .spawn()
+        .unwrap();
+    let input = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": { "file_path": repo.join("src/lib.rs") },
+        "cwd": repo,
+    })
+    .to_string();
+    let run = |bin: &Path| {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", &edit_entry()])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("HOME", "/nonexistent");
+        feed(command, &input)
+    };
+    let bin = w.mkdir("bin");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_workflow"), bin.join("workflow")).unwrap();
+    let real = run(&bin);
+    // A workflow from before guard edit: its help lists pnpm and bash.
+    w.script(
+        "old/workflow",
+        "if [ \"$1 $2\" = 'guard --help' ]; then\n\
+           echo '  <CHECK>  [possible values: pnpm, bash]'; exit 0\n\
+         fi\n\
+         echo \"error: invalid value '$2'\" >&2; exit 2",
+    );
+    let old = run(&w.at("old"));
+    let _ = suite.kill();
+    let _ = suite.wait();
+    assert_eq!(real.status.code(), Some(2), "{real:?}");
+    assert!(String::from_utf8_lossy(&real.stderr).contains("suite runs"));
+    assert_eq!(old.status.code(), Some(0), "{old:?}");
+}

@@ -18,6 +18,15 @@
           "command": "if workflow guard --help 2>/dev/null | grep -q 'possible values:.*bash'; then workflow guard bash; fi"
         }
       ]
+    },
+    {
+      "matcher": "Edit|Write|NotebookEdit",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "if workflow guard --help 2>/dev/null | grep -q 'possible values:.*edit'; then workflow guard edit; fi"
+        }
+      ]
     }
   ],
   "PostToolBatch": [
