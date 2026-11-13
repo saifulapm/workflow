@@ -1,8 +1,9 @@
 //! `device with-secrets <project> -- <command>`: the pass entries a project's
 //! `cloud-secrets` names, read here and handed to the thread, which sets them
 //! for that one command. A theme's token and store password are the only
-//! project secrets a cloud command needs; the key counts only when one of
-//! the devices wrote it, and no value is printed or logged here.
+//! project secrets a cloud command needs, and its store, which is no secret,
+//! is a line of its own; the key counts only when one of the devices wrote
+//! it, and no value is printed or logged here.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -61,6 +62,10 @@ fn read(machine: &str, project: &str) -> Result<BTreeMap<String, String>, Outcom
                 "cloud-secrets of {project} has a line that is not NAME=<pass entry>"
             )));
         };
+        if name == STORE && store_name(entry) {
+            secrets.insert(name.to_string(), entry.to_string());
+            continue;
+        }
         if !theme_secret(entry) {
             return Err(Outcome::refuse(format!(
                 "{entry} is not a theme token or a store password"
@@ -114,6 +119,21 @@ fn read(machine: &str, project: &str) -> Result<BTreeMap<String, String>, Outcom
         secrets.insert(name.to_string(), value);
     }
     Ok(secrets)
+}
+
+/// The name a theme's store is set as, the one Shopify CLI reads.
+const STORE: &str = "SHOPIFY_FLAG_STORE";
+
+/// `<name>.myshopify.com`: the store a theme's line names in place of a pass
+/// entry.
+fn store_name(entry: &str) -> bool {
+    entry.strip_suffix(".myshopify.com").is_some_and(|name| {
+        !name.is_empty()
+            && !name.starts_with('-')
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    })
 }
 
 /// Where theme tokens and store passwords live in pass, and nothing else:

@@ -246,3 +246,38 @@ fn an_entry_that_is_no_theme_token_or_store_password_is_refused() {
         assert!(!response.contains("app-token"), "{response}");
     }
 }
+
+/// A theme's store is no secret and lives in no pass entry: its
+/// `SHOPIFY_FLAG_STORE` line names the store itself, handed back as it is,
+/// with no pass read.
+#[test]
+fn a_store_line_hands_the_theme_its_store_with_no_pass_read() {
+    let rig = rig();
+    rig.secrets(
+        "SHOPIFY_CLI_THEME_TOKEN=Shopify/theme-access/pawsome-theme\n\
+         SHOPIFY_FLAG_STORE=pawsome-theme.myshopify.com",
+        "mac-mini-m2",
+    );
+    let (_, answer) = rig.call();
+    assert_eq!(answer["exit"], 0, "{answer}");
+    assert_eq!(
+        answer["secrets"]["SHOPIFY_FLAG_STORE"], "pawsome-theme.myshopify.com",
+        "{answer}"
+    );
+    assert_eq!(
+        answer["secrets"]["SHOPIFY_CLI_THEME_TOKEN"],
+        serde_json::json!(theme_token()),
+        "{answer}"
+    );
+    // Only a store under that name: any other line still names a pass entry.
+    for line in [
+        "X=pawsome-theme.myshopify.com",
+        "SHOPIFY_FLAG_STORE=Shopify/ShortCart/token",
+        "SHOPIFY_FLAG_STORE=../x.myshopify.com",
+        "SHOPIFY_FLAG_STORE=evil.com/.myshopify.com",
+    ] {
+        rig.secrets(line, "mac-mini-m2");
+        let (_, answer) = rig.call();
+        assert_eq!(answer["exit"], 2, "{line}: {answer}");
+    }
+}

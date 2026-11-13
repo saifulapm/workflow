@@ -532,8 +532,9 @@ pub enum ProjectSetCommand {
     /// also records which machine wrote it, as `device_by`.
     Device { device: String },
     /// The pass entries `device with-secrets` hands a cloud command of this
-    /// project, one `NAME=<pass entry>` a line. mem also records which
-    /// machine wrote them, as `cloud_secrets_by`.
+    /// project, one `NAME=<pass entry>` a line; a theme's store, which is no
+    /// secret, as `SHOPIFY_FLAG_STORE=<name>.myshopify.com`. mem also records
+    /// which machine wrote them, as `cloud_secrets_by`.
     #[command(name = "cloud-secrets")]
     CloudSecrets { lines: String },
 }
