@@ -49,13 +49,14 @@ done
 like "$(skill plan | sed -n '/^## 1. Read/,/^## 2/p')" 'mem search --kind idea' \
 	"plan: the Read step lists the project's ideas"
 
-# A Claude Project's milestone runs in the cloud up to its device work, which
-# comes last, so a cloud run parks once, and only after its review and walk:
-# the device leg starts from reviewed, walked work and checks only what is left.
+# A Claude Project's milestone runs in the cloud from start to landing: a
+# task for Saiful's hands is a question with done and hold, never a park for
+# a device. A device still takes up an old local-only handoff from the
+# reviewed, walked work it names.
 rules=$(skill plan | sed -n '/^## 4/,/^## 5/p')
 like "$rules" 'Runs on:' "plan: a Claude Project's plan says where it runs"
-like "$rules" 'last behaviour' "plan: device work is the milestone's last behaviour"
-like "$(cat "$WF_ROOT/skills/orchestrate/cloud.md")" 'review and walk done at' \
-	"orchestrate cloud: it reviews and walks before it parks for a device"
+like "$rules" 'options are `done` and `hold`' "plan: a task for his hands is a question"
+like "$(cat "$WF_ROOT/skills/orchestrate/cloud.md")" 'Never park for a device' \
+	"orchestrate cloud: it never parks for a device"
 like "$(skill orchestrate | sed -n '/half done/,/^$/p')" 'review and walk done at' \
 	"orchestrate: a device leg starts from the reviewed, walked work"

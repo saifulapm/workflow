@@ -557,6 +557,8 @@ impl<F: Files> View<'_, F> {
             ("roadmap_status", json!(p.declared("roadmap_status"))),
             ("paused", json!(p.declared("paused"))),
             ("cloud", json!(p.declared("cloud"))),
+            ("device", json!(p.declared("device"))),
+            ("device_by", json!(p.declared("device_by"))),
             ("runner", runner),
             (
                 "milestone",
