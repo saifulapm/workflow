@@ -57,3 +57,19 @@ fn the_cloud_page_asks_only_with_mem() {
         "{page}"
     );
 }
+
+/// Export sends to the store first, so a thread commits only what it left
+/// staged (m2b-clean-commits): "commit the file it stages" put an outbox
+/// commit on the branch for writes the store took a second later.
+#[test]
+fn a_thread_commits_only_what_export_left_staged() {
+    for (name, text) in texts() {
+        assert!(
+            text.contains(
+                "the `.mem-outbox.json` or its removal; with nothing staged, commit nothing"
+            ),
+            "{name}: {text}"
+        );
+        assert!(!text.contains("it stages, when it stages one"), "{name}");
+    }
+}

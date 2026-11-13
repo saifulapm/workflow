@@ -316,8 +316,10 @@ pub enum ShareCommand {
         #[arg(long)]
         all: bool,
     },
-    /// Save the writes still waiting into `.mem-outbox.json` at the top of
-    /// this git checkout and stage it, for the next machine to import.
+    /// Ask the local hub to send the outbox, wait up to MEM_SYNC_WAIT_MS
+    /// (ten seconds) for it to empty, then save the writes still waiting into
+    /// `.mem-outbox.json` at the top of this git checkout and stage it, for
+    /// the next machine to import.
     Export,
     /// Print the import's plan, one JSON per line, against the store's
     /// replay on stdin: a write for each text file the store lacks or holds
