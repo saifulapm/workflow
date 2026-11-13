@@ -32,6 +32,7 @@ pub mod mask;
 pub mod memcli;
 pub mod paths;
 pub mod pause;
+pub mod project_new;
 pub mod route;
 #[cfg(test)]
 mod scratch;
@@ -134,6 +135,7 @@ pub fn run(cli: Cli) -> i32 {
         Command::Land => land::cmd_land(),
         Command::WaitAnswer { ids } => wait::cmd_wait(&ids),
         Command::ProjectText { project } => cloud::cmd_project_text(project.as_deref()),
+        Command::ProjectNew { project } => project_new::cmd_project_new(project.as_deref()),
         Command::CloudSetup { bootstrap } => cloud::cmd_cloud_setup(bootstrap),
         Command::CloudSwitch { store } => cloud::cmd_cloud_switch(&store),
         Command::Go {

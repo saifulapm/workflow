@@ -204,6 +204,28 @@ cd into its clone, check mem knows the project, run `workflow go <project>
         /// A project of the repository, by mem's name; the current directory's when omitted.
         project: Option<String>,
     },
+    /// Print the steps that put a project into a Claude Project on both accounts, and check what this machine can.
+    #[command(
+        name = "project-new",
+        long_about = "Print the steps that put a project into a Claude Project on both accounts, and check what this machine can.
+
+It prints what to do once, on any device, then three steps for the work
+account and the same three for the main account: the Claude GitHub App
+reaches the repo and every repo it holds as a submodule, a new Project with
+those repos and the environment `workflow`, and the output of `workflow
+project-text <project>` pasted into Settings, Memory. claude.ai has no API
+for Projects, so Saiful takes these steps himself.
+
+Then one line for each check, `ok: ...` or `missing: ...`: mem has the
+project's remote; the project's device (its own, or the global choice of
+`workflow device use`) has a checkout of it; for a theme, each pass entry its
+cloud-secrets names, by path and never its value. It changes nothing. Exit 0
+when every line is ok, 1 when any is missing, 2 for an unknown project."
+    )]
+    ProjectNew {
+        /// The project, by mem's name; the current directory's when omitted.
+        project: Option<String>,
+    },
     /// Start planning a project in a claude.ai cloud session.
     #[command(long_about = "Start planning a project in a claude.ai cloud session.
 
