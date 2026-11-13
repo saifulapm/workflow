@@ -107,38 +107,9 @@ pub fn project_text(remote: &str) -> String {
         .replace("{repo}", repo)
 }
 
-/// The variables every Project's environment holds for the kit, by name:
-/// the ones `workflow cloud-switch` tells Saiful how to fill.
-const KIT_VARIABLES: &[&str] = &[
-    "HUB_STORE_URL",
-    "HUB_STORE_NAME",
-    "HUB_STORE_TOKEN",
-    "HUB_CLOUD_TOKEN",
-    "HUB_PEER_TOKEN_SHA256",
-    "HUB_STORE_ACCESS_ID",
-    "HUB_STORE_ACCESS_SECRET",
-    "TS_AUTHKEY",
-    "CONTEXT7_API_KEY",
-    "SLACK_BOT_TOKEN",
-    "SLACK_USER_ID",
-];
-
-/// The network secrets every Project's environment holds for the kit.
-const KIT_SECRETS: &[&str] = &["device.on-rexa.com"];
-
-/// The network secrets one mem project's work needs, by host: ebdfy's
-/// deploys run through the proxy's Cloudflare token (its verify page's
-/// Cloud section), and shopify_apps' staging deploys put each app's staging
-/// Worker up with wrangler.
-const PROJECT_SECRETS: &[(&str, &str)] = &[
-    ("ebdfy", "api.cloudflare.com"),
-    ("shopify_apps", "api.cloudflare.com"),
-];
-
 /// What the Claude Project of the repository `remote` needs besides its
 /// instructions: its name and repository, a start line for each mem project
-/// in `repo` (the projects of that repository), and its environment's
-/// variables by name, each with the project it belongs to.
+/// in `repo` (the projects of that repository), and the one environment.
 fn sheet(repo: &[&ProjectRow], remote: &str) -> String {
     let remote = remote.trim().trim_end_matches('/');
     let remote = remote.strip_suffix(".git").unwrap_or(remote);
@@ -152,84 +123,9 @@ fn sheet(repo: &[&ProjectRow], remote: &str) -> String {
     for row in repo {
         out.push_str(&format!("  {}\n", start_line(&row.name)));
     }
-    out.push_str(&format!(
-        "Environment {name}, one on each account. Its variables by name, with the project each \
-belongs to; each value comes from Saiful's pass, never from here:\n"
-    ));
-    for variable in KIT_VARIABLES {
-        out.push_str(&format!("  {variable}  every Project\n"));
-    }
     out.push_str(
-        "  WORKFLOW_ACCOUNT  every Project: work on the work account, main on the main account\n",
+        "Environment workflow, the one every Project uses on each account: its variables and network secret are the ones workflow cloud-switch lists\n",
     );
-    let checkout = root.and_then(|row| {
-        row.checkouts
-            .iter()
-            .map(std::path::Path::new)
-            .find(|dir| dir.is_dir())
-    });
-    let shopify = |row: &&&ProjectRow| {
-        row.subdir
-            .as_deref()
-            .is_some_and(|s| s.starts_with("apps/") || s.starts_with("themes/"))
-    };
-    if checkout.is_none() && repo.iter().any(|row| shopify(&row)) {
-        out.push_str(&format!(
-            "  (no checkout of {owner}/{last} here, so its apps' and themes' Shopify variables are left out: run this where it is checked out)\n"
-        ));
-    }
-    for row in repo {
-        let Some(subdir) = row.subdir.as_deref() else {
-            continue;
-        };
-        let kind = subdir.split('/').next().unwrap_or_default();
-        if !checkout.is_some_and(|dir| crate::shopify::holds(dir, kind)) {
-            continue;
-        }
-        for variable in crate::shopify::variable_names(subdir) {
-            out.push_str(&format!("  {variable}  {}\n", row.name));
-        }
-    }
-    out.push_str("Network secrets by host:\n");
-    for host in KIT_SECRETS {
-        out.push_str(&format!("  {host}  every Project\n"));
-    }
-    for (project, host) in PROJECT_SECRETS {
-        if repo.iter().any(|row| row.name == *project) {
-            out.push_str(&format!("  {host}  {project}\n"));
-        }
-    }
-    let workers: Vec<(&str, String, Option<String>, Vec<String>)> = repo
-        .iter()
-        .filter_map(|row| {
-            let app = row.subdir.as_deref()?.strip_prefix("apps/")?;
-            let (worker, account, secrets) =
-                crate::shopify::staging_worker_of(&checkout?.join("apps").join(app))?;
-            Some((row.name.as_str(), worker, account, secrets))
-        })
-        .collect();
-    let mut accounts: Vec<&str> = workers
-        .iter()
-        .filter_map(|(_, _, account, _)| account.as_deref())
-        .collect();
-    accounts.sort_unstable();
-    accounts.dedup();
-    for account in accounts {
-        out.push_str(&format!(
-            "  api.cloudflare.com path prefixes for the staging deploys, every one of them and no other (the assets upload carries its own token, which the secret would replace): {}\n",
-            crate::shopify::staging_api_paths(account).join(", ")
-        ));
-    }
-    if !workers.is_empty() {
-        out.push_str(
-            "Secrets of each staging Worker by name, with the project each belongs to; each value comes from Saiful's pass, put on the Worker with `wrangler secret put <name> --env staging` in the app's folder before its first deploy:\n",
-        );
-        for (project, worker, _, secrets) in workers {
-            for secret in secrets {
-                out.push_str(&format!("  {secret}  {project}, on {worker}\n"));
-            }
-        }
-    }
     out
 }
 

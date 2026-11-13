@@ -44,42 +44,6 @@ fn prefix(name: &str) -> String {
         .collect()
 }
 
-/// The variables a project at `subdir` of a Shopify repo reads from its
-/// Project's environment: a theme's three under `themes/`, none for an app,
-/// which deploys with the device's own logins.
-pub fn variable_names(subdir: &str) -> Vec<String> {
-    let Some((kind, name)) = subdir.trim_matches('/').split_once('/') else {
-        return Vec::new();
-    };
-    let whats: &[&str] = match kind {
-        "themes" => &[
-            "SHOPIFY_CLI_THEME_TOKEN",
-            "SHOPIFY_FLAG_STORE",
-            "STORE_PASSWORD",
-        ],
-        _ => &[],
-    };
-    whats
-        .iter()
-        .map(|what| format!("{}_{what}", prefix(name)))
-        .collect()
-}
-
-/// Whether the checkout `root` holds Shopify `kind`s: `apps/<app>` with its
-/// shopify.app.toml, or `themes/<theme>` with its layout/theme.liquid.
-pub fn holds(root: &Path, kind: &str) -> bool {
-    let file = match kind {
-        "apps" => "shopify.app.toml",
-        "themes" => "layout/theme.liquid",
-        _ => return false,
-    };
-    std::fs::read_dir(root.join(kind))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|entry| entry.path().join(file).is_file())
-}
-
 fn var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
@@ -487,63 +451,6 @@ fn strip_comments_ahead(rest: &str) -> &str {
             return rest;
         }
     }
-}
-
-/// The paths of the Cloudflare API a staging deploy of `account` calls,
-/// for the network secret that carries its token. The secret replaces the
-/// Authorization header of every request on its paths, so the assets
-/// upload, which carries its own upload token, must not be among them, nor
-/// the bare /accounts, which is a prefix of it.
-pub fn staging_api_paths(account: &str) -> Vec<String> {
-    let mut paths: Vec<String> = [
-        "/client/v4/user",
-        "/client/v4/memberships",
-        "/client/v4/zones",
-    ]
-    .map(str::to_string)
-    .to_vec();
-    for under in [
-        "d1",
-        "r2",
-        "queues",
-        "workflows",
-        "workers/scripts",
-        "workers/services",
-        "workers/subdomain",
-        "workers/workers",
-        "workers/durable_objects",
-        "workers/domains",
-    ] {
-        paths.push(format!("/client/v4/accounts/{account}/{under}"));
-    }
-    paths
-}
-
-/// The staging Worker of the app at `dir`, when the app has a staging
-/// config: its name, its account, and the secrets it needs, which are the
-/// names its .dev.vars.example lists that env.staging does not set as vars.
-/// Wrangler's own `secrets.required` would say them, but in one environment
-/// it changes the types wrangler generates for all of them.
-pub fn staging_worker_of(dir: &Path) -> Option<(String, Option<String>, Vec<String>)> {
-    if !dir.join(format!("shopify.app.{STAGING}.toml")).is_file() {
-        return None;
-    }
-    let config = jsonc(&std::fs::read_to_string(dir.join("wrangler.jsonc")).ok()?)?;
-    let env = &config["env"][STAGING];
-    let example = std::fs::read_to_string(dir.join(".dev.vars.example")).unwrap_or_default();
-    let secrets = example
-        .lines()
-        .filter_map(|line| line.split_once('=').map(|(name, _)| name.trim()))
-        .filter(|name| {
-            !name.is_empty() && !name.starts_with('#') && env["vars"].get(name).is_none()
-        })
-        .map(str::to_string)
-        .collect();
-    Some((
-        env["name"].as_str()?.to_string(),
-        env["account_id"].as_str().map(str::to_string),
-        secrets,
-    ))
 }
 
 /// The app's staging Worker, as its wrangler.jsonc's `env.staging` names it.

@@ -1,8 +1,8 @@
 //! `workflow project-text <project>`: everything a repository's Claude
 //! Project needs, through the real binary with a script in the place of mem.
-//! It prints the repository, a start line per mem project in it, the
-//! environment's variable names with the project each belongs to, and then
-//! the text pasted once into the Project's instructions field.
+//! It prints the repository, a start line per mem project in it, the one
+//! environment every Project uses, and then the text pasted once into the
+//! Project's instructions field.
 
 #[path = "../src/scratch.rs"]
 mod scratch;
@@ -252,7 +252,7 @@ fn every_project_of_a_repo_gets_the_one_text_that_runs_them_side_by_side() {
 }
 
 #[test]
-fn the_sheet_names_the_repo_each_start_line_and_every_variable_with_its_project() {
+fn the_sheet_names_the_repo_each_start_line_and_the_one_environment() {
     let work = six("project-text-apps");
     let out = text(&work, &["shopify_apps"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
@@ -275,127 +275,35 @@ fn the_sheet_names_the_repo_each_start_line_and_every_variable_with_its_project(
         );
     }
     assert!(!sheet.contains("of pawsome"), "{sheet}");
-    let vars = variables(&sheet);
-    let names: Vec<&str> = vars.iter().map(|(n, _)| n.as_str()).collect();
-    for kit in [
-        "HUB_STORE_URL",
-        "HUB_STORE_TOKEN",
-        "TS_AUTHKEY",
-        "WORKFLOW_ACCOUNT",
-        "SLACK_BOT_TOKEN",
-        "SLACK_USER_ID",
+    assert!(sheet.contains("Environment workflow"), "{sheet}");
+    // The environment is the same for every Project: no variable, secret,
+    // path prefix or Worker secret is printed for any of them.
+    assert!(variables(&sheet).is_empty(), "{sheet}");
+    for gone in [
+        "SERVICE_ACCOUNT_TOKEN",
+        "api.cloudflare.com",
+        "path prefixes",
+        "wrangler secret put",
+        "staging Worker",
+        "Network secrets",
+        "no checkout of",
+        "SHORTCART_",
     ] {
-        assert!(names.contains(&kit), "{kit}: {sheet}");
+        assert!(!sheet.contains(gone), "{gone}: {sheet}");
     }
-    // An app deploys on the device with its own Shopify login, so no app
-    // has a token here.
-    assert!(!sheet.contains("SERVICE_ACCOUNT"), "{sheet}");
-    assert!(!names.iter().any(|n| n.contains("THEME")), "{sheet}");
-    assert!(sheet.contains("device.on-rexa.com"), "{sheet}");
-    // Names only: the sheet holds no value and no command that prints one.
     assert!(!sheet.contains('='), "{sheet}");
-    assert!(!sheet.contains("pass show"), "{sheet}");
 
     let (sheet, _) = parts(&text(&work, &["pawsome"]));
-    let vars = variables(&sheet);
-    for theme in ["PAWSOME", "TAMBOUR"] {
-        for what in [
-            "SHOPIFY_CLI_THEME_TOKEN",
-            "SHOPIFY_FLAG_STORE",
-            "STORE_PASSWORD",
-        ] {
-            let name = format!("{theme}_{what}");
-            assert!(
-                vars.iter()
-                    .any(|(n, owner)| *n == name && *owner == theme.to_lowercase()),
-                "{name}: {sheet}"
-            );
-        }
+    assert!(sheet.contains("Environment workflow"), "{sheet}");
+    for gone in ["THEME_TOKEN", "STORE_PASSWORD", "SHOPIFY_FLAG_STORE"] {
+        assert!(!sheet.contains(gone), "{gone}: {sheet}");
     }
-    assert!(!sheet.contains("SERVICE_ACCOUNT"), "{sheet}");
 
-    // A repo with no Shopify files lists only the kit's, and its own
-    // network secret: ebdfy deploys through the proxy's Cloudflare token.
-    let (sheet, _) = parts(&text(&work, &["ebdfy"]));
-    assert!(!sheet.contains("SHOPIFY"), "{sheet}");
-    assert!(sheet.contains("\n  api.cloudflare.com  ebdfy\n"), "{sheet}");
-    let (sheet, _) = parts(&text(&work, &["amx"]));
-    assert!(!sheet.contains("api.cloudflare.com"), "{sheet}");
-}
-
-/// A staging deploy runs wrangler through the proxy's Cloudflare token, and
-/// the staging Worker needs its own secrets: the app's .dev.vars.example
-/// names but the ones env.staging sets as vars. The sheet names both; an
-/// app with no staging config needs neither.
-#[test]
-fn the_sheet_names_what_each_staging_worker_needs() {
-    let work = six("project-text-staging");
-    let (sheet, _) = parts(&text(&work, &["shopify_apps"]));
-    assert!(
-        sheet.contains("\n  api.cloudflare.com  shopify_apps\n"),
-        "{sheet}"
-    );
-    // The secret replaces every Authorization header on the paths it is
-    // given, and the assets upload carries a token of its own.
-    let prefixes = sheet
-        .lines()
-        .find(|line| line.contains("path prefixes"))
-        .unwrap_or_else(|| panic!("{sheet}"));
-    for path in [
-        "/client/v4/user",
-        "/client/v4/zones",
-        "/client/v4/accounts/7d330000000000000000000000000000/d1",
-        "/client/v4/accounts/7d330000000000000000000000000000/workers/scripts",
-        // PalmShop's staging bucket and its custom domain, staging.palmshop.app.
-        "/client/v4/accounts/7d330000000000000000000000000000/r2",
-        "/client/v4/accounts/7d330000000000000000000000000000/workers/domains",
-    ] {
-        assert!(prefixes.contains(path), "{path}: {prefixes}");
+    for project in ["ebdfy", "amx"] {
+        let (sheet, _) = parts(&text(&work, &[project]));
+        assert!(sheet.contains("Environment workflow"), "{sheet}");
+        assert!(!sheet.contains("api.cloudflare.com"), "{project}: {sheet}");
     }
-    assert!(!prefixes.contains("/workers/assets/upload,"), "{prefixes}");
-    assert!(!prefixes.contains("/accounts,"), "{prefixes}");
-    let (heading, secrets) = sheet
-        .split_once("Secrets of each staging Worker")
-        .unwrap_or_else(|| panic!("{sheet}"));
-    assert!(heading.contains("Network secrets by host:"), "{sheet}");
-    let listed: Vec<(String, String)> = variables(secrets);
-    assert_eq!(
-        listed,
-        [
-            (
-                "SHOPIFY_API_KEY".to_string(),
-                "shortcart, on shortcart-staging".to_string()
-            ),
-            (
-                "SHOPIFY_API_SECRET".to_string(),
-                "shortcart, on shortcart-staging".to_string()
-            ),
-            (
-                "SC_MASTER_KEY".to_string(),
-                "shortcart, on shortcart-staging".to_string()
-            ),
-        ],
-        "{sheet}"
-    );
-    assert!(!sheet.contains('='), "{sheet}");
-    let (sheet, _) = parts(&text(&work, &["shopify_themes"]));
-    assert!(!sheet.contains("staging Worker"), "{sheet}");
-}
-
-/// Without the repo's checkout here, project-text cannot tell an app from
-/// a theme, and says it left their variables out rather than look whole.
-#[test]
-fn with_no_checkout_the_sheet_says_it_left_the_shopify_variables_out() {
-    let work = world(
-        "project-text-nocheckout",
-        r#"{"name":"shopify_apps","remote":"github.com/lareysbd/shopify_apps","checkouts":["/nowhere/shopify_apps"],"subdir":null},{"name":"shortcart","remote":"github.com/lareysbd/shopify_apps","checkouts":[],"subdir":"apps/shortcart"}"#,
-    );
-    let (sheet, _) = parts(&text(&work, &["shopify_apps"]));
-    assert!(!sheet.contains("SHORTCART_"), "{sheet}");
-    assert!(
-        sheet.contains("no checkout of lareysbd/shopify_apps here"),
-        "{sheet}"
-    );
 }
 
 /// The six repos the plan moves to Projects each print a text that fits
@@ -422,20 +330,14 @@ fn each_of_the_six_fits_the_field() {
     }
 }
 
-/// The kit's variables are the ones `workflow cloud-switch` tells Saiful to
-/// put in an environment, so the two lists cannot drift apart.
+/// The environment the sheet points to is the one `workflow cloud-switch`
+/// tells Saiful to fill: the 11 kit variables and the device network secret,
+/// and no Cloudflare host.
 #[test]
-fn the_kit_variables_are_the_ones_the_environment_steps_name() {
+fn cloud_switch_names_the_kit_variables_and_the_one_network_secret() {
     let work = spike("project-text-kit");
-    let (sheet, _) = parts(&text(&work, &["cloud_walk"]));
-    let listed: Vec<String> = variables(&sheet)
-        .into_iter()
-        .filter(|(_, owner)| owner.starts_with("every Project"))
-        .map(|(n, _)| n)
-        .filter(|n| n != "WORKFLOW_ACCOUNT")
-        .collect();
     let out = Command::new(env!("CARGO_BIN_EXE_workflow"))
-        .args(["cloud-switch", "--store", "wss://example.test/store/share"])
+        .args(["cloud-switch", "--store", "wss://x.example/store/share"])
         .env("WORKFLOW_MEM", work.at("mem"))
         .output()
         .unwrap();
@@ -445,21 +347,23 @@ fn the_kit_variables_are_the_ones_the_environment_steps_name() {
         .and_then(|(_, rest)| rest.split_once("No MEM_REMOTE"))
         .map(|(block, _)| block)
         .unwrap_or_else(|| panic!("{steps}"));
-    let named: Vec<String> = block
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim_start();
-            let end = line.find(['=', ':'])?;
-            let name = &line[..end];
-            (!name.is_empty()
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()))
-            .then(|| name.to_string())
-        })
-        .collect();
-    assert!(!named.is_empty(), "{steps}");
-    assert_eq!(listed, named, "{sheet}\n{steps}");
+    for name in [
+        "HUB_STORE_URL",
+        "HUB_STORE_NAME",
+        "HUB_STORE_TOKEN",
+        "HUB_CLOUD_TOKEN",
+        "HUB_PEER_TOKEN_SHA256",
+        "HUB_STORE_ACCESS_ID",
+        "HUB_STORE_ACCESS_SECRET",
+        "TS_AUTHKEY",
+        "CONTEXT7_API_KEY",
+        "SLACK_BOT_TOKEN",
+        "SLACK_USER_ID",
+    ] {
+        assert!(block.contains(name), "{name}: {steps}");
+    }
+    assert!(steps.contains("device.on-rexa.com"), "{steps}");
+    assert!(!steps.contains("api.cloudflare.com"), "{steps}");
 }
 
 #[test]
