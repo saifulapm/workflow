@@ -147,6 +147,13 @@ impl Rig {
 #[test]
 fn a_device_written_entry_reaches_the_command_and_no_output_or_log() {
     let rig = rig();
+    // A store password has no token's shape, so no mask would cut it.
+    rig.entry("Shopify/pawsome-demo-password", "plain-words-7");
+    rig.secrets(
+        "SHOPIFY_CLI_THEME_TOKEN=Shopify/theme-access/pawsome-theme\n\
+         STORE_PASSWORD=Shopify/pawsome-demo-password",
+        "mac-mini-m2",
+    );
     let (_, answer) = rig.call();
     assert_eq!(answer["exit"], 0, "{answer}");
     assert_eq!(
@@ -159,6 +166,11 @@ fn a_device_written_entry_reaches_the_command_and_no_output_or_log() {
     let log = rig.log();
     assert!(log.contains("device mac-mini-m2 with-secrets"), "{log}");
     assert!(!log.contains(&theme_token()), "{log}");
+    assert_eq!(
+        answer["secrets"]["STORE_PASSWORD"], "plain-words-7",
+        "{answer}"
+    );
+    assert!(!log.contains("plain-words-7"), "{log}");
     // A locked key fails at once instead of opening a pinentry on the desktop.
     let opts = std::fs::read_to_string(rig.state.join("pass-opts")).unwrap();
     assert!(opts.contains("--pinentry-mode=error"), "{opts}");

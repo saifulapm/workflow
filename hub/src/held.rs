@@ -29,10 +29,22 @@ fn destructive_at(words: &[&str], i: usize) -> bool {
     match program {
         // GNU rm takes its flags after the paths too.
         "rm" => rest.iter().any(|w| recursive(w)),
-        // A thread's own yes, written as Saiful's from the device's shell.
-        "mem" => rest.contains(&"answer"),
+        // A thread's own yes, written as Saiful's from the device's shell, or
+        // its own choice of secrets or device, written as a device's.
+        "mem" => {
+            rest.contains(&"answer")
+                || (rest.contains(&"project")
+                    && (rest.contains(&"set") || rest.contains(&"unset"))
+                    && (rest.contains(&"cloud-secrets") || rest.contains(&"device")))
+        }
+        // A value read back through the pane would reach the cloud. Only the
+        // plain forms: the hub matches words, and a script beats any list.
+        "pass" => rest
+            .first()
+            .is_some_and(|w| matches!(*w, "show" | "otp" | "-c" | "--clip") || w.contains('/')),
+        "gpg" => rest.iter().any(|w| matches!(*w, "-d" | "--decrypt")),
         "git" => git_force_push(rest),
-        "gh" => rest.starts_with(&["repo", "delete"]),
+        "gh" => rest.starts_with(&["repo", "delete"]) || rest.starts_with(&["auth", "token"]),
         "cf" => rest.contains(&"delete"),
         "wrangler" => rest.contains(&"delete") || (rest.contains(&"deploy") && !staging(rest)),
         "shopify" => matches!(rest, ["app", "release" | "deploy", ..]),
@@ -99,6 +111,17 @@ mod tests {
             "bunx wrangler@3 delete",
             "mem answer AAAA1111 yes",
             "mem --project cloud_walk answer AAAA1111 yes",
+            "pass show Shopify/ShortCart/token",
+            "pass Shopify/ShortCart/token",
+            "pass -c Shopify/x",
+            "pass otp otp/x",
+            "echo $(pass show x/y)",
+            "gpg -d secret.gpg",
+            "gpg --decrypt ~/.password-store/x.gpg",
+            "gh auth token",
+            "mem --project pawsome project set cloud-secrets 'X=Shopify/x'",
+            "mem project unset cloud-secrets",
+            "mem project set device nuc",
         ] {
             assert!(held(line), "should hold: {line}");
         }
@@ -122,6 +145,13 @@ mod tests {
             "wrangler deploy -e staging",
             "mem questions",
             "echo answer",
+            "git commit -m 'tests pass'",
+            "pass",
+            "pass ls",
+            "gh auth status",
+            "mem project current",
+            "mem project set verify 'just test'",
+            "gpg --list-keys",
         ] {
             assert!(!held(line), "should pass: {line}");
         }
