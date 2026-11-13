@@ -1384,14 +1384,25 @@ gitkit() {
   command -v git >/dev/null 2>&1 || return 0
   git config --global user.name "Saiful Islam"
   git config --global user.email saiful.apm@gmail.com
-  git config --global commit.gpgsign false
-  git config --global tag.gpgsign false
+  unsign
   if [ -x "$HOME/.config/git/hooks/pre-commit" ]; then
     git config --global core.hooksPath "$HOME/.config/git/hooks"
   fi
   if [ -s "$HOME/.config/git/ignore" ]; then
     git config --global core.excludesFile "$HOME/.config/git/ignore"
   fi
+  return 0
+}
+# unsign: commit and tag signing off in git's global config, written only
+# when they are not off already. gitkit runs once a boot, so the mem shim
+# runs this on every call too: a wake that keeps the boot id, or a write of
+# claude.ai's after the boot's first mem, would otherwise sign until the
+# next boot.
+unsign() {
+  command -v git >/dev/null 2>&1 || return 0
+  for key in commit.gpgsign tag.gpgsign; do
+    [ "$(git config --global --get "$key")" = false ] || git config --global "$key" false
+  done
   return 0
 }
 bake() {
@@ -1515,9 +1526,10 @@ case "${1:-}" in
   bundle) bundle ;;
   hooks) hooks "$2" "${3:-}" "${4:-}" ;;
   git) gitkit ;;
+  unsign) unsign ;;
   # The binaries come from the release; the hub then works on the replica.
   sync) fetch mem && fetch hub && env -u MEM_REMOTE timeout "$2" "$bin/hub-x86_64" share sync ;;
-  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills, bundle, git or hooks <file> [<keys>] [<deny>]" >&2; exit 2 ;;
+  *) echo "mem-cloud: fetch <mem|hub|workflow>, sync <seconds>, bake, runtimes, skills, bundle, git, unsign or hooks <file> [<keys>] [<deny>]" >&2; exit 2 ;;
 esac
 "#;
 
@@ -1567,6 +1579,7 @@ if [ ! -s "$HOME/.config/qshell/machine" ]; then
   mkdir -p "$HOME/.config/qshell" &&
     echo "cloud-${vm:-vm}" > "$HOME/.config/qshell/machine" || true
 fi
+"$helper" unsign
 "$helper" fetch mem || exit 1
 store=
 if [ -n "${HUB_STORE_URL:-}" ] && [ -n "${HUB_STORE_TOKEN:-}" ]; then store=1; fi

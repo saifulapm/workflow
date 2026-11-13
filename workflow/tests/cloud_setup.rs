@@ -1506,6 +1506,28 @@ fn every_boot_turns_signing_off() {
     }
 }
 
+/// The once-a-boot step reads the boot id: a wake that keeps it, or a
+/// write of claude.ai's that lands after the boot's first mem, would leave
+/// signing on until the next boot. Every mem call turns it off again, the
+/// hub's own `mem share` calls too.
+#[test]
+fn every_mem_call_turns_signing_off_again() {
+    let home = Scratch::new("cloud-shim-git-resign");
+    let (_log, path) = store_fakes(&home, 0);
+    git_kit_bundle(&home);
+    setup_with(&home, &path, &STORE_ENV);
+    run_store_shim(&home, &path, &["context"]);
+    for args in [&["context"][..], &["share", "pending"][..]] {
+        home.put(
+            ".gitconfig",
+            "[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n",
+        );
+        run_store_shim(&home, &path, args);
+        assert_eq!(global_git(&home, "commit.gpgsign"), "false", "{args:?}");
+        assert_eq!(global_git(&home, "tag.gpgsign"), "false", "{args:?}");
+    }
+}
+
 /// With no hook stubs laid, git keeps each repo's own hooks: a hooksPath
 /// at an empty folder would turn them off.
 #[test]
