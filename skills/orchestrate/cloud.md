@@ -58,9 +58,11 @@ the skill holds, with these changes:
   Shopify app login. One tmux session per run, `cloud-<project>-<milestone>`,
   which Saiful can attach to and watch. It works in the deploy worktree,
   `~/.cache/workflow-cloud/<repo>`, at this run's cloud branch
-  `cloud/<project>-<milestone>` as origin has it, so push the branch before
-  the first send; its first line updates the submodules, and the worktree
-  keeps its node_modules between sessions. An app's staging deploy is
+  `cloud/<project>-<milestone>` as origin had it when the session started:
+  push the branch before the first send, and after a later push run `device
+  tmux end` and send again, so the new session moves the worktree to the new
+  tip. Its first line updates the submodules, and the worktree keeps its
+  node_modules between sessions. An app's staging deploy is
   `device tmux send 'workflow shopify deploy <app>'` (`pnpm install` first
   when node_modules is missing); in the VM that command deploys nothing.
   A send
@@ -69,7 +71,8 @@ the skill holds, with these changes:
   device: do other work, then try again. A job ends after 15 idle minutes
   and 20 minutes after it started (`device: the job ended at the 20-minute
   cap`): send again to start a new one, and end it with `device tmux end`
-  when done. Never type a secret into it.
+  when done. Never type a secret into it, nor read one back from it (`pass`,
+  `gh auth token`): the hub holds those lines.
 - Before any of these six, ask with `mem ask --for saiful` and wait for
   his yes: (1) a delete or an overwrite of something that exists;
   (2) making something public; (3) a change to a token or to a person's

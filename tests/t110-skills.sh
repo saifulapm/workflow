@@ -106,3 +106,4 @@ like "$cloud" '~/.cache/workflow-cloud/<repo>' "orchestrate cloud: tmux works in
 like "$cloud" 'device with-secrets <project> -- <command>' "orchestrate cloud: a theme's secrets come through with-secrets"
 like "$(sed -n '/pass is locked on/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" 'unlock' \
 	"orchestrate cloud: a locked pass is asked of Saiful"
+like "$cloud" 'after a later push run `device' "orchestrate cloud: a later push starts a new tmux session"

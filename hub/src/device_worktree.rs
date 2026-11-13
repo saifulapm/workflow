@@ -13,6 +13,9 @@ use crate::proc::{Ended, Finished, output_within};
 /// How long a fetch of the branch may take; the call has 90 s in all.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// When the worktree must be checked out by, from the fetch's start.
+const CHECKOUT_BY: Duration = Duration::from_secs(80);
+
 pub(crate) struct Worktree {
     pub(crate) folder: PathBuf,
     /// Whether the repo has submodules, which the session updates itself:
@@ -96,14 +99,25 @@ pub(crate) fn prepare(machine: &str, project: &str, name: &str) -> Result<Worktr
     let folder = PathBuf::from(home).join(".cache/workflow-cloud").join(repo);
     // A folder with no .git is not the worktree: git in it would reach up
     // to whatever repo holds it.
+    // A big checkout can take more than a helper's seconds, and git killed
+    // mid-checkout leaves its index locked; whatever the fetch left of the
+    // call's time.
+    let left = CHECKOUT_BY.saturating_sub(started.elapsed());
     if folder.join(".git").exists() {
-        git.ok(&folder, &["checkout", "-q", "--force", "--detach", &sha])?;
+        git.ok_within(
+            &folder,
+            &["checkout", "-q", "--force", "--detach", &sha],
+            left,
+        )?;
     } else {
-        // A folder deleted by hand is still on the checkout's list, and
-        // git refuses to add it again until the list is pruned.
-        git.ok(&top, &["worktree", "prune"])?;
+        // -f: a folder deleted by hand is still on the checkout's list. Not
+        // a prune, which would drop any other missing worktree of Saiful's.
         let to = folder.to_string_lossy();
-        git.ok(&top, &["worktree", "add", "-q", "--detach", &to, &sha])?;
+        git.ok_within(
+            &top,
+            &["worktree", "add", "-f", "-q", "--detach", &to, &sha],
+            left,
+        )?;
     }
     used(repo, &top);
     Ok(Worktree {
@@ -162,18 +176,25 @@ pub(crate) fn sweep() {
             .join(".cache/workflow-cloud")
             .join(&repo);
         // Only a linked worktree, whose .git is a file, never a checkout.
-        if folder.join(".git").is_file()
-            && let Err(e) = std::fs::remove_dir_all(&folder)
-        {
-            eprintln!("hub: device: cannot remove {}: {e}", folder.display());
-            continue;
-        }
-        if let (Ok(top), Ok(git)) = (std::fs::read_to_string(entry.path()), Git::here()) {
-            let _ = git.run(
-                Path::new(top.trim()),
-                &["worktree", "prune"],
-                HELPER_TIMEOUT,
-            );
+        // git removes it and its entry; one with submodules it refuses, so
+        // that goes by hand and its entry waits for the next add's -f.
+        if folder.join(".git").is_file() {
+            let removed = std::fs::read_to_string(entry.path())
+                .ok()
+                .zip(Git::here().ok())
+                .is_some_and(|(top, git)| {
+                    let to = folder.to_string_lossy();
+                    git.run(
+                        Path::new(top.trim()),
+                        &["worktree", "remove", "--force", "--force", &to],
+                        FETCH_TIMEOUT,
+                    )
+                    .is_ok_and(|done| done.code == Some(0))
+                });
+            if !removed && let Err(e) = std::fs::remove_dir_all(&folder) {
+                eprintln!("hub: device: cannot remove {}: {e}", folder.display());
+                continue;
+            }
         }
         let _ = std::fs::remove_file(entry.path());
         eprintln!(
@@ -225,7 +246,12 @@ impl Git {
 
     /// `run` in HELPER_TIMEOUT, failing unless git exited 0.
     fn ok(&self, dir: &Path, args: &[&str]) -> Result<Finished, Outcome> {
-        let done = self.run(dir, args, HELPER_TIMEOUT)?;
+        self.ok_within(dir, args, HELPER_TIMEOUT)
+    }
+
+    /// `run` in `within`, failing unless git exited 0.
+    fn ok_within(&self, dir: &Path, args: &[&str], within: Duration) -> Result<Finished, Outcome> {
+        let done = self.run(dir, args, within)?;
         if done.code == Some(0) {
             Ok(done)
         } else {

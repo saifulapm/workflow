@@ -764,3 +764,27 @@ fn a_worktree_folder_deleted_by_hand_is_made_again() {
     assert_eq!(sent["exit"], 0, "{sent}");
     rig.read_until("again");
 }
+
+#[test]
+fn a_missing_worktree_of_saiful_s_own_stays_on_his_list() {
+    let rig = rig();
+    let other = rig.checkout.with_file_name("his-other");
+    git(
+        &rig.checkout,
+        &["worktree", "add", "-q", other.to_str().unwrap()],
+    );
+    // On a disk that is not mounted just now.
+    let away = rig.checkout.with_file_name("his-other-away");
+    std::fs::rename(&other, &away).unwrap();
+    rig.walk(&["send", "echo made"]);
+    rig.read_until("made");
+    assert_eq!(rig.walk(&["end"])["exit"], 0);
+    std::fs::remove_dir_all(rig.worktree()).unwrap();
+    rig.walk(&["send", "echo again"]);
+    rig.read_until("again");
+    assert!(
+        worktrees_of(&rig.checkout).contains(other.to_str().unwrap()),
+        "{}",
+        worktrees_of(&rig.checkout)
+    );
+}
