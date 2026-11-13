@@ -322,10 +322,11 @@ asks nothing."
     #[command(
         long_about = "Run Shopify CLI with a theme's or an app's own variables.
 
-One cloud environment holds every theme's secrets, each named after it:
-<THEME>_SHOPIFY_CLI_THEME_TOKEN, <THEME>_SHOPIFY_FLAG_STORE and
-<THEME>_STORE_PASSWORD, in capitals with - as _. They go to the CLI under its
-own names.
+A theme's variables are named after it: <THEME>_SHOPIFY_CLI_THEME_TOKEN,
+<THEME>_SHOPIFY_FLAG_STORE and <THEME>_STORE_PASSWORD, in capitals with - as
+_. They go to the CLI under its own names. A cloud session holds none: there
+theme-dev runs under device with-secrets <theme>, which sets them from the
+theme's cloud-secrets on the device.
 
 theme-dev <theme> runs shopify theme dev on themes/<theme> (in this folder or
 one above it), served at http://127.0.0.1:9292, on the store's unpublished

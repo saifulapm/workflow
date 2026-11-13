@@ -776,9 +776,10 @@ fn an_app_with_rust_functions_gets_the_wasm_target_before_its_shopify_config() {
     assert!(wasm < shopify, "{made:?}");
 }
 
-/// A thread holds no theme token: in a cloud session theme dev runs again
-/// under `device with-secrets pawsome`, and the device's pass entries reach
-/// the CLI for that one run. The fake curl answers as the device's hub does.
+/// A thread holds no theme variable: in a cloud session theme dev runs again
+/// under `device with-secrets pawsome`, and the device's pass entries and the
+/// theme's store reach the CLI for that one run. The fake curl answers as the
+/// device's hub does.
 #[test]
 fn a_cloud_theme_dev_gets_its_token_and_password_from_the_device() {
     let work = world("shopify-theme-cloud");
@@ -788,7 +789,8 @@ fn a_cloud_theme_dev_gets_its_token_and_password_from_the_device() {
         work.put(
             "hub.json",
             r#"{"machine":"mac-mini-m2","stdout":"","stderr":"","exit":0,"files":{},
-                "secrets":{"SHOPIFY_CLI_THEME_TOKEN":"from-pass","STORE_PASSWORD":"pass-pw"}}"#,
+                "secrets":{"SHOPIFY_CLI_THEME_TOKEN":"from-pass","STORE_PASSWORD":"pass-pw",
+                           "SHOPIFY_FLAG_STORE":"pawsome-theme.myshopify.com"}}"#,
         );
         work.script(
             "bin/curl",
@@ -806,7 +808,7 @@ fn a_cloud_theme_dev_gets_its_token_and_password_from_the_device() {
         &work,
         "repo",
         &["theme-dev", "pawsome"],
-        &[("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Theme"), PAWSOME[1]],
+        &[("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Theme")],
     );
     assert!(out.status.success(), "{out:?}");
     let sent: serde_json::Value = serde_json::from_str(&work.read("curl.stdin")).unwrap();
@@ -819,4 +821,28 @@ fn a_cloud_theme_dev_gets_its_token_and_password_from_the_device() {
             .ends_with("| token=from-pass store=pawsome-theme.myshopify.com password=pass-pw")),
         "{calls:?}"
     );
+}
+
+/// Under `device with-secrets`, a missing store is a line of the theme's
+/// cloud-secrets that names the store itself, not a pass entry.
+#[test]
+fn a_store_missing_under_with_secrets_names_its_cloud_secrets_line() {
+    let work = world("shopify-theme-no-store-secrets");
+    let out = shopify(
+        &work,
+        "repo",
+        &["theme-dev", "pawsome"],
+        &[
+            ("WORKFLOW_WITH_SECRETS", "pawsome"),
+            ("SHOPIFY_CLI_THEME_TOKEN", "from-pass"),
+            ("STORE_PASSWORD", "pass-pw"),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("SHOPIFY_FLAG_STORE=<store>.myshopify.com to pawsome's cloud-secrets"),
+        "{said}"
+    );
+    assert!(calls(&work).is_empty());
 }

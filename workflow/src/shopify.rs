@@ -6,9 +6,10 @@
 //! A theme's variables are named after it: `<THEME>_SHOPIFY_CLI_THEME_TOKEN`,
 //! `<THEME>_SHOPIFY_FLAG_STORE` and `<THEME>_STORE_PASSWORD`, in capitals
 //! with `-` as `_`, or the CLI's own names as `device with-secrets` sets them.
-//! A cloud session holds no theme token: theme-dev runs again under `device
-//! with-secrets <theme>`, which sets the entries the theme's `cloud-secrets`
-//! names from the device's pass for that one run. This command hands them to
+//! A cloud session holds no theme variable: theme-dev runs again under
+//! `device with-secrets <theme>`, which sets the entries the theme's
+//! `cloud-secrets` names from the device's pass, and its store, for that one
+//! run. This command hands them to
 //! the CLI under its own names. A name that is not set, or a token Shopify
 //! refuses, exits 3: only Saiful can make a token, so the task parks on it.
 
@@ -63,14 +64,16 @@ fn folder(kind: &str, name: &str) -> Option<PathBuf> {
 fn named(theme: &str, what: &str) -> Result<String, i32> {
     let name = format!("{}_{what}", prefix(theme));
     var(&name).or_else(|| var(what)).ok_or_else(|| {
-        if std::env::var_os(WITH_SECRETS).is_some() {
+        if std::env::var_os(WITH_SECRETS).is_some() && what == "SHOPIFY_FLAG_STORE" {
+            say(&format!(
+                "{what} is not set for {theme}: add {what}=<store>.myshopify.com to {theme}'s cloud-secrets, set from a device"
+            ));
+        } else if std::env::var_os(WITH_SECRETS).is_some() {
             say(&format!(
                 "{what} is not set for {theme}: name its pass entry in {theme}'s cloud-secrets, set from a device"
             ));
         } else {
-            say(&format!(
-                "{what} is not set for {theme}: add {name} to the Project's environment"
-            ));
+            say(&format!("{what} is not set for {theme}: set {name}"));
         }
         NEEDS_SAIFUL
     })
