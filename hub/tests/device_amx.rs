@@ -352,3 +352,79 @@ fn the_agent_is_stopped_once_another_session_runs_the_project() {
     rig.cloud_run_by("session_01Next", "w14", None);
     stopped_by_the_sweep(&rig);
 }
+
+/// Each mem write the hub trusts by the machine that wrote it, with a line
+/// that makes it: a thread's tmux and amx agent are shells on the device, so
+/// each must be held there, or the thread writes its own release.
+const TRUSTED_WRITES: &[(&str, &str)] = &[
+    ("an answer's machine", "mem answer AAAA1111 yes"),
+    (
+        "an answer's machine",
+        "mem --project cloud_walk answer AAAA1111 yes",
+    ),
+    ("device_by", "mem project set device nuc"),
+    ("device_by", "mem project unset device"),
+    (
+        "cloud_secrets_by",
+        "mem project set cloud-secrets 'X=Shopify/x'",
+    ),
+    ("cloud_secrets_by", "mem project unset cloud-secrets"),
+];
+
+/// The ways hub/src reads a writer: a `*_by` key of a project, or the
+/// machine of a mem item it was given.
+fn writers_read_in_hub_src() -> Vec<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        for line in text.lines() {
+            if line.contains(r#"first()?["machine"]"#) {
+                found.push("an answer's machine".to_string());
+            }
+            let mut rest = line;
+            while let Some(at) = rest.find(r#"_by"]"#) {
+                let key = rest[..at]
+                    .rsplit('"')
+                    .next()
+                    .map(|k| format!("{k}_by"))
+                    .unwrap();
+                found.push(key);
+                rest = &rest[at + 5..];
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+#[test]
+fn every_write_the_hub_trusts_by_its_writer_is_held_in_tmux_and_amx() {
+    let mut listed: Vec<String> = TRUSTED_WRITES.iter().map(|(k, _)| k.to_string()).collect();
+    listed.sort();
+    listed.dedup();
+    assert_eq!(
+        writers_read_in_hub_src(),
+        listed,
+        "hub/src trusts a writer this list does not name: add each mem write \
+         that makes it to TRUSTED_WRITES, and hold it in hub/src/held.rs"
+    );
+    let rig = rig();
+    for (_, line) in TRUSTED_WRITES {
+        assert!(hub::held::held(line), "tmux would send: {line}");
+        let words: Vec<&str> = line.split(' ').collect();
+        let mut new = vec!["new"];
+        new.extend(&words);
+        let answer = rig.walk(&new);
+        assert_eq!(answer["exit"], 2, "amx new took: {line}: {answer}");
+    }
+    rig.started();
+    for (_, line) in TRUSTED_WRITES {
+        let mut send = vec!["send", "rec-t8a"];
+        send.extend(line.split(' '));
+        let answer = rig.walk(&send);
+        assert_eq!(answer["exit"], 2, "amx send took: {line}: {answer}");
+    }
+    assert_eq!(rig.calls().len(), 1, "{:?}", rig.calls());
+}

@@ -49,6 +49,13 @@ pub(crate) fn call(session: Option<&str>, project: &str, args: &[String]) -> Out
     {
         return Outcome::refuse(format!("amx {flag} is not allowed here"));
     }
+    // The agent is a shell on the device as Saiful too: a line tmux holds
+    // for his yes would let it write its own release.
+    if matches!(verb, "new" | "send") && crate::held::held(&rest.join(" ")) {
+        return Outcome::refuse(format!(
+            "amx {verb} holds a line only Saiful releases: send it with device tmux, which asks him"
+        ));
+    }
     let amx = match Amx::here() {
         Ok(amx) => amx,
         Err(failed) => return failed,
