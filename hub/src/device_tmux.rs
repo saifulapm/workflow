@@ -41,7 +41,7 @@ pub(crate) fn call(project: &str, args: &[String]) -> Outcome {
 }
 
 /// `cloud-<project>-<milestone>`, from the project's open milestone in mem.
-fn job_name(project: &str) -> Result<String, Outcome> {
+pub(crate) fn job_name(project: &str) -> Result<String, Outcome> {
     let rows = MemCli::new().read(&["projects", "--json"]).rows("projects");
     let milestone = rows
         .iter()
@@ -69,19 +69,12 @@ fn send(tmux: &Tmux, name: &str, rest: &[String]) -> Outcome {
     }
     let line = rest.join(" ");
     if !tmux.has(name) {
-        let Some(home) = std::env::var_os("HOME") else {
-            return Outcome::fail(126, "device: HOME is not set\n".to_string());
+        let folder = match folder(name) {
+            Ok(folder) => folder.to_string_lossy().into_owned(),
+            Err(failed) => return failed,
         };
-        let folder = PathBuf::from(home).join(".cache/workflow-cloud").join(name);
-        if let Err(e) = std::fs::create_dir_all(&folder) {
-            return Outcome::fail(
-                126,
-                format!("device: cannot make {}: {e}\n", folder.display()),
-            );
-        }
-        let folder = folder.to_string_lossy().into_owned();
         let path = format!("PATH={}", tmux.path);
-        let made = tmux.run(&[
+        let mut new = vec![
             "new-session",
             "-d",
             "-s",
@@ -94,7 +87,14 @@ fn send(tmux: &Tmux, name: &str, rest: &[String]) -> Outcome {
             "50",
             "-e",
             &path,
-        ]);
+        ];
+        // A thread writes bash, and the user's own shell may be fish. Two
+        // words, so tmux runs bash itself rather than through that shell.
+        let bash = find_in(&tmux.path, "bash").map(|b| b.to_string_lossy().into_owned());
+        if let Some(bash) = &bash {
+            new.extend([bash.as_str(), "-i"]);
+        }
+        let made = tmux.run(&new);
         if let Err(failed) = ok(made, "new-session") {
             return failed;
         }
@@ -115,6 +115,22 @@ fn send(tmux: &Tmux, name: &str, rest: &[String]) -> Outcome {
         Ok(()) => Outcome::done(String::new()),
         Err(failed) => failed,
     }
+}
+
+/// The job's folder, `~/.cache/workflow-cloud/<name>`, made when it is not
+/// there yet.
+pub(crate) fn folder(name: &str) -> Result<PathBuf, Outcome> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Err(Outcome::fail(126, "device: HOME is not set\n".to_string()));
+    };
+    let folder = PathBuf::from(home).join(".cache/workflow-cloud").join(name);
+    std::fs::create_dir_all(&folder).map_err(|e| {
+        Outcome::fail(
+            126,
+            format!("device: cannot make {}: {e}\n", folder.display()),
+        )
+    })?;
+    Ok(folder)
 }
 
 fn read(tmux: &Tmux, name: &str) -> Outcome {

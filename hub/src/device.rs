@@ -391,7 +391,7 @@ pub fn sweep_sessions() -> ! {
 /// Whether `session` is the cloud run of `project` and that run has landed,
 /// parked or ended. A session that is no cloud run's, such as a local walk's
 /// `local-<host>`, never is.
-fn run_over(
+pub(crate) fn run_over(
     session: &str,
     project: &str,
     mem: &MemCli,

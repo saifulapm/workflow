@@ -187,6 +187,13 @@ fn each_send_leaves_one_line_in_the_project_s_log() {
 }
 
 #[test]
+fn the_session_runs_bash() {
+    let rig = rig();
+    rig.walk(&["send", "echo shell-$0"]);
+    rig.read_until("shell-/usr/bin/bash");
+}
+
+#[test]
 fn a_session_does_not_match_another_by_its_prefix() {
     let rig = rig();
     rig.milestones(&[("cloud_walk", "w1")]);
@@ -200,7 +207,10 @@ fn a_session_does_not_match_another_by_its_prefix() {
 #[test]
 fn a_key_name_is_sent_as_the_key() {
     let rig = rig();
+    rig.walk(&["send", "echo ready"]);
+    rig.read_until("ready");
     rig.walk(&["send", "sleep 30"]);
+    std::thread::sleep(Duration::from_millis(300));
     rig.walk(&["send", "C-c"]);
     rig.walk(&["send", "echo after-c-c"]);
     rig.read_until("after-c-c");
