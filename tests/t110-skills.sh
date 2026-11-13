@@ -65,3 +65,21 @@ like "$(skill orchestrate | sed -n '/half done/,/^$/p')" 'review and walk done a
 # (workflow m2b-clean-commits and m3-ask-not-park): rule 10 drops such a line.
 like "$(skill plan | sed -n '/^10\. /,/^Store each plan/p')" 'already passes on the base names nothing' \
 	"plan: rule 10 drops an acceptance line the base already passes"
+
+# A thread asks before each of the six destructive kinds (#NHEQRXY1), files a
+# held line with its exact text and sends it again with the yes, and starts a
+# local agent only for what the cloud cannot do (m4-device-tmux).
+cloud=$(cat "$WF_ROOT/skills/orchestrate/cloud.md")
+for kind in 'a delete or an overwrite of something that exists' 'making something public' \
+	"a change to a token or to a person's" 'anything that costs money' \
+	'a forced push or a moved' 'a command whose effect you cannot state'; do
+	like "$cloud" "$kind" "orchestrate cloud: asks before $kind"
+done
+like "$(sed -n '/^- Before any of these six/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" \
+	'mem ask --for saiful' "orchestrate cloud: the six kinds are asked with mem ask"
+held=$(sed -n '/prints `ask: <line>`/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
+like "$held" 'exact line' "orchestrate cloud: a held line is asked with its exact text"
+like "$held" 'device tmux send --yes <id>' "orchestrate cloud: a yes sends the held line again"
+like "$held" 'tried once more, then' "orchestrate cloud: another failure is tried once, then asked"
+like "$cloud" 'never for builds, tests or' "orchestrate cloud: a local agent is never for builds, tests or code"
+like "$cloud" 'a phone on adb, or iOS on the Mac' "orchestrate cloud: a local agent only for the screen, adb or iOS"

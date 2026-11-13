@@ -52,6 +52,39 @@ the skill holds, with these changes:
   device answers at all: ask with `mem ask --for saiful "no device answers
   <project>'s calls; turn one on, then answer done" --option done --option
   hold`. Never park for a device.
+- Terminal work on the device goes through `device tmux send '<line>'`,
+  `device tmux read` and `device tmux end`: one tmux session per run,
+  `cloud-<project>-<milestone>`, working in its own folder under
+  `~/.cache/workflow-cloud/`, which Saiful can attach to and watch. A send
+  is one line and its Enter, or one key such as `C-c`; read again until the
+  output is there. `busy: <project>` (exit 5) means another run holds the
+  device: do other work, then try again. A job ends after 15 idle minutes
+  and 20 minutes after it started (`device: the job ended at the 20-minute
+  cap`): send again to start a new one, and end it with `device tmux end`
+  when done. Never type a secret into it.
+- Before any of these six, ask with `mem ask --for saiful` and wait for
+  his yes: (1) a delete or an overwrite of something that exists;
+  (2) making something public; (3) a change to a token or to a person's
+  permissions; (4) anything that costs money; (5) a forced push or a moved
+  branch; (6) a command whose effect you cannot state before it runs. A
+  staging deploy runs without asking; a production deploy asks each time.
+- A `device tmux send` that prints `ask: <line>` (exit 6) was held by the
+  hub and not sent. File it as a question with the exact line in
+  backticks, `mem ask --for saiful "May I run this on the device?
+  \`<line>\`" --option yes --option no`, and wait for it as below. On yes,
+  send it again with the question's id, `device tmux send --yes <id>
+  '<line>'`: one yes sends that one line once. On no, leave it unrun. A
+  device call that fails for another reason is tried once more, then
+  asked like any other question.
+- `device amx new '<task>'` starts a local agent on the device, in the
+  run's tmux folder, and prints its name; `device amx result <name>`
+  prints its answer, and on `again:` (exit 9) runs again at once. `ls`,
+  `status`, `send`, `answer`, `logs` and `stop` reach only the agent this
+  run started. Start one only for what the cloud cannot do: the desktop's
+  screen, a phone on adb, or iOS on the Mac; never for builds, tests or
+  code. A device runs one at a time (`busy:`, exit 5); stop it with
+  `device amx stop <name>` when its work is done. The hub stops it when
+  the run lands or parks.
 - A device need the plan did not name gets `mem finding add --milestone
   <slug> --step plan` naming it, so the next plan names it, and is asked
   the same way.
