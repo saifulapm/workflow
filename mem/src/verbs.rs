@@ -687,12 +687,12 @@ pub fn project_cloud_secrets(app: &App, lines: &str) -> Result<i32> {
             "each line is NAME=<pass entry>, e.g. SHOPIFY_CLI_THEME_TOKEN=Shopify/theme-access/pawsome; not {bad}"
         )));
     }
+    let by = on_a_device(app)?;
     let identity = writable_project_identity(app)?;
     let Some(id) = identity.id() else {
         return Err(exit::usage(unregistered_project_note(app, &identity)));
     };
     let value = lines.join("\n");
-    let by = crate::paths::machine_name(&app.dirs);
     let path = crate::project::set_keys(
         &app.store,
         id,
@@ -717,6 +717,22 @@ pub fn project_cloud_secrets(app: &App, lines: &str) -> Result<i32> {
         );
     }
     Ok(exit::OK)
+}
+
+/// This machine's name when it is one of the devices: a cloud thread's mem
+/// names its own machine, so a key the hub trusts by its writer is refused
+/// anywhere else.
+fn on_a_device(app: &App) -> Result<String> {
+    const DEVICES: [&str; 3] = ["mac-mini-m2", "nuc", "macbook-m2"];
+    let by = crate::paths::machine_name(&app.dirs);
+    if DEVICES.contains(&by.as_str()) {
+        Ok(by)
+    } else {
+        Err(exit::usage(format!(
+            "cloud-secrets is set only on {}; this is {by}",
+            DEVICES.join(", ").replacen(", macbook", " or macbook", 1)
+        )))
+    }
 }
 
 /// `mem project rename <name>`: the new name in project.toml with the old one
@@ -987,6 +1003,9 @@ fn runner_json(store: &crate::store::Store, id: &str) -> serde_json::Value {
 /// empty value, so without this the only way to take a key off a project
 /// was to edit project.toml by hand.
 pub fn project_unset(app: &App, key: &str) -> Result<i32> {
+    if key == "cloud_secrets" {
+        on_a_device(app)?;
+    }
     let identity = writable_project_identity(app)?;
     let Some(id) = identity.id() else {
         return Err(exit::usage(unregistered_project_note(app, &identity)));

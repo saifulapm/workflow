@@ -61,9 +61,14 @@ fn read(machine: &str, project: &str) -> Result<BTreeMap<String, String>, Outcom
                 "cloud-secrets of {project} has a line that is not NAME=<pass entry>"
             )));
         };
+        if !theme_secret(entry) {
+            return Err(Outcome::refuse(format!(
+                "{entry} is not a theme token or a store password"
+            )));
+        }
         // Its file first: a missing entry and a locked key both fail in
         // pass, and only the file tells them apart.
-        if entry.contains("..") || !store.join(format!("{entry}.gpg")).is_file() {
+        if !store.join(format!("{entry}.gpg")).is_file() {
             return Err(Outcome::refuse(format!(
                 "no pass entry {entry} on {machine}"
             )));
@@ -109,4 +114,24 @@ fn read(machine: &str, project: &str) -> Result<BTreeMap<String, String>, Outcom
         secrets.insert(name.to_string(), value);
     }
     Ok(secrets)
+}
+
+/// Where theme tokens and store passwords live in pass, and nothing else:
+/// `Shopify/theme-access/<name>` and `Shopify/<name>-password`. A key a
+/// thread wrote from the device's own shell still reaches no other entry.
+fn theme_secret(entry: &str) -> bool {
+    let plain = |name: &str| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+            && !name.starts_with('.')
+    };
+    match entry.strip_prefix("Shopify/") {
+        Some(rest) => match rest.strip_prefix("theme-access/") {
+            Some(name) => plain(name),
+            None => rest.strip_suffix("-password").is_some_and(plain),
+        },
+        None => false,
+    }
 }

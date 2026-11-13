@@ -690,7 +690,7 @@ fn project_set_device_records_a_cloud_machine_truthfully() {
 #[test]
 fn project_set_cloud_secrets_keeps_the_lines_and_who_wrote_them() {
     let w = World::new("write-cloud-secrets");
-    name_this_machine(&w, "box-1");
+    name_this_machine(&w, "nuc");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     let lines = "SHOPIFY_CLI_THEME_TOKEN=Shopify/theme-access/pawsome-theme\n\
@@ -701,7 +701,7 @@ fn project_set_cloud_secrets_keeps_the_lines_and_who_wrote_them() {
     assert_eq!(v["projects"][0]["cloud_secrets"], serde_json::json!(lines));
     assert_eq!(
         v["projects"][0]["cloud_secrets_by"],
-        serde_json::json!("box-1")
+        serde_json::json!("nuc")
     );
 
     assert_eq!(
@@ -719,6 +719,7 @@ fn project_set_cloud_secrets_keeps_the_lines_and_who_wrote_them() {
 #[test]
 fn project_set_cloud_secrets_refuses_a_line_that_is_not_name_and_entry() {
     let w = World::new("write-cloud-secrets-bad");
+    name_this_machine(&w, "mac-mini-m2");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     for bad in [
@@ -738,6 +739,39 @@ fn project_set_cloud_secrets_refuses_a_line_that_is_not_name_and_entry() {
     }
     let v = json(&mem(&w, &repo, &["projects", "--json"]));
     assert!(v["projects"][0]["cloud_secrets"].is_null(), "{v}");
+}
+
+/// A thread's mem names its own machine, so only a device may say which
+/// pass entries a cloud command gets.
+#[test]
+fn project_set_cloud_secrets_is_refused_off_the_devices() {
+    let w = World::new("write-cloud-secrets-cloud");
+    name_this_machine(&w, "mac-mini-m2");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let lines = "SHOPIFY_CLI_THEME_TOKEN=Shopify/theme-access/x";
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "set", "cloud-secrets", lines])),
+        0
+    );
+    name_this_machine(&w, "cloud-abc");
+    for args in [
+        &["project", "set", "cloud-secrets", lines][..],
+        &["project", "unset", "cloud-secrets"],
+    ] {
+        let out = mem(&w, &repo, args);
+        assert_eq!(code(&out), 2, "{args:?}: {}", stdout(&out));
+        assert!(
+            stderr(&out).contains("cloud-secrets is set only on mac-mini-m2, nuc or macbook-m2"),
+            "{}",
+            stderr(&out)
+        );
+    }
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(
+        v["projects"][0]["cloud_secrets_by"],
+        serde_json::json!("mac-mini-m2")
+    );
 }
 
 #[test]

@@ -225,3 +225,24 @@ fn a_project_with_no_cloud_secrets_is_refused() {
     assert_eq!(answer["exit"], 2, "{answer}");
     assert_eq!(answer["stderr"], "device: pawsome has no cloud-secrets\n");
 }
+
+#[test]
+fn an_entry_that_is_no_theme_token_or_store_password_is_refused() {
+    let rig = rig();
+    rig.entry("Shopify/ShortCart/token", "app-token");
+    for entry in [
+        "Shopify/ShortCart/token",
+        "cloudflare/api-token",
+        "Shopify/theme-access/../ShortCart/token",
+        "Shopify/x/y-password",
+    ] {
+        rig.secrets(&format!("X={entry}"), "mac-mini-m2");
+        let (response, answer) = rig.call();
+        assert_eq!(answer["exit"], 2, "{entry}: {answer}");
+        assert_eq!(
+            answer["stderr"],
+            format!("device: {entry} is not a theme token or a store password\n")
+        );
+        assert!(!response.contains("app-token"), "{response}");
+    }
+}
