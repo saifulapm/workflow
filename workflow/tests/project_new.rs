@@ -518,3 +518,27 @@ fn an_app_inside_a_repo_is_served_by_the_repos_project() {
     );
     assert_eq!(code(&out), Some(0));
 }
+
+#[test]
+fn submodules_it_could_not_read_are_a_missing_line() {
+    let work = world(
+        "unread",
+        r#"{"name":"shopify_apps","remote":"github.com/lareysbd/shopify_apps","checkouts":[],"subdir":null,"device":"nuc","device_by":"nuc"}"#,
+    );
+    fake_ssh(
+        &work,
+        "nuc",
+        r#"{"name":"shopify_apps","checkouts":["/s/shopify_apps"]}"#,
+        &[],
+    );
+    let out = run(&work, "shopify_apps");
+    assert!(
+        checks(&out).contains(
+            &"missing: submodules of lareysbd/shopify_apps (no checkout on this machine to read .gitmodules)"
+                .to_string()
+        ),
+        "{}",
+        said(&out)
+    );
+    assert_eq!(code(&out), Some(1));
+}

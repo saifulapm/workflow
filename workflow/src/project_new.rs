@@ -338,12 +338,20 @@ pub fn cmd_project_new(project: Option<&str>) -> i32 {
         println!();
     }
     print_steps("Once, on any device", &once_steps(theme));
+    let mut unread = None;
     if let Some(remote) = remote.filter(|_| child.is_none()) {
         let repo: Vec<&ProjectRow> = projects
             .iter()
             .filter(|other| other.remote.as_deref().map(str::trim) == Some(remote.trim()))
             .collect();
-        let submodules: Vec<String> = submodule_urls(&repo)
+        let urls = submodule_urls(&repo);
+        if urls.is_none() {
+            unread = Some(format!(
+                "missing: submodules of {} (no checkout on this machine to read .gitmodules)",
+                slug(remote)
+            ));
+        }
+        let submodules: Vec<String> = urls
             .unwrap_or_default()
             .iter()
             .map(|url| submodule_slug(remote, url))
@@ -353,7 +361,8 @@ pub fn cmd_project_new(project: Option<&str>) -> i32 {
             print_steps(&format!("On the {account} account"), &steps);
         }
     }
-    let lines = checks(row, &projects, remote, theme);
+    let mut lines = checks(row, &projects, remote, theme);
+    lines.extend(unread);
     for line in &lines {
         println!("{line}");
     }
