@@ -85,11 +85,35 @@ const BROWSER_FLAGS_REFUSED: [&str; 9] = [
 /// Saiful drags into its group, and that one carries no mark.
 const TAG_CURRENT: &str = "async page => { page.__hubTab = true; }";
 
-/// Closes every page the session opened. Closing the last one ends the
-/// extension's connection, and the session with it.
-const CLOSE_TAGGED: &str = "async page => { let closed = 0; \
-     for (const p of page.context().pages()) if (p.__hubTab) { await p.close(); closed++; } \
-     return closed; }";
+/// The start of the hub's code that asks whether a page is the session's
+/// own: one it marked, or one such a page opened, as a link with
+/// target=_blank does.
+macro_rules! own {
+    () => {
+        "const own = async p => { if (p.__hubTab) return true; \
+         const o = await p.opener().catch(() => null); return !!o && own(o); }; "
+    };
+}
+
+/// Closes every page the session opened, each judged before any closes, so
+/// a popup still has its opener. Closing the last one ends the extension's
+/// connection and the session with it, which playwright-cli reports as
+/// "Session closed" with exit 1.
+const CLOSE_OWN: &str = concat!(
+    "async page => { ",
+    own!(),
+    "const mine = []; for (const p of page.context().pages()) if (await own(p)) mine.push(p); \
+     for (const p of mine) await p.close(); return mine.length; }"
+);
+
+/// -1 when the current page is the session's own, else the number of the
+/// first one that is, else -2.
+const FIRST_OWN: &str = concat!(
+    "async page => { ",
+    own!(),
+    "if (await own(page)) return -1; const pages = page.context().pages(); \
+     for (let i = 0; i < pages.length; i++) if (await own(pages[i])) return i; return -2; }"
+);
 
 /// How long a session may go without a call before the hub closes its tabs.
 const DEFAULT_IDLE: Duration = Duration::from_secs(15 * 60);
@@ -249,7 +273,9 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
     let _held = held.lock().unwrap_or_else(|e| e.into_inner());
     let called = cli.call(args);
     let record = cli.dir.join(LAST_CALL);
-    if args[0] == "detach" {
+    // A detach that could not close the tabs keeps the session's record,
+    // so the idle sweep tries again.
+    if args[0] == "detach" && matches!(&called, Ok(outcome) if outcome.exit == 0) {
         let _ = std::fs::remove_file(&record);
     } else {
         let last = LastCall {
@@ -399,8 +425,11 @@ fn end_when(session: &str, dir: &Path, due: impl Fn(&LastCall) -> bool) {
     if cli.attached().unwrap_or(false) {
         let up = crate::config::config_home()
             .is_ok_and(|home| chromium_up(&home.join("chromium/SingletonLock")));
-        if up {
-            let _ = cli.run_code(CLOSE_TAGGED);
+        if up && !cli.run_code(CLOSE_OWN).is_ok_and(|done| closed(&done)) {
+            eprintln!(
+                "hub: device: could not close the tabs of {session}; trying again next round"
+            );
+            return;
         }
         let flag = format!("-s={session}");
         let _ = cli.run(&[&flag, "detach"], None);
@@ -429,10 +458,18 @@ struct Cli<'a> {
 impl Cli<'_> {
     fn call(&self, args: &[String]) -> Result<Outcome, Stop> {
         let detach = args[0] == "detach";
-        let mut closing = None;
         if self.attached()? {
             if detach {
-                closing = Some(self.run_code(CLOSE_TAGGED)?);
+                let done = self.run_code(CLOSE_OWN)?;
+                if !closed(&done) {
+                    return Ok(Outcome::fail(
+                        done.code.unwrap_or(128),
+                        format!(
+                            "device: closing the session's tabs failed, so it stays attached: {}",
+                            String::from_utf8_lossy(&done.stderr)
+                        ),
+                    ));
+                }
             }
         } else if !detach {
             ensure_chromium(&self.path, self.deadline);
@@ -448,9 +485,12 @@ impl Cli<'_> {
                     ),
                 ));
             }
-            // The extension's connect tab, where the session works until it
-            // opens another.
-            self.run_code(TAG_CURRENT)?;
+            // With the token the session works in the extension's connect
+            // tab. Without it Saiful picked one of his own on the connect
+            // page, and that one stays his.
+            if token.is_some() {
+                self.run_code(TAG_CURRENT)?;
+            }
         }
         if let Some(refused) = self.not_its_tab(args)? {
             return Ok(refused);
@@ -459,17 +499,16 @@ impl Cli<'_> {
         argv.extend(args.iter().cloned());
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let done = self.run(&argv, None)?;
-        if args[0] == "tab-new" && done.code == Some(0) {
+        // tab-new opens and selects the tab before it loads the page, so a
+        // page that fails to load still leaves the session a new tab.
+        if args[0] == "tab-new" {
             self.run_code(TAG_CURRENT)?;
+        }
+        if args[0] == "tab-close" && done.code == Some(0) {
+            self.keep_own_current()?;
         }
         let stdout = String::from_utf8_lossy(&done.stdout).into_owned();
         let mut stderr = String::from_utf8_lossy(&done.stderr).into_owned();
-        if let Some(closing) = closing.filter(|c| c.code != Some(0)) {
-            stderr.push_str(&format!(
-                "device: closing the session's tabs failed: {}",
-                String::from_utf8_lossy(&closing.stderr)
-            ));
-        }
         let files = linked_files(&stdout, &self.dir, &mut stderr);
         Ok(Outcome {
             stdout,
@@ -478,6 +517,25 @@ impl Cli<'_> {
             refused: None,
             files,
         })
+    }
+
+    /// After a tab-close playwright-core makes the tab at the closed one's
+    /// place current, which may be one Saiful dragged into the group. This
+    /// selects the session's own instead, or opens it a blank one.
+    fn keep_own_current(&self) -> Result<(), Stop> {
+        let done = self.run_code(FIRST_OWN)?;
+        let flag = format!("-s={}", self.session);
+        match result_of(&done).as_deref() {
+            Some("-2") => {
+                self.run(&[&flag, "tab-new"], None)?;
+                self.run_code(TAG_CURRENT)?;
+            }
+            Some(i) if i.parse::<usize>().is_ok() => {
+                self.run(&[&flag, "tab-select", i], None)?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// The refusal of a tab-select or tab-close whose tab the session did not
@@ -489,13 +547,17 @@ impl Cli<'_> {
         }
         let (code, which) = match args.get(1) {
             None => (
-                "async page => !!page.__hubTab".to_string(),
+                concat!("async page => { ", own!(), "return await own(page); }").to_string(),
                 "the current tab".to_string(),
             ),
             Some(index) => match index.parse::<usize>() {
                 // Only a number the hub parsed goes into the code.
                 Ok(i) => (
-                    format!("async page => !!page.context().pages()[{i}]?.__hubTab"),
+                    format!(
+                        "async page => {{ {}const p = page.context().pages()[{i}]; \
+                         return !!p && await own(p); }}",
+                        own!()
+                    ),
                     format!("tab {i}"),
                 ),
                 Err(_) => {
@@ -507,9 +569,7 @@ impl Cli<'_> {
             },
         };
         let done = self.run_code(&code)?;
-        let stdout = String::from_utf8_lossy(&done.stdout);
-        let mut lines = stdout.lines().skip_while(|line| *line != "### Result");
-        if lines.nth(1) == Some("true") {
+        if result_of(&done).as_deref() == Some("true") {
             return Ok(None);
         }
         Ok(Some(Outcome::refuse(format!(
@@ -573,6 +633,19 @@ impl Cli<'_> {
     fn left(&self) -> Duration {
         self.deadline.saturating_duration_since(Instant::now())
     }
+}
+
+/// The value a run-code returned: the line after `### Result`.
+fn result_of(done: &crate::proc::Finished) -> Option<String> {
+    let stdout = String::from_utf8_lossy(&done.stdout);
+    let mut lines = stdout.lines().skip_while(|line| *line != "### Result");
+    lines.nth(1).map(str::to_string)
+}
+
+/// Whether CLOSE_OWN closed the session's tabs: it answered, or closing the
+/// last one ended the session.
+fn closed(done: &crate::proc::Finished) -> bool {
+    done.code == Some(0) || String::from_utf8_lossy(&done.stdout).contains("Session closed")
 }
 
 /// Starts Chromium when its lock names no live process, and waits for the

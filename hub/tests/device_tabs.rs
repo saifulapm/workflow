@@ -16,8 +16,7 @@ struct Rig {
     hub: Hub,
     home: PathBuf,
     state: PathBuf,
-    /// One line per tab, in strip order: id, the session whose group holds
-    /// it (`saiful` for none), 1 when the hub tagged it, its URL.
+    /// The strip fake_tabs_cli.sh keeps, one line per tab in strip order.
     tabs: PathBuf,
     /// The argv of every fake call, one line each.
     record: PathBuf,
@@ -45,7 +44,7 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
     std::fs::create_dir_all(&state).unwrap();
     let tabs = state.join("tabs");
     let record = state.join("record");
-    std::fs::write(&tabs, "1\tsaiful\t0\thttps://his.test/\n").unwrap();
+    std::fs::write(&tabs, "1\tsaiful\t0\thttps://his.test/\t0\n").unwrap();
     std::fs::write(state.join("next"), "2\n").unwrap();
     fixture_bin(
         &bin,
@@ -76,56 +75,9 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
         &tools,
         "playwright-cli",
         &format!(
-            "S='{state}'\n\
-             printf '%s\\n' \"$*\" >> \"$S/record\"\n\
-             if [ \"$1\" = list ]; then\n\
-               echo '### Browsers'\n\
-               touch \"$S/sessions\"\n\
-               while read -r s; do echo \"- $s:\"; done < \"$S/sessions\"\n\
-               exit 0\n\
-             fi\n\
-             session=\"${{1#-s=}}\"; shift\n\
-             edit() {{ awk -F'\\t' -v OFS='\\t' -v c=\"$(cat \"$S/current-$session\")\" \
-                 -v s=\"$session\" -v u=\"$2\" \"$1\" \"$S/tabs\" > \"$S/t\" && mv \"$S/t\" \"$S/tabs\"; }}\n\
-             new_tab() {{\n\
-               id=$(cat \"$S/next\"); echo $((id + 1)) > \"$S/next\"\n\
-               printf '%s\\t%s\\t0\\t%s\\n' \"$id\" \"$session\" \"$1\" >> \"$S/tabs\"\n\
-               echo \"$id\" > \"$S/current-$session\"\n\
-             }}\n\
-             case \"$1\" in\n\
-             attach) echo \"$session\" >> \"$S/sessions\"; new_tab about:blank; echo attached ;;\n\
-             tab-new) new_tab \"${{2:-about:blank}}\"; echo opened ;;\n\
-             goto) edit '$1 == c {{ $4 = u }} 1' \"$2\"; echo \"- Page URL: $2\" ;;\n\
-             tab-select) awk -F'\\t' -v s=\"$session\" -v i=\"$2\" '$2 == s && n++ == i {{ print $1 }}' \"$S/tabs\" > \"$S/current-$session\"; echo selected ;;\n\
-             tab-close)\n\
-               if [ -n \"$2\" ]; then awk -F'\\t' -v s=\"$session\" -v i=\"$2\" '$2 == s && n++ == i {{ print $1 }}' \"$S/tabs\" > \"$S/current-$session\"; fi\n\
-               edit '$1 != c'; echo closed ;;\n\
-             run-code)\n\
-               case \"$2\" in\n\
-               *'pages()['*)\n\
-                 i=$(printf '%s' \"$2\" | sed 's/.*pages()\\[\\([0-9]*\\)\\].*/\\1/')\n\
-                 t=$(awk -F'\\t' -v s=\"$session\" -v i=\"$i\" '$2 == s && n++ == i {{ print $3 }}' \"$S/tabs\")\n\
-                 echo '### Result'; [ \"$t\" = 1 ] && echo true || echo false ;;\n\
-               *'!!page.__hubTab'*)\n\
-                 t=$(awk -F'\\t' -v c=\"$(cat \"$S/current-$session\")\" '$1 == c {{ print $3 }}' \"$S/tabs\")\n\
-                 echo '### Result'; [ \"$t\" = 1 ] && echo true || echo false ;;\n\
-               *'__hubTab = true'*) edit '$1 == c {{ $3 = 1 }} 1' ;;\n\
-               *'.close()'*)\n\
-                 edit '!($2 == s && $3 == 1)'\n\
-                 if ! awk -F'\\t' -v s=\"$session\" '$2 == s {{ f = 1 }} END {{ exit !f }}' \"$S/tabs\"; then\n\
-                   grep -vx \"$session\" \"$S/sessions\" > \"$S/t\"; mv \"$S/t\" \"$S/sessions\"\n\
-                   echo 'Session closed'\n\
-                 fi ;;\n\
-               *) echo \"fake: unknown code: $2\" >&2; exit 1 ;;\n\
-               esac ;;\n\
-             detach)\n\
-               if grep -qx \"$session\" \"$S/sessions\"; then\n\
-                 grep -vx \"$session\" \"$S/sessions\" > \"$S/t\"; mv \"$S/t\" \"$S/sessions\"\n\
-                 echo detached\n\
-               else echo \"Browser '$session' is not attached.\"; fi ;;\n\
-             *) echo \"ran $*\" ;;\n\
-             esac",
-            state = state.display(),
+            "S='{}' exec sh '{}/tests/fake_tabs_cli.sh' \"$@\"",
+            state.display(),
+            env!("CARGO_MANIFEST_DIR"),
         ),
     );
     let socket = dir.join("local.sock");
@@ -183,8 +135,37 @@ impl Rig {
     fn his_tab(&self, group: &str, url: &str) {
         let mut text = std::fs::read_to_string(&self.tabs).unwrap();
         let id = 900 + text.lines().count();
-        text.push_str(&format!("{id}\t{group}\t0\t{url}\n"));
+        text.push_str(&format!("{id}\t{group}\t0\t{url}\t0\n"));
         std::fs::write(&self.tabs, text).unwrap();
+    }
+
+    /// Opens `url` from `session`'s current tab, as a link with
+    /// target=_blank does; the extension adds it to the session's group.
+    fn popup(&self, session: &str, url: &str) {
+        let opener =
+            std::fs::read_to_string(self.state.join(format!("current-{session}"))).unwrap();
+        let mut text = std::fs::read_to_string(&self.tabs).unwrap();
+        let id = 900 + text.lines().count();
+        text.push_str(&format!("{id}\t{session}\t0\t{url}\t{}\n", opener.trim()));
+        std::fs::write(&self.tabs, text).unwrap();
+    }
+
+    /// The extension's token cannot be read, so attach shows the connect
+    /// page and Saiful picks one of his tabs.
+    fn no_token(&self) {
+        let helper = self.home.join("../tools/playwright-extension-token");
+        std::fs::write(&helper, "#!/bin/sh\nexit 1\n").unwrap();
+    }
+
+    /// While `on`, the hub's run-code that closes tabs fails, as it does
+    /// while a dialog is open.
+    fn closing_fails(&self, on: bool) {
+        let flag = self.state.join("close-fails");
+        if on {
+            std::fs::write(flag, "").unwrap();
+        } else {
+            std::fs::remove_file(flag).unwrap();
+        }
     }
 
     /// Closes the strip's tab that shows `url`, as Saiful does by hand.
@@ -440,11 +421,14 @@ fn tab_close_of_a_tab_the_session_did_not_open_is_refused() {
     assert_eq!(answer["exit"], 2, "{answer}");
     rig.browser("s1", &["tab-close"]);
     rig.browser("s1", &["tab-close", "0"]);
+    // Its last tab gone, the session gets a blank one rather than work on
+    // in the dragged tab.
     assert_eq!(
         rig.strip(),
         vec![
             tab("saiful", "https://his.test/"),
             tab("s1", "https://dragged.test/"),
+            tab("s1", "about:blank"),
         ]
     );
 }
@@ -458,4 +442,86 @@ fn a_tab_number_that_is_not_one_is_refused() {
         answer["stderr"],
         "device: tab-select needs a tab number, not 1; process.exit()\n"
     );
+}
+
+#[test]
+fn after_its_own_tab_close_the_session_works_in_its_other_tab() {
+    let rig = with_a_dragged_tab();
+    // b was current; playwright-core makes the dragged tab, now at b's
+    // place, current.
+    rig.browser("s1", &["tab-close"]);
+    rig.browser("s1", &["goto", "https://c.test"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://c.test"),
+            tab("s1", "https://dragged.test/"),
+        ]
+    );
+}
+
+#[test]
+fn closing_its_last_tab_beside_a_dragged_one_gives_the_session_a_blank_tab() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.his_tab("s1", "https://dragged.test/");
+    rig.browser("s1", &["tab-close"]);
+    rig.browser("s1", &["goto", "https://c.test"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://dragged.test/"),
+            tab("s1", "https://c.test"),
+        ]
+    );
+}
+
+#[test]
+fn a_tab_the_session_s_click_opened_is_its_own() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.popup("s1", "https://pop.test/");
+    rig.browser("s1", &["tab-select", "1"]);
+    rig.browser("s1", &["detach"]);
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+#[test]
+fn the_tab_saiful_picks_for_an_attach_with_no_token_is_never_closed() {
+    let rig = rig();
+    rig.no_token();
+    rig.browser("s1", &["goto", "https://x.test"]);
+    rig.browser("s1", &["tab-new", "https://b.test"]);
+    rig.browser("s1", &["detach"]);
+    assert_eq!(rig.strip(), vec![tab("s1", "https://x.test")]);
+}
+
+#[test]
+fn a_tab_new_whose_page_fails_to_load_is_still_closed_on_detach() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    let answer = rig.call("s1", &["tab-new", "https://typo.invalid"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    rig.browser("s1", &["detach"]);
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+#[test]
+fn a_detach_whose_close_fails_keeps_the_session_for_the_idle_sweep() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1000")]);
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.closing_fails(true);
+    let answer = rig.call("s1", &["detach"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: closing the session's tabs failed, so it stays attached: \
+         Error: a modal dialog is open\n"
+    );
+    assert!(!rig.calls().iter().any(|c| c == "-s=s1 detach"));
+    rig.closing_fails(false);
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
 }
