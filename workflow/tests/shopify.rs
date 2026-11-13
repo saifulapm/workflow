@@ -67,6 +67,7 @@ fn shopify(work: &Scratch, cwd: &str, args: &[&str], vars: &[(&str, &str)]) -> O
             || key.ends_with("_PASSWORD")
             || key.starts_with("CLOUDFLARE_")
             || key == "NODE_USE_ENV_PROXY"
+            || key == "CLAUDE_CODE_REMOTE_SESSION_ID"
         {
             cmd.env_remove(key);
         }
@@ -239,19 +240,6 @@ fn a_theme_with_no_folder_is_refused() {
     assert!(calls(&work).is_empty());
 }
 
-/// Shopify CLI 5.0.1's real output for a service account token it refuses
-/// (a made-up token, 2026-11-09).
-const SA_REJECTED: &str =
-    "╭─ error ──────────────────────────────────────────────────────────────────────╮
-│                                                                              │
-│  The token in SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected: it has been        │
-│  revoked, has expired, or isn't a valid token.                               │
-│                                                                              │
-│  Check the value, or generate a new token in the Shopify admin under         │
-│  Settings > Users > Security.                                                │
-│                                                                              │
-╰──────────────────────────────────────────────────────────────────────────────╯";
-
 const PRODUCTION: &str = "client_id = \"e3cc0000000000000000000000000000\"\nname = \"EventSmith\"\nhandle = \"eventsmith\"\napplication_url = \"https://eventsmith.lareys.dev\"\n";
 
 const STAGING: &str = "client_id = \"57a90000000000000000000000000000\"\nname = \"EventSmith staging\"\nhandle = \"eventsmith-staging\"\napplication_url = \"https://eventsmith-staging.lareys.dev\"\nembedded = true\n\n[build]\nautomatically_update_urls_on_dev = false\ndev_store_url = \"lareys-development.myshopify.com\"\n\n[access_scopes]\nscopes = \"read_products\"\n";
@@ -350,31 +338,35 @@ fn apps(tag: &str) -> Scratch {
     work
 }
 
-const EVENTSMITH: (&str, &str) = ("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN", "shpsa_abc");
-
-/// The staging deploy takes the app's own token, never production's
-/// config, and says where in the admin to walk it.
+/// The device deploys with its own Shopify and Cloudflare logins: nothing
+/// sets a token for either tool, and the walk line ends the output.
 #[test]
-fn an_app_deploys_its_staging_config_with_its_own_token() {
+fn an_app_deploys_its_staging_config_with_the_devices_own_logins() {
     let work = apps("shopify-deploy");
     let out = shopify(
         &work,
         "repo",
         &["deploy", "eventsmith"],
         &[
-            EVENTSMITH,
-            // The CLI fails when either is set beside a service account token.
+            // Left in, either would override the device's login.
             ("SHOPIFY_APP_AUTOMATION_TOKEN", "old"),
             ("SHOPIFY_CLI_PARTNERS_TOKEN", "older"),
         ],
     );
     assert!(out.status.success(), "{out:?}");
     let dir = work.at("repo/apps/eventsmith").display().to_string();
+    let made = calls(&work);
     assert_eq!(
-        calls(&work).last().map(String::as_str),
+        made.last().map(String::as_str),
         Some(format!(
-            "app deploy --config staging --allow-updates --no-input --path {dir} | token=shpsa_abc automation= partners="
+            "app deploy --config staging --allow-updates --no-input --path {dir} | token= automation= partners="
         ).as_str())
+    );
+    assert!(
+        made.iter()
+            .filter(|call| call.starts_with("wrangler"))
+            .all(|call| call.ends_with("| token= proxy=")),
+        "{made:?}"
     );
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("New version released to users."), "{said}");
@@ -385,22 +377,43 @@ fn an_app_deploys_its_staging_config_with_its_own_token() {
     );
 }
 
+/// A Cloudflare token already in the environment, as on Saiful's machine,
+/// reaches wrangler as it is.
 #[test]
-fn an_app_with_no_token_deploys_nothing() {
-    let work = apps("shopify-deploy-no-token");
+fn a_cloudflare_token_in_the_environment_reaches_wrangler() {
+    let work = apps("shopify-deploy-own-cloudflare");
     let out = shopify(
         &work,
-        "repo/apps/eventsmith",
+        "repo",
         &["deploy", "eventsmith"],
-        &[],
+        &[("CLOUDFLARE_API_TOKEN", "cf_own")],
     );
-    assert_eq!(out.status.code(), Some(3), "{out:?}");
+    assert!(out.status.success(), "{out:?}");
     assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN is not set"),
+        calls(&work).contains(&"wrangler deploy --env staging | token=cf_own proxy=".to_string()),
+        "{:?}",
+        calls(&work)
+    );
+}
+
+/// A cloud session deploys nothing: the device has the logins.
+#[test]
+fn a_cloud_session_sends_the_deploy_to_the_device() {
+    let work = apps("shopify-deploy-cloud");
+    let out = shopify(
+        &work,
+        "repo",
+        &["deploy", "eventsmith"],
+        &[("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_test")],
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(
+            "deploy runs on the device: device tmux send 'workflow shopify deploy eventsmith'"
+        ),
         "{out:?}"
     );
-    assert!(calls(&work).is_empty());
+    assert!(calls(&work).is_empty(), "{:?}", calls(&work));
 }
 
 /// No staging config yet: only Saiful can make the staging app.
@@ -408,7 +421,7 @@ fn an_app_with_no_token_deploys_nothing() {
 fn an_app_with_no_staging_config_deploys_nothing() {
     let work = apps("shopify-deploy-no-staging");
     std::fs::remove_file(work.at("repo/apps/eventsmith/shopify.app.staging.toml")).unwrap();
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("shopify.app.staging.toml"),
@@ -428,7 +441,7 @@ fn a_staging_config_of_the_production_app_is_refused() {
             "e3cc0000000000000000000000000000",
         ),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("production"),
@@ -437,29 +450,12 @@ fn a_staging_config_of_the_production_app_is_refused() {
     assert!(calls(&work).is_empty());
 }
 
-/// A token past its 1, 3 or 6 months names the app's variable and parks,
-/// rather than failing like a bug.
-#[test]
-fn a_rejected_service_account_token_names_the_variable() {
-    let work = apps("shopify-deploy-rejected");
-    work.put("deploy.out", SA_REJECTED);
-    work.put("deploy.code", "1");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
-    assert_eq!(out.status.code(), Some(3), "{out:?}");
-    let said = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        said.contains("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected")
-            && said.contains("expired"),
-        "{said}"
-    );
-}
-
 #[test]
 fn a_deploy_that_fails_otherwise_exits_1() {
     let work = apps("shopify-deploy-fails");
     work.put("deploy.out", "Build failed: extensions/foo");
     work.put("deploy.code", "1");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("Build failed"),
@@ -476,7 +472,7 @@ fn a_staging_config_with_no_dev_store_deploys_nothing() {
         "repo/apps/eventsmith/shopify.app.staging.toml",
         &STAGING.replace("dev_store_url = \"lareys-development.myshopify.com\"\n", ""),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("dev_store_url"),
@@ -485,58 +481,32 @@ fn a_staging_config_with_no_dev_store_deploys_nothing() {
     assert!(calls(&work).is_empty());
 }
 
-/// The CLI wraps its error box to the terminal's width: narrower, the
-/// variable and "was rejected" fall on different lines.
-#[test]
-fn a_rejected_token_in_a_narrow_box_still_names_the_variable() {
-    let work = apps("shopify-deploy-rejected-narrow");
-    work.put(
-        "deploy.out",
-        "╭─ error ──────────────────────────────╮\n│  The token in                        │\n│  SHOPIFY_SERVICE_ACCOUNT_TOKEN was   │\n│  rejected: it has been revoked, has  │\n│  expired, or isn't a valid token.    │\n╰──────────────────────────────────────╯",
-    );
-    work.put("deploy.code", "1");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
-    assert_eq!(out.status.code(), Some(3), "{out:?}");
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("EVENTSMITH_SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected"),
-        "{out:?}"
-    );
-}
-
 /// The release's order, for staging: the D1 migrations, then the build and
 /// the Worker, then the Shopify app version, so the webhooks and extensions
-/// it publishes point at a Worker already live. Wrangler reaches the proxy,
-/// which adds the Cloudflare token, only with NODE_USE_ENV_PROXY and a token
-/// variable; pnpm hangs with NODE_USE_ENV_PROXY, so it gets neither. The
-/// build runs outside turbo, whose cache would hand back production's.
+/// it publishes point at a Worker already live. Wrangler runs with the
+/// environment it inherits. The build runs outside turbo, whose cache would
+/// hand back production's.
 #[test]
 fn an_app_deploys_its_staging_worker_before_its_shopify_config() {
     let work = apps("shopify-deploy-worker");
-    let out = shopify(
-        &work,
-        "repo",
-        &["deploy", "eventsmith"],
-        &[EVENTSMITH, ("NODE_USE_ENV_PROXY", "1")],
-    );
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert!(out.status.success(), "{out:?}");
     let made = calls(&work);
     assert_eq!(
-        made[..5],
+        made[..4],
         [
-            "wrangler d1 list --json --env staging --config wrangler.jsonc | token=proxy-injected proxy=1",
-            "wrangler d1 migrations apply eventsmith-staging --remote --env staging --config wrangler.jsonc | token=proxy-injected proxy=1",
+            "wrangler d1 migrations apply eventsmith-staging --remote --env staging --config wrangler.jsonc | token= proxy=",
             "pnpm turbo run build --filter=eventsmith^... | env= proxy= in=repo",
             "pnpm run build | env=staging proxy= in=eventsmith",
-            "wrangler deploy --env staging | token=proxy-injected proxy=1",
+            "wrangler deploy --env staging | token= proxy=",
         ],
         "{made:?}"
     );
     assert!(
-        made[5].starts_with("app deploy --config staging "),
+        made[4].starts_with("app deploy --config staging "),
         "{made:?}"
     );
-    assert_eq!(made.len(), 6, "{made:?}");
+    assert_eq!(made.len(), 5, "{made:?}");
     assert!(
         made.iter().all(|call| !call.contains("eventsmith-na")),
         "{made:?}"
@@ -558,21 +528,21 @@ fn an_app_deploys_its_staging_worker_before_its_shopify_config() {
 fn a_failed_migration_deploys_nothing() {
     let work = apps("shopify-deploy-migration-fails");
     work.put("migrate.code", "1");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr)
             .contains("the staging D1 migrations of eventsmith-staging failed"),
         "{out:?}"
     );
-    assert_eq!(calls(&work).len(), 2, "{:?}", calls(&work));
+    assert_eq!(calls(&work).len(), 1, "{:?}", calls(&work));
 }
 
 #[test]
 fn a_failed_worker_deploy_leaves_the_shopify_config() {
     let work = apps("shopify-deploy-worker-fails");
     work.put("worker.code", "1");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("the staging Worker deploy failed"),
@@ -594,7 +564,7 @@ fn a_failed_worker_deploy_leaves_the_shopify_config() {
 fn a_build_for_another_worker_is_not_deployed() {
     let work = apps("shopify-deploy-wrong-build");
     work.put("built.name", "eventsmith");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr)
@@ -625,7 +595,7 @@ fn an_app_with_no_staging_worker_deploys_nothing() {
         "repo/apps/eventsmith/wrangler.jsonc",
         r#"{ "name": "eventsmith", }"#,
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains(
@@ -645,7 +615,7 @@ fn a_staging_config_on_production_s_url_is_refused() {
         "repo/apps/eventsmith/shopify.app.staging.toml",
         &STAGING.replace("eventsmith-staging.lareys.dev", "eventsmith.lareys.dev"),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -667,7 +637,7 @@ fn a_staging_worker_on_production_s_database_is_refused() {
             "aaaa0000-0000-0000-0000-000000000000",
         ),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("aaaa0000-0000-0000-0000-000000000000"),
@@ -686,26 +656,10 @@ fn a_staging_worker_named_as_production_s_is_refused() {
             "\"name\": \"eventsmith\"",
         ),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("the Worker eventsmith"),
-        "{out:?}"
-    );
-    assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
-}
-
-/// With no network secret for api.cloudflare.com, the proxy adds no token
-/// and wrangler is refused: only Saiful can add one.
-#[test]
-fn no_cloudflare_token_deploys_nothing() {
-    let work = apps("shopify-deploy-no-cloudflare");
-    work.put("token.code", "1");
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
-    assert_eq!(out.status.code(), Some(3), "{out:?}");
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("add api.cloudflare.com as a network secret of the shopify_apps environment"),
         "{out:?}"
     );
     assert!(deploys(&work).is_empty(), "{:?}", calls(&work));
@@ -728,7 +682,7 @@ fn a_staging_database_named_as_production_s_is_refused() {
                 "",
             ),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("eventsmith-na"),
@@ -749,7 +703,7 @@ fn a_staging_worker_named_for_another_app_is_refused() {
             "\"name\": \"shortcart-staging\"",
         ),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -770,7 +724,7 @@ fn a_staging_config_with_any_production_url_is_refused() {
             "{STAGING}\n[auth]\nredirect_urls = [\"https://eventsmith.lareys.dev/auth/callback\"]\n"
         ),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -790,7 +744,7 @@ fn a_staging_worker_with_no_account_is_refused() {
         "repo/apps/eventsmith/wrangler.jsonc",
         &WRANGLER.replace("\"account_id\": \"7d330000000000000000000000000000\",", ""),
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert_eq!(out.status.code(), Some(3), "{out:?}");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("account_id"),
@@ -808,7 +762,7 @@ fn an_app_with_rust_functions_gets_the_wasm_target_before_its_shopify_config() {
         "repo/apps/eventsmith/extensions/gate/Cargo.toml",
         "[package]\nname = \"gate\"\n",
     );
-    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[EVENTSMITH]);
+    let out = shopify(&work, "repo", &["deploy", "eventsmith"], &[]);
     assert!(out.status.success(), "{out:?}");
     let made = calls(&work);
     let wasm = made

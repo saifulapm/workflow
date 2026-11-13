@@ -1,14 +1,15 @@
 //! `workflow shopify theme-dev <theme>` and `workflow shopify deploy <app>`:
-//! Shopify CLI on a cloud thread, with the theme's or app's own variables
-//! from the Project's environment.
+//! `theme-dev` runs Shopify CLI on a cloud thread with the theme's own
+//! variables from the Project's environment. `deploy` runs on the device, with
+//! its own Shopify and Cloudflare logins; in a cloud session it deploys
+//! nothing and names the command to type into the device.
 //!
-//! One environment holds every theme's and app's secrets, so each is named
-//! after its theme or app: `<THEME>_SHOPIFY_CLI_THEME_TOKEN`,
-//! `<THEME>_SHOPIFY_FLAG_STORE`, `<THEME>_STORE_PASSWORD` and
-//! `<APP>_SHOPIFY_SERVICE_ACCOUNT_TOKEN`, in capitals with `-` as `_`. This
-//! command hands them to the CLI under its own names. A name that is not set,
-//! or a token Shopify refuses, exits 3: only Saiful can make a token, so the
-//! task parks on it.
+//! One environment holds every theme's secrets, so each is named after its
+//! theme: `<THEME>_SHOPIFY_CLI_THEME_TOKEN`, `<THEME>_SHOPIFY_FLAG_STORE` and
+//! `<THEME>_STORE_PASSWORD`, in capitals with `-` as `_`. This command hands
+//! them to the CLI under its own names. A name that is not set, or a token
+//! Shopify refuses, exits 3: only Saiful can make a token, so the task parks
+//! on it.
 
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -43,8 +44,8 @@ fn prefix(name: &str) -> String {
 }
 
 /// The variables a project at `subdir` of a Shopify repo reads from its
-/// Project's environment: a theme's three under `themes/`, an app's token
-/// under `apps/`.
+/// Project's environment: a theme's three under `themes/`, none for an app,
+/// which deploys with the device's own logins.
 pub fn variable_names(subdir: &str) -> Vec<String> {
     let Some((kind, name)) = subdir.trim_matches('/').split_once('/') else {
         return Vec::new();
@@ -55,7 +56,6 @@ pub fn variable_names(subdir: &str) -> Vec<String> {
             "SHOPIFY_FLAG_STORE",
             "STORE_PASSWORD",
         ],
-        "apps" => &["SHOPIFY_SERVICE_ACCOUNT_TOKEN"],
         _ => &[],
     };
     whats
@@ -275,11 +275,17 @@ fn error_message(out: &str) -> String {
         .unwrap_or_else(|| out.trim().to_string())
 }
 
-/// The one config a cloud thread deploys. Production stays Saiful's
+/// The one config a deploy ships. Production stays Saiful's
 /// go-ahead, so no other is ever named.
 const STAGING: &str = "staging";
 
 fn deploy(app: &str) -> i32 {
+    if crate::cloud::this_session().is_some() {
+        say(&format!(
+            "deploy runs on the device: device tmux send 'workflow shopify deploy {app}'"
+        ));
+        return exit::USAGE;
+    }
     let Some(dir) = folder("apps", app) else {
         say(&format!(
             "no apps/{app} in this folder or one above it: run this in the apps repo"
@@ -324,20 +330,10 @@ fn deploy(app: &str) -> i32 {
         ));
         return NEEDS_SAIFUL;
     };
-    let name = format!("{}_SHOPIFY_SERVICE_ACCOUNT_TOKEN", prefix(app));
-    let Some(token) = var(&name) else {
-        say(&format!(
-            "{name} is not set: add it to the Project's environment"
-        ));
-        return NEEDS_SAIFUL;
-    };
     let worker = match staging_worker(&dir, app) {
         Ok(worker) => worker,
         Err(code) => return code,
     };
-    if let Err(code) = cloudflare_token(&dir) {
-        return code;
-    }
     if let Err(code) = deploy_worker(&dir, app, &worker) {
         return code;
     }
@@ -366,8 +362,8 @@ fn deploy(app: &str) -> i32 {
         ])
         .arg("--path")
         .arg(&dir)
-        .env("SHOPIFY_SERVICE_ACCOUNT_TOKEN", &token)
-        // The CLI fails when either is set beside a service account token.
+        // Either token, left in the shell, would take the place of the
+        // device's own Shopify login.
         .env_remove("SHOPIFY_APP_AUTOMATION_TOKEN")
         .env_remove("SHOPIFY_CLI_PARTNERS_TOKEN")
         .output();
@@ -388,14 +384,6 @@ fn deploy(app: &str) -> i32 {
     }
     eprint!("{stderr}");
     if !out.status.success() {
-        if words(&format!("{stdout}{stderr}"))
-            .contains("SHOPIFY_SERVICE_ACCOUNT_TOKEN was rejected")
-        {
-            say(&format!(
-                "{name} was rejected: it was revoked, has expired (1, 3 or 6 months) or is not valid; make a new token for {app}'s service account"
-            ));
-            return NEEDS_SAIFUL;
-        }
         say(&format!("shopify app deploy failed for {app}"));
         return exit::FAILED;
     }
@@ -405,15 +393,6 @@ fn deploy(app: &str) -> i32 {
         .trim_end_matches(".myshopify.com");
     println!("walk: https://admin.shopify.com/store/{store}/apps/{handle}");
     exit::OK
-}
-
-/// The words of the CLI's error box on one line: it wraps to the
-/// terminal's width, so a phrase may span its lines.
-fn words(out: &str) -> String {
-    out.split(|c: char| c.is_whitespace() || "│╭╮╰╯─".contains(c))
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// wrangler.jsonc read as JSON: its comments and trailing commas dropped,
@@ -617,57 +596,12 @@ fn staging_worker(dir: &Path, app: &str) -> Result<Worker, i32> {
     })
 }
 
-/// The app's own wrangler with the proxy's Cloudflare token: wrangler's
-/// fetch reaches the proxy only with NODE_USE_ENV_PROXY, and sends nothing
-/// for it to replace without a token variable. A token already set, as on
-/// Saiful's machine, is used as it is.
+/// The app's own wrangler, with the environment it inherits: the device's
+/// Cloudflare login, or a CLOUDFLARE_API_TOKEN the shell already sets.
 fn wrangler(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(dir.join("node_modules/.bin/wrangler"));
-    cmd.args(args)
-        .current_dir(dir)
-        .env("NODE_USE_ENV_PROXY", "1")
-        .env(
-            "CLOUDFLARE_API_TOKEN",
-            var("CLOUDFLARE_API_TOKEN").unwrap_or_else(|| "proxy-injected".to_string()),
-        );
+    cmd.args(args).current_dir(dir);
     cmd
-}
-
-/// Whether a Cloudflare token reaches wrangler. In a thread it is the
-/// environment's network secret for api.cloudflare.com, which only Saiful
-/// can add; without it the proxy adds nothing and every call is refused.
-/// Listing the account's D1 databases stays inside the paths the secret is
-/// given; whoami would list every account.
-fn cloudflare_token(dir: &Path) -> Result<(), i32> {
-    let mut list = wrangler(
-        dir,
-        &[
-            "d1",
-            "list",
-            "--json",
-            "--env",
-            STAGING,
-            "--config",
-            "wrangler.jsonc",
-        ],
-    );
-    match list.output() {
-        Ok(out) if out.status.success() => Ok(()),
-        Ok(out) => {
-            eprint!("{}", String::from_utf8_lossy(&out.stdout));
-            eprint!("{}", String::from_utf8_lossy(&out.stderr));
-            say(
-                "no Cloudflare token reaches wrangler: add api.cloudflare.com as a network secret of the shopify_apps environment",
-            );
-            Err(NEEDS_SAIFUL)
-        }
-        Err(e) => {
-            say(&format!(
-                "wrangler could not start ({e}): run pnpm install first"
-            ));
-            Err(exit::FAILED)
-        }
-    }
 }
 
 /// pnpm without the proxy switch, which hangs it.
