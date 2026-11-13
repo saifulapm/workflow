@@ -1711,6 +1711,8 @@ In claude.ai:
      SLACK_BOT_TOKEN: pass show workflow/slack-bot-token
      SLACK_USER_ID: pass show workflow/slack-user-id
        (the thread's hub posts its questions to Slack; it is the only hub that does)
+     WORKFLOW_ACCOUNT=main, or work on the work account
+       (the claude.ai account a thread records with its cloud run)
    No MEM_REMOTE, HUB_PEER_TOKEN or Slack app token: the mem server is gone, the peer
    token stays on the devices, and a cloud session opens no Slack socket (the devices
    take the taps).

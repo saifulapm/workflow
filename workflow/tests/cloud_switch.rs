@@ -143,6 +143,7 @@ fn with_no_running_cloud_run_it_prints_the_steps_and_no_secret() {
         "pass show workflow/cloud-next-access-secret",
         "SLACK_BOT_TOKEN: pass show workflow/slack-bot-token",
         "SLACK_USER_ID: pass show workflow/slack-user-id",
+        "WORKFLOW_ACCOUNT=main",
         "/remote-env",
         "https://example.test",
         "cloud-<host>",
