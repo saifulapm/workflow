@@ -22,7 +22,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::gitcmd::{self, Git};
-use crate::{exit, hygiene, memcli, paths, warn};
+use crate::{exit, fmt_staged, hygiene, memcli, paths, warn};
 
 /// Step 2, the fire condition: an agent standing in a checkout mem knows. The
 /// env markers are inherited by everything an agent starts, so the env branch
@@ -97,7 +97,11 @@ fn words(name: &str, args: &[String]) -> i32 {
         message,
         string: None,
     };
-    hygiene::cmd_hygiene(scope, None, false, false)
+    let rc = hygiene::cmd_hygiene(scope, None, false, false);
+    if rc != exit::OK || name != "pre-commit" {
+        return rc;
+    }
+    fmt_staged::check_staged()
 }
 
 /// Step 4: chain to the repo's own hook. The stub's path decides whether that

@@ -162,6 +162,34 @@ run env WORKFLOW_AGENT=1 git -c core.hooksPath="$HOOKS" commit --only cache.rs -
 isnt "$RC" 0 'partial commit: the line in the temporary index is caught'
 like "$OUT" '^cache\.rs:2: hard numbered ruling: ' 'partial commit: the hook names the line it saw'
 
+## ------------------------------------------------------ rustfmt on staged .rs
+
+# The staged blob is what gets checked, so a file fixed on disk but not in the
+# index is still refused. The hook reads it with the crate's edition.
+new_repo fmt
+mem_register
+printf '[package]\nname = "fmtcrate"\nversion = "0.1.0"\nedition = "2024"\n' >Cargo.toml
+mkdir src
+printf 'fn  main( ){}\n' >src/lib.rs
+git add Cargo.toml src/lib.rs
+run env WORKFLOW_AGENT=1 git -c core.hooksPath="$HOOKS" commit -m 'Add the crate'
+isnt "$RC" 0 'rustfmt: an unformatted staged .rs file blocks the commit'
+like "$OUT" 'hook: src/lib\.rs is not rustfmt-clean; run cargo fmt --manifest-path .*/Cargo\.toml' 'rustfmt: the refusal names the file and the fix'
+
+printf 'fn main() {}\n' >src/lib.rs
+git add src/lib.rs
+run env WORKFLOW_AGENT=1 git -c core.hooksPath="$HOOKS" commit -m 'Add the crate'
+is "$RC" 0 'rustfmt: the formatted file commits'
+
+printf 'fn  main( ){ }\n' >src/lib.rs
+git add src/lib.rs
+printf 'fn main() {}\n' >src/lib.rs
+run env -u WORKFLOW_AGENT -u PI_CODING_AGENT git -c core.hooksPath="$HOOKS" commit -m 'Touch the crate'
+isnt "$RC" 0 'rustfmt: a human commit is checked too, and the staged blob counts, not the disk'
+
+run env WORKFLOW_AGENT=1 PATH="$T_TMP/bin:/usr/bin:/bin" git -c core.hooksPath="$HOOKS" commit -m 'Touch the crate'
+is "$RC" 0 'rustfmt: with no rustfmt on PATH the check is skipped'
+
 ## -------------------------------------------------------------- pre-push
 
 git init -q --bare "$T_TMP/origin.git"

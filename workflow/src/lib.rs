@@ -17,6 +17,7 @@ pub mod cloud;
 pub mod device;
 pub mod embedded;
 pub mod exit;
+pub mod fmt_staged;
 pub mod gitcmd;
 pub mod go;
 pub mod guard;
