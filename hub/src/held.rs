@@ -21,11 +21,16 @@ pub fn held(line: &str) -> bool {
 /// Whether the command whose program word is `words[i]` is on the list.
 fn destructive_at(words: &[&str], i: usize) -> bool {
     let rest = &words[i + 1..];
-    match words[i].rsplit('/').next().unwrap_or_default() {
-        "rm" => rest
-            .iter()
-            .take_while(|w| w.starts_with('-'))
-            .any(|w| recursive(w)),
+    // `\rm` skips an alias and `npx wrangler@3` names a version: both are
+    // still the program.
+    let program = words[i].trim_start_matches('\\');
+    let program = program.rsplit('/').next().unwrap_or_default();
+    let program = program.split('@').next().unwrap_or_default();
+    match program {
+        // GNU rm takes its flags after the paths too.
+        "rm" => rest.iter().any(|w| recursive(w)),
+        // A thread's own yes, written as Saiful's from the device's shell.
+        "mem" => rest.contains(&"answer"),
         "git" => git_force_push(rest),
         "gh" => rest.starts_with(&["repo", "delete"]),
         "cf" => rest.contains(&"delete"),
@@ -36,7 +41,8 @@ fn destructive_at(words: &[&str], i: usize) -> bool {
 }
 
 fn recursive(flag: &str) -> bool {
-    flag == "--recursive" || (!flag.starts_with("--") && flag.contains(['r', 'R']))
+    flag == "--recursive"
+        || (flag.starts_with('-') && !flag.starts_with("--") && flag.contains(['r', 'R']))
 }
 
 /// `push` after `git`, up to the next `git`, followed by a force flag.
@@ -87,6 +93,12 @@ mod tests {
             "git push --force-with-lease",
             "shopify app deploy",
             "cd x;rm -r y",
+            "\\rm -rf build",
+            "rm build -r",
+            "npx wrangler@latest deploy",
+            "bunx wrangler@3 delete",
+            "mem answer AAAA1111 yes",
+            "mem --project cloud_walk answer AAAA1111 yes",
         ] {
             assert!(held(line), "should hold: {line}");
         }
@@ -108,6 +120,8 @@ mod tests {
             "echo deploy",
             "wrangler dev",
             "wrangler deploy -e staging",
+            "mem questions",
+            "echo answer",
         ] {
             assert!(!held(line), "should pass: {line}");
         }
