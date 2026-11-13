@@ -197,6 +197,26 @@ fn ask(socket: &Path, method: &str, body: &str) -> std::io::Result<(String, Stri
     Ok((status, answer.to_string()))
 }
 
+/// The machine this machine's local hub sends device calls to, as bare
+/// `workflow device` reads it; `None` when the hub does not say.
+pub fn choice() -> Option<String> {
+    let (status, answer) = ask(&local_socket()?, "GET", "").ok()?;
+    if status != "200" {
+        return None;
+    }
+    let answer = serde_json::from_str::<Value>(&answer).ok()?;
+    answer["device"].as_str().map(str::to_string)
+}
+
+/// The tailnet name of the device `machine`, as `workflow device use` takes
+/// it: `mini` for mac-mini-m2. `None` for a machine that is not a device.
+pub fn short_name(machine: &str) -> Option<&'static str> {
+    MACHINES
+        .iter()
+        .find(|(_, name)| *name == machine)
+        .map(|(short, _)| *short)
+}
+
 /// `workflow device use mini|nuc|macbook` and bare `workflow device`: set or
 /// read which machine this machine's local hub sends device calls to.
 fn cmd_choice(name: Option<&str>) -> i32 {

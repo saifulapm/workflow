@@ -57,6 +57,15 @@ pub struct ProjectRow {
     /// When the latest handoff was written, RFC 3339.
     #[serde(default)]
     pub handoff_at: Option<String>,
+    /// The project's own device (`mem project set device`), and the machine
+    /// that wrote it.
+    #[serde(default)]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub device_by: Option<String>,
+    /// A theme's `NAME=<pass entry>` lines for `device with-secrets`.
+    #[serde(default)]
+    pub cloud_secrets: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

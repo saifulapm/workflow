@@ -783,6 +783,9 @@ The first stretch of a shop.
             remote: None,
             milestone: None,
             handoff_at: None,
+            device: None,
+            device_by: None,
+            cloud_secrets: None,
         }
     }
 

@@ -4,9 +4,10 @@
 //! changes nothing.
 
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use crate::memcli::{self, ProjectRow};
-use crate::{exit, warn};
+use crate::{device, exit, machine, warn};
 
 /// The accounts a Project is made on, as the headings name them.
 const ACCOUNTS: [&str; 2] = ["work", "main"];
@@ -122,6 +123,188 @@ fn print_steps(heading: &str, steps: &[String]) {
     println!();
 }
 
+/// A theme's store, which `cloud-secrets` names in place of a pass entry.
+const STORE: &str = "SHOPIFY_FLAG_STORE";
+
+/// The device `row` runs on: its own, when a device wrote that key, as the
+/// hub follows it, else the global choice of this machine's local hub.
+fn device_of(row: &ProjectRow) -> Option<String> {
+    let own = row.device.as_deref().filter(|device| {
+        device::short_name(device).is_some()
+            && row
+                .device_by
+                .as_deref()
+                .is_some_and(|by| device::short_name(by).is_some())
+    });
+    own.map(str::to_string).or_else(device::choice)
+}
+
+/// How one device is asked: this machine's own files, or ssh to the
+/// device's tailnet name (`WORKFLOW_SSH` in the place of ssh).
+enum Device {
+    Here,
+    Ssh(&'static str),
+}
+
+impl Device {
+    fn of(machine: &str) -> Device {
+        match device::short_name(machine) {
+            Some(host) if machine != machine::mem_name() => Device::Ssh(host),
+            _ => Device::Here,
+        }
+    }
+
+    /// `args` run on the device over ssh: its exit code, and its stdout.
+    fn ssh(host: &str, args: &[&str]) -> Option<(i32, String)> {
+        let program = std::env::var("WORKFLOW_SSH")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| "ssh".to_string());
+        let out = Command::new(program)
+            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host])
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let code = out.status.code()?;
+        Some((code, String::from_utf8_lossy(&out.stdout).to_string()))
+    }
+}
+
+/// Whether `other` is `row`'s project or another project of its repo.
+fn same_repo(row: &ProjectRow, other: &ProjectRow) -> bool {
+    other.name == row.name || (remote_of(row).is_some() && remote_of(other) == remote_of(row))
+}
+
+fn remote_of(row: &ProjectRow) -> Option<&str> {
+    row.remote
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+}
+
+/// Whether the device has a checkout of `row`'s repo: its own, or one of
+/// another project of that repo, since an app's folder may exist only on its
+/// own branch. `here` is this machine's rows; `Err` when the device did not
+/// answer.
+fn has_checkout(on: &Device, row: &ProjectRow, here: &[ProjectRow]) -> Result<bool, ()> {
+    match on {
+        Device::Here => Ok(here
+            .iter()
+            .filter(|other| same_repo(row, other))
+            .any(|other| {
+                other
+                    .checkouts
+                    .iter()
+                    .any(|dir| top_of(other, dir).is_dir())
+            })),
+        Device::Ssh(host) => {
+            let (code, out) = Device::ssh(host, &["mem", "projects", "--json"]).ok_or(())?;
+            let rows = (code == 0)
+                .then(|| memcli::parse_projects(&out))
+                .flatten()
+                .ok_or(())?;
+            Ok(rows
+                .iter()
+                .any(|other| same_repo(row, other) && !other.checkouts.is_empty()))
+        }
+    }
+}
+
+/// A pass entry's name as `cloud-secrets` may hold one, which can go on an
+/// ssh command line unquoted.
+fn entry_name(entry: &str) -> bool {
+    !entry.is_empty()
+        && !entry.starts_with(['/', '.', '-'])
+        && !entry.split('/').any(|part| part.is_empty() || part == "..")
+        && entry
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+}
+
+/// Whether the device's pass has `entry`, by its file: `Err` when it did not
+/// answer.
+fn has_entry(on: &Device, entry: &str) -> Result<bool, ()> {
+    match on {
+        Device::Here => {
+            let store = std::env::var("PASSWORD_STORE_DIR")
+                .ok()
+                .filter(|d| !d.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| crate::paths::home().map(|h| h.join(".password-store")))
+                .ok_or(())?;
+            Ok(store.join(format!("{entry}.gpg")).is_file())
+        }
+        Device::Ssh(host) => {
+            let file = format!("~/.password-store/{entry}.gpg");
+            match Device::ssh(host, &["test", "-f", &file]) {
+                Some((0, _)) => Ok(true),
+                Some((1, _)) => Ok(false),
+                _ => Err(()),
+            }
+        }
+    }
+}
+
+/// The check lines for `row`, each `ok: ...` or `missing: ...`.
+fn checks(
+    row: &ProjectRow,
+    projects: &[ProjectRow],
+    remote: Option<&str>,
+    theme: bool,
+) -> Vec<String> {
+    let mut lines = vec![match remote {
+        Some(remote) => format!("ok: remote {}", slug(remote)),
+        None => "missing: remote".to_string(),
+    }];
+    let Some(machine) = device_of(row) else {
+        lines.push("missing: checkout (this machine's local hub names no device)".to_string());
+        return lines;
+    };
+    let on = Device::of(&machine);
+    lines.push(match has_checkout(&on, row, projects) {
+        Ok(true) => format!("ok: checkout on {machine}"),
+        Ok(false) => format!("missing: checkout on {machine}"),
+        Err(()) => format!("missing: checkout on {machine} ({machine} did not answer)"),
+    });
+    if !theme {
+        return lines;
+    }
+    let Some(secrets) = row.cloud_secrets.as_deref() else {
+        lines.push("missing: cloud-secrets".to_string());
+        return lines;
+    };
+    for (n, line) in secrets.lines().map(str::trim).enumerate() {
+        let Some((name, entry)) = line.split_once('=') else {
+            if !line.is_empty() {
+                lines.push(format!(
+                    "missing: cloud-secrets line {} is not NAME=<pass entry>",
+                    n + 1
+                ));
+            }
+            continue;
+        };
+        if name.trim() == STORE {
+            continue;
+        }
+        let entry = entry.trim();
+        if !entry_name(entry) {
+            lines.push(format!(
+                "missing: cloud-secrets line {} names no pass entry",
+                n + 1
+            ));
+            continue;
+        }
+        lines.push(match has_entry(&on, entry) {
+            Ok(true) => format!("ok: pass entry {entry}"),
+            Ok(false) => format!("missing: pass entry {entry}"),
+            Err(()) => format!("missing: pass entry {entry} ({machine} did not answer)"),
+        });
+    }
+    lines
+}
+
 /// `workflow project-new [<project>]`.
 pub fn cmd_project_new(project: Option<&str>) -> i32 {
     let Some(projects) = memcli::projects() else {
@@ -160,7 +343,15 @@ pub fn cmd_project_new(project: Option<&str>) -> i32 {
             print_steps(&format!("On the {account} account"), &steps);
         }
     }
-    exit::OK
+    let lines = checks(row, &projects, remote, theme);
+    for line in &lines {
+        println!("{line}");
+    }
+    if lines.iter().all(|line| line.starts_with("ok: ")) {
+        exit::OK
+    } else {
+        exit::FAILED
+    }
 }
 
 #[cfg(test)]

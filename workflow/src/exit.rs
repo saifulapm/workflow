@@ -9,6 +9,7 @@
 //!   switch         0 switched · 1 a step failed · 2 refused
 //!   land           0 landed or done · 1 failed · 2 parked · 3 CI still runs: run it again
 //!   wait-answer    0 answered · 1 mem failed · 2 parked or no such question · 3 still open: run it again
+//!   project-new    0 every check ok · 1 a check missing or mem failed · 2 no such project
 
 pub const OK: i32 = 0;
 pub const FAILED: i32 = 1;
