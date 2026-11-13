@@ -1,0 +1,6 @@
+### Browsers
+- m2blist:
+  - status: open
+  - browser-type: chromium
+  - user-data-dir: <in-memory>
+  - headed: false

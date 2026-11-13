@@ -1,0 +1,5 @@
+### Error
+net::ERR_NAME_NOT_RESOLVED at https://nope.invalid/
+Call log:
+[2m  - navigating to "https://nope.invalid/", waiting until "domcontentloaded"[22m
+

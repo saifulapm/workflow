@@ -7,17 +7,54 @@
 # one at the same place current, and closing a session's last tab ends it
 # with "Session closed" and exit 1. The hub's run-code is told apart by the
 # text of its code.
+#
+# What the real CLI prints is kept as transcripts in fixtures/playwright-cli
+# (<case>.out, .err and .code, recorded by record.sh). The fake replays them
+# on the same streams with the same exit code, changing only the parts that
+# vary: a session name, a URL, the code run and the value it returned.
+
+FX=$(dirname "$0")/fixtures/playwright-cli
+# Copies stdin, swapping the text $1 for $2 and $3 for $4 where each starts.
+subst() {
+  F1=$1 T1=$2 F2=$3 T2=$4 awk '
+    function swap(line,   out) {
+      while (line != "") {
+        if (ENVIRON["F1"] != "" && index(line, ENVIRON["F1"]) == 1) {
+          out = out ENVIRON["T1"]; line = substr(line, length(ENVIRON["F1"]) + 1)
+        } else if (ENVIRON["F2"] != "" && index(line, ENVIRON["F2"]) == 1) {
+          out = out ENVIRON["T2"]; line = substr(line, length(ENVIRON["F2"]) + 1)
+        } else {
+          out = out substr(line, 1, 1); line = substr(line, 2)
+        }
+      }
+      return out
+    }
+    { print swap($0) }'
+}
+# Prints transcript $1 (stdout, then stderr) with the substitutions $2..$5
+# and exits with the code it recorded.
+replay() {
+  c=$1
+  shift
+  subst "$@" < "$FX/$c.out"
+  cat "$FX/$c.err" >&2
+  exit "$(cat "$FX/$c.code")"
+}
 
 printf '%s\n' "$*" >> "$S/record"
 if [ "$1" = list ]; then
-  echo '### Browsers'
   touch "$S/sessions"
-  while read -r s; do echo "- $s:"; done < "$S/sessions"
-  exit 0
+  if [ -s "$S/sessions" ]; then
+    head -n 1 "$FX/list1.out"
+    while read -r s; do tail -n +2 "$FX/list1.out" | subst m2blist "$s"; done < "$S/sessions"
+    exit "$(cat "$FX/list1.code")"
+  fi
+  replay list
 fi
 session=${1#-s=}
 cmd=$2
 shift 2
+code=$1
 cur=$(cat "$S/current-$session" 2>/dev/null)
 
 field() { awk -F'\t' -v id="$1" -v f="$2" '$1 == id { print $f }' "$S/tabs"; }
@@ -42,12 +79,11 @@ own() {
   done
   return 1
 }
-result() { echo '### Result'; echo "$1"; }
+result() { replay result 'async page => { return -2 }' "$code" -2 "$1"; }
 end_session() {
   grep -vx "$session" "$S/sessions" > "$S/t"
   mv "$S/t" "$S/sessions"
-  echo 'Session closed' >&2
-  exit 1
+  replay sessclosed
 }
 new_tab() {
   id=$(cat "$S/next")
@@ -81,7 +117,7 @@ attach)
   ;;
 tab-new)
   new_tab "${1:-about:blank}"
-  case $1 in *.invalid*) echo "Error: net::ERR_NAME_NOT_RESOLVED at $1" >&2; exit 1 ;; esac
+  case $1 in *.invalid*) replay tabnew_bad https://nope.invalid/ "$1" ;; esac
   echo opened
   ;;
 goto) set_field "$cur" 4 "$1"; echo "- Page URL: $1" ;;
@@ -129,7 +165,7 @@ detach)
     mv "$S/t" "$S/sessions"
     echo detached
   else
-    echo "Browser '$session' is not attached."
+    replay detach_none m2bnone "$session"
   fi
   ;;
 *) echo "ran $cmd $*" ;;

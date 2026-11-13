@@ -1,0 +1,6 @@
+### Result
+-2
+### Ran Playwright code
+```js
+await (async page => { return -2 })(page);
+```
