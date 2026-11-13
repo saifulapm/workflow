@@ -171,8 +171,17 @@ pub(crate) fn sweep(mem: &MemCli, projects: &OnceCell<Vec<Value>>) {
     if !crate::device::run_over(&agent.session, &agent.project, mem, projects) {
         return;
     }
-    if let Ok(amx) = Amx::here() {
-        let _ = amx.run(&["stop", "--force", &agent.name]);
+    // A stop that failed keeps the record, so the next round tries again;
+    // an agent amx no longer knows is gone already.
+    let stopped = Amx::here().and_then(|amx| amx.run(&["stop", "--force", &agent.name]));
+    let gone = matches!(&stopped, Ok(done) if done.code == Some(0)
+        || String::from_utf8_lossy(&done.stderr).contains("no agent"));
+    if !gone {
+        eprintln!(
+            "hub: device: could not stop amx agent {} of {}; trying again next round",
+            agent.name, agent.project
+        );
+        return;
     }
     forget();
     eprintln!(

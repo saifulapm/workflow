@@ -312,3 +312,18 @@ fn the_agent_is_stopped_once_the_run_lands() {
     rig.cloud_run("w15", None);
     stopped_by_the_sweep(&rig);
 }
+
+#[test]
+fn a_stop_that_fails_is_tried_again_next_sweep() {
+    let rig = rig_env(&SWEEP);
+    rig.started();
+    std::fs::write(rig.state.join("stop-fails"), "").unwrap();
+    rig.cloud_run("w15", None);
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(rig.record().exists(), "{:?}", rig.calls());
+    let tries = rig.calls().len();
+    assert!(tries > 2, "{:?}", rig.calls());
+    std::fs::remove_file(rig.state.join("stop-fails")).unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(!rig.record().exists(), "{:?}", rig.calls());
+}
