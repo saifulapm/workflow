@@ -582,18 +582,18 @@ impl Local {
     /// A device call goes to its project's own device when a device set one,
     /// and to the chosen device otherwise: served here when that is this
     /// machine, sent on to the peer whose hub answers to its name, and
-    /// answered "no device online" otherwise. The route plays no part. A
-    /// peer serves what it is sent without reading its own choice, so a
-    /// stale copy there cannot send the call back.
+    /// answered "no device online" otherwise, with the devices that are. The
+    /// route plays no part. A peer serves what it is sent without reading its
+    /// own choice, so a stale copy there cannot send the call back.
     fn device(&self, request: &Request) -> Response {
         let device =
             crate::device::project_device(request).unwrap_or_else(|| self.device_now.get().device);
         if device == self.machine {
             return crate::device::serve(&self.machine, request);
         }
-        let offline = format!("no device online (device: {device})");
+        let offline = || crate::device::unserved(request, &device, &self.devices_online());
         let Some(peer) = self.peer_named(&device) else {
-            return crate::device::unserved(request, &offline);
+            return offline();
         };
         // The device stops a call at its own timeout; wait a little past it.
         let within = crate::device::timeout() + Duration::from_secs(15);
@@ -608,12 +608,12 @@ impl Local {
             // A hub from before device calls cannot serve one.
             Ok((404, _)) => {
                 eprintln!("hub: local: {device} on {peer} has no device calls; update its hub");
-                crate::device::unserved(request, &offline)
+                offline()
             }
             Ok((status, body)) => Response::new(status, "application/json", body),
             Err(e) => {
                 eprintln!("hub: local: device call to {device} on {peer}: {e:#}");
-                crate::device::unserved(request, &offline)
+                offline()
             }
         }
     }
@@ -621,15 +621,40 @@ impl Local {
     /// The online peer whose hub answers `/ping` with `machine`: a peer is
     /// known by its tailnet host, a device by its machine name.
     fn peer_named(&self, machine: &str) -> Option<String> {
+        self.device_peers().find(|peer| {
+            matches!(
+                self.ping(peer),
+                Some(name) if name == machine
+            )
+        })
+    }
+
+    /// The devices online now: this machine, when it is one, then each peer
+    /// whose hub answers `/ping` with a device's name, in tailnet order.
+    fn devices_online(&self) -> Vec<String> {
+        let mut online = Vec::new();
+        let here = std::iter::once(self.machine.clone());
+        for name in here.chain(self.device_peers().filter_map(|peer| self.ping(&peer))) {
+            if crate::device::DEVICES.contains(&name.as_str()) && !online.contains(&name) {
+                online.push(name);
+            }
+        }
+        online
+    }
+
+    /// The tailnet peers that may be a device: not this hub, not a cloud's.
+    fn device_peers(&self) -> impl Iterator<Item = String> + '_ {
         crate::tailnet_peers()
             .into_iter()
             .filter(|peer| *peer != self.host && !crate::cloud_peer(peer))
-            .find(|peer| {
-                matches!(
-                    request_within(peer, "GET", "/ping", &self.token, b"", PING_WITHIN),
-                    Ok((200, name)) if name.trim() == machine
-                )
-            })
+    }
+
+    /// The machine name `peer`'s hub answers `/ping` with.
+    fn ping(&self, peer: &str) -> Option<String> {
+        match request_within(peer, "GET", "/ping", &self.token, b"", PING_WITHIN) {
+            Ok((200, name)) => Some(name.trim().to_string()),
+            _ => None,
+        }
     }
 
     fn is_review(&self, question: &str) -> bool {

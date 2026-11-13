@@ -820,7 +820,8 @@ fn log(machine: &str, call: &Call, outcome: &Outcome) {
 }
 
 /// The device the call's project names in mem, when one of `DEVICES` set
-/// it. None when it has none, a cloud thread set it, or mem cannot be read.
+/// it and it is one of them. None when it has none, a cloud thread set it,
+/// or mem cannot be read.
 pub fn project_device(request: &Request) -> Option<String> {
     let call: Call = serde_json::from_slice(&request.body).ok()?;
     let rows = MemCli::new().read(&["projects", "--json"]).rows("projects");
@@ -828,22 +829,28 @@ pub fn project_device(request: &Request) -> Option<String> {
         .iter()
         .find(|row| row["name"].as_str() == Some(call.project.as_str()))?;
     let by = row["device_by"].as_str()?;
-    if !DEVICES.contains(&by) {
-        return None;
-    }
-    row["device"].as_str().map(str::to_string)
+    let device = row["device"].as_str()?;
+    (DEVICES.contains(&by) && DEVICES.contains(&device)).then(|| device.to_string())
 }
 
-/// The answer when no machine can take the call: exit 3 with `why`, logged
-/// under the machine `none`.
-pub fn unserved(request: &Request, why: &str) -> Response {
+/// The answer when `device` cannot take the call: exit 3 naming it and the
+/// devices `online` now, logged under the machine `none`. The client reads
+/// `device` and `online` to ask which one to use.
+pub fn unserved(request: &Request, device: &str, online: &[String]) -> Response {
     let call: Call = match serde_json::from_slice(&request.body) {
         Ok(call) => call,
         Err(e) => return Response::text(400, &format!("expected verb, args and project: {e}")),
     };
+    let named = if online.is_empty() {
+        "none".to_string()
+    } else {
+        online.join(", ")
+    };
     let outcome = Outcome {
         exit: 3,
-        ..Outcome::refuse(why.to_string())
+        ..Outcome::refuse(format!(
+            "no device online (device: {device}); online: {named}"
+        ))
     };
     log("none", &call, &outcome);
     Response::new(
@@ -855,6 +862,8 @@ pub fn unserved(request: &Request, why: &str) -> Response {
             "stderr": outcome.stderr,
             "exit": outcome.exit,
             "files": {},
+            "device": device,
+            "online": online,
         })
         .to_string(),
     )

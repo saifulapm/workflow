@@ -244,7 +244,13 @@ fn a_chosen_device_that_is_offline_says_so_by_its_name() {
     let answer = device(&mini, "whoami");
     assert_eq!(answer["exit"], 3, "{answer}");
     assert_eq!(
-        answer["stderr"], "device: no device online (device: nuc)\n",
+        answer["stderr"], "device: no device online (device: nuc); online: mac-mini-m2\n",
+        "{answer}"
+    );
+    assert_eq!(answer["device"], "nuc", "{answer}");
+    assert_eq!(
+        answer["online"],
+        serde_json::json!(["mac-mini-m2"]),
         "{answer}"
     );
     assert_eq!(answer["stdout"], "", "{answer}");
@@ -316,9 +322,53 @@ fn a_project_device_that_is_offline_says_so_by_its_name() {
     let answer = device_for(&mini, "whoami", "palmshop");
     assert_eq!(answer["exit"], 3, "{answer}");
     assert_eq!(
-        answer["stderr"], "device: no device online (device: nuc)\n",
+        answer["stderr"], "device: no device online (device: nuc); online: mac-mini-m2\n",
         "{answer}"
     );
+}
+
+#[test]
+fn an_offline_device_names_the_devices_that_are_online() {
+    let dir = TempDir::new("device-online");
+    // The global choice stays the mini, which is not running.
+    let nuc = spawn(&dir, "nuc", &[]);
+    let answer = device(&nuc, "whoami");
+    assert_eq!(answer["exit"], 3, "{answer}");
+    assert_eq!(
+        answer["stderr"], "device: no device online (device: mac-mini-m2); online: nuc\n",
+        "{answer}"
+    );
+    assert_eq!(answer["device"], "mac-mini-m2", "{answer}");
+    assert_eq!(answer["online"], serde_json::json!(["nuc"]), "{answer}");
+
+    drop(nuc);
+    let macbook = spawn(&dir, "macbook-m2", &[]);
+    let nuc = spawn(&dir, "nuc", &[&macbook]);
+    let answer = device(&nuc, "whoami");
+    assert_eq!(
+        answer["stderr"],
+        "device: no device online (device: mac-mini-m2); online: nuc, macbook-m2\n",
+        "{answer}"
+    );
+    assert_eq!(
+        answer["online"],
+        serde_json::json!(["nuc", "macbook-m2"]),
+        "{answer}"
+    );
+}
+
+#[test]
+fn a_project_device_that_is_not_a_device_is_not_followed() {
+    let dir = TempDir::new("device-project-unknown");
+    let mini = spawn(&dir, "mac-mini-m2", &[]);
+    projects(
+        &dir,
+        "mac-mini-m2",
+        r#"{"projects":[{"name":"palmshop","device":"cloud-vm","device_by":"nuc"}]}"#,
+    );
+
+    let answer = device_for(&mini, "whoami", "palmshop");
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
 }
 
 #[test]
@@ -446,8 +496,9 @@ fn a_chosen_device_whose_hub_cannot_serve_calls_is_not_online() {
 
     let answer = device(&mini, "whoami");
     assert_eq!(answer["exit"], 3, "{answer}");
+    // Its ping answers to the name, so it counts as online.
     assert_eq!(
-        answer["stderr"], "device: no device online (device: nuc)\n",
+        answer["stderr"], "device: no device online (device: nuc); online: mac-mini-m2, nuc\n",
         "{answer}"
     );
 }
