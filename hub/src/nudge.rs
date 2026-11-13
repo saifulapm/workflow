@@ -6,7 +6,9 @@
 //! nudge one park twice. The park is the one `workflow go --cloud` reads
 //! (workflow/src/cloud.rs `parked_questions`): a `parked:` handoff written
 //! after the run's latest record, its milestone still the open one, and
-//! the questions of its project asked since the run first started.
+//! the questions of its project asked since the run first started. Only a
+//! `parked: question` handoff counts, and the nudge waits a minute after
+//! the newest answer.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -92,28 +94,26 @@ fn park(project: &Value) -> Option<(String, String)> {
     let handoff = mem_out(&["handoff", "--project", name])?;
     let handoff = String::from_utf8_lossy(&handoff);
     let handoff = handoff.trim_start();
-    // A device takes a local-only park over; no answer is what it waits on.
-    if !handoff.starts_with("parked:") || handoff.starts_with("parked: local-only") {
+    // Only a park on questions waits for answers: a hold, a 6-hour stop or
+    // a local-only park (a device takes it over) does not, however its
+    // questions stand. One question or several: `parked: question #<id>`,
+    // `parked: questions #<id> and #<id>`.
+    if !handoff.starts_with("parked: question") {
         return None;
     }
     Some((session.to_string(), format!("{session} {at}")))
 }
 
-/// The newest answer came after the park at `at`, and `settle` ago or
-/// more. A thread that parked with every answer in hand parked on
-/// something else, another session's question or a hold, and a nudge
-/// would carry on what it meant to stop. The wait lets a message he types
-/// in the thread himself re-record the run first, so it gets no second.
-fn answered_since(asked: &[Value], at: &str, settle: Duration) -> bool {
-    let Ok(parked) = at.parse::<jiff::Timestamp>() else {
-        return false;
-    };
+/// The newest answer is `settle` old or more. The wait lets a message he
+/// types in the thread himself re-record the run first, so it gets no
+/// second turn from the nudge.
+fn settled(asked: &[Value], settle: Duration) -> bool {
     let settled = jiff::Timestamp::now().as_millisecond() - settle.as_millis() as i64;
     asked
         .iter()
         .filter_map(|q| hubpages::model::ulid_millis(q["answer_id"].as_str()?))
         .max()
-        .is_some_and(|ms| ms > parked.as_millisecond() && ms <= settled)
+        .is_some_and(|ms| ms <= settled)
 }
 
 /// The questions the run asked since it first started, oldest first; a
@@ -207,11 +207,7 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration) {
         if asked.is_empty() || asked.iter().any(|q| q["answered"] != true) {
             continue;
         }
-        if !answered_since(
-            &asked,
-            project["handoff_at"].as_str().unwrap_or_default(),
-            settle,
-        ) {
+        if !settled(&asked, settle) {
             continue;
         }
         let name = project["name"].as_str().unwrap_or_default();

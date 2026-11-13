@@ -255,13 +255,33 @@ fn a_nudge_that_fails_is_tried_three_times_then_said_once() {
 }
 
 #[test]
-fn a_park_whose_answers_all_came_before_it_gets_no_nudge() {
-    // The thread had every answer when it parked: what it parked on is
-    // another session's question, or a hold.
-    let dir = TempDir::new("nudge-before");
+fn only_a_park_on_a_question_gets_a_nudge() {
+    // A hold, a 6-hour stop or a local-only park is not waiting on an
+    // answer, however its questions stand.
+    for handoff in [
+        "parked: Saiful holds w20-nudge (#Q1). Branch cloud/cloud_walk-w20-nudge",
+        "parked: 6-hour stop, at t2 on cloud/cloud_walk-w20-nudge",
+        "parked: local-only t14 waits on a device: w20-nudge",
+    ] {
+        let dir = TempDir::new("nudge-not-question");
+        let bin = bins(&dir);
+        set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+        std::fs::write(dir.join("handoff.txt"), format!("{handoff}\n")).unwrap();
+        answered(&dir, Some("0"), Some("yes"));
+        let _hub = spawn(&dir, &bin, "mac-mini-m2");
+        std::thread::sleep(Duration::from_millis(800));
+        assert!(sent(&dir).is_empty(), "{handoff}: {:?}", sent(&dir));
+    }
+}
+
+#[test]
+fn an_answer_just_before_the_park_still_gets_its_nudge() {
+    // It landed after the thread's last wait-answer and before its park
+    // handoff was stamped, so the thread parked without reading it.
+    let dir = TempDir::new("nudge-race");
     let bin = bins(&dir);
     set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
-    let before = "2026-11-13T18:20:00Z";
+    let just_before = "2026-11-13T18:39:58Z";
     set_questions(
         &dir,
         &[
@@ -270,37 +290,21 @@ fn a_park_whose_answers_all_came_before_it_gets_no_nudge() {
                 "Q2",
                 "Blank lines?",
                 Some("yes"),
-                before,
+                just_before,
             ),
             answered_at(
                 "2026-11-13T18:09:00Z",
                 "Q1",
                 "Empty file?",
                 Some("0"),
-                before,
+                "2026-11-13T18:20:00Z",
             ),
         ],
     );
     let _hub = spawn(&dir, &bin, "mac-mini-m2");
-    std::thread::sleep(Duration::from_millis(800));
-    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
-}
-
-#[test]
-fn a_local_only_park_gets_no_nudge() {
-    // A device takes a local-only park over; no answer wakes the thread.
-    let dir = TempDir::new("nudge-local-only");
-    let bin = bins(&dir);
-    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
-    std::fs::write(
-        dir.join("handoff.txt"),
-        "parked: local-only t14 waits on a device: w20-nudge on cloud/cloud_walk-w20-nudge\n",
-    )
-    .unwrap();
-    answered(&dir, Some("0"), Some("yes"));
-    let _hub = spawn(&dir, &bin, "mac-mini-m2");
-    std::thread::sleep(Duration::from_millis(800));
-    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
+    wait_for("the nudge", Duration::from_secs(5), || {
+        !sent(&dir).is_empty()
+    });
 }
 
 #[test]
