@@ -2589,6 +2589,28 @@ pub fn prune(app: &App, apply: &[String]) -> Result<i32> {
     Ok(exit::OK)
 }
 
+/// Asks the local hub to send the outbox now and waits up to
+/// `MEM_SYNC_WAIT_MS` (ten seconds) for it to empty. Returns the last share
+/// sequence and the writes still waiting; None on a machine that never
+/// shared through a hub, which waits for nothing.
+fn send_outbox(db: &std::path::Path) -> Result<Option<(u64, u64)>> {
+    let wait = std::env::var("MEM_SYNC_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10_000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait);
+    let mut status = crate::share::status(db)?;
+    if status.is_some_and(|(_, waiting)| waiting > 0) {
+        crate::share::kick();
+        while status.is_some_and(|(_, waiting)| waiting > 0) && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            status = crate::share::status(db)?;
+        }
+    }
+    Ok(status)
+}
+
 /// `mem sync` — the hub has carried the store since 2026-10-17, so this asks
 /// the local hub to send the outbox now, waits a little for it to empty, and
 /// says where sharing stands: the writes still waiting and the last sequence
@@ -2596,20 +2618,7 @@ pub fn prune(app: &App, apply: &[String]) -> Result<i32> {
 /// writes land here; a batch that failed to land says why.
 pub fn sync(app: &App) -> Result<i32> {
     let db = app.dirs.share_db();
-    let wait = std::env::var("MEM_SYNC_WAIT_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10_000);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait);
-    let mut status = crate::share::status(&db)?;
-    if status.is_some_and(|(_, waiting)| waiting > 0) {
-        crate::share::kick();
-        while status.is_some_and(|(_, waiting)| waiting > 0) && std::time::Instant::now() < deadline
-        {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            status = crate::share::status(&db)?;
-        }
-    }
+    let status = send_outbox(&db)?;
     let stuck = crate::share::apply_failure(&db);
     let (state, detail) = match status {
         None => (
@@ -2843,6 +2852,9 @@ pub fn share(app: &App, command: &crate::cli::ShareCommand) -> Result<i32> {
                     "mem share export: this directory is not in a git checkout",
                 ));
             };
+            // What the store takes now needs no file: a thread that exported
+            // right after a write put an outbox commit on the branch for it.
+            send_outbox(&db)?;
             let saved = crate::share::export(&db, &top, &app.machine)?;
             let noun = if saved == 1 { "write" } else { "writes" };
             println!("saved {saved} {noun} to {}", crate::share::OUTBOX_FILE);

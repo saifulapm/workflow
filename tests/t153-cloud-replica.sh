@@ -200,7 +200,7 @@ for n in 1 2 3; do on cloud mem --project walk log "unsent from the cloud $n" >/
 repo=$T_TMP/checkout
 git init -q -b main "$repo"
 git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m start
-(cd "$repo" && on cloud mem share export >/dev/null)
+(cd "$repo" && on cloud env MEM_SYNC_WAIT_MS=300 mem share export >/dev/null)
 git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m "Push the cloud's outbox"
 is "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["writes"]))' "$repo/.mem-outbox.json")" 3 \
 	"the branch carries .mem-outbox.json with the 3 unsent logs"

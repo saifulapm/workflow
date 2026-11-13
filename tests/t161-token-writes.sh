@@ -269,7 +269,7 @@ on cloud-ab12 mem --project walk log "unsent from cloud-ab12" >/dev/null
 repo=$T_TMP/checkout
 git init -q -b main "$repo"
 git -C "$repo" commit -q --allow-empty -m start
-(cd "$repo" && on cloud-ab12 mem share export >/dev/null)
+(cd "$repo" && on cloud-ab12 env MEM_SYNC_WAIT_MS=300 mem share export >/dev/null)
 git -C "$repo" commit -q -m "Push the cloud's outbox"
 is "$(python3 -c 'import json, sys; o = json.load(open(sys.argv[1])); print(o["machine"], len(o["writes"]))' \
 	"$repo/.mem-outbox.json")" "cloud-ab12 1" "the branch carries cloud-ab12's outbox with its one log"

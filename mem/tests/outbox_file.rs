@@ -5,9 +5,12 @@
 
 mod common;
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use common::{World, code, mem_env, run_git, stderr, stdout};
 use serde_json::{Value, json};
@@ -125,6 +128,67 @@ fn apply(w: &World, messages: &[Value]) {
     mem_stdin(w, &["share", "apply"], &input);
 }
 
+/// No hub answers in these tests unless one is named: export need not wait
+/// for one.
+const NO_WAIT: (&str, &str) = ("MEM_SYNC_WAIT_MS", "0");
+
+/// A local hub on its socket that, each time it is kicked, has the store
+/// take the oldest waiting writes, `take` of them in all. `body` runs with
+/// the socket's path.
+fn with_hub<T>(w: &World, take: usize, body: impl FnOnce(&Path) -> T) -> T {
+    let socket = w.dir.path().join("hub.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let done = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let mut taken = 0;
+            while !done.load(Ordering::SeqCst) {
+                let Ok((stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+                stream.set_nonblocking(false).unwrap();
+                let mut line = String::new();
+                BufReader::new(&stream).read_line(&mut line).unwrap();
+                let _ = (&stream).write_all(b"HTTP/1.1 204 No Content\r\n\r\n");
+                if !line.contains("/share/kick") {
+                    continue;
+                }
+                for id in ids(&pending(w)).into_iter().take(take - taken) {
+                    taken += 1;
+                    apply(w, &[json!({"t": "ack", "id": id, "seq": taken})]);
+                }
+            }
+        });
+        let out = body(&socket);
+        done.store(true, Ordering::SeqCst);
+        out
+    })
+}
+
+/// `mem share export` in `repo` with the hub on `socket`.
+fn export_to(w: &World, repo: &Path, socket: &Path) -> String {
+    let out = mem_env(
+        w,
+        repo,
+        &["share", "export"],
+        &[("HUB_LOCAL_SOCKET", socket.to_str().unwrap())],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    stdout(&out)
+}
+
+/// Two logs waiting on the cloud, and its checkout.
+fn two_waiting() -> (World, PathBuf) {
+    let cloud = machine("cloud");
+    for text in ["outbox probe one", "outbox probe two"] {
+        walk_in(&cloud, cloud.dir.path(), &["log", text]);
+    }
+    let repo = checkout(&cloud);
+    (cloud, repo)
+}
+
 /// Three logs on the cloud, exported into the cloud's checkout.
 fn exported() -> (World, PathBuf, Vec<String>) {
     let cloud = machine("cloud");
@@ -132,7 +196,7 @@ fn exported() -> (World, PathBuf, Vec<String>) {
         walk_in(&cloud, cloud.dir.path(), &["log", text]);
     }
     let repo = checkout(&cloud);
-    let out = mem_env(&cloud, &repo, &["share", "export"], &[]);
+    let out = mem_env(&cloud, &repo, &["share", "export"], &[NO_WAIT]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let sent = ids(&pending(&cloud));
     assert_eq!(sent.len(), 3);
@@ -234,7 +298,7 @@ fn an_imported_page_keeps_its_base_and_lands_nothing_before_the_store_answers() 
         "# Notes\n\nthe cloud's\n",
     );
     let repo = checkout(&cloud);
-    let out = mem_env(&cloud, &repo, &["share", "export"], &[]);
+    let out = mem_env(&cloud, &repo, &["share", "export"], &[NO_WAIT]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 
     let wiki = stdout(&walk_in(&mini, &repo, &["wiki", "notes"]));
@@ -404,4 +468,104 @@ fn a_path_that_is_no_record_imports_nothing() {
         assert!(repo.join(FILE).exists(), "{rest}");
         assert!(pending(&mini).is_empty(), "{rest}");
     }
+}
+
+/// A thread exported right after each write, before the hub had sent it, so
+/// threads put 94 outbox commits on four projects' mains in a day. Export
+/// now has the hub send first and saves only what the store has not taken.
+#[test]
+fn export_saves_nothing_once_the_hub_has_sent_every_write() {
+    let (cloud, repo) = two_waiting();
+    let said = with_hub(&cloud, 2, |socket| export_to(&cloud, &repo, socket));
+    assert_eq!(said, "saved 0 writes to .mem-outbox.json\n");
+    assert_eq!(git_out(&repo, &["status", "--short"]), "");
+    assert!(pending(&cloud).is_empty());
+}
+
+#[test]
+fn export_saves_the_write_the_hub_did_not_send() {
+    let (cloud, repo) = two_waiting();
+    let waiting = ids(&pending(&cloud));
+    let said = with_hub(&cloud, 1, |socket| {
+        let out = mem_env(
+            &cloud,
+            &repo,
+            &["share", "export"],
+            &[
+                ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+                ("MEM_SYNC_WAIT_MS", "500"),
+            ],
+        );
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        stdout(&out)
+    });
+    assert_eq!(said, "saved 1 write to .mem-outbox.json\n");
+    let file: Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(FILE)).unwrap()).unwrap();
+    assert_eq!(ids(file["writes"].as_array().unwrap()), waiting[1..]);
+}
+
+/// With no hub to send them, the writes go in the file as before, and the
+/// wait ends at MEM_SYNC_WAIT_MS.
+#[test]
+fn with_no_hub_export_saves_every_write_once_the_wait_ends() {
+    let (cloud, repo) = two_waiting();
+    let waiting = ids(&pending(&cloud));
+    let started = Instant::now();
+    let out = mem_env(
+        &cloud,
+        &repo,
+        &["share", "export"],
+        &[("MEM_SYNC_WAIT_MS", "200")],
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "saved 2 writes to .mem-outbox.json\n");
+    let file: Value =
+        serde_json::from_str(&std::fs::read_to_string(repo.join(FILE)).unwrap()).unwrap();
+    assert_eq!(ids(file["writes"].as_array().unwrap()), waiting);
+    assert_eq!(
+        git_out(&repo, &["diff", "--cached", "--name-only"]),
+        ".mem-outbox.json\n"
+    );
+}
+
+/// A machine that never shared through a hub has nothing to send, so export
+/// does not wait the default ten seconds.
+#[test]
+fn a_machine_that_never_shared_does_not_wait() {
+    let w = World::new("outbox-unshared");
+    w.project(ID, "walk");
+    walk_in(&w, w.dir.path(), &["log", "not shared"]);
+    let repo = checkout(&w);
+    let started = Instant::now();
+    let out = mem_env(&w, &repo, &["share", "export"], &[]);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "saved 0 writes to .mem-outbox.json\n");
+}
+
+/// The store unreachable for one export and back for the next: the second
+/// takes the first one's file off the branch.
+#[test]
+fn an_export_once_the_store_is_back_removes_the_file_an_earlier_one_saved() {
+    let (cloud, repo) = two_waiting();
+    let out = mem_env(&cloud, &repo, &["share", "export"], &[NO_WAIT]);
+    assert_eq!(stdout(&out), "saved 2 writes to .mem-outbox.json\n");
+    commit(&repo, "Carry the writes the store has not taken yet");
+    let said = with_hub(&cloud, 2, |socket| export_to(&cloud, &repo, socket));
+    assert_eq!(said, "saved 0 writes to .mem-outbox.json\n");
+    assert!(!repo.join(FILE).exists());
+    assert_eq!(
+        git_out(&repo, &["diff", "--cached", "--name-status"]),
+        "D\t.mem-outbox.json\n"
+    );
 }
