@@ -34,6 +34,7 @@ pub mod memserve;
 pub mod mint;
 pub mod model;
 pub mod multipart;
+pub mod nudge;
 pub mod open;
 pub mod origin;
 pub mod page_control;

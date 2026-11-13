@@ -321,6 +321,7 @@ fn run_local(port: u16) -> Result<()> {
     // Sharing only with both set: a test that names neither never reaches
     // the real store.
     let store = hub::share::from_env();
+    let nudger = machine.clone();
     let local = Arc::new(
         local::Local::new(machine, host.clone(), tokens, slack.clone()).with_store(store.clone()),
     );
@@ -393,6 +394,13 @@ fn run_local(port: u16) -> Result<()> {
             .spawn(move || hub::share::run(store, kick, notice))
             .context("starting the sharing socket")?;
     }
+    // A parked cloud thread wakes on a message only, which the mini sends.
+    // It goes by the machine name its items are stamped with, not the
+    // runner name, so it needs no tailnet.
+    std::thread::Builder::new()
+        .name("hub-nudge".to_string())
+        .spawn(move || hub::nudge::run(&nudger))
+        .context("starting the nudge")?;
     // The runs of this machine, under its runner name: without one no run
     // here could be matched to its report. tailscale may not answer yet
     // when the unit starts, so the name is asked again until it does,
