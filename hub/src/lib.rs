@@ -17,6 +17,7 @@ pub mod device_tmux;
 pub mod doorbell;
 pub mod fleet;
 pub mod form;
+pub mod held;
 pub mod html;
 pub mod http;
 pub mod live;
