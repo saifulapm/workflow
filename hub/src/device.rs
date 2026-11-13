@@ -142,6 +142,9 @@ struct Call {
     project: String,
     #[serde(default)]
     session: Option<String>,
+    /// The run's question that asked Saiful which device to use.
+    #[serde(default)]
+    question: Option<String>,
 }
 
 /// What a call came to: the process-shaped answer, and why it was refused
@@ -831,6 +834,55 @@ pub fn project_device(request: &Request) -> Option<String> {
     let by = row["device_by"].as_str()?;
     let device = row["device"].as_str()?;
     (DEVICES.contains(&by) && DEVICES.contains(&device)).then(|| device.to_string())
+}
+
+/// The device Saiful named for this run, in answer to the call's question.
+/// It counts only when the question is the call's project's, its answer is
+/// one of `DEVICES` and was given on one of them (never a thread's own
+/// `mem answer`), and no handoff came after it: a park or a landing ends the
+/// run. None when anything cannot be read.
+pub fn run_device(request: &Request) -> Option<String> {
+    let call: Call = serde_json::from_slice(&request.body).ok()?;
+    let short_id = call.question?;
+    let mem = MemCli::new();
+    let rows = mem
+        .read(&["--project", &call.project, "questions", "--json"])
+        .rows("questions");
+    let question = rows
+        .iter()
+        .find(|q| q["short_id"].as_str() == Some(short_id.as_str()))?;
+    if question["project"].as_str() != Some(call.project.as_str())
+        || question["answered"].as_bool() != Some(true)
+    {
+        return None;
+    }
+    let device = question["answer"].as_str()?.trim();
+    if !DEVICES.contains(&device) {
+        return None;
+    }
+    let given = mem
+        .read(&["show", question["answer_id"].as_str()?, "--json"])
+        .rows("items");
+    if !DEVICES.contains(&given.first()?["machine"].as_str()?) {
+        return None;
+    }
+    let asked = hubpages::model::ulid_millis(question["id"].as_str()?)?;
+    let projects = mem.read(&["projects", "--json"]).rows("projects");
+    let row = projects
+        .iter()
+        .find(|row| row["name"].as_str() == Some(call.project.as_str()))?;
+    let handed_off = match &row["handoff_at"] {
+        serde_json::Value::Null => None,
+        at => Some(
+            at.as_str()?
+                .parse::<jiff::Timestamp>()
+                .ok()?
+                .as_millisecond(),
+        ),
+    };
+    handed_off
+        .is_none_or(|at| asked > at)
+        .then(|| device.to_string())
 }
 
 /// The answer when `device` cannot take the call: exit 3 naming it and the

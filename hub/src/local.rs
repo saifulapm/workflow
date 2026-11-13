@@ -579,15 +579,17 @@ impl Local {
 
     /// Whether `question`, asked here, is a roadmap review: answering it
     /// starts work, so it is answered on the hub and never by a tap.
-    /// A device call goes to its project's own device when a device set one,
-    /// and to the chosen device otherwise: served here when that is this
+    /// A device call goes to the device Saiful named for its run, else its
+    /// project's own device when a device set one, else the chosen device:
+    /// served here when that is this
     /// machine, sent on to the peer whose hub answers to its name, and
     /// answered "no device online" otherwise, with the devices that are. The
     /// route plays no part. A peer serves what it is sent without reading its
     /// own choice, so a stale copy there cannot send the call back.
     fn device(&self, request: &Request) -> Response {
-        let device =
-            crate::device::project_device(request).unwrap_or_else(|| self.device_now.get().device);
+        let device = crate::device::run_device(request)
+            .or_else(|| crate::device::project_device(request))
+            .unwrap_or_else(|| self.device_now.get().device);
         if device == self.machine {
             return crate::device::serve(&self.machine, request);
         }

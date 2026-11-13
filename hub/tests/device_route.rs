@@ -34,15 +34,22 @@ fn spawn_with_peers(dir: &TempDir, machine: &str, peers: &str) -> Hub {
     std::fs::write(home.join("config/qshell/machine"), format!("{machine}\n")).unwrap();
     let bin = home.join("bin");
     let calls = home.join("mem.calls");
-    let projects = home.join("projects.json");
+    // Answers `projects --json`, a project's `questions --json` and `show`
+    // from files the tests write; see `projects`, `questions` and `answered`.
     fixture_bin(
         &bin,
         "mem",
         &format!(
-            "printf '%s\\n' \"$*\" >> '{}'\n\
-             if [ \"$*\" = 'projects --json' ] && [ -f '{1}' ]; then cat '{1}'; fi",
-            calls.display(),
-            projects.display()
+            "printf '%s\\n' \"$*\" >> '{calls}'\n\
+             f=\n\
+             case \"$*\" in\n\
+             'projects --json') f='{home}/projects.json' ;;\n\
+             '--project '*' questions --json') f=\"{home}/questions-$2.json\" ;;\n\
+             'show '*' --json') f=\"{home}/show-$2.json\" ;;\n\
+             esac\n\
+             if [ -n \"$f\" ] && [ -f \"$f\" ]; then cat \"$f\"; fi",
+            calls = calls.display(),
+            home = home.display(),
         ),
     );
     let socket = home.join("local.sock");
@@ -98,12 +105,40 @@ fn projects(dir: &TempDir, machine: &str, json: &str) {
     std::fs::write(dir.join(machine).join("projects.json"), json).unwrap();
 }
 
+/// What `mem --project <project> questions --json` answers on `machine`.
+fn questions(dir: &TempDir, machine: &str, project: &str, json: &str) {
+    let file = dir.join(machine).join(format!("questions-{project}.json"));
+    std::fs::write(file, json).unwrap();
+}
+
+/// What `mem show <answer> --json` answers on `machine`: an answer item
+/// given on `by`.
+fn answered(dir: &TempDir, machine: &str, answer: &str, by: &str) {
+    let file = dir.join(machine).join(format!("show-{answer}.json"));
+    let json = format!(r#"{{"items":[{{"machine":"{by}","by":"slack","kind":"answer"}}]}}"#);
+    std::fs::write(file, json).unwrap();
+}
+
 fn device(hub: &Hub, verb: &str) -> Value {
     device_for(hub, verb, "alpha")
 }
 
 fn device_for(hub: &Hub, verb: &str, project: &str) -> Value {
-    let body = format!(r#"{{"verb":"{verb}","args":[],"project":"{project}"}}"#);
+    device_body(
+        hub,
+        &format!(r#"{{"verb":"{verb}","args":[],"project":"{project}"}}"#),
+    )
+}
+
+/// A `whoami` of `project`'s run that asked `question` which device to use.
+fn device_asked(hub: &Hub, project: &str, question: &str) -> Value {
+    device_body(
+        hub,
+        &format!(r#"{{"verb":"whoami","args":[],"project":"{project}","question":"{question}"}}"#),
+    )
+}
+
+fn device_body(hub: &Hub, body: &str) -> Value {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", hub.port)).unwrap();
     write!(
         stream,
@@ -501,4 +536,139 @@ fn a_chosen_device_whose_hub_cannot_serve_calls_is_not_online() {
         answer["stderr"], "device: no device online (device: nuc); online: mac-mini-m2, nuc\n",
         "{answer}"
     );
+}
+
+const QUESTION: &str = "ABCD1234";
+/// Minted by the real mem on 2026-08-18.
+const ASKED_ULID: &str = "01M0BF1F8BY8FXGZS428J1TSD1";
+const ANSWER_ID: &str = "01M0BF2A00AAAAAAAAAAAAAAAA";
+const BEFORE_ASKED: &str = "2026-08-01T00:00:00Z";
+const AFTER_ASKED: &str = "2026-09-01T00:00:00Z";
+
+/// On the mini, whose global choice stays the mini: `listed_in`'s questions
+/// hold one of `project`'s, answered `answer` on machine `by`, and both
+/// palmshop and shortcart last handed off at `handoff_at`.
+fn asked_run(
+    dir: &TempDir,
+    listed_in: &str,
+    project: &str,
+    answer: &str,
+    by: &str,
+    handoff_at: &str,
+) {
+    questions(
+        dir,
+        "mac-mini-m2",
+        listed_in,
+        &serde_json::json!({"questions": [{
+            "short_id": QUESTION, "id": ASKED_ULID, "project": project,
+            "answered": true, "answer": answer, "answer_id": ANSWER_ID,
+            "options": ["nuc", "I will turn it on"],
+        }]})
+        .to_string(),
+    );
+    answered(dir, "mac-mini-m2", ANSWER_ID, by);
+    projects(
+        dir,
+        "mac-mini-m2",
+        &serde_json::json!({"projects": [
+            {"name": "palmshop", "device": null, "device_by": null, "handoff_at": handoff_at},
+            {"name": "shortcart", "device": null, "device_by": null, "handoff_at": handoff_at},
+        ]})
+        .to_string(),
+    );
+}
+
+#[test]
+fn a_run_s_answered_device_takes_its_project_s_calls() {
+    let dir = TempDir::new("device-run-answer");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    asked_run(&dir, "palmshop", "palmshop", "nuc", "nuc", BEFORE_ASKED);
+
+    let answer = device_asked(&mini, "palmshop", QUESTION);
+    assert_eq!(answer["machine"], "nuc", "{answer}");
+    let answer = device_for(&mini, "whoami", "shortcart");
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+#[test]
+fn a_run_s_answer_given_in_a_cloud_thread_is_not_followed() {
+    let dir = TempDir::new("device-run-cloud-answer");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    asked_run(
+        &dir,
+        "palmshop",
+        "palmshop",
+        "nuc",
+        "cloud-vm",
+        BEFORE_ASKED,
+    );
+
+    let answer = device_asked(&mini, "palmshop", QUESTION);
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+#[test]
+fn a_run_s_device_lapses_at_a_handoff_after_the_question() {
+    let dir = TempDir::new("device-run-handoff");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    asked_run(&dir, "palmshop", "palmshop", "nuc", "nuc", AFTER_ASKED);
+
+    let answer = device_asked(&mini, "palmshop", QUESTION);
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+#[test]
+fn a_run_s_answer_that_is_not_a_device_is_not_followed() {
+    let dir = TempDir::new("device-run-turn-on");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    asked_run(
+        &dir,
+        "palmshop",
+        "palmshop",
+        "I will turn it on",
+        "nuc",
+        BEFORE_ASKED,
+    );
+
+    let answer = device_asked(&mini, "palmshop", QUESTION);
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+#[test]
+fn a_run_s_device_that_is_offline_says_so_by_its_name() {
+    let dir = TempDir::new("device-run-offline");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    asked_run(
+        &dir,
+        "palmshop",
+        "palmshop",
+        "macbook-m2",
+        "nuc",
+        BEFORE_ASKED,
+    );
+
+    let answer = device_asked(&mini, "palmshop", QUESTION);
+    assert_eq!(answer["exit"], 3, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: no device online (device: macbook-m2); online: mac-mini-m2, nuc\n",
+        "{answer}"
+    );
+}
+
+#[test]
+fn a_run_s_question_of_another_project_is_not_followed() {
+    let dir = TempDir::new("device-run-other-project");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    asked_run(&dir, "shortcart", "palmshop", "nuc", "nuc", BEFORE_ASKED);
+
+    let answer = device_asked(&mini, "shortcart", QUESTION);
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
 }

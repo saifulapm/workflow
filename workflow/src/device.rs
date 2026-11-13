@@ -43,12 +43,23 @@ fn session() -> String {
         .collect()
 }
 
-/// The last machine that answered, kept so a change of device can be said.
-fn machine_file() -> Option<PathBuf> {
+/// `name` under this machine's `workflow` state folder.
+fn state_file(name: &str) -> Option<PathBuf> {
     let state = env("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| crate::paths::home().map(|h| h.join(".local/state")))?;
-    Some(state.join("workflow/device-machine"))
+    Some(state.join("workflow").join(name))
+}
+
+/// The last machine that answered, kept so a change of device can be said.
+fn machine_file() -> Option<PathBuf> {
+    state_file("device-machine")
+}
+
+/// The question `device ask` filed, which every later call names so the hub
+/// can follow Saiful's answer to it.
+fn question_file() -> Option<PathBuf> {
+    state_file("device-question")
 }
 
 fn say(msg: &str) {
@@ -240,7 +251,7 @@ pub fn cmd_device(args: &[String]) -> i32 {
         };
         return cmd_choice(Some(machine));
     }
-    if !VERBS.contains(&verb.as_str()) {
+    if verb != "ask" && !VERBS.contains(&verb.as_str()) {
         say(&format!("{verb} is not a verb (whoami, run, browser)"));
         return exit::USAGE;
     }
@@ -250,7 +261,26 @@ pub fn cmd_device(args: &[String]) -> i32 {
         say("no project here (set MEM_PROJECT)");
         return exit::USAGE;
     };
-    let body = json!({"verb": verb, "args": rest, "session": session(), "project": project});
+    if verb == "ask" {
+        return cmd_ask(&project);
+    }
+    match call(verb, rest, &project) {
+        Ok(answer) => play_back(&answer),
+        Err(code) => code,
+    }
+}
+
+/// One call to the device's hub: its answer, or the exit code once the
+/// reason it has none is said.
+fn call(verb: &str, args: &[String], project: &str) -> Result<Value, i32> {
+    let mut body = json!({"verb": verb, "args": args, "session": session(), "project": project});
+    let question = question_file()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|q| q.trim().to_string())
+        .filter(|q| !q.is_empty());
+    if let Some(question) = question {
+        body["question"] = json!(question);
+    }
     let timeout_s = env("WORKFLOW_DEVICE_TIMEOUT_S")
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_TIMEOUT_S);
@@ -258,29 +288,29 @@ pub fn cmd_device(args: &[String]) -> i32 {
         Reply::Answer(status, text) => (status, text),
         Reply::CurlFailed(6 | 7) => {
             say("no device online");
-            return 3;
+            return Err(3);
         }
         Reply::CurlFailed(28) => {
             say(&format!("the device did not answer in {timeout_s} s"));
-            return 124;
+            return Err(124);
         }
         Reply::CurlFailed(code) => {
             say(&format!("curl failed with exit {code}"));
-            return exit::FAILED;
+            return Err(exit::FAILED);
         }
     };
     match status {
         401 | 403 | 302 => {
             say("refused by Access");
-            return 4;
+            return Err(4);
         }
         524 => {
             say(&format!("the device did not answer in {EDGE_TIMEOUT_S} s"));
-            return 124;
+            return Err(124);
         }
         502 | 503 | 504 | 530 => {
             say("no device online");
-            return 3;
+            return Err(3);
         }
         _ => {}
     }
@@ -288,11 +318,78 @@ pub fn cmd_device(args: &[String]) -> i32 {
         .then(|| serde_json::from_str::<Value>(&text).ok())
         .flatten()
         .filter(|a| a.get("exit").is_some_and(Value::is_i64));
-    let Some(answer) = answer else {
+    answer.ok_or_else(|| {
         let start: String = text.chars().take(200).collect();
         say(&format!("unexpected answer {status}: {start}"));
+        exit::FAILED
+    })
+}
+
+/// `device ask`: when the device is offline, ask Saiful which online device
+/// this run should use, and keep the question so later calls name it.
+fn cmd_ask(project: &str) -> i32 {
+    let answer = match call("whoami", &[], project) {
+        Ok(answer) => answer,
+        Err(code) => return code,
+    };
+    let exit = answer["exit"].as_i64();
+    if exit == Some(0) {
+        let machine = answer["machine"].as_str().unwrap_or("the device");
+        println!("device: {machine} is online; nothing to ask");
+        return exit::OK;
+    }
+    let target = answer["device"].as_str();
+    let online = answer["online"].as_array();
+    let (Some(3), Some(target), Some(online)) = (exit, target, online) else {
+        return play_back(&answer);
+    };
+    let turn_on = "I will turn it on";
+    let online: Vec<&str> = online.iter().filter_map(Value::as_str).collect();
+    let text = format!("{project}'s device {target} is offline. Which device should this run use?");
+    let mut args = vec!["ask", "--for", "saiful", "--project", project, &text];
+    for option in online.iter().chain([&turn_on]) {
+        args.extend(["--option", option]);
+    }
+    args.extend(["--recommend", online.first().unwrap_or(&turn_on)]);
+    let asked = Command::new(crate::memcli::bin())
+        .args(&args)
+        .stderr(Stdio::inherit())
+        .output();
+    let printed = match asked {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
+        Ok(out) => {
+            say(&format!("mem ask failed with {}", out.status));
+            return exit::FAILED;
+        }
+        Err(err) => {
+            say(&format!("mem did not start: {err}"));
+            return exit::FAILED;
+        }
+    };
+    let id = printed
+        .split_whitespace()
+        .filter_map(|word| word.strip_prefix('#'))
+        .find(|id| id.len() == 8 && id.chars().all(|c| c.is_ascii_alphanumeric()));
+    let Some(id) = id else {
+        say(&format!("mem ask printed no question: {}", printed.trim()));
         return exit::FAILED;
     };
+    let written = question_file().is_some_and(|file| {
+        file.parent()
+            .is_none_or(|dir| std::fs::create_dir_all(dir).is_ok())
+            && std::fs::write(&file, id).is_ok()
+    });
+    if !written {
+        say(&format!("cannot keep #{id} in the state folder"));
+        return exit::FAILED;
+    }
+    println!("#{id}");
+    say(&format!("wait on it with workflow wait-answer {id}"));
+    exit::OK
+}
+
+/// The hub's answer played back here, as if the program had run here.
+fn play_back(answer: &Value) -> i32 {
     if let Some(machine) = answer["machine"].as_str() {
         note_machine(machine);
     }

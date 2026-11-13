@@ -37,10 +37,22 @@ fn world(tag: &str) -> Scratch {
             code = at("curl.code"),
         ),
     );
+    // A mem that keeps its argv, one argument a line, and prints what
+    // `mem ask` prints for a new question.
+    work.script(
+        "bin/mem",
+        &format!(
+            "for a in \"$@\"; do echo \"$a\" >> {argv}; done\n\
+             echo '#{QUESTION}'",
+            argv = at("mem.argv"),
+        ),
+    );
     drop(writing);
     answer(&work, 200, 0, "");
     work
 }
+
+const QUESTION: &str = "ABCD1234";
 
 /// What the fake curl does next: the status it prints, the code it exits
 /// with and the body it leaves in the `-o` file.
@@ -73,6 +85,7 @@ fn device(work: &Scratch, args: &[&str]) -> Output {
         .env("HOME", work.at("home"))
         .env("XDG_STATE_HOME", work.at("state"))
         .env("MEM_PROJECT", "alpha")
+        .env("WORKFLOW_MEM", work.at("bin/mem"))
         .env("CLAUDE_CODE_REMOTE_SESSION_ID", "session_01X")
         .env_remove("WORKFLOW_DEVICE_URL")
         .env_remove("WORKFLOW_DEVICE_TIMEOUT_S")
@@ -278,4 +291,104 @@ fn a_file_outside_the_folder_is_skipped() {
         err.contains("device: skipped .claude/settings.json\n"),
         "{err}"
     );
+}
+
+#[test]
+fn ask_files_a_question_naming_the_online_devices_and_later_calls_carry_it() {
+    let work = world("device-ask");
+    let offline = json!({
+        "machine": null, "stdout": "", "exit": 3, "files": {},
+        "stderr": "device: no device online (device: mac-mini-m2); online: nuc\n",
+        "device": "mac-mini-m2", "online": ["nuc"],
+    });
+    answer(&work, 200, 0, &offline.to_string());
+    let out = device(&work, &["ask"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(stdout(&out), format!("#{QUESTION}\n"), "{out:?}");
+    assert_eq!(
+        stderr(&out),
+        format!("device: wait on it with workflow wait-answer {QUESTION}\n")
+    );
+    assert_eq!(sent(&work)["verb"], "whoami");
+    assert_eq!(
+        work.read("mem.argv").lines().collect::<Vec<_>>(),
+        [
+            "ask",
+            "--for",
+            "saiful",
+            "--project",
+            "alpha",
+            "alpha's device mac-mini-m2 is offline. Which device should this run use?",
+            "--option",
+            "nuc",
+            "--option",
+            "I will turn it on",
+            "--recommend",
+            "nuc",
+        ]
+    );
+    assert_eq!(work.read("state/workflow/device-question"), QUESTION);
+
+    answer(
+        &work,
+        200,
+        0,
+        &hub_says(Some("nuc"), "nuc\n", "", 0, json!({})),
+    );
+    device(&work, &["whoami"]);
+    assert_eq!(
+        sent(&work),
+        json!({"verb": "whoami", "args": [], "session": "session_01X",
+               "project": "alpha", "question": QUESTION})
+    );
+}
+
+#[test]
+fn ask_with_no_device_online_recommends_turning_it_on() {
+    let work = world("device-ask-none");
+    let offline = json!({
+        "machine": null, "stdout": "", "exit": 3, "files": {},
+        "stderr": "device: no device online (device: nuc); online: none\n",
+        "device": "nuc", "online": [],
+    });
+    answer(&work, 200, 0, &offline.to_string());
+    let out = device(&work, &["ask"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let argv = work.read("mem.argv");
+    assert!(
+        argv.ends_with(
+            "is offline. Which device should this run use?\n\
+             --option\nI will turn it on\n--recommend\nI will turn it on\n"
+        ),
+        "{argv}"
+    );
+}
+
+#[test]
+fn ask_with_the_device_online_asks_nothing() {
+    let work = world("device-ask-online");
+    answer(
+        &work,
+        200,
+        0,
+        &hub_says(Some("mac-mini-m2"), "mac-mini-m2\n", "", 0, json!({})),
+    );
+    let out = device(&work, &["ask"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        stdout(&out),
+        "device: mac-mini-m2 is online; nothing to ask\n"
+    );
+    assert!(!work.has("mem.argv"));
+    assert!(!work.has("state/workflow/device-question"));
+}
+
+#[test]
+fn ask_fails_as_a_call_would_when_the_hub_cannot_be_reached() {
+    let work = world("device-ask-down");
+    answer(&work, 530, 0, "error code: 1033");
+    let out = device(&work, &["ask"]);
+    assert_eq!(stderr(&out), "device: no device online\n");
+    assert_eq!(out.status.code(), Some(3));
+    assert!(!work.has("mem.argv"));
 }

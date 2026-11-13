@@ -306,10 +306,15 @@ WORKFLOW_DEVICE_URL moves the hub's address. Exit 1 for any other answer.
 calls reach (mini is mac-mini-m2, nuc is nuc, macbook is macbook-m2). With no
 argument, `device` asks which is chosen now. Both talk to this machine's local
 hub, need no project, and print one line, `device: <machine>`. Exit 2 for any
-other name or extra arguments, 1 when the local hub refuses or does not answer."
+other name or extra arguments, 1 when the local hub refuses or does not answer.
+
+`device ask`, when the device is offline, asks Saiful in mem which online
+device this run should use, prints the question's #ID and keeps it, so every
+later call names it and goes where he answers. With the device online it
+asks nothing."
     )]
     Device {
-        /// verb (whoami, run or browser), then its arguments.
+        /// verb (whoami, run, browser or ask), then its arguments.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
