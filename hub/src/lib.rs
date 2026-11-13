@@ -16,6 +16,7 @@ pub mod device;
 pub mod device_amx;
 pub mod device_secrets;
 pub mod device_tmux;
+pub mod device_worktree;
 pub mod doorbell;
 pub mod fleet;
 pub mod form;

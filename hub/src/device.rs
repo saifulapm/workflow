@@ -220,7 +220,9 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         // watch them and a destructive line waits for his yes.
         "run" => Outcome::refuse("run is gone; use device tmux".to_string()),
         "browser" => browser(call.session.as_deref(), &call.project, &call.args),
-        "tmux" => crate::device_tmux::call(call.session.as_deref(), &call.project, &call.args),
+        "tmux" => {
+            crate::device_tmux::call(machine, call.session.as_deref(), &call.project, &call.args)
+        }
         "amx" => crate::device_amx::call(call.session.as_deref(), &call.project, &call.args),
         other => return Response::text(400, &format!("not a device verb: {other}")),
     };

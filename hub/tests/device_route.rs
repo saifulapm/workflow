@@ -65,8 +65,48 @@ fn spawn_with_peers(dir: &TempDir, machine: &str, peers: &str) -> Hub {
             ("HUB_HOST", "127.0.0.1"),
             ("HUB_PEERS", peers),
             ("XDG_RUNTIME_DIR", runtime.to_str().unwrap()),
+            // A tmux call reaches this hub's own server, never Saiful's.
+            (
+                "HUB_DEVICE_TMUX_SOCKET",
+                tmux_socket(&home).to_str().unwrap(),
+            ),
         ],
     )
+}
+
+fn tmux_socket(home: &Path) -> PathBuf {
+    home.join("tmux.sock")
+}
+
+/// Kills the tmux server of the hub in `home` when dropped.
+struct TmuxServer(PathBuf);
+
+impl Drop for TmuxServer {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("tmux")
+            .arg("-S")
+            .arg(tmux_socket(&self.0))
+            .arg("kill-server")
+            .output();
+    }
+}
+
+/// git in `dir`, with none of the user's own config.
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn socket_of(dir: &TempDir, machine: &str) -> PathBuf {
@@ -317,6 +357,43 @@ fn a_project_with_its_own_device_sends_its_calls_there() {
     assert_eq!(answer["machine"], "nuc", "{answer}");
     let answer = device_for(&mini, "whoami", "shortcart");
     assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+#[test]
+fn a_tmux_send_for_a_project_on_nuc_makes_its_worktree_on_nuc_only() {
+    let dir = TempDir::new("device-project-tmux");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    git(dir.path(), &["clone", "-q", "origin.git", "checkout"]);
+    let checkout = dir.join("checkout");
+    std::fs::write(checkout.join("README"), "palm\n").unwrap();
+    git(&checkout, &["add", "."]);
+    git(&checkout, &["commit", "-q", "-m", "first"]);
+    git(
+        &checkout,
+        &["push", "-q", "origin", "HEAD:refs/heads/cloud/palmshop-m1"],
+    );
+    let nuc = spawn(&dir, "nuc", &[]);
+    let _server = TmuxServer(dir.join("nuc"));
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    let rows = serde_json::json!({"projects": [
+        {"name": "palmshop", "device": "nuc", "device_by": "mac-mini-m2", "milestone": "m1",
+         "remote": "github.com/saifulapm/palm", "checkouts": [checkout]},
+    ]})
+    .to_string();
+    projects(&dir, "mac-mini-m2", &rows);
+    projects(&dir, "nuc", &rows);
+
+    let answer = device_body(
+        &mini,
+        r#"{"verb":"tmux","args":["send","true"],"project":"palmshop","session":"cse_01Palm"}"#,
+    );
+    assert_eq!(answer["machine"], "nuc", "{answer}");
+    assert_eq!(answer["exit"], 0, "{answer}");
+    assert!(dir.join("nuc/.cache/workflow-cloud/palm/README").is_file());
+    assert!(!dir.join("mac-mini-m2/.cache/workflow-cloud/palm").exists());
 }
 
 #[test]

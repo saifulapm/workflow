@@ -1,6 +1,7 @@
 //! `device tmux send|read|end`: one tmux session on this device for a
 //! thread, named `cloud-<project>-<milestone>` so Saiful can attach to it and
-//! watch, and working in its own folder under `~/.cache/workflow-cloud/`.
+//! watch, and working in a worktree of the project's repo under
+//! `~/.cache/workflow-cloud/`.
 //! A device runs one such job at a time; it ends on `end`, after the idle
 //! limit, at its 20-minute cap, and when its cloud run lands or parks.
 
@@ -59,7 +60,12 @@ enum Over {
     Run,
 }
 
-pub(crate) fn call(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
+pub(crate) fn call(
+    machine: &str,
+    session: Option<&str>,
+    project: &str,
+    args: &[String],
+) -> Outcome {
     let Some((verb, rest)) = args.split_first() else {
         return Outcome::refuse("tmux needs send, read or end".to_string());
     };
@@ -96,7 +102,7 @@ pub(crate) fn call(session: Option<&str>, project: &str, args: &[String]) -> Out
         },
     };
     let outcome = match verb.as_str() {
-        "send" => send(&tmux, &name, project, rest),
+        "send" => send(&tmux, machine, &name, project, rest),
         "read" => read(&tmux, &name),
         _ => end(&tmux, &name),
     };
@@ -225,7 +231,7 @@ pub(crate) fn job_name(project: &str) -> Result<String, Outcome> {
     Ok(format!("cloud-{project}-{milestone}"))
 }
 
-fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
+fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) -> Outcome {
     let (yes, rest) = match rest {
         [flag, id, rest @ ..] if flag == "--yes" => (Some(id.trim_start_matches('#')), rest),
         _ => (None, rest),
@@ -252,11 +258,13 @@ fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
         }
         spend_id = Some(id);
     }
+    let target = format!("={name}:");
     if !tmux.has(name) {
-        let folder = match folder(name) {
-            Ok(folder) => folder.to_string_lossy().into_owned(),
+        let work = match crate::device_worktree::prepare(machine, project, name) {
+            Ok(work) => work,
             Err(failed) => return failed,
         };
+        let folder = work.folder.to_string_lossy().into_owned();
         let path = format!("PATH={}", tmux.path);
         let mut new = vec![
             "new-session",
@@ -288,20 +296,18 @@ fn send(tmux: &Tmux, name: &str, project: &str, rest: &[String]) -> Outcome {
         if let Err(failed) = ok(made, "new-session") {
             return failed;
         }
-    }
-    let target = format!("={name}:");
-    let sent = if is_key(&line) {
-        tmux.run(&["send-keys", "-t", &target, &line])
-    } else {
-        match ok(
-            tmux.run(&["send-keys", "-t", &target, "-l", "--", &line]),
-            "send-keys",
-        ) {
-            Ok(()) => tmux.run(&["send-keys", "-t", &target, "Enter"]),
-            Err(failed) => return failed,
+        if work.submodules
+            && let Err(failed) = type_line(tmux, &target, "git submodule update --init --recursive")
+        {
+            return failed;
         }
+    }
+    let sent = if is_key(&line) {
+        ok(tmux.run(&["send-keys", "-t", &target, &line]), "send-keys")
+    } else {
+        type_line(tmux, &target, &line)
     };
-    match ok(sent, "send-keys") {
+    match sent {
         Ok(()) => {
             if let Some(id) = spend_id {
                 spend(id);
@@ -420,6 +426,15 @@ fn end(tmux: &Tmux, name: &str) -> Outcome {
         Ok(()) => Outcome::done(String::new()),
         Err(failed) => failed,
     }
+}
+
+/// Types `line` into the pane as it is, then Enter.
+fn type_line(tmux: &Tmux, target: &str, line: &str) -> Result<(), Outcome> {
+    ok(
+        tmux.run(&["send-keys", "-t", target, "-l", "--", line]),
+        "send-keys",
+    )?;
+    ok(tmux.run(&["send-keys", "-t", target, "Enter"]), "send-keys")
 }
 
 /// A line that is one tmux key name: C-<key>, M-<key>, or one of KEYS.

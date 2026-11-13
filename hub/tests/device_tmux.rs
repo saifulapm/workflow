@@ -3,13 +3,16 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use common::{Hub, TempDir, body_of, fixture_bin, status_of};
 
 const TOKEN: &str = "peer-token-for-tests-0123456789abcdef";
+
+/// The projects' repo, as mem names its remote.
+const REMOTE: &str = "github.com/saifulapm/cloud-spike";
 
 struct Rig {
     hub: Hub,
@@ -18,6 +21,13 @@ struct Rig {
     /// What fake mem keeps: projects.json, read back, and log, the lines
     /// `mem log` was given.
     state: PathBuf,
+    /// The repo's bare origin, with branches main, cloud/cloud_walk-w14 and
+    /// cloud/shop-m2.
+    origin: PathBuf,
+    /// A clone the tests push to origin from.
+    seed: PathBuf,
+    /// Saiful's own clone, on main; cloud_walk's checkout is its apps/.
+    checkout: PathBuf,
     _dir: TempDir,
 }
 
@@ -44,7 +54,40 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
     let bin = dir.join("bin");
     let state = dir.join("mem");
     std::fs::create_dir_all(&state).unwrap();
-    fixture_bin(&bin, "systemctl", "echo 'PATH=/usr/bin:/bin'");
+    // The user env lets git clone a submodule from a local path.
+    fixture_bin(
+        &bin,
+        "systemctl",
+        "echo 'PATH=/usr/bin:/bin'\n\
+         echo 'GIT_CONFIG_COUNT=1'\n\
+         echo 'GIT_CONFIG_KEY_0=protocol.file.allow'\n\
+         echo 'GIT_CONFIG_VALUE_0=always'",
+    );
+    let origin = dir.join("origin.git");
+    let seed = dir.join("seed");
+    let checkout = dir.join("checkout");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", "main", "origin.git"],
+    );
+    git(dir.path(), &["clone", "-q", "origin.git", "seed"]);
+    std::fs::create_dir_all(seed.join("apps")).unwrap();
+    std::fs::write(seed.join(".gitignore"), "node_modules/\n").unwrap();
+    std::fs::write(seed.join("apps/README"), "walk\n").unwrap();
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-q", "-m", "first"]);
+    git(
+        &seed,
+        &[
+            "push",
+            "-q",
+            "origin",
+            "HEAD:refs/heads/main",
+            "HEAD:refs/heads/cloud/cloud_walk-w14",
+            "HEAD:refs/heads/cloud/shop-m2",
+        ],
+    );
+    git(dir.path(), &["clone", "-q", "origin.git", "checkout"]);
     fixture_bin(
         &bin,
         "mem",
@@ -75,24 +118,91 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
         home,
         socket,
         state,
+        origin,
+        seed,
+        checkout,
         _dir: dir,
     };
     rig.milestones(&[("cloud_walk", "w14"), ("shop", "m2")]);
     rig
 }
 
+/// git in `dir`, with none of the user's own config; its trimmed stdout.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(["-c", "protocol.file.allow=always"])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 impl Rig {
-    /// Each project's open milestone, as `mem projects --json` names it.
+    /// Each project's open milestone, as `mem projects --json` names it, all
+    /// of the one remote; cloud_walk's checkout is on this device.
     fn milestones(&self, rows: &[(&str, &str)]) {
         let rows: Vec<_> = rows
             .iter()
-            .map(|(name, milestone)| serde_json::json!({"name": name, "milestone": milestone}))
+            .map(|(name, milestone)| {
+                serde_json::json!({"name": name, "milestone": milestone, "remote": REMOTE,
+                                   "checkouts": self.checkouts(name)})
+            })
             .collect();
-        std::fs::write(
-            self.state.join("projects.json"),
-            serde_json::json!({ "projects": rows }).to_string(),
+        self.projects(serde_json::json!({ "projects": rows }));
+    }
+
+    /// What `mem projects --json` answers.
+    fn projects(&self, json: serde_json::Value) {
+        std::fs::write(self.state.join("projects.json"), json.to_string()).unwrap();
+    }
+
+    /// The project's checkouts on this device: cloud_walk's is a subfolder
+    /// of Saiful's clone, shop has none.
+    fn checkouts(&self, project: &str) -> Vec<String> {
+        match project {
+            "cloud_walk" => vec![self.checkout.join("apps").display().to_string()],
+            _ => vec![],
+        }
+    }
+
+    /// The worktree folder the sessions work in.
+    fn worktree(&self) -> PathBuf {
+        self.home.join(".cache/workflow-cloud/cloud-spike")
+    }
+
+    /// The sha of origin's `branch`.
+    fn origin_sha(&self, branch: &str) -> String {
+        git(
+            &self.origin,
+            &["rev-parse", &format!("refs/heads/{branch}")],
         )
-        .unwrap();
+    }
+
+    /// Moves origin's `branch` on by a commit made in `change`, run in a
+    /// clone at its tip.
+    fn push(&self, branch: &str, change: impl FnOnce(&Path)) {
+        git(&self.seed, &["fetch", "-q", "origin"]);
+        git(
+            &self.seed,
+            &["checkout", "-q", "--detach", &format!("origin/{branch}")],
+        );
+        change(&self.seed);
+        git(&self.seed, &["add", "."]);
+        git(&self.seed, &["commit", "-q", "-m", "next"]);
+        git(
+            &self.seed,
+            &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
+        );
     }
 
     /// cloud_walk building `milestone`, run in the cloud by session_01Walk
@@ -108,14 +218,15 @@ impl Rig {
         let since = now - jiff::SignedDuration::from_secs(60);
         let handoff_at = handoff.map_or(serde_json::Value::Null, |_| now.to_string().into());
         let projects = serde_json::json!({"projects": [
-            {"name": "cloud_walk", "roadmap_status": "approved", "checkouts": [],
+            {"name": "cloud_walk", "roadmap_status": "approved",
+             "remote": REMOTE, "checkouts": self.checkouts("cloud_walk"),
              "milestone": milestone, "milestones_done": 1, "milestones_total": 3,
              "handoff_at": handoff_at,
              "runner": {"machine": "cloud", "id": runner,
                         "since": since.to_string(), "milestone": "w14"}},
-            {"name": "shop", "milestone": "m2"},
+            {"name": "shop", "milestone": "m2", "remote": REMOTE, "checkouts": []},
         ]});
-        std::fs::write(self.state.join("projects.json"), projects.to_string()).unwrap();
+        self.projects(projects);
         let body = serde_json::json!({ "body": handoff.unwrap_or_default() });
         std::fs::write(self.state.join("handoff.json"), body.to_string()).unwrap();
     }
@@ -203,8 +314,82 @@ fn the_session_is_named_for_the_project_and_milestone_and_works_in_its_own_folde
     let rig = rig();
     assert_eq!(rig.walk(&["send", "pwd"])["exit"], 0);
     assert_eq!(rig.sessions(), ["cloud-cloud_walk-w14"]);
-    let folder = rig.home.join(".cache/workflow-cloud/cloud-cloud_walk-w14");
+    let folder = rig.home.join(".cache/workflow-cloud/cloud-spike");
     rig.read_until(folder.to_str().unwrap());
+    // A worktree of the repo, at origin's cloud branch.
+    rig.walk(&["send", "git rev-parse HEAD"]);
+    rig.read_until(&rig.origin_sha("cloud/cloud_walk-w14"));
+}
+
+#[test]
+fn making_the_worktree_leaves_saiful_s_checkout_as_it_was() {
+    let rig = rig();
+    std::fs::write(rig.checkout.join("apps/README"), "edited\n").unwrap();
+    std::fs::write(rig.checkout.join("notes"), "mine\n").unwrap();
+    let branch = git(&rig.checkout, &["branch", "--show-current"]);
+    let status = git(&rig.checkout, &["status", "--porcelain"]);
+    assert_eq!(status, "M apps/README\n?? notes");
+    rig.walk(&["send", "echo made"]);
+    rig.read_until("made");
+    assert_eq!(git(&rig.checkout, &["branch", "--show-current"]), branch);
+    assert_eq!(git(&rig.checkout, &["status", "--porcelain"]), status);
+}
+
+#[test]
+fn a_later_session_keeps_the_folder_and_moves_to_the_branch_s_new_tip() {
+    let rig = rig();
+    rig.walk(&[
+        "send",
+        "mkdir -p node_modules/x && echo kept > node_modules/x/file",
+    ]);
+    rig.walk(&["send", "echo wrote"]);
+    rig.read_until("wrote");
+    assert_eq!(rig.walk(&["end"])["exit"], 0);
+    rig.push("cloud/cloud_walk-w14", |seed| {
+        std::fs::write(seed.join("apps/README"), "walk on\n").unwrap();
+    });
+    let sha = rig.origin_sha("cloud/cloud_walk-w14");
+    rig.walk(&["send", "cat node_modules/x/file"]);
+    rig.read_until("kept");
+    rig.walk(&["send", "git rev-parse HEAD"]);
+    rig.read_until(&sha);
+    rig.walk(&["send", "pwd"]);
+    rig.read_until(rig.worktree().to_str().unwrap());
+}
+
+#[test]
+fn a_submodule_is_checked_out_by_the_session_s_first_line() {
+    let rig = rig();
+    let sub = rig.origin.with_file_name("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    git(&sub, &["init", "-q", "-b", "main"]);
+    std::fs::write(sub.join("hello"), "from-sub\n").unwrap();
+    git(&sub, &["add", "."]);
+    git(&sub, &["commit", "-q", "-m", "sub"]);
+    rig.push("cloud/cloud_walk-w14", |seed| {
+        git(
+            seed,
+            &["submodule", "add", "-q", sub.to_str().unwrap(), "lib"],
+        );
+    });
+    rig.walk(&["send", "cat lib/hello"]);
+    rig.read_until("from-sub");
+    assert!(rig.worktree().join("lib/hello").is_file());
+}
+
+#[test]
+fn a_project_with_no_checkout_of_its_repo_is_refused() {
+    let rig = rig();
+    rig.projects(serde_json::json!({"projects": [
+        {"name": "cloud_walk", "milestone": "w14", "remote": REMOTE, "checkouts": []},
+    ]}));
+    let answer = rig.walk(&["send", "true"]);
+    assert_eq!(answer["exit"], 2, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: no checkout of saifulapm/cloud-spike on mac-mini-m2\n"
+    );
+    assert!(rig.sessions().is_empty(), "{:?}", rig.sessions());
 }
 
 #[test]
@@ -404,9 +589,7 @@ fn a_line_off_the_list_is_sent() {
 fn scratch(rig: &Rig) -> PathBuf {
     rig.walk(&["send", "mkdir -p scratch && echo made"]);
     rig.read_until("made");
-    let folder = rig
-        .home
-        .join(".cache/workflow-cloud/cloud-cloud_walk-w14/scratch");
+    let folder = rig.worktree().join("scratch");
     assert!(folder.is_dir());
     folder
 }
