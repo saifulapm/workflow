@@ -24,9 +24,10 @@ A cloud plan is the plan skill in a claude.ai cloud session
   cloud. Write a handoff whose first line is `Next: type "Run the next
   milestone of <project>." in its Claude Project`: that thread runs the
   first milestone, cut from this branch.
-- Then run `mem share export`, commit the `.mem-outbox.json` it stages when
-  it stages one, and `git push origin cloud/<project>-plan`, even with no new
-  commit: no signal reaches a session that ends, so writes the store has not
+- Then run `mem share export`, which sends what it can to the store first,
+  commit only what it left staged (the `.mem-outbox.json` or its removal;
+  with nothing staged, commit nothing), and `git push origin
+  cloud/<project>-plan`, even with no new commit: no signal reaches a session that ends, so writes the store has not
   taken yet travel on the branch, and the first cloud milestone imports them.
 - Never push `main`. Stop after 6 hours with a handoff starting `parked:
   6-hour stop`, then that export and push.

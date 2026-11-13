@@ -512,6 +512,24 @@ fn writes_the_store_has_not_taken_land_on_the_trunk_too() {
     assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
 }
 
+/// A store that took every write leaves nothing to carry: the trunk gains
+/// no commit touching the outbox file, where threads had put 94 in a day.
+#[test]
+fn a_store_that_took_every_write_adds_no_outbox_commit() {
+    let w = World::new("land-outbox-none");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let origin = w.work.at("origin.git");
+    assert!(w.origin_log("main").contains("Build the milestone"));
+    assert_eq!(
+        w.git(
+            &origin,
+            &["log", "--oneline", "main", "--", ".mem-outbox.json"]
+        ),
+        ""
+    );
+}
+
 /// The outbox file at the top of the checkout, as `mem share export` writes
 /// it for `machine`.
 fn outbox_of(machine: &str) -> String {

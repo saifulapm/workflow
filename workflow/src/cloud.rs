@@ -1833,10 +1833,27 @@ mod tests {
         // the tick it makes after the push.
         assert!(
             PROMPT.contains(
-                "then `mem share export` run and the file it stages committed; then `workflow land` run"
+                "then `mem share export` run and only what it left staged committed; then `workflow land` run"
             ),
             "{PROMPT}"
         );
+    }
+
+    /// Export sends to the store first, so with the store up it stages
+    /// nothing, or the removal of a file an earlier export saved: a thread
+    /// that committed anyway put an empty or stale outbox on the branch.
+    #[test]
+    fn a_thread_commits_only_what_export_left_staged() {
+        for text in [PROMPT, PLAN_PROMPT] {
+            assert!(
+                text.contains(
+                    "the `.mem-outbox.json` or its removal; with nothing staged, commit nothing"
+                ),
+                "{text}"
+            );
+            assert!(!text.contains("it stages, when it stages one"), "{text}");
+            assert!(!text.contains("it stages when it stages one"), "{text}");
+        }
     }
 
     /// A thread waits on Saiful's answer 30 minutes from the ask, then

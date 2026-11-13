@@ -21,10 +21,12 @@ the skill holds, with these changes:
   after its tick, so the branch gains one commit, or one fast-forward, per
   landed task. Work in progress goes on that branch too, never on main,
   including what Claude Code's own stop hook asks to commit and push.
-- Before every push, run `mem share export` and commit the
-  `.mem-outbox.json` it stages, when it stages one: no signal reaches a
-  session that ends, so writes the store has not taken yet travel on the
-  branch, and the next machine to read the project sends them.
+- Before every push, run `mem share export`. It sends what it can to the
+  store first, then stages what is still waiting. Commit only what it left
+  staged, the `.mem-outbox.json` or its removal; with nothing staged,
+  commit nothing. No signal reaches a session that ends, so writes the
+  store has not taken yet travel on the branch, and the next machine to
+  read the project sends them.
 - A task only a device can do, which the `device` command, `gh` and
   `workflow land` do not reach (a phone in hand, a Mac for iOS, hardware),
   is local-only, and its checklist line ends `[local]`: the device work
