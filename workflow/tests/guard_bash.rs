@@ -759,3 +759,20 @@ fn a_commit_passes_when_no_suite_runs() {
     let out = guard(&repo, "git commit -am x");
     assert!(passes(&out), "{out:?}");
 }
+
+/// A walker's `rm -rf tmp.??????????` took the orchestrator's scratch
+/// folders (m5-device-deploy): a subagent removes only its own folder, by
+/// its exact path, and the session's own agent is not held to it.
+#[test]
+fn a_subagents_rm_of_a_glob_is_refused_through_the_hook() {
+    let w = Scratch::new("guard-bash-rm-glob");
+    let dir = w.at("walk");
+    let out = guard_as(&dir, "dogfooder", "rm -rf tmp.??????????");
+    assert!(refused(&out, "its exact path"), "{out:?}");
+    assert!(passes(&guard_as(
+        &dir,
+        "dogfooder",
+        "rm -rf ~/.cache/w/walk1"
+    )));
+    assert!(passes(&guard(&dir, "rm -rf tmp.??????????")));
+}
