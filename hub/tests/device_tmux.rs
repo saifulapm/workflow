@@ -453,3 +453,33 @@ fn a_yes_releases_only_the_line_it_asked_for() {
     assert_eq!(sent["exit"], 2, "{sent}");
     assert!(folder.is_dir());
 }
+
+#[test]
+fn a_pane_s_tokens_read_back_cut() {
+    let rig = rig();
+    // The quotes keep the typed line from holding a whole token: only the
+    // output does.
+    rig.walk(&[
+        "send",
+        "echo shpat_\"\"0123456789abcdef0123456789abcdef cfut_\"\"abc123 shpss_\"\"def456 tskey-\"\"ghi789; echo printed",
+    ]);
+    let pane = rig.read_until("printed");
+    for cut in ["shpat_***", "cfut_***", "shpss_***", "tskey-***"] {
+        assert!(pane.contains(cut), "{cut} in {pane}");
+    }
+    for raw in ["shpat_0", "cfut_a", "shpss_d", "tskey-g"] {
+        assert!(!pane.contains(raw), "{raw} in {pane}");
+    }
+}
+
+#[test]
+fn a_sent_token_is_cut_in_the_log() {
+    let rig = rig();
+    // Built here, so no token shape sits in the source for a secret scanner.
+    let line = format!("echo shpat_{}", "0123456789abcdef".repeat(2));
+    rig.walk(&["send", &line]);
+    assert_eq!(
+        rig.log(),
+        ["--project=cloud_walk device mac-mini-m2 tmux send echo shpat_*** exit 0"]
+    );
+}

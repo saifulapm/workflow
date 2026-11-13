@@ -191,7 +191,7 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         Ok(call) => call,
         Err(e) => return Response::text(400, &format!("expected verb, args and project: {e}")),
     };
-    let outcome = match call.verb.as_str() {
+    let mut outcome = match call.verb.as_str() {
         "whoami" => Outcome {
             stdout: format!("{machine}\n"),
             stderr: String::new(),
@@ -204,6 +204,11 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         "tmux" => crate::device_tmux::call(call.session.as_deref(), &call.project, &call.args),
         other => return Response::text(400, &format!("not a device verb: {other}")),
     };
+    // What a terminal or an agent printed may hold a token.
+    if matches!(call.verb.as_str(), "tmux" | "amx") {
+        outcome.stdout = crate::mask::mask(&outcome.stdout);
+        outcome.stderr = crate::mask::mask(&outcome.stderr);
+    }
     log(machine, &call, &outcome);
     Response::new(
         200,
@@ -810,7 +815,7 @@ pub(crate) fn find_in(path: &str, program: &str) -> Option<PathBuf> {
         })
 }
 
-/// One line in the project's mem log for the call.
+/// One line in the project's mem log for the call, its tokens cut.
 fn log(machine: &str, call: &Call, outcome: &Outcome) {
     let mut line = format!("device {machine} {}", call.verb);
     for arg in &call.args {
@@ -821,6 +826,7 @@ fn log(machine: &str, call: &Call, outcome: &Outcome) {
     if let Some(reason) = &outcome.refused {
         line.push_str(&format!(" refused: {reason}"));
     }
+    let line = crate::mask::mask(&line);
     let mut command = Command::new("mem");
     command.args([&format!("--project={}", call.project), "log", "--", &line]);
     match output_within(&mut command, HELPER_TIMEOUT) {
