@@ -34,10 +34,16 @@ fn spawn_with_peers(dir: &TempDir, machine: &str, peers: &str) -> Hub {
     std::fs::write(home.join("config/qshell/machine"), format!("{machine}\n")).unwrap();
     let bin = home.join("bin");
     let calls = home.join("mem.calls");
+    let projects = home.join("projects.json");
     fixture_bin(
         &bin,
         "mem",
-        &format!("printf '%s\\n' \"$*\" >> '{}'", calls.display()),
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{}'\n\
+             if [ \"$*\" = 'projects --json' ] && [ -f '{1}' ]; then cat '{1}'; fi",
+            calls.display(),
+            projects.display()
+        ),
     );
     let socket = home.join("local.sock");
     let runtime = home.join("run");
@@ -87,8 +93,17 @@ fn route_machine(socket: &Path) -> Value {
     serde_json::from_str::<Value>(body_of(&response)).unwrap()["machine"].clone()
 }
 
+/// What `mem projects --json` answers on `machine`.
+fn projects(dir: &TempDir, machine: &str, json: &str) {
+    std::fs::write(dir.join(machine).join("projects.json"), json).unwrap();
+}
+
 fn device(hub: &Hub, verb: &str) -> Value {
-    let body = format!(r#"{{"verb":"{verb}","args":[],"project":"alpha"}}"#);
+    device_for(hub, verb, "alpha")
+}
+
+fn device_for(hub: &Hub, verb: &str, project: &str) -> Value {
+    let body = format!(r#"{{"verb":"{verb}","args":[],"project":"{project}"}}"#);
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", hub.port)).unwrap();
     write!(
         stream,
@@ -241,6 +256,68 @@ fn a_chosen_device_that_is_offline_says_so_by_its_name() {
         ),
         "{}",
         mem_calls(&dir, "mac-mini-m2")
+    );
+}
+
+const PALMSHOP_ON_NUC: &str = r#"{"projects":[
+    {"name":"palmshop","device":"nuc","device_by":"mac-mini-m2"},
+    {"name":"shortcart","device":null,"device_by":null}
+]}"#;
+
+#[test]
+fn a_project_with_its_own_device_sends_its_calls_there() {
+    let dir = TempDir::new("device-project");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    projects(&dir, "mac-mini-m2", PALMSHOP_ON_NUC);
+    assert_eq!(chosen(&socket_of(&dir, "mac-mini-m2")), "mac-mini-m2");
+
+    let answer = device_for(&mini, "whoami", "palmshop");
+    assert_eq!(answer["machine"], "nuc", "{answer}");
+    let answer = device_for(&mini, "whoami", "shortcart");
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+#[test]
+fn a_project_without_a_device_follows_the_global_choice() {
+    let dir = TempDir::new("device-project-global");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    projects(&dir, "mac-mini-m2", PALMSHOP_ON_NUC);
+    choose(&socket_of(&dir, "mac-mini-m2"), "nuc");
+
+    let answer = device_for(&mini, "whoami", "shortcart");
+    assert_eq!(answer["machine"], "nuc", "{answer}");
+}
+
+#[test]
+fn a_project_device_set_by_a_cloud_thread_is_not_followed() {
+    let dir = TempDir::new("device-project-cloud");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    projects(
+        &dir,
+        "mac-mini-m2",
+        r#"{"projects":[{"name":"palmshop","device":"nuc","device_by":"cloud-abc"}]}"#,
+    );
+
+    let answer = device_for(&mini, "whoami", "palmshop");
+    assert_eq!(answer["machine"], "mac-mini-m2", "{answer}");
+}
+
+#[test]
+fn a_project_device_that_is_offline_says_so_by_its_name() {
+    let dir = TempDir::new("device-project-offline");
+    let nuc = spawn(&dir, "nuc", &[]);
+    let mini = spawn(&dir, "mac-mini-m2", &[&nuc]);
+    projects(&dir, "mac-mini-m2", PALMSHOP_ON_NUC);
+    drop(nuc);
+
+    let answer = device_for(&mini, "whoami", "palmshop");
+    assert_eq!(answer["exit"], 3, "{answer}");
+    assert_eq!(
+        answer["stderr"], "device: no device online (device: nuc)\n",
+        "{answer}"
     );
 }
 

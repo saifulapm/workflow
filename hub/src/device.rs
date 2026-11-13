@@ -20,6 +20,10 @@ use crate::proc::{Ended, output_within};
 /// The only programs `run` starts.
 const ALLOWED: [&str; 3] = ["adb", "podman", "shopify"];
 
+/// The machines that serve device calls. A project's own device counts only
+/// when one of them set it, so a cloud thread's mem cannot move its calls.
+pub const DEVICES: [&str; 3] = ["mac-mini-m2", "nuc", "macbook-m2"];
+
 /// Under Cloudflare's 100 s for an origin, so a stopped call still reaches
 /// the caller through the tunnel.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -813,6 +817,21 @@ fn log(machine: &str, call: &Call, outcome: &Outcome) {
         Ended::TimedOut => eprintln!("hub: device: mem log took too long"),
         Ended::Failed(e) => eprintln!("hub: device: mem log did not start: {e}"),
     }
+}
+
+/// The device the call's project names in mem, when one of `DEVICES` set
+/// it. None when it has none, a cloud thread set it, or mem cannot be read.
+pub fn project_device(request: &Request) -> Option<String> {
+    let call: Call = serde_json::from_slice(&request.body).ok()?;
+    let rows = MemCli::new().read(&["projects", "--json"]).rows("projects");
+    let row = rows
+        .iter()
+        .find(|row| row["name"].as_str() == Some(call.project.as_str()))?;
+    let by = row["device_by"].as_str()?;
+    if !DEVICES.contains(&by) {
+        return None;
+    }
+    row["device"].as_str().map(str::to_string)
 }
 
 /// The answer when no machine can take the call: exit 3 with `why`, logged
