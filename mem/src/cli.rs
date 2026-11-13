@@ -470,6 +470,7 @@ pub enum ProjectKey {
     Share,
     Cloud,
     Device,
+    CloudSecrets,
 }
 
 impl ProjectKey {
@@ -484,6 +485,7 @@ impl ProjectKey {
             ProjectKey::Share => "share",
             ProjectKey::Cloud => "cloud",
             ProjectKey::Device => "device",
+            ProjectKey::CloudSecrets => "cloud_secrets",
         }
     }
 }
@@ -529,6 +531,11 @@ pub enum ProjectSetCommand {
     /// The device this project runs on: mac-mini-m2, nuc or macbook-m2. mem
     /// also records which machine wrote it, as `device_by`.
     Device { device: String },
+    /// The pass entries `device with-secrets` hands a cloud command of this
+    /// project, one `NAME=<pass entry>` a line. mem also records which
+    /// machine wrote them, as `cloud_secrets_by`.
+    #[command(name = "cloud-secrets")]
+    CloudSecrets { lines: String },
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;

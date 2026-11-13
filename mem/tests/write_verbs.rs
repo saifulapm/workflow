@@ -688,6 +688,59 @@ fn project_set_device_records_a_cloud_machine_truthfully() {
 }
 
 #[test]
+fn project_set_cloud_secrets_keeps_the_lines_and_who_wrote_them() {
+    let w = World::new("write-cloud-secrets");
+    name_this_machine(&w, "box-1");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let lines = "SHOPIFY_CLI_THEME_TOKEN=Shopify/theme-access/pawsome-theme\n\
+                 STORE_PASSWORD=Shopify/pawsome-demo-password";
+    let out = mem(&w, &repo, &["project", "set", "cloud-secrets", lines]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(v["projects"][0]["cloud_secrets"], serde_json::json!(lines));
+    assert_eq!(
+        v["projects"][0]["cloud_secrets_by"],
+        serde_json::json!("box-1")
+    );
+
+    assert_eq!(
+        code(&mem(&w, &repo, &["project", "unset", "cloud-secrets"])),
+        0
+    );
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert!(
+        v["projects"][0]["cloud_secrets"].is_null()
+            && v["projects"][0]["cloud_secrets_by"].is_null(),
+        "{v}"
+    );
+}
+
+#[test]
+fn project_set_cloud_secrets_refuses_a_line_that_is_not_name_and_entry() {
+    let w = World::new("write-cloud-secrets-bad");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    for bad in [
+        "TOKEN",
+        "=Shopify/x",
+        "lower=Shopify/x",
+        "TOKEN=",
+        "TOKEN=a b",
+    ] {
+        let out = mem(&w, &repo, &["project", "set", "cloud-secrets", bad]);
+        assert_eq!(code(&out), 2, "{bad}: {}", stdout(&out));
+        assert!(
+            stderr(&out).contains("NAME=<pass entry>"),
+            "{}",
+            stderr(&out)
+        );
+    }
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert!(v["projects"][0]["cloud_secrets"].is_null(), "{v}");
+}
+
+#[test]
 fn project_set_refuses_the_keys_nothing_reads() {
     let w = World::new("write-no-reader");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));

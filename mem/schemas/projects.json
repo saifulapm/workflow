@@ -30,6 +30,8 @@
           "cloud",
           "device",
           "device_by",
+          "cloud_secrets",
+          "cloud_secrets_by",
           "runner",
           "milestone",
           "milestones_done",
@@ -113,6 +115,20 @@
           },
           "device_by": {
             "description": "The machine that wrote `device`; null when no device is set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cloud_secrets": {
+            "description": "The pass entries `device with-secrets` hands a cloud command, one `NAME=<pass entry>` a line; null when none are set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cloud_secrets_by": {
+            "description": "The machine that wrote `cloud_secrets`; null when none are set.",
             "type": [
               "string",
               "null"

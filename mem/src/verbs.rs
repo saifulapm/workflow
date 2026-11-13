@@ -402,6 +402,8 @@ fn project_summary(
         ("cloud", json!(declared("cloud"))),
         ("device", json!(declared("device"))),
         ("device_by", json!(declared("device_by"))),
+        ("cloud_secrets", json!(declared("cloud_secrets"))),
+        ("cloud_secrets_by", json!(declared("cloud_secrets_by"))),
         ("runner", runner_json(&app.store, id)),
         (
             "milestone",
@@ -656,6 +658,63 @@ pub fn project_device(app: &App, device: &str) -> Result<i32> {
         );
     } else if !app.quiet {
         println!("device for {}: {device}", identity.name().unwrap_or(id));
+    }
+    Ok(exit::OK)
+}
+
+/// `mem project set cloud-secrets "<lines>"`: the pass entries a cloud
+/// command of this project may have, one `NAME=<pass entry>` a line, with
+/// the machine that wrote them, so the hub hands them out only when a device
+/// did.
+pub fn project_cloud_secrets(app: &App, lines: &str) -> Result<i32> {
+    let lines: Vec<&str> = lines
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let fits = |line: &&str| {
+        line.split_once('=').is_some_and(|(name, entry)| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                && !entry.is_empty()
+                && !entry.contains(char::is_whitespace)
+        })
+    };
+    if let Some(bad) = lines.iter().find(|line| !fits(line)) {
+        return Err(exit::usage(format!(
+            "each line is NAME=<pass entry>, e.g. SHOPIFY_CLI_THEME_TOKEN=Shopify/theme-access/pawsome; not {bad}"
+        )));
+    }
+    let identity = writable_project_identity(app)?;
+    let Some(id) = identity.id() else {
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
+    };
+    let value = lines.join("\n");
+    let by = crate::paths::machine_name(&app.dirs);
+    let path = crate::project::set_keys(
+        &app.store,
+        id,
+        &[("cloud_secrets", &value), ("cloud_secrets_by", &by)],
+    )?;
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "id": id,
+                "name": identity.name(),
+                "cloud_secrets": value,
+                "cloud_secrets_by": by,
+                "path": path.to_string_lossy(),
+            }))?
+        );
+    } else if !app.quiet {
+        println!(
+            "cloud-secrets for {}: {} entries",
+            identity.name().unwrap_or(id),
+            lines.len()
+        );
     }
     Ok(exit::OK)
 }
@@ -942,6 +1001,9 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     }
     if key == "device" {
         crate::project::unset_key(&app.store, id, "device_by")?;
+    }
+    if key == "cloud_secrets" {
+        crate::project::unset_key(&app.store, id, "cloud_secrets_by")?;
     }
     // An unpause, or a cleared runner, has to reach the other machines as a
     // pause does.
