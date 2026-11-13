@@ -475,10 +475,59 @@ fn scan_staged(git: &Git, spec: &[String], globs: &[String], report: &mut Report
         spec,
     ));
     for (path, n, text) in added_lines(&String::from_utf8_lossy(&diff.stdout)) {
+        if EXEMPT_FILES.contains(&path.as_str()) {
+            continue;
+        }
+        // Whatever the file: rustfmt cannot parse a conflict marker, so the
+        // fmt check never sees one, and GitHub refuses a push holding a
+        // token's shape even in a test fixture.
+        if conflict_marker(&text) {
+            report.add(&path, n, "hard", "conflict marker", &text);
+        }
+        if token_shape(&text) {
+            report.add(
+                &path,
+                n,
+                "hard",
+                "token",
+                "a literal token: build it at run time",
+            );
+        }
         if !is_markdown(&path) && !exempt(globs, &path) {
             report.source_line(&path, n, &text);
         }
     }
+}
+
+/// The ours and theirs lines git writes; `=======` alone is a heading rule.
+fn conflict_marker(line: &str) -> bool {
+    ["<<<<<<<", ">>>>>>>"].iter().any(|marker| {
+        line.strip_prefix(marker)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    })
+}
+
+/// A Shopify token (`shpat_`, `shpss_`, `shpca_`, `shppa_` and 32 hex) or a
+/// GitHub one (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_` and 36 letters or
+/// digits): shapes GitHub's push protection refuses.
+fn token_shape(line: &str) -> bool {
+    let b = line.as_bytes();
+    let run = |from: usize, ok: fn(&u8) -> bool| b[from..].iter().take_while(|c| ok(c)).count();
+    let shaped = |prefixes: &[&str], ok: fn(&u8) -> bool, len: usize| {
+        prefixes.iter().any(|p| {
+            line.match_indices(p)
+                .any(|(i, _)| starts_word(line, i) && run(i + p.len(), ok) >= len)
+        })
+    };
+    shaped(
+        &["shpat_", "shpss_", "shpca_", "shppa_"],
+        u8::is_ascii_hexdigit,
+        32,
+    ) || shaped(
+        &["ghp_", "gho_", "ghu_", "ghs_", "ghr_"],
+        u8::is_ascii_alphanumeric,
+        36,
+    )
 }
 
 /// The checkout's pnpm store, read through an agent worktree's `node_modules`
@@ -665,6 +714,56 @@ mod tests {
         let flagged: Vec<&str> = report.findings.iter().map(|f| f.path.as_str()).collect();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(flagged, ["notes.json"]);
+    }
+
+    /// Push protection and rustfmt read every file alike, so neither a
+    /// conflict marker nor a token shape is let through in a test or a page.
+    #[test]
+    fn a_staged_conflict_marker_or_token_is_refused_in_any_file() {
+        let dir = std::env::temp_dir().join(format!("hygiene-shapes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        let git = Git::at(&dir);
+        assert!(git.quiet(&["init", "-q"]));
+        let token = format!("shpat_{}", "0123456789abcdef".repeat(2));
+        let github = format!("ghp_{}", "a1B2c3D4e5F6".repeat(3));
+        let marker = format!("{} HEAD", "<".repeat(7));
+        let theirs = format!("{} t2", ">".repeat(7));
+        for (name, text) in [
+            ("tests/fixture.rs", format!("let t = \"{token}\";\n")),
+            ("notes.md", format!("{marker}\nours\n=======\n{theirs}\n")),
+            ("src/a.rs", format!("// {github}\n")),
+            (
+                "src/ok.rs",
+                format!("// shpat_ then 32 hex\n// {}\n=======\n", "<".repeat(6)),
+            ),
+        ] {
+            std::fs::create_dir_all(dir.join(name).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+        assert!(git.quiet(&["add", "-A"]));
+        let mut report = Report::default();
+        scan_staged(&git, &[], &["tests/**".to_string()], &mut report);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut flagged: Vec<(&str, usize, &str)> = report
+            .findings
+            .iter()
+            .map(|f| (f.path.as_str(), f.line, f.label))
+            .collect();
+        flagged.sort();
+        assert_eq!(
+            flagged,
+            [
+                ("notes.md", 1, "conflict marker"),
+                ("notes.md", 4, "conflict marker"),
+                ("src/a.rs", 1, "token"),
+                ("tests/fixture.rs", 1, "token"),
+            ]
+        );
+        assert!(
+            report.findings.iter().all(|f| !f.excerpt.contains(&token)),
+            "a token is never printed back"
+        );
     }
 
     // The numbered shapes are built at run time so this file stays clean
