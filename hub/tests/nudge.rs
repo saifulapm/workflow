@@ -84,10 +84,16 @@ fn ulid(at: &str, tail: &str) -> String {
     format!("{}{tail:0>16}", String::from_utf8(time.to_vec()).unwrap())
 }
 
-/// A question the thread asked at `at`, answered when `answer` is given.
+/// A question the thread asked at `at`, answered after the park when
+/// `answer` is given.
 fn question(at: &str, short: &str, body: &str, answer: Option<&str>) -> Value {
+    answered_at(at, short, body, answer, "2026-11-13T18:45:00Z")
+}
+
+fn answered_at(at: &str, short: &str, body: &str, answer: Option<&str>, when: &str) -> Value {
     json!({"id": ulid(at, short), "short_id": short, "body": body, "session": null,
            "audience": "saiful", "answered": answer.is_some(), "answer": answer,
+           "answer_id": answer.map(|_| ulid(when, &format!("A{short}"))),
            "answer_by": answer.map(|_| "hub")})
 }
 
@@ -246,4 +252,36 @@ fn a_nudge_that_fails_is_tried_three_times_then_said_once() {
         said[0].contains(SESSION) && said[0].contains("session not found"),
         "{said:?}"
     );
+}
+
+#[test]
+fn a_park_whose_answers_all_came_before_it_gets_no_nudge() {
+    // The thread had every answer when it parked: what it parked on is
+    // another session's question, or a hold.
+    let dir = TempDir::new("nudge-before");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    let before = "2026-11-13T18:20:00Z";
+    set_questions(
+        &dir,
+        &[
+            answered_at(
+                "2026-11-13T18:10:00Z",
+                "Q2",
+                "Blank lines?",
+                Some("yes"),
+                before,
+            ),
+            answered_at(
+                "2026-11-13T18:09:00Z",
+                "Q1",
+                "Empty file?",
+                Some("0"),
+                before,
+            ),
+        ],
+    );
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
 }

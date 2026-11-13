@@ -97,6 +97,20 @@ fn park(project: &Value) -> Option<(String, String)> {
     Some((session.to_string(), format!("{session} {at}")))
 }
 
+/// The newest answer came after the park at `at`: a thread that parked
+/// with every answer in hand parked on something else, another session's
+/// question or a hold, and a nudge would carry on what it meant to stop.
+fn answered_since(asked: &[Value], at: &str) -> bool {
+    let Ok(parked) = at.parse::<jiff::Timestamp>() else {
+        return false;
+    };
+    asked
+        .iter()
+        .filter_map(|q| hubpages::model::ulid_millis(q["answer_id"].as_str()?))
+        .max()
+        .is_some_and(|ms| ms > parked.as_millisecond())
+}
+
 /// The questions the run asked since it first started, oldest first; a
 /// thread has no amx session and asks Saiful, never an orchestrator.
 fn asked(project: &Value) -> Option<Vec<Value>> {
@@ -184,6 +198,9 @@ fn round(nudged: &mut HashSet<String>, pause: Duration) {
             continue;
         };
         if asked.is_empty() || asked.iter().any(|q| q["answered"] != true) {
+            continue;
+        }
+        if !answered_since(&asked, project["handoff_at"].as_str().unwrap_or_default()) {
             continue;
         }
         let name = project["name"].as_str().unwrap_or_default();
