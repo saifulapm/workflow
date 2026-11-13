@@ -776,3 +776,28 @@ fn a_subagents_rm_of_a_glob_is_refused_through_the_hook() {
     )));
     assert!(passes(&guard(&dir, "rm -rf tmp.??????????")));
 }
+
+#[test]
+fn a_plan_tick_on_a_commits_command_line_is_refused() {
+    let w = Scratch::new("guard-bash-tick");
+    for command in [
+        "git commit -qm 'Add x'\ngit log -1 && mem plan --tick t2",
+        "git commit -am x && mem plan --tick t2",
+        "mem plan --tick=t2; git -C app commit -m x",
+        "git commit -F - <<EOF\nAdd x\nEOF\nmem --project shop plan --tick t3",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(
+            refused(&out, "then `mem plan --tick` in the next"),
+            "{command:?}: {out:?}"
+        );
+    }
+    for command in [
+        "git commit -am x",
+        "mem plan --tick t2",
+        "git log -1 && mem plan --tick t2",
+        "git commit -am x && mem log 'landed t2: mem plan --tick next'",
+    ] {
+        assert!(passes(&guard(w.path(), command)), "{command:?}");
+    }
+}

@@ -13,6 +13,7 @@ mod playwright;
 mod rm;
 mod snapshot;
 mod suite;
+mod tick;
 mod tmp;
 
 use std::io::Read;
@@ -53,6 +54,7 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     rm::refusal,
     devserver::refusal,
     suite::refusal,
+    tick::refusal,
 ];
 
 pub fn cmd_guard_bash() -> i32 {
