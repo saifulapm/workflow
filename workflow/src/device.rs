@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::exit;
 
-const VERBS: [&str; 3] = ["whoami", "run", "browser"];
+const VERBS: [&str; 5] = ["whoami", "run", "browser", "tmux", "amx"];
 /// What `device use` takes, and the machine name each stands for.
 const MACHINES: [(&str, &str); 3] = [
     ("mini", "mac-mini-m2"),
@@ -252,7 +252,9 @@ pub fn cmd_device(args: &[String]) -> i32 {
         return cmd_choice(Some(machine));
     }
     if verb != "ask" && !VERBS.contains(&verb.as_str()) {
-        say(&format!("{verb} is not a verb (whoami, run, browser)"));
+        say(&format!(
+            "{verb} is not a verb (whoami, run, browser, tmux, amx)"
+        ));
         return exit::USAGE;
     }
     let Some(project) =

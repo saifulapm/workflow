@@ -174,8 +174,27 @@ fn no_args_asks_the_local_hub_and_a_wrong_verb_exits_2() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stderr(&out),
-        "device: rm is not a verb (whoami, run, browser)\n"
+        "device: rm is not a verb (whoami, run, browser, tmux, amx)\n"
     );
+}
+
+#[test]
+fn tmux_and_amx_calls_go_to_the_device_and_keep_its_exit() {
+    let work = world("device-tmux");
+    answer(
+        &work,
+        200,
+        0,
+        &hub_says(Some("mac-mini-m2"), "", "busy: shop\n", 5, json!({})),
+    );
+    let out = device(&work, &["tmux", "send", "echo hello-7"]);
+    assert_eq!(out.status.code(), Some(5), "{out:?}");
+    assert_eq!(stderr(&out), "busy: shop\n");
+    assert_eq!(sent(&work)["verb"], "tmux");
+    assert_eq!(sent(&work)["args"], json!(["send", "echo hello-7"]));
+    let out = device(&work, &["amx", "ls"]);
+    assert_eq!(out.status.code(), Some(5), "{out:?}");
+    assert_eq!(sent(&work)["verb"], "amx");
 }
 
 #[test]

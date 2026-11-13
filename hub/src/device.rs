@@ -1,7 +1,8 @@
 //! `POST /device`: what this machine does for a session that is somewhere
 //! else. `whoami` names the machine, `run` runs one of a few programs,
-//! `browser` drives the logged-in Chromium through playwright-cli, and every
-//! call leaves one line in the project's mem log.
+//! `browser` drives the logged-in Chromium through playwright-cli, `tmux`
+//! drives the session's own tmux session (device_tmux), and every call leaves
+//! one line in the project's mem log.
 
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::fs::PermissionsExt;
@@ -29,7 +30,7 @@ pub const DEVICES: [&str; 3] = ["mac-mini-m2", "nuc", "macbook-m2"];
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// How long `systemctl` and `mem` get; both answer in milliseconds.
-const HELPER_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const HELPER_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The playwright-cli commands a walk drives a page with, and nothing else:
 /// no run-code (node, as this user), no file it names (upload, state-save,
@@ -149,24 +150,32 @@ struct Call {
 
 /// What a call came to: the process-shaped answer, and why it was refused
 /// when the device decided not to run anything.
-struct Outcome {
-    stdout: String,
-    stderr: String,
-    exit: i32,
-    refused: Option<String>,
-    files: BTreeMap<String, String>,
+pub(crate) struct Outcome {
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) exit: i32,
+    pub(crate) refused: Option<String>,
+    pub(crate) files: BTreeMap<String, String>,
 }
 
 impl Outcome {
-    fn refuse(reason: String) -> Outcome {
+    pub(crate) fn refuse(reason: String) -> Outcome {
         Outcome {
             refused: Some(reason.clone()),
             ..Outcome::fail(2, format!("device: {reason}\n"))
         }
     }
 
+    /// An answer that exits 0 with `stdout`.
+    pub(crate) fn done(stdout: String) -> Outcome {
+        Outcome {
+            stdout,
+            ..Outcome::fail(0, String::new())
+        }
+    }
+
     /// An answer with nothing on stdout, for when the device stopped itself.
-    fn fail(exit: i32, stderr: String) -> Outcome {
+    pub(crate) fn fail(exit: i32, stderr: String) -> Outcome {
         Outcome {
             stdout: String::new(),
             stderr,
@@ -192,6 +201,7 @@ pub fn serve(machine: &str, request: &Request) -> Response {
         },
         "run" => run(&call.args),
         "browser" => browser(call.session.as_deref(), &call.project, &call.args),
+        "tmux" => crate::device_tmux::call(&call.project, &call.args),
         other => return Response::text(400, &format!("not a device verb: {other}")),
     };
     log(machine, &call, &outcome);
@@ -789,7 +799,7 @@ pub(crate) fn user_path() -> String {
     }
 }
 
-fn find_in(path: &str, program: &str) -> Option<PathBuf> {
+pub(crate) fn find_in(path: &str, program: &str) -> Option<PathBuf> {
     std::env::split_paths(path)
         .map(|dir| dir.join(program))
         .find(|candidate| {
