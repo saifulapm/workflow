@@ -10,6 +10,7 @@ mod chain;
 mod devserver;
 mod pkill;
 mod playwright;
+mod rm;
 mod snapshot;
 mod suite;
 mod tmp;
@@ -49,6 +50,7 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     snapshot::refusal,
     cd::refusal,
     tmp::refusal,
+    rm::refusal,
     devserver::refusal,
     suite::refusal,
 ];
