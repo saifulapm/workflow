@@ -285,3 +285,64 @@ fn a_park_whose_answers_all_came_before_it_gets_no_nudge() {
     std::thread::sleep(Duration::from_millis(800));
     assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
 }
+
+#[test]
+fn a_local_only_park_gets_no_nudge() {
+    // A device takes a local-only park over; no answer wakes the thread.
+    let dir = TempDir::new("nudge-local-only");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    std::fs::write(
+        dir.join("handoff.txt"),
+        "parked: local-only t14 waits on a device: w20-nudge on cloud/cloud_walk-w20-nudge\n",
+    )
+    .unwrap();
+    answered(&dir, Some("0"), Some("yes"));
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
+}
+
+#[test]
+fn the_nudge_waits_a_moment_after_the_last_answer() {
+    // He may answer and then type in the thread himself: the nudge holds
+    // off for HUB_NUDGE_SETTLE_MS after the newest answer.
+    let dir = TempDir::new("nudge-settle");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    let now = jiff::Timestamp::now().to_string();
+    set_questions(
+        &dir,
+        &[
+            answered_at(
+                "2026-11-13T18:10:00Z",
+                "Q2",
+                "Blank lines?",
+                Some("yes"),
+                &now,
+            ),
+            question("2026-11-13T18:09:00Z", "Q1", "Empty file?", Some("0")),
+        ],
+    );
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), "mac-mini-m2").unwrap();
+    let socket = dir.join("local.sock");
+    let _hub = Hub::spawn_env(
+        &home,
+        &[&bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", PEER_TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_NUDGE_CHECK_MS", "100"),
+            ("HUB_NUDGE_SETTLE_MS", "2000"),
+        ],
+    );
+    std::thread::sleep(Duration::from_millis(1000));
+    assert!(sent(&dir).is_empty(), "too soon: {:?}", sent(&dir));
+    wait_for("the settled nudge", Duration::from_secs(5), || {
+        !sent(&dir).is_empty()
+    });
+}

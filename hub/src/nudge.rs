@@ -21,6 +21,8 @@ use crate::proc::{self, Ended};
 const MACHINE: &str = "mac-mini-m2";
 const MEM_TIMEOUT: Duration = Duration::from_secs(10);
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long after the newest answer the nudge waits (`HUB_NUDGE_SETTLE_MS`).
+const SETTLE: Duration = Duration::from_secs(60);
 /// How many times one park's nudge is sent before the hub gives it up.
 const TRIES: usize = 3;
 
@@ -88,27 +90,30 @@ fn park(project: &Value) -> Option<(String, String)> {
         return None;
     }
     let handoff = mem_out(&["handoff", "--project", name])?;
-    if !String::from_utf8_lossy(&handoff)
-        .trim_start()
-        .starts_with("parked:")
-    {
+    let handoff = String::from_utf8_lossy(&handoff);
+    let handoff = handoff.trim_start();
+    // A device takes a local-only park over; no answer is what it waits on.
+    if !handoff.starts_with("parked:") || handoff.starts_with("parked: local-only") {
         return None;
     }
     Some((session.to_string(), format!("{session} {at}")))
 }
 
-/// The newest answer came after the park at `at`: a thread that parked
-/// with every answer in hand parked on something else, another session's
-/// question or a hold, and a nudge would carry on what it meant to stop.
-fn answered_since(asked: &[Value], at: &str) -> bool {
+/// The newest answer came after the park at `at`, and `settle` ago or
+/// more. A thread that parked with every answer in hand parked on
+/// something else, another session's question or a hold, and a nudge
+/// would carry on what it meant to stop. The wait lets a message he types
+/// in the thread himself re-record the run first, so it gets no second.
+fn answered_since(asked: &[Value], at: &str, settle: Duration) -> bool {
     let Ok(parked) = at.parse::<jiff::Timestamp>() else {
         return false;
     };
+    let settled = jiff::Timestamp::now().as_millisecond() - settle.as_millis() as i64;
     asked
         .iter()
         .filter_map(|q| hubpages::model::ulid_millis(q["answer_id"].as_str()?))
         .max()
-        .is_some_and(|ms| ms > parked.as_millisecond())
+        .is_some_and(|ms| ms > parked.as_millisecond() && ms <= settled)
 }
 
 /// The questions the run asked since it first started, oldest first; a
@@ -178,12 +183,14 @@ fn send(session: &str, text: &str) -> Result<(), String> {
                 Err(format!("exit {:?}: {error}", done.code))
             }
         }
-        _ => Err(format!("no answer in {} s", SEND_TIMEOUT.as_secs())),
+        Ended::TimedOut => Err(format!("no answer in {} s", SEND_TIMEOUT.as_secs())),
+        Ended::Failed(e) => Err(format!("claude did not start: {e}")),
     }
 }
 
-/// `pause` is the wait between tries of one nudge.
-fn round(nudged: &mut HashSet<String>, pause: Duration) {
+/// `pause` is the wait between tries of one nudge, `settle` the wait
+/// after the newest answer.
+fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration) {
     let Some(projects) = mem_json(&["projects", "--json"]) else {
         return;
     };
@@ -200,7 +207,11 @@ fn round(nudged: &mut HashSet<String>, pause: Duration) {
         if asked.is_empty() || asked.iter().any(|q| q["answered"] != true) {
             continue;
         }
-        if !answered_since(&asked, project["handoff_at"].as_str().unwrap_or_default()) {
+        if !answered_since(
+            &asked,
+            project["handoff_at"].as_str().unwrap_or_default(),
+            settle,
+        ) {
             continue;
         }
         let name = project["name"].as_str().unwrap_or_default();
@@ -228,7 +239,8 @@ fn round(nudged: &mut HashSet<String>, pause: Duration) {
 }
 
 /// On the mini, checks every 10 s (`HUB_NUDGE_CHECK_MS`) for a parked
-/// cloud run with all its answers; on any other machine, nothing.
+/// cloud run with all its answers, the newest a minute old; on any other
+/// machine, nothing.
 pub fn run(machine: &str) {
     if machine != MACHINE {
         return;
@@ -237,9 +249,13 @@ pub fn run(machine: &str) {
         .ok()
         .and_then(|ms| ms.trim().parse().ok())
         .map_or(Duration::from_secs(10), Duration::from_millis);
+    let settle = std::env::var("HUB_NUDGE_SETTLE_MS")
+        .ok()
+        .and_then(|ms| ms.trim().parse().ok())
+        .map_or(SETTLE, Duration::from_millis);
     let mut nudged = read_nudged();
     loop {
         std::thread::sleep(every);
-        round(&mut nudged, every);
+        round(&mut nudged, every, settle);
     }
 }
