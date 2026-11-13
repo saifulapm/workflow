@@ -425,6 +425,18 @@ fn every_write_the_hub_trusts_by_its_writer_is_held_in_tmux_and_amx() {
         send.extend(line.split(' '));
         let answer = rig.walk(&send);
         assert_eq!(answer["exit"], 2, "amx send took: {line}: {answer}");
+        let mut words = vec!["answer", "rec-t8a"];
+        words.extend(line.split(' '));
+        let answer = rig.walk(&words);
+        assert_eq!(answer["exit"], 2, "amx answer took: {line}: {answer}");
+        let answer = rig.walk(&["answer", "rec-t8a", "--text", line]);
+        assert_eq!(
+            answer["exit"], 2,
+            "amx answer --text took: {line}: {answer}"
+        );
+        let text = format!("--text={line}");
+        let answer = rig.walk(&["answer", "rec-t8a", &text]);
+        assert_eq!(answer["exit"], 2, "amx answer {text} took: {answer}");
     }
     assert_eq!(rig.calls().len(), 1, "{:?}", rig.calls());
 }
