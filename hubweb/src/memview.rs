@@ -559,6 +559,8 @@ impl<F: Files> View<'_, F> {
             ("cloud", json!(p.declared("cloud"))),
             ("device", json!(p.declared("device"))),
             ("device_by", json!(p.declared("device_by"))),
+            ("cloud_secrets", json!(p.declared("cloud_secrets"))),
+            ("cloud_secrets_by", json!(p.declared("cloud_secrets_by"))),
             ("runner", runner),
             (
                 "milestone",
