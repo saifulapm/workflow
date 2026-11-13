@@ -141,26 +141,27 @@ pushes it to the trunk, never forced; a trunk that moved while the tests ran
 is rebased onto again, up to three times. Then it ticks the milestone. An app
 then moves onto main the same way: rebased on origin/main, tested, main
 fast-forwarded, and app/<project> moved to match with a lease; a conflict or
-a red run there leaves main untouched and prints `parked: main moved:
+a red run there leaves main untouched and prints `ask: main moved:
 <project>: ...`, exit 2. It commits and pushes the writes the store has not
 taken, and prints the line the thread ends its report on: `next: Run the next
 milestone of <project>.`, `done: <project>'s roadmap is done`, or `parked:
 <project> is paused`. A rebase conflict on the trunk pushes nothing and prints
-`parked: trunk moved: ...`, exit 2; a red test run pushes nothing, exit 1. The
+`ask: trunk moved: ...`, exit 2; a red test run pushes nothing, exit 1. The
 rebased branch itself goes over origin's copy, leased, so the thread's next
 push of it is a fast-forward; a copy with commits the checkout lacks is kept
-and land refuses, exit 1.
+and land refuses, exit 1. A line starting `ask:` is a landing that cannot
+finish: the thread asks Saiful on the hub, with `fix and try again` and `hold`.
 
 A project that names a GitHub Actions workflow (`mem project set land-ci ci.yml`)
 waits on it before each push of the trunk: after the local tests pass, land
 pushes the rebased sha to ci/<project>-<milestone>, leased, prints `land:
 waiting on <file> for <sha>`, and reads the workflow's run of that sha on that
-ref with `gh api`. A green run lets the push go; otherwise it pushes nothing to
-the trunk, exit 2, and prints `parked: CI red on <sha>: <failed jobs>`,
-`parked: no <file> run for <sha>` (none 10 minutes after the push), `parked:
-<file> still running on <sha>` (90 minutes after the run started), `parked:
-origin refused ci/...: <why>` or `parked: GitHub refused the Actions API for
-<owner/repo>: <why>`. One call waits at most 9 minutes, under a thread's
+ref with `gh api`, three tries per read. A green run lets the push go;
+otherwise it pushes nothing to the trunk, exit 2, and prints `ask: CI red on
+<sha>: <failed jobs>`, `ask: no <file> run for <sha>` (none 10 minutes after
+the push), `ask: <file> still running on <sha>` (90 minutes after the run
+started), `ask: origin refused ci/...: <why>` or `ask: GitHub refused the
+Actions API for <owner/repo>: <why>`. One call waits at most 9 minutes, under a thread's
 10-minute Bash call, then prints `again: waiting on <file> for <sha>; run
 workflow land again`, exit 3. Run again on that sha, it neither pushes nor tests
 again and reads the same run."

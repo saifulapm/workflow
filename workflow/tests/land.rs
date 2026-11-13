@@ -128,6 +128,12 @@ esac
         w.work.script("gh", &format!(r#"
 dir=$(dirname "$0")
 echo "$*" >>"$dir/gh.log"
+# gh-flaky holds how many calls fail before GitHub answers again.
+if [ -f "$dir/gh-flaky" ] && [ "$(cat "$dir/gh-flaky")" -gt 0 ]; then
+  echo $(( $(cat "$dir/gh-flaky") - 1 )) >"$dir/gh-flaky"
+  echo "gh: HTTP 502: Bad Gateway" >&2
+  exit 1
+fi
 if [ -f "$dir/gh-refused" ]; then
   echo "gh: Resource not accessible by integration (HTTP 403)" >&2
   exit 1
@@ -272,6 +278,16 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).to_string()
 }
 
+/// The last line of a landing that asks Saiful, which never parks.
+fn ask_line(out: &Output) -> String {
+    let said = stdout(out);
+    assert!(
+        !said.lines().any(|l| l.starts_with("parked:")),
+        "a landing that asks never parks: {said}"
+    );
+    last_line(out)
+}
+
 fn last_line(out: &Output) -> String {
     stdout(out).lines().last().unwrap_or("").to_string()
 }
@@ -322,7 +338,7 @@ fn a_paused_project_parks_after_its_landing() {
 }
 
 #[test]
-fn a_rebase_conflict_pushes_nothing_and_parks_on_the_trunk() {
+fn a_rebase_conflict_pushes_nothing_and_asks_on_the_trunk() {
     let w = World::new("land-conflict");
     let clone = w.clone_dir();
     w.work.put("thread/shared.txt", "the milestone's\n");
@@ -332,8 +348,8 @@ fn a_rebase_conflict_pushes_nothing_and_parks_on_the_trunk() {
     let before = w.origin_main();
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    let line = last_line(&out);
-    assert!(line.starts_with("parked: trunk moved:"), "{line}");
+    let line = ask_line(&out);
+    assert!(line.starts_with("ask: trunk moved:"), "{line}");
     assert!(line.contains("shared.txt"), "{line}");
     assert_eq!(w.origin_main(), before);
     assert_eq!(
@@ -403,6 +419,38 @@ git push -q origin HEAD:main
     assert_eq!(w.origin_main(), w.git(&clone, &["rev-parse", "HEAD"]));
 }
 
+/// A trunk that moves during every run of the tests is tried three times,
+/// then the landing asks Saiful, with nothing pushed.
+#[test]
+fn a_trunk_that_keeps_moving_asks_after_three_tries() {
+    let w = World::new("land-race-forever");
+    let seed = w.work.at("seed");
+    w.work.script(
+        "move-always",
+        &format!(
+            r#"
+cd "{seed}" || exit 1
+date +%s%N >raced.txt
+git add raced.txt
+git commit -q -m "Race the landing"
+git push -q origin HEAD:main
+"#,
+            seed = seed.display()
+        ),
+    );
+    w.verify(&format!(
+        "test -f work.txt && {}",
+        w.work.at("move-always").display()
+    ));
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let line = ask_line(&out);
+    assert!(line.starts_with("ask: trunk moved:"), "{line}");
+    assert!(line.contains("kept moving"), "{line}");
+    assert!(!w.origin_log("main").contains("Build the milestone"));
+    assert!(!w.ticked());
+}
+
 #[test]
 fn it_lands_only_a_clean_milestone_branch() {
     let w = World::new("land-dirty");
@@ -423,9 +471,9 @@ fn it_lands_only_a_clean_milestone_branch() {
 }
 
 /// A commit that got past the hooks with a Claude line never reaches a
-/// trunk: the branch parks naming it, and nothing is pushed.
+/// trunk: the landing asks, naming it, and nothing is pushed.
 #[test]
-fn a_commit_with_a_claude_line_parks_the_landing() {
+fn a_commit_with_a_claude_line_asks_the_landing() {
     for (tag, line) in [
         (
             "land-coauthor",
@@ -453,8 +501,8 @@ fn a_commit_with_a_claude_line_parks_the_landing() {
         assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
         let field = line.split(':').next().unwrap();
         assert_eq!(
-            last_line(&out),
-            format!("parked: commit {sha} carries a {field} line")
+            ask_line(&out),
+            format!("ask: commit {sha} carries a {field} line")
         );
         assert_eq!(w.origin_main(), before);
         assert!(w.git(&clone, &["ls-remote", "origin", BRANCH]).is_empty());
@@ -466,7 +514,7 @@ fn a_commit_with_a_claude_line_parks_the_landing() {
 /// Claude with no trailer at all: such a commit never reaches a trunk
 /// either, whether Claude wrote it or only committed it.
 #[test]
-fn a_commit_by_claudes_identity_parks_the_landing() {
+fn a_commit_by_claudes_identity_asks_the_landing() {
     for (tag, who, role) in [
         ("land-claude-author", "AUTHOR", "authored"),
         ("land-claude-committer", "COMMITTER", "committed"),
@@ -490,8 +538,8 @@ fn a_commit_by_claudes_identity_parks_the_landing() {
         let out = w.land();
         assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
         assert_eq!(
-            last_line(&out),
-            format!("parked: commit {sha} is {role} by Claude <noreply@anthropic.com>")
+            ask_line(&out),
+            format!("ask: commit {sha} is {role} by Claude <noreply@anthropic.com>")
         );
         assert_eq!(w.origin_main(), before);
         assert!(!w.ticked());
@@ -596,7 +644,7 @@ fn a_siblings_outbox_never_stops_an_app_moving_onto_main() {
 /// Origin refuses main for a reason of its own, a protected branch: the
 /// milestone stays on app/gamma and the thread still gets its last line.
 #[test]
-fn a_main_origin_refuses_parks_the_move_with_a_line_to_end_on() {
+fn a_main_origin_refuses_asks_the_move_with_a_line_to_end_on() {
     let w = World::app("land-app-refused");
     w.trunk_moves("apps/delta/other.txt", "another app\n");
     let hook = w.work.at("origin.git/hooks/pre-receive");
@@ -609,8 +657,8 @@ fn a_main_origin_refuses_parks_the_move_with_a_line_to_end_on() {
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    let line = last_line(&out);
-    assert!(line.starts_with("parked: main moved: gamma"), "{line}");
+    let line = ask_line(&out);
+    assert!(line.starts_with("ask: main moved: gamma"), "{line}");
     assert!(w.origin_log("app/gamma").contains("Build the milestone"));
     assert!(!w.origin_log("main").contains("Build the milestone"));
 }
@@ -779,7 +827,7 @@ fn an_app_landing_after_a_sibling_loses_nothing_of_it() {
 }
 
 #[test]
-fn a_conflict_moving_onto_main_leaves_main_untouched_and_parks() {
+fn a_conflict_moving_onto_main_leaves_main_untouched_and_asks() {
     let w = World::app("land-app-conflict");
     let clone = w.clone_dir();
     w.work.put("thread/shared.txt", "gamma's\n");
@@ -791,8 +839,8 @@ fn a_conflict_moving_onto_main_leaves_main_untouched_and_parks() {
     let before = w.origin_main();
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    let line = last_line(&out);
-    assert!(line.starts_with("parked: main moved: gamma"), "{line}");
+    let line = ask_line(&out);
+    assert!(line.starts_with("ask: main moved: gamma"), "{line}");
     assert_eq!(w.origin_main(), before);
     assert!(w.origin_log("app/gamma").contains("Build the milestone"));
 }
@@ -800,19 +848,44 @@ fn a_conflict_moving_onto_main_leaves_main_untouched_and_parks() {
 /// Main took something that breaks gamma's tests only once gamma sits on
 /// it: the milestone stays on app/gamma, and main is left as it was.
 #[test]
-fn red_tests_moving_onto_main_leave_main_untouched_and_park() {
+fn red_tests_moving_onto_main_leave_main_untouched_and_ask() {
     let w = World::app("land-app-red-move");
     w.verify("test -f work.txt && test ! -f ../../breaks-gamma.txt");
     w.trunk_moves("breaks-gamma.txt", "x\n");
     let before = w.origin_main();
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    let line = last_line(&out);
-    assert!(line.starts_with("parked: main moved: gamma"), "{line}");
+    let line = ask_line(&out);
+    assert!(line.starts_with("ask: main moved: gamma"), "{line}");
     assert!(line.contains("the tests fail"), "{line}");
     assert_eq!(w.origin_main(), before);
     assert!(w.origin_log("app/gamma").contains("Build the milestone"));
     assert!(w.ticked(), "{}", w.work.read("mem.log"));
+}
+
+/// Main took the milestone, but origin refuses app/gamma's move to it, a
+/// rewrite: the landing asks, with main holding the milestone.
+#[test]
+fn an_app_branch_that_cannot_follow_main_asks() {
+    let w = World::app("land-app-stuck");
+    w.trunk_moves("apps/delta/other.txt", "another app\n");
+    let hook = w.work.at("origin.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nwhile read old new ref; do\n  [ \"$ref\" = refs/heads/app/gamma ] || continue\n  git merge-base --is-ancestor \"$old\" \"$new\" || exit 1\ndone\nexit 0\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let line = ask_line(&out);
+    assert!(
+        line.starts_with("ask: app/gamma did not follow main:"),
+        "{line}"
+    );
+    assert!(w.origin_log("main").contains("Build the milestone"));
+    assert_ne!(w.origin_ref("app/gamma"), w.origin_main());
 }
 
 /// Main moves while the tests of gamma rebased onto main run: the push is
@@ -925,15 +998,15 @@ fn a_green_ci_run_on_the_rebased_sha_lands_it() {
 }
 
 #[test]
-fn a_red_ci_run_parks_naming_its_failed_jobs_and_pushes_nothing_to_main() {
+fn a_red_ci_run_asks_naming_its_failed_jobs_and_pushes_nothing_to_main() {
     let w = World::new("land-ci-red");
     w.land_ci("red");
     let before = w.origin_main();
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(
-        last_line(&out),
-        format!("parked: CI red on {}: php 8.4 postgres:15", w.short_head()),
+        ask_line(&out),
+        format!("ask: CI red on {}: php 8.4 postgres:15", w.short_head()),
         "the pull request's green run on another branch never counts"
     );
     assert_eq!(w.origin_main(), before);
@@ -944,7 +1017,7 @@ fn a_red_ci_run_parks_naming_its_failed_jobs_and_pushes_nothing_to_main() {
 /// yet it says to run land again, and the 10 minutes count from the push,
 /// across calls.
 #[test]
-fn no_ci_run_for_the_sha_parks_ten_minutes_after_the_push() {
+fn no_ci_run_for_the_sha_asks_ten_minutes_after_the_push() {
     let w = World::new("land-ci-none");
     w.land_ci("none");
     let before = w.origin_main();
@@ -960,8 +1033,8 @@ fn no_ci_run_for_the_sha_parks_ten_minutes_after_the_push() {
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(
-        last_line(&out),
-        format!("parked: no ci.yml run for {}", w.short_head())
+        ask_line(&out),
+        format!("ask: no ci.yml run for {}", w.short_head())
     );
     assert_eq!(w.origin_main(), before);
 }
@@ -979,7 +1052,7 @@ fn a_ci_run_younger_than_ninety_minutes_is_waited_on_again() {
 }
 
 #[test]
-fn a_ci_run_still_going_ninety_minutes_after_it_started_parks() {
+fn a_ci_run_still_going_ninety_minutes_after_it_started_asks() {
     let w = World::new("land-ci-running");
     w.land_ci("running");
     // 19 s at a minute of 200 ms: 95 minutes.
@@ -988,14 +1061,14 @@ fn a_ci_run_still_going_ninety_minutes_after_it_started_parks() {
     let out = w.land_minute("200");
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert_eq!(
-        last_line(&out),
-        format!("parked: ci.yml still running on {}", w.short_head())
+        ask_line(&out),
+        format!("ask: ci.yml still running on {}", w.short_head())
     );
     assert_eq!(w.origin_main(), before);
 }
 
 #[test]
-fn an_origin_that_refuses_the_ci_ref_parks_with_its_reason() {
+fn an_origin_that_refuses_the_ci_ref_asks_with_its_reason() {
     let w = World::new("land-ci-push-refused");
     w.land_ci("green");
     let hook = w.work.at("origin.git/hooks/pre-receive");
@@ -1007,9 +1080,9 @@ fn an_origin_that_refuses_the_ci_ref_parks_with_its_reason() {
     let before = w.origin_main();
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    let line = last_line(&out);
+    let line = ask_line(&out);
     assert!(
-        line.starts_with("parked: origin refused ci/gamma-m2-next:"),
+        line.starts_with("ask: origin refused ci/gamma-m2-next:"),
         "{line}"
     );
     assert!(line.contains("ci refs are not allowed here"), "{line}");
@@ -1017,20 +1090,34 @@ fn an_origin_that_refuses_the_ci_ref_parks_with_its_reason() {
 }
 
 #[test]
-fn a_github_that_refuses_the_actions_api_parks_saying_so() {
+fn a_github_that_refuses_the_actions_api_asks_saying_so() {
     let w = World::new("land-ci-refused");
     w.land_ci("green");
     w.work.put("gh-refused", "");
     let before = w.origin_main();
     let out = w.land();
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
-    let line = last_line(&out);
+    let line = ask_line(&out);
     assert!(
-        line.starts_with("parked: GitHub refused the Actions API for me/gamma:"),
+        line.starts_with("ask: GitHub refused the Actions API for me/gamma:"),
         "{line}"
     );
     assert!(line.contains("HTTP 403"), "{line}");
     assert_eq!(w.origin_main(), before);
+    let runs = w.gh_log().lines().filter(|l| l.contains("/runs?")).count();
+    assert_eq!(runs, 3, "tried 3 times: {}", w.gh_log());
+}
+
+/// GitHub failing twice in the CI wait, then answering, still lands.
+#[test]
+fn a_github_failure_that_passes_on_a_later_try_still_lands() {
+    let w = World::new("land-ci-flaky");
+    w.land_ci("green");
+    w.work.put("gh-flaky", "2");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert!(w.origin_log("main").contains("Build the milestone"));
 }
 
 /// A second landing after a red run: the trunk moved, so the rebase makes a

@@ -6,6 +6,8 @@
 //! ends its report on, which its coordinator reads to start the next thread.
 //! A project that names a CI workflow (`mem project set land-ci ci.yml`)
 //! pushes the trunk only once that workflow's run on the rebased sha passed.
+//! A landing that cannot finish prints a line starting `ask:`, which the
+//! thread asks Saiful on the hub, never a park.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -19,7 +21,7 @@ use crate::{exit, go, warn};
 const MAIN: &str = "main";
 
 /// How many times a push the trunk refused, because it moved while the
-/// tests ran, starts the landing over before the run parks.
+/// tests ran, starts the landing over before the thread asks Saiful.
 const TRIES: usize = 3;
 
 pub fn cmd_land() -> i32 {
@@ -124,7 +126,7 @@ pub fn cmd_land() -> i32 {
         let before = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
         if let Err(files) = rebase(&git, &trunk) {
             println!(
-                "parked: trunk moved: {files} conflict with {slug}'s commits on {branch}; nothing was pushed"
+                "ask: trunk moved: {files} conflict with {slug}'s commits on {branch}; nothing was pushed"
             );
             return exit::USAGE;
         }
@@ -175,7 +177,7 @@ Fix it on {branch} and land again"
         }
         if tries == TRIES {
             println!(
-                "parked: trunk moved: origin's {trunk_name} kept moving while {slug} was tested; \
+                "ask: trunk moved: origin's {trunk_name} kept moving while {slug} was tested; \
 nothing was pushed to {trunk_name}"
             );
             return exit::USAGE;
@@ -210,7 +212,7 @@ struct Ci {
 }
 
 /// How many minutes GitHub may take to start a run for the pushed sha, and
-/// how many the run may take, before the landing parks. One call of land
+/// how many the run may take, before the thread asks Saiful. One call of land
 /// waits at most CALL_MINUTES, under the 10 minutes a thread's Bash call
 /// may run, and then says to run it again.
 const CI_START_MINUTES: u32 = 10;
@@ -294,7 +296,7 @@ fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci, started: Instant) -> R
         if let Err(why) = push(dir, &format!("HEAD:{refname}"), Some(&lease)) {
             let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
             println!(
-                "parked: origin refused {}: {why}; nothing was pushed to the trunk",
+                "ask: origin refused {}: {why}; nothing was pushed to the trunk",
                 ci.branch
             );
             return Err(exit::USAGE);
@@ -303,10 +305,7 @@ fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci, started: Instant) -> R
     let pushed_at = pushed_at(git, &sha, pushed);
     println!("land: waiting on {} for {short}", ci.file);
     let refused = |why: String| {
-        println!(
-            "parked: GitHub refused the Actions API for {}: {why}",
-            ci.repo
-        );
+        println!("ask: GitHub refused the Actions API for {}: {why}", ci.repo);
         exit::USAGE
     };
     // Minutes since `at`, by the clock land runs on.
@@ -359,18 +358,18 @@ fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci, started: Instant) -> R
                 } else {
                     failed.join(", ")
                 };
-                println!("parked: CI red on {short}: {why}");
+                println!("ask: CI red on {short}: {why}");
                 return Err(exit::USAGE);
             }
             Some(run) => {
                 let created = run["created_at"].as_str().and_then(|t| t.parse().ok());
                 if created.is_some_and(|at| since(at) >= minute() * CI_RUN_MINUTES) {
-                    println!("parked: {} still running on {short}", ci.file);
+                    println!("ask: {} still running on {short}", ci.file);
                     return Err(exit::USAGE);
                 }
             }
             None if since(pushed_at) >= minute() * CI_START_MINUTES => {
-                println!("parked: no {} run for {short}", ci.file);
+                println!("ask: no {} run for {short}", ci.file);
                 return Err(exit::USAGE);
             }
             None => {}
@@ -386,9 +385,25 @@ fn wait_for_ci(git: &Git, dir: &std::path::Path, ci: &Ci, started: Instant) -> R
     }
 }
 
-/// `gh api <path>`'s JSON, or gh's own words for why not. `WORKFLOW_GH`
-/// replaces gh in the tests.
+/// How many times a CI wait asks GitHub before it asks Saiful instead: a
+/// 502 or a rate limit passes on a later try.
+const GH_TRIES: usize = 3;
+
+/// `gh api <path>`'s JSON, tried GH_TRIES times, a sixth of a minute apart;
+/// or gh's own words for why not, the last time.
 fn gh(path: &str) -> Result<serde_json::Value, String> {
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        match gh_once(path) {
+            Err(_) if tries < GH_TRIES => std::thread::sleep(minute() / 6),
+            said => return said,
+        }
+    }
+}
+
+/// One `gh api <path>`. `WORKFLOW_GH` replaces gh in the tests.
+fn gh_once(path: &str) -> Result<serde_json::Value, String> {
     let bin = std::env::var("WORKFLOW_GH")
         .ok()
         .filter(|v| !v.is_empty())
@@ -418,7 +433,7 @@ const CLAUDE_LINES: [&str; 2] = [concat!("Co-Authored", "-By"), "Claude-Session"
 /// Saiful's yet, as in an environment set up before the kit did.
 const CLAUDE_EMAIL: &str = "noreply@anthropic.com";
 
-/// The parked line for the first commit of `range` made under Claude's
+/// The ask line for the first commit of `range` made under Claude's
 /// identity, or whose message has a line Claude Code adds: one that got
 /// past the hooks stops here, before anything is pushed.
 fn claude_line(git: &Git, range: &str) -> Option<String> {
@@ -434,7 +449,7 @@ fn claude_line(git: &Git, range: &str) -> Option<String> {
         for role in ["authored", "committed"] {
             let who = lines.next()?;
             if who.ends_with(&format!("<{CLAUDE_EMAIL}>")) {
-                return Some(format!("parked: commit {sha} is {role} by {who}"));
+                return Some(format!("ask: commit {sha} is {role} by {who}"));
             }
         }
         lines.find_map(|line| {
@@ -444,7 +459,7 @@ fn claude_line(git: &Git, range: &str) -> Option<String> {
                     line.get(..=field.len())
                         .is_some_and(|head| head.eq_ignore_ascii_case(&format!("{field}:")))
                 })
-                .map(|field| format!("parked: commit {sha} carries a {field} line"))
+                .map(|field| format!("ask: commit {sha} carries a {field} line"))
         })
     })
 }
@@ -465,7 +480,7 @@ fn passes(verify: &str, folder: &std::path::Path) -> bool {
 /// on origin's main, test it there and fast-forward main, never forced,
 /// starting over when main moved meanwhile; then app/<project> follows,
 /// leased on the tip the landing pushed, since the rebase rewrote it. A
-/// conflict or a red run parks with main untouched and the branch as it
+/// conflict or a red run asks with main untouched and the branch as it
 /// was pushed, so the thread's own push of it stays a fast-forward.
 fn move_onto_main(
     git: &Git,
@@ -478,30 +493,29 @@ fn move_onto_main(
     let app = format!("app/{project}");
     let pushed = git.out(&["rev-parse", "HEAD"]).unwrap_or_default();
     let main = format!("origin/{MAIN}");
-    let park = |why: String| {
+    let ask = |why: String| {
         git.quiet(&["reset", "-q", "--hard", &pushed]);
         println!(
-            "parked: main moved: {project}: {why}; {slug} is on origin's {app}, main is untouched"
+            "ask: main moved: {project}: {why}; {slug} is on origin's {app}, main is untouched"
         );
         exit::USAGE
     };
     let mut tries = 0;
     loop {
         tries += 1;
-        // Each stop from here on parks with a line the thread ends its report
-        // on: the milestone is ticked, so a second land would find the next.
+        // Each stop from here on asks with the milestone ticked already.
         if !git.quiet(&["fetch", "-q", "origin", MAIN]) {
-            return Err(park("origin's main cannot be fetched".to_string()));
+            return Err(ask("origin's main cannot be fetched".to_string()));
         }
         let base = git.out(&["rev-parse", &main]).unwrap_or_default();
         // A main that has not moved since app/<project> was cut takes it as
         // it is, tested already.
         if !git.quiet(&["merge-base", "--is-ancestor", &main, "HEAD"]) {
             if let Err(files) = rebase(git, &main) {
-                return Err(park(format!("{files} conflict with main")));
+                return Err(ask(format!("{files} conflict with main")));
             }
             if !passes(verify, folder) {
-                return Err(park(format!("the tests fail on {app} rebased onto main")));
+                return Err(ask(format!("the tests fail on {app} rebased onto main")));
             }
         }
         let why = match push(dir, &format!("HEAD:{MAIN}"), None) {
@@ -512,10 +526,10 @@ fn move_onto_main(
             && git.out(&["rev-parse", &main]).unwrap_or_default() != base;
         if !moved {
             warn(format!("land: origin refused main: {why}"));
-            return Err(park("origin refused the push to main".to_string()));
+            return Err(ask("origin refused the push to main".to_string()));
         }
         if tries == TRIES {
-            return Err(park(format!(
+            return Err(ask(format!(
                 "origin's main kept moving while {app} was tested on it"
             )));
         }
@@ -525,7 +539,7 @@ fn move_onto_main(
         if let Err(why) = push(dir, &format!("HEAD:refs/heads/{app}"), Some(&lease)) {
             warn(format!("land: origin refused {app}: {why}"));
             println!(
-                "parked: {app} did not follow main: {slug} is on origin's main, but {app} could not move to it"
+                "ask: {app} did not follow main: {slug} is on origin's main, but {app} could not move to it"
             );
             return Err(exit::USAGE);
         }
