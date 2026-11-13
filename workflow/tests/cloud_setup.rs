@@ -1802,9 +1802,10 @@ fn the_runtimes_are_the_devices_and_install_once() {
         "real playwright-cli /usr/bin/google-chrome false open https://example.com",
         "{ran:?}"
     );
-    // cf reaches the proxy, which adds the network secret's token, only
-    // with Node's proxy support on and a token variable to replace; a
-    // global NODE_USE_ENV_PROXY hangs pnpm (probe-proxy, 2026-11-06).
+    // cf reaches the network through the proxy only with Node's proxy
+    // support on, and gets no token from the wrapper: the cloud holds no
+    // Cloudflare login. A global NODE_USE_ENV_PROXY hangs pnpm
+    // (probe-proxy, 2026-11-06).
     let ran = command(home.at(".local/bin/cf"))
         .args(["zones", "list"])
         .env_remove("CLOUDFLARE_API_TOKEN")
@@ -1813,18 +1814,14 @@ fn the_runtimes_are_the_devices_and_install_once() {
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&ran.stdout).trim(),
-        "real cf 1 proxy-injected zones list",
+        "real cf 1  zones list",
         "{ran:?}"
     );
-    let ran = command(home.at(".local/bin/cf"))
-        .arg("whoami")
-        .env("CLOUDFLARE_API_TOKEN", "a-real-one")
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&ran.stdout).trim(),
-        "real cf 1 a-real-one whoami",
-        "{ran:?}"
+    assert!(
+        !std::fs::read_to_string(home.at(".local/bin/cf"))
+            .unwrap()
+            .contains("CLOUDFLARE_API_TOKEN"),
+        "the wrapper sets no Cloudflare token"
     );
     // The CLI's own agent takes the proxy only from SHOPIFY_-named
     // variables; Node's NODE_USE_ENV_PROXY would reach the pnpm it runs.

@@ -1464,18 +1464,17 @@ runtimes() {
     [ "$("$node/playwright-cli" --version 2>/dev/null)" = 0.1.23 ] ||
       "$node/node" "$node/npm" install -g @playwright/cli@0.1.23 >&2 ||
       failed="$failed playwright-cli"
-    # Cloudflare's CLI; the environment's network secret for
-    # api.cloudflare.com carries the token, so the session holds none.
+    # Cloudflare's CLI. The cloud holds no Cloudflare login: a deploy or any
+    # other Cloudflare call is typed into the device's tmux.
     case "$("$node/cf" --version 2>/dev/null)" in
       *1.0.0-beta.28*) ;;
       *) "$node/node" "$node/npm" install -g cf@1.0.0-beta.28 >&2 || failed="$failed cf" ;;
     esac
-    # Node's fetch reaches the proxy, which adds that token, only with
-    # NODE_USE_ENV_PROXY on, and cf sends nothing without a token variable to
-    # replace. Here alone: a global NODE_USE_ENV_PROXY hangs pnpm.
+    # Node's fetch reaches the network only through the proxy, with
+    # NODE_USE_ENV_PROXY on. Here alone: a global NODE_USE_ENV_PROXY hangs
+    # pnpm. No token variable, so the proxy has nothing to put a token in.
     printf '%s\n' '#!/bin/sh' \
       'export NODE_USE_ENV_PROXY=1' \
-      'export CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-proxy-injected}"' \
       "exec \"$node/cf\" \"\$@\"" >"$bin/cf"
     chmod +x "$bin/cf"
     # Shopify CLI 5, the first that takes a service account token. Its own
