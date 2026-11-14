@@ -410,6 +410,20 @@ fn a_call_of_a_session_list_no_longer_names_closes_its_old_tabs() {
 }
 
 #[test]
+fn a_session_whose_old_tabs_would_not_close_attaches_on_its_next_call() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.daemon_gone("s1");
+    rig.closing_fails(true);
+    let answer = rig.call("s1", &["snapshot"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    rig.browser("s1", &["goto", "https://b.test"]);
+    rig.closing_fails(false);
+    rig.browser("s1", &["detach"]);
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+#[test]
 fn a_session_idle_past_the_limit_loses_its_tabs() {
     let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1000")]);
     rig.browser("s1", &["goto", "https://a.test"]);

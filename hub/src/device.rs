@@ -675,14 +675,14 @@ impl Cli<'_> {
     fn keep_hub_tab(&self) -> Result<(), Stop> {
         let connection = self.connection()?;
         let file = connection.dir.join(HUB_TAB);
+        // Held from the read of the guid to its write, so two calls at once
+        // open one tab, not two.
+        let _tabs = tabs_lock();
         let id = std::fs::read_to_string(&file)
             .ok()
             .map(|id| id.trim().to_string())
             .filter(|id| is_guid(id));
-        let done = {
-            let _tabs = tabs_lock();
-            connection.run_code(&hub_tab_code(id.as_deref()))?
-        };
+        let done = connection.run_code(&hub_tab_code(id.as_deref()))?;
         match result_of(&done).map(|r| serde_json::from_str::<Option<String>>(&r)) {
             Some(Ok(None)) => {}
             Some(Ok(Some(id))) if is_guid(&id) => {
@@ -747,10 +747,15 @@ impl Cli<'_> {
                 Err(done) => {
                     // The sweep tries again, attached or not.
                     self.stayed.set(!attached);
+                    let stays = if attached {
+                        "so it stays attached"
+                    } else {
+                        "so the hub tries again within 15 minutes"
+                    };
                     return Ok(Outcome::fail(
                         done.code.unwrap_or(128),
                         format!(
-                            "device: closing the session's tabs failed, so it stays attached: {}",
+                            "device: closing the session's tabs failed, {stays}: {}",
                             String::from_utf8_lossy(&done.stderr)
                         ),
                     ));
@@ -764,14 +769,14 @@ impl Cli<'_> {
         } else if !attached {
             // A session with a record was attached when its last call ended.
             if self.dir.join(LAST_CALL).exists() {
+                // The record goes either way, so the next call attaches; the
+                // guids of tabs left open stay, and that session's detach or
+                // idle close takes them.
                 let mut ended = ENDED.to_string();
-                match self.close_own_left()? {
-                    Ok(left) if left.is_empty() => {}
-                    Ok(left) => {
-                        self.stayed.set(true);
-                        ended.push_str(&stayed_open(&left));
-                    }
-                    Err(_) => self.stayed.set(true),
+                if let Ok(left) = self.close_own_left()?
+                    && !left.is_empty()
+                {
+                    ended.push_str(&stayed_open(&left));
                 }
                 return Ok(Outcome::fail(1, ended));
             }
