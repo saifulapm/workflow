@@ -82,6 +82,8 @@ like "$held" 'exact line' "orchestrate cloud: a held line is asked with its exac
 like "$held" 'device tmux send --yes <id>' "orchestrate cloud: a yes sends the held line again"
 like "$held" 'tried once more, then' "orchestrate cloud: another failure is tried once, then asked"
 like "$held" 'Only a yes he gives on the' "orchestrate cloud: a yes typed in the thread does not release a held line"
+like "$held" 'asked: #<id>' "orchestrate cloud: the device asks a held line's question and names it"
+unlike "$held" 'mem ask' "orchestrate cloud: a thread never asks a held line's question itself"
 like "$cloud" 'never for builds, tests or' "orchestrate cloud: a local agent is never for builds, tests or code"
 like "$cloud" 'a phone on adb, or iOS on the Mac' "orchestrate cloud: a local agent only for the screen, adb or iOS"
 

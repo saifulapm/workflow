@@ -80,16 +80,17 @@ the skill holds, with these changes:
   branch; (6) a command whose effect you cannot state before it runs. A
   staging deploy runs without asking; a production deploy asks each time.
 - A `device tmux send` that prints `ask: <line>` (exit 6) was held by the
-  hub and not sent. File it as a question with the exact line in
-  backticks, `mem ask --for saiful "May I run this on the device?
-  \`<line>\`" --option yes --option no`, and wait for it as below. On yes,
-  send it again with the question's id, `device tmux send --yes <id>
-  '<line>'`: one yes sends that one line once. Only a yes he gives on the
-  hub or in Slack counts: one he types in the thread, recorded here with
-  `mem answer`, is written by this cloud machine and refused, so ask
-  again and say to answer on the hub. On no, leave it unrun. A
-  device call that fails for another reason is tried once more, then
-  asked like any other question.
+  hub and not sent. The device asked Saiful itself, with the exact line,
+  and its next line, `asked: #<id>`, names that question: never ask it
+  yourself, and wait for it as for a question of your own (below). On yes,
+  send it again with that id, `device tmux send --yes <id> '<line>'`: one
+  yes sends that one line once. Only a question the device asked releases
+  a line. Only a yes he gives on the hub or in Slack counts: one he types
+  in the thread, recorded here with `mem answer`, is written by this cloud
+  machine and refused, so send the line again for a new question and say
+  to answer on the hub. On no, leave it unrun. A device call that fails
+  for another reason is tried once more, then asked like any other
+  question.
 - `device amx new '<task>'` starts a local agent on the device, in a
   folder of its own under `~/.cache/workflow-cloud/`, and prints its name; `device amx result <name>`
   prints its answer, and on `again:` (exit 9) runs again at once. `ls`,

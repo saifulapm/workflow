@@ -185,7 +185,12 @@ impl MemCli {
             return Run::unavailable();
         }
         let mut command = Command::new(&self.program);
-        command.args(args);
+        // The hub's writes are its own, never a session's it was started
+        // from: a question filed with one would not wake a parked thread.
+        command
+            .args(args)
+            .env_remove("AMX_ID")
+            .env_remove("CLAUDE_CODE_SESSION_ID");
         if let Some(path) = &self.path {
             command.env("PATH", path);
         }

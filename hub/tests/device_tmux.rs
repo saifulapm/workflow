@@ -99,6 +99,7 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
             "S='{}'\n\
              for a in \"$@\"; do last=\"$a\"; done\n\
              case \"$*\" in\n\
+             *' ask --for '*) printf '%s|%s\\n' \"${{AMX_ID:-none}}\" \"$*\" >> \"$S/asks\"; echo '#QQQQ0001' ;;\n\
              *' log -- '*) printf '%s %s\\n' \"$1\" \"$last\" >> \"$S/log\" ;;\n\
              projects*) cat \"$S/projects.json\" 2>/dev/null || echo '{{\"projects\":[]}}' ;;\n\
              *' questions --json'*) cat \"$S/questions.json\" 2>/dev/null || echo '{{\"questions\":[]}}' ;;\n\
@@ -235,11 +236,16 @@ impl Rig {
         std::fs::write(self.state.join("handoff.json"), body.to_string()).unwrap();
     }
 
-    /// cloud_walk's question #AAAA1111 asking for `line`, answered
-    /// `answer` from `machine`.
+    /// cloud_walk's question #AAAA1111 asking for `line`, asked by the
+    /// mini and answered `answer` from `machine`.
     fn asked(&self, line: &str, answer: &str, machine: &str) {
+        self.asked_by("mac-mini-m2", line, answer, machine);
+    }
+
+    /// `asked`, of a question `asker` wrote.
+    fn asked_by(&self, asker: &str, line: &str, answer: &str, machine: &str) {
         let questions = serde_json::json!({"questions": [
-            {"short_id": "AAAA1111", "project": "cloud_walk",
+            {"short_id": "AAAA1111", "project": "cloud_walk", "machine": asker,
              "body": format!("May I run this on the mini?\n\n    {line}\n"),
              "answered": true, "answer": answer, "answer_id": "01ANSWER"},
         ]});
@@ -567,12 +573,54 @@ fn a_listed_line_is_held_and_never_reaches_the_pane() {
     for line in HELD {
         let answer = rig.walk(&["send", line]);
         assert_eq!(answer["exit"], 6, "{line}: {answer}");
-        assert_eq!(answer["stdout"], format!("ask: {line}\n"), "{line}");
+        assert_eq!(
+            answer["stdout"],
+            format!("ask: {line}\nasked: #QQQQ0001\n"),
+            "{line}"
+        );
     }
     rig.walk(&["send", "echo after"]);
     let pane = rig.read_until("after");
     assert!(!pane.contains("rm -r"), "{pane}");
     assert!(!pane.contains("git push"), "{pane}");
+}
+
+/// What the device asked with `mem ask`: for each question, the AMX_ID
+/// it ran with, `|`, then its arguments and a newline.
+fn asks(rig: &Rig) -> String {
+    std::fs::read_to_string(rig.state.join("asks")).unwrap_or_default()
+}
+
+#[test]
+fn the_device_asks_saiful_a_held_line_s_question_itself() {
+    let rig = rig();
+    let answer = rig.walk(&["send", "rm -r scratch"]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+    assert_eq!(answer["stdout"], "ask: rm -r scratch\nasked: #QQQQ0001\n");
+    let asks = asks(&rig);
+    assert_eq!(asks.matches("|--project").count(), 1, "{asks}");
+    // No session, so the hub wakes the parked thread on his answer.
+    assert!(
+        asks.starts_with("none|--project cloud_walk ask --for saiful "),
+        "{asks}"
+    );
+    assert!(asks.contains("\n    rm -r scratch\n"), "{asks}");
+    assert!(asks.ends_with(" --option yes --option no\n"), "{asks}");
+}
+
+#[test]
+fn a_held_line_sent_again_names_the_question_already_open() {
+    let rig = rig();
+    rig.asked("rm -r scratch", "", "mac-mini-m2");
+    let questions = rig.state.join("questions.json");
+    let open = std::fs::read_to_string(&questions)
+        .unwrap()
+        .replace("\"answered\":true", "\"answered\":false");
+    std::fs::write(&questions, open).unwrap();
+    let answer = rig.walk(&["send", "rm -r scratch"]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+    assert_eq!(answer["stdout"], "ask: rm -r scratch\nasked: #AAAA1111\n");
+    assert!(asks(&rig).is_empty());
 }
 
 #[test]
@@ -622,6 +670,20 @@ fn a_yes_written_by_a_cloud_machine_is_refused() {
     assert_eq!(
         sent["stderr"],
         "device: the yes for #AAAA1111 came from a cloud machine\n"
+    );
+    assert!(folder.is_dir());
+}
+
+#[test]
+fn a_yes_to_a_question_a_cloud_machine_wrote_releases_nothing() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    rig.asked_by("cloud-vm", "rm -r scratch", "yes", "mac-mini-m2");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 2, "{sent}");
+    assert_eq!(
+        sent["stderr"],
+        "device: #AAAA1111 was asked by cloud-vm, not by a device\n"
     );
     assert!(folder.is_dir());
 }

@@ -249,10 +249,7 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
     let mut spend_id = None;
     if crate::held::held(&line) {
         let Some(id) = yes else {
-            return Outcome {
-                stdout: format!("ask: {line}\n"),
-                ..Outcome::fail(6, String::new())
-            };
+            return ask(project, machine, &line);
         };
         if let Err(refused) = released(project, id, &line) {
             return refused;
@@ -319,9 +316,67 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
     }
 }
 
-/// Ok when question `id` of `project` asks for `line` and Saiful answered
-/// yes on one of the devices, never a cloud thread's own `mem answer`, and
-/// no earlier line went out on it.
+/// Asks Saiful on this device whether `line` may run, or finds the open
+/// question a device already asks it in, and names it: a thread never asks
+/// it, so no thread writes the text his yes releases.
+fn ask(project: &str, machine: &str, line: &str) -> Outcome {
+    let mem = MemCli::new();
+    let rows = mem
+        .refresh(&["--project", project, "questions", "--json"])
+        .rows("questions");
+    let open = rows.iter().find(|q| {
+        q["project"].as_str() == Some(project)
+            && q["answered"].as_bool() != Some(true)
+            && q["machine"]
+                .as_str()
+                .is_some_and(|m| crate::device::DEVICES.contains(&m))
+            && asks(q["body"].as_str().unwrap_or_default(), line)
+    });
+    let id = match open.and_then(|q| q["short_id"].as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            let text = format!(
+                "A {project} thread asks to run this line in its tmux session on {machine}:\n\n    {line}\n\nYes sends it there once."
+            );
+            let run = mem.write_through(&[
+                "--project",
+                project,
+                "ask",
+                "--for",
+                "saiful",
+                &text,
+                "--option",
+                "yes",
+                "--option",
+                "no",
+            ]);
+            let out = String::from_utf8_lossy(&run.stdout);
+            match out.trim().strip_prefix('#') {
+                Some(id) if run.ok() && plain(id) => id.to_string(),
+                _ => {
+                    return Outcome::fail(
+                        1,
+                        format!("device: cannot ask about {line}: {}\n", run.stderr),
+                    );
+                }
+            }
+        }
+    };
+    Outcome {
+        stdout: format!("ask: {line}\nasked: #{id}\n"),
+        ..Outcome::fail(6, String::new())
+    }
+}
+
+/// Whether a question's `body` asks for `line`: on a line of its own, or
+/// in backticks.
+fn asks(body: &str, line: &str) -> bool {
+    body.lines().any(|l| l.trim() == line) || body.contains(&format!("`{line}`"))
+}
+
+/// Ok when question `id` of `project` was asked by a device, asks for
+/// `line`, and Saiful answered yes on one of the devices, never a cloud
+/// thread's own `mem answer`, and no earlier line went out on it.
 fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
     let spent = state(SPENT)
         .ok_or_else(|| Outcome::fail(126, "device: cannot find the state folder\n".to_string()))?;
@@ -342,9 +397,13 @@ fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
             "#{id} is not a question of {project}"
         )));
     };
-    let body = question["body"].as_str().unwrap_or_default();
-    let asks = body.lines().any(|l| l.trim() == line) || body.contains(&format!("`{line}`"));
-    if !asks {
+    let asker = question["machine"].as_str().unwrap_or("no machine");
+    if !crate::device::DEVICES.contains(&asker) {
+        return Err(Outcome::refuse(format!(
+            "#{id} was asked by {asker}, not by a device"
+        )));
+    }
+    if !asks(question["body"].as_str().unwrap_or_default(), line) {
         return Err(Outcome::refuse(format!("#{id} does not ask for {line}")));
     }
     let answer = question["answer"].as_str().unwrap_or_default();
