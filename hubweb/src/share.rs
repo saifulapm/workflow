@@ -1842,6 +1842,46 @@ mod tests {
         assert_eq!(log.recs.len(), 1);
     }
 
+    /// The hub page signs Saiful's answers hub-web, and a device's hub
+    /// releases a held line on one: no cloud session's token writes one,
+    /// new or over his.
+    #[test]
+    fn a_cloud_token_writes_no_answer_as_the_hub_page() {
+        let mut log = Memory::default();
+        let cloud = token("session_*", Some("cloud-*"));
+        let forged = write_as(
+            &mut log,
+            Some(&cloud),
+            "cloud-vm",
+            "01A",
+            ITEM,
+            json!(item_by("hub-web")),
+        );
+        let answer = &parse(&forged.sender)[0];
+        assert_eq!(answer["t"], "refused");
+        assert_eq!(
+            answer["why"],
+            "this socket's token writes as cloud-vm, not hub-web"
+        );
+        assert_eq!(forged.others, None);
+        assert!(log.recs.is_empty());
+        let no = item_by("hub-web").replace("said", "No");
+        write_as(&mut log, None, "hub-web", "01B", ITEM, json!(no));
+        let yes = item_by("hub-web").replace("said", "Yes");
+        let flipped = write_as(&mut log, Some(&cloud), "cloud-vm", "01C", ITEM, json!(yes));
+        let answer = &parse(&flipped.sender)[0];
+        assert_eq!(answer["t"], "refused");
+        assert_eq!(
+            answer["why"],
+            "a cloud session writes over no item a device wrote; hub-web wrote this item"
+        );
+        assert_eq!(log.recs.len(), 1);
+        assert_eq!(
+            log.head(ITEM).unwrap().unwrap().body.as_deref(),
+            Some(no.as_str())
+        );
+    }
+
     #[test]
     fn a_drop_never_removes_a_global_item_another_machine_wrote() {
         const RULE: &str = "global/items/01RULE.md";
