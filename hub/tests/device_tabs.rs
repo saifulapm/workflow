@@ -792,7 +792,7 @@ fn a_session_whose_attach_failed_attaches_on_its_next_call() {
 }
 
 #[test]
-fn the_hub_s_connection_runs_in_a_systemd_scope_that_outlives_the_hub() {
+fn the_connection_and_each_session_run_in_systemd_scopes_that_outlive_the_hub() {
     let rig = rig();
     rig.browser("s1", &["goto", "https://a.test"]);
     let wrapper = rig.home.parent().unwrap().join("tools/playwright-cli");
@@ -803,10 +803,110 @@ fn the_hub_s_connection_runs_in_a_systemd_scope_that_outlives_the_hub() {
         .collect();
     assert_eq!(
         scoped,
-        [format!(
-            "systemd-run --user --scope --quiet --collect -- {} \
-             -s=hub.connection attach --extension=chromium",
-            wrapper.display()
-        )]
+        [
+            format!(
+                "systemd-run --user --scope --quiet --collect -- {} \
+                 -s=hub.connection attach --extension=chromium",
+                wrapper.display()
+            ),
+            format!(
+                "systemd-run --user --scope --quiet --collect -- {} \
+                 -s=s1 attach hub.connection",
+                wrapper.display()
+            ),
+        ]
     );
+}
+
+/// Puts `line` at the top of the fake playwright-cli, so it runs before the
+/// fake's own handling, until `restore` is called with what this returns.
+fn fake_first(rig: &Rig, line: &str) -> String {
+    let fake = rig.home.join("../tools/playwright-cli");
+    let real = std::fs::read_to_string(&fake).unwrap();
+    let (shebang, rest) = real.split_once('\n').unwrap();
+    std::fs::write(&fake, format!("{shebang}\n{line}\n{rest}")).unwrap();
+    real
+}
+
+fn restore(rig: &Rig, real: String) {
+    std::fs::write(rig.home.join("../tools/playwright-cli"), real).unwrap();
+}
+
+#[test]
+fn a_tab_new_that_fails_leaves_another_session_s_tab_alone() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.browser("s2", &["goto", "https://b.test"]);
+    // Through the extension tab-new about:blank fails, and playwright-core
+    // makes the connection's last tab, s2's, current.
+    let answer = rig.call("s1", &["tab-new", "about:blank"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    rig.browser("s1", &["goto", "https://c.test"]);
+    rig.browser("s1", &["detach"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s2", "https://b.test"),
+        ]
+    );
+}
+
+#[test]
+fn a_command_whose_tab_closed_shows_no_other_session_s_page() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.popup("s1", "https://pop.test/");
+    rig.browser("s1", &["tab-select", "2"]);
+    rig.browser("s2", &["goto", "https://b.test"]);
+    // The popup closes itself on the click, and playwright-core makes the
+    // connection's last tab, s2's, current.
+    let answer = rig.browser("s1", &["click", "close-me"]);
+    assert!(!answer.to_string().contains("b.test"), "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: the session's tab closed, so it works in its own again\n"
+    );
+    rig.browser("s1", &["goto", "https://c.test"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://c.test"),
+            tab("s2", "https://b.test"),
+        ]
+    );
+}
+
+#[test]
+fn a_session_whose_join_could_not_open_its_tab_is_still_swept() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1000")]);
+    let real = fake_first(
+        &rig,
+        "[ \"$*\" = '-s=s1 tab-new' ] && { echo 'Error: boom' >&2; exit 1; }",
+    );
+    let answer = rig.call("s1", &["goto", "https://a.test"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    restore(&rig, real);
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(rig.calls().last().unwrap(), "-s=s1 detach");
+}
+
+#[test]
+fn a_command_runs_nowhere_when_the_session_s_tab_cannot_be_found() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    let real = fake_first(
+        &rig,
+        "case \"$*\" in *'return -2'*) echo 'Error: a modal dialog is open' >&2; exit 1 ;; esac",
+    );
+    let answer = rig.call("s1", &["click", "e2"]);
+    restore(&rig, real);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: cannot find the session's own tab, so the command did not run: \
+         Error: a modal dialog is open\n"
+    );
+    assert!(!rig.calls().iter().any(|c| c == "-s=s1 click e2"));
 }

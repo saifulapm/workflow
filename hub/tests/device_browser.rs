@@ -98,6 +98,10 @@ fn rig(goto: &str, env: &[(&str, &str)]) -> Rig {
              session=\"${{1#-s=}}\"; shift\n\
              case \"$1\" in\n\
              attach) echo \"$session\" >> '{sessions}'; echo attached ;;\n\
+             run-code) case \"$2\" in\n\
+               *'return -2'*) printf '### Result\\n-1\\n' ;;\n\
+               *'own(page)'*) printf '### Result\\ntrue\\n' ;;\n\
+               esac ;;\n\
              goto)\n{goto}\n;;\n\
              *) echo \"ran $*\" ;;\n\
              esac",
@@ -184,25 +188,39 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     );
     let cwd = rig.session_dir("s1");
     let connection = rig.home.join("state/hub/connection").display().to_string();
-    assert_eq!(
-        rig.calls(),
+    let scoped = |argv: &str| {
         vec![
+            "systemd-run".to_string(),
+            format!(
+                "--user --scope --quiet --collect -- {}/.dotfiles/bin/playwright-cli {argv}",
+                rig.home.display()
+            ),
+        ]
+    };
+    let calls = rig.calls();
+    assert_eq!(calls.len(), 11, "{calls:?}");
+    assert_eq!(
+        calls[..10],
+        [
             fields(&cwd, "", &["list"]),
             fields(&cwd, "", &["list"]),
-            vec![
-                "systemd-run".to_string(),
-                format!(
-                    "--user --scope --quiet --collect -- {}/.dotfiles/bin/playwright-cli \
-                     -s=hub.connection attach --extension=chromium",
-                    rig.home.display()
-                ),
-            ],
+            scoped("-s=hub.connection attach --extension=chromium"),
             fields(
                 &connection,
                 "fake-token-123",
                 &["-s=hub.connection", "attach", "--extension=chromium"]
             ),
+            scoped("-s=s1 attach hub.connection"),
             fields(&cwd, "", &["-s=s1", "attach", "hub.connection"]),
+            fields(
+                &cwd,
+                "",
+                &[
+                    "-s=s1",
+                    "run-code",
+                    "async page => { for (const p of page.context().pages()) p.__hubSeen = true; }"
+                ]
+            ),
             fields(&cwd, "", &["-s=s1", "tab-new"]),
             fields(
                 &cwd,
@@ -210,12 +228,15 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
                 &[
                     "-s=s1",
                     "run-code",
-                    "async page => { page.__hubTab = true; }"
+                    "async page => { if (!page.__hubSeen) page.__hubTab = true; }"
                 ]
             ),
             fields(&cwd, "", &["-s=s1", "goto", "https://claude.ai/code"]),
         ]
     );
+    // After a command that may change the current tab the hub checks it is
+    // still the session's own.
+    assert_eq!(calls[10][2..4], ["-s=s1", "run-code"]);
     assert_eq!(
         mem_lines(&rig.mem_log),
         vec!["--project=demo log -- device nuc browser goto https://claude.ai/code exit 0"]
@@ -227,10 +248,10 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     let calls = rig.calls();
     // Before the command the hub checks the current tab is still the
     // session's own.
-    assert_eq!(calls.len(), 11, "{calls:?}");
-    assert_eq!(calls[8], fields(&cwd, "", &["list"]));
-    assert_eq!(calls[9][2..4], ["-s=s1", "run-code"]);
-    assert_eq!(calls[10], fields(&cwd, "", &["-s=s1", "snapshot"]));
+    assert_eq!(calls.len(), 14, "{calls:?}");
+    assert_eq!(calls[11], fields(&cwd, "", &["list"]));
+    assert_eq!(calls[12][2..4], ["-s=s1", "run-code"]);
+    assert_eq!(calls[13], fields(&cwd, "", &["-s=s1", "snapshot"]));
 }
 
 #[test]
@@ -375,10 +396,8 @@ fn an_argument_with_quotes_and_spaces_arrives_whole() {
     let answer = browser(&rig.hub, Some("s1"), &["fill", "e5", "a \"b\" c"]);
     assert_eq!(answer["exit"], 0, "{answer}");
     let calls = rig.calls();
-    assert_eq!(
-        calls.last().unwrap()[2..],
-        ["-s=s1", "fill", "e5", "a \"b\" c"]
-    );
+    let fill = ["-s=s1", "fill", "e5", "a \"b\" c"];
+    assert!(calls.iter().any(|c| c[2..] == fill), "{calls:?}");
 }
 
 #[test]

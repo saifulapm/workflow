@@ -83,11 +83,19 @@ const BROWSER_FLAGS_REFUSED: [&str; 9] = [
     "--host",
 ];
 
-/// Marks the session's current page as one it opened. The session's
-/// playwright-cli daemon keeps its Page objects from call to call, so the mark
-/// lasts as long as the session. The extension also hands a session any tab
-/// Saiful drags into its group, and that one carries no mark.
-const TAG_CURRENT: &str = "async page => { page.__hubTab = true; }";
+/// Marks every page the session's daemon knows as seen, before it opens a
+/// tab, so TAG_NEW can tell the new tab from one it fell back to.
+const SEEN_ALL: &str =
+    "async page => { for (const p of page.context().pages()) p.__hubSeen = true; }";
+
+/// After a tab-new, marks the current page as one the session opened, when
+/// it is the new one: a tab-new whose page closes (tab-new about:blank
+/// does, through the extension) leaves another tab current, which may be
+/// another session's. The session's playwright-cli daemon keeps its Page
+/// objects from call to call, so the mark lasts as long as the session and
+/// no other session's daemon sees it. A tab Saiful drags into the group
+/// carries no mark.
+const TAG_NEW: &str = "async page => { if (!page.__hubSeen) page.__hubTab = true; }";
 
 /// The start of the hub's code that asks whether a page is the session's
 /// own: one it marked, or one such a page opened, as a link with
@@ -98,6 +106,9 @@ macro_rules! own {
          const o = await p.opener().catch(() => null); return !!o && own(o); }; "
     };
 }
+
+/// Whether the current page is the session's own.
+const OWN_CURRENT: &str = concat!("async page => { ", own!(), "return await own(page); }");
 
 /// Closes every page the session opened, each judged before any closes, so
 /// a popup still has its opener. Closing the last one ends the extension's
@@ -311,7 +322,9 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
     let record = cli.dir.join(LAST_CALL);
     // A detach that could not close the tabs keeps the session's record,
     // so the idle sweep tries again.
-    if !cli.on.get() || args[0] == "detach" && matches!(&called, Ok(outcome) if outcome.exit == 0) {
+    if cli.on.get() == Some(false)
+        || args[0] == "detach" && matches!(&called, Ok(outcome) if outcome.exit == 0)
+    {
         let _ = std::fs::remove_file(&record);
     } else {
         let last = LastCall {
@@ -531,10 +544,11 @@ struct Cli<'a> {
     path: String,
     session: &'a str,
     dir: PathBuf,
-    /// Whether the session was attached as the call went on: the record
-    /// of a session that is not, whose attach failed or whose connection
-    /// ended, goes, so its next call attaches.
-    on: std::cell::Cell<bool>,
+    /// Whether the session was attached as the call went on, None when the
+    /// call stopped before the hub could tell: the record of a session that
+    /// is not, whose attach failed or whose connection ended, goes, so its
+    /// next call attaches.
+    on: std::cell::Cell<Option<bool>>,
 }
 
 impl Cli<'_> {
@@ -543,8 +557,9 @@ impl Cli<'_> {
         let detach = command == "detach";
         let tab_command = matches!(command, "tab-list" | "tab-new" | "tab-select" | "tab-close");
         let mut fresh = false;
-        if self.attached()? {
-            self.on.set(true);
+        let attached = self.attached()?;
+        self.on.set(Some(attached));
+        if attached {
             if detach {
                 let done = {
                     let _tabs = tabs_lock();
@@ -568,7 +583,6 @@ impl Cli<'_> {
             if let Some(failed) = self.attach()? {
                 return Ok(failed);
             }
-            self.on.set(true);
             fresh = true;
         }
         // A tab number counts every tab of the shared connection, so no
@@ -581,28 +595,51 @@ impl Cli<'_> {
         // its place current, which may be another session's. A session alone
         // on its connection works in the tab Saiful picked, which it never
         // marks.
-        if !fresh && !detach && !tab_command && !self.dir.join(ALONE).exists() {
-            self.keep_own_current()?;
+        let shared = !self.dir.join(ALONE).exists();
+        if !fresh && !detach && !tab_command && shared {
+            let _tabs = tabs_lock();
+            if let Err(why) = self.keep_own_current()? {
+                return Ok(Outcome::fail(
+                    1,
+                    format!(
+                        "device: cannot find the session's own tab, so the command did not run: {why}"
+                    ),
+                ));
+            }
         }
         let mut argv = vec![format!("-s={}", self.session)];
         argv.extend(args.iter().cloned());
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-        let done = self.run(&argv, None)?;
-        // tab-new opens and selects the tab before it loads the page, so a
-        // page that fails to load still leaves the session a new tab.
-        if args[0] == "tab-new" {
-            self.run_code(TAG_CURRENT)?;
-        }
-        if args[0] == "tab-close" && done.code == Some(0) {
-            self.keep_own_current()?;
+        let done = if command == "tab-new" {
+            self.open_own_tab(&argv)?
+        } else {
+            self.run(&argv, None)?
+        };
+        if command == "tab-close" && done.code == Some(0) {
+            let _ = self.keep_own_current()?;
         }
         let mut stdout = String::from_utf8_lossy(&done.stdout).into_owned();
+        let mut stderr = String::from_utf8_lossy(&done.stderr).into_owned();
+        // A page that closes itself, such as a popup on a click, makes the
+        // connection's next tab current, and playwright-cli reports that
+        // page, which may be another session's.
+        if !detach && !tab_command && shared && !READ_ONLY.contains(&command) {
+            let _tabs = tabs_lock();
+            let current = self.run_code(OWN_CURRENT)?;
+            if result_of(&current).as_deref() != Some("true") {
+                stdout = without(
+                    &stdout,
+                    &["### Page", "### Snapshot", "### Modal state", "### Events"],
+                );
+                stderr.push_str("device: the session's tab closed, so it works in its own again\n");
+                let _ = self.keep_own_current()?;
+            }
+        }
         // playwright-cli lists every tab of the connection: in a tab
         // command's result, and under "Open tabs" once there are two.
         if stdout.contains("### Open tabs") || (tab_command && stdout.contains("### Result")) {
             stdout = only_own(&stdout, tab_command, &self.own_tabs()?);
         }
-        let mut stderr = String::from_utf8_lossy(&done.stderr).into_owned();
         let files = linked_files(&stdout, &self.dir, &mut stderr);
         Ok(Outcome {
             stdout,
@@ -637,10 +674,11 @@ impl Cli<'_> {
             if !self.listed(CONNECTION)? {
                 ensure_chromium(&self.path, self.deadline);
                 let Some(token) = self.token() else {
-                    let done = self.run(&[&flag, "attach", "--extension=chromium"], None)?;
+                    let done = self.run_scoped(&[&flag, "attach", "--extension=chromium"], None)?;
                     if done.code != Some(0) {
                         return Ok(Some(attach_failed(&done)));
                     }
+                    self.on.set(Some(true));
                     let _ = std::fs::write(self.dir.join(ALONE), "");
                     return Ok(None);
                 };
@@ -665,38 +703,51 @@ impl Cli<'_> {
             }
         }
         let _ = std::fs::remove_file(self.dir.join(ALONE));
-        let joined = self.run(&[&flag, "attach", CONNECTION], None)?;
+        let joined = self.run_scoped(&[&flag, "attach", CONNECTION], None)?;
         if joined.code != Some(0) {
             return Ok(Some(attach_failed(&joined)));
         }
+        // Joined, the session has a record from here on, so the sweep ends
+        // it even when it gets no tab.
+        self.on.set(Some(true));
         // A session joins on whichever tab of the connection is current,
-        // which is another's, so it works in a new one, and marks nothing
-        // when there is none.
-        let opened = self.run(&[&flag, "tab-new"], None)?;
+        // which is another's, so it works in a new one.
+        let opened = self.open_own_tab(&[&flag, "tab-new"])?;
         if opened.code != Some(0) {
             return Ok(Some(attach_failed(&opened)));
         }
-        self.run_code(TAG_CURRENT)?;
         Ok(None)
     }
 
+    /// Runs `argv`, a tab-new, and marks the tab it opened as the session's
+    /// own. tab-new opens and selects the tab before it loads the page, so
+    /// a page that fails to load still leaves the session a new tab; one
+    /// whose page closed leaves none, and no mark.
+    fn open_own_tab(&self, argv: &[&str]) -> Result<crate::proc::Finished, Stop> {
+        self.run_code(SEEN_ALL)?;
+        let opened = self.run(argv, None)?;
+        self.run_code(TAG_NEW)?;
+        Ok(opened)
+    }
+
     /// After a tab-close playwright-core makes the tab at the closed one's
-    /// place current, which may be one Saiful dragged into the group. This
-    /// selects the session's own instead, or opens it a blank one.
-    fn keep_own_current(&self) -> Result<(), Stop> {
+    /// place current, which may be another session's or one Saiful dragged
+    /// into the group. This selects the session's own instead, or opens it
+    /// a blank one. Why it could not, if it could not. The caller holds
+    /// tabs_lock, so the number it selects is the one it read.
+    fn keep_own_current(&self) -> Result<Result<(), String>, Stop> {
         let done = self.run_code(FIRST_OWN)?;
         let flag = format!("-s={}", self.session);
-        match result_of(&done).as_deref() {
-            Some("-2") => {
-                self.run(&[&flag, "tab-new"], None)?;
-                self.run_code(TAG_CURRENT)?;
-            }
-            Some(i) if i.parse::<usize>().is_ok() => {
-                self.run(&[&flag, "tab-select", i], None)?;
-            }
-            _ => {}
+        let moved = match result_of(&done).as_deref() {
+            Some("-1") => return Ok(Ok(())),
+            Some("-2") => self.open_own_tab(&[&flag, "tab-new"])?,
+            Some(i) if i.parse::<usize>().is_ok() => self.run(&[&flag, "tab-select", i], None)?,
+            _ => return Ok(Err(why(&done))),
+        };
+        if moved.code != Some(0) {
+            return Ok(Err(why(&moved)));
         }
-        Ok(())
+        Ok(Ok(()))
     }
 
     /// The session's own tabs as playwright-cli lists tabs, none when the
@@ -859,6 +910,33 @@ fn result_of(done: &crate::proc::Finished) -> Option<String> {
     let stdout = String::from_utf8_lossy(&done.stdout);
     let mut lines = stdout.lines().skip_while(|line| *line != "### Result");
     lines.nth(1).map(str::to_string)
+}
+
+/// What playwright-cli said when a run of it did not do what the hub asked.
+fn why(done: &crate::proc::Finished) -> String {
+    match String::from_utf8_lossy(&done.stderr) {
+        stderr if !stderr.trim().is_empty() => stderr.into_owned(),
+        _ => format!("playwright-cli exited {:?} with no answer\n", done.code),
+    }
+}
+
+/// Commands that leave the current tab as it is.
+const READ_ONLY: [&str; 3] = ["snapshot", "find", "console"];
+
+/// `stdout` without the sections named in `names`.
+fn without(stdout: &str, names: &[&str]) -> String {
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in stdout.lines() {
+        if line.starts_with("### ") {
+            skipping = names.contains(&line);
+        }
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// The lock over the numbers of the connection's tabs, held from a tab

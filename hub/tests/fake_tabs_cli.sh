@@ -147,6 +147,10 @@ fi
 
 case $cmd in
 attach)
+  # A new daemon knows no mark of the session's last one.
+  awk -F'\t' -v OFS='\t' -v s="$session" '$3 == s { $3 = 0 } 1' "$S/tabs" > "$S/t"
+  mv "$S/t" "$S/tabs"
+  rm -f "$S/seen-$session"
   if [ "$1" = "--extension=chromium" ]; then
     echo "$session" > "$S/conn-$session"
     conn=$session
@@ -173,6 +177,13 @@ attach)
   fi
   ;;
 tab-new)
+  if [ "$1" = about:blank ]; then
+    # What the probe saw through the extension: the new page closes, and
+    # playwright-core makes the connection's last tab current.
+    visible | tail -n 1 > "$S/current-$session"
+    printf '### Error\nTarget page, context or browser has been closed\n'
+    exit 1
+  fi
   new_tab "${1:-about:blank}"
   case $1 in *.invalid*) replay tabnew_bad https://nope.invalid/ "$1" ;; esac
   tab_result
@@ -188,6 +199,20 @@ goto)
   echo "- Page URL: $1"
   ;;
 tab-list) tab_result ;;
+click)
+  if [ "$1" = close-me ]; then
+    # The page closes itself, and playwright-core makes the connection's
+    # last tab current and reports that page.
+    drop "$cur"
+    visible | tail -n 1 > "$S/current-$session"
+    echo '### Page'
+    echo "- Page URL: $(field "$(cat "$S/current-$session")" 4)"
+    echo '### Snapshot'
+    echo '- [Snapshot](.playwright-cli/page-x.yml)'
+  else
+    echo "ran click $*"
+  fi
+  ;;
 tab-select) nth "$1" > "$S/current-$session"; tab_result ;;
 tab-close)
   if [ -n "$1" ]; then close_tab "$(nth "$1")"; else close_tab "$cur"; fi
@@ -222,6 +247,12 @@ run-code)
     if [ -n "$id" ] && own "$id"; then result true; else result false; fi
     ;;
   *'own(page)'*) if own "$cur"; then result true; else result false; fi ;;
+  *'__hubSeen = true'*)
+    visible > "$S/seen-$session"
+    ;;
+  *'!page.__hubSeen'*)
+    grep -qx "$cur" "$S/seen-$session" 2>/dev/null || set_field "$cur" 3 "$session"
+    ;;
   *'title()'*)
     json= i=0
     for id in $(visible); do
@@ -234,7 +265,6 @@ run-code)
     done
     result "[$json]"
     ;;
-  *'__hubTab = true'*) set_field "$cur" 3 "$session" ;;
   *) echo "fake: unknown code: $1" >&2; exit 1 ;;
   esac
   ;;
