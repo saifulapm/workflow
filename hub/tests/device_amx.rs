@@ -371,6 +371,114 @@ const TRUSTED_WRITES: &[(&str, &str)] = &[
     ("cloud_secrets_by", "mem project unset cloud-secrets"),
 ];
 
+/// Each list of machines in hub/src/device.rs whose writes the hub trusts,
+/// with the checks that keep a thread from writing as one of them: a file
+/// under the repo, and the text that names the check in it. A thread holds
+/// its store token, its outbox file, its tmux and amx agent, and device
+/// browser, so a new trusted machine needs a check for each.
+const TRUSTED_MACHINES: &[(&str, &[(&str, &str)])] = &[
+    (
+        "DEVICES",
+        &[
+            (
+                "hubweb/src/share.rs",
+                "fn a_cloud_sessions_name_rides_its_own_token_and_a_devices_import(",
+            ),
+            (
+                "hubweb/src/share.rs",
+                "fn a_cloud_token_moves_no_project_to_another_device(",
+            ),
+            (
+                "hubweb/src/share.rs",
+                "fn no_thread_writes_over_an_item_a_device_wrote(",
+            ),
+            (
+                "mem/tests/outbox_file.rs",
+                "fn a_thread_writes_over_no_item_a_device_wrote(",
+            ),
+            (
+                "hub/tests/device_amx.rs",
+                "fn every_write_the_hub_trusts_by_its_writer_is_held_in_tmux_and_amx(",
+            ),
+        ],
+    ),
+    (
+        "HUB_PAGE",
+        &[
+            (
+                "hubweb/src/share.rs",
+                "fn a_cloud_token_writes_no_answer_as_the_hub_page(",
+            ),
+            (
+                "mem/tests/outbox_file.rs",
+                "fn an_answer_naming_the_hub_page_is_neither_sent_nor_kept(",
+            ),
+            (
+                "tests/t140-hubweb.sh",
+                "a service token's answer is refused",
+            ),
+            (
+                "hub/tests/device_browser.rs",
+                "fn goto_the_hub_page_never_runs(",
+            ),
+            (
+                "hub/tests/device_browser.rs",
+                "fn no_command_but_leaving_runs_while_the_tab_is_on_the_hub_page(",
+            ),
+        ],
+    ),
+];
+
+/// The public constants of hub/src/device.rs that hub/src compares a
+/// writer's machine with.
+fn trusted_machines_in_hub_src() -> Vec<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let device = std::fs::read_to_string(src.join("device.rs")).unwrap();
+    let public: Vec<&str> = device
+        .lines()
+        .filter_map(|line| line.strip_prefix("pub const ")?.split(':').next())
+        .collect();
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&src).unwrap() {
+        let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        for name in &public {
+            let compared = [
+                format!("{name}.contains(&"),
+                format!("!= crate::device::{name}"),
+                format!("== crate::device::{name}"),
+            ];
+            if compared.iter().any(|c| text.contains(c.as_str())) {
+                found.push(name.to_string());
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+#[test]
+fn every_machine_the_hub_trusts_has_a_check_on_each_way_a_thread_writes() {
+    let mut listed: Vec<String> = TRUSTED_MACHINES
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    listed.sort();
+    assert_eq!(
+        trusted_machines_in_hub_src(),
+        listed,
+        "hub/src trusts a list of machines TRUSTED_MACHINES does not name: \
+         add it with a check on each way a thread writes"
+    );
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for (name, checks) in TRUSTED_MACHINES {
+        for (file, check) in *checks {
+            let text = std::fs::read_to_string(repo.join(file)).unwrap();
+            assert!(text.contains(check), "{name}: {file} has no {check}");
+        }
+    }
+}
+
 /// The ways hub/src reads a writer: a `*_by` key of a project, or the
 /// machine of a mem item it was given.
 fn writers_read_in_hub_src() -> Vec<String> {
