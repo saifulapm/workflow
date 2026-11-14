@@ -624,7 +624,7 @@ fn name_this_machine(w: &World, name: &str) {
 #[test]
 fn project_set_device_takes_the_three_devices_and_records_who_wrote_it() {
     let w = World::new("write-device");
-    name_this_machine(&w, "nuc");
+    name_this_machine(&w, "mac-mini-m2");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
@@ -633,13 +633,17 @@ fn project_set_device_takes_the_three_devices_and_records_who_wrote_it() {
     for device in ["mac-mini-m2", "nuc", "macbook-m2"] {
         let out = mem(&w, &repo, &["project", "set", "device", device]);
         assert_eq!(code(&out), 0, "{device}: {}", stderr(&out));
+        assert_eq!(stdout(&out), format!("device for thing: {device}\n"));
         let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
         assert_eq!(v["device"], serde_json::json!(device));
-        assert_eq!(v["device_by"], serde_json::json!("nuc"));
+        assert_eq!(v["device_by"], serde_json::json!("mac-mini-m2"));
     }
     let v = json(&mem(&w, &repo, &["projects", "--json"]));
     assert_eq!(v["projects"][0]["device"], serde_json::json!("macbook-m2"));
-    assert_eq!(v["projects"][0]["device_by"], serde_json::json!("nuc"));
+    assert_eq!(
+        v["projects"][0]["device_by"],
+        serde_json::json!("mac-mini-m2")
+    );
 
     assert_eq!(code(&mem(&w, &repo, &["project", "unset", "device"])), 0);
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
