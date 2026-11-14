@@ -65,7 +65,7 @@ fn run_code_result() {
 fn closing_the_last_tab_ends_the_session() {
     replays(
         "sessclosed",
-        "2\tm2b\t1\tabout:blank\t0\n",
+        "2\tm2b\tm2b\tabout:blank\t0\n",
         "m2b\n",
         &["-s=m2b", "run-code", "async page => { page.close() }"],
     );
@@ -94,4 +94,29 @@ fn list_with_no_session() {
 #[test]
 fn list_with_one_session() {
     replays("list1", "", "m2blist\n", &["list"]);
+}
+
+#[test]
+fn a_session_joins_another_s_browser_by_its_name() {
+    replays(
+        "join",
+        "2\tm2brec\t0\tabout:blank\t0\n",
+        "m2brec\n",
+        &["-s=m2bjoin", "attach", "m2brec"],
+    );
+}
+
+#[test]
+fn detach_of_a_session_that_joined() {
+    replays(
+        "detach_join",
+        "2\tm2brec\t0\tabout:blank\t0\n",
+        "m2brec\nm2bjoin\n",
+        &["-s=m2bjoin", "detach"],
+    );
+}
+
+#[test]
+fn a_call_after_the_browser_it_joined_ended() {
+    replays("notopen", "", "", &["-s=m2bjoin", "tab-list"]);
 }

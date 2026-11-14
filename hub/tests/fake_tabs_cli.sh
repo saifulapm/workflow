@@ -67,7 +67,9 @@ cmd=$2
 shift 2
 code=$1
 cur=$(cat "$S/current-$session" 2>/dev/null)
-conn=$(cat "$S/conn-$session" 2>/dev/null)
+# The connection a session is on: its own unless it joined another's.
+conn_of() { cat "$S/conn-$1" 2>/dev/null || echo "$1"; }
+conn=$(conn_of "$session")
 
 field() { awk -F'\t' -v id="$1" -v f="$2" '$1 == id { print $f }' "$S/tabs"; }
 set_field() {
@@ -116,7 +118,7 @@ tab_result() { echo '### Result'; tab_lines; }
 # Ends every session on connection $1.
 end_conn() {
   while read -r s; do
-    [ "$(cat "$S/conn-$s" 2>/dev/null)" = "$1" ] || echo "$s"
+    [ "$(conn_of "$s")" = "$1" ] || echo "$s"
   done < "$S/sessions" > "$S/t"
   mv "$S/t" "$S/sessions"
 }
@@ -169,7 +171,7 @@ attach)
       echo "[PlaywrightError: connect ENOENT $1] { log: [], code: 'ENOENT' }" >&2
       exit 1
     fi
-    cat "$S/conn-$1" > "$S/conn-$session"
+    conn_of "$1" > "$S/conn-$session"
     conn=$(cat "$S/conn-$session")
     visible | head -n 1 > "$S/current-$session"
     echo "$session" >> "$S/sessions"
