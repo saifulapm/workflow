@@ -146,8 +146,10 @@ const OWN_TABS: &str = concat!(
      return mine; }"
 );
 
-/// The current page's URL, as Chromium normalised it.
-const CURRENT_URL: &str = "async page => page.url()";
+/// The URL of the current page and of each frame in it, as Chromium
+/// normalised them: a page of the same site may frame the hub page, and
+/// Chromium sends its cookies there.
+const FRAME_URLS: &str = "async page => page.frames().map(f => f.url())";
 
 /// The hosts that serve the hub page (hubweb/cloudflare.config.ts), where a
 /// tap on Yes is signed as Saiful's own.
@@ -640,10 +642,10 @@ impl Cli<'_> {
                     .is_some_and(|s| s.eq_ignore_ascii_case("javascript:"))
             });
         if !detach && !tab_command && !leaves {
-            let done = self.run_code(CURRENT_URL)?;
-            let url = result_of(&done).and_then(|r| serde_json::from_str::<String>(&r).ok());
-            match url {
-                Some(url) if on_hub_page(&url) => {
+            let done = self.run_code(FRAME_URLS)?;
+            let urls = result_of(&done).and_then(|r| serde_json::from_str::<Vec<String>>(&r).ok());
+            match urls {
+                Some(urls) if urls.iter().any(|url| on_hub_page(url)) => {
                     return Ok(Outcome::refuse(
                         "browser may not act on the hub page: a yes there is Saiful's own"
                             .to_string(),
@@ -980,11 +982,36 @@ fn on_hub_page(url: &str) -> bool {
         }
         _ => url,
     };
+    // Chromium drops the slashes a URL with no scheme starts with, and
+    // decodes an escaped host.
+    let rest = rest.trim_start_matches(['/', '\\']);
     let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
     let host = authority.rsplit('@').next().unwrap_or_default();
     let host = host.split(':').next().unwrap_or_default();
-    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
-    HUB_PAGE_HOSTS.contains(&host.as_str())
+    let host = unescaped(host).to_ascii_lowercase();
+    let host = host.strip_suffix('.').unwrap_or(&host);
+    HUB_PAGE_HOSTS.contains(&host)
+}
+
+/// `text` with each `%XX` escape decoded, as a URL's host is read.
+fn unescaped(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if byte == b'%'
+            && let Some(hex) = text.get(i + 1..i + 3)
+            && let Ok(decoded) = u8::from_str_radix(hex, 16)
+        {
+            out.push(decoded);
+            i += 3;
+            continue;
+        }
+        out.push(byte);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// What playwright-cli said when a run of it did not do what the hub asked.

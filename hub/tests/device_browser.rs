@@ -104,7 +104,7 @@ fn rig(goto: &str, env: &[(&str, &str)]) -> Rig {
              run-code) case \"$2\" in\n\
                *'return -2'*) printf '### Result\\n-1\\n' ;;\n\
                *'own(page)'*) printf '### Result\\ntrue\\n' ;;\n\
-               *'page.url()'*) printf '### Result\\n\"%s\"\\n' \"$(cat '{url}' 2>/dev/null || echo about:blank)\" ;;\n\
+               *'page.frames()'*) printf '### Result\\n[%s]\\n' \"$(sed 's/.*/\"&\"/' '{url}' 2>/dev/null | paste -sd, - | grep . || echo '\"about:blank\"')\" ;;\n\
                esac ;;\n\
              goto) printf '%s' \"$2\" > '{url}'\n{goto}\n;;\n\
              *) echo \"ran $*\" ;;\n\
@@ -259,7 +259,15 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     assert_eq!(calls[12][2..4], ["-s=s1", "run-code"]);
     assert_eq!(
         calls[13],
-        fields(&cwd, "", &["-s=s1", "run-code", "async page => page.url()"])
+        fields(
+            &cwd,
+            "",
+            &[
+                "-s=s1",
+                "run-code",
+                "async page => page.frames().map(f => f.url())"
+            ]
+        )
     );
     assert_eq!(calls[14], fields(&cwd, "", &["-s=s1", "snapshot"]));
 }
@@ -274,6 +282,8 @@ fn goto_the_hub_page_never_runs() {
         "HTTPS://Mem.On-Rexa.Com./x",
         "https://u@next-hub.on-rexa.com:443/",
         "hub.on-rexa.com/p/x",
+        "//hub.on-rexa.com/p/x",
+        "https://hub%2Eon-rexa.com/p/x",
     ] {
         // tab-new opens its URL as a goto does.
         for verb in ["goto", "tab-new"] {
@@ -304,8 +314,13 @@ fn no_command_but_leaving_runs_while_the_tab_is_on_the_hub_page() {
     let rig = rig(SNAPSHOT_GOTO, &[]);
     let answer = browser(&rig.hub, Some("s1"), &["goto", "https://example.com/"]);
     assert_eq!(answer["exit"], 0, "{answer}");
-    // As when Saiful picked the hub page's tab, or a click led there.
-    std::fs::write(&rig.url, "https://hub.on-rexa.com/p/cloud_walk/questions").unwrap();
+    // As when Saiful picked the hub page's tab, or a click led there, or
+    // a page of the same site framed it.
+    std::fs::write(
+        &rig.url,
+        "https://device.on-rexa.com/\nhttps://hub.on-rexa.com/p/cloud_walk/questions\n",
+    )
+    .unwrap();
     // A javascript: URL runs in the page it is on rather than leave it.
     for args in [
         &["click", "e5"][..],
