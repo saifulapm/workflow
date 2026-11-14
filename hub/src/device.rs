@@ -143,6 +143,10 @@ const DEFAULT_IDLE: Duration = Duration::from_secs(15 * 60);
 /// for which project.
 const LAST_CALL: &str = "last-call.json";
 
+/// What a session hears on its first call after its connection ended.
+const ENDED: &str = "device: the browser connection ended (Chromium closed or restarted, or its \
+     connect tab was closed), and this session's tabs with it; the next call attaches anew\n";
+
 /// The file in a session's folder that says its last attach made a
 /// connection of its own, with no token, rather than join the hub's. Every
 /// attach writes or removes it.
@@ -299,6 +303,7 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
             Ok(dir) => dir,
             Err(e) => return Outcome::fail(126, format!("device: {e:#}\n")),
         },
+        on: Default::default(),
     };
     let held = session_lock(session);
     let _held = held.lock().unwrap_or_else(|e| e.into_inner());
@@ -306,7 +311,7 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
     let record = cli.dir.join(LAST_CALL);
     // A detach that could not close the tabs keeps the session's record,
     // so the idle sweep tries again.
-    if args[0] == "detach" && matches!(&called, Ok(outcome) if outcome.exit == 0) {
+    if !cli.on.get() || args[0] == "detach" && matches!(&called, Ok(outcome) if outcome.exit == 0) {
         let _ = std::fs::remove_file(&record);
     } else {
         let last = LastCall {
@@ -489,6 +494,7 @@ fn end_when(session: &str, dir: &Path, due: impl Fn(&LastCall) -> bool) {
         path: user_path(),
         session,
         dir: dir.to_path_buf(),
+        on: Default::default(),
     };
     if cli.attached().unwrap_or(false) {
         let up = crate::config::config_home()
@@ -525,6 +531,10 @@ struct Cli<'a> {
     path: String,
     session: &'a str,
     dir: PathBuf,
+    /// Whether the session was attached as the call went on: the record
+    /// of a session that is not, whose attach failed or whose connection
+    /// ended, goes, so its next call attaches.
+    on: std::cell::Cell<bool>,
 }
 
 impl Cli<'_> {
@@ -534,6 +544,7 @@ impl Cli<'_> {
         let tab_command = matches!(command, "tab-list" | "tab-new" | "tab-select" | "tab-close");
         let mut fresh = false;
         if self.attached()? {
+            self.on.set(true);
             if detach {
                 let done = {
                     let _tabs = tabs_lock();
@@ -550,9 +561,14 @@ impl Cli<'_> {
                 }
             }
         } else if !detach {
+            // A session with a record was attached when its last call ended.
+            if self.dir.join(LAST_CALL).exists() {
+                return Ok(Outcome::fail(1, ENDED.to_string()));
+            }
             if let Some(failed) = self.attach()? {
                 return Ok(failed);
             }
+            self.on.set(true);
             fresh = true;
         }
         // A tab number counts every tab of the shared connection, so no
@@ -633,6 +649,7 @@ impl Cli<'_> {
                     path: self.path.clone(),
                     session: CONNECTION,
                     dir: connection_dir().map_err(|e| Stop::Failed(format!("{e:#}")))?,
+                    on: Default::default(),
                 };
                 let made = connection.run(
                     &[

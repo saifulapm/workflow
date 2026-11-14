@@ -730,3 +730,52 @@ fn a_session_with_no_token_works_on_in_the_tab_saiful_picked() {
     rig.browser("s1", &["goto", "https://y.test"]);
     assert_eq!(rig.strip(), vec![tab("s1", "https://y.test")]);
 }
+
+#[test]
+fn after_chromium_restarts_a_session_hears_its_connection_ended_then_attaches_anew() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    // Chromium restarts: its connection and every session on it end, and
+    // only Saiful's tab comes back.
+    std::fs::write(&rig.tabs, "1\tsaiful\t0\thttps://his.test/\t0\n").unwrap();
+    std::fs::write(rig.state.join("sessions"), "").unwrap();
+    let started = std::time::Instant::now();
+    let answer = rig.call("s1", &["snapshot"]);
+    assert!(started.elapsed() < Duration::from_secs(90));
+    assert_eq!(answer["exit"], 1, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: the browser connection ended (Chromium closed or restarted, or its \
+         connect tab was closed), and this session's tabs with it; the next call attaches anew\n"
+    );
+    rig.browser("s1", &["goto", "https://b.test"]);
+    assert_eq!(connect_tabs(&rig), 2, "{:?}", rig.calls());
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://b.test")
+        ]
+    );
+    assert_eq!(hub_tabs(&rig), ["about:blank"]);
+}
+
+#[test]
+fn a_session_whose_attach_failed_attaches_on_its_next_call() {
+    let rig = rig();
+    // The extension refuses the first attach.
+    let fake = rig.home.join("../tools/playwright-cli");
+    let real = std::fs::read_to_string(&fake).unwrap();
+    let (shebang, rest) = real.split_once('\n').unwrap();
+    std::fs::write(
+        &fake,
+        format!(
+            "{shebang}\ncase \"$*\" in *'attach --extension'*) echo refused >&2; exit 1 ;; esac\n{rest}"
+        ),
+    )
+    .unwrap();
+    let answer = rig.call("s1", &["goto", "https://a.test"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    std::fs::write(&fake, real).unwrap();
+    rig.browser("s1", &["goto", "https://a.test"]);
+}
