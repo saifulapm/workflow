@@ -335,6 +335,16 @@ fn forged(
     let Some(named) = item_machine(body) else {
         return Ok(Some("an item names the machine that wrote it".into()));
     };
+    // What a device wrote is its word: no thread's write takes its place,
+    // on the thread's own token or in a device's import of its outbox.
+    let cloud_token = bound.machine.as_deref().is_none_or(|m| m.ends_with('*'));
+    if let Some(author) = author.as_deref().filter(|author| !names(CLOUD, author))
+        && (cloud_token || names(CLOUD, &named))
+    {
+        return Ok(Some(format!(
+            "a cloud session writes over no item a device wrote; {author} wrote this item"
+        )));
+    }
     if named == writer
         || author.as_deref() == Some(named.as_str())
         || !global && names(CLOUD, &named)
@@ -1993,5 +2003,86 @@ mod tests {
         assert!(answer.get("why").is_none(), "{answer}");
         assert_eq!(answer["head"]["id"], "01B");
         assert_eq!(log.head(RECORD).unwrap().unwrap().id, "01B");
+    }
+
+    /// The mini's question, then its yes: what a thread would rewrite.
+    fn a_devices_item(log: &mut Memory) {
+        let mini = token("mini", Some("mac-mini-m2"));
+        let landed = write_as(
+            log,
+            Some(&mini),
+            "mac-mini-m2",
+            "01A",
+            ITEM,
+            json!(item_by("mac-mini-m2")),
+        );
+        assert_eq!(parse(&landed.sender)[0]["t"], "ack");
+    }
+
+    /// A yes is the device's word only while nothing a thread sent can take
+    /// the place of what a device wrote: neither its own token, whatever
+    /// name the body keeps, nor a device sending a thread's outbox.
+    #[test]
+    fn no_thread_writes_over_an_item_a_device_wrote() {
+        let cloud = token("session_*", Some("cloud-*"));
+        let nuc = token("nuc", Some("nuc"));
+        let as_answer = item_by("mac-mini-m2")
+            .replace("kind = \"log\"", "kind = \"answer\"\nanswers = \"01Q\"");
+        for (case, bound, hello, body) in [
+            (
+                "cloud token keeps the mini's name",
+                &cloud,
+                "cloud-vm",
+                as_answer,
+            ),
+            (
+                "cloud token names itself",
+                &cloud,
+                "cloud-vm",
+                item_by("cloud-vm"),
+            ),
+            (
+                "a device sends a thread's body",
+                &nuc,
+                "nuc",
+                item_by("cloud-vm"),
+            ),
+        ] {
+            let mut log = Memory::default();
+            a_devices_item(&mut log);
+            let refused = write_as(&mut log, Some(bound), hello, "01B", ITEM, json!(body));
+            let answer = &parse(&refused.sender)[0];
+            assert_eq!(answer["t"], "refused", "{case}");
+            assert_eq!(answer["head"]["id"], "01A", "{case}");
+            assert_eq!(refused.others, None, "{case}");
+            assert_eq!(log.recs.len(), 1, "{case}");
+        }
+    }
+
+    /// A later thread may still close an earlier thread's finding: an item
+    /// a cloud session wrote is any cloud session's.
+    #[test]
+    fn a_thread_writes_over_an_item_another_thread_wrote() {
+        let mut log = Memory::default();
+        let cloud = token("session_*", Some("cloud-*"));
+        let first = write_as(
+            &mut log,
+            Some(&cloud),
+            "cloud-a",
+            "01A",
+            ITEM,
+            json!(item_by("cloud-a")),
+        );
+        assert_eq!(parse(&first.sender)[0]["t"], "ack");
+        let closed = item_by("cloud-a").replace("kind", "status = \"fixed\"\nkind");
+        let later = write_as(
+            &mut log,
+            Some(&cloud),
+            "cloud-b",
+            "01B",
+            ITEM,
+            json!(closed),
+        );
+        assert_eq!(parse(&later.sender)[0]["t"], "ack");
     }
 }
