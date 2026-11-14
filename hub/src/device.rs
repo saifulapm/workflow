@@ -631,8 +631,14 @@ impl Cli<'_> {
         }
         // A click on the hub page's Yes would release a held tmux line as
         // Saiful's word. Alone, the session works in the tab Saiful picked,
-        // which may be that page, so every path reads the URL here.
-        if !detach && !tab_command && command != "goto" {
+        // which may be that page, so every path reads the URL here. A goto
+        // leaves the page, unless its javascript: URL runs in it.
+        let leaves = command == "goto"
+            && !args[1..].iter().any(|a| {
+                a.get(..11)
+                    .is_some_and(|s| s.eq_ignore_ascii_case("javascript:"))
+            });
+        if !detach && !tab_command && !leaves {
             let done = self.run_code(CURRENT_URL)?;
             let url = result_of(&done).and_then(|r| serde_json::from_str::<String>(&r).ok());
             match url {

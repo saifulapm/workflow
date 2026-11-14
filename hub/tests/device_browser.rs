@@ -301,7 +301,12 @@ fn no_command_but_leaving_runs_while_the_tab_is_on_the_hub_page() {
     assert_eq!(answer["exit"], 0, "{answer}");
     // As when Saiful picked the hub page's tab, or a click led there.
     std::fs::write(&rig.url, "https://hub.on-rexa.com/p/cloud_walk/questions").unwrap();
-    for args in [&["click", "e5"][..], &["snapshot"]] {
+    // A javascript: URL runs in the page it is on rather than leave it.
+    for args in [
+        &["click", "e5"][..],
+        &["snapshot"],
+        &["goto", "JavaScript:document.title"],
+    ] {
         let answer = browser(&rig.hub, Some("s1"), args);
         assert_eq!(answer["exit"], 2, "{args:?}: {answer}");
         assert_eq!(
@@ -312,9 +317,10 @@ fn no_command_but_leaving_runs_while_the_tab_is_on_the_hub_page() {
     }
     let calls = rig.calls();
     assert!(
-        !calls
-            .iter()
-            .any(|c| c.get(3).is_some_and(|a| a == "click" || a == "snapshot")),
+        !calls.iter().any(
+            |c| c.get(3).is_some_and(|a| a == "click" || a == "snapshot")
+                || c.get(4).is_some_and(|a| a == "JavaScript:document.title")
+        ),
         "{calls:?}"
     );
     for args in [&["goto", "https://example.com/"][..], &["detach"]] {
