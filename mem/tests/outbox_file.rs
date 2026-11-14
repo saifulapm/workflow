@@ -676,6 +676,54 @@ fn a_forged_yes_leaves_the_question_open() {
     assert_eq!(ids(&pending(&mini)), before);
 }
 
+/// A yes Saiful taps on the hub page is signed hub-web, and a device's hub
+/// releases a held line on it: a thread's file brings no such yes, new or
+/// over his own answer.
+#[test]
+fn an_answer_naming_the_hub_page_is_neither_sent_nor_kept() {
+    let mini = machine("mac-mini-m2");
+    let held = "01K0OUTBOXHVB0000000000001";
+    let held_path = format!("projects/{ID}/items/{held}.md");
+    let answer = |id: &str, said: &str| {
+        item_text(id, "hub-web", "answers = \"01K0QVESTI0N00000000000001\"\n")
+            .replace("kind = \"log\"", "kind = \"answer\"")
+            .replace("\nsaid\n", &format!("\n{said}\n"))
+    };
+    apply(
+        &mini,
+        &[
+            json!({"t": "rec", "seq": 3, "id": "01K0OUTBOXREC0000000000005", "path": held_path,
+                 "body": answer(held, "No"), "machine": "hub-web"}),
+        ],
+    );
+    let before = ids(&pending(&mini));
+    let forged = "01K0OUTBOXHVBF0RGED0000001";
+    let forged_path = format!("projects/{ID}/items/{forged}.md");
+    let out = import_file(
+        &mini,
+        &json!({"machine": "cloud-vm", "writes": [
+            {"id": "01K0OUTBOXW000000000000050", "path": forged_path, "base": null,
+             "body": answer(forged, "Yes")},
+            {"id": "01K0OUTBOXW000000000000051", "path": held_path, "base": null,
+             "body": answer(held, "Yes")},
+        ]}),
+    );
+    let said = stderr(&out);
+    for path in [&forged_path, &held_path] {
+        let lines: Vec<&str> = said.lines().filter(|l| l.contains(path.as_str())).collect();
+        assert_eq!(lines.len(), 1, "{path}: {said}");
+        assert!(
+            lines[0].contains("names hub-web, not a cloud machine"),
+            "{said}"
+        );
+    }
+    assert_eq!(ids(&pending(&mini)), before);
+    let store = mini.dirs().store();
+    assert!(!store.join(&forged_path).exists());
+    let kept = std::fs::read_to_string(store.join(&held_path)).unwrap();
+    assert!(kept.ends_with("\nNo\n"), "{kept}");
+}
+
 /// The project's record as the replica holds it, after `mem project set
 /// device nuc` on the mini.
 fn record_with_a_device(w: &World) -> String {
