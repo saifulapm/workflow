@@ -18,9 +18,10 @@ const CHECKOUT_BY: Duration = Duration::from_secs(80);
 
 pub(crate) struct Worktree {
     pub(crate) folder: PathBuf,
-    /// Whether the repo has submodules, which the session updates itself:
-    /// a first clone of one can take longer than a call may.
-    pub(crate) submodules: bool,
+    /// Saiful's own checkout of the repo, which the worktree was made from.
+    pub(crate) checkout: PathBuf,
+    /// What the hub does with the repo's submodules before the session.
+    pub(crate) submodules: Submodules,
 }
 
 /// Fetches the branch of session `name` (`cloud-<project>-<milestone>`) into
@@ -120,11 +121,35 @@ pub(crate) fn prepare(machine: &str, project: &str, name: &str) -> Result<Worktr
         )?;
     }
     used(repo, &top);
-    let submodules = folder.join(".gitmodules").exists();
-    if submodules {
-        unplant(&git, &folder)?;
-    }
-    Ok(Worktree { submodules, folder })
+    let submodules = match std::fs::read(folder.join(".gitmodules")) {
+        Err(_) => Submodules::None,
+        Ok(listed) => {
+            unplant(&git, &folder)?;
+            // The update runs with Saiful's logins: only on the URLs his own
+            // checkout names, never ones a thread's branch chose.
+            if std::fs::read(top.join(".gitmodules")).is_ok_and(|own| own == listed) {
+                Submodules::Update
+            } else {
+                Submodules::Differ
+            }
+        }
+    };
+    Ok(Worktree {
+        submodules,
+        folder,
+        checkout: top,
+    })
+}
+
+/// What the hub does with a worktree's submodules before its session.
+#[derive(PartialEq)]
+pub(crate) enum Submodules {
+    None,
+    /// Updates them outside the wall, in the pane, where a first clone may
+    /// take longer than a call.
+    Update,
+    /// Leaves them: the branch's .gitmodules is not the checkout's.
+    Differ,
 }
 
 /// Removes the folder of each submodule the worktree's commit names, so
@@ -141,10 +166,28 @@ fn unplant(git: &Git, folder: &Path) -> Result<(), Outcome> {
             .components()
             .all(|c| matches!(c, std::path::Component::Normal(_)));
         if meta.starts_with("160000 ") && inside {
-            let _ = std::fs::remove_dir_all(folder.join(path));
+            remove_inside(folder, Path::new(path));
         }
     }
     Ok(())
+}
+
+/// Removes `path` under `folder`, never what a link on the way leads to:
+/// a link a session made is removed itself, and the walk stops there.
+fn remove_inside(folder: &Path, path: &Path) {
+    let mut at = folder.to_path_buf();
+    for part in path.components() {
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Err(_) => return,
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let _ = std::fs::remove_file(&at);
+                return;
+            }
+            Ok(_) => {}
+        }
+    }
+    let _ = std::fs::remove_dir_all(&at);
 }
 
 /// Under the state folder, one file a worktree, named for it: the checkout

@@ -30,34 +30,42 @@ const RULES: &str = "table inet wall {
 
 /// The toolchain the PATH's shims and links reach, read-only: mise's
 /// tools, its settings and the folders it trusts, rustup's toolchains,
-/// Composer's global packages.
-const TOOLS: [&str; 5] = [
+/// Composer's global packages, the pnpm corepack runs and pnpm's own
+/// folder, which is on the PATH. Saiful runs all of it outside the wall.
+const TOOLS: [&str; 7] = [
     ".local/share/mise",
     ".config/mise",
     ".local/state/mise",
     ".rustup",
     ".config/composer/vendor",
+    ".cache/node/corepack",
+    ".local/share/pnpm",
 ];
 
-/// Writable: the tool caches, and the Cloudflare and Shopify logins, whose
-/// tokens a deploy may refresh.
-const KEPT: [&str; 11] = [
-    ".local/share/pnpm",
-    ".cache/node/corepack",
-    ".cache/pnpm",
+/// The tool caches, each the wall's own under OWN_CACHES: what a session
+/// writes in one, Saiful's own builds never run.
+const CACHES: [&str; 5] = [
     ".npm",
-    ".cache/composer",
     ".cargo/registry",
     ".cargo/git",
-    ".cache/mise",
+    ".cache/composer",
+    ".cache/pnpm",
+];
+
+/// Where the wall keeps its caches, under the home.
+const OWN_CACHES: &str = ".cache/workflow-wall";
+
+/// The Cloudflare and Shopify logins, writable where they are: a deploy
+/// may refresh a token, and the device keeps it.
+const LOGINS: [&str; 3] = [
     ".config/.wrangler",
     ".config/cloudflare",
     ".config/shopify-cli-kit-nodejs",
 ];
 
-/// The user environment's variables a walled shell keeps; the rest may
-/// hold a key (TMDB_API_KEY) or name a socket the wall hides.
-const ENV: [&str; 13] = [
+/// The user environment's variables a walled shell keeps besides PATH; the
+/// rest may hold a key (TMDB_API_KEY) or name a socket the wall hides.
+const ENV: [&str; 12] = [
     "HOME",
     "USER",
     "LOGNAME",
@@ -70,8 +78,24 @@ const ENV: [&str; 13] = [
     "PNPM_HOME",
     "GOPATH",
     "GOBIN",
-    "PATH",
 ];
+
+/// The PATH Saiful's own shell runs a folder's tools with: the user's, with
+/// mise's shims first, as `mise activate` puts each folder's tools ahead of
+/// the rest (the user's PATH finds pnpm's global shopify before node's).
+pub(crate) fn shell_path(env: &[(String, String)]) -> String {
+    let var = |key: &str| env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+    let path = var("PATH").unwrap_or_default();
+    let shims = Path::new(var("HOME").unwrap_or_default()).join(".local/share/mise/shims");
+    let shims = shims.to_string_lossy();
+    if !path.split(':').any(|dir| dir == shims) {
+        return path.to_string();
+    }
+    std::iter::once(shims.as_ref())
+        .chain(path.split(':').filter(|dir| *dir != shims))
+        .collect::<Vec<_>>()
+        .join(":")
+}
 
 /// What of the device's folders a wall shows besides the home's allow-list.
 pub(crate) struct Place<'a> {
@@ -156,7 +180,14 @@ pub(crate) fn command(
             }
         }
     }
-    for rel in KEPT {
+    for rel in CACHES {
+        let own = home
+            .join(OWN_CACHES)
+            .join(rel.trim_start_matches('.').replace('/', "-"));
+        std::fs::create_dir_all(&own).map_err(|e| format!("cannot make {}: {e}", own.display()))?;
+        wall.bind("--bind", &own, &home.join(rel));
+    }
+    for rel in LOGINS {
         let dir = home.join(rel);
         if dir.exists() {
             wall.bind("--bind", &dir, &dir);
@@ -190,16 +221,7 @@ pub(crate) fn command(
     for (key, value) in extra {
         wall.add(&["--setenv", key, value]);
     }
-    // pnpm keeps its store on the project's mount unless told, and the
-    // worktree is a mount of its own here: a store there would be another
-    // than outside, and every install a cold one.
-    let store = home.join(".local/share/pnpm/store");
-    if store.is_dir() {
-        let store = store.to_string_lossy();
-        for key in ["pnpm_config_store_dir", "npm_config_store_dir"] {
-            wall.add(&["--setenv", key, &store]);
-        }
-    }
+    wall.add(&["--setenv", "PATH", &shell_path(env)]);
 
     let mut argv: Vec<String> = [
         pasta.to_string_lossy().as_ref(),
@@ -281,11 +303,10 @@ fn shell_quote(s: &str) -> String {
 }
 
 /// What the check compares: a name, the program the shell must find, and
-/// the line that prints its version, or for pnpm's store, its folder.
-const CHECKED: [(&str, &str, &str); 10] = [
+/// the line that prints its version.
+const CHECKED: [(&str, &str, &str); 9] = [
     ("node", "node", "node --version"),
     ("pnpm", "pnpm", "pnpm --version"),
-    ("pnpm-store", "pnpm", "pnpm store path"),
     ("npm", "npm", "npm --version"),
     ("php", "php", "php --version"),
     ("composer", "composer", "composer --version"),
@@ -306,21 +327,17 @@ pub(crate) enum Seen {
     Missing,
 }
 
-/// Each tool of CHECKED the user's shell finds in `place.cwd`, as it runs
-/// there behind the wall and outside it.
+/// Each tool of CHECKED Saiful's own shell finds in `outside`, a folder of
+/// his checkout, against what runs behind the wall at `place`. The outside
+/// side never runs in a thread's worktree, whose files (a toolchain file,
+/// node_modules/.bin) would pick what runs there, outside the wall.
 pub(crate) fn compare(
     env: &[(String, String)],
     place: &Place,
+    outside: &Path,
     state: &Path,
 ) -> Result<Vec<(&'static str, Seen)>, String> {
-    let path = env
-        .iter()
-        .find(|(k, _)| k == "PATH")
-        .map(|(_, v)| v.as_str())
-        .unwrap_or_default();
-    let bash = find_in(path, "bash")
-        .or_else(|| find_in("/usr/bin", "bash"))
-        .ok_or("bash was not found")?;
+    let bash = find_in("/usr/bin:/bin", "bash").ok_or("bash was not found")?;
     let script: String = CHECKED
         .iter()
         .map(|(name, program, line)| {
@@ -339,10 +356,23 @@ pub(crate) fn compare(
     ]
     .map(str::to_string);
     let walled = command(env, place, &[], &shell, state)?;
-    let run = |argv: &[String], cwd: &Path| -> Result<String, String> {
+    let mut own = env.to_vec();
+    own.retain(|(k, _)| k != "PATH");
+    own.push(("PATH".to_string(), login_path(env, outside)?));
+    let run = |argv: &[String], env: &[(String, String)], cwd: &Path| -> Result<String, String> {
         let mut cmd = crate::device::user_command(Path::new(&argv[0]), env, false);
         cmd.args(&argv[1..]).current_dir(cwd);
         match crate::proc::output_within(&mut cmd, CHECK_TIMEOUT) {
+            // A side that printed no tool at all did not start: its own
+            // words say why.
+            crate::proc::Ended::Exited(done) if !done.stdout.windows(2).any(|w| w == b"@@") => {
+                let said = String::from_utf8_lossy(&done.stderr);
+                let why = said
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("no output");
+                Err(format!("{} did not start: {}", argv[0], why.trim()))
+            }
             crate::proc::Ended::Exited(done) => {
                 Ok(String::from_utf8_lossy(&done.stdout).into_owned())
             }
@@ -351,8 +381,8 @@ pub(crate) fn compare(
         }
     };
     let (inside, outside) = std::thread::scope(|scope| {
-        let inside = scope.spawn(|| run(&walled, place.cwd));
-        let outside = run(&shell, place.cwd);
+        let inside = scope.spawn(|| run(&walled, env, place.cwd));
+        let outside = run(&shell, &own, outside);
         (
             inside
                 .join()
@@ -364,7 +394,8 @@ pub(crate) fn compare(
     Ok(CHECKED
         .iter()
         .filter_map(|(tool, _, _)| {
-            let outside = outside.get(*tool)?.clone()?;
+            // A tool that prints nothing outside is one the shell lacks.
+            let outside = outside.get(*tool)?.clone().filter(|v| !v.is_empty())?;
             let seen = match inside.get(*tool).cloned().flatten() {
                 None => Seen::Missing,
                 Some(inside) if inside == outside => Seen::Same(inside),
@@ -373,6 +404,27 @@ pub(crate) fn compare(
             Some((*tool, seen))
         })
         .collect())
+}
+
+/// The PATH Saiful's login shell (the user's SHELL, interactive, as his
+/// terminal starts it) has in `folder`.
+fn login_path(env: &[(String, String)], folder: &Path) -> Result<String, String> {
+    let shell = env
+        .iter()
+        .find(|(k, _)| k == "SHELL")
+        .map(|(_, v)| PathBuf::from(v))
+        .or_else(|| find_in("/usr/bin:/bin", "bash"))
+        .ok_or("no login shell")?;
+    let mut cmd = crate::device::user_command(&shell, env, false);
+    cmd.args(["-i", "-l", "-c", "env"]).current_dir(folder);
+    let done = match crate::proc::output_within(&mut cmd, CHECK_TIMEOUT) {
+        crate::proc::Ended::Exited(done) => done,
+        _ => return Err(format!("{} -i -l did not print its PATH", shell.display())),
+    };
+    String::from_utf8_lossy(&done.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("PATH=").map(str::to_string))
+        .ok_or_else(|| format!("{} -i -l printed no PATH", shell.display()))
 }
 
 /// Each tool's version from the check script's output, None when the
@@ -446,7 +498,7 @@ pub fn cli() -> i32 {
                             cwd: checkout,
                             writable: false,
                         };
-                        compare(env, &place, &state)
+                        compare(env, &place, checkout, &state)
                     })
                 })
                 .collect();
@@ -494,4 +546,67 @@ fn top(folder: &Path) -> PathBuf {
         .find(|dir| dir.join(".git").exists())
         .unwrap_or(folder)
         .to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a session may write: its worktree, the wall's own caches and
+    /// the logins, and nothing on the PATH, which the hub and Saiful run.
+    #[test]
+    fn a_session_writes_only_its_worktree_its_caches_and_the_logins() {
+        let dir = std::env::temp_dir().join(format!("wall-binds-{}", std::process::id()));
+        let home = dir.join("home");
+        let folder = home.join(".cache/workflow-cloud/repo");
+        let bins = [home.join(".local/bin"), home.join(".local/share/pnpm")];
+        for made in bins.iter().chain([
+            &folder,
+            &home.join(".cargo/registry"),
+            &home.join(".config/.wrangler"),
+        ]) {
+            std::fs::create_dir_all(made).unwrap();
+        }
+        let path = format!("{}:{}:/usr/bin", bins[0].display(), bins[1].display());
+        let env = vec![
+            ("HOME".to_string(), home.display().to_string()),
+            ("PATH".to_string(), path),
+        ];
+        let place = Place {
+            root: &folder,
+            cwd: &folder,
+            writable: true,
+        };
+        let argv = command(&env, &place, &[], &["bash".to_string()], &dir.join("state")).unwrap();
+        let mut writable: Vec<PathBuf> = argv
+            .windows(3)
+            .filter(|w| w[0] == "--bind")
+            .map(|w| PathBuf::from(&w[2]))
+            .collect();
+        writable.sort();
+        let mut want: Vec<PathBuf> = [
+            ".npm",
+            ".cargo/registry",
+            ".cargo/git",
+            ".cache/composer",
+            ".cache/pnpm",
+            ".config/.wrangler",
+        ]
+        .iter()
+        .map(|rel| home.join(rel))
+        .chain([folder.clone()])
+        .collect();
+        want.sort();
+        assert_eq!(writable, want);
+        for bin in &bins {
+            assert!(
+                !writable
+                    .iter()
+                    .any(|w| w.starts_with(bin) || bin.starts_with(w)),
+                "{} is writable",
+                bin.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

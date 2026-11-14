@@ -92,7 +92,7 @@ the skill holds, with these changes:
   for another reason is tried once more, then asked like any other
   question.
 - The tmux session runs behind a wall: it sees its worktree, the device's
-  toolchain, the tool caches and the Cloudflare and Shopify logins, and
+  toolchain, tool caches of its own and the Cloudflare and Shopify logins, and
   reaches the internet and adb, but not pass, gpg, `~/.ssh`, the GitHub
   login, mem's store or the device's other ports, and every git file in
   it is read-only. When a line fails inside the wall for want of something

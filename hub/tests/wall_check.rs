@@ -146,22 +146,3 @@ fn a_tool_whose_settings_are_a_link_elsewhere_reads_them_inside() {
     assert!(out.lines().any(|l| l == "ok: shop node v24.21.0"), "{out}");
     assert_eq!(code, 0, "{out}");
 }
-
-/// pnpm keeps its store on the project's own mount, and the wall shows the
-/// store and the worktree as two: this pnpm does as pnpm does, so the wall
-/// must name the store for it.
-#[test]
-fn pnpm_s_store_is_the_same_folder_inside_and_outside() {
-    let pnpm = "store=\"$HOME/.local/share/pnpm/store\"\n\
-                if [ \"$1\" != store ]; then echo 11.17.0; exit; fi\n\
-                if [ -n \"$pnpm_config_store_dir\" ]; then echo \"$pnpm_config_store_dir/v11\"\n\
-                elif [ \"$(stat -c %m \"$store\")\" = \"$(stat -c %m .)\" ]; then echo \"$store/v11\"\n\
-                else echo \"$PWD/.pnpm-store/v11\"; fi";
-    let rig = rig(&[("pnpm", pnpm)], &[]);
-    std::fs::create_dir_all(rig.home.join(".local/share/pnpm/store")).unwrap();
-    let (code, out) = check(&rig);
-    let store = rig.home.join(".local/share/pnpm/store/v11");
-    let line = format!("ok: shop pnpm-store {}", store.display());
-    assert!(out.lines().any(|l| l == line), "{line}\n{out}");
-    assert_eq!(code, 0, "{out}");
-}

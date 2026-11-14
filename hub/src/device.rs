@@ -869,7 +869,9 @@ pub(crate) fn user_path() -> String {
 }
 
 pub(crate) fn find_in(path: &str, program: &str) -> Option<PathBuf> {
+    // A relative folder (node_modules/.bin) is wherever the caller stands.
     std::env::split_paths(path)
+        .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(program))
         .find(|candidate| {
             std::fs::metadata(candidate)

@@ -184,6 +184,15 @@ impl Rig {
         }
     }
 
+    /// Saiful's checkout names the submodules the branch's .gitmodules does.
+    fn same_gitmodules(&self) {
+        std::fs::copy(
+            self.seed.join(".gitmodules"),
+            self.checkout.join(".gitmodules"),
+        )
+        .unwrap();
+    }
+
     /// The worktree folder the sessions work in.
     fn worktree(&self) -> PathBuf {
         self.home.join(".cache/workflow-cloud/cloud-spike")
@@ -248,7 +257,9 @@ impl Rig {
 
     /// `asked`, of a question `asker` wrote.
     fn asked_by(&self, asker: &str, line: &str, answer: &str, machine: &str) {
-        let body = format!("May I run this on the mini?\n\n    {line}\n");
+        let body = format!(
+            "A cloud_walk thread asks to run this line in its tmux session on {asker}:\n\n    {line}\n"
+        );
         self.asked_with(asker, &body, &[], answer, machine);
     }
 
@@ -393,6 +404,7 @@ fn a_submodule_is_checked_out_by_the_session_s_first_line() {
             &["submodule", "add", "-q", sub.to_str().unwrap(), "lib"],
         );
     });
+    rig.same_gitmodules();
     rig.walk(&["send", "cat lib/hello"]);
     rig.read_until("from-sub");
     assert!(rig.worktree().join("lib/hello").is_file());
@@ -416,6 +428,7 @@ fn a_submodule_s_git_file_rewritten_in_the_wall_is_made_again() {
             &["submodule", "add", "-q", sub.to_str().unwrap(), "lib"],
         );
     });
+    rig.same_gitmodules();
     rig.walk(&["send", "cat lib/hello"]);
     rig.read_until("from-sub");
     rig.walk(&[
@@ -1265,4 +1278,230 @@ fn a_device_s_answer_runs_the_job_outside_the_wall() {
     ]);
     assert_eq!(sent["exit"], 0, "{sent}");
     rig.read_until("unwalled");
+}
+
+/// The user's PATH for the next session: `dirs`, then the system's.
+fn user_path(rig: &Rig, dirs: &[&Path]) {
+    let mut path: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+    path.extend(["/usr/bin".to_string(), "/bin".to_string()]);
+    std::fs::write(rig.state.join("path"), path.join(":")).unwrap();
+}
+
+/// The hub runs programs from the PATH's folders outside the wall, and
+/// Saiful's builds run the tool caches: a session writes in none of them.
+#[test]
+fn a_walled_session_writes_in_no_folder_saiful_runs() {
+    let rig = rig();
+    let pnpm = rig.home.join(".local/share/pnpm");
+    let registry = rig.home.join(".cargo/registry");
+    for dir in [&pnpm, &registry] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    user_path(&rig, &[&pnpm]);
+    rig.walk(&[
+        "send",
+        "touch ~/.local/share/pnpm/tmux; echo crate > ~/.cargo/registry/planted && echo kept",
+    ]);
+    let pane = rig.read_until("kept");
+    assert!(pane.contains("Read-only file system"), "{pane}");
+    assert!(!pnpm.join("tmux").exists());
+    assert!(!registry.join("planted").exists());
+    let own = rig.home.join(".cache/workflow-wall/cargo-registry/planted");
+    assert!(own.is_file(), "the wall's own registry keeps it");
+}
+
+/// A tool the thread's branch carries, on a relative folder of the PATH,
+/// never runs outside the wall: the check's outside side runs in Saiful's
+/// checkout.
+#[test]
+fn the_check_runs_nothing_of_the_worktree_outside_the_wall() {
+    let rig = rig();
+    let marker = rig.home.join("ran-outside");
+    rig.push("cloud/cloud_walk-w14", |seed| {
+        let bin = seed.join("vendor/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let cf = bin.join("cf");
+        std::fs::write(
+            &cf,
+            format!("#!/bin/sh\ntouch '{}'\necho cf 1.0\n", marker.display()),
+        )
+        .unwrap();
+        common::make_executable(&cf);
+    });
+    std::fs::write(rig.state.join("path"), "vendor/bin:/usr/bin:/bin").unwrap();
+    rig.walk(&["send", "echo started"]);
+    rig.read_until("started");
+    assert!(!marker.exists());
+}
+
+#[test]
+fn a_shell_that_ignores_the_hangup_ends_with_its_session() {
+    let rig = rig();
+    let sleep = format!("sleep {}3", std::process::id());
+    rig.walk(&[
+        "send",
+        &format!("trap '' HUP; exec nohup {sleep} > /dev/null 2>&1"),
+    ]);
+    wait_until(Duration::from_secs(5), || running(&sleep));
+    rig.walk(&["end"]);
+    wait_until(Duration::from_secs(5), || !running(&sleep));
+}
+
+/// A session that swaps a submodule's folder for a link to one of Saiful's
+/// own: the next start removes the link, never what it leads to.
+#[test]
+fn a_link_on_a_submodule_s_path_is_removed_and_not_followed() {
+    let rig = rig();
+    let sub = rig.origin.with_file_name("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    git(&sub, &["init", "-q", "-b", "main"]);
+    std::fs::write(sub.join("hello"), "from-sub\n").unwrap();
+    git(&sub, &["add", "."]);
+    git(&sub, &["commit", "-q", "-m", "sub"]);
+    rig.push("cloud/cloud_walk-w14", |seed| {
+        git(
+            seed,
+            &["submodule", "add", "-q", sub.to_str().unwrap(), "h/lib"],
+        );
+    });
+    rig.same_gitmodules();
+    let own = rig.origin.with_file_name("own");
+    std::fs::create_dir_all(own.join("lib")).unwrap();
+    std::fs::write(own.join("lib/keep"), "mine\n").unwrap();
+    rig.walk(&["send", "cat h/lib/hello"]);
+    rig.read_until("from-sub");
+    rig.walk(&[
+        "send",
+        &format!("mv h h.old && ln -s {} h && echo linked", own.display()),
+    ]);
+    rig.read_until("linked");
+    rig.walk(&["end"]);
+    rig.walk(&["send", "cat h/lib/hello; echo again"]);
+    let pane = rig.read_until("again");
+    assert!(own.join("lib/keep").is_file(), "{pane}");
+    assert!(pane.contains("from-sub"), "{pane}");
+}
+
+/// The update runs with Saiful's logins, so only on the URLs his own
+/// checkout names; another branch's are left, and the pane says so.
+#[test]
+fn submodules_a_branch_names_on_its_own_are_not_updated() {
+    let rig = rig();
+    let sub = rig.origin.with_file_name("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    git(&sub, &["init", "-q", "-b", "main"]);
+    std::fs::write(sub.join("hello"), "from-sub\n").unwrap();
+    git(&sub, &["add", "."]);
+    git(&sub, &["commit", "-q", "-m", "sub"]);
+    rig.push("cloud/cloud_walk-w14", |seed| {
+        git(
+            seed,
+            &["submodule", "add", "-q", sub.to_str().unwrap(), "lib"],
+        );
+    });
+    rig.walk(&["send", "ls lib; echo listed"]);
+    let pane = rig.read_until("listed");
+    assert!(pane.contains("hub: submodules not updated"), "{pane}");
+    assert!(!rig.worktree().join("lib/hello").exists());
+}
+
+/// A job question's first line, for `why`.
+fn job(why: &str) -> String {
+    format!("The wall cannot start on mac-mini-m2 for cloud_walk: {why}\n")
+}
+
+#[test]
+fn a_job_yes_for_another_reason_releases_nothing() {
+    let rig = rig();
+    node_that_differs(&rig);
+    let options = ["run this job outside the wall", "hold"];
+    let why = "node v1 inside, v2 outside";
+    rig.asked_with(
+        "mac-mini-m2",
+        &job(why),
+        &options,
+        options[0],
+        "mac-mini-m2",
+    );
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "echo hi"]);
+    assert_eq!(sent["exit"], 2, "{sent}");
+    assert!(rig.sessions().is_empty());
+}
+
+#[test]
+fn a_job_yes_is_spent_by_a_job_that_started_walled() {
+    let rig = rig();
+    let options = ["run this job outside the wall", "hold"];
+    let why = "node v24.18.0 inside, v24.21.0 outside";
+    rig.asked_with(
+        "mac-mini-m2",
+        &job(why),
+        &options,
+        options[0],
+        "mac-mini-m2",
+    );
+    let walled = rig.walk(&["send", "--yes", "AAAA1111", "echo hi"]);
+    assert_eq!(walled["exit"], 0, "{walled}");
+    rig.walk(&["end"]);
+    node_that_differs(&rig);
+    let later = rig.walk(&["send", "--yes", "AAAA1111", "echo hi"]);
+    assert_eq!(later["exit"], 2, "{later}");
+    assert!(rig.sessions().is_empty());
+}
+
+#[test]
+fn a_wall_that_cannot_start_is_asked_with_its_own_words() {
+    let rig = rig();
+    let fake = rig.origin.with_file_name("fake-bin");
+    common::fixture_bin(
+        &fake,
+        "bwrap",
+        "echo 'bwrap: setting up uid map: Permission denied' >&2; exit 1",
+    );
+    user_path(&rig, &[&fake]);
+    let answer = rig.walk(&["send", "echo hi"]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+    let out = answer["stdout"].as_str().unwrap();
+    assert!(
+        out.starts_with("ask: the wall cannot start on mac-mini-m2: "),
+        "{out}"
+    );
+    assert!(
+        out.contains("bwrap: setting up uid map: Permission denied"),
+        "{out}"
+    );
+    assert!(!out.contains("missing inside"), "{out}");
+    assert!(rig.sessions().is_empty());
+}
+
+/// mem in the wall reads an empty store, and what it writes stays there.
+#[test]
+fn mem_in_the_wall_reaches_no_store_of_the_device() {
+    let Some(mem) = common::real_mem() else {
+        panic!("mem did not build");
+    };
+    let rig = rig();
+    let bin = rig.home.join(".local/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(&mem, bin.join("mem")).unwrap();
+    let store = rig.home.join(".local/share/mem/store");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("planted-question.md"), "planted-question\n").unwrap();
+    user_path(&rig, &[&bin]);
+    rig.walk(&[
+        "send",
+        "mem questions; mem log from-the-wall; echo mem-done",
+    ]);
+    let pane = rig.read_until("mem-done");
+    assert!(!pane.contains("planted-question"), "{pane}");
+    let host = Command::new("grep")
+        .args(["-r", "-l", "from-the-wall"])
+        .arg(&rig.home)
+        .output()
+        .unwrap();
+    assert!(
+        host.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&host.stdout)
+    );
 }

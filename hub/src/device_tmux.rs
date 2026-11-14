@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::device::{HELPER_TIMEOUT, Outcome, find_in, unix_now, user_command, user_env};
+use crate::device_worktree::Submodules;
 use crate::memcli::MemCli;
 use crate::proc::{Ended, Finished, output_within};
 
@@ -162,6 +163,7 @@ fn due(job: &Job, now: u64) -> Option<Over> {
 /// cap ended. With no `job`, only the record goes.
 fn end_job(tmux: &Tmux, job: Option<&Job>, over: Over) {
     if let Some(job) = job {
+        unwall(tmux, &job.name);
         let _ = tmux.run(&["kill-session", "-t", &format!("={}", job.name)]);
         if over == Over::Cap
             && let Some(capped) = state(CAPPED)
@@ -319,7 +321,7 @@ fn start(
 ) -> Result<Option<String>, Outcome> {
     let work = crate::device_worktree::prepare(machine, project, name)?;
     let folder = work.folder.to_string_lossy().into_owned();
-    let path = format!("PATH={}", tmux.path);
+    let path = format!("PATH={}", crate::wall::shell_path(&tmux.env));
     let mut new = vec![
         "new-session",
         "-d",
@@ -372,12 +374,12 @@ fn start(
     };
     let checked = crate::wall::Place {
         root: &work.folder,
-        cwd: &work.folder.join(subdir),
+        cwd: &work.folder.join(&subdir),
         writable: false,
     };
     let walled =
         crate::wall::command(&tmux.env, &place, &history, &shell, &state).and_then(|walled| {
-            match crate::wall::compare(&tmux.env, &checked, &state)? {
+            match crate::wall::compare(&tmux.env, &checked, &work.checkout.join(&subdir), &state)? {
                 seen if seen
                     .iter()
                     .all(|(_, s)| matches!(s, crate::wall::Seen::Same(_))) =>
@@ -387,8 +389,10 @@ fn start(
                 seen => Err(differences(&seen)),
             }
         });
+    // A job's yes is spent once a job starts on it, walled or not, so no
+    // later wall that cannot start finds it still good.
     let (mut command, spent) = match (walled, job) {
-        (Ok(walled), _) => (walled, None),
+        (Ok(walled), job) => (walled, job.map(str::to_string)),
         (Err(why), Some(id)) => {
             released(project, id, &why, Asked::Job)?;
             (shell.to_vec(), Some(id.to_string()))
@@ -399,17 +403,25 @@ fn start(
     };
     // The submodules come with the GitHub login the wall hides, so the hub
     // updates them before the wall starts, in the pane, where a first clone
-    // may take longer than a call.
-    if work.submodules {
-        let update = [
-            &bash,
+    // may take longer than a call; not their own submodules, whose URLs
+    // the commit a thread chose names.
+    let first = match work.submodules {
+        Submodules::None => None,
+        Submodules::Update => Some("GIT_TERMINAL_PROMPT=0 git submodule update --init"),
+        Submodules::Differ => {
+            Some("echo hub: submodules not updated: the branch .gitmodules is not the checkout one")
+        }
+    };
+    if let Some(first) = first {
+        let before = [
+            bash.as_str(),
             "--noprofile",
             "--norc",
             "-c",
-            "GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive; exec \"$@\"",
+            &format!("{first}; exec \"$@\""),
             "bash",
         ];
-        command.splice(0..0, update.map(str::to_string));
+        command.splice(0..0, before.map(str::to_string));
     }
     new.extend(command.iter().map(String::as_str));
     ok(tmux.run(&new), "new-session")?;
@@ -497,7 +509,14 @@ fn job_head(project: &str, machine: &str) -> String {
     format!("The wall cannot start on {machine} for {project}: ")
 }
 
-fn kind_of(question: &serde_json::Value, project: &str) -> Asked {
+/// The first line a held line's question starts with.
+fn line_head(project: &str, machine: &str) -> String {
+    format!("A {project} thread asks to run this line in its tmux session on {machine}:")
+}
+
+/// The kind of a question the hub asked, None for any other question,
+/// such as one Saiful's own agent asked on the device.
+fn kind_of(question: &serde_json::Value, project: &str) -> Option<Asked> {
     let body = question["body"].as_str().unwrap_or_default();
     let head = body.lines().next().unwrap_or_default();
     let machine = question["machine"].as_str().unwrap_or_default();
@@ -505,11 +524,13 @@ fn kind_of(question: &serde_json::Value, project: &str) -> Asked {
         .as_array()
         .is_some_and(|o| o.iter().any(|o| o.as_str() == Some(RUN_OUTSIDE)));
     if offers && head.starts_with(&job_head(project, machine)) {
-        Asked::Job
+        Some(Asked::Job)
     } else if head == outside_head(project, machine) {
-        Asked::Outside
+        Some(Asked::Outside)
+    } else if head == line_head(project, machine) {
+        Some(Asked::Line)
     } else {
-        Asked::Line
+        None
     }
 }
 
@@ -528,7 +549,7 @@ fn ask(project: &str, machine: &str, kind: Asked, what: &str) -> Outcome {
             && q["machine"]
                 .as_str()
                 .is_some_and(|m| crate::device::DEVICES.contains(&m))
-            && kind_of(q, project) == kind
+            && kind_of(q, project) == Some(kind)
             && match kind {
                 Asked::Job => q["body"].as_str().unwrap_or_default().contains(what),
                 _ => asks(q["body"].as_str().unwrap_or_default(), what),
@@ -537,7 +558,8 @@ fn ask(project: &str, machine: &str, kind: Asked, what: &str) -> Outcome {
     let (text, options, shown) = match kind {
         Asked::Line => (
             format!(
-                "A {project} thread asks to run this line in its tmux session on {machine}:\n\n    {what}\n\nYes sends it there once."
+                "{}\n\n    {what}\n\nYes sends it there once.",
+                line_head(project, machine)
             ),
             ["yes", "no"],
             what.to_string(),
@@ -628,7 +650,7 @@ fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outc
             "#{id} was asked by {asker}, not by a device"
         )));
     }
-    if kind_of(question, project) != kind {
+    if kind_of(question, project) != Some(kind) {
         let what = match kind {
             Asked::Line => "a line in the wall",
             Asked::Outside => "a line outside the wall",
@@ -636,7 +658,13 @@ fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outc
         };
         return Err(Outcome::refuse(format!("#{id} does not ask for {what}")));
     }
-    if kind != Asked::Job && !asks(question["body"].as_str().unwrap_or_default(), line) {
+    let body = question["body"].as_str().unwrap_or_default();
+    let named = match kind {
+        // The reason the wall cannot start now, not one it had before.
+        Asked::Job => body.lines().next() == Some(&format!("{}{line}", job_head(project, asker))),
+        _ => asks(body, line),
+    };
+    if !named {
         return Err(Outcome::refuse(format!("#{id} does not ask for {line}")));
     }
     let answer = question["answer"].as_str().unwrap_or_default();
@@ -716,6 +744,7 @@ fn end(tmux: &Tmux, name: &str) -> Outcome {
     if !tmux.has(name) {
         return Outcome::done(String::new());
     }
+    unwall(tmux, name);
     match ok(
         tmux.run(&["kill-session", "-t", &format!("={name}")]),
         "kill-session",
@@ -807,5 +836,56 @@ impl Tmux {
                 format!("device: tmux did not start: {e}\n"),
             )),
         }
+    }
+}
+
+/// Kills the init of each wall in `name`'s panes: the kernel then ends every
+/// process in its pid namespace at once, one that ignores a hangup too,
+/// before tmux ends the rest.
+fn unwall(tmux: &Tmux, name: &str) {
+    let Ok(panes) = tmux.run(&[
+        "list-panes",
+        "-s",
+        "-t",
+        &format!("={name}"),
+        "-F",
+        "#{pane_pid}",
+    ]) else {
+        return;
+    };
+    let mut parents: Vec<(u32, u32)> = Vec::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|p| p.parse().ok()) else {
+            continue;
+        };
+        let status = std::fs::read_to_string(entry.path().join("status")).unwrap_or_default();
+        let ppid = status
+            .lines()
+            .find_map(|l| l.strip_prefix("PPid:"))
+            .and_then(|p| p.trim().parse().ok());
+        if let Some(ppid) = ppid {
+            parents.push((pid, ppid));
+        }
+    }
+    let mut todo: Vec<u32> = String::from_utf8_lossy(&panes.stdout)
+        .lines()
+        .filter_map(|p| p.trim().parse().ok())
+        .collect();
+    while let Some(pid) = todo.pop() {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+        let init = status
+            .lines()
+            .find_map(|l| l.strip_prefix("NSpid:"))
+            .is_some_and(|ids| {
+                let ids: Vec<&str> = ids.split_whitespace().collect();
+                ids.len() > 1 && ids.last() == Some(&"1")
+            });
+        if init {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+            continue;
+        }
+        todo.extend(parents.iter().filter(|(_, p)| *p == pid).map(|(c, _)| *c));
     }
 }
