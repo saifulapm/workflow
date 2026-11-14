@@ -237,6 +237,10 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
         [flag, id, rest @ ..] if flag == "--yes" => (Some(id.trim_start_matches('#')), rest),
         _ => (None, rest),
     };
+    let (outside, rest) = match rest {
+        [flag, rest @ ..] if flag == "--no-wall" => (true, rest),
+        _ => (false, rest),
+    };
     if rest.is_empty() {
         return Outcome::refuse("tmux send needs a line".to_string());
     }
@@ -246,96 +250,45 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
             "a line may not end with \\: send the whole command as one line".to_string(),
         );
     }
-    let mut spend_id = None;
-    if crate::held::held(&line) {
+    let mut spent = Vec::new();
+    let asked = if outside {
+        Some(Asked::Outside)
+    } else {
+        crate::held::held(&line).then_some(Asked::Line)
+    };
+    if let Some(kind) = asked {
         let Some(id) = yes else {
-            return ask(project, machine, &line);
+            return ask(project, machine, kind, &line);
         };
-        if let Err(refused) = released(project, id, &line) {
+        if let Err(refused) = released(project, id, &line, kind) {
             return refused;
         }
-        spend_id = Some(id);
+        spent.push(id.to_string());
     }
-    let target = format!("={name}:");
     if !tmux.has(name) {
-        let work = match crate::device_worktree::prepare(machine, project, name) {
-            Ok(work) => work,
+        // A yes that released no line may be the one for the whole job.
+        let job = yes.filter(|_| spent.is_empty());
+        match start(tmux, machine, name, project, job) {
+            Ok(Some(id)) => spent.push(id),
+            Ok(None) => {}
             Err(failed) => return failed,
-        };
-        let folder = work.folder.to_string_lossy().into_owned();
-        let path = format!("PATH={}", tmux.path);
-        let mut new = vec![
-            "new-session",
-            "-d",
-            "-s",
-            name,
-            "-c",
-            &folder,
-            "-x",
-            "200",
-            "-y",
-            "50",
-            "-e",
-            &path,
-            // No history, so no key brings a released line back.
-            "-e",
-            "HISTFILE=/dev/null",
-            "-e",
-            "HISTSIZE=0",
-        ];
-        // A thread writes bash, and the user's own shell may be fish. No rc
-        // file, which may turn history back on, and no `!` expansion.
-        let Some(bash) = find_in(&tmux.path, "bash") else {
-            return Outcome::fail(127, "device: bash was not found\n".to_string());
-        };
-        let bash = bash.to_string_lossy().into_owned();
-        let shell = [&bash, "--noprofile", "--norc", "+H", "-i"].map(str::to_string);
-        let Some(state) = state("hub/wall") else {
-            return Outcome::fail(126, "device: cannot find the state folder\n".to_string());
-        };
-        let history = [("HISTFILE", "/dev/null"), ("HISTSIZE", "0")];
-        let place = crate::wall::Place {
-            root: &work.folder,
-            cwd: &work.folder,
-            writable: true,
-        };
-        let mut walled = match crate::wall::command(&tmux.env, &place, &history, &shell, &state) {
-            Ok(walled) => walled,
-            Err(why) => {
-                return Outcome::fail(
-                    126,
-                    format!("device: the wall cannot start on {machine}: {why}\n"),
-                );
-            }
-        };
-        // The submodules come with the GitHub login the wall hides, so the
-        // hub updates them before the wall starts, in the pane, where a
-        // first clone may take longer than a call.
-        if work.submodules {
-            let update = [
-                &bash,
-                "--noprofile",
-                "--norc",
-                "-c",
-                "GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive; exec \"$@\"",
-                "bash",
-            ];
-            walled.splice(0..0, update.map(str::to_string));
-        }
-        new.extend(walled.iter().map(String::as_str));
-        let made = tmux.run(&new);
-        if let Err(failed) = ok(made, "new-session") {
-            return failed;
         }
     }
-    let sent = if is_key(&line) {
-        ok(tmux.run(&["send-keys", "-t", &target, &line]), "send-keys")
+    let sent = if outside {
+        run_outside(tmux, name, &line)
+    } else if is_key(&line) {
+        // To the window in front, so C-c reaches a job outside the wall too.
+        ok(
+            tmux.run(&["send-keys", "-t", &format!("={name}:"), &line]),
+            "send-keys",
+        )
     } else {
-        type_line(tmux, &target, &line)
+        close_outside(tmux, name);
+        type_line(tmux, &format!("={name}:={WALL}"), &line)
     };
     match sent {
         Ok(()) => {
-            if let Some(id) = spend_id {
+            for id in &spent {
                 spend(id);
             }
             Outcome::done(String::new())
@@ -344,10 +297,227 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
     }
 }
 
-/// Asks Saiful on this device whether `line` may run, or finds the open
-/// question a device already asks it in, and names it: a thread never asks
-/// it, so no thread writes the text his yes releases.
-fn ask(project: &str, machine: &str, line: &str) -> Outcome {
+/// The window of a job's shell, behind the wall unless Saiful let the job
+/// run outside it, and the one a yes to a `--no-wall` line runs that line
+/// in, outside the wall.
+const WALL: &str = "wall";
+const OUTSIDE: &str = "outside";
+
+/// The answer that lets a job whose wall cannot start run outside it.
+const RUN_OUTSIDE: &str = "run this job outside the wall";
+
+/// Starts the job's session in its worktree, behind the wall once the
+/// wall starts and the project's tools match outside it; else outside it
+/// on a yes `job` to the device's question, which it returns to be spent,
+/// and otherwise not at all, asking that question.
+fn start(
+    tmux: &Tmux,
+    machine: &str,
+    name: &str,
+    project: &str,
+    job: Option<&str>,
+) -> Result<Option<String>, Outcome> {
+    let work = crate::device_worktree::prepare(machine, project, name)?;
+    let folder = work.folder.to_string_lossy().into_owned();
+    let path = format!("PATH={}", tmux.path);
+    let mut new = vec![
+        "new-session",
+        "-d",
+        "-s",
+        name,
+        "-n",
+        WALL,
+        "-c",
+        &folder,
+        "-x",
+        "200",
+        "-y",
+        "50",
+        "-e",
+        &path,
+        // No history, so no key brings a released line back.
+        "-e",
+        "HISTFILE=/dev/null",
+        "-e",
+        "HISTSIZE=0",
+    ];
+    // A thread writes bash, and the user's own shell may be fish. No rc
+    // file, which may turn history back on, and no `!` expansion.
+    let Some(bash) = find_in(&tmux.path, "bash") else {
+        return Err(Outcome::fail(
+            127,
+            "device: bash was not found\n".to_string(),
+        ));
+    };
+    let bash = bash.to_string_lossy().into_owned();
+    let shell = [&bash, "--noprofile", "--norc", "+H", "-i"].map(str::to_string);
+    let Some(state) = state("hub/wall") else {
+        return Err(Outcome::fail(
+            126,
+            "device: cannot find the state folder\n".to_string(),
+        ));
+    };
+    let history = [("HISTFILE", "/dev/null"), ("HISTSIZE", "0")];
+    let subdir = MemCli::new()
+        .read(&["projects", "--json"])
+        .rows("projects")
+        .iter()
+        .find(|row| row["name"].as_str() == Some(project))
+        .and_then(|row| row["subdir"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    let place = crate::wall::Place {
+        root: &work.folder,
+        cwd: &work.folder,
+        writable: true,
+    };
+    let checked = crate::wall::Place {
+        root: &work.folder,
+        cwd: &work.folder.join(subdir),
+        writable: false,
+    };
+    let walled =
+        crate::wall::command(&tmux.env, &place, &history, &shell, &state).and_then(|walled| {
+            match crate::wall::compare(&tmux.env, &checked, &state)? {
+                seen if seen
+                    .iter()
+                    .all(|(_, s)| matches!(s, crate::wall::Seen::Same(_))) =>
+                {
+                    Ok(walled)
+                }
+                seen => Err(differences(&seen)),
+            }
+        });
+    let (mut command, spent) = match (walled, job) {
+        (Ok(walled), _) => (walled, None),
+        (Err(why), Some(id)) => {
+            released(project, id, &why, Asked::Job)?;
+            (shell.to_vec(), Some(id.to_string()))
+        }
+        (Err(why), None) => {
+            return Err(ask(project, machine, Asked::Job, &why));
+        }
+    };
+    // The submodules come with the GitHub login the wall hides, so the hub
+    // updates them before the wall starts, in the pane, where a first clone
+    // may take longer than a call.
+    if work.submodules {
+        let update = [
+            &bash,
+            "--noprofile",
+            "--norc",
+            "-c",
+            "GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive; exec \"$@\"",
+            "bash",
+        ];
+        command.splice(0..0, update.map(str::to_string));
+    }
+    new.extend(command.iter().map(String::as_str));
+    ok(tmux.run(&new), "new-session")?;
+    Ok(spent)
+}
+
+/// What the wall check found that is not the same on both sides.
+fn differences(seen: &[(&str, crate::wall::Seen)]) -> String {
+    seen.iter()
+        .filter_map(|(tool, seen)| match seen {
+            crate::wall::Seen::Same(_) => None,
+            crate::wall::Seen::Differs { inside, outside } => {
+                Some(format!("{tool} {inside} inside, {outside} outside"))
+            }
+            crate::wall::Seen::Missing => Some(format!("{tool} missing inside")),
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Runs `line` outside the wall, in the job's worktree, in a window of its
+/// own that stays to be read until the next line or the job's end.
+fn run_outside(tmux: &Tmux, name: &str, line: &str) -> Result<(), Outcome> {
+    let folder = tmux.run(&[
+        "display-message",
+        "-p",
+        "-t",
+        &format!("={name}:"),
+        "#{session_path}",
+    ])?;
+    let folder = String::from_utf8_lossy(&folder.stdout).trim().to_string();
+    let Some(bash) = find_in(&tmux.path, "bash") else {
+        return Err(Outcome::fail(
+            127,
+            "device: bash was not found\n".to_string(),
+        ));
+    };
+    close_outside(tmux, name);
+    let script = r#"eval "$1"; echo "exit: $?"; exec sleep 3600"#;
+    ok(
+        tmux.run(&[
+            "new-window",
+            "-t",
+            &format!("={name}:"),
+            "-n",
+            OUTSIDE,
+            "-c",
+            &folder,
+            &bash.to_string_lossy(),
+            "--noprofile",
+            "--norc",
+            "-c",
+            script,
+            "bash",
+            line,
+        ]),
+        "new-window",
+    )
+}
+
+/// Closes the window a `--no-wall` line ran in, if there is one.
+fn close_outside(tmux: &Tmux, name: &str) {
+    let _ = tmux.run(&["kill-window", "-t", &format!("={name}:={OUTSIDE}")]);
+}
+
+/// What a question the device asks is for, read from its first line, which
+/// the device writes and no thread chooses.
+#[derive(Clone, Copy, PartialEq)]
+enum Asked {
+    /// A held line, sent in the wall.
+    Line,
+    /// A line sent with `--no-wall`, run outside the wall.
+    Outside,
+    /// A job whose wall cannot start, run outside it.
+    Job,
+}
+
+/// The first line a no-wall question starts with: the project and the
+/// machine are plain names, so no line a thread sends can make it.
+fn outside_head(project: &str, machine: &str) -> String {
+    format!("A {project} thread asks to run this line outside the wall on {machine}:")
+}
+
+fn job_head(project: &str, machine: &str) -> String {
+    format!("The wall cannot start on {machine} for {project}: ")
+}
+
+fn kind_of(question: &serde_json::Value, project: &str) -> Asked {
+    let body = question["body"].as_str().unwrap_or_default();
+    let head = body.lines().next().unwrap_or_default();
+    let machine = question["machine"].as_str().unwrap_or_default();
+    let offers = question["options"]
+        .as_array()
+        .is_some_and(|o| o.iter().any(|o| o.as_str() == Some(RUN_OUTSIDE)));
+    if offers && head.starts_with(&job_head(project, machine)) {
+        Asked::Job
+    } else if head == outside_head(project, machine) {
+        Asked::Outside
+    } else {
+        Asked::Line
+    }
+}
+
+/// Asks Saiful on this device about `what`, a line or why the wall cannot
+/// start, or finds the open question a device already asks it in, and
+/// names it: a thread never asks it, so no thread writes the text his yes
+/// releases.
+fn ask(project: &str, machine: &str, kind: Asked, what: &str) -> Outcome {
     let mem = MemCli::new();
     let rows = mem
         .refresh(&["--project", project, "questions", "--json"])
@@ -358,14 +528,40 @@ fn ask(project: &str, machine: &str, line: &str) -> Outcome {
             && q["machine"]
                 .as_str()
                 .is_some_and(|m| crate::device::DEVICES.contains(&m))
-            && asks(q["body"].as_str().unwrap_or_default(), line)
+            && kind_of(q, project) == kind
+            && match kind {
+                Asked::Job => q["body"].as_str().unwrap_or_default().contains(what),
+                _ => asks(q["body"].as_str().unwrap_or_default(), what),
+            }
     });
+    let (text, options, shown) = match kind {
+        Asked::Line => (
+            format!(
+                "A {project} thread asks to run this line in its tmux session on {machine}:\n\n    {what}\n\nYes sends it there once."
+            ),
+            ["yes", "no"],
+            what.to_string(),
+        ),
+        Asked::Outside => (
+            format!(
+                "{}\n\n    {what}\n\nIt runs with your logins, in the thread's worktree. Yes runs it there once; the next line is walled again.",
+                outside_head(project, machine)
+            ),
+            ["yes", "no"],
+            format!("{what} (outside the wall)"),
+        ),
+        Asked::Job => (
+            format!(
+                "{}{what}\n\nRun this job outside the wall, with your logins, or hold it?",
+                job_head(project, machine)
+            ),
+            [RUN_OUTSIDE, "hold"],
+            format!("the wall cannot start on {machine}: {what}"),
+        ),
+    };
     let id = match open.and_then(|q| q["short_id"].as_str()) {
         Some(id) => id.to_string(),
         None => {
-            let text = format!(
-                "A {project} thread asks to run this line in its tmux session on {machine}:\n\n    {line}\n\nYes sends it there once."
-            );
             let run = mem.write_through(&[
                 "--project",
                 project,
@@ -374,9 +570,9 @@ fn ask(project: &str, machine: &str, line: &str) -> Outcome {
                 "saiful",
                 &text,
                 "--option",
-                "yes",
+                options[0],
                 "--option",
-                "no",
+                options[1],
             ]);
             let out = String::from_utf8_lossy(&run.stdout);
             match out.trim().strip_prefix('#') {
@@ -384,14 +580,14 @@ fn ask(project: &str, machine: &str, line: &str) -> Outcome {
                 _ => {
                     return Outcome::fail(
                         1,
-                        format!("device: cannot ask about {line}: {}\n", run.stderr),
+                        format!("device: cannot ask about {shown}: {}\n", run.stderr),
                     );
                 }
             }
         }
     };
     Outcome {
-        stdout: format!("ask: {line}\nasked: #{id}\n"),
+        stdout: format!("ask: {shown}\nasked: #{id}\n"),
         ..Outcome::fail(6, String::new())
     }
 }
@@ -402,10 +598,11 @@ fn asks(body: &str, line: &str) -> bool {
     body.lines().any(|l| l.trim() == line) || body.contains(&format!("`{line}`"))
 }
 
-/// Ok when question `id` of `project` was asked by a device, asks for
-/// `line`, and Saiful answered yes on one of the devices, never a cloud
-/// thread's own `mem answer`, and no earlier line went out on it.
-fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
+/// Ok when question `id` of `project` was asked by a device, is of `kind`
+/// and asks for `line` (a job's question, for any), and Saiful answered it
+/// yes (a job's, to run outside the wall) on one of the devices, never a
+/// cloud thread's own `mem answer`, and no earlier line went out on it.
+fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outcome> {
     let spent = state(SPENT)
         .ok_or_else(|| Outcome::fail(126, "device: cannot find the state folder\n".to_string()))?;
     if std::fs::read_to_string(&spent).is_ok_and(|ids| ids.lines().any(|used| used == id)) {
@@ -431,7 +628,15 @@ fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
             "#{id} was asked by {asker}, not by a device"
         )));
     }
-    if !asks(question["body"].as_str().unwrap_or_default(), line) {
+    if kind_of(question, project) != kind {
+        let what = match kind {
+            Asked::Line => "a line in the wall",
+            Asked::Outside => "a line outside the wall",
+            Asked::Job => "a job outside the wall",
+        };
+        return Err(Outcome::refuse(format!("#{id} does not ask for {what}")));
+    }
+    if kind != Asked::Job && !asks(question["body"].as_str().unwrap_or_default(), line) {
         return Err(Outcome::refuse(format!("#{id} does not ask for {line}")));
     }
     let answer = question["answer"].as_str().unwrap_or_default();
@@ -442,7 +647,11 @@ fn released(project: &str, id: &str, line: &str) -> Result<(), Outcome> {
         .split(|c: char| !c.is_alphanumeric())
         .find(|w| !w.is_empty())
         .unwrap_or_default();
-    if !first.eq_ignore_ascii_case("yes") {
+    let agreed = match kind {
+        Asked::Job => answer.trim().eq_ignore_ascii_case(RUN_OUTSIDE),
+        _ => first.eq_ignore_ascii_case("yes"),
+    };
+    if !agreed {
         return Err(Outcome::refuse(format!(
             "the answer to #{id} is {answer}, not yes"
         )));

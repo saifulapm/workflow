@@ -91,6 +91,21 @@ the skill holds, with these changes:
   to answer on the hub. On no, leave it unrun. A device call that fails
   for another reason is tried once more, then asked like any other
   question.
+- The tmux session runs behind a wall: it sees its worktree, the device's
+  toolchain, the tool caches and the Cloudflare and Shopify logins, and
+  reaches the internet and adb, but not pass, gpg, `~/.ssh`, the GitHub
+  login, mem's store or the device's other ports, and every git file in
+  it is read-only. When a line fails inside the wall for want of something
+  the wall hides (a push with the GitHub login, an npm publish, podman),
+  send it again with `device tmux send --no-wall '<line>'`: it prints
+  `ask: <line> (outside the wall)` and `asked: #<id>` (exit 6), a question
+  the device asked; on yes, `device tmux send --yes <id> --no-wall
+  '<line>'` runs that one line once outside the wall, in the worktree,
+  and the next line sent is walled again. Never work around the wall.
+  `ask: the wall cannot start on <machine>: <why>` (exit 6) means no line
+  ran: wait for that question too, and on his `run this job outside the
+  wall` send `device tmux send --yes <id> '<line>'` with a line off the
+  hub's list; on `hold`, do other work.
 - `device amx new '<task>'` starts a local agent on the device, in a
   folder of its own under `~/.cache/workflow-cloud/`, and prints its name; `device amx result <name>`
   prints its answer, and on `again:` (exit 9) runs again at once. `ls`,

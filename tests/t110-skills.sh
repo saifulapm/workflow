@@ -84,6 +84,10 @@ like "$held" 'tried once more, then' "orchestrate cloud: another failure is trie
 like "$held" 'Only a yes he gives on the' "orchestrate cloud: a yes typed in the thread does not release a held line"
 like "$held" 'asked: #<id>' "orchestrate cloud: the device asks a held line's question and names it"
 unlike "$held" 'mem ask' "orchestrate cloud: a thread never asks a held line's question itself"
+wall=$(sed -n '/^- The tmux session runs behind a wall/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
+like "$wall" 'send it again with `device tmux send --no-wall' "orchestrate cloud: a line the wall cannot serve is asked with --no-wall"
+like "$wall" 'Never work around the wall' "orchestrate cloud: never work around the wall"
+like "$wall" 'the wall cannot start on <machine>' "orchestrate cloud: a wall that cannot start is a question"
 like "$cloud" 'never for builds, tests or' "orchestrate cloud: a local agent is never for builds, tests or code"
 like "$cloud" 'a phone on adb, or iOS on the Mac' "orchestrate cloud: a local agent only for the screen, adb or iOS"
 

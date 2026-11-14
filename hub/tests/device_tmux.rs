@@ -55,13 +55,17 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
     let state = dir.join("mem");
     std::fs::create_dir_all(&state).unwrap();
     // The user env lets git clone a submodule from a local path.
+    // The user's PATH is the state's `path` file once a test writes one.
     fixture_bin(
         &bin,
         "systemctl",
-        "echo 'PATH=/usr/bin:/bin'\n\
-         echo 'GIT_CONFIG_COUNT=1'\n\
-         echo 'GIT_CONFIG_KEY_0=protocol.file.allow'\n\
-         echo 'GIT_CONFIG_VALUE_0=always'",
+        &format!(
+            "echo \"PATH=$(cat '{}/path' 2>/dev/null || echo /usr/bin:/bin)\"\n\
+             echo 'GIT_CONFIG_COUNT=1'\n\
+             echo 'GIT_CONFIG_KEY_0=protocol.file.allow'\n\
+             echo 'GIT_CONFIG_VALUE_0=always'",
+            state.display()
+        ),
     );
     let origin = dir.join("origin.git");
     let seed = dir.join("seed");
@@ -244,9 +248,16 @@ impl Rig {
 
     /// `asked`, of a question `asker` wrote.
     fn asked_by(&self, asker: &str, line: &str, answer: &str, machine: &str) {
+        let body = format!("May I run this on the mini?\n\n    {line}\n");
+        self.asked_with(asker, &body, &[], answer, machine);
+    }
+
+    /// cloud_walk's question #AAAA1111, `body` with `options`, asked by
+    /// `asker` and answered `answer` from `machine`.
+    fn asked_with(&self, asker: &str, body: &str, options: &[&str], answer: &str, machine: &str) {
         let questions = serde_json::json!({"questions": [
             {"short_id": "AAAA1111", "project": "cloud_walk", "machine": asker,
-             "body": format!("May I run this on the mini?\n\n    {line}\n"),
+             "options": options, "body": body,
              "answered": true, "answer": answer, "answer_id": "01ANSWER"},
         ]});
         std::fs::write(self.state.join("questions.json"), questions.to_string()).unwrap();
@@ -1112,4 +1123,146 @@ fn of_the_device_a_walled_session_reaches_only_adb_s_port() {
     {
         assert!(!reaches(&rig, &addr, port), "{addr}:{port}");
     }
+}
+
+/// A no-wall question as the device words it, for `line`.
+fn outside(line: &str) -> String {
+    format!(
+        "A cloud_walk thread asks to run this line outside the wall on mac-mini-m2:\n\n    {line}\n"
+    )
+}
+
+#[test]
+fn a_no_wall_line_is_asked_with_its_exact_text() {
+    let rig = rig();
+    let answer = rig.walk(&["send", "--no-wall", "gh", "auth", "status"]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+    assert_eq!(
+        answer["stdout"],
+        "ask: gh auth status (outside the wall)\nasked: #QQQQ0001\n"
+    );
+    let asks = asks(&rig);
+    assert!(asks.contains("\n    gh auth status\n"), "{asks}");
+    assert!(asks.contains("outside the wall"), "{asks}");
+    assert!(asks.ends_with(" --option yes --option no\n"), "{asks}");
+}
+
+#[test]
+fn a_device_s_yes_runs_a_no_wall_line_outside_once_and_the_next_is_walled() {
+    let rig = rig();
+    let docs = rig.home.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("note"), "seen\n").unwrap();
+    let line = format!("cat {}/note && echo outside-$(pwd)", docs.display());
+    rig.asked_with(
+        "mac-mini-m2",
+        &outside(&line),
+        &["yes", "no"],
+        "yes",
+        "mac-mini-m2",
+    );
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", &line]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    let pane = rig.read_until(&format!("outside-{}", rig.worktree().display()));
+    assert!(pane.contains("seen"), "{pane}");
+    let again = rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", &line]);
+    assert_eq!(again["exit"], 2, "{again}");
+    rig.walk(&[
+        "send",
+        &format!("cat {}/note || echo walled-again", docs.display()),
+    ]);
+    rig.read_until("walled-again");
+}
+
+#[test]
+fn a_no_wall_yes_from_a_cloud_machine_runs_nothing() {
+    let rig = rig();
+    let line = "gh auth status";
+    rig.asked_with(
+        "mac-mini-m2",
+        &outside(line),
+        &["yes", "no"],
+        "yes",
+        "cloud-vm",
+    );
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", line]);
+    assert_eq!(sent["exit"], 2, "{sent}");
+    assert!(rig.sessions().is_empty());
+}
+
+#[test]
+fn a_held_line_s_yes_runs_nothing_outside_the_wall() {
+    let rig = rig();
+    rig.asked("rm -r scratch", "yes", "mac-mini-m2");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 2, "{sent}");
+}
+
+/// A node on the user's PATH, in the home, that prints another version
+/// behind the wall, which hides ~/Documents.
+fn node_that_differs(rig: &Rig) {
+    std::fs::create_dir_all(rig.home.join("Documents")).unwrap();
+    let tools = rig.home.join(".local/bin");
+    common::fixture_bin(
+        &tools,
+        "node",
+        "if [ -d \"$HOME/Documents\" ]; then echo v24.21.0; else echo v24.18.0; fi",
+    );
+    std::fs::write(
+        rig.state.join("path"),
+        format!("{}:/usr/bin:/bin", tools.display()),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_check_that_differs_is_asked_and_no_line_runs() {
+    let rig = rig();
+    node_that_differs(&rig);
+    let answer = rig.walk(&["send", "echo hi"]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+    assert_eq!(
+        answer["stdout"],
+        "ask: the wall cannot start on mac-mini-m2: node v24.18.0 inside, v24.21.0 outside\n\
+         asked: #QQQQ0001\n"
+    );
+    let asks = asks(&rig);
+    assert!(
+        asks.ends_with(" --option run this job outside the wall --option hold\n"),
+        "{asks}"
+    );
+    assert!(rig.sessions().is_empty());
+}
+
+#[test]
+fn a_device_s_answer_runs_the_job_outside_the_wall() {
+    let rig = rig();
+    node_that_differs(&rig);
+    let body = "The wall cannot start on mac-mini-m2 for cloud_walk: node v24.18.0 inside, v24.21.0 outside\n";
+    let options = ["run this job outside the wall", "hold"];
+    rig.asked_with(
+        "mac-mini-m2",
+        body,
+        &options,
+        "run this job outside the wall",
+        "cloud-vm",
+    );
+    let cloud = rig.walk(&["send", "--yes", "AAAA1111", "echo hi"]);
+    assert_eq!(cloud["exit"], 2, "{cloud}");
+    assert!(rig.sessions().is_empty());
+    rig.asked_with(
+        "mac-mini-m2",
+        body,
+        &options,
+        "run this job outside the wall",
+        "mac-mini-m2",
+    );
+    let sent = rig.walk(&[
+        "send",
+        "--yes",
+        "AAAA1111",
+        "test -d ~/Documents && echo unwalled",
+    ]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    rig.read_until("unwalled");
 }
