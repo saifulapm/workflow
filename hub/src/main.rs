@@ -23,6 +23,7 @@ Usage: hub [OPTIONS]
        hub pair --web
        hub local [--port <PORT>]
        hub ping <HOST[:PORT]>
+       hub wall-check
        hub share sync
        hub share seed
        hub share mint <RUNNER> <MACHINE>
@@ -42,6 +43,8 @@ Commands:
                 no Slack socket
   ping          Ask another local hub its machine name, with the token
                 this machine's local hub sends
+  wall-check    Compare each tool's version behind a device tmux session's
+                wall with outside it, in each project's checkout here
   share sync    Bring this machine's replica up to the store (HUB_STORE_URL
                 and HUB_STORE_TOKEN) once, landing every shared project, and
                 end; it fails when the store cannot be reached
@@ -121,6 +124,7 @@ fn parse(argv: impl Iterator<Item = String>) -> Result<Option<Args>> {
                 }
                 _ => anyhow::bail!("share takes sync, seed, mint or put-bin\n\n{USAGE}"),
             },
+            "wall-check" => std::process::exit(hub::wall::cli()),
             "ping" => match argv.next().context("ping needs a host")? {
                 help if help == "-h" || help == "--help" => {
                     print!("{USAGE}");

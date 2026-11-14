@@ -294,16 +294,20 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
             return Outcome::fail(126, "device: cannot find the state folder\n".to_string());
         };
         let history = [("HISTFILE", "/dev/null"), ("HISTSIZE", "0")];
-        let mut walled =
-            match crate::wall::command(&tmux.env, &work.folder, &history, &shell, &state) {
-                Ok(walled) => walled,
-                Err(why) => {
-                    return Outcome::fail(
-                        126,
-                        format!("device: the wall cannot start on {machine}: {why}\n"),
-                    );
-                }
-            };
+        let place = crate::wall::Place {
+            root: &work.folder,
+            cwd: &work.folder,
+            writable: true,
+        };
+        let mut walled = match crate::wall::command(&tmux.env, &place, &history, &shell, &state) {
+            Ok(walled) => walled,
+            Err(why) => {
+                return Outcome::fail(
+                    126,
+                    format!("device: the wall cannot start on {machine}: {why}\n"),
+                );
+            }
+        };
         // The submodules come with the GitHub login the wall hides, so the
         // hub updates them before the wall starts, in the pane, where a
         // first clone may take longer than a call.

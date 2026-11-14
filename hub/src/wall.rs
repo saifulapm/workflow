@@ -41,8 +41,9 @@ const TOOLS: [&str; 5] = [
 
 /// Writable: the tool caches, and the Cloudflare and Shopify logins, whose
 /// tokens a deploy may refresh.
-const KEPT: [&str; 10] = [
+const KEPT: [&str; 11] = [
     ".local/share/pnpm",
+    ".cache/node/corepack",
     ".cache/pnpm",
     ".npm",
     ".cache/composer",
@@ -72,12 +73,22 @@ const ENV: [&str; 13] = [
     "PATH",
 ];
 
-/// The command that runs `shell` behind the wall in `folder`, with the
+/// What of the device's folders a wall shows besides the home's allow-list.
+pub(crate) struct Place<'a> {
+    /// The worktree or checkout the wall shows.
+    pub(crate) root: &'a Path,
+    /// The folder the shell starts in, `root` or a folder in it.
+    pub(crate) cwd: &'a Path,
+    /// A session's worktree is; a checkout the check reads is not.
+    pub(crate) writable: bool,
+}
+
+/// The command that runs `shell` behind the wall at `place`, with the
 /// user's environment `env` cut to ENV, plus `extra`. Its two files,
 /// the rules and the resolver, go in `state`. Err says why it cannot.
 pub(crate) fn command(
     env: &[(String, String)],
-    folder: &Path,
+    place: &Place,
     extra: &[(&str, &str)],
     shell: &[String],
     state: &Path,
@@ -138,6 +149,11 @@ pub(crate) fn command(
     for dir in path_dirs.chain(TOOLS.iter().map(|rel| home.join(rel))) {
         if dir.exists() {
             wall.bind("--ro-bind", &dir, &dir);
+            // A link in it to a file elsewhere, such as mise's settings in
+            // the dotfiles, shows that file alone.
+            for target in links_out(&dir) {
+                wall.bind("--ro-bind", &target, &target);
+            }
         }
     }
     for rel in KEPT {
@@ -150,13 +166,22 @@ pub(crate) fn command(
     // .git, the worktree's own git folder in it, and the worktree's .git
     // file. The hub runs git here outside the wall, so no file the session
     // wrote may steer it.
-    wall.bind("--bind", folder, folder);
-    if let Some(common) = common_dir(folder) {
+    let root = place.root;
+    wall.bind(
+        if place.writable {
+            "--bind"
+        } else {
+            "--ro-bind"
+        },
+        root,
+        root,
+    );
+    if let Some(common) = common_dir(root) {
         wall.bind("--ro-bind", &common, &common);
-        let link = folder.join(".git");
+        let link = root.join(".git");
         wall.bind("--ro-bind", &link, &link);
     }
-    wall.add(&["--chdir", &folder.to_string_lossy()]);
+    wall.add(&["--chdir", &place.cwd.to_string_lossy()]);
     for key in ENV {
         if let Some(value) = var(key) {
             wall.add(&["--setenv", key, value]);
@@ -219,6 +244,19 @@ impl Wall {
     }
 }
 
+/// The files the links at the top of `dir` lead to outside it.
+fn links_out(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_symlink()))
+        .filter_map(|entry| std::fs::canonicalize(entry.path()).ok())
+        .filter(|target| !target.starts_with(dir) && target.is_file())
+        .collect()
+}
+
 /// The checkout's git folder, which holds the worktree's own one, from the
 /// worktree's `.git` file.
 fn common_dir(folder: &Path) -> Option<PathBuf> {
@@ -230,4 +268,219 @@ fn common_dir(folder: &Path) -> Option<PathBuf> {
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// The tools the check compares, each with the line that prints its
+/// version.
+const CHECKED: [(&str, &str); 9] = [
+    ("node", "node --version"),
+    ("pnpm", "pnpm --version"),
+    ("npm", "npm --version"),
+    ("php", "php --version"),
+    ("composer", "composer --version"),
+    ("cargo", "cargo --version"),
+    ("shopify", "shopify version"),
+    ("cf", "cf --version"),
+    ("adb", "adb --version"),
+];
+
+/// How long one side of a check may take.
+const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// What the check found of one tool the device's own shell finds.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Seen {
+    Same(String),
+    Differs { inside: String, outside: String },
+    Missing,
+}
+
+/// Each tool of CHECKED the user's shell finds in `place.cwd`, as it runs
+/// there behind the wall and outside it.
+pub(crate) fn compare(
+    env: &[(String, String)],
+    place: &Place,
+    state: &Path,
+) -> Result<Vec<(&'static str, Seen)>, String> {
+    let path = env
+        .iter()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or_default();
+    let bash = find_in(path, "bash")
+        .or_else(|| find_in("/usr/bin", "bash"))
+        .ok_or("bash was not found")?;
+    let script: String = CHECKED
+        .iter()
+        .map(|(tool, line)| {
+            format!(
+                "if command -v {tool} >/dev/null 2>&1; then echo @@{tool}; {line} 2>/dev/null </dev/null; \
+                 else echo '@@{tool} missing'; fi\n"
+            )
+        })
+        .collect();
+    let shell = [
+        bash.to_string_lossy().as_ref(),
+        "--noprofile",
+        "--norc",
+        "-c",
+        &script,
+    ]
+    .map(str::to_string);
+    let walled = command(env, place, &[], &shell, state)?;
+    let run = |argv: &[String], cwd: &Path| -> Result<String, String> {
+        let mut cmd = crate::device::user_command(Path::new(&argv[0]), env, false);
+        cmd.args(&argv[1..]).current_dir(cwd);
+        match crate::proc::output_within(&mut cmd, CHECK_TIMEOUT) {
+            crate::proc::Ended::Exited(done) => {
+                Ok(String::from_utf8_lossy(&done.stdout).into_owned())
+            }
+            crate::proc::Ended::TimedOut => Err("a version check took over a minute".to_string()),
+            crate::proc::Ended::Failed(e) => Err(format!("{} did not start: {e}", argv[0])),
+        }
+    };
+    let (inside, outside) = std::thread::scope(|scope| {
+        let inside = scope.spawn(|| run(&walled, place.cwd));
+        let outside = run(&shell, place.cwd);
+        (
+            inside
+                .join()
+                .unwrap_or_else(|_| Err("the check panicked".to_string())),
+            outside,
+        )
+    });
+    let (inside, outside) = (versions(&inside?), versions(&outside?));
+    Ok(CHECKED
+        .iter()
+        .filter_map(|(tool, _)| {
+            let outside = outside.get(*tool)?.clone()?;
+            let seen = match inside.get(*tool).cloned().flatten() {
+                None => Seen::Missing,
+                Some(inside) if inside == outside => Seen::Same(inside),
+                Some(inside) => Seen::Differs { inside, outside },
+            };
+            Some((*tool, seen))
+        })
+        .collect())
+}
+
+/// Each tool's version from the check script's output, None when the
+/// shell found no such tool.
+fn versions(out: &str) -> std::collections::BTreeMap<String, Option<String>> {
+    let mut found = std::collections::BTreeMap::new();
+    for part in out.split("@@").skip(1) {
+        let (head, text) = part.split_once('\n').unwrap_or((part, ""));
+        let version = match head.split_once(' ') {
+            Some((_, "missing")) => None,
+            _ => Some(version(text)),
+        };
+        found.insert(
+            head.split(' ').next().unwrap_or_default().to_string(),
+            version,
+        );
+    }
+    found
+}
+
+/// The first word that looks like a version (`v24.21.0`, `2.8.4`), else
+/// the first line.
+fn version(text: &str) -> String {
+    let looks = |w: &&str| {
+        let digits = w.trim_start_matches('v');
+        digits.starts_with(|c: char| c.is_ascii_digit()) && digits.contains('.')
+    };
+    text.split_whitespace()
+        .find(looks)
+        .map(|w| w.trim_end_matches([',', ';', ')']).to_string())
+        .unwrap_or_else(|| text.lines().next().unwrap_or_default().trim().to_string())
+}
+
+/// `hub wall-check`: for each project with a remote and a checkout on this
+/// device, a line for each tool its folder's shell finds: `ok:`, or
+/// `differs:` or `missing:` and exit 1.
+pub fn cli() -> i32 {
+    let env = crate::device::user_env();
+    let rows = crate::memcli::MemCli::new()
+        .read(&["projects", "--json"])
+        .rows("projects");
+    let projects: Vec<(String, PathBuf)> = rows
+        .iter()
+        .filter(|row| row["remote"].as_str().is_some_and(|r| !r.is_empty()))
+        .filter_map(|row| {
+            let name = row["name"].as_str()?.to_string();
+            let checkout = row["checkouts"]
+                .as_array()?
+                .iter()
+                .filter_map(|c| c.as_str().map(PathBuf::from))
+                .find(|c| c.is_dir())?;
+            Some((name, checkout))
+        })
+        .collect();
+    let Ok(state) = crate::config::state_home() else {
+        eprintln!("hub: wall-check: cannot find the state folder");
+        return 1;
+    };
+    let mut code = 0;
+    // A few at once: each runs every tool twice.
+    for batch in projects.chunks(4) {
+        let seen: Vec<_> = std::thread::scope(|scope| {
+            let runs: Vec<_> = batch
+                .iter()
+                .map(|(name, checkout)| {
+                    let (env, state) = (&env, state.join("hub/wall/check").join(name));
+                    scope.spawn(move || {
+                        let root = top(checkout);
+                        let place = Place {
+                            root: &root,
+                            cwd: checkout,
+                            writable: false,
+                        };
+                        compare(env, &place, &state)
+                    })
+                })
+                .collect();
+            runs.into_iter()
+                .map(|run| {
+                    run.join()
+                        .unwrap_or_else(|_| Err("the check panicked".into()))
+                })
+                .collect()
+        });
+        for ((name, _), seen) in batch.iter().zip(seen) {
+            match seen {
+                Err(why) => {
+                    println!("differs: {name} the wall cannot start: {why}");
+                    code = 1;
+                }
+                Ok(tools) => {
+                    for (tool, seen) in tools {
+                        match seen {
+                            Seen::Same(v) => println!("ok: {name} {tool} {v}"),
+                            Seen::Differs { inside, outside } => {
+                                println!(
+                                    "differs: {name} {tool} {inside} inside, {outside} outside"
+                                );
+                                code = 1;
+                            }
+                            Seen::Missing => {
+                                println!("missing: {name} {tool}");
+                                code = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    code
+}
+
+/// The repo `folder` is in: the nearest folder up with a `.git`, else
+/// `folder` itself.
+fn top(folder: &Path) -> PathBuf {
+    folder
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(folder)
+        .to_path_buf()
 }
