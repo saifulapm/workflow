@@ -284,6 +284,22 @@ run-code)
     result "[$json]"
     ;;
   *'page.frames()'*) result "[\"$(field "$cur" 4)\"]" ;;
+  *'newPage()'*)
+    # The hub's own tab: null while the tab of the guid it names is open;
+    # with no guid, the first tab when it is blank; else a new blank tab.
+    id=$(printf '%s' "$1" | sed -n 's/.*const id = "page@\([0-9]*\)".*/\1/p')
+    if [ -n "$id" ] && visible | grep -qx "$id"; then result null; fi
+    first=$(visible | head -n 1)
+    case $1 in *'const id = null'*)
+      if [ -n "$first" ] && [ "$(field "$first" 4)" = about:blank ]; then
+        result "\"page@$first\""
+      fi
+    esac
+    new_tab about:blank
+    new=$(cat "$S/current-$session")
+    [ -n "$cur" ] && echo "$cur" > "$S/current-$session"
+    result "\"page@$new\""
+    ;;
   *) echo "fake: unknown code: $1" >&2; exit 1 ;;
   esac
   ;;

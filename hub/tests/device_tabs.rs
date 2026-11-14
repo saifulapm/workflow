@@ -720,6 +720,35 @@ fn two_sessions_at_once_open_one_connect_tab() {
 }
 
 #[test]
+fn the_next_session_opens_the_hub_s_tab_again_after_saiful_closed_it() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.close_by_hand("about:blank");
+    assert!(hub_tabs(&rig).is_empty());
+    rig.browser("s2", &["goto", "https://b.test"]);
+    assert_eq!(hub_tabs(&rig), ["about:blank"]);
+    rig.browser("s1", &["detach"]);
+    rig.browser("s2", &["detach"]);
+    rig.browser("s3", &["goto", "https://c.test"]);
+    assert_eq!(connect_tabs(&rig), 1, "{:?}", rig.calls());
+    assert_eq!(hub_tabs(&rig), ["about:blank"]);
+}
+
+#[test]
+fn with_the_hub_s_tab_closed_the_last_session_s_detach_leaves_the_connection_up() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.browser("s2", &["goto", "https://b.test"]);
+    rig.close_by_hand("about:blank");
+    rig.browser("s1", &["detach"]);
+    rig.browser("s2", &["detach"]);
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+    rig.browser("s3", &["goto", "https://c.test"]);
+    assert_eq!(connect_tabs(&rig), 1, "{:?}", rig.calls());
+    assert_eq!(hub_tabs(&rig), ["about:blank"]);
+}
+
+#[test]
 fn a_session_that_closes_its_last_tab_leaves_the_connection_up() {
     let rig = rig();
     rig.browser("s1", &["goto", "https://a.test"]);

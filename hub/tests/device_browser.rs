@@ -204,9 +204,9 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
         ]
     };
     let calls = rig.calls();
-    assert_eq!(calls.len(), 11, "{calls:?}");
+    assert_eq!(calls.len(), 12, "{calls:?}");
     assert_eq!(
-        calls[..10],
+        calls[..11],
         [
             fields(&cwd, "", &["list"]),
             fields(&cwd, "", &["list"]),
@@ -218,6 +218,19 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
             ),
             scoped("-s=s1 attach hub.connection"),
             fields(&cwd, "", &["-s=s1", "attach", "hub.connection"]),
+            fields(
+                &connection,
+                "",
+                &[
+                    "-s=hub.connection",
+                    "run-code",
+                    "async page => { const id = null; const pages = page.context().pages(); \
+                     if (pages.some(p => p._guid === id)) return null; \
+                     if (id === null && pages.length && pages[0].url() === 'about:blank') \
+                     return pages[0]._guid || ''; \
+                     const p = await page.context().newPage(); return p._guid || ''; }"
+                ]
+            ),
             fields(
                 &cwd,
                 "",
@@ -243,7 +256,7 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     );
     // After a command that may change the current tab the hub checks it is
     // still the session's own.
-    assert_eq!(calls[10][2..4], ["-s=s1", "run-code"]);
+    assert_eq!(calls[11][2..4], ["-s=s1", "run-code"]);
     assert_eq!(
         mem_lines(&rig.mem_log),
         vec!["--project=demo log -- device nuc browser goto https://claude.ai/code exit 0"]
@@ -255,11 +268,11 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     let calls = rig.calls();
     // Before the command the hub checks the current tab is still the
     // session's own, then reads its URL.
-    assert_eq!(calls.len(), 15, "{calls:?}");
-    assert_eq!(calls[11], fields(&cwd, "", &["list"]));
-    assert_eq!(calls[12][2..4], ["-s=s1", "run-code"]);
+    assert_eq!(calls.len(), 16, "{calls:?}");
+    assert_eq!(calls[12], fields(&cwd, "", &["list"]));
+    assert_eq!(calls[13][2..4], ["-s=s1", "run-code"]);
     assert_eq!(
-        calls[13],
+        calls[14],
         fields(
             &cwd,
             "",
@@ -270,7 +283,7 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
             ]
         )
     );
-    assert_eq!(calls[14], fields(&cwd, "", &["-s=s1", "snapshot"]));
+    assert_eq!(calls[15], fields(&cwd, "", &["-s=s1", "snapshot"]));
 }
 
 /// Saiful's tap on the hub page releases a held tmux line, so a session

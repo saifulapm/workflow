@@ -111,6 +111,25 @@ const TAG_NEW: &str = "async page => { if (!page.__hubSeen) { page.__hubTab = tr
 /// no longer knows its marks.
 const OWN_IDS: &str = "tabs.json";
 
+/// The file in the connection's folder that holds the guid of the hub's own
+/// tab, the one that keeps the connection up when no session has a tab.
+const HUB_TAB: &str = "hub-tab";
+
+/// Returns null while the hub's tab, guid `id`, is open. With no guid kept
+/// it takes the connection's first page when that is blank, as it is when
+/// the connection is new; otherwise it opens a blank page, which stays open
+/// where tab-new about:blank does not, and returns that page's guid.
+fn hub_tab_code(id: Option<&str>) -> String {
+    format!(
+        "async page => {{ const id = {}; const pages = page.context().pages(); \
+         if (pages.some(p => p._guid === id)) return null; \
+         if (id === null && pages.length && pages[0].url() === 'about:blank') \
+         return pages[0]._guid || ''; \
+         const p = await page.context().newPage(); return p._guid || ''; }}",
+        serde_json::to_string(&id).unwrap_or_else(|_| "null".to_string())
+    )
+}
+
 /// The start of the hub's code that asks whether a page is the session's
 /// own: one it marked, or one such a page opened, as a link with
 /// target=_blank does.
@@ -628,6 +647,9 @@ impl Cli<'_> {
     /// Closes the session's tabs: the URL of each that stayed open, or the
     /// run of playwright-cli that could not close them.
     fn close_own(&self) -> Result<Result<Vec<String>, crate::proc::Finished>, Stop> {
+        if !self.dir.join(ALONE).exists() {
+            self.keep_hub_tab()?;
+        }
         self.close_own_in(self)
     }
 
@@ -643,7 +665,34 @@ impl Cli<'_> {
             let _ = std::fs::remove_file(self.dir.join(OWN_IDS));
             return Ok(Ok(Vec::new()));
         }
+        self.keep_hub_tab()?;
         self.close_own_in(&self.connection()?)
+    }
+
+    /// Opens the hub's own tab on its connection again when Saiful closed
+    /// it, so closing the last session's tab leaves the connection up and
+    /// the next attach opens no other connect tab.
+    fn keep_hub_tab(&self) -> Result<(), Stop> {
+        let connection = self.connection()?;
+        let file = connection.dir.join(HUB_TAB);
+        let id = std::fs::read_to_string(&file)
+            .ok()
+            .map(|id| id.trim().to_string())
+            .filter(|id| is_guid(id));
+        let done = {
+            let _tabs = tabs_lock();
+            connection.run_code(&hub_tab_code(id.as_deref()))?
+        };
+        match result_of(&done).map(|r| serde_json::from_str::<Option<String>>(&r)) {
+            Some(Ok(None)) => {}
+            Some(Ok(Some(id))) if is_guid(&id) => {
+                if let Err(e) = std::fs::write(&file, id) {
+                    eprintln!("hub: device: cannot write {}: {e}", file.display());
+                }
+            }
+            _ => eprintln!("hub: device: cannot keep the hub's own tab: {}", why(&done)),
+        }
+        Ok(())
     }
 
     /// Closes the session's tabs by `cli`'s daemon; forgets their guids
@@ -860,6 +909,7 @@ impl Cli<'_> {
                     return Ok(None);
                 };
                 let connection = self.connection()?;
+                let _ = std::fs::remove_file(connection.dir.join(HUB_TAB));
                 let made = connection.run_scoped(
                     &[
                         &format!("-s={CONNECTION}"),
@@ -881,6 +931,7 @@ impl Cli<'_> {
         // Joined, the session has a record from here on, so the sweep ends
         // it even when it gets no tab.
         self.on.set(Some(true));
+        self.keep_hub_tab()?;
         // A session joins on whichever tab of the connection is current,
         // which is another's, so it works in a new one.
         let opened = self.open_own_tab(&[&flag, "tab-new"])?;
