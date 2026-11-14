@@ -950,13 +950,20 @@ const DEVICE_KEYS: [&str; 4] = ["device", "device_by", "cloud_secrets", "cloud_s
 
 /// Why a write in another machine's outbox file would pass as a device's
 /// word, if it would: an item that names a machine other than a cloud one,
-/// a write or removal over such an item here, or a project record that changes one of
+/// a write or removal over such an item here other than one that only closes
+/// or archives it, or a project record that changes one of
 /// `DEVICE_KEYS` from what `file` holds here.
 fn foreign(rel: &str, file: &Path, body: Option<&str>) -> Option<String> {
     if is_item(rel) {
         // The write's own body and the copy it would replace here: a thread
-        // writes as itself, and over nothing a device wrote.
+        // writes as itself, and over nothing a device wrote but to close or
+        // archive it.
         let here = std::fs::read_to_string(file).ok();
+        if let (Some(body), Some(here)) = (body, here.as_deref())
+            && status_only(here, body)
+        {
+            return None;
+        }
         return [body, here.as_deref()]
             .into_iter()
             .flatten()
@@ -986,6 +993,21 @@ fn foreign(rel: &str, file: &Path, body: Option<&str>) -> Option<String> {
         .zip(theirs.iter().zip(&ours))
         .find(|(_, (a, b))| a != b)
         .map(|(key, _)| format!("changes {key}, which only a device sets"))
+}
+
+/// Whether two items differ only in the frontmatter keys that close or
+/// archive one: the rest of the frontmatter, parsed, and the text below it
+/// are the same, so the machine each names is the same too.
+fn status_only(here: &str, body: &str) -> bool {
+    let rest = |text: &str| {
+        let item = crate::item::Item::parse(text.as_bytes()).ok()?;
+        let mut table = item.table().ok()?;
+        for key in ["status", "fixed_by", "archived", "modified"] {
+            table.remove(key);
+        }
+        Some((table, item.body))
+    };
+    rest(here).is_some_and(|here| rest(body) == Some(here))
 }
 
 /// Whether `rel` is where mem keeps a record of a project: its project.toml,

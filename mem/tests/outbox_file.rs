@@ -801,3 +801,60 @@ fn a_thread_writes_over_no_item_a_device_wrote() {
     let file = mini.dirs().store().join(&path);
     assert_eq!(std::fs::read_to_string(file).unwrap(), original);
 }
+
+/// A thread may still close the mini's item: a write that keeps the mini's
+/// name and changes only its status, fixed_by and modified imports, while
+/// one that also changes the text, or removes the item, is dropped.
+#[test]
+fn a_thread_closes_an_item_a_device_wrote() {
+    let mini = machine("mac-mini-m2");
+    let held = "01K0OUTBOXHE1D000000000003";
+    let path = format!("projects/{ID}/items/{held}.md");
+    apply(
+        &mini,
+        &[
+            json!({"t": "rec", "seq": 3, "id": "01K0OUTBOXREC0000000000005", "path": path,
+                 "body": item_text(held, "mac-mini-m2", ""), "machine": "mac-mini-m2"}),
+        ],
+    );
+    let closed = item_text(
+        held,
+        "mac-mini-m2",
+        "status = \"fixed\"\nfixed_by = \"abc1234\"\n",
+    )
+    .replace(
+        "modified = \"2026-11-14T00:00:00Z\"",
+        "modified = \"2026-11-15T00:00:00Z\"",
+    );
+    let repo = checkout(&mini);
+    let import = |id: &str, body: Value| {
+        let file = json!({"machine": "cloud-vm", "writes": [
+            {"id": id, "path": path, "base": null, "body": body},
+        ]});
+        std::fs::write(repo.join(FILE), file.to_string()).unwrap();
+        let out = walk_in(&mini, &repo, &["projects"]);
+        assert!(!repo.join(FILE).exists(), "{id}");
+        stderr(&out)
+    };
+    for (id, body) in [
+        (
+            "01K0OUTBOXW000000000000070",
+            json!(closed.replace("\nsaid\n", "\nyes\n")),
+        ),
+        ("01K0OUTBOXW000000000000071", Value::Null),
+    ] {
+        let said = import(id, body);
+        assert!(
+            said.lines().any(|l| l.contains(path.as_str())
+                && l.contains("names mac-mini-m2, not a cloud machine")),
+            "{id}: {said}"
+        );
+    }
+    assert!(pending(&mini).is_empty());
+    let id = "01K0OUTBOXW000000000000072";
+    assert_eq!(import(id, json!(closed)), "");
+    assert_eq!(ids(&pending(&mini)), [id]);
+    apply(&mini, &[json!({"t": "ack", "id": id, "seq": 4})]);
+    let file = mini.dirs().store().join(&path);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), closed);
+}
