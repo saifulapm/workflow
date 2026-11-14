@@ -66,6 +66,12 @@ like "$(skill orchestrate | sed -n '/half done/,/^$/p')" 'review and walk done a
 like "$(skill plan | sed -n '/^10\. /,/^Store each plan/p')" 'already passes on the base names nothing' \
 	"plan: rule 10 drops an acceptance line the base already passes"
 
+# A plan promised a number counted in the code, not on production, three
+# times (lareys-trendsi m7, m15 and m21): rule 11 has each number name where
+# it was counted.
+like "$(skill plan | sed -n '/^11\. /,/^Store each plan/p')" 'names where it was counted' \
+	"plan: rule 11 has each number a plan promises name where it was counted"
+
 # A thread asks before each of the six destructive kinds (#NHEQRXY1), files a
 # held line with its exact text and sends it again with the yes, and starts a
 # local agent only for what the cloud cannot do (m4-device-tmux).

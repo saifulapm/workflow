@@ -162,6 +162,12 @@ The rules:
    build: drop it, or rewrite the behaviour as what is still missing
    (workflow m2b-clean-commits' outbox log, on main since e31789d;
    m3-ask-not-park's `--blank`, on main since w9).
+11. Each number a plan promises (a count, a share, a cost, a time)
+   names where it was counted: the production query, log or file, and its date.
+   A number read off the code is a guess. lareys-trendsi m21 promised D1
+   reads "under half" from three catalog loads it counted in the code;
+   production showed two per run. Measure such a number on production, or
+   cut it, before you store the plan.
 
 Store each plan as written. mem refuses one whose first line is not
 `# plan: <slug>`.
