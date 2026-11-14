@@ -387,6 +387,55 @@ fn a_submodule_is_checked_out_by_the_session_s_first_line() {
     assert!(rig.worktree().join("lib/hello").is_file());
 }
 
+/// The hub runs git in the worktree outside the wall, so no git file a
+/// session could rewrite may steer it: a submodule's .git file planted in
+/// the wall is made again before the next session's update.
+#[test]
+fn a_submodule_s_git_file_rewritten_in_the_wall_is_made_again() {
+    let rig = rig();
+    let sub = rig.origin.with_file_name("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    git(&sub, &["init", "-q", "-b", "main"]);
+    std::fs::write(sub.join("hello"), "from-sub\n").unwrap();
+    git(&sub, &["add", "."]);
+    git(&sub, &["commit", "-q", "-m", "sub"]);
+    rig.push("cloud/cloud_walk-w14", |seed| {
+        git(
+            seed,
+            &["submodule", "add", "-q", sub.to_str().unwrap(), "lib"],
+        );
+    });
+    rig.walk(&["send", "cat lib/hello"]);
+    rig.read_until("from-sub");
+    rig.walk(&[
+        "send",
+        "printf 'gitdir: /nowhere\\n' > lib/.git && echo planted",
+    ]);
+    rig.read_until("planted");
+    rig.walk(&["end"]);
+    rig.walk(&["send", "cat lib/hello; echo again"]);
+    let pane = rig.read_until("again");
+    assert!(pane.contains("from-sub"), "{pane}");
+    let file = std::fs::read_to_string(rig.worktree().join("lib/.git")).unwrap();
+    assert!(!file.contains("/nowhere"), "{file}");
+}
+
+#[test]
+fn the_worktree_s_own_git_files_are_read_only_in_the_wall() {
+    let rig = rig();
+    rig.walk(&[
+        "send",
+        "echo 'gitdir: /nowhere' > .git; echo /nowhere > $(git rev-parse --git-dir)/commondir; echo tried",
+    ]);
+    let pane = rig.read_until("tried");
+    assert_eq!(pane.matches("Read-only file system").count(), 2, "{pane}");
+    let file = std::fs::read_to_string(rig.worktree().join(".git")).unwrap();
+    assert!(
+        file.starts_with("gitdir: ") && !file.contains("/nowhere"),
+        "{file}"
+    );
+}
+
 #[test]
 fn a_project_with_no_checkout_of_its_repo_is_refused() {
     let rig = rig();
@@ -849,4 +898,218 @@ fn a_missing_worktree_of_saiful_s_own_stays_on_his_list() {
         "{}",
         worktrees_of(&rig.checkout)
     );
+}
+
+/// Saiful's secrets, his other folders and mem's store, planted in the
+/// home: none is in the wall.
+#[test]
+fn a_walled_session_sees_none_of_saiful_s_secrets() {
+    let rig = rig();
+    let hidden = [
+        ".password-store",
+        ".ssh",
+        ".gnupg",
+        ".config/gh",
+        ".config/hub",
+        ".claude",
+        "Documents",
+        ".local/share/mem/store",
+        ".local/state/mem/share",
+    ];
+    for dir in hidden {
+        std::fs::create_dir_all(rig.home.join(dir)).unwrap();
+        std::fs::write(rig.home.join(dir).join("planted"), "secret\n").unwrap();
+    }
+    std::fs::write(
+        rig.home.join(".npmrc"),
+        "//registry.npmjs.org/:_authToken=x\n",
+    )
+    .unwrap();
+    let home = rig.home.display();
+    let mut line = String::new();
+    for dir in hidden {
+        line.push_str(&format!("ls {home}/{dir}; "));
+    }
+    line.push_str(&format!(
+        "cat {home}/.npmrc; cat {home}/Documents/planted; echo listed"
+    ));
+    rig.walk(&["send", &line]);
+    let pane = rig.read_until("listed");
+    for dir in hidden {
+        let said = format!("ls: cannot access '{home}/{dir}': No such file or directory");
+        assert!(pane.contains(&said), "{said}\n{pane}");
+    }
+    assert!(
+        pane.contains(&format!("cat: {home}/.npmrc: No such file or directory")),
+        "{pane}"
+    );
+    assert!(
+        !pane.contains("secret") && !pane.contains("_authToken"),
+        "{pane}"
+    );
+}
+
+#[test]
+fn a_walled_session_reaches_no_agent_socket_or_session_bus() {
+    let rig = rig();
+    rig.walk(&[
+        "send",
+        "gpg-connect-agent /bye; echo gpg-$?; tmux ls; echo tmux-$?; \
+         systemd-run --user true; echo run-$?; ls /run/user; echo done",
+    ]);
+    let pane = rig.read_until("done");
+    for code in ["gpg-0", "tmux-0", "run-0"] {
+        assert!(
+            !pane.lines().any(|l| l.trim_end() == code),
+            "{code}\n{pane}"
+        );
+    }
+    assert!(
+        pane.contains("ls: cannot access '/run/user': No such file or directory"),
+        "{pane}"
+    );
+}
+
+#[test]
+fn the_checkout_s_git_is_read_only_and_the_worktree_s_git_works() {
+    let rig = rig();
+    let hooks = rig.checkout.join(".git/hooks");
+    rig.walk(&[
+        "send",
+        &format!(
+            "touch {}/planted; git status > /dev/null; echo status-$?",
+            hooks.display()
+        ),
+    ]);
+    let pane = rig.read_until("status-0");
+    assert!(pane.contains("Read-only file system"), "{pane}");
+    assert!(!hooks.join("planted").exists());
+}
+
+#[test]
+fn a_walled_session_runs_as_the_device_s_user() {
+    let rig = rig();
+    let me = Command::new("id").arg("-un").output().unwrap();
+    let me = String::from_utf8_lossy(&me.stdout).trim().to_string();
+    rig.walk(&["send", "echo user-$(id -un)"]);
+    rig.read_until(&format!("user-{me}"));
+}
+
+/// Whether a process whose command line is `marker` is still running.
+fn running(marker: &str) -> bool {
+    std::fs::read_dir("/proc").unwrap().flatten().any(|entry| {
+        std::fs::read(entry.path().join("cmdline"))
+            .is_ok_and(|cmd| String::from_utf8_lossy(&cmd).replace('\0', " ").trim() == marker)
+    })
+}
+
+#[test]
+fn no_process_of_a_walled_session_outlives_its_end() {
+    let rig = rig();
+    // Seconds no other run of this test sleeps for.
+    let (first, second) = (
+        format!("sleep {}1", std::process::id()),
+        format!("sleep {}2", std::process::id()),
+    );
+    rig.walk(&[
+        "send",
+        &format!("setsid {first} & (nohup {second} > /dev/null &); echo started"),
+    ]);
+    rig.read_until("started");
+    wait_until(Duration::from_secs(5), || {
+        running(&first) && running(&second)
+    });
+    rig.walk(&["end"]);
+    wait_until(Duration::from_secs(5), || {
+        !running(&first) && !running(&second)
+    });
+}
+
+/// Whether the walled session can open a TCP connection to `host`:`port`.
+fn reaches(rig: &Rig, host: &str, port: u16) -> bool {
+    let tag = format!("{}-{port}", host.replace(['.', ':'], "_"));
+    rig.walk(&[
+        "send",
+        &format!(
+            "timeout 2 bash -c 'exec 3<>/dev/tcp/{host}/{port}' 2>/dev/null \
+             && echo open-{tag} || echo shut-{tag}"
+        ),
+    ]);
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let pane = rig.walk(&["read"])["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        for (word, open) in [("open", true), ("shut", false)] {
+            if pane
+                .lines()
+                .any(|l| l.trim_end() == format!("{word}-{tag}"))
+            {
+                return open;
+            }
+        }
+        assert!(
+            Instant::now() < until,
+            "no answer for {host}:{port} in: {pane}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn a_walled_session_reaches_the_internet() {
+    let rig = rig();
+    rig.walk(&[
+        "send",
+        "echo code-$(curl -s -m 20 -o /dev/null -w '%{http_code}' https://api.cloudflare.com/client/v4/)",
+    ]);
+    let until = Instant::now() + Duration::from_secs(25);
+    loop {
+        let pane = rig.walk(&["read"])["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let code = pane
+            .lines()
+            .filter_map(|l| l.trim_end().strip_prefix("code-"))
+            .find(|c| c.len() == 3);
+        if let Some(code) = code {
+            assert_ne!(code, "000", "{pane}");
+            return;
+        }
+        assert!(Instant::now() < until, "{pane}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Of the device, a walled session reaches adb's port and nothing else:
+/// not the hub, not another loopback port, not the device's own addresses.
+#[test]
+fn of_the_device_a_walled_session_reaches_only_adb_s_port() {
+    let rig = rig();
+    // A running adb server is a listener on 5037 too.
+    let _adb = std::net::TcpListener::bind("127.0.0.1:5037");
+    let other = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let port = other.local_addr().unwrap().port();
+    assert!(reaches(&rig, "127.0.0.1", 5037));
+    assert!(!reaches(&rig, "127.0.0.1", rig.hub.port));
+    assert!(!reaches(&rig, "127.0.0.1", port));
+    let addrs = Command::new("ip")
+        .args(["-4", "-o", "addr", "show"])
+        .output()
+        .unwrap();
+    for addr in String::from_utf8_lossy(&addrs.stdout)
+        .lines()
+        .filter_map(|l| {
+            l.split_whitespace()
+                .nth(3)?
+                .split('/')
+                .next()
+                .map(str::to_string)
+        })
+        .filter(|a| !a.starts_with("127."))
+    {
+        assert!(!reaches(&rig, &addr, port), "{addr}:{port}");
+    }
 }

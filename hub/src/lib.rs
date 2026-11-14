@@ -53,6 +53,7 @@ pub mod seed;
 pub mod share;
 pub mod slack;
 pub mod stalls;
+pub mod wall;
 
 /// How long `tailscale status` may take. It runs once, before the listener is
 /// serving, so a wedged `tailscaled` must not become the reason hub never

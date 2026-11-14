@@ -120,10 +120,31 @@ pub(crate) fn prepare(machine: &str, project: &str, name: &str) -> Result<Worktr
         )?;
     }
     used(repo, &top);
-    Ok(Worktree {
-        submodules: folder.join(".gitmodules").exists(),
-        folder,
-    })
+    let submodules = folder.join(".gitmodules").exists();
+    if submodules {
+        unplant(&git, &folder)?;
+    }
+    Ok(Worktree { submodules, folder })
+}
+
+/// Removes the folder of each submodule the worktree's commit names, so
+/// the hub's update, outside the wall, makes it again from the git folder
+/// the wall keeps read-only, never through a .git file a session wrote.
+fn unplant(git: &Git, folder: &Path) -> Result<(), Outcome> {
+    let listed = git.ok(folder, &["ls-files", "--stage", "-z"])?;
+    for entry in listed.stdout.split(|b| *b == 0) {
+        let entry = String::from_utf8_lossy(entry);
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        let inside = Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if meta.starts_with("160000 ") && inside {
+            let _ = std::fs::remove_dir_all(folder.join(path));
+        }
+    }
+    Ok(())
 }
 
 /// Under the state folder, one file a worktree, named for it: the checkout

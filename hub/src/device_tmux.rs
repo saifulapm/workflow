@@ -283,20 +283,44 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
             "-e",
             "HISTSIZE=0",
         ];
-        // A thread writes bash, and the user's own shell may be fish. Several
-        // words, so tmux runs bash itself rather than through that shell;
-        // no rc file, which may turn history back on, and no `!` expansion.
-        let bash = find_in(&tmux.path, "bash").map(|b| b.to_string_lossy().into_owned());
-        if let Some(bash) = &bash {
-            new.extend([bash.as_str(), "--noprofile", "--norc", "+H", "-i"]);
+        // A thread writes bash, and the user's own shell may be fish. No rc
+        // file, which may turn history back on, and no `!` expansion.
+        let Some(bash) = find_in(&tmux.path, "bash") else {
+            return Outcome::fail(127, "device: bash was not found\n".to_string());
+        };
+        let bash = bash.to_string_lossy().into_owned();
+        let shell = [&bash, "--noprofile", "--norc", "+H", "-i"].map(str::to_string);
+        let Some(state) = state("hub/wall") else {
+            return Outcome::fail(126, "device: cannot find the state folder\n".to_string());
+        };
+        let history = [("HISTFILE", "/dev/null"), ("HISTSIZE", "0")];
+        let mut walled =
+            match crate::wall::command(&tmux.env, &work.folder, &history, &shell, &state) {
+                Ok(walled) => walled,
+                Err(why) => {
+                    return Outcome::fail(
+                        126,
+                        format!("device: the wall cannot start on {machine}: {why}\n"),
+                    );
+                }
+            };
+        // The submodules come with the GitHub login the wall hides, so the
+        // hub updates them before the wall starts, in the pane, where a
+        // first clone may take longer than a call.
+        if work.submodules {
+            let update = [
+                &bash,
+                "--noprofile",
+                "--norc",
+                "-c",
+                "GIT_TERMINAL_PROMPT=0 git submodule update --init --recursive; exec \"$@\"",
+                "bash",
+            ];
+            walled.splice(0..0, update.map(str::to_string));
         }
+        new.extend(walled.iter().map(String::as_str));
         let made = tmux.run(&new);
         if let Err(failed) = ok(made, "new-session") {
-            return failed;
-        }
-        if work.submodules
-            && let Err(failed) = type_line(tmux, &target, "git submodule update --init --recursive")
-        {
             return failed;
         }
     }
