@@ -298,14 +298,24 @@ fn device_keys(text: Option<&str>) -> [Option<toml::Value>; 4] {
 }
 
 /// Whether two items differ only in the frontmatter keys that close or
-/// archive one: the rest of the frontmatter, parsed, and the text below it
-/// are the same.
+/// archive one (prune's archive keeps its time too), each a value of the
+/// shape mem reads: the rest of the frontmatter, parsed, and the text below
+/// it are the same.
 fn status_only(held: &str, body: &str) -> bool {
     let rest = |text| {
         let (front, below) = crate::memview::split_item(text)?;
         let mut table: toml::Table = toml::from_str(front).ok()?;
-        for key in ["status", "fixed_by", "archived", "modified"] {
-            table.remove(key);
+        for key in ["status", "fixed_by", "archived", "archived_at", "modified"] {
+            // Each of the shape mem reads, so no device is sent an item it
+            // cannot parse.
+            let shaped = match (key, table.remove(key)) {
+                (_, None) => true,
+                ("archived", Some(value)) => value.is_bool(),
+                (_, Some(value)) => value.is_str(),
+            };
+            if !shaped {
+                return None;
+            }
         }
         Some((table, below))
     };
@@ -2122,6 +2132,29 @@ mod tests {
                 "archived",
                 held.replace("kind", "archived = true\nkind"),
                 true,
+            ),
+            (
+                "archived by prune",
+                held.replace(
+                    "kind",
+                    "archived = true\narchived_at = \"2026-11-15T00:00:00Z\"\nkind",
+                ),
+                true,
+            ),
+            (
+                "a modified that is no time",
+                closed.replace("\"2026-11-15T00:00:00Z\"", "1"),
+                false,
+            ),
+            (
+                "a status that is no word",
+                closed.replace("status = \"fixed\"", "status = 1"),
+                false,
+            ),
+            (
+                "an archived that is no yes or no",
+                held.replace("kind", "archived = \"x\"\nkind"),
+                false,
             ),
             (
                 "and the title",

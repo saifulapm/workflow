@@ -857,4 +857,12 @@ fn a_thread_closes_an_item_a_device_wrote() {
     apply(&mini, &[json!({"t": "ack", "id": id, "seq": 4})]);
     let file = mini.dirs().store().join(&path);
     assert_eq!(std::fs::read_to_string(file).unwrap(), closed);
+    // Prune's archive, which keeps its own time.
+    let archived = closed.replace(
+        "fixed_by = \"abc1234\"\n",
+        "fixed_by = \"abc1234\"\narchived = true\narchived_at = \"2026-11-16T00:00:00Z\"\n",
+    );
+    let id = "01K0OUTBOXW000000000000073";
+    assert_eq!(import(id, json!(archived)), "");
+    assert_eq!(ids(&pending(&mini)), [id]);
 }

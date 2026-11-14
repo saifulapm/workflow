@@ -996,13 +996,13 @@ fn foreign(rel: &str, file: &Path, body: Option<&str>) -> Option<String> {
 }
 
 /// Whether two items differ only in the frontmatter keys that close or
-/// archive one: the rest of the frontmatter, parsed, and the text below it
+/// archive one (prune's archive keeps its time too): the rest of the frontmatter, parsed, and the text below it
 /// are the same, so the machine each names is the same too.
 fn status_only(here: &str, body: &str) -> bool {
     let rest = |text: &str| {
         let item = crate::item::Item::parse(text.as_bytes()).ok()?;
         let mut table = item.table().ok()?;
-        for key in ["status", "fixed_by", "archived", "modified"] {
+        for key in ["status", "fixed_by", "archived", "archived_at", "modified"] {
             table.remove(key);
         }
         Some((table, item.body))
