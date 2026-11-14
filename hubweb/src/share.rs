@@ -297,6 +297,21 @@ fn device_keys(text: Option<&str>) -> [Option<toml::Value>; 4] {
     ["device", "device_by", "cloud_secrets", "cloud_secrets_by"].map(|key| table.get(key).cloned())
 }
 
+/// Whether two items differ only in the frontmatter keys that close or
+/// archive one: the rest of the frontmatter, parsed, and the text below it
+/// are the same.
+fn status_only(held: &str, body: &str) -> bool {
+    let rest = |text| {
+        let (front, below) = crate::memview::split_item(text)?;
+        let mut table: toml::Table = toml::from_str(front).ok()?;
+        for key in ["status", "fixed_by", "archived", "modified"] {
+            table.remove(key);
+        }
+        Some((table, below))
+    };
+    rest(held).is_some_and(|held| rest(body) == Some(held))
+}
+
 /// Why a bound socket writing as `writer` may not make this write, if it
 /// may not: a global item through a cloud session's token, an item that
 /// names a machine other than the writer, the item's author so far, or a
@@ -319,9 +334,8 @@ fn forged(
     if !path.contains("/items/") {
         return Ok(None);
     }
-    let author = log
-        .head(path)?
-        .and_then(|head| head.body.as_deref().and_then(item_machine));
+    let held = log.head(path)?.and_then(|head| head.body);
+    let author = held.as_deref().and_then(item_machine);
     // mem removes no item but its own, except when a device deletes a whole
     // project: then it drops every item in it, whoever wrote it.
     let Some(body) = body else {
@@ -336,10 +350,12 @@ fn forged(
         return Ok(Some("an item names the machine that wrote it".into()));
     };
     // What a device wrote is its word: no thread's write takes its place,
-    // on the thread's own token or in a device's import of its outbox.
+    // on the thread's own token or in a device's import of its outbox. It
+    // may still close or archive it, as long as it keeps the device's name.
     let cloud_token = bound.machine.as_deref().is_none_or(|m| m.ends_with('*'));
     if let Some(author) = author.as_deref().filter(|author| !names(CLOUD, author))
         && (cloud_token || names(CLOUD, &named))
+        && !(named == author && held.as_deref().is_some_and(|held| status_only(held, body)))
     {
         return Ok(Some(format!(
             "a cloud session writes over no item a device wrote; {author} wrote this item"
@@ -2084,5 +2100,70 @@ mod tests {
             json!(closed),
         );
         assert_eq!(parse(&later.sender)[0]["t"], "ack");
+    }
+
+    /// A thread may close or archive a device's item: a write that changes
+    /// only its status, fixed_by, archived or modified lands, and one that
+    /// changes anything else stays refused.
+    #[test]
+    fn a_thread_changes_only_the_status_of_an_item_a_device_wrote() {
+        let mini = token("mini", Some("mac-mini-m2"));
+        let cloud = token("session_*", Some("cloud-*"));
+        let held = item_by("mac-mini-m2").replace(
+            "kind",
+            "modified = \"2026-11-14T00:00:00Z\"\ntitle = \"said\"\nkind",
+        );
+        let closed = held
+            .replace("2026-11-14T00:00:00Z", "2026-11-15T00:00:00Z")
+            .replace("kind", "status = \"fixed\"\nfixed_by = \"abc1234\"\nkind");
+        for (case, body, acked) in [
+            ("status and fixed_by", closed.clone(), true),
+            (
+                "archived",
+                held.replace("kind", "archived = true\nkind"),
+                true,
+            ),
+            (
+                "and the title",
+                closed.replace("title = \"said\"", "title = \"yes\""),
+                false,
+            ),
+            ("and the text", closed.replace("\nsaid\n", "\nyes\n"), false),
+            (
+                "and the machine",
+                closed.replace("mac-mini-m2", "cloud-vm"),
+                false,
+            ),
+            (
+                "and answers",
+                closed.replace("kind", "answers = \"01Q\"\nkind"),
+                false,
+            ),
+        ] {
+            let mut log = Memory::default();
+            let first = write_as(
+                &mut log,
+                Some(&mini),
+                "mac-mini-m2",
+                "01A",
+                ITEM,
+                json!(held),
+            );
+            assert_eq!(parse(&first.sender)[0]["t"], "ack", "{case}");
+            let later = write_as(&mut log, Some(&cloud), "cloud-vm", "01B", ITEM, json!(body));
+            let answer = &parse(&later.sender)[0];
+            if acked {
+                assert_eq!(answer["t"], "ack", "{case}");
+                assert_eq!(log.recs.len(), 2, "{case}");
+            } else {
+                assert_eq!(answer["t"], "refused", "{case}");
+                assert_eq!(
+                    answer["why"],
+                    "a cloud session writes over no item a device wrote; mac-mini-m2 wrote this item",
+                    "{case}"
+                );
+                assert_eq!(log.recs.len(), 1, "{case}");
+            }
+        }
     }
 }
