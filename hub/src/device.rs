@@ -24,6 +24,11 @@ use crate::proc::{Ended, output_within};
 /// when one of them set it, so a cloud thread's mem cannot move its calls.
 pub const DEVICES: [&str; 3] = ["mac-mini-m2", "nuc", "macbook-m2"];
 
+/// The machine the hub page signs every answer Saiful taps there with. It
+/// answers only for a person signed in to Access on a paired browser, so
+/// it is his word as a device's is; it asks nothing and serves no call.
+pub const HUB_PAGE: &str = "hub-web";
+
 /// Under Cloudflare's 100 s for an origin, so a stopped call still reaches
 /// the caller through the tunnel.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);

@@ -622,8 +622,9 @@ fn asks(body: &str, line: &str) -> bool {
 
 /// Ok when question `id` of `project` was asked by a device, is of `kind`
 /// and asks for `line` (a job's question, for any), and Saiful answered it
-/// yes (a job's, to run outside the wall) on one of the devices, never a
-/// cloud thread's own `mem answer`, and no earlier line went out on it.
+/// yes (a job's, to run outside the wall) on one of the devices or the hub
+/// page, never a cloud thread's own `mem answer`, and no earlier line went
+/// out on it.
 fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outcome> {
     let spent = state(SPENT)
         .ok_or_else(|| Outcome::fail(126, "device: cannot find the state folder\n".to_string()))?;
@@ -688,9 +689,10 @@ fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outc
         .as_str()
         .map(|answer| mem.refresh(&["show", answer, "--json"]).rows("items"))
         .and_then(|items| items.first()?["machine"].as_str().map(str::to_string));
-    if !machine.is_some_and(|m| crate::device::DEVICES.contains(&m.as_str())) {
+    let machine = machine.as_deref().unwrap_or("no machine");
+    if !crate::device::DEVICES.contains(&machine) && machine != crate::device::HUB_PAGE {
         return Err(Outcome::refuse(format!(
-            "the yes for #{id} came from a cloud machine"
+            "the yes for #{id} came from {machine}, not from a device or the hub page"
         )));
     }
     Ok(())

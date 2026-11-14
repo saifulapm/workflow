@@ -16,6 +16,8 @@ const REMOTE: &str = "github.com/saifulapm/cloud-spike";
 
 struct Rig {
     hub: Hub,
+    /// The fakes the hub finds on its PATH, for a restart.
+    bin: PathBuf,
     home: PathBuf,
     socket: PathBuf,
     /// What fake mem keeps: projects.json, read back, and log, the lines
@@ -124,6 +126,7 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
     let hub = Hub::spawn_env(&home, &[&bin], &["local", "--port", "0"], &all);
     let rig = Rig {
         hub,
+        bin,
         home,
         socket,
         state,
@@ -157,6 +160,18 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 impl Rig {
+    /// A new hub on the same home, state and tmux server, the old one
+    /// stopped once the new one is up.
+    fn restart(&mut self) {
+        let local = self._dir.join("local-again.sock");
+        let env = [
+            ("HUB_PEER_TOKEN", TOKEN),
+            ("HUB_LOCAL_SOCKET", local.to_str().unwrap()),
+            ("HUB_DEVICE_TMUX_SOCKET", self.socket.to_str().unwrap()),
+        ];
+        self.hub = Hub::spawn_env(&self.home, &[&self.bin], &["local", "--port", "0"], &env);
+    }
+
     /// Each project's open milestone, as `mem projects --json` names it, all
     /// of the one remote; cloud_walk's checkout is on this device.
     fn milestones(&self, rows: &[(&str, &str)]) {
@@ -737,12 +752,12 @@ fn a_device_written_yes_sends_the_held_line_once() {
 fn a_yes_written_by_a_cloud_machine_is_refused() {
     let rig = rig();
     let folder = scratch(&rig);
-    rig.asked("rm -r scratch", "yes", "cloud-abc");
+    rig.asked("rm -r scratch", "yes", "cloud-vm");
     let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
     assert_eq!(sent["exit"], 2, "{sent}");
     assert_eq!(
         sent["stderr"],
-        "device: the yes for #AAAA1111 came from a cloud machine\n"
+        "device: the yes for #AAAA1111 came from cloud-vm, not from a device or the hub page\n"
     );
     assert!(folder.is_dir());
 }
@@ -779,6 +794,99 @@ fn a_yes_releases_only_the_line_it_asked_for() {
     let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
     assert_eq!(sent["exit"], 2, "{sent}");
     assert!(folder.is_dir());
+}
+
+#[test]
+fn a_hub_page_yes_sends_the_held_line_once() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    rig.asked("rm -r scratch", "Yes", "hub-web");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    rig.walk(&["send", "echo removed"]);
+    rig.read_until("removed");
+    assert!(!folder.exists());
+    let again = rig.walk(&["send", "--yes", "#AAAA1111", "rm -r scratch"]);
+    assert_eq!(again["exit"], 2, "{again}");
+}
+
+#[test]
+fn a_spent_hub_page_yes_stays_spent_after_a_restart() {
+    let mut rig = rig();
+    let folder = scratch(&rig);
+    rig.asked("rm -r scratch", "Yes", "hub-web");
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    rig.walk(&["send", "echo removed"]);
+    rig.read_until("removed");
+    assert!(!folder.exists());
+    rig.restart();
+    std::fs::create_dir_all(&folder).unwrap();
+    let again = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+    assert_eq!(again["exit"], 2, "{again}");
+    assert_eq!(
+        again["stderr"],
+        "device: #AAAA1111 already sent its line; ask again\n"
+    );
+    assert!(folder.is_dir());
+}
+
+#[test]
+fn a_hub_page_no_keeps_the_line_held() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    for answer in ["No", "hold"] {
+        rig.asked("rm -r scratch", answer, "hub-web");
+        let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+        assert_eq!(sent["exit"], 2, "{answer}: {sent}");
+        assert!(folder.is_dir(), "{answer}");
+    }
+}
+
+#[test]
+fn a_hub_page_yes_to_a_question_a_cloud_machine_wrote_releases_nothing() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    // The hub page answers; it never asks, so a question it names is no
+    // device's either.
+    for asker in ["cloud-vm", "hub-web"] {
+        rig.asked_by(asker, "rm -r scratch", "Yes", "hub-web");
+        let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+        assert_eq!(sent["exit"], 2, "{sent}");
+        assert_eq!(
+            sent["stderr"],
+            format!("device: #AAAA1111 was asked by {asker}, not by a device\n")
+        );
+        assert!(folder.is_dir());
+    }
+}
+
+/// The claude.ai connector and the hub sandbox sign as themselves, and a
+/// thread reaches the connector: neither is the hub page.
+#[test]
+fn a_yes_through_the_connector_or_with_no_machine_is_refused() {
+    let rig = rig();
+    let folder = scratch(&rig);
+    for (machine, named) in [
+        ("connector", "connector"),
+        ("hub", "hub"),
+        ("", "no machine"),
+    ] {
+        rig.asked("rm -r scratch", "yes", machine);
+        if machine.is_empty() {
+            let show = serde_json::json!({"items": [{"kind": "answer"}]});
+            std::fs::write(rig.state.join("show-01ANSWER.json"), show.to_string()).unwrap();
+        }
+        let sent = rig.walk(&["send", "--yes", "AAAA1111", "rm -r scratch"]);
+        assert_eq!(sent["exit"], 2, "{machine}: {sent}");
+        assert_eq!(
+            sent["stderr"],
+            format!(
+                "device: the yes for #AAAA1111 came from {named}, not from a device or the hub page\n"
+            )
+        );
+        assert!(folder.is_dir(), "{machine}");
+    }
 }
 
 #[test]
@@ -1269,6 +1377,55 @@ fn a_device_s_answer_runs_the_job_outside_the_wall() {
         &options,
         "run this job outside the wall",
         "mac-mini-m2",
+    );
+    let sent = rig.walk(&[
+        "send",
+        "--yes",
+        "AAAA1111",
+        "test -d ~/Documents && echo unwalled",
+    ]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    rig.read_until("unwalled");
+}
+
+#[test]
+fn a_hub_page_yes_runs_a_no_wall_line_outside_once() {
+    let rig = rig();
+    let docs = rig.home.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("note"), "seen\n").unwrap();
+    let line = format!("cat {}/note && echo outside-$(pwd)", docs.display());
+    rig.asked_with(
+        "mac-mini-m2",
+        &outside(&line),
+        &["yes", "no"],
+        "Yes",
+        "hub-web",
+    );
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", &line]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    let pane = rig.read_until(&format!("outside-{}", rig.worktree().display()));
+    assert!(pane.contains("seen"), "{pane}");
+    let again = rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", &line]);
+    assert_eq!(again["exit"], 2, "{again}");
+}
+
+#[test]
+fn a_hub_page_answer_runs_the_job_outside_the_wall_and_its_hold_runs_nothing() {
+    let rig = rig();
+    node_that_differs(&rig);
+    let body = "The wall cannot start on mac-mini-m2 for cloud_walk: node v24.18.0 inside, v24.21.0 outside\n";
+    let options = ["run this job outside the wall", "hold"];
+    rig.asked_with("mac-mini-m2", body, &options, "hold", "hub-web");
+    let held = rig.walk(&["send", "--yes", "AAAA1111", "echo hi"]);
+    assert_eq!(held["exit"], 2, "{held}");
+    assert!(rig.sessions().is_empty());
+    rig.asked_with(
+        "mac-mini-m2",
+        body,
+        &options,
+        "run this job outside the wall",
+        "hub-web",
     );
     let sent = rig.walk(&[
         "send",
