@@ -1,0 +1,7 @@
+### Session `m2bjoin` created, attached to `m2brec`.
+Run commands with: playwright-cli -s=m2bjoin <command>
+
+### Page
+- Page URL: about:blank
+### Snapshot
+- [Snapshot](.playwright-cli/page-2026-11-14T18-39-48-288Z.yml)

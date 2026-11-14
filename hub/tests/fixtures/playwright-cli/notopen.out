@@ -1,0 +1,3 @@
+The browser 'm2bjoin' is not open, please run open first
+
+  playwright-cli -s=m2bjoin open [params]

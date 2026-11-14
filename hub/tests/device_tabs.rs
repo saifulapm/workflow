@@ -119,7 +119,8 @@ impl Rig {
         serde_json::from_str(body_of(&response)).unwrap()
     }
 
-    /// The tab strip, as (group, URL) in order.
+    /// The tab strip, as (who opened it, URL) in order, without the tab
+    /// the hub keeps for its own connection (hub_tabs).
     fn strip(&self) -> Vec<(String, String)> {
         std::fs::read_to_string(&self.tabs)
             .unwrap()
@@ -128,6 +129,7 @@ impl Rig {
                 let f: Vec<&str> = line.split('\t').collect();
                 (f[1].to_string(), f[3].to_string())
             })
+            .filter(|(who, _)| who != "hub.connection")
             .collect()
     }
 
@@ -239,7 +241,7 @@ fn detach_closes_the_two_tabs_the_session_opened() {
     rig.browser("s1", &["tab-new", "https://b.test"]);
     let answer = rig.browser("s1", &["detach"]);
     assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
-    assert_eq!(answer["stdout"], "Browser 's1' is not attached.\n");
+    assert_eq!(answer["stdout"], "Browser 's1' detached\n\n");
 }
 
 #[test]
@@ -381,8 +383,8 @@ fn a_local_walk_s_tabs_outlast_the_run_s_handoff() {
     );
 }
 
-/// s1's own tab at 0, a tab Saiful dragged into its group at 1, and s1's
-/// second tab, current, at 2.
+/// The hub's own tab at 0, s1's own tab at 1, a tab Saiful dragged into the
+/// group at 2, and s1's second tab, current, at 3.
 fn with_a_dragged_tab() -> Rig {
     let rig = rig();
     rig.browser("s1", &["goto", "https://a.test"]);
@@ -394,14 +396,14 @@ fn with_a_dragged_tab() -> Rig {
 #[test]
 fn tab_select_of_a_tab_the_session_did_not_open_is_refused() {
     let rig = with_a_dragged_tab();
-    let answer = rig.call("s1", &["tab-select", "1"]);
+    let answer = rig.call("s1", &["tab-select", "2"]);
     assert_eq!(answer["exit"], 2, "{answer}");
     assert_eq!(
         answer["stderr"],
-        "device: tab 1 is not one this session opened\n"
+        "device: tab 2 is not one this session opened\n"
     );
-    assert!(!rig.calls().iter().any(|c| c == "-s=s1 tab-select 1"));
-    rig.browser("s1", &["tab-select", "0"]);
+    assert!(!rig.calls().iter().any(|c| c == "-s=s1 tab-select 2"));
+    rig.browser("s1", &["tab-select", "1"]);
     rig.browser("s1", &["goto", "https://c.test"]);
     assert_eq!(
         rig.strip(),
@@ -417,10 +419,10 @@ fn tab_select_of_a_tab_the_session_did_not_open_is_refused() {
 #[test]
 fn tab_close_of_a_tab_the_session_did_not_open_is_refused() {
     let rig = with_a_dragged_tab();
-    let answer = rig.call("s1", &["tab-close", "1"]);
+    let answer = rig.call("s1", &["tab-close", "2"]);
     assert_eq!(answer["exit"], 2, "{answer}");
     rig.browser("s1", &["tab-close"]);
-    rig.browser("s1", &["tab-close", "0"]);
+    rig.browser("s1", &["tab-close", "1"]);
     // Its last tab gone, the session gets a blank one rather than work on
     // in the dragged tab.
     assert_eq!(
@@ -483,7 +485,7 @@ fn a_tab_the_session_s_click_opened_is_its_own() {
     let rig = rig();
     rig.browser("s1", &["goto", "https://a.test"]);
     rig.popup("s1", "https://pop.test/");
-    rig.browser("s1", &["tab-select", "1"]);
+    rig.browser("s1", &["tab-select", "2"]);
     rig.browser("s1", &["detach"]);
     assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
 }
@@ -524,4 +526,72 @@ fn a_detach_whose_close_fails_keeps_the_session_for_the_idle_sweep() {
     rig.closing_fails(false);
     std::thread::sleep(Duration::from_secs(3));
     assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+/// How many times the hub attached through the extension: each one opens a
+/// connect tab in Chromium.
+fn connect_tabs(rig: &Rig) -> usize {
+    rig.calls()
+        .iter()
+        .filter(|c| c.ends_with(" attach --extension=chromium"))
+        .count()
+}
+
+/// The tabs of the hub's own connection session, which no walk opened.
+fn hub_tabs(rig: &Rig) -> Vec<String> {
+    std::fs::read_to_string(&rig.tabs)
+        .unwrap()
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            (f[1] == "hub.connection").then(|| f[3].to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn three_sessions_one_after_another_open_one_connect_tab() {
+    let rig = rig();
+    for (session, url) in [
+        ("s1", "https://a.test"),
+        ("s2", "https://b.test"),
+        ("s3", "https://c.test"),
+    ] {
+        rig.browser(session, &["goto", url]);
+        rig.browser(session, &["detach"]);
+    }
+    assert_eq!(connect_tabs(&rig), 1, "{:?}", rig.calls());
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+    assert_eq!(hub_tabs(&rig), ["about:blank"]);
+}
+
+#[test]
+fn two_sessions_at_once_open_one_connect_tab() {
+    let rig = rig();
+    std::thread::scope(|scope| {
+        scope.spawn(|| rig.browser("s1", &["goto", "https://a.test"]));
+        scope.spawn(|| rig.browser("s2", &["goto", "https://b.test"]));
+    });
+    assert_eq!(connect_tabs(&rig), 1, "{:?}", rig.calls());
+    let mut strip = rig.strip();
+    strip.sort();
+    assert_eq!(
+        strip,
+        vec![
+            tab("s1", "https://a.test"),
+            tab("s2", "https://b.test"),
+            tab("saiful", "https://his.test/"),
+        ]
+    );
+}
+
+#[test]
+fn a_session_that_closes_its_last_tab_leaves_the_connection_up() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.browser("s1", &["tab-close"]);
+    rig.browser("s1", &["detach"]);
+    rig.browser("s2", &["goto", "https://b.test"]);
+    assert_eq!(connect_tabs(&rig), 1, "{:?}", rig.calls());
+    assert_eq!(hub_tabs(&rig), ["about:blank"]);
 }

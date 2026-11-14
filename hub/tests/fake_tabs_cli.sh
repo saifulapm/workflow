@@ -1,11 +1,18 @@
 #!/bin/sh
 # A fake playwright-cli over Chromium's tab strip, kept in $S/tabs, one tab a
-# line, tab-separated: id, the session whose group holds it (saiful for
-# none), 1 when the hub marked it, its URL, and the id of the tab that opened
-# it (0 for none). Like the Playwright extension, a session sees only the
-# tabs in its group. Like playwright-core, closing the current tab makes the
-# one at the same place current, and closing a session's last tab ends it
-# with "Session closed" and exit 1. The hub's run-code is told apart by the
+# line, tab-separated: id, who opened it (a session, or saiful for one of his
+# own), the session whose daemon marked it (0 for none), its URL, and the id
+# of the tab that opened it (0 for none).
+#
+# Like the Playwright extension, a connection sees only the tabs in its
+# group. A session that attaches with --extension makes a connection of its
+# own; one that attaches to another session's name joins that one's, and
+# sees every tab of it ($S/conn-<session> names the connection). Like
+# playwright-core, a mark lives in the marking session's daemon, closing the
+# current tab makes the one at the same place current, and closing a
+# connection's last tab ends it and every session on it with "Session
+# closed" and exit 1. Detaching the session that made a connection ends it
+# for every session that joined. The hub's run-code is told apart by the
 # text of its code.
 #
 # What the real CLI prints is kept as transcripts in fixtures/playwright-cli
@@ -37,13 +44,17 @@ replay() {
   c=$1
   shift
   subst "$@" < "$FX/$c.out"
-  cat "$FX/$c.err" >&2
+  subst "$@" < "$FX/$c.err" >&2
   exit "$(cat "$FX/$c.code")"
 }
 
+# One call at a time, as one browser answers them, so two sessions' calls
+# never write the strip over each other.
+exec 9>> "$S/lock"
+flock 9
 printf '%s\n' "$*" >> "$S/record"
+touch "$S/sessions"
 if [ "$1" = list ]; then
-  touch "$S/sessions"
   if [ -s "$S/sessions" ]; then
     head -n 1 "$FX/list1.out"
     while read -r s; do tail -n +2 "$FX/list1.out" | subst m2blist "$s"; done < "$S/sessions"
@@ -56,6 +67,7 @@ cmd=$2
 shift 2
 code=$1
 cur=$(cat "$S/current-$session" 2>/dev/null)
+conn=$(cat "$S/conn-$session" 2>/dev/null)
 
 field() { awk -F'\t' -v id="$1" -v f="$2" '$1 == id { print $f }' "$S/tabs"; }
 set_field() {
@@ -66,23 +78,38 @@ drop() {
   awk -F'\t' -v id="$1" '$1 != id' "$S/tabs" > "$S/t"
   mv "$S/t" "$S/tabs"
 }
-visible() { awk -F'\t' -v s="$session" '$2 == s { print $1 }' "$S/tabs"; }
+attached() { grep -qx "$1" "$S/sessions"; }
+# The tabs of connection $1: those opened by a session on it, or dragged
+# into its group.
+of_conn() {
+  for f in "$S"/conn-*; do
+    [ -f "$f" ] && printf '%s\t%s\n' "${f##*/conn-}" "$(cat "$f")"
+  done | awk -F'\t' -v c="$1" 'NR == FNR { conn[$1] = $2; next }
+    { k = ($2 in conn) ? conn[$2] : $2; if (k == c) print $1 }' - "$S/tabs"
+}
+visible() { of_conn "$conn"; }
 nth() { visible | sed -n "$(($1 + 1))p"; }
-# A tab the hub marked, or, when the hub's code asks for openers, one a
-# marked tab opened.
+# A tab this session's daemon marked, or, when the hub's code asks for
+# openers, one such a tab opened.
 own() {
   t=$1
   while [ -n "$t" ] && [ "$t" != 0 ]; do
-    [ "$(field "$t" 3)" = 1 ] && return 0
+    [ "$(field "$t" 3)" = "$session" ] && return 0
     [ -n "$openers" ] || return 1
     t=$(field "$t" 5)
   done
   return 1
 }
 result() { replay result 'async page => { return -2 }' "$code" -2 "$1"; }
-end_session() {
-  grep -vx "$session" "$S/sessions" > "$S/t"
+# Ends every session on connection $1.
+end_conn() {
+  while read -r s; do
+    [ "$(cat "$S/conn-$s" 2>/dev/null)" = "$1" ] || echo "$s"
+  done < "$S/sessions" > "$S/t"
   mv "$S/t" "$S/sessions"
+}
+end_session() {
+  end_conn "$conn"
   replay sessclosed
 }
 new_tab() {
@@ -102,18 +129,36 @@ close_tab() {
   fi
 }
 
+if [ "$cmd" != attach ] && [ "$cmd" != detach ] && ! attached "$session"; then
+  replay notopen m2bjoin "$session"
+fi
+
 case $cmd in
 attach)
-  echo "$session" >> "$S/sessions"
-  if [ -n "$PLAYWRIGHT_MCP_EXTENSION_TOKEN" ]; then
-    new_tab about:blank
+  if [ "$1" = "--extension=chromium" ]; then
+    echo "$session" > "$S/conn-$session"
+    conn=$session
+    if [ -n "$PLAYWRIGHT_MCP_EXTENSION_TOKEN" ]; then
+      new_tab about:blank
+    else
+      # With no token Saiful picks one of his own tabs on the connect page.
+      his=$(awk -F'\t' '$2 == "saiful" { print $1; exit }' "$S/tabs")
+      set_field "$his" 2 "$session"
+      echo "$his" > "$S/current-$session"
+    fi
+    echo "$session" >> "$S/sessions"
+    echo attached
   else
-    # With no token Saiful picks one of his own tabs on the connect page.
-    his=$(awk -F'\t' '$2 == "saiful" { print $1; exit }' "$S/tabs")
-    set_field "$his" 2 "$session"
-    echo "$his" > "$S/current-$session"
+    if ! attached "$1"; then
+      echo "[PlaywrightError: connect ENOENT $1] { log: [], code: 'ENOENT' }" >&2
+      exit 1
+    fi
+    cat "$S/conn-$1" > "$S/conn-$session"
+    conn=$(cat "$S/conn-$session")
+    visible | head -n 1 > "$S/current-$session"
+    echo "$session" >> "$S/sessions"
+    replay join m2bjoin "$session" m2brec "$1"
   fi
-  echo attached
   ;;
 tab-new)
   new_tab "${1:-about:blank}"
@@ -155,15 +200,17 @@ run-code)
     if [ -n "$id" ] && own "$id"; then result true; else result false; fi
     ;;
   *'own(page)'*) if own "$cur"; then result true; else result false; fi ;;
-  *'__hubTab = true'*) set_field "$cur" 3 1 ;;
+  *'__hubTab = true'*) set_field "$cur" 3 "$session" ;;
   *) echo "fake: unknown code: $1" >&2; exit 1 ;;
   esac
   ;;
 detach)
-  if grep -qx "$session" "$S/sessions"; then
+  if attached "$session"; then
     grep -vx "$session" "$S/sessions" > "$S/t"
     mv "$S/t" "$S/sessions"
-    echo detached
+    # The session that made the connection takes it down with it.
+    [ "$conn" = "$session" ] && end_conn "$session"
+    replay detach_join m2bjoin "$session"
   else
     replay detach_none m2bnone "$session"
   fi

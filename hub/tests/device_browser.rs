@@ -169,15 +169,19 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
         "### Page\n- Page URL: https://claude.ai/code\n- [Snapshot](.playwright-cli/page-x.yml)\n"
     );
     let cwd = rig.session_dir("s1");
+    let connection = rig.home.join("state/hub/connection").display().to_string();
     assert_eq!(
         rig.calls(),
         vec![
             fields(&cwd, "", &["list"]),
+            fields(&cwd, "", &["list"]),
             fields(
-                &cwd,
+                &connection,
                 "fake-token-123",
-                &["-s=s1", "attach", "--extension=chromium"]
+                &["-s=hub.connection", "attach", "--extension=chromium"]
             ),
+            fields(&cwd, "", &["-s=s1", "attach", "hub.connection"]),
+            fields(&cwd, "", &["-s=s1", "tab-new"]),
             fields(
                 &cwd,
                 "",
@@ -200,7 +204,7 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     assert_eq!(answer["stdout"], "ran snapshot\n");
     let calls = rig.calls();
     assert_eq!(
-        calls[4..],
+        calls[7..],
         [
             fields(&cwd, "", &["list"]),
             fields(&cwd, "", &["-s=s1", "snapshot"]),
@@ -241,16 +245,19 @@ fn two_sessions_at_once_each_attach_and_run_in_their_own_folder() {
         "snapshot of https://b.test\n"
     );
     let calls = rig.calls();
+    let connection = rig.home.join("state/hub/connection").display().to_string();
+    let made = fields(
+        &connection,
+        "fake-token-123",
+        &["-s=hub.connection", "attach", "--extension=chromium"],
+    );
+    assert_eq!(calls.iter().filter(|c| **c == made).count(), 1, "{calls:?}");
     for (session, url) in [("s1", "https://a.test"), ("s2", "https://b.test")] {
         let cwd = rig.session_dir(session);
         let flag = format!("-s={session}");
-        let attach = fields(
-            &cwd,
-            "fake-token-123",
-            &[&flag, "attach", "--extension=chromium"],
-        );
+        let join = fields(&cwd, "", &[&flag, "attach", "hub.connection"]);
         let goto = fields(&cwd, "", &[&flag, "goto", url]);
-        assert!(calls.contains(&attach), "{calls:?}");
+        assert!(calls.contains(&join), "{calls:?}");
         assert!(calls.contains(&goto), "{calls:?}");
     }
     for call in &calls {

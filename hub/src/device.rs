@@ -119,6 +119,12 @@ const FIRST_OWN: &str = concat!(
      for (let i = 0; i < pages.length; i++) if (await own(pages[i])) return i; return -2; }"
 );
 
+/// The hub's own playwright-cli session, the one that attaches through the
+/// extension. Every device browser session joins it by this name, so the
+/// extension opens its connect tab once per Chromium, not once per session.
+/// The dot keeps it out of the names a caller may give a session.
+const CONNECTION: &str = "hub.connection";
+
 /// How long a session may go without a call before the hub closes its tabs.
 const DEFAULT_IDLE: Duration = Duration::from_secs(15 * 60);
 
@@ -318,6 +324,14 @@ fn session_dir(session: &str) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Where the hub's connection session runs, outside hub/device, which holds
+/// only the sessions the sweep may end.
+fn connection_dir() -> anyhow::Result<PathBuf> {
+    let dir = crate::config::state_home()?.join("hub/connection");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// When a session's last call ended, and for which project.
 #[derive(Serialize, Deserialize)]
 struct LastCall {
@@ -509,26 +523,8 @@ impl Cli<'_> {
                     ));
                 }
             }
-        } else if !detach {
-            ensure_chromium(&self.path, self.deadline);
-            let flag = format!("-s={}", self.session);
-            let token = self.token();
-            let done = self.run(&[&flag, "attach", "--extension=chromium"], token.as_deref())?;
-            if done.code != Some(0) {
-                return Ok(Outcome::fail(
-                    done.code.unwrap_or(128),
-                    format!(
-                        "device: attach failed: {}",
-                        String::from_utf8_lossy(&done.stderr)
-                    ),
-                ));
-            }
-            // With the token the session works in the extension's connect
-            // tab. Without it Saiful picked one of his own on the connect
-            // page, and that one stays his.
-            if token.is_some() {
-                self.run_code(TAG_CURRENT)?;
-            }
+        } else if !detach && let Some(failed) = self.attach()? {
+            return Ok(failed);
         }
         if let Some(refused) = self.not_its_tab(args)? {
             return Ok(refused);
@@ -555,6 +551,67 @@ impl Cli<'_> {
             refused: None,
             files,
         })
+    }
+
+    /// Joins the hub's connection, making it first when it is not up, and
+    /// opens the session a tab of its own there. Without the extension's
+    /// token no connection can be made unattended: the session attaches by
+    /// itself, and Saiful picks one of his own tabs on the connect page,
+    /// which stays his. The failure to answer with, if any.
+    fn attach(&self) -> Result<Option<Outcome>, Stop> {
+        let flag = format!("-s={}", self.session);
+        let attach_failed = |done: &crate::proc::Finished| {
+            Outcome::fail(
+                done.code.unwrap_or(128),
+                format!(
+                    "device: attach failed: {}",
+                    String::from_utf8_lossy(&done.stderr)
+                ),
+            )
+        };
+        {
+            // One session at a time looks for the connection, so two at once
+            // do not make two.
+            static MAKING: Mutex<()> = Mutex::new(());
+            let _making = MAKING.lock().unwrap_or_else(|e| e.into_inner());
+            if !self.listed(CONNECTION)? {
+                ensure_chromium(&self.path, self.deadline);
+                let Some(token) = self.token() else {
+                    let done = self.run(&[&flag, "attach", "--extension=chromium"], None)?;
+                    return Ok((done.code != Some(0)).then(|| attach_failed(&done)));
+                };
+                let connection = Cli {
+                    deadline: self.deadline,
+                    path: self.path.clone(),
+                    session: CONNECTION,
+                    dir: connection_dir().map_err(|e| Stop::Failed(format!("{e:#}")))?,
+                };
+                let made = connection.run(
+                    &[
+                        &format!("-s={CONNECTION}"),
+                        "attach",
+                        "--extension=chromium",
+                    ],
+                    Some(&token),
+                )?;
+                if made.code != Some(0) {
+                    return Ok(Some(attach_failed(&made)));
+                }
+            }
+        }
+        let joined = self.run(&[&flag, "attach", CONNECTION], None)?;
+        if joined.code != Some(0) {
+            return Ok(Some(attach_failed(&joined)));
+        }
+        // A session joins on whichever tab of the connection is current,
+        // which is another's, so it works in a new one, and marks nothing
+        // when there is none.
+        let opened = self.run(&[&flag, "tab-new"], None)?;
+        if opened.code != Some(0) {
+            return Ok(Some(attach_failed(&opened)));
+        }
+        self.run_code(TAG_CURRENT)?;
+        Ok(None)
     }
 
     /// After a tab-close playwright-core makes the tab at the closed one's
@@ -623,8 +680,13 @@ impl Cli<'_> {
 
     /// Whether `playwright-cli list` names this session.
     fn attached(&self) -> Result<bool, Stop> {
+        self.listed(self.session)
+    }
+
+    /// Whether `playwright-cli list` names `session`.
+    fn listed(&self, session: &str) -> Result<bool, Stop> {
         let done = self.run(&["list"], None)?;
-        let name = format!("- {}:", self.session);
+        let name = format!("- {session}:");
         Ok(String::from_utf8_lossy(&done.stdout)
             .lines()
             .any(|line| line.trim_end() == name))

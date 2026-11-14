@@ -28,3 +28,12 @@ record result -s=$s run-code 'async page => { return -2 }'
 record tabnew_bad -s=$s tab-new https://nope.invalid/
 record sessclosed -s=$s run-code 'async page => { await page.context().browser().close(); return 1 }'
 playwright-cli -s=$s close >/dev/null 2>&1
+
+# A session that joins another's browser by its name, as every device
+# browser session joins the hub's connection.
+playwright-cli -s=$s open about:blank >/dev/null 2>&1
+record join -s=m2bjoin attach $s
+record detach_join -s=m2bjoin detach
+playwright-cli -s=m2bjoin attach $s >/dev/null 2>&1
+playwright-cli -s=$s close >/dev/null 2>&1
+record notopen -s=m2bjoin tab-list
