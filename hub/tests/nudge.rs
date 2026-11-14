@@ -43,9 +43,14 @@ fn bins(dir: &TempDir) -> PathBuf {
     bin
 }
 
+/// The calls the fake claude finished recording; one it is still writing
+/// has no `<END>` yet and is left out.
 fn sent(dir: &TempDir) -> Vec<String> {
-    std::fs::read_to_string(dir.join("sent"))
-        .unwrap_or_default()
+    let text = std::fs::read_to_string(dir.join("sent")).unwrap_or_default();
+    let done = text
+        .rfind("\n<END>\n")
+        .map_or(0, |at| at + "\n<END>\n".len());
+    text[..done]
         .split("\n<END>\n")
         .filter(|call| !call.is_empty())
         .map(str::to_string)
