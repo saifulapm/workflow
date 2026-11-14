@@ -190,6 +190,16 @@ pub(crate) fn command(
     for (key, value) in extra {
         wall.add(&["--setenv", key, value]);
     }
+    // pnpm keeps its store on the project's mount unless told, and the
+    // worktree is a mount of its own here: a store there would be another
+    // than outside, and every install a cold one.
+    let store = home.join(".local/share/pnpm/store");
+    if store.is_dir() {
+        let store = store.to_string_lossy();
+        for key in ["pnpm_config_store_dir", "npm_config_store_dir"] {
+            wall.add(&["--setenv", key, &store]);
+        }
+    }
 
     let mut argv: Vec<String> = [
         pasta.to_string_lossy().as_ref(),
@@ -270,18 +280,19 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// The tools the check compares, each with the line that prints its
-/// version.
-const CHECKED: [(&str, &str); 9] = [
-    ("node", "node --version"),
-    ("pnpm", "pnpm --version"),
-    ("npm", "npm --version"),
-    ("php", "php --version"),
-    ("composer", "composer --version"),
-    ("cargo", "cargo --version"),
-    ("shopify", "shopify version"),
-    ("cf", "cf --version"),
-    ("adb", "adb --version"),
+/// What the check compares: a name, the program the shell must find, and
+/// the line that prints its version, or for pnpm's store, its folder.
+const CHECKED: [(&str, &str, &str); 10] = [
+    ("node", "node", "node --version"),
+    ("pnpm", "pnpm", "pnpm --version"),
+    ("pnpm-store", "pnpm", "pnpm store path"),
+    ("npm", "npm", "npm --version"),
+    ("php", "php", "php --version"),
+    ("composer", "composer", "composer --version"),
+    ("cargo", "cargo", "cargo --version"),
+    ("shopify", "shopify", "shopify version"),
+    ("cf", "cf", "cf --version"),
+    ("adb", "adb", "adb --version"),
 ];
 
 /// How long one side of a check may take.
@@ -312,10 +323,10 @@ pub(crate) fn compare(
         .ok_or("bash was not found")?;
     let script: String = CHECKED
         .iter()
-        .map(|(tool, line)| {
+        .map(|(name, program, line)| {
             format!(
-                "if command -v {tool} >/dev/null 2>&1; then echo @@{tool}; {line} 2>/dev/null </dev/null; \
-                 else echo '@@{tool} missing'; fi\n"
+                "if command -v {program} >/dev/null 2>&1; then echo @@{name}; {line} 2>/dev/null </dev/null; \
+                 else echo '@@{name} missing'; fi\n"
             )
         })
         .collect();
@@ -352,7 +363,7 @@ pub(crate) fn compare(
     let (inside, outside) = (versions(&inside?), versions(&outside?));
     Ok(CHECKED
         .iter()
-        .filter_map(|(tool, _)| {
+        .filter_map(|(tool, _, _)| {
             let outside = outside.get(*tool)?.clone()?;
             let seen = match inside.get(*tool).cloned().flatten() {
                 None => Seen::Missing,
