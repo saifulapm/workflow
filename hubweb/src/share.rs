@@ -288,6 +288,15 @@ fn item_machine(text: &str) -> Option<String> {
     table.get("machine")?.as_str().map(str::to_string)
 }
 
+/// The device and cloud-secrets keys of a project's record; a removed record
+/// has none.
+fn device_keys(text: Option<&str>) -> [Option<toml::Value>; 4] {
+    let table: toml::Table = text
+        .and_then(|t| toml::from_str(t).ok())
+        .unwrap_or_default();
+    ["device", "device_by", "cloud_secrets", "cloud_secrets_by"].map(|key| table.get(key).cloned())
+}
+
 /// Why a bound socket writing as `writer` may not make this write, if it
 /// may not: a global item through a cloud session's token, an item that
 /// names a machine other than the writer, the item's author so far, or a
@@ -386,6 +395,24 @@ fn write(
             let head = head.map(|h| json!({"seq":h.seq,"id":h.id,"path":h.path,"body":h.body}));
             return Ok(Outcome {
                 sender: vec![json!({"t":"refused","id":id,"head":head}).to_string()],
+                ..Outcome::default()
+            });
+        }
+        // Which device runs a project, and who may read its cloud secrets,
+        // is a device's word: a cloud session may claim the runner only.
+        let cloud = bound.is_some_and(|b| b.machine.as_deref().is_none_or(|m| m.ends_with('*')));
+        if cloud
+            && matches!(
+                path.split('/').collect::<Vec<_>>().as_slice(),
+                ["projects", _, "project.toml"]
+            )
+            && device_keys(body.as_deref())
+                != device_keys(head.as_ref().and_then(|h| h.body.as_deref()))
+        {
+            let head = head.map(|h| json!({"seq":h.seq,"id":h.id,"path":h.path,"body":h.body}));
+            let why = "a cloud session's token changes no device or cloud-secrets key";
+            return Ok(Outcome {
+                sender: vec![json!({"t":"refused","id":id,"head":head,"why":why}).to_string()],
                 ..Outcome::default()
             });
         }
@@ -1788,5 +1815,183 @@ mod tests {
         let refused = drop_as(&mut log, &mini, "mac-mini-m2", "01B", RULE);
         assert_eq!(parse(&refused.sender)[0]["t"], "refused");
         assert_eq!(log.recs.len(), 1);
+    }
+
+    const RECORD: &str = "projects/P1/project.toml";
+    const DEVICE_WHY: &str = "a cloud session's token changes no device or cloud-secrets key";
+
+    /// A record with the device and cloud-secrets keys a device wrote.
+    const HELD: &str = "name = \"workflow\"\ndevice = \"nuc\"\ndevice_by = \"mac-mini-m2\"\n\
+                        cloud_secrets = \"API_KEY\"\ncloud_secrets_by = \"mac-mini-m2\"\n";
+
+    /// A write from `base` on a socket that said hello as `hello`.
+    fn write_from(
+        log: &mut Memory,
+        bound: &Bound,
+        hello: &str,
+        id: &str,
+        base: &str,
+        body: Value,
+    ) -> Outcome {
+        let message = json!({"t":"write","id":id,"path":RECORD,"base":base,"body":body});
+        handle(log, Some(hello), Some(bound), &message.to_string())
+    }
+
+    #[test]
+    fn a_cloud_token_moves_no_project_to_another_device() {
+        let mut log = Memory::default();
+        let mini = token("mini", Some("mac-mini-m2"));
+        let held = "name = \"workflow\"\ndevice = \"nuc\"\ndevice_by = \"mac-mini-m2\"\n";
+        let landed = write_as(
+            &mut log,
+            Some(&mini),
+            "mac-mini-m2",
+            "01A",
+            RECORD,
+            json!(held),
+        );
+        assert_eq!(parse(&landed.sender)[0]["t"], "ack");
+        let cloud = token("session_*", Some("cloud-*"));
+        let moved = held.replace("\"nuc\"", "\"mac-mini-m2\"");
+        let refused = write_from(&mut log, &cloud, "cloud-vm", "01B", "01A", json!(moved));
+        let answer = &parse(&refused.sender)[0];
+        assert_eq!(answer["t"], "refused");
+        assert_eq!(answer["why"], DEVICE_WHY);
+        assert_eq!(answer["head"]["id"], "01A");
+        assert_eq!(refused.others, None);
+        assert_eq!(log.recs.len(), 1);
+        assert_eq!(log.head(RECORD).unwrap().unwrap().id, "01A");
+    }
+
+    #[test]
+    fn a_cloud_token_changes_or_drops_none_of_the_four_keys() {
+        let cloud = token("session_*", Some("cloud-*"));
+        let mini = token("mini", Some("mac-mini-m2"));
+        for (case, body) in [
+            (
+                "device_by",
+                json!(HELD.replace("device_by = \"mac-mini-m2\"", "device_by = \"cloud-vm\"")),
+            ),
+            (
+                "cloud_secrets",
+                json!(HELD.replace("\"API_KEY\"", "\"API_KEY\\nTOKEN\"")),
+            ),
+            (
+                "cloud_secrets_by",
+                json!(HELD.replace(
+                    "cloud_secrets_by = \"mac-mini-m2\"",
+                    "cloud_secrets_by = \"cloud-vm\""
+                )),
+            ),
+            (
+                "dropped",
+                json!(HELD.replace("cloud_secrets_by = \"mac-mini-m2\"\n", "")),
+            ),
+            ("removed", Value::Null),
+        ] {
+            let mut log = Memory::default();
+            write_as(
+                &mut log,
+                Some(&mini),
+                "mac-mini-m2",
+                "01A",
+                RECORD,
+                json!(HELD),
+            );
+            let refused = write_from(&mut log, &cloud, "cloud-vm", "01B", "01A", body);
+            let answer = &parse(&refused.sender)[0];
+            assert_eq!(answer["t"], "refused", "{case}");
+            assert_eq!(answer["why"], DEVICE_WHY, "{case}");
+            assert_eq!(log.recs.len(), 1, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_cloud_token_names_no_device_for_a_project_that_had_none() {
+        let mut log = Memory::default();
+        let mini = token("mini", Some("mac-mini-m2"));
+        write_as(
+            &mut log,
+            Some(&mini),
+            "mac-mini-m2",
+            "01A",
+            RECORD,
+            json!("name = \"workflow\"\n"),
+        );
+        let cloud = token("session_*", Some("cloud-*"));
+        let body = "name = \"workflow\"\ndevice = \"cloud-vm\"\n";
+        let refused = write_from(&mut log, &cloud, "cloud-vm", "01B", "01A", json!(body));
+        let answer = &parse(&refused.sender)[0];
+        assert_eq!(answer["t"], "refused");
+        assert_eq!(answer["why"], DEVICE_WHY);
+        assert_eq!(log.recs.len(), 1);
+    }
+
+    #[test]
+    fn a_cloud_token_claims_the_runner_and_keeps_the_four_keys() {
+        let mut log = Memory::default();
+        let mini = token("mini", Some("mac-mini-m2"));
+        write_as(
+            &mut log,
+            Some(&mini),
+            "mac-mini-m2",
+            "01A",
+            RECORD,
+            json!(HELD),
+        );
+        let cloud = token("session_*", Some("cloud-*"));
+        let claimed = format!(
+            "{HELD}runner = \"session_01abc\"\nrunner_since = \"2026-11-14\"\nrunner_milestone = \"w1\"\n"
+        );
+        let landed = write_from(&mut log, &cloud, "cloud-vm", "01B", "01A", json!(claimed));
+        assert_eq!(parse(&landed.sender)[0]["t"], "ack");
+        assert_eq!(log.recs.len(), 2);
+        assert_eq!(
+            log.head(RECORD).unwrap().unwrap().body.as_deref(),
+            Some(claimed.as_str())
+        );
+    }
+
+    #[test]
+    fn a_device_token_moves_its_project_to_another_device() {
+        let mut log = Memory::default();
+        let mini = token("mini", Some("mac-mini-m2"));
+        write_as(
+            &mut log,
+            Some(&mini),
+            "mac-mini-m2",
+            "01A",
+            RECORD,
+            json!(HELD),
+        );
+        let moved = HELD.replace("device = \"nuc\"", "device = \"macbook-m2\"");
+        let landed = write_from(&mut log, &mini, "mac-mini-m2", "01B", "01A", json!(moved));
+        assert_eq!(parse(&landed.sender)[0]["t"], "ack");
+        assert_eq!(log.recs.len(), 2);
+    }
+
+    #[test]
+    fn a_cloud_write_from_an_old_record_is_refused_as_stale() {
+        let mut log = Memory::default();
+        let mini = token("mini", Some("mac-mini-m2"));
+        let v1 = "name = \"workflow\"\ndevice = \"nuc\"\ndevice_by = \"mac-mini-m2\"\n";
+        write_as(
+            &mut log,
+            Some(&mini),
+            "mac-mini-m2",
+            "01A",
+            RECORD,
+            json!(v1),
+        );
+        let v2 = v1.replace("\"nuc\"", "\"macbook-m2\"");
+        write_from(&mut log, &mini, "mac-mini-m2", "01B", "01A", json!(v2));
+        let cloud = token("session_*", Some("cloud-*"));
+        let claimed = format!("{v1}runner = \"session_01abc\"\n");
+        let refused = write_from(&mut log, &cloud, "cloud-vm", "01C", "01A", json!(claimed));
+        let answer = &parse(&refused.sender)[0];
+        assert_eq!(answer["t"], "refused");
+        assert!(answer.get("why").is_none(), "{answer}");
+        assert_eq!(answer["head"]["id"], "01B");
+        assert_eq!(log.head(RECORD).unwrap().unwrap().id, "01B");
     }
 }
