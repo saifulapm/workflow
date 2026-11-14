@@ -225,6 +225,16 @@ is "$(answer_post -H 'Sec-Fetch-Site: same-origin')" 403 "an unpaired browser's 
 like "$(cat "$T_TMP/answer.html")" 'This device is not paired, so this was not sent' "the 403 page says nothing was sent"
 is "$(answer_post -H 'Sec-Fetch-Site: cross-site' -H "Cookie: $cookie")" 403 \
 	"a paired device's cookie on a cross-site POST is refused"
+# Every machine and cloud thread holds the service token, and a device's hub
+# releases a held line on a yes the hub page signs: the token answers nothing,
+# even with a paired device's cookie from the page itself.
+is "$(curl -s -X POST -H "@$T_TMP/service.hdr" -H 'Sec-Fetch-Site: same-origin' -H "Cookie: $cookie" \
+	-o "$T_TMP/answer.html" -w '%{http_code}' --data-urlencode "id=$qid" --data-urlencode "text=nine" "$base/answer")" 403 \
+	"a service token's answer is refused"
+is "$(cat "$T_TMP/answer.html")" "the hub's pages are for a person, not a service token" \
+	"the refusal says the pages are a person's"
+like "$(curl -s -H "@$T_TMP/jwt.hdr" -H "Cookie: $cookie" "$base/" | tr -d '\n')" 'name="text" value="nine"' \
+	"the store keeps the question a service token answered open"
 
 font=$base/assets/maple-mono-400.woff2
 curl -s -o /dev/null "$font"
