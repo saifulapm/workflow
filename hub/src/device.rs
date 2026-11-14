@@ -119,6 +119,17 @@ const FIRST_OWN: &str = concat!(
      for (let i = 0; i < pages.length; i++) if (await own(pages[i])) return i; return -2; }"
 );
 
+/// The session's own tabs, each with the number playwright-cli gives it
+/// among all the connection's tabs.
+const OWN_TABS: &str = concat!(
+    "async page => { ",
+    own!(),
+    "const pages = page.context().pages(); const mine = []; \
+     for (let i = 0; i < pages.length; i++) if (await own(pages[i])) mine.push({ i, \
+     current: pages[i] === page, title: await pages[i].title(), url: pages[i].url() }); \
+     return mine; }"
+);
+
 /// The hub's own playwright-cli session, the one that attaches through the
 /// extension. Every device browser session joins it by this name, so the
 /// extension opens its connect tab once per Chromium, not once per session.
@@ -131,6 +142,11 @@ const DEFAULT_IDLE: Duration = Duration::from_secs(15 * 60);
 /// The file in a session's folder that says when its last call ended, and
 /// for which project.
 const LAST_CALL: &str = "last-call.json";
+
+/// The file in a session's folder that says its last attach made a
+/// connection of its own, with no token, rather than join the hub's. Every
+/// attach writes or removes it.
+const ALONE: &str = "alone";
 
 /// How long a Chromium the device started gets to put its lock down.
 const DEFAULT_CHROMIUM_WAIT: Duration = Duration::from_secs(10);
@@ -477,7 +493,11 @@ fn end_when(session: &str, dir: &Path, due: impl Fn(&LastCall) -> bool) {
     if cli.attached().unwrap_or(false) {
         let up = crate::config::config_home()
             .is_ok_and(|home| chromium_up(&home.join("chromium/SingletonLock")));
-        if up && !cli.run_code(CLOSE_OWN).is_ok_and(|done| closed(&done)) {
+        let closing = up.then(|| {
+            let _tabs = tabs_lock();
+            cli.run_code(CLOSE_OWN)
+        });
+        if closing.is_some_and(|done| !done.is_ok_and(|done| closed(&done))) {
             eprintln!(
                 "hub: device: could not close the tabs of {session}; trying again next round"
             );
@@ -509,10 +529,16 @@ struct Cli<'a> {
 
 impl Cli<'_> {
     fn call(&self, args: &[String]) -> Result<Outcome, Stop> {
-        let detach = args[0] == "detach";
+        let command = args[0].as_str();
+        let detach = command == "detach";
+        let tab_command = matches!(command, "tab-list" | "tab-new" | "tab-select" | "tab-close");
+        let mut fresh = false;
         if self.attached()? {
             if detach {
-                let done = self.run_code(CLOSE_OWN)?;
+                let done = {
+                    let _tabs = tabs_lock();
+                    self.run_code(CLOSE_OWN)?
+                };
                 if !closed(&done) {
                     return Ok(Outcome::fail(
                         done.code.unwrap_or(128),
@@ -523,11 +549,24 @@ impl Cli<'_> {
                     ));
                 }
             }
-        } else if !detach && let Some(failed) = self.attach()? {
-            return Ok(failed);
+        } else if !detach {
+            if let Some(failed) = self.attach()? {
+                return Ok(failed);
+            }
+            fresh = true;
         }
+        // A tab number counts every tab of the shared connection, so no
+        // other session closes one between the check of a number and its use.
+        let _tabs = matches!(command, "tab-select" | "tab-close").then(tabs_lock);
         if let Some(refused) = self.not_its_tab(args)? {
             return Ok(refused);
+        }
+        // Saiful closing the session's current tab by hand makes the tab at
+        // its place current, which may be another session's. A session alone
+        // on its connection works in the tab Saiful picked, which it never
+        // marks.
+        if !fresh && !detach && !tab_command && !self.dir.join(ALONE).exists() {
+            self.keep_own_current()?;
         }
         let mut argv = vec![format!("-s={}", self.session)];
         argv.extend(args.iter().cloned());
@@ -541,7 +580,12 @@ impl Cli<'_> {
         if args[0] == "tab-close" && done.code == Some(0) {
             self.keep_own_current()?;
         }
-        let stdout = String::from_utf8_lossy(&done.stdout).into_owned();
+        let mut stdout = String::from_utf8_lossy(&done.stdout).into_owned();
+        // playwright-cli lists every tab of the connection: in a tab
+        // command's result, and under "Open tabs" once there are two.
+        if stdout.contains("### Open tabs") || (tab_command && stdout.contains("### Result")) {
+            stdout = only_own(&stdout, tab_command, &self.own_tabs()?);
+        }
         let mut stderr = String::from_utf8_lossy(&done.stderr).into_owned();
         let files = linked_files(&stdout, &self.dir, &mut stderr);
         Ok(Outcome {
@@ -578,7 +622,11 @@ impl Cli<'_> {
                 ensure_chromium(&self.path, self.deadline);
                 let Some(token) = self.token() else {
                     let done = self.run(&[&flag, "attach", "--extension=chromium"], None)?;
-                    return Ok((done.code != Some(0)).then(|| attach_failed(&done)));
+                    if done.code != Some(0) {
+                        return Ok(Some(attach_failed(&done)));
+                    }
+                    let _ = std::fs::write(self.dir.join(ALONE), "");
+                    return Ok(None);
                 };
                 let connection = Cli {
                     deadline: self.deadline,
@@ -599,6 +647,7 @@ impl Cli<'_> {
                 }
             }
         }
+        let _ = std::fs::remove_file(self.dir.join(ALONE));
         let joined = self.run(&[&flag, "attach", CONNECTION], None)?;
         if joined.code != Some(0) {
             return Ok(Some(attach_failed(&joined)));
@@ -631,6 +680,29 @@ impl Cli<'_> {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The session's own tabs as playwright-cli lists tabs, none when the
+    /// hub cannot read them.
+    fn own_tabs(&self) -> Result<String, Stop> {
+        #[derive(Deserialize)]
+        struct OwnTab {
+            i: usize,
+            current: bool,
+            title: String,
+            url: String,
+        }
+        let done = self.run_code(OWN_TABS)?;
+        let tabs: Vec<OwnTab> = result_of(&done)
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+        Ok(tabs
+            .iter()
+            .map(|t| {
+                let current = if t.current { " (current)" } else { "" };
+                format!("- {}:{current} [{}]({})\n", t.i, t.title, t.url)
+            })
+            .collect())
     }
 
     /// The refusal of a tab-select or tab-close whose tab the session did not
@@ -740,6 +812,34 @@ fn result_of(done: &crate::proc::Finished) -> Option<String> {
     let stdout = String::from_utf8_lossy(&done.stdout);
     let mut lines = stdout.lines().skip_while(|line| *line != "### Result");
     lines.nth(1).map(str::to_string)
+}
+
+/// The lock over the numbers of the connection's tabs, held from a tab
+/// number's check to its use and while a session's tabs close.
+fn tabs_lock() -> std::sync::MutexGuard<'static, ()> {
+    static TABS: Mutex<()> = Mutex::new(());
+    TABS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `stdout` with each list of tabs replaced by `own`: the "Open tabs"
+/// section, and the result of a tab command when `in_result`.
+fn only_own(stdout: &str, in_result: bool, own: &str) -> String {
+    let mut out = String::new();
+    let mut skipping = false;
+    for line in stdout.lines() {
+        if line.starts_with("### ") {
+            skipping = false;
+        } else if skipping {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        if line == "### Open tabs" || (in_result && line == "### Result") {
+            out.push_str(own);
+            skipping = true;
+        }
+    }
+    out
 }
 
 /// Whether CLOSE_OWN closed the session's tabs: it answered, or closing the

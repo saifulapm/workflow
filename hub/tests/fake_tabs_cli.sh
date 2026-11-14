@@ -101,6 +101,18 @@ own() {
   return 1
 }
 result() { replay result 'async page => { return -2 }' "$code" -2 "$1"; }
+# The connection's tabs as playwright-core lists them, every page having an
+# empty title.
+tab_lines() {
+  i=0
+  for id in $(visible); do
+    mark=
+    [ "$id" = "$(cat "$S/current-$session")" ] && mark=" (current)"
+    printf -- '- %s:%s [](%s)\n' "$i" "$mark" "$(field "$id" 4)"
+    i=$((i + 1))
+  done
+}
+tab_result() { echo '### Result'; tab_lines; }
 # Ends every session on connection $1.
 end_conn() {
   while read -r s; do
@@ -163,13 +175,23 @@ attach)
 tab-new)
   new_tab "${1:-about:blank}"
   case $1 in *.invalid*) replay tabnew_bad https://nope.invalid/ "$1" ;; esac
-  echo opened
+  tab_result
   ;;
-goto) set_field "$cur" 4 "$1"; echo "- Page URL: $1" ;;
-tab-select) nth "$1" > "$S/current-$session"; echo selected ;;
+goto)
+  set_field "$cur" 4 "$1"
+  # playwright-core lists the open tabs once there is more than one.
+  if [ "$(visible | wc -l)" -gt 1 ]; then
+    echo '### Open tabs'
+    tab_lines
+  fi
+  echo '### Page'
+  echo "- Page URL: $1"
+  ;;
+tab-list) tab_result ;;
+tab-select) nth "$1" > "$S/current-$session"; tab_result ;;
 tab-close)
   if [ -n "$1" ]; then close_tab "$(nth "$1")"; else close_tab "$cur"; fi
-  echo closed
+  tab_result
   ;;
 run-code)
   case $1 in *'opener()'*) openers=1 ;; *) openers= ;; esac
@@ -200,6 +222,18 @@ run-code)
     if [ -n "$id" ] && own "$id"; then result true; else result false; fi
     ;;
   *'own(page)'*) if own "$cur"; then result true; else result false; fi ;;
+  *'title()'*)
+    json= i=0
+    for id in $(visible); do
+      if own "$id"; then
+        c=false
+        [ "$id" = "$cur" ] && c=true
+        json="$json${json:+,}{\"i\":$i,\"current\":$c,\"title\":\"\",\"url\":\"$(field "$id" 4)\"}"
+      fi
+      i=$((i + 1))
+    done
+    result "[$json]"
+    ;;
   *'__hubTab = true'*) set_field "$cur" 3 "$session" ;;
   *) echo "fake: unknown code: $1" >&2; exit 1 ;;
   esac

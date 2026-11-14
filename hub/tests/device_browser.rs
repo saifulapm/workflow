@@ -203,13 +203,12 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     assert_eq!(answer["exit"], 0, "{answer}");
     assert_eq!(answer["stdout"], "ran snapshot\n");
     let calls = rig.calls();
-    assert_eq!(
-        calls[7..],
-        [
-            fields(&cwd, "", &["list"]),
-            fields(&cwd, "", &["-s=s1", "snapshot"]),
-        ]
-    );
+    // Before the command the hub checks the current tab is still the
+    // session's own.
+    assert_eq!(calls.len(), 10, "{calls:?}");
+    assert_eq!(calls[7], fields(&cwd, "", &["list"]));
+    assert_eq!(calls[8][2..4], ["-s=s1", "run-code"]);
+    assert_eq!(calls[9], fields(&cwd, "", &["-s=s1", "snapshot"]));
 }
 
 #[test]

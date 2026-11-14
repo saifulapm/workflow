@@ -175,7 +175,7 @@ impl Rig {
         let text = std::fs::read_to_string(&self.tabs).unwrap();
         let kept: String = text
             .lines()
-            .filter(|line| !line.ends_with(&format!("\t{url}")))
+            .filter(|line| line.split('\t').nth(3) != Some(url))
             .map(|line| format!("{line}\n"))
             .collect();
         std::fs::write(&self.tabs, kept).unwrap();
@@ -594,4 +594,139 @@ fn a_session_that_closes_its_last_tab_leaves_the_connection_up() {
     rig.browser("s2", &["goto", "https://b.test"]);
     assert_eq!(connect_tabs(&rig), 1, "{:?}", rig.calls());
     assert_eq!(hub_tabs(&rig), ["about:blank"]);
+}
+
+/// s1's tab a.test at 1, s2's b.test at 2 and s1's c.test, current, at 3,
+/// after the hub's own tab at 0.
+fn two_sessions() -> Rig {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.browser("s2", &["goto", "https://b.test"]);
+    rig.browser("s1", &["tab-new", "https://c.test"]);
+    rig
+}
+
+#[test]
+fn a_session_s_tab_list_shows_its_own_tabs_only() {
+    let rig = two_sessions();
+    let answer = rig.browser("s1", &["tab-list"]);
+    assert_eq!(
+        answer["stdout"],
+        "### Result\n- 1: [](https://a.test)\n- 3: (current) [](https://c.test)\n"
+    );
+}
+
+#[test]
+fn a_command_s_open_tabs_show_no_other_session_s_tab() {
+    let rig = two_sessions();
+    let answer = rig.browser("s2", &["goto", "https://b2.test"]);
+    assert_eq!(
+        answer["stdout"],
+        "### Open tabs\n- 2: (current) [](https://b2.test)\n### Page\n- Page URL: https://b2.test\n"
+    );
+}
+
+#[test]
+fn tab_select_and_tab_close_of_another_session_s_tab_are_refused() {
+    let rig = two_sessions();
+    for command in ["tab-select", "tab-close"] {
+        let answer = rig.call("s1", &[command, "2"]);
+        assert_eq!(answer["exit"], 2, "{answer}");
+        assert_eq!(
+            answer["stderr"],
+            "device: tab 2 is not one this session opened\n"
+        );
+    }
+    rig.browser("s1", &["goto", "https://d.test"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://a.test"),
+            tab("s2", "https://b.test"),
+            tab("s1", "https://d.test"),
+        ]
+    );
+}
+
+#[test]
+fn a_session_s_detach_leaves_the_other_working() {
+    let rig = two_sessions();
+    rig.browser("s1", &["detach"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s2", "https://b.test"),
+        ]
+    );
+    rig.browser("s2", &["goto", "https://b2.test"]);
+}
+
+#[test]
+fn an_idle_session_s_close_leaves_a_busy_one_s_tab() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1500")]);
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.browser("s2", &["goto", "https://b.test"]);
+    for _ in 0..6 {
+        std::thread::sleep(Duration::from_millis(500));
+        rig.browser("s2", &["snapshot"]);
+    }
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s2", "https://b.test"),
+        ]
+    );
+}
+
+#[test]
+fn a_cloud_run_s_close_leaves_a_local_walk_working() {
+    let rig = rig_env(&SWEEP);
+    rig.cloud_run("m2", None);
+    rig.browser("cse_01Abc", &["goto", "https://a.test"]);
+    rig.browser("local-mini", &["goto", "https://b.test"]);
+    rig.cloud_run("m2", Some("parked: waiting on q1"));
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("local-mini", "https://b.test"),
+        ]
+    );
+    rig.browser("local-mini", &["goto", "https://b2.test"]);
+}
+
+#[test]
+fn a_session_whose_tab_saiful_closed_works_on_in_its_own_not_the_neighbour() {
+    let rig = two_sessions();
+    rig.close_by_hand("https://c.test");
+    // playwright-core makes the tab at the closed one's place current: s2's.
+    let b = std::fs::read_to_string(&rig.tabs)
+        .unwrap()
+        .lines()
+        .find(|line| line.ends_with("\thttps://b.test\t0"))
+        .map(|line| line.split('\t').next().unwrap().to_string())
+        .unwrap();
+    std::fs::write(rig.state.join("current-s1"), b).unwrap();
+    rig.browser("s1", &["goto", "https://d.test"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://d.test"),
+            tab("s2", "https://b.test"),
+        ]
+    );
+}
+
+#[test]
+fn a_session_with_no_token_works_on_in_the_tab_saiful_picked() {
+    let rig = rig();
+    rig.no_token();
+    rig.browser("s1", &["goto", "https://x.test"]);
+    rig.browser("s1", &["goto", "https://y.test"]);
+    assert_eq!(rig.strip(), vec![tab("s1", "https://y.test")]);
 }
