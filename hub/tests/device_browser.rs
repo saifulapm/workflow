@@ -275,17 +275,22 @@ fn goto_the_hub_page_never_runs() {
         "https://u@next-hub.on-rexa.com:443/",
         "hub.on-rexa.com/p/x",
     ] {
-        let answer = browser(&rig.hub, Some("s1"), &["goto", url]);
-        assert_eq!(answer["exit"], 2, "{url}: {answer}");
-        assert_eq!(
-            answer["stderr"],
-            "device: browser may not open the hub page: a yes there is Saiful's own\n",
-            "{url}"
-        );
+        // tab-new opens its URL as a goto does.
+        for verb in ["goto", "tab-new"] {
+            let answer = browser(&rig.hub, Some("s1"), &[verb, url]);
+            assert_eq!(answer["exit"], 2, "{verb} {url}: {answer}");
+            assert_eq!(
+                answer["stderr"],
+                "device: browser may not open the hub page: a yes there is Saiful's own\n",
+                "{verb} {url}"
+            );
+        }
     }
     let calls = rig.calls();
     assert!(
-        !calls.iter().any(|c| c.get(3).is_some_and(|a| a == "goto")),
+        !calls
+            .iter()
+            .any(|c| c.get(3).is_some_and(|a| a == "goto" || a == "tab-new")),
         "{calls:?}"
     );
     for url in ["https://device.on-rexa.com/", "https://example.com/"] {

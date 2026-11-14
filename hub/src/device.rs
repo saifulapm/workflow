@@ -322,7 +322,8 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
     }) {
         return Outcome::refuse(format!("browser {arg} is not allowed here"));
     }
-    if args[0] == "goto" && args[1..].iter().any(|a| on_hub_page(a)) {
+    // tab-new opens its URL as goto does.
+    if matches!(args[0].as_str(), "goto" | "tab-new") && args[1..].iter().any(|a| on_hub_page(a)) {
         return Outcome::refuse(
             "browser may not open the hub page: a yes there is Saiful's own".to_string(),
         );
