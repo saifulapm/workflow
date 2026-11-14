@@ -39,7 +39,7 @@ fn rig(tools: &[(&str, &str)], outside: &[(&str, &str)]) -> Rig {
     let init = Command::new("git")
         .arg("-C")
         .arg(&repo)
-        .args(["init", "-q"])
+        .args(["-c", "core.hooksPath=/dev/null", "init", "-q"])
         .status();
     assert!(init.unwrap().success());
     let projects = serde_json::json!({"projects": [
