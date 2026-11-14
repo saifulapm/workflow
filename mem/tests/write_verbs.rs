@@ -624,7 +624,7 @@ fn name_this_machine(w: &World, name: &str) {
 #[test]
 fn project_set_device_takes_the_three_devices_and_records_who_wrote_it() {
     let w = World::new("write-device");
-    name_this_machine(&w, "box-1");
+    name_this_machine(&w, "nuc");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
@@ -635,11 +635,11 @@ fn project_set_device_takes_the_three_devices_and_records_who_wrote_it() {
         assert_eq!(code(&out), 0, "{device}: {}", stderr(&out));
         let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
         assert_eq!(v["device"], serde_json::json!(device));
-        assert_eq!(v["device_by"], serde_json::json!("box-1"));
+        assert_eq!(v["device_by"], serde_json::json!("nuc"));
     }
     let v = json(&mem(&w, &repo, &["projects", "--json"]));
     assert_eq!(v["projects"][0]["device"], serde_json::json!("macbook-m2"));
-    assert_eq!(v["projects"][0]["device_by"], serde_json::json!("box-1"));
+    assert_eq!(v["projects"][0]["device_by"], serde_json::json!("nuc"));
 
     assert_eq!(code(&mem(&w, &repo, &["project", "unset", "device"])), 0);
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
@@ -657,6 +657,7 @@ fn project_set_device_takes_the_three_devices_and_records_who_wrote_it() {
 #[test]
 fn project_set_device_refuses_any_other_name_and_leaves_project_toml_alone() {
     let w = World::new("write-device-bad");
+    name_this_machine(&w, "nuc");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     let id = json(&mem(&w, &repo, &["project", "current", "--json"]))["id"]
@@ -673,18 +674,36 @@ fn project_set_device_refuses_any_other_name_and_leaves_project_toml_alone() {
     assert_eq!(before, after);
 }
 
+/// A thread's mem names its own machine, so only a device may say which
+/// device a project runs on.
 #[test]
-fn project_set_device_records_a_cloud_machine_truthfully() {
+fn project_set_device_is_refused_off_the_devices() {
     let w = World::new("write-device-cloud");
-    name_this_machine(&w, "cloud-abc");
+    name_this_machine(&w, "mac-mini-m2");
     let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
     assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
     assert_eq!(
         code(&mem(&w, &repo, &["project", "set", "device", "nuc"])),
         0
     );
+    name_this_machine(&w, "cloud-vm");
+    for args in [
+        &["project", "set", "device", "nuc"][..],
+        &["project", "set", "device", "macbook-m2"],
+        &["project", "unset", "device"],
+    ] {
+        let out = mem(&w, &repo, args);
+        assert_eq!(code(&out), 2, "{args:?}: {}", stdout(&out));
+        assert!(
+            stderr(&out)
+                .contains("device is set only on mac-mini-m2, nuc or macbook-m2; this is cloud-vm"),
+            "{}",
+            stderr(&out)
+        );
+    }
     let v = json(&mem(&w, &repo, &["project", "current", "--json"]));
-    assert_eq!(v["device_by"], serde_json::json!("cloud-abc"));
+    assert_eq!(v["device"], serde_json::json!("nuc"));
+    assert_eq!(v["device_by"], serde_json::json!("mac-mini-m2"));
 }
 
 #[test]
