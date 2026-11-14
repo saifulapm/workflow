@@ -181,7 +181,7 @@ fn export_to(w: &World, repo: &Path, socket: &Path) -> String {
 
 /// Two logs waiting on the cloud, and its checkout.
 fn two_waiting() -> (World, PathBuf) {
-    let cloud = machine("cloud");
+    let cloud = machine("cloud-vm");
     for text in ["outbox probe one", "outbox probe two"] {
         walk_in(&cloud, cloud.dir.path(), &["log", text]);
     }
@@ -191,7 +191,7 @@ fn two_waiting() -> (World, PathBuf) {
 
 /// Three logs on the cloud, exported into the cloud's checkout.
 fn exported() -> (World, PathBuf, Vec<String>) {
-    let cloud = machine("cloud");
+    let cloud = machine("cloud-vm");
     for text in ["outbox probe one", "outbox probe two", "outbox probe three"] {
         walk_in(&cloud, cloud.dir.path(), &["log", text]);
     }
@@ -208,7 +208,7 @@ fn export_saves_the_outbox_in_the_checkout_and_stages_it() {
     let (_cloud, repo, sent) = exported();
     let file: Value =
         serde_json::from_str(&std::fs::read_to_string(repo.join(FILE)).unwrap()).unwrap();
-    assert_eq!(file["machine"], "cloud");
+    assert_eq!(file["machine"], "cloud-vm");
     assert_eq!(ids(file["writes"].as_array().unwrap()), sent);
     assert_eq!(
         git_out(&repo, &["diff", "--cached", "--name-only"]),
@@ -268,7 +268,7 @@ fn the_machine_that_wrote_the_file_leaves_it_alone() {
 fn an_imported_page_keeps_its_base_and_lands_nothing_before_the_store_answers() {
     let page = format!("projects/{ID}/wiki/notes.md");
     let first = "01K0OUTBOXREC0000000000001";
-    let cloud = machine("cloud");
+    let cloud = machine("cloud-vm");
     let mini = machine("mini");
     for w in [&cloud, &mini] {
         apply(
@@ -315,7 +315,7 @@ fn an_imported_page_keeps_its_base_and_lands_nothing_before_the_store_answers() 
 /// runs mem there, which imports it.
 fn import(w: &World, writes: Value) {
     let repo = checkout(w);
-    let file = json!({"machine": "cloud", "writes": writes});
+    let file = json!({"machine": "cloud-vm", "writes": writes});
     std::fs::write(repo.join(FILE), file.to_string()).unwrap();
     walk_in(w, &repo, &["projects"]);
     assert!(!repo.join(FILE).exists());
@@ -373,7 +373,7 @@ fn an_imported_page_replayed_before_its_ack_lands_it() {
         &mini,
         &[
             json!({"t": "rec", "seq": 5, "id": PAGE_X, "path": page,
-                   "body": "# Notes\n\nX\n", "machine": "cloud"}),
+                   "body": "# Notes\n\nX\n", "machine": "cloud-vm"}),
             json!({"t": "ack", "id": PAGE_X, "seq": 5}),
         ],
     );
@@ -396,6 +396,7 @@ fn an_imported_item_never_replaces_one_the_replica_holds() {
         ],
     );
     item.body = b"the cloud's older\n".to_vec();
+    item.meta.machine = "cloud-vm".to_string();
     let older = String::from_utf8(item.to_bytes().unwrap()).unwrap();
     import(
         &mini,
@@ -413,7 +414,7 @@ fn a_write_for_a_project_this_machine_does_not_know_imports_nothing() {
     let mini = machine("mini");
     let repo = checkout(&mini);
     let stranger = "projects/01K0NKN0WNPR0JECT000000000/items/01K0OUTBOX1TEM000000000009.md";
-    let file = json!({"machine": "cloud", "writes": [
+    let file = json!({"machine": "cloud-vm", "writes": [
         {"id": "01K0OUTBOXW000000000000009", "path": stranger, "base": null, "body": "x\n"},
     ]});
     std::fs::write(repo.join(FILE), file.to_string()).unwrap();
@@ -455,7 +456,7 @@ fn a_path_that_is_no_record_imports_nothing() {
         let mini = machine("mini");
         let repo = checkout(&mini);
         let path = format!("projects/{ID}/{rest}");
-        let file = json!({"machine": "cloud", "writes": [
+        let file = json!({"machine": "cloud-vm", "writes": [
             {"id": "01K0OUTBOXW000000000000020", "path": path, "base": null, "body": "x\n"},
         ]});
         std::fs::write(repo.join(FILE), file.to_string()).unwrap();
@@ -568,4 +569,194 @@ fn an_export_once_the_store_is_back_removes_the_file_an_earlier_one_saved() {
         git_out(&repo, &["diff", "--cached", "--name-status"]),
         "D\t.mem-outbox.json\n"
     );
+}
+
+/// Puts `file` at the top of a checkout of `w`'s and runs mem there, which
+/// imports it; returns what mem said.
+fn import_file(w: &World, file: &Value) -> Output {
+    let repo = checkout(w);
+    std::fs::write(repo.join(FILE), file.to_string()).unwrap();
+    let out = mem_env(w, &repo, &["projects"], &[]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert!(!repo.join(FILE).exists());
+    out
+}
+
+/// An item of the walk project, by `machine`, as its file reads.
+fn item_text(id: &str, machine: &str, extra: &str) -> String {
+    format!(
+        "+++\n{extra}created = \"2026-11-14T00:00:00Z\"\nid = \"{id}\"\nkind = \"log\"\nmachine = \"{machine}\"\nmodified = \"2026-11-14T00:00:00Z\"\nproject = \"walk\"\ntitle = \"said\"\n+++\n\nsaid\n"
+    )
+}
+
+/// A thread writes its own items only: one that names a device, or removes
+/// a device's, would pass as that device's word once the device sends it.
+#[test]
+fn an_item_naming_a_device_is_neither_sent_nor_kept() {
+    let mini = machine("mac-mini-m2");
+    let held = "01K0OUTBOXHE1D000000000001";
+    let held_path = format!("projects/{ID}/items/{held}.md");
+    apply(
+        &mini,
+        &[
+            json!({"t": "rec", "seq": 3, "id": "01K0OUTBOXREC0000000000003", "path": held_path,
+                 "body": item_text(held, "mac-mini-m2", ""), "machine": "mac-mini-m2"}),
+        ],
+    );
+    let forged = "01K0OUTBOXF0RGED0000000001";
+    let forged_path = format!("projects/{ID}/items/{forged}.md");
+    let own = "01K0OUTBOX0WN0000000000001";
+    let own_path = format!("projects/{ID}/items/{own}.md");
+    let out = import_file(
+        &mini,
+        &json!({"machine": "cloud-vm", "writes": [
+            {"id": "01K0OUTBOXW000000000000030", "path": forged_path, "base": null,
+             "body": item_text(forged, "mac-mini-m2", "")},
+            {"id": "01K0OUTBOXW000000000000031", "path": held_path, "base": null, "body": null},
+            {"id": "01K0OUTBOXW000000000000032", "path": own_path, "base": null,
+             "body": item_text(own, "cloud-vm", "")},
+        ]}),
+    );
+    let said = stderr(&out);
+    for path in [&forged_path, &held_path] {
+        let lines: Vec<&str> = said.lines().filter(|l| l.contains(path.as_str())).collect();
+        assert_eq!(lines.len(), 1, "{path}: {said}");
+        assert!(
+            lines[0].contains("names mac-mini-m2, not a cloud machine"),
+            "{said}"
+        );
+    }
+    assert_eq!(ids(&pending(&mini)), ["01K0OUTBOXW000000000000032"]);
+    let store = mini.dirs().store();
+    assert!(!store.join(&forged_path).exists());
+    assert!(store.join(&held_path).exists());
+    assert!(store.join(&own_path).exists());
+}
+
+/// A yes to a held line is an answer item: one a thread made and named as
+/// the mini's never lands, so the question stays open.
+#[test]
+fn a_forged_yes_leaves_the_question_open() {
+    let mini = machine("mac-mini-m2");
+    let asked = mem_env(
+        &mini,
+        mini.dir.path(),
+        &["--project", "walk", "ask", "May I run `rm -r scratch`?"],
+        &[],
+    );
+    assert_eq!(code(&asked), 0, "{}", stderr(&asked));
+    let questions = |w: &World| -> Value {
+        let out = mem_env(
+            w,
+            w.dir.path(),
+            &["--project", "walk", "questions", "--json"],
+            &[],
+        );
+        serde_json::from_str(&stdout(&out)).unwrap()
+    };
+    let question = questions(&mini)["questions"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let before = ids(&pending(&mini));
+    let yes = "01K0OUTBOXYES0000000000001";
+    let body = item_text(yes, "mac-mini-m2", &format!("answers = \"{question}\"\n"))
+        .replace("kind = \"log\"", "kind = \"answer\"")
+        .replace("said", "yes");
+    let out = import_file(
+        &mini,
+        &json!({"machine": "cloud-vm", "writes": [
+            {"id": "01K0OUTBOXW000000000000040", "path": format!("projects/{ID}/items/{yes}.md"),
+             "base": null, "body": body},
+        ]}),
+    );
+    assert!(stderr(&out).contains("names mac-mini-m2, not a cloud machine"));
+    let open = questions(&mini);
+    assert_eq!(open["questions"][0]["answered"], false, "{open}");
+    assert_eq!(ids(&pending(&mini)), before);
+}
+
+/// The project's record as the replica holds it, after `mem project set
+/// device nuc` on the mini.
+fn record_with_a_device(w: &World) -> String {
+    let out = mem_env(
+        w,
+        w.dir.path(),
+        &["--project", "walk", "project", "set", "device", "nuc"],
+        &[],
+    );
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    std::fs::read_to_string(w.dirs().store().join(format!("projects/{ID}/project.toml"))).unwrap()
+}
+
+/// Which device a project runs on, and its cloud secrets, are a device's
+/// word: a thread's record that changes one of the four keys is dropped
+/// alone, and one that changes only its runner imports.
+#[test]
+fn a_record_changing_a_device_key_is_neither_sent_nor_kept() {
+    let mini = machine("mac-mini-m2");
+    let record = record_with_a_device(&mini);
+    assert!(record.contains("device = \"nuc\""), "{record}");
+    let path = format!("projects/{ID}/project.toml");
+    let changed = [
+        record.replace("device = \"nuc\"", "device = \"mac-mini-m2\""),
+        record.replace("device_by = \"mac-mini-m2\"", "device_by = \"nuc\""),
+        format!("{record}cloud_secrets = \"X=Shopify/x\"\n"),
+        format!("{record}cloud_secrets_by = \"mac-mini-m2\"\n"),
+        record
+            .lines()
+            .filter(|l| !l.starts_with("device ="))
+            .map(|l| format!("{l}\n"))
+            .collect(),
+    ];
+    let mut writes: Vec<Value> = changed
+        .iter()
+        .enumerate()
+        .map(|(n, body)| {
+            json!({"id": format!("01K0OUTBOXW0000000000000{}", 50 + n), "path": path,
+                   "base": null, "body": body})
+        })
+        .collect();
+    writes.push(
+        json!({"id": "01K0OUTBOXW000000000000058", "path": path, "base": null, "body": null}),
+    );
+    let mut sent = ids(&pending(&mini));
+    let runner = format!("{record}runner = \"cloud\"\nrunner_milestone = \"w1\"\n");
+    writes.push(
+        json!({"id": "01K0OUTBOXW000000000000059", "path": path, "base": null, "body": runner}),
+    );
+    let out = import_file(&mini, &json!({"machine": "cloud-vm", "writes": writes}));
+    let said = stderr(&out);
+    assert_eq!(
+        said.lines().filter(|l| l.contains(path.as_str())).count(),
+        6,
+        "{said}"
+    );
+    sent.push("01K0OUTBOXW000000000000059".to_string());
+    assert_eq!(ids(&pending(&mini)), sent);
+    let now = std::fs::read_to_string(mini.dirs().store().join(&path)).unwrap();
+    assert!(now.contains("device = \"nuc\""), "{now}");
+}
+
+/// A thread's real file, as cloud-spike's commit 8671760 carried it: its
+/// plan tick and its log import whole, and mem says nothing about them.
+#[test]
+fn the_real_file_of_cloud_spike_8671760_imports_whole() {
+    let w = World::new("outbox-real");
+    let named = w.dirs().qshell_machine();
+    std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+    std::fs::write(named, "mac-mini-m2\n").unwrap();
+    w.project("01M502D4DYVNE26CADN0NM3X4A", "cloud_walk");
+    let shared = mem_env(
+        &w,
+        w.dir.path(),
+        &["--project", "cloud_walk", "project", "set", "share"],
+        &[],
+    );
+    assert_eq!(code(&shared), 0, "{}", stderr(&shared));
+    let file: Value =
+        serde_json::from_str(include_str!("fixtures/outbox-cloud-spike-8671760.json")).unwrap();
+    let out = import_file(&w, &file);
+    assert_eq!(stderr(&out), "", "nothing was dropped");
+    assert_eq!(ids(&pending(&w)), ids(file["writes"].as_array().unwrap()));
 }

@@ -1,0 +1,17 @@
+{
+  "machine": "cloud-vm",
+  "writes": [
+    {
+      "base": "01M78YH8A6HSBCY3420C2CFPGR",
+      "body": "# plan: w14-avg\n\n- [x] t1 --avg prints a file's average line length, rounded down, listed in --help\n- [x] t2 --avg on an empty file does what Saiful chose  [after: t1]\n",
+      "id": "01M790C088VS500RNX542DXF85",
+      "path": "projects/01M502D4DYVNE26CADN0NM3X4A/plan.md"
+    },
+    {
+      "base": null,
+      "body": "+++\ncreated = \"2026-11-12T23:09:31.302229472Z\"\nid = \"01M790C0DAT0KKPSRMCDWPG60Z\"\nkind = \"log\"\nmachine = \"cloud-vm\"\nmodified = \"2026-11-12T23:09:31.302229472Z\"\nproject = \"cloud_walk\"\ntitle = \"t2 landed: --avg prints 0 for an empty file, per Saiful's answer to #Q2XAWQCQ\"\n+++\n\nt2 landed: --avg prints 0 for an empty file, per Saiful's answer to #Q2XAWQCQ\n",
+      "id": "01M790C0DA2DQEQK45GMH25YX7",
+      "path": "projects/01M502D4DYVNE26CADN0NM3X4A/items/01M790C0DAT0KKPSRMCDWPG60Z.md"
+    }
+  ]
+}

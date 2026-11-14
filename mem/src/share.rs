@@ -908,6 +908,18 @@ pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
             "{rel} is in a project this machine does not know"
         );
     }
+    // A device sends what it imports with its own token, so the file may
+    // carry nothing the hub trusts by its writer: each write that would pass
+    // as a device's word is dropped alone, and the rest imports.
+    writes.retain(
+        |(_, rel, file, _, body)| match foreign(rel, file, body.as_deref()) {
+            Some(why) => {
+                eprintln!("mem: {rel} in {OUTBOX_FILE}: {why}; not imported");
+                false
+            }
+            None => true,
+        },
+    );
     let mut conn = open(db)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for (id, rel, file, base, body) in writes {
@@ -930,6 +942,46 @@ pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
     remove_outbox_file(top)?;
     kick();
     Ok(())
+}
+
+/// The keys of a project's record the hub trusts by the machine that wrote
+/// them.
+const DEVICE_KEYS: [&str; 4] = ["device", "device_by", "cloud_secrets", "cloud_secrets_by"];
+
+/// Why a write in another machine's outbox file would pass as a device's
+/// word, if it would: an item that names a machine other than a cloud one,
+/// the removal of such an item, or a project record that changes one of
+/// `DEVICE_KEYS` from what `file` holds here.
+fn foreign(rel: &str, file: &Path, body: Option<&str>) -> Option<String> {
+    if is_item(rel) {
+        let text = match body {
+            Some(text) => text.to_string(),
+            None => std::fs::read_to_string(file).ok()?,
+        };
+        let named = crate::item::Item::parse(text.as_bytes())
+            .map(|item| item.meta.machine)
+            .unwrap_or_default();
+        let cloud = named
+            .strip_prefix("cloud-")
+            .is_some_and(|rest| !rest.is_empty());
+        return (!cloud).then(|| format!("names {named}, not a cloud machine"));
+    }
+    if !rel.ends_with("/project.toml") {
+        return None;
+    }
+    let keys = |text: Option<&str>| {
+        let table: toml::Table = text
+            .and_then(|t| toml::from_str(t).ok())
+            .unwrap_or_default();
+        DEVICE_KEYS.map(|key| table.get(key).cloned())
+    };
+    let here = std::fs::read_to_string(file).ok();
+    let (theirs, ours) = (keys(body), keys(here.as_deref()));
+    DEVICE_KEYS
+        .iter()
+        .zip(theirs.iter().zip(&ours))
+        .find(|(_, (a, b))| a != b)
+        .map(|(key, _)| format!("changes {key}, which only a device sets"))
 }
 
 /// Whether `rel` is where mem keeps a record of a project: its project.toml,
