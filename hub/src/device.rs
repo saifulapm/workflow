@@ -100,7 +100,16 @@ const SEEN_ALL: &str =
 /// objects from call to call, so the mark lasts as long as the session and
 /// no other session's daemon sees it. A tab Saiful drags into the group
 /// carries no mark.
-const TAG_NEW: &str = "async page => { if (!page.__hubSeen) page.__hubTab = true; }";
+/// It returns the page's guid when it marks it, which is the same in every
+/// daemon on the connection, so the hub can close the tab through another
+/// one, and null when it does not.
+const TAG_NEW: &str = "async page => { if (!page.__hubSeen) { page.__hubTab = true; \
+     return page._guid || ''; } return null; }";
+
+/// The file in a session's folder that lists the guid of each tab it
+/// opened: what the hub closes it by when the session's daemon is gone or
+/// no longer knows its marks.
+const OWN_IDS: &str = "tabs.json";
 
 /// The start of the hub's code that asks whether a page is the session's
 /// own: one it marked, or one such a page opened, as a link with
@@ -115,19 +124,41 @@ macro_rules! own {
 /// Whether the current page is the session's own.
 const OWN_CURRENT: &str = concat!("async page => { ", own!(), "return await own(page); }");
 
-/// Closes every page the session opened, each judged before any closes, so
-/// a popup still has its opener, and returns the URL of each of its pages
-/// still open after. Closing the last one ends the extension's connection
-/// and the session with it, which playwright-cli reports as "Session
-/// closed" on stderr with exit 1.
-const CLOSE_OWN: &str = concat!(
-    "async page => { ",
-    own!(),
-    "const mine = []; for (const p of page.context().pages()) if (await own(p)) mine.push(p); \
-     for (const p of mine) await p.close(); const left = []; \
-     for (const p of page.context().pages()) if (await own(p)) left.push(p.url()); \
-     return left; }"
-);
+/// Closes every page the session opened, by its mark or by one of the
+/// guids in `ids`, each judged before any closes, so a popup still has its
+/// opener, and returns the URL of each of its pages still open after.
+/// Closing the last one ends the extension's connection and the session
+/// with it, which playwright-cli reports as "Session closed" on stderr with
+/// exit 1.
+fn close_own_code(ids: &[String]) -> String {
+    format!(
+        "async page => {{ const ids = {}; \
+         const own = async p => {{ if (p.__hubTab || ids.includes(p._guid)) return true; \
+         const o = await p.opener().catch(() => null); return !!o && own(o); }}; \
+         const mine = []; for (const p of page.context().pages()) if (await own(p)) mine.push(p); \
+         for (const p of mine) await p.close(); const left = []; \
+         for (const p of page.context().pages()) if (await own(p)) left.push(p.url()); \
+         return left; }}",
+        serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_string())
+    )
+}
+
+/// The guids of the tabs the session in `dir` opened. Only a guid the hub
+/// checked goes into its code.
+fn own_ids(dir: &Path) -> Vec<String> {
+    std::fs::read(dir.join(OWN_IDS))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|id| is_guid(id))
+        .collect()
+}
+
+fn is_guid(id: &str) -> bool {
+    id.strip_prefix("page@")
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
 
 /// -1 when the current page is the session's own, else the number of the
 /// first one that is, else -2.
@@ -351,7 +382,7 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
     let record = cli.dir.join(LAST_CALL);
     // A detach that could not close the tabs keeps the session's record,
     // so the idle sweep tries again.
-    if cli.on.get() == Some(false)
+    if !cli.stayed.get() && cli.on.get() == Some(false)
         || args[0] == "detach" && matches!(&called, Ok(outcome) if outcome.exit == 0)
     {
         let _ = std::fs::remove_file(&record);
@@ -545,16 +576,23 @@ fn end_when(session: &str, dir: &Path, due: impl Fn(&LastCall) -> bool) {
         on: Default::default(),
         stayed: Default::default(),
     };
-    if cli.attached().unwrap_or(false) {
-        let up = crate::config::config_home()
-            .is_ok_and(|home| chromium_up(&home.join("chromium/SingletonLock")));
-        let closing = up.then(|| cli.close_own());
-        if closing.is_some_and(|left| !matches!(left, Ok(Ok(left)) if left.is_empty())) {
-            eprintln!(
-                "hub: device: could not close the tabs of {session}; trying again next round"
-            );
-            return;
+    let attached = cli.attached().unwrap_or(false);
+    let up = crate::config::config_home()
+        .is_ok_and(|home| chromium_up(&home.join("chromium/SingletonLock")));
+    // A session `list` no longer names may still have tabs open on the
+    // hub's connection.
+    let closing = up.then(|| {
+        if attached {
+            cli.close_own()
+        } else {
+            cli.close_own_left()
         }
+    });
+    if closing.is_some_and(|left| !matches!(left, Ok(Ok(left)) if left.is_empty())) {
+        eprintln!("hub: device: could not close the tabs of {session}; trying again next round");
+        return;
+    }
+    if attached {
         let flag = format!("-s={session}");
         let _ = cli.run(&[&flag, "detach"], None);
     }
@@ -590,18 +628,55 @@ impl Cli<'_> {
     /// Closes the session's tabs: the URL of each that stayed open, or the
     /// run of playwright-cli that could not close them.
     fn close_own(&self) -> Result<Result<Vec<String>, crate::proc::Finished>, Stop> {
+        self.close_own_in(self)
+    }
+
+    /// close_own through the hub's connection, for a session whose daemon
+    /// is gone: by the guids the session's folder keeps, which no other
+    /// session's tab has. Nothing to close when it keeps none, or when the
+    /// connection is gone, which took the tabs' session with it.
+    fn close_own_left(&self) -> Result<Result<Vec<String>, crate::proc::Finished>, Stop> {
+        if own_ids(&self.dir).is_empty()
+            || self.dir.join(ALONE).exists()
+            || !self.listed(CONNECTION)?
+        {
+            let _ = std::fs::remove_file(self.dir.join(OWN_IDS));
+            return Ok(Ok(Vec::new()));
+        }
+        self.close_own_in(&self.connection()?)
+    }
+
+    /// Closes the session's tabs by `cli`'s daemon; forgets their guids
+    /// once none is left.
+    fn close_own_in(&self, cli: &Cli) -> Result<Result<Vec<String>, crate::proc::Finished>, Stop> {
         let done = {
             let _tabs = tabs_lock();
-            self.run_code(CLOSE_OWN)?
+            cli.run_code(&close_own_code(&own_ids(&self.dir)))?
         };
         if !closed(&done) {
             return Ok(Err(done));
         }
         // Closing the connection's last tab ends the session before it
         // answers, and every tab of it is closed.
-        Ok(Ok(result_of(&done)
+        let left: Vec<String> = result_of(&done)
             .and_then(|left| serde_json::from_str(&left).ok())
-            .unwrap_or_default()))
+            .unwrap_or_default();
+        if left.is_empty() {
+            let _ = std::fs::remove_file(self.dir.join(OWN_IDS));
+        }
+        Ok(Ok(left))
+    }
+
+    /// The hub's own connection session.
+    fn connection(&self) -> Result<Cli<'static>, Stop> {
+        Ok(Cli {
+            deadline: self.deadline,
+            path: self.path.clone(),
+            session: CONNECTION,
+            dir: connection_dir().map_err(|e| Stop::Failed(format!("{e:#}")))?,
+            on: Default::default(),
+            stayed: Default::default(),
+        })
     }
 
     fn call(&self, args: &[String]) -> Result<Outcome, Stop> {
@@ -611,39 +686,45 @@ impl Cli<'_> {
         let mut fresh = false;
         let attached = self.attached()?;
         self.on.set(Some(attached));
-        if attached {
-            if detach {
-                match self.close_own()? {
-                    Err(done) => {
-                        return Ok(Outcome::fail(
-                            done.code.unwrap_or(128),
-                            format!(
-                                "device: closing the session's tabs failed, so it stays attached: {}",
-                                String::from_utf8_lossy(&done.stderr)
-                            ),
-                        ));
-                    }
-                    Ok(left) if !left.is_empty() => {
-                        self.stayed.set(true);
-                        let tabs = if left.len() == 1 { "tab" } else { "tabs" };
-                        return Ok(Outcome::fail(
-                            1,
-                            format!(
-                                "device: {} {tabs} stayed open: {}, so the session stays \
-                                 attached and the hub tries to close {} again within 15 minutes\n",
-                                left.len(),
-                                left.join(", "),
-                                if left.len() == 1 { "it" } else { "them" },
-                            ),
-                        ));
-                    }
-                    Ok(_) => {}
+        if detach {
+            // A session `list` no longer names may still have tabs open on
+            // the hub's connection.
+            let closing = if attached {
+                self.close_own()?
+            } else {
+                self.close_own_left()?
+            };
+            match closing {
+                Err(done) => {
+                    // The sweep tries again, attached or not.
+                    self.stayed.set(!attached);
+                    return Ok(Outcome::fail(
+                        done.code.unwrap_or(128),
+                        format!(
+                            "device: closing the session's tabs failed, so it stays attached: {}",
+                            String::from_utf8_lossy(&done.stderr)
+                        ),
+                    ));
                 }
+                Ok(left) if !left.is_empty() => {
+                    self.stayed.set(true);
+                    return Ok(Outcome::fail(1, stayed_open(&left)));
+                }
+                Ok(_) => {}
             }
-        } else if !detach {
+        } else if !attached {
             // A session with a record was attached when its last call ended.
             if self.dir.join(LAST_CALL).exists() {
-                return Ok(Outcome::fail(1, ENDED.to_string()));
+                let mut ended = ENDED.to_string();
+                match self.close_own_left()? {
+                    Ok(left) if left.is_empty() => {}
+                    Ok(left) => {
+                        self.stayed.set(true);
+                        ended.push_str(&stayed_open(&left));
+                    }
+                    Err(_) => self.stayed.set(true),
+                }
+                return Ok(Outcome::fail(1, ended));
             }
             if let Some(failed) = self.attach()? {
                 return Ok(failed);
@@ -778,14 +859,7 @@ impl Cli<'_> {
                     let _ = std::fs::write(self.dir.join(ALONE), "");
                     return Ok(None);
                 };
-                let connection = Cli {
-                    deadline: self.deadline,
-                    path: self.path.clone(),
-                    session: CONNECTION,
-                    dir: connection_dir().map_err(|e| Stop::Failed(format!("{e:#}")))?,
-                    on: Default::default(),
-                    stayed: Default::default(),
-                };
+                let connection = self.connection()?;
                 let made = connection.run_scoped(
                     &[
                         &format!("-s={CONNECTION}"),
@@ -823,7 +897,24 @@ impl Cli<'_> {
     fn open_own_tab(&self, argv: &[&str]) -> Result<crate::proc::Finished, Stop> {
         self.run_code(SEEN_ALL)?;
         let opened = self.run(argv, None)?;
-        self.run_code(TAG_NEW)?;
+        let tagged = self.run_code(TAG_NEW)?;
+        match result_of(&tagged).map(|r| serde_json::from_str::<Option<String>>(&r)) {
+            Some(Ok(None)) => {}
+            Some(Ok(Some(id))) if is_guid(&id) => {
+                let mut ids = own_ids(&self.dir);
+                ids.push(id);
+                let file = self.dir.join(OWN_IDS);
+                if let Err(e) = std::fs::write(&file, serde_json::to_vec(&ids).unwrap_or_default())
+                {
+                    eprintln!("hub: device: cannot write {}: {e}", file.display());
+                }
+            }
+            _ => eprintln!(
+                "hub: device: the tab {} opened has no guid, so only its daemon's mark closes it: {}",
+                self.session,
+                why(&tagged)
+            ),
+        }
         Ok(opened)
     }
 
@@ -1000,6 +1091,21 @@ impl Cli<'_> {
     fn left(&self) -> Duration {
         self.deadline.saturating_duration_since(Instant::now())
     }
+}
+
+/// What a session hears when tabs it opened stayed open through their close.
+fn stayed_open(left: &[String]) -> String {
+    let (tabs, them) = if left.len() == 1 {
+        ("tab", "it")
+    } else {
+        ("tabs", "them")
+    };
+    format!(
+        "device: {} {tabs} stayed open: {}; the hub tries to close {them} again within 15 \
+         minutes\n",
+        left.len(),
+        left.join(", "),
+    )
 }
 
 /// The value a run-code returned: the line after `### Result`.

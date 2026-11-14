@@ -97,6 +97,7 @@ own() {
   t=$1
   while [ -n "$t" ] && [ "$t" != 0 ]; do
     [ "$(field "$t" 3)" = "$session" ] && return 0
+    case " $ids " in *" page@$t "*) return 0 ;; esac
     [ -n "$openers" ] || return 1
     t=$(field "$t" 5)
   done
@@ -222,6 +223,11 @@ tab-close)
   ;;
 run-code)
   case $1 in *'opener()'*) openers=1 ;; *) openers= ;; esac
+  # The guids the hub's close names, each tab's being page@<its id>.
+  case $1 in
+  *'const ids = '*) ids=$(printf '%s' "$1" | sed -n 's/.*const ids = \(\[[^]]*\]\).*/\1/p' | grep -o 'page@[0-9]*' | tr '\n' ' ') ;;
+  *) ids= ;;
+  esac
   case $1 in
   *'.close()'*)
     if [ -f "$S/close-fails" ]; then
@@ -258,7 +264,12 @@ run-code)
     visible > "$S/seen-$session"
     ;;
   *'!page.__hubSeen'*)
-    grep -qx "$cur" "$S/seen-$session" 2>/dev/null || set_field "$cur" 3 "$session"
+    if grep -qx "$cur" "$S/seen-$session" 2>/dev/null; then
+      result null
+    else
+      set_field "$cur" 3 "$session"
+      result "\"page@$cur\""
+    fi
     ;;
   *'title()'*)
     json= i=0

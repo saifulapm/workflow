@@ -192,6 +192,35 @@ impl Rig {
         }
     }
 
+    /// `session`'s daemon is gone, as when playwright-cli detached it by
+    /// itself: `list` no longer names it, and its tabs stay in the strip.
+    fn daemon_gone(&self, session: &str) {
+        let sessions = self.state.join("sessions");
+        let text = std::fs::read_to_string(&sessions).unwrap();
+        let kept: String = text
+            .lines()
+            .filter(|line| *line != session)
+            .map(|line| format!("{line}\n"))
+            .collect();
+        std::fs::write(sessions, kept).unwrap();
+    }
+
+    /// `session`'s daemon no longer knows which tabs it marked.
+    fn marks_lost(&self, session: &str) {
+        let text = std::fs::read_to_string(&self.tabs).unwrap();
+        let kept: String = text
+            .lines()
+            .map(|line| {
+                let mut f: Vec<&str> = line.split('\t').collect();
+                if f[2] == session {
+                    f[2] = "0";
+                }
+                format!("{}\n", f.join("\t"))
+            })
+            .collect();
+        std::fs::write(&self.tabs, kept).unwrap();
+    }
+
     /// Closes the strip's tab that shows `url`, as Saiful does by hand.
     fn close_by_hand(&self, url: &str) {
         let text = std::fs::read_to_string(&self.tabs).unwrap();
@@ -322,6 +351,62 @@ fn detach_of_a_session_that_never_attached_opens_nothing() {
     rig.browser("s1", &["detach"]);
     assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
     assert_eq!(rig.calls(), vec!["list", "-s=s1 detach"]);
+}
+
+#[test]
+fn detach_of_a_session_list_no_longer_names_closes_its_tabs() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.browser("s1", &["tab-new", "https://b.test"]);
+    rig.browser("s2", &["goto", "https://c.test"]);
+    rig.daemon_gone("s1");
+    let answer = rig.browser("s1", &["detach"]);
+    assert_eq!(answer["stderr"], "", "{answer}");
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s2", "https://c.test")
+        ]
+    );
+}
+
+#[test]
+fn detach_of_a_daemon_without_its_marks_closes_its_tabs_and_their_popups() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.popup("s1", "https://pop.test");
+    rig.his_tab("s1", "https://dragged.test/");
+    rig.browser("s2", &["goto", "https://a.test"]);
+    rig.marks_lost("s1");
+    rig.browser("s1", &["detach"]);
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://dragged.test/"),
+            tab("s2", "https://a.test")
+        ]
+    );
+}
+
+#[test]
+fn an_idle_session_list_no_longer_names_loses_its_tabs() {
+    let rig = rig_env(&[("HUB_DEVICE_IDLE_MS", "1000")]);
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.daemon_gone("s1");
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+#[test]
+fn a_call_of_a_session_list_no_longer_names_closes_its_old_tabs() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    rig.daemon_gone("s1");
+    let answer = rig.call("s1", &["snapshot"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
 }
 
 #[test]
@@ -560,8 +645,8 @@ fn a_detach_names_the_tab_that_stayed_open_and_the_sweep_closes_it() {
     assert_eq!(answer["exit"], 1, "{answer}");
     assert_eq!(
         answer["stderr"],
-        "device: 1 tab stayed open: https://example.com/?k2, so the session stays \
-         attached and the hub tries to close it again within 15 minutes\n"
+        "device: 1 tab stayed open: https://example.com/?k2; the hub tries to close it \
+         again within 15 minutes\n"
     );
     assert_eq!(
         rig.strip(),

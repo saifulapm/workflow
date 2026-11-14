@@ -234,7 +234,8 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
                 &[
                     "-s=s1",
                     "run-code",
-                    "async page => { if (!page.__hubSeen) page.__hubTab = true; }"
+                    "async page => { if (!page.__hubSeen) { page.__hubTab = true; \
+                     return page._guid || ''; } return null; }"
                 ]
             ),
             fields(&cwd, "", &["-s=s1", "goto", "https://claude.ai/code"]),
