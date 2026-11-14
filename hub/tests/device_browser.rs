@@ -42,6 +42,8 @@ struct Rig {
     /// tab-separated.
     record: PathBuf,
     mem_log: PathBuf,
+    /// The URL the fake reports for the current tab.
+    url: PathBuf,
     _dir: TempDir,
 }
 
@@ -62,6 +64,7 @@ fn rig(goto: &str, env: &[(&str, &str)]) -> Rig {
     let record = dir.join("record");
     let sessions = dir.join("sessions");
     let mem_log = dir.join("mem.log");
+    let url = dir.join("url");
     fixture_bin(
         &bin,
         "systemctl",
@@ -101,12 +104,14 @@ fn rig(goto: &str, env: &[(&str, &str)]) -> Rig {
              run-code) case \"$2\" in\n\
                *'return -2'*) printf '### Result\\n-1\\n' ;;\n\
                *'own(page)'*) printf '### Result\\ntrue\\n' ;;\n\
+               *'page.url()'*) printf '### Result\\n\"%s\"\\n' \"$(cat '{url}' 2>/dev/null || echo about:blank)\" ;;\n\
                esac ;;\n\
-             goto)\n{goto}\n;;\n\
+             goto) printf '%s' \"$2\" > '{url}'\n{goto}\n;;\n\
              *) echo \"ran $*\" ;;\n\
              esac",
             record = record.display(),
             sessions = sessions.display(),
+            url = url.display(),
         ),
     );
     let socket = dir.join("local.sock");
@@ -122,6 +127,7 @@ fn rig(goto: &str, env: &[(&str, &str)]) -> Rig {
         tools,
         record,
         mem_log,
+        url,
         _dir: dir,
     }
 }
@@ -247,11 +253,74 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     assert_eq!(answer["stdout"], "ran snapshot\n");
     let calls = rig.calls();
     // Before the command the hub checks the current tab is still the
-    // session's own.
-    assert_eq!(calls.len(), 14, "{calls:?}");
+    // session's own, then reads its URL.
+    assert_eq!(calls.len(), 15, "{calls:?}");
     assert_eq!(calls[11], fields(&cwd, "", &["list"]));
     assert_eq!(calls[12][2..4], ["-s=s1", "run-code"]);
-    assert_eq!(calls[13], fields(&cwd, "", &["-s=s1", "snapshot"]));
+    assert_eq!(
+        calls[13],
+        fields(&cwd, "", &["-s=s1", "run-code", "async page => page.url()"])
+    );
+    assert_eq!(calls[14], fields(&cwd, "", &["-s=s1", "snapshot"]));
+}
+
+/// Saiful's tap on the hub page releases a held tmux line, so a session
+/// must not open that page in its own tab.
+#[test]
+fn goto_the_hub_page_never_runs() {
+    let rig = rig(SNAPSHOT_GOTO, &[]);
+    for url in [
+        "https://hub.on-rexa.com/p/cloud_walk/questions",
+        "HTTPS://Mem.On-Rexa.Com./x",
+        "https://u@next-hub.on-rexa.com:443/",
+        "hub.on-rexa.com/p/x",
+    ] {
+        let answer = browser(&rig.hub, Some("s1"), &["goto", url]);
+        assert_eq!(answer["exit"], 2, "{url}: {answer}");
+        assert_eq!(
+            answer["stderr"],
+            "device: browser may not open the hub page: a yes there is Saiful's own\n",
+            "{url}"
+        );
+    }
+    let calls = rig.calls();
+    assert!(
+        !calls.iter().any(|c| c.get(3).is_some_and(|a| a == "goto")),
+        "{calls:?}"
+    );
+    for url in ["https://device.on-rexa.com/", "https://example.com/"] {
+        let answer = browser(&rig.hub, Some("s1"), &["goto", url]);
+        assert_eq!(answer["exit"], 0, "{url}: {answer}");
+    }
+}
+
+#[test]
+fn no_command_but_leaving_runs_while_the_tab_is_on_the_hub_page() {
+    let rig = rig(SNAPSHOT_GOTO, &[]);
+    let answer = browser(&rig.hub, Some("s1"), &["goto", "https://example.com/"]);
+    assert_eq!(answer["exit"], 0, "{answer}");
+    // As when Saiful picked the hub page's tab, or a click led there.
+    std::fs::write(&rig.url, "https://hub.on-rexa.com/p/cloud_walk/questions").unwrap();
+    for args in [&["click", "e5"][..], &["snapshot"]] {
+        let answer = browser(&rig.hub, Some("s1"), args);
+        assert_eq!(answer["exit"], 2, "{args:?}: {answer}");
+        assert_eq!(
+            answer["stderr"],
+            "device: browser may not act on the hub page: a yes there is Saiful's own\n",
+            "{args:?}"
+        );
+    }
+    let calls = rig.calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.get(3).is_some_and(|a| a == "click" || a == "snapshot")),
+        "{calls:?}"
+    );
+    for args in [&["goto", "https://example.com/"][..], &["detach"]] {
+        let answer = browser(&rig.hub, Some("s1"), args);
+        assert_eq!(answer["exit"], 0, "{args:?}: {answer}");
+    }
 }
 
 #[test]

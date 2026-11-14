@@ -267,6 +267,7 @@ run-code)
     done
     result "[$json]"
     ;;
+  *'page.url()'*) result "\"$(field "$cur" 4)\"" ;;
   *) echo "fake: unknown code: $1" >&2; exit 1 ;;
   esac
   ;;

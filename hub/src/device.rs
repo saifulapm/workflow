@@ -146,6 +146,18 @@ const OWN_TABS: &str = concat!(
      return mine; }"
 );
 
+/// The current page's URL, as Chromium normalised it.
+const CURRENT_URL: &str = "async page => page.url()";
+
+/// The hosts that serve the hub page (hubweb/cloudflare.config.ts), where a
+/// tap on Yes is signed as Saiful's own.
+const HUB_PAGE_HOSTS: [&str; 4] = [
+    "hub.on-rexa.com",
+    "mem.on-rexa.com",
+    "next-hub.on-rexa.com",
+    "next-mem.on-rexa.com",
+];
+
 /// The hub's own playwright-cli session, the one that attaches through the
 /// extension. Every device browser session joins it by this name, so the
 /// extension opens its connect tab once per Chromium, not once per session.
@@ -309,6 +321,11 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
         BROWSER_FLAGS_REFUSED.contains(&name)
     }) {
         return Outcome::refuse(format!("browser {arg} is not allowed here"));
+    }
+    if args[0] == "goto" && args[1..].iter().any(|a| on_hub_page(a)) {
+        return Outcome::refuse(
+            "browser may not open the hub page: a yes there is Saiful's own".to_string(),
+        );
     }
     let timeout = timeout();
     let cli = Cli {
@@ -610,6 +627,31 @@ impl Cli<'_> {
                         "device: cannot find the session's own tab, so the command did not run: {why}"
                     ),
                 ));
+            }
+        }
+        // A click on the hub page's Yes would release a held tmux line as
+        // Saiful's word. Alone, the session works in the tab Saiful picked,
+        // which may be that page, so every path reads the URL here.
+        if !detach && !tab_command && command != "goto" {
+            let done = self.run_code(CURRENT_URL)?;
+            let url = result_of(&done).and_then(|r| serde_json::from_str::<String>(&r).ok());
+            match url {
+                Some(url) if on_hub_page(&url) => {
+                    return Ok(Outcome::refuse(
+                        "browser may not act on the hub page: a yes there is Saiful's own"
+                            .to_string(),
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    return Ok(Outcome::fail(
+                        1,
+                        format!(
+                            "device: cannot read the session's tab URL, so the command did not run: {}",
+                            why(&done)
+                        ),
+                    ));
+                }
             }
         }
         let mut argv = vec![format!("-s={}", self.session)];
@@ -915,6 +957,27 @@ fn result_of(done: &crate::proc::Finished) -> Option<String> {
     let stdout = String::from_utf8_lossy(&done.stdout);
     let mut lines = stdout.lines().skip_while(|line| *line != "### Result");
     lines.nth(1).map(str::to_string)
+}
+
+/// Whether `url` is on a hub page host. With no scheme, playwright-cli's
+/// goto puts https:// in front, so the text up to the path is the host.
+fn on_hub_page(url: &str) -> bool {
+    let rest = match url.split_once("://") {
+        Some((scheme, rest))
+            if scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c)) =>
+        {
+            rest
+        }
+        _ => url,
+    };
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    HUB_PAGE_HOSTS.contains(&host.as_str())
 }
 
 /// What playwright-cli said when a run of it did not do what the hub asked.
