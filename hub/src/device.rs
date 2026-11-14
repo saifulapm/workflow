@@ -116,14 +116,17 @@ macro_rules! own {
 const OWN_CURRENT: &str = concat!("async page => { ", own!(), "return await own(page); }");
 
 /// Closes every page the session opened, each judged before any closes, so
-/// a popup still has its opener. Closing the last one ends the extension's
-/// connection and the session with it, which playwright-cli reports as
-/// "Session closed" on stderr with exit 1.
+/// a popup still has its opener, and returns the URL of each of its pages
+/// still open after. Closing the last one ends the extension's connection
+/// and the session with it, which playwright-cli reports as "Session
+/// closed" on stderr with exit 1.
 const CLOSE_OWN: &str = concat!(
     "async page => { ",
     own!(),
     "const mine = []; for (const p of page.context().pages()) if (await own(p)) mine.push(p); \
-     for (const p of mine) await p.close(); return mine.length; }"
+     for (const p of mine) await p.close(); const left = []; \
+     for (const p of page.context().pages()) if (await own(p)) left.push(p.url()); \
+     return left; }"
 );
 
 /// -1 when the current page is the session's own, else the number of the
@@ -340,6 +343,7 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
             Err(e) => return Outcome::fail(126, format!("device: {e:#}\n")),
         },
         on: Default::default(),
+        stayed: Default::default(),
     };
     let held = session_lock(session);
     let _held = held.lock().unwrap_or_else(|e| e.into_inner());
@@ -355,6 +359,7 @@ fn browser(session: Option<&str>, project: &str, args: &[String]) -> Outcome {
         let last = LastCall {
             project: project.to_string(),
             at: unix_now(),
+            stayed: cli.stayed.get(),
         };
         if let Err(e) = std::fs::write(&record, serde_json::to_vec(&last).unwrap_or_default()) {
             eprintln!("hub: device: cannot write {}: {e}", record.display());
@@ -397,6 +402,10 @@ struct LastCall {
     project: String,
     /// Unix milliseconds.
     at: u64,
+    /// Whether a tab of the session stayed open through its detach, so the
+    /// sweep closes it on its next round.
+    #[serde(default)]
+    stayed: bool,
 }
 
 pub(crate) fn unix_now() -> u64 {
@@ -449,7 +458,8 @@ pub fn sweep_sessions() -> ! {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             end_when(&name, &entry.path(), |last| {
-                Duration::from_millis(unix_now().saturating_sub(last.at)) >= limit
+                last.stayed
+                    || Duration::from_millis(unix_now().saturating_sub(last.at)) >= limit
                     || run_over(&name, &last.project, &mem, &projects)
             });
         }
@@ -533,15 +543,13 @@ fn end_when(session: &str, dir: &Path, due: impl Fn(&LastCall) -> bool) {
         session,
         dir: dir.to_path_buf(),
         on: Default::default(),
+        stayed: Default::default(),
     };
     if cli.attached().unwrap_or(false) {
         let up = crate::config::config_home()
             .is_ok_and(|home| chromium_up(&home.join("chromium/SingletonLock")));
-        let closing = up.then(|| {
-            let _tabs = tabs_lock();
-            cli.run_code(CLOSE_OWN)
-        });
-        if closing.is_some_and(|done| !done.is_ok_and(|done| closed(&done))) {
+        let closing = up.then(|| cli.close_own());
+        if closing.is_some_and(|left| !matches!(left, Ok(Ok(left)) if left.is_empty())) {
             eprintln!(
                 "hub: device: could not close the tabs of {session}; trying again next round"
             );
@@ -574,9 +582,28 @@ struct Cli<'a> {
     /// is not, whose attach failed or whose connection ended, goes, so its
     /// next call attaches.
     on: std::cell::Cell<Option<bool>>,
+    /// Whether a tab of the session stayed open through its detach.
+    stayed: std::cell::Cell<bool>,
 }
 
 impl Cli<'_> {
+    /// Closes the session's tabs: the URL of each that stayed open, or the
+    /// run of playwright-cli that could not close them.
+    fn close_own(&self) -> Result<Result<Vec<String>, crate::proc::Finished>, Stop> {
+        let done = {
+            let _tabs = tabs_lock();
+            self.run_code(CLOSE_OWN)?
+        };
+        if !closed(&done) {
+            return Ok(Err(done));
+        }
+        // Closing the connection's last tab ends the session before it
+        // answers, and every tab of it is closed.
+        Ok(Ok(result_of(&done)
+            .and_then(|left| serde_json::from_str(&left).ok())
+            .unwrap_or_default()))
+    }
+
     fn call(&self, args: &[String]) -> Result<Outcome, Stop> {
         let command = args[0].as_str();
         let detach = command == "detach";
@@ -586,18 +613,31 @@ impl Cli<'_> {
         self.on.set(Some(attached));
         if attached {
             if detach {
-                let done = {
-                    let _tabs = tabs_lock();
-                    self.run_code(CLOSE_OWN)?
-                };
-                if !closed(&done) {
-                    return Ok(Outcome::fail(
-                        done.code.unwrap_or(128),
-                        format!(
-                            "device: closing the session's tabs failed, so it stays attached: {}",
-                            String::from_utf8_lossy(&done.stderr)
-                        ),
-                    ));
+                match self.close_own()? {
+                    Err(done) => {
+                        return Ok(Outcome::fail(
+                            done.code.unwrap_or(128),
+                            format!(
+                                "device: closing the session's tabs failed, so it stays attached: {}",
+                                String::from_utf8_lossy(&done.stderr)
+                            ),
+                        ));
+                    }
+                    Ok(left) if !left.is_empty() => {
+                        self.stayed.set(true);
+                        let tabs = if left.len() == 1 { "tab" } else { "tabs" };
+                        return Ok(Outcome::fail(
+                            1,
+                            format!(
+                                "device: {} {tabs} stayed open: {}, so the session stays \
+                                 attached and the hub tries to close {} again within 15 minutes\n",
+                                left.len(),
+                                left.join(", "),
+                                if left.len() == 1 { "it" } else { "them" },
+                            ),
+                        ));
+                    }
+                    Ok(_) => {}
                 }
             }
         } else if !detach {
@@ -744,6 +784,7 @@ impl Cli<'_> {
                     session: CONNECTION,
                     dir: connection_dir().map_err(|e| Stop::Failed(format!("{e:#}")))?,
                     on: Default::default(),
+                    stayed: Default::default(),
                 };
                 let made = connection.run_scoped(
                     &[

@@ -181,6 +181,17 @@ impl Rig {
         }
     }
 
+    /// While `on`, the hub's close of the tab that shows `url` returns with
+    /// the tab still open.
+    fn close_leaves(&self, url: &str, on: bool) {
+        let flag = self.state.join("close-leaves");
+        if on {
+            std::fs::write(flag, format!("{url}\n")).unwrap();
+        } else {
+            std::fs::remove_file(flag).unwrap();
+        }
+    }
+
     /// Closes the strip's tab that shows `url`, as Saiful does by hand.
     fn close_by_hand(&self, url: &str) {
         let text = std::fs::read_to_string(&self.tabs).unwrap();
@@ -537,6 +548,33 @@ fn a_detach_whose_close_fails_keeps_the_session_for_the_idle_sweep() {
     rig.closing_fails(false);
     std::thread::sleep(Duration::from_secs(3));
     assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+}
+
+#[test]
+fn a_detach_names_the_tab_that_stayed_open_and_the_sweep_closes_it() {
+    let rig = rig_env(&SWEEP);
+    rig.browser("s1", &["goto", "https://example.com/?k1"]);
+    rig.browser("s1", &["tab-new", "https://example.com/?k2"]);
+    rig.close_leaves("https://example.com/?k2", true);
+    let answer = rig.call("s1", &["detach"]);
+    assert_eq!(answer["exit"], 1, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: 1 tab stayed open: https://example.com/?k2, so the session stays \
+         attached and the hub tries to close it again within 15 minutes\n"
+    );
+    assert_eq!(
+        rig.strip(),
+        vec![
+            tab("saiful", "https://his.test/"),
+            tab("s1", "https://example.com/?k2")
+        ]
+    );
+    assert!(!rig.calls().iter().any(|c| c == "-s=s1 detach"));
+    rig.close_leaves("https://example.com/?k2", false);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(rig.strip(), vec![tab("saiful", "https://his.test/")]);
+    assert!(rig.calls().iter().any(|c| c == "-s=s1 detach"));
 }
 
 /// How many times the hub attached through the extension: each one opens a

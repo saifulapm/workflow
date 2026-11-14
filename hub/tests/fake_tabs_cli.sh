@@ -230,9 +230,14 @@ run-code)
     fi
     mine=
     for id in $(visible); do own "$id" && mine="$mine $id"; done
-    for id in $mine; do drop "$id"; done
+    # A tab whose URL is in close-leaves stays open through its close.
+    for id in $mine; do
+      grep -qxF "$(field "$id" 4)" "$S/close-leaves" 2>/dev/null || drop "$id"
+    done
     [ -z "$(visible)" ] && end_session
-    result "$(echo $mine | wc -w)"
+    left=
+    for id in $(visible); do own "$id" && left="$left${left:+,}\"$(field "$id" 4)\""; done
+    result "[$left]"
     ;;
   *'return -2'*)
     if own "$cur"; then result -1; exit 0; fi
