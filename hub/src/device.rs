@@ -651,7 +651,7 @@ impl Cli<'_> {
                     dir: connection_dir().map_err(|e| Stop::Failed(format!("{e:#}")))?,
                     on: Default::default(),
                 };
-                let made = connection.run(
+                let made = connection.run_scoped(
                     &[
                         &format!("-s={CONNECTION}"),
                         "attach",
@@ -797,6 +797,27 @@ impl Cli<'_> {
     }
 
     fn run(&self, args: &[&str], token: Option<&str>) -> Result<crate::proc::Finished, Stop> {
+        self.run_as(args, token, false)
+    }
+
+    /// `run` with the playwright-cli daemon it starts in a systemd scope of
+    /// its own, when the user's PATH has systemd-run. The hub's unit stops
+    /// every process of its own cgroup when it restarts, which would end
+    /// the connection, and the next attach would open another connect tab.
+    fn run_scoped(
+        &self,
+        args: &[&str],
+        token: Option<&str>,
+    ) -> Result<crate::proc::Finished, Stop> {
+        self.run_as(args, token, true)
+    }
+
+    fn run_as(
+        &self,
+        args: &[&str],
+        token: Option<&str>,
+        scoped: bool,
+    ) -> Result<crate::proc::Finished, Stop> {
         // The dotfiles' wrapper, found on the user manager's PATH since the
         // hub's own, pinned by its unit, does not have the dotfiles' bin
         // (~/Codes/dotfiles/bin in v2); v1's ~/.dotfiles/bin when it is not.
@@ -804,7 +825,16 @@ impl Cli<'_> {
             let home = std::env::var_os("HOME").unwrap_or_default();
             Path::new(&home).join(".dotfiles/bin/playwright-cli")
         });
-        let mut command = Command::new(wrapper);
+        let mut command = match find_in(&self.path, "systemd-run").filter(|_| scoped) {
+            Some(systemd_run) => {
+                let mut command = Command::new(systemd_run);
+                command
+                    .args(["--user", "--scope", "--quiet", "--collect", "--"])
+                    .arg(wrapper);
+                command
+            }
+            None => Command::new(wrapper),
+        };
         command
             .args(args)
             .env("PATH", &self.path)

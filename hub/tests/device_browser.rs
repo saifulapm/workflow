@@ -20,6 +20,19 @@ const SNAPSHOT_GOTO: &str = "mkdir -p .playwright-cli\n\
      echo \"- Page URL: $2\"\n\
      echo \"- [Snapshot](.playwright-cli/page-x.yml)\"";
 
+/// The body of a fake systemd-run that records its arguments in `record`
+/// and runs what it starts in a scope, as the real one does, and starts
+/// nothing else.
+fn scope_runner(record: &Path) -> String {
+    format!(
+        "printf 'systemd-run\\t%s\\n' \"$*\" >> '{}'\n\
+         case \" $* \" in *' --scope '*)\n\
+           while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\" ;;\n\
+         esac",
+        record.display()
+    )
+}
+
 struct Rig {
     hub: Hub,
     home: PathBuf,
@@ -64,6 +77,7 @@ fn rig(goto: &str, env: &[(&str, &str)]) -> Rig {
         "playwright-extension-token",
         "echo '  fake-token-123  '",
     );
+    fixture_bin(&tools, "systemd-run", &scope_runner(&record));
     fixture_bin(
         &home.join(".dotfiles/bin"),
         "playwright-cli",
@@ -175,6 +189,14 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
         vec![
             fields(&cwd, "", &["list"]),
             fields(&cwd, "", &["list"]),
+            vec![
+                "systemd-run".to_string(),
+                format!(
+                    "--user --scope --quiet --collect -- {}/.dotfiles/bin/playwright-cli \
+                     -s=hub.connection attach --extension=chromium",
+                    rig.home.display()
+                ),
+            ],
             fields(
                 &connection,
                 "fake-token-123",
@@ -205,10 +227,10 @@ fn the_first_call_attaches_the_session_and_the_second_does_not() {
     let calls = rig.calls();
     // Before the command the hub checks the current tab is still the
     // session's own.
-    assert_eq!(calls.len(), 10, "{calls:?}");
-    assert_eq!(calls[7], fields(&cwd, "", &["list"]));
-    assert_eq!(calls[8][2..4], ["-s=s1", "run-code"]);
-    assert_eq!(calls[9], fields(&cwd, "", &["-s=s1", "snapshot"]));
+    assert_eq!(calls.len(), 11, "{calls:?}");
+    assert_eq!(calls[8], fields(&cwd, "", &["list"]));
+    assert_eq!(calls[9][2..4], ["-s=s1", "run-code"]);
+    assert_eq!(calls[10], fields(&cwd, "", &["-s=s1", "snapshot"]));
 }
 
 #[test]
@@ -462,10 +484,12 @@ fn with_no_app_run_chromium_starts_through_systemd_run() {
         &rig.tools,
         "systemd-run",
         &format!(
-            "printf 'systemd-run\\t%s\\n' \"$*\" >> '{record}'\n\
-             rm -f '{lock}'\n\
-             ln -s 'testhost-{pid}' '{lock}'",
-            record = rig.record.display(),
+            "case \" $* \" in *' --scope '*) ;; *)\n\
+               rm -f '{lock}'\n\
+               ln -s 'testhost-{pid}' '{lock}' ;;\n\
+             esac\n\
+             {}",
+            scope_runner(&rig.record),
             lock = lock.display(),
             pid = std::process::id(),
         ),

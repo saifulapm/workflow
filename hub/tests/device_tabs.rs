@@ -64,13 +64,24 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
         ),
     );
     fixture_bin(&tools, "playwright-extension-token", "echo fake-token");
-    for starter in ["app-run", "systemd-run"] {
-        fixture_bin(
-            &tools,
-            starter,
-            &format!("echo {starter} >> '{}'", record.display()),
-        );
-    }
+    fixture_bin(
+        &tools,
+        "app-run",
+        &format!("echo app-run >> '{}'", record.display()),
+    );
+    // Runs what it starts in a scope, as the real one does, and starts
+    // nothing else.
+    fixture_bin(
+        &tools,
+        "systemd-run",
+        &format!(
+            "echo \"systemd-run $*\" >> '{}'\n\
+             case \" $* \" in *' --scope '*)\n\
+               while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\" ;;\n\
+             esac",
+            record.display()
+        ),
+    );
     fixture_bin(
         &tools,
         "playwright-cli",
@@ -533,7 +544,7 @@ fn a_detach_whose_close_fails_keeps_the_session_for_the_idle_sweep() {
 fn connect_tabs(rig: &Rig) -> usize {
     rig.calls()
         .iter()
-        .filter(|c| c.ends_with(" attach --extension=chromium"))
+        .filter(|c| c.starts_with("-s=") && c.ends_with(" attach --extension=chromium"))
         .count()
 }
 
@@ -778,4 +789,24 @@ fn a_session_whose_attach_failed_attaches_on_its_next_call() {
     assert_eq!(answer["exit"], 1, "{answer}");
     std::fs::write(&fake, real).unwrap();
     rig.browser("s1", &["goto", "https://a.test"]);
+}
+
+#[test]
+fn the_hub_s_connection_runs_in_a_systemd_scope_that_outlives_the_hub() {
+    let rig = rig();
+    rig.browser("s1", &["goto", "https://a.test"]);
+    let wrapper = rig.home.parent().unwrap().join("tools/playwright-cli");
+    let scoped: Vec<String> = rig
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("systemd-run"))
+        .collect();
+    assert_eq!(
+        scoped,
+        [format!(
+            "systemd-run --user --scope --quiet --collect -- {} \
+             -s=hub.connection attach --extension=chromium",
+            wrapper.display()
+        )]
+    );
 }
