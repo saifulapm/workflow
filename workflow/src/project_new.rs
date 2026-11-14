@@ -112,6 +112,7 @@ fn account_steps(project: &str, repo: &str, submodules: &[String]) -> Vec<String
         format!("The Claude GitHub App reaches {}.", listed(&repos)),
         format!("New Project: {added}, and pick the environment `workflow`."),
         format!("Paste the output of `workflow project-text {project}` into Settings, Memory."),
+        "In Settings, General, set Threads to Thread model Opus 5.5, Thread effort High; the coordinator's setting stays.".to_string(),
     ]
 }
 

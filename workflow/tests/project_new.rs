@@ -81,7 +81,7 @@ fn trendsi(tag: &str) -> Scratch {
 }
 
 #[test]
-fn it_prints_three_steps_for_each_account_naming_the_repo_and_the_text() {
+fn it_prints_four_steps_for_each_account_naming_the_repo_the_text_and_the_threads() {
     let work = trendsi("steps");
     let out = run(&work, "lareys-trendsi");
     let text = said(&out);
@@ -94,12 +94,16 @@ fn it_prints_three_steps_for_each_account_naming_the_repo_and_the_text() {
     );
     for account in ["On the work account", "On the main account"] {
         let steps = section(&text, account);
-        assert_eq!(numbers(&steps), [1, 2, 3], "{account}:\n{text}");
+        assert_eq!(numbers(&steps), [1, 2, 3, 4], "{account}:\n{text}");
         let all = steps.join("\n");
         assert!(all.contains("saifulapm/lareys-trendsi"), "{all}");
         assert!(all.contains("environment `workflow`"), "{all}");
         assert!(
             all.contains("`workflow project-text lareys-trendsi`"),
+            "{all}"
+        );
+        assert!(
+            all.contains("Thread model Opus 5.5, Thread effort High"),
             "{all}"
         );
     }
