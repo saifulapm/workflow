@@ -950,21 +950,25 @@ const DEVICE_KEYS: [&str; 4] = ["device", "device_by", "cloud_secrets", "cloud_s
 
 /// Why a write in another machine's outbox file would pass as a device's
 /// word, if it would: an item that names a machine other than a cloud one,
-/// the removal of such an item, or a project record that changes one of
+/// a write or removal over such an item here, or a project record that changes one of
 /// `DEVICE_KEYS` from what `file` holds here.
 fn foreign(rel: &str, file: &Path, body: Option<&str>) -> Option<String> {
     if is_item(rel) {
-        let text = match body {
-            Some(text) => text.to_string(),
-            None => std::fs::read_to_string(file).ok()?,
-        };
-        let named = crate::item::Item::parse(text.as_bytes())
-            .map(|item| item.meta.machine)
-            .unwrap_or_default();
-        let cloud = named
-            .strip_prefix("cloud-")
-            .is_some_and(|rest| !rest.is_empty());
-        return (!cloud).then(|| format!("names {named}, not a cloud machine"));
+        // The write's own body and the copy it would replace here: a thread
+        // writes as itself, and over nothing a device wrote.
+        let here = std::fs::read_to_string(file).ok();
+        return [body, here.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(|text| {
+                let named = crate::item::Item::parse(text.as_bytes())
+                    .map(|item| item.meta.machine)
+                    .unwrap_or_default();
+                let cloud = named
+                    .strip_prefix("cloud-")
+                    .is_some_and(|rest| !rest.is_empty());
+                (!cloud).then(|| format!("names {named}, not a cloud machine"))
+            });
     }
     if !rel.ends_with("/project.toml") {
         return None;

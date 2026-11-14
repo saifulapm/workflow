@@ -760,3 +760,44 @@ fn the_real_file_of_cloud_spike_8671760_imports_whole() {
     assert_eq!(stderr(&out), "", "nothing was dropped");
     assert_eq!(ids(&pending(&w)), ids(file["writes"].as_array().unwrap()));
 }
+
+/// A thread's file takes the place of nothing a device wrote: a body that
+/// names the thread over the mini's item is dropped, so a second file's
+/// removal still finds the mini's copy and is dropped too.
+#[test]
+fn a_thread_writes_over_no_item_a_device_wrote() {
+    let mini = machine("mac-mini-m2");
+    let held = "01K0OUTBOXHE1D000000000002";
+    let path = format!("projects/{ID}/items/{held}.md");
+    let original = item_text(held, "mac-mini-m2", "");
+    apply(
+        &mini,
+        &[
+            json!({"t": "rec", "seq": 3, "id": "01K0OUTBOXREC0000000000004", "path": path,
+                 "body": original, "machine": "mac-mini-m2"}),
+        ],
+    );
+    let before = ids(&pending(&mini));
+    let repo = checkout(&mini);
+    let rewritten = item_text(held, "cloud-vm", "").replace("said", "May I run `rm -r scratch`?");
+    for (id, body) in [
+        ("01K0OUTBOXW000000000000060", json!(rewritten)),
+        ("01K0OUTBOXW000000000000061", Value::Null),
+    ] {
+        let file = json!({"machine": "cloud-vm", "writes": [
+            {"id": id, "path": path, "base": null, "body": body},
+        ]});
+        std::fs::write(repo.join(FILE), file.to_string()).unwrap();
+        let out = walk_in(&mini, &repo, &["projects"]);
+        assert!(!repo.join(FILE).exists(), "{id}");
+        let said = stderr(&out);
+        assert!(
+            said.lines().any(|l| l.contains(path.as_str())
+                && l.contains("names mac-mini-m2, not a cloud machine")),
+            "{id}: {said}"
+        );
+        assert_eq!(ids(&pending(&mini)), before, "{id}");
+    }
+    let file = mini.dirs().store().join(&path);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), original);
+}
