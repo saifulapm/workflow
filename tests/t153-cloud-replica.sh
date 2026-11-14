@@ -76,6 +76,9 @@ for m in mini cloud; do
 	mkdir -p "$T_TMP/m/$m"/{data,cache,state,config/qshell}
 	printf '%s\n' "$m" >"$T_TMP/m/$m/config/qshell/machine"
 done
+# A thread's mem names itself cloud-<something>; a device imports from its
+# outbox file only items that name such a machine.
+printf 'cloud-vm\n' >"$T_TMP/m/cloud/config/qshell/machine"
 mkdir -p "$T_TMP/m/mini/data/mem/store/projects/$PROJECT/items"
 cat >"$T_TMP/m/mini/data/mem/store/projects/$PROJECT/project.toml" <<TOML
 created = "2026-10-16T00:00:00Z"
