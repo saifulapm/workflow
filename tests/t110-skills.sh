@@ -78,6 +78,13 @@ blocked=$(sed -n '/safety check blocks a step/,/^- /p' "$WF_ROOT/skills/orchestr
 like "$blocked" 'naming the exact command' "orchestrate cloud: a blocked step is asked naming its command"
 like "$blocked" 'parked: blocked: <step> [(]#<id>[)]' "orchestrate cloud: a turn that ends on a blocked step parks first"
 
+# His hub types his answer into the thread, since the safety check never
+# reads what wait-answer prints (g2-answer-typed): the thread takes it as his.
+relayed=$(sed -n '/starts `Saiful answered your question`/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
+like "$relayed" 'is his word' "orchestrate cloud: an answer his hub typed is his word"
+like "$relayed" 'as on a line he typed' "orchestrate cloud: it is acted on as a line he typed"
+like "$relayed" 'once, not once for each' "orchestrate cloud: the step an answer clears runs once"
+
 # A thread asks before each of the six destructive kinds (#NHEQRXY1), files a
 # held line with its exact text and sends it again with the yes, and starts a
 # local agent only for what the cloud cannot do (m4-device-tmux).

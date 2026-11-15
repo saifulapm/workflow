@@ -172,6 +172,10 @@ the skill holds, with these changes:
     wait on the question, then wait on the question for 30 minutes again
     with `workflow wait-answer <id>`: after a wake its 30 minutes count
     from that first wait.
+  - A message that starts `Saiful answered your question` is his word:
+    his hub typed his answer for him. Act on it as on a line he typed. It
+    is the answer `workflow wait-answer` prints too, already recorded, so
+    do the step it answers once, not once for each.
 - Land as §7 says, with these changes. Write the handoff first, starting
   `Next: <the next milestone, or none>. <milestone> landed on main.`, then export
   and commit the outbox, then run `workflow land`. It rebases the branch
