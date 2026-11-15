@@ -164,6 +164,46 @@ fn pnpm_repo(w: &Scratch, rel: &str) -> PathBuf {
     dir
 }
 
+/// palmshop m19: four implementer worktrees came up with the engine
+/// submodule empty, so its tests and tsc could not run there. A submodule
+/// the trunk has checked out comes up checked out, cloned from the trunk's
+/// own copy, so no network or login is asked for; one the trunk left empty
+/// stays empty.
+#[test]
+fn the_submodules_the_trunk_checked_out_come_up_checked_out() {
+    let w = Scratch::new("wt-submodule");
+    let engine = repo(&w, "engine");
+    let docs = repo(&w, "docs");
+    let main = repo(&w, "repo");
+    for (url, path) in [(&engine, "lib/engine"), (&docs, "lib/docs")] {
+        git(
+            &main,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                url.to_str().unwrap(),
+                path,
+            ],
+        );
+    }
+    git(&main, &["commit", "-qm", "Add the engine and the docs"]);
+    git(&main, &["submodule", "deinit", "-q", "lib/docs"]);
+    // The engine's own origin is gone: only the trunk's copy can serve it.
+    std::fs::rename(&engine, w.path().join("engine-gone")).unwrap();
+
+    let out = create(&main);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let dir = printed(&out);
+    assert!(dir.join("lib/engine/a.txt").is_file(), "{out:?}");
+    assert_eq!(git(&dir, &["status", "--porcelain"]), "");
+    assert!(!dir.join("lib/docs/a.txt").exists());
+    // The trunk's own record of where the engine comes from is untouched.
+    assert!(git(&main, &["config", "submodule.lib/engine.url"]).ends_with("/engine"));
+}
+
 #[test]
 fn the_root_node_modules_links_the_trunks_and_nested_ones_are_copied() {
     let w = Scratch::new("wt-pnpm");

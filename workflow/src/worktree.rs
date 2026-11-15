@@ -73,6 +73,7 @@ pub fn cmd_worktree_create() -> i32 {
         return exit::FAILED;
     }
     bring_installs(&trunk, &dir);
+    bring_submodules(&trunk, &dir);
     println!("{}", dir.display());
     exit::OK
 }
@@ -140,6 +141,50 @@ fn bring_installs(trunk: &Path, dir: &Path) {
                 &trunk.join(&package).join(name),
                 &dir.join(&package).join(name),
             );
+        }
+    }
+}
+
+/// Check out in `dir` each submodule the trunk has checked out, cloned from
+/// the trunk's copy, so no network or login is asked for (palmshop m19's
+/// worktrees came up with the engine empty). One the trunk left empty stays
+/// empty; one that fails is reported and skipped.
+fn bring_submodules(trunk: &Path, dir: &Path) {
+    let git = Git::at(dir);
+    let Some(paths) = git.out(&[
+        "config",
+        "-f",
+        ".gitmodules",
+        "--get-regexp",
+        r"^submodule\..*\.path$",
+    ]) else {
+        return;
+    };
+    for line in paths.lines() {
+        let Some((key, path)) = line.split_once(' ') else {
+            continue;
+        };
+        let name = &key["submodule.".len()..key.len() - ".path".len()];
+        let copy = trunk.join(path);
+        if !copy.join(".git").exists() {
+            continue;
+        }
+        let url = format!("submodule.{name}.url={}", copy.display());
+        let update = git.capture(&[
+            "-c",
+            "protocol.file.allow=always",
+            "-c",
+            &url,
+            "submodule",
+            "update",
+            "--",
+            path,
+        ]);
+        if !update.ok {
+            eprint!("{}", String::from_utf8_lossy(&update.stderr));
+            warn(format!(
+                "worktree create: could not check out the submodule {path}"
+            ));
         }
     }
 }
