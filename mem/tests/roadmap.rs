@@ -438,4 +438,23 @@ fn a_plan_cost_or_saving_needs_a_measurement() {
     let out = mem(&w, &repo, &["plan", "m24-photo", "--set-file", &path]);
     assert_eq!(code(&out), 2, "{}", stdout(&out));
     assert!(stderr(&out).contains("line 3"), "{}", stderr(&out));
+
+    // A saving with no period word, on either side of the figure, and the
+    // same words split by a full stop, which is two statements.
+    for (line, refused) in [
+        ("- Fix 6 saves $7-11 on Vectorize.", true),
+        ("- About $40 of it is saved by the cache.", true),
+        ("- Fix 6 saves time. The plan costs $7.", false),
+        ("- A shirt at $30; save it for later.", false),
+    ] {
+        let plan = format!("# plan: m25-save\n\n{line}\n");
+        let path = file(&w, "m25-save.md", &plan);
+        let out = mem(&w, &repo, &["plan", "m25-save", "--set-file", &path]);
+        assert_eq!(
+            code(&out),
+            if refused { 2 } else { 0 },
+            "{line}: {}",
+            stderr(&out)
+        );
+    }
 }
