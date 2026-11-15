@@ -128,6 +128,17 @@ esac
                 sync = SYNC,
             ),
         );
+        // Logs into mem's log, so the order of the calls shows; its exit code
+        // is the number in `tailscale-exit`, 0 when there is none.
+        w.work.script(
+            "tailscale",
+            r#"
+dir=$(dirname "$0")
+echo "tailscale $*" >>"$dir/mem.log"
+[ -f "$dir/tailscale-exit" ] && exit "$(cat "$dir/tailscale-exit")"
+exit 0
+"#,
+        );
         w.work.script("gh", &format!(r#"
 dir=$(dirname "$0")
 echo "$*" >>"$dir/gh.log"
@@ -249,18 +260,52 @@ esac
 
     /// land with a minute of `ms` milliseconds.
     fn land_minute(&self, ms: &str) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_workflow"))
-            .arg("land")
+        self.run_land(ms, true)
+    }
+
+    /// land on a device, outside any cloud thread.
+    fn land_on_a_device(&self) -> Output {
+        self.run_land("20", false)
+    }
+
+    fn run_land(&self, ms: &str, in_thread: bool) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_workflow"));
+        cmd.arg("land")
             .env("WORKFLOW_MEM", self.work.at("mem"))
             .env("WORKFLOW_GH", self.work.at("gh"))
+            .env("WORKFLOW_TAILSCALE", self.work.at("tailscale"))
+            .env("HOME", self.work.at("home"))
             .env("WORKFLOW_CI_MINUTE_MS", ms)
             .env("GIT_CONFIG_GLOBAL", self.work.at("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Thread")
             .env_remove("WORKFLOW_ALLOW_PUSH")
-            .current_dir(self.clone_dir())
-            .output()
-            .unwrap()
+            .current_dir(self.clone_dir());
+        if in_thread {
+            cmd.env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_01Thread");
+        } else {
+            cmd.env_remove("CLAUDE_CODE_REMOTE_SESSION_ID");
+        }
+        cmd.output().unwrap()
+    }
+
+    /// The fake tailscale's calls and mem's, in the order they came.
+    fn calls(&self) -> Vec<String> {
+        if !self.work.has("mem.log") {
+            return Vec::new();
+        }
+        self.work
+            .read("mem.log")
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    /// The arguments of each logout the fake tailscale was run with.
+    fn logouts(&self) -> Vec<String> {
+        self.calls()
+            .into_iter()
+            .filter_map(|l| l.strip_prefix("tailscale ").map(String::from))
+            .collect()
     }
 
     fn ticked(&self) -> bool {
@@ -311,6 +356,81 @@ fn a_milestone_lands_on_a_trunk_that_moved_and_names_the_next() {
         "the milestone sits on the moved trunk"
     );
     assert!(w.ticked(), "{}", w.work.read("mem.log"));
+}
+
+#[test]
+fn a_landing_in_a_thread_logs_its_machine_off_the_tailnet_last() {
+    let w = World::new("land-logout");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let home = w.work.at("home");
+    assert_eq!(
+        w.logouts(),
+        vec![format!(
+            "--socket={}/.local/state/hub/tailscaled.sock logout",
+            home.display()
+        )]
+    );
+    let calls = w.calls();
+    let tick = calls
+        .iter()
+        .position(|l| l == "roadmap --tick m2-next --project gamma")
+        .unwrap();
+    assert_eq!(calls.last().unwrap().split(' ').next(), Some("tailscale"));
+    assert!(tick < calls.len() - 1, "{calls:?}");
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert!(!stdout(&out).contains("tailscale"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_logout_that_fails_does_not_fail_the_landing() {
+    let w = World::new("land-logout-fails");
+    w.work.put("tailscale-exit", "1");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert_eq!(w.logouts().len(), 1);
+}
+
+#[test]
+fn a_landing_on_a_device_logs_nothing_off() {
+    let w = World::new("land-logout-device");
+    let out = w.land_on_a_device();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert!(w.logouts().is_empty(), "{:?}", w.calls());
+}
+
+#[test]
+fn a_landing_that_asks_keeps_the_tailnet_for_the_answer() {
+    let w = World::new("land-logout-ask");
+    w.work.put("thread/shared.txt", "gamma's\n");
+    w.git(
+        &w.clone_dir(),
+        &["commit", "-q", "-am", "Change shared.txt in gamma"],
+    );
+    w.trunk_moves("shared.txt", "main's\n");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(ask_line(&out).starts_with("ask: trunk moved"));
+    assert!(w.logouts().is_empty(), "{:?}", w.calls());
+}
+
+#[test]
+fn a_land_run_again_logs_out_once_at_its_end() {
+    let w = World::app("land-logout-again");
+    w.verify("test -f work.txt && test ! -f ../../breaks-gamma.txt");
+    w.trunk_moves("breaks-gamma.txt", "x\n");
+    assert!(ask_line(&w.land()).starts_with("ask: main moved: gamma"));
+    assert!(w.logouts().is_empty(), "{:?}", w.calls());
+    let seed = w.work.at("seed");
+    w.git(&seed, &["rm", "-q", "breaks-gamma.txt"]);
+    w.git(&seed, &["commit", "-q", "-m", "Stop breaking gamma"]);
+    w.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert_eq!(w.logouts().len(), 1, "{:?}", w.calls());
 }
 
 #[test]

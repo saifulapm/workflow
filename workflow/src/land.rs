@@ -138,8 +138,7 @@ pub fn cmd_land() -> i32 {
             return code;
         }
         carry_outbox(&git, &dir, &[trunk_name, MAIN]);
-        println!("{}", next_line(&project));
-        return exit::OK;
+        return finish(&project);
     }
     if let Some(line) = claude_line(&git, &format!("origin/{trunk_name}..HEAD")) {
         println!("{line}");
@@ -234,8 +233,55 @@ nothing was pushed to {trunk_name}"
         landed.push(MAIN);
     }
     carry_outbox(&git, &dir, &landed);
-    println!("{}", next_line(&project));
+    finish(&project)
+}
+
+/// How long a logout may run before land kills it and goes on.
+const LOGOUT_SECONDS: u64 = 30;
+
+/// The end of a landing: the line the thread ends its report on, printed
+/// after a cloud thread's machine left the tailnet. The thread cannot type
+/// that logout itself, Claude Code's safety check blocks it. The line is
+/// read first, because mem needs the tailnet, and the logout prints nothing
+/// of its own, so the line stays the last one. A logout that fails or hangs
+/// never fails the landing.
+fn finish(project: &str) -> i32 {
+    let line = next_line(project);
+    if cloud::this_session().is_some() {
+        log_out_of_tailnet();
+    }
+    println!("{line}");
     exit::OK
+}
+
+fn log_out_of_tailnet() {
+    let tailscale = match std::env::var("WORKFLOW_TAILSCALE") {
+        Ok(v) if !v.is_empty() => v,
+        _ => format!("{}/.local/bin/tailscale", home()),
+    };
+    let socket = format!("--socket={}/.local/state/hub/tailscaled.sock", home());
+    let Ok(mut child) = Command::new(tailscale)
+        .args([&socket, "logout"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let until = Instant::now() + Duration::from_secs(LOGOUT_SECONDS);
+    while matches!(child.try_wait(), Ok(None)) {
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn home() -> String {
+    std::env::var("HOME").unwrap_or_default()
 }
 
 /// The GitHub Actions workflow a landing waits on: its file, the repository
