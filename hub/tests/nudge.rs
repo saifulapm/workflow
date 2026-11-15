@@ -33,7 +33,8 @@ fn bins(dir: &TempDir) -> PathBuf {
         &bin,
         "claude",
         &format!(
-            "{{ printf '%s\\n' \"$*\"; cat; printf '\\n<END>\\n'; }} >> '{d}/sent'\n\
+            "printf '%s\\n' \"${{CLAUDE_CONFIG_DIR-default}}\" >> '{d}/logins'\n\
+             {{ printf '%s\\n' \"$*\"; cat; printf '\\n<END>\\n'; }} >> '{d}/sent'\n\
              if [ -e '{d}/claude.fail' ]; then\n\
                echo '{{\"ok\":false,\"error\":\"session not found\"}}'; exit 1\n\
              fi\n\
@@ -129,7 +130,10 @@ fn spawn(dir: &TempDir, bin: &Path, machine: &str) -> Hub {
     let home = dir.join("home");
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::write(home.join("config/qshell/machine"), machine).unwrap();
+    logins(&home);
     let socket = dir.join("local.sock");
+    // The hub's own login is neither account's.
+    let own = home.join("hub-own-login");
     Hub::spawn_env(
         &home,
         &[bin],
@@ -139,6 +143,7 @@ fn spawn(dir: &TempDir, bin: &Path, machine: &str) -> Hub {
             ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
             ("WORKFLOW_MACHINE", "mini"),
             ("HUB_NUDGE_CHECK_MS", "100"),
+            ("CLAUDE_CONFIG_DIR", own.to_str().unwrap()),
         ],
     )
 }
@@ -227,6 +232,7 @@ fn a_nudge_that_fails_is_tried_three_times_then_said_once() {
     let home = dir.join("home");
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::write(home.join("config/qshell/machine"), "mac-mini-m2").unwrap();
+    logins(&home);
     let log = dir.join("hub.log");
     let socket = dir.join("local.sock");
     let _hub = Hub::spawn_with_stderr(
@@ -336,6 +342,7 @@ fn the_nudge_waits_a_moment_after_the_last_answer() {
     let home = dir.join("home");
     std::fs::create_dir_all(home.join("config/qshell")).unwrap();
     std::fs::write(home.join("config/qshell/machine"), "mac-mini-m2").unwrap();
+    logins(&home);
     let socket = dir.join("local.sock");
     let _hub = Hub::spawn_env(
         &home,
@@ -354,4 +361,65 @@ fn the_nudge_waits_a_moment_after_the_last_answer() {
     wait_for("the settled nudge", Duration::from_secs(5), || {
         !sent(&dir).is_empty()
     });
+}
+
+/// The mini's claude logins: the default one in ~/.claude, and the work
+/// account's in a folder of its own, which dots' registry names.
+fn logins(home: &Path) -> PathBuf {
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    std::fs::write(home.join(".claude/.credentials.json"), "{}").unwrap();
+    let work = home.join("state/dots/claude-accounts/work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join(".credentials.json"), "{}").unwrap();
+    std::fs::write(
+        home.join("state/dots/claude-accounts.json"),
+        json!({"active": "work", "accounts": [
+            {"id": "main", "home": home.join(".claude")},
+            {"id": "work", "home": work},
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    work
+}
+
+/// The CLAUDE_CONFIG_DIR each call of the fake claude saw, `default` for none.
+fn logins_used(dir: &TempDir) -> Vec<String> {
+    std::fs::read_to_string(dir.join("logins"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Names the claude.ai account the run's record holds.
+fn set_account(dir: &TempDir, account: Option<&str>) {
+    let path = dir.join("projects.json");
+    let mut projects: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    projects["projects"][0]["runner"]["account"] = account.map_or(Value::Null, Value::from);
+    std::fs::write(&path, projects.to_string()).unwrap();
+}
+
+#[test]
+fn the_nudge_goes_out_with_the_login_of_the_runs_own_account() {
+    // The hub's own login may be either; the run's account decides.
+    for (account, work) in [(Some("work"), true), (Some("main"), false), (None, false)] {
+        let dir = TempDir::new("nudge-account");
+        let bin = bins(&dir);
+        set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+        set_account(&dir, account);
+        answered(&dir, Some("0"), Some("yes"));
+        let _hub = spawn(&dir, &bin, "mac-mini-m2");
+        wait_for("the nudge", Duration::from_secs(5), || {
+            !sent(&dir).is_empty()
+        });
+        let want = if work {
+            dir.join("home/state/dots/claude-accounts/work")
+                .display()
+                .to_string()
+        } else {
+            "default".to_string()
+        };
+        assert_eq!(logins_used(&dir), [want], "{account:?}");
+    }
 }

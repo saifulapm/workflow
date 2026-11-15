@@ -8,7 +8,8 @@
 //! after the run's latest record, its milestone still the open one, and
 //! the questions of its project asked since the run first started. Only a
 //! `parked: question` handoff counts, and the nudge waits a minute after
-//! the newest answer.
+//! the newest answer. It goes out with the claude.ai login of the run's own
+//! account, which dots' registry places in a folder of its own.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -163,10 +164,43 @@ fn message(project: &str, asked: &[Value]) -> String {
     )
 }
 
-/// One `claude -p --cloud` send of `text` to `session`.
-fn send(session: &str, text: &str) -> Result<(), String> {
+/// The claude login of the claude.ai `account`, from dots' registry
+/// (`$XDG_STATE_HOME/dots/claude-accounts.json`, an id to its home): the
+/// folder for CLAUDE_CONFIG_DIR, or None for the default ~/.claude, which
+/// is main's when the registry is missing. `Err` when the account has no
+/// login on this machine: no home, or one without credentials. The hub
+/// runs the vendor claude, which reads only CLAUDE_CONFIG_DIR.
+fn login(account: &str) -> Result<Option<PathBuf>, ()> {
+    let default = PathBuf::from(std::env::var_os("HOME").ok_or(())?).join(".claude");
+    let registry: Value = crate::config::state_home()
+        .ok()
+        .and_then(|state| std::fs::read(state.join("dots/claude-accounts.json")).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let home = registry["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["id"] == account)
+        .and_then(|row| row["home"].as_str())
+        .map(PathBuf::from)
+        .or_else(|| (account == "main").then(|| default.clone()))
+        .ok_or(())?;
+    if !home.join(".credentials.json").is_file() {
+        return Err(());
+    }
+    Ok((home != default).then_some(home))
+}
+
+/// One `claude -p --cloud` send of `text` to `session`, logged in as
+/// `login` says.
+fn send(session: &str, text: &str, login: &Option<PathBuf>) -> Result<(), String> {
     let mut command = Command::new("claude");
     command.args(["-p", "--cloud", session, "--output-format", "json"]);
+    match login {
+        Some(home) => command.env("CLAUDE_CONFIG_DIR", home),
+        None => command.env_remove("CLAUDE_CONFIG_DIR"),
+    };
     if let Ok(dir) = crate::config::state_home() {
         command.current_dir(dir);
     }
@@ -211,14 +245,20 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration) {
             continue;
         }
         let name = project["name"].as_str().unwrap_or_default();
+        // A run recorded before accounts were is main's.
+        let account = project["runner"]["account"].as_str().unwrap_or("main");
+        let Ok(login) = login(account) else {
+            eprintln!("hub: nudge: {name}: no claude login for the {account} account");
+            continue;
+        };
         let text = message(name, &asked);
-        let mut result = send(&session, &text);
+        let mut result = send(&session, &text, &login);
         for _ in 1..TRIES {
             if result.is_ok() {
                 break;
             }
             std::thread::sleep(pause);
-            result = send(&session, &text);
+            result = send(&session, &text, &login);
         }
         // Tried no more either way: a claude.ai change that breaks the send
         // leaves a typed message as the way to wake the thread.
