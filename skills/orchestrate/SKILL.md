@@ -163,6 +163,10 @@ implementation. Rerun its targeted test. Then:
     mem plan --tick <id>
     mem log "<what landed, in one line>"
 
+git removes a worktree holding a submodule only with `--force`: use it
+once `git -C "$w" status --porcelain --ignore-submodules=none` prints
+nothing, never on a worktree that holds work.
+
 The WorktreeCreate hook, `workflow worktree create`, makes that worktree
 ready to build: its root node_modules links the trunk checkout's, and each
 nested node_modules, vendor and generated type folder is a copy. A brief

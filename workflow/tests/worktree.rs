@@ -366,6 +366,48 @@ fn a_worktree_with_uncommitted_work_stays_and_says_so() {
     }
 }
 
+/// A trunk with the submodule lib/engine checked out.
+fn engine_repo(w: &Scratch) -> PathBuf {
+    let engine = repo(w, "engine");
+    let main = repo(w, "repo");
+    git(
+        &main,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            engine.to_str().unwrap(),
+            "lib/engine",
+        ],
+    );
+    git(&main, &["commit", "-qm", "Add the engine"]);
+    main
+}
+
+/// git removes a worktree holding a submodule only when forced: one with no
+/// work in it, its submodule's included, goes; one whose submodule holds
+/// work stays.
+#[test]
+fn a_worktree_with_a_submodule_goes_unless_the_submodule_holds_work() {
+    let w = Scratch::new("wt-remove-submodule");
+    let main = engine_repo(&w);
+    let dir = printed(&create(&main));
+    assert!(dir.join("lib/engine/a.txt").is_file());
+    let out = remove(&dir);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!dir.exists());
+    assert!(!has_branch(&main, &format!("worktree-{NAME}")));
+
+    let dir = printed(&create(&main));
+    std::fs::write(dir.join("lib/engine/wip.txt"), "wip\n").unwrap();
+    let out = remove(&dir);
+    assert_ne!(out.status.code(), Some(0), "{out:?}");
+    assert!(dir.join("lib/engine/wip.txt").exists());
+    assert!(has_branch(&main, &format!("worktree-{NAME}")));
+}
+
 #[test]
 fn a_branch_with_commits_no_other_branch_has_stays_and_says_so() {
     let w = Scratch::new("wt-remove-commit");

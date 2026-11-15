@@ -95,7 +95,14 @@ pub fn cmd_worktree_remove() -> i32 {
         return exit::FAILED;
     };
     let main = Git::at(main);
-    let removed = main.capture(&["worktree", "remove", path]);
+    let mut removed = main.capture(&["worktree", "remove", path]);
+    // git removes a worktree holding a submodule only when forced, and a
+    // forced remove drops work too: so only one with none, its submodules'
+    // included.
+    let clean = worktree.capture(&["status", "--porcelain", "--ignore-submodules=none"]);
+    if !removed.ok && clean.ok && clean.stdout.is_empty() {
+        removed = main.capture(&["worktree", "remove", "--force", path]);
+    }
     if !removed.ok {
         eprint!("{}", String::from_utf8_lossy(&removed.stderr));
         warn(format!("worktree remove: kept {path}; git says why above"));
