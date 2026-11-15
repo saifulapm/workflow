@@ -1664,3 +1664,81 @@ fn a_working_agents_state_word_waits_for_the_interval() {
         || reports_on(&store, 0).len() >= 2,
     );
 }
+
+/// The mini rings for a quiet cloud run only once its replica holds what
+/// the store held at its last ready: a write the thread made while the
+/// mini was cut off from the store must not ring a spell that never was.
+#[test]
+fn the_mini_rings_for_a_quiet_run_only_once_its_replica_is_current() {
+    let dir = TempDir::new("share-quiet");
+    let bin = dir.join("bin");
+    let since = (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(60)).to_string();
+    let wrote = (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(45)).to_string();
+    std::fs::write(
+        dir.join("projects.json"),
+        serde_json::json!({"projects": [{"name": "cloud_walk", "checkouts": [],
+            "milestone": "w23-quiet", "handoff_at": null, "cloud_write_at": wrote,
+            "runner": {"machine": "cloud", "id": "session_01QUIET", "milestone": "w23-quiet",
+                       "first": since, "since": since, "earlier": []}}]})
+        .to_string(),
+    )
+    .unwrap();
+    fixture_mem(
+        &bin,
+        &format!(
+            "case \"$1 $2\" in\n\
+             'share hello') echo '{HELLO}' ;;\n\
+             'share pending') true ;;\n\
+             'share apply') cat >> '{applied}' ;;\n\
+             'projects --json') cat '{projects}' ;;\n\
+             'questions --json') echo '{{\"questions\":[]}}' ;;\n\
+             esac",
+            applied = dir.join("applied").display(),
+            projects = dir.join("projects.json").display(),
+        ),
+    );
+    let store = FakeStore::start();
+    let (api, posts) = fake_slack();
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), "mac-mini-m2\n").unwrap();
+    let socket = dir.join("local.sock");
+    let _hub = Hub::spawn_env(
+        &home,
+        &[&bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", PEER_TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("HUB_STORE_URL", store.url.as_str()),
+            ("HUB_STORE_TOKEN", STORE_TOKEN),
+            ("HUB_NUDGE_CHECK_MS", "100"),
+            ("SLACK_BOT_TOKEN", "xoxb-test"),
+            ("SLACK_APP_TOKEN", "xapp-test"),
+            ("SLACK_USER_ID", "U0SAIFUL"),
+            ("SLACK_API_URL", &api),
+        ],
+    );
+    let rung = || {
+        posts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|body| body.contains("has written nothing"))
+            .count()
+    };
+    wait_for("a hello", Duration::from_secs(5), || {
+        !store.texts_on(0).is_empty()
+    });
+    // Connected, and the store has not said ready yet.
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(rung(), 0, "{:?}", posts.lock().unwrap());
+
+    // A part of a long replay is not the end of it.
+    store.send(r#"{"t":"ready","seq":42,"rows":0,"more":true}"#);
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(rung(), 0, "{:?}", posts.lock().unwrap());
+
+    store.send(r#"{"t":"ready","seq":43}"#);
+    wait_for("the ring", Duration::from_secs(5), || rung() == 1);
+}

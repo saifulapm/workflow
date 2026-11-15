@@ -348,19 +348,36 @@ fn upload_pending(store: &Store) {
 /// `kick` is set when mem has put a write in the outbox. After the store
 /// answers `limit`, no write is sent until the next 00:00 UTC, on this
 /// connection or the next; `slack` hears of it once per Dhaka day.
+/// Whether this hub shares through a store at all.
+static SHARING: AtomicBool = AtomicBool::new(false);
+/// Whether the replica holds all the store held at the open socket's last
+/// ready: false from the hello until a ready that says no more is applied,
+/// and again once the socket is gone.
+static CURRENT: AtomicBool = AtomicBool::new(false);
+
+/// Whether this machine's replica is as current as the store: always, for a
+/// hub that shares through none. What it reads of a cloud run's writes is
+/// then all the store has.
+pub fn current() -> bool {
+    !SHARING.load(Ordering::SeqCst) || CURRENT.load(Ordering::SeqCst)
+}
+
 pub fn run(store: Store, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! {
     let mut backoff = BACKOFF_START;
     let mut paused_until = None;
     let uploads = Arc::new(Uploads::default());
+    SHARING.store(true, Ordering::SeqCst);
     loop {
-        match session(
+        let ended = session(
             &store,
             &uploads,
             &kick,
             &mut backoff,
             &mut paused_until,
             slack.as_deref(),
-        ) {
+        );
+        CURRENT.store(false, Ordering::SeqCst);
+        match ended {
             Ok(()) => eprintln!("hub: share: the store closed the socket"),
             // Cut off costs the store nothing, so it is tried every second:
             // the outbox goes out, and other writes come in, within 2 s of
@@ -559,6 +576,12 @@ fn session(
             }
             if kinds.iter().any(|k| k == "ready") {
                 *backoff = BACKOFF_START;
+            }
+            // The last ready of these frames says whether the replay is
+            // whole: a part of a long one says more.
+            if let Some(ready) = frames.iter().rev().find(|f| kind(f) == "ready") {
+                let more = serde_json::from_str::<Value>(ready).is_ok_and(|v| v["more"] == true);
+                CURRENT.store(!more, Ordering::SeqCst);
             }
             if kinds.iter().any(|k| k == "limit") {
                 let at = now();

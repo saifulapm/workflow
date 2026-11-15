@@ -24,6 +24,7 @@
 //! (`hubpages::live::quiet_since`), rings him once on Slack with its
 //! thread's link: once for each quiet spell, kept as `quiet <session>
 //! <start>` so a restart rings no spell twice, and a write starts a new one.
+//! It rings only while this replica is as current as the store.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -426,6 +427,11 @@ fn relay_round(nudged: &mut HashSet<String>, pause: Duration, slack: Option<&Sla
 /// Rings Saiful once for each quiet spell of a live cloud run. The ring
 /// only tells him: nothing is sent to the thread.
 fn quiet_round(nudged: &mut HashSet<String>, slack: Option<&Slack>) {
+    // A replica behind the store may lack the thread's latest writes: a
+    // spell read off it may never have been.
+    if !crate::share::current() {
+        return;
+    }
     let Some(projects) = mem_json(&["projects", "--json"]) else {
         return;
     };
