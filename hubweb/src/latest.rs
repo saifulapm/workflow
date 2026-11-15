@@ -131,6 +131,7 @@ mod tests {
                 supersedes: Some("01M0C0PVT8TMV5YC3D884VNZNQ".into()),
                 archived: true,
                 answers: Some("01M0C0PVT8TMV5YC3D884VNZNP".into()),
+                cloud_created: None,
             })
         );
         // A file mem would skip, or one that is no item file, keeps none.

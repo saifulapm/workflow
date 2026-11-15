@@ -359,6 +359,10 @@ impl<F: Files> Files for After<'_, F> {
             false => self.files.paths(prefix),
         }
     }
+    /// The page's own writes are never a cloud machine's.
+    fn cloud_written(&self, project: &str) -> Option<i64> {
+        self.files.cloud_written(project)
+    }
     fn item_count(&self, project: &str) -> usize {
         match self.wrote_items(project) {
             true => memview::item_count_by_reading(self, project),

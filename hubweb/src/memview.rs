@@ -80,6 +80,14 @@ pub trait Files {
     fn newest(&self, project: &str, kinds: &[&str], limit: usize) -> Vec<(String, String)> {
         newest_by_reading(self, project, kinds, limit)
     }
+    /// When a cloud machine last made an item of the project, in Unix
+    /// seconds, archived and superseded ones too, as mem's index has it.
+    fn cloud_written(&self, project: &str) -> Option<i64> {
+        self.items(project, &[])
+            .iter()
+            .filter_map(|(path, body)| item_columns(path, body)?.cloud_created)
+            .max()
+    }
     /// The items of any project whose id is `id`, or whose short id is when
     /// `id` is 8 characters, each with every item that supersedes it, as
     /// (path, body).
@@ -228,6 +236,9 @@ pub struct ItemColumns {
     pub archived: bool,
     /// The question it answers.
     pub answers: Option<String>,
+    /// Unix seconds it was made, when a cloud machine (`cloud-<vm>`) made
+    /// it: a quiet cloud run is told by its thread's newest.
+    pub cloud_created: Option<i64>,
 }
 
 /// The columns of the file at store path `path` when mem reads it as an
@@ -244,6 +255,11 @@ pub fn item_columns(path: &str, body: &str) -> Option<ItemColumns> {
         supersedes: meta.supersedes,
         archived: meta.archived,
         answers: meta.answers,
+        cloud_created: meta
+            .machine
+            .strip_prefix("cloud-")
+            .is_some_and(|rest| !rest.is_empty())
+            .then_some(meta.created),
     })
 }
 
@@ -528,6 +544,11 @@ impl<F: Files> View<'_, F> {
         };
         let last_activity = stamp(&[]);
         let handoff_at = stamp(&["handoff"]);
+        let cloud_write_at = self
+            .files
+            .cloud_written(&p.id)
+            .and_then(|secs| jiff::Timestamp::from_second(secs).ok())
+            .map(|ts| ts.to_string());
         // Only pages whose slug starts with `start` are listed, so a summary
         // never reads every page's path.
         let has_page = |start: &str, wanted: fn(&str) -> bool| {
@@ -549,6 +570,7 @@ impl<F: Files> View<'_, F> {
                 "since": p.declared("runner_since"),
                 "milestone": p.declared("runner_milestone"),
                 "account": p.declared("runner_account"),
+                "first": p.declared("runner_first"),
             }),
             None => Value::Null,
         };
@@ -579,6 +601,7 @@ impl<F: Files> View<'_, F> {
             ("plan_total", json!(plan.len())),
             ("last_activity", json!(last_activity)),
             ("handoff_at", json!(handoff_at)),
+            ("cloud_write_at", json!(cloud_write_at)),
             (
                 "has_research",
                 json!(has_page("research", |s| s.starts_with("research"))),

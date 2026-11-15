@@ -1538,6 +1538,14 @@ impl memview::Files for SqlFiles<'_> {
             .unwrap_or(0) as usize
     }
 
+    fn cloud_written(&self, project: &str) -> Option<i64> {
+        let rows = self.rows(
+            "SELECT max(cloud_created) AS at FROM files WHERE project = ?",
+            Some(vec![project.into()]),
+        );
+        rows.first()?["at"].as_i64()
+    }
+
     fn newest(&self, project: &str, kinds: &[&str], limit: usize) -> Vec<(String, String)> {
         let mut bindings: Vec<SqlStorageValue> = vec![project.into()];
         bindings.extend(kinds.iter().map(|kind| (*kind).into()));
@@ -1900,6 +1908,7 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
                 supersedes: None,
                 archived: false,
                 answers: None,
+                cloud_created: None,
             });
             let is_question = is_item && kind.as_deref() == Some("question");
             questions.extend(item.answers.clone());
@@ -1909,13 +1918,14 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
             counted(
                 sql,
                 "INSERT INTO files(path, project, kind, seq, body, item_id, modified, \
-                 supersedes, archived, answers, answered) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 supersedes, archived, answers, answered, cloud_created) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                  ON CONFLICT(path) DO UPDATE SET project = excluded.project, \
                  kind = excluded.kind, seq = excluded.seq, body = excluded.body, \
                  item_id = excluded.item_id, modified = excluded.modified, \
                  supersedes = excluded.supersedes, archived = excluded.archived, \
-                 answers = excluded.answers, answered = excluded.answered",
+                 answers = excluded.answers, answered = excluded.answered, \
+                 cloud_created = excluded.cloud_created",
                 vec![
                     rec.path.as_str().into(),
                     project.as_str().into(),
@@ -1928,6 +1938,7 @@ fn keep_file(sql: &SqlStorage, rec: &Rec) -> Result<()> {
                     is_item.then_some(item.archived as i64).into(),
                     item.answers.into(),
                     is_question.then_some(0).into(),
+                    item.cloud_created.into(),
                 ],
             )?;
             (project, is_item)
@@ -1990,6 +2001,7 @@ fn add_item_columns(sql: &SqlStorage) -> Result<()> {
         "archived INTEGER",
         "answers TEXT",
         "answered INTEGER",
+        "cloud_created INTEGER",
     ] {
         let name = column.split(' ').next().unwrap_or_default();
         let missing = sql
@@ -2009,6 +2021,7 @@ fn add_item_columns(sql: &SqlStorage) -> Result<()> {
         "files_by_short_id ON files(substr(item_id, -8))",
         "files_by_answers ON files(project, answers)",
         "files_pending ON files(project) WHERE kind = 'question' AND answered = 0",
+        "files_cloud ON files(project, cloud_created)",
     ] {
         sql.exec(&format!("CREATE INDEX IF NOT EXISTS {index}"), None)?;
     }
@@ -2028,13 +2041,14 @@ fn add_item_columns(sql: &SqlStorage) -> Result<()> {
         counted(
             sql,
             "UPDATE files SET item_id = ?, modified = ?, supersedes = ?, archived = ?, \
-             answers = ? WHERE path = ?",
+             answers = ?, cloud_created = ? WHERE path = ?",
             vec![
                 item.id.into(),
                 item.modified.into(),
                 item.supersedes.into(),
                 (item.archived as i64).into(),
                 item.answers.into(),
+                item.cloud_created.into(),
                 path.into(),
             ],
         )?;

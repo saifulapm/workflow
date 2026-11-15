@@ -278,3 +278,44 @@ fn a_question_another_kind_supersedes_is_not_pending() {
     let doc = json(read(&store, &argv, now()));
     assert_eq!(doc["questions"], json!([]), "{doc}");
 }
+
+/// As mem lists it: when a cloud machine last made an item in the project,
+/// by its `created`, which a device's later write leaves as it was.
+#[test]
+fn the_projects_listing_says_when_a_cloud_machine_last_wrote() {
+    let mut store = Store::default();
+    store.project(ALPHA, "alpha");
+    let put = |store: &mut Store, id: &str, machine: &str, created: &str| {
+        store.0.insert(
+            format!("projects/{ALPHA}/items/{id}.md"),
+            format!(
+                "+++\ncreated = \"{created}\"\nid = \"{id}\"\nkind = \"log\"\n\
+                 machine = \"{machine}\"\nmodified = \"{created}\"\nproject = \"alpha\"\n\
+                 title = \"w\"\n+++\n\nw\n"
+            ),
+        );
+    };
+    let listed = |store: &Store| {
+        json(read(store, &["projects", "--json"], now()))["projects"][0]["cloud_write_at"].clone()
+    };
+    put(
+        &mut store,
+        "01K0000000000000000000DEV1",
+        "nuc",
+        "2026-10-02T09:00:00Z",
+    );
+    assert_eq!(listed(&store), Value::Null);
+    put(
+        &mut store,
+        "01K0000000000000000000CXD1",
+        "cloud-vm1",
+        "2026-10-02T10:00:00.250Z",
+    );
+    put(
+        &mut store,
+        "01K0000000000000000000DEV2",
+        "nuc",
+        "2026-10-02T11:00:00Z",
+    );
+    assert_eq!(listed(&store), json!("2026-10-02T10:00:00Z"));
+}
