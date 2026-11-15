@@ -41,6 +41,7 @@
           "plan_total",
           "last_activity",
           "handoff_at",
+          "cloud_write_at",
           "has_research",
           "has_research_summary",
           "has_spec"
@@ -233,6 +234,13 @@
           },
           "handoff_at": {
             "description": "When the latest handoff was written, RFC 3339; null when there is none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cloud_write_at": {
+            "description": "When a cloud machine (cloud-<vm>) last made an item in the project, RFC 3339; null when none has.",
             "type": [
               "string",
               "null"
