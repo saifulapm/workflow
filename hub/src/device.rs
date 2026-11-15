@@ -29,6 +29,12 @@ pub const DEVICES: [&str; 3] = ["mac-mini-m2", "nuc", "macbook-m2"];
 /// it is his word as a device's is; it asks nothing and serves no call.
 pub const HUB_PAGE: &str = "hub-web";
 
+/// Whether what `machine` wrote is Saiful's word: a device's or the hub
+/// page's, never a cloud machine's.
+pub fn his_word(machine: &str) -> bool {
+    DEVICES.contains(&machine) || machine == HUB_PAGE
+}
+
 /// Under Cloudflare's 100 s for an origin, so a stopped call still reaches
 /// the caller through the tunnel.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);

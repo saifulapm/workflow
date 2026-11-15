@@ -29,6 +29,7 @@ fn bins(dir: &TempDir) -> PathBuf {
              'projects --json') cat '{d}/projects.json' ;;\n\
              'questions --json') cat '{d}/questions.json' ;;\n\
              'handoff --project') cat '{d}/handoff.txt' ;;\n\
+             show\\ *) cat \"{d}/show-$2.json\" ;;\n\
              esac"
         ),
     );
@@ -298,7 +299,16 @@ fn a_park_on_a_blocked_step_gets_its_nudge_once_answered() {
         "parked: blocked: mem project set land-ci ci.yml (#Q1)\n",
     )
     .unwrap();
-    answered(&dir, Some("0"), Some("yes"));
+    // His answer, from a device: the one thing that may clear the block.
+    let row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "Q1",
+        ASKED,
+        Some("Yes"),
+        "nuc",
+    );
+    set_questions(&dir, &[row]);
     let _hub = spawn(&dir, &bin, "mac-mini-m2");
     wait_for("the nudge", Duration::from_secs(5), || {
         !sent(&dir).is_empty()
@@ -527,4 +537,280 @@ fn a_run_whose_account_has_no_login_here_gets_no_send_and_one_ring() {
         .count();
     assert_eq!(rings, 1, "{:?}", posts.lock().unwrap());
     assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
+}
+
+/// A run of `cloud_walk` live in the cloud since FIRST, with no park.
+fn live_run(dir: &TempDir) {
+    set_run(dir, FIRST, "2026-11-13T17:00:00Z", "w20-nudge");
+}
+
+/// A question the thread asked from a cloud machine at `at`, answered at
+/// 18:45 by `by` when `answer` is given.
+fn asked_by(
+    dir: &TempDir,
+    at: &str,
+    short: &str,
+    body: &str,
+    answer: Option<&str>,
+    by: &str,
+) -> Value {
+    let mut row = question(at, short, body, answer);
+    row["machine"] = json!("cloud-vm-2");
+    if let Some(id) = row["answer_id"].as_str() {
+        std::fs::write(
+            dir.join(&format!("show-{id}.json")),
+            json!({"items": [{"id": id, "kind": "answer", "machine": by}]}).to_string(),
+        )
+        .unwrap();
+    }
+    row
+}
+
+const ASKED: &str = "May I run: mem project set verify \"bash ./test.sh\"?";
+
+#[test]
+fn a_devices_answer_to_a_live_run_is_typed_into_its_thread_once() {
+    for by in ["macbook-m2", "hub-web"] {
+        let dir = TempDir::new("relay-device");
+        let bin = bins(&dir);
+        live_run(&dir);
+        let row = asked_by(
+            &dir,
+            "2026-11-13T18:09:00Z",
+            "AAAA1111",
+            ASKED,
+            Some("Yes"),
+            by,
+        );
+        set_questions(&dir, &[row]);
+        let hub = spawn(&dir, &bin, "mac-mini-m2");
+        wait_for("the relay", Duration::from_secs(5), || {
+            !sent(&dir).is_empty()
+        });
+        let call = &sent(&dir)[0];
+        let (args, text) = call.split_once('\n').unwrap();
+        assert_eq!(args, format!("-p --cloud {SESSION} --output-format json"));
+        assert_eq!(
+            text,
+            "Saiful answered your question #AAAA1111 (\"May I run: mem project set verify \
+             \"bash ./test.sh\"?\"): \"Yes\". His hub typed this for him.",
+            "{by}"
+        );
+        std::thread::sleep(Duration::from_millis(600));
+        assert_eq!(sent(&dir).len(), 1, "{by}: {:?}", sent(&dir));
+        // A restarted hub knows the answer went in.
+        drop(hub);
+        let _hub = spawn(&dir, &bin, "mac-mini-m2");
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(
+            sent(&dir).len(),
+            1,
+            "{by} after a restart: {:?}",
+            sent(&dir)
+        );
+    }
+}
+
+#[test]
+fn every_answer_goes_in_its_own_message_in_the_order_asked_no_and_hold_too() {
+    let dir = TempDir::new("relay-order");
+    let bin = bins(&dir);
+    live_run(&dir);
+    let body = "May I run:\nrm -r \"scratch dir\"?";
+    let rows = [
+        asked_by(
+            &dir,
+            "2026-11-13T18:10:00Z",
+            "BBBB2222",
+            "Keep going?",
+            Some("hold"),
+            "nuc",
+        ),
+        asked_by(
+            &dir,
+            "2026-11-13T18:09:00Z",
+            "AAAA1111",
+            body,
+            Some("No"),
+            "mac-mini-m2",
+        ),
+    ];
+    set_questions(&dir, &rows);
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    wait_for("both relays", Duration::from_secs(5), || {
+        sent(&dir).len() >= 2
+    });
+    let texts: Vec<String> = sent(&dir)
+        .iter()
+        .map(|call| call.split_once('\n').unwrap().1.to_string())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Saiful answered your question #AAAA1111 (\"May I run:\nrm -r \"scratch dir\"?\"): \
+             \"No\". His hub typed this for him.",
+            "Saiful answered your question #BBBB2222 (\"Keep going?\"): \"hold\". His hub \
+             typed this for him.",
+        ]
+    );
+}
+
+#[test]
+fn no_answer_a_cloud_machine_wrote_is_typed_in() {
+    // The thread's own `mem answer`, or any write from a cloud machine,
+    // is not his word.
+    for by in ["cloud-vm-2", "cloud", ""] {
+        let dir = TempDir::new("relay-cloud");
+        let bin = bins(&dir);
+        live_run(&dir);
+        let row = asked_by(
+            &dir,
+            "2026-11-13T18:09:00Z",
+            "AAAA1111",
+            ASKED,
+            Some("Yes"),
+            by,
+        );
+        set_questions(&dir, &[row]);
+        let _hub = spawn(&dir, &bin, "mac-mini-m2");
+        std::thread::sleep(Duration::from_millis(800));
+        assert!(sent(&dir).is_empty(), "{by:?}: {:?}", sent(&dir));
+    }
+}
+
+#[test]
+fn a_device_agents_question_or_a_landed_run_gets_no_relay() {
+    // A device's agent asked it: not the thread's question.
+    let dir = TempDir::new("relay-device-asked");
+    let bin = bins(&dir);
+    live_run(&dir);
+    let mut row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "AAAA1111",
+        ASKED,
+        Some("Yes"),
+        "nuc",
+    );
+    row["machine"] = json!("mac-mini-m2");
+    set_questions(&dir, &[row]);
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
+
+    // The run's milestone landed: the open one is the next.
+    let dir = TempDir::new("relay-landed");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, "2026-11-13T17:00:00Z", "w21-next");
+    let row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "AAAA1111",
+        ASKED,
+        Some("Yes"),
+        "nuc",
+    );
+    set_questions(&dir, &[row]);
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
+}
+
+#[test]
+fn an_answer_from_before_the_runs_latest_record_is_not_typed_in_again() {
+    // It came while the run was parked: its prompt or its nudge had it.
+    let dir = TempDir::new("relay-before");
+    let bin = bins(&dir);
+    set_run(
+        &dir,
+        "2026-11-13T18:50:00Z",
+        "2026-11-13T18:40:00Z",
+        "w20-nudge",
+    );
+    let row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "AAAA1111",
+        ASKED,
+        Some("Yes"),
+        "nuc",
+    );
+    set_questions(&dir, &[row]);
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
+}
+
+#[test]
+fn a_parked_runs_device_answer_comes_once_in_the_relays_words() {
+    // Parked on its question: the nudge wakes it, its first line his
+    // answer as the relay types it, and no relay comes besides.
+    let dir = TempDir::new("relay-parked");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    let row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "Q1",
+        ASKED,
+        Some("Yes"),
+        "macbook-m2",
+    );
+    set_questions(&dir, &[row]);
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    wait_for("the nudge", Duration::from_secs(5), || {
+        !sent(&dir).is_empty()
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(sent(&dir).len(), 1, "{:?}", sent(&dir));
+    let text = sent(&dir)[0].split_once('\n').unwrap().1.to_string();
+    assert!(
+        text.starts_with(
+            "Saiful answered your question #Q1 (\"May I run: mem project set verify \
+             \"bash ./test.sh\"?\"): \"Yes\". His hub typed this for him.\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("typed nothing"), "{text}");
+}
+
+#[test]
+fn a_park_on_a_blocked_step_is_not_nudged_again_with_the_same_answers() {
+    // Still blocked after his answer went in: another message with the
+    // same answer would only park it again, and again.
+    let dir = TempDir::new("nudge-blocked-again");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    std::fs::write(
+        dir.join("handoff.txt"),
+        "parked: blocked: mem project set verify \"true\" (#Q1)\n",
+    )
+    .unwrap();
+    let row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "Q1",
+        ASKED,
+        Some("Yes"),
+        "nuc",
+    );
+    set_questions(&dir, &[row]);
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    wait_for("the nudge", Duration::from_secs(5), || {
+        !sent(&dir).is_empty()
+    });
+    // It woke, tried, and parked on the same step again.
+    set_run(
+        &dir,
+        "2026-11-13T19:00:00Z",
+        "2026-11-13T19:05:00Z",
+        "w20-nudge",
+    );
+    std::fs::write(
+        dir.join("handoff.txt"),
+        "parked: blocked: mem project set verify \"true\" (#Q1)\n",
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(sent(&dir).len(), 1, "{:?}", sent(&dir));
 }

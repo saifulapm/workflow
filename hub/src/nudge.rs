@@ -8,9 +8,17 @@
 //! after the run's latest record, its milestone still the open one, and
 //! the questions of its project asked since the run first started. Only a
 //! `parked: question` or `parked: blocked:` handoff counts, and the nudge
-//! waits a minute after the newest answer. It goes out with the claude.ai login of the run's own
-//! account, which dots' registry places in a folder of its own; with no
-//! login for that account here, it rings Saiful once on Slack instead.
+//! waits a minute after the newest answer.
+//!
+//! A live run gets each answer as he gives it: a thread's safety check reads
+//! what is typed in the thread, never what `workflow wait-answer` prints, so
+//! the mini types his answer in as a message of its own. Only an answer a
+//! device or the hub page wrote is his word; one a cloud machine wrote, the
+//! thread's own `mem answer` among them, is never typed in.
+//!
+//! Both go out with the claude.ai login of the run's own account, which
+//! dots' registry places in a folder of its own; with no login for that
+//! account here, the mini rings Saiful once on Slack instead.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -49,7 +57,9 @@ fn nudged_file() -> Option<PathBuf> {
     Some(crate::config::state_home().ok()?.join("hub/nudged"))
 }
 
-/// The parks already nudged, as `<session> <handoff time>` lines.
+/// What was sent already: the parks nudged, as `<session> <handoff time>`
+/// lines, the answers typed in, as `answer <id>`, and the runs whose
+/// account had no login, as `<session> no login`.
 fn read_nudged() -> HashSet<String> {
     nudged_file()
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -78,9 +88,10 @@ fn time(value: &Value) -> Option<jiff::Timestamp> {
     value.as_str()?.parse().ok()
 }
 
-/// A parked cloud run of `project`: its session and the park's key, or
-/// None when the run is live, another machine's, or its milestone landed.
-fn park(project: &Value) -> Option<(String, String)> {
+/// A parked cloud run of `project`: its session, the park's key and
+/// whether it parked on a blocked step, or None when the run is live,
+/// another machine's, or its milestone landed.
+fn park(project: &Value) -> Option<(String, String, bool)> {
     let name = project["name"].as_str()?;
     let runner = &project["runner"];
     if runner["machine"] != "cloud" || runner["milestone"].is_null() {
@@ -103,10 +114,11 @@ fn park(project: &Value) -> Option<(String, String)> {
     // questions stand. One question or several: `parked: question #<id>`,
     // `parked: questions #<id> and #<id>`; or a step the safety check
     // blocked, asked about: `parked: blocked: <step> (#<id>)`.
-    if !handoff.starts_with("parked: question") && !handoff.starts_with("parked: blocked:") {
+    let blocked = handoff.starts_with("parked: blocked:");
+    if !handoff.starts_with("parked: question") && !blocked {
         return None;
     }
-    Some((session.to_string(), format!("{session} {at}")))
+    Some((session.to_string(), format!("{session} {at}"), blocked))
 }
 
 /// The newest answer is `settle` old or more. The wait lets a message he
@@ -146,10 +158,67 @@ fn asked(project: &Value) -> Option<Vec<Value>> {
     Some(asked)
 }
 
-/// What the woken thread reads: every answer under its question.
-fn message(project: &str, asked: &[Value]) -> String {
+/// A live cloud run of `project`, its milestone the open one and no park
+/// written since its latest record: its session and that record's time.
+fn live(project: &Value) -> Option<(String, jiff::Timestamp)> {
+    let runner = &project["runner"];
+    if runner["machine"] != "cloud" || runner["milestone"].is_null() {
+        return None;
+    }
+    if runner["milestone"] != project["milestone"] {
+        return None;
+    }
+    let session = runner["id"].as_str().filter(|id| !id.is_empty())?;
+    let since = time(&runner["since"])?;
+    if time(&project["handoff_at"]).is_some_and(|at| at > since) {
+        let name = project["name"].as_str()?;
+        let handoff = mem_out(&["handoff", "--project", name])?;
+        if String::from_utf8_lossy(&handoff)
+            .trim_start()
+            .starts_with("parked:")
+        {
+            return None;
+        }
+    }
+    Some((session.to_string(), since))
+}
+
+/// The machine that wrote the answer item `id`.
+fn writer(id: &str) -> Option<String> {
+    let shown = mem_json(&["show", id, "--json"])?;
+    Some(
+        shown["items"].as_array()?.first()?["machine"]
+            .as_str()?
+            .to_string(),
+    )
+}
+
+/// The relay of one answer, as the thread reads it.
+fn relay(row: &Value) -> String {
+    format!(
+        "Saiful answered your question #{} (\"{}\"): \"{}\". His hub typed this for him.",
+        row["short_id"].as_str().unwrap_or(""),
+        row["body"].as_str().unwrap_or(""),
+        row["answer"].as_str().unwrap_or(""),
+    )
+}
+
+/// What the woken thread reads: first each answer a device or the hub page
+/// gave, in the relay's words, so its safety check reads them as his; then
+/// every other answer under its question. `his` holds the ids of the first.
+fn message(project: &str, asked: &[Value], his: &HashSet<String>) -> String {
+    let is_his = |row: &&Value| row["answer_id"].as_str().is_some_and(|id| his.contains(id));
+    let mut text: String = asked
+        .iter()
+        .filter(is_his)
+        .map(|row| relay(row) + "\n")
+        .collect();
+    if !text.is_empty() {
+        text.push('\n');
+    }
     let answers: Vec<String> = asked
         .iter()
+        .filter(|row| !is_his(row))
         .map(|row| {
             format!(
                 "#{} {}\nAnswer: {}",
@@ -159,13 +228,17 @@ fn message(project: &str, asked: &[Value]) -> String {
             )
         })
         .collect();
-    format!(
+    text.push_str(&format!(
         "Every question this thread parked on is answered; the mini's hub sends \
-         this for Saiful, who typed nothing. Carry on with {project}'s milestone \
-         as your instructions say for a new turn after a park. The answers are \
-         below; `mem questions` shows them too.\n\n{}",
-        answers.join("\n\n")
-    )
+         this for Saiful. Carry on with {project}'s milestone as your \
+         instructions say for a new turn after a park. `mem questions` shows \
+         the answers too."
+    ));
+    if !answers.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&answers.join("\n\n"));
+    }
+    text
 }
 
 /// The claude login of the claude.ai `account`, from dots' registry
@@ -233,7 +306,7 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration, slack:
         return;
     };
     for project in projects["projects"].as_array().into_iter().flatten() {
-        let Some((session, key)) = park(project) else {
+        let Some((session, key, blocked)) = park(project) else {
             continue;
         };
         if nudged.contains(&key) {
@@ -248,44 +321,141 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration, slack:
         if !settled(&asked, settle) {
             continue;
         }
+        // The answers that are his word, by the machine that wrote them.
+        let his: HashSet<String> = asked
+            .iter()
+            .filter_map(|row| row["answer_id"].as_str())
+            .filter(|id| writer(id).is_some_and(|by| crate::device::his_word(&by)))
+            .map(str::to_string)
+            .collect();
+        // A park on a step still blocked after his answers went in gets no
+        // second message with the same ones: it would only park again.
+        if blocked
+            && his
+                .iter()
+                .all(|id| nudged.contains(&format!("answer {id}")))
+        {
+            nudged.insert(key);
+            write_nudged(nudged);
+            continue;
+        }
         let name = project["name"].as_str().unwrap_or_default();
-        // A run recorded before accounts were is main's.
-        let account = project["runner"]["account"].as_str().unwrap_or("main");
-        let Ok(login) = login(account) else {
+        let text = message(name, &asked, &his);
+        match deliver(project, &session, &text, pause, nudged, slack) {
+            Some(Ok(())) => eprintln!("hub: nudge: {name}: woke {session} with its answers"),
+            // Tried no more: a claude.ai change that breaks the send leaves a
+            // typed message as the way to wake the thread.
+            Some(Err(e)) => eprintln!(
+                "hub: nudge: {name}: {session} did not take the nudge in {TRIES} tries, \
+                 so it waits for a typed message: {e}"
+            ),
+            None => {}
+        }
+        nudged.insert(key);
+        nudged.extend(his.iter().map(|id| format!("answer {id}")));
+        write_nudged(nudged);
+    }
+}
+
+/// Types each answer a device or the hub page gave since a live cloud
+/// run's latest record into its thread, one message each, in the order
+/// the questions were asked.
+fn relay_round(nudged: &mut HashSet<String>, pause: Duration, slack: Option<&Slack>) {
+    let Some(projects) = mem_json(&["projects", "--json"]) else {
+        return;
+    };
+    for project in projects["projects"].as_array().into_iter().flatten() {
+        let Some((session, since)) = live(project) else {
+            continue;
+        };
+        let Some(asked) = asked(project) else {
+            continue;
+        };
+        let name = project["name"].as_str().unwrap_or_default();
+        for row in asked {
+            let Some(answer) = row["answer_id"]
+                .as_str()
+                .filter(|_| row["answered"] == true)
+            else {
+                continue;
+            };
+            let key = format!("answer {answer}");
+            // An answer from before this record reached the thread in its
+            // prompt or its nudge.
+            if nudged.contains(&key)
+                || hubpages::model::ulid_millis(answer)
+                    .is_none_or(|ms| ms <= since.as_millisecond())
+            {
+                continue;
+            }
+            // A question a device asked is its agent's, not the thread's.
+            if row["machine"].as_str().is_none_or(crate::device::his_word) {
+                continue;
+            }
+            let Some(by) = writer(answer) else {
+                continue;
+            };
+            if crate::device::his_word(&by) {
+                let short = row["short_id"].as_str().unwrap_or_default();
+                match deliver(project, &session, &relay(&row), pause, nudged, slack) {
+                    Some(Ok(())) => {
+                        eprintln!(
+                            "hub: nudge: {name}: typed the answer to #{short} into {session}"
+                        );
+                    }
+                    Some(Err(e)) => eprintln!(
+                        "hub: nudge: {name}: {session} did not take the answer to #{short} \
+                         in {TRIES} tries: {e}"
+                    ),
+                    None => {}
+                }
+            }
+            nudged.insert(key);
+            write_nudged(nudged);
+        }
+    }
+}
+
+/// Sends `text` to the run's thread with its account's login, tried
+/// `TRIES` times; None when that account has no login here, after ringing
+/// Saiful once for the run.
+fn deliver(
+    project: &Value,
+    session: &str,
+    text: &str,
+    pause: Duration,
+    nudged: &mut HashSet<String>,
+    slack: Option<&Slack>,
+) -> Option<Result<(), String>> {
+    let name = project["name"].as_str().unwrap_or_default();
+    // A run recorded before accounts were is main's.
+    let account = project["runner"]["account"].as_str().unwrap_or("main");
+    let Ok(login) = login(account) else {
+        let rung = format!("{session} no login");
+        if nudged.insert(rung) {
+            write_nudged(nudged);
             let ring = format!("no claude login for the {account} account on {MACHINE}");
             eprintln!("hub: nudge: {name}: {ring}");
             if let Some(Err(e)) = slack.map(|slack| slack.post_text(&ring)) {
                 eprintln!("hub: nudge: {name}: ringing Saiful: {e:#}");
             }
-            nudged.insert(key);
-            write_nudged(nudged);
-            continue;
-        };
-        let text = message(name, &asked);
-        let mut result = send(&session, &text, &login);
-        for _ in 1..TRIES {
-            if result.is_ok() {
-                break;
-            }
-            std::thread::sleep(pause);
-            result = send(&session, &text, &login);
         }
-        // Tried no more either way: a claude.ai change that breaks the send
-        // leaves a typed message as the way to wake the thread.
-        match result {
-            Ok(()) => eprintln!("hub: nudge: {name}: woke {session} with its answers"),
-            Err(e) => eprintln!(
-                "hub: nudge: {name}: {session} did not take the nudge in {TRIES} tries, \
-                 so it waits for a typed message: {e}"
-            ),
+        return None;
+    };
+    let mut result = send(session, text, &login);
+    for _ in 1..TRIES {
+        if result.is_ok() {
+            break;
         }
-        nudged.insert(key);
-        write_nudged(nudged);
+        std::thread::sleep(pause);
+        result = send(session, text, &login);
     }
+    Some(result)
 }
 
 /// On the mini, checks every 10 s (`HUB_NUDGE_CHECK_MS`) for a parked
-/// cloud run with all its answers, the newest a minute old; on any other
+/// cloud run with all its answers, the newest a minute old, and for an
+/// answer a live cloud run has not had typed in yet; on any other
 /// machine, nothing. `slack` rings Saiful when a run's account has no
 /// login here.
 pub fn run(machine: &str, slack: Option<Arc<Slack>>) {
@@ -304,5 +474,6 @@ pub fn run(machine: &str, slack: Option<Arc<Slack>>) {
     loop {
         std::thread::sleep(every);
         round(&mut nudged, every, settle, slack.as_deref());
+        relay_round(&mut nudged, every, slack.as_deref());
     }
 }

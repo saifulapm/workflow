@@ -690,7 +690,7 @@ fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outc
         .map(|answer| mem.refresh(&["show", answer, "--json"]).rows("items"))
         .and_then(|items| items.first()?["machine"].as_str().map(str::to_string));
     let machine = machine.as_deref().unwrap_or("no machine");
-    if !crate::device::DEVICES.contains(&machine) && machine != crate::device::HUB_PAGE {
+    if !crate::device::his_word(machine) {
         return Err(Outcome::refuse(format!(
             "the yes for #{id} came from {machine}, not from a device or the hub page"
         )));
