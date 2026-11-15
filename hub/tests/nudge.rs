@@ -29,7 +29,7 @@ fn bins(dir: &TempDir) -> PathBuf {
              'projects --json') cat '{d}/projects.json' ;;\n\
              'questions --json') cat '{d}/questions.json' ;;\n\
              'handoff --project') cat '{d}/handoff.txt' ;;\n\
-             show\\ *) cat \"{d}/show-$2.json\" ;;\n\
+             show\\ *) cat \"{d}/show-$2.json\" 2>/dev/null || echo '{{\"items\":[{{\"machine\":\"mac-mini-m2\"}}]}}' ;;\n\
              esac"
         ),
     );
@@ -172,9 +172,11 @@ fn the_last_answer_of_a_parked_thread_sends_it_one_nudge_with_every_answer() {
     let call = &sent(&dir)[0];
     let (args, text) = call.split_once('\n').unwrap();
     assert_eq!(args, format!("-p --cloud {SESSION} --output-format json"));
-    // Oldest first, each with its answer.
-    let q1 = text.find("#Q1 Empty file prints?\nAnswer: 0");
-    let q2 = text.find("#Q2 Do blank lines count?\nAnswer: no, skip blank lines");
+    // Oldest first, each his answer as the relay types it.
+    let q1 = text.find("Saiful answered your question #Q1 (\"Empty file prints?\"): \"0\".");
+    let q2 = text.find(
+        "Saiful answered your question #Q2 (\"Do blank lines count?\"): \"no, skip blank lines\".",
+    );
     assert!(q1.is_some() && q2.is_some() && q1 < q2, "{text}");
 
     std::thread::sleep(Duration::from_millis(600));
@@ -813,4 +815,110 @@ fn a_park_on_a_blocked_step_is_not_nudged_again_with_the_same_answers() {
     .unwrap();
     std::thread::sleep(Duration::from_millis(800));
     assert_eq!(sent(&dir).len(), 1, "{:?}", sent(&dir));
+}
+
+#[test]
+fn a_parked_nudge_leaves_out_an_answer_the_thread_wrote_itself() {
+    let dir = TempDir::new("nudge-own-answer");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    let row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "Q1",
+        ASKED,
+        Some("Yes"),
+        "cloud-vm-2",
+    );
+    set_questions(&dir, &[row]);
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    wait_for("the nudge", Duration::from_secs(5), || {
+        !sent(&dir).is_empty()
+    });
+    let text = sent(&dir)[0].split_once('\n').unwrap().1.to_string();
+    assert!(!text.contains("May I run"), "{text}");
+    assert!(!text.contains("Yes"), "{text}");
+}
+
+#[test]
+fn an_answer_typed_in_while_live_is_not_typed_again_by_a_later_nudge() {
+    let dir = TempDir::new("nudge-typed-before");
+    let bin = bins(&dir);
+    live_run(&dir);
+    let q1 = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "Q1",
+        ASKED,
+        Some("Yes"),
+        "nuc",
+    );
+    set_questions(&dir, std::slice::from_ref(&q1));
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    wait_for("the relay", Duration::from_secs(5), || {
+        !sent(&dir).is_empty()
+    });
+    // Then it parked on a second question, which he answered.
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    std::fs::write(
+        dir.join("handoff.txt"),
+        "parked: question #Q2 waits on Saiful: which word\n",
+    )
+    .unwrap();
+    let q2 = asked_by(
+        &dir,
+        "2026-11-13T18:10:00Z",
+        "Q2",
+        "Which word?",
+        Some("count"),
+        "nuc",
+    );
+    set_questions(&dir, &[q2, q1]);
+    wait_for("the nudge", Duration::from_secs(5), || {
+        sent(&dir).len() >= 2
+    });
+    let text = sent(&dir)[1].split_once('\n').unwrap().1.to_string();
+    assert!(
+        text.starts_with("Saiful answered your question #Q2 (\"Which word?\"): \"count\"."),
+        "{text}"
+    );
+    assert!(!text.contains("#Q1"), "{text}");
+}
+
+#[test]
+fn a_relay_that_did_not_go_in_still_lets_a_blocked_park_be_woken() {
+    let dir = TempDir::new("relay-failed-blocked");
+    let bin = bins(&dir);
+    live_run(&dir);
+    let row = asked_by(
+        &dir,
+        "2026-11-13T18:09:00Z",
+        "Q1",
+        ASKED,
+        Some("Yes"),
+        "nuc",
+    );
+    set_questions(&dir, &[row]);
+    std::fs::write(dir.join("claude.fail"), "").unwrap();
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    wait_for("three tries", Duration::from_secs(5), || {
+        sent(&dir).len() >= 3
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    std::fs::remove_file(dir.join("claude.fail")).unwrap();
+    // The thread never saw it, tried, was blocked, and parked.
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    std::fs::write(
+        dir.join("handoff.txt"),
+        "parked: blocked: mem project set verify \"true\" (#Q1)\n",
+    )
+    .unwrap();
+    wait_for("the nudge", Duration::from_secs(5), || {
+        sent(&dir).len() >= 4
+    });
+    assert!(
+        sent(&dir)[3].contains("Saiful answered your question #Q1"),
+        "{:?}",
+        sent(&dir)
+    );
 }

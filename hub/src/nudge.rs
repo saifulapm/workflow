@@ -58,7 +58,8 @@ fn nudged_file() -> Option<PathBuf> {
 }
 
 /// What was sent already: the parks nudged, as `<session> <handoff time>`
-/// lines, the answers typed in, as `answer <id>`, and the runs whose
+/// lines, the answers typed in, as `answer <id>`, those not typed in (a
+/// failed send, or not his word), as `tried <id>`, and the runs whose
 /// account had no login, as `<session> no login`.
 fn read_nudged() -> HashSet<String> {
     nudged_file()
@@ -203,41 +204,20 @@ fn relay(row: &Value) -> String {
     )
 }
 
-/// What the woken thread reads: first each answer a device or the hub page
-/// gave, in the relay's words, so its safety check reads them as his; then
-/// every other answer under its question. `his` holds the ids of the first.
-fn message(project: &str, asked: &[Value], his: &HashSet<String>) -> String {
-    let is_his = |row: &&Value| row["answer_id"].as_str().is_some_and(|id| his.contains(id));
-    let mut text: String = asked
-        .iter()
-        .filter(is_his)
-        .map(|row| relay(row) + "\n")
-        .collect();
+/// What the woken thread reads: each answer of his not typed into it yet,
+/// in the relay's words, so its safety check reads them as his. Answers
+/// the thread wrote itself, or that went in already, are in its history.
+fn message(project: &str, fresh: &[&Value]) -> String {
+    let mut text: String = fresh.iter().map(|row| relay(row) + "\n").collect();
     if !text.is_empty() {
         text.push('\n');
     }
-    let answers: Vec<String> = asked
-        .iter()
-        .filter(|row| !is_his(row))
-        .map(|row| {
-            format!(
-                "#{} {}\nAnswer: {}",
-                row["short_id"].as_str().unwrap_or(""),
-                row["body"].as_str().unwrap_or(""),
-                row["answer"].as_str().unwrap_or(""),
-            )
-        })
-        .collect();
     text.push_str(&format!(
         "Every question this thread parked on is answered; the mini's hub sends \
          this for Saiful. Carry on with {project}'s milestone as your \
          instructions say for a new turn after a park. `mem questions` shows \
          the answers too."
     ));
-    if !answers.is_empty() {
-        text.push_str("\n\n");
-        text.push_str(&answers.join("\n\n"));
-    }
     text
 }
 
@@ -321,28 +301,45 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration, slack:
         if !settled(&asked, settle) {
             continue;
         }
-        // The answers that are his word, by the machine that wrote them.
-        let his: HashSet<String> = asked
-            .iter()
-            .filter_map(|row| row["answer_id"].as_str())
-            .filter(|id| writer(id).is_some_and(|by| crate::device::his_word(&by)))
-            .map(str::to_string)
-            .collect();
+        // His answers not typed in yet, by the machine that wrote each; a
+        // writer mem cannot name now is asked again next round.
+        let mut fresh = Vec::new();
+        let mut unread = false;
+        for row in &asked {
+            let Some(id) = row["answer_id"].as_str() else {
+                continue;
+            };
+            match writer(id) {
+                Some(by) if crate::device::his_word(&by) => {
+                    if !nudged.contains(&format!("answer {id}")) {
+                        fresh.push(row);
+                    }
+                }
+                Some(_) => {}
+                None => unread = true,
+            }
+        }
+        if unread {
+            continue;
+        }
         // A park on a step still blocked after his answers went in gets no
         // second message with the same ones: it would only park again.
-        if blocked
-            && his
-                .iter()
-                .all(|id| nudged.contains(&format!("answer {id}")))
-        {
+        if blocked && fresh.is_empty() {
             nudged.insert(key);
             write_nudged(nudged);
             continue;
         }
         let name = project["name"].as_str().unwrap_or_default();
-        let text = message(name, &asked, &his);
+        let text = message(name, &fresh);
         match deliver(project, &session, &text, pause, nudged, slack) {
-            Some(Ok(())) => eprintln!("hub: nudge: {name}: woke {session} with its answers"),
+            Some(Ok(())) => {
+                eprintln!("hub: nudge: {name}: woke {session} with its answers");
+                nudged.extend(
+                    fresh
+                        .iter()
+                        .filter_map(|row| Some(format!("answer {}", row["answer_id"].as_str()?))),
+                );
+            }
             // Tried no more: a claude.ai change that breaks the send leaves a
             // typed message as the way to wake the thread.
             Some(Err(e)) => eprintln!(
@@ -352,7 +349,6 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration, slack:
             None => {}
         }
         nudged.insert(key);
-        nudged.extend(his.iter().map(|id| format!("answer {id}")));
         write_nudged(nudged);
     }
 }
@@ -379,10 +375,12 @@ fn relay_round(nudged: &mut HashSet<String>, pause: Duration, slack: Option<&Sla
             else {
                 continue;
             };
-            let key = format!("answer {answer}");
+            let typed = format!("answer {answer}");
+            let tried = format!("tried {answer}");
             // An answer from before this record reached the thread in its
             // prompt or its nudge.
-            if nudged.contains(&key)
+            if nudged.contains(&typed)
+                || nudged.contains(&tried)
                 || hubpages::model::ulid_millis(answer)
                     .is_none_or(|ms| ms <= since.as_millisecond())
             {
@@ -395,10 +393,14 @@ fn relay_round(nudged: &mut HashSet<String>, pause: Duration, slack: Option<&Sla
             let Some(by) = writer(answer) else {
                 continue;
             };
+            // Only an answer that went in counts as typed: a park on a step
+            // still blocked may be woken with one that did not.
+            let mut went_in = false;
             if crate::device::his_word(&by) {
                 let short = row["short_id"].as_str().unwrap_or_default();
                 match deliver(project, &session, &relay(&row), pause, nudged, slack) {
                     Some(Ok(())) => {
+                        went_in = true;
                         eprintln!(
                             "hub: nudge: {name}: typed the answer to #{short} into {session}"
                         );
@@ -410,7 +412,7 @@ fn relay_round(nudged: &mut HashSet<String>, pause: Duration, slack: Option<&Sla
                     None => {}
                 }
             }
-            nudged.insert(key);
+            nudged.insert(if went_in { typed } else { tried });
             write_nudged(nudged);
         }
     }
