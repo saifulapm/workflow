@@ -1776,12 +1776,14 @@ mod tests {
         assert_eq!(session_of(&format!("View: {CODE_PAGE}/session_")), None);
     }
 
-    /// Tailscale drops an offline ephemeral machine only after 30 to 60
-    /// minutes; a landed run leaves the tailnet itself.
+    /// Claude Code's safety check blocked the logout a thread typed, so
+    /// `workflow land` logs the machine out itself and the thread types none.
     #[test]
-    fn a_landed_run_logs_out_of_the_tailnet_last() {
-        assert!(PROMPT.contains("tailscaled.sock\" logout"), "{PROMPT}");
-        assert!(PROMPT.contains("not when parked"), "{PROMPT}");
+    fn a_thread_types_no_logout() {
+        assert!(!PROMPT.contains("logout"), "{PROMPT}");
+        let page = include_str!("../../skills/orchestrate/cloud.md");
+        assert!(!page.contains("logout"), "{page}");
+        assert!(!page.contains("log the machine off"), "{page}");
     }
 
     /// No end signal reaches a cloud session, so its unsent writes go on

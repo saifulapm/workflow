@@ -211,8 +211,8 @@ the skill holds, with these changes:
     <sha>`, `ask: origin refused ci/...` or `ask: GitHub refused the
     Actions API ...`: nothing reached the trunk; ask as for any `ask:`
     line.
-- After a landing, as the very last command, log the machine off the
-  tailnet as the prompt says; not when parked.
+- `workflow land` takes the machine off the tailnet itself once it has
+  landed: run nothing for it.
 - When usage limits reset and the thread continues, carry on from `mem
   plan` and the handoff; never start the milestone over.
 - Stop after 6 hours from the run's start, or from the latest new turn
