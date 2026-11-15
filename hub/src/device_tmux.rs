@@ -848,7 +848,7 @@ fn waits_on(pane: u32) -> Vec<String> {
     // bash; the inner bwrap, the wall's init, also takes in the orphans of
     // the line, which start later.
     let mut shell = top;
-    while matches!(shell.comm.as_str(), "pasta" | "bwrap") {
+    while wall_layer(&shell.comm) {
         match children(shell.pid).min_by_key(|s| (s.started, s.pid)) {
             Some(first) => shell = first,
             None => return Vec::new(),
@@ -862,6 +862,12 @@ fn waits_on(pane: u32) -> Vec<String> {
         .collect();
     line.sort_by_key(|s| (s.started, s.pid));
     line.iter().map(|s| s.comm.clone()).collect()
+}
+
+/// Whether a process named `comm` is the wall's pasta or one of its
+/// bwraps. On an x86_64 device with AVX2, pasta runs as `pasta.avx2`.
+fn wall_layer(comm: &str) -> bool {
+    comm == "bwrap" || comm == "pasta" || comm.starts_with("pasta.")
 }
 
 fn end(tmux: &Tmux, name: &str) -> Outcome {
@@ -1016,7 +1022,17 @@ fn unwall(tmux: &Tmux, name: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::status_line;
+    use super::{status_line, wall_layer};
+
+    #[test]
+    fn the_walk_to_the_wall_s_bash_passes_pasta_s_own_builds_too() {
+        for comm in ["pasta", "pasta.avx2", "bwrap"] {
+            assert!(wall_layer(comm), "{comm}");
+        }
+        for comm in ["bash", "sleep", "cargo"] {
+            assert!(!wall_layer(comm), "{comm}");
+        }
+    }
 
     #[test]
     fn the_status_line_counts_whole_minutes() {
