@@ -401,3 +401,41 @@ fn an_html_page_is_not_a_stored_plan() {
         );
     }
 }
+
+#[test]
+fn a_plan_cost_or_saving_needs_a_measurement() {
+    let w = World::new("roadmap-plan-cost");
+    let repo = w.repo("shop", None);
+
+    let unmeasured = "# plan: m22-cost\n\nGoal: cut the bill.\n\n## Decisions\n\
+                      - Fix 6 saves $7-11 a month on Vectorize. (agent, research)\n";
+    let path = file(&w, "m22-cost.md", unmeasured);
+    let out = mem(&w, &repo, &["plan", "m22-cost", "--set-file", &path]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert!(stderr(&out).contains("line 6"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("measured:"), "{}", stderr(&out));
+    assert_eq!(code(&mem(&w, &repo, &["plan", "m22-cost"])), 1);
+
+    let measured = unmeasured.replace(
+        "(agent, research)",
+        "(agent, research) measured: Cloudflare's billing page, 2026-11-14",
+    );
+    let path = file(&w, "m22-cost.md", &measured);
+    let out = mem(&w, &repo, &["plan", "m22-cost", "--set-file", &path]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let prices = "# plan: m23-prices\n\n\
+        - [ ] a cart of $1,444.85 with $154.94 of savings shows You save −$154.94\n\
+        - Cloudflare at most $10 a month in total. (saiful, #KE0QJ6JD)\n\
+        - Read `awk '{print $1}'` and `$5 a month`\n\
+        - A variant priced $28.00 shows its plan row.\n";
+    let path = file(&w, "m23-prices.md", prices);
+    let out = mem(&w, &repo, &["plan", "m23-prices", "--set-file", &path]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+
+    let goal = "# plan: m24-photo\n\nGoal: search by photo for about $1 to $2 a month.\n";
+    let path = file(&w, "m24-photo.md", goal);
+    let out = mem(&w, &repo, &["plan", "m24-photo", "--set-file", &path]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert!(stderr(&out).contains("line 3"), "{}", stderr(&out));
+}

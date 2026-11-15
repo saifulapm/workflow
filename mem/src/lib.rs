@@ -17,6 +17,7 @@ pub mod lint;
 pub mod localhub;
 pub mod maint;
 pub mod paths;
+pub mod plancost;
 pub mod project;
 pub mod questions;
 pub mod records;

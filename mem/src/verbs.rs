@@ -1570,6 +1570,14 @@ fn stored_plan(
             crate::search::truncate_bytes(first.trim(), 60)
         )));
     }
+    if let Some((n, line)) = crate::plancost::unmeasured_figure(&text) {
+        return Err(exit::usage(format!(
+            "line {n} states a cost or a saving with no measurement: \"{}\". Add \
+             `measured: <the production query or the provider's page>` on that line, \
+             or take the figure out.",
+            crate::search::truncate_bytes(line.trim(), 60)
+        )));
+    }
     land(&path, &text, seen, &format!("{slug}.md"))
 }
 
