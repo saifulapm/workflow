@@ -1664,3 +1664,174 @@ fn mem_in_the_wall_reaches_no_store_of_the_device() {
         String::from_utf8_lossy(&host.stdout)
     );
 }
+
+/// The rig, with a line counted silent after `ms` of no output.
+fn silent_after(ms: &str) -> Rig {
+    rig_env(&[("HUB_DEVICE_SILENT_MS", ms)])
+}
+
+/// The pane's last line that is not blank.
+fn last_line(answer: &serde_json::Value) -> String {
+    answer["stdout"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default()
+        .trim_end()
+        .to_string()
+}
+
+/// Reads until the read ends with a device status line, and returns the
+/// read.
+fn read_status(rig: &Rig) -> serde_json::Value {
+    let until = Instant::now() + Duration::from_secs(10);
+    loop {
+        let answer = rig.walk(&["read"]);
+        if last_line(&answer).starts_with("device: ") {
+            return answer;
+        }
+        assert!(Instant::now() < until, "no status line in: {answer}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn a_silent_line_s_read_ends_with_what_it_still_waits_on() {
+    let rig = silent_after("300");
+    rig.walk(&["send", "sleep 300"]);
+    let read = read_status(&rig);
+    let status = last_line(&read);
+    assert_eq!(
+        status,
+        "device: no output for 0 min; the line still waits on: sleep"
+    );
+    for wall in ["pasta", "bwrap", "bash"] {
+        assert!(!status.contains(wall), "{status}");
+    }
+    rig.walk(&["end"]);
+    let gone = rig.walk(&["read"]);
+    assert_eq!(gone["exit"], 2, "{gone}");
+    assert!(
+        gone["stderr"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no tmux session cloud-cloud_walk-w14; send a line first"),
+        "{gone}"
+    );
+}
+
+#[test]
+fn a_filter_whose_input_a_background_command_holds_is_named() {
+    let rig = silent_after("300");
+    rig.walk(&[
+        "send",
+        "bash -c 'sleep 300 & echo hi' | grep hi | cut -c1-5",
+    ]);
+    let read = read_status(&rig);
+    assert_eq!(
+        last_line(&read),
+        "device: no output for 0 min; the line still waits on: grep, cut"
+    );
+    let pane = read["stdout"].as_str().unwrap_or_default();
+    assert!(!pane.lines().any(|l| l.trim_end() == "hi"), "{pane}");
+}
+
+#[test]
+fn a_line_that_keeps_printing_gets_no_status_line() {
+    let rig = silent_after("300");
+    rig.walk(&["send", "while :; do echo tick; sleep 0.2; done"]);
+    rig.read_until("tick");
+    for _ in 0..10 {
+        let read = rig.walk(&["read"]);
+        assert!(!last_line(&read).starts_with("device: "), "{read}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+#[test]
+fn a_line_sent_moments_ago_gets_no_status_line() {
+    let rig = silent_after("5000");
+    rig.walk(&["send", "sleep 300"]);
+    std::thread::sleep(Duration::from_millis(1500));
+    let read = rig.walk(&["read"]);
+    assert!(!last_line(&read).starts_with("device: "), "{read}");
+}
+
+#[test]
+fn an_ended_line_gets_no_status_line_even_with_a_command_left_in_the_background() {
+    let rig = silent_after("300");
+    rig.walk(&["send", "sleep 300 & echo ended-1"]);
+    rig.read_until("ended-1");
+    std::thread::sleep(Duration::from_millis(2000));
+    let read = rig.walk(&["read"]);
+    assert!(!last_line(&read).starts_with("device: "), "{read}");
+}
+
+#[test]
+fn the_status_line_is_never_typed_into_the_pane() {
+    let rig = silent_after("300");
+    rig.walk(&["send", "sleep 300"]);
+    let first = read_status(&rig);
+    let second = rig.walk(&["read"]);
+    let without = |read: &serde_json::Value| {
+        let pane = read["stdout"].as_str().unwrap_or_default();
+        assert_eq!(pane.matches("device: no output").count(), 1, "{pane}");
+        pane.lines()
+            .filter(|l| !l.starts_with("device: "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(last_line(&second), last_line(&first));
+    assert_eq!(without(&first), without(&second));
+}
+
+#[test]
+fn past_five_commands_the_status_line_counts_the_rest() {
+    let rig = silent_after("300");
+    rig.walk(&["send", &["sleep 300"; 7].join(" | ")]);
+    let read = read_status(&rig);
+    assert_eq!(
+        last_line(&read),
+        "device: no output for 0 min; the line still waits on: sleep, sleep, sleep, sleep, sleep and 2 more"
+    );
+}
+
+#[test]
+fn a_silent_no_wall_line_ends_its_read_with_what_it_still_waits_on() {
+    let rig = silent_after("300");
+    let line = "sleep 300";
+    rig.asked_with(
+        "mac-mini-m2",
+        &outside(line),
+        &["yes", "no"],
+        "yes",
+        "mac-mini-m2",
+    );
+    let sent = rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", line]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    let read = read_status(&rig);
+    assert_eq!(
+        last_line(&read),
+        "device: no output for 0 min; the line still waits on: sleep"
+    );
+}
+
+#[test]
+fn an_ended_no_wall_line_gets_no_status_line() {
+    let rig = silent_after("300");
+    let line = "sleep 300 & echo outside-done";
+    rig.asked_with(
+        "mac-mini-m2",
+        &outside(line),
+        &["yes", "no"],
+        "yes",
+        "mac-mini-m2",
+    );
+    rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", line]);
+    rig.read_until("exit: 0");
+    std::thread::sleep(Duration::from_millis(2000));
+    let read = rig.walk(&["read"]);
+    assert!(!last_line(&read).starts_with("device: "), "{read}");
+}

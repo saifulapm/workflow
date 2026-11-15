@@ -734,12 +734,134 @@ fn read(tmux: &Tmux, name: &str) -> Outcome {
     let target = format!("={name}:");
     match tmux.run(&["capture-pane", "-p", "-J", "-S", HISTORY, "-t", &target]) {
         Ok(done) if done.code == Some(0) => {
-            Outcome::done(String::from_utf8_lossy(&done.stdout).into_owned())
+            let mut pane = String::from_utf8_lossy(&done.stdout).into_owned();
+            if let Some(status) = silence(tmux, name) {
+                if !pane.is_empty() && !pane.ends_with('\n') {
+                    pane.push('\n');
+                }
+                pane.push_str(&status);
+            }
+            Outcome::done(pane)
         }
         other => ok(other, "capture-pane")
             .err()
             .unwrap_or_else(|| Outcome::fail(1, "device: tmux capture-pane failed\n".to_string())),
     }
+}
+
+/// How long a line may print nothing before a read says what it still
+/// waits on: `HUB_DEVICE_SILENT_MS`, else a minute.
+fn silent_limit() -> Duration {
+    std::env::var("HUB_DEVICE_SILENT_MS")
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+        .map_or(Duration::from_secs(60), Duration::from_millis)
+}
+
+/// The line a read adds when the line in front has printed nothing for the
+/// silent limit and has not ended: the pane never holds it.
+fn silence(tmux: &Tmux, name: &str) -> Option<String> {
+    let done = tmux
+        .run(&[
+            "display-message",
+            "-p",
+            "-t",
+            &format!("={name}:"),
+            "#{window_activity} #{pane_pid}",
+        ])
+        .ok()
+        .filter(|done| done.code == Some(0))?;
+    let out = String::from_utf8_lossy(&done.stdout);
+    let mut words = out.split_whitespace();
+    let activity: u64 = words.next()?.parse().ok()?;
+    let pane: u32 = words.next()?.parse().ok()?;
+    // tmux keeps the time to the second: count the output as at its end, so
+    // the line comes late rather than early.
+    let silent = unix_now().saturating_sub((activity + 1) * 1000);
+    if Duration::from_millis(silent) < silent_limit() {
+        return None;
+    }
+    let names = waits_on(pane);
+    (!names.is_empty()).then(|| status_line(silent, &names))
+}
+
+fn status_line(silent_ms: u64, names: &[String]) -> String {
+    let named = match names.len() {
+        0..=5 => names.join(", "),
+        n => format!("{} and {} more", names[..5].join(", "), n - 5),
+    };
+    format!(
+        "device: no output for {} min; the line still waits on: {named}\n",
+        silent_ms / 60_000
+    )
+}
+
+/// What a process's stat says of it.
+struct Stat {
+    pid: u32,
+    ppid: u32,
+    pgrp: i64,
+    tpgid: i64,
+    zombie: bool,
+    started: u64,
+    comm: String,
+}
+
+fn stat(pid: u32) -> Option<Stat> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command's name may hold spaces and parentheses.
+    let open = text.find('(')?;
+    let close = text.rfind(')')?;
+    let comm = text.get(open + 1..close)?.to_string();
+    let rest: Vec<&str> = text.get(close + 1..)?.split_whitespace().collect();
+    // From the state, field 3: ppid 4, pgrp 5, tpgid 8, starttime 22.
+    Some(Stat {
+        pid,
+        ppid: rest.get(1)?.parse().ok()?,
+        pgrp: rest.get(2)?.parse().ok()?,
+        tpgid: rest.get(5)?.parse().ok()?,
+        zombie: *rest.first()? == "Z",
+        started: rest.get(19)?.parse().ok()?,
+        comm,
+    })
+}
+
+/// The names of the commands the pane's line still runs, in the order they
+/// started: the live children, in the terminal's foreground group, of the
+/// line's shell: the pane's bash, or the bash the wall's pasta and bwraps
+/// run. A shell back at its prompt
+/// has a foreground of its own, and the window outside the wall, whose bash
+/// ends in `sleep`, has no bash once its line ended.
+fn waits_on(pane: u32) -> Vec<String> {
+    let all: Vec<Stat> = std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse().ok())
+        .filter_map(stat)
+        .collect();
+    let children = |of: u32| all.iter().filter(move |s| s.ppid == of);
+    let Some(top) = all.iter().find(|s| s.pid == pane) else {
+        return Vec::new();
+    };
+    // The wall's pasta and two bwraps each start one child, down to its
+    // bash; the inner bwrap, the wall's init, also takes in the orphans of
+    // the line, which start later.
+    let mut shell = top;
+    while matches!(shell.comm.as_str(), "pasta" | "bwrap") {
+        match children(shell.pid).min_by_key(|s| (s.started, s.pid)) {
+            Some(first) => shell = first,
+            None => return Vec::new(),
+        }
+    }
+    if shell.comm != "bash" {
+        return Vec::new();
+    }
+    let mut line: Vec<&Stat> = children(shell.pid)
+        .filter(|s| !s.zombie && s.pgrp == shell.tpgid)
+        .collect();
+    line.sort_by_key(|s| (s.started, s.pid));
+    line.iter().map(|s| s.comm.clone()).collect()
 }
 
 fn end(tmux: &Tmux, name: &str) -> Outcome {
@@ -889,5 +1011,18 @@ fn unwall(tmux: &Tmux, name: &str) {
             continue;
         }
         todo.extend(parents.iter().filter(|(_, p)| *p == pid).map(|(c, _)| *c));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::status_line;
+
+    #[test]
+    fn the_status_line_counts_whole_minutes() {
+        assert_eq!(
+            status_line(185_000, &["sleep".to_string()]),
+            "device: no output for 3 min; the line still waits on: sleep\n"
+        );
     }
 }
