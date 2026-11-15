@@ -220,6 +220,9 @@ fn the_cloud_page_reads_a_silent_job_s_status_line() {
         "`grep --line-buffered`",
         "`server >/tmp/server.log 2>&1 &`",
         "is run again, fixed, after `device tmux end`",
+        "only the line's filters",
+        "mean the command before them has ended and something it started holds the output",
+        "its held output is lost",
     ] {
         assert!(cloud.contains(said), "cloud.md says {said}");
     }
