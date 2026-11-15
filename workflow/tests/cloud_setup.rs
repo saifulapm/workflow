@@ -972,6 +972,47 @@ fn the_first_mem_gives_the_catch_up_120_seconds() {
     );
 }
 
+/// A store session's mem starts the local hub in the background, and that
+/// start goes on after the shim returns: it fetches the hub into the home.
+/// A home dropped under it came back, 7 MB a time, until 726 of them filled
+/// /tmp (2026-11-15).
+#[test]
+fn a_shim_home_stays_gone_once_its_scratch_is_dropped() {
+    let home = Scratch::new("cloud-shim-gone");
+    let (_log, path) = store_fakes(&home, 0);
+    setup_with(&home, &path, &STORE_ENV);
+    // The start makes the hub's folders with a mkdir slow enough to outlast
+    // the shim, as a busy machine's is.
+    let mkdir = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("mkdir"))
+        .find(|p| p.is_file())
+        .unwrap();
+    home.script(
+        "fake/mkdir",
+        &format!(
+            "#!/bin/sh\ncase \"$*\" in *.local/bin*) sleep 1;; esac\nexec {} \"$@\"\n",
+            mkdir.display()
+        ),
+    );
+    // Past the fakes, no curl reaches the network.
+    let net = Scratch::new("cloud-shim-gone-net");
+    net.script("curl", "#!/bin/sh\nexit 22\n");
+    let path = path.replacen(':', &format!(":{}:", net.path().display()), 1);
+    let mut shim = command(home.at("usr-local-bin/mem"));
+    shim.args(["context"])
+        .env("HOME", home.path())
+        .env("PATH", &path);
+    for (k, v) in STORE_ENV {
+        shim.env(k, v);
+    }
+    let out = shim.output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let at = home.path().to_path_buf();
+    drop(home);
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    assert!(!at.exists(), "{} came back", at.display());
+}
+
 /// The release's bundle of the workflow skills and agents, as the workflow
 /// repo's CI packs it: `skills/<name>/SKILL.md` and `agents/<name>.md`.
 fn store_skills(home: &Scratch, skill: &str, agent: &str) {

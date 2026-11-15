@@ -71,6 +71,13 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
+        // A cloud shim run in this home starts the local hub in the
+        // background, holding this lock while it fetches into the home: a
+        // home removed under it comes back.
+        let start = self.at(".local/state/hub/start.lock");
+        if start.exists() {
+            let _ = Command::new("flock").arg(&start).arg("true").status();
+        }
         let _ = fs::remove_dir_all(&self.0);
     }
 }
