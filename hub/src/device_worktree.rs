@@ -64,7 +64,8 @@ pub(crate) fn prepare(machine: &str, project: &str, name: &str) -> Result<Worktr
         });
     let Some(top) = top else {
         return Err(Outcome::refuse(format!(
-            "no checkout of {slug} on {machine}"
+            "no checkout of {slug} on {machine} that mem knows: clone it there if it \
+             has none, then run `mem project current` in the clone so mem records it"
         )));
     };
     let branch = format!("cloud/{}", name.strip_prefix("cloud-").unwrap_or(name));

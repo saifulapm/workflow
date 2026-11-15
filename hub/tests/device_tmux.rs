@@ -485,7 +485,9 @@ fn a_project_with_no_checkout_of_its_repo_is_refused() {
     assert_eq!(answer["exit"], 2, "{answer}");
     assert_eq!(
         answer["stderr"],
-        "device: no checkout of saifulapm/cloud-spike on mac-mini-m2\n"
+        "device: no checkout of saifulapm/cloud-spike on mac-mini-m2 that mem knows: \
+         clone it there if it has none, then run `mem project current` in the clone \
+         so mem records it\n"
     );
     assert!(rig.sessions().is_empty(), "{:?}", rig.sessions());
 }
