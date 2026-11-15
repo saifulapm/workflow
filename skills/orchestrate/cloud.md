@@ -124,23 +124,30 @@ the skill holds, with these changes:
   new '<task>'`, and give it in the task the worktree's path,
   `~/.cache/workflow-cloud/<repo>`, the AVD, the page and what to check. Say
   in the task that the agent runs none of the branch's programs: it serves
-  the built files with a plain file server on the device's loopback, boots
-  the emulator with `dots-emulator <avd>`, uses the serial that command
-  printed in every adb call, never the first serial `adb devices` lists,
-  and ends the server and an emulator it started (`dots-emulator stop
-  <avd>`); an emulator that was up before stays up. (3) Report the agent's
-  result from `device amx result <name>`, quoting its serial and what it
-  saw. A page that only its own server program can serve is sent as one
-  `device tmux send --no-wall` line, which asks Saiful once, and the agent
-  then only drives the emulator. On `busy: <project>` (exit 5) from `device
-  amx new`, do other work and try again; never fall back to `device tmux`.
-  When the agent reports `dots-emulator: this machine has no Android
-  emulator`, ask Saiful to choose a device that has one, naming `workflow
-  device use <name>` in the question: `mem ask --for saiful "<machine> has
-  no Android emulator: choose a device that has one with workflow device
-  use <name>, then answer done" --option done --option hold`. Wait for
-  `done` as below, then start the agent again.
-  Never send the check with `--no-wall` instead.
+  the built files with a plain file server on the device's loopback; it
+  first reads `adb devices` and, for each emulator there, `adb -s <serial>
+  emu avd name`, to see whether the AVD is up already; it boots the emulator
+  with `dots-emulator <avd>`, uses the serial that command printed in every
+  adb call, never the first serial `adb devices` lists, and ends the server
+  and an emulator it started (`dots-emulator stop <avd>`); an emulator that
+  was up before stays up. (3) Report the agent's result from `device amx
+  result <name>`, quoting its serial and what it saw, then stop the agent
+  with `device amx stop <name>` once its result is in. A page that only its
+  own server program can serve is sent as one `device tmux send --no-wall`
+  line, which asks Saiful once, and the agent then only drives the emulator:
+  send no other `device tmux` line until the agent's result is in, since the
+  next walled line ends that server. On `busy: <project>` (exit 5) from
+  `device amx new`, do other work and try again; never fall back to `device
+  tmux`. When the agent reports `dots-emulator: this machine has no Android
+  emulator`, stop the agent with `device amx stop <name>` before you ask,
+  since the next device call goes to the new device. Then ask Saiful to
+  choose a device that has one, naming `workflow device use <name>` in the
+  question: `mem ask --for saiful "<machine> has no Android emulator: choose
+  a device that has one with workflow device use <name>, then answer done"
+  --option done --option hold`. Wait for `done` as below, then build again
+  with `device tmux send` on the new device, since each device keeps a
+  worktree of its own, and start the agent there. Never send the check with
+  `--no-wall` instead.
 - A theme's token and store password are the only project secrets a cloud
   command gets, through `device with-secrets <project> -- <command>`: the
   device reads the pass entries the project's `cloud-secrets` names and
