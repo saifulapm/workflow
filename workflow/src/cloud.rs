@@ -354,6 +354,29 @@ environment's old copy; run `mem sync` until it says performed, then start again
     if row.paused.is_some() {
         return paused(&start.project, me.is_some());
     }
+    // `workflow land` runs the test command and refuses without one, so a
+    // thread never builds a milestone it could not land.
+    match memcli::project_verify(&start.project) {
+        None => {
+            return refuse(
+                format!(
+                    "mem cannot read {}'s test command; run `mem sync` and start again",
+                    start.project
+                ),
+                exit::FAILED,
+            );
+        }
+        Some(verify) if verify.is_empty() => {
+            return refuse(
+                format!(
+                    "{} has no test command: on a device run mem project set verify \"<command>\"",
+                    start.project
+                ),
+                exit::USAGE,
+            );
+        }
+        Some(_) => {}
+    }
     if let Some(why) = refusal(row, &start.slug, &start.dir, me.is_some()) {
         return refuse(why, exit::USAGE);
     }

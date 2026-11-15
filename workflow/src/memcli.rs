@@ -354,6 +354,24 @@ pub fn project_choice(key: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
+/// The test command `mem project set verify` holds for the named project,
+/// trimmed: empty when none is set. `None` when mem cannot answer, which is
+/// not the same as no command.
+pub fn project_verify(project: &str) -> Option<String> {
+    let (ok, out) = capture(&["project", "current", "--json", "--project", project])?;
+    if !ok {
+        return None;
+    }
+    let doc: serde_json::Value = serde_json::from_str(&out).ok()?;
+    Some(
+        doc["verify"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    )
+}
+
 /// The path globs this project keeps out of the hygiene check, `mem project
 /// set hygiene-exempt`, split the way a Files line is.
 pub fn project_hygiene_exempt() -> Vec<String> {

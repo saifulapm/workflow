@@ -51,6 +51,20 @@ projects) cat "$dir/projects.json" ;;
 project)
   # The checkout the caller stands in, by its folder's name, as a VM's
   # mem knows it: a root project with no subdir.
+  # `current --json --project <name>` answers for that project: with a test
+  # command, unless a file `no-verify-<name>` takes it away or `mem-fails-<name>`
+  # makes mem fail.
+  if [ "$2 $4" = "current --project" ]; then
+    [ -f "$dir/mem-fails-$5" ] && exit 1
+    if [ "$(cat "$dir/no-verify-$5" 2>/dev/null)" = blank ]; then
+      echo "{\"name\":\"$5\",\"verify\":\"  \"}"
+    elif [ -f "$dir/no-verify-$5" ]; then
+      echo "{\"name\":\"$5\"}"
+    else
+      echo "{\"name\":\"$5\",\"verify\":\"cargo test\"}"
+    fi
+    exit 0
+  fi
   if [ "$2" = current ]; then
     [ -f "$dir/current-${PWD##*/}.json" ] || exit 1
     cat "$dir/current-${PWD##*/}.json"
@@ -922,6 +936,73 @@ fn a_paused_project_parks_a_thread_even_with_a_parked_handoff() {
     let out = w.go(&["gamma", "--cloud", "--print"]);
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(stdout(&out).trim(), "gamma: paused");
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
+
+const NO_VERIFY: &str =
+    r#"gamma has no test command: on a device run mem project set verify "<command>""#;
+
+#[test]
+fn a_thread_parks_a_project_with_no_test_command_before_it_claims() {
+    let w = World::new("cloud-no-verify");
+    w.work.put("no-verify-gamma", "");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).lines().last(),
+        Some(format!("parked: {NO_VERIFY}").as_str())
+    );
+    assert!(
+        !w.mem_calls().iter().any(|c| c.contains("set runner")),
+        "{:?}",
+        w.mem_calls()
+    );
+}
+
+#[test]
+fn a_machine_refuses_a_project_with_no_test_command_on_stderr() {
+    let w = World::new("cloud-no-verify-machine");
+    w.work.put("no-verify-gamma", "");
+    let out = w.go(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert_eq!(stdout(&out), "");
+    assert!(
+        stderr(&out).contains(&format!("go: {NO_VERIFY}")),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_thread_woken_on_its_own_milestone_parks_when_the_test_command_went() {
+    let w = World::new("cloud-no-verify-own");
+    cloud_runner(&w, "gamma", THREAD_SESSION, 0);
+    w.work.put("no-verify-gamma", "");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), format!("parked: {NO_VERIFY}"));
+    assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
+}
+
+#[test]
+fn a_blank_test_command_counts_as_none() {
+    let w = World::new("cloud-blank-verify");
+    w.work.put("no-verify-gamma", "blank");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    assert!(stdout(&out).contains(NO_VERIFY), "{}", stdout(&out));
+}
+
+#[test]
+fn a_mem_that_cannot_read_the_test_command_is_named_not_blamed_on_the_project() {
+    let w = World::new("cloud-verify-mem-fails");
+    w.work.put("mem-fails-gamma", "");
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "parked: mem cannot read gamma's test command; run `mem sync` and start again"
+    );
     assert!(!w.mem_calls().iter().any(|c| c.contains("set runner")));
 }
 

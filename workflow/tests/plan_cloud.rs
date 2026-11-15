@@ -36,7 +36,9 @@ dir=$(dirname "$0")
 echo "$*" >>"$dir/mem.log"
 case "$1" in
 projects) cat "$dir/projects.json" ;;
-project) [ "$2" = current ] && exit 1; exit 0 ;;
+project)
+  [ "$2 $4" = "current --project" ] && { echo "{\"name\":\"$5\",\"verify\":\"cargo test\"}"; exit 0; }
+  [ "$2" = current ] && exit 1; exit 0 ;;
 handoff) [ -f "$dir/handoff-$3.md" ] && cat "$dir/handoff-$3.md" || exit 1 ;;
 esac
 "#,
