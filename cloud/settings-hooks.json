@@ -27,6 +27,15 @@
           "command": "if workflow guard --help 2>/dev/null | grep -q 'possible values:.*edit'; then workflow guard edit; fi"
         }
       ]
+    },
+    {
+      "matcher": "Agent",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "if workflow guard --help 2>/dev/null | grep -q 'possible values:.*agent'; then workflow guard agent; fi"
+        }
+      ]
     }
   ],
   "PostToolBatch": [

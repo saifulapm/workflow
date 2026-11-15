@@ -254,3 +254,48 @@ fn an_implementer_brief_whose_verify_names_no_lint_is_refused() {
     let scout = guard_agent("scout", "find every use of send_at");
     assert_eq!(scout.status.code(), Some(0), "{scout:?}");
 }
+
+/// The cloud kit's PreToolUse entry on the Agent tool runs `workflow guard
+/// agent`, and passes every call with a workflow from before it.
+#[test]
+fn the_agent_entry_refuses_a_brief_without_lint_and_passes_an_old_workflow() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cloud/settings-hooks.json");
+    let hooks: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let entries: Vec<&Value> = hooks["PreToolUse"]
+        .as_array()
+        .expect("a PreToolUse list")
+        .iter()
+        .filter(|e| e["matcher"] == "Agent")
+        .collect();
+    assert_eq!(entries.len(), 1, "{hooks}");
+    let entry = entries[0]["hooks"][0]["command"].as_str().unwrap();
+    let input = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Agent",
+        "tool_input": { "subagent_type": "implementer", "prompt": brief("vitest run") },
+        "cwd": "/repo",
+    })
+    .to_string();
+    let w = Scratch::new("guard-hook-agent");
+    let run = |bin: &Path| {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", entry])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("HOME", "/nonexistent");
+        feed(command, &input)
+    };
+    let bin = w.mkdir("bin");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_workflow"), bin.join("workflow")).unwrap();
+    let real = run(&bin);
+    assert_eq!(real.status.code(), Some(2), "{real:?}");
+    w.script(
+        "old/workflow",
+        "if [ \"$1 $2\" = 'guard --help' ]; then\n\
+           echo '  <CHECK>  [possible values: pnpm, bash, edit]'; exit 0\n\
+         fi\n\
+         echo \"error: invalid value '$2'\" >&2; exit 2",
+    );
+    let old = run(&w.at("old"));
+    assert_eq!(old.status.code(), Some(0), "{old:?}");
+}

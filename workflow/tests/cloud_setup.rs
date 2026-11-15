@@ -1274,7 +1274,7 @@ fn the_setup_carries_the_advisor_and_runs_twice_without_doubling_a_hook() {
     }
     assert_eq!(
         settings["hooks"]["PreToolUse"].as_array().unwrap().len(),
-        2,
+        3,
         "{settings}"
     );
 }
