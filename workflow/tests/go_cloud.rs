@@ -2026,6 +2026,30 @@ fn a_woken_thread_carries_on_after_its_6_hour_stop() {
     assert!(w.claimed(), "{:?}", w.mem_calls());
 }
 
+/// A turn that ended on a step the safety check blocked parked first; the
+/// next turn carries the run on, its answer in the prompt.
+#[test]
+fn a_woken_thread_carries_on_after_a_park_on_a_blocked_step() {
+    let w = World::new("cloud-wake-blocked");
+    w.parked_as(
+        THREAD_SESSION,
+        2,
+        1,
+        "parked: blocked: mem project set land-ci ci.yml (#AAAA1111)\n",
+        &[question("gamma", 90, "AAAA1111", Some("Yes"))],
+    );
+    let out = w.thread(&["gamma", "--cloud", "--print"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let said = stdout(&out);
+    assert!(
+        said.starts_with("Land milestone m2-next of gamma"),
+        "{said}"
+    );
+    assert!(said.contains("#AAAA1111"), "{said}");
+    assert!(said.contains("answered: Yes"), "{said}");
+    assert!(w.claimed(), "{:?}", w.mem_calls());
+}
+
 /// mem's calls that write: a woken thread that lost its run makes none.
 fn writes(w: &World) -> Vec<String> {
     w.mem_calls()

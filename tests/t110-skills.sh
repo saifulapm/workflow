@@ -72,6 +72,12 @@ like "$(skill plan | sed -n '/^10\. /,/^Store each plan/p')" 'already passes on 
 like "$(skill plan | sed -n '/^11\. /,/^Store each plan/p')" 'names where it was counted' \
 	"plan: rule 11 has each number a plan promises name where it was counted"
 
+# ebdfy-ui m27's thread sat 82 minutes on a step the safety check blocked,
+# with no handoff: it asks naming the command, and parks before its turn ends.
+blocked=$(sed -n '/safety check blocks a step/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
+like "$blocked" 'naming the exact command' "orchestrate cloud: a blocked step is asked naming its command"
+like "$blocked" 'parked: blocked: <step> [(]#<id>[)]' "orchestrate cloud: a turn that ends on a blocked step parks first"
+
 # A thread asks before each of the six destructive kinds (#NHEQRXY1), files a
 # held line with its exact text and sends it again with the yes, and starts a
 # local agent only for what the cloud cannot do (m4-device-tmux).

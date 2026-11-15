@@ -289,6 +289,23 @@ fn only_a_park_on_a_question_gets_a_nudge() {
 }
 
 #[test]
+fn a_park_on_a_blocked_step_gets_its_nudge_once_answered() {
+    let dir = TempDir::new("nudge-blocked");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    std::fs::write(
+        dir.join("handoff.txt"),
+        "parked: blocked: mem project set land-ci ci.yml (#Q1)\n",
+    )
+    .unwrap();
+    answered(&dir, Some("0"), Some("yes"));
+    let _hub = spawn(&dir, &bin, "mac-mini-m2");
+    wait_for("the nudge", Duration::from_secs(5), || {
+        !sent(&dir).is_empty()
+    });
+}
+
+#[test]
 fn an_answer_just_before_the_park_still_gets_its_nudge() {
     // It landed after the thread's last wait-answer and before its park
     // handoff was stamped, so the thread parked without reading it.

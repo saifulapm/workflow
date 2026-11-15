@@ -1875,6 +1875,23 @@ mod tests {
         );
     }
 
+    /// A step the safety check blocks is asked naming the exact command, and
+    /// a turn that ends on it parks first (ebdfy-ui m27 sat 82 minutes on
+    /// one with no handoff).
+    #[test]
+    fn a_turn_that_ends_on_a_blocked_step_parks_first() {
+        assert!(
+            PROMPT.contains(
+                "When the safety check blocks a step and you must wait for Saiful, ask with `mem ask --for saiful` naming the exact command"
+            ),
+            "{PROMPT}"
+        );
+        assert!(
+            PROMPT.contains("a handoff starting `parked: blocked: <step> (#<id>)`"),
+            "{PROMPT}"
+        );
+    }
+
     /// A task for Saiful's hands is a question with done and hold, never a
     /// park for a device; hold parks naming the question.
     #[test]

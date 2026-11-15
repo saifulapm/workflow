@@ -7,8 +7,8 @@
 //! (workflow/src/cloud.rs `parked_questions`): a `parked:` handoff written
 //! after the run's latest record, its milestone still the open one, and
 //! the questions of its project asked since the run first started. Only a
-//! `parked: question` handoff counts, and the nudge waits a minute after
-//! the newest answer. It goes out with the claude.ai login of the run's own
+//! `parked: question` or `parked: blocked:` handoff counts, and the nudge
+//! waits a minute after the newest answer. It goes out with the claude.ai login of the run's own
 //! account, which dots' registry places in a folder of its own; with no
 //! login for that account here, it rings Saiful once on Slack instead.
 
@@ -101,8 +101,9 @@ fn park(project: &Value) -> Option<(String, String)> {
     // Only a park on questions waits for answers: a hold, a 6-hour stop or
     // a local-only park (a device takes it over) does not, however its
     // questions stand. One question or several: `parked: question #<id>`,
-    // `parked: questions #<id> and #<id>`.
-    if !handoff.starts_with("parked: question") {
+    // `parked: questions #<id> and #<id>`; or a step the safety check
+    // blocked, asked about: `parked: blocked: <step> (#<id>)`.
+    if !handoff.starts_with("parked: question") && !handoff.starts_with("parked: blocked:") {
         return None;
     }
     Some((session.to_string(), format!("{session} {at}")))

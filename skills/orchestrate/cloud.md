@@ -149,6 +149,13 @@ the skill holds, with these changes:
     line. His start line, typed after he answers, parks
     again while any question is open, and once all are answered starts a
     thread that takes up the branch with the answers in its prompt.
+  - When the safety check blocks a step and you must wait for Saiful,
+    ask with `mem ask --for saiful` naming the exact command ("May I run:
+    <the command>?") and wait for it as above. When your turn must end on
+    that step, first write a handoff starting
+    `parked: blocked: <step> (#<id>)` that names the branch and the first
+    open task, export, commit and push the branch, and end the report with
+    that line.
   - A park ends the turn, not the run. On every new turn after a park, a
     typed message or a comment on an artifact, `cd` into the checkout and
     run `workflow go <project> --cloud --print` and follow what it prints.
