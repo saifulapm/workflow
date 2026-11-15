@@ -73,7 +73,17 @@ the skill holds, with these changes:
   and 20 minutes after it started (`device: the job ended at the 20-minute
   cap`): send again to start a new one, and end it with `device tmux end`
   when done. Never type a secret into it, nor read one back from it (`pass`,
-  `gh auth token`): the hub holds those lines.
+  `gh auth token`): the hub holds those lines. When a line has printed
+  nothing for 60 seconds, `device tmux read` ends with one more line, which
+  the pane does not hold: `device: no output for <N> min; the line still
+  waits on: <names>`. Names that are only the line's filters, such as `grep`
+  or `cut`, mean the command before them has ended and something it started
+  holds the output. A long build that names its own command, say `cargo`, is
+  still working. A dev server that printed its ready line and serves is not
+  a fault either. Send a background command's output to a file, as in
+  `server >/tmp/server.log 2>&1 &`, and filter with `grep --line-buffered`.
+  A line read this way is run again, fixed, after `device tmux end`; its held
+  output is lost.
 - Before any of these six, ask with `mem ask --for saiful` and wait for
   his yes: (1) a delete or an overwrite of something that exists;
   (2) making something public; (3) a change to a token or to a person's

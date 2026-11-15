@@ -207,3 +207,20 @@ fn a_cloud_walk_checks_an_android_page_in_the_devices_emulator() {
         assert!(plan.contains(said), "the plan skill's rule 9 says {said}");
     }
 }
+
+/// A job whose line prints nothing gets a status line from `device tmux
+/// read`; the cloud page says what it means and how to keep output coming.
+#[test]
+fn the_cloud_page_reads_a_silent_job_s_status_line() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let cloud = one_line(&fs::read_to_string(repo.join("skills/orchestrate/cloud.md")).unwrap());
+    for said in [
+        "device: no output for <N> min; the line still waits on: <names>",
+        "the line still waits on",
+        "`grep --line-buffered`",
+        "`server >/tmp/server.log 2>&1 &`",
+        "is run again, fixed, after `device tmux end`",
+    ] {
+        assert!(cloud.contains(said), "cloud.md says {said}");
+    }
+}
