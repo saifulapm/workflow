@@ -421,14 +421,15 @@ pub fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
 }
 
 /// Whole minutes a live cloud run has been quiet, or None. The project's
-/// questions are read only for a live run.
+/// questions are read only for a live run; a run whose questions mem could
+/// not list may be waiting on one, so it shows as live, as the ring holds.
 fn quiet_minutes(ctx: &PageCtx, s: &ProjectSummary, run: &CloudRun) -> Option<i64> {
     if run.state != CloudState::Live {
         return None;
     }
     let rows = match &*ctx.site.mem.questions_all(&s.name) {
         Outcome::Json(doc) => doc["questions"].as_array().cloned().unwrap_or_default(),
-        _ => Vec::new(),
+        _ => return None,
     };
     let start = live::quiet_since(s, run, &rows, ctx.site.now)?;
     Some(ctx.site.now.duration_since(start).as_mins())

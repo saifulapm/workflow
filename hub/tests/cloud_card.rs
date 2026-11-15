@@ -319,3 +319,13 @@ fn a_cloud_run_with_a_question_of_its_own_open_is_not_quiet() {
     assert!(body.contains("cloud · m2-next · live"), "{body}");
     assert!(!body.contains("quiet for"), "{body}");
 }
+
+#[test]
+fn a_cloud_run_whose_questions_cannot_be_read_is_not_shown_quiet() {
+    let world = World::new("cloud-quiet-unread");
+    run_written(&world, 47);
+    world.put("questions-gamma.json", "not json");
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(body.contains("cloud · m2-next · live"), "{body}");
+}
