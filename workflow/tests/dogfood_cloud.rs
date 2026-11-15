@@ -118,3 +118,47 @@ fn a_cloud_walk_says_how_shopify_themes_and_apps_are_walked() {
         assert!(skill.contains(said), "the dogfood skill says {said}");
     }
 }
+
+/// c1-phone-by-agent: a check of a page on Android goes to a local agent
+/// through `device amx new`, since the wall lets no port through but adb's;
+/// the build stays behind the wall and the agent runs none of the branch's
+/// programs. ebdfy-ui m29 sent its emulator check as `--no-wall` lines.
+#[test]
+fn an_android_page_check_goes_to_a_local_agent() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let cloud = one_line(&fs::read_to_string(repo.join("skills/orchestrate/cloud.md")).unwrap());
+    let at = cloud
+        .find("- A check of a page on Android")
+        .expect("cloud.md has a paragraph on Android page checks");
+    let check = &cloud[at..cloud[at + 2..]
+        .find(" - ")
+        .map_or(cloud.len(), |end| at + 2 + end)];
+    for said in [
+        "`device amx new",
+        "never through `device tmux`",
+        "the wall lets no port through but adb's",
+        "`device tmux send`, behind the wall",
+        "`~/.cache/workflow-cloud/<repo>`",
+        "none of the branch's programs",
+        "plain file server",
+        "`dots-emulator <avd>`",
+        "`dots-emulator stop <avd>`",
+        "never the first serial `adb devices` lists",
+        "one `device tmux send --no-wall` line",
+        "`busy: <project>` (exit 5)",
+        "never fall back to `device tmux`",
+    ] {
+        assert!(
+            check.contains(said),
+            "cloud.md's Android check says {said}: {check}"
+        );
+    }
+    let tmux = &cloud[cloud.find("- Terminal work on the device").unwrap()..];
+    let tmux = &tmux[..tmux[2..].find(" - ").unwrap() + 2];
+    assert!(
+        tmux.contains(
+            "adb for what needs no page from the job (installing a build, reading a log)"
+        ),
+        "cloud.md's device tmux paragraph: {tmux}"
+    );
+}

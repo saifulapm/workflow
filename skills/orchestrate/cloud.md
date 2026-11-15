@@ -53,7 +53,8 @@ the skill holds, with these changes:
   <project>'s calls; turn one on, then answer done" --option done --option
   hold`. Never park for a device.
 - Terminal work on the device goes through `device tmux send '<line>'`,
-  `device tmux read` and `device tmux end`: adb, podman, gh, cf and every
+  `device tmux read` and `device tmux end`: adb for what needs no page from
+  the job (installing a build, reading a log), podman, gh, cf and every
   deploy, with the device's own logins; the cloud holds no Cloudflare or
   Shopify app login. One tmux session per run, `cloud-<project>-<milestone>`,
   which Saiful can attach to and watch. It works in the deploy worktree,
@@ -115,6 +116,24 @@ the skill holds, with these changes:
   code. A device runs one at a time (`busy:`, exit 5); stop it with
   `device amx stop <name>` when its work is done. The hub stops it when
   the run lands or parks.
+- A check of a page on Android, on a phone on adb or in an emulator, goes
+  through `device amx new`, never through `device tmux`: the wall lets no
+  port through but adb's, so a phone or an emulator cannot reach a page a
+  walled job serves. It takes three steps. (1) Build the page's files with
+  `device tmux send`, behind the wall. (2) Start the agent with `device amx
+  new '<task>'`, and give it in the task the worktree's path,
+  `~/.cache/workflow-cloud/<repo>`, the AVD, the page and what to check. Say
+  in the task that the agent runs none of the branch's programs: it serves
+  the built files with a plain file server on the device's loopback, boots
+  the emulator with `dots-emulator <avd>`, uses the serial that command
+  printed in every adb call, never the first serial `adb devices` lists,
+  and ends the server and an emulator it started (`dots-emulator stop
+  <avd>`); an emulator that was up before stays up. (3) Report the agent's
+  result from `device amx result <name>`, quoting its serial and what it
+  saw. A page that only its own server program can serve is sent as one
+  `device tmux send --no-wall` line, which asks Saiful once, and the agent
+  then only drives the emulator. On `busy: <project>` (exit 5) from `device
+  amx new`, do other work and try again; never fall back to `device tmux`.
 - A theme's token and store password are the only project secrets a cloud
   command gets, through `device with-secrets <project> -- <command>`: the
   device reads the pass entries the project's `cloud-secrets` names and
