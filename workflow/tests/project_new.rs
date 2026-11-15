@@ -25,6 +25,9 @@ dir=$(dirname "$0")
 printf '%s\n' "$*" >>"$dir/mem-calls"
 case "$1" in
 projects) cat "$dir/projects.json" ;;
+# `project current --json --project <name>`: a test command unless the
+# file `no-verify` says the project has none.
+project) [ -f "$dir/no-verify" ] && echo '{"name":"p"}' || echo '{"name":"p","verify":"make test"}' ;;
 *) exit 1 ;;
 esac
 "#,
@@ -89,6 +92,11 @@ fn it_prints_four_steps_for_each_account_naming_the_repo_the_text_and_the_thread
     let once = section(&text, "Once, on any device");
     assert!(
         once.iter()
+            .any(|l| l.contains("`mem project set verify \"<command>\"`")),
+        "{text}"
+    );
+    assert!(
+        once.iter()
             .any(|l| l.contains("`mem project set device <machine>`")),
         "{text}"
     );
@@ -140,7 +148,14 @@ fn it_writes_nothing_and_only_reads_mem() {
     let calls = work.read("mem-calls");
     assert!(!calls.trim().is_empty());
     for call in calls.lines() {
-        assert_eq!(call, "projects --json", "mem was called with {call:?}");
+        assert!(
+            [
+                "projects --json",
+                "project current --json --project lareys-trendsi"
+            ]
+            .contains(&call),
+            "mem was called with {call:?}"
+        );
     }
 }
 
@@ -236,12 +251,33 @@ fn a_project_with_a_remote_and_its_checkout_here_is_all_ok() {
         checks(&out),
         [
             "ok: remote saifulapm/lareys-trendsi",
+            "ok: test command",
             "ok: checkout on mac-mini-m2"
         ],
         "{}",
         said(&out)
     );
     assert_eq!(code(&out), Some(0));
+}
+
+/// ebdfy-ui m27 built 19 tasks in a thread, then `workflow land` refused
+/// for want of a test command.
+#[test]
+fn a_project_with_no_test_command_is_missing_it_and_exits_one() {
+    let work = world(
+        "no-verify",
+        r#"{"name":"lareys-trendsi","remote":"github.com/saifulapm/lareys-trendsi","checkouts":["{root}/lareys-trendsi"],"subdir":null,"device":"mac-mini-m2","device_by":"mac-mini-m2"}"#,
+    );
+    work.mkdir("lareys-trendsi");
+    work.put("no-verify", "");
+    let out = run(&work, "lareys-trendsi");
+    assert!(
+        checks(&out)
+            .contains(&r#"missing: test command (mem project set verify "<command>")"#.to_string()),
+        "{}",
+        said(&out)
+    );
+    assert_eq!(code(&out), Some(1));
 }
 
 #[test]
@@ -436,6 +472,7 @@ fn theme_secrets_on_another_device_are_checked_there() {
         checks(&out),
         [
             "ok: remote lareysbd/shopify_themes",
+            "ok: test command",
             "ok: checkout on nuc",
             "ok: pass entry Shopify/theme-access/pawsome-theme",
             "ok: pass entry Shopify/pawsome-demo-password",
@@ -516,6 +553,7 @@ fn an_app_inside_a_repo_is_served_by_the_repos_project() {
         checks(&out),
         [
             "ok: remote lareysbd/shopify_apps",
+            "ok: test command",
             "ok: checkout on mac-mini-m2"
         ],
         "{text}"

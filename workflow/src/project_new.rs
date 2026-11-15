@@ -94,6 +94,7 @@ fn once_steps(theme: bool) -> Vec<String> {
     if theme {
         steps.push("`pass insert` the theme's token and store password, and list them in its cloud-secrets: `mem project set cloud-secrets`, one NAME=<pass entry> a line, and SHOPIFY_FLAG_STORE=<store>.myshopify.com.".to_string());
     }
+    steps.push("Set its test command, the one its CI runs, which `workflow land` runs before it pushes a trunk: `mem project set verify \"<command>\"`.".to_string());
     steps.push("For a project tied to one machine, such as a mobile app with its phone on the nuc: `mem project set device <machine>`.".to_string());
     steps
 }
@@ -281,6 +282,12 @@ fn checks(
         Some(remote) => format!("ok: remote {}", slug(remote)),
         None => "missing: remote".to_string(),
     }];
+    // `workflow land` runs it, and a cloud start refuses a project without one.
+    lines.push(match memcli::project_verify(&row.name).as_deref() {
+        None => "missing: test command (mem did not answer)".to_string(),
+        Some("") => r#"missing: test command (mem project set verify "<command>")"#.to_string(),
+        Some(_) => "ok: test command".to_string(),
+    });
     let device = device_of(row).map(|machine| {
         let on = Device::of(&machine);
         (machine, on)
