@@ -90,11 +90,11 @@ fn listed(names: &[String]) -> String {
 fn once_steps(theme: bool) -> Vec<String> {
     let mut steps = vec![
         "Give mem the project's git remote, `mem project set remote` for one registered before it had one, and write the Cloud section of its verify page.".to_string(),
+        "Set its test command, the one its CI runs, which `workflow land` runs before it pushes a trunk: `mem project set verify \"<command>\"`.".to_string(),
     ];
     if theme {
         steps.push("`pass insert` the theme's token and store password, and list them in its cloud-secrets: `mem project set cloud-secrets`, one NAME=<pass entry> a line, and SHOPIFY_FLAG_STORE=<store>.myshopify.com.".to_string());
     }
-    steps.push("Set its test command, the one its CI runs, which `workflow land` runs before it pushes a trunk: `mem project set verify \"<command>\"`.".to_string());
     steps.push("For a project tied to one machine, such as a mobile app with its phone on the nuc: `mem project set device <machine>`.".to_string());
     steps
 }

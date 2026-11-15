@@ -120,7 +120,8 @@ write it whole:
     CONTEXT     behaviour numbers, file:line pointers, spec sections, the exact
                 signatures it consumes or must provide
     ACCEPTANCE  the failing test to write first and what it asserts
-    VERIFY      the exact targeted test command and typecheck
+    VERIFY      the exact targeted test command, the typecheck, then the
+                app's lint and format
     STOP        what sends it back to you instead of improvising
 
 Write VERIFY as plain commands, one per line, with tools by path: each from
