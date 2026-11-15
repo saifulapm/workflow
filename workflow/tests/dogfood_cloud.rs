@@ -167,3 +167,36 @@ fn an_android_page_check_goes_to_a_local_agent() {
         "cloud.md's device tmux paragraph: {tmux}"
     );
 }
+
+/// c1-phone-by-agent: a cloud walk's Android page step walks in the device's
+/// emulator through `device amx new`, and the plan skill counts that
+/// emulator among what a cloud session reaches; a phone in hand stays a
+/// question.
+#[test]
+fn a_cloud_walk_checks_an_android_page_in_the_devices_emulator() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let skill = fs::read_to_string(repo.join("skills/dogfood/SKILL.md")).unwrap();
+    let at = skill
+        .find("In a cloud session")
+        .expect("the skill has a cloud paragraph");
+    let paragraph =
+        one_line(&skill[at..skill[at..].find("\n\n").map_or(skill.len(), |end| at + end)]);
+    for said in [
+        "`device amx new`",
+        "emulator",
+        "a phone in his hand",
+        "--option done --option hold",
+    ] {
+        assert!(
+            paragraph.contains(said),
+            "the dogfood cloud paragraph says {said}: {paragraph}"
+        );
+    }
+    let plan = one_line(&fs::read_to_string(repo.join("skills/plan/SKILL.md")).unwrap());
+    for said in [
+        "an Android emulator on the device, through `device amx`",
+        "a phone or tablet in hand",
+    ] {
+        assert!(plan.contains(said), "the plan skill's rule 9 says {said}");
+    }
+}

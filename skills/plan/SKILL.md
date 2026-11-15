@@ -139,7 +139,8 @@ The rules:
    `Cloud` section), say so in a line under `Show`: `Runs on: cloud`. A
    cloud session runs what verify's `Cloud` section says it can, Saiful's
    logged-in Chromium and the device's terminal through the `device` command
-   (adb, podman, gh, cf and deploys, with the device's own logins), and GitHub's
+   (adb, podman, gh, cf and deploys, with the device's own logins), an
+   Android emulator on the device, through `device amx`, and GitHub's
    runs, job summaries and workflow dispatches through `gh` and `workflow
    land`. What none of those reach (a phone or tablet in hand, a Mac for
    iOS, hardware, a login no device or environment holds) is a task for

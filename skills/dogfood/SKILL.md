@@ -41,16 +41,19 @@ The `desktop` skill holds the tools and their rules (text before pixels,
 region screenshots, OCR before reading an image). Load it before the walk.
 
 In a cloud session (`CLAUDE_CODE_REMOTE_SESSION_ID` is set) there is no
-desktop, no phone and no `desktop` skill. A web page walks headless through
-`playwright-cli`, which the cloud setup points at the image's Chrome: open,
-snapshot, click, fill and screenshot work as above, with no `--headed` and no
-`attach`. A CLI or TUI walks as above, in tmux when the VM has it (`command -v
-tmux`), else through plain commands and their output. A step that needs the
-desktop, a phone or a headed window needs Saiful's hands: ask it with `mem
-ask --for saiful "<what to do>, then answer done" --option done --option
-hold`, wait on it with `workflow wait-answer <id>`, and walk the step from his
-answer. On `hold`, report the step as held with its number, and file no
-finding for it.
+desktop, no phone in reach and no `desktop` skill. A web page walks headless
+through `playwright-cli`, which the cloud setup points at the image's Chrome:
+open, snapshot, click, fill and screenshot work as above, with no `--headed`
+and no `attach`. A CLI or TUI walks as above, in tmux when the VM has it
+(`command -v tmux`), else through plain commands and their output. A step on
+an Android page walks in the device's emulator through `device amx new`, as
+the orchestrate skill's cloud page says: the page is built behind the wall,
+and a local agent serves the built files and drives the emulator. A step that
+needs the desktop, a phone in his hand or a headed window needs Saiful's
+hands: ask it with `mem ask --for saiful "<what to do>, then answer done"
+--option done --option hold`, wait on it with `workflow wait-answer <id>`, and
+walk the step from his answer. On `hold`, report the step as held with its
+number, and file no finding for it.
 
 A step that needs Saiful's logged-in Chromium walks through `device browser
 <playwright-cli args>`, page commands only (`goto`, `snapshot`, `find`,
@@ -58,7 +61,8 @@ A step that needs Saiful's logged-in Chromium walks through `device browser
 `screenshot`, `upload`, cookies or `-s`): it runs on the device chosen with
 `workflow device use` (the mini unless Saiful chose another), in a tab of its
 own, and prints what playwright-cli prints there, with the snapshot files
-written here. Terminal work there (adb, podman, gh, cf, a deploy) goes through
+written here. Terminal work there (adb for a build or a log, podman, gh, cf,
+a deploy) goes through
 `device tmux send '<line>'` and `device tmux read`, as the orchestrate skill's
 cloud page says. The
 browser-operator rules hold: type only text the brief names, press a commit
