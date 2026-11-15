@@ -885,6 +885,47 @@ fn a_cloud_runner_carries_its_milestone_and_the_list_says_when_the_handoff_was_w
     );
 }
 
+/// A cloud run's thread writes under a `cloud-<vm>` machine name; the list
+/// says when one last wrote, so the hub can tell a quiet run from a device
+/// that keeps logging into the same project.
+#[test]
+fn the_list_says_when_a_cloud_machine_last_wrote() {
+    let w = World::new("write-cloud-written");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    let ok = |args: &[&str]| {
+        let out = mem(&w, &repo, args);
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+    };
+    let row = |w: &World| json(&mem(w, &repo, &["projects", "--json"]))["projects"][0].clone();
+    name_this_machine(&w, "nuc");
+    ok(&["log", "a device's write"]);
+    assert!(row(&w)["cloud_write_at"].is_null(), "{}", row(&w));
+
+    let before = jiff::Timestamp::now().as_second();
+    name_this_machine(&w, "cloud-vm1");
+    ok(&["log", "the thread's write"]);
+    let after = jiff::Timestamp::now().as_second();
+    let at = row(&w)["cloud_write_at"].clone();
+    let at: jiff::Timestamp = at
+        .as_str()
+        .expect("a cloud write is listed")
+        .parse()
+        .unwrap();
+    assert!(
+        (before..=after).contains(&at.as_second()),
+        "{at} not in {before}..={after}"
+    );
+
+    // A device writing after it is no sign of the thread.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    name_this_machine(&w, "nuc");
+    ok(&["log", "device nuc tmux read exit 0"]);
+    assert_eq!(
+        row(&w)["cloud_write_at"].as_str(),
+        Some(at.to_string().as_str())
+    );
+}
+
 /// Both claude.ai accounts run the same Projects, so a run's record says
 /// which one runs it, and a run started without the account names none.
 #[test]

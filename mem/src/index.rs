@@ -336,6 +336,19 @@ impl Index {
         )? as usize)
     }
 
+    /// When a cloud machine last made an item in the project, in seconds:
+    /// the store takes a cloud session's writes only under a `cloud-<vm>`
+    /// name (share.rs). The time it was made, so an answer or a supersede
+    /// that touches the item later is no write of the thread's.
+    pub fn cloud_written(&self, project_id: &str) -> Result<Option<i64>> {
+        Ok(self.conn.query_row(
+            "SELECT max(created_epoch) FROM items \
+             WHERE project_id = ?1 AND machine LIKE 'cloud-_%'",
+            params![project_id],
+            |r| r.get::<_, Option<i64>>(0),
+        )?)
+    }
+
     /// Rows of one kind, newest first.
     pub fn recent(&self, kind: &str, project_id: Option<&str>, limit: usize) -> Result<Vec<Row>> {
         self.recent_filtered(Some(kind), None, project_id, limit)

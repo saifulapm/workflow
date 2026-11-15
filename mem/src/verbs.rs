@@ -394,6 +394,14 @@ fn project_summary(
         .and_then(|rows| rows.into_iter().next())
         .and_then(|row| jiff::Timestamp::from_second(row.modified_epoch).ok())
         .map(|ts| ts.to_string());
+    // When a cloud run's thread last wrote: the hub rings for a quiet run
+    // by it, which a device's own logs into the project must not hide.
+    let cloud_write_at = index
+        .cloud_written(id)
+        .ok()
+        .flatten()
+        .and_then(|secs| jiff::Timestamp::from_second(secs).ok())
+        .map(|ts| ts.to_string());
     let pages = app.store.wiki_pages(id);
     let has_page = |wanted: fn(&str) -> bool| pages.iter().any(|page| wanted(&page.slug));
     vec![
@@ -422,6 +430,7 @@ fn project_summary(
         ("plan_total", json!(plan.len())),
         ("last_activity", json!(last_activity)),
         ("handoff_at", json!(handoff_at)),
+        ("cloud_write_at", json!(cloud_write_at)),
         (
             "has_research",
             json!(has_page(|s| s.starts_with("research"))),
