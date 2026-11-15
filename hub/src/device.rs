@@ -32,7 +32,7 @@ pub const HUB_PAGE: &str = "hub-web";
 /// Whether what `machine` wrote is Saiful's word: a device's or the hub
 /// page's, never a cloud machine's.
 pub fn his_word(machine: &str) -> bool {
-    DEVICES.contains(&machine) || machine == HUB_PAGE
+    DEVICES.contains(&machine) || machine == crate::device::HUB_PAGE
 }
 
 /// Under Cloudflare's 100 s for an origin, so a stopped call still reaches
