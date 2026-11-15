@@ -190,3 +190,67 @@ fn the_edit_entry_refuses_an_edit_while_the_suite_runs_and_passes_an_old_workflo
     assert!(String::from_utf8_lossy(&real.stderr).contains("suite runs"));
     assert_eq!(old.status.code(), Some(0), "{old:?}");
 }
+
+fn guard_agent(subagent: &str, prompt: &str) -> Output {
+    let input = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Agent",
+        "tool_input": {
+            "description": "t3 build",
+            "subagent_type": subagent,
+            "prompt": prompt,
+        },
+        "cwd": "/repo",
+    })
+    .to_string();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_workflow"));
+    command.args(["guard", "agent"]);
+    feed(command, &input)
+}
+
+fn brief(verify: &str) -> String {
+    format!(
+        "GOAL        a scheduled message keeps its send time\n\
+         SCOPE       apps/web/app/\n\
+         ACCEPTANCE  a test that stores one and reads it back\n\
+         VERIFY\n{verify}\n\
+         STOP        a schema change sends it back\n"
+    )
+}
+
+/// palmshop m19 t3's VERIFY named no oxlint, and its commits brought four
+/// lint errors the trunk then fixed, as a brief had on 2026-11-02.
+#[test]
+fn an_implementer_brief_whose_verify_names_no_lint_is_refused() {
+    let refused = guard_agent(
+        "implementer",
+        &brief("node_modules/.bin/vitest run app/send.test.ts\nnode_modules/.bin/tsc --noEmit"),
+    );
+    assert_eq!(refused.status.code(), Some(2), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("lint"),
+        "{refused:?}"
+    );
+    for verify in [
+        "cargo test -q --test land\ncargo clippy -q --all-targets -- -D warnings",
+        "node_modules/.bin/vitest run\nnode_modules/.bin/oxlint app\nnode_modules/.bin/oxfmt --check app",
+        "cd apps/web && pnpm lint",
+    ] {
+        let out = guard_agent("implementer", &brief(verify));
+        assert_eq!(out.status.code(), Some(0), "{verify}: {out:?}");
+    }
+    // A lint named outside VERIFY does not count, nor does a brief with no VERIFY.
+    let elsewhere = guard_agent(
+        "implementer",
+        &format!(
+            "CONTEXT     oxlint.config.ts holds the rules\n{}",
+            brief("vitest run")
+        ),
+    );
+    assert_eq!(elsewhere.status.code(), Some(2), "{elsewhere:?}");
+    let none = guard_agent("implementer", "GOAL  fix the typo in the README");
+    assert_eq!(none.status.code(), Some(2), "{none:?}");
+    // Any other agent's prompt is no brief.
+    let scout = guard_agent("scout", "find every use of send_at");
+    assert_eq!(scout.status.code(), Some(0), "{scout:?}");
+}

@@ -398,8 +398,9 @@ hub-local.")]
         /// pnpm: refuse pnpm in a linked worktree over a linked node_modules.
         /// bash: refuse a command that repeats a lesson's mistake, for every
         /// session. edit: refuse an Edit, Write or NotebookEdit in a checkout
-        /// while its suite runs.
-        #[arg(value_parser = ["pnpm", "bash", "edit"])]
+        /// while its suite runs. agent: refuse an implementer's brief whose
+        /// VERIFY names no lint.
+        #[arg(value_parser = ["pnpm", "bash", "edit", "agent"])]
         check: String,
     },
     /// Copy stdin to stdout with secret tokens (shpss_, shpat_, cfut_, tskey-)

@@ -5,6 +5,7 @@
 //! the agent.
 
 mod attach;
+mod brief;
 mod cd;
 mod chain;
 mod devserver;
@@ -109,6 +110,30 @@ pub fn cmd_guard_edit() -> i32 {
     match suite::edit_refusal(Path::new(path)) {
         Some(reason) => deny(reason),
         None => exit::OK,
+    }
+}
+
+/// `workflow guard agent`, the PreToolUse hook on the Agent tool: an
+/// implementer's brief must end its VERIFY with a lint.
+pub fn cmd_guard_agent() -> i32 {
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        return exit::OK;
+    }
+    let Ok(hook) = serde_json::from_str::<Value>(&input) else {
+        return exit::OK;
+    };
+    let tool = &hook["tool_input"];
+    if tool["subagent_type"] != "implementer" {
+        return exit::OK;
+    }
+    let Some(prompt) = tool["prompt"].as_str() else {
+        return exit::OK;
+    };
+    if brief::verify_names_a_lint(prompt) {
+        exit::OK
+    } else {
+        deny(brief::NO_LINT)
     }
 }
 
