@@ -183,8 +183,12 @@ fn orchestrator_line(ctx: &PageCtx, s: &ProjectSummary) -> String {
     };
     // No agent reports a cloud session, so its runner and handoff tell it.
     if let Some(cloud) = cloud_run(ctx, s) {
+        let quiet = quiet_minutes(ctx, s, &cloud).map(|min| format!("quiet for {min} min"));
         let (pill, state) = match cloud.state {
-            CloudState::Live => ("<span class=\"pill\">running</span>", "live"),
+            CloudState::Live => match &quiet {
+                Some(text) => ("<span class=\"pill wait\">quiet</span>", text.as_str()),
+                None => ("<span class=\"pill\">running</span>", "live"),
+            },
             CloudState::Parked => ("<span class=\"pill wait\">parked</span>", "parked"),
             CloudState::LocalOnly => (
                 "<span class=\"pill wait\">parked</span>",
@@ -414,6 +418,20 @@ pub fn cloud_run(ctx: &PageCtx, s: &ProjectSummary) -> Option<CloudRun> {
         _ => None,
     };
     live::cloud_run(s, handoff, ctx.site.now).map(|run| live::heard(run, ctx.site.host.fleet()))
+}
+
+/// Whole minutes a live cloud run has been quiet, or None. The project's
+/// questions are read only for a live run.
+fn quiet_minutes(ctx: &PageCtx, s: &ProjectSummary, run: &CloudRun) -> Option<i64> {
+    if run.state != CloudState::Live {
+        return None;
+    }
+    let rows = match &*ctx.site.mem.questions_all(&s.name) {
+        Outcome::Json(doc) => doc["questions"].as_array().cloned().unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let start = live::quiet_since(s, run, &rows, ctx.site.now)?;
+    Some(ctx.site.now.duration_since(start).as_mins())
 }
 
 /// claude.ai's Code page, where a cloud session lives. Built with `concat!`,

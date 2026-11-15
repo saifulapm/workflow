@@ -43,7 +43,7 @@ impl World {
                  project) exit 1 ;;\n\
                  roadmap) cat \"$d/roadmap.$ext\" ;;\n\
                  handoff) [ -f \"$d/handoff-$proj.$ext\" ] && cat \"$d/handoff-$proj.$ext\" || exit 1 ;;\n\
-                 questions) echo '{{\"questions\":[]}}' ;;\n\
+                 questions) [ -f \"$d/questions-$proj.json\" ] && cat \"$d/questions-$proj.json\" || echo '{{\"questions\":[]}}' ;;\n\
                  plan) echo '{{\"plans\":[]}}' ;;\n\
                  *) echo '{{\"items\":[]}}' ;;\n\
                  esac",
@@ -210,7 +210,7 @@ fn a_landed_or_ended_cloud_run_offers_a_device_start() {
 #[test]
 fn a_live_or_parked_cloud_run_offers_no_device_start() {
     let world = World::new("cloud-device-live");
-    world.set("gamma", "runner", cloud("m2-next", &ago(30)));
+    world.set("gamma", "runner", cloud("m2-next", &ago(10)));
     let hub = world.hub();
     poll_with_gamma(&hub);
     let body = page(&hub);
@@ -254,4 +254,68 @@ fn the_run_line_shows_a_cloud_runner_by_its_state_and_session() {
         body.contains("<span class=\"meta\">cloud · m2-next · parked</span>"),
         "{body}"
     );
+}
+
+/// A ULID made at `at`, as mem's ids are.
+fn ulid(at: &str, tail: &str) -> String {
+    const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let mut ms = at.parse::<jiff::Timestamp>().unwrap().as_millisecond();
+    let mut time = [b'0'; 10];
+    for slot in time.iter_mut().rev() {
+        *slot = CROCKFORD[(ms % 32) as usize];
+        ms /= 32;
+    }
+    format!("{}{tail:0>16}", String::from_utf8(time.to_vec()).unwrap())
+}
+
+/// A live cloud run begun 60 minutes ago whose thread last wrote
+/// `written` minutes ago.
+fn run_written(world: &World, written: i64) {
+    let mut runner = cloud("m2-next", &ago(60));
+    runner["first"] = json!(ago(60));
+    world.set("gamma", "runner", runner);
+    world.set("gamma", "cloud_write_at", json!(ago(written)));
+}
+
+#[test]
+fn a_cloud_run_whose_thread_wrote_nothing_for_30_minutes_shows_as_quiet() {
+    let world = World::new("cloud-quiet");
+    run_written(&world, 47);
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(
+        body.contains("<span class=\"meta\">cloud · m2-next · quiet for 47 min</span>"),
+        "{body}"
+    );
+    assert!(
+        body.contains("href=\"https://claude.ai/code/session_01Other\""),
+        "{body}"
+    );
+    assert!(!body.contains("cloud · m2-next · live"), "{body}");
+}
+
+#[test]
+fn a_cloud_run_that_wrote_29_minutes_ago_still_shows_as_live() {
+    let world = World::new("cloud-not-quiet");
+    run_written(&world, 29);
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(body.contains("cloud · m2-next · live"), "{body}");
+}
+
+#[test]
+fn a_cloud_run_with_a_question_of_its_own_open_is_not_quiet() {
+    let world = World::new("cloud-quiet-asked");
+    run_written(&world, 47);
+    let asked = ulid(&ago(40), "A");
+    world.put(
+        "questions-gamma.json",
+        &json!({"questions": [{"id": asked, "machine": "cloud-vm1",
+            "answered": false, "answer_id": null}]})
+        .to_string(),
+    );
+    let hub = world.hub();
+    let body = page(&hub);
+    assert!(body.contains("cloud · m2-next · live"), "{body}");
+    assert!(!body.contains("quiet for"), "{body}");
 }
