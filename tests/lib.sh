@@ -213,16 +213,26 @@ t_done() {
 # unlike tests/run.sh, which rebuilds them. Refuse one that is older than the
 # newest source of its crate (or of a path dependency of it), and name the
 # build. Only the default release path inside this tree is checked; a binary
-# the caller points elsewhere is theirs.
+# the caller points elsewhere is theirs. With cargo's dep-info beside the
+# binary, a source counts only if the build read it: a #[cfg(test)] module
+# changes no release build, and cargo leaves the binary's time as it was.
 # _stale_guard <bin> <crate>
 _stale_guard() {
-	local bin=$1 crate=$2 dirs=("$WF_ROOT/$2") dep newer d
+	local bin=$1 crate=$2 dirs=("$WF_ROOT/$2") dep newer d f read_by=
 	[ "$bin" = "$WF_ROOT/$crate/target/release/$crate" ] && [ -x "$bin" ] || return 0
+	[ -f "$bin.d" ] && read_by=$(sed 's/^[^:]*: *//' "$bin.d" | tr ' ' '\n')
 	while IFS= read -r dep; do
 		[ -d "$WF_ROOT/$crate/$dep/src" ] && dirs+=("$(cd -- "$WF_ROOT/$crate/$dep" && pwd)")
 	done < <(sed -n 's/.*path *= *"\([^"]*\)".*/\1/p' "$WF_ROOT/$crate/Cargo.toml" 2>/dev/null)
 	for d in "${dirs[@]}"; do
-		newer=$(find "$d/src" "$d/Cargo.toml" "$d/Cargo.lock" -type f -newer "$bin" -print -quit 2>/dev/null)
+		newer=
+		while IFS= read -r f; do
+			case "$f" in
+			*/src/*) [ -n "$read_by" ] && ! grep -qxF -- "$f" <<<"$read_by" && continue ;;
+			esac
+			newer=$f
+			break
+		done < <(find "$d/src" "$d/Cargo.toml" "$d/Cargo.lock" -type f -newer "$bin" -print 2>/dev/null)
 		if [ -n "$newer" ]; then
 			printf 'stale %s: %s is newer than it.\nbuild it first: (cd %s && cargo build --release)\n' \
 				"$crate" "$newer" "$WF_ROOT/$crate" >&2

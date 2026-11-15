@@ -72,6 +72,24 @@ touch -d "$old" "$tree/hub/target/release/hub"
 out=$(run_fake); st=$?
 if [ "$st" -ne 0 ]; then ok "newer path dependency source: hub refused"; else notok "newer path dependency source: hub refused" "$out"; fi
 
+# With cargo's dep-info beside it, only what the binary was built from
+# counts: a #[cfg(test)] module changes no release build, so cargo leaves the
+# binary as it is.
+printf '%s: %s\n' "$tree/workflow/target/release/workflow" "$tree/workflow/src/x.rs" \
+	>"$tree/workflow/target/release/workflow.d"
+fresh_all
+: >"$tree/workflow/src/scratch.rs"
+touch -d "$new" "$tree/workflow/src/scratch.rs"
+touch -d "$old" "$tree/workflow/target/release/workflow"
+out=$(run_fake); st=$?
+is "$st" 0 "a newer source the build never read: the test runs"
+fresh_all
+touch -d "$new" "$tree/workflow/src/x.rs"
+touch -d "$old" "$tree/workflow/target/release/workflow"
+out=$(run_fake); st=$?
+if [ "$st" -ne 0 ]; then ok "a newer source the build read: refused"; else notok "a newer source the build read: refused" "$out"; fi
+rm -f "$tree/workflow/target/release/workflow.d" "$tree/workflow/src/scratch.rs"
+
 fresh_all
 touch -d "$new" "$tree/mem/src/x.rs"
 touch -d "$old" "$tree/mem/target/release/mem"
