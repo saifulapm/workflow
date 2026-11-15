@@ -439,6 +439,36 @@ fn a_mem_after_a_logout_joins_the_tailnet_again() {
     assert_eq!(lines_of(&log, "hub").len(), 1, "the live hub is kept");
 }
 
+/// `workflow land` logs a landed run off the tailnet and leaves
+/// `left-tailnet`: the hooks' mem calls after it (PostToolBatch's context,
+/// the Stop hook) must not join again, or the machine stays on the tailnet
+/// 30 to 60 minutes after the VM stops. The run's own next mem, once a
+/// message wakes it, joins again.
+#[test]
+fn a_hooks_mem_after_a_landing_stays_off_the_tailnet() {
+    let (home, log, path) = cloud_home("cloud-setup-left");
+    let ups = || {
+        lines_of(&log, "tailscale")
+            .iter()
+            .filter(|l| l.contains(" up "))
+            .count()
+    };
+    run_shim(&home, &path, &["ask", "probe?"]);
+    fs::remove_file(home.at("joined")).unwrap();
+    home.put(".local/state/hub/left-tailnet", "");
+    run_shim(
+        &home,
+        &path,
+        &["context", "--brief", "--hook-json", "--session-id", "s1"],
+    );
+    run_shim(&home, &path, &["stop-hook", "--session-id", "s1"]);
+    run_shim(&home, &path, &["precompact", "--hook-json"]);
+    assert_eq!(ups(), 1, "{:?}", fs::read_to_string(&log));
+    run_shim(&home, &path, &["ask", "after the wake?"]);
+    assert_eq!(ups(), 2, "{:?}", fs::read_to_string(&log));
+    assert!(!home.at(".local/state/hub/left-tailnet").exists());
+}
+
 #[test]
 fn without_the_keys_the_shim_starts_nothing() {
     let home = Scratch::new("cloud-setup-no-keys");

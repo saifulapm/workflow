@@ -249,6 +249,11 @@ fn finish(project: &str) -> i32 {
     let line = next_line(project);
     if cloud::this_session().is_some() {
         log_out_of_tailnet();
+        // The cloud mem reads it and keeps the hooks' calls after this one
+        // from joining the tailnet again.
+        let state = format!("{}/.local/state/hub", home());
+        let _ = std::fs::create_dir_all(&state)
+            .and_then(|()| std::fs::write(format!("{state}/left-tailnet"), ""));
     }
     println!("{line}");
     exit::OK

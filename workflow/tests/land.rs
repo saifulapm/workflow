@@ -380,6 +380,8 @@ fn a_landing_in_a_thread_logs_its_machine_off_the_tailnet_last() {
     assert!(tick < calls.len() - 1, "{calls:?}");
     assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
     assert!(!stdout(&out).contains("tailscale"), "{}", stdout(&out));
+    // The cloud mem then keeps the hooks' calls from joining again.
+    assert!(home.join(".local/state/hub/left-tailnet").exists());
 }
 
 #[test]
@@ -399,6 +401,7 @@ fn a_landing_on_a_device_logs_nothing_off() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
     assert!(w.logouts().is_empty(), "{:?}", w.calls());
+    assert!(!w.work.at("home/.local/state/hub/left-tailnet").exists());
 }
 
 #[test]
@@ -414,6 +417,7 @@ fn a_landing_that_asks_keeps_the_tailnet_for_the_answer() {
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     assert!(ask_line(&out).starts_with("ask: trunk moved"));
     assert!(w.logouts().is_empty(), "{:?}", w.calls());
+    assert!(!w.work.at("home/.local/state/hub/left-tailnet").exists());
 }
 
 #[test]
@@ -1346,6 +1350,8 @@ fn a_ci_run_younger_than_ninety_minutes_is_waited_on_again() {
     let out = w.land_minute("200");
     assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
     assert!(last_line(&out).starts_with("again: "), "{}", stdout(&out));
+    // A thread waiting on CI keeps the tailnet for its next landing.
+    assert!(w.logouts().is_empty(), "{:?}", w.calls());
 }
 
 #[test]

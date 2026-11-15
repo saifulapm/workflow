@@ -1545,8 +1545,14 @@ if [ "${1:-}" = share ] && [ -n "$store" ]; then exec env -u MEM_REMOTE "$real" 
 state="$HOME/.local/state/hub"
 # Alive when the local hub answers on mem's socket.
 hub_alive() { curl -s -m 2 --unix-socket "$state/local.sock" http://local/ping >/dev/null 2>&1; }
-# Off the tailnet though Tailscale was set up: a run that logged out (its
-# last step) and asks again must join again, or no answer reaches it.
+# `workflow land` logged a landed run off the tailnet and left this file:
+# the hooks' own mem calls after it must not join again, or the machine
+# stays on the tailnet 30 to 60 minutes after the VM stops. The run's own
+# next mem, once a message wakes it, joins again.
+left="$state/left-tailnet"
+case "${1:-} $*" in stop-hook*|*--hook-json*) ;; *) rm -f "$left" ;; esac
+# Off the tailnet though Tailscale was set up: a run that logged out and
+# asks again must join again, or no answer reaches it.
 ts_down() {
   [ -n "${TS_AUTHKEY:-}" ] && [ -x "$HOME/.local/bin/tailscale" ] &&
     ! env -u TS_AUTHKEY "$HOME/.local/bin/tailscale" --socket="$state/tailscaled.sock" status >/dev/null 2>&1
@@ -1559,7 +1565,7 @@ else
   alive=1
   peer=
 fi
-if [ -n "$peer" ] && { [ -z "$alive" ] || ts_down; }; then
+if [ -n "$peer" ] && [ ! -e "$left" ] && { [ -z "$alive" ] || ts_down; }; then
   # The replica as the store has it now, before this mem reads it. A fresh
   # VM replays the whole store, about 25 s on a cloud VM: the wait is long
   # enough for all of it, so the first read is whole.
