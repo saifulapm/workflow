@@ -22,6 +22,11 @@ its own. Never use your shortcuts.
 - **Web app.** An isolated browser through `playwright-cli`, started from a
   scratch directory (`cd "$(mktemp -d)"`) so its files never land in the
   repo. Check at 390 px and 1280 px wide.
+- **Saiful's own Chromium**, when a step needs his login on this machine:
+  attach by the wrapper's path, `playwright-cli attach --extension=chromium`,
+  open a tab of your own, and end with `playwright-cli -s=<name> detach`.
+  Never close your last tab: a walker's close quit his browser and lost
+  his tabs.
 - **CLI or TUI.** A tmux session of its own: `tmux new -d -s walk-<n>`, then
   `send-keys` and `capture-pane -p`.
 - **The desktop shell.** A nested niri, as the `desktop` skill describes,
