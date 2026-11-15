@@ -19,6 +19,11 @@
 //! Both go out with the claude.ai login of the run's own account, which
 //! dots' registry places in a folder of its own; with no login for that
 //! account here, the mini rings Saiful once on Slack instead.
+//!
+//! A live cloud run that has gone quiet, by the pages' rule
+//! (`hubpages::live::quiet_since`), rings him once on Slack with its
+//! thread's link: once for each quiet spell, kept as `quiet <session>
+//! <start>` so a restart rings no spell twice, and a write starts a new one.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -418,6 +423,63 @@ fn relay_round(nudged: &mut HashSet<String>, pause: Duration, slack: Option<&Sla
     }
 }
 
+/// Rings Saiful once for each quiet spell of a live cloud run. The ring
+/// only tells him: nothing is sent to the thread.
+fn quiet_round(nudged: &mut HashSet<String>, slack: Option<&Slack>) {
+    let Some(projects) = mem_json(&["projects", "--json"]) else {
+        return;
+    };
+    let now = jiff::Timestamp::now();
+    for project in projects["projects"].as_array().into_iter().flatten() {
+        let s = hubpages::page_home::summary_of(project);
+        let handoff = || {
+            mem_out(&["handoff", "--project", &s.name])
+                .map(|text| String::from_utf8_lossy(&text).into_owned())
+        };
+        let Some(run) = hubpages::live::cloud_run(&s, handoff, now) else {
+            continue;
+        };
+        // A question only holds the ring back or moves its start later, so
+        // they are read only for a run quiet without them.
+        if hubpages::live::quiet_since(&s, &run, &[], now).is_none() {
+            continue;
+        }
+        let Some(questions) = mem_json(&["questions", "--json", "--project", &s.name]) else {
+            continue;
+        };
+        let rows = questions["questions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let Some(start) = hubpages::live::quiet_since(&s, &run, &rows, now) else {
+            continue;
+        };
+        let key = format!("quiet {} {start}", run.id);
+        if nudged.contains(&key) {
+            continue;
+        }
+        let text = format!(
+            "{} {}: its thread has written nothing for 30 minutes and has no open question: {}/{}",
+            s.name,
+            run.milestone,
+            hubpages::page_project::CODE_PAGE,
+            run.id
+        );
+        // A failed post is tried again next round; with no Slack here, the
+        // log line is the ring, once.
+        match slack.map(|slack| slack.post_text(&text)) {
+            Some(Err(e)) => {
+                eprintln!("hub: nudge: {}: ringing for a quiet run: {e:#}", s.name);
+                continue;
+            }
+            Some(Ok(())) => eprintln!("hub: nudge: {}: rang Saiful, quiet since {start}", s.name),
+            None => eprintln!("hub: nudge: {text} (no Slack here)"),
+        }
+        nudged.insert(key);
+        write_nudged(nudged);
+    }
+}
+
 /// Sends `text` to the run's thread with its account's login, tried
 /// `TRIES` times; None when that account has no login here, after ringing
 /// Saiful once for the run.
@@ -477,5 +539,6 @@ pub fn run(machine: &str, slack: Option<Arc<Slack>>) {
         std::thread::sleep(every);
         round(&mut nudged, every, settle, slack.as_deref());
         relay_round(&mut nudged, every, slack.as_deref());
+        quiet_round(&mut nudged, slack.as_deref());
     }
 }
