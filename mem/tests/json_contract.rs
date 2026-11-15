@@ -552,3 +552,24 @@ fn every_schema_is_covered_by_this_test() {
         "item.json must stay reachable"
     );
 }
+
+/// The hub page on Cloudflare lists projects from the store, through
+/// hubweb's memview, not through mem: a key mem's listing gains and memview
+/// lacks breaks the page there (`cloud` on 2026-11-01, `cloud_write_at` on
+/// 2026-11-15), which only the slow tests/t144-memview.sh caught. Every key
+/// the projects schema requires is named in memview.
+#[test]
+fn every_project_key_mem_lists_is_one_memview_lists_too() {
+    let schema = load("projects.json");
+    let required = schema["properties"]["projects"]["items"]["required"]
+        .as_array()
+        .expect("the project row's required keys");
+    let memview = Path::new(env!("CARGO_MANIFEST_DIR")).join("../hubweb/src/memview.rs");
+    let memview = std::fs::read_to_string(&memview).unwrap();
+    let missing: Vec<&str> = required
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|key| !memview.contains(&format!("\"{key}\"")))
+        .collect();
+    assert!(missing.is_empty(), "memview never names {missing:?}");
+}
