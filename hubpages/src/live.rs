@@ -43,6 +43,10 @@ pub struct Runner {
     /// The milestone a cloud run was started on; a device runner names none.
     #[serde(default)]
     pub milestone: Option<String>,
+    /// When a cloud run of this milestone first started, before any park
+    /// and wake re-recorded it.
+    #[serde(default)]
+    pub first: Option<String>,
 }
 
 /// Where a cloud run stands. No agent reports a cloud session, so the hub
@@ -147,6 +151,54 @@ pub fn heard(mut run: CloudRun, agents: &dyn Fleet) -> CloudRun {
         };
     }
     run
+}
+
+/// How long a live cloud run may write nothing to mem before it is quiet:
+/// 99 in 100 gaps between a working run's writes were under 23.3 minutes,
+/// measured over the store's runs of 2026-11-09 to 2026-11-15.
+pub const QUIET_AFTER: jiff::SignedDuration = jiff::SignedDuration::from_mins(30);
+
+/// Since when a live cloud run has been quiet, once it has been for
+/// `QUIET_AFTER`: its thread has written nothing to mem, nobody recorded the
+/// run again and no answer came to a question it asked, and no question of
+/// its own is open. `questions` are `mem questions --json` rows of its
+/// project; the run's own are those a cloud machine asked since the run
+/// first started. None for a run that is not live, or not quiet that long.
+pub fn quiet_since(
+    summary: &ProjectSummary,
+    run: &CloudRun,
+    questions: &[serde_json::Value],
+    now: jiff::Timestamp,
+) -> Option<jiff::Timestamp> {
+    if run.state != CloudState::Live {
+        return None;
+    }
+    let time = |at: &Option<String>| at.as_deref()?.parse::<jiff::Timestamp>().ok();
+    let runner = summary.runner.as_ref()?;
+    let since = time(&runner.since)?;
+    let first = time(&runner.first).unwrap_or(since);
+    let mut start = since.max(time(&summary.cloud_write_at).unwrap_or(since));
+    for q in questions {
+        let asked = q["id"].as_str().and_then(crate::model::ulid_millis);
+        let cloud = q["machine"]
+            .as_str()
+            .and_then(|m| m.strip_prefix("cloud-"))
+            .is_some_and(|rest| !rest.is_empty());
+        if !cloud || asked.is_none_or(|ms| ms <= first.as_millisecond()) {
+            continue;
+        }
+        if q["answered"] != true {
+            return None;
+        }
+        let answered = q["answer_id"]
+            .as_str()
+            .and_then(crate::model::ulid_millis)
+            .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok());
+        if let Some(answered) = answered {
+            start = start.max(answered);
+        }
+    }
+    (now.duration_since(start) >= QUIET_AFTER).then_some(start)
 }
 
 /// What runs a project.
@@ -300,6 +352,7 @@ mod tests {
             cloud: None,
             runner: None,
             handoff_at: None,
+            cloud_write_at: None,
         }
     }
 
@@ -313,6 +366,7 @@ mod tests {
                 id: "session_01Abc".to_string(),
                 since: Some("2026-10-15T09:00:00Z".to_string()),
                 milestone: Some(milestone.to_string()),
+                first: None,
             }),
             handoff_at: handoff_at.map(str::to_string),
             ..summary(1, 3)
@@ -414,6 +468,7 @@ mod tests {
             id: "gamma-m2".to_string(),
             since: None,
             milestone: None,
+            first: None,
         });
         assert_eq!(cloud_run(&device, unread, at("2026-10-15T09:40:00Z")), None);
         assert_eq!(
@@ -564,5 +619,111 @@ mod tests {
             heard(run_in(CloudState::Ended), &other).state,
             CloudState::Ended
         );
+    }
+
+    /// gamma's live cloud run, first started at 09:00, its thread's newest
+    /// write at `wrote`.
+    fn quiet_run(wrote: Option<&str>) -> (ProjectSummary, CloudRun) {
+        let mut s = cloud("m2", None);
+        s.cloud_write_at = wrote.map(str::to_string);
+        if let Some(r) = s.runner.as_mut() {
+            r.first = Some("2026-10-15T09:00:00Z".to_string());
+        }
+        let run = cloud_run(&s, unread, at("2026-10-15T10:00:00Z")).unwrap();
+        (s, run)
+    }
+
+    /// A ULID made at `time`, as mem's ids are.
+    fn ulid(time: &str) -> String {
+        const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        let mut ms = at(time).as_millisecond();
+        let mut head = [b'0'; 10];
+        for slot in head.iter_mut().rev() {
+            *slot = CROCKFORD[(ms % 32) as usize];
+            ms /= 32;
+        }
+        format!(
+            "{}0000000000000000",
+            String::from_utf8(head.to_vec()).unwrap()
+        )
+    }
+
+    fn asked(time: &str, machine: &str, answered: Option<&str>) -> serde_json::Value {
+        serde_json::json!({"id": ulid(time), "machine": machine,
+            "answered": answered.is_some(), "answer_id": answered.map(ulid)})
+    }
+
+    #[test]
+    fn a_live_cloud_run_is_quiet_once_its_thread_has_written_nothing_for_30_minutes() {
+        let (s, run) = quiet_run(Some("2026-10-15T10:00:00Z"));
+        assert_eq!(quiet_since(&s, &run, &[], at("2026-10-15T10:29:59Z")), None);
+        assert_eq!(
+            quiet_since(&s, &run, &[], at("2026-10-15T10:30:00Z")),
+            Some(at("2026-10-15T10:00:00Z"))
+        );
+        // A run that has not written yet is quiet from its record.
+        let (s, run) = quiet_run(None);
+        assert_eq!(
+            quiet_since(&s, &run, &[], at("2026-10-15T09:30:00Z")),
+            Some(at("2026-10-15T09:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn a_question_of_its_own_open_keeps_a_run_from_being_quiet() {
+        let (s, run) = quiet_run(Some("2026-10-15T10:00:00Z"));
+        let now = at("2026-10-15T12:00:00Z");
+        let open = asked("2026-10-15T10:00:00Z", "cloud-runner-abc", None);
+        assert_eq!(quiet_since(&s, &run, &[open], now), None);
+        // A device's own question, or one from before the run, is not its.
+        let device = asked("2026-10-15T10:00:00Z", "nuc", None);
+        let earlier = asked("2026-10-15T08:00:00Z", "cloud-runner-old", None);
+        assert_eq!(
+            quiet_since(&s, &run, &[device, earlier], now),
+            Some(at("2026-10-15T10:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn the_quiet_clock_starts_again_at_an_answer_or_a_new_record() {
+        let (s, run) = quiet_run(Some("2026-10-15T10:00:00Z"));
+        // Two hours in wait-answer, then his answer: quiet only 30 minutes on.
+        let waited = asked(
+            "2026-10-15T10:00:00Z",
+            "cloud-runner-abc",
+            Some("2026-10-15T12:00:00Z"),
+        );
+        let rows = [waited];
+        assert_eq!(
+            quiet_since(&s, &run, &rows, at("2026-10-15T12:29:00Z")),
+            None
+        );
+        assert_eq!(
+            quiet_since(&s, &run, &rows, at("2026-10-15T12:30:00Z")),
+            Some(at("2026-10-15T12:00:00Z"))
+        );
+        // Woken after a park: the new record restarts it.
+        let (mut s, _) = quiet_run(Some("2026-10-15T10:00:00Z"));
+        s.runner.as_mut().unwrap().since = Some("2026-10-15T11:00:00Z".to_string());
+        let run = cloud_run(&s, unread, at("2026-10-15T11:10:00Z")).unwrap();
+        assert_eq!(quiet_since(&s, &run, &[], at("2026-10-15T11:29:00Z")), None);
+    }
+
+    #[test]
+    fn a_parked_landed_or_ended_run_is_never_quiet() {
+        let (s, run) = quiet_run(Some("2026-10-15T10:00:00Z"));
+        let now = at("2026-10-15T12:00:00Z");
+        for state in [
+            CloudState::Parked,
+            CloudState::Landed,
+            CloudState::Ended,
+            CloudState::LocalOnly,
+        ] {
+            let run = CloudRun {
+                state,
+                ..run.clone()
+            };
+            assert_eq!(quiet_since(&s, &run, &[], now), None, "{state:?}");
+        }
     }
 }

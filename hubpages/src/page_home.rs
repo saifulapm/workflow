@@ -80,6 +80,8 @@ pub struct ProjectSummary {
     pub runner: Option<Runner>,
     /// RFC 3339, when the latest handoff was written.
     pub handoff_at: Option<String>,
+    /// RFC 3339, when a cloud machine last wrote to the project.
+    pub cloud_write_at: Option<String>,
 }
 
 pub fn get(ctx: &PageCtx) -> Response {
@@ -131,6 +133,7 @@ pub fn summary_of(row: &Value) -> ProjectSummary {
         cloud: text(row, "cloud"),
         runner: serde_json::from_value(row["runner"].clone()).ok(),
         handoff_at: text(row, "handoff_at"),
+        cloud_write_at: text(row, "cloud_write_at"),
     }
 }
 
