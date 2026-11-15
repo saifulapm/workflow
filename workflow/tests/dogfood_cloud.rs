@@ -147,6 +147,11 @@ fn an_android_page_check_goes_to_a_local_agent() {
         "one `device tmux send --no-wall` line",
         "`busy: <project>` (exit 5)",
         "never fall back to `device tmux`",
+        // c1 behaviour 2: a device with no emulator is a question for Saiful.
+        "`dots-emulator: this machine has no Android emulator`",
+        "`workflow device use <name>`",
+        "--option done --option hold",
+        "Never send the check with `--no-wall` instead",
     ] {
         assert!(
             check.contains(said),

@@ -134,6 +134,13 @@ the skill holds, with these changes:
   `device tmux send --no-wall` line, which asks Saiful once, and the agent
   then only drives the emulator. On `busy: <project>` (exit 5) from `device
   amx new`, do other work and try again; never fall back to `device tmux`.
+  When the agent reports `dots-emulator: this machine has no Android
+  emulator`, ask Saiful to choose a device that has one, naming `workflow
+  device use <name>` in the question: `mem ask --for saiful "<machine> has
+  no Android emulator: choose a device that has one with workflow device
+  use <name>, then answer done" --option done --option hold`. Wait for
+  `done` as below, then start the agent again.
+  Never send the check with `--no-wall` instead.
 - A theme's token and store password are the only project secrets a cloud
   command gets, through `device with-secrets <project> -- <command>`: the
   device reads the pass entries the project's `cloud-secrets` names and
