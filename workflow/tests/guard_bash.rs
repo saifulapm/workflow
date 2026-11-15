@@ -852,6 +852,47 @@ fn pnpm_where_node_modules_links_out_of_the_worktree_is_refused() {
     ));
 }
 
+#[test]
+fn turbo_where_node_modules_links_out_of_the_worktree_is_refused() {
+    // palmshop m20: `node_modules/.bin/turbo run test lint` in a linked
+    // worktree ran `pnpm install` over the trunk's node_modules.
+    let trunk = Scratch::new("guard-bash-turbo-trunk");
+    std::fs::create_dir_all(trunk.path().join("node_modules")).unwrap();
+    let w = Scratch::new("guard-bash-turbo");
+    std::fs::write(w.path().join(".git"), "gitdir: /elsewhere\n").unwrap();
+    std::fs::create_dir_all(w.path().join("apps/web")).unwrap();
+    std::os::unix::fs::symlink(
+        trunk.path().join("node_modules"),
+        w.path().join("node_modules"),
+    )
+    .unwrap();
+    for command in [
+        "node_modules/.bin/turbo run test lint typecheck fmt:check",
+        "turbo run build --filter=web",
+        "npx turbo run test",
+        "cd apps/web && ../../node_modules/.bin/turbo test",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(refused(&out, "each tool by path"), "{command:?}: {out:?}");
+    }
+    for command in [
+        "node_modules/.bin/tsc -b",
+        "grep -n turbo package.json",
+        "node_modules/.bin/vitest run",
+    ] {
+        assert!(passes(&guard(w.path(), command)), "{command:?}");
+    }
+
+    // The main checkout runs turbo as it likes.
+    let own = Scratch::new("guard-bash-turbo-own");
+    std::fs::create_dir(own.path().join(".git")).unwrap();
+    std::fs::create_dir_all(own.path().join("node_modules")).unwrap();
+    assert!(passes(&guard(
+        own.path(),
+        "node_modules/.bin/turbo run test"
+    )));
+}
+
 fn guard_edit(tool: &str, path: &Path) -> Output {
     let key = if tool == "NotebookEdit" {
         "notebook_path"

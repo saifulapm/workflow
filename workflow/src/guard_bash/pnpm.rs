@@ -3,7 +3,8 @@
 //! check, and an install there rewrites the other checkout's packages.
 //! `workflow guard pnpm` refused it in implementers only; an orchestrator's
 //! own worktree hit it again (eventsmith m16, m18, m22, ebdfy m53,
-//! lareys-trendsi m17).
+//! lareys-trendsi m17). turbo runs the workspace's package manager, so
+//! `turbo run` there installed over the trunk's packages too (palmshop m20).
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,9 @@ use crate::shell::{argv, program_name};
 
 const REFUSAL: &str = "workflow guard refused this on purpose: pnpm refuses a node_modules linked from outside this worktree, or writes into the checkout it links.\n\
 Run the tool by path (node_modules/.bin/vitest), or `npm_config_verify_deps_before_run=false node scripts/verify.mjs`.";
+
+const TURBO_REFUSAL: &str = "workflow guard refused this on purpose: turbo runs pnpm install over a node_modules linked from outside this worktree.\n\
+Call each tool by path instead: node_modules/.bin/tsc -b, node_modules/.bin/vitest run, node_modules/.bin/oxlint.";
 
 pub fn refusal(call: &Call) -> Option<&'static str> {
     // The folder each subshell depth is in, as the line's `cd`s move it.
@@ -39,6 +43,7 @@ pub fn refusal(call: &Call) -> Option<&'static str> {
             {
                 return Some(REFUSAL);
             }
+            Some("turbo") if over_linked_node_modules(here) => return Some(TURBO_REFUSAL),
             _ => {}
         }
     }
