@@ -9,16 +9,19 @@
 //! the questions of its project asked since the run first started. Only a
 //! `parked: question` handoff counts, and the nudge waits a minute after
 //! the newest answer. It goes out with the claude.ai login of the run's own
-//! account, which dots' registry places in a folder of its own.
+//! account, which dots' registry places in a folder of its own; with no
+//! login for that account here, it rings Saiful once on Slack instead.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::proc::{self, Ended};
+use crate::slack::Slack;
 
 /// The one machine that nudges.
 const MACHINE: &str = "mac-mini-m2";
@@ -224,7 +227,7 @@ fn send(session: &str, text: &str, login: &Option<PathBuf>) -> Result<(), String
 
 /// `pause` is the wait between tries of one nudge, `settle` the wait
 /// after the newest answer.
-fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration) {
+fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration, slack: Option<&Slack>) {
     let Some(projects) = mem_json(&["projects", "--json"]) else {
         return;
     };
@@ -248,7 +251,13 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration) {
         // A run recorded before accounts were is main's.
         let account = project["runner"]["account"].as_str().unwrap_or("main");
         let Ok(login) = login(account) else {
-            eprintln!("hub: nudge: {name}: no claude login for the {account} account");
+            let ring = format!("no claude login for the {account} account on {MACHINE}");
+            eprintln!("hub: nudge: {name}: {ring}");
+            if let Some(Err(e)) = slack.map(|slack| slack.post_text(&ring)) {
+                eprintln!("hub: nudge: {name}: ringing Saiful: {e:#}");
+            }
+            nudged.insert(key);
+            write_nudged(nudged);
             continue;
         };
         let text = message(name, &asked);
@@ -276,8 +285,9 @@ fn round(nudged: &mut HashSet<String>, pause: Duration, settle: Duration) {
 
 /// On the mini, checks every 10 s (`HUB_NUDGE_CHECK_MS`) for a parked
 /// cloud run with all its answers, the newest a minute old; on any other
-/// machine, nothing.
-pub fn run(machine: &str) {
+/// machine, nothing. `slack` rings Saiful when a run's account has no
+/// login here.
+pub fn run(machine: &str, slack: Option<Arc<Slack>>) {
     if machine != MACHINE {
         return;
     }
@@ -292,6 +302,6 @@ pub fn run(machine: &str) {
     let mut nudged = read_nudged();
     loop {
         std::thread::sleep(every);
-        round(&mut nudged, every, settle);
+        round(&mut nudged, every, settle, slack.as_deref());
     }
 }

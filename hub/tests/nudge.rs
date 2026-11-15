@@ -5,7 +5,10 @@
 
 mod common;
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{Hub, TempDir, fixture_bin, fixture_mem, wait_for};
@@ -422,4 +425,89 @@ fn the_nudge_goes_out_with_the_login_of_the_runs_own_account() {
         };
         assert_eq!(logins_used(&dir), [want], "{account:?}");
     }
+}
+
+/// A Slack Web API that records the text of each chat.postMessage.
+fn fake_slack() -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let api = format!("http://{}/api", listener.local_addr().unwrap());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&posts);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                let header = header.trim_end().to_ascii_lowercase();
+                if header.is_empty() {
+                    break;
+                }
+                if let Some(value) = header.strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap_or_default();
+            recorded
+                .lock()
+                .unwrap()
+                .push(body["text"].as_str().unwrap_or_default().to_string());
+            let reply = r#"{"ok":true,"channel":"D0DM","ts":"1700000000.000100"}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+        }
+    });
+    (api, posts)
+}
+
+#[test]
+fn a_run_whose_account_has_no_login_here_gets_no_send_and_one_ring() {
+    let dir = TempDir::new("nudge-no-login");
+    let bin = bins(&dir);
+    set_run(&dir, FIRST, PARKED_AT, "w20-nudge");
+    set_account(&dir, Some("work"));
+    answered(&dir, Some("0"), Some("yes"));
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), "mac-mini-m2").unwrap();
+    // The work account's folder is there, logged out.
+    let work = logins(&home);
+    std::fs::remove_file(work.join(".credentials.json")).unwrap();
+    let (api, posts) = fake_slack();
+    let socket = dir.join("local.sock");
+    let _hub = Hub::spawn_env(
+        &home,
+        &[&bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", PEER_TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_NUDGE_CHECK_MS", "100"),
+            ("SLACK_BOT_TOKEN", "xoxb-test"),
+            ("SLACK_APP_TOKEN", "xapp-test"),
+            ("SLACK_USER_ID", "U0SAIFUL"),
+            ("SLACK_API_URL", &api),
+        ],
+    );
+    let ring = "no claude login for the work account on mac-mini-m2";
+    wait_for("the ring", Duration::from_secs(5), || {
+        posts.lock().unwrap().iter().any(|text| text == ring)
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    let rings = posts
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|text| *text == ring)
+        .count();
+    assert_eq!(rings, 1, "{:?}", posts.lock().unwrap());
+    assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
 }

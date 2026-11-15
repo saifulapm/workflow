@@ -326,6 +326,7 @@ fn run_local(port: u16) -> Result<()> {
     // the real store.
     let store = hub::share::from_env();
     let nudger = machine.clone();
+    let nudge_bell = slack.clone();
     let local = Arc::new(
         local::Local::new(machine, host.clone(), tokens, slack.clone()).with_store(store.clone()),
     );
@@ -403,7 +404,7 @@ fn run_local(port: u16) -> Result<()> {
     // runner name, so it needs no tailnet.
     std::thread::Builder::new()
         .name("hub-nudge".to_string())
-        .spawn(move || hub::nudge::run(&nudger))
+        .spawn(move || hub::nudge::run(&nudger, nudge_bell))
         .context("starting the nudge")?;
     // The runs of this machine, under its runner name: without one no run
     // here could be matched to its report. tailscale may not answer yet
