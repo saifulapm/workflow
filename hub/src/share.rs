@@ -346,7 +346,7 @@ fn upload_pending(store: &Store) {
 
 /// Holds the socket for good. A dropped or failed connection is tried again
 /// after 1, 2, 4, then 8 s, and a `ready` from the store resets the wait; a
-/// store that cannot be reached at all is tried every second.
+/// store that cannot be reached at all is tried every 250 ms.
 /// `kick` is set when mem has put a write in the outbox. After the store
 /// answers `limit`, no write is sent until the next 00:00 UTC, on this
 /// connection or the next; `slack` hears of it once per Dhaka day.
