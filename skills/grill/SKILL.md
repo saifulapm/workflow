@@ -125,10 +125,11 @@ Done when the frontier is empty and the sweep left nothing open.
 
 ## 6. Confirm the summary
 
-Write `grilling-summary`: the shared understanding in plain words, each point
-naming the decision ids behind it, then the test seams, the fakes allowed and
-what is out of scope. Ask him to confirm it. A change he asks for is a new
-`mem decide` and a revised page.
+Write `grilling-summary-<topic>`, named after this grill's topic so an
+earlier grill's summary stays: the shared understanding in plain words, each
+point naming the decision ids behind it, then the test seams, the fakes
+allowed and what is out of scope. Ask him to confirm it. A change he asks for
+is a new `mem decide` and a revised page.
 
 Done when he confirmed the summary.
 

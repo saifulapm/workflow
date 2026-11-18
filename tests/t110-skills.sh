@@ -35,6 +35,9 @@ skill() { cat "$WF_ROOT/skills/$1/SKILL.md"; }
 like "$(skill plan | grep 'Review the <name> roadmap')" 'mem ask --for saiful' \
 	"plan: the roadmap review is Saiful's"
 like "$(skill grill | grep 'mem ask')" 'mem ask --for saiful' "grill: its questions are Saiful's"
+# A fixed summary slug overwrote the 2026-10-15 grill's summary on 2026-11-18.
+like "$(skill grill | sed -n '/^## 6\./,/^## 7\./p')" 'grilling-summary-<topic>' \
+	"grill: each grill's summary page is named after its topic"
 like "$(skill orchestrate | sed -n '/^Saiful.s, asked without waiting/,/^These are/p')" \
 	'mem ask --for saiful' "orchestrate: push, spend, secrets and taste are Saiful's"
 
