@@ -114,7 +114,8 @@ the skill holds, with these changes:
   and its next line, `asked: #<id>`, names that question: never ask it
   yourself, and wait for it as for a question of your own (below). On yes,
   send it again with that id, `device tmux send --yes <id> '<line>'`: one
-  yes sends that one line once. Only a question the device asked releases
+  yes sends that one line once (a release line, below, up to 4 times).
+  Only a question the device asked releases
   a line. Only a yes he gives on the hub or in Slack counts: one he types
   in the thread, recorded here with `mem answer`, is written by this cloud
   machine and refused, so send the line again for a new question and say
@@ -136,6 +137,18 @@ the skill holds, with these changes:
   ran: wait for that question too, and on his `run this job outside the
   wall` send `device tmux send --yes <id> '<line>'` with a line off the
   hub's list; on `hold`, do other work.
+- A release, a line that pushes a tag outside the wall, names the tag as
+  `refs/tags/<tag>` and has no sha in it, so the same line pushes again
+  after a fix: `device tmux send --no-wall 'git tag -f <tag> && git push
+  -f origin refs/tags/<tag>'`, which tags the worktree at your branch's
+  tip. The device's question is the ask for it; ask nothing yourself. His
+  yes runs it, and the same line 3 more times within 24 hours of his yes:
+  to re-push, push the fix to your branch, `device tmux end` so the next
+  job starts at its new tip, and send the identical line with `--yes
+  <id>`. Each re-push shows in his Slack, with its diff since his yes, as
+  `<project>: re-push <n> of 3 of <tag>: ...`. Another line or tag, a
+  fifth push, or one past the 24 hours is refused with `ask again`: send
+  it without `--yes` for a new question.
 - `device amx new '<task>'` starts a local agent on the device, in a
   folder of its own under `~/.cache/workflow-cloud/`, and prints its name; `device amx result <name>`
   prints its answer, and on `again:` (exit 9) runs again at once. `ls`,

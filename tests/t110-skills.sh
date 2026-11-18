@@ -136,6 +136,16 @@ wall=$(sed -n '/^- The tmux session runs behind a wall/,/^- /p' "$WF_ROOT/skills
 like "$wall" 'send it again with `device tmux send --no-wall' "orchestrate cloud: a line the wall cannot serve is asked with --no-wall"
 like "$wall" 'Never work around the wall' "orchestrate cloud: never work around the wall"
 like "$wall" 'the wall cannot start on <machine>' "orchestrate cloud: a wall that cannot start is a question"
+# One yes to a release line covers its next three pushes (r5-release-yes).
+release=$(sed -n '/^- A release, a line that pushes a tag/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
+like "$release" 'refs/tags/<tag>' "orchestrate cloud: a release line names its tag as refs/tags/<tag>"
+like "$release" 'no sha in it' "orchestrate cloud: a release line names no sha, so the same line pushes again"
+like "$release" '3 more times within 24 hours of his yes' "orchestrate cloud: a release yes covers three re-pushes in a day"
+like "$release" 'device tmux end' "orchestrate cloud: a fix reaches the device by ending the job"
+like "$release" 're-push <n> of 3 of <tag>' "orchestrate cloud: each re-push shows in Slack"
+like "$release" 'without `--yes`' "orchestrate cloud: a release line the yes no longer covers is asked again"
+like "$(sed -n '/prints `ask: <line>`/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" 'a release line, below' \
+	"orchestrate cloud: the held line's once points at the release yes"
 like "$cloud" 'never for builds, tests or' "orchestrate cloud: a local agent is never for builds, tests or code"
 like "$cloud" 'a phone on adb, or iOS on the Mac' "orchestrate cloud: a local agent only for the screen, adb or iOS"
 
