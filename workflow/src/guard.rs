@@ -13,15 +13,18 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::{exit, mask, memcli};
+use crate::guard_bash::by_path;
+use crate::{exit, mask, memcli, shell};
 
 /// Claude Code blocks a tool call whose PreToolUse hook exits 2, and shows
 /// the agent what the hook wrote to stderr.
 const BLOCK: i32 = 2;
 
-const REFUSAL: &str = "workflow guard: pnpm refused. This worktree's node_modules is the \
-trunk checkout's, linked in, and pnpm would rewrite it. Call the tool by path instead, \
-as in node_modules/.bin/vitest run <file>.";
+const WHY: &str = "workflow guard: pnpm refused. This worktree's node_modules is the \
+trunk checkout's, linked in, and pnpm would rewrite it.";
+
+/// What to run instead when the command has no by-path form.
+const BY_PATH: &str = "Call the tool by path instead, as in node_modules/.bin/vitest run <file>.";
 
 pub fn cmd_guard_pnpm() -> i32 {
     let mut input = String::new();
@@ -39,7 +42,13 @@ pub fn cmd_guard_pnpm() -> i32 {
         return exit::OK;
     };
     if runs_pnpm(command) && over_linked_node_modules(Path::new(cwd)) {
-        eprintln!("{REFUSAL}");
+        match shell::commands(command).and_then(|c| by_path::lines(&c, Path::new(cwd))) {
+            Some(lines) => eprintln!(
+                "{WHY} Run each line below as a call of its own:\n{}",
+                lines.join("\n")
+            ),
+            None => eprintln!("{WHY} {BY_PATH}"),
+        }
         record("pnpm", command, Path::new(cwd));
         return BLOCK;
     }

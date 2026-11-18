@@ -254,3 +254,40 @@ fn a_script_it_cannot_put_by_path_keeps_todays_message() {
         says_today(&site, &format!("pnpm {script}"));
     }
 }
+
+fn guard_pnpm(cwd: &Path, command: &str) -> Output {
+    let input = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+        "cwd": cwd,
+    });
+    hook("pnpm", cwd, input)
+}
+
+#[test]
+fn guard_pnpm_names_the_same_lines() {
+    let (_t, w) = scripts(
+        "by-path-guard-pnpm",
+        json!({ "typecheck": "astro check && tsc -p test" }),
+    );
+    let out = guard_pnpm(w.path(), "cd apps/site && pnpm typecheck");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        stderr(&out),
+        "workflow guard: pnpm refused. This worktree's node_modules is the trunk checkout's, linked in, and pnpm would rewrite it. Run each line below as a call of its own:\n\
+         cd apps/site && node_modules/.bin/astro check\n\
+         cd apps/site && node_modules/.bin/tsc -p test\n"
+    );
+    let out = guard_pnpm(w.path(), "pnpm nosuch");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        stderr(&out),
+        "workflow guard: pnpm refused. This worktree's node_modules is the trunk checkout's, linked in, and pnpm would rewrite it. Call the tool by path instead, as in node_modules/.bin/vitest run <file>.\n"
+    );
+    let out = guard_pnpm(
+        w.path(),
+        r#"git commit -m "Fix the cart (pnpm test was red)""#,
+    );
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
