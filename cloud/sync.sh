@@ -21,9 +21,10 @@ cp "$(readlink -f "$HOME/.config/git/ignore")" "$here/gitignore"
 # So is the last SessionStart hook: a cloud session's start and each resume
 # write `hooks ran: <session> in <project of the cwd, or none>` to
 # workflow's log, so mem shows whether a thread's hooks ran. It prints
-# nothing, waits on mem 5 s at most, and never fails the start.
+# nothing, waits on mem 5 s at most, and never fails the start. The
+# project is the cwd's: a session's MEM_PROJECT names its own.
 # shellcheck disable=SC2016
-ran='[ -z "$CLAUDE_CODE_REMOTE_SESSION_ID" ] || { p=$(timeout 5 mem project current 2>/dev/null | sed -n "s/^name  *//p"); timeout 5 mem log --project workflow "hooks ran: $CLAUDE_CODE_REMOTE_SESSION_ID in ${p:-none}" >/dev/null 2>&1; }; true'
+ran='[ -z "$CLAUDE_CODE_REMOTE_SESSION_ID" ] || { p=$(env -u MEM_PROJECT timeout 5 mem project current 2>/dev/null | sed -n "s/^name  *//p"); timeout 5 mem log --project workflow "hooks ran: $CLAUDE_CODE_REMOTE_SESSION_ID in ${p:-none}" >/dev/null 2>&1; }; true'
 jq --arg ran "$ran" '.hooks + {SessionStart: (.hooks.SessionStart + [{hooks: [{type: "command", command: $ran}]}]),
   Stop: [{hooks: [{type: "command",
   command: "mem stop-hook --session-id \"$CLAUDE_CODE_SESSION_ID\" || true"}]}]}' \

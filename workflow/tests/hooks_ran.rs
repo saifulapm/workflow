@@ -36,7 +36,8 @@ fn fake_mem(w: &Scratch, then: &str) -> std::path::PathBuf {
             "{then}\n\
              case \"$1\" in\n\
              log) shift; printf '%s\\n' \"$*\" >>'{log}' ;;\n\
-             project) case \"$(pwd -P)\" in */cloud_walk) printf 'id    01X\\nname  cloud_walk\\n' ;; *) exit 1 ;; esac ;;\n\
+             project) case \"$(pwd -P)\" in */cloud_walk) printf 'id    01X\\nname  cloud_walk\\n' ;; \
+               *) [ -n \"$MEM_PROJECT\" ] || exit 1; printf 'name  %s\\n' \"$MEM_PROJECT\" ;; esac ;;\n\
              esac",
             log = log.display()
         ),
@@ -55,7 +56,8 @@ fn start(bin: &Path, cwd: &Path, session: Option<&str>) -> Vec<Output> {
                 .current_dir(cwd)
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
                 .env("HOME", "/nonexistent")
-                .env_remove("CLAUDE_CODE_REMOTE_SESSION_ID");
+                .env_remove("CLAUDE_CODE_REMOTE_SESSION_ID")
+                .env_remove("MEM_PROJECT");
             if let Some(id) = session {
                 sh.env("CLAUDE_CODE_REMOTE_SESSION_ID", id);
             }
@@ -81,6 +83,30 @@ fn a_cloud_session_start_names_its_session_and_no_project_outside_one() {
         assert_eq!(out.status.code(), Some(0), "{out:?}");
         assert!(out.stdout.is_empty(), "{out:?}");
     }
+    assert_eq!(
+        logged(&w),
+        ["--project workflow hooks ran: cse_r1test in none"]
+    );
+}
+
+/// A session amx or workflow go started names its project in MEM_PROJECT,
+/// which mem takes outside any checkout; the line names the cwd's.
+#[test]
+fn a_session_whose_environment_names_a_project_still_logs_its_cwds() {
+    let w = Scratch::new("hooks-ran-mem-project");
+    let bin = fake_mem(&w, "");
+    let home = w.mkdir("home/user");
+    let mut sh = Command::new("/bin/sh");
+    let command = session_start().pop().unwrap();
+    let out = sh
+        .args(["-c", &command])
+        .current_dir(&home)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_r1test")
+        .env("MEM_PROJECT", "workflow")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(
         logged(&w),
         ["--project workflow hooks ran: cse_r1test in none"]
