@@ -1357,6 +1357,35 @@ fn a_check_that_differs_is_asked_and_no_line_runs() {
     assert!(rig.sessions().is_empty());
 }
 
+/// A project's own cf, installed in the worktree and not in Saiful's
+/// checkout, is no difference of the wall's: cf hands off to the cf the
+/// folder's package.json finds, as Saiful's own shell does in an
+/// installed checkout.
+#[test]
+fn a_tool_the_worktree_installed_for_itself_starts_the_job_unasked() {
+    let rig = rig();
+    let tools = rig.home.join(".local/bin");
+    common::fixture_bin(
+        &tools,
+        "cf",
+        "if [ -d node_modules/cf ]; then echo 1.0.0-beta.16; else echo 'cf v0.15.0'; fi",
+    );
+    std::fs::write(
+        rig.state.join("path"),
+        format!("{}:/usr/bin:/bin", tools.display()),
+    )
+    .unwrap();
+    rig.walk(&["send", "echo first"]);
+    rig.read_until("first");
+    rig.walk(&["end"]);
+    std::fs::create_dir_all(rig.worktree().join("node_modules/cf")).unwrap();
+    let sent = rig.walk(&["send", "cf --version; echo second"]);
+    assert_eq!(sent["exit"], 0, "{sent}");
+    let pane = rig.read_until("second");
+    assert!(pane.contains("1.0.0-beta.16"), "{pane}");
+    assert_eq!(asks(&rig), "");
+}
+
 #[test]
 fn a_device_s_answer_runs_the_job_outside_the_wall() {
     let rig = rig();

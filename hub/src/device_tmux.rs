@@ -372,9 +372,12 @@ fn start(
         cwd: &work.folder,
         writable: true,
     };
+    // Both sides of the check run in Saiful's checkout, so they differ by
+    // the wall alone: in the worktree, a tool the branch installed for
+    // itself (cf hands off to a project's own cf) would read as the wall's.
     let checked = crate::wall::Place {
-        root: &work.folder,
-        cwd: &work.folder.join(&subdir),
+        root: &work.checkout,
+        cwd: &work.checkout.join(&subdir),
         writable: false,
     };
     let walled =
