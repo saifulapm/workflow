@@ -1138,9 +1138,18 @@ fn a_fix_commit_after_red_tests_on_main_lands_with_land_run_again() {
     let clone = w.clone_dir();
     w.work.put("thread/apps/gamma/fixed.txt", "fixed\n");
     w.git(&clone, &["add", "."]);
-    w.git(&clone, &["commit", "-q", "-m", "Fix gamma on main"]);
+    // The fix comes after the milestone's walk line, as Saiful's
+    // `fix and try again` does, not in the same second.
+    let later = format!("--date=@{}", jiff::Timestamp::now().as_second() + 5);
+    w.git(&clone, &["commit", "-q", "-m", "Fix gamma on main", &later]);
     let out = w.land();
-    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stderr(&out),
+        stdout(&out)
+    );
     assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
     assert!(w.origin_log("main").contains("Fix gamma on main"));
     assert_eq!(w.origin_ref("app/gamma"), w.origin_main());

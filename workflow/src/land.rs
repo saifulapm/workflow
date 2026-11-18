@@ -145,8 +145,16 @@ pub fn cmd_land() -> i32 {
         return exit::USAGE;
     }
     // A milestone lands only on code its walk saw, judged before the rebase
-    // rewrites the shas its walk line names.
-    match walked::check(&git, &project, &slug, &format!("origin/{trunk_name}")) {
+    // rewrites the shas its walk line names. Landed again, its commits are
+    // on the app's trunk already, and only main still lacks them.
+    let start = if ticked { MAIN } else { trunk_name };
+    match walked::check(
+        &git,
+        &project,
+        &slug,
+        &format!("origin/{trunk_name}"),
+        &format!("origin/{start}"),
+    ) {
         None => {
             warn("land: mem cannot list this project's log, where its walk line is");
             return exit::FAILED;

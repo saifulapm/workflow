@@ -18,10 +18,18 @@ pub enum Walk {
 
 /// Ok when `slug` may land from HEAD, Err with the reason it may not, None
 /// when mem cannot list `project`'s log. `trunk` is the ref the milestone
-/// lands on, as origin last had it.
-pub fn check(git: &Git, project: &str, slug: &str, trunk: &str) -> Option<Result<(), String>> {
+/// lands on, as origin last had it, and `start` the ref the milestone's own
+/// commits are not on yet: the trunk, or main once a landing that asked has
+/// put them on an app's trunk already.
+pub fn check(
+    git: &Git,
+    project: &str,
+    slug: &str,
+    trunk: &str,
+    start: &str,
+) -> Option<Result<(), String>> {
     let lines = memcli::log_lines(project)?;
-    let sha = match newest(&lines, slug, first_commit(git, trunk)) {
+    let sha = match newest(&lines, slug, first_commit(git, start)) {
         Walk::None => {
             return Some(Err(format!(
                 "no walk line for {slug}; walk it, or log 'no walk: <why>'"
