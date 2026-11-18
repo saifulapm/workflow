@@ -302,6 +302,14 @@ pub fn idea(app: &App, text: &str) -> Result<i32> {
     report(app, &written, Kind::Idea)
 }
 
+/// `mem tell "<text>"`: a log of type `tell`, not a kind of its own, so a
+/// device whose mem predates it still reads and syncs it. The body keeps
+/// the whole text; the title is cut.
+pub fn tell(app: &App, text: &str) -> Result<i32> {
+    let written = crate::write::save(app, Kind::Log, text, None, Some("tell"), &[], None)?;
+    report(app, &written, Kind::Log)
+}
+
 fn new_meta(app: &App, kind: Kind, text: &str) -> Meta {
     Meta::new(String::new(), kind, derive_title(text), app.machine.clone())
 }

@@ -286,6 +286,7 @@ of <project>.\" in the project's Claude Project; `mem project unset cloud` clear
         },
         cli::Command::Brief { set } => records::brief(&app, set.as_deref()),
         cli::Command::Idea { text } => records::idea(&app, text),
+        cli::Command::Tell { text } => records::tell(&app, text),
         cli::Command::Wiki {
             slug,
             rebuild,

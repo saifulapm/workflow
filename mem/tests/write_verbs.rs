@@ -174,6 +174,42 @@ fn log_by_type_reads_every_kind_and_the_whole_history() {
 }
 
 #[test]
+fn tell_writes_a_log_of_type_tell_whose_body_keeps_the_whole_text() {
+    let w = World::new("write-tell");
+    let repo = w.repo("ebdfy", None);
+    let short = "ebdfy-api 006785a5 live, roll back to 44fee01e";
+    let long = "ebdfy-api 006785a5 is live on every region after the cache warmed, \
+                and if checkout errors climb past two percent roll back to 44fee01e";
+    assert!(long.len() > 100);
+    for text in [short, long] {
+        let out = mem(&w, &repo, &["tell", text]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+    }
+
+    let out = mem(&w, &repo, &["log", "--type", "tell", "--json"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let items = json(&out)["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 2, "{items:?}");
+    // The hub reads each tell's text from its body, as `mem show` gives it.
+    let mut texts = Vec::new();
+    for item in &items {
+        assert_eq!(item["kind"], "log");
+        assert_eq!(item["type"], "tell");
+        let id = item["id"].as_str().unwrap();
+        let shown = json(&mem(&w, &repo, &["show", id, "--json"]));
+        texts.push(
+            shown["items"][0]["body"]
+                .as_str()
+                .unwrap()
+                .trim()
+                .to_string(),
+        );
+    }
+    texts.sort();
+    assert_eq!(texts, [long, short]);
+}
+
+#[test]
 fn handoff_sets_and_prints_the_latest() {
     let w = World::new("write-handoff");
     let repo = w.repo("thing", None);

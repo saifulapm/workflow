@@ -245,6 +245,8 @@ pub enum Command {
     },
     /// Record an idea for later.
     Idea { text: String },
+    /// Tell Saiful something on Slack: the mini's hub posts it to his DM.
+    Tell { text: String },
     /// The project's wiki: list pages, print one, or replace one. `mem wiki
     /// lint` checks the wiki and exits 1 on findings.
     Wiki {
