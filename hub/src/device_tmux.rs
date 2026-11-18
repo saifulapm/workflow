@@ -96,6 +96,14 @@ pub(crate) fn call(
                 ..Outcome::fail(5, String::new())
             };
         }
+        // The job's project picks its stage and its worktree, so a call
+        // naming another one reaches neither.
+        Some(job) if job.project != project => {
+            return Outcome::refuse(format!(
+                "this session's job is {}'s, not {project}'s",
+                job.project
+            ));
+        }
         Some(job) => (job.name.clone(), job.started),
         None => match job_name(project) {
             Ok(name) => (name, now),

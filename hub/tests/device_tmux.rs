@@ -730,6 +730,25 @@ fn a_deploy_line_is_held_when_no_device_set_the_stage() {
     assert_eq!(answer["exit"], 6, "{answer}");
 }
 
+/// A session's job is its one project's: a call naming another project
+/// takes neither that project's stage nor its job.
+#[test]
+fn a_call_naming_another_project_reaches_no_job_of_the_session() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    rig.walk(&["send", "echo ready"]);
+    rig.read_until("ready");
+    let answer = rig.call("shop", "cse_01Walk", &["send", "npx wrangler deploy"]);
+    assert_eq!(answer["exit"], 2, "{answer}");
+    assert_eq!(
+        answer["stderr"],
+        "device: this session's job is cloud_walk's, not shop's\n"
+    );
+    rig.walk(&["send", "echo after"]);
+    let pane = rig.read_until("after");
+    assert!(!pane.contains("npx wrangler"), "{pane}");
+}
+
 #[test]
 fn development_still_holds_a_delete_and_whatever_rides_on_a_deploy() {
     let rig = rig();
