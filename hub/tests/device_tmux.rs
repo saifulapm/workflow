@@ -675,6 +675,77 @@ fn a_listed_line_is_held_and_never_reaches_the_pane() {
     assert!(!pane.contains("git push"), "{pane}");
 }
 
+impl Rig {
+    /// cloud_walk's stage and the machine that set it, with shop in
+    /// development, set by the mini.
+    fn stage(&self, stage: &str, by: &str) {
+        let row = |name: &str, stage: &str, by: &str, milestone: &str| {
+            serde_json::json!({"name": name, "milestone": milestone, "remote": REMOTE,
+                               "checkouts": self.checkouts(name),
+                               "stage": stage, "stage_by": by})
+        };
+        self.projects(serde_json::json!({"projects": [
+            row("cloud_walk", stage, by, "w14"),
+            row("shop", "development", "mac-mini-m2", "m2"),
+        ]}));
+    }
+}
+
+#[test]
+fn a_deploy_line_runs_unasked_in_a_project_a_device_put_in_development() {
+    let rig = rig();
+    rig.stage("development", "mac-mini-m2");
+    let tools = rig.home.join(".local/bin");
+    common::fixture_bin(&tools, "npx", "echo \"ran $*\"");
+    std::fs::write(
+        rig.state.join("path"),
+        format!("{}:/usr/bin:/bin", tools.display()),
+    )
+    .unwrap();
+    let answer = rig.walk(&["send", "npx wrangler deploy"]);
+    assert_eq!(answer["exit"], 0, "{answer}");
+    rig.read_until("ran wrangler deploy");
+    assert_eq!(asks(&rig), "");
+}
+
+#[test]
+fn a_deploy_line_is_held_in_a_live_project_while_another_is_in_development() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let answer = rig.walk(&["send", "npx wrangler deploy"]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+    assert_eq!(
+        answer["stdout"],
+        "ask: npx wrangler deploy\nasked: #QQQQ0001\n"
+    );
+}
+
+/// Only a device's word puts a project in development: a stage a cloud
+/// machine wrote releases nothing.
+#[test]
+fn a_deploy_line_is_held_when_no_device_set_the_stage() {
+    let rig = rig();
+    rig.stage("development", "cloud-vm");
+    let answer = rig.walk(&["send", "npx wrangler deploy"]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+}
+
+#[test]
+fn development_still_holds_a_delete_and_whatever_rides_on_a_deploy() {
+    let rig = rig();
+    rig.stage("development", "mac-mini-m2");
+    for line in [
+        "wrangler delete",
+        "wrangler deploy && wrangler delete",
+        "wrangler deploy; rm -r scratch",
+        "npx wrangler deploy && mem answer AAAA1111 yes",
+        "shopify app deploy",
+    ] {
+        let answer = rig.walk(&["send", line]);
+        assert_eq!(answer["exit"], 6, "{line}: {answer}");
+    }
+}
+
 /// What the device asked with `mem ask`: for each question, the AMX_ID
 /// it ran with, `|`, then its arguments and a newline.
 fn asks(rig: &Rig) -> String {

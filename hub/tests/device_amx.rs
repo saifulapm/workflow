@@ -369,6 +369,8 @@ const TRUSTED_WRITES: &[(&str, &str)] = &[
         "mem project set cloud-secrets 'X=Shopify/x'",
     ),
     ("cloud_secrets_by", "mem project unset cloud-secrets"),
+    ("stage_by", "mem project set stage development"),
+    ("stage_by", "mem project unset stage"),
 ];
 
 /// Each list of machines in hub/src/device.rs whose writes the hub trusts,

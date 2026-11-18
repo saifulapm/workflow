@@ -234,6 +234,22 @@ pub(crate) fn job_name(project: &str) -> Result<String, Outcome> {
     Ok(format!("cloud-{project}-{milestone}"))
 }
 
+/// Whether a device put `project` in development; a stage a thread wrote, or
+/// none, is live.
+fn in_development(project: &str) -> bool {
+    MemCli::new()
+        .read(&["projects", "--json"])
+        .rows("projects")
+        .iter()
+        .find(|row| row["name"].as_str() == Some(project))
+        .is_some_and(|row| {
+            row["stage"].as_str() == Some("development")
+                && row["stage_by"]
+                    .as_str()
+                    .is_some_and(|by| crate::device::DEVICES.contains(&by))
+        })
+}
+
 fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) -> Outcome {
     let (yes, rest) = match rest {
         [flag, id, rest @ ..] if flag == "--yes" => (Some(id.trim_start_matches('#')), rest),
@@ -255,6 +271,8 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
     let mut spent = Vec::new();
     let asked = if outside {
         Some(Asked::Outside)
+    } else if in_development(project) {
+        crate::held::held_in_development(&line).then_some(Asked::Line)
     } else {
         crate::held::held(&line).then_some(Asked::Line)
     };

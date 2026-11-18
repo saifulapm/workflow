@@ -2,6 +2,17 @@
 
 /// Whether `line` holds a command on the hub's list of destructive ones.
 pub fn held(line: &str) -> bool {
+    held_but(line, false)
+}
+
+/// `held`, for a project in development, where a Worker deploy runs after
+/// its walk unasked: a non-staging `wrangler deploy` is let through, and
+/// every other command on the list in the line is still held.
+pub fn held_in_development(line: &str) -> bool {
+    held_but(line, true)
+}
+
+fn held_but(line: &str, deploys: bool) -> bool {
     // Quotes and shell punctuation become spaces, so a quoted or chained
     // command shows up as plain words. The hub matches words, not meaning.
     let text: String = line
@@ -15,11 +26,12 @@ pub fn held(line: &str) -> bool {
         })
         .collect();
     let words: Vec<&str> = text.split_whitespace().collect();
-    (0..words.len()).any(|i| destructive_at(&words, i))
+    (0..words.len()).any(|i| destructive_at(&words, i, deploys))
 }
 
-/// Whether the command whose program word is `words[i]` is on the list.
-fn destructive_at(words: &[&str], i: usize) -> bool {
+/// Whether the command whose program word is `words[i]` is on the list;
+/// with `deploys`, a wrangler deploy is not.
+fn destructive_at(words: &[&str], i: usize, deploys: bool) -> bool {
     let rest = &words[i + 1..];
     // `\rm` skips an alias and `npx wrangler@3` names a version: both are
     // still the program.
@@ -48,7 +60,9 @@ fn destructive_at(words: &[&str], i: usize) -> bool {
         "git" => git_force_push(rest),
         "gh" => rest.starts_with(&["repo", "delete"]) || rest.starts_with(&["auth", "token"]),
         "cf" => rest.contains(&"delete"),
-        "wrangler" => rest.contains(&"delete") || (rest.contains(&"deploy") && !staging(rest)),
+        "wrangler" => {
+            rest.contains(&"delete") || (!deploys && rest.contains(&"deploy") && !staging(rest))
+        }
         "shopify" => matches!(rest, ["app", "release" | "deploy", ..]),
         _ => false,
     }
@@ -86,7 +100,7 @@ fn staging(rest: &[&str]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::held;
+    use super::{held, held_in_development};
 
     #[test]
     fn holds_destructive_lines() {
@@ -128,6 +142,32 @@ mod tests {
             "mem --project cloud_walk project unset stage",
         ] {
             assert!(held(line), "should hold: {line}");
+        }
+    }
+
+    #[test]
+    fn development_lets_a_deploy_through_and_holds_the_rest() {
+        for line in [
+            "wrangler deploy",
+            "npx wrangler@latest deploy",
+            "pnpm exec wrangler deploy --minify",
+            "npx wrangler deploy && echo done",
+        ] {
+            assert!(held(line), "live holds: {line}");
+            assert!(
+                !held_in_development(line),
+                "development lets through: {line}"
+            );
+        }
+        for line in [
+            "wrangler delete",
+            "wrangler deploy && wrangler delete",
+            "wrangler deploy; rm -r x",
+            "wrangler deploy && mem answer AAAA1111 yes",
+            "shopify app deploy",
+            "mem project set stage development",
+        ] {
+            assert!(held_in_development(line), "development holds: {line}");
         }
     }
 
