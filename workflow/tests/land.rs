@@ -1829,3 +1829,63 @@ fn a_second_call_after_lands_own_rebase_still_finds_the_walk() {
     );
     assert!(w.ticked());
 }
+
+#[test]
+fn a_refusal_comes_before_the_rebase() {
+    let w = World::new("land-walk-before-rebase");
+    w.forget_walks();
+    let a = w.walk();
+    w.commit(&["src/app.rs"], "Change the app");
+    w.trunk_moves("src/other.rs", "another thread\n");
+    let main = w.origin_main();
+    let head = w.head();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        &format!(
+            "src/app.rs changed after the walk at {a}; re-walk the steps it touches, or log 'tests-only after {a}: <why>'"
+        ),
+        &main,
+    );
+    assert_eq!(w.head(), head, "nothing was rebased");
+    let branch = w.git(
+        &w.work.at("origin.git"),
+        &["for-each-ref", "--format=%(refname)", "refs/heads/cloud"],
+    );
+    assert_eq!(branch, "", "nothing was pushed to origin's branch");
+}
+
+#[test]
+fn a_second_call_finds_the_walk_after_the_trunk_edited_near_its_change() {
+    let w = World::new("land-walk-rebased-near");
+    w.forget_walks();
+    let lines: Vec<String> = (1..=12).map(|n| format!("line {n}")).collect();
+    w.trunk_moves("src/lib.rs", &(lines.join("\n") + "\n"));
+    let clone = w.clone_dir();
+    w.git(&clone, &["fetch", "-q", "origin"]);
+    w.git(&clone, &["rebase", "-q", "origin/main"]);
+    let mut ours = lines.clone();
+    ours[9] = "line 10, the branch's".to_string();
+    w.work.put("thread/src/lib.rs", &(ours.join("\n") + "\n"));
+    w.git(&clone, &["commit", "-q", "-am", "Change line 10"]);
+    w.walk();
+    let mut theirs = lines.clone();
+    theirs[7] = "line 8, the trunk's".to_string();
+    w.trunk_moves("src/lib.rs", &(theirs.join("\n") + "\n"));
+    let walked = w.head();
+    w.verify("exit 1");
+    let first = w.land();
+    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    assert_ne!(w.head(), walked, "the first call rebased the branch");
+    w.verify("test -f work.txt");
+    let out = w.land();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(w.ticked());
+}

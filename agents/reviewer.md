@@ -35,7 +35,8 @@ Work in this order:
      references to tasks, rulings or sessions in code or commit messages
 
 4. Read the milestone's flake lines, `mem log --limit 1000 | grep -F
-   'flake: '`. Each line whose sha is in the range is a `[blocks]` finding
+   'flake: '`, and a line cut short (it ends in `…`) in full with `mem show
+   <id>`. Each line whose sha is in the range is a `[blocks]` finding
    naming its test file, unless a commit in the range fixes the flake's
    cause, or deletes the test and says why. A sleep or a retry added around
    the test fixes nothing.

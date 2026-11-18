@@ -115,11 +115,13 @@ fn changed_after(git: &Git, walked: &str, trunk: &str) -> Vec<String> {
 }
 
 /// Each commit of `tip` not on `trunk`, merges left out, as its patch id and
-/// its sha.
+/// its sha. The patch has no context lines, so a rebase over a trunk that
+/// edited lines next to a change keeps its id.
 fn patches(git: &Git, tip: &str, trunk: &str) -> Vec<(String, String)> {
     let log = git.bytes(&[
         "log",
         "-p",
+        "-U0",
         "--no-merges",
         "--no-renames",
         "--no-ext-diff",
