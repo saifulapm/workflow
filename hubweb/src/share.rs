@@ -288,13 +288,21 @@ fn item_machine(text: &str) -> Option<String> {
     table.get("machine")?.as_str().map(str::to_string)
 }
 
-/// The device and cloud-secrets keys of a project's record; a removed record
-/// has none.
-fn device_keys(text: Option<&str>) -> [Option<toml::Value>; 4] {
+/// The device, cloud-secrets and stage keys of a project's record; a removed
+/// record has none.
+fn device_keys(text: Option<&str>) -> [Option<toml::Value>; 6] {
     let table: toml::Table = text
         .and_then(|t| toml::from_str(t).ok())
         .unwrap_or_default();
-    ["device", "device_by", "cloud_secrets", "cloud_secrets_by"].map(|key| table.get(key).cloned())
+    [
+        "device",
+        "device_by",
+        "cloud_secrets",
+        "cloud_secrets_by",
+        "stage",
+        "stage_by",
+    ]
+    .map(|key| table.get(key).cloned())
 }
 
 /// Whether two items differ only in the frontmatter keys that close or
@@ -434,8 +442,9 @@ fn write(
                 ..Outcome::default()
             });
         }
-        // Which device runs a project, and who may read its cloud secrets,
-        // is a device's word: a cloud session may claim the runner only.
+        // Which device runs a project, who may read its cloud secrets and
+        // whether its deploys run unasked are a device's word: a cloud
+        // session may claim the runner only.
         let cloud = bound.is_some_and(|b| b.machine.as_deref().is_none_or(|m| m.ends_with('*')));
         if cloud
             && matches!(
@@ -446,7 +455,7 @@ fn write(
                 != device_keys(head.as_ref().and_then(|h| h.body.as_deref()))
         {
             let head = head.map(|h| json!({"seq":h.seq,"id":h.id,"path":h.path,"body":h.body}));
-            let why = "a cloud session's token changes no device or cloud-secrets key";
+            let why = "a cloud session's token changes no device, cloud-secrets or stage key";
             return Ok(Outcome {
                 sender: vec![json!({"t":"refused","id":id,"head":head,"why":why}).to_string()],
                 ..Outcome::default()
@@ -1894,7 +1903,8 @@ mod tests {
     }
 
     const RECORD: &str = "projects/P1/project.toml";
-    const DEVICE_WHY: &str = "a cloud session's token changes no device or cloud-secrets key";
+    const DEVICE_WHY: &str =
+        "a cloud session's token changes no device, cloud-secrets or stage key";
 
     /// A record with the device and cloud-secrets keys a device wrote.
     const HELD: &str = "name = \"workflow\"\ndevice = \"nuc\"\ndevice_by = \"mac-mini-m2\"\n\
@@ -1940,7 +1950,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cloud_token_changes_or_drops_none_of_the_four_keys() {
+    fn a_cloud_token_changes_or_drops_none_of_the_device_keys() {
         let cloud = token("session_*", Some("cloud-*"));
         let mini = token("mini", Some("mac-mini-m2"));
         for (case, body) in [
@@ -1957,6 +1967,12 @@ mod tests {
                 json!(HELD.replace(
                     "cloud_secrets_by = \"mac-mini-m2\"",
                     "cloud_secrets_by = \"cloud-vm\""
+                )),
+            ),
+            (
+                "stage",
+                json!(format!(
+                    "{HELD}stage = \"development\"\nstage_by = \"mac-mini-m2\"\n"
                 )),
             ),
             (

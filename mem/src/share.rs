@@ -946,7 +946,14 @@ pub fn import(db: &Path, root: &Path, machine: &str, cwd: &Path) -> Result<()> {
 
 /// The keys of a project's record the hub trusts by the machine that wrote
 /// them.
-const DEVICE_KEYS: [&str; 4] = ["device", "device_by", "cloud_secrets", "cloud_secrets_by"];
+const DEVICE_KEYS: [&str; 6] = [
+    "device",
+    "device_by",
+    "cloud_secrets",
+    "cloud_secrets_by",
+    "stage",
+    "stage_by",
+];
 
 /// Why a write in another machine's outbox file would pass as a device's
 /// word, if it would: an item that names a machine other than a cloud one,

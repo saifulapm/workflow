@@ -737,8 +737,8 @@ fn record_with_a_device(w: &World) -> String {
     std::fs::read_to_string(w.dirs().store().join(format!("projects/{ID}/project.toml"))).unwrap()
 }
 
-/// Which device a project runs on, and its cloud secrets, are a device's
-/// word: a thread's record that changes one of the four keys is dropped
+/// Which device a project runs on, its cloud secrets and its stage are a
+/// device's word: a thread's record that changes one of those keys is dropped
 /// alone, and one that changes only its runner imports.
 #[test]
 fn a_record_changing_a_device_key_is_neither_sent_nor_kept() {
@@ -751,6 +751,7 @@ fn a_record_changing_a_device_key_is_neither_sent_nor_kept() {
         record.replace("device_by = \"mac-mini-m2\"", "device_by = \"nuc\""),
         format!("{record}cloud_secrets = \"X=Shopify/x\"\n"),
         format!("{record}cloud_secrets_by = \"mac-mini-m2\"\n"),
+        format!("{record}stage = \"development\"\nstage_by = \"mac-mini-m2\"\n"),
         record
             .lines()
             .filter(|l| !l.starts_with("device ="))
@@ -777,7 +778,7 @@ fn a_record_changing_a_device_key_is_neither_sent_nor_kept() {
     let said = stderr(&out);
     assert_eq!(
         said.lines().filter(|l| l.contains(path.as_str())).count(),
-        6,
+        7,
         "{said}"
     );
     sent.push("01K0OUTBOXW000000000000059".to_string());

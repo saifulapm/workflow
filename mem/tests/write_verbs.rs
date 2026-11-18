@@ -764,6 +764,66 @@ fn project_set_cloud_secrets_refuses_a_line_that_is_not_name_and_entry() {
     assert!(v["projects"][0]["cloud_secrets"].is_null(), "{v}");
 }
 
+#[test]
+fn project_set_stage_takes_development_or_live_and_live_is_the_default() {
+    let w = World::new("write-stage");
+    name_this_machine(&w, "mac-mini-m2");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(v["projects"][0]["stage"], serde_json::json!("live"));
+
+    let out = mem(&w, &repo, &["project", "set", "stage", "development"]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    assert_eq!(stdout(&out), "stage for thing: development\n");
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(v["projects"][0]["stage"], serde_json::json!("development"));
+    assert_eq!(
+        v["projects"][0]["stage_by"],
+        serde_json::json!("mac-mini-m2")
+    );
+
+    let out = mem(&w, &repo, &["project", "set", "stage", "beta"]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("a stage is development or live"),
+        "{}",
+        stderr(&out)
+    );
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(v["projects"][0]["stage"], serde_json::json!("development"));
+
+    assert_eq!(code(&mem(&w, &repo, &["project", "unset", "stage"])), 0);
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(v["projects"][0]["stage"], serde_json::json!("live"));
+    assert!(v["projects"][0]["stage_by"].is_null(), "{v}");
+}
+
+/// A thread's mem names its own machine, so a thread cannot make its own
+/// project development, which lets its deploys run unasked.
+#[test]
+fn project_set_stage_is_refused_off_the_devices() {
+    let w = World::new("write-stage-cloud");
+    name_this_machine(&w, "cloud-vm");
+    let repo = w.repo("thing", Some("git@github.com:me/thing.git"));
+    assert_eq!(code(&mem(&w, &repo, &["log", "first write"])), 0);
+    for args in [
+        &["project", "set", "stage", "development"][..],
+        &["project", "unset", "stage"],
+    ] {
+        let out = mem(&w, &repo, args);
+        assert_eq!(code(&out), 2, "{args:?}: {}", stdout(&out));
+        assert!(
+            stderr(&out)
+                .contains("stage is set only on mac-mini-m2, nuc or macbook-m2; this is cloud-vm"),
+            "{}",
+            stderr(&out)
+        );
+    }
+    let v = json(&mem(&w, &repo, &["projects", "--json"]));
+    assert_eq!(v["projects"][0]["stage"], serde_json::json!("live"));
+}
+
 /// A thread's mem names its own machine, so only a device may say which
 /// pass entries a cloud command gets.
 #[test]

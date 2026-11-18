@@ -412,6 +412,11 @@ fn project_summary(
         ("device_by", json!(declared("device_by"))),
         ("cloud_secrets", json!(declared("cloud_secrets"))),
         ("cloud_secrets_by", json!(declared("cloud_secrets_by"))),
+        (
+            "stage",
+            json!(declared("stage").unwrap_or_else(|| "live".to_string())),
+        ),
+        ("stage_by", json!(declared("stage_by"))),
         ("runner", runner_json(&app.store, id)),
         (
             "milestone",
@@ -667,6 +672,36 @@ pub fn project_device(app: &App, device: &str) -> Result<i32> {
         );
     } else if !app.quiet {
         println!("device for {}: {device}", identity.name().unwrap_or(id));
+    }
+    Ok(exit::OK)
+}
+
+/// `mem project set stage development|live`, with the machine that wrote
+/// it, so the hub releases a deploy line by it only when a device did.
+pub fn project_stage(app: &App, stage: &str) -> Result<i32> {
+    let stage = stage.trim();
+    if !matches!(stage, "development" | "live") {
+        return Err(exit::usage("a stage is development or live".to_string()));
+    }
+    let by = on_a_device(app, "stage")?;
+    let identity = writable_project_identity(app)?;
+    let Some(id) = identity.id() else {
+        return Err(exit::usage(unregistered_project_note(app, &identity)));
+    };
+    let path = crate::project::set_keys(&app.store, id, &[("stage", stage), ("stage_by", &by)])?;
+    if app.json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "id": id,
+                "name": identity.name(),
+                "stage": stage,
+                "stage_by": by,
+                "path": path.to_string_lossy(),
+            }))?
+        );
+    } else if !app.quiet {
+        println!("stage for {}: {stage}", identity.name().unwrap_or(id));
     }
     Ok(exit::OK)
 }
@@ -1012,7 +1047,7 @@ fn runner_json(store: &crate::store::Store, id: &str) -> serde_json::Value {
 /// empty value, so without this the only way to take a key off a project
 /// was to edit project.toml by hand.
 pub fn project_unset(app: &App, key: &str) -> Result<i32> {
-    if key == "device" || key == "cloud_secrets" {
+    if matches!(key, "device" | "cloud_secrets" | "stage") {
         on_a_device(app, &key.replace('_', "-"))?;
     }
     let identity = writable_project_identity(app)?;
@@ -1032,6 +1067,9 @@ pub fn project_unset(app: &App, key: &str) -> Result<i32> {
     }
     if key == "cloud_secrets" {
         crate::project::unset_key(&app.store, id, "cloud_secrets_by")?;
+    }
+    if key == "stage" {
+        crate::project::unset_key(&app.store, id, "stage_by")?;
     }
     // An unpause, or a cleared runner, has to reach the other machines as a
     // pause does.

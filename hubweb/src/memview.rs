@@ -583,6 +583,11 @@ impl<F: Files> View<'_, F> {
             ("device_by", json!(p.declared("device_by"))),
             ("cloud_secrets", json!(p.declared("cloud_secrets"))),
             ("cloud_secrets_by", json!(p.declared("cloud_secrets_by"))),
+            (
+                "stage",
+                json!(p.declared("stage").unwrap_or_else(|| "live".to_string())),
+            ),
+            ("stage_by", json!(p.declared("stage_by"))),
             ("runner", runner),
             (
                 "milestone",

@@ -30,12 +30,14 @@ fn destructive_at(words: &[&str], i: usize) -> bool {
         // GNU rm takes its flags after the paths too.
         "rm" => rest.iter().any(|w| recursive(w)),
         // A thread's own yes, written as Saiful's from the device's shell, or
-        // its own choice of secrets or device, written as a device's.
+        // its own choice of secrets, device or stage, written as a device's.
         "mem" => {
             rest.contains(&"answer")
                 || (rest.contains(&"project")
                     && (rest.contains(&"set") || rest.contains(&"unset"))
-                    && (rest.contains(&"cloud-secrets") || rest.contains(&"device")))
+                    && (rest.contains(&"cloud-secrets")
+                        || rest.contains(&"device")
+                        || rest.contains(&"stage")))
         }
         // A value read back through the pane would reach the cloud. Only the
         // plain forms: the hub matches words, and a script beats any list.
@@ -122,6 +124,8 @@ mod tests {
             "mem --project pawsome project set cloud-secrets 'X=Shopify/x'",
             "mem project unset cloud-secrets",
             "mem project set device nuc",
+            "mem project set stage development",
+            "mem --project cloud_walk project unset stage",
         ] {
             assert!(held(line), "should hold: {line}");
         }

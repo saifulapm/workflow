@@ -471,6 +471,7 @@ pub enum ProjectKey {
     Cloud,
     Device,
     CloudSecrets,
+    Stage,
 }
 
 impl ProjectKey {
@@ -486,6 +487,7 @@ impl ProjectKey {
             ProjectKey::Cloud => "cloud",
             ProjectKey::Device => "device",
             ProjectKey::CloudSecrets => "cloud_secrets",
+            ProjectKey::Stage => "stage",
         }
     }
 }
@@ -537,6 +539,10 @@ pub enum ProjectSetCommand {
     /// which machine wrote them, as `cloud_secrets_by`.
     #[command(name = "cloud-secrets")]
     CloudSecrets { lines: String },
+    /// Where this project is: development, where a Worker deploy runs after
+    /// a passing walk with no question, or live, the default, where it asks.
+    /// mem also records which machine wrote it, as `stage_by`.
+    Stage { stage: String },
 }
 
 /// Who a question is for. An orchestrator's question never reaches the hub;

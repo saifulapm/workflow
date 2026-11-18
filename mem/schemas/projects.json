@@ -32,6 +32,8 @@
           "device_by",
           "cloud_secrets",
           "cloud_secrets_by",
+          "stage",
+          "stage_by",
           "runner",
           "milestone",
           "milestones_done",
@@ -130,6 +132,20 @@
           },
           "cloud_secrets_by": {
             "description": "The machine that wrote `cloud_secrets`; null when none are set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "description": "development, where a Worker deploy runs after a passing walk with no question, or live, where it asks; set with `mem project set stage`, live when none is set.",
+            "enum": [
+              "development",
+              "live"
+            ]
+          },
+          "stage_by": {
+            "description": "The machine that wrote `stage`; null when none is set.",
             "type": [
               "string",
               "null"

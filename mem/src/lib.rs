@@ -142,6 +142,7 @@ fn dispatch(cli: &cli::Cli) -> anyhow::Result<i32> {
                 cli::ProjectSetCommand::CloudSecrets { lines } => {
                     verbs::project_cloud_secrets(&app, lines)
                 }
+                cli::ProjectSetCommand::Stage { stage } => verbs::project_stage(&app, stage),
                 cli::ProjectSetCommand::Remote { url } => verbs::project_set(&app, "remote", url),
                 cli::ProjectSetCommand::Paused { who } => verbs::project_pause(&app, who),
                 cli::ProjectSetCommand::Runner {
