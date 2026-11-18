@@ -70,6 +70,7 @@ const HARD: &[Rule] = &[
     Rule::GeneratedWith,
     Rule::ClaudeCode,
     Rule::Robot,
+    Rule::Invisible,
 ];
 
 /// Process words warned about in a message, beside lint-msg's own table,
@@ -93,6 +94,8 @@ enum Rule {
     GeneratedWith,
     ClaudeCode,
     Robot,
+    /// A bidi control or a stray control character, see `invisible`.
+    Invisible,
 }
 
 impl Rule {
@@ -109,6 +112,7 @@ impl Rule {
             Rule::GeneratedWith => "generated-with line",
             Rule::ClaudeCode => "Claude Code link",
             Rule::Robot => "robot emoji",
+            Rule::Invisible => "bidi or control character",
         }
     }
 
@@ -136,8 +140,19 @@ impl Rule {
             Rule::GeneratedWith => lower.contains(concat!("generated", " with")),
             Rule::ClaudeCode => lower.contains(concat!("claude.ai", "/code")),
             Rule::Robot => line.contains('\u{1f916}'),
+            Rule::Invisible => line.chars().any(invisible),
         }
     }
+}
+
+/// A character that reorders or hides text: the bidi controls, and any C0 or
+/// C1 control but tab, LF, CR and form feed. ZWJ, ZWNJ and the BOM stay
+/// allowed, since emoji sequences and some files use them.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+    ) || (c.is_control() && !matches!(c, '\t' | '\n' | '\r' | '\u{000C}'))
 }
 
 fn leading_digits(s: &[u8]) -> usize {
@@ -257,9 +272,21 @@ impl Report {
         text: &str,
     ) {
         let text = text.trim();
+        // An invisible character is printed as its escape, so the report
+        // does not carry it back to the terminal.
+        let text: String = text
+            .chars()
+            .map(|c| {
+                if invisible(c) {
+                    format!("\\u{{{:04X}}}", u32::from(c))
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect();
         let excerpt = match text.char_indices().nth(EXCERPT_MAX) {
             Some((cut, _)) => format!("{}...", &text[..cut]),
-            None => text.to_string(),
+            None => text,
         };
         self.findings.push(Finding {
             path: path.to_string(),
@@ -695,6 +722,46 @@ mod tests {
             .filter(|r| r.hits(line))
             .map(Rule::label)
             .collect()
+    }
+
+    #[test]
+    fn a_bidi_or_control_character_is_refused() {
+        for c in ['\u{202E}', '\u{2066}', '\u{0007}'] {
+            let line = format!("let name = \"a{c}b\";");
+            assert_eq!(hard_labels(&line), ["bidi or control character"], "{c:?}");
+        }
+    }
+
+    #[test]
+    fn tab_form_feed_zwj_and_bom_are_allowed() {
+        for line in [
+            "\tindented",
+            "page\u{000C}break",
+            "\u{1F468}\u{200D}\u{1F469}",
+            "\u{FEFF}first line",
+        ] {
+            assert!(hard_labels(line).is_empty(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_staged_bidi_character_is_refused_and_not_printed_raw() {
+        let dir = std::env::temp_dir().join(format!("hygiene-bidi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = Git::at(&dir);
+        assert!(git.quiet(&["init", "-q"]));
+        std::fs::write(dir.join("a.txt"), "fine\nlet x = \"a\u{202E}b\";\n").unwrap();
+        assert!(git.quiet(&["add", "a.txt"]));
+        let mut report = Report::default();
+        scan_staged(&git, &[], &[], &mut report);
+        let _ = std::fs::remove_dir_all(&dir);
+        let found: Vec<(&str, usize, &str, &str)> = report
+            .findings
+            .iter()
+            .map(|f| (f.path.as_str(), f.line, f.tier, f.excerpt.as_str()))
+            .collect();
+        assert_eq!(found, [("a.txt", 2, "hard", "let x = \"a\\u{202E}b\";")]);
     }
 
     #[test]
