@@ -73,7 +73,9 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).to_string()
 }
 
-/// guard bash refused `command` naming exactly `lines`.
+/// guard bash refused `command` naming exactly `lines`, and every line it
+/// names passes guard bash: a refusal that names a command the guards
+/// refuse too sends the agent round in a circle.
 #[track_caller]
 fn names(cwd: &Path, command: &str, lines: &[&str]) {
     let out = bash(cwd, command);
@@ -83,6 +85,30 @@ fn names(cwd: &Path, command: &str, lines: &[&str]) {
         format!("{HEAD}\n{}\n", lines.join("\n")),
         "{command:?}"
     );
+    for line in lines {
+        passes(cwd, line);
+    }
+}
+
+/// guard bash lets `command` through.
+#[track_caller]
+fn passes(cwd: &Path, command: &str) {
+    let out = bash(cwd, command);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{command:?} is refused: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn turbo_by_path_is_a_line_no_refusal_may_name() {
+    // r2's first by-path refusal named this for `pnpm typecheck` with the
+    // script `turbo run typecheck`; guard bash's turbo rule refuses it.
+    let (_t, w) = worktree("by-path-turbo", &[]);
+    let out = bash(w.path(), "node_modules/.bin/turbo run typecheck");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
 }
 
 /// guard bash refused `command` with today's message.
