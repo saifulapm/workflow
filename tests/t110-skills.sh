@@ -38,6 +38,12 @@ like "$(skill grill | grep 'mem ask')" 'mem ask --for saiful' "grill: its questi
 # A fixed summary slug overwrote the 2026-10-15 grill's summary on 2026-11-18.
 like "$(skill grill | sed -n '/^## 6\./,/^## 7\./p')" 'grilling-summary-<topic>' \
 	"grill: each grill's summary page is named after its topic"
+like "$(skill grill | sed -n '/^## 7\./,$p')" 'spec-<topic>' \
+	"grill: a later grill's spec is named after its topic"
+like "$(skill grill | sed -n '/^## 1\./,/^## 2\./p')" 'research-summary-<topic>' \
+	"grill: a later grill's research summary is named after its topic"
+like "$(skill plan | sed -n '/^## 1\./,/^## 2\./p')" 'spec-<topic>' \
+	"plan: it reads the spec page the grill named"
 like "$(skill orchestrate | sed -n '/^Saiful.s, asked without waiting/,/^These are/p')" \
 	'mem ask --for saiful' "orchestrate: push, spend, secrets and taste are Saiful's"
 

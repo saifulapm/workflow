@@ -24,8 +24,8 @@ holds only work on the repo as a whole.
 
 ## 1. Read
 
-Read `spec` one section at a time (`mem wiki spec --sections`, then `mem wiki
-spec#<section>`), `verify` (in a project that runs in its Claude Project, its
+Read the spec page the grill named, `spec` or `spec-<topic>`, one section at a
+time (`mem wiki <page> --sections`, then `mem wiki <page>#<section>`), `verify` (in a project that runs in its Claude Project, its
 `Cloud` section too: what a cloud session runs there), the decisions
 (`mem search --kind ruling --limit 100`), the ideas filed for later
 (`mem search --kind idea --limit 100`; each one this work covers is a

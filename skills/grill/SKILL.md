@@ -27,7 +27,8 @@ parallel before the first round. One covers competitors and how they solve it,
 one covers the libraries and APIs it will stand on (current docs through `npx
 ctx7@latest`, dated), and one covers the existing code it touches. Keep what matters on wiki
 pages (`research-<topic>`) and a `research-summary` that ends with the
-questions only Saiful can answer. A small change in a known codebase skips
+questions only Saiful can answer. When the project has a `research-summary`
+from an earlier grill, name this one `research-summary-<topic>`. A small change in a known codebase skips
 this step.
 
 When the product must pass someone else's review to ship (the Theme Store,
@@ -136,7 +137,10 @@ Done when he confirmed the summary.
 ## 7. Write the spec
 
 Write it from the decisions, the glossary and the research. Keep each section
-under 2 KB, and split a page that passes 8 KB by subsystem.
+under 2 KB, and split a page that passes 8 KB by subsystem. A project's first
+spec is `spec`, which the hub reads to show a project as specced. When the
+project has a `spec` from an earlier grill, this one is `spec-<topic>` and its
+parts `spec-<topic>-<subsystem>`, so the earlier spec stays.
 
 - `spec` has these sections: problem, users and stories, the shape of the
   solution, decisions (one line each, linking the decision id), surfaces and
@@ -159,7 +163,7 @@ place:
 3. Each rule lives in one section, and the others cite it.
 4. Each Show path ends in something a person can see.
 
-Then say the spec is ready for the plan skill.
+Then name the spec page that is ready for the plan skill.
 
 Done when every decision appears in the spec's decisions section, every
 feature has a Show path, the four checks pass, and `mem wiki lint` exits 0.
