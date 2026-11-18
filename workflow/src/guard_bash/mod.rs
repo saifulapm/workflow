@@ -45,7 +45,8 @@ pub struct Call<'a> {
 }
 
 /// Each rule's refusal for a call, or None. The first refusal is the one
-/// the agent reads.
+/// the agent reads; pnpm's, whose message names the command to run instead,
+/// comes last.
 const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     chain::refusal,
     pkill::refusal,
@@ -58,7 +59,6 @@ const RULES: &[fn(&Call) -> Option<&'static str>] = &[
     devserver::refusal,
     suite::refusal,
     tick::refusal,
-    pnpm::refusal,
 ];
 
 pub fn cmd_guard_bash() -> i32 {
@@ -83,9 +83,14 @@ pub fn cmd_guard_bash() -> i32 {
         cwd: Path::new(hook["cwd"].as_str().unwrap_or_default()),
         agent: hook["agent_type"].as_str(),
     };
-    match RULES.iter().find_map(|rule| rule(&call)) {
+    let refusal = RULES
+        .iter()
+        .find_map(|rule| rule(&call))
+        .map(String::from)
+        .or_else(|| pnpm::refusal(&call));
+    match refusal {
         Some(reason) => {
-            let code = deny(reason);
+            let code = deny(&reason);
             record("bash", command, call.cwd);
             code
         }

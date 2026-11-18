@@ -19,7 +19,7 @@ Run the tool by path (node_modules/.bin/vitest), or `npm_config_verify_deps_befo
 const TURBO_REFUSAL: &str = "workflow guard refused this on purpose: turbo runs pnpm install over a node_modules linked from outside this worktree.\n\
 Call each tool by path instead: node_modules/.bin/tsc -b, node_modules/.bin/vitest run, node_modules/.bin/oxlint.";
 
-pub fn refusal(call: &Call) -> Option<&'static str> {
+pub fn refusal(call: &Call) -> Option<String> {
     // The folder each subshell depth is in, as the line's `cd`s move it.
     let mut dirs = vec![call.cwd.to_path_buf()];
     for command in call.commands {
@@ -41,9 +41,11 @@ pub fn refusal(call: &Call) -> Option<&'static str> {
             _ if runs_pnpm(&command.words, argv)
                 && over_linked_node_modules(&pnpm_dir(here, argv)) =>
             {
-                return Some(REFUSAL);
+                return Some(REFUSAL.to_string());
             }
-            Some("turbo") if over_linked_node_modules(here) => return Some(TURBO_REFUSAL),
+            Some("turbo") if over_linked_node_modules(here) => {
+                return Some(TURBO_REFUSAL.to_string());
+            }
             _ => {}
         }
     }
