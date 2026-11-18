@@ -1889,3 +1889,30 @@ fn a_second_call_finds_the_walk_after_the_trunk_edited_near_its_change() {
     );
     assert!(w.ticked());
 }
+
+#[test]
+fn a_change_after_the_walk_that_repeats_an_earlier_one_is_refused() {
+    let w = World::new("land-walk-repeat");
+    w.forget_walks();
+    w.work.put("thread/src/app.rs", "fn main() {}\n");
+    w.commit(&[], "Write the app");
+    w.work
+        .put("thread/src/app.rs", "fn main() {}\nfn debug() {}\n");
+    w.commit(&[], "Add debug");
+    w.work.put("thread/src/app.rs", "fn main() {}\n");
+    w.commit(&[], "Drop debug");
+    let a = w.walk();
+    w.work
+        .put("thread/src/app.rs", "fn main() {}\nfn debug() {}\n");
+    w.commit(&[], "Add debug again");
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        &format!(
+            "src/app.rs changed after the walk at {a}; re-walk the steps it touches, or log 'tests-only after {a}: <why>'"
+        ),
+        &main,
+    );
+}

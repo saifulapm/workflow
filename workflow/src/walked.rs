@@ -82,21 +82,37 @@ fn commit(git: &Git, sha: &str) -> Option<String> {
     git.out(&["rev-parse", "-q", "--verify", &format!("{sha}^{{commit}}")])
 }
 
-/// The files HEAD's own commits change after `walked`, sorted: its commits
-/// not on `trunk` whose patch is not one of `walked`'s own commits' patches.
-/// That is walked..HEAD, and still the same commits on a second call of
-/// land, after its first rebased and pushed the branch. Merges bring no file
-/// in, and a rename names the path it left too.
+/// The files HEAD's own commits, those not on `trunk`, change after
+/// `walked`, sorted: the commits of walked..HEAD. On a second call of land,
+/// after its first rebased and pushed the branch, `walked` is on the branch
+/// no more, and its commits are found again by patch: HEAD's commits whose
+/// patch is not one of `walked`'s own. Merges bring no file in, and a rename
+/// names the path it left too.
 fn changed_after(git: &Git, walked: &str, trunk: &str) -> Vec<String> {
-    let seen: Vec<String> = patches(git, walked, trunk)
-        .into_iter()
-        .map(|(patch, _)| patch)
-        .collect();
-    let after: Vec<String> = patches(git, "HEAD", trunk)
-        .into_iter()
-        .filter(|(patch, _)| !seen.contains(patch))
-        .map(|(_, commit)| commit)
-        .collect();
+    let after: Vec<String> = if git.quiet(&["merge-base", "--is-ancestor", walked, "HEAD"]) {
+        git.out(&[
+            "log",
+            "--no-merges",
+            "--format=%H",
+            &format!("{walked}..HEAD"),
+            "--not",
+            trunk,
+        ])
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+    } else {
+        let seen: Vec<String> = patches(git, walked, trunk)
+            .into_iter()
+            .map(|(patch, _)| patch)
+            .collect();
+        patches(git, "HEAD", trunk)
+            .into_iter()
+            .filter(|(patch, _)| !seen.contains(patch))
+            .map(|(_, commit)| commit)
+            .collect()
+    };
     if after.is_empty() {
         return Vec::new();
     }
