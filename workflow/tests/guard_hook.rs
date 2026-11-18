@@ -239,7 +239,8 @@ fn an_implementer_brief_whose_verify_names_no_lint_is_refused() {
     for verify in [
         "cargo test -q --test land\ncargo clippy -q --all-targets -- -D warnings",
         "node_modules/.bin/vitest run\nnode_modules/.bin/oxlint app\nnode_modules/.bin/oxfmt --check app",
-        "cd apps/web && pnpm lint",
+        // pnpm in VERIFY is refused on its own (pnpm_by_path.rs).
+        "cd apps/web && node_modules/.bin/eslint .",
     ] {
         let out = guard_agent("implementer", &brief(verify));
         assert_eq!(out.status.code(), Some(0), "{verify}: {out:?}");
