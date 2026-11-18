@@ -1391,6 +1391,27 @@ fn a_no_wall_line_is_asked_with_its_exact_text() {
 }
 
 #[test]
+fn a_tag_push_s_question_says_its_yes_covers_three_re_pushes_for_a_day() {
+    let rig = rig();
+    let line = "git tag -f v1 && git push -f origin refs/tags/v1";
+    let answer = rig.walk(&["send", "--no-wall", line]);
+    assert_eq!(answer["exit"], 6, "{answer}");
+    let asks = asks(&rig);
+    assert!(asks.contains(&format!("\n    {line}\n")), "{asks}");
+    assert!(
+        asks.contains(
+            "Yes runs it now, and this same line up to 3 more times within 24 hours of your yes \
+             to push v1 again; Slack shows each re-push."
+        ),
+        "{asks}"
+    );
+    rig.walk(&["send", "--no-wall", "git push origin main"]);
+    let other = asks.len();
+    let asks = std::fs::read_to_string(rig.state.join("asks")).unwrap();
+    assert!(!asks[other..].contains("re-push"), "{asks}");
+}
+
+#[test]
 fn a_device_s_yes_runs_a_no_wall_line_outside_once_and_the_next_is_walled() {
     let rig = rig();
     let docs = rig.home.join("Documents");

@@ -595,19 +595,32 @@ fn ask(project: &str, machine: &str, kind: Asked, what: &str) -> Outcome {
                 _ => asks(q["body"].as_str().unwrap_or_default(), what),
             }
     });
+    let tag = crate::release::pushed_tag(what);
     let (text, options, shown) = match kind {
         Asked::Line => (
             format!(
-                "{}\n\n    {what}\n\nYes sends it there once.",
-                line_head(project, machine)
+                "{}\n\n    {what}\n\n{}",
+                line_head(project, machine),
+                tag.map_or("Yes sends it there once.".to_string(), |tag| {
+                    crate::release::terms(&tag)
+                })
             ),
             ["yes", "no"],
             what.to_string(),
         ),
         Asked::Outside => (
             format!(
-                "{}\n\n    {what}\n\nIt runs with your logins, in the thread's worktree. Yes runs it there once; the next line is walled again.",
-                outside_head(project, machine)
+                "{}\n\n    {what}\n\nIt runs with your logins, in the thread's worktree. {}",
+                outside_head(project, machine),
+                tag.map_or(
+                    "Yes runs it there once; the next line is walled again.".to_string(),
+                    |tag| {
+                        format!(
+                            "{} The next line is walled again.",
+                            crate::release::terms(&tag)
+                        )
+                    }
+                )
             ),
             ["yes", "no"],
             format!("{what} (outside the wall)"),

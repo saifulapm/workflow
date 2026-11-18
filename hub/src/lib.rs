@@ -47,6 +47,7 @@ pub mod parked;
 pub mod presence;
 pub mod proc;
 pub mod proxy;
+pub mod release;
 pub mod route;
 pub mod runs;
 pub mod seed;
