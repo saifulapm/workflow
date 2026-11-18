@@ -76,6 +76,20 @@ fn command_tags(command: &str) -> Option<Vec<String>> {
     Some(tags)
 }
 
+/// The Unix milliseconds a ULID was minted at, from its first ten
+/// characters; None for anything that is not a ULID.
+pub fn ulid_ms(id: &str) -> Option<u64> {
+    const CROCKFORD: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    if id.len() != 26 || !id.starts_with(|c| ('0'..='7').contains(&c)) {
+        return None;
+    }
+    id.chars()
+        .try_fold(0u128, |n, c| Some(n * 32 + CROCKFORD.find(c)? as u128))?;
+    id[..10]
+        .chars()
+        .try_fold(0u64, |ms, c| Some(ms * 32 + CROCKFORD.find(c)? as u64))
+}
+
 /// `NAME=value` before a command.
 fn assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| {
@@ -87,7 +101,7 @@ fn assignment(word: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::pushed_tag;
+    use super::{pushed_tag, ulid_ms};
 
     #[test]
     fn a_push_naming_one_tag_by_its_ref_pushes_that_tag() {
@@ -107,6 +121,28 @@ mod tests {
             pushed_tag("git push origin refs/tags/ui-v2.2.0").as_deref(),
             Some("ui-v2.2.0")
         );
+    }
+
+    #[test]
+    fn a_ulid_s_time_is_its_first_ten_characters() {
+        // The ULID spec's own example.
+        let at: jiff::Timestamp = "2016-07-30T23:54:10.259Z".parse().unwrap();
+        assert_eq!(
+            ulid_ms("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            Some(at.as_millisecond() as u64)
+        );
+        // A mem answer, created at 19:07:15.576: its id is minted moments after.
+        let created: jiff::Timestamp = "2026-11-18T19:07:15.576Z".parse().unwrap();
+        let minted = ulid_ms("01M7R0WQ98NQV75E7DEAZJZJGS").unwrap();
+        assert!((0..1000).contains(&(minted - created.as_millisecond() as u64)));
+        for id in [
+            "01ANSWER",
+            "",
+            "81M7R0WQ98NQV75E7DEAZJZJGS",
+            "01M7R0WQ98NQV75E7DEAZJZJGU",
+        ] {
+            assert_eq!(ulid_ms(id), None, "{id}");
+        }
     }
 
     #[test]

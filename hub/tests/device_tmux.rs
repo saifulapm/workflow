@@ -1411,6 +1411,165 @@ fn a_tag_push_s_question_says_its_yes_covers_three_re_pushes_for_a_day() {
     assert!(!asks[other..].contains("re-push"), "{asks}");
 }
 
+/// A release line the tests send: it tags the worktree's HEAD and pushes
+/// the tag to the rig's origin.
+fn release(tag: &str) -> String {
+    format!("git tag -f {tag} && git push -q -f origin refs/tags/{tag}")
+}
+
+/// A ULID minted `ago` before now, as mem mints an answer's id.
+fn ulid_ago(ago: Duration) -> String {
+    const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let ms = (jiff::Timestamp::now().as_millisecond() - ago.as_millis() as i64) as u64;
+    let time: String = (0..10)
+        .rev()
+        .map(|i| CROCKFORD[((ms >> (5 * i)) & 31) as usize] as char)
+        .collect();
+    format!("{time}NQV75E7DEAZJZJGS")
+}
+
+/// Question #AAAA1111 for `line`, a release line of `tag`, in the device's
+/// words, answered yes on the mini `ago` before now.
+fn release_yes(rig: &Rig, tag: &str, line: &str, ago: Duration) {
+    let body = format!(
+        "{}\nIt runs with your logins, in the thread's worktree. Yes runs it now, and this same \
+         line up to 3 more times within 24 hours of your yes to push {tag} again; Slack shows \
+         each re-push. The next line is walled again.",
+        outside(line)
+    );
+    rig.asked_with("mac-mini-m2", &body, &["yes", "no"], "yes", "mac-mini-m2");
+    let answer = ulid_ago(ago);
+    let questions = std::fs::read_to_string(rig.state.join("questions.json"))
+        .unwrap()
+        .replace("01ANSWER", &answer);
+    std::fs::write(rig.state.join("questions.json"), questions).unwrap();
+    std::fs::rename(
+        rig.state.join("show-01ANSWER.json"),
+        rig.state.join(format!("show-{answer}.json")),
+    )
+    .unwrap();
+}
+
+fn send_release(rig: &Rig, line: &str) -> serde_json::Value {
+    rig.walk(&["send", "--yes", "AAAA1111", "--no-wall", line])
+}
+
+const HOUR: Duration = Duration::from_secs(3600);
+
+#[test]
+fn a_tag_push_s_yes_runs_the_same_line_three_more_times_and_no_fourth() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    release_yes(&rig, "v1", &line, HOUR);
+    for n in 0..4 {
+        let sent = send_release(&rig, &line);
+        assert_eq!(sent["exit"], 0, "push {n}: {sent}");
+    }
+    let fifth = send_release(&rig, &line);
+    assert_eq!(fifth["exit"], 2, "{fifth}");
+    assert_eq!(
+        fifth["stderr"],
+        "device: #AAAA1111 already re-pushed v1 3 times; ask again\n"
+    );
+    assert_eq!(asks(&rig), "");
+}
+
+#[test]
+fn a_tag_push_s_yes_covers_no_other_line_that_names_the_tag() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    release_yes(&rig, "v1", &line, HOUR);
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    for other in [
+        release("v2"),
+        "git commit -m \"prepare v1\"".to_string(),
+        "git push -q -f origin refs/tags/v1".to_string(),
+    ] {
+        let sent = send_release(&rig, &other);
+        assert_eq!(sent["exit"], 2, "{other}: {sent}");
+        assert_eq!(
+            sent["stderr"],
+            format!("device: #AAAA1111 does not ask for {other}\n")
+        );
+    }
+}
+
+/// The day counts from Saiful's yes: a first push late in it leaves the
+/// re-pushes no more time.
+#[test]
+fn a_re_push_past_a_day_from_the_yes_runs_nothing() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    release_yes(&rig, "v1", &line, 24 * HOUR + Duration::from_secs(60));
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    let again = send_release(&rig, &line);
+    assert_eq!(again["exit"], 2, "{again}");
+    assert_eq!(
+        again["stderr"],
+        "device: #AAAA1111 was given more than 24 hours ago; ask again\n"
+    );
+}
+
+#[test]
+fn a_re_push_just_inside_the_day_runs() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    release_yes(&rig, "v1", &line, 24 * HOUR - Duration::from_secs(60));
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+}
+
+/// A yes to a question that said "once" stays a yes for once, tag or not.
+#[test]
+fn a_yes_to_a_question_that_said_once_re_pushes_nothing() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    let body = format!(
+        "{}\nIt runs with your logins, in the thread's worktree. Yes runs it there once; the next line is walled again.",
+        outside(&line)
+    );
+    rig.asked_with("mac-mini-m2", &body, &["yes", "no"], "yes", "mac-mini-m2");
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    let again = send_release(&rig, &line);
+    assert_eq!(again["exit"], 2, "{again}");
+    assert_eq!(
+        again["stderr"],
+        "device: #AAAA1111 already sent its line; ask again\n"
+    );
+}
+
+/// Only the project's own live run re-pushes on its yes: not another
+/// session calling under its name, nor another project's thread.
+#[test]
+fn a_re_push_from_another_session_or_project_runs_nothing() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    release_yes(&rig, "v1", &line, HOUR);
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    rig.walk(&["end"]);
+    let args = ["send", "--yes", "AAAA1111", "--no-wall", line.as_str()];
+    let other = rig.call("cloud_walk", "cse_01Other", &args);
+    assert_eq!(other["exit"], 2, "{other}");
+    assert_eq!(
+        other["stderr"],
+        "device: #AAAA1111 is cloud_walk's and this session is not its live run; ask again\n"
+    );
+    rig.call("cloud_walk", "cse_01Other", &["end"]);
+    let shop = rig.call("shop", "cse_01Shop", &args);
+    assert_eq!(shop["exit"], 2, "{shop}");
+    assert_eq!(
+        shop["stderr"],
+        "device: #AAAA1111 is not a question of shop\n"
+    );
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+}
+
 #[test]
 fn a_device_s_yes_runs_a_no_wall_line_outside_once_and_the_next_is_walled() {
     let rig = rig();

@@ -288,6 +288,9 @@ fn send(
         );
     }
     let mut spent = Vec::new();
+    // A yes to a release line: its first push, or re-push n of the tag.
+    let mut release = None;
+    let mut again = None;
     let asked = if outside {
         Some(Asked::Outside)
     } else if in_development(project, session) {
@@ -299,20 +302,39 @@ fn send(
         let Some(id) = yes else {
             return ask(project, machine, kind, &line);
         };
-        if let Err(refused) = released(project, id, &line, kind) {
-            return refused;
+        match is_spent(id) {
+            Err(failed) => return failed,
+            Ok(true) => match released_again(project, session, id, &line, kind) {
+                Ok(n) => again = Some((id, n)),
+                Err(refused) => return refused,
+            },
+            Ok(false) => match answered(project, id, &line, kind) {
+                Ok(question) => {
+                    spent.push(id.to_string());
+                    release = crate::release::pushed_tag(&line)
+                        .filter(|tag| {
+                            question["body"]
+                                .as_str()
+                                .is_some_and(|body| body.contains(&crate::release::terms(tag)))
+                        })
+                        .map(|_| id);
+                }
+                Err(refused) => return refused,
+            },
         }
-        spent.push(id.to_string());
     }
     if !tmux.has(name) {
         // A yes that released no line may be the one for the whole job.
-        let job = yes.filter(|_| spent.is_empty());
+        let job = yes.filter(|_| spent.is_empty() && again.is_none());
         match start(tmux, machine, name, project, job) {
             Ok(Some(id)) => spent.push(id),
             Ok(None) => {}
             Err(failed) => return failed,
         }
     }
+    // The worktree's HEAD as the line goes out, the base of the re-pushes'
+    // diffs; a first push whose HEAD cannot be read gets no re-push.
+    let head = release.and_then(|_| head_of(tmux, name));
     let sent = if outside {
         run_outside(tmux, name, &line)
     } else if is_key(&line) {
@@ -329,6 +351,18 @@ fn send(
         Ok(()) => {
             for id in &spent {
                 spend(id);
+            }
+            let mut releases = read_releases();
+            if let (Some(id), Some(sha)) = (release, head) {
+                releases.insert(id.to_string(), Release { sha, pushes: 0 });
+            }
+            if let Some((id, n)) = again
+                && let Some(release) = releases.get_mut(id)
+            {
+                release.pushes = n;
+            }
+            if release.is_some() || again.is_some() {
+                write_releases(&releases);
             }
             Outcome::done(String::new())
         }
@@ -673,19 +707,77 @@ fn asks(body: &str, line: &str) -> bool {
     body.lines().any(|l| l.trim() == line) || body.contains(&format!("`{line}`"))
 }
 
-/// Ok when question `id` of `project` was asked by a device, is of `kind`
-/// and asks for `line` (a job's question, for any), and Saiful answered it
-/// yes (a job's, to run outside the wall) on one of the devices or the hub
-/// page, never a cloud thread's own `mem answer`, and no earlier line went
-/// out on it.
+/// `answered`, when no earlier line went out on question `id`.
 fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outcome> {
-    let spent = state(SPENT)
-        .ok_or_else(|| Outcome::fail(126, "device: cannot find the state folder\n".to_string()))?;
-    if std::fs::read_to_string(&spent).is_ok_and(|ids| ids.lines().any(|used| used == id)) {
+    if is_spent(id)? {
         return Err(Outcome::refuse(format!(
             "#{id} already sent its line; ask again"
         )));
     }
+    answered(project, id, line, kind).map(|_| ())
+}
+
+/// Whether a line already went out on question `id`.
+fn is_spent(id: &str) -> Result<bool, Outcome> {
+    let spent = state(SPENT)
+        .ok_or_else(|| Outcome::fail(126, "device: cannot find the state folder\n".to_string()))?;
+    Ok(std::fs::read_to_string(&spent).is_ok_and(|ids| ids.lines().any(|used| used == id)))
+}
+
+/// The number of the re-push that spent question `id`'s yes releases
+/// `line` as: its first push went out, the question's own words say its
+/// yes covers re-pushes of the tag `line` pushes, `line` is the one it
+/// asked for, fewer than 3 went out, Saiful's yes is under a day old, and
+/// `session` is `project`'s live cloud run.
+fn released_again(
+    project: &str,
+    session: &str,
+    id: &str,
+    line: &str,
+    kind: Asked,
+) -> Result<u32, Outcome> {
+    let refused = |why: String| Err(Outcome::refuse(format!("#{id} {why}; ask again")));
+    let question = answered(project, id, line, kind)?;
+    let Some(tag) = crate::release::pushed_tag(line) else {
+        return refused("already sent its line".to_string());
+    };
+    let covers = question["body"]
+        .as_str()
+        .is_some_and(|body| body.contains(&crate::release::terms(&tag)));
+    let Some(release) = read_releases().remove(id).filter(|_| covers) else {
+        return refused("already sent its line".to_string());
+    };
+    if release.pushes >= crate::release::REPUSHES {
+        return refused(format!(
+            "already re-pushed {tag} {} times",
+            crate::release::REPUSHES
+        ));
+    }
+    let given = question["answer_id"]
+        .as_str()
+        .and_then(crate::release::ulid_ms);
+    if !given.is_some_and(|ms| unix_now() < ms + DAY.as_millis() as u64) {
+        return refused("was given more than 24 hours ago".to_string());
+    }
+    let mem = MemCli::new();
+    if !crate::device::runs_project(session, project, &mem, &OnceCell::new()) {
+        return refused(format!(
+            "is {project}'s and this session is not its live run"
+        ));
+    }
+    Ok(release.pushes + 1)
+}
+
+/// The question `id` of `project`, when it was asked by a device, is of
+/// `kind` and asks for `line` (a job's question, for any), and Saiful
+/// answered it yes (a job's, to run outside the wall) on one of the devices
+/// or the hub page, never a cloud thread's own `mem answer`.
+fn answered(
+    project: &str,
+    id: &str,
+    line: &str,
+    kind: Asked,
+) -> Result<serde_json::Value, Outcome> {
     let mem = MemCli::new();
     let rows = mem
         .refresh(&["--project", project, "questions", "--json"])
@@ -748,7 +840,62 @@ fn released(project: &str, id: &str, line: &str, kind: Asked) -> Result<(), Outc
             "the yes for #{id} came from {machine}, not from a device or the hub page"
         )));
     }
-    Ok(())
+    Ok(question.clone())
+}
+
+/// How long a yes to a release line covers its re-pushes, from the yes.
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The yeses to a release line, by question id, under the state folder.
+const RELEASES: &str = "hub/device-tmux-release.json";
+
+/// A yes to a release line whose first push went out.
+#[derive(Serialize, Deserialize)]
+struct Release {
+    /// The job worktree's HEAD when the first push went out.
+    sha: String,
+    /// The re-pushes since.
+    pushes: u32,
+}
+
+fn read_releases() -> std::collections::BTreeMap<String, Release> {
+    state(RELEASES)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn write_releases(releases: &std::collections::BTreeMap<String, Release>) {
+    let Some(path) = state(RELEASES) else {
+        return;
+    };
+    let json = serde_json::to_vec(releases).unwrap_or_default();
+    if let Err(e) = std::fs::write(&path, json) {
+        eprintln!("hub: device: cannot keep the release yeses: {e}");
+    }
+}
+
+/// The HEAD of job `name`'s worktree.
+fn head_of(tmux: &Tmux, name: &str) -> Option<String> {
+    let folder = tmux
+        .run(&[
+            "display-message",
+            "-p",
+            "-t",
+            &format!("={name}:"),
+            "#{session_path}",
+        ])
+        .ok()?;
+    let folder = String::from_utf8_lossy(&folder.stdout).trim().to_string();
+    let git = find_in(&tmux.path, "git")?;
+    let mut command = user_command(&git, &tmux.env, false);
+    command.args(["-C", &folder, "rev-parse", "--verify", "HEAD"]);
+    match output_within(&mut command, HELPER_TIMEOUT) {
+        Ended::Exited(done) if done.code == Some(0) => {
+            Some(String::from_utf8_lossy(&done.stdout).trim().to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Keeps `id` as spent once its line went out, so its yes sends no other.
