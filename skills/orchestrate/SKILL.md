@@ -192,6 +192,11 @@ Done when every task is ticked and landed on the trunk.
   green: slices that pass alone can fail together. A red suite stops new
   work: find the commit, then follow the diagnose skill. A red that two
   fixes did not turn green parks the milestone (§8).
+- **Flakes.** A test that fails, then passes on a rerun with no code
+  change, is a flake: log it with `mem log "flake: <test file> failed then
+  passed at <sha>"`. It gets never a sleep or a retry until green. The
+  review reports it as a block until a commit fixes its cause, or deletes
+  the test and says why.
 - **Never in a hook.** The git hooks run only the hygiene check.
 
 A suite slower than about two minutes is a lesson to record, and splitting

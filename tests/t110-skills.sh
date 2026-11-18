@@ -175,3 +175,12 @@ like "$(sed -n '/^## 6\./,$p' <<<"$dogfood")" 'mem log "walked <milestone> at <s
 six=$(skill orchestrate | sed -n '/^## 6/,/^## 7/p')
 like "$six" 'no walk: <why>' "orchestrate: a milestone with nothing to open logs no walk"
 like "$six" 'walked <milestone> at <sha>' "orchestrate: a walk it runs itself ends with the walk line"
+# r3-walk-line: a flake is logged, never slept or retried away, and blocks
+# the review until a commit fixes its cause or deletes the test.
+three=$(skill orchestrate | sed -n '/^## 3\./,/^## 4\./p' | tr '\n' ' ' | tr -s ' ')
+like "$three" 'mem log "flake: <test file> failed then passed at <sha>"' "orchestrate: a flake is logged"
+like "$three" 'never a sleep or a retry until green' "orchestrate: a flake gets no sleep or retry"
+reviewer=$(tr '\n' ' ' < "$WF_ROOT/agents/reviewer.md" | tr -s ' ')
+like "$reviewer" "grep -F 'flake: '" "reviewer: it reads the milestone's flake lines"
+like "$reviewer" 'is a `\[blocks\]` finding naming its test file' "reviewer: a flake is a block"
+like "$reviewer" 'deletes the test and says why' "reviewer: a flake clears by a fix or a reasoned delete"

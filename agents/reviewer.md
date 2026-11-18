@@ -34,6 +34,12 @@ Work in this order:
    - anything in the repo that reads as agent-written: notes, plan files,
      references to tasks, rulings or sessions in code or commit messages
 
+4. Read the milestone's flake lines, `mem log --limit 1000 | grep -F
+   'flake: '`. Each line whose sha is in the range is a `[blocks]` finding
+   naming its test file, unless a commit in the range fixes the flake's
+   cause, or deletes the test and says why. A sleep or a retry added around
+   the test fixes nothing.
+
 A finding names the input or state that breaks and what goes wrong. Before
 you report one, check the callers, guards and defaults that may already
 handle it. Ignore style, naming taste and refactors nobody needs.
