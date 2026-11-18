@@ -28,6 +28,8 @@ use crate::proc::{self, Ended};
 use crate::slack::Slack;
 
 const BACKOFF_START: Duration = Duration::from_secs(1);
+/// How often a store that cannot be reached is tried again.
+const UNREACHABLE_RETRY: Duration = Duration::from_millis(250);
 /// The outbox should empty within 10 s of the store coming back, so the wait
 /// between tries stops growing at 8 s.
 const BACKOFF_CAP: Duration = Duration::from_secs(8);
@@ -379,12 +381,13 @@ pub fn run(store: Store, kick: Arc<AtomicBool>, slack: Option<Arc<Slack>>) -> ! 
         CURRENT.store(false, Ordering::SeqCst);
         match ended {
             Ok(()) => eprintln!("hub: share: the store closed the socket"),
-            // Cut off costs the store nothing, so it is tried every second:
-            // the outbox goes out, and other writes come in, within 2 s of
-            // the way back.
+            // Cut off costs the store nothing, so it is tried every quarter
+            // second: the outbox goes out, and other writes come in, within
+            // 2 s of the way back, most of which is left for the sync, which
+            // a busy machine slows.
             Err(e) if e.chain().any(|c| c.is::<Unreachable>()) => {
                 eprintln!("hub: share: disconnected: {e:#}");
-                std::thread::sleep(BACKOFF_START);
+                std::thread::sleep(UNREACHABLE_RETRY);
                 continue;
             }
             Err(e) => eprintln!("hub: share: disconnected: {e:#}"),

@@ -8,7 +8,8 @@
 #     it filled before still answers;
 #   - the cloud's local hub reaches the store only through the VM's HTTP
 #     proxy (CONNECT), and once the proxy comes back after a long cut, a
-#     write the mini made meanwhile is listed in the cloud within 2 s;
+#     write the mini made meanwhile is listed in the cloud within 2 s, the
+#     hub trying the store 3 times a second while cut off;
 #   - a cloud session that ends cut off leaves its 3 unsent logs in
 #     .mem-outbox.json on its branch; the mini imports and sends them and
 #     stages the file's removal; importing that file again, here or on a
@@ -187,7 +188,14 @@ like "$(cat "$T_TMP/connects.log" 2>/dev/null)" "^CONNECT store.invalid:$CF_DEV_
 block
 on mini mem --project walk log "made during the cut" >/dev/null
 # Long enough for a doubling wait to have grown past 2 s.
-sleep 10
+sleep 8
+tries=$(grep -c 'share: disconnected' "$T_TMP/cloud.hub.log")
+sleep 2
+tries=$(($(grep -c 'share: disconnected' "$T_TMP/cloud.hub.log") - tries))
+# The 2 s after the way back are the reconnect and the sync together: a
+# reconnect tried once a second took ~850 ms of them, and a sync slowed by
+# a busy machine ran out the rest.
+is "$((tries >= 6))" 1 "cut off, the cloud's hub tries the store at least 3 times a second ($tries in 2 s)"
 unblock
 start=$(now_ms)
 while ! lists "made during the cut" && [ $(($(now_ms) - start)) -le 2000 ]; do sleep 0.05; done
