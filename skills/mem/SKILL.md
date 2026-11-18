@@ -113,6 +113,9 @@ prints it.
 
 **An idea for later** → `mem idea "<text>"`, not a plan task.
 
+**News for Saiful that asks nothing** → `mem tell "<text>"`: the mini's hub
+posts it to his Slack once, as `<project>: <text>`. A question is `mem ask`.
+
 Superseding is a write too: `mem save "<new text>" --supersedes <id>`. Two live
 items that disagree is this store's failure mode.
 
