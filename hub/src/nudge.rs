@@ -25,6 +25,11 @@
 //! thread's link: once for each quiet spell, kept as `quiet <session>
 //! <start>` so a restart rings no spell twice, and a write starts a new one.
 //! It rings only while this replica is as current as the store.
+//!
+//! A tell (`mem tell`, a log of type `tell`) goes to his Slack DM as
+//! `<project>: <text>`, the text read whole from its body. It is kept as
+//! `tell <id>` only once Slack took it, so a failed post goes again next
+//! round and none goes twice.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -65,8 +70,9 @@ fn nudged_file() -> Option<PathBuf> {
 
 /// What was sent already: the parks nudged, as `<session> <handoff time>`
 /// lines, the answers typed in, as `answer <id>`, those not typed in (a
-/// failed send, or not his word), as `tried <id>`, and the runs whose
-/// account had no login, as `<session> no login`.
+/// failed send, or not his word), as `tried <id>`, the runs whose
+/// account had no login, as `<session> no login`, and the tells posted, as
+/// `tell <id>`.
 fn read_nudged() -> HashSet<String> {
     nudged_file()
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -486,6 +492,52 @@ fn quiet_round(nudged: &mut HashSet<String>, slack: Option<&Slack>) {
     }
 }
 
+/// Posts each tell of each project not posted yet, oldest first. With no
+/// Slack here, nothing is posted or kept.
+fn tell_round(nudged: &mut HashSet<String>, slack: Option<&Slack>) {
+    let Some(slack) = slack else {
+        return;
+    };
+    let Some(projects) = mem_json(&["projects", "--json"]) else {
+        return;
+    };
+    for project in projects["projects"].as_array().into_iter().flatten() {
+        let Some(name) = project["name"].as_str() else {
+            continue;
+        };
+        let Some(tells) = mem_json(&["log", "--type", "tell", "--json", "--project", name]) else {
+            continue;
+        };
+        for row in tells["items"].as_array().into_iter().flatten().rev() {
+            let Some(id) = row["id"].as_str() else {
+                continue;
+            };
+            let key = format!("tell {id}");
+            if nudged.contains(&key) {
+                continue;
+            }
+            // The title is cut; the body holds the whole text.
+            let Some(text) = mem_json(&["show", id, "--json"]).and_then(|shown| {
+                Some(
+                    shown["items"].as_array()?.first()?["body"]
+                        .as_str()?
+                        .trim()
+                        .to_string(),
+                )
+            }) else {
+                continue;
+            };
+            if let Err(e) = slack.post_text(&format!("{name}: {text}")) {
+                eprintln!("hub: nudge: {name}: posting tell {id}: {e:#}");
+                continue;
+            }
+            eprintln!("hub: nudge: {name}: posted tell {id}");
+            nudged.insert(key);
+            write_nudged(nudged);
+        }
+    }
+}
+
 /// Sends `text` to the run's thread with its account's login, tried
 /// `TRIES` times; None when that account has no login here, after ringing
 /// Saiful once for the run.
@@ -546,5 +598,6 @@ pub fn run(machine: &str, slack: Option<Arc<Slack>>) {
         round(&mut nudged, every, settle, slack.as_deref());
         relay_round(&mut nudged, every, slack.as_deref());
         quiet_round(&mut nudged, slack.as_deref());
+        tell_round(&mut nudged, slack.as_deref());
     }
 }

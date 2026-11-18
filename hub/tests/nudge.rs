@@ -29,6 +29,7 @@ fn bins(dir: &TempDir) -> PathBuf {
              'projects --json') cat '{d}/projects.json' ;;\n\
              'questions --json') cat '{d}/questions.json' ;;\n\
              'handoff --project') cat '{d}/handoff.txt' ;;\n\
+             'log --type') cat '{d}/tells.json' ;;\n\
              show\\ *) cat \"{d}/show-$2.json\" 2>/dev/null || echo '{{\"items\":[{{\"machine\":\"mac-mini-m2\"}}]}}' ;;\n\
              esac"
         ),
@@ -456,16 +457,32 @@ fn the_nudge_goes_out_with_the_login_of_the_runs_own_account() {
     }
 }
 
+/// The texts a fake Slack recorded.
+type Posts = Arc<Mutex<Vec<String>>>;
+
 /// A Slack Web API that records the text of each chat.postMessage.
-fn fake_slack() -> (String, Arc<Mutex<Vec<String>>>) {
+fn fake_slack() -> (String, Posts) {
+    let (api, posts, _) = failing_slack(0);
+    (api, posts)
+}
+
+/// A Slack Web API that answers `ok: false` to its first `fails`
+/// chat.postMessage calls: the text of each post it took, and apart the
+/// text of each it failed.
+fn failing_slack(fails: usize) -> (String, Posts, Posts) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let api = format!("http://{}/api", listener.local_addr().unwrap());
     let posts = Arc::new(Mutex::new(Vec::new()));
+    let failed = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&posts);
+    let refused = Arc::clone(&failed);
     std::thread::spawn(move || {
+        let mut fails = fails;
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
             let mut length = 0;
             loop {
                 let mut header = String::new();
@@ -481,11 +498,15 @@ fn fake_slack() -> (String, Arc<Mutex<Vec<String>>>) {
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
             let body: Value = serde_json::from_slice(&body).unwrap_or_default();
-            recorded
-                .lock()
-                .unwrap()
-                .push(body["text"].as_str().unwrap_or_default().to_string());
-            let reply = r#"{"ok":true,"channel":"D0DM","ts":"1700000000.000100"}"#;
+            let text = body["text"].as_str().unwrap_or_default().to_string();
+            let reply = if fails > 0 && request.contains("chat.postMessage") {
+                fails -= 1;
+                refused.lock().unwrap().push(text);
+                r#"{"ok":false,"error":"x"}"#
+            } else {
+                recorded.lock().unwrap().push(text);
+                r#"{"ok":true,"channel":"D0DM","ts":"1700000000.000100"}"#
+            };
             let _ = write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
@@ -493,7 +514,7 @@ fn fake_slack() -> (String, Arc<Mutex<Vec<String>>>) {
             );
         }
     });
-    (api, posts)
+    (api, posts, failed)
 }
 
 #[test]
@@ -539,6 +560,111 @@ fn a_run_whose_account_has_no_login_here_gets_no_send_and_one_ring() {
         .count();
     assert_eq!(rings, 1, "{:?}", posts.lock().unwrap());
     assert!(sent(&dir).is_empty(), "{:?}", sent(&dir));
+}
+
+const TELL: &str = "ebdfy-api 006785a5 live, roll back to 44fee01e";
+const TOLD: &str = "ebdfy: ebdfy-api 006785a5 live, roll back to 44fee01e";
+
+/// Project `ebdfy` with one tell of TELL, its body as mem writes it.
+fn told(dir: &TempDir) {
+    let id = ulid("2026-11-13T18:30:00Z", "T1");
+    std::fs::write(
+        dir.join("projects.json"),
+        json!({"projects": [{"name": "ebdfy", "checkouts": []}]}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("tells.json"),
+        json!({"items": [{"id": id, "short_id": "T1", "project": "ebdfy",
+            "machine": "nuc", "kind": "log", "title": TELL, "type": "tell"}]})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(&format!("show-{id}.json")),
+        json!({"items": [{"id": id, "kind": "log", "type": "tell", "machine": "nuc",
+            "body": format!("\n{TELL}\n")}]})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+fn spawn_slack(dir: &TempDir, bin: &Path, machine: &str, api: &str) -> Hub {
+    let home = dir.join("home");
+    std::fs::create_dir_all(home.join("config/qshell")).unwrap();
+    std::fs::write(home.join("config/qshell/machine"), machine).unwrap();
+    let socket = dir.join("local.sock");
+    Hub::spawn_env(
+        &home,
+        &[bin],
+        &["local", "--port", "0"],
+        &[
+            ("HUB_PEER_TOKEN", PEER_TOKEN),
+            ("HUB_LOCAL_SOCKET", socket.to_str().unwrap()),
+            ("WORKFLOW_MACHINE", "mini"),
+            ("HUB_NUDGE_CHECK_MS", "100"),
+            ("SLACK_BOT_TOKEN", "xoxb-test"),
+            ("SLACK_APP_TOKEN", "xapp-test"),
+            ("SLACK_USER_ID", "U0SAIFUL"),
+            ("SLACK_API_URL", api),
+        ],
+    )
+}
+
+fn count(posts: &Mutex<Vec<String>>, text: &str) -> usize {
+    posts.lock().unwrap().iter().filter(|t| *t == text).count()
+}
+
+#[test]
+fn a_tell_goes_to_slack_once_as_its_project_and_text() {
+    let dir = TempDir::new("nudge-tell");
+    let bin = bins(&dir);
+    told(&dir);
+    let (api, posts) = fake_slack();
+    let hub = spawn_slack(&dir, &bin, "mac-mini-m2", &api);
+    wait_for("the tell", Duration::from_secs(5), || {
+        count(&posts, TOLD) > 0
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(count(&posts, TOLD), 1, "{:?}", posts.lock().unwrap());
+
+    // A restarted hub knows the tell went out.
+    drop(hub);
+    let _hub = spawn_slack(&dir, &bin, "mac-mini-m2", &api);
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(
+        count(&posts, TOLD),
+        1,
+        "after a restart: {:?}",
+        posts.lock().unwrap()
+    );
+}
+
+#[test]
+fn a_tell_slack_failed_is_posted_on_a_later_pass_once() {
+    let dir = TempDir::new("nudge-tell-fail");
+    let bin = bins(&dir);
+    told(&dir);
+    let (api, posts, failed) = failing_slack(1);
+    let _hub = spawn_slack(&dir, &bin, "mac-mini-m2", &api);
+    wait_for("the tell", Duration::from_secs(5), || {
+        count(&posts, TOLD) > 0
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(count(&failed, TOLD), 1, "{:?}", failed.lock().unwrap());
+    assert_eq!(count(&posts, TOLD), 1, "{:?}", posts.lock().unwrap());
+}
+
+#[test]
+fn a_hub_on_another_machine_posts_no_tell() {
+    let dir = TempDir::new("nudge-tell-nuc");
+    let bin = bins(&dir);
+    told(&dir);
+    let (api, posts, failed) = failing_slack(0);
+    let _hub = spawn_slack(&dir, &bin, "nuc", &api);
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(count(&posts, TOLD), 0, "{:?}", posts.lock().unwrap());
+    assert_eq!(count(&failed, TOLD), 0, "{:?}", failed.lock().unwrap());
 }
 
 /// A run of `cloud_walk` live in the cloud since FIRST, with no park.
