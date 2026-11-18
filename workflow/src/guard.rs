@@ -6,11 +6,14 @@
 //! Input it cannot read passes: a broken guard must not stop the agent.
 
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::exit;
+use crate::{exit, mask, memcli};
 
 /// Claude Code blocks a tool call whose PreToolUse hook exits 2, and shows
 /// the agent what the hook wrote to stderr.
@@ -37,9 +40,44 @@ pub fn cmd_guard_pnpm() -> i32 {
     };
     if runs_pnpm(command) && over_linked_node_modules(Path::new(cwd)) {
         eprintln!("{REFUSAL}");
+        record("pnpm", command, Path::new(cwd));
         return BLOCK;
     }
     exit::OK
+}
+
+/// How long a guard waits for its mem write before it answers anyway.
+const RECORD_WAIT: Duration = Duration::from_secs(1);
+
+/// Log a refusal to the project of `cwd` as `guard <name> refused: <what>`,
+/// `what` masked and cut to 120 characters, so a secret in a refused
+/// command never reaches mem. mem runs in a process group of its own and
+/// the guard waits for it at most RECORD_WAIT: a slow, failing or missing
+/// mem never changes the guard's answer.
+pub(crate) fn record(name: &str, what: &str, cwd: &Path) {
+    if !cwd.is_dir() {
+        return;
+    }
+    let masked = String::from_utf8_lossy(&mask::mask(what.as_bytes())).replace('\n', " ");
+    let cut: String = masked.chars().take(120).collect();
+    let Ok(mut child) = Command::new(memcli::bin())
+        .args(["log", &format!("guard {name} refused: {cut}")])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+    else {
+        return;
+    };
+    let started = Instant::now();
+    while started.elapsed() < RECORD_WAIT {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Whether any simple command in `command` runs pnpm, past the variable

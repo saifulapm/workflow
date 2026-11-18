@@ -23,7 +23,12 @@ fn world(tag: &str) -> Scratch {
     work
 }
 
+/// mem is one that does not exist, so no test writes to the real store.
 fn guard(cwd: &std::path::Path, tool: &str, command: &str) -> Output {
+    run_guard(cwd, tool, command, std::path::Path::new("/nonexistent/mem"))
+}
+
+fn run_guard(cwd: &std::path::Path, tool: &str, command: &str, mem: &std::path::Path) -> Output {
     let input = json!({
         "hook_event_name": "PreToolUse",
         "tool_name": tool,
@@ -32,6 +37,7 @@ fn guard(cwd: &std::path::Path, tool: &str, command: &str) -> Output {
     });
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .args(["guard", "pnpm"])
+        .env("WORKFLOW_MEM", mem)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -133,4 +139,86 @@ fn other_tools_and_unreadable_input_pass() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{out:?}");
+}
+
+/// A mem that writes the folder it runs in and its words to mem.log in
+/// `w`, then runs `then` (an exit code or a sleep).
+fn fake_mem(w: &Scratch, then: &str) -> std::path::PathBuf {
+    let log = w.at("mem.log");
+    w.script(
+        "bin/mem",
+        &format!(
+            "printf '%s|%s\\n' \"$(pwd -P)\" \"$*\" >>'{}'\n{then}",
+            log.display()
+        ),
+    )
+}
+
+fn guard_with_mem(cwd: &std::path::Path, mem: &std::path::Path, command: &str) -> Output {
+    run_guard(cwd, "Bash", command, mem)
+}
+
+#[test]
+fn a_refusal_writes_one_line_to_the_project_of_the_cwd() {
+    let w = world("guard-record");
+    let mem = fake_mem(&w, "exit 0");
+    assert!(refused(&guard_with_mem(&w.at("wt"), &mem, "pnpm test")));
+    let wt = w.at("wt").canonicalize().unwrap();
+    assert_eq!(
+        w.read("mem.log"),
+        format!("{}|log guard pnpm refused: pnpm test\n", wt.display())
+    );
+}
+
+#[test]
+fn a_refused_command_is_logged_masked_and_cut_to_120_characters() {
+    let w = world("guard-record-cut");
+    let mem = fake_mem(&w, "exit 0");
+    let long = format!("pnpm test {}", "x".repeat(290));
+    assert!(refused(&guard_with_mem(&w.at("wt"), &mem, &long)));
+    // Built at run time, so the source holds no token shape.
+    let token = format!(
+        "GITHUB_TOKEN=ghp_{} pnpm i",
+        "0123456789abcdefghijklmnopqrstuvwxyz"
+    );
+    assert!(refused(&guard_with_mem(&w.at("wt"), &mem, &token)));
+    let log = w.read("mem.log");
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines.len(), 2, "{log}");
+    assert!(
+        lines[0].ends_with(&format!("|log guard pnpm refused: {}", &long[..120])),
+        "{log}"
+    );
+    assert!(
+        lines[1].ends_with("|log guard pnpm refused: GITHUB_TOKEN=ghp_*** pnpm i"),
+        "{log}"
+    );
+    assert!(!log.contains("ghp_0123"), "{log}");
+}
+
+#[test]
+fn an_allowed_command_writes_nothing() {
+    let w = world("guard-record-allowed");
+    let mem = fake_mem(&w, "exit 0");
+    let out = guard_with_mem(&w.at("wt"), &mem, "node_modules/.bin/vitest run");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(!w.has("mem.log"));
+}
+
+#[test]
+fn a_failing_or_slow_mem_never_changes_the_answer() {
+    let w = world("guard-record-mem-fails");
+    let failing = fake_mem(&w, "echo 'mem: store down' >&2; exit 1");
+    let out = guard_with_mem(&w.at("wt"), &failing, "pnpm test");
+    assert!(refused(&out), "{out:?}");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("store down"));
+    assert!(out.stdout.is_empty(), "{out:?}");
+
+    let slow = fake_mem(&w, "sleep 10");
+    let started = std::time::Instant::now();
+    assert!(refused(&guard_with_mem(&w.at("wt"), &slow, "pnpm test")));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+
+    let missing = w.at("no-such-mem");
+    assert!(refused(&guard_with_mem(&w.at("wt"), &missing, "pnpm test")));
 }

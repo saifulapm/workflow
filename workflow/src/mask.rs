@@ -6,7 +6,18 @@ use std::io::{Read, Write};
 
 use crate::exit;
 
-const PREFIXES: [&[u8]; 4] = [b"shpss_", b"shpat_", b"cfut_", b"tskey-"];
+const PREFIXES: [&[u8]; 10] = [
+    b"shpss_",
+    b"shpat_",
+    b"cfut_",
+    b"tskey-",
+    b"ghp_",
+    b"gho_",
+    b"ghu_",
+    b"ghs_",
+    b"ghr_",
+    b"github_pat_",
+];
 
 pub fn cmd_mask() -> i32 {
     let mut input = Vec::new();
@@ -27,7 +38,7 @@ fn is_token_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
-fn mask(input: &[u8]) -> Vec<u8> {
+pub(crate) fn mask(input: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len());
     let mut i = 0;
     while i < input.len() {
