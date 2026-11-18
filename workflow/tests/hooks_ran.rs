@@ -66,11 +66,21 @@ fn start(bin: &Path, cwd: &Path, session: Option<&str>) -> Vec<Output> {
         .collect()
 }
 
-fn logged(w: &Scratch) -> Vec<String> {
-    if !w.has("mem.log") {
-        return Vec::new();
+/// The lines mem.log holds once it holds `n`, or after 10 s: the hook's
+/// write runs on after the hook has returned.
+fn logged(w: &Scratch, n: usize) -> Vec<String> {
+    let started = std::time::Instant::now();
+    loop {
+        let lines: Vec<String> = if w.has("mem.log") {
+            w.read("mem.log").lines().map(str::to_string).collect()
+        } else {
+            Vec::new()
+        };
+        if lines.len() >= n || started.elapsed() > std::time::Duration::from_secs(10) {
+            return lines;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    w.read("mem.log").lines().map(str::to_string).collect()
 }
 
 #[test]
@@ -84,7 +94,7 @@ fn a_cloud_session_start_names_its_session_and_no_project_outside_one() {
         assert!(out.stdout.is_empty(), "{out:?}");
     }
     assert_eq!(
-        logged(&w),
+        logged(&w, 1),
         ["--project workflow hooks ran: cse_r1test in none"]
     );
 }
@@ -108,7 +118,7 @@ fn a_session_whose_environment_names_a_project_still_logs_its_cwds() {
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(
-        logged(&w),
+        logged(&w, 1),
         ["--project workflow hooks ran: cse_r1test in none"]
     );
 }
@@ -120,7 +130,7 @@ fn a_cloud_session_start_in_a_checkout_names_its_project() {
     let checkout = w.mkdir("cloud_walk");
     start(&bin, &checkout, Some("cse_r1test"));
     assert_eq!(
-        logged(&w),
+        logged(&w, 1),
         ["--project workflow hooks ran: cse_r1test in cloud_walk"]
     );
 }
@@ -133,7 +143,7 @@ fn a_start_and_a_resume_write_a_line_each() {
     start(&bin, &home, Some("cse_r1test"));
     start(&bin, &home, Some("cse_r1test"));
     let line = "--project workflow hooks ran: cse_r1test in none";
-    assert_eq!(logged(&w), [line, line]);
+    assert_eq!(logged(&w, 2), [line, line]);
 }
 
 #[test]
@@ -144,7 +154,7 @@ fn a_local_session_start_writes_no_line() {
     for out in start(&bin, &home, None) {
         assert_eq!(out.status.code(), Some(0), "{out:?}");
     }
-    assert_eq!(logged(&w), Vec::<String>::new());
+    assert_eq!(logged(&w, 0), Vec::<String>::new());
 }
 
 #[test]
@@ -155,4 +165,29 @@ fn a_failing_mem_still_lets_the_session_start() {
     for out in start(&bin, &home, Some("cse_r1test")) {
         assert_eq!(out.status.code(), Some(0), "{out:?}");
     }
+}
+
+/// A fresh cloud VM's first mem replays the store, about 25 s: the start
+/// does not wait for it, and the line still lands once mem is done.
+#[test]
+fn a_slow_mem_never_delays_the_start_and_still_writes_the_line() {
+    let w = Scratch::new("hooks-ran-mem-slow");
+    let bin = fake_mem(&w, "sleep 2");
+    let home = w.mkdir("home/user");
+    let command = session_start().pop().unwrap();
+    let started = std::time::Instant::now();
+    let out = Command::new("/bin/sh")
+        .args(["-c", &command])
+        .current_dir(&home)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("CLAUDE_CODE_REMOTE_SESSION_ID", "cse_r1test")
+        .env_remove("MEM_PROJECT")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(
+        logged(&w, 1),
+        ["--project workflow hooks ran: cse_r1test in none"]
+    );
 }

@@ -87,6 +87,7 @@ like "$(skill plan | sed -n '/^11\. /,/^Store each plan/p')" 'names where it was
 # missing, never a question.
 first=$(awk '/^- /{n++} n==1' "$WF_ROOT/skills/orchestrate/cloud.md")
 like "$first" 'mem log --project workflow' "orchestrate cloud: the first step reads workflow's log"
+like "$first" '--limit 200 [|] grep -F' "orchestrate cloud: it reads past the default 20 entries"
 like "$first" 'hooks ran: [$]CLAUDE_CODE_REMOTE_SESSION_ID ' "orchestrate cloud: it looks for its own session's hooks line"
 like "$first" 'mem finding add --project workflow --milestone hooks-in-threads --step 0 "hooks did not run in thread [$]CLAUDE_CODE_REMOTE_SESSION_ID"' \
 	"orchestrate cloud: a missing line files a hooks-in-threads finding"
