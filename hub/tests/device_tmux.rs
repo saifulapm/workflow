@@ -1507,18 +1507,11 @@ fn a_tag_push_s_yes_covers_no_other_line_that_names_the_tag() {
 
 /// The commit `tag` names on the rig's origin, empty while it has none.
 fn origin_tag(rig: &Rig, tag: &str) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(&rig.origin)
-        .args([
-            "rev-parse",
-            "-q",
-            "--verify",
-            &format!("refs/tags/{tag}^{{commit}}"),
-        ])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
+    let named = format!("refs/tags/{tag}");
+    git(
+        &rig.origin,
+        &["for-each-ref", "--format=%(objectname)", &named],
+    )
 }
 
 /// What the device told Saiful with `mem tell`, one call a line.
