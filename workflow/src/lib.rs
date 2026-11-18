@@ -40,6 +40,7 @@ pub mod shell;
 pub mod shopify;
 pub mod switch;
 pub mod wait;
+pub mod walk_account;
 pub mod worktree;
 
 use clap::Parser;
@@ -127,6 +128,7 @@ pub fn run(cli: Cli) -> i32 {
             _ => guard::cmd_guard_pnpm(),
         },
         Command::Mask => mask::cmd_mask(),
+        Command::WalkAccount => walk_account::cmd_walk_account(),
         Command::Worktree { action } => match action.as_str() {
             "remove" => worktree::cmd_worktree_remove(),
             _ => worktree::cmd_worktree_create(),

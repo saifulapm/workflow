@@ -37,6 +37,13 @@ he is away and the screen is unlocked:
 
     curl -s http://127.0.0.1:8787/api/presence   # "watching": false and "locked": false
 
+Before a step on claude.ai in his Chromium, read the account it holds:
+
+    workflow walk-account    # claude.ai account in Chromium: main, or not main
+
+When it is not the account your brief names, walk no step there: report
+the mismatch to the orchestrator.
+
 The `desktop` skill holds the tools and their rules (text before pixels,
 region screenshots, OCR before reading an image). Load it before the walk.
 

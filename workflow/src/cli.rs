@@ -406,6 +406,19 @@ hub-local.")]
     /// Copy stdin to stdout with secret tokens (shpss_, shpat_, cfut_, tskey-)
     /// cut to their prefix and `***`. Pipe a page snapshot through it.
     Mask,
+    /// Print the claude.ai account Saiful's Chromium holds, main or not, before a walk.
+    #[command(
+        long_about = "Print the claude.ai account Saiful's Chromium holds, main or not, before a walk.
+
+It attaches to his Chromium through playwright-cli as `-s=walk-account`, with
+the extension's token (PLAYWRIGHT_MCP_EXTENSION_TOKEN, else
+playwright-extension-token's), opens a tab of its own on claude.ai's Code page,
+reads the page's text, closes that tab and detaches. The main account's page
+names its Ultra plan. It prints one line, `claude.ai account in Chromium:
+main` or `... not main (...)`. Exit 1 when it has no token, the attach fails
+or the page cannot be read."
+    )]
+    WalkAccount,
     /// A Claude Code worktree hook, given its JSON on stdin.
     #[command(long_about = "A Claude Code worktree hook, given its JSON on stdin.
 

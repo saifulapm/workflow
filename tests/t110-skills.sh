@@ -148,6 +148,10 @@ like "$dogfood" "device tmux send 'workflow shopify deploy <app>'" \
 	"dogfood: an app's staging deploy is typed into device tmux"
 like "$dogfood" 'device browser goto <url>' "dogfood: the walk opens the walk line's url"
 like "$dogfood" 'end with `playwright-cli -s=<name> detach`' "dogfood: a walk in his Chromium ends by detaching"
+like "$(sed -n '/api.presence/,/^## /p' <<<"$dogfood")" 'workflow walk-account' \
+	"dogfood: the presence check reads the claude.ai account before a step there"
+like "$(skill orchestrate | sed -n '/^## 6/,/^## 7/p')" 'run `workflow walk-account` and name the account it prints in both' \
+	"orchestrate: a walk's question and brief name the account its Chromium holds"
 like "$cloud" "device tmux send 'workflow shopify deploy <app>'" \
 	"orchestrate cloud: an app's staging deploy is typed into device tmux"
 like "$cloud" '~/.cache/workflow-cloud/<repo>' "orchestrate cloud: tmux works in the deploy worktree"

@@ -250,6 +250,10 @@ on an isolated surface and files each defect with `mem finding add`. A UI-free m
 library or an internal refactor, has its walk replaced by running its
 examples or CLI once yourself.
 
+A step on claude.ai in Saiful's Chromium walks on whichever account that
+browser holds. Before you write its question or the brief,
+run `workflow walk-account` and name the account it prints in both.
+
 Brief the walker to append one line per step to
 `~/.cache/<project>-<milestone>/walk.log`, and watch that file with Monitor.
 A walk with no new line for 15 minutes has stalled: stop it and launch a
