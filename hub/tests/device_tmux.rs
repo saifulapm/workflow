@@ -1412,10 +1412,13 @@ fn a_tag_push_s_question_says_its_yes_covers_three_re_pushes_for_a_day() {
     assert!(!asks[other..].contains("re-push"), "{asks}");
 }
 
-/// A release line the tests send: it tags the worktree's HEAD and pushes
-/// the tag to the rig's origin.
+/// A release line the tests send, in cloud.md's shape: it tags the
+/// worktree's HEAD and moves the tag on the rig's origin by delete then
+/// push, the delete failing on the first push.
 fn release(tag: &str) -> String {
-    format!("git tag -f {tag} && git push -q -f origin refs/tags/{tag}")
+    format!(
+        "git tag -f {tag}; git push -q origin :refs/tags/{tag}; git push -q origin refs/tags/{tag}"
+    )
 }
 
 /// A ULID minted `ago` before now, as mem mints an answer's id.
@@ -1502,6 +1505,22 @@ fn a_tag_push_s_yes_covers_no_other_line_that_names_the_tag() {
     }
 }
 
+/// The commit `tag` names on the rig's origin, empty while it has none.
+fn origin_tag(rig: &Rig, tag: &str) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&rig.origin)
+        .args([
+            "rev-parse",
+            "-q",
+            "--verify",
+            &format!("refs/tags/{tag}^{{commit}}"),
+        ])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 /// What the device told Saiful with `mem tell`, one call a line.
 fn tells(rig: &Rig) -> String {
     std::fs::read_to_string(rig.state.join("tells")).unwrap_or_default()
@@ -1515,6 +1534,7 @@ fn each_re_push_tells_its_diff_since_the_yes_and_the_first_push_none() {
     release_yes(&rig, "v1", &line, HOUR);
     let yes = rig.origin_sha("cloud/cloud_walk-w14");
     assert_eq!(send_release(&rig, &line)["exit"], 0);
+    wait_until(Duration::from_secs(10), || origin_tag(&rig, "v1") == yes);
     assert_eq!(tells(&rig), "");
     // The thread's fix reaches the device with the job's next start.
     rig.walk(&["end"]);
@@ -1522,6 +1542,8 @@ fn each_re_push_tells_its_diff_since_the_yes_and_the_first_push_none() {
         std::fs::write(seed.join("apps/README"), "walk\nfixed\nagain\n").unwrap();
     });
     assert_eq!(send_release(&rig, &line)["exit"], 0);
+    let fix = rig.origin_sha("cloud/cloud_walk-w14");
+    wait_until(Duration::from_secs(10), || origin_tag(&rig, "v1") == fix);
     let short = &yes[..7];
     assert_eq!(
         tells(&rig),

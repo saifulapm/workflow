@@ -139,9 +139,12 @@ the skill holds, with these changes:
   hub's list; on `hold`, do other work.
 - A release, a line that pushes a tag outside the wall, names the tag as
   `refs/tags/<tag>` and has no sha in it, so the same line pushes again
-  after a fix: `device tmux send --no-wall 'git tag -f <tag> && git push
-  -f origin refs/tags/<tag>'`, which tags the worktree at your branch's
-  tip. The device's question is the ask for it; ask nothing yourself. His
+  after a fix, and moves the tag by delete then push, never a forced push
+  (your safety check refuses that even after his yes): `device tmux send
+  --no-wall 'git tag -f <tag>; git push origin :refs/tags/<tag>; git push origin refs/tags/<tag>'`,
+  which tags the worktree at your branch's tip. The delete fails harmlessly
+  on the first push. The device's question is the ask for it; ask nothing
+  yourself. His
   yes runs it, and the same line 3 more times within 24 hours of his yes:
   to re-push, push the fix to your branch, `device tmux end` so the next
   job starts at its new tip, and send the identical line with `--yes

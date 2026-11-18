@@ -135,6 +135,7 @@ mod tests {
             "git push origin 4438a764:refs/tags/v1",
             "git push origin HEAD:refs/heads/main refs/tags/v1",
             "git push origin :refs/tags/v1; git push origin refs/tags/v1",
+            "git tag -f v1; git push origin :refs/tags/v1; git push origin refs/tags/v1",
         ] {
             assert_eq!(pushed_tag(line).as_deref(), Some("v1"), "{line}");
         }

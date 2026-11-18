@@ -139,6 +139,11 @@ like "$wall" 'the wall cannot start on <machine>' "orchestrate cloud: a wall tha
 # One yes to a release line covers its next three pushes (r5-release-yes).
 release=$(sed -n '/^- A release, a line that pushes a tag/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
 like "$release" 'refs/tags/<tag>' "orchestrate cloud: a release line names its tag as refs/tags/<tag>"
+# A thread's own safety check refused `git push -f` of a tag twice, even
+# after Saiful's yes (r5 walk, #0QGD8RGC); m38's delete-then-push lines ran.
+like "$release" 'git push origin :refs/tags/<tag>; git push origin refs/tags/<tag>' \
+	"orchestrate cloud: a release line moves its tag by delete then push"
+unlike "$release" 'push -f' "orchestrate cloud: a release line forces no push"
 like "$release" 'no sha in it' "orchestrate cloud: a release line names no sha, so the same line pushes again"
 like "$release" '3 more times within 24 hours of his yes' "orchestrate cloud: a release yes covers three re-pushes in a day"
 like "$release" 'device tmux end' "orchestrate cloud: a fix reaches the device by ending the job"
