@@ -159,3 +159,13 @@ like "$cloud" 'device with-secrets <project> -- <command>' "orchestrate cloud: a
 like "$(sed -n '/pass is locked on/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" 'unlock' \
 	"orchestrate cloud: a locked pass is asked of Saiful"
 like "$cloud" 'after a later push run `device' "orchestrate cloud: a later push starts a new tmux session"
+# r3-walk-line: land refuses code its walk did not see with `land: refused:`,
+# which a thread clears itself, never by asking Saiful.
+prompt=$(tr '\n' ' ' < "$WF_ROOT/workflow/src/cloud-prompt.txt")
+refusal=$(sed -n '/^  - A line starting `land: refused:`/,/^  - /p' "$WF_ROOT/skills/orchestrate/cloud.md" | tr '\n' ' ' | tr -s ' ')
+for text in prompt refusal; do
+	like "${!text}" 'land: refused:' "$text: names land's refusal"
+	like "${!text}" 'walked <milestone> at <sha>' "$text: a refusal is cleared by a re-walk's line"
+	like "${!text}" 'tests-only after <sha>: <why>' "$text: or by the tests-only line"
+	like "${!text}" 'never a question for Saiful' "$text: a refusal is never asked"
+done

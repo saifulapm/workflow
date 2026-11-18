@@ -258,6 +258,14 @@ the skill holds, with these changes:
   - Tests red after the rebase: fix them on the branch test-first and run
     `workflow land` again. After two failed fixes, ask as for an `ask:`
     line, with `ask: tests red after rebasing on main: <what fails>`.
+  - A line starting `land: refused:` is a landing that never began:
+    nothing was rebased or pushed. Either no walk line was logged, or the
+    files it names changed after the walk. Re-walk the steps those files
+    touch and end that walk with `mem log "walked <milestone> at <sha>"`,
+    or, when only tests cover the change, log the `tests-only after <sha>:
+    <why>` line it names (`no walk: <why>` when the milestone has nothing
+    to open). Then run `workflow land` again. It is never a question for
+    Saiful.
   - `ask: trunk moved: ...` or `ask: main moved: ...`: on `main moved` the
     milestone is on app/<app> and ticked already, and main is untouched;
     `workflow land` run again from the same branch moves it onto main, as
