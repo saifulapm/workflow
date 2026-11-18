@@ -118,6 +118,13 @@ for kind in 'a delete or an overwrite of something that exists' 'making somethin
 done
 like "$(sed -n '/^- Before any of these six/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" \
 	'mem ask --for saiful' "orchestrate cloud: the six kinds are asked with mem ask"
+six=$(sed -n '/^- Before any of these six/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
+like "$six" 'a production deploy asks each time' "orchestrate cloud: a live project's production deploy asks each time"
+like "$six" 'stage is development' "orchestrate cloud: a project in development deploys a Worker after its walk"
+like "$six" 'with no `mem ask`' "orchestrate cloud: a development Worker deploy asks nothing"
+like "$six" 'mem tell "<worker> <version> live, roll back to <version>"' \
+	"orchestrate cloud: a development deploy tells Slack its version and the way back"
+like "$six" 'npm and CDN releases and Shopify app deploys' "orchestrate cloud: the stage leaves npm, CDN and Shopify releases alone"
 held=$(sed -n '/prints `ask: <line>`/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")
 like "$held" 'exact line' "orchestrate cloud: a held line is asked with its exact text"
 like "$held" 'device tmux send --yes <id>' "orchestrate cloud: a yes sends the held line again"

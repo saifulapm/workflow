@@ -103,6 +103,12 @@ the skill holds, with these changes:
   permissions; (4) anything that costs money; (5) a forced push or a moved
   branch; (6) a command whose effect you cannot state before it runs. A
   staging deploy runs without asking; a production deploy asks each time.
+  One exception: when your project's stage is development (`mem projects
+  --json` shows its `stage`; live when none is set), a Worker deploy, D1
+  migrations included, runs right after a passing walk with no `mem ask`.
+  Then send `mem tell "<worker> <version> live, roll back to <version>"`:
+  the version it deployed, and the one live before it. The stage changes
+  nothing else: npm and CDN releases and Shopify app deploys ask as before.
 - A `device tmux send` that prints `ask: <line>` (exit 6) was held by the
   hub and not sent. The device asked Saiful itself, with the exact line,
   and its next line, `asked: #<id>`, names that question: never ask it
