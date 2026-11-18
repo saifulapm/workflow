@@ -550,6 +550,18 @@ pub(crate) fn run_ended(
     })
 }
 
+/// Whether `session` is `project`'s cloud run, and that run is live.
+pub(crate) fn runs_project(
+    session: &str,
+    project: &str,
+    mem: &MemCli,
+    projects: &std::cell::OnceCell<Vec<serde_json::Value>>,
+) -> bool {
+    cloud_run_of(project, mem, projects).is_some_and(|run| {
+        run.id == runner_of(session) && run.state == crate::live::CloudState::Live
+    })
+}
+
 /// A thread sends CLAUDE_CODE_REMOTE_SESSION_ID, and the runner record names
 /// the same session with `session_` for `cse_`, as fleet reads it.
 fn runner_of(session: &str) -> String {

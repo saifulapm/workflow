@@ -676,19 +676,49 @@ fn a_listed_line_is_held_and_never_reaches_the_pane() {
 }
 
 impl Rig {
-    /// cloud_walk's stage and the machine that set it, with shop in
+    /// cloud_walk's stage and the machine that set it, its w14 run live in
+    /// the cloud as session_01Walk (the thread cse_01Walk), with shop in
     /// development, set by the mini.
     fn stage(&self, stage: &str, by: &str) {
+        let since = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60);
         let row = |name: &str, stage: &str, by: &str, milestone: &str| {
             serde_json::json!({"name": name, "milestone": milestone, "remote": REMOTE,
                                "checkouts": self.checkouts(name),
                                "stage": stage, "stage_by": by})
         };
+        let mut walk = row("cloud_walk", stage, by, "w14");
+        walk["roadmap_status"] = "approved".into();
+        walk["milestones_done"] = 1.into();
+        walk["milestones_total"] = 3.into();
+        walk["handoff_at"] = serde_json::Value::Null;
+        walk["runner"] = serde_json::json!({"machine": "cloud", "id": "session_01Walk",
+                                            "since": since.to_string(), "milestone": "w14"});
         self.projects(serde_json::json!({"projects": [
-            row("cloud_walk", stage, by, "w14"),
+            walk,
             row("shop", "development", "mac-mini-m2", "m2"),
         ]}));
+        let body = serde_json::json!({ "body": "" });
+        std::fs::write(self.state.join("handoff.json"), body.to_string()).unwrap();
     }
+}
+
+/// A thread names its project in each call, so only the project's own live
+/// run gets its development stage: another session starting a job under
+/// that name has its deploy line held.
+#[test]
+fn a_deploy_line_is_held_for_a_session_that_is_not_the_project_s_run() {
+    let rig = rig();
+    rig.stage("development", "mac-mini-m2");
+    let answer = rig.call(
+        "cloud_walk",
+        "cse_01Other",
+        &["send", "npx wrangler deploy"],
+    );
+    assert_eq!(answer["exit"], 6, "{answer}");
+    assert_eq!(
+        answer["stdout"],
+        "ask: npx wrangler deploy\nasked: #QQQQ0001\n"
+    );
 }
 
 #[test]

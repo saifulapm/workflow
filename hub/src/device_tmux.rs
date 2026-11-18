@@ -111,7 +111,7 @@ pub(crate) fn call(
         },
     };
     let outcome = match verb.as_str() {
-        "send" => send(&tmux, machine, &name, project, rest),
+        "send" => send(&tmux, machine, session, &name, project, rest),
         "read" => read(&tmux, &name),
         _ => end(&tmux, &name),
     };
@@ -242,12 +242,15 @@ pub(crate) fn job_name(project: &str) -> Result<String, Outcome> {
     Ok(format!("cloud-{project}-{milestone}"))
 }
 
-/// Whether a device put `project` in development; a stage a thread wrote, or
-/// none, is live.
-fn in_development(project: &str) -> bool {
-    MemCli::new()
-        .read(&["projects", "--json"])
-        .rows("projects")
+/// Whether a device put `project` in development and `session` is the
+/// project's own live cloud run. A stage a thread wrote, or none, is live,
+/// and a call names its project itself, so another session's call under
+/// that name gets no release.
+fn in_development(project: &str, session: &str) -> bool {
+    let mem = MemCli::new();
+    let projects = OnceCell::new();
+    let rows = projects.get_or_init(|| mem.read(&["projects", "--json"]).rows("projects"));
+    let staged = rows
         .iter()
         .find(|row| row["name"].as_str() == Some(project))
         .is_some_and(|row| {
@@ -255,10 +258,18 @@ fn in_development(project: &str) -> bool {
                 && row["stage_by"]
                     .as_str()
                     .is_some_and(|by| crate::device::DEVICES.contains(&by))
-        })
+        });
+    staged && crate::device::runs_project(session, project, &mem, &projects)
 }
 
-fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) -> Outcome {
+fn send(
+    tmux: &Tmux,
+    machine: &str,
+    session: &str,
+    name: &str,
+    project: &str,
+    rest: &[String],
+) -> Outcome {
     let (yes, rest) = match rest {
         [flag, id, rest @ ..] if flag == "--yes" => (Some(id.trim_start_matches('#')), rest),
         _ => (None, rest),
@@ -279,7 +290,7 @@ fn send(tmux: &Tmux, machine: &str, name: &str, project: &str, rest: &[String]) 
     let mut spent = Vec::new();
     let asked = if outside {
         Some(Asked::Outside)
-    } else if in_development(project) {
+    } else if in_development(project, session) {
         crate::held::held_in_development(&line).then_some(Asked::Line)
     } else {
         crate::held::held(&line).then_some(Asked::Line)
