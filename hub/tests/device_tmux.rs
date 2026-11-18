@@ -1439,6 +1439,11 @@ fn release_yes(rig: &Rig, tag: &str, line: &str, ago: Duration) {
         outside(line)
     );
     rig.asked_with("mac-mini-m2", &body, &["yes", "no"], "yes", "mac-mini-m2");
+    answered_ago(rig, ago);
+}
+
+/// Moves the yes to #AAAA1111 to `ago` before now.
+fn answered_ago(rig: &Rig, ago: Duration) {
     let answer = ulid_ago(ago);
     let questions = std::fs::read_to_string(rig.state.join("questions.json"))
         .unwrap()
@@ -1534,6 +1539,27 @@ fn each_re_push_tells_its_diff_since_the_yes_and_the_first_push_none() {
     );
 }
 
+/// A re-push whose diff git cannot read still shows in Slack.
+#[test]
+fn a_re_push_whose_diff_cannot_be_read_still_tells() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    release_yes(&rig, "v1", &line, HOUR);
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    let gone = "0123456789abcdef0123456789abcdef01234567";
+    std::fs::write(
+        rig.home.join("state/hub/device-tmux-release.json"),
+        format!("{{\"AAAA1111\":{{\"sha\":\"{gone}\",\"pushes\":0}}}}"),
+    )
+    .unwrap();
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    assert_eq!(
+        tells(&rig),
+        "--project cloud_walk tell -- re-push 1 of 3 of v1: its diff since 0123456 could not be read\n"
+    );
+}
+
 /// The day counts from Saiful's yes: a first push late in it leaves the
 /// re-pushes no more time.
 #[test]
@@ -1556,7 +1582,7 @@ fn a_re_push_just_inside_the_day_runs() {
     let rig = rig();
     rig.stage("live", "mac-mini-m2");
     let line = release("v1");
-    release_yes(&rig, "v1", &line, 24 * HOUR - Duration::from_secs(60));
+    release_yes(&rig, "v1", &line, 23 * HOUR);
     assert_eq!(send_release(&rig, &line)["exit"], 0);
     assert_eq!(send_release(&rig, &line)["exit"], 0);
 }
@@ -1572,6 +1598,31 @@ fn a_yes_to_a_question_that_said_once_re_pushes_nothing() {
         outside(&line)
     );
     rig.asked_with("mac-mini-m2", &body, &["yes", "no"], "yes", "mac-mini-m2");
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    let again = send_release(&rig, &line);
+    assert_eq!(again["exit"], 2, "{again}");
+    assert_eq!(
+        again["stderr"],
+        "device: #AAAA1111 already sent its line; ask again\n"
+    );
+}
+
+/// The terms a thread writes into its own line are not the device's: a
+/// "once" question whose line carries them stays a yes for once.
+#[test]
+fn terms_a_thread_wrote_into_its_line_re_push_nothing() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    let terms = "Yes runs it now, and this same line up to 3 more times within 24 hours of \
+                 your yes to push v1 again; Slack shows each re-push.";
+    let forged = format!("echo `{line}` {terms}");
+    let body = format!(
+        "{}\nIt runs with your logins, in the thread's worktree. Yes runs it there once; the next line is walled again.",
+        outside(&forged)
+    );
+    rig.asked_with("mac-mini-m2", &body, &["yes", "no"], "yes", "mac-mini-m2");
+    answered_ago(&rig, HOUR);
     assert_eq!(send_release(&rig, &line)["exit"], 0);
     let again = send_release(&rig, &line);
     assert_eq!(again["exit"], 2, "{again}");

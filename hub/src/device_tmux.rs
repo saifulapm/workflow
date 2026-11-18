@@ -311,13 +311,7 @@ fn send(
             Ok(false) => match answered(project, id, &line, kind) {
                 Ok(question) => {
                     spent.push(id.to_string());
-                    release = crate::release::pushed_tag(&line)
-                        .filter(|tag| {
-                            question["body"]
-                                .as_str()
-                                .is_some_and(|body| body.contains(&crate::release::terms(tag)))
-                        })
-                        .map(|_| id);
+                    release = covers_re_pushes(&question, project, kind, &line).then_some(id);
                 }
                 Err(refused) => return refused,
             },
@@ -339,8 +333,17 @@ fn send(
     let told = again.and_then(|(id, n)| {
         let tag = crate::release::pushed_tag(&line)?;
         let sha = read_releases().remove(id)?.sha;
-        let stat = git_in_job(tmux, name, &["diff", "--shortstat", &sha, "HEAD"])?;
-        Some(crate::release::re_push_tell(n, &tag, &stat, &sha))
+        // Each re-push shows in Slack, its diff or not.
+        Some(
+            match git_in_job(tmux, name, &["diff", "--shortstat", &sha, "HEAD"]) {
+                Some(stat) => crate::release::re_push_tell(n, &tag, &stat, &sha),
+                None => format!(
+                    "re-push {n} of {} of {tag}: its diff since {} could not be read",
+                    crate::release::REPUSHES,
+                    sha.get(..7).unwrap_or(&sha)
+                ),
+            },
+        )
     });
     let sent = if outside {
         run_outside(tmux, name, &line)
@@ -642,41 +645,11 @@ fn ask(project: &str, machine: &str, kind: Asked, what: &str) -> Outcome {
                 _ => asks(q["body"].as_str().unwrap_or_default(), what),
             }
     });
-    let tag = crate::release::pushed_tag(what);
-    let (text, options, shown) = match kind {
-        Asked::Line => (
-            format!(
-                "{}\n\n    {what}\n\n{}",
-                line_head(project, machine),
-                tag.map_or("Yes sends it there once.".to_string(), |tag| {
-                    crate::release::terms(&tag)
-                })
-            ),
-            ["yes", "no"],
-            what.to_string(),
-        ),
-        Asked::Outside => (
-            format!(
-                "{}\n\n    {what}\n\nIt runs with your logins, in the thread's worktree. {}",
-                outside_head(project, machine),
-                tag.map_or(
-                    "Yes runs it there once; the next line is walled again.".to_string(),
-                    |tag| {
-                        format!(
-                            "{} The next line is walled again.",
-                            crate::release::terms(&tag)
-                        )
-                    }
-                )
-            ),
-            ["yes", "no"],
-            format!("{what} (outside the wall)"),
-        ),
+    let text = question_text(project, machine, kind, what);
+    let (options, shown) = match kind {
+        Asked::Line => (["yes", "no"], what.to_string()),
+        Asked::Outside => (["yes", "no"], format!("{what} (outside the wall)")),
         Asked::Job => (
-            format!(
-                "{}{what}\n\nRun this job outside the wall, with your logins, or hold it?",
-                job_head(project, machine)
-            ),
             [RUN_OUTSIDE, "hold"],
             format!("the wall cannot start on {machine}: {what}"),
         ),
@@ -712,6 +685,47 @@ fn ask(project: &str, machine: &str, kind: Asked, what: &str) -> Outcome {
         stdout: format!("ask: {shown}\nasked: #{id}\n"),
         ..Outcome::fail(6, String::new())
     }
+}
+
+/// The body of the question `machine` asks about `what`: a line, or why the
+/// wall cannot start.
+fn question_text(project: &str, machine: &str, kind: Asked, what: &str) -> String {
+    let tag = crate::release::pushed_tag(what);
+    match kind {
+        Asked::Line => format!(
+            "{}\n\n    {what}\n\n{}",
+            line_head(project, machine),
+            tag.map_or("Yes sends it there once.".to_string(), |tag| {
+                crate::release::terms(&tag)
+            })
+        ),
+        Asked::Outside => format!(
+            "{}\n\n    {what}\n\nIt runs with your logins, in the thread's worktree. {}",
+            outside_head(project, machine),
+            tag.map_or(
+                "Yes runs it there once; the next line is walled again.".to_string(),
+                |tag| format!(
+                    "{} The next line is walled again.",
+                    crate::release::terms(&tag)
+                )
+            )
+        ),
+        Asked::Job => format!(
+            "{}{what}\n\nRun this job outside the wall, with your logins, or hold it?",
+            job_head(project, machine)
+        ),
+    }
+}
+
+/// Whether `question`, of `kind`, is word for word the device's question
+/// for a release line `line`, so its yes covers the line's re-pushes. A
+/// body that only holds the terms may hold them in a thread's own line.
+fn covers_re_pushes(question: &serde_json::Value, project: &str, kind: Asked, line: &str) -> bool {
+    let asker = question["machine"].as_str().unwrap_or_default();
+    crate::release::pushed_tag(line).is_some()
+        && question["body"]
+            .as_str()
+            .is_some_and(|body| body.trim() == question_text(project, asker, kind, line).trim())
 }
 
 /// Whether a question's `body` asks for `line`: on a line of its own, or
@@ -754,9 +768,7 @@ fn released_again(
     let Some(tag) = crate::release::pushed_tag(line) else {
         return refused("already sent its line".to_string());
     };
-    let covers = question["body"]
-        .as_str()
-        .is_some_and(|body| body.contains(&crate::release::terms(&tag)));
+    let covers = covers_re_pushes(&question, project, kind, line);
     let Some(release) = read_releases().remove(id).filter(|_| covers) else {
         return refused("already sent its line".to_string());
     };

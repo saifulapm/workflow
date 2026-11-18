@@ -147,8 +147,8 @@ the skill holds, with these changes:
   job starts at its new tip, and send the identical line with `--yes
   <id>`. Each re-push shows in his Slack, with its diff since his yes, as
   `<project>: re-push <n> of 3 of <tag>: ...`. Another line or tag, a
-  fifth push, or one past the 24 hours is refused with `ask again`: send
-  it without `--yes` for a new question.
+  fifth push, or one past the 24 hours is refused (exit 2) and runs
+  nothing: send it without `--yes` for a new question.
 - `device amx new '<task>'` starts a local agent on the device, in a
   folder of its own under `~/.cache/workflow-cloud/`, and prints its name; `device amx result <name>`
   prints its answer, and on `again:` (exit 9) runs again at once. `ls`,
