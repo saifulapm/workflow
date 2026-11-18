@@ -7,7 +7,7 @@
 //!   go             0 started or the roadmap is done · 1 mem or amx failed · 2 refused
 //!   pause, unpause 0 done · 1 mem failed · 2 no such project
 //!   switch         0 switched · 1 a step failed · 2 refused
-//!   land           0 landed or done · 1 failed · 2 parked · 3 CI still runs: run it again
+//!   land           0 landed or done · 1 failed or refused · 2 parked · 3 CI still runs: run it again
 //!   wait-answer    0 answered · 1 mem failed · 2 parked or no such question · 3 still open: run it again
 //!   project-new    0 every check ok · 1 a check missing or mem failed · 2 no such project
 

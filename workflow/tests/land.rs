@@ -1605,3 +1605,227 @@ fn an_earlier_milestones_no_walk_line_does_not_land_this_one() {
         &main,
     );
 }
+
+impl World {
+    /// A commit on the milestone branch writing each of `files`.
+    fn commit(&self, files: &[&str], message: &str) {
+        for file in files {
+            self.work
+                .put(&format!("thread/{file}"), &format!("{message}\n"));
+        }
+        self.git(&self.clone_dir(), &["add", "-A"]);
+        self.git(&self.clone_dir(), &["commit", "-q", "-m", message]);
+    }
+
+    /// The branch walked at its head: its walk line, and the sha it names.
+    fn walk(&self) -> String {
+        let head = self.short_head();
+        self.log(&format!("walked m2-next at {head}"));
+        head
+    }
+
+    fn head(&self) -> String {
+        self.git(&self.clone_dir(), &["rev-parse", "HEAD"])
+    }
+}
+
+#[test]
+fn a_change_after_the_walk_is_refused_naming_its_file() {
+    let w = World::new("land-walk-changed");
+    w.forget_walks();
+    let a = w.walk();
+    w.commit(&["src/app.rs"], "Change the app");
+    let main = w.origin_main();
+    let head = w.head();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        &format!(
+            "src/app.rs changed after the walk at {a}; re-walk the steps it touches, or log 'tests-only after {a}: <why>'"
+        ),
+        &main,
+    );
+    assert_eq!(w.head(), head, "nothing was rebased");
+}
+
+#[test]
+fn test_files_and_the_outbox_after_the_walk_land() {
+    let w = World::new("land-walk-tests-only");
+    w.forget_walks();
+    w.walk();
+    w.commit(&["tests/app.rs", "src/a.test.ts"], "Test the app");
+    w.commit(&["web/b.spec.ts", ".mem-outbox.json"], "Spec the page");
+    let out = w.land();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(w.ticked());
+}
+
+#[test]
+fn a_merge_of_the_trunk_after_the_walk_brings_no_file_in() {
+    let w = World::new("land-walk-merge");
+    w.forget_walks();
+    w.walk();
+    w.trunk_moves("src/other.rs", "another thread\n");
+    let clone = w.clone_dir();
+    w.git(&clone, &["fetch", "-q", "origin"]);
+    w.git(&clone, &["merge", "-q", "--no-edit", "origin/main"]);
+    let out = w.land();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(w.ticked());
+}
+
+#[test]
+fn a_tests_only_line_naming_the_walked_sha_lands_the_change() {
+    let w = World::new("land-walk-tests-only-line");
+    w.forget_walks();
+    let a = w.walk();
+    w.commit(&["src/app.rs"], "Change the app");
+    w.log(&format!("tests-only after {a}: covered by app_test"));
+    let out = w.land();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(w.ticked());
+}
+
+#[test]
+fn a_tests_only_line_for_another_sha_does_not() {
+    let w = World::new("land-walk-tests-only-other");
+    w.forget_walks();
+    let a = w.short_head();
+    w.commit(&["src/early.rs"], "Start the app");
+    let b = w.walk();
+    w.commit(&["src/app.rs"], "Change the app");
+    w.log(&format!("tests-only after {a}: an older walk"));
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        &format!(
+            "src/app.rs changed after the walk at {b}; re-walk the steps it touches, or log 'tests-only after {b}: <why>'"
+        ),
+        &main,
+    );
+}
+
+#[test]
+fn the_newest_walk_line_counts() {
+    let w = World::new("land-walk-again");
+    w.forget_walks();
+    w.walk();
+    w.commit(&["src/app.rs"], "Change the app");
+    let main = w.origin_main();
+    assert_eq!(w.land().status.code(), Some(1));
+    assert_eq!(w.origin_main(), main);
+    w.walk();
+    let out = w.land();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(w.ticked());
+}
+
+#[test]
+fn a_rename_into_tests_names_the_file_it_moved() {
+    let w = World::new("land-walk-rename");
+    w.forget_walks();
+    w.commit(&["src/app.rs"], "Write the app");
+    let a = w.walk();
+    let clone = w.clone_dir();
+    std::fs::create_dir_all(clone.join("tests")).unwrap();
+    w.git(&clone, &["mv", "src/app.rs", "tests/app.rs"]);
+    w.git(&clone, &["commit", "-q", "-m", "Move the app into tests"]);
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        &format!(
+            "src/app.rs changed after the walk at {a}; re-walk the steps it touches, or log 'tests-only after {a}: <why>'"
+        ),
+        &main,
+    );
+}
+
+#[test]
+fn files_name_the_steps_they_touch() {
+    let w = World::new("land-walk-two-files");
+    w.forget_walks();
+    let a = w.walk();
+    w.commit(&["src/b.rs", "src/a.rs", "tests/a.rs"], "Change two files");
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        &format!(
+            "src/a.rs, src/b.rs changed after the walk at {a}; re-walk the steps they touch, or log 'tests-only after {a}: <why>'"
+        ),
+        &main,
+    );
+}
+
+#[test]
+fn a_walked_sha_that_is_no_commit_here_is_refused() {
+    let w = World::new("land-walk-unknown");
+    w.forget_walks();
+    w.log("walked m2-next at 0000000");
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        "the walk at 0000000 names no commit here; walk m2-next again",
+        &main,
+    );
+}
+
+#[test]
+fn a_second_call_after_lands_own_rebase_still_finds_the_walk() {
+    let w = World::new("land-walk-rebased");
+    w.forget_walks();
+    w.walk();
+    w.trunk_moves("src/other.rs", "another thread\n");
+    let walked = w.head();
+    w.verify("exit 1");
+    let first = w.land();
+    assert_eq!(first.status.code(), Some(1), "{}", stderr(&first));
+    assert!(
+        stderr(&first).contains("the tests failed"),
+        "the first call got to its rebase: {}",
+        stderr(&first)
+    );
+    assert_ne!(w.head(), walked, "the first call rebased the branch");
+    w.verify("test -f work.txt");
+    let out = w.land();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}{}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(w.ticked());
+}

@@ -1,7 +1,9 @@
 //! The walk line `workflow land` reads before it rebases: a milestone lands
 //! only on code its walk saw. A passing walk ends with `walked <milestone> at
 //! <sha>`, and a milestone with nothing to open logs `no walk: <why>`. A
-//! refusal is the orchestrator's to clear, never a question to Saiful.
+//! change after the walk that only test files carry lands, and so does one a
+//! `tests-only after <sha>: <why>` line lets through. A refusal is the
+//! orchestrator's to clear, never a question to Saiful.
 
 use crate::gitcmd::Git;
 use crate::memcli::{self, LogLine};
@@ -19,12 +21,119 @@ pub enum Walk {
 /// lands on, as origin last had it.
 pub fn check(git: &Git, project: &str, slug: &str, trunk: &str) -> Option<Result<(), String>> {
     let lines = memcli::log_lines(project)?;
-    Some(match newest(&lines, slug, first_commit(git, trunk)) {
-        Walk::None => Err(format!(
-            "no walk line for {slug}; walk it, or log 'no walk: <why>'"
-        )),
-        Walk::NoWalk | Walk::At(_) => Ok(()),
-    })
+    let sha = match newest(&lines, slug, first_commit(git, trunk)) {
+        Walk::None => {
+            return Some(Err(format!(
+                "no walk line for {slug}; walk it, or log 'no walk: <why>'"
+            )));
+        }
+        Walk::NoWalk => return Some(Ok(())),
+        Walk::At(sha) => sha,
+    };
+    let Some(walked) = commit(git, &sha) else {
+        return Some(Err(format!(
+            "the walk at {sha} names no commit here; walk {slug} again"
+        )));
+    };
+    let files: Vec<String> = changed_after(git, &walked, trunk)
+        .into_iter()
+        .filter(|file| file != memcli::OUTBOX_FILE && !is_test_file(file))
+        .collect();
+    let cleared = tests_only(&lines)
+        .into_iter()
+        .any(|named| commit(git, named).as_deref() == Some(walked.as_str()));
+    if files.is_empty() || cleared {
+        return Some(Ok(()));
+    }
+    let they = if files.len() == 1 {
+        "it touches"
+    } else {
+        "they touch"
+    };
+    Some(Err(format!(
+        "{} changed after the walk at {sha}; re-walk the steps {they}, or log 'tests-only after {sha}: <why>'",
+        files.join(", ")
+    )))
+}
+
+/// The shas `tests-only after <sha>: <why>` lines name.
+pub fn tests_only(lines: &[LogLine]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            line.title
+                .strip_prefix("tests-only after ")?
+                .split_once(':')
+        })
+        .map(|(sha, _)| sha.trim())
+        .collect()
+}
+
+/// A path segment `test` or `tests`, or a name holding `.test.` or `.spec.`.
+pub fn is_test_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    path.split('/').any(|s| s == "test" || s == "tests")
+        || name.contains(".test.")
+        || name.contains(".spec.")
+}
+
+/// The full sha of the commit `sha` names, None when it names none here.
+fn commit(git: &Git, sha: &str) -> Option<String> {
+    git.out(&["rev-parse", "-q", "--verify", &format!("{sha}^{{commit}}")])
+}
+
+/// The files HEAD's own commits change after `walked`, sorted: its commits
+/// not on `trunk` whose patch is not one of `walked`'s own commits' patches.
+/// That is walked..HEAD, and still the same commits on a second call of
+/// land, after its first rebased and pushed the branch. Merges bring no file
+/// in, and a rename names the path it left too.
+fn changed_after(git: &Git, walked: &str, trunk: &str) -> Vec<String> {
+    let seen: Vec<String> = patches(git, walked, trunk)
+        .into_iter()
+        .map(|(patch, _)| patch)
+        .collect();
+    let after: Vec<String> = patches(git, "HEAD", trunk)
+        .into_iter()
+        .filter(|(patch, _)| !seen.contains(patch))
+        .map(|(_, commit)| commit)
+        .collect();
+    if after.is_empty() {
+        return Vec::new();
+    }
+    let mut args = vec!["show", "--no-renames", "--name-only", "--format="];
+    args.extend(after.iter().map(String::as_str));
+    let mut files: Vec<String> = git
+        .out(&args)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// Each commit of `tip` not on `trunk`, merges left out, as its patch id and
+/// its sha.
+fn patches(git: &Git, tip: &str, trunk: &str) -> Vec<(String, String)> {
+    let log = git.bytes(&[
+        "log",
+        "-p",
+        "--no-merges",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-color",
+        tip,
+        "--not",
+        trunk,
+    ]);
+    git.feed(&["patch-id", "--stable"], &log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(patch, commit)| (patch.to_string(), commit.to_string()))
+        .collect()
 }
 
 /// The milestone's newest walk line in `lines`, newest first. A `no walk:`
@@ -56,4 +165,32 @@ fn first_commit(git: &Git, trunk: &str) -> Option<jiff::Timestamp> {
         .filter_map(|s| s.parse::<i64>().ok())
         .min()
         .and_then(|s| jiff::Timestamp::from_second(s).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_test_file;
+
+    #[test]
+    fn a_test_file_is_named_by_a_segment_or_its_name() {
+        for path in [
+            "tests/app.rs",
+            "test/a.py",
+            "apps/web/tests/e2e/x.ts",
+            "src/a.test.ts",
+            "web/b.spec.ts",
+        ] {
+            assert!(is_test_file(path), "{path}");
+        }
+        for path in [
+            "src/app.rs",
+            "contest/a.rs",
+            "src/latest.rs",
+            "src/tests.rs",
+            "src/test_helpers/x.rs",
+            "src/spec.ts",
+        ] {
+            assert!(!is_test_file(path), "{path}");
+        }
+    }
 }

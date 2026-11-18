@@ -77,6 +77,28 @@ impl Git {
         if o.ok { o.stdout } else { Vec::new() }
     }
 
+    /// The stdout of a command fed `input`, or nothing when it failed.
+    pub fn feed(&self, args: &[&str], input: &[u8]) -> Option<String> {
+        use std::io::Write;
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        // A writer thread, so a reader that answers as it reads never
+        // blocks on a full pipe.
+        let mut stdin = child.stdin.take()?;
+        let input = input.to_vec();
+        let writer = std::thread::spawn(move || stdin.write_all(&input));
+        let out = child.wait_with_output().ok()?;
+        let _ = writer.join();
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+    }
+
     /// Did it work? Output goes nowhere.
     pub fn quiet(&self, args: &[&str]) -> bool {
         self.command(args)
