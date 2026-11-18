@@ -39,7 +39,10 @@ fn feed(mut command: Command, input: &str) -> Output {
 
 fn guard_bash(input: &str) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_workflow"));
-    command.args(["guard", "bash"]).env("HOME", "/nonexistent");
+    command
+        .args(["guard", "bash"])
+        .env("HOME", "/nonexistent")
+        .env("WORKFLOW_MEM", "/nonexistent/mem");
     feed(command, input)
 }
 
@@ -204,7 +207,9 @@ fn guard_agent(subagent: &str, prompt: &str) -> Output {
     })
     .to_string();
     let mut command = Command::new(env!("CARGO_BIN_EXE_workflow"));
-    command.args(["guard", "agent"]);
+    command
+        .args(["guard", "agent"])
+        .env("WORKFLOW_MEM", "/nonexistent/mem");
     feed(command, &input)
 }
 

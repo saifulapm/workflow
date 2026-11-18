@@ -24,6 +24,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::exit;
+use crate::guard::record;
 use crate::shell::{self, Simple};
 
 /// Claude Code blocks a tool call whose PreToolUse hook exits 2. With a deny
@@ -83,7 +84,11 @@ pub fn cmd_guard_bash() -> i32 {
         agent: hook["agent_type"].as_str(),
     };
     match RULES.iter().find_map(|rule| rule(&call)) {
-        Some(reason) => deny(reason),
+        Some(reason) => {
+            let code = deny(reason);
+            record("bash", command, call.cwd);
+            code
+        }
         None => exit::OK,
     }
 }
@@ -108,7 +113,13 @@ pub fn cmd_guard_edit() -> i32 {
         return exit::OK;
     };
     match suite::edit_refusal(Path::new(path)) {
-        Some(reason) => deny(reason),
+        Some(reason) => {
+            let code = deny(reason);
+            let cwd = Path::new(hook["cwd"].as_str().unwrap_or_default());
+            let shown = Path::new(path).strip_prefix(cwd).unwrap_or(Path::new(path));
+            record("edit", &shown.to_string_lossy(), cwd);
+            code
+        }
         None => exit::OK,
     }
 }
@@ -133,7 +144,14 @@ pub fn cmd_guard_agent() -> i32 {
     if brief::verify_names_a_lint(prompt) {
         exit::OK
     } else {
-        deny(brief::NO_LINT)
+        let code = deny(brief::NO_LINT);
+        let cwd = Path::new(hook["cwd"].as_str().unwrap_or_default());
+        record(
+            "agent",
+            tool["description"].as_str().unwrap_or_default(),
+            cwd,
+        );
+        code
     }
 }
 

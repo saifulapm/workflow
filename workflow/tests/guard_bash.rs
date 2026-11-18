@@ -26,6 +26,7 @@ fn guard_home(cwd: &Path, home: &Path, command: &str) -> Output {
     });
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .args(["guard", "bash"])
+        .env("WORKFLOW_MEM", "/nonexistent/mem")
         .env("HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -184,12 +185,14 @@ fn input_the_guard_cannot_read_passes() {
     }
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .args(["guard", "bash"])
+        .env("WORKFLOW_MEM", "/nonexistent/mem")
         .stdin(Stdio::null())
         .output()
         .unwrap();
     assert!(passes(&out), "{out:?}");
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .args(["guard", "bash"])
+        .env("WORKFLOW_MEM", "/nonexistent/mem")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -571,6 +574,7 @@ fn guard_as(cwd: &Path, agent: &str, command: &str) -> Output {
     });
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .args(["guard", "bash"])
+        .env("WORKFLOW_MEM", "/nonexistent/mem")
         .env("HOME", cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -939,6 +943,7 @@ fn guard_edit(tool: &str, path: &Path) -> Output {
     });
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
         .args(["guard", "edit"])
+        .env("WORKFLOW_MEM", "/nonexistent/mem")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -979,4 +984,130 @@ fn an_edit_passes_when_no_suite_runs() {
     let w = Scratch::new("guard-edit-idle");
     let repo = repo(&w);
     assert!(passes(&guard_edit("Edit", &repo.join("src/lib.rs"))));
+}
+
+/// A mem that writes the folder it runs in and its words to mem.log in
+/// `w`, then runs `then`.
+fn fake_mem(w: &Scratch, then: &str) -> PathBuf {
+    let log = w.at("mem.log");
+    w.script(
+        "bin/mem",
+        &format!(
+            "printf '%s|%s\\n' \"$(pwd -P)\" \"$*\" >>'{}'\n{then}",
+            log.display()
+        ),
+    )
+}
+
+/// `workflow guard <check>` fed `input`, with `mem` in the place of mem.
+fn guard_with_mem(check: &str, input: serde_json::Value, mem: &Path) -> Output {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_workflow"))
+        .args(["guard", check])
+        .env("WORKFLOW_MEM", mem)
+        .env("HOME", "/nonexistent")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn bash_input(cwd: &Path, command: &str) -> serde_json::Value {
+    json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+        "cwd": cwd,
+    })
+}
+
+fn logged(w: &Scratch) -> Vec<String> {
+    if !w.has("mem.log") {
+        return Vec::new();
+    }
+    w.read("mem.log").lines().map(str::to_string).collect()
+}
+
+#[test]
+fn a_guard_bash_refusal_writes_one_line_and_a_pass_writes_none() {
+    let w = Scratch::new("guard-bash-record");
+    let mem = fake_mem(&w, "exit 0");
+    let cwd = w.mkdir("app");
+    let out = guard_with_mem("bash", bash_input(&cwd, "git status"), &mem);
+    assert!(passes(&out), "{out:?}");
+    assert_eq!(logged(&w), Vec::<String>::new());
+    let out = guard_with_mem("bash", bash_input(&cwd, "pkill -f vitest"), &mem);
+    assert!(refused(&out, "kill -TERM"), "{out:?}");
+    let app = cwd.canonicalize().unwrap();
+    assert_eq!(
+        logged(&w),
+        [format!(
+            "{}|log guard bash refused: pkill -f vitest",
+            app.display()
+        )]
+    );
+}
+
+#[test]
+fn a_guard_bash_refusal_keeps_its_answer_when_mem_fails() {
+    let w = Scratch::new("guard-bash-record-fails");
+    let mem = fake_mem(&w, "echo 'mem: store down' >&2; exit 1");
+    let cwd = w.mkdir("app");
+    let out = guard_with_mem("bash", bash_input(&cwd, "pkill -f vitest"), &mem);
+    assert!(refused(&out, "kill -TERM"), "{out:?}");
+}
+
+#[test]
+fn a_guard_edit_refusal_logs_the_path_from_the_cwd() {
+    let w = Scratch::new("guard-edit-record");
+    let mem = fake_mem(&w, "exit 0");
+    let repo = repo(&w);
+    let _suite = Suite::run(&repo, "cargo test -q");
+    let input = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": { "file_path": repo.join("src/a.rs") },
+        "cwd": repo,
+    });
+    let out = guard_with_mem("edit", input, &mem);
+    assert!(refused(&out, EDIT_HELD), "{out:?}");
+    let at = repo.canonicalize().unwrap();
+    assert_eq!(
+        logged(&w),
+        [format!("{}|log guard edit refused: src/a.rs", at.display())]
+    );
+}
+
+#[test]
+fn a_guard_agent_refusal_logs_the_calls_description() {
+    let w = Scratch::new("guard-agent-record");
+    let mem = fake_mem(&w, "exit 0");
+    let cwd = w.mkdir("app");
+    let input = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Agent",
+        "tool_input": {
+            "description": "t3 build the composer",
+            "subagent_type": "implementer",
+            "prompt": "GOAL  x\nVERIFY  node_modules/.bin/vitest run a.test.ts\nSTOP  y",
+        },
+        "cwd": cwd,
+    });
+    let out = guard_with_mem("agent", input, &mem);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let app = cwd.canonicalize().unwrap();
+    assert_eq!(
+        logged(&w),
+        [format!(
+            "{}|log guard agent refused: t3 build the composer",
+            app.display()
+        )]
+    );
 }
