@@ -171,3 +171,86 @@ fn the_package_folder_comes_from_c_filter_or_cd() {
         says_today(w.path(), command);
     }
 }
+
+fn scripts(tag: &str, scripts: serde_json::Value) -> (Scratch, Scratch) {
+    let package = json!({ "name": "app", "scripts": scripts }).to_string();
+    worktree(tag, &[("apps/site/package.json", &package)])
+}
+
+#[test]
+fn a_script_of_two_tools_names_one_line_each() {
+    let (_t, w) = scripts(
+        "by-path-two",
+        json!({ "typecheck": "astro check && tsc -p test", "check": "rm -rf dist; node scripts/a.mjs" }),
+    );
+    names(
+        w.path(),
+        "cd apps/site && pnpm typecheck",
+        &[
+            "cd apps/site && node_modules/.bin/astro check",
+            "cd apps/site && node_modules/.bin/tsc -p test",
+        ],
+    );
+    // A program the system or node has is no package's tool.
+    names(
+        w.path(),
+        "pnpm -C apps/site check",
+        &[
+            "cd apps/site && rm -rf dist",
+            "cd apps/site && node scripts/a.mjs",
+        ],
+    );
+}
+
+#[test]
+fn an_env_prefix_arguments_and_a_pipe_tail_are_kept() {
+    let (_t, w) = scripts(
+        "by-path-keep",
+        json!({ "test": "NODE_ENV=test vitest run", "both": "tsc -b && vitest run", "unit": "vitest run" }),
+    );
+    let site = w.path().join("apps/site");
+    names(
+        &site,
+        "pnpm test",
+        &["NODE_ENV=test node_modules/.bin/vitest run"],
+    );
+    names(
+        &site,
+        "pnpm unit 2>&1 | tail -5",
+        &["node_modules/.bin/vitest run 2>&1 | tail -5"],
+    );
+    // pnpm hands its arguments to the script's last command; a redirection
+    // and the pipe go with every line.
+    names(
+        &site,
+        "timeout 600 pnpm both test/a.test.ts > out.txt | grep -v skip",
+        &[
+            "timeout 600 node_modules/.bin/tsc -b > out.txt | grep -v skip",
+            "timeout 600 node_modules/.bin/vitest run test/a.test.ts > out.txt | grep -v skip",
+        ],
+    );
+    names(
+        &site,
+        "pnpm exec vitest run -t 'the cart'",
+        &["node_modules/.bin/vitest run -t 'the cart'"],
+    );
+}
+
+#[test]
+fn a_script_it_cannot_put_by_path_keeps_todays_message() {
+    let (_t, w) = scripts(
+        "by-path-cannot",
+        json!({
+            "build": "pnpm run build && vitest",
+            "npm": "npm run x",
+            "vars": "vitest run $FILES",
+            "sub": "tsc && (cd e2e && playwright test)",
+            "or": "tsc || true",
+            "cd": "cd e2e && playwright test",
+        }),
+    );
+    let site = w.path().join("apps/site");
+    for script in ["build", "npm", "vars", "sub", "or", "cd"] {
+        says_today(&site, &format!("pnpm {script}"));
+    }
+}

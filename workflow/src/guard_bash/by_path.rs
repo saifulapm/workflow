@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::cd::resolve;
-use crate::shell::{self, Simple, program_name};
+use crate::shell::{self, Op, Simple, program_name};
 
 /// pnpm's own commands that install, publish or fetch: a package script of
 /// the same name (an `install` lifecycle script) never runs by them.
@@ -17,13 +17,19 @@ const BUILTINS: &[&str] = &[
     "deploy", "publish", "pack", "dlx", "create",
 ];
 
+/// The programs a script line cannot be split past: those that run another
+/// script or install, and cd, whose move the next call would not keep.
+const RUNNERS: &[&str] = &[
+    "pnpm", "pnpx", "npm", "npx", "yarn", "bun", "bunx", "cd", "pushd",
+];
+
 /// The by-path lines of every pnpm command in `commands`, run in `cwd`, or
 /// None when one of them cannot be put that way.
 pub fn lines(commands: &[Simple], cwd: &Path) -> Option<Vec<String>> {
     // The folder each subshell depth is in, as the line's `cd`s move it.
     let mut dirs = vec![cwd.to_path_buf()];
     let mut out = Vec::new();
-    for command in commands {
+    for (at, command) in commands.iter().enumerate() {
         dirs.truncate(command.depth + 1);
         while dirs.len() <= command.depth {
             dirs.push(dirs[dirs.len() - 1].clone());
@@ -42,14 +48,16 @@ pub fn lines(commands: &[Simple], cwd: &Path) -> Option<Vec<String>> {
             .iter()
             .any(|w| matches!(program_name(w), "pnpm" | "pnpx"))
         {
-            out.extend(translate(&command.words, &here, cwd)?);
+            out.extend(translate(commands, at, &here, cwd)?);
         }
     }
     (!out.is_empty()).then_some(out)
 }
 
-/// The lines for `words`, a pnpm command run in `here`, shown from `cwd`.
-fn translate(words: &[String], here: &Path, cwd: &Path) -> Option<Vec<String>> {
+/// The lines for `commands[at]`, a pnpm command run in `here`, shown from
+/// `cwd`.
+fn translate(commands: &[Simple], at: usize, here: &Path, cwd: &Path) -> Option<Vec<String>> {
+    let words = &commands[at].words;
     let p = words.iter().position(|w| program_name(w) == "pnpm")?;
     let mut dir = here.to_path_buf();
     let mut rest = &words[p + 1..];
@@ -71,28 +79,74 @@ fn translate(words: &[String], here: &Path, cwd: &Path) -> Option<Vec<String>> {
             _ => break word.as_str(),
         }
     };
-    let tool: Vec<String> = match sub {
-        "exec" => rest.to_vec(),
-        "run" | "run-script" => {
-            let (name, args) = rest.split_first()?;
-            let (package, text) = script(&dir, name)?;
-            dir = package;
-            with_args(text, args)?
-        }
+    let (mut tools, args) = match sub {
+        "exec" => (vec![vec![by_path(rest.to_vec())]], &[][..]),
         name if BUILTINS.contains(&name) => return None,
         name => {
+            let (name, args): (&str, &[String]) = match name {
+                "run" | "run-script" => {
+                    let (name, args) = rest.split_first()?;
+                    (name, args)
+                }
+                _ => (name, rest),
+            };
             let (package, text) = script(&dir, name)?;
             dir = package;
-            with_args(text, rest)?
+            (script_lines(&text)?, args)
         }
     };
+    // pnpm hands its arguments to the script's last command; its
+    // redirections and the pipe it feeds go with every line.
+    let mut redirects = Vec::new();
+    let mut extra = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if is_redirect(arg) {
+            redirects.push(arg.clone());
+            if arg
+                .trim_start_matches(|c: char| c.is_ascii_digit() || "<>&".contains(c))
+                .is_empty()
+            {
+                redirects.extend(args.next().cloned());
+            }
+        } else {
+            extra.push(arg.clone());
+        }
+    }
+    tools.last_mut()?.last_mut()?.extend(extra);
+    let mut tail = String::new();
+    let mut i = at;
+    while commands[i].then == Op::Pipe && i + 1 < commands.len() {
+        i += 1;
+        tail.push_str(" | ");
+        tail.push_str(&join(&commands[i].words));
+    }
     let cd = if dir == cwd {
         String::new()
     } else {
         let shown = dir.strip_prefix(cwd).unwrap_or(&dir);
         format!("cd {} && ", quote(&shown.to_string_lossy()))
     };
-    Some(vec![format!("{cd}{}", join(&by_path(tool)))])
+    let mut lead = join(&words[..p]);
+    if !lead.is_empty() {
+        lead.push(' ');
+    }
+    Some(
+        tools
+            .iter()
+            .map(|pipeline| {
+                let mut line = pipeline
+                    .iter()
+                    .map(|command| join(command))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                if !redirects.is_empty() {
+                    line = format!("{line} {}", join(&redirects));
+                }
+                format!("{cd}{lead}{line}{tail}")
+            })
+            .collect(),
+    )
 }
 
 /// The folder pnpm's `flag` (-C, --dir, -F or --filter) with `value` runs
@@ -129,15 +183,36 @@ fn packages_named(dir: &Path, name: &str, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The words of `text`, a script, with `args` after them.
-fn with_args(text: String, args: &[String]) -> Option<Vec<String>> {
-    let mut commands = shell::commands(&text)?;
-    if commands.len() != 1 {
+/// The lines of `text`, a script, one for each command or pipeline it runs
+/// in turn, each command's tool by path. None for a script it cannot split
+/// that way: one that runs another script or package manager, moves with
+/// cd, branches with `||`, or holds a subshell or a variable.
+fn script_lines(text: &str) -> Option<Vec<Vec<Vec<String>>>> {
+    if text.contains(['$', '`']) {
         return None;
     }
-    let mut words = commands.remove(0).words;
-    words.extend(args.iter().cloned());
-    Some(words)
+    let mut lines = vec![Vec::new()];
+    for command in shell::commands(text)? {
+        let argv = shell::argv(&command.words);
+        // The program and the wrappers in front of it, `npx` among them.
+        let leading = &command.words[..command.words.len() - argv.len()];
+        if command.depth > 0
+            || leading
+                .iter()
+                .chain(argv.first())
+                .any(|w| RUNNERS.contains(&program_name(w)))
+        {
+            return None;
+        }
+        lines.last_mut()?.push(by_path(command.words));
+        match command.then {
+            Op::Pipe => {}
+            Op::Seq | Op::And => lines.push(Vec::new()),
+            Op::Or | Op::Background => return None,
+        }
+    }
+    lines.retain(|line| !line.is_empty());
+    (!lines.is_empty()).then_some(lines)
 }
 
 /// The folder of the package.json nearest `dir`, as pnpm finds it, and its
@@ -154,17 +229,35 @@ fn package_json(dir: &Path) -> Option<Value> {
     serde_json::from_str(&text).ok()
 }
 
-/// `words` with node_modules/.bin/ in front of the program.
+/// `words` with node_modules/.bin/ in front of the program, unless node
+/// or the system has it, or it is a path.
 fn by_path(mut words: Vec<String>) -> Vec<String> {
-    if let Some(program) = words.first_mut() {
-        *program = format!("node_modules/.bin/{program}");
+    let at = words.len() - shell::argv(&words).len();
+    if let Some(program) = words.get_mut(at) {
+        let system = ["/usr/bin", "/bin"]
+            .iter()
+            .any(|d| Path::new(d).join(&*program).exists());
+        if !program.contains('/') && program != "node" && !system {
+            *program = format!("node_modules/.bin/{program}");
+        }
     }
     words
 }
 
+/// A redirection, as in `2>&1`, `>out.txt` or `>`.
+fn is_redirect(word: &str) -> bool {
+    word.trim_start_matches(|c: char| c.is_ascii_digit())
+        .starts_with(['<', '>'])
+        || word.starts_with("&>")
+}
+
 /// `words` as one shell line, each quoted when the shell would split it.
 fn join(words: &[String]) -> String {
-    words.iter().map(|w| quote(w)).collect::<Vec<_>>().join(" ")
+    words
+        .iter()
+        .map(|w| if is_redirect(w) { w.clone() } else { quote(w) })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn quote(word: &str) -> String {
