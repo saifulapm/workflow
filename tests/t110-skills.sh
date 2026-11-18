@@ -81,6 +81,17 @@ like "$(skill plan | sed -n '/^10\. /,/^Store each plan/p')" 'already passes on 
 like "$(skill plan | sed -n '/^11\. /,/^Store each plan/p')" 'names where it was counted' \
 	"plan: rule 11 has each number a plan promises name where it was counted"
 
+# Nothing showed whether a thread's hooks ran (retro-fixes, #R5JGX4HC): the
+# kit's SessionStart writes `hooks ran: <session> in <project>`, and a
+# thread's first step looks for its own line, filing a finding when it is
+# missing, never a question.
+first=$(awk '/^- /{n++} n==1' "$WF_ROOT/skills/orchestrate/cloud.md")
+like "$first" 'mem log --project workflow' "orchestrate cloud: the first step reads workflow's log"
+like "$first" 'hooks ran: [$]CLAUDE_CODE_REMOTE_SESSION_ID ' "orchestrate cloud: it looks for its own session's hooks line"
+like "$first" 'mem finding add --project workflow --milestone hooks-in-threads --step 0 "hooks did not run in thread [$]CLAUDE_CODE_REMOTE_SESSION_ID"' \
+	"orchestrate cloud: a missing line files a hooks-in-threads finding"
+unlike "$first" 'mem ask' "orchestrate cloud: a missing hooks line asks nothing"
+
 # ebdfy-ui m27's thread sat 82 minutes on a step the safety check blocked,
 # with no handoff: it asks naming the command, and parks before its turn ends.
 blocked=$(sed -n '/safety check blocks a step/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")

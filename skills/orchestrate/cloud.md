@@ -9,6 +9,14 @@ prints the prompt. The prompt names the milestone, its branch
 `cloud/<project>-<milestone>` and the branch to cut it from. Everything in
 the skill holds, with these changes:
 
+- First, check that this session's hooks ran: `mem log --project workflow
+  --limit 200 | grep -F "hooks ran: $CLAUDE_CODE_REMOTE_SESSION_ID "`. The
+  cloud kit's SessionStart hook writes that line at each start and resume,
+  so a resumed thread finds its own among several. When grep finds none,
+  file it and carry on; nothing waits on it, so ask nothing and park nothing:
+
+      mem finding add --project workflow --milestone hooks-in-threads --step 0 "hooks did not run in thread $CLAUDE_CODE_REMOTE_SESSION_ID"
+
 - The run is already recorded as this session's: `workflow go --cloud
   --print` did it, and refused if another run held the project. Check out
   the milestone branch as the prompt says, never build on `main`: mem
