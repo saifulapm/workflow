@@ -131,7 +131,8 @@ pub fn cmd_guard_edit() -> i32 {
 }
 
 /// `workflow guard agent`, the PreToolUse hook on the Agent tool: an
-/// implementer's brief must end its VERIFY with a lint.
+/// implementer's brief must end its VERIFY with a lint, and run no pnpm
+/// there, which its worktree's linked node_modules refuses.
 pub fn cmd_guard_agent() -> i32 {
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
@@ -147,17 +148,19 @@ pub fn cmd_guard_agent() -> i32 {
     let Some(prompt) = tool["prompt"].as_str() else {
         return exit::OK;
     };
-    if brief::verify_names_a_lint(prompt) {
-        exit::OK
-    } else {
-        let code = deny(brief::NO_LINT);
-        let cwd = Path::new(hook["cwd"].as_str().unwrap_or_default());
+    let cwd = Path::new(hook["cwd"].as_str().unwrap_or_default());
+    let refusal = brief::pnpm_refusal(prompt, cwd)
+        .or_else(|| (!brief::verify_names_a_lint(prompt)).then(|| brief::NO_LINT.to_string()));
+    if let Some(reason) = refusal {
+        let code = deny(&reason);
         record(
             "agent",
             tool["description"].as_str().unwrap_or_default(),
             cwd,
         );
         code
+    } else {
+        exit::OK
     }
 }
 

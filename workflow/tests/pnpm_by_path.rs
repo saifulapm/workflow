@@ -291,3 +291,115 @@ fn guard_pnpm_names_the_same_lines() {
     );
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
+
+fn agent(cwd: &Path, subagent: &str, prompt: &str) -> Output {
+    let input = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Agent",
+        "tool_input": {
+            "subagent_type": subagent,
+            "description": "t3 build the composer",
+            "prompt": prompt,
+        },
+        "cwd": cwd,
+    });
+    hook("agent", cwd, input)
+}
+
+/// A brief in the orchestrate skill's shape, with `verify` under VERIFY.
+fn brief(context: &str, verify: &str) -> String {
+    format!(
+        "GOAL        Build the composer\n\
+         SCOPE       apps/site\n\
+         CONTEXT     {context}\n\
+         ACCEPTANCE  a failing test first\n\
+         VERIFY      {verify}\n\
+         STOP        anything outside apps/site\n"
+    )
+}
+
+const AGENT_HEAD: &str = "workflow guard refused this on purpose: this implementer brief's VERIFY runs pnpm, which its worktree's linked node_modules refuses. Write these lines in its place, each a call of its own:";
+
+#[test]
+fn an_implementer_brief_whose_verify_runs_pnpm_is_refused_naming_the_lines() {
+    let trunk = Scratch::new("by-path-agent");
+    trunk.put(
+        "apps/site/package.json",
+        r#"{"name": "site", "scripts": {"typecheck": "astro check && tsc -p test", "lint": "oxlint src"}}"#,
+    );
+    let lint = "\n            node_modules/.bin/oxlint src";
+    let refused = agent(
+        trunk.path(),
+        "implementer",
+        &brief("the site", &format!("cd apps/site && pnpm typecheck{lint}")),
+    );
+    assert_eq!(refused.status.code(), Some(2), "{refused:?}");
+    assert_eq!(
+        stderr(&refused),
+        format!(
+            "{AGENT_HEAD}\n\
+             cd apps/site && node_modules/.bin/astro check\n\
+             cd apps/site && node_modules/.bin/tsc -p test\n"
+        )
+    );
+
+    // Two pnpm lines, as a list with backticks, name both forms.
+    let two = agent(
+        trunk.path(),
+        "implementer",
+        &brief(
+            "the site",
+            "\n- `cd apps/site && pnpm typecheck`\n- `pnpm -C apps/site lint`",
+        ),
+    );
+    assert_eq!(two.status.code(), Some(2), "{two:?}");
+    assert_eq!(
+        stderr(&two),
+        format!(
+            "{AGENT_HEAD}\n\
+             cd apps/site && node_modules/.bin/astro check\n\
+             cd apps/site && node_modules/.bin/tsc -p test\n\
+             cd apps/site && node_modules/.bin/oxlint src\n"
+        )
+    );
+
+    for (subagent, prompt) in [
+        (
+            "implementer",
+            brief(
+                "the site",
+                &format!(
+                    "cd apps/site && node_modules/.bin/astro check\n            \
+                     cd apps/site && node_modules/.bin/tsc -p test{lint}"
+                ),
+            ),
+        ),
+        ("scout", brief("the site", "cd apps/site && pnpm typecheck")),
+        (
+            "implementer",
+            brief(
+                "run pnpm typecheck in apps/site to see the old errors",
+                &format!("cd apps/site && node_modules/.bin/tsc -p test{lint}"),
+            ),
+        ),
+    ] {
+        let out = agent(trunk.path(), subagent, &prompt);
+        assert_eq!(out.status.code(), Some(0), "{prompt}: {out:?}");
+    }
+}
+
+#[test]
+fn a_verify_pnpm_line_with_no_by_path_form_is_still_refused() {
+    let trunk = Scratch::new("by-path-agent-none");
+    let out = agent(
+        trunk.path(),
+        "implementer",
+        &brief("x", "pnpm nosuch\n            node_modules/.bin/oxlint ."),
+    );
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        stderr(&out),
+        "workflow guard refused this on purpose: this implementer brief's VERIFY runs pnpm, which its worktree's linked node_modules refuses.\n\
+         Call each tool by path instead, as in node_modules/.bin/vitest run <file>, one line each.\n"
+    );
+}

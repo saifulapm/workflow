@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::cd::resolve;
+use super::pnpm::runs_pnpm;
 use crate::shell::{self, Op, Simple, program_name};
 
 /// pnpm's own commands that install, publish or fetch: a package script of
@@ -43,11 +44,7 @@ pub fn lines(commands: &[Simple], cwd: &Path) -> Option<Vec<String>> {
             {
                 dirs[command.depth] = resolve(&here, to);
             }
-        } else if command
-            .words
-            .iter()
-            .any(|w| matches!(program_name(w), "pnpm" | "pnpx"))
-        {
+        } else if runs_pnpm(&command.words) {
             out.extend(translate(commands, at, &here, cwd)?);
         }
     }

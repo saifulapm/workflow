@@ -399,7 +399,7 @@ hub-local.")]
         /// bash: refuse a command that repeats a lesson's mistake, for every
         /// session. edit: refuse an Edit, Write or NotebookEdit in a checkout
         /// while its suite runs. agent: refuse an implementer's brief whose
-        /// VERIFY names no lint.
+        /// VERIFY names no lint or runs pnpm.
         #[arg(value_parser = ["pnpm", "bash", "edit", "agent"])]
         check: String,
     },

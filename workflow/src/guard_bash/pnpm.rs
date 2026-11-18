@@ -41,9 +41,7 @@ pub fn refusal(call: &Call) -> Option<String> {
                     dirs[command.depth] = resolve(here, to);
                 }
             }
-            _ if runs_pnpm(&command.words, argv)
-                && over_linked_node_modules(&pnpm_dir(here, argv)) =>
-            {
+            _ if runs_pnpm(&command.words) && over_linked_node_modules(&pnpm_dir(here, argv)) => {
                 return Some(match by_path::lines(call.commands, call.cwd) {
                     Some(lines) => format!(
                         "{WHY} Run each line below as a call of its own:\n{}",
@@ -62,7 +60,8 @@ pub fn refusal(call: &Call) -> Option<String> {
 }
 
 /// pnpm is the program, or the runner `argv` stepped past (`pnpm exec`).
-fn runs_pnpm(words: &[String], argv: &[String]) -> bool {
+pub(super) fn runs_pnpm(words: &[String]) -> bool {
+    let argv = argv(words);
     words[..words.len() - argv.len()]
         .iter()
         .chain(argv.first())
