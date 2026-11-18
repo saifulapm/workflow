@@ -130,3 +130,44 @@ fn pnpm_as_a_word_inside_quotes_passes() {
     );
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
+
+#[test]
+fn the_package_folder_comes_from_c_filter_or_cd() {
+    let (_t, w) = worktree(
+        "by-path-folder",
+        &[
+            ("package.json", r#"{"name": "root"}"#),
+            ("apps/admin/package.json", TSC),
+            (
+                "packages/core/package.json",
+                r#"{"name": "@lareys/core", "scripts": {"typecheck": "tsc --noEmit"}}"#,
+            ),
+            // A package of the same name under node_modules is no workspace package.
+            (
+                "node_modules/.pnpm/x/package.json",
+                r#"{"name": "@lareys/core", "scripts": {"typecheck": "tsc -b"}}"#,
+            ),
+        ],
+    );
+    let admin = &["cd apps/admin && node_modules/.bin/tsc --noEmit"];
+    names(w.path(), "pnpm -C apps/admin typecheck", admin);
+    names(w.path(), "pnpm --dir=apps/admin run typecheck", admin);
+    names(w.path(), "cd apps/admin && pnpm typecheck", admin);
+    names(
+        w.path(),
+        "pnpm --filter @lareys/core typecheck",
+        &["cd packages/core && node_modules/.bin/tsc --noEmit"],
+    );
+    // From inside the package, no cd.
+    names(
+        &w.path().join("apps/admin"),
+        "pnpm typecheck",
+        &["node_modules/.bin/tsc --noEmit"],
+    );
+    for command in [
+        "pnpm --filter @lareys/nosuch typecheck",
+        "pnpm -r typecheck",
+    ] {
+        says_today(w.path(), command);
+    }
+}
