@@ -19,9 +19,10 @@ const BUILTINS: &[&str] = &[
 ];
 
 /// The programs a script line cannot be split past: those that run another
-/// script or install, and cd, whose move the next call would not keep.
+/// script or install (turbo runs pnpm install, palmshop m20), and cd, whose
+/// move the next call would not keep.
 const RUNNERS: &[&str] = &[
-    "pnpm", "pnpx", "npm", "npx", "yarn", "bun", "bunx", "cd", "pushd",
+    "pnpm", "pnpx", "npm", "npx", "yarn", "bun", "bunx", "turbo", "cd", "pushd",
 ];
 
 /// The by-path lines of every pnpm command in `commands`, run in `cwd`, or
@@ -100,10 +101,11 @@ fn translate(commands: &[Simple], at: usize, here: &Path, cwd: &Path) -> Option<
     while let Some(arg) = args.next() {
         if is_redirect(arg) {
             redirects.push(arg.clone());
-            if arg
-                .trim_start_matches(|c: char| c.is_ascii_digit() || "<>&".contains(c))
-                .is_empty()
-            {
+            // `>` waits for its target in the next word; `2>&1` has its own.
+            if matches!(
+                arg.trim_start_matches(|c: char| c.is_ascii_digit()),
+                ">" | ">>" | "<" | "&>" | "&>>" | ">|"
+            ) {
                 redirects.extend(args.next().cloned());
             }
         } else {

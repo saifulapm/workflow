@@ -219,6 +219,11 @@ fn an_env_prefix_arguments_and_a_pipe_tail_are_kept() {
         "pnpm unit 2>&1 | tail -5",
         &["node_modules/.bin/vitest run 2>&1 | tail -5"],
     );
+    names(
+        &site,
+        "pnpm unit 2>&1 > out.txt",
+        &["node_modules/.bin/vitest run 2>&1 > out.txt"],
+    );
     // pnpm hands its arguments to the script's last command; a redirection
     // and the pipe go with every line.
     names(
@@ -247,10 +252,12 @@ fn a_script_it_cannot_put_by_path_keeps_todays_message() {
             "sub": "tsc && (cd e2e && playwright test)",
             "or": "tsc || true",
             "cd": "cd e2e && playwright test",
+            // turbo runs pnpm install over the linked node_modules (palmshop m20).
+            "turbo": "turbo run typecheck",
         }),
     );
     let site = w.path().join("apps/site");
-    for script in ["build", "npm", "vars", "sub", "or", "cd"] {
+    for script in ["build", "npm", "vars", "sub", "or", "cd", "turbo"] {
         says_today(&site, &format!("pnpm {script}"));
     }
 }
@@ -378,7 +385,7 @@ fn an_implementer_brief_whose_verify_runs_pnpm_is_refused_naming_the_lines() {
         (
             "implementer",
             brief(
-                "run pnpm typecheck in apps/site to see the old errors",
+                "pnpm typecheck",
                 &format!("cd apps/site && node_modules/.bin/tsc -p test{lint}"),
             ),
         ),
