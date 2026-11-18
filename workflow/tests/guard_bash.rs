@@ -107,6 +107,38 @@ fn a_command_after_a_piped_git_merge_is_refused() {
 }
 
 #[test]
+fn a_mem_log_naming_green_chained_after_a_log_read_is_refused() {
+    let w = Scratch::new("guard-bash-green");
+    for command in [
+        "tail -3 /tmp/v.log; mem log \"verify green at abc123\"",
+        "tail -3 /tmp/v.log && mem log 'full suite green'",
+        "grep exit= /tmp/v.log | tail -1 && mem log \"suite Green on main\"",
+        "cat /tmp/v.log\nmem log \"wave green\"",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(
+            refused(&out, "exit=0 line in a call of its own"),
+            "{command:?}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn a_log_read_or_a_green_mem_log_alone_runs() {
+    let w = Scratch::new("guard-bash-green-alone");
+    for command in [
+        "tail -3 /tmp/v.log",
+        "mem log \"verify green at abc123\"",
+        "tail -3 /tmp/v.log; mem log \"t2 landed at abc123\"",
+        "cat notes; echo green",
+        "mem log \"evergreen tests\"",
+    ] {
+        let out = guard(w.path(), command);
+        assert!(passes(&out), "{command:?}: {out:?}");
+    }
+}
+
+#[test]
 fn a_test_a_commit_or_a_merge_alone_runs() {
     let w = Scratch::new("guard-bash-alone");
     // The scratch folder is under /tmp, where a cargo build is refused.
