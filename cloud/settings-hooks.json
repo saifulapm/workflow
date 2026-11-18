@@ -7,6 +7,14 @@
           "command": "mem context || true"
         }
       ]
+    },
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "[ -z \"$CLAUDE_CODE_REMOTE_SESSION_ID\" ] || { p=$(timeout 5 mem project current 2>/dev/null | sed -n \"s/^name  *//p\"); timeout 5 mem log --project workflow \"hooks ran: $CLAUDE_CODE_REMOTE_SESSION_ID in ${p:-none}\" >/dev/null 2>&1; }; true"
+        }
+      ]
     }
   ],
   "PreToolUse": [
