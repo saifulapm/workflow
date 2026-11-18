@@ -184,3 +184,12 @@ reviewer=$(tr '\n' ' ' < "$WF_ROOT/agents/reviewer.md" | tr -s ' ')
 like "$reviewer" "grep -F 'flake: '" "reviewer: it reads the milestone's flake lines"
 like "$reviewer" 'is a `\[blocks\]` finding naming its test file' "reviewer: a flake is a block"
 like "$reviewer" 'deletes the test and says why' "reviewer: a flake clears by a fix or a reasoned delete"
+# r3-walk-line: a bare `cd <worktree> &&` at the top of a command is
+# refused by the cd guard; orchestrate writes git -C or a (cd ...) subshell.
+unlike "$(skill orchestrate)" '(^|[^(])cd +("?\$w|"?\$\{w\}|<worktree>|[^ ]*worktrees/)' \
+	"orchestrate: no bare cd into an agent worktree"
+like "$(skill orchestrate | sed -n '/^\*\*Land each result yourself/,/^## 3/p')" '[(]cd "[$]w" && <targeted test>[)]' \
+	"orchestrate: it reruns a subagent's test in a subshell"
+mem=$(skill mem | tr '\n' ' ' | tr -s ' ')
+like "$mem" 'Global is only for a rule that holds in every project' "mem: global is for every project's rules"
+like "$mem" 'goes in that project, even when you work in another' "mem: a product's rule goes in its project"

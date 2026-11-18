@@ -89,8 +89,9 @@ with `--replaces "<the old decision>"` when it overturns one.
 **Saiful states a rule for all his work, or corrects how you work** → `mem
 decide "<the rule in one line>" --by saiful`, with the why and how to apply
 it after a blank line, run outside any checkout (`cd "$(mktemp -d)"` first).
-Every session's digest opens with these rules. A rule for one project is
-written in its checkout instead.
+Every session's digest opens with these rules. Global is only for a rule
+that holds in every project. A rule about one product goes in that
+project, even when you work in another: `mem decide ... --project <name>`.
 
 **A change Saiful adopts** (from a review, a ruling or the chat) → a task on
 the current plan (`mem plan`), or a roadmap milestone when it is a slice of

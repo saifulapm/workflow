@@ -153,7 +153,9 @@ yourself.
 your folder when you work in a linked worktree, so find it from the git
 common dir. Read its diff (`git diff <trunk>...worktree-<name>`) and check
 it stayed in scope and its test asserts the behaviour, not the
-implementation. Rerun its targeted test. Then:
+implementation. Rerun its targeted test in its worktree, `$w` below, as
+a subshell, `(cd "$w" && <targeted test>)`, or with `git -C "$w"`: a bare
+`cd` into a worktree is refused. Then:
 
     w="$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/worktrees/<name>"
     git -C "$w" rebase <trunk>    # when the trunk moved; retest there
