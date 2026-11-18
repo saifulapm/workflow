@@ -306,6 +306,8 @@ pub fn idea(app: &App, text: &str) -> Result<i32> {
 /// device whose mem predates it still reads and syncs it. The body keeps
 /// the whole text; the title is cut.
 pub fn tell(app: &App, text: &str) -> Result<i32> {
+    // The hub posts it as `<project>: <text>`; one in global scope never goes.
+    project(app, "a tell")?;
     let written = crate::write::save(app, Kind::Log, text, None, Some("tell"), &[], None)?;
     report(app, &written, Kind::Log)
 }

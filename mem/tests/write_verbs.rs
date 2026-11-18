@@ -209,6 +209,21 @@ fn tell_writes_a_log_of_type_tell_whose_body_keeps_the_whole_text() {
     assert_eq!(texts, [long, short]);
 }
 
+/// The hub posts a tell as `<project>: <text>`, so one with no project
+/// would never be posted.
+#[test]
+fn tell_outside_a_project_is_refused() {
+    let w = World::new("write-tell-global");
+    let loose = w.plain_dir("loose");
+    let out = mem(&w, &loose, &["tell", "deployed"]);
+    assert_eq!(code(&out), 2, "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("a tell belongs to a project"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 #[test]
 fn handoff_sets_and_prints_the_latest() {
     let w = World::new("write-handoff");
