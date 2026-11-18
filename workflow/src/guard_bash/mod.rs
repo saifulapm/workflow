@@ -6,6 +6,7 @@
 
 mod attach;
 mod brief;
+mod by_path;
 mod cd;
 mod chain;
 mod devserver;

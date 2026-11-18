@@ -9,12 +9,15 @@
 use std::path::{Path, PathBuf};
 
 use super::Call;
+use super::by_path;
 use super::cd::resolve;
 use crate::guard::over_linked_node_modules;
 use crate::shell::{argv, program_name};
 
-const REFUSAL: &str = "workflow guard refused this on purpose: pnpm refuses a node_modules linked from outside this worktree, or writes into the checkout it links.\n\
-Run the tool by path (node_modules/.bin/vitest), or `npm_config_verify_deps_before_run=false node scripts/verify.mjs`.";
+const WHY: &str = "workflow guard refused this on purpose: pnpm refuses a node_modules linked from outside this worktree, or writes into the checkout it links.";
+
+/// What to run instead when the command has no by-path form.
+const BY_PATH: &str = "Run the tool by path (node_modules/.bin/vitest), or `npm_config_verify_deps_before_run=false node scripts/verify.mjs`.";
 
 const TURBO_REFUSAL: &str = "workflow guard refused this on purpose: turbo runs pnpm install over a node_modules linked from outside this worktree.\n\
 Call each tool by path instead: node_modules/.bin/tsc -b, node_modules/.bin/vitest run, node_modules/.bin/oxlint.";
@@ -41,7 +44,13 @@ pub fn refusal(call: &Call) -> Option<String> {
             _ if runs_pnpm(&command.words, argv)
                 && over_linked_node_modules(&pnpm_dir(here, argv)) =>
             {
-                return Some(REFUSAL.to_string());
+                return Some(match by_path::lines(call.commands, call.cwd) {
+                    Some(lines) => format!(
+                        "{WHY} Run each line below as a call of its own:\n{}",
+                        lines.join("\n")
+                    ),
+                    None => format!("{WHY}\n{BY_PATH}"),
+                });
             }
             Some("turbo") if over_linked_node_modules(here) => {
                 return Some(TURBO_REFUSAL.to_string());
