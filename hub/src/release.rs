@@ -76,6 +76,27 @@ fn command_tags(command: &str) -> Option<Vec<String>> {
     Some(tags)
 }
 
+/// The tell for re-push `n` of `tag`: git's `--shortstat` of its diff
+/// since `sha`, the HEAD of the push Saiful said yes to, with every count.
+pub fn re_push_tell(n: u32, tag: &str, shortstat: &str, sha: &str) -> String {
+    let count = |word: &str| {
+        shortstat
+            .split(',')
+            .find(|part| part.contains(word))
+            .and_then(|part| part.split_whitespace().next()?.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    let counted =
+        |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let short = sha.get(..7).unwrap_or(sha);
+    format!(
+        "re-push {n} of {REPUSHES} of {tag}: {}, {}, {} since {short}",
+        counted(count("changed"), "file changed", "files changed"),
+        counted(count("insertion"), "insertion", "insertions"),
+        counted(count("deletion"), "deletion", "deletions"),
+    )
+}
+
 /// The Unix milliseconds a ULID was minted at, from its first ten
 /// characters; None for anything that is not a ULID.
 pub fn ulid_ms(id: &str) -> Option<u64> {
@@ -101,7 +122,7 @@ fn assignment(word: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{pushed_tag, ulid_ms};
+    use super::{pushed_tag, re_push_tell, ulid_ms};
 
     #[test]
     fn a_push_naming_one_tag_by_its_ref_pushes_that_tag() {
@@ -120,6 +141,28 @@ mod tests {
         assert_eq!(
             pushed_tag("git push origin refs/tags/ui-v2.2.0").as_deref(),
             Some("ui-v2.2.0")
+        );
+    }
+
+    #[test]
+    fn a_re_push_tell_counts_files_insertions_and_deletions() {
+        let sha = "7361ebd0c0ffee";
+        assert_eq!(
+            re_push_tell(1, "v1", " 1 file changed, 1 insertion(+)\n", sha),
+            "re-push 1 of 3 of v1: 1 file changed, 1 insertion, 0 deletions since 7361ebd"
+        );
+        assert_eq!(
+            re_push_tell(
+                3,
+                "v1",
+                " 4 files changed, 10 insertions(+), 1 deletion(-)",
+                sha
+            ),
+            "re-push 3 of 3 of v1: 4 files changed, 10 insertions, 1 deletion since 7361ebd"
+        );
+        assert_eq!(
+            re_push_tell(2, "v1", "", sha),
+            "re-push 2 of 3 of v1: 0 files changed, 0 insertions, 0 deletions since 7361ebd"
         );
     }
 

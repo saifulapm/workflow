@@ -106,6 +106,7 @@ fn rig_env(env: &[(&str, &str)]) -> Rig {
              for a in \"$@\"; do last=\"$a\"; done\n\
              case \"$*\" in\n\
              *' ask --for '*) printf '%s|%s\\n' \"${{AMX_ID:-none}}\" \"$*\" >> \"$S/asks\"; echo '#QQQQ0001' ;;\n\
+             *' tell -- '*) printf '%s\\n' \"$*\" >> \"$S/tells\" ;;\n\
              *' log -- '*) printf '%s %s\\n' \"$1\" \"$last\" >> \"$S/log\" ;;\n\
              projects*) cat \"$S/projects.json\" 2>/dev/null || echo '{{\"projects\":[]}}' ;;\n\
              *' questions --json'*) cat \"$S/questions.json\" 2>/dev/null || echo '{{\"questions\":[]}}' ;;\n\
@@ -1494,6 +1495,43 @@ fn a_tag_push_s_yes_covers_no_other_line_that_names_the_tag() {
             format!("device: #AAAA1111 does not ask for {other}\n")
         );
     }
+}
+
+/// What the device told Saiful with `mem tell`, one call a line.
+fn tells(rig: &Rig) -> String {
+    std::fs::read_to_string(rig.state.join("tells")).unwrap_or_default()
+}
+
+#[test]
+fn each_re_push_tells_its_diff_since_the_yes_and_the_first_push_none() {
+    let rig = rig();
+    rig.stage("live", "mac-mini-m2");
+    let line = release("v1");
+    release_yes(&rig, "v1", &line, HOUR);
+    let yes = rig.origin_sha("cloud/cloud_walk-w14");
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    assert_eq!(tells(&rig), "");
+    // The thread's fix reaches the device with the job's next start.
+    rig.walk(&["end"]);
+    rig.push("cloud/cloud_walk-w14", |seed| {
+        std::fs::write(seed.join("apps/README"), "walk\nfixed\nagain\n").unwrap();
+    });
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    let short = &yes[..7];
+    assert_eq!(
+        tells(&rig),
+        format!(
+            "--project cloud_walk tell -- re-push 1 of 3 of v1: 1 file changed, 2 insertions, 0 deletions since {short}\n"
+        )
+    );
+    assert_eq!(send_release(&rig, &line)["exit"], 0);
+    assert!(
+        tells(&rig).ends_with(&format!(
+            "re-push 2 of 3 of v1: 1 file changed, 2 insertions, 0 deletions since {short}\n"
+        )),
+        "{}",
+        tells(&rig)
+    );
 }
 
 /// The day counts from Saiful's yes: a first push late in it leaves the

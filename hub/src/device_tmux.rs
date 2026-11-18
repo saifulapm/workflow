@@ -334,7 +334,14 @@ fn send(
     }
     // The worktree's HEAD as the line goes out, the base of the re-pushes'
     // diffs; a first push whose HEAD cannot be read gets no re-push.
-    let head = release.and_then(|_| head_of(tmux, name));
+    let head = release.and_then(|_| git_in_job(tmux, name, &["rev-parse", "--verify", "HEAD"]));
+    // What a re-push tells Saiful, from its diff since that HEAD.
+    let told = again.and_then(|(id, n)| {
+        let tag = crate::release::pushed_tag(&line)?;
+        let sha = read_releases().remove(id)?.sha;
+        let stat = git_in_job(tmux, name, &["diff", "--shortstat", &sha, "HEAD"])?;
+        Some(crate::release::re_push_tell(n, &tag, &stat, &sha))
+    });
     let sent = if outside {
         run_outside(tmux, name, &line)
     } else if is_key(&line) {
@@ -363,6 +370,12 @@ fn send(
             }
             if release.is_some() || again.is_some() {
                 write_releases(&releases);
+            }
+            if let Some(text) = told {
+                let run = MemCli::new().write_through(&["--project", project, "tell", "--", &text]);
+                if !run.ok() {
+                    eprintln!("hub: device: cannot tell {text}: {}", run.stderr);
+                }
             }
             Outcome::done(String::new())
         }
@@ -875,8 +888,8 @@ fn write_releases(releases: &std::collections::BTreeMap<String, Release>) {
     }
 }
 
-/// The HEAD of job `name`'s worktree.
-fn head_of(tmux: &Tmux, name: &str) -> Option<String> {
+/// git's trimmed output for `args` in job `name`'s worktree.
+fn git_in_job(tmux: &Tmux, name: &str, args: &[&str]) -> Option<String> {
     let folder = tmux
         .run(&[
             "display-message",
@@ -889,7 +902,7 @@ fn head_of(tmux: &Tmux, name: &str) -> Option<String> {
     let folder = String::from_utf8_lossy(&folder.stdout).trim().to_string();
     let git = find_in(&tmux.path, "git")?;
     let mut command = user_command(&git, &tmux.env, false);
-    command.args(["-C", &folder, "rev-parse", "--verify", "HEAD"]);
+    command.arg("-C").arg(&folder).args(args);
     match output_within(&mut command, HELPER_TIMEOUT) {
         Ended::Exited(done) if done.code == Some(0) => {
             Some(String::from_utf8_lossy(&done.stdout).trim().to_string())
