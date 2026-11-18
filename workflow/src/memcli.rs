@@ -133,16 +133,53 @@ pub struct Question {
 impl Question {
     /// When it was asked, read from its ULID: mem's `created` is a date.
     pub fn asked(&self) -> Option<jiff::Timestamp> {
-        const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-        let mut ms: i64 = 0;
-        for c in self.id.get(..10)?.bytes() {
-            let digit = CROCKFORD
-                .iter()
-                .position(|&d| d == c.to_ascii_uppercase())?;
-            ms = ms * 32 + digit as i64;
-        }
-        jiff::Timestamp::from_millisecond(ms).ok()
+        ulid_time(&self.id)
     }
+}
+
+/// The time a mem id, a ULID, was made at.
+pub fn ulid_time(id: &str) -> Option<jiff::Timestamp> {
+    const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let mut ms: i64 = 0;
+    for c in id.get(..10)?.bytes() {
+        let digit = CROCKFORD
+            .iter()
+            .position(|&d| d == c.to_ascii_uppercase())?;
+        ms = ms * 32 + digit as i64;
+    }
+    jiff::Timestamp::from_millisecond(ms).ok()
+}
+
+/// A log line as `mem log --json` lists it. Its title is the line, cut at
+/// about 98 characters.
+#[derive(Debug, Deserialize)]
+pub struct LogLine {
+    pub id: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LogLines {
+    items: Vec<LogLine>,
+}
+
+/// `project`'s own log lines, newest first; `None` when mem cannot say.
+pub fn log_lines(project: &str) -> Option<Vec<LogLine>> {
+    let (ok, out) = capture(&["log", "--project", project, "--limit", "5000", "--json"])?;
+    if !ok {
+        return None;
+    }
+    let mut lines: Vec<LogLine> = serde_json::from_str::<LogLines>(&out)
+        .ok()?
+        .items
+        .into_iter()
+        .filter(|line| line.project.as_deref() == Some(project))
+        .collect();
+    lines.sort_by(|a, b| b.id.cmp(&a.id));
+    Some(lines)
 }
 
 #[derive(Debug, Deserialize)]

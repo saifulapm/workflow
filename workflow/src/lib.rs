@@ -41,6 +41,7 @@ pub mod shopify;
 pub mod switch;
 pub mod wait;
 pub mod walk_account;
+pub mod walked;
 pub mod worktree;
 
 use clap::Parser;

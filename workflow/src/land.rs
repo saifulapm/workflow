@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use crate::cloud;
 use crate::gitcmd::Git;
 use crate::memcli;
-use crate::{exit, go, warn};
+use crate::{exit, go, walked, warn};
 
 /// The repo's trunk, which a project with a trunk of its own moves onto.
 const MAIN: &str = "main";
@@ -143,6 +143,19 @@ pub fn cmd_land() -> i32 {
     if let Some(line) = claude_line(&git, &format!("origin/{trunk_name}..HEAD")) {
         println!("{line}");
         return exit::USAGE;
+    }
+    // A milestone lands only on code its walk saw, judged before the rebase
+    // rewrites the shas its walk line names.
+    match walked::check(&git, &project, &slug, &format!("origin/{trunk_name}")) {
+        None => {
+            warn("land: mem cannot list this project's log, where its walk line is");
+            return exit::FAILED;
+        }
+        Some(Err(reason)) => {
+            println!("land: refused: {reason}");
+            return exit::FAILED;
+        }
+        Some(Ok(())) => {}
     }
     let mut tries = 0;
     loop {

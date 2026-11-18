@@ -94,6 +94,9 @@ impl World {
             r#"{"projects":[{"name":"gamma","remote":"github.com/me/gamma","checkouts":[],"roadmap_status":"approved","milestone":"m2-next"}]}"#,
         );
         w.verify("test -f work.txt");
+        // A milestone lands only on a walk line; most tests are about
+        // something else, so theirs opens nothing.
+        w.log("no walk: the fixture opens nothing");
         w.work.script(
             "mem",
             &format!(
@@ -113,6 +116,7 @@ case "$1 $2" in
   next=$(sed -n 's/^- \[ \] \([^ ]*\) .*/\1/p' "$dir/roadmap.md" | head -n 1)
   sed -i "s/\"milestone\":\"$3\"/\"milestone\":\"$next\"/" "$dir/projects.json" ;;
 "roadmap --project") cat "$dir/roadmap.md" ;;
+"log --project") cat "$dir/log.json" ;;
 "sync --json")
   n=0
   [ -f "$dir/outbox" ] && n=$(cat "$dir/outbox")
@@ -219,6 +223,40 @@ esac
         );
     }
 
+    /// `text` in gamma's log, as the thread logs it now.
+    fn log(&self, text: &str) {
+        self.log_in("gamma", text, 0);
+    }
+
+    /// `text` in `project`'s log, `ago` seconds back. mem lists newest
+    /// first; its ids are ULIDs, whose first ten characters are the time.
+    fn log_in(&self, project: &str, text: &str, ago: u64) {
+        let mut items = if self.work.has("log.json") {
+            let log: serde_json::Value = serde_json::from_str(&self.work.read("log.json")).unwrap();
+            log["items"].as_array().unwrap().clone()
+        } else {
+            Vec::new()
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let id = ulid(now - ago * 1000, items.len() as u64);
+        items.insert(
+            0,
+            serde_json::json!({"id": id, "kind": "log", "project": project, "title": text}),
+        );
+        self.work.put(
+            "log.json",
+            &serde_json::json!({ "items": items }).to_string(),
+        );
+    }
+
+    /// No walk line at all, nor anything else in the log.
+    fn forget_walks(&self) {
+        self.work.put("log.json", r#"{"items":[]}"#);
+    }
+
     /// The fixture's own git, with no global hooks or config.
     fn git(&self, dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
@@ -316,6 +354,18 @@ esac
                 .lines()
                 .any(|l| l == "roadmap --tick m2-next --project gamma")
     }
+}
+
+/// A ULID of `ms`, its last sixteen characters `n`.
+fn ulid(ms: u64, n: u64) -> String {
+    const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    let digit =
+        |v: u64, i: u32| CROCKFORD[(v.checked_shr(5 * i).unwrap_or(0) & 31) as usize] as char;
+    (0..10)
+        .rev()
+        .map(|i| digit(ms, i))
+        .chain((0..16).rev().map(|i| digit(n, i)))
+        .collect()
 }
 
 fn stdout(out: &Output) -> String {
@@ -1482,4 +1532,76 @@ fn a_trunk_that_moves_while_ci_runs_gets_a_new_run_before_main_moves() {
     let log = w.gh_log();
     assert!(log.contains(&format!("head_sha={first}")), "{log}");
     assert!(log.contains(&format!("head_sha={head}")), "{log}");
+}
+
+/// A refusal: exit 1, `land: refused: <reason>` last, no question for
+/// Saiful, nothing pushed, nothing ticked.
+#[track_caller]
+fn refused(w: &World, out: &Output, reason: &str, main_before: &str) {
+    assert_eq!(out.status.code(), Some(1), "{}{}", stdout(out), stderr(out));
+    assert_eq!(last_line(out), format!("land: refused: {reason}"));
+    assert!(
+        !stdout(out).lines().any(|l| l.starts_with("ask:")),
+        "a refusal never asks: {}",
+        stdout(out)
+    );
+    assert_eq!(w.origin_main(), main_before, "nothing was pushed");
+    assert!(!w.ticked());
+}
+
+#[test]
+fn a_milestone_with_no_walk_line_is_refused() {
+    let w = World::new("land-no-walk-line");
+    w.forget_walks();
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        "no walk line for m2-next; walk it, or log 'no walk: <why>'",
+        &main,
+    );
+}
+
+#[test]
+fn a_milestone_with_nothing_to_open_lands_on_its_no_walk_line() {
+    let w = World::new("land-no-walk");
+    w.forget_walks();
+    w.log("no walk: nothing to open");
+    let out = w.land();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(last_line(&out), "next: Run the next milestone of gamma.");
+    assert!(w.ticked());
+}
+
+#[test]
+fn another_projects_walk_line_of_the_same_slug_does_not_count() {
+    let w = World::new("land-walk-other-project");
+    w.forget_walks();
+    let head = w.short_head();
+    w.log_in("delta", &format!("walked m2-next at {head}"), 0);
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        "no walk line for m2-next; walk it, or log 'no walk: <why>'",
+        &main,
+    );
+}
+
+#[test]
+fn an_earlier_milestones_no_walk_line_does_not_land_this_one() {
+    let w = World::new("land-no-walk-earlier");
+    w.forget_walks();
+    // Logged an hour before the milestone's first commit.
+    w.log_in("gamma", "no walk: nothing to open", 3600);
+    let main = w.origin_main();
+    let out = w.land();
+    refused(
+        &w,
+        &out,
+        "no walk line for m2-next; walk it, or log 'no walk: <why>'",
+        &main,
+    );
 }
