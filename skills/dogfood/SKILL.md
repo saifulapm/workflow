@@ -165,7 +165,13 @@ seconds:
 ## 6. Clean up and report
 
 Stop what you started (the server, the tmux session, the browser), by the
-pid or name you kept. Then report to the orchestrator:
+pid or name you kept. A walk with every step passed then logs the sha it
+walked (`git rev-parse --short HEAD` in the checkout it launched), since
+`workflow land` lands only code a walk saw:
+
+    mem log "walked <milestone> at <sha>"
+
+Then report to the orchestrator:
 
 - `pass`, or `failed <n> <n>` with each failed step's finding id
 - the walk's minutes and the steps taken

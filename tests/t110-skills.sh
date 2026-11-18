@@ -169,3 +169,9 @@ for text in prompt refusal; do
 	like "${!text}" 'tests-only after <sha>: <why>' "$text: or by the tests-only line"
 	like "${!text}" 'never a question for Saiful' "$text: a refusal is never asked"
 done
+# r3-walk-line: land reads the walk line, so a passing walk ends with it.
+like "$(sed -n '/^## 6\./,$p' <<<"$dogfood")" 'mem log "walked <milestone> at <sha>"' \
+	"dogfood: a passing walk ends with its walk line"
+six=$(skill orchestrate | sed -n '/^## 6/,/^## 7/p')
+like "$six" 'no walk: <why>' "orchestrate: a milestone with nothing to open logs no walk"
+like "$six" 'walked <milestone> at <sha>' "orchestrate: a walk it runs itself ends with the walk line"

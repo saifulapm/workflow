@@ -248,7 +248,11 @@ the project has one, and the writes the plan lets one party cause (a form,
 a webhook, a message), for its forged-write check. It walks the real product
 on an isolated surface and files each defect with `mem finding add`. A UI-free milestone, such as a
 library or an internal refactor, has its walk replaced by running its
-examples or CLI once yourself.
+examples or CLI once yourself. A walk you run ends as the dogfooder's
+does, with `mem log "walked <milestone> at <sha>"` once every step passed,
+and a milestone with nothing to open logs `mem log "no walk: <why>"`:
+`workflow land` refuses a milestone with neither, and code changed after
+the walked sha. After fixes, the last walk logs the sha it walked.
 
 A step on claude.ai in Saiful's Chromium walks on whichever account that
 browser holds. Before you write its question or the brief,
