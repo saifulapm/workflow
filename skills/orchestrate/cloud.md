@@ -144,7 +144,12 @@ the skill holds, with these changes:
   --no-wall 'git tag -f <tag>; git push origin :refs/tags/<tag>; git push origin refs/tags/<tag>'`,
   which tags the worktree at your branch's tip. The delete fails harmlessly
   on the first push. The device's question is the ask for it; ask nothing
-  yourself. His
+  yourself, unless your own safety check refuses the line. It may, this
+  shape too, even after his yes on the hub or in Slack. Then ask with `mem
+  ask --for saiful` that he type his yes into this thread, naming the tag
+  and its 3 re-pushes, and park `parked: blocked: <step> (#<id>)`: only his
+  words typed here pass your check, and the device's own question still
+  takes his yes on the hub or in Slack. His
   yes runs it, and the same line 3 more times within 24 hours of his yes:
   to re-push, push the fix to your branch, `device tmux end` so the next
   job starts at its new tip, and send the identical line with `--yes

@@ -149,6 +149,10 @@ like "$release" '3 more times within 24 hours of his yes' "orchestrate cloud: a 
 like "$release" 'device tmux end' "orchestrate cloud: a fix reaches the device by ending the job"
 like "$release" 're-push <n> of 3 of <tag>' "orchestrate cloud: each re-push shows in Slack"
 like "$release" 'without `--yes`' "orchestrate cloud: a release line the yes no longer covers is asked again"
+# The safety check refused delete-then-push too, even after a hub and a Slack
+# yes; only Saiful's words typed in the thread passed it (r5 walk 3, #XZ9KCMQR).
+like "$release" 'type his yes into this thread' "orchestrate cloud: a refused release line asks for his typed yes"
+like "$release" 'parked: blocked: <step> [(]#<id>[)]' "orchestrate cloud: a refused release line parks blocked"
 like "$(sed -n '/prints `ask: <line>`/,/^- /p' "$WF_ROOT/skills/orchestrate/cloud.md")" 'a release line, below' \
 	"orchestrate cloud: the held line's once points at the release yes"
 like "$cloud" 'never for builds, tests or' "orchestrate cloud: a local agent is never for builds, tests or code"
