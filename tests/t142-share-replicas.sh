@@ -157,8 +157,8 @@ within() {
 		sleep 0.05
 	done
 }
-lists() { walk "$1" log --limit 50 | grep -qF "$2"; }
-outbox_is() { on "$1" mem doctor | grep -qE "^sharing +seq [0-9]+, outbox $2\$"; }
+lists() { grep -qF "$2" <<<"$(walk "$1" log --limit 50)"; }
+outbox_is() { grep -qE "^sharing +seq [0-9]+, outbox $2\$" <<<"$(on "$1" mem doctor)"; }
 
 for m in mini macbook nuc; do machine "$m"; done
 for m in mini macbook nuc; do

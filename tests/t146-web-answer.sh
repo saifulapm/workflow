@@ -79,7 +79,7 @@ asked=$(walk ask --for human --options 'yes,no' 'Ship the walk?' | sed -n 's/^#\
 like "$asked" '^[0-9A-Z]{8}$' "the machine asks a question in the shared project"
 
 home() { curl -s -H "@$T_TMP/jwt.hdr" "$@" "$base/" | tr -d '\n'; }
-for _ in $(seq 1 100); do home | grep -q 'Ship the walk?' && break; sleep 0.1; done
+for _ in $(seq 1 100); do grep -q 'Ship the walk?' <<<"$(home)" && break; sleep 0.1; done
 like "$(home)" 'Ship the walk\?' "the question reaches the hub web's home"
 
 code=$(curl -s -X POST -H "Authorization: Bearer $token" "$base/store/pair")
@@ -106,18 +106,18 @@ unlike "$(home)" 'Ship the walk\?' "the home no longer lists it as waiting"
 # Phone pressed there reaches the machine's hub.
 route_on_machine() { curl -s --unix-socket "$root/state/hub/local.sock" "$@" http://x/route; }
 route_on_machine -d '{"route":"device"}' >/dev/null
-for _ in $(seq 1 40); do home | grep -q 'Route: Device (mac' && break; sleep 0.05; done
+for _ in $(seq 1 40); do grep -q 'Route: Device (mac' <<<"$(home)" && break; sleep 0.05; done
 like "$(home)" 'Route: Device \(mac:[0-9]+\)' "Device taken on the machine shows on the hub web"
 like "$(home -H "Cookie: $cookie")" '>Phone</button>.*>Device</button>' "a paired home offers Phone and Device"
 sent=$(now_ms)
 status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H "Cookie: $cookie" \
 	-H 'Sec-Fetch-Site: same-origin' --data 'route=phone' "$base/route")
 is "$status" 303 "Phone pressed on the hub web is taken"
-for _ in $(seq 1 40); do route_on_machine | grep -q '"phone"' && break; sleep 0.05; done
+for _ in $(seq 1 40); do grep -q '"phone"' <<<"$(route_on_machine)" && break; sleep 0.05; done
 took=$(($(now_ms) - sent))
 like "$(route_on_machine)" '"route":"phone"' "the machine's hub follows the hub web's route"
 truthy "$([ "$took" -lt 2000 ]; echo $?)" "within 2 s (took ${took} ms)"
 status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "@$T_TMP/jwt.hdr" -H "Cookie: $cookie" \
 	-H 'Sec-Fetch-Site: same-origin' --data 'route=device' "$base/route")
-for _ in $(seq 1 40); do route_on_machine | grep -q '"device"' && break; sleep 0.05; done
+for _ in $(seq 1 40); do grep -q '"device"' <<<"$(route_on_machine)" && break; sleep 0.05; done
 like "$(route_on_machine)" '"route":"device","machine":"mac:[0-9]+"' "Device on the hub web goes back to the machine that last took it"

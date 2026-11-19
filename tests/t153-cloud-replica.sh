@@ -96,7 +96,7 @@ hub_pid=$!
 on mini mem --project walk project set verify "true" >/dev/null
 on mini mem --project walk handoff --set "Next: m2. m1 landed in the walk." >/dev/null
 on mini mem --project walk decide "walk rule from the mini" --by agent >/dev/null
-drained() { on mini mem doctor | grep -qE '^sharing +seq [0-9]+, outbox 0$'; }
+drained() { grep -qE '^sharing +seq [0-9]+, outbox 0$' <<<"$(on mini mem doctor)"; }
 for _ in $(seq 1 100); do drained && break; sleep 0.1; done
 if drained; then
 	ok "the mini's writes reach the store"
@@ -169,7 +169,7 @@ unblock() {
 }
 block() { kill "$proxy_pid" 2>/dev/null; wait "$proxy_pid" 2>/dev/null; }
 now_ms() { date +%s%3N; }
-lists() { on cloud mem --project walk log --limit 50 | grep -qF "$1"; }
+lists() { grep -qF "$1" <<<"$(on cloud mem --project walk log --limit 50)"; }
 
 unblock
 on cloud env HUB_PEER_TOKEN=peer-token HUB_PEERS= HUB_STORE_URL="ws://store.invalid:$CF_DEV_PORT/store/share" \
@@ -236,7 +236,7 @@ on third env HUB_PEER_TOKEN=peer-token HUB_PEERS= HUB_STORE_URL="$store" HUB_STO
 	"$HUB_BIN" local --port "$(free_port)" >>"$T_TMP/third.hub.log" 2>&1 &
 third_hub=$!
 (cd "$repo" && on third mem --project walk log --limit 1 >/dev/null)
-third_drained() { on third mem doctor | grep -qE '^sharing +seq [0-9]+, outbox 0$'; }
+third_drained() { grep -qE '^sharing +seq [0-9]+, outbox 0$' <<<"$(on third mem doctor)"; }
 for _ in $(seq 1 100); do third_drained && break; sleep 0.1; done
 kill "$third_hub" 2>/dev/null
 # A fresh replica reads what the store holds.

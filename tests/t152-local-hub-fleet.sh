@@ -103,8 +103,8 @@ until_true() {
 	for _ in $(seq "$n"); do "$@" && return 0; sleep 0.1; done
 	return 1
 }
-offers_resume() { paired_get /p/gamma | grep -q 'name="machine" value="mini"'; }
-waiting() { get /p/gamma | grep -q 'waiting for mini'; }
+offers_resume() { grep -q 'name="machine" value="mini"' <<<"$(paired_get /p/gamma)"; }
+waiting() { grep -q 'waiting for mini' <<<"$(get /p/gamma)"; }
 ran_lines() { [ "$(ran | grep -c 'workflow go gamma')" -ge "$1" ]; }
 
 start_hub

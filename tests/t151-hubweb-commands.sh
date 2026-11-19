@@ -127,7 +127,7 @@ like "$(get /p/gamma)" 'waiting for mini' "past the window the project reads wai
 
 printf '%s\n' "$id" >"$T_TMP/done.mini"
 for _ in $(seq 50); do
-	get /p/gamma | grep -q 'waiting for mini' || break
+	grep -q 'waiting for mini' <<<"$(get /p/gamma)" || break
 	sleep 0.1
 done
 unlike "$(get /p/gamma)" 'waiting for mini' "once mini is done the project no longer waits"
